@@ -28,6 +28,7 @@
 
 local logger = require("core.logger")
 local qt_constants = require("core.qt_constants")
+local Mixer = require("core.mixer")
 
 -- Quality mode constants (match SSE C++ enum)
 local Q1 = 1          -- Editor mode: 0.25x-4x
@@ -410,8 +411,18 @@ function M.set_audio_sources(sources, cache, restart_time_us)
                 sources_changed = true
                 break
             end
-            -- Check source_offset (edit point within same file)
-            if old_src.source_offset_us ~= new_src.source_offset_us then
+            -- Check source position (edit point within same file)
+            if old_src.seek_us ~= new_src.seek_us then
+                sources_changed = true
+                break
+            end
+            -- Check clip start (timeline position changed)
+            if old_src.clip_start_us ~= new_src.clip_start_us then
+                sources_changed = true
+                break
+            end
+            -- Check conform speed
+            if old_src.speed_ratio ~= new_src.speed_ratio then
                 sources_changed = true
                 break
             end
@@ -530,8 +541,11 @@ function M.switch_source(cache)
     M.set_audio_sources({{
         path = file_path,
         source_offset_us = 0,
+        seek_us = 0,
+        speed_ratio = 1.0,
         volume = 1.0,
         duration_us = info.duration_us,
+        clip_start_us = 0,
         clip_end_us = info.duration_us,  -- explicit: entire source
     }}, cache)
 
@@ -996,128 +1010,36 @@ function M._ensure_pcm_cache()
         end
     end
 
-    if #M.audio_sources == 1 then
-        -- Single-source fast path (most common: source mode, or timeline with 1 audio clip)
-        local src = M.audio_sources[1]
-        local src_start = math.max(0, pb_start - src.source_offset_us)
-        -- Compute source end from clip_end_us (timeline boundary) and source_offset_us
-        -- This correctly handles clips with source_in > 0
-        local source_end_us = src.clip_end_us - src.source_offset_us
-        local src_end = math.min(source_end_us, pb_end - src.source_offset_us)
+    -- Delegate decode + time-mapping + conform + mixing to Mixer.
+    -- audio_playback handles: cache management, trim-to-boundary, SSE push.
+    local mix_buf, mix_frames, pb_actual_start = Mixer.mix_sources(
+        M.audio_sources, pb_start, pb_end,
+        M.session_sample_rate, M.session_channels, M.media_cache_ref)
 
-        if src_end <= src_start then
-            -- Source has no data in this range
-            last_pcm_range = { start_us = pb_start, end_us = pb_end }
-            return
-        end
-
-        logger.debug("audio_playback", string.format(
-            "Fetching audio PCM: %.3fs - %.3fs (current=%.3fs, single source)",
-            src_start / 1000000, src_end / 1000000, current_us / 1000000))
-
-        local pcm_ptr, frames, actual_start = M.media_cache_ref.get_audio_pcm_for_path(
-            src.path, src_start, src_end, M.session_sample_rate)
-
-        assert(pcm_ptr, string.format(
-            "audio_playback._ensure_pcm_cache: get_audio_pcm_for_path returned nil for '%s' [%.3fs, %.3fs]",
-            src.path, src_start / 1000000, src_end / 1000000))
-        assert(frames and frames > 0, string.format(
-            "audio_playback._ensure_pcm_cache: get_audio_pcm_for_path returned %s frames",
-            tostring(frames)))
-
-        -- Convert source timestamps back to playback timestamps
-        local pb_actual_start = actual_start + src.source_offset_us
-        local pb_actual_end = pb_actual_start + (frames * 1000000 / M.session_sample_rate)
+    if not mix_buf or mix_frames <= 0 then
+        last_pcm_range = { start_us = pb_start, end_us = pb_end }
+    else
+        local pb_actual_end = pb_actual_start + (mix_frames * 1000000 / M.session_sample_rate)
 
         -- Trim frames to not exceed clip boundary (decoder may return extra due to AAC alignment)
         local frames_to_push, clamped_end = trim_frames_to_clip_end(
-            pb_actual_start, pb_actual_end, frames, min_clip_end_us, "PCM")
+            pb_actual_start, pb_actual_end, mix_frames, min_clip_end_us, "PCM")
 
         last_pcm_range = {
             start_us = pb_actual_start,
             end_us = clamped_end,
-            pcm_ptr = pcm_ptr,
+            pcm_ptr = mix_buf,
             frames = frames_to_push,
         }
 
-        -- Push to SSE with playback timestamps (trimmed to clip boundary)
         if frames_to_push > 0 then
-            qt_constants.SSE.PUSH_PCM(M.sse, pcm_ptr, frames_to_push, pb_actual_start)
+            qt_constants.SSE.PUSH_PCM(M.sse, mix_buf, frames_to_push, pb_actual_start)
         end
 
         logger.debug("audio_playback", string.format(
-            "Pushed PCM to SSE: %.3fs - %.3fs (%d frames, playback time)",
-            pb_actual_start / 1000000, clamped_end / 1000000, frames_to_push))
-
-    elseif #M.audio_sources > 1 then
-        -- Multi-source mixing path
-        local ffi = require("ffi")
-        local mix_frames = nil
-        local mix_buf = nil
-        local mix_actual_start = pb_start
-
-        for _, src in ipairs(M.audio_sources) do
-            -- Convert playback range → source range
-            local src_start = math.max(0, pb_start - src.source_offset_us)
-            -- Compute source end from clip_end_us (timeline boundary) and source_offset_us
-            local source_end_us = src.clip_end_us - src.source_offset_us
-            local src_end = math.min(source_end_us, pb_end - src.source_offset_us)
-            if src_end <= src_start then goto continue end
-
-            local pcm_ptr, frames, actual_start = M.media_cache_ref.get_audio_pcm_for_path(
-                src.path, src_start, src_end, M.session_sample_rate)
-
-            if not pcm_ptr or not frames or frames <= 0 then
-                logger.warn("audio_playback", string.format(
-                    "Failed to decode audio for '%s' [%.3fs-%.3fs]",
-                    src.path, src_start / 1000000, src_end / 1000000))
-                goto continue
-            end
-
-            if not mix_buf then
-                mix_frames = frames
-                mix_buf = ffi.new("float[?]", frames * M.session_channels)
-                ffi.fill(mix_buf, ffi.sizeof("float") * frames * M.session_channels, 0)
-                mix_actual_start = actual_start + src.source_offset_us
-            end
-
-            -- Cast raw userdata to float* for sample-level access
-            local float_ptr = ffi.cast("float*", pcm_ptr)
-
-            -- Sum with volume scaling
-            local n = math.min(frames, mix_frames) * M.session_channels
-            local vol = src.volume
-            for i = 0, n - 1 do
-                mix_buf[i] = mix_buf[i] + float_ptr[i] * vol
-            end
-
-            ::continue::
-        end
-
-        if mix_buf and mix_frames and mix_frames > 0 then
-            local mix_end = mix_actual_start + (mix_frames * 1000000 / M.session_sample_rate)
-
-            -- Trim mixed frames to not exceed clip boundary
-            local frames_to_push, clamped_end = trim_frames_to_clip_end(
-                mix_actual_start, mix_end, mix_frames, min_clip_end_us, "mixed PCM")
-
-            if frames_to_push > 0 then
-                qt_constants.SSE.PUSH_PCM(M.sse, mix_buf, frames_to_push, mix_actual_start)
-            end
-
-            last_pcm_range = {
-                start_us = mix_actual_start,
-                end_us = clamped_end,
-            }
-
-            logger.debug("audio_playback", string.format(
-                "Pushed mixed PCM to SSE: %.3fs - %.3fs (%d frames, %d sources)",
-                mix_actual_start / 1000000, clamped_end / 1000000,
-                frames_to_push, #M.audio_sources))
-        else
-            -- All sources had gaps
-            last_pcm_range = { start_us = pb_start, end_us = pb_end }
-        end
+            "Pushed PCM to SSE: %.3fs - %.3fs (%d frames, %d sources)",
+            pb_actual_start / 1000000, clamped_end / 1000000,
+            frames_to_push, #M.audio_sources))
     end
 
     -- Record what we requested so the cache check can suppress

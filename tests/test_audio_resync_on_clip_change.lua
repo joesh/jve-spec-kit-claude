@@ -25,8 +25,8 @@ assert(has_sources_changed, "Fix missing: set_audio_sources must detect source c
 local hot_swap_condition = content:find("not sources_changed", 1, true)
 assert(hot_swap_condition, "Fix incomplete: hot swap must check sources_changed")
 
--- Verify we check source_offset_us
-local checks_offset = content:find("source_offset_us ~= new_src.source_offset_us", 1, true)
-assert(checks_offset, "Fix incomplete: must check source_offset_us changes")
+-- Verify we check seek_us
+local checks_offset = content:find("seek_us ~= new_src.seek_us", 1, true)
+assert(checks_offset, "Fix incomplete: must check seek_us changes")
 
 print("✅ test_audio_resync_on_clip_change.lua passed")

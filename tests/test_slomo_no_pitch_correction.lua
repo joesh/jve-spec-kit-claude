@@ -87,6 +87,9 @@ local mock_cache = {
 audio_pb.set_audio_sources({{
     path = "/mock/media.mov",
     source_offset_us = 0,
+    seek_us = 0,
+    speed_ratio = 1.0,
+    clip_start_us = 0,
     volume = 1.0,
     duration_us = 3333333,
     clip_end_us = 3333333,  -- explicit boundary

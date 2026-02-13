@@ -21,7 +21,9 @@ local function detect_sources_changed(old_sources, new_sources)
             local new_src = new_sources[i]
             if not new_src then return true end
             if old_src.path ~= new_src.path then return true end
-            if old_src.source_offset_us ~= new_src.source_offset_us then return true end
+            if old_src.seek_us ~= new_src.seek_us then return true end
+            if old_src.clip_start_us ~= new_src.clip_start_us then return true end
+            if old_src.speed_ratio ~= new_src.speed_ratio then return true end
             if old_src.duration_us ~= new_src.duration_us then return true end
         end
     end
@@ -31,8 +33,8 @@ end
 -- Test 1: Different file paths
 print("  Test 1: Different file paths should trigger sources_changed...")
 do
-    local old = {{ path = "/media/clip_a.mov", source_offset_us = 0, volume = 1.0, duration_us = 1000000 }}
-    local new = {{ path = "/media/clip_b.mov", source_offset_us = 0, volume = 1.0, duration_us = 1000000 }}
+    local old = {{ path = "/media/clip_a.mov", source_offset_us = 0, seek_us = 0, speed_ratio = 1.0, clip_start_us = 0, volume = 1.0, duration_us = 1000000 }}
+    local new = {{ path = "/media/clip_b.mov", source_offset_us = 0, seek_us = 0, speed_ratio = 1.0, clip_start_us = 0, volume = 1.0, duration_us = 1000000 }}
     assert(detect_sources_changed(old, new) == true, "Different paths should trigger change")
     print("    ✓ Different paths detected")
 end
@@ -40,8 +42,8 @@ end
 -- Test 2: Same path, same offset, different volume only - should NOT change
 print("  Test 2: Volume-only change should NOT trigger sources_changed...")
 do
-    local old = {{ path = "/media/clip.mov", source_offset_us = 0, volume = 1.0, duration_us = 1000000 }}
-    local new = {{ path = "/media/clip.mov", source_offset_us = 0, volume = 0.5, duration_us = 1000000 }}
+    local old = {{ path = "/media/clip.mov", source_offset_us = 0, seek_us = 0, speed_ratio = 1.0, clip_start_us = 0, volume = 1.0, duration_us = 1000000 }}
+    local new = {{ path = "/media/clip.mov", source_offset_us = 0, seek_us = 0, speed_ratio = 1.0, clip_start_us = 0, volume = 0.5, duration_us = 1000000 }}
     assert(detect_sources_changed(old, new) == false, "Volume-only should not trigger change")
     print("    ✓ Volume-only change uses hot swap (no flush)")
 end
@@ -49,8 +51,8 @@ end
 -- Test 3: Same path, different offset (edit point within same file)
 print("  Test 3: Same path, different offset should trigger sources_changed...")
 do
-    local old = {{ path = "/media/clip.mov", source_offset_us = 0, volume = 1.0, duration_us = 800000 }}
-    local new = {{ path = "/media/clip.mov", source_offset_us = 800000, volume = 1.0, duration_us = 800000 }}
+    local old = {{ path = "/media/clip.mov", source_offset_us = 0, seek_us = 0, speed_ratio = 1.0, clip_start_us = 0, volume = 1.0, duration_us = 800000 }}
+    local new = {{ path = "/media/clip.mov", source_offset_us = 800000, seek_us = 0, speed_ratio = 1.0, clip_start_us = 800000, volume = 1.0, duration_us = 800000 }}
     assert(detect_sources_changed(old, new) == true, "Offset change should trigger change")
     print("    ✓ Offset change triggers cold path (flush)")
 end
@@ -58,8 +60,8 @@ end
 -- Test 4: Same path, different duration (clip length changed)
 print("  Test 4: Different duration should trigger sources_changed...")
 do
-    local old = {{ path = "/media/clip.mov", source_offset_us = 0, volume = 1.0, duration_us = 1000000 }}
-    local new = {{ path = "/media/clip.mov", source_offset_us = 0, volume = 1.0, duration_us = 500000 }}
+    local old = {{ path = "/media/clip.mov", source_offset_us = 0, seek_us = 0, speed_ratio = 1.0, clip_start_us = 0, volume = 1.0, duration_us = 1000000 }}
+    local new = {{ path = "/media/clip.mov", source_offset_us = 0, seek_us = 0, speed_ratio = 1.0, clip_start_us = 0, volume = 1.0, duration_us = 500000 }}
     assert(detect_sources_changed(old, new) == true, "Duration change should trigger change")
     print("    ✓ Duration change triggers cold path (flush)")
 end
@@ -67,10 +69,10 @@ end
 -- Test 5: Different source count
 print("  Test 5: Different source count should trigger sources_changed...")
 do
-    local old = {{ path = "/media/clip.mov", source_offset_us = 0, volume = 1.0, duration_us = 1000000 }}
+    local old = {{ path = "/media/clip.mov", source_offset_us = 0, seek_us = 0, speed_ratio = 1.0, clip_start_us = 0, volume = 1.0, duration_us = 1000000 }}
     local new = {
-        { path = "/media/clip.mov", source_offset_us = 0, volume = 1.0, duration_us = 1000000 },
-        { path = "/media/audio.wav", source_offset_us = 0, volume = 1.0, duration_us = 1000000 }
+        { path = "/media/clip.mov", source_offset_us = 0, seek_us = 0, speed_ratio = 1.0, clip_start_us = 0, volume = 1.0, duration_us = 1000000 },
+        { path = "/media/audio.wav", source_offset_us = 0, seek_us = 0, speed_ratio = 1.0, clip_start_us = 0, volume = 1.0, duration_us = 1000000 }
     }
     assert(detect_sources_changed(old, new) == true, "Count change should trigger change")
     print("    ✓ Source count change triggers cold path (flush)")
@@ -80,7 +82,7 @@ end
 print("  Test 6: Empty to non-empty should trigger sources_changed...")
 do
     local old = {}
-    local new = {{ path = "/media/clip.mov", source_offset_us = 0, volume = 1.0, duration_us = 1000000 }}
+    local new = {{ path = "/media/clip.mov", source_offset_us = 0, seek_us = 0, speed_ratio = 1.0, clip_start_us = 0, volume = 1.0, duration_us = 1000000 }}
     assert(detect_sources_changed(old, new) == true, "Empty to non-empty should trigger change")
     print("    ✓ Empty to non-empty triggers cold path")
 end
@@ -93,9 +95,9 @@ do
     local content = file:read("*all")
     file:close()
 
-    -- Check that we're now checking source_offset_us
-    assert(content:find("source_offset_us ~= new_src.source_offset_us", 1, true),
-        "Implementation must check source_offset_us changes")
+    -- Check that we're now checking seek_us
+    assert(content:find("seek_us ~= new_src.seek_us", 1, true),
+        "Implementation must check seek_us changes")
 
     -- Check that we're now checking duration_us
     assert(content:find("duration_us ~= new_src.duration_us", 1, true),

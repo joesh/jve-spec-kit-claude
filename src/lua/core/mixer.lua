@@ -14,10 +14,73 @@
 --
 -- @file mixer.lua
 
-local logger = require("core.logger")
 local ffi = require("ffi")
 
 local M = {}
+
+--------------------------------------------------------------------------------
+-- Time mapping: playback ↔ source with conform speed ratio
+--
+-- General formula: src_time = seek_us + (pb_time - clip_start_us) * speed_ratio
+-- When speed_ratio=1.0 this degrades to: src_time = pb_time - source_offset_us
+-- (where source_offset_us = clip_start_us - seek_us)
+--------------------------------------------------------------------------------
+
+--- Map playback time to source time for a source descriptor.
+function M.pb_to_source(src, pb_time)
+    assert(type(src.seek_us) == "number", "mixer.pb_to_source: src.seek_us must be number")
+    assert(type(src.clip_start_us) == "number", "mixer.pb_to_source: src.clip_start_us must be number")
+    assert(src.speed_ratio and src.speed_ratio > 0, "mixer.pb_to_source: src.speed_ratio must be > 0")
+    return src.seek_us + (pb_time - src.clip_start_us) * src.speed_ratio
+end
+
+--- Map source time back to playback time for a source descriptor.
+function M.source_to_pb(src, src_time)
+    assert(type(src.seek_us) == "number", "mixer.source_to_pb: src.seek_us must be number")
+    assert(type(src.clip_start_us) == "number", "mixer.source_to_pb: src.clip_start_us must be number")
+    assert(src.speed_ratio and src.speed_ratio > 0, "mixer.source_to_pb: src.speed_ratio must be > 0")
+    return src.clip_start_us + (src_time - src.seek_us) / src.speed_ratio
+end
+
+--- Resample PCM via linear interpolation (conform speed change).
+-- @param input_ptr float* input PCM buffer
+-- @param in_frames integer number of input frames
+-- @param out_frames integer number of output frames
+-- @param channels integer channel count
+-- @return float* resampled buffer, integer out_frames
+local function resample_linear(input_ptr, in_frames, out_frames, channels)
+    if in_frames == out_frames then
+        return input_ptr, out_frames
+    end
+    assert(in_frames > 0,
+        string.format("mixer.resample_linear: in_frames must be > 0, got %d", in_frames))
+    assert(out_frames > 0,
+        string.format("mixer.resample_linear: out_frames must be > 0, got %d", out_frames))
+
+    local float_in = ffi.cast("float*", input_ptr)
+    local buf = ffi.new("float[?]", out_frames * channels)
+    local ratio = in_frames / out_frames  -- > 1.0 when speeding up (compressing)
+
+    for i = 0, out_frames - 1 do
+        local src_pos = i * ratio
+        local idx = math.floor(src_pos)
+        local frac = src_pos - idx
+
+        if idx + 1 < in_frames then
+            for ch = 0, channels - 1 do
+                local s0 = float_in[idx * channels + ch]
+                local s1 = float_in[(idx + 1) * channels + ch]
+                buf[i * channels + ch] = s0 + (s1 - s0) * frac
+            end
+        else
+            for ch = 0, channels - 1 do
+                buf[i * channels + ch] = float_in[math.min(idx, in_frames - 1) * channels + ch]
+            end
+        end
+    end
+
+    return buf, out_frames
+end
 
 --------------------------------------------------------------------------------
 -- Internal: Build audio source list from sequence resolver results.
@@ -39,6 +102,8 @@ local function build_sources(audio_clips, playhead_frame, seq_fps_num, seq_fps_d
     for _, ac in ipairs(audio_clips) do
         if ac.track.soloed then any_soloed = true; break end
     end
+
+    local seq_fps = seq_fps_num / seq_fps_den
 
     for _, ac in ipairs(audio_clips) do
         local media_info = media_cache.ensure_audio_pooled(ac.media_path)
@@ -78,15 +143,23 @@ local function build_sources(audio_clips, playhead_frame, seq_fps_num, seq_fps_d
         local source_duration_us = math.floor(
             clip_duration_frames * 1000000 * clip_fps_den / clip_fps_num)
 
-        -- "Frames are frames" audio conform
+        -- "Frames are frames" audio conform: speed_ratio = seq_fps / media_video_fps
+        -- For same-fps or audio-only (rate >= 1000), speed_ratio = 1.0 (no conform).
         local media_fps_num = ac.media_fps_num
         local media_fps_den = ac.media_fps_den
         local media_video_fps = media_fps_num and media_fps_den
             and (media_fps_num / media_fps_den) or nil
         local needs_conform = media_video_fps
             and media_video_fps < 1000
-            and math.abs(media_video_fps - seq_fps_num / seq_fps_den) > 0.01
+            and math.abs(media_video_fps - seq_fps) > 0.01
 
+        local speed_ratio = 1.0
+        if needs_conform then
+            speed_ratio = seq_fps / media_video_fps
+        end
+
+        -- source_offset_us: backward-compat linear offset (exact only for speed_ratio=1.0).
+        -- For conform clips, computed at playhead for change detection / legacy consumers.
         local source_offset_us
         if needs_conform then
             local offset_tl = playhead_frame - timeline_start_frames
@@ -121,6 +194,8 @@ local function build_sources(audio_clips, playhead_frame, seq_fps_num, seq_fps_d
         sources[#sources + 1] = {
             path = ac.media_path,
             source_offset_us = source_offset_us,
+            seek_us = seek_us,
+            speed_ratio = speed_ratio,
             volume = effective_volume,
             duration_us = source_duration_us,
             clip_start_us = timeline_start_us,
@@ -159,8 +234,58 @@ function M.resolve_audio_sources(sequence, playhead_frame, seq_fps_num, seq_fps_
     return sources, clip_ids
 end
 
+--- Decode + conform a single source for a playback time window.
+-- Reads from the correct source position (scaled by speed_ratio),
+-- then resamples if conform is needed so output sample count matches
+-- the playback time window at the device sample rate.
+-- @param src source descriptor
+-- @param pb_start playback start (us)
+-- @param pb_end playback end (us)
+-- @param sample_rate output sample rate
+-- @param channels output channel count
+-- @param media_cache media_cache module
+-- @return pcm_ptr, out_frames, pb_actual_start  or nil,0,pb_start
+local function decode_source(src, pb_start, pb_end, sample_rate, channels, media_cache)
+    local speed = src.speed_ratio
+    assert(speed and speed > 0,
+        "mixer.decode_source: speed_ratio must be > 0")
+    assert(type(src.seek_us) == "number",
+        "mixer.decode_source: source missing seek_us")
+    assert(type(src.clip_start_us) == "number",
+        "mixer.decode_source: source missing clip_start_us")
+    assert(src.clip_end_us,
+        "mixer.decode_source: source missing clip_end_us")
+
+    -- Map playback range → source range
+    local src_start = math.max(0, M.pb_to_source(src, pb_start))
+    local source_end_us = M.pb_to_source(src, src.clip_end_us)
+    local src_end = math.min(source_end_us, M.pb_to_source(src, pb_end))
+
+    if src_end <= src_start then
+        return nil, 0, pb_start
+    end
+
+    local pcm_ptr, frames, actual_start = media_cache.get_audio_pcm_for_path(
+        src.path, src_start, src_end, sample_rate)
+
+    assert(pcm_ptr and frames and frames > 0, string.format(
+        "mixer.decode_source: PCM decode failed for '%s' [%.3fs-%.3fs] (ptr=%s frames=%s)",
+        src.path, src_start / 1000000, src_end / 1000000,
+        tostring(pcm_ptr), tostring(frames)))
+
+    local pb_actual_start = M.source_to_pb(src, actual_start)
+
+    -- Conform: resample source frames → output frames (speed_ratio != 1.0)
+    if math.abs(speed - 1.0) > 0.001 then
+        local out_frames = math.max(1, math.floor(frames / speed))
+        pcm_ptr, frames = resample_linear(pcm_ptr, frames, out_frames, channels)
+    end
+
+    return pcm_ptr, frames, pb_actual_start
+end
+
 --- Mix multiple audio sources into a single float buffer.
--- Extracted from audio_playback._ensure_pcm_cache() multi-source mixing path.
+-- Handles conform (speed_ratio != 1.0) via decode_source.
 -- @param sources list of source descriptors (from resolve_audio_sources)
 -- @param pb_start number playback time range start (microseconds)
 -- @param pb_end number playback time range end (microseconds)
@@ -180,38 +305,29 @@ function M.mix_sources(sources, pb_start, pb_end, sample_rate, channels, media_c
         return nil, 0, pb_start
     end
 
-    -- Single source fast path (no mixing needed, return raw decoded PCM)
+    -- Single source fast path
     if #sources == 1 then
         local src = sources[1]
-        local src_start = math.max(0, pb_start - src.source_offset_us)
-        local source_end_us = src.clip_end_us - src.source_offset_us
-        local src_end = math.min(source_end_us, pb_end - src.source_offset_us)
-        if src_end <= src_start then
+        local pcm_ptr, frames, pb_actual_start =
+            decode_source(src, pb_start, pb_end, sample_rate, channels, media_cache)
+
+        if not pcm_ptr or frames <= 0 then
             return nil, 0, pb_start
         end
-
-        local pcm_ptr, frames, actual_start = media_cache.get_audio_pcm_for_path(
-            src.path, src_start, src_end, sample_rate)
-
-        assert(pcm_ptr and frames and frames > 0, string.format(
-            "mixer.mix_sources: PCM decode failed for '%s' [%.3fs-%.3fs] (ptr=%s frames=%s)",
-            src.path, src_start / 1000000, src_end / 1000000,
-            tostring(pcm_ptr), tostring(frames)))
 
         -- Apply volume if not unity
         if src.volume ~= 1.0 then
             local float_ptr = ffi.cast("float*", pcm_ptr)
             local n = frames * channels
             local vol = src.volume
-            -- Create mixed buffer with volume applied
             local buf = ffi.new("float[?]", n)
             for i = 0, n - 1 do
                 buf[i] = float_ptr[i] * vol
             end
-            return buf, frames, actual_start + src.source_offset_us
+            return buf, frames, pb_actual_start
         end
 
-        return pcm_ptr, frames, actual_start + src.source_offset_us
+        return pcm_ptr, frames, pb_actual_start
     end
 
     -- Multi-source mixing path
@@ -220,24 +336,16 @@ function M.mix_sources(sources, pb_start, pb_end, sample_rate, channels, media_c
     local mix_actual_start = pb_start
 
     for _, src in ipairs(sources) do
-        local src_start = math.max(0, pb_start - src.source_offset_us)
-        local source_end_us = src.clip_end_us - src.source_offset_us
-        local src_end = math.min(source_end_us, pb_end - src.source_offset_us)
-        if src_end <= src_start then goto continue end
+        local pcm_ptr, frames, pb_actual_start =
+            decode_source(src, pb_start, pb_end, sample_rate, channels, media_cache)
 
-        local pcm_ptr, frames, actual_start = media_cache.get_audio_pcm_for_path(
-            src.path, src_start, src_end, sample_rate)
-
-        assert(pcm_ptr and frames and frames > 0, string.format(
-            "mixer.mix_sources: PCM decode failed for '%s' [%.3fs-%.3fs] (ptr=%s frames=%s)",
-            src.path, src_start / 1000000, src_end / 1000000,
-            tostring(pcm_ptr), tostring(frames)))
+        if not pcm_ptr or frames <= 0 then goto continue end
 
         if not mix_buf then
             mix_frames = frames
             mix_buf = ffi.new("float[?]", frames * channels)
             ffi.fill(mix_buf, ffi.sizeof("float") * frames * channels, 0)
-            mix_actual_start = actual_start + src.source_offset_us
+            mix_actual_start = pb_actual_start
         end
 
         -- Cast raw userdata to float* for sample-level access

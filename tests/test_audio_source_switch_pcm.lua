@@ -140,6 +140,9 @@ sse_target_log = {}
 audio_playback.set_audio_sources({{
     path = "/mock/clip_b.mov",
     source_offset_us = 5000000,  -- clip B starts at 5s on timeline
+    seek_us = 0,
+    speed_ratio = 1.0,
+    clip_start_us = 5000000,
     volume = 1.0,
     duration_us = 30000000,  -- 30s clip
     clip_end_us = 5000000 + 30000000,  -- explicit boundary from engine
@@ -225,6 +228,9 @@ push_pcm_log = {}
 audio_playback.set_audio_sources({{
     path = "/mock/clip_c.mov",
     source_offset_us = 15000000,  -- clip C starts at 15s on timeline
+    seek_us = 0,
+    speed_ratio = 1.0,
+    clip_start_us = 15000000,
     volume = 1.0,
     duration_us = 60000000,
     clip_end_us = 15000000 + 60000000,  -- explicit boundary from engine

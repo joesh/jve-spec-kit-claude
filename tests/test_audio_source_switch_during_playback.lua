@@ -119,6 +119,9 @@ sse_target_times = {}
 audio_playback.set_audio_sources({{
     path = "/mock/clip_b.mov",
     source_offset_us = 0,
+    seek_us = 0,
+    speed_ratio = 1.0,
+    clip_start_us = 0,
     volume = 1.0,
     duration_us = 60000000,
     clip_end_us = 60000000,  -- explicit from engine
@@ -150,6 +153,9 @@ audio_playback.seek(12000000)  -- park at 12s
 audio_playback.set_audio_sources({{
     path = "/mock/clip_c.mov",
     source_offset_us = 0,
+    seek_us = 0,
+    speed_ratio = 1.0,
+    clip_start_us = 0,
     volume = 1.0,
     duration_us = 60000000,
 }}, mock_cache)

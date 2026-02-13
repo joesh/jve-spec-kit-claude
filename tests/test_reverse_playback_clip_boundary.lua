@@ -93,6 +93,8 @@ local new_sources = {
     {
         path = "/mock/audio.wav",
         source_offset_us = 0,
+        seek_us = 0,
+        speed_ratio = 1.0,
         volume = 1.0,
         duration_us = 1000000,  -- 1 second
         clip_start_us = 2771517,  -- clip starts 1 second before end
@@ -128,6 +130,8 @@ new_sources = {
     {
         path = "/mock/audio.wav",
         source_offset_us = 0,
+        seek_us = 0,
+        speed_ratio = 1.0,
         volume = 1.0,
         duration_us = 1000000,  -- 1 second
         clip_start_us = 2000000,  -- clip starts at 2s
@@ -162,6 +166,8 @@ new_sources = {
     {
         path = "/mock/audio1.wav",
         source_offset_us = 0,
+        seek_us = 0,
+        speed_ratio = 1.0,
         volume = 1.0,
         duration_us = 1000000,
         clip_start_us = 2000000,  -- 2s
@@ -170,6 +176,8 @@ new_sources = {
     {
         path = "/mock/audio2.wav",
         source_offset_us = 0,
+        seek_us = 0,
+        speed_ratio = 1.0,
         volume = 1.0,
         duration_us = 2000000,
         clip_start_us = 1500000,  -- 1.5s

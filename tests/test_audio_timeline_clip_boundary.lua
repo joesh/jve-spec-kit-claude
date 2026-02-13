@@ -87,6 +87,9 @@ local function build_sources_like_real_code()
     return {{
         path = "/test/22D-3.mp4",
         source_offset_us = source_offset_us,
+        seek_us = source_in_us,
+        speed_ratio = 1.0,
+        clip_start_us = timeline_start_us,
         volume = 1.0,
         duration_us = clip_duration_us,
         clip_end_us = clip_end_us,
@@ -209,6 +212,9 @@ audio_playback.set_max_time(FULL_MEDIA_DURATION_US)
 local source_mode_sources = {{
     path = "/test/22D-3.mp4",
     source_offset_us = 0,  -- source mode: offset = 0
+    seek_us = 0,
+    speed_ratio = 1.0,
+    clip_start_us = 0,
     volume = 1.0,
     duration_us = FULL_MEDIA_DURATION_US,  -- Full media is correct for source mode
     clip_end_us = FULL_MEDIA_DURATION_US,  -- Source mode: clip_end = full media

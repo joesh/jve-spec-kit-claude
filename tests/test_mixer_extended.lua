@@ -119,7 +119,7 @@ do
     print("  frame 30: only A1 (A2 not yet started)")
 
     -- Frame 100: gap (A1 ends at 72, A2 ends at 96)
-    local sources100, ids100 = mixer.resolve_audio_sources(seq, 100, 24, 1, mock_media_cache)
+    local sources100, _ = mixer.resolve_audio_sources(seq, 100, 24, 1, mock_media_cache)
     assert(#sources100 == 0, "Frame 100: expected 0 sources (gap)")
 
     print("  frame 100: gap, no audio")
@@ -363,6 +363,207 @@ do
             sources[1].source_offset_us))
 
     print("  audio-only media correctly skips conform")
+end
+
+--------------------------------------------------------------------------------
+-- Test 5: Audio conform SPEED — mix_sources reads scaled source positions
+--
+-- Regression: source_offset_us is a constant additive shift (slope=1).
+-- For conformed clips the mapping is multiplicative: source_time grows faster
+-- than playback_time by ratio = seq_fps / media_fps.
+--
+-- Setup: 24fps clip on 30fps timeline.
+-- Conform ratio = 30/24 = 1.25x.
+-- At playback time 4.0s (frame 120 @ 30fps), source should be at 5.0s,
+-- not 4.0s. The difference proves the read is speed-scaled, not just offset.
+--------------------------------------------------------------------------------
+print("\n--- conform speed: mix_sources reads at scaled rate ---")
+do
+    local ffi = require("ffi")
+
+    -- Create 30fps sequence
+    assert(db:exec([[
+        INSERT INTO sequences(id, project_id, name, kind, fps_numerator, fps_denominator,
+                             audio_rate, width, height, view_start_frame, view_duration_frames,
+                             playhead_frame, created_at, modified_at)
+        VALUES('speed_seq', 'proj', 'SpeedTimeline', 'timeline', 30, 1, 48000, 1920, 1080, 0, 2000, 0,
+               strftime('%s','now'), strftime('%s','now'))
+    ]]))
+
+    assert(db:exec([[
+        INSERT INTO tracks(id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+        VALUES('spa1', 'speed_seq', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0)
+    ]]))
+
+    -- 24fps media
+    assert(db:exec([[
+        INSERT INTO media(id, project_id, file_path, name, duration_frames, fps_numerator, fps_denominator,
+                         width, height, audio_channels, codec, created_at, modified_at, metadata)
+        VALUES('spmedia', 'proj', '/test/speed24.mov', 'speed24', 2400, 24, 1, 1920, 1080, 2, 'h264',
+               strftime('%s','now'), strftime('%s','now'), '{}')
+    ]]))
+
+    -- Clip: 600 frames starting at timeline frame 0, source 0-600, clip rate 24fps
+    -- 600 frames at 30fps = 20 seconds of timeline
+    -- 600 frames at 24fps = 25 seconds of source audio
+    assert(db:exec([[
+        INSERT INTO clips(id, project_id, clip_kind, name, track_id, media_id,
+                         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+                         fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+        VALUES('spclip', 'proj', 'timeline', 'SpeedClip', 'spa1', 'spmedia', 0, 600, 0, 600, 24, 1, 1, 0,
+               strftime('%s','now'), strftime('%s','now'))
+    ]]))
+
+    local seq = Sequence.load("speed_seq")
+    assert(seq, "Failed to load speed sequence")
+
+    local speed_cache = {
+        ensure_audio_pooled = function()
+            return {
+                has_audio = true,
+                audio_sample_rate = 48000,
+                audio_channels = 2,
+                duration_us = 30000000,  -- 30 seconds
+                start_tc = 0,
+            }
+        end,
+    }
+
+    -- Resolve at frame 0 (the playhead position when playback starts)
+    local sources = mixer.resolve_audio_sources(seq, 0, 30, 1, speed_cache)
+    assert(#sources == 1, string.format("Expected 1 source, got %d", #sources))
+
+    -- ---- Test A: source descriptor must carry speed_ratio ----
+    local src = sources[1]
+    assert(src.speed_ratio ~= nil,
+        "REGRESSION: conformed source must have speed_ratio field")
+    local expected_ratio = 30 / 24  -- = 1.25
+    assert(math.abs(src.speed_ratio - expected_ratio) < 0.001,
+        string.format("speed_ratio should be %.4f, got %.4f",
+            expected_ratio, src.speed_ratio))
+
+    print(string.format("  speed_ratio=%.4f (expected %.4f)", src.speed_ratio, expected_ratio))
+
+    -- ---- Test B: mix_sources reads from scaled source position ----
+    -- Read audio at playback time 4.0s (120 frames at 30fps).
+    -- With conform 1.25x, source should be at 5.0s, not 4.0s.
+    local captured_reads = {}
+    local pcm_mock_cache = {
+        get_audio_pcm_for_path = function(path, start_us, end_us, sr)
+            captured_reads[#captured_reads + 1] = {
+                start_us = start_us,
+                end_us = end_us,
+            }
+            -- Return valid PCM buffer
+            local duration_us = end_us - start_us
+            local frames = math.max(1, math.floor(duration_us * sr / 1000000))
+            local buf = ffi.new("float[?]", frames * 2)
+            return buf, frames, start_us
+        end,
+    }
+
+    -- 1-frame chunk at 4 seconds: pb_start=4000000, pb_end=4033333
+    local pb_start = 4000000
+    local pb_end = 4033333
+
+    mixer.mix_sources({src}, pb_start, pb_end, 48000, 2, pcm_mock_cache)
+
+    assert(#captured_reads == 1,
+        string.format("Expected 1 PCM read, got %d", #captured_reads))
+
+    local read = captured_reads[1]
+
+    -- Correct source start: (pb_start - clip_start) * speed_ratio + seek
+    -- = (4000000 - 0) * 1.25 + 0 = 5000000
+    local expected_src_start = 5000000
+    -- With current bug: src_start = pb_start - source_offset = 4000000 - 0 = 4000000
+
+    assert(math.abs(read.start_us - expected_src_start) < 2000,
+        string.format(
+            "REGRESSION: source read start should be ~%dus (5.0s, conform-scaled), got %dus (%.1fs)\n"
+            .. "  Audio is reading at 1:1 speed instead of 1.25x",
+            expected_src_start, read.start_us, read.start_us / 1000000))
+
+    -- Also verify end is scaled
+    local expected_src_end = math.floor((pb_end - 0) * expected_ratio)
+    assert(math.abs(read.end_us - expected_src_end) < 2000,
+        string.format("Source read end should be ~%dus, got %dus",
+            expected_src_end, read.end_us))
+
+    print(string.format("  mix_sources read: start=%dus end=%dus (correctly scaled)",
+        read.start_us, read.end_us))
+
+    -- ---- Test C: no-conform clip has speed_ratio=1.0 ----
+    -- Use same-fps media on same 30fps sequence
+    assert(db:exec([[
+        INSERT INTO media(id, project_id, file_path, name, duration_frames, fps_numerator, fps_denominator,
+                         width, height, audio_channels, codec, created_at, modified_at, metadata)
+        VALUES('spmedia30', 'proj', '/test/speed30.mov', 'speed30', 2400, 30, 1, 1920, 1080, 2, 'h264',
+               strftime('%s','now'), strftime('%s','now'), '{}')
+    ]]))
+
+    assert(db:exec([[
+        INSERT INTO tracks(id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+        VALUES('spa2', 'speed_seq', 'A2', 'AUDIO', 2, 1, 0, 0, 0, 1.0, 0.0)
+    ]]))
+
+    assert(db:exec([[
+        INSERT INTO clips(id, project_id, clip_kind, name, track_id, media_id,
+                         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+                         fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+        VALUES('spclip30', 'proj', 'timeline', 'NoConformClip', 'spa2', 'spmedia30', 0, 600, 0, 600, 30, 1, 1, 0,
+               strftime('%s','now'), strftime('%s','now'))
+    ]]))
+
+    seq = Sequence.load("speed_seq")
+    local sources2 = mixer.resolve_audio_sources(seq, 0, 30, 1, speed_cache)
+
+    local no_conform_src
+    for _, s in ipairs(sources2) do
+        if s.clip_id == "spclip30" then no_conform_src = s end
+    end
+    assert(no_conform_src, "Should find no-conform clip")
+    assert(no_conform_src.speed_ratio == 1.0,
+        string.format("No-conform clip speed_ratio should be 1.0, got %s",
+            tostring(no_conform_src.speed_ratio)))
+
+    print("  no-conform clip: speed_ratio=1.0")
+
+    -- ---- Test D: audio-only clip (48000/1 rate) has speed_ratio=1.0 ----
+    assert(db:exec([[
+        INSERT INTO media(id, project_id, file_path, name, duration_frames, fps_numerator, fps_denominator,
+                         width, height, audio_channels, codec, created_at, modified_at, metadata)
+        VALUES('spmedia_wav', 'proj', '/test/speed_audio.wav', 'speed_audio', 480000, 48000, 1, 0, 0, 2, 'pcm',
+               strftime('%s','now'), strftime('%s','now'), '{}')
+    ]]))
+
+    assert(db:exec([[
+        INSERT INTO tracks(id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+        VALUES('spa3', 'speed_seq', 'A3', 'AUDIO', 3, 1, 0, 0, 0, 1.0, 0.0)
+    ]]))
+
+    assert(db:exec([[
+        INSERT INTO clips(id, project_id, clip_kind, name, track_id, media_id,
+                         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+                         fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+        VALUES('spclip_ao', 'proj', 'timeline', 'AudioOnlyClip', 'spa3', 'spmedia_wav', 0, 600, 0, 600000, 48000, 1, 1, 0,
+               strftime('%s','now'), strftime('%s','now'))
+    ]]))
+
+    seq = Sequence.load("speed_seq")
+    local sources3 = mixer.resolve_audio_sources(seq, 0, 30, 1, speed_cache)
+
+    local ao_src
+    for _, s in ipairs(sources3) do
+        if s.clip_id == "spclip_ao" then ao_src = s end
+    end
+    assert(ao_src, "Should find audio-only clip")
+    assert(ao_src.speed_ratio == 1.0,
+        string.format("Audio-only clip speed_ratio should be 1.0, got %s",
+            tostring(ao_src.speed_ratio)))
+
+    print("  audio-only clip: speed_ratio=1.0")
+    print("  conform speed tests passed")
 end
 
 print("\n✅ test_mixer_extended.lua passed")

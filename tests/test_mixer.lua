@@ -310,7 +310,7 @@ local function test_mix_sources_nil_media_cache_asserts()
 end
 
 local function test_mix_sources_empty_returns_nil()
-    local buf, frames, start = mixer.mix_sources(
+    local buf, frames, _ = mixer.mix_sources(
         {}, 0, 1000000, 48000, 2, mock_media_cache)
     assert(buf == nil, "Empty sources should return nil buffer")
     assert(frames == 0, "Empty sources should return 0 frames")
@@ -329,9 +329,11 @@ local function test_mix_sources_single_pcm_fail_asserts()
     local sources = {{
         path = "/test/fail.wav",
         source_offset_us = 0,
+        seek_us = 0,
+        speed_ratio = 1.0,
+        clip_start_us = 0,
         volume = 1.0,
         duration_us = 1000000,
-        clip_start_us = 0,
         clip_end_us = 1000000,
         clip_id = "clip_fail",
     }}
@@ -364,13 +366,15 @@ local function test_mix_sources_multi_pcm_fail_asserts()
     }
     local sources = {
         {
-            path = "/test/ok.wav", source_offset_us = 0, volume = 1.0,
-            duration_us = 1000000, clip_start_us = 0, clip_end_us = 1000000,
+            path = "/test/ok.wav", source_offset_us = 0, seek_us = 0,
+            speed_ratio = 1.0, clip_start_us = 0, volume = 1.0,
+            duration_us = 1000000, clip_end_us = 1000000,
             clip_id = "clip_ok",
         },
         {
-            path = "/test/fail.wav", source_offset_us = 0, volume = 1.0,
-            duration_us = 1000000, clip_start_us = 0, clip_end_us = 1000000,
+            path = "/test/fail.wav", source_offset_us = 0, seek_us = 0,
+            speed_ratio = 1.0, clip_start_us = 0, volume = 1.0,
+            duration_us = 1000000, clip_end_us = 1000000,
             clip_id = "clip_fail",
         },
     }
@@ -412,5 +416,87 @@ test_mix_sources_empty_returns_nil()
 print("Testing mixer.mix_sources() PCM decode fail-fast...")
 test_mix_sources_single_pcm_fail_asserts()
 test_mix_sources_multi_pcm_fail_asserts()
+
+-- ============================================================================
+-- NSF: source descriptor missing required fields must assert
+-- ============================================================================
+
+print("Testing mixer NSF: source descriptor field validation...")
+
+local function test_mix_sources_missing_speed_ratio_asserts()
+    local bad_sources = {{
+        path = "/test.wav", source_offset_us = 0,
+        seek_us = 0, clip_start_us = 0,
+        -- speed_ratio MISSING
+        volume = 1.0, duration_us = 1000000,
+        clip_end_us = 1000000, clip_id = "x",
+    }}
+    local ok, err = pcall(function()
+        mixer.mix_sources(bad_sources, 0, 500000, 48000, 2, mock_media_cache)
+    end)
+    assert(not ok, "Missing speed_ratio should assert")
+    assert(string.find(tostring(err), "speed_ratio"),
+        "Error should mention speed_ratio, got: " .. tostring(err))
+    print("  test_mix_sources_missing_speed_ratio_asserts passed")
+end
+
+local function test_mix_sources_missing_seek_us_asserts()
+    local bad_sources = {{
+        path = "/test.wav", source_offset_us = 0,
+        -- seek_us MISSING
+        speed_ratio = 1.0, clip_start_us = 0,
+        volume = 1.0, duration_us = 1000000,
+        clip_end_us = 1000000, clip_id = "x",
+    }}
+    local ok, err = pcall(function()
+        mixer.mix_sources(bad_sources, 0, 500000, 48000, 2, mock_media_cache)
+    end)
+    assert(not ok, "Missing seek_us should assert")
+    -- Must be an actionable assert (not a cryptic nil arithmetic error).
+    -- Check for "decode_source" (function name), not just "mixer" (which matches file path).
+    assert(string.find(tostring(err), "seek_us") and string.find(tostring(err), "decode_source"),
+        "Error should be actionable assert mentioning decode_source + seek_us, got: " .. tostring(err))
+    print("  test_mix_sources_missing_seek_us_asserts passed")
+end
+
+local function test_mix_sources_missing_clip_start_us_asserts()
+    local bad_sources = {{
+        path = "/test.wav", source_offset_us = 0,
+        seek_us = 0, speed_ratio = 1.0,
+        -- clip_start_us MISSING
+        volume = 1.0, duration_us = 1000000,
+        clip_end_us = 1000000, clip_id = "x",
+    }}
+    local ok, err = pcall(function()
+        mixer.mix_sources(bad_sources, 0, 500000, 48000, 2, mock_media_cache)
+    end)
+    assert(not ok, "Missing clip_start_us should assert")
+    -- Must be an actionable assert (not a cryptic nil arithmetic error).
+    -- Check for "decode_source" (function name), not just "mixer" (which matches file path).
+    assert(string.find(tostring(err), "clip_start_us") and string.find(tostring(err), "decode_source"),
+        "Error should be actionable assert mentioning decode_source + clip_start_us, got: " .. tostring(err))
+    print("  test_mix_sources_missing_clip_start_us_asserts passed")
+end
+
+local function test_mix_sources_zero_speed_ratio_asserts()
+    local bad_sources = {{
+        path = "/test.wav", source_offset_us = 0,
+        seek_us = 0, speed_ratio = 0, clip_start_us = 0,
+        volume = 1.0, duration_us = 1000000,
+        clip_end_us = 1000000, clip_id = "x",
+    }}
+    local ok, err = pcall(function()
+        mixer.mix_sources(bad_sources, 0, 500000, 48000, 2, mock_media_cache)
+    end)
+    assert(not ok, "Zero speed_ratio should assert")
+    assert(string.find(tostring(err), "speed_ratio"),
+        "Error should mention speed_ratio, got: " .. tostring(err))
+    print("  test_mix_sources_zero_speed_ratio_asserts passed")
+end
+
+test_mix_sources_missing_speed_ratio_asserts()
+test_mix_sources_missing_seek_us_asserts()
+test_mix_sources_missing_clip_start_us_asserts()
+test_mix_sources_zero_speed_ratio_asserts()
 
 print("✅ test_mixer.lua passed")

@@ -129,6 +129,9 @@ audio_playback.set_max_time(180000000)
 local sources = {{
     path = "/test/clip.mp4",
     source_offset_us = SOURCE_OFFSET_US,
+    seek_us = 0,
+    speed_ratio = 1.0,
+    clip_start_us = SOURCE_OFFSET_US,
     volume = 1.0,
     duration_us = CLIP_DURATION_US,
     clip_end_us = CLIP_END_US,
