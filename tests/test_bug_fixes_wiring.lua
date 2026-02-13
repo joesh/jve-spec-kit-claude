@@ -2,8 +2,8 @@
 
 -- Regression tests for 4 bugs where fixes existed but were never wired in:
 -- B1: TrimHead/TrimTail not registered in command system
--- B2: source_mark_bar.seek_to_frame doesn't sync playback_controller position
--- B3: set_timeline_mode uses 24hr fallback instead of content_end
+-- B2: mark bar seek must sync engine position (via SequenceView on_seek)
+-- B3: load_sequence uses content_end, not 24hr fallback
 -- B5: timeline_panel restore clobbers viewer title to "Timeline Viewer"
 
 require("test_env")
@@ -68,37 +68,34 @@ do
 end
 
 -- ═══════════════════════════════════════════════════════════
--- B2: mark bar seek must sync playback_controller position
--- (After mark bar refactor: on_seek callback in viewer_panel handles this)
+-- B2: mark bar seek must sync engine position
+-- (SequenceView on_seek callback calls engine:seek)
 -- ═══════════════════════════════════════════════════════════
-print("\n=== B2: seek_to_frame syncs playback_controller ===")
+print("\n=== B2: seek syncs engine position (SequenceView) ===")
 do
-    -- Mark bar delegates to on_seek callback; verify viewer_panel provides
-    -- an on_seek that calls playback_controller.set_position
-    local f = io.open("../src/lua/ui/viewer_panel.lua", "r")
-    assert(f, "Cannot open viewer_panel.lua")
+    local f = io.open("../src/lua/ui/sequence_view.lua", "r")
+    assert(f, "Cannot open sequence_view.lua")
     local content = f:read("*a")
     f:close()
 
-    check("on_seek calls set_position in viewer_panel",
+    check("on_seek calls engine:seek in sequence_view",
         content:find("on_seek") ~= nil and
-        content:find("set_position") ~= nil and
-        content:find("playback_controller") ~= nil)
+        content:find("seek") ~= nil and
+        content:find("engine") ~= nil)
 end
 
 -- ═══════════════════════════════════════════════════════════
--- B3: set_timeline_mode uses content_end, not 24hr fallback
+-- B3: load_sequence uses content_end, not 24hr fallback
 -- ═══════════════════════════════════════════════════════════
-print("\n=== B3: set_timeline_mode uses content_end ===")
+print("\n=== B3: load_sequence uses content_end ===")
 do
-    local f = io.open("../src/lua/core/playback/playback_controller.lua", "r")
-    assert(f, "Cannot open playback_controller.lua")
+    local f = io.open("../src/lua/core/playback/playback_engine.lua", "r")
+    assert(f, "Cannot open playback_engine.lua")
     local content = f:read("*a")
     f:close()
 
-    -- Should reference get_content_end_frame to get actual timeline length
-    check("set_timeline_mode references content_end",
-        content:find("get_content_end") ~= nil or content:find("content_end") ~= nil)
+    check("load_sequence references content_end",
+        content:find("content_end") ~= nil)
 end
 
 -- ═══════════════════════════════════════════════════════════
