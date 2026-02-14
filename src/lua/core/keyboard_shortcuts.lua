@@ -391,6 +391,22 @@ function keyboard_shortcuts.init(state, cmd_mgr, proj_browser, panel)
     timeline_panel = panel
     redo_toggle_state = nil
     zoom_fit_toggle_state = nil
+
+    -- Wire command_manager into registry for TOML-based dispatch
+    if shortcut_registry.set_command_manager then
+        shortcut_registry.set_command_manager(cmd_mgr)
+    end
+
+    -- Load TOML keybindings (commands dispatch via registry → command_manager.execute_ui)
+    if shortcut_registry.load_keybindings then
+        local keymap_path = "keymaps/default.jvekeys"
+        local f = io.open(keymap_path, "r")
+        if f then
+            f:close()
+            shortcut_registry.load_keybindings(keymap_path)
+        end
+    end
+
     ensure_browser_shortcuts_registered()
     register_jkl_commands()
 end
