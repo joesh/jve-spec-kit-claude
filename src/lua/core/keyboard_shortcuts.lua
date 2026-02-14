@@ -20,15 +20,11 @@ local keyboard_shortcuts = {}
 local shortcut_registry = require("core.keyboard_shortcut_registry")
 local panel_manager = require("ui.panel_manager")
 local kb_constants = require("core.keyboard_constants")
+local snapping_state = require("ui.timeline.state.snapping_state")
+local undo_redo_controller = require("core.undo_redo_controller")
 
--- Self-managed arrow key repeat: bypasses macOS key repeat rate (~12/sec)
--- with our own timer at ~30fps. Detects keyDown → start timer, keyUp → stop.
-local ARROW_STEP_MS = 33            -- ~30fps stepping (matches NLE convention)
-local ARROW_INITIAL_DELAY_MS = 200  -- delay before repeat starts
-local arrow_repeat_active = false   -- true while arrow key is held and timer is running
-local arrow_repeat_dir = 0          -- 1=right, -1=left
-local arrow_repeat_shift = false    -- shift held = 1-second jumps
-local arrow_repeat_gen = 0          -- generation counter for timer invalidation
+-- Arrow key repeat: delegates to arrow_repeat module
+local arrow_repeat = require("ui.arrow_repeat")
 
 --- Get the PlaybackEngine for the currently active SequenceMonitor.
 -- @return PlaybackEngine|nil
@@ -180,7 +176,6 @@ end
 local project_browser = nil
 local timeline_panel = nil
 local focus_manager = require("ui.focus_manager")
-local redo_toggle_state = nil
 local zoom_fit_toggle_state = nil
 
 local ACTIVATE_BROWSER_COMMAND = "ActivateBrowserSelection"
@@ -363,24 +358,10 @@ local function ensure_browser_shortcuts_registered()
     end
 end
 
--- MAGNETIC SNAPPING STATE
--- Baseline preference (persists across drags)
-local baseline_snapping_enabled = true  -- Default ON
--- Per-drag inversion (resets when drag ends)
-local drag_snapping_inverted = false
+-- MAGNETIC SNAPPING — delegates to snapping_state module
 
 local function clear_redo_toggle()
-    redo_toggle_state = nil
-end
-
-local function get_current_sequence_position()
-    if command_manager and command_manager.get_stack_state then
-        local state = command_manager.get_stack_state()
-        if state and state.current_sequence_number ~= nil then
-            return state.current_sequence_number
-        end
-    end
-    return nil
+    undo_redo_controller.clear_toggle()
 end
 
 -- Initialize with references to other modules
@@ -389,7 +370,7 @@ function keyboard_shortcuts.init(state, cmd_mgr, proj_browser, panel)
     command_manager = cmd_mgr
     project_browser = proj_browser
     timeline_panel = panel
-    redo_toggle_state = nil
+    undo_redo_controller.clear_toggle()
     zoom_fit_toggle_state = nil
 
     -- Wire command_manager into registry for TOML-based dispatch
@@ -411,30 +392,21 @@ function keyboard_shortcuts.init(state, cmd_mgr, proj_browser, panel)
     register_jkl_commands()
 end
 
--- Get effective snapping state (baseline XOR drag_inverted)
+-- Snapping API — thin wrappers around snapping_state for backward compat
 function keyboard_shortcuts.is_snapping_enabled()
-    local effective = baseline_snapping_enabled
-    if drag_snapping_inverted then
-        effective = not effective
-    end
-    return effective
+    return snapping_state.is_enabled()
 end
 
--- Toggle baseline snapping preference
 function keyboard_shortcuts.toggle_baseline_snapping()
-    baseline_snapping_enabled = not baseline_snapping_enabled
-    print(string.format("Snapping %s", baseline_snapping_enabled and "ON" or "OFF"))
+    snapping_state.toggle_baseline()
 end
 
--- Invert snapping for current drag only
 function keyboard_shortcuts.invert_drag_snapping()
-    drag_snapping_inverted = not drag_snapping_inverted
-    print(string.format("Snapping temporarily %s for this drag", keyboard_shortcuts.is_snapping_enabled() and "ON" or "OFF"))
+    snapping_state.invert_drag()
 end
 
--- Reset drag inversion (call when drag ends)
 function keyboard_shortcuts.reset_drag_snapping()
-    drag_snapping_inverted = false
+    snapping_state.reset_drag()
 end
 
 -- Check if timeline is currently dragging clips or edges
@@ -603,20 +575,6 @@ local function step_arrow_frame(dir, shift)
     execute_command("StepFrame", {direction = dir, shift = shift})
 end
 
--- Chained single-shot timer callback for arrow key repeat.
--- Schedules next tick BEFORE doing work so decode latency doesn't inflate interval.
-local function arrow_repeat_tick(gen)
-    if gen ~= arrow_repeat_gen or not arrow_repeat_active then return end
-
-    -- Schedule next tick first — keeps cadence steady regardless of decode cost
-    if qt_create_single_shot_timer then
-        qt_create_single_shot_timer(ARROW_STEP_MS, function()
-            arrow_repeat_tick(gen)
-        end)
-    end
-
-    step_arrow_frame(arrow_repeat_dir, arrow_repeat_shift)
-end
 
 -- Global key handler function (called from Qt event filter)
 -- Internal implementation of handle_key (without command event management)
@@ -672,87 +630,11 @@ local function handle_key_impl(event)
     -- Cmd/Ctrl + Z: Undo
     -- Cmd/Ctrl + Shift + Z: Redo toggle
     if key == KEY.Z and modifier_meta then
-        if modifier_shift then
-            if command_manager then
-                local current_pos = get_current_sequence_position()
-
-                if redo_toggle_state
-                    and redo_toggle_state.undo_position ~= nil
-                    and redo_toggle_state.redo_position ~= nil
-                    and current_pos == redo_toggle_state.redo_position then
-                    if command_manager.can_undo and not command_manager.can_undo() then
-                        clear_redo_toggle()
-                        return true
-                    end
-                    local undo_result = command_manager.undo()
-                    if not undo_result.success then
-                        clear_redo_toggle()
-                        if undo_result.error_message then
-                            print("ERROR: Toggle redo failed - " .. undo_result.error_message)
-                        else
-                            print("ERROR: Toggle redo failed")
-                        end
-                    else
-                        local after_pos = get_current_sequence_position()
-                        if after_pos ~= redo_toggle_state.undo_position then
-                            clear_redo_toggle()
-                        else
-                            redo_toggle_state.last_action = "undo"
-                            print("Redo toggle: returned to pre-redo state")
-                        end
-                    end
-                else
-                    if redo_toggle_state then
-                        local undo_pos = redo_toggle_state.undo_position
-                        if undo_pos ~= current_pos then
-                            clear_redo_toggle()
-                        end
-                    end
-
-                    local before_pos = current_pos
-                    if command_manager.can_redo and not command_manager.can_redo() then
-                        clear_redo_toggle()
-                        return true
-                    end
-                    local redo_result = command_manager.redo()
-                    if redo_result.success then
-                        local after_pos = get_current_sequence_position()
-                        if after_pos and after_pos ~= before_pos then
-                            redo_toggle_state = {
-                                undo_position = before_pos,
-                                redo_position = after_pos,
-                                last_action = "redo",
-                            }
-                            print("Redo complete")
-                        else
-                            clear_redo_toggle()
-                        end
-                    else
-                        clear_redo_toggle()
-                        if redo_result.error_message then
-                            print("Nothing to redo (" .. redo_result.error_message .. ")")
-                        else
-                            print("Nothing to redo")
-                        end
-                    end
-                end
-            end
-        else
-            if command_manager then
-                clear_redo_toggle()
-                if command_manager.can_undo and not command_manager.can_undo() then
-                    return true
-                end
-                local result = command_manager.undo()
-                if result.success then
-                    print("Undo complete")
-                else
-                    if result.error_message then
-                        print("ERROR: Undo failed - " .. result.error_message)
-                    else
-                        print("ERROR: Undo failed - event log may be corrupted")
-                    end
-                end
+        if command_manager then
+            if modifier_shift then
+                undo_redo_controller.handle_redo_toggle(command_manager)
+            else
+                undo_redo_controller.handle_undo(command_manager)
             end
         end
         return true
@@ -797,23 +679,7 @@ local function handle_key_impl(event)
             end
 
             local dir = (key == KEY.Right) and 1 or -1
-
-            -- Immediate first step
-            step_arrow_frame(dir, modifier_shift)
-
-            -- Start self-managed repeat timer
-            arrow_repeat_active = true
-            arrow_repeat_dir = dir
-            arrow_repeat_shift = modifier_shift
-            arrow_repeat_gen = arrow_repeat_gen + 1
-            local gen = arrow_repeat_gen
-
-            if qt_create_single_shot_timer then
-                qt_create_single_shot_timer(ARROW_INITIAL_DELAY_MS, function()
-                    arrow_repeat_tick(gen)
-                end)
-            end
-
+            arrow_repeat.start(dir, modifier_shift, step_arrow_frame)
             return true
         end
     end
@@ -1416,8 +1282,7 @@ function keyboard_shortcuts.handle_key_release(event)
 
     -- Stop arrow key repeat on real release
     if key == KEY.Left or key == KEY.Right then
-        arrow_repeat_active = false
-        arrow_repeat_gen = arrow_repeat_gen + 1  -- invalidate pending timer
+        arrow_repeat.stop()
     end
 
     return false  -- Key release is not "handled" - let it propagate
