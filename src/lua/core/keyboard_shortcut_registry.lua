@@ -1,22 +1,13 @@
---- TODO: one-line summary (human review required)
+--- Keyboard shortcut registry: TOML-based keybinding store + menu shortcut registry
 --
 -- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~238 LOC
--- Volatility: unknown
+-- - Parse TOML keybinding files (keymaps/*.jvekeys)
+-- - Store key combo → command name mappings
+-- - Dispatch key events to command_manager.execute_ui()
+-- - Menu shortcut registration (register_command/assign_shortcut)
+-- - Conflict detection, preset management
 --
 -- @file keyboard_shortcut_registry.lua
--- Original intent (unreviewed):
--- Keyboard Shortcut Registry
--- Central registry of all available commands and their assigned shortcuts
--- Supports customization, conflict detection, and preset management
 local M = {}
 local kb_constants = require("core.keyboard_constants")
 local logger = require("core.logger")
@@ -78,7 +69,6 @@ function M.register_command(command_def)
         description = command_def.description,
         default_shortcuts = default_shortcuts,
         context = command_def.context,
-        handler = command_def.handler,
         current_shortcuts = {}
     }
 end
@@ -434,14 +424,13 @@ local function context_matches(allowed_contexts, active_context)
     return false
 end
 
--- Handle a key event and execute matching command.
--- Checks TOML-based keybindings first, then falls back to handler-based commands.
+-- Handle a key event and execute matching command via TOML keybindings.
 function M.handle_key_event(key, modifiers, context)
     local combo_key = string.format("%d_%d", key, modifiers)
 
-    -- 1. Check TOML-based keybindings (new system)
+    -- TOML-based keybindings → command_manager.execute_ui()
     -- Only dispatches if: context matches AND command is registered in command_manager.
-    -- Unregistered commands fall through to legacy handler or keyboard_shortcuts cascade.
+    -- Unregistered commands fall through to keyboard_shortcuts cascade.
     local binding = M.keybindings[combo_key]
     if binding and command_manager then
         if context_matches(binding.contexts, context) then
@@ -462,30 +451,6 @@ function M.handle_key_event(key, modifiers, context)
                 return true
             end
         end
-    end
-
-    -- 2. Fall back to handler-based commands (legacy, being migrated)
-    local command_id = M.active_shortcuts[combo_key]
-    if not command_id then
-        return false
-    end
-
-    local command = M.commands[command_id]
-
-    -- Check context match (supports single context or array of contexts)
-    if command.context then
-        local contexts = type(command.context) == "table" and command.context or {command.context}
-        local matched = false
-        for _, ctx in ipairs(contexts) do
-            if ctx == context then matched = true; break end
-        end
-        if not matched then return false end
-    end
-
-    -- Execute handler
-    if command.handler then
-        command.handler()
-        return true
     end
 
     return false

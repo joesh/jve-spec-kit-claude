@@ -8,7 +8,7 @@ local timeline_state = require("ui.timeline.timeline_state")
 local timeline_view_input = require("ui.timeline.view.timeline_view_input")
 local edge_picker = require("ui.timeline.edge_picker")
 local time_utils = require("core.time_utils")
-local keyboard_shortcuts = require("core.keyboard_shortcuts")
+local snapping_state = require("ui.timeline.state.snapping_state")
 
 -- Initialize DB for command execution
 local db_path = "/tmp/jve/test_timeline_edge_drag_frames_only.db"
@@ -121,7 +121,7 @@ local edge = {clip_id = "clip_b", edge_type = "gap_before", trim_type = "ripple"
 
 local original_pick_edges = edge_picker.pick_edges
 local original_to_ms = time_utils.to_milliseconds
-local original_snapping = keyboard_shortcuts.is_snapping_enabled
+local original_snapping = snapping_state.is_enabled
 
 edge_picker.pick_edges = function()
     return {
@@ -134,7 +134,7 @@ end
 time_utils.to_milliseconds = function()
     error("edge drag should not use milliseconds", 2)
 end
-keyboard_shortcuts.is_snapping_enabled = function()
+snapping_state.is_enabled = function()
     return false
 end
 
@@ -144,7 +144,7 @@ timeline_view_input.handle_mouse(view, "move", 25, 10, 1, nil)
 
 edge_picker.pick_edges = original_pick_edges
 time_utils.to_milliseconds = original_to_ms
-keyboard_shortcuts.is_snapping_enabled = original_snapping
+snapping_state.is_enabled = original_snapping
 
 assert(view.drag_state, "drag_state should be created on move")
 assert(view.drag_state.delta_frames == 15,

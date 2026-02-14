@@ -1,50 +1,47 @@
 #!/usr/bin/env luajit
--- Regression Test: Timeline Zoom Rational Fix
--- Verifies that TimelineZoomIn handles Rational durations without crashing
+-- Regression Test: Timeline Zoom commands handle integer durations without crashing
 
-package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require('test_env')
 
-local Rational = require('core.rational')
-local keyboard_shortcuts = require('core.keyboard_shortcuts')
-
--- Mock timeline_state
+-- Mock timeline_state so zoom commands find it via pcall(require)
 local mock_state = {}
-mock_state._duration = 10000 -- 10s @ 30fps
+mock_state._duration = 10000
 mock_state.get_viewport_duration = function() return mock_state._duration end
-mock_state.set_viewport_duration = function(val) 
+mock_state.set_viewport_duration = function(val)
     mock_state._duration = val
     print("DEBUG: set_viewport_duration called with " .. tostring(val))
 end
-mock_state.get_viewport_start_time = function() return Rational.new(0, 30, 1) end
-mock_state.set_viewport_start_time = function() end
-mock_state.get_playhead_position = function() return 0 end
 
--- Inject mock state
-keyboard_shortcuts.init(mock_state, nil, nil, nil)
+package.loaded["ui.timeline.timeline_state"] = mock_state
+
+local function make_cmd(params)
+    return { get_all_parameters = function() return params or {} end }
+end
+
+local function make_set_last_error()
+    return function(msg) error(msg) end
+end
 
 print("=== Testing TimelineZoomIn ===")
-local ok, err = pcall(function()
-    keyboard_shortcuts.handle_command("TimelineZoomIn")
-end)
+local zoom_in_mod = require("core.commands.timeline_zoom_in")
+local executors = {}
+zoom_in_mod.register(executors, {}, nil, make_set_last_error())
 
-if ok then
-    print("✅ TimelineZoomIn succeeded")
-else
-    print("❌ TimelineZoomIn failed: " .. tostring(err))
-    os.exit(1)
-end
+local ok, err = pcall(executors["TimelineZoomIn"], make_cmd({ project_id = "test" }))
+assert(ok, "TimelineZoomIn failed: " .. tostring(err))
+assert(mock_state._duration == 8000,
+    "expected 8000 after 0.8x zoom, got " .. tostring(mock_state._duration))
+print("✅ TimelineZoomIn succeeded")
 
 print("=== Testing TimelineZoomOut ===")
-ok, err = pcall(function()
-    keyboard_shortcuts.handle_command("TimelineZoomOut")
-end)
+mock_state._duration = 10000
+local zoom_out_mod = require("core.commands.timeline_zoom_out")
+zoom_out_mod.register(executors, {}, nil, make_set_last_error())
 
-if ok then
-    print("✅ TimelineZoomOut succeeded")
-else
-    print("❌ TimelineZoomOut failed: " .. tostring(err))
-    os.exit(1)
-end
+ok, err = pcall(executors["TimelineZoomOut"], make_cmd({ project_id = "test" }))
+assert(ok, "TimelineZoomOut failed: " .. tostring(err))
+assert(mock_state._duration == 12500,
+    "expected 12500 after 1.25x zoom, got " .. tostring(mock_state._duration))
+print("✅ TimelineZoomOut succeeded")
 
-os.exit(0)
+print("\n✅ test_zoom_rational_fix.lua passed")

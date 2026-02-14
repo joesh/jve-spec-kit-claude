@@ -3,7 +3,6 @@ require("test_env")
 local import_schema = require("import_schema")
 local database = require("core.database")
 local timeline_state = require("ui.timeline.timeline_state")
-local keyboard_shortcuts = require("core.keyboard_shortcuts")
 
 local function with_db(fn)
     local db_path = "/tmp/jve/test_zoom_fit_toggle.db"
@@ -27,10 +26,13 @@ local function with_db(fn)
     fn(db, db_path)
 end
 
-local function reload_state()
-    timeline_state.reset()
-    assert(timeline_state.init("seq"), "failed to init timeline state")
-    keyboard_shortcuts.init(timeline_state)
+-- Set up zoom fit command executor
+local zoom_fit_mod = require("core.commands.timeline_zoom_fit")
+local executors = {}
+zoom_fit_mod.register(executors, {}, nil, function(e) error(e) end)
+
+local function make_cmd()
+    return { get_all_parameters = function() return { project_id = "proj" } end }
 end
 
 local function to_frames(value)
@@ -55,22 +57,23 @@ with_db(function(db)
         ('c2','proj','timeline','v1',NULL,'seq',5000,1000,0,1000,24,1,1,0,strftime('%s','now'),strftime('%s','now'))
     ]]))
 
-    reload_state()
+    timeline_state.reset()
+    assert(timeline_state.init("seq"), "failed to init timeline state")
+    zoom_fit_mod.clear_toggle_state()
 
     -- Start from a non-zero viewport so toggle has something to restore
-    -- All coords are integer frames
     timeline_state.set_viewport_start_time(1000)
     timeline_state.set_viewport_duration(4000)
     local initial = capture_view()
 
-    local ok1 = keyboard_shortcuts.handle_command("TimelineZoomFit")
+    local ok1 = executors["TimelineZoomFit"](make_cmd())
     assert(ok1 ~= false, "first zoom fit should succeed")
     local after_fit = capture_view()
     assert(after_fit.start_frames == 0, "zoom fit should start at 0")
     assert(after_fit.duration_frames >= 6000, "zoom fit should cover the full span")
     assert(after_fit.duration_frames ~= initial.duration_frames, "zoom fit should change viewport")
 
-    local ok2 = keyboard_shortcuts.handle_command("TimelineZoomFit")
+    local ok2 = executors["TimelineZoomFit"](make_cmd())
     assert(ok2 ~= false, "second zoom fit should restore previous view")
     local restored = capture_view()
     assert(restored.start_frames == initial.start_frames, string.format("expected start %d got %d", initial.start_frames, restored.start_frames))

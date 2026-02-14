@@ -3,7 +3,6 @@ require("test_env")
 local import_schema = require("import_schema")
 local database = require("core.database")
 local timeline_state = require("ui.timeline.timeline_state")
-local keyboard_shortcuts = require("core.keyboard_shortcuts")
 
 local function with_db(fn)
     local db_path = "/tmp/jve/test_zoom_fit.db"
@@ -29,10 +28,13 @@ local function with_db(fn)
     fn(db, db_path)
 end
 
-local function reload_state()
-    timeline_state.reset()
-    assert(timeline_state.init("seq"), "failed to init timeline state")
-    keyboard_shortcuts.init(timeline_state)
+-- Set up zoom fit command executor
+local zoom_fit_mod = require("core.commands.timeline_zoom_fit")
+local executors = {}
+zoom_fit_mod.register(executors, {}, nil, function(e) error(e) end)
+
+local function make_cmd()
+    return { get_all_parameters = function() return { project_id = "proj" } end }
 end
 
 local function current_view()
@@ -44,10 +46,8 @@ end
 
 local function assert_view(expected_start, expected_duration)
     local view = current_view()
-    local start_frames = (type(view.start_value) == "table" and view.start_value) or view.start_value
-    local duration_frames = (type(view.duration) == "table" and view.duration) or view.duration
-    assert(start_frames == expected_start, string.format("start_value expected %d got %s", expected_start, tostring(start_frames)))
-    assert(duration_frames == expected_duration, string.format("duration expected %d got %s", expected_duration, tostring(duration_frames)))
+    assert(view.start_value == expected_start, string.format("start_value expected %d got %s", expected_start, tostring(view.start_value)))
+    assert(view.duration == expected_duration, string.format("duration expected %d got %s", expected_duration, tostring(view.duration)))
 end
 
 -- Regression: ZoomFit updates viewport to cover all clips and toggles back.
@@ -58,27 +58,25 @@ with_db(function(db)
         ('c2','proj','timeline','v1',NULL,'seq',5000,1000,0,1000,24,1,1,0,strftime('%s','now'),strftime('%s','now'))
     ]]))
 
-    reload_state()
-    local initial_duration = (function()
-        local v = timeline_state.get_viewport_duration()
-        return (type(v) == "table" and v.frames) or v
-    end)()
+    timeline_state.reset()
+    assert(timeline_state.init("seq"), "failed to init timeline state")
+    zoom_fit_mod.clear_toggle_state()
+
+    local initial_duration = timeline_state.get_viewport_duration()
 
     -- Prime snapshot for toggle
     assert_view(0, initial_duration)
 
-    local ok = keyboard_shortcuts.handle_command("TimelineZoomFit")
+    local ok = executors["TimelineZoomFit"](make_cmd())
     assert(ok ~= false, "zoom fit should succeed")
 
     local view_after_fit = current_view()
-    local fit_start = (type(view_after_fit.start_value) == "table" and view_after_fit.start_value) or view_after_fit.start_value
-    local fit_duration = (type(view_after_fit.duration) == "table" and view_after_fit.duration) or view_after_fit.duration
-    assert(fit_start == 0, "zoom fit should start at 0")
-    assert(fit_duration >= 6600, "zoom fit should cover all clips with 10% buffer")
+    assert(view_after_fit.start_value == 0, "zoom fit should start at 0")
+    assert(view_after_fit.duration >= 6600, "zoom fit should cover all clips with 10% buffer")
 
     -- Toggle back to previous view
-    local ok2 = keyboard_shortcuts.handle_command("TimelineZoomFit")
-    assert(ok2 ~= false, "zoom fit toggle should succeed")
+    ok = executors["TimelineZoomFit"](make_cmd())
+    assert(ok ~= false, "zoom fit toggle should succeed")
     assert_view(0, initial_duration) -- back to initial
 end)
 

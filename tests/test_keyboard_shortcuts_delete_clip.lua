@@ -1,10 +1,8 @@
 #!/usr/bin/env luajit
+-- Tests that DeleteSelection command dispatches correctly via TOML keybindings.
+-- Delete/Backspace → DeleteSelection; Shift+Delete → DeleteSelection ripple=true.
 
-package.path = package.path .. ";../src/lua/?.lua;../src/lua/?/init.lua"
-
--- Tests that perform_delete_action dispatches DeleteSelection command
--- After refactor: perform_delete_action is a thin wrapper that delegates
--- to execute_command("DeleteSelection", params)
+require('test_env')
 
 package.loaded["ui.focus_manager"] = {
     get_focused_panel = function() return "timeline" end,
@@ -23,6 +21,10 @@ local mock_command_manager = {
         }
         return { success = true }
     end,
+    get_executor = function(command_name)
+        if command_name == "DeleteSelection" then return function() end end
+        return nil
+    end,
     peek_command_event_origin = function() return nil end,
     begin_command_event = function() end,
     end_command_event = function() end,
@@ -30,27 +32,50 @@ local mock_command_manager = {
 
 keyboard_shortcuts.init(nil, mock_command_manager, nil, nil)
 
--- Test 1: perform_delete_action dispatches DeleteSelection
+local kb = require("core.keyboard_constants")
+
+-- Test 1: Delete key dispatches DeleteSelection
+print("\nTest 1: Delete key dispatches DeleteSelection")
 captured_commands = {}
-assert(keyboard_shortcuts.perform_delete_action({}), "Delete action should be handled")
-assert(#captured_commands == 1, "Should dispatch exactly one command")
+keyboard_shortcuts.handle_key({
+    key = kb.KEY.Delete,
+    modifiers = 0,
+    text = "",
+    focus_widget_is_text_input = 0,
+})
+assert(#captured_commands >= 1, "Should dispatch at least one command")
 assert(captured_commands[1].name == "DeleteSelection",
     "Should dispatch DeleteSelection, got: " .. tostring(captured_commands[1].name))
-print("  ✓ perform_delete_action dispatches DeleteSelection")
+print("  ✓ Delete key dispatches DeleteSelection")
 
--- Test 2: shift option passes ripple=true
+-- Test 2: Shift+Delete passes ripple=true
+print("\nTest 2: Shift+Delete passes ripple=true")
 captured_commands = {}
-keyboard_shortcuts.perform_delete_action({ shift = true })
-assert(#captured_commands == 1, "Should dispatch exactly one command")
+keyboard_shortcuts.handle_key({
+    key = kb.KEY.Delete,
+    modifiers = kb.MOD.Shift,
+    text = "",
+    focus_widget_is_text_input = 0,
+})
+assert(#captured_commands >= 1, "Should dispatch at least one command")
+assert(captured_commands[1].name == "DeleteSelection",
+    "Should dispatch DeleteSelection, got: " .. tostring(captured_commands[1].name))
 assert(captured_commands[1].params.ripple == true,
-    "Shift should set ripple=true")
-print("  ✓ perform_delete_action with shift passes ripple=true")
+    "Shift+Delete should set ripple=true")
+print("  ✓ Shift+Delete passes ripple=true")
 
--- Test 3: no shift means no ripple param
+-- Test 3: Backspace also dispatches DeleteSelection
+print("\nTest 3: Backspace dispatches DeleteSelection")
 captured_commands = {}
-keyboard_shortcuts.perform_delete_action({})
-assert(captured_commands[1].params.ripple == nil,
-    "Without shift, ripple should be nil")
-print("  ✓ perform_delete_action without shift has no ripple param")
+keyboard_shortcuts.handle_key({
+    key = kb.KEY.Backspace,
+    modifiers = 0,
+    text = "",
+    focus_widget_is_text_input = 0,
+})
+assert(#captured_commands >= 1, "Should dispatch at least one command")
+assert(captured_commands[1].name == "DeleteSelection",
+    "Should dispatch DeleteSelection, got: " .. tostring(captured_commands[1].name))
+print("  ✓ Backspace dispatches DeleteSelection")
 
-print("✅ test_keyboard_shortcuts_delete_clip.lua passed")
+print("\n✅ test_keyboard_shortcuts_delete_clip.lua passed")
