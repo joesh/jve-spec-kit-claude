@@ -1,0 +1,84 @@
+# JVE Editor Default Keybindings
+# Format: "KeyCombo" = "CommandName [args...] [@context ...]"
+# Contexts: @timeline @source_monitor @timeline_monitor @project_browser
+# No context suffix = global (active in any panel)
+#
+# Args:
+#   Positional:  "MovePlayhead 1f" — first token after command name
+#   Named:       "DeleteSelection ripple=true"
+#   Duration:    1f (1 frame), -1s (minus 1 second), 30f (30 frames)
+
+[Transport]
+"Space" = "TogglePlay @timeline @source_monitor @timeline_monitor"
+"J" = "ShuttleReverse @timeline @source_monitor @timeline_monitor"
+"K" = "ShuttleStop @timeline @source_monitor @timeline_monitor"
+"L" = "ShuttleForward @timeline @source_monitor @timeline_monitor"
+
+[Navigation]
+"Home" = "GoToStart @timeline"
+"End" = "GoToEnd @timeline"
+"Up" = "GoToPrevEdit @timeline"
+"Down" = "GoToNextEdit @timeline"
+"Left" = "MovePlayhead -1f @timeline @source_monitor @timeline_monitor"
+"Right" = "MovePlayhead 1f @timeline @source_monitor @timeline_monitor"
+"Shift+Left" = "MovePlayhead -1s @timeline @source_monitor @timeline_monitor"
+"Shift+Right" = "MovePlayhead 1s @timeline @source_monitor @timeline_monitor"
+
+[Marks]
+"I" = "SetMarkIn @timeline @source_monitor"
+"O" = "SetMarkOut @timeline @source_monitor"
+"Shift+I" = "GoToMarkIn @timeline @source_monitor"
+"Shift+O" = "GoToMarkOut @timeline @source_monitor"
+"Alt+I" = "ClearMarkIn @timeline @source_monitor"
+"Alt+O" = "ClearMarkOut @timeline @source_monitor"
+"Alt+X" = "ClearMarks @timeline @source_monitor"
+"X" = "MarkClipExtent @timeline"
+
+[Timeline]
+# Selection
+"Cmd+A" = "SelectAll @timeline"
+"Cmd+Shift+A" = "DeselectAll @timeline"
+# Editing
+"Delete" = "DeleteSelection"
+"Backspace" = "DeleteSelection"
+"Shift+Delete" = "DeleteSelection ripple=true"
+"Shift+Backspace" = "DeleteSelection ripple=true"
+"Cmd+B" = "Blade @timeline"
+"Cmd+Shift+BracketLeft" = "TrimHead @timeline"
+"Cmd+Shift+BracketRight" = "TrimTail @timeline"
+"Comma" = "Nudge -1f @timeline"
+"Period" = "Nudge 1f @timeline"
+"Shift+Comma" = "Nudge -5f @timeline"
+"Shift+Period" = "Nudge 5f @timeline"
+# Insert/Overwrite
+"F9" = "Insert @timeline"
+"F10" = "Overwrite @timeline"
+# Zoom
+"Shift+Z" = "TimelineZoomFit @timeline"
+"Cmd+Equal" = "TimelineZoomIn @timeline"
+"Cmd+Plus" = "TimelineZoomIn @timeline"
+"Cmd+Minus" = "TimelineZoomOut @timeline"
+# Snapping
+"N" = "ToggleSnapping @timeline"
+# Tools
+"E" = "ExtendEdit @timeline"
+"Q" = "SelectTool @timeline"
+"W" = "TrackSelectTool @timeline"
+"R" = "RippleTool @timeline"
+"T" = "RollTool @timeline"
+
+[View]
+"Cmd+2" = "SelectPanel inspector"
+"Cmd+3" = "SelectPanel timeline"
+"Cmd+4" = "SelectPanel project_browser"
+"Tilde" = "ToggleMaximizePanel"
+"Shift+Grave" = "ToggleMaximizePanel"
+
+[Browser]
+"Return" = "OpenBrowserSelection @project_browser"
+"F2" = "RenameItem @project_browser"
+
+[Application]
+"Cmd+Z" = "Undo"
+"Cmd+Shift+Z" = "Redo"
+"F12" = "ReportBug"

@@ -20,7 +20,7 @@ local M = {}
 
 local qt_constants = require('core.qt_constants')
 local registry = require('core.keyboard_shortcut_registry')
-local keyboard_shortcuts = require('core.keyboard_shortcuts')
+local kb_constants = require('core.keyboard_constants')
 local bit = require('bit')
 
 local WIDGET = qt_constants.WIDGET
@@ -107,13 +107,13 @@ local function build_shortcut_string(key, modifiers)
 end
 
 local function is_modifier_key(key)
-    local KEY = keyboard_shortcuts.KEY
+    local KEY = kb_constants.KEY
     return key == KEY.Shift or key == KEY.Control or key == KEY.Alt or key == KEY.Meta
 end
 
 local function modifier_flag_for_key(key)
-    local MOD = keyboard_shortcuts.MOD
-    local KEY = keyboard_shortcuts.KEY
+    local MOD = kb_constants.MOD
+    local KEY = kb_constants.KEY
     if key == KEY.Shift then
         return MOD.Shift
     elseif key == KEY.Control then

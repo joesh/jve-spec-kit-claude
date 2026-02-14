@@ -18,6 +18,7 @@
 -- Central registry of all available commands and their assigned shortcuts
 -- Supports customization, conflict detection, and preset management
 local M = {}
+local kb_constants = require("core.keyboard_constants")
 
 -- Command registry: all commands that can have shortcuts
 -- Format: {id, category, name, description, default_shortcuts, handler}
@@ -81,8 +82,8 @@ function M.parse_shortcut(shortcut_string)
     local modifiers = 0
     local key_name = parts[#parts]  -- Last part is the key
 
-    local KEY = require('core.keyboard_shortcuts').KEY
-    local MOD = require('core.keyboard_shortcuts').MOD
+    local KEY = kb_constants.KEY
+    local MOD = kb_constants.MOD
 
     -- Parse modifiers
     for i = 1, #parts - 1 do
@@ -126,7 +127,7 @@ end
 -- Format a key combo as human-readable string
 function M.format_shortcut(key, modifiers)
     local parts = {}
-    local MOD = require('core.keyboard_shortcuts').MOD
+    local MOD = kb_constants.MOD
     local bit = require("bit")
 
     -- Platform-specific ordering
@@ -144,7 +145,7 @@ function M.format_shortcut(key, modifiers)
     end
 
     -- Add key name
-    local KEY = require('core.keyboard_shortcuts').KEY
+    local KEY = kb_constants.KEY
     local key_name = nil
 
     -- Reverse lookup in KEY table
