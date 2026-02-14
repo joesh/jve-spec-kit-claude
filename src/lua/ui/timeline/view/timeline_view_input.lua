@@ -19,7 +19,7 @@
 local M = {}
 local ui_constants = require("core.ui_constants")
 local edge_picker = require("ui.timeline.edge_picker")
-local keyboard_shortcuts = require("core.keyboard_shortcuts")
+local snapping_state = require("ui.timeline.state.snapping_state")
 local focus_manager = require("ui.focus_manager")
 local magnetic_snapping = require("core.magnetic_snapping")
 local TimelineActiveRegion = require("core.timeline_active_region")
@@ -562,7 +562,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             view.pending_gap_click = nil
             local current_time = state.pixel_to_time(x, width)
 
-            if keyboard_shortcuts.is_snapping_enabled() then
+            if snapping_state.is_enabled() then
                 if view.drag_state.type == "clips" then
                     local delta = current_time - view.drag_state.start_value
                     local best_snap = nil
@@ -671,7 +671,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 state.clear_active_edge_drag_state()
             end
             view.drag_state = nil
-            keyboard_shortcuts.reset_drag_snapping()
+            snapping_state.reset_drag()
             if drag.type ~= "edges" then
                 view.render()
             end

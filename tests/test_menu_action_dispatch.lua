@@ -1,7 +1,7 @@
 #!/usr/bin/env luajit
 
--- Regression: B2 — Menu action "Delete" must dispatch to perform_delete_action,
--- not try to execute a nonexistent "Delete" command via command_manager.
+-- Menu action dispatch: all commands route through execute_ui except
+-- Insert/Overwrite (need project_browser context) and Quit.
 
 require("test_env")
 
@@ -17,16 +17,7 @@ local function check(label, condition)
     end
 end
 
-print("\n=== B2: Menu action dispatch table ===")
-
--- Stub keyboard_shortcuts.perform_delete_action
-local delete_call_count = 0
-package.loaded["core.keyboard_shortcuts"] = {
-    perform_delete_action = function(_opts)
-        delete_call_count = delete_call_count + 1
-        return true
-    end,
-}
+print("\n=== Menu action dispatch table ===")
 
 -- Stub command_manager
 local executed_commands = {}
@@ -43,6 +34,8 @@ local mock_cm = {
     can_redo = function() return true end,
     undo = function() end,
     redo = function() end,
+    add_listener = function() return function() end end,
+    remove_listener = function() end,
 }
 
 -- Stub lxp (XML parser, not available in test env)
@@ -70,28 +63,38 @@ db_mod.get_current_project_id = function() return "test_proj" end
 local menu_system = require("core.menu_system")
 menu_system.init(nil, mock_cm)
 
--- ─── Test 1: "Delete" → dispatches to perform_delete_action ───
-print("\n--- Delete → perform_delete_action ---")
+-- ─── Test 1: "Undo" → dispatches through execute_ui ───
+print("\n--- Undo → execute_ui ---")
 do
-    local before = delete_call_count
-    local cb = menu_system._test_get_action_callback("Delete")
-    cb()
-    check("Delete dispatched to keyboard_shortcuts", delete_call_count > before)
-    check("Delete NOT sent to command_manager", #executed_commands == 0)
-end
-
--- ─── Test 2: "Undo" still works via dispatch table ───
-print("\n--- Undo → command_manager.undo ---")
-do
-    local undo_called = false
-    mock_cm.undo = function() undo_called = true end
+    executed_commands = {}
     local cb = menu_system._test_get_action_callback("Undo")
     cb()
-    check("Undo dispatched correctly", undo_called)
+    check("Undo dispatched via execute_ui", #executed_commands == 1)
+    check("Correct command name", executed_commands[1] == "Undo")
 end
 
--- ─── Test 3: Unknown command → falls through to command_manager ───
-print("\n--- Unknown → command_manager.execute ---")
+-- ─── Test 2: "Redo" → dispatches through execute_ui ───
+print("\n--- Redo → execute_ui ---")
+do
+    executed_commands = {}
+    local cb = menu_system._test_get_action_callback("Redo")
+    cb()
+    check("Redo dispatched via execute_ui", #executed_commands == 1)
+    check("Correct command name", executed_commands[1] == "Redo")
+end
+
+-- ─── Test 3: "DeleteSelection" → dispatches through execute_ui ───
+print("\n--- DeleteSelection → execute_ui ---")
+do
+    executed_commands = {}
+    local cb = menu_system._test_get_action_callback("DeleteSelection")
+    cb()
+    check("DeleteSelection dispatched via execute_ui", #executed_commands == 1)
+    check("Correct command name", executed_commands[1] == "DeleteSelection")
+end
+
+-- ─── Test 4: Unknown command → falls through to execute_ui ───
+print("\n--- Unknown → execute_ui ---")
 do
     executed_commands = {}
     local cb = menu_system._test_get_action_callback("SomeOtherCommand")
@@ -100,7 +103,7 @@ do
     check("Correct command name passed", executed_commands[1] == "SomeOtherCommand")
 end
 
--- ─── Test 4: Insert menu → project_browser, NOT raw command ───
+-- ─── Test 5: Insert menu → project_browser, NOT raw command ───
 print("\n--- Insert → project_browser.add_selected_to_timeline ---")
 do
     local insert_called_with = nil
@@ -116,7 +119,7 @@ do
     check("Insert NOT sent to raw command", #executed_commands == 0)
 end
 
--- ─── Test 5: Overwrite menu → project_browser, NOT raw command ───
+-- ─── Test 6: Overwrite menu → project_browser, NOT raw command ───
 print("\n--- Overwrite → project_browser.add_selected_to_timeline ---")
 do
     local overwrite_called_with = nil

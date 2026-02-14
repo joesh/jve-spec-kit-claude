@@ -10,7 +10,7 @@
 -- - Dialog handling (moved to commands)
 --
 -- Invariants:
--- - All menu items dispatch to commands (except Undo/Redo/Quit)
+-- - All menu items dispatch to commands (except Insert/Overwrite/Quit)
 -- - Menu item name = command name (no indirection)
 --
 -- Size: ~400 LOC
@@ -390,31 +390,7 @@ local function create_action_callback(command_name, params)
 
         logger.debug("menu", string.format("Menu clicked: %s", tostring(command_name)))
 
-        -- Special handling for meta-commands (not data commands)
-        if command_name == "Undo" then
-            if command_manager.can_undo and not command_manager.can_undo() then
-                return
-            end
-            command_manager.undo()
-            update_undo_redo_actions()
-            return
-        end
-
-        if command_name == "Redo" then
-            if command_manager.can_redo and not command_manager.can_redo() then
-                return
-            end
-            command_manager.redo()
-            update_undo_redo_actions()
-            return
-        end
-
-        if command_name == "Delete" then
-            local keyboard_shortcuts = require("core.keyboard_shortcuts")
-            keyboard_shortcuts.perform_delete_action()
-            return
-        end
-
+        -- Special handling for commands that need external context gathering
         if command_name == "Insert" or command_name == "Overwrite" then
             local project_browser = require("ui.project_browser")
             project_browser.add_selected_to_timeline(command_name, {advance_playhead = true})

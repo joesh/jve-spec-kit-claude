@@ -251,6 +251,16 @@ function M.execute_ui(command_name, params)
         if params.sequence_id == nil and active_sequence_id ~= nil and active_sequence_id ~= "" then
             params.sequence_id = active_sequence_id
         end
+        -- Auto-resolve playhead from active sequence monitor
+        if params.playhead == nil then
+            local ok_pm, pm = pcall(require, "ui.panel_manager")
+            if ok_pm and pm and pm.get_active_sequence_monitor then
+                local sv = pm.get_active_sequence_monitor()
+                if sv and sv.engine and sv.engine.get_position then
+                    params.playhead = sv.engine:get_position()
+                end
+            end
+        end
         result = M.execute(command_name, params)
     end, debug.traceback)
 

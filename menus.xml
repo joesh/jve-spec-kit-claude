@@ -35,7 +35,7 @@
     <item name="Cut" command="Cut" shortcut="Cmd+X"/>
     <item name="Copy" command="Copy" shortcut="Cmd+C"/>
     <item name="Paste" command="Paste" shortcut="Cmd+V"/>
-    <item name="Delete" command="Delete" shortcut="Delete"/>
+    <item name="Delete" command="DeleteSelection" shortcut="Delete"/>
     <separator/>
     <item name="Select All" command="SelectAll" shortcut="Cmd+A"/>
     <item name="Deselect All" command="DeselectAll" shortcut="Cmd+Shift+A"/>
