@@ -51,11 +51,17 @@ local mock_command_manager = {
     end_command_event = function() end,
 }
 
-keyboard_shortcuts.init(timeline_state, mock_command_manager, nil, nil)
+local mock_project_browser = {
+    add_selected_to_timeline = function() end,
+}
+local mock_timeline_panel = {
+    is_dragging = function() return false end,
+}
+keyboard_shortcuts.init(timeline_state, mock_command_manager, mock_project_browser, mock_timeline_panel)
 
 local event = {
     key = keyboard_shortcuts.KEY.B,
-    modifiers = keyboard_shortcuts.MOD.Meta,
+    modifiers = keyboard_shortcuts.MOD.Control,  -- Qt: Command key = ControlModifier on macOS
     text = "b",
     focus_widget_is_text_input = 0,
 }

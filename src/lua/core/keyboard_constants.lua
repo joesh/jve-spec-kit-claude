@@ -63,6 +63,12 @@ M.MOD = {
     Control = 0x04000000,
     Alt = 0x08000000,
     Meta = 0x10000000,
+    Keypad = 0x20000000,
 }
+
+-- Mask of modifiers significant for shortcut matching.
+-- Strips KeypadModifier (0x20000000) and GroupSwitchModifier (0x40000000)
+-- which Qt adds to arrow keys, numpad keys, etc.
+M.SIGNIFICANT_MOD_MASK = 0x1E000000  -- Shift | Control | Alt | Meta
 
 return M

@@ -182,7 +182,10 @@ local function reset_environment()
     timeline_moves = {}
     timeline_marks = { last_in = nil, last_out = nil }
     focus_manager.set_focused_panel(nil)
-    keyboard_shortcuts.init(timeline_state, command_manager_stub, nil, timeline_panel_stub)
+    local project_browser_stub = {
+        add_selected_to_timeline = function() end,
+    }
+    keyboard_shortcuts.init(timeline_state, command_manager_stub, project_browser_stub, timeline_panel_stub)
 end
 
 -- Test 1: Arrow keys ignored when timeline does not have focus
@@ -236,7 +239,7 @@ reset_environment()
 focus_manager.set_focused_panel("inspector")
 handled = keyboard_shortcuts.handle_key({
     key = KEY.Z,
-    modifiers = MOD.Meta,
+    modifiers = MOD.Control,  -- Qt: Command key = ControlModifier on macOS
     text = "",
     focus_widget_is_text_input = false,
 })

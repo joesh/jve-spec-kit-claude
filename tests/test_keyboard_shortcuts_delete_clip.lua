@@ -30,7 +30,21 @@ local mock_command_manager = {
     end_command_event = function() end,
 }
 
-keyboard_shortcuts.init(nil, mock_command_manager, nil, nil)
+local mock_timeline_state = {
+    get_playhead_position = function() return 0 end,
+    get_project_id = function() return "test_project" end,
+    get_sequence_id = function() return "test_sequence" end,
+    get_selected_clips = function() return {} end,
+    get_selected_edges = function() return {} end,
+    get_clips = function() return {} end,
+}
+local mock_project_browser = {
+    add_selected_to_timeline = function() end,
+}
+local mock_timeline_panel = {
+    is_dragging = function() return false end,
+}
+keyboard_shortcuts.init(mock_timeline_state, mock_command_manager, mock_project_browser, mock_timeline_panel)
 
 local kb = require("core.keyboard_constants")
 

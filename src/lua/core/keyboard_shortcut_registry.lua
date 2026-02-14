@@ -88,17 +88,22 @@ function M.parse_shortcut(shortcut_string)
     local MOD = kb_constants.MOD
 
     -- Parse modifiers
+    -- Qt swaps Control/Meta on macOS:
+    --   Command key (⌘) → Qt::ControlModifier (0x04000000)
+    --   Control key (^) → Qt::MetaModifier (0x10000000)
     for i = 1, #parts - 1 do
         local mod = parts[i]:lower()
         if mod == "cmd" or mod == "command" then
-            -- On macOS use Meta, on others use Control
+            -- Command key: ControlModifier on all platforms
+            -- (on macOS Qt maps Command to ControlModifier)
+            modifiers = modifiers + MOD.Control
+        elseif mod == "ctrl" or mod == "control" then
+            -- Physical Control key: MetaModifier on macOS, ControlModifier elsewhere
             if jit.os == "OSX" then
                 modifiers = modifiers + MOD.Meta
             else
                 modifiers = modifiers + MOD.Control
             end
-        elseif mod == "ctrl" or mod == "control" then
-            modifiers = modifiers + MOD.Control
         elseif mod == "alt" or mod == "option" then
             modifiers = modifiers + MOD.Alt
         elseif mod == "shift" then
@@ -133,12 +138,14 @@ function M.format_shortcut(key, modifiers)
     local bit = require("bit")
 
     -- Platform-specific ordering
+    -- Qt swaps Control/Meta on macOS:
+    --   ControlModifier = Command key (⌘), MetaModifier = Control key (^)
     if jit.os == "OSX" then
-        -- Mac order: Cmd, Shift, Alt, Ctrl
-        if bit.band(modifiers, MOD.Meta) ~= 0 then table.insert(parts, "Cmd") end
+        -- Mac order: Cmd, Shift, Option, Ctrl
+        if bit.band(modifiers, MOD.Control) ~= 0 then table.insert(parts, "Cmd") end
         if bit.band(modifiers, MOD.Shift) ~= 0 then table.insert(parts, "Shift") end
         if bit.band(modifiers, MOD.Alt) ~= 0 then table.insert(parts, "Option") end
-        if bit.band(modifiers, MOD.Control) ~= 0 then table.insert(parts, "Ctrl") end
+        if bit.band(modifiers, MOD.Meta) ~= 0 then table.insert(parts, "Ctrl") end
     else
         -- Windows/Linux order: Ctrl, Alt, Shift
         if bit.band(modifiers, MOD.Control) ~= 0 then table.insert(parts, "Ctrl") end
@@ -393,6 +400,9 @@ function M.load_keybindings(file_path)
             "load_keybindings: section [" .. category .. "] must be a table")
         for key_combo_str, value_str in pairs(entries) do
             local binding = M.parse_binding_value(value_str)
+            assert(binding, string.format(
+                "load_keybindings: bad binding value '%s' for key '%s' in [%s]",
+                tostring(value_str), key_combo_str, category))
             binding.category = category
 
             -- Parse key combo to get combo_key for lookup
@@ -404,6 +414,8 @@ function M.load_keybindings(file_path)
             local combo_key = string.format("%d_%d", shortcut.key, shortcut.modifiers)
             binding.shortcut = shortcut
             M.keybindings[combo_key] = binding
+            logger.trace("keyboard_shortcut_registry", string.format(
+                "  loaded: '%s' → combo_key=%s → %s", key_combo_str, combo_key, binding.command_name))
             count = count + 1
         end
     end
@@ -426,34 +438,59 @@ end
 
 -- Handle a key event and execute matching command via TOML keybindings.
 function M.handle_key_event(key, modifiers, context)
+    -- Strip non-significant modifiers (KeypadModifier, GroupSwitchModifier)
+    -- that Qt adds to arrow keys, numpad keys, etc.
+    local bit = require("bit")
+    modifiers = bit.band(modifiers, kb_constants.SIGNIFICANT_MOD_MASK)
     local combo_key = string.format("%d_%d", key, modifiers)
 
-    -- TOML-based keybindings → command_manager.execute_ui()
-    -- Only dispatches if: context matches AND command is registered in command_manager.
-    -- Unregistered commands fall through to keyboard_shortcuts cascade.
     local binding = M.keybindings[combo_key]
-    if binding and command_manager then
-        if context_matches(binding.contexts, context) then
-            -- Only dispatch if command is registered (allows incremental migration)
-            if command_manager.get_executor(binding.command_name) then
-                local params = {}
-                for k, v in pairs(binding.named_params) do
-                    params[k] = v
-                end
-                if #binding.positional_args > 0 then
-                    params._positional = binding.positional_args
-                end
-                local result = command_manager.execute_ui(binding.command_name, params)
-                if result and not result.success and result.error_message then
-                    logger.warn("keyboard_shortcut_registry",
-                        string.format("%s: %s", binding.command_name, result.error_message))
-                end
-                return true
-            end
-        end
+    if not binding then
+        logger.trace("keyboard_shortcut_registry", string.format(
+            "  no TOML binding for combo_key=%s", combo_key))
+        return false
     end
 
-    return false
+    logger.trace("keyboard_shortcut_registry", string.format(
+        "  found binding: combo_key=%s → command='%s' contexts={%s}",
+        combo_key, binding.command_name,
+        table.concat(binding.contexts or {}, ",")))
+
+    assert(command_manager,
+        string.format("handle_key_event: command_manager not set (binding '%s' for key %s)",
+            binding.command_name, combo_key))
+
+    if not context_matches(binding.contexts, context) then
+        logger.trace("keyboard_shortcut_registry", string.format(
+            "  context mismatch: active='%s' required={%s}",
+            tostring(context), table.concat(binding.contexts or {}, ",")))
+        return false
+    end
+
+    logger.trace("keyboard_shortcut_registry", string.format(
+        "  context matched, looking up executor for '%s'", binding.command_name))
+
+    assert(command_manager.get_executor(binding.command_name),
+        string.format("handle_key_event: TOML binding '%s' has no registered executor (combo %s)",
+            binding.command_name, binding.shortcut and binding.shortcut.string or combo_key))
+
+    local params = {}
+    for k, v in pairs(binding.named_params) do
+        params[k] = v
+    end
+    if #binding.positional_args > 0 then
+        params._positional = binding.positional_args
+    end
+
+    logger.trace("keyboard_shortcut_registry", string.format(
+        "  dispatching %s via execute_ui", binding.command_name))
+
+    local result = command_manager.execute_ui(binding.command_name, params)
+    if result and not result.success and result.error_message then
+        logger.warn("keyboard_shortcut_registry",
+            string.format("%s: %s", binding.command_name, result.error_message))
+    end
+    return true
 end
 
 return M

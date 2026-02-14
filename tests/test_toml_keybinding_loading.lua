@@ -108,8 +108,8 @@ assert_binding(KEY.Delete, 0, "DeleteSelection", "Delete")
 assert_binding(KEY.Backspace, 0, "DeleteSelection", "Backspace")
 assert_binding(KEY.Delete, MOD.Shift, "DeleteSelection", "Shift+Delete")
 assert_named(KEY.Delete, MOD.Shift, "ripple", true, "Shift+Delete ripple")
-assert_binding(KEY.B, MOD.Meta, "Blade", "Cmd+B")
-assert_contexts(KEY.B, MOD.Meta, {"timeline"}, "Cmd+B contexts")
+assert_binding(KEY.B, MOD.Control, "Blade", "Cmd+B")
+assert_contexts(KEY.B, MOD.Control, {"timeline"}, "Cmd+B contexts")
 print("  ✓ Editing bindings: Delete, Backspace, Shift+Delete(ripple), Cmd+B")
 
 -- ═════════════════════════════════════════
@@ -123,21 +123,21 @@ print("  ✓ Zoom bindings: Shift+Z")
 -- View
 -- ═════════════════════════════════════════
 print("\n--- View ---")
-assert_binding(KEY.Key2, MOD.Meta, "SelectPanel", "Cmd+2")
-assert_positional(KEY.Key2, MOD.Meta, 1, "inspector", "Cmd+2 positional")
-assert_binding(KEY.Key3, MOD.Meta, "SelectPanel", "Cmd+3")
-assert_positional(KEY.Key3, MOD.Meta, 1, "timeline", "Cmd+3 positional")
+assert_binding(KEY.Key2, MOD.Control, "SelectPanel", "Cmd+2")
+assert_positional(KEY.Key2, MOD.Control, 1, "inspector", "Cmd+2 positional")
+assert_binding(KEY.Key3, MOD.Control, "SelectPanel", "Cmd+3")
+assert_positional(KEY.Key3, MOD.Control, 1, "timeline", "Cmd+3 positional")
 print("  ✓ View bindings: Cmd+2, Cmd+3")
 
 -- ═════════════════════════════════════════
 -- Application (global, no context)
 -- ═════════════════════════════════════════
 print("\n--- Application ---")
-assert_binding(KEY.Z, MOD.Meta, "Undo", "Cmd+Z")
-assert_binding(KEY.Z, MOD.Meta + MOD.Shift, "Redo", "Cmd+Shift+Z")
+assert_binding(KEY.Z, MOD.Control, "Undo", "Cmd+Z")
+assert_binding(KEY.Z, MOD.Control + MOD.Shift, "Redo", "Cmd+Shift+Z")
 -- Global commands should have empty contexts
 do
-    local c = combo(KEY.Z, MOD.Meta)
+    local c = combo(KEY.Z, MOD.Control)
     local binding = registry.keybindings[c]
     assert(#binding.contexts == 0,
         "Undo should be global (no context restriction), got " .. #binding.contexts .. " contexts")
