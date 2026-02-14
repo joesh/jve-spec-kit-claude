@@ -75,7 +75,7 @@
 "Shift+Grave" = "ToggleMaximizePanel"
 
 [Browser]
-"Return" = "OpenBrowserSelection @project_browser"
+"Return" = "ActivateBrowserSelection @project_browser"
 "F2" = "RenameItem @project_browser"
 
 [Application]
