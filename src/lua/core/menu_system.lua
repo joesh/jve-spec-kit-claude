@@ -413,8 +413,12 @@ local function create_action_callback(command_name, params)
         end
 
         -- Pure command dispatch for everything else
+        -- Copy params to avoid mutating the closure's table (project_id would become stale)
         local project_id = get_active_project_id()
-        local command_params = params or {}
+        local command_params = {}
+        if params then
+            for k, v in pairs(params) do command_params[k] = v end
+        end
         command_params.project_id = command_params.project_id or project_id
 
 		local result_value
