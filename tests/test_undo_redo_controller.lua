@@ -195,10 +195,14 @@ do
         get_stack_state = function() return { current_sequence_number = pos } end,
     }
 
-    urc.handle_redo_toggle(mock)
-    -- Failed redo should clear toggle; next call is fresh attempt
-    urc.handle_redo_toggle(mock)
-    -- Should not have called undo (no toggle state to toggle back from)
+    local r1 = urc.handle_redo_toggle(mock)
+    assert(not r1.success, "first failed redo should return success=false")
+    -- Failed redo should clear toggle; next call is fresh attempt (not toggle-back)
+    local undo_called = false
+    mock.undo = function() undo_called = true; pos = pos - 1; return { success = true } end
+    local r2 = urc.handle_redo_toggle(mock)
+    assert(not r2.success, "second failed redo should also return success=false")
+    assert(not undo_called, "toggle state should be cleared — undo must NOT be called on second attempt")
     assert(pos == 1, "pos should remain 1 after failed redos")
 end
 

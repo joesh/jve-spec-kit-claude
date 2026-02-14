@@ -29,9 +29,10 @@ function M.handle_undo(command_manager)
 
     M.clear_toggle()
     if command_manager.can_undo and not command_manager.can_undo() then
-        return
+        return { success = false, error_message = "nothing to undo" }
     end
     local result = command_manager.undo()
+    assert(type(result) == "table", "undo_redo_controller.handle_undo: undo() must return table")
     if result.success then
         print("Undo complete")
     else
@@ -41,6 +42,7 @@ function M.handle_undo(command_manager)
             print("ERROR: Undo failed - event log may be corrupted")
         end
     end
+    return result
 end
 
 --- Handle redo toggle (Cmd+Shift+Z).
@@ -58,9 +60,10 @@ function M.handle_redo_toggle(command_manager)
         and current_pos == redo_toggle_state.redo_position then
         if command_manager.can_undo and not command_manager.can_undo() then
             M.clear_toggle()
-            return
+            return { success = false, error_message = "nothing to undo (toggle)" }
         end
         local undo_result = command_manager.undo()
+        assert(type(undo_result) == "table", "undo_redo_controller.handle_redo_toggle: undo() must return table")
         if not undo_result.success then
             M.clear_toggle()
             if undo_result.error_message then
@@ -77,7 +80,7 @@ function M.handle_redo_toggle(command_manager)
                 print("Redo toggle: returned to pre-redo state")
             end
         end
-        return
+        return undo_result
     end
 
     -- Not at redo position → do a redo
@@ -91,9 +94,10 @@ function M.handle_redo_toggle(command_manager)
     local before_pos = current_pos
     if command_manager.can_redo and not command_manager.can_redo() then
         M.clear_toggle()
-        return
+        return { success = false, error_message = "nothing to redo" }
     end
     local redo_result = command_manager.redo()
+    assert(type(redo_result) == "table", "undo_redo_controller.handle_redo_toggle: redo() must return table")
     if redo_result.success then
         local after_pos = get_current_sequence_position(command_manager)
         if after_pos and after_pos ~= before_pos then
@@ -114,6 +118,7 @@ function M.handle_redo_toggle(command_manager)
             print("Nothing to redo")
         end
     end
+    return redo_result
 end
 
 return M
