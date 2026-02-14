@@ -52,19 +52,25 @@ do
     check("TrimTail undoer loads", type(undoers["TrimTail"]) == "function")
 end
 
--- Verify KEY table has BracketLeft and BracketRight
+-- Verify KEY table has BracketLeft/BracketRight and TOML has TrimHead/TrimTail
 print("\n=== B1: BracketLeft/BracketRight in KEY table ===")
 do
-    local f = io.open("../src/lua/core/keyboard_shortcuts.lua", "r")
-    assert(f, "Cannot open keyboard_shortcuts.lua")
+    local f = io.open("../src/lua/core/keyboard_constants.lua", "r")
+    assert(f, "Cannot open keyboard_constants.lua")
     local content = f:read("*a")
     f:close()
 
     check("BracketLeft in KEY table", content:find("BracketLeft") ~= nil)
     check("BracketRight in KEY table", content:find("BracketRight") ~= nil)
-    -- Verify the shortcut handler references TrimHead/TrimTail
-    check("TrimHead in keyboard handler", content:find("TrimHead") ~= nil)
-    check("TrimTail in keyboard handler", content:find("TrimTail") ~= nil)
+
+    -- TrimHead/TrimTail dispatch through TOML keybindings
+    local f2 = io.open("../keymaps/default.jvekeys", "r")
+    assert(f2, "Cannot open default.jvekeys")
+    local toml = f2:read("*a")
+    f2:close()
+
+    check("TrimHead in keybinding config", toml:find("TrimHead") ~= nil)
+    check("TrimTail in keybinding config", toml:find("TrimTail") ~= nil)
 end
 
 -- ═══════════════════════════════════════════════════════════

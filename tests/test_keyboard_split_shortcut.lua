@@ -1,6 +1,5 @@
 #!/usr/bin/env luajit
--- Regression: Cmd/Ctrl+B (Blade/Split) should dispatch a BatchCommand to SplitClip without errors.
--- Current bug: timeline_state lacks get_clips_at_time, causing "attempt to call nil value" during shortcut handling.
+-- Regression: Cmd/Ctrl+B (Blade/Split) should dispatch Blade command via TOML keybindings.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
@@ -8,14 +7,12 @@ require("test_env")
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local timeline_state = require("ui.timeline.timeline_state")
 local data = require("ui.timeline.state.timeline_state_data")
-local dkjson = require("dkjson")
-local Command = require("command")
 
 -- Focus panel needs to be "timeline" for the shortcut to be active.
 local focus_manager = require("ui.focus_manager")
 focus_manager.get_focused_panel = function() return "timeline" end
 
--- Prepare a clip under the playhead.
+-- Prepare timeline state
 timeline_state.reset()
 data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
 data.state.project_id = "test_project"
@@ -34,18 +31,24 @@ data.state.clips = { clip }
 data.state.selected_clips = { clip }
 timeline_state.set_playhead_position(10)
 
--- Stub command manager to capture the dispatched command.
-local captured_command = nil
+-- Stub command manager with execute_ui + get_executor for TOML dispatch
+local captured_commands = {}
 local mock_command_manager = {
-    execute = function(command_or_name, params)
-        if type(command_or_name) == "table" then
-            captured_command = command_or_name
-        else
-            -- Create a proper Command object so the test can call :get_parameter()
-            captured_command = Command.create(command_or_name, params.project_id or "test_project", params)
-        end
+    execute_ui = function(command_name, params)
+        captured_commands[#captured_commands + 1] = {
+            name = command_name,
+            params = params or {},
+        }
         return { success = true }
-    end
+    end,
+    get_executor = function(command_name)
+        -- Return a dummy for Blade so TOML dispatch works
+        if command_name == "Blade" then return function() end end
+        return nil
+    end,
+    peek_command_event_origin = function() return nil end,
+    begin_command_event = function() end,
+    end_command_event = function() end,
 }
 
 keyboard_shortcuts.init(timeline_state, mock_command_manager, nil, nil)
@@ -62,15 +65,8 @@ local ok, err = pcall(function()
 end)
 
 assert(ok, "keyboard_shortcuts.handle_key errored: " .. tostring(err))
-assert(captured_command, "BatchCommand was not dispatched")
-assert(captured_command.type == "BatchCommand", "Expected BatchCommand, got " .. tostring(captured_command.type))
+assert(#captured_commands > 0, "Blade command was not dispatched")
+assert(captured_commands[1].name == "Blade",
+    "Expected Blade command, got: " .. tostring(captured_commands[1].name))
 
-local payload = captured_command:get_parameter("commands_json")
-assert(payload, "commands_json missing from dispatched BatchCommand")
-local specs = dkjson.decode(payload)
-assert(type(specs) == "table" and #specs == 1, "Expected one SplitClip spec, got " .. tostring(specs and #specs))
-assert(specs[0] == nil, "commands_json should be an array")
-assert(specs[1].command_type == "SplitClip", "Expected SplitClip command, got " .. tostring(specs[1].command_type))
-assert(specs[1].parameters.clip_id == clip.id, "SplitClip target clip mismatch")
-
-print("✅ Cmd/Ctrl+B dispatched SplitClip BatchCommand without errors")
+print("✅ Cmd/Ctrl+B dispatches Blade command via TOML keybindings")

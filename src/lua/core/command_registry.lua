@@ -48,13 +48,22 @@ local module_aliases = {
     -- Unified mark commands live in set_marks.lua
     SetMarkIn = "core.commands.set_marks",
     SetMarkOut = "core.commands.set_marks",
+    SetMark = "core.commands.set_marks",
     ClearMarkIn = "core.commands.set_marks",
     ClearMarkOut = "core.commands.set_marks",
+    ClearMark = "core.commands.set_marks",
     ClearMarks = "core.commands.set_marks",
     GetMarkIn = "core.commands.set_marks",
     GetMarkOut = "core.commands.set_marks",
     GoToMarkIn = "core.commands.set_marks",
     GoToMarkOut = "core.commands.set_marks",
+    GoToMark = "core.commands.set_marks",
+
+    -- Playback commands live in playback.lua (multi-register)
+    TogglePlay = "core.commands.playback",
+    ShuttleForward = "core.commands.playback",
+    ShuttleReverse = "core.commands.playback",
+    ShuttleStop = "core.commands.playback",
 }
 function M.init(database, set_last_error_fn)
     db = database

@@ -149,6 +149,23 @@ function command_manager_stub.execute(command_arg)
     return {success = true}
 end
 
+function command_manager_stub.execute_ui(command_name, params)
+    table.insert(command_manager_stub.executed_commands, command_name)
+    return {success = true}
+end
+
+function command_manager_stub.get_executor(command_name)
+    -- Return a dummy executor so TOML dispatch works
+    return function() end
+end
+
+function command_manager_stub.peek_command_event_origin()
+    return nil
+end
+
+function command_manager_stub.begin_command_event() end
+function command_manager_stub.end_command_event() end
+
 local timeline_panel_stub = {
     is_dragging = function()
         return false
@@ -190,12 +207,12 @@ handled = keyboard_shortcuts.handle_key({
     focus_widget_is_text_input = false,
 })
 assert_true(handled, "Right arrow should be handled when timeline has focus")
--- Arrow keys now dispatch StepFrame command (tested in test_step_frame_command.lua)
-local found_step = false
+-- Arrow keys dispatch MovePlayhead command via arrow_repeat
+local found_move = false
 for _, cmd in ipairs(command_manager_stub.executed_commands) do
-    if cmd == "StepFrame" then found_step = true; break end
+    if cmd == "MovePlayhead" then found_move = true; break end
 end
-assert_true(found_step, "Right arrow should dispatch StepFrame command")
+assert_true(found_move, "Right arrow should dispatch MovePlayhead command")
 
 -- Test 3: Text inputs bypass timeline shortcuts
 reset_environment()
@@ -214,7 +231,7 @@ for _, cmd in ipairs(command_manager_stub.executed_commands) do
 end
 assert_false(found_mark_in, "SetMarkIn should not dispatch while typing in text field")
 
--- Test 4: Undo is still handled as a global shortcut
+-- Test 4: Undo is still handled as a global shortcut (via TOML dispatch)
 reset_environment()
 focus_manager.set_focused_panel("inspector")
 handled = keyboard_shortcuts.handle_key({
@@ -224,7 +241,11 @@ handled = keyboard_shortcuts.handle_key({
     focus_widget_is_text_input = false,
 })
 assert_true(handled, "Cmd/Ctrl+Z should be treated as a global command")
-assert_equal(command_manager_stub.undo_calls, 1, "Global undo should be invoked exactly once")
+local found_undo = false
+for _, cmd in ipairs(command_manager_stub.executed_commands) do
+    if cmd == "Undo" then found_undo = true; break end
+end
+assert_true(found_undo, "Cmd+Z should dispatch Undo command")
 
 -- Test 5: Return activates browser selection only when browser focused
 reset_environment()

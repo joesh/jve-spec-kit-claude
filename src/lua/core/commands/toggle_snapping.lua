@@ -1,6 +1,6 @@
---- ToggleSnapping command: toggle magnetic snapping on/off.
+--- ToggleSnapping command: context-aware magnetic snapping toggle.
 --
--- Non-undoable. Toggles the baseline snapping preference (not drag inversion).
+-- Non-undoable. During drag → invert drag snapping. Otherwise → toggle baseline.
 --
 -- @file toggle_snapping.lua
 local M = {}
@@ -15,7 +15,14 @@ local SPEC = {
 function M.register(executors, undoers, db)
     local function executor(command)
         local snapping_state = require("ui.timeline.state.snapping_state")
-        snapping_state.toggle_baseline()
+        -- During active drag, N inverts snapping for this drag only.
+        -- Outside drag, N toggles the baseline preference.
+        local ok, ks = pcall(require, "core.keyboard_shortcuts")
+        if ok and ks and ks.is_dragging and ks.is_dragging() then
+            snapping_state.invert_drag()
+        else
+            snapping_state.toggle_baseline()
+        end
         return true
     end
 

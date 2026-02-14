@@ -19,18 +19,15 @@
 "End" = "GoToEnd @timeline"
 "Up" = "GoToPrevEdit @timeline"
 "Down" = "GoToNextEdit @timeline"
-"Left" = "MovePlayhead -1f @timeline @source_monitor @timeline_monitor"
-"Right" = "MovePlayhead 1f @timeline @source_monitor @timeline_monitor"
-"Shift+Left" = "MovePlayhead -1s @timeline @source_monitor @timeline_monitor"
-"Shift+Right" = "MovePlayhead 1s @timeline @source_monitor @timeline_monitor"
+# Left/Right handled in keyboard_shortcuts.lua (arrow repeat management)
 
 [Marks]
-"I" = "SetMarkIn @timeline @source_monitor"
-"O" = "SetMarkOut @timeline @source_monitor"
-"Shift+I" = "GoToMarkIn @timeline @source_monitor"
-"Shift+O" = "GoToMarkOut @timeline @source_monitor"
-"Alt+I" = "ClearMarkIn @timeline @source_monitor"
-"Alt+O" = "ClearMarkOut @timeline @source_monitor"
+"I" = "SetMark in @timeline @source_monitor"
+"O" = "SetMark out @timeline @source_monitor"
+"Shift+I" = "GoToMark in @timeline @source_monitor"
+"Shift+O" = "GoToMark out @timeline @source_monitor"
+"Alt+I" = "ClearMark in @timeline @source_monitor"
+"Alt+O" = "ClearMark out @timeline @source_monitor"
 "Alt+X" = "ClearMarks @timeline @source_monitor"
 "X" = "MarkClipExtent @timeline"
 
@@ -46,13 +43,9 @@
 "Cmd+B" = "Blade @timeline"
 "Cmd+Shift+BracketLeft" = "TrimHead @timeline"
 "Cmd+Shift+BracketRight" = "TrimTail @timeline"
-"Comma" = "Nudge -1f @timeline"
-"Period" = "Nudge 1f @timeline"
-"Shift+Comma" = "Nudge -5f @timeline"
-"Shift+Period" = "Nudge 5f @timeline"
-# Insert/Overwrite
-"F9" = "Insert @timeline"
-"F10" = "Overwrite @timeline"
+# Comma/Period handled in keyboard_shortcuts.lua (edge vs clip context gathering)
+# E handled in keyboard_shortcuts.lua (edge context gathering)
+# F9/F10 handled in keyboard_shortcuts.lua (project_browser context gathering)
 # Zoom
 "Shift+Z" = "TimelineZoomFit @timeline"
 "Cmd+Equal" = "TimelineZoomIn @timeline"
@@ -61,7 +54,6 @@
 # Snapping
 "N" = "ToggleSnapping @timeline"
 # Tools
-"E" = "ExtendEdit @timeline"
 "Q" = "SelectTool @timeline"
 "W" = "TrackSelectTool @timeline"
 "R" = "RippleTool @timeline"

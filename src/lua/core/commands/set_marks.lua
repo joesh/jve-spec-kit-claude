@@ -305,18 +305,159 @@ function M.register(executors, undoers)
     end
 
     ---------------------------------------------------------------------------
+    -- SetMark (positional alias): "SetMark in" → SetMarkIn, "SetMark out" → SetMarkOut
+    ---------------------------------------------------------------------------
+    local SET_MARK_SPEC = {
+        undoable = true,
+        args = {
+            _positional = {},
+            sequence_id = { required = true, kind = "string" },
+            frame = { kind = "number" },
+        },
+    }
+    executors["SetMark"] = function(command)
+        local args = command:get_all_parameters()
+        local pos = args._positional or {}
+        assert(#pos >= 1, "SetMark: positional arg required (in/out)")
+        local which = pos[1]
+        assert(which == "in" or which == "out",
+            "SetMark: positional arg must be 'in' or 'out', got: " .. tostring(which))
+
+        -- Auto-resolve frame from playhead if not provided
+        local frame = args.frame
+        if frame == nil then
+            local pm = require("ui.panel_manager")
+            local sv = pm.get_active_sequence_monitor()
+            assert(sv and sv.engine, "SetMark: no active sequence monitor for playhead")
+            frame = sv.engine:get_position()
+        end
+        assert(type(frame) == "number", "SetMark: frame must be a number")
+
+        local seq = load_sequence(args.sequence_id)
+        if which == "in" then
+            command:set_parameter("_old_mark_in", seq.mark_in)
+            seq.mark_in = frame
+        else
+            command:set_parameter("_old_mark_out", seq.mark_out)
+            seq.mark_out = frame + 1  -- exclusive
+        end
+        command:set_parameter("_which", which)
+        command:set_parameter("frame", frame)
+        seq:save()
+        emit_marks_changed(args.sequence_id)
+        return { success = true }
+    end
+
+    undoers["SetMark"] = function(command)
+        local args = command:get_all_parameters()
+        local seq = load_sequence(args.sequence_id)
+        if args._which == "in" then
+            seq.mark_in = args._old_mark_in
+        else
+            seq.mark_out = args._old_mark_out
+        end
+        seq:save()
+        emit_marks_changed(args.sequence_id)
+        return { success = true }
+    end
+
+    ---------------------------------------------------------------------------
+    -- GoToMark (positional alias): "GoToMark in" → GoToMarkIn, etc.
+    ---------------------------------------------------------------------------
+    local GO_TO_MARK_SPEC = {
+        undoable = false,
+        args = {
+            _positional = {},
+            sequence_id = { required = true, kind = "string" },
+        },
+    }
+    executors["GoToMark"] = function(command)
+        local args = command:get_all_parameters()
+        local pos = args._positional or {}
+        assert(#pos >= 1, "GoToMark: positional arg required (in/out)")
+        local which = pos[1]
+        assert(which == "in" or which == "out",
+            "GoToMark: positional arg must be 'in' or 'out', got: " .. tostring(which))
+
+        local seq = load_sequence(args.sequence_id)
+        if which == "in" then
+            if seq.mark_in then
+                seq.playhead_position = seq.mark_in
+                seq:save()
+                Signals.emit("playhead_changed", args.sequence_id, seq.mark_in)
+            end
+        else
+            if seq.mark_out then
+                local target = seq.mark_out - 1
+                seq.playhead_position = target
+                seq:save()
+                Signals.emit("playhead_changed", args.sequence_id, target)
+            end
+        end
+        return { success = true }
+    end
+
+    ---------------------------------------------------------------------------
+    -- ClearMark (positional alias): "ClearMark in" → ClearMarkIn, etc.
+    ---------------------------------------------------------------------------
+    local CLEAR_MARK_SPEC = {
+        undoable = true,
+        args = {
+            _positional = {},
+            sequence_id = { required = true, kind = "string" },
+        },
+    }
+    executors["ClearMark"] = function(command)
+        local args = command:get_all_parameters()
+        local pos = args._positional or {}
+        assert(#pos >= 1, "ClearMark: positional arg required (in/out)")
+        local which = pos[1]
+        assert(which == "in" or which == "out",
+            "ClearMark: positional arg must be 'in' or 'out', got: " .. tostring(which))
+
+        local seq = load_sequence(args.sequence_id)
+        if which == "in" then
+            command:set_parameter("_old_mark_in", seq.mark_in)
+            seq.mark_in = nil
+        else
+            command:set_parameter("_old_mark_out", seq.mark_out)
+            seq.mark_out = nil
+        end
+        command:set_parameter("_which", which)
+        seq:save()
+        emit_marks_changed(args.sequence_id)
+        return { success = true }
+    end
+
+    undoers["ClearMark"] = function(command)
+        local args = command:get_all_parameters()
+        local seq = load_sequence(args.sequence_id)
+        if args._which == "in" then
+            seq.mark_in = args._old_mark_in
+        else
+            seq.mark_out = args._old_mark_out
+        end
+        seq:save()
+        emit_marks_changed(args.sequence_id)
+        return { success = true }
+    end
+
+    ---------------------------------------------------------------------------
     -- Return registrations (multi-command style B)
     ---------------------------------------------------------------------------
     return {
         ["SetMarkIn"] = { executor = executors["SetMarkIn"], undoer = undoers["SetMarkIn"], spec = SET_MARK_IN_SPEC },
         ["SetMarkOut"] = { executor = executors["SetMarkOut"], undoer = undoers["SetMarkOut"], spec = SET_MARK_OUT_SPEC },
+        ["SetMark"] = { executor = executors["SetMark"], undoer = undoers["SetMark"], spec = SET_MARK_SPEC },
         ["ClearMarkIn"] = { executor = executors["ClearMarkIn"], undoer = undoers["ClearMarkIn"], spec = CLEAR_MARK_IN_SPEC },
         ["ClearMarkOut"] = { executor = executors["ClearMarkOut"], undoer = undoers["ClearMarkOut"], spec = CLEAR_MARK_OUT_SPEC },
+        ["ClearMark"] = { executor = executors["ClearMark"], undoer = undoers["ClearMark"], spec = CLEAR_MARK_SPEC },
         ["ClearMarks"] = { executor = executors["ClearMarks"], undoer = undoers["ClearMarks"], spec = CLEAR_MARKS_SPEC },
         ["GetMarkIn"] = { executor = executors["GetMarkIn"], spec = GET_MARK_IN_SPEC },
         ["GetMarkOut"] = { executor = executors["GetMarkOut"], spec = GET_MARK_OUT_SPEC },
         ["GoToMarkIn"] = { executor = executors["GoToMarkIn"], spec = GO_TO_MARK_IN_SPEC },
         ["GoToMarkOut"] = { executor = executors["GoToMarkOut"], spec = GO_TO_MARK_OUT_SPEC },
+        ["GoToMark"] = { executor = executors["GoToMark"], spec = GO_TO_MARK_SPEC },
     }
 end
 

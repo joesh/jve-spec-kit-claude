@@ -1,67 +1,83 @@
 require('test_env')
 
--- Tests that JKL handlers assert when media metadata is invalid
--- (not silently skip init and schedule broken tick)
+-- Tests that playback command executors handle missing/invalid media gracefully
+-- (not crash when no sequence loaded)
 
 print("=== Test JKL Requires Valid Media ===")
 
-_G.qt_create_single_shot_timer = function(interval, callback) end
+-- Track playback calls
+local shuttle_called
 
--- Track what happens (variables needed for mock callbacks but not read in test)
--- luacheck: ignore shuttle_called assert_fired
-local shuttle_called = false
-local assert_fired = false
+-- Mock engine
+local mock_engine = {}
+function mock_engine:is_playing() return false end
+function mock_engine:play() end
+function mock_engine:stop() end
+function mock_engine:shuttle(dir) shuttle_called = true end
+function mock_engine:slow_play(dir) end
 
--- Mock registry
-package.loaded["core.keyboard_shortcut_registry"] = {
-    commands = {},
-    register_command = function(cmd)
-        package.loaded["core.keyboard_shortcut_registry"].commands[cmd.id] = cmd
-    end,
-    assign_shortcut = function() return true end,
-    handle_key_event = function() return false end,
-}
-
--- Mock panel_manager with no sequence loaded (simulates no media state)
-local mock_sv_no_seq = {
+-- Mock SequenceMonitor — starts with no sequence
+local mock_sv = {
     sequence_id = nil,
     total_frames = 0,
-    engine = { shuttle = function() shuttle_called = true end },
+    engine = mock_engine,
 }
-function mock_sv_no_seq:has_clip() return false end
 
-local mock_pm = {
-    toggle_active_panel = function() end,
-    get_active_sequence_monitor = function() return mock_sv_no_seq end,
-    get_sequence_monitor = function() return mock_sv_no_seq end,
+-- Mock panel_manager
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return mock_sv end,
+    get_sequence_monitor = function() return mock_sv end,
 }
-package.loaded["ui.panel_manager"] = mock_pm
-package.loaded["ui.focus_manager"] = { get_focused_panel = function() return "source_monitor" end }
 
-package.loaded["core.keyboard_shortcuts"] = nil
-local keyboard_shortcuts = require("core.keyboard_shortcuts")
-keyboard_shortcuts.init(nil, nil, nil, nil)
+-- Load playback command module and register executors
+local playback_mod = require("core.commands.playback")
+local executors = {}
+local undoers = {}
+local registered = playback_mod.register(executors, undoers, nil)
 
-local registry = package.loaded["core.keyboard_shortcut_registry"]
+-- Extract executor from registration
+local shuttle_fwd = registered.ShuttleForward.executor
+assert(shuttle_fwd, "ShuttleForward executor should be registered")
+
+-- Mock command object (executors receive a command object)
+local mock_command = {
+    get_all_parameters = function() return {} end,
+    set_parameter = function() end,
+}
 
 print("\nTest 1: L with no sequence loaded should silently return (not crash)")
-local handler = registry.commands["playback.forward"].handler
 shuttle_called = false
-
--- With no sequence loaded, ensure_playback_initialized returns false, handler returns nil
-local ok, err = pcall(handler)
-assert(ok, "Handler should NOT assert when no sequence loaded, got: " .. tostring(err))
+local ok, err = pcall(shuttle_fwd, mock_command)
+assert(ok, "Executor should NOT crash when no sequence loaded, got: " .. tostring(err))
 assert(not shuttle_called, "shuttle should not have been called")
 print("  ✓ Silently returns when no sequence loaded")
 
 print("\nTest 2: L with sequence loaded should call shuttle")
-mock_sv_no_seq.sequence_id = "test_seq"
-mock_sv_no_seq.total_frames = 100
+mock_sv.sequence_id = "test_seq"
+mock_sv.total_frames = 100
 shuttle_called = false
 
-ok, err = pcall(handler)
-assert(ok, "Handler should succeed when sequence loaded, got: " .. tostring(err))
+ok, err = pcall(shuttle_fwd, mock_command)
+assert(ok, "Executor should succeed when sequence loaded, got: " .. tostring(err))
 assert(shuttle_called, "shuttle should have been called")
 print("  ✓ shuttle called when sequence loaded")
+
+print("\nTest 3: K sets k_held, then K+L triggers slow_play")
+local slow_play_called
+function mock_engine:slow_play(dir) slow_play_called = true end
+
+local shuttle_stop = registered.ShuttleStop.executor
+shuttle_stop(mock_command)  -- K press sets k_held
+assert(playback_mod.is_k_held(), "k_held should be true after ShuttleStop")
+
+shuttle_called = false
+slow_play_called = false
+shuttle_fwd(mock_command)  -- L while k_held → slow_play
+assert(slow_play_called, "K+L should trigger slow_play")
+assert(not shuttle_called, "K+L should not trigger shuttle")
+print("  ✓ K+L triggers slow_play instead of shuttle")
+
+-- Clean up k_held state
+playback_mod.set_k_held(false)
 
 print("\n✅ test_jkl_requires_valid_media.lua passed")
