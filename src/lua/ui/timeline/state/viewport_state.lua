@@ -148,8 +148,9 @@ function M.set_playhead_position(time_obj, persist_callback, selection_callback)
     assert(type(time_obj) == "number" and time_obj == math.floor(time_obj),
         "viewport_state.set_playhead_position: time must be integer frame, got " .. tostring(time_obj))
 
-    local changed = state.playhead_position ~= time_obj
-    state.playhead_position = time_obj
+    local clamped = math.max(0, time_obj)
+    local changed = state.playhead_position ~= clamped
+    state.playhead_position = clamped
 
     local viewport_adjusted = ensure_playhead_visible()
 
@@ -194,7 +195,7 @@ function M.pixel_to_time(pixel, viewport_width)
 
     local pixels_per_frame = viewport_width / duration_frames
     local delta_frames = pixel / pixels_per_frame
-    return math.floor(start_frames + delta_frames + 0.5)
+    return math.max(0, math.floor(start_frames + delta_frames + 0.5))
 end
 
 function M.push_viewport_guard()

@@ -256,7 +256,7 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     -- For masterclips: restore playhead from DB
     if seq:is_masterclip() then
         local saved_playhead = seq.playhead_position or 0
-        if saved_playhead > 0 and saved_playhead < self.total_frames then
+        if saved_playhead > 0 then
             self.playhead = saved_playhead
             self.engine:seek(saved_playhead)
         else
@@ -318,9 +318,7 @@ function SequenceMonitor:seek_to_frame(frame)
     self.engine:seek(frame)
 
     -- engine:seek uses set_position_silent (no callback), update manually
-    local clamped = math.max(0, math.min(
-        math.floor(frame), self.total_frames - 1))
-    self.playhead = clamped
+    self.playhead = math.max(0, math.floor(frame))
     if self.sequence and self.sequence:is_masterclip() then
         self:_schedule_persist()
     end
@@ -373,11 +371,10 @@ end
 function SequenceMonitor:set_playhead(frame)
     assert(frame ~= nil, string.format(
         "SequenceMonitor(%s):set_playhead: frame is nil", self.view_id))
-    local clamped = math.max(0, math.min(
-        math.floor(frame), math.max(0, self.total_frames - 1)))
-    if clamped == self.playhead then return end
+    local pos = math.max(0, math.floor(frame))
+    if pos == self.playhead then return end
 
-    self.playhead = clamped
+    self.playhead = pos
     self:_notify()
     if self.sequence and self.sequence:is_masterclip() then
         self:_schedule_persist()

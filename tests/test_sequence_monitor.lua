@@ -411,7 +411,7 @@ do
     assert(view.playhead == 0, "clamped to 0")
 
     view:set_playhead(999)
-    assert(view.playhead == 99, "clamped to total_frames-1")
+    assert(view.playhead == 999, "no upper clamp — playhead free beyond content")
 
     view:set_playhead(50.7)
     assert(view.playhead == 50, "floored")
@@ -792,10 +792,10 @@ do
     timer_callbacks = {}
     view:load_sequence(mc_id)  -- 100 frames
 
-    -- Seek beyond end → clamped to 99
+    -- Seek beyond end → no upper clamp, playhead free
     view:seek_to_frame(200)
-    assert(view.playhead == 99,
-        "seek beyond end clamped to 99, got " .. view.playhead)
+    assert(view.playhead == 200,
+        "seek beyond end not clamped, got " .. view.playhead)
 
     -- Seek to negative → engine asserts (frame >= 0)
     -- engine:seek asserts frame_idx >= 0, so this should assert
@@ -895,10 +895,9 @@ do
     timer_callbacks = {}
     view:load_sequence(mc_id)
 
-    -- total_frames=100, so saved playhead=999 should NOT be restored
-    -- (the condition checks saved_playhead < total_frames)
-    assert(view.playhead == 0,
-        "out-of-bounds playhead not restored, got " .. view.playhead)
+    -- Playhead is free — no upper clamp. 999 is valid and should restore.
+    assert(view.playhead == 999,
+        "saved playhead should restore, got " .. view.playhead)
 
     -- Reset for other tests
     view:set_playhead(0)
