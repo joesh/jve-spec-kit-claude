@@ -67,6 +67,9 @@ function SequenceInspectable:set(field, value)
                 ["value"] = value,
         project_id = self.project_id,
     })
+    assert(type(result) == "table",
+        string.format("SequenceInspectable:set(%s): execute() returned %s, expected table",
+            tostring(field), type(result)))
     if not result.success then
         return false, result.error_message or "failed to update sequence"
     end

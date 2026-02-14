@@ -54,6 +54,7 @@ function M.register(executors, undoers, db)
             local clip_last_frame = clip_start + best_clip.duration - 1
             local args = command:get_all_parameters()
             local seq_id = args.sequence_id or timeline_state.get_sequence_id()
+            assert(seq_id, "MarkClipExtent: sequence_id missing from args and timeline_state")
 
             local command_manager = require("core.command_manager")
             command_manager.execute("SetMarkIn", {sequence_id = seq_id, frame = clip_start})

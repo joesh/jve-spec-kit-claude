@@ -39,6 +39,7 @@ function M.register(executors, undoers, db)
     local function toggle_play_executor(command)
         if not ensure_playback_initialized() then return true end
         local engine = get_active_engine()
+        assert(engine, "TogglePlay: engine is nil after playback initialized")
         if engine:is_playing() then
             engine:stop()
         else
@@ -50,6 +51,7 @@ function M.register(executors, undoers, db)
     local function shuttle_forward_executor(command)
         if not ensure_playback_initialized() then return true end
         local engine = get_active_engine()
+        assert(engine, "ShuttleForward: engine is nil after playback initialized")
         if k_held then
             engine:slow_play(1)   -- K+L = slow forward
         else
@@ -61,6 +63,7 @@ function M.register(executors, undoers, db)
     local function shuttle_reverse_executor(command)
         if not ensure_playback_initialized() then return true end
         local engine = get_active_engine()
+        assert(engine, "ShuttleReverse: engine is nil after playback initialized")
         if k_held then
             engine:slow_play(-1)  -- K+J = slow reverse
         else

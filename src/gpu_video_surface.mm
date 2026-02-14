@@ -195,7 +195,11 @@ void GPUVideoSurface::setFrame(const std::shared_ptr<emp::Frame>& frame) {
         return;
     }
 
-    JVE_ASSERT(m_initialized, "Metal not initialized");
+    if (!m_initialized) initMetal();
+    if (!m_initialized) {
+        qDebug() << "GPUVideoSurface::setFrame: Metal not initialized, dropping frame";
+        return;
+    }
 
 #ifdef EMP_HAS_VIDEOTOOLBOX
     void* hw_buffer = frame->native_buffer();

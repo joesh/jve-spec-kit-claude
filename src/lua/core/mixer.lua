@@ -268,10 +268,15 @@ local function decode_source(src, pb_start, pb_end, sample_rate, channels, media
     local pcm_ptr, frames, actual_start = media_cache.get_audio_pcm_for_path(
         src.path, src_start, src_end, sample_rate)
 
-    assert(pcm_ptr and frames and frames > 0, string.format(
-        "mixer.decode_source: PCM decode failed for '%s' [%.3fs-%.3fs] (ptr=%s frames=%s)",
-        src.path, src_start / 1000000, src_end / 1000000,
-        tostring(pcm_ptr), tostring(frames)))
+    -- Decode failure: media_cache returned nil pointer
+    assert(pcm_ptr, string.format(
+        "mixer.decode_source: PCM decode failed for '%s' [%.3fs-%.3fs]",
+        src.path, src_start / 1000000, src_end / 1000000))
+
+    -- No audio available for this range (video-only file, or audio ends before this position)
+    if not frames or frames == 0 then
+        return nil, 0, pb_start
+    end
 
     local pb_actual_start = M.source_to_pb(src, actual_start)
 
