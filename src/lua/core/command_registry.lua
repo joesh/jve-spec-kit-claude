@@ -137,13 +137,16 @@ end
 
 local function module_path_for(command_type)
     -- Undo executors live in the same module as their forward command.
+    -- e.g. UndoInsert → core.commands.insert (same module as Insert)
+    -- But literal "Undo" command → core.commands.undo (its own module)
     if command_type:sub(1, 4) == "Undo" then
         local base_type = command_type:sub(5)
-        -- Reuse alias if base command has one
-        if module_aliases[base_type] then
-            return module_aliases[base_type]
+        if base_type ~= "" then
+            if module_aliases[base_type] then
+                return module_aliases[base_type]
+            end
+            command_type = base_type
         end
-        command_type = base_type
     end
 
     if module_aliases[command_type] then
@@ -212,10 +215,10 @@ function M.load_command_module(command_type)
         return true
     end
 
-    local is_undo_type = command_type:sub(1, 4) == "Undo"
-    local base_type = is_undo_type and command_type:sub(5) or nil
+    local has_undo_prefix = command_type:sub(1, 4) == "Undo" and #command_type > 4
+    local base_type = has_undo_prefix and command_type:sub(5) or nil
     local primary_path = module_path_for(command_type)
-    local register_type = is_undo_type and base_type or command_type
+    local register_type = has_undo_prefix and base_type or command_type
     local loaded, err = try_load(primary_path, register_type)
     if not loaded then
         logger.error("command_registry", err or ("Unable to load " .. primary_path))
@@ -224,7 +227,7 @@ function M.load_command_module(command_type)
 
     -- For Undo* commands, also register the undoer under the base command type so
     -- command_manager.execute_undo can find it without invoking the executor path.
-    if is_undo_type and base_type then
+    if has_undo_prefix and base_type then
         local undoer = command_undoers[command_type] or command_undoers[base_type]
         if undoer then
             command_undoers[base_type] = undoer
