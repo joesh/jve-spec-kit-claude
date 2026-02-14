@@ -11,12 +11,53 @@
 #include <QFile>
 #include <iostream>
 #include <cstring>
+#include <cstdio>
+#include <vector>
+#include <string>
+#include <algorithm>
 
 #include "simple_lua_engine.h"
 #include "resource_paths.h"
 #include "assert_handler.h"
 
 Q_LOGGING_CATEGORY(jveMain, "jve.main")
+
+// Auto-discover logger modules by scanning Lua source files
+static std::vector<std::string> discoverLoggerModules(const char* programPath)
+{
+    std::vector<std::string> modules;
+
+    // Get directory containing the executable
+    std::string exePath(programPath);
+    size_t lastSlash = exePath.rfind('/');
+    std::string exeDir = (lastSlash != std::string::npos) ? exePath.substr(0, lastSlash) : ".";
+
+    // Try dev layout first: build/bin/JVEEditor -> src/lua
+    std::string luaPath = exeDir + "/../../src/lua";
+
+    // Run grep to find logger calls and extract module names
+    std::string cmd =
+        "grep -rhoE 'logger\\.(debug|info|warn|error|trace)\\(\"([^\"]+)\"' '" + luaPath + "' 2>/dev/null | "
+        "sed -E 's/.*\"([^\"]+)\"/\\1/' | sort -u";
+
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (pipe) {
+        char buffer[256];
+        while (fgets(buffer, sizeof(buffer), pipe)) {
+            std::string mod(buffer);
+            // Trim newline
+            if (!mod.empty() && mod.back() == '\n') {
+                mod.pop_back();
+            }
+            if (!mod.empty()) {
+                modules.push_back(mod);
+            }
+        }
+        pclose(pipe);
+    }
+
+    return modules;
+}
 
 static void printHelp(const char* programName)
 {
@@ -55,8 +96,42 @@ static void printHelp(const char* programName)
     std::cout << "  JVE_DEBUG_RIPPLE_DELETE_SELECTION=1\n";
     std::cout << "      Log ripple delete selection command details.\n";
     std::cout << "\n";
+    std::cout << "Lua Logger Environment Variables:\n";
+    std::cout << "  JVE_LOG_LEVEL=<LEVEL>\n";
+    std::cout << "      Set global log level: TRACE, DEBUG, INFO, WARN, ERROR, FATAL\n";
+    std::cout << "      Default: WARN\n";
+    std::cout << "\n";
+    std::cout << "  JVE_LOG_MODULES=\"module:LEVEL,...\"\n";
+    std::cout << "      Set per-module log levels (overrides global for specific modules)\n";
+    std::cout << "      Supports wildcards: command* matches command, command_manager, etc.\n";
+    std::cout << "      Example: JVE_LOG_MODULES=\"mixer:DEBUG,command*:TRACE\"\n";
+    std::cout << "\n";
+
+    // Auto-discover and print available modules
+    auto modules = discoverLoggerModules(programName);
+    if (!modules.empty()) {
+        std::cout << "  Available modules:\n";
+        std::cout << "      ";
+        size_t lineLen = 6;
+        for (size_t i = 0; i < modules.size(); ++i) {
+            const auto& mod = modules[i];
+            size_t needed = mod.size() + (i + 1 < modules.size() ? 2 : 0);
+            if (lineLen + needed > 78) {
+                std::cout << "\n      ";
+                lineLen = 6;
+            }
+            std::cout << mod;
+            if (i + 1 < modules.size()) {
+                std::cout << ", ";
+            }
+            lineLen += needed;
+        }
+        std::cout << "\n\n";
+    }
+
     std::cout << "Example:\n";
     std::cout << "  JVE_DEBUG_PLAYHEAD=1 " << programName << " myproject.jvp\n";
+    std::cout << "  JVE_LOG_LEVEL=INFO JVE_LOG_MODULES=\"mixer:DEBUG\" " << programName << "\n";
     std::cout << "\n";
 }
 

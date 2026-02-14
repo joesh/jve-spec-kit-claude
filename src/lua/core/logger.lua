@@ -52,7 +52,9 @@ local RESET_COLOR = "\27[0m"
 
 -- Logger configuration
 local config = {
-    level = LOG_LEVELS.WARN,  -- Default level
+    level = LOG_LEVELS.WARN,  -- Default (global) level
+    module_levels = {},       -- Per-module level overrides: module_name -> level number
+    module_patterns = {},     -- Wildcard patterns: {pattern=lua_pattern, level=number}[]
     enable_colors = true,
     enable_timestamps = true,
     enable_component_tags = true,
@@ -101,6 +103,22 @@ function logger.init(user_config)
         local ok = logger.setLevel(env_level)
         if not ok then
             error("Invalid JVE_LOG_LEVEL: " .. tostring(env_level))
+        end
+    end
+
+    -- Per-module levels via JVE_LOG_MODULES="mixer:DEBUG,audio_playback:TRACE"
+    local env_modules = os.getenv("JVE_LOG_MODULES")
+    if env_modules and env_modules ~= "" then
+        for spec in env_modules:gmatch("[^,]+") do
+            local mod, lvl = spec:match("^([^:]+):([^:]+)$")
+            if mod and lvl then
+                local ok = logger.setModuleLevel(mod, lvl)
+                if not ok then
+                    error("Invalid module level in JVE_LOG_MODULES: " .. spec)
+                end
+            else
+                error("Invalid format in JVE_LOG_MODULES (expected mod:LEVEL): " .. spec)
+            end
         end
     end
     
@@ -156,9 +174,111 @@ function logger.getLevel()
     return LEVEL_NAMES[config.level]
 end
 
--- Check if a level is enabled
+-- Convert glob pattern (with *) to Lua pattern
+local function glob_to_lua_pattern(glob)
+    -- Escape magic characters except *
+    local escaped = glob:gsub("([%^%$%(%)%%%.%[%]%+%-%?])", "%%%1")
+    -- Convert * to .*
+    escaped = escaped:gsub("%*", ".*")
+    -- Anchor to full string
+    return "^" .. escaped .. "$"
+end
+
+-- Set log level for a specific module or pattern
+-- Usage: logger.setModuleLevel("mixer", "DEBUG")
+--        logger.setModuleLevel("command*", "DEBUG")  -- wildcard
+function logger.setModuleLevel(module_name, level_name)
+    assert(module_name and module_name ~= "", "logger.setModuleLevel: module_name required")
+    local level = LOG_LEVELS[level_name:upper()]
+    if not level then
+        return false
+    end
+
+    -- Check if it's a wildcard pattern
+    if module_name:find("%*") then
+        local lua_pattern = glob_to_lua_pattern(module_name)
+        -- Remove any existing pattern with same glob
+        for i = #config.module_patterns, 1, -1 do
+            if config.module_patterns[i].glob == module_name then
+                table.remove(config.module_patterns, i)
+            end
+        end
+        table.insert(config.module_patterns, {
+            glob = module_name,
+            pattern = lua_pattern,
+            level = level
+        })
+    else
+        config.module_levels[module_name] = level
+    end
+    return true
+end
+
+-- Clear module-specific level (revert to global)
+function logger.clearModuleLevel(module_name)
+    config.module_levels[module_name] = nil
+    -- Also check patterns
+    for i = #config.module_patterns, 1, -1 do
+        if config.module_patterns[i].glob == module_name then
+            table.remove(config.module_patterns, i)
+        end
+    end
+end
+
+-- Clear all module-specific levels
+function logger.clearAllModuleLevels()
+    config.module_levels = {}
+    config.module_patterns = {}
+end
+
+-- Get module's effective level name
+function logger.getModuleLevel(module_name)
+    local level = config.module_levels[module_name]
+    if level then
+        return LEVEL_NAMES[level]
+    end
+    return nil  -- using global or pattern
+end
+
+-- List all module-specific levels (includes patterns)
+function logger.listModuleLevels()
+    local result = {}
+    for mod, level in pairs(config.module_levels) do
+        result[mod] = LEVEL_NAMES[level]
+    end
+    for _, entry in ipairs(config.module_patterns) do
+        result[entry.glob] = LEVEL_NAMES[entry.level]
+    end
+    return result
+end
+
+-- Get effective log level for a module (exact match > pattern > global)
+local function get_effective_level(component)
+    if not component then
+        return config.level
+    end
+    -- Exact match first
+    if config.module_levels[component] then
+        return config.module_levels[component]
+    end
+    -- Check wildcard patterns (first match wins)
+    for _, entry in ipairs(config.module_patterns) do
+        if component:match(entry.pattern) then
+            return entry.level
+        end
+    end
+    return config.level
+end
+
+-- Check if a level is enabled (global)
 function logger.isEnabled(level)
     return level >= config.level
+end
+
+-- Check if a level is enabled for a specific module
+function logger.isEnabledFor(module_name, level)
+    local effective = get_effective_level(module_name)
+    return level >= effective
 end
 
 -- Check if subsystem tracing is enabled
@@ -207,13 +327,14 @@ local function log(level, component, message)
         io.stderr:flush()
         return
     end
-    
-    -- Early exit if level not enabled
-    if not logger.isEnabled(level) then
+
+    -- Early exit if level not enabled (check module-specific level first)
+    local effective_level = get_effective_level(component)
+    if level < effective_level then
         return
     end
-    
-    -- Check component filter
+
+    -- Check component filter (explicit disable overrides level)
     if component and config.component_filters[component] == false then
         return
     end
