@@ -122,7 +122,6 @@ CREATE TABLE IF NOT EXISTS clips (
     -- Structural Fields (Restored)
     clip_kind TEXT NOT NULL DEFAULT 'timeline', -- 'master', 'timeline'
     master_clip_id TEXT, -- Masterclip sequence ID (the source material)
-    parent_clip_id TEXT REFERENCES clips(id) ON DELETE CASCADE, -- For master->timeline relationship
     owner_sequence_id TEXT REFERENCES sequences(id) ON DELETE CASCADE, -- Direct ownership shortcut
     
     -- Container Relationship

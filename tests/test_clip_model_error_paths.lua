@@ -92,6 +92,63 @@ expect_error("missing fps_denominator", function()
 end, "fps_denominator")
 
 -- ============================================================================
+-- create(): Timeline clips require master_clip_id, track_id, owner_sequence_id
+-- ============================================================================
+
+print("\n--- create: timeline clip required fields ---")
+
+expect_error("timeline clip missing media_id for master_clip_id auto-resolve", function()
+    Clip.create("TestClip", nil, {
+        project_id = "proj1",
+        clip_kind = "timeline",
+        track_id = "track1",
+        owner_sequence_id = "seq1",
+        timeline_start = 0,
+        duration = 100,
+        fps_numerator = 24,
+        fps_denominator = 1,
+    })
+end, "media_id is required to auto%-resolve master_clip_id")
+
+expect_error("timeline clip missing track_id", function()
+    Clip.create("TestClip", "media1", {
+        project_id = "proj1",
+        clip_kind = "timeline",
+        master_clip_id = "mc1",
+        owner_sequence_id = "seq1",
+        timeline_start = 0,
+        duration = 100,
+        fps_numerator = 24,
+        fps_denominator = 1,
+    })
+end, "track_id")
+
+expect_error("timeline clip missing owner_sequence_id", function()
+    Clip.create("TestClip", "media1", {
+        project_id = "proj1",
+        clip_kind = "timeline",
+        track_id = "track1",
+        master_clip_id = "mc1",
+        timeline_start = 0,
+        duration = 100,
+        fps_numerator = 24,
+        fps_denominator = 1,
+    })
+end, "owner_sequence_id")
+
+-- master clips should NOT require master_clip_id
+local master_clip = Clip.create("MasterClip", "media1", {
+    project_id = "proj1",
+    clip_kind = "master",
+    owner_sequence_id = "seq1",
+    timeline_start = 0,
+    duration = 100,
+    fps_numerator = 24,
+    fps_denominator = 1,
+})
+check("master clip without master_clip_id succeeds", master_clip ~= nil)
+
+-- ============================================================================
 -- create(): Valid integer coordinates work
 -- ============================================================================
 
@@ -102,6 +159,8 @@ local clip = Clip.create("ValidClip", "media1", {
     project_id = "proj1",
     clip_kind = "timeline",
     track_id = "track1",
+    master_clip_id = "mc1",
+    owner_sequence_id = "seq1",
     timeline_start = 0,
     duration = 100,
     source_in = 0,
@@ -126,6 +185,8 @@ local bad_clip = Clip.create("BadClip", "media1", {
     project_id = "proj1",
     clip_kind = "timeline",
     track_id = "track1",
+    master_clip_id = "mc1",
+    owner_sequence_id = "seq1",
     timeline_start = 0,
     duration = 100,
     source_in = 0,

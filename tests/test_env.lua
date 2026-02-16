@@ -276,6 +276,7 @@ function M.create_test_masterclip_sequence(project_id, name, fps_num, fps_den, d
     assert(track:save(), "create_test_masterclip_sequence: failed to save track")
 
     local clip = Clip.create(name, media_id, {
+        clip_kind = "master",
         track_id = track.id,
         owner_sequence_id = seq.id,
         timeline_start = 0,

@@ -27,10 +27,7 @@
 -- @file import_media.lua
 local M = {}
 local Sequence = require("models.sequence")
-local Track = require("models.track")
-local Clip = require("models.clip")
 local MediaReader = require("media.media_reader")
-local frame_utils = require("core.frame_utils")
 local logger = require("core.logger")
 local file_browser = require("core.file_browser")
 
@@ -54,18 +51,6 @@ local SPEC = {
         media_metadata = {},            -- Array of metadata objects
     },
 }
-
--- Helper: Extract filename from path
-local function extract_filename(path)
-    if not path then
-        return "Imported Media"
-    end
-    local name = path:match("([^/\\]+)$")
-    if not name or name == "" then
-        return path
-    end
-    return name
-end
 
 -- Helper: Find existing masterclip sequence and related entities by media_id
 -- Returns nil if no masterclip sequence exists for this media
@@ -189,10 +174,9 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
         error("ImportMedia: unrecognized frame_rate format for " .. tostring(file_path))
     end
 
-    -- Check if masterclip sequence already exists for this media
+    -- Check existing masterclip for fps update (re-import case)
     local existing = find_existing_masterclip(db, media_id)
     if existing then
-        -- Update masterclip fps if changed
         if existing.old_fps_num ~= fps_num or existing.old_fps_den ~= fps_den then
             logger.info("import_media", string.format(
                 "Updating masterclip fps: %d/%d -> %d/%d for %s",
@@ -201,7 +185,6 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
         else
             logger.debug("import_media", string.format("Masterclip already exists for %s, no fps change", file_path))
         end
-        -- Return existing IDs - skip creating new entities
         return {
             media_id = media_id,
             masterclip_sequence_id = existing.masterclip_sequence_id,
@@ -213,128 +196,30 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
         }
     end
 
-    assert(metadata.duration_ms and metadata.duration_ms > 0,
-        "ImportMedia: missing or zero duration_ms in metadata for " .. tostring(file_path))
-    -- Convert duration_ms to integer frames (for video) and samples (for audio)
-    local duration_frames = frame_utils.ms_to_frames(metadata.duration_ms, fps_num, fps_den)
-    -- Use actual sample rate from metadata (supports 44100, 48000, 96000, etc.)
+    -- No existing masterclip: create via Sequence.ensure_masterclip
     local sample_rate = (metadata.audio and metadata.audio.sample_rate) or 48000
     assert(sample_rate > 0, "ImportMedia: invalid sample_rate for " .. tostring(file_path))
-    local duration_samples = math.floor(metadata.duration_ms * sample_rate / 1000 + 0.5)
 
-    local base_name = extract_filename(file_path)
+    local masterclip_seq_id = Sequence.ensure_masterclip(media_id, project_id, {
+        id = replay_ids.masterclip_sequence_id,
+        video_track_id = replay_ids.video_track_id,
+        video_clip_id = replay_ids.video_clip_id,
+        audio_track_ids = replay_ids.audio_track_ids,
+        audio_clip_ids = replay_ids.audio_clip_ids,
+        sample_rate = sample_rate,
+    })
 
-    -- Create masterclip sequence (IS the master clip - no wrapper Clip needed)
-    local sequence = Sequence.create(base_name, project_id,
-        {fps_numerator = fps_num, fps_denominator = fps_den},
-        assert(metadata and metadata.video and metadata.video.width, "ImportMedia: missing video.width for " .. tostring(file_path)),
-        assert(metadata and metadata.video and metadata.video.height, "ImportMedia: missing video.height for " .. tostring(file_path)),
-        {
-            id = replay_ids.masterclip_sequence_id,
-            kind = "masterclip",
-            audio_rate = sample_rate,
-        })
-    if not sequence then
-        set_last_error("ImportMedia: Failed to create masterclip sequence object")
-        return nil
-    end
-    if not sequence:save() then
-        set_last_error("ImportMedia: Failed to save masterclip sequence")
-        return nil
-    end
-
-    -- Create video track if media has video
-    local video_track = nil
-    local video_track_id = nil
-    if metadata and metadata.has_video then
-        video_track = Track.create_video("Video 1", sequence.id, {
-            id = replay_ids.video_track_id,
-            index = 1
-        })
-        if not video_track or not video_track:save() then
-            set_last_error("ImportMedia: Failed to create video track")
-            return nil
-        end
-        video_track_id = video_track.id
-    end
-
-    -- Create audio tracks
-    local stored_audio_track_ids = replay_ids.audio_track_ids or {}
-    local audio_track_ids = {}
-    if metadata and metadata.has_audio then
-        local channels = metadata.audio and metadata.audio.channels or 1
-        if channels < 1 then
-            channels = 1
-        end
-        for channel = 1, channels do
-            local track = Track.create_audio(string.format("Audio %d", channel), sequence.id, {
-                id = stored_audio_track_ids[channel],
-                index = channel
-            })
-            if not track or not track:save() then
-                set_last_error("ImportMedia: Failed to create audio track")
-                return nil
-            end
-            audio_track_ids[channel] = track.id
-        end
-    end
-
-    -- Create video stream clip (no parent_clip_id - the sequence IS the masterclip)
-    local video_clip_id = nil
-    if video_track then
-        local video_clip = Clip.create(base_name .. " (Video)", media_id, {
-            id = replay_ids.video_clip_id,
-            project_id = project_id,
-            track_id = video_track.id,
-            owner_sequence_id = sequence.id,
-            timeline_start = 0,
-            duration = duration_frames,
-            source_in = 0,
-            source_out = duration_frames,
-            enabled = true,
-            offline = false,
-            fps_numerator = fps_num,
-            fps_denominator = fps_den
-        })
-        if not video_clip:save({skip_occlusion = true}) then
-            set_last_error("ImportMedia: Failed to create video stream clip")
-            return nil
-        end
-        video_clip_id = video_clip.id
-    end
-
-    -- Create audio stream clips (no parent_clip_id)
-    local stored_audio_clip_ids = replay_ids.audio_clip_ids or {}
-    local audio_clip_ids = {}
-    for index, track_id in ipairs(audio_track_ids) do
-        local audio_clip = Clip.create(string.format("%s (Audio %d)", base_name, index), media_id, {
-            id = stored_audio_clip_ids[index],
-            project_id = project_id,
-            track_id = track_id,
-            owner_sequence_id = sequence.id,
-            timeline_start = 0,
-            duration = duration_frames,
-            source_in = 0,
-            source_out = duration_samples,
-            enabled = true,
-            offline = false,
-            fps_numerator = sample_rate,
-            fps_denominator = 1
-        })
-        if not audio_clip:save({skip_occlusion = true}) then
-            set_last_error("ImportMedia: Failed to create audio stream clip")
-            return nil
-        end
-        audio_clip_ids[index] = audio_clip.id
-    end
+    -- Query created entities for redo ID storage
+    local created = find_existing_masterclip(db, media_id)
+    assert(created, "ImportMedia: masterclip not found after ensure_masterclip for " .. tostring(file_path))
 
     return {
         media_id = media_id,
-        masterclip_sequence_id = sequence.id,
-        video_track_id = video_track_id,
-        video_clip_id = video_clip_id,
-        audio_track_ids = audio_track_ids,
-        audio_clip_ids = audio_clip_ids,
+        masterclip_sequence_id = masterclip_seq_id,
+        video_track_id = created.video_track_id,
+        video_clip_id = created.video_clip_id,
+        audio_track_ids = created.audio_track_ids,
+        audio_clip_ids = created.audio_clip_ids,
         metadata = metadata,
     }
 end

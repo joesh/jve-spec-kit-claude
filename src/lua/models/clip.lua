@@ -63,7 +63,7 @@ local function load_internal(clip_id, raise_errors)
 
     local query = db:prepare([[
         SELECT c.id, c.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
-               c.master_clip_id, c.parent_clip_id, c.owner_sequence_id,
+               c.master_clip_id, c.owner_sequence_id,
                c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
                c.fps_numerator, c.fps_denominator, c.enabled, c.offline,
                s.fps_numerator, s.fps_denominator
@@ -101,10 +101,10 @@ local function load_internal(clip_id, raise_errors)
     end
 
     local clip_kind = query:value(2)
-    local fps_numerator = query:value(13)
-    local fps_denominator = query:value(14)
-    local sequence_fps_numerator = query:value(17)
-    local sequence_fps_denominator = query:value(18)
+    local fps_numerator = query:value(12)
+    local fps_denominator = query:value(13)
+    local sequence_fps_numerator = query:value(16)
+    local sequence_fps_denominator = query:value(17)
     
     -- Enforce Rate existence (Strict V5)
     if not fps_numerator or fps_numerator <= 0 then 
@@ -135,23 +135,22 @@ local function load_internal(clip_id, raise_errors)
         track_id = query:value(4),
         media_id = query:value(5),
         master_clip_id = query:value(6),
-        parent_clip_id = query:value(7),
-        owner_sequence_id = query:value(8),
+        owner_sequence_id = query:value(7),
 
         -- Integer frame coordinates (fps is metadata in clip.rate and sequence.frame_rate)
-        timeline_start = assert(query:value(9), "Clip.load: timeline_start_frame is NULL"),
-        duration = assert(query:value(10), "Clip.load: duration_frames is NULL"),
-        source_in = assert(query:value(11), "Clip.load: source_in_frame is NULL"),
-        source_out = assert(query:value(12), "Clip.load: source_out_frame is NULL"),
-        
+        timeline_start = assert(query:value(8), "Clip.load: timeline_start_frame is NULL"),
+        duration = assert(query:value(9), "Clip.load: duration_frames is NULL"),
+        source_in = assert(query:value(10), "Clip.load: source_in_frame is NULL"),
+        source_out = assert(query:value(11), "Clip.load: source_out_frame is NULL"),
+
         -- Store rate explicitly
         rate = {
             fps_numerator = fps_numerator,
             fps_denominator = fps_denominator
         },
 
-        enabled = query:value(15) == 1 or query:value(15) == true,
-        offline = query:value(16) == 1 or query:value(16) == true,
+        enabled = query:value(14) == 1 or query:value(14) == true,
+        offline = query:value(15) == 1 or query:value(15) == true,
     }
     
     query:finalize()
@@ -179,15 +178,33 @@ function M.create(name, media_id, opts)
         error("Clip.create: Legacy field names (start_value, etc.) are NOT allowed. Use Rational objects.")
     end
 
+    local clip_kind = opts.clip_kind or "timeline"
+
+    -- FAIL FAST: timeline clips require structural fields
+    if clip_kind == "timeline" then
+        assert(opts.track_id and opts.track_id ~= "",
+            "Clip.create: track_id is required for timeline clips")
+        assert(opts.owner_sequence_id and opts.owner_sequence_id ~= "",
+            "Clip.create: owner_sequence_id is required for timeline clips")
+        -- Auto-resolve master_clip_id from media_id if not provided
+        if not opts.master_clip_id or opts.master_clip_id == "" then
+            assert(media_id and media_id ~= "",
+                "Clip.create: media_id is required to auto-resolve master_clip_id")
+            assert(opts.project_id and opts.project_id ~= "",
+                "Clip.create: project_id is required to auto-resolve master_clip_id")
+            local Sequence = require("models.sequence")
+            opts.master_clip_id = Sequence.ensure_masterclip(media_id, opts.project_id)
+        end
+    end
+
     local clip = {
         id = opts.id or uuid.generate(),
         project_id = opts.project_id,
-        clip_kind = opts.clip_kind or "timeline", -- NSF-OK: "timeline" is the natural default kind for new clips
+        clip_kind = clip_kind,
         name = name,
         track_id = opts.track_id,
         media_id = media_id,
         master_clip_id = opts.master_clip_id,
-        parent_clip_id = opts.parent_clip_id,
         owner_sequence_id = opts.owner_sequence_id,
         created_at = opts.created_at or now,
         modified_at = opts.modified_at or now,
@@ -300,7 +317,7 @@ local function ensure_project_context(self, db)
         end
     end
 
-    -- Fallback: derive from source sequence if present
+    -- Fallback: derive from masterclip sequence if present
     if not self.project_id and self.master_clip_id then
         local seq_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
         if seq_query then
@@ -368,7 +385,7 @@ local function save_internal(self, _opts)
         query = db:prepare([[
             UPDATE clips
             SET project_id = ?, clip_kind = ?, name = ?, track_id = ?, media_id = ?,
-                master_clip_id = ?, parent_clip_id = ?, owner_sequence_id = ?,
+                master_clip_id = ?, owner_sequence_id = ?,
                 timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?,
                 fps_numerator = ?, fps_denominator = ?, enabled = ?, offline = ?, modified_at = strftime('%s','now')
             WHERE id = ?
@@ -377,11 +394,11 @@ local function save_internal(self, _opts)
         query = db:prepare([[
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
-                master_clip_id, parent_clip_id, owner_sequence_id,
-                timeline_start_frame, duration_frames, source_in_frame, source_out_frame, 
+                master_clip_id, owner_sequence_id,
+                timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                 fps_numerator, fps_denominator, enabled, offline, created_at, modified_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
         ]])
     end
 
@@ -394,7 +411,24 @@ local function save_internal(self, _opts)
         query:bind_value(4, self.track_id)
         query:bind_value(5, self.media_id)
         query:bind_value(6, self.master_clip_id)
-        query:bind_value(7, self.parent_clip_id)
+        query:bind_value(7, self.owner_sequence_id)
+        query:bind_value(8, db_start_frame)
+        query:bind_value(9, db_duration_frames)
+        query:bind_value(10, db_source_in_frame)
+        query:bind_value(11, db_source_out_frame)
+        query:bind_value(12, db_fps_num)
+        query:bind_value(13, db_fps_den)
+        query:bind_value(14, self.enabled and 1 or 0)
+        query:bind_value(15, self.offline and 1 or 0)
+        query:bind_value(16, self.id)
+    else
+        query:bind_value(1, self.id)
+        query:bind_value(2, self.project_id)
+        query:bind_value(3, self.clip_kind)
+        query:bind_value(4, self.name or "")
+        query:bind_value(5, self.track_id)
+        query:bind_value(6, self.media_id)
+        query:bind_value(7, self.master_clip_id)
         query:bind_value(8, self.owner_sequence_id)
         query:bind_value(9, db_start_frame)
         query:bind_value(10, db_duration_frames)
@@ -404,25 +438,6 @@ local function save_internal(self, _opts)
         query:bind_value(14, db_fps_den)
         query:bind_value(15, self.enabled and 1 or 0)
         query:bind_value(16, self.offline and 1 or 0)
-        query:bind_value(17, self.id)
-    else
-        query:bind_value(1, self.id)
-        query:bind_value(2, self.project_id)
-        query:bind_value(3, self.clip_kind)
-        query:bind_value(4, self.name or "")
-        query:bind_value(5, self.track_id)
-        query:bind_value(6, self.media_id)
-        query:bind_value(7, self.master_clip_id)
-        query:bind_value(8, self.parent_clip_id)
-        query:bind_value(9, self.owner_sequence_id)
-        query:bind_value(10, db_start_frame)
-        query:bind_value(11, db_duration_frames)
-        query:bind_value(12, db_source_in_frame)
-        query:bind_value(13, db_source_out_frame)
-        query:bind_value(14, db_fps_num)
-        query:bind_value(15, db_fps_den)
-        query:bind_value(16, self.enabled and 1 or 0)
-        query:bind_value(17, self.offline and 1 or 0)
     end
 
     local krono_exec = (krono_enabled and krono_exists and krono.now and krono.now()) or nil
@@ -542,19 +557,14 @@ function M.get_master_clip_usage(master_clip_id)
         return {}
     end
 
-    -- Get the master clip's source sequence (to exclude it from results)
-    local master = M.load_optional(master_clip_id)
-    local source_seq_id = master and master.master_clip_id or ""
-
-    -- Find all sequences that have timeline clips referencing this master clip
+    -- Find all sequences that have timeline clips referencing this masterclip
     local query = db:prepare([[
         SELECT s.id, s.name, COUNT(c.id) as clip_count
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences s ON t.sequence_id = s.id
-        WHERE c.parent_clip_id = ?
+        WHERE c.master_clip_id = ?
           AND c.clip_kind = 'timeline'
-          AND (c.owner_sequence_id IS NULL OR c.owner_sequence_id <> ?)
         GROUP BY s.id, s.name
         ORDER BY s.name
     ]])
@@ -565,7 +575,6 @@ function M.get_master_clip_usage(master_clip_id)
     end
 
     query:bind_value(1, master_clip_id)
-    query:bind_value(2, source_seq_id)
 
     local results = {}
     if query:exec() then

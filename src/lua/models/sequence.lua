@@ -337,6 +337,165 @@ function Sequence.find_most_recent()
 end
 
 -- =============================================================================
+-- MASTERCLIP FACTORY: find-or-create masterclip sequence for a media item
+-- =============================================================================
+
+--- Ensure a masterclip sequence exists for a given media item.
+-- Idempotent: returns existing masterclip sequence_id if one exists, otherwise creates one.
+-- @param media_id string: Media record ID
+-- @param project_id string: Project ID
+-- @param opts table: Optional replay IDs for redo determinism:
+--   id, video_track_id, video_clip_id, audio_track_ids, audio_clip_ids
+-- @return string: masterclip sequence_id
+function Sequence.ensure_masterclip(media_id, project_id, opts)
+    assert(media_id and media_id ~= "",
+        "Sequence.ensure_masterclip: media_id is required")
+    assert(project_id and project_id ~= "",
+        "Sequence.ensure_masterclip: project_id is required")
+    opts = opts or {}
+
+    local conn = resolve_db()
+
+    -- LOOKUP PHASE: find existing masterclip by media_id
+    local existing_id = Sequence._find_masterclip_for_media(conn, media_id)
+    if existing_id then
+        return existing_id
+    end
+
+    -- CREATE PHASE: build masterclip from Media metadata
+    local Media = require("models.media")
+    local Track = require("models.track")
+    local Clip = require("models.clip")
+
+    local media = Media.load(media_id)
+    assert(media, string.format(
+        "Sequence.ensure_masterclip: Media record not found for media_id=%s",
+        tostring(media_id)))
+
+    local fps_num = media.frame_rate.fps_numerator
+    local fps_den = media.frame_rate.fps_denominator
+    local duration_frames = media.duration
+    local has_video = media.width > 0
+    local has_audio = media.audio_channels > 0
+    -- Derive sample_rate: explicit opts > audio-only media fps > fallback 48000
+    -- TODO: add sample_rate column to Media; then require it here (no fallback)
+    local sample_rate = opts.sample_rate
+    if not sample_rate and not has_video and has_audio then
+        -- Audio-only media: fps_numerator IS the sample rate (e.g., 48000)
+        sample_rate = fps_num
+    end
+    -- NSF-NOTED: 48000 fallback for video+audio until Media stores sample_rate
+    sample_rate = sample_rate or 48000
+
+    -- Compute audio duration in samples from video frames
+    local duration_samples = 0
+    if has_audio and duration_frames > 0 then
+        duration_samples = math.floor(
+            duration_frames * sample_rate * fps_den / fps_num + 0.5)
+    end
+
+    -- Sequence dimensions: use media dims if video, else 1920x1080
+    local width = has_video and media.width or 1920
+    local height = has_video and media.height or 1080
+
+    assert(media.name and media.name ~= "",
+        string.format("Sequence.ensure_masterclip: media has no name for media_id=%s", tostring(media_id)))
+    local seq = Sequence.create(media.name, project_id,
+        {fps_numerator = fps_num, fps_denominator = fps_den},
+        width, height, {
+            id = opts.id,
+            kind = "masterclip",
+            audio_rate = sample_rate,
+        })
+    assert(seq:save(), string.format(
+        "Sequence.ensure_masterclip: failed to save masterclip sequence for media_id=%s",
+        tostring(media_id)))
+
+    -- Create video track + stream clip
+    if has_video then
+        local vtrack = Track.create_video("Video 1", seq.id, {
+            id = opts.video_track_id,
+            index = 1,
+        })
+        assert(vtrack:save(), "Sequence.ensure_masterclip: failed to save video track")
+
+        local vclip = Clip.create(media.name .. " (Video)", media_id, {
+            id = opts.video_clip_id,
+            project_id = project_id,
+            clip_kind = "master",
+            track_id = vtrack.id,
+            owner_sequence_id = seq.id,
+            timeline_start = 0,
+            duration = duration_frames,
+            source_in = 0,
+            source_out = duration_frames,
+            fps_numerator = fps_num,
+            fps_denominator = fps_den,
+        })
+        assert(vclip:save({skip_occlusion = true}),
+            "Sequence.ensure_masterclip: failed to save video stream clip")
+    end
+
+    -- Create audio tracks + stream clips
+    if has_audio then
+        local replay_audio_track_ids = opts.audio_track_ids or {}
+        local replay_audio_clip_ids = opts.audio_clip_ids or {}
+        for ch = 1, media.audio_channels do
+            local atrack = Track.create_audio(
+                string.format("Audio %d", ch), seq.id, {
+                    id = replay_audio_track_ids[ch],
+                    index = ch,
+                })
+            assert(atrack:save(), "Sequence.ensure_masterclip: failed to save audio track")
+
+            local aclip = Clip.create(
+                string.format("%s (Audio %d)", media.name, ch), media_id, {
+                    id = replay_audio_clip_ids[ch],
+                    project_id = project_id,
+                    clip_kind = "master",
+                    track_id = atrack.id,
+                    owner_sequence_id = seq.id,
+                    timeline_start = 0,
+                    duration = duration_frames,
+                    source_in = 0,
+                    source_out = duration_samples,
+                    fps_numerator = sample_rate,
+                    fps_denominator = 1,
+                })
+            assert(aclip:save({skip_occlusion = true}),
+                "Sequence.ensure_masterclip: failed to save audio stream clip")
+        end
+    end
+
+    return seq.id
+end
+
+--- Internal: find masterclip sequence_id for a media_id.
+-- @param conn database connection
+-- @param media_id string
+-- @return string|nil masterclip sequence_id, or nil if none exists
+function Sequence._find_masterclip_for_media(conn, media_id)
+    local stmt = assert(conn:prepare([[
+        SELECT s.id FROM sequences s
+        JOIN tracks t ON t.sequence_id = s.id
+        JOIN clips c ON c.track_id = t.id
+        WHERE s.kind = 'masterclip' AND c.media_id = ? AND c.clip_kind = 'master'
+        LIMIT 1
+    ]]), "_find_masterclip_for_media: failed to prepare query")
+    stmt:bind_value(1, media_id)
+    assert(stmt:exec(), string.format(
+        "_find_masterclip_for_media: query exec failed for media_id=%s",
+        tostring(media_id)))
+    if not stmt:next() then
+        stmt:finalize()
+        return nil
+    end
+    local id = stmt:value(0)
+    stmt:finalize()
+    return id
+end
+
+-- =============================================================================
 -- MASTERCLIP SEQUENCE METHODS (for kind="masterclip")
 -- =============================================================================
 
