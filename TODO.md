@@ -62,8 +62,12 @@ Full-codebase audit identified ~8,000 LOC with zero or minimal test coverage. Ta
 
 ---
 
+## Eliminate keyboard_shortcuts.lua cascade
+Move remaining if/elseif handlers (arrows, Tab, E, Comma/Period, F9/F10) to TOML or dedicated command executors, then delete the cascade.
+
 ## Still Open
 
+- [ ] **Media `sample_rate` column** — Media model has no `sample_rate` field. `Sequence.ensure_masterclip()` defaults to 48000. Add `sample_rate INTEGER` to media table, populate from MediaReader probe, use in ensure_masterclip and audio clip creation.
 - [ ] **Edge-release latency** — NOT STARTED. `TimelineActiveRegion` has on-demand snapshot builds but no preloading/caching. Header TODOs unfilled. Needs design decision on when to preload (playhead move vs drag start) and perf target.
 - [ ] **Command isolation enforcement** — PARTIAL (60%). Depth tracking + undo grouping implemented. Missing: hard max-depth assert, re-entrancy guards. Current approach is soft guardrails, not fail-fast.
 
