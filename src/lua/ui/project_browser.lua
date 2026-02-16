@@ -33,10 +33,14 @@ local qt_constants = require("core.qt_constants")
 local profile_scope = require("core.profile_scope")
 local logger = require("core.logger")
 local uuid = require("uuid")
+local project_gen = require("core.project_generation")
 
 local handler_seq = 0
 
 local function selection_context()
+    if M._project_gen then
+        project_gen.check(M._project_gen, "project_browser.selection_context")
+    end
     return {
         master_lookup = M.master_clip_map,
         media_lookup = M.media_map,
@@ -596,6 +600,7 @@ local function populate_tree()
     local project_id = M.project_id or db.get_current_project_id()
     assert(project_id and project_id ~= "", "project_browser.populate_tree: no project_id available")
     M.project_id = project_id
+    M._project_gen = project_gen.current()
 
     local settings = db.get_project_settings(M.project_id)
     M.media_bin_map = tag_service.list_master_clip_assignments(M.project_id)

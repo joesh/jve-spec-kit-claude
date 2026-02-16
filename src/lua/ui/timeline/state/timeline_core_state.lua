@@ -27,9 +27,11 @@ local ui_constants = require("core.ui_constants")
 local command_manager = require("core.command_manager")
 local Command = require("command")
 local Signals = require("core.signals")
+local project_gen = require("core.project_generation")
 
 local persist_timer = nil
 local persist_dirty = false
+local persist_gen = 0  -- project generation at init time
 local PERSIST_DEBOUNCE_MS = ui_constants.TIMELINE.PERSIST_DEBOUNCE_MS or 75
 
 -- Qt timer bridge
@@ -240,9 +242,11 @@ local function schedule_state_persist(immediate)
         return
     end
     if persist_timer then return end
+    local gen = persist_gen
     persist_timer = create_single_shot_timer(PERSIST_DEBOUNCE_MS, function()
         persist_timer = nil
         if not persist_dirty then return end
+        if gen ~= project_gen.current() then return end  -- project changed since scheduled
         persist_dirty = false
         flush_state_to_db()
     end)
@@ -268,6 +272,7 @@ function M.init(sequence_id, project_id)
     persist_dirty = false
 
     assert(sequence_id and sequence_id ~= "", "timeline_core_state.init: sequence_id is required")
+    persist_gen = project_gen.current()
     data.state.sequence_id = sequence_id
 
     -- Load Data

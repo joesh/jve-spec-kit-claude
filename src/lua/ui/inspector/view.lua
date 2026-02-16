@@ -28,6 +28,7 @@ local inspectable_factory = require("inspectable")
 local metadata_schemas = require("ui.metadata_schemas")
 local collapsible_section = require("ui.collapsible_section")
 local profile_scope = require("core.profile_scope")
+local project_gen = require("core.project_generation")
 
 local FIELD_TYPES = metadata_schemas.FIELD_TYPES
 
@@ -147,6 +148,7 @@ M = {
   _suppress_field_updates_depth = 0,
   _schemas_active = false, -- Whether schema sections should be interactive/visible
   _sections_visible_state = nil, -- Tracks last visibility applied to schema sections
+  _project_gen = 0,             -- project generation at last data load
 }
 
 local function format_timecode(time_input, override_rate)
@@ -1031,6 +1033,7 @@ function M.save_field_value(field_key, explicit_value)
   if not inspectable then
     return
   end
+  project_gen.check(M._project_gen, "inspector.save_field_value")
 
   local value = explicit_value
   if value == nil then
@@ -1103,6 +1106,7 @@ function M.load_clip_data(inspectable)
   end
 
   M._current_inspectable = inspectable
+  M._project_gen = project_gen.current()
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Loading inspectable data for schema " .. inspectable:get_schema_id())
 
   suppress_field_updates()
@@ -1139,6 +1143,7 @@ function M.load_multi_clip_data(inspectables)
   M._multi_edit_mode = true
   M._multi_inspectables = inspectables
   M._current_inspectable = nil
+  M._project_gen = project_gen.current()
 
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
       "[inspector][view] Loading multi-inspectable data: " .. #inspectables .. " items")
@@ -1194,6 +1199,7 @@ local function apply_multi_edit_new()
   if not M._multi_edit_mode or not M._multi_inspectables or #M._multi_inspectables == 0 then
     return
   end
+  project_gen.check(M._project_gen, "inspector.apply_multi_edit")
 
   logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
       "[inspector][view] Applying multi-edit to " .. #M._multi_inspectables .. " items")
@@ -1388,5 +1394,18 @@ local function update_selection_new(selected_items, source_panel)
 end
 
 M.update_selection = update_selection_new
+
+--------------------------------------------------------------------------------
+-- Project change: clear stale inspectables from previous project.
+-- Without this, save_field_value/apply_multi_edit could write to wrong project.
+--------------------------------------------------------------------------------
+local Signals = require("core.signals")
+Signals.connect("project_changed", function()
+    M._current_inspectable = nil
+    M._multi_inspectables = nil
+    M._multi_edit_mode = false
+    M._selected_items = {}
+    M._active_schema_id = nil
+end, 45)  -- after timeline_state (40), before timeline_panel/project_browser (50)
 
 return M
