@@ -373,25 +373,17 @@ function M.convert(drp_path, jvp_path)
                     -- Import clips
                     for _, clip_data in ipairs(track_data.clips) do
                         -- Find media by file path
-                        local media = nil
                         local media_id = nil
                         if clip_data.file_path and media_by_path[clip_data.file_path] then
-                            media = media_by_path[clip_data.file_path]
-                            media_id = media.id
+                            media_id = media_by_path[clip_data.file_path].id
                         end
 
-                        -- Determine clip rate: video uses timeline fps, audio uses media sample rate
+                        -- Determine clip rate: video uses timeline fps, audio always 48kHz
                         local clip_rate_num, clip_rate_den
                         if track_data.type == "VIDEO" then
                             clip_rate_num, clip_rate_den = fps_num, fps_den
                         else
-                            -- Audio: use media's rate if available (sample_rate/1), else 48kHz default
-                            if media and media.frame_rate then
-                                clip_rate_num = media.frame_rate.fps_numerator
-                                clip_rate_den = media.frame_rate.fps_denominator
-                            else
-                                clip_rate_num, clip_rate_den = 48000, 1  -- Professional audio standard
-                            end
+                            clip_rate_num, clip_rate_den = 48000, 1
                         end
 
                         local source_out = clip_data.source_out

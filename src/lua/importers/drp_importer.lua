@@ -639,15 +639,12 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
             -- NSF: Assert on missing required clip fields
             local start_elem = find_element(clip_elem, "Start")
             local duration_elem = find_element(clip_elem, "Duration")
-            local media_start_elem = find_element(clip_elem, "MediaStartTime")
+            local in_elem = find_element(clip_elem, "In")
 
             assert(start_elem, string.format(
                 "parse_resolve_tracks: clip '%s' missing Start element", clip_name))
             assert(duration_elem, string.format(
                 "parse_resolve_tracks: clip '%s' missing Duration element", clip_name))
-            -- MediaStartTime can be 0 for clips starting at media beginning, but element must exist
-            assert(media_start_elem, string.format(
-                "parse_resolve_tracks: clip '%s' missing MediaStartTime element", clip_name))
 
             -- DRP format: some values use "frames|metadata" format (e.g., "2699|00e0401cd451d83f")
             -- Extract numeric portion before pipe
@@ -663,23 +660,31 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
 
             local start_frames = parse_drp_numeric(get_text(start_elem), "Start")
             local duration_raw = parse_drp_numeric(get_text(duration_elem), "Duration")
-            local media_start_frames = parse_drp_numeric(get_text(media_start_elem), "MediaStartTime")
 
             start_frames = math.floor(start_frames)
             duration_raw = math.floor(duration_raw)
-            media_start_frames = math.floor(media_start_frames)
 
-            -- DRP stores Start/Duration in TIMELINE FRAMES for both video and audio
-            -- (confirmed: clips are contiguous with Start[n+1] = Start[n] + Duration[n])
-            -- source_in/source_out are in native units (samples for audio @ 48kHz, frames for video)
-            local duration_timeline_frames = duration_raw  -- already in timeline frames
-            local source_duration  -- in native units (samples or frames)
+            -- DRP field meanings (confirmed from real DRP XML analysis):
+            --   <MediaStartTime> = file's TC origin in SECONDS since midnight (not per-clip)
+            --   <In>             = source mark-in offset in TIMELINE FRAMES
+            --   <Start>          = timeline position (frames)
+            --   <Duration>       = timeline duration (frames)
+            --
+            -- source_in comes from <In>, NOT <MediaStartTime>.
+            -- Empty/missing <In> means untrimmed (source_in = 0).
+            local in_text = in_elem and get_text(in_elem) or ""
+            local in_value = tonumber(in_text) or 0  -- empty <In/> = untrimmed = 0
+
+            local duration_timeline_frames = duration_raw
+            local source_in_native
+            local source_duration
             if track_type == "AUDIO" then
-                -- Audio source_in/source_out are in samples (48kHz)
-                -- Convert timeline duration (frames) to source duration (samples)
+                -- Audio: convert <In> from timeline frames to samples (48kHz)
+                source_in_native = math.floor(in_value * 48000 / frame_rate + 0.5)
                 source_duration = math.floor(duration_raw * 48000 / frame_rate + 0.5)
             else
-                -- Video source coords are in frames (same as timeline)
+                -- Video: <In> is already in video frames
+                source_in_native = math.floor(in_value)
                 source_duration = duration_raw
             end
 
@@ -688,11 +693,11 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
                 start_value = start_frames,        -- timeline position (integer frames)
                 duration = duration_timeline_frames,  -- duration on timeline (integer frames)
                 -- Absolute timecode addressing for source selection:
-                source_in_tc = media_start_frames, -- absolute TC (samples for audio, frames for video)
+                source_in_tc = source_in_native,   -- native units (samples for audio, frames for video)
                 source_length = source_duration,   -- duration in source units
                 -- Legacy aliases (deprecated - use source_in_tc/source_length)
-                source_in = media_start_frames,
-                source_out = media_start_frames + source_duration,
+                source_in = source_in_native,
+                source_out = source_in_native + source_duration,
                 enabled = get_text(find_element(clip_elem, "WasDisbanded")) ~= "true",
                 file_path = file_path,
                 media_key = file_path,
@@ -1038,5 +1043,8 @@ function M.parse_drp_file(drp_path)
         folder_map = media_pool_hierarchy.folder_map,
     }
 end
+
+-- Test-only export (underscore-prefixed convention)
+M._parse_resolve_tracks = parse_resolve_tracks
 
 return M

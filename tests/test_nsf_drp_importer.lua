@@ -49,11 +49,12 @@ end
 -- Test 2: Clip elements must have required fields
 --------------------------------------------------------------------------------
 
-print("\n--- Test 2: Clip parsing requires Start/Duration/MediaStartTime ---")
+print("\n--- Test 2: Clip parsing requires Start/Duration ---")
 
 -- This test verifies the contract: if a clip element is malformed (missing
--- Start, Duration, or MediaStartTime), the importer should skip it with
--- a warning or assert, NOT silently create a clip with 0 values.
+-- Start or Duration), the importer should assert, NOT silently create a
+-- clip with 0 values. MediaStartTime is the file's TC origin (not used for
+-- source_in). <In> is optional (empty = untrimmed = source_in 0).
 
 -- We verify this by checking that all clips in a valid DRP have non-zero
 -- start positions (since DRP timelines start at 01:00:00:00 TC = 86400+ frames)
@@ -129,10 +130,11 @@ print("✓ No fps fallback patterns found")
 
 print("\n--- Test 4: Clip fields must use assert, not `or 0` ---")
 
--- Check that parse_resolve_tracks asserts on clip fields
+-- Check that parse_resolve_tracks asserts on required clip fields
+-- Start and Duration are required. MediaStartTime is not used for source_in.
+-- <In> is optional (empty = untrimmed).
 local has_start_assert = content:match('assert%(start_elem') or content:match('assert%(start_frames')
 local has_duration_assert = content:match('assert%(duration_elem') or content:match('assert%(duration_raw')
-local has_media_start_assert = content:match('assert%(media_start_elem') or content:match('assert%(media_start_frames')
 
 if not has_start_assert then
     print("NSF VIOLATION: No assert for Start field")
@@ -142,11 +144,7 @@ if not has_duration_assert then
     print("NSF VIOLATION: No assert for Duration field")
     error("drp_importer.lua must assert on missing Duration element")
 end
-if not has_media_start_assert then
-    print("NSF VIOLATION: No assert for MediaStartTime field")
-    error("drp_importer.lua must assert on missing MediaStartTime element")
-end
 
-print("✓ Clip fields use assert for required elements")
+print("✓ Required clip fields (Start, Duration) use assert")
 
 print("\n✅ test_nsf_drp_importer.lua passed")
