@@ -181,6 +181,30 @@ function PlaybackEngine:_compute_content_end()
     return self.sequence:compute_content_end()
 end
 
+--- Refresh content bounds from database.
+-- Recomputes total_frames and max_media_time_us from current sequence content.
+-- Called at transport start (play/shuttle/slow_play) to pick up clip changes
+-- since load_sequence was last called.
+function PlaybackEngine:_refresh_content_bounds()
+    if not self.sequence then return end
+
+    local new_end = math.max(1, self:_compute_content_end())
+    if new_end == self.total_frames then return end
+
+    self.total_frames = new_end
+    self.max_media_time_us = helpers.calc_time_us_from_frame(
+        new_end - 1, self.fps_num, self.fps_den)
+
+    if self._audio_owner and audio_playback
+       and audio_playback.session_initialized then
+        audio_playback.set_max_time(self.max_media_time_us)
+    end
+
+    logger.debug("playback_engine", string.format(
+        "Refreshed content bounds: %d frames, max_time=%.3fs",
+        self.total_frames, self.max_media_time_us / 1000000))
+end
+
 --------------------------------------------------------------------------------
 -- Position Accessors
 --------------------------------------------------------------------------------
@@ -209,6 +233,8 @@ end
 function PlaybackEngine:shuttle(dir)
     assert(dir == 1 or dir == -1,
         "PlaybackEngine:shuttle: dir must be 1 or -1")
+
+    self:_refresh_content_bounds()
 
     -- Handle unlatch: opposite direction while latched resumes playback
     if self.latched then
@@ -278,6 +304,8 @@ function PlaybackEngine:slow_play(dir)
     assert(dir == 1 or dir == -1,
         "PlaybackEngine:slow_play: dir must be 1 or -1")
 
+    self:_refresh_content_bounds()
+
     self.direction = dir
     self.speed = 0.5
     self.state = "playing"
@@ -293,6 +321,8 @@ end
 --- Play forward at 1x speed (spacebar).
 function PlaybackEngine:play()
     if self.state == "playing" then return end
+
+    self:_refresh_content_bounds()
 
     self.direction = 1
     self.speed = 1

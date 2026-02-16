@@ -109,6 +109,15 @@ function SequenceMonitor.new(config)
         end
     end)
 
+    -- Refresh content bounds when clips change (insert, delete, undo, redo)
+    self._content_changed_id = Signals.connect("content_changed", function(sequence_id)
+        if self.sequence_id == sequence_id then
+            self.engine:_refresh_content_bounds()
+            self.total_frames = self.engine.total_frames
+            self:_notify()
+        end
+    end)
+
     return self
 end
 
@@ -118,6 +127,10 @@ end
 
 function SequenceMonitor:_create_widgets()
     self._container = qt_constants.WIDGET.CREATE()
+    -- Opaque background prevents resize artifacts (transparent children leave ghost pixels)
+    qt_constants.PROPERTIES.SET_STYLE(self._container, [[
+        QWidget { background: #2b2b2b; }
+    ]])
     local layout = qt_constants.LAYOUT.CREATE_VBOX()
     if qt_constants.LAYOUT.SET_SPACING then
         qt_constants.LAYOUT.SET_SPACING(layout, 0)
@@ -484,6 +497,10 @@ function SequenceMonitor:destroy()
     if self._playhead_changed_id then
         Signals.disconnect(self._playhead_changed_id)
         self._playhead_changed_id = nil
+    end
+    if self._content_changed_id then
+        Signals.disconnect(self._content_changed_id)
+        self._content_changed_id = nil
     end
 end
 

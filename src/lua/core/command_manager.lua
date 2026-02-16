@@ -23,6 +23,7 @@ local M = {}
 -- The db variable is only used to pass to sub-modules (registry, history, state) during init.
 local db_module = require("core.database")
 local db = nil
+local Signals = require("core.signals")
 
 -- State tracking
 local last_error_message = ""
@@ -166,6 +167,9 @@ end
 
 local command_event_listeners = {}
 
+-- Forward declaration (defined at line ~486)
+local extract_sequence_id
+
 local function notify_command_event(event)
     if not event then
         return
@@ -176,6 +180,13 @@ local function notify_command_event(event)
         if not ok then
             logger.error("command_manager", string.format("Command listener failed: %s", tostring(err)))
         end
+    end
+
+    -- Notify playback layer that sequence content may have changed.
+    -- Covers execute, undo, redo. Handler is a no-op when total_frames unchanged.
+    local seq_id = event.command and extract_sequence_id(event.command)
+    if seq_id and seq_id ~= "" then
+        Signals.emit("content_changed", seq_id)
     end
 end
 
@@ -248,17 +259,24 @@ function M.execute_ui(command_name, params)
             assert(pid, pid_err)
             params.project_id = pid
         end
-        if params.sequence_id == nil and active_sequence_id ~= nil and active_sequence_id ~= "" then
-            params.sequence_id = active_sequence_id
+        -- Focus-aware routing: resolve sequence_id and playhead from active monitor.
+        -- This ensures mark/playhead commands target the focused viewer (source or timeline),
+        -- matching FCP7/Resolve behavior where I/O keys target the active viewer.
+        local ok_pm, pm = pcall(require, "ui.panel_manager")
+        local active_monitor = nil
+        if ok_pm and pm and pm.get_active_sequence_monitor then
+            active_monitor = pm.get_active_sequence_monitor()
         end
-        -- Auto-resolve playhead from active sequence monitor
+        if params.sequence_id == nil then
+            if active_monitor and active_monitor.sequence_id then
+                params.sequence_id = active_monitor.sequence_id
+            elseif active_sequence_id ~= nil and active_sequence_id ~= "" then
+                params.sequence_id = active_sequence_id
+            end
+        end
         if params.playhead == nil then
-            local ok_pm, pm = pcall(require, "ui.panel_manager")
-            if ok_pm and pm and pm.get_active_sequence_monitor then
-                local sv = pm.get_active_sequence_monitor()
-                if sv and sv.engine and sv.engine.get_position then
-                    params.playhead = sv.engine:get_position()
-                end
+            if active_monitor and active_monitor.engine and active_monitor.engine.get_position then
+                params.playhead = active_monitor.engine:get_position()
             end
         end
         result = M.execute(command_name, params)
@@ -468,7 +486,7 @@ local function command_flag(command, property, param_key)
     return false
 end
 
-local function extract_sequence_id(command)
+extract_sequence_id = function(command)
     if not command then return nil end
     if command.get_parameter then
         local value = command:get_parameter("sequence_id")

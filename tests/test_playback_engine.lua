@@ -123,8 +123,11 @@ package.loaded["core.mixer"] = {
 }
 
 -- Mock Sequence model (includes lookahead stubs)
+-- mock_content_end: configurable return for compute_content_end (simulates DB state)
+local mock_content_end = 100
 local mock_sequence = {
     id = "seq1",
+    compute_content_end = function() return mock_content_end end,
     get_next_video = function() return {} end,
     get_prev_video = function() return {} end,
     get_next_audio = function() return {} end,
@@ -320,6 +323,7 @@ end
 -- ─── Test 5: boundary stop in play mode ───
 print("\n--- boundary stop (play mode) ---")
 do
+    mock_content_end = 5
     local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 5)
@@ -332,12 +336,14 @@ do
     assert(not engine:is_playing(), "stopped at boundary")
     assert(engine:get_position() == 4, "parked at last frame")
     assert(not engine.latched, "play mode doesn't latch")
+    mock_content_end = 100
     print("  ok")
 end
 
 -- ─── Test 6: boundary latch in shuttle mode + unlatch ───
 print("\n--- boundary latch (shuttle mode) ---")
 do
+    mock_content_end = 5
     local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 5)
@@ -361,6 +367,7 @@ do
     assert(not engine.latched, "unlatched")
     assert(engine.direction == -1, "reversed")
     assert(engine.speed == 1, "1x after unlatch")
+    mock_content_end = 100
     print("  ok")
 end
 
@@ -694,6 +701,7 @@ end
 -- ─── Test 25: total_frames = 1 (single frame) ───
 print("\n--- single frame sequence ---")
 do
+    mock_content_end = 1
     local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 1)
@@ -705,6 +713,7 @@ do
     pump_tick()
     assert(not engine:is_playing(), "stopped (only 1 frame)")
     assert(engine:get_position() == 0, "at frame 0")
+    mock_content_end = 100
     print("  ok")
 end
 
@@ -781,6 +790,64 @@ do
 
     engine:seek(99)
     assert(engine:get_position() == 99, "at frame 99")
+    print("  ok")
+end
+
+-- ─── Test 31: play() refreshes total_frames after clip added to empty sequence ───
+-- Regression: adding a clip to an empty sequence then pressing play did nothing
+-- because total_frames and max_media_time_us were stale from load_sequence.
+print("\n--- play refreshes stale total_frames ---")
+do
+    mock_content_end = 0
+
+    local engine, _ = make_engine()
+    clear_timers()
+
+    -- Load empty sequence (total_frames computed = max(1, 0) = 1)
+    engine:load_sequence("seq1")
+    assert(engine.total_frames == 1,
+        "empty sequence: total_frames=" .. engine.total_frames .. " expected 1")
+
+    -- Simulate clip insertion: content_end now 100 frames
+    mock_content_end = 100
+
+    -- Play: engine should recompute total_frames before starting tick loop
+    engine:play()
+    assert(engine.total_frames == 100,
+        "after play: total_frames=" .. engine.total_frames .. " expected 100")
+    assert(engine.max_media_time_us > 0,
+        "after play: max_media_time_us=" .. engine.max_media_time_us .. " expected > 0")
+
+    -- Pump tick: should advance normally (not hit boundary at frame 0)
+    pump_tick()
+    assert(engine:is_playing(),
+        "should still be playing after first tick (not boundary-stopped)")
+    assert(engine:get_position() >= 1,
+        "should have advanced past frame 0")
+
+    engine:stop()
+    mock_content_end = 100
+    print("  ok")
+end
+
+-- ─── Test 32: shuttle() refreshes stale total_frames ───
+print("\n--- shuttle refreshes stale total_frames ---")
+do
+    mock_content_end = 0
+
+    local engine, _ = make_engine()
+    clear_timers()
+
+    engine:load_sequence("seq1")
+    assert(engine.total_frames == 1, "empty")
+
+    mock_content_end = 50
+    engine:shuttle(1)
+    assert(engine.total_frames == 50,
+        "after shuttle: total_frames=" .. engine.total_frames .. " expected 50")
+
+    engine:stop()
+    mock_content_end = 100
     print("  ok")
 end
 

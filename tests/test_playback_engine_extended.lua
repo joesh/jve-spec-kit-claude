@@ -142,8 +142,10 @@ package.loaded["core.mixer"] = {
 }
 
 -- Mock Sequence model (includes lookahead stubs)
+local mock_content_end = 100
 local mock_sequence = {
     id = "seq1",
+    compute_content_end = function() return mock_content_end end,
     get_next_video = function() return {} end,
     get_prev_video = function() return {} end,
     get_next_audio = function() return {} end,
@@ -915,6 +917,7 @@ do
         }
     end
 
+    mock_content_end = 200
     local engine, _ = make_engine()
     engine:load_sequence("seq1", 200)
     engine:activate_audio()
@@ -944,6 +947,7 @@ do
     engine:stop()
     -- Restore renderer
     package.loaded["core.renderer"].get_sequence_info = orig_get_info
+    mock_content_end = 100
 
     print("  video follows audio formula verified")
 end
