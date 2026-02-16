@@ -612,7 +612,7 @@ end
 -- @param frame_idx Frame index to retrieve
 -- @param context_id string
 -- @return EMP frame handle
-function M.get_video_frame(frame_idx, context_id)
+function M.get_video_frame(frame_idx, context_id, fps_num, fps_den)
     assert(M.is_loaded(context_id),
         "media_cache.get_video_frame: not loaded (call activate() first)")
     assert(frame_idx, "media_cache.get_video_frame: frame_idx is nil")
@@ -627,15 +627,32 @@ function M.get_video_frame(frame_idx, context_id)
         "media_cache.get_video_frame: active entry '%s' has no video_reader (audio-only file?)",
         ctx.active_path))
 
+    -- Use caller-provided fps (clip's timebase) or fall back to media's native rate
+    local decode_fps_num = fps_num or entry.info.fps_num
+    local decode_fps_den = fps_den or entry.info.fps_den
+
     local frame, err = qt_constants.EMP.READER_DECODE_FRAME(
         entry.video_reader,
         frame_idx,
-        entry.info.fps_num,
-        entry.info.fps_den
+        decode_fps_num,
+        decode_fps_den
     )
-    assert(frame, string.format(
-        "media_cache.get_video_frame: READER_DECODE_FRAME failed at frame %d: %s",
-        frame_idx, err and err.msg or "unknown error"))
+    if not frame then
+        local msg = err and err.msg or "unknown error"
+        if msg:match("End of file") then
+            -- EOF: source material exhausted (clip duration exceeds media file).
+            logger.warn("media_cache", string.format(
+                "EOF at file_frame=%d fps=%d/%d media_dur=%.3fs media_fps=%d/%d path=%s",
+                frame_idx, decode_fps_num, decode_fps_den,
+                (entry.info.duration_us or 0) / 1000000,
+                entry.info.fps_num or 0, entry.info.fps_den or 0,
+                tostring(ctx.active_path)))
+            return nil
+        end
+        assert(false, string.format(
+            "media_cache.get_video_frame: READER_DECODE_FRAME failed at frame %d: %s",
+            frame_idx, msg))
+    end
 
     return frame
 end
@@ -666,7 +683,9 @@ function M._cache_video_frame(frame_idx, frame, context_id)
 end
 
 --- Internal: decode a contiguous window ending at end_frame_idx
-function M._ensure_reverse_window(end_frame_idx, backfill_count, context_id)
+-- @param fps_num number|nil clip fps numerator (falls back to media's native rate)
+-- @param fps_den number|nil clip fps denominator
+function M._ensure_reverse_window(end_frame_idx, backfill_count, context_id, fps_num, fps_den)
     if not M.is_loaded(context_id) then
         return
     end
@@ -694,10 +713,12 @@ function M._ensure_reverse_window(end_frame_idx, backfill_count, context_id)
     ctx.video_cache.bulk_keep_min = start_frame_idx
     ctx.video_cache.bulk_keep_max = end_frame_idx
 
+    local decode_fps_num = fps_num or entry.info.fps_num
+    local decode_fps_den = fps_den or entry.info.fps_den
     for i = start_frame_idx, end_frame_idx do
         if not ctx.video_cache.frames[i] then
             local frame = qt_constants.EMP.READER_DECODE_FRAME(
-                entry.video_reader, i, entry.info.fps_num, entry.info.fps_den)
+                entry.video_reader, i, decode_fps_num, decode_fps_den)
             if frame then
                 M._cache_video_frame(i, frame, context_id)
             end
@@ -792,7 +813,9 @@ end
 -- @param direction -1=reverse, 0=stopped, 1=forward
 -- @param speed Playback speed multiplier
 -- @param context_id string
-function M.set_playhead(frame_idx, direction, speed, context_id)
+-- @param fps_num number|nil clip fps numerator (falls back to media's native rate)
+-- @param fps_den number|nil clip fps denominator
+function M.set_playhead(frame_idx, direction, speed, context_id, fps_num, fps_den)
     assert(frame_idx, "media_cache.set_playhead: frame_idx is nil")
     assert(direction, "media_cache.set_playhead: direction is nil")
     assert(speed, "media_cache.set_playhead: speed is nil")
@@ -820,11 +843,13 @@ function M.set_playhead(frame_idx, direction, speed, context_id)
     end
 
     if direction ~= 0 and entry.video_reader then
+        local prefetch_fps_num = fps_num or entry.info.fps_num
+        local prefetch_fps_den = fps_den or entry.info.fps_den
         qt_constants.EMP.READER_UPDATE_PREFETCH_TARGET(
             entry.video_reader,
             frame_idx,
-            entry.info.fps_num,
-            entry.info.fps_den
+            prefetch_fps_num,
+            prefetch_fps_den
         )
     end
 

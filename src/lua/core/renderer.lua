@@ -13,6 +13,7 @@
 
 local media_cache = require("core.media.media_cache")
 local Sequence = require("models.sequence")
+local logger = require("core.logger")
 
 local M = {}
 
@@ -41,16 +42,38 @@ function M.get_video_frame(sequence, playhead_frame, context_id)
     -- Activate reader in pool for this context
     local info = media_cache.activate(top.media_path, context_id)
 
-    -- Decode frame
-    local frame = media_cache.get_video_frame(top.source_frame, context_id)
+    -- Absolute timecode → file-relative frame (matches audio Mixer pattern).
+    -- Camera footage embeds time-of-day TC (e.g., 14:28:00:00 → frame 1249920).
+    -- DRP imports store these as source_in. Decoder needs file-relative (0-based).
+    local file_frame = top.source_frame - (info.start_tc or 0)
+
+    -- Decode using the clip's timebase (not the media's native rate).
+    -- source_frame is in clip rate units (e.g., 24/1 for a 24fps timeline).
+    -- If we used the media's rate (e.g., 24000/1001), the timestamp would drift
+    -- and overshoot the file at clip boundaries.
+    local clip_fps_num = top.clip.rate.fps_numerator
+    local clip_fps_den = top.clip.rate.fps_denominator
+    local frame = media_cache.get_video_frame(file_frame, context_id, clip_fps_num, clip_fps_den)
+    if not frame then
+        logger.warn("renderer", string.format(
+            "DECODE_NIL playhead=%d source_frame=%d file_frame=%d start_tc=%s clip_fps=%d/%d "
+            .. "src_in=%s src_out=%s dur=%s media=%s",
+            playhead_frame, top.source_frame, file_frame,
+            tostring(info.start_tc),
+            clip_fps_num, clip_fps_den,
+            tostring(top.clip.source_in), tostring(top.clip.source_out),
+            tostring(top.clip.duration),
+            tostring(top.media_path)))
+        return nil, nil
+    end
 
     local metadata = {
         clip_id = top.clip.id,
         media_path = top.media_path,
-        source_frame = top.source_frame,
-        -- info is guaranteed non-nil (activate asserts on failure).
-        -- rotation may be nil for assets without rotation metadata; nil means 0 degrees.
+        source_frame = file_frame,
         rotation = info.rotation or 0,
+        clip_fps_num = clip_fps_num,
+        clip_fps_den = clip_fps_den,
     }
 
     return frame, metadata
