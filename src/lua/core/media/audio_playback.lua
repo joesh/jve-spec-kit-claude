@@ -29,6 +29,7 @@
 local logger = require("core.logger")
 local qt_constants = require("core.qt_constants")
 local Mixer = require("core.mixer")
+local project_gen = require("core.project_generation")
 
 -- Quality mode constants (match SSE C++ enum)
 local Q1 = 1          -- Editor mode: 0.25x-4x
@@ -71,6 +72,7 @@ local M = {
     audio_sources = {},     -- list of {path, source_offset_us, volume, duration_us}
     media_cache_ref = nil,  -- media_cache module reference (for get_audio_pcm_for_path)
     has_audio = false,
+    _project_gen = 0,       -- generation counter at last set_audio_sources
 
     -- TRANSPORT state (per-event, unchanged)
     playing = false,
@@ -450,6 +452,7 @@ function M.set_audio_sources(sources, cache, restart_time_us)
         M.audio_sources = sources
         M.media_cache_ref = cache
         M.has_audio = true
+        M._project_gen = project_gen.current()
 
         -- Clear stale PCM cache and push new source data immediately.
         -- AOP+SSE continue playing old audio during the decode below;
@@ -475,6 +478,7 @@ function M.set_audio_sources(sources, cache, restart_time_us)
         M.audio_sources = sources
         M.media_cache_ref = cache
         M.has_audio = #sources > 0
+        M._project_gen = project_gen.current()
 
         -- Clear PCM cache (stale data from previous sources)
         last_pcm_range = { start_us = 0, end_us = 0 }
@@ -627,6 +631,7 @@ function M.start()
 
     assert(M.max_media_time_us >= 0,
         "audio_playback.start: max_media_time_us not set (call set_max_time first)")
+    project_gen.check(M._project_gen, "audio_playback.start")
 
     -- Reanchor at current media_time_us with current speed/mode
     reanchor(M.media_time_us, M.speed, M.quality_mode)
