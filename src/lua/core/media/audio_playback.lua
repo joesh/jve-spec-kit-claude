@@ -72,7 +72,7 @@ local M = {
     audio_sources = {},     -- list of {path, source_offset_us, volume, duration_us}
     media_cache_ref = nil,  -- media_cache module reference (for get_audio_pcm_for_path)
     has_audio = false,
-    _project_gen = 0,       -- generation counter at last set_audio_sources
+    _project_gen = -1,      -- sentinel: must call set_audio_sources before start()
 
     -- TRANSPORT state (per-event, unchanged)
     playing = false,
@@ -84,6 +84,9 @@ local M = {
     media_anchor_us = 0,         -- Playback time at last reanchor
     aop_epoch_playhead_us = 0,   -- AOP playhead reading at last reanchor
     max_media_time_us = 0,       -- Max playback time (set by controller)
+
+    -- Pre-buffer state for warm edit-point transitions
+    _pre_buffered = nil,  -- {clip_start_us, clip_end_us, path} or nil
 
     -- Export constants for tests/external access
     Q1 = Q1,
@@ -372,6 +375,86 @@ end
 -- Source Lifecycle (multi-source, replaces switch_source)
 --------------------------------------------------------------------------------
 
+--- Pre-buffer audio for an upcoming clip transition.
+-- Decodes PCM for the next clip's start region and pushes to SSE.
+-- When set_audio_sources detects matching pre-buffered data, it skips the
+-- cold restart (STOP/FLUSH/RESET) for a seamless edit-point crossover.
+-- @param source table: source entry {path, clip_start_us, clip_end_us, ...}
+-- @param cache media_cache module reference
+function M.pre_buffer(source, cache)
+    assert(source and type(source) == "table",
+        "audio_playback.pre_buffer: source must be a table")
+    assert(cache and cache.get_audio_pcm_for_path,
+        "audio_playback.pre_buffer: cache must have get_audio_pcm_for_path")
+    assert(source.path and type(source.path) == "string",
+        "audio_playback.pre_buffer: source.path must be a non-nil string")
+    assert(source.clip_start_us,
+        "audio_playback.pre_buffer: source missing clip_start_us")
+    assert(source.clip_end_us,
+        "audio_playback.pre_buffer: source missing clip_end_us")
+
+    if not M.session_initialized then return end
+
+    -- Ensure reader is pooled (warm I/O)
+    assert(cache.ensure_audio_pooled,
+        "audio_playback.pre_buffer: cache missing ensure_audio_pooled")
+    cache.ensure_audio_pooled(source.path)
+
+    -- Decode a half-window of PCM starting at clip start
+    local decode_start_us = source.clip_start_us
+    local decode_end_us = math.min(
+        source.clip_end_us,
+        decode_start_us + CFG.AUDIO_CACHE_HALF_WINDOW_US)
+
+    local pushed = false
+    if decode_end_us > decode_start_us then
+        -- Delegate decode to Mixer for proper time-mapping + conform
+        local mix_buf, mix_frames, actual_start = Mixer.mix_sources(
+            { source }, decode_start_us, decode_end_us,
+            M.session_sample_rate, M.session_channels, cache)
+
+        if mix_buf and mix_frames > 0 then
+            -- Push pre-decoded PCM to SSE at the FUTURE timeline position.
+            -- SSE replaces overlapping chunks, so this won't interfere with
+            -- currently-playing audio from the old clip.
+            qt_constants.SSE.PUSH_PCM(M.sse, mix_buf, mix_frames, actual_start)
+            pushed = true
+        end
+    end
+
+    -- Only store pre-buffer identity if PCM was actually pushed to SSE.
+    -- Storing without PCM would cause warm transition to skip RESET
+    -- even though SSE has no data for the new clip.
+    if pushed then
+        M._pre_buffered = {
+            clip_start_us = source.clip_start_us,
+            clip_end_us = source.clip_end_us,
+            path = source.path,
+        }
+        logger.debug("audio_playback", string.format(
+            "Pre-buffered audio: path=%s start=%.3fs end=%.3fs",
+            source.path, decode_start_us / 1000000, decode_end_us / 1000000))
+    else
+        logger.warn("audio_playback", string.format(
+            "Pre-buffer decode failed (no PCM): path=%s start=%.3fs",
+            source.path, decode_start_us / 1000000))
+    end
+end
+
+--- Check if sources match the pre-buffered clip.
+-- Match on single-source transitions where path and clip_start_us agree.
+-- @param sources table: list of source entries
+-- @return boolean
+local function sources_match_pre_buffer(sources)
+    if not M._pre_buffered then return false end
+    if #sources ~= 1 then return false end
+
+    local src = sources[1]
+    return src.path == M._pre_buffered.path
+       and src.clip_start_us == M._pre_buffered.clip_start_us
+       and src.clip_end_us == M._pre_buffered.clip_end_us
+end
+
 --- Set audio sources for playback. THE ONLY way to configure audio.
 -- Stops pump, resets SSE, stores new sources list. Restarts if was playing.
 -- Source mode: one entry with source_offset_us=0.
@@ -461,6 +544,50 @@ function M.set_audio_sources(sources, cache, restart_time_us)
         last_fetch_pb_start_us = nil
         M._ensure_pcm_cache()
     else
+        -- Warm pre-buffered transition: edit point with pre-loaded audio in SSE.
+        -- pre_buffer() already pushed the next clip's PCM to SSE, so we can
+        -- skip the cold restart (STOP → FLUSH → RESET → decode → restart).
+        if sources_match_pre_buffer(sources) then
+            M.audio_sources = sources
+            M.media_cache_ref = cache
+            M.has_audio = #sources > 0
+            M._project_gen = project_gen.current()
+            -- Clear pre-buffer (consumed). Reset PCM cache so pump refetches
+            -- from new sources on next tick. SSE retains pre-buffered PCM.
+            M._pre_buffered = nil
+            last_pcm_range = { start_us = 0, end_us = 0 }
+            last_fetch_pb_start_us = nil
+
+            if was_playing and M.has_audio then
+                -- Warm reanchor: update SSE target WITHOUT RESET.
+                -- SSE already has pre-buffered PCM — RESET would wipe it.
+                local t = restart_time_us or M.get_time_us()
+                t = clamp_to_source_boundaries(t, sources, M.speed)
+                t = clamp_media_us(t)
+
+                M.media_anchor_us = t
+                M.media_time_us = t
+                qt_constants.AOP.FLUSH(M.aop)
+                M.aop_epoch_playhead_us = qt_constants.AOP.PLAYHEAD_US(M.aop)
+                qt_constants.SSE.SET_TARGET(M.sse, t, M.speed, M.quality_mode)
+
+                M._ensure_pcm_cache()
+                advance_sse_past_codec_delay()
+                qt_constants.AOP.START(M.aop)
+                M.playing = true
+                M._start_pump()
+                logger.debug("audio_playback",
+                    "Warm transition (playing): reanchored, skipped SSE.RESET")
+            else
+                logger.debug("audio_playback",
+                    "Warm transition (stopped): skipped SSE.RESET (pre-buffered)")
+            end
+            return
+        end
+
+        -- Clear stale pre-buffer on mismatch
+        M._pre_buffered = nil
+
         -- Cold path: sources changed, cleared, or not playing — full stop/restart
         if M.playing then
             -- Use explicit restart time if provided (for video sync),
@@ -602,9 +729,11 @@ function M.shutdown_session()
     last_pcm_range = { start_us = 0, end_us = 0 }
     last_fetch_pb_start_us = nil
     pumping = false
+    M._pre_buffered = nil
     M.audio_sources = {}
     M.media_cache_ref = nil
     M.has_audio = false
+    M._project_gen = -1  -- sentinel: must call set_audio_sources before start()
     M.session_initialized = false
     M.session_sample_rate = 0
     M.session_channels = 0

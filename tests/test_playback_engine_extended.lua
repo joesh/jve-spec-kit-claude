@@ -69,6 +69,7 @@ package.loaded["core.media.media_cache"] = {
         return { has_audio = true, audio_sample_rate = 48000 }
     end,
     get_audio_pcm_for_path = function() return nil, 0, 0 end,
+    pre_buffer = function() end,
 }
 
 -- Mock logger
@@ -140,8 +141,14 @@ package.loaded["core.mixer"] = {
     end,
 }
 
--- Mock Sequence model
-local mock_sequence = { id = "seq1" }
+-- Mock Sequence model (includes lookahead stubs)
+local mock_sequence = {
+    id = "seq1",
+    get_next_video = function() return {} end,
+    get_prev_video = function() return {} end,
+    get_next_audio = function() return {} end,
+    get_prev_audio = function() return {} end,
+}
 package.loaded["models.sequence"] = {
     load = function(id) return mock_sequence end,
 }

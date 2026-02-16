@@ -110,6 +110,12 @@ function PlaybackEngine.new(config)
     -- Audio ownership (only one engine owns audio at a time)
     self._audio_owner = false
 
+    -- Lookahead pre-buffer state
+    self._video_clip_bounds = nil       -- {start_frame, end_frame} from metadata
+    self._pre_buffered_video_id = nil   -- clip_id of pre-buffered video clip
+    self._pre_buffered_audio_ids = {}   -- {[clip_id] = true}
+    self._current_audio_sources = nil   -- sources from last _resolve_and_set_audio
+
     return self
 end
 
@@ -313,6 +319,11 @@ function PlaybackEngine:stop()
     self._last_audio_frame = nil
     self:_clear_latch()
 
+    -- Clear lookahead state (stale across stop/start cycles)
+    self._current_audio_sources = nil
+    self._pre_buffered_video_id = nil
+    self._pre_buffered_audio_ids = {}
+
     self:_stop_audio()
     media_cache.stop_all_prefetch()
     qt_constants.EMP.SET_DECODE_MODE("park")
@@ -505,7 +516,10 @@ function PlaybackEngine:_tick()
         end)
     end
 
-    -- 8. Commit position
+    -- 8. Lookahead: pre-buffer next/prev clip near edit points
+    self:_check_lookahead(frame_idx)
+
+    -- 9. Commit position
     self:set_position(pos)
     self._last_committed_frame = math.floor(pos)
     self._last_tick_frame = frame_idx
@@ -552,11 +566,23 @@ function PlaybackEngine:_display_frame(frame_idx)
         assert(metadata, string.format(
             "PlaybackEngine:_display_frame: Renderer returned frame but nil metadata at frame %d",
             frame_idx))
-        -- Detect clip switch → rotation callback
+        -- Detect clip switch → rotation callback + reset lookahead
         if metadata.clip_id ~= self.current_clip_id then
             self.current_clip_id = metadata.clip_id
             self._on_set_rotation(metadata.rotation)
+            -- Entering new clip: clear pre-buffer state from previous clip
+            self._pre_buffered_video_id = nil
+            self._pre_buffered_audio_ids = {}
         end
+
+        -- Store clip bounds for lookahead (always, not just on clip switch)
+        if metadata.clip_end_frame then
+            self._video_clip_bounds = {
+                start_frame = metadata.clip_start_frame,
+                end_frame = metadata.clip_end_frame,
+            }
+        end
+
         self._on_show_frame(frame_handle, metadata)
 
         -- Notify prefetch of source-space position (use clip's rate for timestamp accuracy)
@@ -570,6 +596,208 @@ function PlaybackEngine:_display_frame(frame_idx)
         -- Gap at playhead
         self._on_show_gap()
         self.current_clip_id = nil
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Lookahead Pre-Buffer
+--
+-- Detects when playback approaches a clip boundary and pre-buffers the
+-- next (or prev) clip's data. Video threshold: 1 second. Audio: 2 seconds.
+-- Each clip is pre-buffered at most once (tracked by clip_id).
+--------------------------------------------------------------------------------
+
+--- Check proximity to clip boundaries and pre-buffer next/prev clip.
+-- Called from _tick() after display and audio resolve.
+-- @param frame_idx integer: current display frame
+function PlaybackEngine:_check_lookahead(frame_idx)
+    if not self.sequence then return end
+    if self.direction == 0 then return end
+
+    if self.direction > 0 then
+        self:_lookahead_video_forward(frame_idx)
+        self:_lookahead_audio_forward(frame_idx)
+    else
+        self:_lookahead_video_reverse(frame_idx)
+        self:_lookahead_audio_reverse(frame_idx)
+    end
+end
+
+--- Video lookahead (forward): pre-buffer when within 1 second of clip_end.
+function PlaybackEngine:_lookahead_video_forward(frame_idx)
+    if not self._video_clip_bounds then return end
+
+    local threshold_frames = math.ceil(self.fps) -- 1 second
+    local distance = self._video_clip_bounds.end_frame - frame_idx
+    if distance > threshold_frames or distance <= 0 then return end
+
+    -- Resolve next video clip at the boundary
+    local entries = self.sequence:get_next_video(self._video_clip_bounds.end_frame)
+    if #entries == 0 then return end
+
+    local entry = entries[1]
+    if self._pre_buffered_video_id == entry.clip.id then return end -- already done
+
+    media_cache.pre_buffer(
+        entry.media_path, entry.source_frame,
+        entry.clip.rate.fps_numerator, entry.clip.rate.fps_denominator)
+    self._pre_buffered_video_id = entry.clip.id
+
+    logger.debug("playback_engine", string.format(
+        "Video lookahead: pre-buffered '%s' at frame %d (boundary in %d frames)",
+        entry.media_path, entry.source_frame, distance))
+end
+
+--- Video lookahead (reverse): pre-buffer when within 1 second of clip_start.
+function PlaybackEngine:_lookahead_video_reverse(frame_idx)
+    if not self._video_clip_bounds then return end
+
+    local threshold_frames = math.ceil(self.fps)
+    local distance = frame_idx - self._video_clip_bounds.start_frame
+    if distance > threshold_frames or distance <= 0 then return end
+
+    local entries = self.sequence:get_prev_video(self._video_clip_bounds.start_frame)
+    if #entries == 0 then return end
+
+    local entry = entries[1]
+    if self._pre_buffered_video_id == entry.clip.id then return end
+
+    media_cache.pre_buffer(
+        entry.media_path, entry.source_frame,
+        entry.clip.rate.fps_numerator, entry.clip.rate.fps_denominator)
+    self._pre_buffered_video_id = entry.clip.id
+
+    logger.debug("playback_engine", string.format(
+        "Video lookahead (rev): pre-buffered '%s' at frame %d (boundary in %d frames)",
+        entry.media_path, entry.source_frame, distance))
+end
+
+--- Audio lookahead (forward): pre-buffer when within 2 seconds of clip_end_us.
+function PlaybackEngine:_lookahead_audio_forward(frame_idx)
+    if not self._audio_owner then return end
+    if not audio_playback then return end
+    if not self._current_audio_sources or #self._current_audio_sources == 0 then return end
+
+    local threshold_us = 2000000 -- 2 seconds
+    local current_time_us = helpers.calc_time_us_from_frame(
+        frame_idx, self.fps_num, self.fps_den)
+
+    for _, src in ipairs(self._current_audio_sources) do
+        if not src.clip_end_us then goto continue end
+
+        local distance_us = src.clip_end_us - current_time_us
+        if distance_us > threshold_us or distance_us <= 0 then goto continue end
+
+        -- Already pre-buffered this audio clip?
+        local src_id = src.clip_id or src.path
+        if self._pre_buffered_audio_ids[src_id] then goto continue end
+
+        -- Resolve next audio clip at the boundary frame.
+        -- Round (not floor) to avoid losing the boundary due to us→frame truncation.
+        -- Example: 100 frames @ 24fps → 4166666us → floor(99.999) = 99 (wrong).
+        local boundary_frame = math.floor(
+            src.clip_end_us * self.fps_num / (1000000 * self.fps_den) + 0.5)
+        local entries = self.sequence:get_next_audio(boundary_frame)
+        if #entries == 0 then goto continue end
+
+        -- Build source for pre-buffer from resolved entry
+        local entry = entries[1]
+        assert(entry.source_time_us,
+            "playback_engine._lookahead_audio_forward: entry missing source_time_us")
+
+        local clip_start_us = helpers.calc_time_us_from_frame(
+            entry.clip.timeline_start, self.fps_num, self.fps_den)
+        local clip_end_us = helpers.calc_time_us_from_frame(
+            entry.clip.timeline_start + entry.clip.duration, self.fps_num, self.fps_den)
+
+        -- Compute conform speed_ratio (same logic as mixer.resolve_audio_sources)
+        local media_video_fps = entry.media_fps_num and entry.media_fps_den
+            and (entry.media_fps_num / entry.media_fps_den) or nil
+        local seq_fps = self.fps_num / self.fps_den
+        local pre_speed_ratio = 1.0
+        if media_video_fps and media_video_fps < 1000
+           and math.abs(media_video_fps - seq_fps) > 0.01 then
+            pre_speed_ratio = seq_fps / media_video_fps
+        end
+
+        local pre_source = {
+            path = entry.media_path,
+            clip_start_us = clip_start_us,
+            clip_end_us = clip_end_us,
+            seek_us = entry.source_time_us,
+            speed_ratio = pre_speed_ratio,
+            volume = 1.0, -- Pre-buffer uses unity; real volume applied at playback
+        }
+        audio_playback.pre_buffer(pre_source, media_cache)
+        self._pre_buffered_audio_ids[src_id] = true
+
+        logger.debug("playback_engine", string.format(
+            "Audio lookahead: pre-buffered '%s' (%.3fs from boundary)",
+            entry.media_path, distance_us / 1000000))
+
+        ::continue::
+    end
+end
+
+--- Audio lookahead (reverse): pre-buffer when within 2 seconds of clip_start_us.
+function PlaybackEngine:_lookahead_audio_reverse(frame_idx)
+    if not self._audio_owner then return end
+    if not audio_playback then return end
+    if not self._current_audio_sources or #self._current_audio_sources == 0 then return end
+
+    local threshold_us = 2000000
+    local current_time_us = helpers.calc_time_us_from_frame(
+        frame_idx, self.fps_num, self.fps_den)
+
+    for _, src in ipairs(self._current_audio_sources) do
+        if not src.clip_start_us then goto continue end
+
+        local distance_us = current_time_us - src.clip_start_us
+        if distance_us > threshold_us or distance_us <= 0 then goto continue end
+
+        local src_id = src.clip_id or src.path
+        if self._pre_buffered_audio_ids[src_id] then goto continue end
+
+        local boundary_frame = math.floor(
+            src.clip_start_us * self.fps_num / (1000000 * self.fps_den) + 0.5)
+        local entries = self.sequence:get_prev_audio(boundary_frame)
+        if #entries == 0 then goto continue end
+
+        local entry = entries[1]
+        assert(entry.source_time_us,
+            "playback_engine._lookahead_audio_reverse: entry missing source_time_us")
+
+        local clip_start_us = helpers.calc_time_us_from_frame(
+            entry.clip.timeline_start, self.fps_num, self.fps_den)
+        local clip_end_us = helpers.calc_time_us_from_frame(
+            entry.clip.timeline_start + entry.clip.duration, self.fps_num, self.fps_den)
+
+        -- Compute conform speed_ratio (same logic as mixer.resolve_audio_sources)
+        local media_video_fps = entry.media_fps_num and entry.media_fps_den
+            and (entry.media_fps_num / entry.media_fps_den) or nil
+        local seq_fps = self.fps_num / self.fps_den
+        local pre_speed_ratio = 1.0
+        if media_video_fps and media_video_fps < 1000
+           and math.abs(media_video_fps - seq_fps) > 0.01 then
+            pre_speed_ratio = seq_fps / media_video_fps
+        end
+
+        local pre_source = {
+            path = entry.media_path,
+            clip_start_us = clip_start_us,
+            clip_end_us = clip_end_us,
+            seek_us = entry.source_time_us,
+            speed_ratio = pre_speed_ratio,
+            volume = 1.0, -- Pre-buffer uses unity; real volume applied at playback
+        }
+        audio_playback.pre_buffer(pre_source, media_cache)
+        self._pre_buffered_audio_ids[src_id] = true
+
+        logger.debug("playback_engine", string.format(
+            "Audio lookahead (rev): pre-buffered '%s' (%.3fs from boundary)",
+            entry.media_path, distance_us / 1000000))
+
+        ::continue::
     end
 end
 
@@ -633,6 +861,9 @@ function PlaybackEngine:_resolve_and_set_audio(frame)
     assert(type(clip_ids) == "table", string.format(
         "PlaybackEngine:_resolve_and_set_audio: Mixer returned non-table clip_ids at frame %d",
         frame))
+
+    -- Always store for lookahead (even if clips unchanged)
+    self._current_audio_sources = sources
 
     -- Change detection: compare clip ID sets
     if not self:_audio_clips_changed(clip_ids) then return end

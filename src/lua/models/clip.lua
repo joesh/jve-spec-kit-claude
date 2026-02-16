@@ -583,6 +583,81 @@ function M.get_master_clip_usage(master_clip_id)
 end
 
 -- =============================================================================
+-- TRACK-RELATIVE QUERY METHODS (for engine lookahead / pre-buffering)
+-- =============================================================================
+
+--- Find the next enabled clip on a track starting at or after a given frame.
+-- @param track_id string: Track ID to search
+-- @param after_frame number: Timeline frame position (inclusive lower bound)
+-- @return Clip or nil
+function M.find_next_on_track(track_id, after_frame)
+    assert(track_id and track_id ~= "", "Clip.find_next_on_track: track_id is required")
+    assert(type(after_frame) == "number", "Clip.find_next_on_track: after_frame must be a number")
+
+    local database = require("core.database")
+    local db = database.get_connection()
+    assert(db, "Clip.find_next_on_track: no database connection")
+
+    local stmt = db:prepare([[
+        SELECT id FROM clips
+        WHERE track_id = ?
+          AND timeline_start_frame >= ?
+          AND enabled = 1
+        ORDER BY timeline_start_frame ASC
+        LIMIT 1
+    ]])
+    assert(stmt, "Clip.find_next_on_track: failed to prepare query")
+
+    stmt:bind_value(1, track_id)
+    stmt:bind_value(2, after_frame)
+
+    local clip_id = nil
+    if stmt:exec() and stmt:next() then
+        clip_id = stmt:value(0)
+    end
+    stmt:finalize()
+
+    if not clip_id then return nil end
+    return M.load(clip_id)
+end
+
+--- Find the previous enabled clip on a track ending at or before a given frame.
+-- "Ending at" means (timeline_start + duration) <= before_frame.
+-- @param track_id string: Track ID to search
+-- @param before_frame number: Timeline frame position (inclusive upper bound for clip end)
+-- @return Clip or nil
+function M.find_prev_on_track(track_id, before_frame)
+    assert(track_id and track_id ~= "", "Clip.find_prev_on_track: track_id is required")
+    assert(type(before_frame) == "number", "Clip.find_prev_on_track: before_frame must be a number")
+
+    local database = require("core.database")
+    local db = database.get_connection()
+    assert(db, "Clip.find_prev_on_track: no database connection")
+
+    local stmt = db:prepare([[
+        SELECT id FROM clips
+        WHERE track_id = ?
+          AND (timeline_start_frame + duration_frames) <= ?
+          AND enabled = 1
+        ORDER BY timeline_start_frame DESC
+        LIMIT 1
+    ]])
+    assert(stmt, "Clip.find_prev_on_track: failed to prepare query")
+
+    stmt:bind_value(1, track_id)
+    stmt:bind_value(2, before_frame)
+
+    local clip_id = nil
+    if stmt:exec() and stmt:next() then
+        clip_id = stmt:value(0)
+    end
+    stmt:finalize()
+
+    if not clip_id then return nil end
+    return M.load(clip_id)
+end
+
+-- =============================================================================
 -- DOMAIN METHODS
 -- =============================================================================
 

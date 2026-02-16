@@ -45,7 +45,12 @@ function M.get_video_frame(sequence, playhead_frame, context_id)
     -- Absolute timecode → file-relative frame (matches audio Mixer pattern).
     -- Camera footage embeds time-of-day TC (e.g., 14:28:00:00 → frame 1249920).
     -- DRP imports store these as source_in. Decoder needs file-relative (0-based).
+    -- start_tc may be nil for files without embedded timecode; nil means 0.
     local file_frame = top.source_frame - (info.start_tc or 0)
+    assert(file_frame >= 0, string.format(
+        "renderer: file_frame=%d < 0 (source_frame=%d, start_tc=%s, clip=%s, media=%s)",
+        file_frame, top.source_frame, tostring(info.start_tc),
+        top.clip.id, tostring(top.media_path)))
 
     -- Decode using the clip's timebase (not the media's native rate).
     -- source_frame is in clip rate units (e.g., 24/1 for a 24fps timeline).
@@ -74,6 +79,8 @@ function M.get_video_frame(sequence, playhead_frame, context_id)
         rotation = info.rotation or 0,
         clip_fps_num = clip_fps_num,
         clip_fps_den = clip_fps_den,
+        clip_end_frame = top.clip.timeline_start + top.clip.duration,
+        clip_start_frame = top.clip.timeline_start,
     }
 
     return frame, metadata

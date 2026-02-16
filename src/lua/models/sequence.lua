@@ -41,6 +41,16 @@ local function validate_frame_rate(val)
     error("Sequence: frame_rate is required (got " .. type(val) .. ")")
 end
 
+--- Default viewport duration: 10 seconds worth of frames.
+-- Single source of truth; used by Sequence.create, import commands, and zoom_to_fit_if_first_open.
+function Sequence.default_viewport_duration(fps_num, fps_den)
+    assert(type(fps_num) == "number" and fps_num > 0,
+        "Sequence.default_viewport_duration: fps_num must be positive number")
+    assert(type(fps_den) == "number" and fps_den > 0,
+        "Sequence.default_viewport_duration: fps_den must be positive number")
+    return math.floor(10.0 * fps_num / fps_den)
+end
+
 function Sequence.create(name, project_id, frame_rate, width, height, opts)
     assert(name and name ~= "", "Sequence.create: name is required")
     assert(project_id and project_id ~= "", "Sequence.create: project_id is required")
@@ -58,8 +68,7 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
     -- Integer frame coordinates (fps is metadata in frame_rate)
     local playhead_pos = opts.playhead_frame or 0
     local viewport_start = opts.view_start_frame or 0
-    -- Default viewport: 10 seconds worth of frames
-    local viewport_dur = opts.view_duration_frames or math.floor(10.0 * fr.fps_numerator / fr.fps_denominator)
+    local viewport_dur = opts.view_duration_frames or Sequence.default_viewport_duration(fr.fps_numerator, fr.fps_denominator)
 
     local sequence = {
         id = opts.id or uuid.generate(),
@@ -672,6 +681,156 @@ function Sequence:get_audio_at(playhead_frame)
         end
     end
 
+    return results
+end
+
+--- Get next video clips (one per track) starting at or after a boundary frame.
+-- Used by engine lookahead for pre-buffering. Entry format matches get_video_at.
+-- @param after_frame integer: boundary frame (inclusive)
+-- @return list of {media_path, source_time_us, source_frame, clip, track}
+function Sequence:get_next_video(after_frame)
+    assert(type(after_frame) == "number",
+        "Sequence:get_next_video: after_frame must be integer")
+
+    local Track = require("models.track")
+    local Clip = require("models.clip")
+    local Media = require("models.media")
+
+    local tracks = Track.find_by_sequence(self.id, "VIDEO")
+    if not tracks or #tracks == 0 then return {} end
+
+    local results = {}
+    for _, track in ipairs(tracks) do
+        local clip = Clip.find_next_on_track(track.id, after_frame)
+        if clip then
+            local media = Media.load(clip.media_id)
+            assert(media, string.format(
+                "Sequence:get_next_video: clip %s references missing media %s",
+                clip.id, tostring(clip.media_id)))
+            -- source_frame at clip start = source_in
+            local source_time_us, source_frame = calc_source_time_us(clip, clip.timeline_start)
+            results[#results + 1] = {
+                media_path = media.file_path,
+                source_time_us = source_time_us,
+                source_frame = source_frame,
+                clip = clip,
+                track = track,
+            }
+        end
+    end
+    return results
+end
+
+--- Get previous video clips (one per track) ending at or before a boundary frame.
+-- @param before_frame integer: boundary frame (inclusive upper bound for clip end)
+-- @return list of {media_path, source_time_us, source_frame, clip, track}
+function Sequence:get_prev_video(before_frame)
+    assert(type(before_frame) == "number",
+        "Sequence:get_prev_video: before_frame must be integer")
+
+    local Track = require("models.track")
+    local Clip = require("models.clip")
+    local Media = require("models.media")
+
+    local tracks = Track.find_by_sequence(self.id, "VIDEO")
+    if not tracks or #tracks == 0 then return {} end
+
+    local results = {}
+    for _, track in ipairs(tracks) do
+        local clip = Clip.find_prev_on_track(track.id, before_frame)
+        if clip then
+            local media = Media.load(clip.media_id)
+            assert(media, string.format(
+                "Sequence:get_prev_video: clip %s references missing media %s",
+                clip.id, tostring(clip.media_id)))
+            -- Source position at clip END (last frame): reverse playback enters here
+            local last_frame = clip.timeline_start + clip.duration - 1
+            local source_time_us, source_frame = calc_source_time_us(clip, last_frame)
+            results[#results + 1] = {
+                media_path = media.file_path,
+                source_time_us = source_time_us,
+                source_frame = source_frame,
+                clip = clip,
+                track = track,
+            }
+        end
+    end
+    return results
+end
+
+--- Get next audio clips (one per track) starting at or after a boundary frame.
+-- @param after_frame integer
+-- @return list of {media_path, source_time_us, source_frame, clip, track, media_fps_num, media_fps_den}
+function Sequence:get_next_audio(after_frame)
+    assert(type(after_frame) == "number",
+        "Sequence:get_next_audio: after_frame must be integer")
+
+    local Track = require("models.track")
+    local Clip = require("models.clip")
+    local Media = require("models.media")
+
+    local tracks = Track.find_by_sequence(self.id, "AUDIO")
+    if not tracks or #tracks == 0 then return {} end
+
+    local results = {}
+    for _, track in ipairs(tracks) do
+        local clip = Clip.find_next_on_track(track.id, after_frame)
+        if clip then
+            local media = Media.load(clip.media_id)
+            assert(media, string.format(
+                "Sequence:get_next_audio: clip %s references missing media %s",
+                clip.id, tostring(clip.media_id)))
+            local source_time_us, source_frame = calc_source_time_us(clip, clip.timeline_start)
+            results[#results + 1] = {
+                media_path = media.file_path,
+                source_time_us = source_time_us,
+                source_frame = source_frame,
+                clip = clip,
+                track = track,
+                media_fps_num = media.frame_rate.fps_numerator,
+                media_fps_den = media.frame_rate.fps_denominator,
+            }
+        end
+    end
+    return results
+end
+
+--- Get previous audio clips (one per track) ending at or before a boundary frame.
+-- @param before_frame integer
+-- @return list of {media_path, source_time_us, source_frame, clip, track, media_fps_num, media_fps_den}
+function Sequence:get_prev_audio(before_frame)
+    assert(type(before_frame) == "number",
+        "Sequence:get_prev_audio: before_frame must be integer")
+
+    local Track = require("models.track")
+    local Clip = require("models.clip")
+    local Media = require("models.media")
+
+    local tracks = Track.find_by_sequence(self.id, "AUDIO")
+    if not tracks or #tracks == 0 then return {} end
+
+    local results = {}
+    for _, track in ipairs(tracks) do
+        local clip = Clip.find_prev_on_track(track.id, before_frame)
+        if clip then
+            local media = Media.load(clip.media_id)
+            assert(media, string.format(
+                "Sequence:get_prev_audio: clip %s references missing media %s",
+                clip.id, tostring(clip.media_id)))
+            -- Source position at clip END (last frame): reverse playback enters here
+            local last_frame = clip.timeline_start + clip.duration - 1
+            local source_time_us, source_frame = calc_source_time_us(clip, last_frame)
+            results[#results + 1] = {
+                media_path = media.file_path,
+                source_time_us = source_time_us,
+                source_frame = source_frame,
+                clip = clip,
+                track = track,
+                media_fps_num = media.frame_rate.fps_numerator,
+                media_fps_den = media.frame_rate.fps_denominator,
+            }
+        end
+    end
     return results
 end
 

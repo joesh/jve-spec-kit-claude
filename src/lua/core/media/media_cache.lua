@@ -805,6 +805,47 @@ function M.get_audio_pcm(start_us, end_us, out_sample_rate, context_id)
 end
 
 --------------------------------------------------------------------------------
+-- Pre-Buffer (warm reader pool + decode ahead, no context change)
+--------------------------------------------------------------------------------
+
+--- Pre-buffer video frames for an upcoming clip transition.
+-- Opens reader in pool (if not already) and pre-decodes ~5 frames at entry point.
+-- Does NOT change any context's active_path. Used by engine lookahead.
+-- @param path string: media file path
+-- @param entry_frame number: first source frame to decode
+-- @param fps_num number: clip fps numerator
+-- @param fps_den number: clip fps denominator
+function M.pre_buffer(path, entry_frame, fps_num, fps_den)
+    assert(path and type(path) == "string",
+        "media_cache.pre_buffer: path must be a non-nil string")
+    assert(type(entry_frame) == "number",
+        "media_cache.pre_buffer: entry_frame must be a number")
+    assert(type(fps_num) == "number" and fps_num > 0,
+        "media_cache.pre_buffer: fps_num must be positive number")
+    assert(type(fps_den) == "number" and fps_den > 0,
+        "media_cache.pre_buffer: fps_den must be positive number")
+
+    -- Warm the reader pool (opens file if not already pooled)
+    local entry = ensure_in_pool(path)
+
+    -- Pre-decode ~5 frames starting at entry point (if video reader exists).
+    -- Stop early if decode returns nil (past EOF).
+    if entry.video_reader then
+        local pre_decode_count = 5
+        local decoded = 0
+        for i = 0, pre_decode_count - 1 do
+            local frame_handle = qt_constants.EMP.READER_DECODE_FRAME(
+                entry.video_reader, entry_frame + i, fps_num, fps_den)
+            if not frame_handle then break end
+            decoded = decoded + 1
+        end
+        logger.debug("media_cache", string.format(
+            "Pre-buffered %d/%d frames at %d for '%s'",
+            decoded, pre_decode_count, entry_frame, path))
+    end
+end
+
+--------------------------------------------------------------------------------
 -- Playhead Management (per-context)
 --------------------------------------------------------------------------------
 

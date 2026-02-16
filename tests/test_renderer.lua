@@ -278,6 +278,31 @@ local function test_get_video_frame_returns_nil_on_eof()
     print("  test_get_video_frame_returns_nil_on_eof passed")
 end
 
+local function test_get_video_frame_clip_bounds_in_metadata()
+    mc.activate = function() return { start_tc = 0, rotation = 0 } end
+    mc.get_video_frame = function() return "mock_frame" end
+
+    -- Frame 10 → clip_v2 (timeline_start=0, duration=48)
+    local _, meta = renderer.get_video_frame(seq, 10, "test_ctx")
+    assert(meta, "Expected metadata")
+    assert(meta.clip_end_frame == 48, string.format(
+        "clip_end_frame should be 0+48=48, got %s", tostring(meta.clip_end_frame)))
+    assert(meta.clip_start_frame == 0, string.format(
+        "clip_start_frame should be 0, got %s", tostring(meta.clip_start_frame)))
+
+    -- Frame 30 → clip_v1 (timeline_start=24, duration=48)
+    local _, meta2 = renderer.get_video_frame(seq, 30, "test_ctx")
+    assert(meta2, "Expected metadata at frame 30")
+    assert(meta2.clip_end_frame == 72, string.format(
+        "clip_end_frame should be 24+48=72, got %s", tostring(meta2.clip_end_frame)))
+    assert(meta2.clip_start_frame == 24, string.format(
+        "clip_start_frame should be 24, got %s", tostring(meta2.clip_start_frame)))
+
+    mc.activate = orig_activate
+    mc.get_video_frame = orig_get_video_frame
+    print("  test_get_video_frame_clip_bounds_in_metadata passed")
+end
+
 -- ============================================================================
 -- NSF: Parameter validation tests
 -- ============================================================================
@@ -364,6 +389,24 @@ print("Testing Renderer.get_video_frame() with mock media_cache...")
 test_get_video_frame_passes_clip_fps()
 test_get_video_frame_start_tc_subtracted()
 test_get_video_frame_returns_nil_on_eof()
+test_get_video_frame_clip_bounds_in_metadata()
+
+local function test_get_video_frame_negative_file_frame_asserts()
+    -- If start_tc > source_frame, file_frame goes negative — renderer should assert
+    mc.activate = function() return { start_tc = 9999, rotation = 0 } end
+    mc.get_video_frame = function() return "mock_frame" end
+
+    -- Frame 10 → clip_v2: source_frame=10, start_tc=9999 → file_frame = -9989
+    local ok, err = pcall(function()
+        renderer.get_video_frame(seq, 10, "test_ctx")
+    end)
+    assert(not ok, "Negative file_frame should assert")
+    assert(tostring(err):find("file_frame"), "Error should mention file_frame, got: " .. tostring(err))
+
+    mc.activate = orig_activate
+    mc.get_video_frame = orig_get_video_frame
+    print("  test_get_video_frame_negative_file_frame_asserts passed")
+end
 
 print("Testing Renderer NSF: parameter validation...")
 test_get_sequence_info_nil_id_asserts()
@@ -372,5 +415,6 @@ test_get_sequence_info_nonexistent_asserts()
 test_get_video_frame_nil_sequence_asserts()
 test_get_video_frame_nil_playhead_asserts()
 test_get_video_frame_nil_context_asserts()
+test_get_video_frame_negative_file_frame_asserts()
 
 print("✅ test_renderer.lua passed")
