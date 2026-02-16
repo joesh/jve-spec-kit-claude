@@ -56,9 +56,10 @@ local prefetch_calls = {}
 package.loaded["core.media.media_cache"] = {
     activate = function() return { rotation = 0 } end,
     get_video_frame = function(frame, ctx) return "frame_" .. frame end,
-    set_playhead = function(frame, dir, speed, ctx)
+    set_playhead = function(frame, dir, speed, ctx, fps_num, fps_den)
         prefetch_calls[#prefetch_calls + 1] = {
             frame = frame, direction = dir, speed = speed, ctx = ctx,
+            fps_num = fps_num, fps_den = fps_den,
         }
     end,
     is_loaded = function() return true end,
@@ -100,6 +101,8 @@ package.loaded["core.renderer"] = {
                 media_path = entry.media_path or "/test.mov",
                 source_frame = entry.source_frame or frame,
                 rotation = entry.rotation or 0,
+                clip_fps_num = entry.clip_fps_num or 24,
+                clip_fps_den = entry.clip_fps_den or 1,
             }
         end
         -- Default: clip1 for frames 0-99, gap otherwise
@@ -109,6 +112,8 @@ package.loaded["core.renderer"] = {
                 media_path = "/test.mov",
                 source_frame = frame,
                 rotation = 0,
+                clip_fps_num = 24,
+                clip_fps_den = 1,
             }
         end
         return nil, nil
@@ -141,9 +146,15 @@ package.loaded["models.sequence"] = {
     load = function(id) return mock_sequence end,
 }
 
--- Mock signals
+-- Mock signals (capture registrations for verification)
+local signal_handlers = {}  -- { [signal_name] = { {handler, priority}, ... } }
 package.loaded["core.signals"] = {
-    connect = function() end,
+    connect = function(name, handler, priority)
+        signal_handlers[name] = signal_handlers[name] or {}
+        signal_handlers[name][#signal_handlers[name] + 1] = {
+            handler = handler, priority = priority or 0
+        }
+    end,
     emit = function() end,
 }
 
@@ -831,9 +842,14 @@ do
     -- source_frame = displayed frame + 100
     assert(last.frame >= 100, string.format(
         "set_playhead should use source_frame (>= 100), got %d", last.frame))
+    -- Verify clip fps is threaded through to prefetch
+    assert(last.fps_num == 24, string.format(
+        "set_playhead should receive clip_fps_num=24, got %s", tostring(last.fps_num)))
+    assert(last.fps_den == 1, string.format(
+        "set_playhead should receive clip_fps_den=1, got %s", tostring(last.fps_den)))
 
     engine:stop()
-    print("  prefetch with source_frame passed")
+    print("  prefetch with source_frame and clip fps passed")
 end
 
 print("\n--- prefetch: no set_playhead during gap ---")
@@ -1083,6 +1099,54 @@ do
         "activate_audio must re-push audio sources (stale clip IDs should be cleared)")
 
     print("  activate_audio clears stale clip IDs passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 15: project_changed must shut down audio session (stale source crash)
+--
+-- Bug: opening a second project cleared media_cache pool but left
+-- audio_playback with old sources/session from previous project.
+-- Playing in the new project tried to decode old paths → crash.
+--------------------------------------------------------------------------------
+print("\n--- B12: project_changed shuts down audio session ---")
+do
+    reset()
+
+    -- Set up audio with old project's session
+    local mock_audio = make_tracked_audio()
+    mock_audio.session_initialized = true
+    mock_audio.has_audio = true
+    mock_audio.audio_sources = {
+        { path = "/old/project/media.mp4", seek_us = 0, clip_start_us = 0,
+          clip_end_us = 4000000, speed_ratio = 1.0, volume = 1.0 },
+    }
+    PlaybackEngine.init_audio(mock_audio)
+
+    -- Verify audio is set
+    assert(PlaybackEngine.get_audio() ~= nil,
+        "audio must be set before project_changed")
+    assert(PlaybackEngine.get_audio().session_initialized,
+        "audio session must be initialized before project_changed")
+
+    -- Verify project_changed handler is registered
+    assert(signal_handlers["project_changed"],
+        "PlaybackEngine must register a project_changed signal handler")
+    local found_handler = false
+    for _, entry in ipairs(signal_handlers["project_changed"]) do
+        if type(entry.handler) == "function" then
+            found_handler = true
+            -- Simulate the signal firing (like open_project.lua does)
+            entry.handler("new_project_id")
+        end
+    end
+    assert(found_handler,
+        "project_changed must have a function handler from playback_engine")
+
+    -- After project_changed: audio must be shut down and nil'd
+    assert(PlaybackEngine.get_audio() == nil,
+        "audio must be nil after project_changed (prevents stale sources)")
+
+    print("  project_changed shuts down audio session passed")
 end
 
 print("\n✅ test_playback_engine_extended.lua passed")

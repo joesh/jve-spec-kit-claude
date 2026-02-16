@@ -259,9 +259,9 @@ function PlaybackEngine:shuttle(dir)
     self.transport_mode = "shuttle"
 
     if was_stopped then
-        self:_configure_and_start_audio()
+        self:_try_audio("_configure_and_start_audio")
     else
-        self:_sync_audio()
+        self:_try_audio("_sync_audio")
     end
 
     self:_schedule_tick()
@@ -280,7 +280,7 @@ function PlaybackEngine:slow_play(dir)
     self._last_tick_frame = math.floor(self:get_position())
 
     qt_constants.EMP.SET_DECODE_MODE("play")
-    self:_configure_and_start_audio()
+    self:_try_audio("_configure_and_start_audio")
     self:_schedule_tick()
 end
 
@@ -297,7 +297,7 @@ function PlaybackEngine:play()
     self:_clear_latch()
 
     qt_constants.EMP.SET_DECODE_MODE("play")
-    self:_configure_and_start_audio()
+    self:_try_audio("_configure_and_start_audio")
     self:_schedule_tick()
 end
 
@@ -347,21 +347,19 @@ function PlaybackEngine:seek(frame_idx)
     -- Display via Renderer
     self:_display_frame(frame)
 
-    -- Resolve audio at new position
-    if self._audio_owner then
-        self:_resolve_and_set_audio(frame)
-    end
-
-    if was_playing then
-        self:_start_audio()
-    else
-        -- Parked: scrub audio
-        local time_us = helpers.calc_time_us_from_frame(
-            frame, self.fps_num, self.fps_den)
-        if audio_playback and audio_playback.is_ready() then
-            audio_playback.seek(time_us)
+    -- Audio resolve + restart/scrub (non-fatal: must not prevent seek)
+    self:_try_audio(function(eng)
+        eng:_resolve_and_set_audio(frame)
+        if was_playing then
+            eng:_start_audio()
+        else
+            local time_us = helpers.calc_time_us_from_frame(
+                frame, eng.fps_num, eng.fps_den)
+            if audio_playback and audio_playback.is_ready() then
+                audio_playback.seek(time_us)
+            end
         end
-    end
+    end)
 end
 
 --- Seek to frame (convenience wrapper with type assertion).
@@ -495,15 +493,16 @@ function PlaybackEngine:_tick()
     local frame_idx = math.floor(pos)
     self:_display_frame(frame_idx)
 
-    -- 6. Audio: resolve if displayed frame changed
-    if self._audio_owner and frame_idx ~= self._last_tick_frame then
-        self:_resolve_and_set_audio(frame_idx)
-    end
-
-    -- 7. Start audio if entering clip from gap (sources set but not playing)
-    if self._audio_owner and audio_playback
-       and audio_playback.has_audio and not audio_playback.playing then
-        self:_start_audio()
+    -- 6-7. Audio resolve + gap-entry start (non-fatal: must not kill video tick loop)
+    if self._audio_owner then
+        self:_try_audio(function(eng)
+            if frame_idx ~= eng._last_tick_frame then
+                eng:_resolve_and_set_audio(frame_idx)
+            end
+            if audio_playback and audio_playback.has_audio and not audio_playback.playing then
+                eng:_start_audio()
+            end
+        end)
     end
 
     -- 8. Commit position
@@ -560,11 +559,12 @@ function PlaybackEngine:_display_frame(frame_idx)
         end
         self._on_show_frame(frame_handle, metadata)
 
-        -- Notify prefetch of source-space position
+        -- Notify prefetch of source-space position (use clip's rate for timestamp accuracy)
         if self.direction ~= 0 then
             media_cache.set_playhead(
                 metadata.source_frame, self.direction, self.speed,
-                self.media_context_id)
+                self.media_context_id,
+                metadata.clip_fps_num, metadata.clip_fps_den)
         end
     else
         -- Gap at playhead
@@ -576,6 +576,21 @@ end
 --------------------------------------------------------------------------------
 -- Audio Helpers
 --------------------------------------------------------------------------------
+
+--- Non-fatal audio call: logs error but does not crash video playback.
+-- @param fn_or_name  string method name on self, or function(engine)
+function PlaybackEngine:_try_audio(fn_or_name)
+    if not self._audio_owner then return end
+    local ok, err
+    if type(fn_or_name) == "string" then
+        ok, err = pcall(self[fn_or_name], self)
+    else
+        ok, err = pcall(fn_or_name, self)
+    end
+    if not ok then
+        logger.error("playback_engine", "audio failed: " .. tostring(err))
+    end
+end
 
 --- Configure audio sources and start playback (transport start).
 function PlaybackEngine:_configure_and_start_audio()
@@ -767,5 +782,12 @@ function PlaybackEngine:play_frame_audio(frame_idx)
         math.floor(frame_duration_us * 1.5)))
     audio_playback.play_burst(time_us, burst_us)
 end
+
+--------------------------------------------------------------------------------
+-- Project change: tear down audio session (prevents stale sources from
+-- previous project being used after media_cache clears its pool).
+--------------------------------------------------------------------------------
+local Signals = require("core.signals")
+Signals.connect("project_changed", PlaybackEngine.shutdown_audio_session, 5)
 
 return PlaybackEngine
