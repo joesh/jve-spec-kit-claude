@@ -231,6 +231,8 @@ function M.register(executors, undoers, db)
                             local clip_fps_den = track_data.type == "AUDIO" and 1 or fps_den
 
                             local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
+                                project_id = project.id,
+                                owner_sequence_id = timeline_id,
                                 track_id = track_id,
                                 timeline_start = clip_data.start_value,
                                 duration = clip_data.duration,
@@ -486,6 +488,8 @@ function M.register(executors, undoers, db)
                             local clip_fps_den = track_data.type == "AUDIO" and 1 or fps_den
 
                             local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
+                                project_id = project.id,
+                                owner_sequence_id = timeline_id,
                                 track_id = track_id,
                                 timeline_start = clip_data.start_value,
                                 duration = clip_data.duration,

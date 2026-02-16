@@ -393,6 +393,8 @@ function M.convert(drp_path, jvp_path)
                         end
 
                         local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
+                            project_id = project.id,
+                            owner_sequence_id = sequence.id,
                             track_id = track.id,
                             timeline_start = clip_data.start_value,
                             duration = clip_data.duration,
