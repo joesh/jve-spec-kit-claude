@@ -24,6 +24,7 @@ local PlaybackEngine = require("core.playback.playback_engine")
 local Sequence = require("models.sequence")
 local monitor_mark_bar = require("ui.monitor_mark_bar")
 local database = require("core.database")
+local project_gen = require("core.project_generation")
 
 local Signals = require("core.signals")
 
@@ -64,6 +65,7 @@ function SequenceMonitor.new(config)
 
     -- Debounced playhead persistence
     self._persist_generation = 0
+    self._project_gen = project_gen.current()
 
     -- Create media_cache context for this view
     media_cache.create_context(self.media_context_id)
@@ -243,6 +245,7 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
 
     self.sequence_id = sequence_id
     self.sequence = seq
+    self._project_gen = project_gen.current()
 
     -- Load engine (sets fps, total_frames, resets position)
     self.engine:load_sequence(sequence_id, opts.total_frames)
@@ -251,20 +254,11 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     self.total_frames = self.engine.total_frames
     self.fps_num = self.engine.fps_num
     self.fps_den = self.engine.fps_den
-    self.playhead = 0
 
-    -- For masterclips: restore playhead from DB
-    if seq:is_masterclip() then
-        local saved_playhead = seq.playhead_position or 0
-        if saved_playhead > 0 then
-            self.playhead = saved_playhead
-            self.engine:seek(saved_playhead)
-        else
-            self.engine:seek(0)
-        end
-    else
-        self.engine:seek(0)
-    end
+    -- Restore playhead from DB (both masterclips and timelines)
+    local saved_playhead = seq.playhead_position or 0
+    self.playhead = saved_playhead
+    self.engine:seek(saved_playhead)
 
     -- Update title
     local title = seq:is_masterclip() and "Source" or "Timeline"
@@ -421,12 +415,14 @@ end
 function SequenceMonitor:_schedule_persist()
     self._persist_generation = self._persist_generation + 1
     local gen = self._persist_generation
+    local pgen = self._project_gen
 
     if not database.has_connection() then return end
 
     if _G.qt_create_single_shot_timer then
         _G.qt_create_single_shot_timer(DEBOUNCE_MS, function()
             if gen ~= self._persist_generation then return end
+            if pgen ~= project_gen.current() then return end  -- project changed
             self:save_playhead_to_db()
         end)
     else

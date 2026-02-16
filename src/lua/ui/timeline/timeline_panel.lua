@@ -1640,13 +1640,51 @@ function M.create(opts)
     return container
 end
 
+-- Zoom to fit content if sequence viewport is at factory defaults (never opened).
+-- Sets playhead to first frame of content.
+local function zoom_to_fit_if_first_open(sequence)
+    local fr = sequence.frame_rate
+    assert(fr and fr.fps_numerator and fr.fps_denominator,
+        "zoom_to_fit_if_first_open: sequence missing frame_rate")
+    local default_dur = math.floor(10.0 * fr.fps_numerator / fr.fps_denominator)
+    if sequence.viewport_start_time ~= 0 or sequence.viewport_duration ~= default_dur then
+        return  -- user has a saved viewport
+    end
+
+    local clips = state.get_clips()
+    if not clips or #clips == 0 then
+        return
+    end
+
+    local min_start, max_end
+    for _, clip in ipairs(clips) do
+        local s = clip.timeline_start
+        local d = clip.duration
+        if type(s) == "number" and type(d) == "number" then
+            local e = s + d
+            if not min_start or s < min_start then min_start = s end
+            if not max_end or e > max_end then max_end = e end
+        end
+    end
+    if not min_start or not max_end or max_end <= min_start then return end
+
+    local content_dur = max_end - min_start
+    local buffer = math.floor(content_dur / 10)
+    state.set_viewport_duration(content_dur + buffer)
+    state.set_viewport_start_time(min_start)
+    state.set_playhead_position(min_start)
+end
+
 function M.load_sequence(sequence_id)
     if not sequence_id or sequence_id == "" then
         return
     end
 
+    -- Guard: only skip if BOTH state AND UI (tab) confirm this sequence is fully loaded.
+    -- command_manager.init sets timeline_state.sequence_id before load_sequence runs
+    -- (during open_project), so state alone is insufficient proof.
     local current = state.get_sequence_id and state.get_sequence_id()
-    if current == sequence_id then
+    if current == sequence_id and open_tabs[sequence_id] then
         return
     end
 
@@ -1657,6 +1695,9 @@ function M.load_sequence(sequence_id)
     local project_id = sequence.project_id
     assert(project_id and project_id ~= "", "timeline_panel.load_sequence: missing project_id for sequence " .. tostring(sequence_id))
     state.init(sequence_id, project_id)
+
+    -- First-open detection: if viewport is at defaults, zoom to fit content
+    zoom_to_fit_if_first_open(sequence)
 
     database.set_project_setting(project_id, "last_open_sequence_id", sequence_id)
 

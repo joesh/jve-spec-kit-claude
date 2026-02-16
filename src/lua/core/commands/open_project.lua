@@ -164,9 +164,17 @@ function M.register(executors, undoers, db, set_last_error)
             return { success = false, error_message = "Failed to open project database" }
         end
 
-        -- Find most recent sequence via model (SQL isolation: models own DB access)
+        -- Find best sequence: last-open if available, else most recent
         local Sequence = require("models.sequence")
-        local sequence = Sequence.find_most_recent()
+        local sequence
+        local last_id = database.get_project_setting(
+            database.get_current_project_id(), "last_open_sequence_id")
+        if last_id and last_id ~= "" then
+            sequence = Sequence.load(last_id)
+        end
+        if not sequence then
+            sequence = Sequence.find_most_recent()
+        end
 
         if not sequence then
             return { success = false, error_message = "No sequences found in project" }

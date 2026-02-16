@@ -170,10 +170,13 @@ function M.register(executors, undoers, db)
             local timeline_id = require("models.clip").generate_id()
             local now = os.time()
 
+            -- Viewport default: 10 seconds at this fps (must match Sequence.create and zoom_to_fit_if_first_open)
+            local default_view_dur = math.floor(10.0 * fps_num / fps_den)
             local sql = string.format([[
-                INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-                VALUES ('%s', '%s', %s, 'timeline', %d, %d, 48000, %d, %d, %d, %d)
-            ]], timeline_id, project.id, sql_escape(timeline_data.name), fps_num, fps_den, settings.width, settings.height, now, now)
+                INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+                                      playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
+                VALUES ('%s', '%s', %s, 'timeline', %d, %d, 48000, %d, %d, 0, 0, %d, %d, %d)
+            ]], timeline_id, project.id, sql_escape(timeline_data.name), fps_num, fps_den, settings.width, settings.height, default_view_dur, now, now)
 
             local ok, err = db:exec(sql)
             if not ok then
@@ -431,10 +434,13 @@ function M.register(executors, undoers, db)
             local timeline_id = require("models.clip").generate_id()
             local now = os.time()
 
+            -- Viewport default: 10 seconds at this fps (must match Sequence.create and zoom_to_fit_if_first_open)
+            local default_view_dur = math.floor(10.0 * fps_num / fps_den)
             local sql = string.format([[
-                INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-                VALUES ('%s', '%s', %s, 'timeline', %d, %d, 48000, %d, %d, %d, %d)
-            ]], timeline_id, project.id, sql_escape(timeline_data.name), fps_num, fps_den, db_settings.width, db_settings.height, now, now)
+                INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+                                      playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
+                VALUES ('%s', '%s', %s, 'timeline', %d, %d, 48000, %d, %d, 0, 0, %d, %d, %d)
+            ]], timeline_id, project.id, sql_escape(timeline_data.name), fps_num, fps_den, db_settings.width, db_settings.height, default_view_dur, now, now)
 
             local ok, err = db:exec(sql)
             if not ok then
