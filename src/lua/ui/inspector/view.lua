@@ -846,6 +846,11 @@ function M.create_schema_driven_inspector()
   -- Store content widget for later updates
   M._content_widget = content_widget
 
+  -- Opaque background prevents resize artifacts (transparent children leave ghost pixels)
+  pcall(qt_constants.PROPERTIES.SET_STYLE, content_widget, [[
+    QWidget { background: #2b2b2b; }
+  ]])
+
   -- Create content layout
   local content_layout_success, content_layout = pcall(qt_constants.LAYOUT.CREATE_VBOX)
   if not content_layout_success then

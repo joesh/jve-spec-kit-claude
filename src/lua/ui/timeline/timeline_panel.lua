@@ -1178,6 +1178,8 @@ function M.create(opts)
 
     -- Main container
     local container = qt_constants.WIDGET.CREATE()
+    -- Opaque background prevents resize artifacts (transparent children leave ghost pixels)
+    qt_constants.PROPERTIES.SET_STYLE(container, [[QWidget { background: #2b2b2b; }]])
     local main_layout = qt_constants.LAYOUT.CREATE_VBOX()
     qt_constants.CONTROL.SET_LAYOUT_SPACING(main_layout, 0)
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(main_layout, 0, 0, 0, 0)
