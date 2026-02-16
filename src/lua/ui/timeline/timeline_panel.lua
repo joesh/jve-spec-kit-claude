@@ -1646,7 +1646,8 @@ local function zoom_to_fit_if_first_open(sequence)
     local fr = sequence.frame_rate
     assert(fr and fr.fps_numerator and fr.fps_denominator,
         "zoom_to_fit_if_first_open: sequence missing frame_rate")
-    local default_dur = math.floor(10.0 * fr.fps_numerator / fr.fps_denominator)
+    local Sequence = require("models.sequence")
+    local default_dur = Sequence.default_viewport_duration(fr.fps_numerator, fr.fps_denominator)
     if sequence.viewport_start_time ~= 0 or sequence.viewport_duration ~= default_dur then
         return  -- user has a saved viewport
     end
@@ -1660,11 +1661,15 @@ local function zoom_to_fit_if_first_open(sequence)
     for _, clip in ipairs(clips) do
         local s = clip.timeline_start
         local d = clip.duration
-        if type(s) == "number" and type(d) == "number" then
-            local e = s + d
-            if not min_start or s < min_start then min_start = s end
-            if not max_end or e > max_end then max_end = e end
-        end
+        assert(type(s) == "number", string.format(
+            "zoom_to_fit_if_first_open: clip %s has non-number timeline_start: %s",
+            tostring(clip.id), type(s)))
+        assert(type(d) == "number", string.format(
+            "zoom_to_fit_if_first_open: clip %s has non-number duration: %s",
+            tostring(clip.id), type(d)))
+        local e = s + d
+        if not min_start or s < min_start then min_start = s end
+        if not max_end or e > max_end then max_end = e end
     end
     if not min_start or not max_end or max_end <= min_start then return end
 

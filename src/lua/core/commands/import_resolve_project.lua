@@ -135,8 +135,8 @@ function M.register(executors, undoers, db)
             return {success = false, error_message = "Failed to create project"}
         end
 
-        logger.info("import_resolve", string.format("Created project: %s (%dx%d @ %.2ffps)",
-            project.name, settings.width, settings.height, settings.frame_rate))
+        logger.info("import_resolve", string.format("Created project: %s (%dx%d @ %sfps)",
+            project.name, settings.width, settings.height, tostring(settings.frame_rate)))
 
         -- Track created entities for undo
         local created_media_ids = {}
@@ -151,7 +151,8 @@ function M.register(executors, undoers, db)
                 name = media_item.name,
                 file_path = media_item.file_path,
                 duration_frames = media_item.duration,  -- drp_importer returns frames, not ms
-                frame_rate = media_item.frame_rate or parse_result.project.settings.frame_rate,
+                frame_rate = assert(media_item.frame_rate or parse_result.project.settings.frame_rate,
+                    string.format("import_resolve_project: no frame_rate for media '%s'", media_item.name)),
                 width = parse_result.project.settings.width,
                 height = parse_result.project.settings.height
             })
@@ -170,8 +171,8 @@ function M.register(executors, undoers, db)
             local timeline_id = require("models.clip").generate_id()
             local now = os.time()
 
-            -- Viewport default: 10 seconds at this fps (must match Sequence.create and zoom_to_fit_if_first_open)
-            local default_view_dur = math.floor(10.0 * fps_num / fps_den)
+            local Sequence = require("models.sequence")
+            local default_view_dur = Sequence.default_viewport_duration(fps_num, fps_den)
             local sql = string.format([[
                 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
                                       playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
@@ -434,8 +435,8 @@ function M.register(executors, undoers, db)
             local timeline_id = require("models.clip").generate_id()
             local now = os.time()
 
-            -- Viewport default: 10 seconds at this fps (must match Sequence.create and zoom_to_fit_if_first_open)
-            local default_view_dur = math.floor(10.0 * fps_num / fps_den)
+            local Sequence = require("models.sequence")
+            local default_view_dur = Sequence.default_viewport_duration(fps_num, fps_den)
             local sql = string.format([[
                 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
                                       playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)

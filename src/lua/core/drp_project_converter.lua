@@ -203,8 +203,8 @@ function M.convert(drp_path, jvp_path)
         return false, "Failed to save project record"
     end
 
-    logger.info("drp_project_converter", string.format("Created project: %s (%dx%d @ %.2ffps)",
-        project.name, settings.width, settings.height, settings.frame_rate))
+    logger.info("drp_project_converter", string.format("Created project: %s (%dx%d @ %sfps)",
+        project.name, settings.width, settings.height, tostring(settings.frame_rate)))
 
     -- Import media items
     local media_by_path = {}
@@ -219,7 +219,8 @@ function M.convert(drp_path, jvp_path)
                 name = media_item.name,
                 file_path = media_item.file_path,
                 duration_frames = dur,  -- Use duration_frames, not duration (ms)
-                frame_rate = media_item.frame_rate or parse_result.project.settings.frame_rate,
+                frame_rate = assert(media_item.frame_rate or parse_result.project.settings.frame_rate,
+                    string.format("drp_project_converter: no frame_rate for media '%s'", media_item.name)),
                 width = parse_result.project.settings.width,
                 height = parse_result.project.settings.height
             })

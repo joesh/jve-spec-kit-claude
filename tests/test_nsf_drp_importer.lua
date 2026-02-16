@@ -147,4 +147,38 @@ end
 
 print("✓ Required clip fields (Start, Duration) use assert")
 
+--------------------------------------------------------------------------------
+-- Test 5: Pipe-delimited <In> values are parsed correctly
+--------------------------------------------------------------------------------
+
+print("\n--- Test 5: Pipe-delimited <In> values parsed ---")
+-- The second DRP fixture has clips with <In>23294|hexdata format.
+-- These must parse as source_in=23294, not 0 (the old or-0 fallback).
+local drp2_path = "../tests/fixtures/resolve/2025-06-14 NO KINGS SEATTLE.drp"
+local handle2 = io.open(drp2_path, "r")
+if handle2 then
+    handle2:close()
+    local parse_result2 = drp_importer.parse_drp_file(drp2_path)
+    assert(parse_result2.timelines, "DRP should have timelines")
+
+    -- Find clips with source_in > 0 (proves pipe-delimited <In> was parsed)
+    local clips_with_source_in = 0
+    for _, tl in ipairs(parse_result2.timelines) do
+        for _, track in ipairs(tl.tracks) do
+            for _, clip in ipairs(track.clips) do
+                if clip.source_in and clip.source_in > 0 then
+                    clips_with_source_in = clips_with_source_in + 1
+                end
+            end
+        end
+    end
+    assert(clips_with_source_in > 0, string.format(
+        "Expected clips with source_in > 0 (pipe-delimited <In>), got %d",
+        clips_with_source_in))
+    print(string.format("  ✓ Found %d clips with non-zero source_in (pipe-delimited parsing works)",
+        clips_with_source_in))
+else
+    print("  (skipping - fixture not available)")
+end
+
 print("\n✅ test_nsf_drp_importer.lua passed")

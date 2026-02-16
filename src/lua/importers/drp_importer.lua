@@ -247,7 +247,9 @@ local function parse_project_metadata(project_elem)
     }
 
     if not project_elem then
-        project.settings.frame_rate = 30.0
+        -- No <Project> element — will be overridden by fps inference in converter.
+        -- Use nil to signal "unknown"; converter must infer or fail.
+        project.settings.frame_rate = nil
         project.settings.width = 1920
         project.settings.height = 1080
         return project
@@ -284,7 +286,16 @@ local function parse_project_metadata(project_elem)
         end
     end
 
-    project.settings.frame_rate = numeric_from(frame_rate_elem, 30.0)
+    if frame_rate_elem then
+        local fr = tonumber(get_text(frame_rate_elem))
+        assert(fr, string.format(
+            "parse_project_metadata: <TimelineFrameRate> is not numeric: '%s'",
+            tostring(get_text(frame_rate_elem))))
+        project.settings.frame_rate = fr
+    else
+        -- No frame rate in project element — converter will infer from clip positions
+        project.settings.frame_rate = nil
+    end
     project.settings.width = numeric_from(width_elem, 1920)
     project.settings.height = numeric_from(height_elem, 1080)
 
@@ -673,7 +684,17 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
             -- source_in comes from <In>, NOT <MediaStartTime>.
             -- Empty/missing <In> means untrimmed (source_in = 0).
             local in_text = in_elem and get_text(in_elem) or ""
-            local in_value = tonumber(in_text) or 0  -- empty <In/> = untrimmed = 0
+            local in_value
+            if in_text == "" then
+                in_value = 0  -- empty/missing <In> = untrimmed
+            else
+                -- DRP <In> can be "12345" or "12345|hexdata" (pipe-delimited
+                -- with hex-encoded speed ratio). Extract integer before pipe.
+                local num_part = in_text:match("^(%d+)")
+                in_value = assert(num_part and tonumber(num_part), string.format(
+                    "parse_resolve_tracks: clip '%s' <In> has no numeric prefix: '%s'",
+                    clip_name, in_text))
+            end
 
             local duration_timeline_frames = duration_raw
             local source_in_native
@@ -1024,6 +1045,14 @@ function M.parse_drp_file(drp_path)
                 end
             end
         end
+    end
+
+    -- Propagate first timeline fps to project settings when DRP lacks TimelineFrameRate.
+    -- Media items need a frame_rate; the first timeline's metadata-derived fps is the
+    -- best approximation available from DRP.
+    if not project.settings.frame_rate and #timelines > 0 then
+        assert(timelines[1].fps, "parse_drp_file: first timeline has no fps")
+        project.settings.frame_rate = timelines[1].fps
     end
 
     -- Parse MediaPool folder hierarchy for bins and master clips
