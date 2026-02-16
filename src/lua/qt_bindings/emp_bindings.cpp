@@ -529,11 +529,19 @@ static int lua_emp_surface_set_rotation(lua_State* L) {
     QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
     int degrees = static_cast<int>(luaL_checkinteger(L, 2));
 
+    GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
+    if (gpu_surface) {
+        gpu_surface->setRotation(degrees);
+        return 0;
+    }
+
     CPUVideoSurface* cpu_surface = qobject_cast<CPUVideoSurface*>(qwidget);
     if (cpu_surface) {
         cpu_surface->setRotation(degrees);
+        return 0;
     }
-    // GPU surface rotation not yet implemented - silently ignore
+
+    return luaL_error(L, "SURFACE_SET_ROTATION: widget is neither GPU nor CPU video surface");
     return 0;
 }
 

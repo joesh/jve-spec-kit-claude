@@ -189,6 +189,47 @@ void GPUVideoSurface::cleanupMetal() {
     m_initialized = false;
 }
 
+void GPUVideoSurface::setRotation(int degrees) {
+    // Normalize to 0/90/180/270
+    degrees = ((degrees % 360) + 360) % 360;
+    JVE_ASSERT(degrees == 0 || degrees == 90 || degrees == 180 || degrees == 270,
+        "GPUVideoSurface::setRotation: invalid rotation (must be 0/90/180/270)");
+    if (degrees == m_rotation) return;
+    m_rotation = degrees;
+    if (m_initialized) {
+        rebuildVertexBuffer();
+        if (m_impl->metalTextureY) renderTexture();
+    }
+}
+
+void GPUVideoSurface::rebuildVertexBuffer() {
+    JVE_ASSERT(m_initialized, "GPUVideoSurface::rebuildVertexBuffer: Metal not initialized");
+
+    // Texture coordinates for each rotation.
+    // To rotate the displayed image N° CW, rotate tex coords N° CCW around (0.5, 0.5).
+    // Vertex order: BL, BR, TL, TR (triangle strip)
+    static const float texCoords[4][4][2] = {
+        // 0°:   identity
+        {{0,1}, {1,1}, {0,0}, {1,0}},
+        // 90°:  image rotated 90° CW
+        {{1,1}, {1,0}, {0,1}, {0,0}},
+        // 180°: image rotated 180°
+        {{1,0}, {0,0}, {1,1}, {0,1}},
+        // 270°: image rotated 270° CW (= 90° CCW)
+        {{0,0}, {0,1}, {1,0}, {1,1}},
+    };
+
+    int idx = m_rotation / 90;
+    Vertex vertices[] = {
+        {{-1, -1}, {texCoords[idx][0][0], texCoords[idx][0][1]}},
+        {{ 1, -1}, {texCoords[idx][1][0], texCoords[idx][1][1]}},
+        {{-1,  1}, {texCoords[idx][2][0], texCoords[idx][2][1]}},
+        {{ 1,  1}, {texCoords[idx][3][0], texCoords[idx][3][1]}},
+    };
+    m_impl->vertexBuffer = [m_impl->device newBufferWithBytes:vertices
+        length:sizeof(vertices) options:MTLResourceStorageModeShared];
+}
+
 void GPUVideoSurface::setFrame(const std::shared_ptr<emp::Frame>& frame) {
     if (!frame) {
         clearFrame();
@@ -324,10 +365,13 @@ void GPUVideoSurface::renderTexture() {
         id<MTLRenderCommandEncoder> encoder = [cmdBuffer renderCommandEncoderWithDescriptor:passDesc];
 
         if (m_impl->metalTextureY && m_impl->metalTextureUV && m_frameWidth > 0 && m_frameHeight > 0) {
-            // Letterbox viewport
+            // Letterbox viewport - swap dimensions for 90°/270° rotation
             float widget_w = width() * scale;
             float widget_h = height() * scale;
-            float frame_aspect = (float)m_frameWidth / m_frameHeight;
+            bool rotated = (m_rotation == 90 || m_rotation == 270);
+            float eff_w = rotated ? (float)m_frameHeight : (float)m_frameWidth;
+            float eff_h = rotated ? (float)m_frameWidth : (float)m_frameHeight;
+            float frame_aspect = eff_w / eff_h;
             float widget_aspect = widget_w / widget_h;
 
             CGRect viewport;

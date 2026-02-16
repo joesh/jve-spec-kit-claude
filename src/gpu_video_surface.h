@@ -28,6 +28,10 @@ public:
     // Clear display
     void clearFrame();
 
+    // Set rotation (0, 90, 180, 270 degrees)
+    void setRotation(int degrees);
+    int rotation() const { return m_rotation; }
+
     int frameWidth() const { return m_frameWidth; }
     int frameHeight() const { return m_frameHeight; }
 
@@ -47,9 +51,12 @@ private:
     void cleanupMetal();
     void renderTexture();
 
+    void rebuildVertexBuffer();
+
     std::unique_ptr<GPUVideoSurfaceImpl> m_impl;
     int m_frameWidth = 0;
     int m_frameHeight = 0;
+    int m_rotation = 0;
     bool m_initialized = false;
 };
 
@@ -62,6 +69,8 @@ public:
     explicit GPUVideoSurface(QWidget* parent = nullptr) : QWidget(parent) {}
     void setFrame(const std::shared_ptr<emp::Frame>&) { assert(false && "GPUVideoSurface not available on this platform"); }
     void clearFrame() {}
+    void setRotation(int) {}
+    int rotation() const { return 0; }
     int frameWidth() const { return 0; }
     int frameHeight() const { return 0; }
     static bool isAvailable() { return false; }
