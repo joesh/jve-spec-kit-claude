@@ -108,7 +108,7 @@ function M.register(executors, undoers, db, set_last_error)
 
         if format == "drp" then
             -- .drp requires conversion to .jvp first
-            local drp_converter = require("core.drp_project_converter")
+            local drp_converter = require("importers.drp_importer")
 
             -- Get main_window for dialog
             local ui_state_ok2, ui_state2 = pcall(require, "ui.ui_state")

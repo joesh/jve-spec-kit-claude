@@ -1,34 +1,21 @@
---- TODO: one-line summary (human review required)
+--- DaVinci Resolve .drp Importer — parse, convert, and import
 --
 -- Responsibilities:
--- - TODO
+-- - parse_drp_file(): Parse .drp ZIP archive to structured Lua tables
+-- - show_conversion_dialog(): Modal dialog to choose save location
+-- - convert(): Parse .drp and create new .jvp database (Open verb)
+-- - import_into_project(): Import parsed DRP data into existing project (Import verb)
 --
 -- Non-goals:
--- - TODO
+-- - Opening the converted project (caller handles that)
+-- - Resolve DB peer mode (that's direct open, not conversion)
 --
 -- Invariants:
--- - TODO
---
--- Size: ~482 LOC
--- Volatility: unknown
+-- - Conversion creates a NEW .jvp file (never modifies existing)
+-- - All media items use duration_frames (not duration in ms)
+-- - fps MUST come from DRP metadata — no silent fallbacks
 --
 -- @file drp_importer.lua
--- Original intent (unreviewed):
--- - DaVinci Resolve .drp Project Importer
--- Parses Resolve's .drp export format (ZIP archive with XML files)
---
--- Format structure:
--- .drp file = ZIP archive containing:
--- - project.xml (project settings, users, timeline list)
--- - MediaPool/Master/MpFolder.xml (media bin organization)
--- - SeqContainer/*.xml (timeline sequences with tracks/clips)
---
--- Usage:
--- local drp_importer = require("importers.drp_importer")
--- local result = drp_importer.parse_drp_file("/path/to/project.drp")
--- if result.success then
--- print("Imported: " .. result.project.name)
--- end
 local M = {}
 
 local xml2 = require("xml2")
@@ -1075,5 +1062,441 @@ end
 
 -- Test-only export (underscore-prefixed convention)
 M._parse_resolve_tracks = parse_resolve_tracks
+
+-- ===========================================================================
+-- Conversion + Import
+-- ===========================================================================
+--
+-- Two verbs use the same entity-creation logic:
+--   Open  → convert() → parse + init DB + create project + import_into_project()
+--   Import → command executor → import_into_project() with existing project
+--
+-- import_into_project() is the single source of truth for DRP entity creation:
+-- media records, sequences, tracks, clips, A/V link groups.
+
+local logger = require("core.logger")
+
+-- Models (SQL isolation: all DB access goes through models)
+local Project = require("models.project")
+local Media = require("models.media")
+local Sequence = require("models.sequence")
+local Track = require("models.track")
+local Clip = require("models.clip")
+local clip_link = require("models.clip_link")
+
+-- ---------------------------------------------------------------------------
+-- Helper: Infer frame rate from 1-hour timecode start position
+-- ---------------------------------------------------------------------------
+--
+-- HEURISTIC: Professional video workflows typically use 1-hour timecode start
+-- (01:00:00:00). Different frame rates produce different frame counts:
+--
+--   Frame Rate    | Frames in 1 Hour | Rational (num/den)
+--   23.976 fps    | ~86,314          | 24000/1001
+--   24 fps        |  86,400          | 24/1
+--   25 fps        |  90,000          | 25/1
+--   29.97 fps     | ~107,892         | 30000/1001
+--   30 fps        | 108,000          | 30/1
+--   50 fps        | 180,000          | 50/1
+--   59.94 fps     | ~215,784         | 60000/1001
+--   60 fps        | 216,000          | 60/1
+--
+local function infer_fps_from_one_hour_start(min_start_frame)
+    if not min_start_frame or min_start_frame <= 0 then
+        return nil
+    end
+
+    local one_hour_markers = {
+        { 86314,  23.976, 24000, 1001 },
+        { 86400,  24,     24,    1    },
+        { 90000,  25,     25,    1    },
+        { 107892, 29.97,  30000, 1001 },
+        { 108000, 30,     30,    1    },
+        { 180000, 50,     50,    1    },
+        { 215784, 59.94,  60000, 1001 },
+        { 216000, 60,     60,    1    },
+    }
+
+    local tolerance = 0.01
+
+    for _, marker in ipairs(one_hour_markers) do
+        local expected = marker[1]
+        local lower = expected * (1 - tolerance)
+        local upper = expected * (1 + tolerance)
+
+        if min_start_frame >= lower and min_start_frame <= upper then
+            logger.info("drp_importer",
+                string.format("Inferred %.3f fps from 1-hour TC start (frame %d ~ %d)",
+                    marker[2], min_start_frame, expected))
+            return marker[2], marker[3], marker[4]
+        end
+    end
+
+    logger.debug("drp_importer",
+        string.format("Could not infer fps from start frame %d (not near 1-hour TC)", min_start_frame))
+    return nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Helper: Frame rate to rational
+-- ---------------------------------------------------------------------------
+
+local function frame_rate_to_rational(frame_rate)
+    local fps = tonumber(frame_rate)
+    assert(fps and fps > 0, "drp_importer: invalid frame_rate: " .. tostring(frame_rate))
+
+    if math.abs(fps - 23.976) < 0.01 then
+        return 24000, 1001
+    elseif math.abs(fps - 29.97) < 0.01 then
+        return 30000, 1001
+    elseif math.abs(fps - 59.94) < 0.01 then
+        return 60000, 1001
+    end
+
+    return math.floor(fps + 0.5), 1
+end
+
+-- ---------------------------------------------------------------------------
+-- Conversion Dialog
+-- ---------------------------------------------------------------------------
+
+--- Show conversion dialog for .drp file
+-- @param drp_path string: Path to source .drp file
+-- @param parent widget: Parent window for dialog
+-- @return string|nil: Chosen save path, or nil if cancelled
+function M.show_conversion_dialog(drp_path, parent)
+    assert(drp_path and drp_path ~= "", "drp_importer.show_conversion_dialog: drp_path required")
+
+    local file_browser = require("core.file_browser")
+
+    local default_name = "Converted Project.jvp"
+    local parse_result = M.parse_drp_file(drp_path)
+    if parse_result.success and parse_result.project and parse_result.project.name then
+        default_name = parse_result.project.name .. ".jvp"
+    end
+
+    local home = os.getenv("HOME") or ""
+    local default_dir = home ~= "" and (home .. "/Documents/JVE Projects") or ""
+
+    local save_path = file_browser.save_file(
+        "convert_drp_project",
+        parent,
+        "Save Converted Project",
+        "JVE Project Files (*.jvp)",
+        default_dir,
+        default_name
+    )
+
+    return save_path
+end
+
+-- ---------------------------------------------------------------------------
+-- import_into_project: Shared entity-creation for both Open and Import verbs
+-- ---------------------------------------------------------------------------
+
+--- Import parsed DRP data into an existing project.
+-- Creates: media records, sequences, tracks, clips, A/V link groups.
+-- @param project_id string: Target project ID (must already exist)
+-- @param parse_result table: Output of parse_drp_file()
+-- @param opts table: Optional settings
+--   opts.project_settings table: {frame_rate, width, height} project defaults
+-- @return table: {media_ids, sequence_ids, track_ids, clip_ids} for undo
+function M.import_into_project(project_id, parse_result, opts)
+    assert(project_id and project_id ~= "", "drp_importer.import_into_project: project_id required")
+    assert(parse_result and parse_result.success, "drp_importer.import_into_project: parse_result must be successful")
+    opts = opts or {}
+    local project_settings = opts.project_settings or parse_result.project.settings
+
+    -- Track created entity IDs for undo
+    local result = {
+        media_ids = {},
+        sequence_ids = {},
+        track_ids = {},
+        clip_ids = {},
+    }
+
+    -- Import media items
+    local media_by_path = {}
+    for _, media_item in ipairs(parse_result.media_items) do
+        local dur = media_item.duration or 0
+        if dur <= 0 then
+            logger.warn("drp_importer", string.format("Skipping zero-duration media: %s", media_item.name))
+        else
+            local media = Media.create({
+                project_id = project_id,
+                name = media_item.name,
+                file_path = media_item.file_path,
+                duration_frames = dur,
+                frame_rate = assert(media_item.frame_rate or project_settings.frame_rate,
+                    string.format("drp_importer: no frame_rate for media '%s'", media_item.name)),
+                width = project_settings.width,
+                height = project_settings.height,
+            })
+
+            if media:save() then
+                media_by_path[media_item.file_path] = media
+                table.insert(result.media_ids, media.id)
+                logger.debug("drp_importer", string.format("  Imported media: %s", media.name))
+            else
+                logger.warn("drp_importer", string.format("Failed to import media: %s", media_item.name))
+            end
+        end
+    end
+
+    -- Import timelines
+    for _, timeline_data in ipairs(parse_result.timelines) do
+        -- STEP 1: Analyze clip positions for viewport + fps inference
+        local min_start_frame = nil
+        local max_end_frame = 0
+        for _, track_data in ipairs(timeline_data.tracks) do
+            for _, clip_data in ipairs(track_data.clips) do
+                local start = clip_data.start_value or 0
+                local dur = clip_data.duration or 0
+                if not min_start_frame or start < min_start_frame then
+                    min_start_frame = start
+                end
+                if (start + dur) > max_end_frame then
+                    max_end_frame = start + dur
+                end
+            end
+        end
+
+        -- STEP 2: Determine frame rate
+        local fps_num, fps_den
+
+        if timeline_data.fps and timeline_data.fps > 0 then
+            fps_num, fps_den = frame_rate_to_rational(timeline_data.fps)
+            logger.info("drp_importer",
+                string.format("Using explicit fps from DRP metadata: %.3f (%d/%d)",
+                    timeline_data.fps, fps_num, fps_den))
+        else
+            local inferred_fps, inferred_num, inferred_den = infer_fps_from_one_hour_start(min_start_frame)
+
+            if inferred_fps then
+                fps_num, fps_den = inferred_num, inferred_den
+                logger.info("drp_importer",
+                    string.format("Inferred fps from 1-hour TC: %.3f (%d/%d)",
+                        inferred_fps, fps_num, fps_den))
+            else
+                fps_num, fps_den = frame_rate_to_rational(project_settings.frame_rate)
+                logger.warn("drp_importer",
+                    string.format("No fps metadata, no 1-hour TC; using project default: %d/%d",
+                        fps_num, fps_den))
+            end
+        end
+
+        -- STEP 3: Zoom-to-fit viewport
+        local view_start = min_start_frame or 0
+        local content_duration = max_end_frame - view_start
+        local view_duration
+
+        if content_duration > 0 then
+            local margin = math.floor(content_duration * 0.05)
+            view_start = math.max(0, view_start - margin)
+            view_duration = content_duration + (margin * 2)
+        else
+            local effective_fps = fps_num / fps_den
+            view_duration = math.floor(10 * effective_fps)
+        end
+
+        -- STEP 4: Create Sequence
+        local seq_width = (timeline_data.width and timeline_data.width > 0)
+            and timeline_data.width or project_settings.width
+        local seq_height = (timeline_data.height and timeline_data.height > 0)
+            and timeline_data.height or project_settings.height
+
+        local sequence = Sequence.create(
+            timeline_data.name,
+            project_id,
+            { fps_numerator = fps_num, fps_denominator = fps_den },
+            seq_width,
+            seq_height,
+            {
+                audio_rate = 48000,
+                view_start_frame = view_start,
+                view_duration_frames = view_duration,
+                playhead_frame = min_start_frame or 0,
+            }
+        )
+
+        if not sequence:save() then
+            logger.warn("drp_importer", string.format("Failed to create timeline: %s", timeline_data.name))
+        else
+            table.insert(result.sequence_ids, sequence.id)
+            logger.info("drp_importer",
+                string.format("  Created timeline: %s @ %d/%d fps, %dx%d, viewport [%d..%d]",
+                    timeline_data.name, fps_num, fps_den, seq_width, seq_height, view_start, view_start + view_duration))
+
+            local clips_for_linking = {}
+
+            -- STEP 5: Import tracks + clips
+            for _, track_data in ipairs(timeline_data.tracks) do
+                local track_prefix = track_data.type == "VIDEO" and "V" or "A"
+                local track_name = string.format("%s%d", track_prefix, track_data.index)
+
+                local track
+                if track_data.type == "VIDEO" then
+                    track = Track.create_video(track_name, sequence.id, { index = track_data.index })
+                else
+                    track = Track.create_audio(track_name, sequence.id, { index = track_data.index })
+                end
+
+                if not track:save() then
+                    logger.warn("drp_importer", string.format("Failed to create track: %s", track_name))
+                else
+                    table.insert(result.track_ids, track.id)
+
+                    for _, clip_data in ipairs(track_data.clips) do
+                        local media_id = nil
+                        if clip_data.file_path and media_by_path[clip_data.file_path] then
+                            media_id = media_by_path[clip_data.file_path].id
+                        end
+
+                        local clip_rate_num, clip_rate_den
+                        if track_data.type == "VIDEO" then
+                            clip_rate_num, clip_rate_den = fps_num, fps_den
+                        else
+                            clip_rate_num, clip_rate_den = 48000, 1
+                        end
+
+                        local source_out = clip_data.source_out
+                        if not source_out and clip_data.source_in and clip_data.duration then
+                            source_out = clip_data.source_in + clip_data.duration
+                        end
+
+                        local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
+                            project_id = project_id,
+                            owner_sequence_id = sequence.id,
+                            track_id = track.id,
+                            timeline_start = clip_data.start_value,
+                            duration = clip_data.duration,
+                            source_in = clip_data.source_in,
+                            source_out = source_out,
+                            fps_numerator = clip_rate_num,
+                            fps_denominator = clip_rate_den,
+                        })
+
+                        if clip:save() then
+                            table.insert(result.clip_ids, clip.id)
+
+                            if clip_data.file_path then
+                                table.insert(clips_for_linking, {
+                                    clip_id = clip.id,
+                                    file_path = clip_data.file_path,
+                                    timeline_start = clip_data.start_value,
+                                    role = track_data.type == "VIDEO" and "video" or "audio",
+                                })
+                            end
+                        else
+                            logger.warn("drp_importer", string.format("Failed to import clip: %s", clip_data.name))
+                        end
+                    end
+                end
+            end
+
+            -- STEP 6: Create A/V link groups
+            local link_groups_by_key = {}
+            for _, clip_info in ipairs(clips_for_linking) do
+                local key = clip_info.file_path .. ":" .. tostring(clip_info.timeline_start)
+                link_groups_by_key[key] = link_groups_by_key[key] or {}
+                table.insert(link_groups_by_key[key], clip_info)
+            end
+
+            local link_count = 0
+            for _, group in pairs(link_groups_by_key) do
+                if #group >= 2 then
+                    local clips_to_link = {}
+                    for _, info in ipairs(group) do
+                        table.insert(clips_to_link, {
+                            clip_id = info.clip_id,
+                            role = info.role,
+                            time_offset = 0,
+                        })
+                    end
+
+                    local link_id, link_err = clip_link.create_link_group(clips_to_link)
+                    if link_id then
+                        link_count = link_count + 1
+                    else
+                        logger.warn("drp_importer",
+                            string.format("Failed to create link group: %s", link_err or "unknown error"))
+                    end
+                end
+            end
+
+            if link_count > 0 then
+                logger.info("drp_importer",
+                    string.format("Created %d A/V link groups for timeline: %s", link_count, timeline_data.name))
+            end
+        end
+    end
+
+    logger.info("drp_importer", string.format("Import complete: %d media, %d sequences, %d tracks, %d clips",
+        #result.media_ids, #result.sequence_ids, #result.track_ids, #result.clip_ids))
+
+    return result
+end
+
+-- ---------------------------------------------------------------------------
+-- convert: Parse .drp and create new .jvp at target path (Open verb)
+-- ---------------------------------------------------------------------------
+
+--- Convert .drp file to .jvp at target path
+-- @param drp_path string: Path to source .drp file
+-- @param jvp_path string: Path for new .jvp file
+-- @return boolean: success
+-- @return string|nil: error message if failed
+function M.convert(drp_path, jvp_path)
+    assert(drp_path and drp_path ~= "", "drp_importer.convert: drp_path required")
+    assert(jvp_path and jvp_path ~= "", "drp_importer.convert: jvp_path required")
+
+    logger.info("drp_importer", string.format("Converting %s -> %s", drp_path, jvp_path))
+
+    local parse_result = M.parse_drp_file(drp_path)
+    if not parse_result.success then
+        return false, "Failed to parse .drp file: " .. tostring(parse_result.error)
+    end
+
+    -- Remove existing file if present (user confirmed overwrite in save dialog)
+    os.remove(jvp_path)
+    os.remove(jvp_path .. "-shm")
+    os.remove(jvp_path .. "-wal")
+
+    local database = require("core.database")
+    local ok, err = pcall(function()
+        database.init(jvp_path)
+    end)
+
+    if not ok then
+        return false, "Failed to create database: " .. tostring(err)
+    end
+
+    local json = require("dkjson")
+    local settings = {
+        frame_rate = parse_result.project.settings.frame_rate,
+        width = parse_result.project.settings.width,
+        height = parse_result.project.settings.height,
+    }
+
+    local project = Project.create(parse_result.project.name, {
+        settings = json.encode(settings),
+    })
+
+    if not project:save() then
+        return false, "Failed to save project record"
+    end
+
+    logger.info("drp_importer", string.format("Created project: %s (%dx%d @ %sfps)",
+        project.name, settings.width, settings.height, tostring(settings.frame_rate)))
+
+    M.import_into_project(project.id, parse_result, {
+        project_settings = settings,
+    })
+
+    return true
+end
+
+-- Test-only export for frame_rate_to_rational
+M._frame_rate_to_rational = frame_rate_to_rational
 
 return M

@@ -1,12 +1,12 @@
 #!/usr/bin/env luajit
 
--- Regression: drp_project_converter.convert() must pass project_id and
+-- Regression: drp_importer.convert() must pass project_id and
 -- owner_sequence_id to Clip.create for timeline clips. Without these,
 -- Clip.create asserts since the masterclip invariant requires them.
 
 require("test_env")
 
-local drp_converter = require("core.drp_project_converter")
+local drp_converter = require("importers.drp_importer")
 local database = require("core.database")
 
 local test_env = require("test_env")

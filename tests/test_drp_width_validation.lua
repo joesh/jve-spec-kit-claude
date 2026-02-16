@@ -11,7 +11,7 @@ require("test_env")
 -- =============================================================================
 
 local function resolve_dimension(value, fallback)
-    -- This is the FIXED pattern used in drp_importer and drp_project_converter
+    -- This is the FIXED pattern used in drp_importer
     return (value and value > 0) and value or fallback
 end
 
