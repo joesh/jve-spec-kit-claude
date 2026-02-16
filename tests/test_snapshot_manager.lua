@@ -102,7 +102,6 @@ do
             project_id = "proj1",
             track_id = "trk1",
             owner_sequence_id = "seq1",
-            parent_clip_id = nil,
             master_clip_id = nil,
             media_id = "med1",
             timeline_start = 0,

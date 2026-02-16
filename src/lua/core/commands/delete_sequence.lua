@@ -322,7 +322,7 @@ fetch_sequence_clips = function(db, sequence_id)
 
     local clip_stmt = db:prepare([[
         SELECT id, project_id, clip_kind, name, track_id, media_id,
-               master_clip_id, parent_clip_id, owner_sequence_id,
+               master_clip_id, owner_sequence_id,
                timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                fps_numerator, fps_denominator, enabled,
                offline, created_at, modified_at
@@ -348,18 +348,17 @@ fetch_sequence_clips = function(db, sequence_id)
                 track_id = clip_stmt:value(4),
                 media_id = clip_stmt:value(5),
                 master_clip_id = clip_stmt:value(6),
-                parent_clip_id = clip_stmt:value(7),
-                owner_sequence_id = clip_stmt:value(8),
-                start_value = assert(tonumber(clip_stmt:value(9)), "DeleteSequence.fetch_sequence_clips: missing start_value for clip " .. tostring(clip_id)),
-                duration_value = assert(tonumber(clip_stmt:value(10)), "DeleteSequence.fetch_sequence_clips: missing duration_value for clip " .. tostring(clip_id)),
-                source_in_value = assert(tonumber(clip_stmt:value(11)), "DeleteSequence.fetch_sequence_clips: missing source_in_value for clip " .. tostring(clip_id)),
-                source_out_value = assert(tonumber(clip_stmt:value(12)), "DeleteSequence.fetch_sequence_clips: missing source_out_value for clip " .. tostring(clip_id)),
-                fps_numerator = assert(tonumber(clip_stmt:value(13)), "DeleteSequence.fetch_sequence_clips: missing fps_numerator for clip " .. tostring(clip_id)),
-                fps_denominator = assert(tonumber(clip_stmt:value(14)), "DeleteSequence.fetch_sequence_clips: missing fps_denominator for clip " .. tostring(clip_id)),
-                enabled = clip_stmt:value(15) == 1 or clip_stmt:value(15) == true,
-                offline = clip_stmt:value(16) == 1 or clip_stmt:value(16) == true,
-                created_at = clip_stmt:value(17) and tonumber(clip_stmt:value(17)) or nil,
-                modified_at = clip_stmt:value(18) and tonumber(clip_stmt:value(18)) or nil
+                owner_sequence_id = clip_stmt:value(7),
+                start_value = assert(tonumber(clip_stmt:value(8)), "DeleteSequence.fetch_sequence_clips: missing start_value for clip " .. tostring(clip_id)),
+                duration_value = assert(tonumber(clip_stmt:value(9)), "DeleteSequence.fetch_sequence_clips: missing duration_value for clip " .. tostring(clip_id)),
+                source_in_value = assert(tonumber(clip_stmt:value(10)), "DeleteSequence.fetch_sequence_clips: missing source_in_value for clip " .. tostring(clip_id)),
+                source_out_value = assert(tonumber(clip_stmt:value(11)), "DeleteSequence.fetch_sequence_clips: missing source_out_value for clip " .. tostring(clip_id)),
+                fps_numerator = assert(tonumber(clip_stmt:value(12)), "DeleteSequence.fetch_sequence_clips: missing fps_numerator for clip " .. tostring(clip_id)),
+                fps_denominator = assert(tonumber(clip_stmt:value(13)), "DeleteSequence.fetch_sequence_clips: missing fps_denominator for clip " .. tostring(clip_id)),
+                enabled = clip_stmt:value(14) == 1 or clip_stmt:value(14) == true,
+                offline = clip_stmt:value(15) == 1 or clip_stmt:value(15) == true,
+                created_at = clip_stmt:value(16) and tonumber(clip_stmt:value(16)) or nil,
+                modified_at = clip_stmt:value(17) and tonumber(clip_stmt:value(17)) or nil
             }
             table.insert(clips, clip_entry)
         end
@@ -552,11 +551,11 @@ restore_sequence_from_payload = function(db, set_last_error, payload)
         local insert_clip_stmt = db:prepare([[
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
-                master_clip_id, parent_clip_id, owner_sequence_id,
+                master_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                 fps_numerator, fps_denominator, enabled,
                 offline, created_at, modified_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not insert_clip_stmt then
             set_error(set_last_error, "UndoDeleteSequence: Failed to prepare clip insert")
@@ -571,12 +570,11 @@ restore_sequence_from_payload = function(db, set_last_error, payload)
             insert_clip_stmt:bind_value(5, clip.track_id)
             insert_clip_stmt:bind_value(6, clip.media_id)
             insert_clip_stmt:bind_value(7, clip.master_clip_id)
-            insert_clip_stmt:bind_value(8, clip.parent_clip_id)
-            insert_clip_stmt:bind_value(9, clip.owner_sequence_id or sequence_row.id)
-            insert_clip_stmt:bind_value(10, clip.start_value or 0)
-            insert_clip_stmt:bind_value(11, clip.duration_value or clip.duration or 0)
-            insert_clip_stmt:bind_value(12, clip.source_in_value or clip.source_in or 0)
-            insert_clip_stmt:bind_value(13, clip.source_out_value or clip.source_out or 0)
+            insert_clip_stmt:bind_value(8, clip.owner_sequence_id or sequence_row.id)
+            insert_clip_stmt:bind_value(9, clip.start_value or 0)
+            insert_clip_stmt:bind_value(10, clip.duration_value or clip.duration or 0)
+            insert_clip_stmt:bind_value(11, clip.source_in_value or clip.source_in or 0)
+            insert_clip_stmt:bind_value(12, clip.source_out_value or clip.source_out or 0)
             local clip_fps_num = clip.fps_numerator or sequence_row.fps_numerator
             local clip_fps_den = clip.fps_denominator or sequence_row.fps_denominator
             if not clip_fps_num or not clip_fps_den then
@@ -584,12 +582,12 @@ restore_sequence_from_payload = function(db, set_last_error, payload)
                 set_error(set_last_error, "UndoDeleteSequence: Missing clip fps")
                 return false
             end
-            insert_clip_stmt:bind_value(14, clip_fps_num)
-            insert_clip_stmt:bind_value(15, clip_fps_den)
-            insert_clip_stmt:bind_value(16, clip.enabled and 1 or 0)
-            insert_clip_stmt:bind_value(17, clip.offline and 1 or 0)
-            insert_clip_stmt:bind_value(18, clip.created_at or os.time())
-            insert_clip_stmt:bind_value(19, clip.modified_at or os.time())
+            insert_clip_stmt:bind_value(13, clip_fps_num)
+            insert_clip_stmt:bind_value(14, clip_fps_den)
+            insert_clip_stmt:bind_value(15, clip.enabled and 1 or 0)
+            insert_clip_stmt:bind_value(16, clip.offline and 1 or 0)
+            insert_clip_stmt:bind_value(17, clip.created_at or os.time())
+            insert_clip_stmt:bind_value(18, clip.modified_at or os.time())
             if not insert_clip_stmt:exec() then
                 insert_clip_stmt:finalize()
                 set_error(set_last_error, "UndoDeleteSequence: Failed to restore clip")

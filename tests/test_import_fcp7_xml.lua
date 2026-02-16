@@ -299,25 +299,46 @@ assert(invalid_track_count == 0, "All imported tracks must have explicit AUDIO/V
 scratch_db:close()
 os.remove(scratch_db_path)
 
-local timeline_parent_stmt = db:prepare([[SELECT id, parent_clip_id FROM clips WHERE clip_kind = 'timeline' AND parent_clip_id IS NOT NULL LIMIT 1]])
-assert(timeline_parent_stmt:exec(), "Timeline clip parent query should run")
-local timeline_clip_id, timeline_parent_id = nil, nil
-if timeline_parent_stmt:next() then
-    timeline_clip_id = timeline_parent_stmt:value(0)
-    timeline_parent_id = timeline_parent_stmt:value(1)
+local timeline_master_stmt = db:prepare([[SELECT c.id, c.master_clip_id, c.timeline_start_frame, c.duration_frames, c.track_id
+    FROM clips c WHERE c.clip_kind = 'timeline' AND c.master_clip_id IS NOT NULL LIMIT 1]])
+assert(timeline_master_stmt:exec(), "Timeline clip master query should run")
+local timeline_clip_id, timeline_master_id, tl_start, tl_dur, tl_track_id = nil, nil, nil, nil, nil
+if timeline_master_stmt:next() then
+    timeline_clip_id = timeline_master_stmt:value(0)
+    timeline_master_id = timeline_master_stmt:value(1)
+    tl_start = timeline_master_stmt:value(2)
+    tl_dur = timeline_master_stmt:value(3)
+    tl_track_id = timeline_master_stmt:value(4)
 end
-timeline_parent_stmt:finalize()
-assert(timeline_clip_id and timeline_parent_id, "Importer should assign parent_clip_id for timeline clips")
+timeline_master_stmt:finalize()
+assert(timeline_clip_id and timeline_master_id, "Importer should assign master_clip_id for timeline clips")
 
-timeline_state.set_selection({
-    { id = timeline_clip_id, parent_clip_id = timeline_parent_id }
-})
+-- MatchFrame resolves via playhead, not selection. Set playhead inside the clip.
+timeline_state.playhead_position = tl_start + 1
+local match_clip = { id = timeline_clip_id, master_clip_id = timeline_master_id,
+    timeline_start = tl_start, duration = tl_dur, track_id = tl_track_id }
+timeline_state.set_selection({ match_clip })
+-- Provide get_clips_at_time: return selected clips that overlap the time
+function timeline_state.get_clips_at_time(time_value)
+    local matches = {}
+    for _, clip in ipairs(timeline_state.selected_clips) do
+        if clip.timeline_start and clip.duration then
+            if time_value >= clip.timeline_start and time_value < clip.timeline_start + clip.duration then
+                matches[#matches + 1] = clip
+            end
+        end
+    end
+    return matches
+end
+function timeline_state.get_track_by_id(track_id)
+    return { id = track_id, track_type = "VIDEO", track_index = 1 }
+end
 
 local match_cmd = Command.create("MatchFrame", "default_project")
 local match_result = command_manager.execute(match_cmd)
-assert(match_result.success, "MatchFrame should succeed on imported clips")
-assert(project_browser.focused_master_clip_id == timeline_parent_id,
-    "MatchFrame should focus the parent master clip")
+assert(match_result.success, "MatchFrame should succeed on imported clips: " .. tostring(match_result.error_message))
+assert(project_browser.focused_master_clip_id == timeline_master_id,
+    "MatchFrame should focus the master clip")
 
 -- Use a single clip to avoid overlap errors when nudging.
 local clip_ids = fetch_clip_ids(1)

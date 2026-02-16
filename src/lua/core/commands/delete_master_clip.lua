@@ -89,7 +89,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                        c.enabled, c.offline, c.fps_numerator, c.fps_denominator, c.name, c.owner_sequence_id, t.sequence_id
                 FROM clips c
                 JOIN tracks t ON c.track_id = t.id
-                WHERE c.parent_clip_id = ?
+                WHERE c.master_clip_id = ?
                   AND c.clip_kind = 'timeline'
                   AND (c.owner_sequence_id IS NULL OR c.owner_sequence_id <> ?)
             ]])
@@ -97,7 +97,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 set_error(set_last_error, "DeleteMasterClip: Failed to prepare reference check")
                 return false
             end
-            ref_query:bind_value(1, args.master_clip_id)
+            ref_query:bind_value(1, clip.master_clip_id)
             ref_query:bind_value(2, clip.master_clip_id)
             if ref_query:exec() then
                 while ref_query:next() do
@@ -115,7 +115,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         name = ref_query:value(10),
                         owner_sequence_id = ref_query:value(11),
                         sequence_id = ref_query:value(12),  -- For cache invalidation
-                        parent_clip_id = args.master_clip_id,
+                        master_clip_id = clip.master_clip_id,
+                        project_id = clip.project_id,
                         media_id = clip.media_id,
                         clip_kind = "timeline",
                     })
@@ -153,11 +154,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        -- Remove timeline clips that belong to the master clip's source sequence
-        local child_stmt = db:prepare("SELECT id FROM clips WHERE parent_clip_id = ?")
+        -- Remove stream clips that belong to the master clip's source sequence
+        local child_stmt = db:prepare("SELECT id FROM clips WHERE owner_sequence_id = ?")
         local child_clip_ids = {}
         if child_stmt then
-            child_stmt:bind_value(1, args.master_clip_id)
+            child_stmt:bind_value(1, clip.master_clip_id or args.master_clip_id)
             if child_stmt:exec() then
                 while child_stmt:next() do
                     table.insert(child_clip_ids, child_stmt:value(0))
@@ -205,7 +206,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             track_id = clip.track_id,
             media_id = clip.media_id,
             master_clip_id = clip.master_clip_id,
-            parent_clip_id = clip.parent_clip_id,
             owner_sequence_id = clip.owner_sequence_id,
             timeline_start = clip.timeline_start,
             duration = clip.duration,
@@ -267,7 +267,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             project_id = args.master_clip_snapshot.project_id,
             clip_kind = args.master_clip_snapshot.clip_kind,
             track_id = args.master_clip_snapshot.track_id,
-            parent_clip_id = args.master_clip_snapshot.parent_clip_id,
             owner_sequence_id = args.master_clip_snapshot.owner_sequence_id,
             master_clip_id = args.master_clip_snapshot.master_clip_id,
             timeline_start = args.master_clip_snapshot.timeline_start,
@@ -314,9 +313,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, snap in ipairs(deleted_timeline_clips) do
             local timeline_clip = Clip.create(snap.name or "Timeline Clip", snap.media_id, {
                 id = snap.id,
+                project_id = snap.project_id,
                 clip_kind = snap.clip_kind,
                 track_id = snap.track_id,
-                parent_clip_id = snap.parent_clip_id,
+                master_clip_id = snap.master_clip_id,
                 owner_sequence_id = snap.owner_sequence_id,
                 timeline_start = snap.timeline_start,
                 duration = snap.duration,

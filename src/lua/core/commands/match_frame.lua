@@ -1,16 +1,10 @@
---- TODO: one-line summary (human review required)
+--- Match Frame: reveal the master clip for the clip under the playhead.
 --
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~52 LOC
--- Volatility: unknown
+-- Resolution order:
+-- 1. Get all clips under the playhead
+-- 2. If any are selected, filter to only selected clips
+-- 3. Pick the topmost (lowest track_index) from the candidates
+-- 4. Focus that clip's master clip in the project browser
 --
 -- @file match_frame.lua
 local M = {}
@@ -28,38 +22,70 @@ local SPEC = {
     }
 }
 
+local function extract_master_clip_id(clip)
+    if type(clip) ~= "table" then return nil end
+    if clip.master_clip_id and clip.master_clip_id ~= "" then
+        return clip.master_clip_id
+    end
+    return nil
+end
+
+local function track_index_for_clip(clip)
+    local track = timeline_state.get_track_by_id(clip.track_id)
+    if track then return track.track_index end
+    return math.huge
+end
+
+--- From candidates, pick the topmost (lowest track_index).
+local function pick_topmost(candidates)
+    local best = nil
+    local best_index = math.huge
+    for _, clip in ipairs(candidates) do
+        local idx = track_index_for_clip(clip)
+        if idx < best_index then
+            best = clip
+            best_index = idx
+        end
+    end
+    return best
+end
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["MatchFrame"] = function(command)
         local args = command:get_all_parameters()
-        local selected = timeline_state.get_selected_clips and timeline_state.get_selected_clips() or {}
-        if not selected or #selected == 0 then
-            set_last_error("MatchFrame: No clips selected")
+
+        local playhead = timeline_state.get_playhead_position()
+        local clips_at_playhead = timeline_state.get_clips_at_time(playhead)
+
+        if #clips_at_playhead == 0 then
+            set_last_error("MatchFrame: No clips under playhead")
             return false
         end
 
-        local function extract_parent_id(entry)
-            if type(entry) ~= "table" then
-                return nil
-            end
-            if entry.parent_clip_id and entry.parent_clip_id ~= "" then
-                return entry.parent_clip_id
-            end
-            if entry.parent_id and entry.parent_id ~= "" then
-                return entry.parent_id
-            end
-            return nil
-        end
-
-        local target_master_id = nil
+        -- If any clip under playhead is selected, prefer selected clips
+        local selected = timeline_state.get_selected_clips and timeline_state.get_selected_clips() or {}
+        local selected_set = {}
         for _, clip in ipairs(selected) do
-            target_master_id = extract_parent_id(clip)
-            if target_master_id then
-                break
+            if clip.id then selected_set[clip.id] = true end
+        end
+
+        local selected_under_playhead = {}
+        for _, clip in ipairs(clips_at_playhead) do
+            if selected_set[clip.id] then
+                selected_under_playhead[#selected_under_playhead + 1] = clip
             end
         end
 
+        local target_clip
+        if #selected_under_playhead > 0 then
+            target_clip = pick_topmost(selected_under_playhead)
+        else
+            target_clip = pick_topmost(clips_at_playhead)
+        end
+
+        local target_master_id = extract_master_clip_id(target_clip)
         if not target_master_id then
-            set_last_error("MatchFrame: Selected clip is not linked to a master clip")
+            set_last_error("MatchFrame: Clip is not linked to a master clip")
             return false
         end
 

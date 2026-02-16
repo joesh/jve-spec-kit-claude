@@ -57,6 +57,7 @@ local a_track = Track.create_audio("A1", mc.id, {index = 1})
 assert(a_track:save(), "Failed to save audio track")
 
 local v_clip = Clip.create("Video Stream", "media_1", {
+    clip_kind = "master",
     track_id = v_track.id,
     owner_sequence_id = mc.id,
     timeline_start = 0,
@@ -69,6 +70,7 @@ local v_clip = Clip.create("Video Stream", "media_1", {
 assert(v_clip:save({skip_occlusion = true}), "Failed to save video clip")
 
 local a_clip = Clip.create("Audio Stream", "media_1", {
+    clip_kind = "master",
     track_id = a_track.id,
     owner_sequence_id = mc.id,
     timeline_start = 0,

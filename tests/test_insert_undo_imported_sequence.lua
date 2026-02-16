@@ -90,6 +90,7 @@ assert(master_video_track:save())
 local stream_clip = Clip.create("Insert Clip Video", "media_insert", {
     id = "masterclip_insert_stream",
     project_id = "default_project",
+    clip_kind = "master",
     track_id = master_video_track.id,
     owner_sequence_id = masterclip_seq.id,
     timeline_start = 0,
@@ -104,6 +105,7 @@ assert(stream_clip:save({skip_occlusion = true}))
 local base_clip = Clip.create("Existing Clip", "media_existing", {
     id = "clip_existing",
     project_id = "default_project",
+    master_clip_id = "mc_test",
     track_id = "imported_v1",
     owner_sequence_id = "imported_sequence",
     timeline_start = 0,

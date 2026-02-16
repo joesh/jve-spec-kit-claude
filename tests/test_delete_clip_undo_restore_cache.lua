@@ -118,6 +118,10 @@ db:exec(require("import_schema"))
 db:exec([[
     INSERT INTO projects (id, name, created_at, modified_at)
     VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO media (id, project_id, name, file_path, duration_frames,
+        fps_numerator, fps_denominator, width, height, created_at, modified_at)
+    VALUES ('media_test', 'default_project', 'Test Media', 'synthetic://test',
+        1000, 30, 1, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
     INSERT INTO sequences (
         id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_rate,
@@ -134,6 +138,22 @@ db:exec([[
         '[]', '[]', '[]',
         0, strftime('%s','now'), strftime('%s','now')
     );
+    INSERT INTO sequences (
+        id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_rate,
+        width, height,
+        view_start_frame, view_duration_frames, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at
+    )
+    VALUES (
+        'mc_seq', 'default_project', 'Test Master', 'masterclip',
+        30, 1, 48000,
+        1920, 1080,
+        0, 300, 0,
+        '[]', '[]', '[]',
+        0, strftime('%s','now'), strftime('%s','now')
+    );
     INSERT INTO tracks (
         id, sequence_id, name, track_type, track_index,
         enabled, locked, muted, soloed, volume, pan
@@ -143,15 +163,15 @@ db:exec([[
         1, 0, 0, 0, 1.0, 0.0
     );
     INSERT INTO clips (
-        id, project_id, clip_kind, master_clip_id, parent_clip_id, owner_sequence_id,
+        id, project_id, clip_kind, master_clip_id, owner_sequence_id,
         track_id, media_id, name,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
         fps_numerator, fps_denominator, enabled, offline,
         created_at, modified_at
     )
     VALUES (
-        'clip_delete_test', 'default_project', 'timeline', NULL, NULL, 'default_sequence',
-        'track_v1', NULL, 'Test Clip',
+        'clip_delete_test', 'default_project', 'timeline', 'mc_seq', 'default_sequence',
+        'track_v1', 'media_test', 'Test Clip',
         0, 30, 0, 30,
         30, 1, 1, 0,
         strftime('%s','now'), strftime('%s','now')

@@ -634,7 +634,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 clip_kind = base.clip_kind,
                 owner_sequence_id = base.owner_sequence_id or base.track_sequence_id,
                 track_sequence_id = base.track_sequence_id or base.owner_sequence_id,
-                parent_clip_id = base.parent_clip_id,
                 master_clip_id = base.master_clip_id,
                 track_id = base.track_id,
                 media_id = base.media_id,

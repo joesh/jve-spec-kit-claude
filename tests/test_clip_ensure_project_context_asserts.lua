@@ -48,6 +48,7 @@ local Clip = require("models.clip")
 -- Create a clip with NO project_id and NO track_id — project_id cannot be derived
 local clip = Clip.create("orphan_clip", "media1", {
     id = "clip_orphan",
+    clip_kind = "master",
     track_id = nil,
     project_id = nil,
     timeline_start = 0,

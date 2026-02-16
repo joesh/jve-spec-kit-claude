@@ -48,7 +48,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local update_stmt = db:prepare([[
                 UPDATE clips
                 SET name = ?
-                WHERE parent_clip_id = ? AND clip_kind = 'timeline'
+                WHERE master_clip_id = ? AND clip_kind = 'timeline'
             ]])
             if not update_stmt then
                 return false, "RenameItem: Failed to prepare timeline rename"

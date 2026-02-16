@@ -91,7 +91,7 @@ local function fetch_clip(id)
 end
 
 local function clip_count()
-    local stmt = database.get_connection():prepare([[SELECT COUNT(*) FROM clips]])
+    local stmt = database.get_connection():prepare([[SELECT COUNT(*) FROM clips WHERE owner_sequence_id = 'default_sequence']])
     assert(stmt:exec() and stmt:next())
     local count = stmt:value(0)
     stmt:finalize()

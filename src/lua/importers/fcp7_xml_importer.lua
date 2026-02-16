@@ -935,7 +935,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             project_id = project_id,
             file_path = file_path,
             name = media_info.name or tostring(key or file_path),
-            duration = duration,
+            duration_frames = duration,  -- already integer frames from XML parsing
             frame_rate = frame_rate,
             width = media_info.width,
             height = media_info.height,
@@ -956,7 +956,13 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
 
     local function create_clip(track_id, clip_info, clip_key, master_bin_id, track_type)
         local media_id = ensure_media(clip_info)
+        assert(media_id and media_id ~= "",
+            string.format("create_clip: ensure_media returned nil for clip '%s' (key=%s)",
+                tostring(clip_info.name or clip_info.original_id), tostring(clip_key)))
         local master_clip_id = ensure_master_clip(clip_info, clip_key, media_id)
+        assert(master_clip_id and master_clip_id ~= "",
+            string.format("create_clip: ensure_master_clip returned nil for clip '%s' (media_id=%s, key=%s)",
+                tostring(clip_info.name or clip_info.original_id), tostring(media_id), tostring(clip_key)))
 
         if master_bin_id and master_bin_id ~= "" and master_clip_id then
             local bucket = pending_bin_assignments[master_bin_id]
@@ -1000,7 +1006,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             id = reuse_id,
             project_id = project_id,
             track_id = track_id,
-            parent_clip_id = master_clip_id,
+            master_clip_id = master_clip_id,
             owner_sequence_id = clip_info.owner_sequence_id,
             timeline_start = start_value,
             duration = duration,

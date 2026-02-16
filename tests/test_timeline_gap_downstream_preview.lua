@@ -24,6 +24,7 @@ local tracks = layout.tracks
 local downstream = Clip.create("V2 Downstream", clips.v2.media_id, {
     project_id = layout.project_id,
     owner_sequence_id = layout.sequence_id,
+    master_clip_id = "mc_test",
     track_id = tracks.v2.id,
     fps_numerator = 1000,
     fps_denominator = 1,

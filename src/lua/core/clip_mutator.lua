@@ -27,7 +27,7 @@ local krono_ok, krono = pcall(require, "core.krono")
 	        track_id = row.track_id,
 	        media_id = row.media_id,
             master_clip_id = row.master_clip_id,
-            parent_clip_id = row.parent_clip_id,
+
             owner_sequence_id = row.owner_sequence_id,
 	        created_at = row.created_at,
 	        modified_at = row.modified_at,
@@ -130,7 +130,6 @@ local function plan_insert(row)
         track_id = row.track_id,
         media_id = row.media_id,
         master_clip_id = row.master_clip_id,
-        parent_clip_id = row.parent_clip_id,
         owner_sequence_id = row.owner_sequence_id,
         timeline_start_frame = get_frames(row.timeline_start or row.start_value),
         duration_frames = get_frames(row.duration),
@@ -152,7 +151,7 @@ end
 local function load_track_clips(db, track_id)
     local stmt = db:prepare([[
         SELECT c.id, c.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
-               c.master_clip_id, c.parent_clip_id, c.owner_sequence_id,
+               c.master_clip_id, c.owner_sequence_id,
                c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
                c.fps_numerator, c.fps_denominator,
                s.fps_numerator, s.fps_denominator,
@@ -176,10 +175,10 @@ local function load_track_clips(db, track_id)
     end
 
     while stmt:next() do
-        local clip_num = stmt:value(13)
-        local clip_den = stmt:value(14)
-        local seq_num = stmt:value(15)
-        local seq_den = stmt:value(16)
+        local clip_num = stmt:value(12)
+        local clip_den = stmt:value(13)
+        local seq_num = stmt:value(14)
+        local seq_den = stmt:value(15)
         assert_fps(clip_num, clip_den, "clip fps")
         assert_fps(seq_num, seq_den, "sequence fps")
         table.insert(results, {
@@ -190,16 +189,15 @@ local function load_track_clips(db, track_id)
             track_id = stmt:value(4),
             media_id = stmt:value(5),
             master_clip_id = stmt:value(6),
-            parent_clip_id = stmt:value(7),
-            owner_sequence_id = stmt:value(8),
-            created_at = stmt:value(19),
-            modified_at = stmt:value(20),
+            owner_sequence_id = stmt:value(7),
+            created_at = stmt:value(18),
+            modified_at = stmt:value(19),
             -- Integer frame coordinates
-            timeline_start = stmt:value(9),
-            start_value = stmt:value(9),  -- Legacy compat
-            duration = stmt:value(10),
-            source_in = stmt:value(11),
-            source_out = stmt:value(12),
+            timeline_start = stmt:value(8),
+            start_value = stmt:value(8),  -- Legacy compat
+            duration = stmt:value(9),
+            source_in = stmt:value(10),
+            source_out = stmt:value(11),
             -- Rate metadata for source coordinate conversions
             rate = { fps_numerator = clip_num, fps_denominator = clip_den },
             fps_numerator = clip_num,
@@ -207,8 +205,8 @@ local function load_track_clips(db, track_id)
             -- Sequence rate for reference
             seq_fps_numerator = seq_num,
             seq_fps_denominator = seq_den,
-            enabled = stmt:value(17) == 1 or stmt:value(17) == true,
-            offline = stmt:value(18) == 1 or stmt:value(18) == true
+            enabled = stmt:value(16) == 1 or stmt:value(16) == true,
+            offline = stmt:value(17) == 1 or stmt:value(17) == true
         })
     end
     stmt:finalize()
@@ -501,7 +499,6 @@ function ClipMutator.resolve_ripple(db, params)
                 track_id = row.track_id,
                 media_id = row.media_id,
                 master_clip_id = original.master_clip_id,
-                parent_clip_id = original.parent_clip_id,
                 owner_sequence_id = original.owner_sequence_id,
                 timeline_start = right_start,
                 duration = right_dur,
@@ -738,7 +735,7 @@ end
 local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_num, seq_fps_den)
     local stmt = db:prepare([[
         SELECT c.id, c.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
-               c.master_clip_id, c.parent_clip_id, c.owner_sequence_id,
+               c.master_clip_id, c.owner_sequence_id,
                c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
                c.fps_numerator, c.fps_denominator,
                c.enabled, c.offline, c.created_at, c.modified_at,
@@ -757,20 +754,20 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         return nil
     end
 
-    local owning_sequence_id = stmt:value(19)
+    local owning_sequence_id = stmt:value(18)
     assert(owning_sequence_id, "clip_mutator.plan_duplicate_block: clip missing owning sequence via track_id (clip_id=" .. tostring(clip_id) .. ")")
     assert(owning_sequence_id == sequence_id,
         string.format("clip_mutator.plan_duplicate_block: clip %s belongs to sequence %s, not %s",
             tostring(clip_id), tostring(owning_sequence_id), tostring(sequence_id)))
 
-    local owning_fps_num = stmt:value(20)
-    local owning_fps_den = stmt:value(21)
+    local owning_fps_num = stmt:value(19)
+    local owning_fps_den = stmt:value(20)
     assert(owning_fps_num == seq_fps_num and owning_fps_den == seq_fps_den,
         string.format("clip_mutator.plan_duplicate_block: clip %s owning sequence rate mismatch (%s/%s vs %s/%s)",
             tostring(clip_id), tostring(owning_fps_num), tostring(owning_fps_den), tostring(seq_fps_num), tostring(seq_fps_den)))
 
-    local clip_fps_num = stmt:value(13)
-    local clip_fps_den = stmt:value(14)
+    local clip_fps_num = stmt:value(12)
+    local clip_fps_den = stmt:value(13)
     assert_fps(clip_fps_num, clip_fps_den, "clip fps")
 
     local clip = {
@@ -781,21 +778,20 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         track_id = stmt:value(4),
         media_id = stmt:value(5),
         master_clip_id = stmt:value(6),
-        parent_clip_id = stmt:value(7),
-        owner_sequence_id = stmt:value(8),
+        owner_sequence_id = stmt:value(7),
         -- Integer frame coordinates
-        timeline_start = stmt:value(9),
-        duration = stmt:value(10),
-        source_in = stmt:value(11),
-        source_out = stmt:value(12),
+        timeline_start = stmt:value(8),
+        duration = stmt:value(9),
+        source_in = stmt:value(10),
+        source_out = stmt:value(11),
         -- Fps metadata (for storage/passthrough only)
         fps_numerator = clip_fps_num,
         fps_denominator = clip_fps_den,
         rate = {fps_numerator = clip_fps_num, fps_denominator = clip_fps_den},
-        enabled = stmt:value(15) == 1 or stmt:value(15) == true,
-        offline = stmt:value(16) == 1 or stmt:value(16) == true,
-        created_at = stmt:value(17),
-        modified_at = stmt:value(18),
+        enabled = stmt:value(14) == 1 or stmt:value(14) == true,
+        offline = stmt:value(15) == 1 or stmt:value(15) == true,
+        created_at = stmt:value(16),
+        modified_at = stmt:value(17),
     }
     stmt:finalize()
     return clip
@@ -967,7 +963,6 @@ function ClipMutator.plan_duplicate_block(db, params)
             track_id = mapped_track.id,
             media_id = clip.media_id,
             owner_sequence_id = sequence_id,
-            parent_clip_id = clip.parent_clip_id,
             master_clip_id = clip.master_clip_id,
             timeline_start = new_start,
             duration = clip.duration,

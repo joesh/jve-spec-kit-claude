@@ -106,12 +106,12 @@ local function create_master_clip(id, name)
     })
     assert(clip:save(db), "Failed to save master clip " .. id)
 
-    -- Create child clip in source sequence
+    -- Create child clip in source sequence (stream clip inside masterclip sequence)
     local child = Clip.create(name .. " (Video)", "media_dmc", {
         id = id .. "_child",
         project_id = "project",
+        clip_kind = "master",
         track_id = src_track.id,
-        parent_clip_id = id,
         owner_sequence_id = source_seq.id,
         timeline_start = 0,
         duration = 100,
@@ -210,6 +210,7 @@ local regular_clip = Clip.create("Regular Clip", "media_dmc", {
     project_id = "project",
     track_id = "track_v1",
     owner_sequence_id = "sequence",
+    master_clip_id = "mc_test",
     clip_kind = "timeline",
     timeline_start = 0,
     duration = 100,
@@ -253,13 +254,13 @@ print("Test 6: Cannot delete master clip in use by timeline")
 reset_test_data()
 create_master_clip("master_inuse", "In Use Clip")
 
--- Create a timeline clip that references this master
+-- Create a timeline clip that references this master's source sequence
 local timeline_clip = Clip.create("Timeline Instance", "media_dmc", {
     id = "timeline_instance",
     project_id = "project",
     track_id = "track_v1",
-    parent_clip_id = "master_inuse",  -- References the master
     owner_sequence_id = "sequence",   -- In a different sequence than source
+    master_clip_id = "master_inuse_src_seq",  -- References the master's source sequence
     clip_kind = "timeline",
     timeline_start = 0,
     duration = 100,

@@ -79,6 +79,7 @@ local clip_existing = Clip.create("Existing", "media_1", {
     project_id = "project",
     track_id = "track_v1",
     owner_sequence_id = "sequence",
+    master_clip_id = "mc_test",
     timeline_start = 0,
     duration = 100,
     source_in = 0,

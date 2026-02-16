@@ -51,6 +51,7 @@ local clip = Clip.create("Clip", nil, {
     project_id = "proj",
     track_id = "v1",
     owner_sequence_id = "seq",
+    master_clip_id = "mc_test",
     timeline_start = 0,
     duration = 48,
     source_in = 0,

@@ -43,17 +43,21 @@ db:exec(string.format([[
 -- Create linked clips: V1 [video 0..1000] linked to A1 [audio 0..1000]
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id,
+        owner_sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
         fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
     VALUES ('clip_video', 'proj1', 'timeline', 'Video', 'trk_v', 'med1',
+        'seq1',
         0, 1000, 0, 1000, 24000, 1001, 1, 0, %d, %d);
 ]], now, now))
 
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id,
+        owner_sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
         fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
     VALUES ('clip_audio', 'proj1', 'timeline', 'Audio', 'trk_a', 'med1',
+        'seq1',
         0, 1000, 0, 1000, 24000, 1001, 1, 0, %d, %d);
 ]], now, now))
 

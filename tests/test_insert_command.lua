@@ -93,6 +93,7 @@ local downstream_clip = Clip.create("Downstream", "media_video", {
     project_id = "project",
     track_id = "track_v1",
     owner_sequence_id = "sequence",
+    master_clip_id = "mc_test",
     timeline_start = 200,
     duration = 100,
     source_in = 0,

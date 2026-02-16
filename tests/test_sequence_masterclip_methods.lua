@@ -75,6 +75,7 @@ local video_track = Track.create_video("V1", masterclip_seq.id, {index = 1})
 assert(video_track:save(), "Failed to save video track")
 
 local video_clip = Clip.create("Video Stream", "media_1", {
+    clip_kind = "master",
     track_id = video_track.id,
     owner_sequence_id = masterclip_seq.id,
     timeline_start = 0,
@@ -103,6 +104,7 @@ local audio_track = Track.create_audio("A1", masterclip_seq.id, {index = 1})
 assert(audio_track:save(), "Failed to save audio track")
 
 local audio_clip = Clip.create("Audio Stream", "media_1", {
+    clip_kind = "master",
     track_id = audio_track.id,
     owner_sequence_id = masterclip_seq.id,
     timeline_start = 0,

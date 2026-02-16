@@ -72,7 +72,7 @@ local t1 = Clip.create("Timeline", media.id, {
     project_id = "proj",
     track_id = "v1",
     owner_sequence_id = "seq",
-    parent_clip_id = master.id,
+    master_clip_id = "mc_test",
     timeline_start = 0,
     duration = 100,
     source_in = 5,
@@ -107,9 +107,8 @@ assert(duplicated_id, "Expected a duplicated clip on v2")
 local dup_clip = Clip.load_optional(duplicated_id, db)
 assert(dup_clip, "Expected to load duplicated clip")
 assert(dup_clip.owner_sequence_id == "seq", "Duplicated clip should preserve owner_sequence_id")
-assert(dup_clip.parent_clip_id == master.id, "Duplicated clip should preserve parent_clip_id")
 assert(dup_clip.offline == true, "Duplicated clip should preserve offline flag")
 
 cleanup_db_artifacts(db_path)
-print("✅ DuplicateClips preserves owner_sequence_id/parent_clip_id/offline via mutation inserts")
+print("✅ DuplicateClips preserves owner_sequence_id/offline via mutation inserts")
 

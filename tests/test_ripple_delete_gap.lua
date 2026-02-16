@@ -49,10 +49,10 @@ end
 local function insert_clip(id, track_id, start_value, duration_value)
     local media_id = ensure_media(id .. "_media", duration_value)
     local stmt = db:prepare([[
-        INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, master_clip_id, parent_clip_id, owner_sequence_id,
+        INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, master_clip_id, owner_sequence_id,
                            timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                            fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-        VALUES (?, 'default_project', 'timeline', ?, ?, ?, 'default_sequence', NULL, 'default_sequence',
+        VALUES (?, 'default_project', 'timeline', ?, ?, ?, 'default_sequence', 'default_sequence',
                 ?, ?, 0, ?, 30, 1, 1, 0, strftime('%s','now'), strftime('%s','now'))
     ]])
     assert(stmt, "failed to prepare clip insert")

@@ -173,8 +173,7 @@ function M.clip_insert_payload(source, fallback_sequence_id)
         owner_sequence_id = source.owner_sequence_id or track_sequence_id,
         media_id = source.media_id,
         master_clip_id = source.master_clip_id,
-        parent_clip_id = source.parent_clip_id,
-        
+
         timeline_start = source.timeline_start,
         duration = source.duration,
         source_in = source.source_in,
@@ -373,7 +372,6 @@ function M.restore_clip_state(state)
             project_id = state.project_id,
             clip_kind = state.clip_kind,
             track_id = state.track_id,
-            parent_clip_id = state.parent_clip_id,
             owner_sequence_id = state.owner_sequence_id or state.track_sequence_id,
             master_clip_id = state.master_clip_id,
             track_sequence_id = state.track_sequence_id or state.owner_sequence_id,
@@ -417,7 +415,6 @@ function M.capture_clip_state(clip)
         clip_kind = clip.clip_kind,
         owner_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
         track_sequence_id = clip.track_sequence_id or clip.owner_sequence_id,
-        parent_clip_id = clip.parent_clip_id,
         master_clip_id = clip.master_clip_id,
         track_id = clip.track_id,
         media_id = clip.media_id,
@@ -589,12 +586,12 @@ function M.apply_mutations(db, mutations)
         insert_stmt = db:prepare([[
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
-                master_clip_id, parent_clip_id, owner_sequence_id,
+                master_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                 fps_numerator, fps_denominator, enabled, offline,
                 created_at, modified_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not insert_stmt then
             return nil, "Failed to prepare INSERT statement: " .. tostring(db:last_error() or "unknown")
@@ -734,24 +731,23 @@ function M.apply_mutations(db, mutations)
             stmt:bind_value(5, mut.track_id)
             stmt:bind_value(6, mut.media_id)
             stmt:bind_value(7, mut.master_clip_id)
-            stmt:bind_value(8, mut.parent_clip_id)
-            stmt:bind_value(9, mut.owner_sequence_id)
-            stmt:bind_value(10, mut.timeline_start_frame)
-            stmt:bind_value(11, mut.duration_frames)
-            stmt:bind_value(12, mut.source_in_frame)
-            stmt:bind_value(13, mut.source_out_frame)
-            stmt:bind_value(14, mut.fps_numerator)
-            stmt:bind_value(15, mut.fps_denominator)
-            stmt:bind_value(16, mut.enabled)
-            stmt:bind_value(17, (mut.offline == 1 or mut.offline == true) and 1 or 0)
+            stmt:bind_value(8, mut.owner_sequence_id)
+            stmt:bind_value(9, mut.timeline_start_frame)
+            stmt:bind_value(10, mut.duration_frames)
+            stmt:bind_value(11, mut.source_in_frame)
+            stmt:bind_value(12, mut.source_out_frame)
+            stmt:bind_value(13, mut.fps_numerator)
+            stmt:bind_value(14, mut.fps_denominator)
+            stmt:bind_value(15, mut.enabled)
+            stmt:bind_value(16, (mut.offline == 1 or mut.offline == true) and 1 or 0)
             if mut.created_at == nil or mut.modified_at == nil then
                 finalize_stmt(update_stmt)
                 finalize_stmt(delete_stmt)
                 finalize_stmt(insert_stmt)
                 return false, "INSERT mutation missing created_at/modified_at for clip " .. tostring(mut.clip_id)
             end
-            stmt:bind_value(18, mut.created_at)
-            stmt:bind_value(19, mut.modified_at)
+            stmt:bind_value(17, mut.created_at)
+            stmt:bind_value(18, mut.modified_at)
             local ok = stmt:exec()
             local err = db:last_error()
             reset_stmt(stmt)
@@ -1001,12 +997,12 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         local stmt = db:prepare([[
             INSERT INTO clips (
                 id, project_id, clip_kind, name, track_id, media_id,
-                master_clip_id, parent_clip_id, owner_sequence_id,
+                master_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                 fps_numerator, fps_denominator, enabled, offline,
                 created_at, modified_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not stmt then return false, "Failed to prepare undo delete: " .. tostring(db:last_error()) end
 
@@ -1017,18 +1013,17 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         stmt:bind_value(5, prev.track_id)
         stmt:bind_value(6, prev.media_id)
         stmt:bind_value(7, prev.master_clip_id)
-        stmt:bind_value(8, prev.parent_clip_id)
-        stmt:bind_value(9, prev.owner_sequence_id or prev.track_sequence_id)
-        stmt:bind_value(10, val_frames(prev.timeline_start or prev.start_value, "timeline_start"))
-        stmt:bind_value(11, val_frames(prev.duration, "duration"))
-        stmt:bind_value(12, val_frames(prev.source_in, "source_in"))
-        stmt:bind_value(13, val_frames(prev.source_out, "source_out"))
-        stmt:bind_value(14, fps_num)
-        stmt:bind_value(15, fps_den)
-        stmt:bind_value(16, prev.enabled and 1 or 0)
-        stmt:bind_value(17, (prev.offline == 1 or prev.offline == true) and 1 or 0)
-        stmt:bind_value(18, prev.created_at)
-        stmt:bind_value(19, prev.modified_at)
+        stmt:bind_value(8, prev.owner_sequence_id or prev.track_sequence_id)
+        stmt:bind_value(9, val_frames(prev.timeline_start or prev.start_value, "timeline_start"))
+        stmt:bind_value(10, val_frames(prev.duration, "duration"))
+        stmt:bind_value(11, val_frames(prev.source_in, "source_in"))
+        stmt:bind_value(12, val_frames(prev.source_out, "source_out"))
+        stmt:bind_value(13, fps_num)
+        stmt:bind_value(14, fps_den)
+        stmt:bind_value(15, prev.enabled and 1 or 0)
+        stmt:bind_value(16, (prev.offline == 1 or prev.offline == true) and 1 or 0)
+        stmt:bind_value(17, prev.created_at)
+        stmt:bind_value(18, prev.modified_at)
 
         local ok = stmt:exec()
         stmt:finalize()

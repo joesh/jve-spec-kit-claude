@@ -105,7 +105,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local second_clip = Clip.create(original_clip.name, original_clip.media_id, {
             project_id = original_clip.project_id,
             track_id = original_clip.track_id,
-            parent_clip_id = original_clip.parent_clip_id,
             owner_sequence_id = original_clip.owner_sequence_id,
             master_clip_id = original_clip.master_clip_id,
             timeline_start = split_frame,

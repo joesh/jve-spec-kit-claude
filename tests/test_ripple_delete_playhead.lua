@@ -57,6 +57,7 @@ local function create_clip(id, track_id, start_value, duration_value, media_id)
         project_id = 'default_project',
         track_id = track_id,
         owner_sequence_id = 'default_sequence',
+        master_clip_id = "mc_test",
         timeline_start = start_value,
         duration = duration_value,
         source_in = 0,

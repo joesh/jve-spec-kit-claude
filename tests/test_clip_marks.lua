@@ -61,7 +61,7 @@ assert(db:exec([[
     INSERT INTO clips (
         id, project_id, clip_kind, name,
         track_id, media_id,
-        master_clip_id, parent_clip_id, owner_sequence_id,
+        master_clip_id, owner_sequence_id,
         timeline_start_frame, duration_frames,
         source_in_frame, source_out_frame,
         enabled, offline,
@@ -71,7 +71,7 @@ assert(db:exec([[
     VALUES (
         'clipA', 'proj', 'master', 'Clip A',
         'v1', 'media1',
-        NULL, NULL, 'seq',
+        NULL, 'seq',
         0, 100,
         0, 100,
         1, 0,
@@ -82,7 +82,7 @@ assert(db:exec([[
     INSERT INTO clips (
         id, project_id, clip_kind, name,
         track_id, media_id,
-        master_clip_id, parent_clip_id, owner_sequence_id,
+        master_clip_id, owner_sequence_id,
         timeline_start_frame, duration_frames,
         source_in_frame, source_out_frame,
         enabled, offline,
@@ -92,7 +92,7 @@ assert(db:exec([[
     VALUES (
         'clipB', 'proj', 'master', 'Clip B',
         'v1', 'media1',
-        NULL, NULL, 'seq',
+        NULL, 'seq',
         100, 200,
         100, 300,
         1, 0,

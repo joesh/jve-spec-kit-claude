@@ -70,6 +70,7 @@ assert(master_video_track:save())
 local stream_clip = Clip.create("25fps Video", media.id, {
     id = "masterclip_stream_clip",
     project_id = "default_project",
+    clip_kind = "master",
     track_id = master_video_track.id,
     owner_sequence_id = masterclip_seq.id,
     timeline_start = 0,

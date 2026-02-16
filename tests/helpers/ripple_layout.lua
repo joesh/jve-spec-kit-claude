@@ -321,6 +321,7 @@ function M.create(opts)
             project_id = cfg.project_id,
             clip_kind = "timeline",
             track_id = track.id,
+            master_clip_id = c.master_clip_id or ("mc_" .. media_cfg.id),
             owner_sequence_id = cfg.sequence_id,
             timeline_start = c.timeline_start,  -- integer
             duration = c.duration,  -- integer

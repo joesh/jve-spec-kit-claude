@@ -73,7 +73,6 @@ local function create_clip(params)
         source_out = params.source_out_value or params.duration_value or 0,
         fps_numerator = 30,
         fps_denominator = 1,
-        parent_clip_id = params.parent_clip_id,
         master_clip_id = master_clip_id,
     })
     assert(clip and clip:save(db, {skip_occlusion = true}))

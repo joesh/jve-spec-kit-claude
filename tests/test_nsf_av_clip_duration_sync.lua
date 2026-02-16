@@ -76,6 +76,7 @@ local audio_duration_samples = 480000  -- 10 * 48000
 
 local video_stream = Clip.create("Video Stream", media.id, {
     project_id = project_id,
+    clip_kind = "master",
     track_id = mc_video_track.id,
     owner_sequence_id = masterclip.id,
     timeline_start = 0,
@@ -89,6 +90,7 @@ assert(video_stream:save({skip_occlusion = true}), "Failed to save video stream"
 
 local audio_stream = Clip.create("Audio Stream", media.id, {
     project_id = project_id,
+    clip_kind = "master",
     track_id = mc_audio_track.id,
     owner_sequence_id = masterclip.id,
     timeline_start = 0,

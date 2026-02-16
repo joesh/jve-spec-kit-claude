@@ -125,7 +125,6 @@ local function copy_timeline_selection()
                 media_id = clip.media_id,
                 fps_numerator = clip.rate.fps_numerator,
                 fps_denominator = clip.rate.fps_denominator,
-                parent_clip_id = clip.parent_clip_id,
                 master_clip_id = clip.master_clip_id,
                 owner_sequence_id = clip.owner_sequence_id,
                 clip_kind = clip.clip_kind,
@@ -216,7 +215,7 @@ local function paste_timeline(payload)
     end
 
     for _, clip_data in ipairs(clips) do
-        if clip_data.track_id and (clip_data.media_id or clip_data.parent_clip_id) then
+        if clip_data.track_id and clip_data.media_id then
             local track = assert(track_lookup[clip_data.track_id], "clipboard_actions.paste_timeline: missing track for clip")
             local track_type = assert(track.track_type, "clipboard_actions.paste_timeline: missing track type")
 
