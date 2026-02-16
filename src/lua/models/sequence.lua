@@ -359,6 +359,11 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
     -- LOOKUP PHASE: find existing masterclip by media_id
     local existing_id = Sequence._find_masterclip_for_media(conn, media_id)
     if existing_id then
+        -- Add to bin if requested (idempotent — INSERT OR IGNORE)
+        if opts.bin_id then
+            local tag_service = require("core.tag_service")
+            tag_service.add_to_bin(project_id, {existing_id}, opts.bin_id, "master_clip")
+        end
         return existing_id
     end
 
@@ -465,6 +470,12 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
             assert(aclip:save({skip_occlusion = true}),
                 "Sequence.ensure_masterclip: failed to save audio stream clip")
         end
+    end
+
+    -- Add to bin if requested (idempotent — INSERT OR IGNORE)
+    if opts.bin_id then
+        local tag_service = require("core.tag_service")
+        tag_service.add_to_bin(project_id, {seq.id}, opts.bin_id, "master_clip")
     end
 
     return seq.id

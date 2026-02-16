@@ -2042,14 +2042,69 @@ function M.save_master_clip_bin_map(project_id, bin_map)
     return true
 end
 
-function M.assign_master_clips_to_bin(project_id, clip_ids, bin_id)
-    if not project_id or project_id == "" then
-        return false, "Missing project_id"
+--- Add entities to a bin (INSERT OR IGNORE — idempotent, many-to-many safe).
+-- Use for import paths where an entity may already be in the bin.
+-- @param project_id string
+-- @param entity_ids table: array of entity IDs
+-- @param bin_id string: target bin ID
+-- @param entity_type string: e.g. "master_clip"
+function M.add_to_bin(project_id, entity_ids, bin_id, entity_type)
+    assert(project_id and project_id ~= "", "database.add_to_bin: missing project_id")
+    assert(bin_id and bin_id ~= "", "database.add_to_bin: missing bin_id")
+    assert(entity_type and entity_type ~= "", "database.add_to_bin: missing entity_type")
+    assert(db_connection, "database.add_to_bin: no database connection")
+    if type(entity_ids) ~= "table" or #entity_ids == 0 then
+        return true
     end
-    if not db_connection then
-        return false, "No database connection"
+
+    require_tag_tables()
+    ensure_tag_namespace(BIN_NAMESPACE, "Bins")
+
+    assert(validate_bin_id(project_id, bin_id),
+        string.format("database.add_to_bin: bin %s not found in project %s", bin_id, project_id))
+
+    local started, begin_err = begin_write_transaction()
+    assert(started ~= nil, "database.add_to_bin: failed to begin transaction: " .. tostring(begin_err))
+
+    for _, eid in ipairs(entity_ids) do
+        if type(eid) == "string" and eid ~= "" then
+            local stmt = db_connection:prepare([[
+                INSERT OR IGNORE INTO tag_assignments(tag_id, project_id, namespace_id, entity_type, entity_id)
+                VALUES (?, ?, ?, ?, ?)
+            ]])
+            assert(stmt, "database.add_to_bin: failed to prepare insert statement")
+            stmt:bind_value(1, bin_id)
+            stmt:bind_value(2, project_id)
+            stmt:bind_value(3, BIN_NAMESPACE)
+            stmt:bind_value(4, entity_type)
+            stmt:bind_value(5, eid)
+            local success = stmt:exec()
+            local detail = stmt:last_error()
+            local rc = stmt:last_result_code()
+            stmt:finalize()
+            if success == false then
+                rollback_transaction(started)
+                error(string.format("database.add_to_bin: insert failed for %s %s (%s, rc=%s)",
+                    entity_type, eid, tostring(detail), tostring(rc)))
+            end
+        end
     end
-    if type(clip_ids) ~= "table" or #clip_ids == 0 then
+
+    assert(commit_transaction(started, "add_to_bin"), "database.add_to_bin: commit failed")
+    return true
+end
+
+--- Move entities to a bin (DELETE old assignments + INSERT new).
+-- Use for user-facing MoveToBin where entity should leave its old bin.
+-- @param project_id string
+-- @param entity_ids table: array of entity IDs
+-- @param bin_id string|nil: target bin ID (nil = unassign)
+-- @param entity_type string: e.g. "master_clip"
+function M.set_bin(project_id, entity_ids, bin_id, entity_type)
+    assert(project_id and project_id ~= "", "database.set_bin: missing project_id")
+    assert(entity_type and entity_type ~= "", "database.set_bin: missing entity_type")
+    assert(db_connection, "database.set_bin: no database connection")
+    if type(entity_ids) ~= "table" or #entity_ids == 0 then
         return true
     end
 
@@ -2057,67 +2112,78 @@ function M.assign_master_clips_to_bin(project_id, clip_ids, bin_id)
     ensure_tag_namespace(BIN_NAMESPACE, "Bins")
 
     if bin_id and (type(bin_id) ~= "string" or bin_id == "" or not validate_bin_id(project_id, bin_id)) then
-        local message = string.format("assign_master_clips_to_bin: invalid bin %s", tostring(bin_id))
-        logger.warn("database", message)
-        return false, message
+        error(string.format("database.set_bin: invalid bin %s", tostring(bin_id)))
     end
 
     local started, begin_err = begin_write_transaction()
-    if started == nil then
-        local message = "assign_master_clips_to_bin: failed to begin transaction: " .. tostring(begin_err)
-        logger.warn("database", message)
-        return false, message
-    end
+    assert(started ~= nil, "database.set_bin: failed to begin transaction: " .. tostring(begin_err))
 
-    for _, clip_id in ipairs(clip_ids) do
-        if type(clip_id) == "string" and clip_id ~= "" then
+    for _, eid in ipairs(entity_ids) do
+        if type(eid) == "string" and eid ~= "" then
+            -- Delete ALL existing assignments for this entity
             local delete_stmt = db_connection:prepare([[
                 DELETE FROM tag_assignments
-                WHERE project_id = ? AND namespace_id = ? AND entity_type = 'master_clip' AND entity_id = ?
+                WHERE project_id = ? AND namespace_id = ? AND entity_type = ? AND entity_id = ?
             ]])
-            if not delete_stmt then
-                rollback_transaction(started)
-                return false, "assign_master_clips_to_bin: failed to prepare delete statement"
-            end
+            assert(delete_stmt, "database.set_bin: failed to prepare delete statement")
             delete_stmt:bind_value(1, project_id)
             delete_stmt:bind_value(2, BIN_NAMESPACE)
-            delete_stmt:bind_value(3, clip_id)
+            delete_stmt:bind_value(3, entity_type)
+            delete_stmt:bind_value(4, eid)
             local success = delete_stmt:exec()
             local delete_detail = delete_stmt:last_error()
             local delete_rc = delete_stmt:last_result_code()
             delete_stmt:finalize()
             if success == false then
                 rollback_transaction(started)
-                return false, string.format("assign_master_clips_to_bin: delete failed for clip %s (%s, rc=%s)", tostring(clip_id), tostring(delete_detail or "unknown error"), tostring(delete_rc))
+                error(string.format("database.set_bin: delete failed for %s %s (%s, rc=%s)",
+                    entity_type, eid, tostring(delete_detail), tostring(delete_rc)))
             end
 
+            -- Insert new assignment (if bin_id provided)
             if bin_id then
                 local insert_stmt = db_connection:prepare([[
                     INSERT INTO tag_assignments(tag_id, project_id, namespace_id, entity_type, entity_id)
-                    VALUES (?, ?, ?, 'master_clip', ?)
+                    VALUES (?, ?, ?, ?, ?)
                 ]])
-                if not insert_stmt then
-                    rollback_transaction(started)
-                    return false, "assign_master_clips_to_bin: failed to prepare insert statement"
-                end
+                assert(insert_stmt, "database.set_bin: failed to prepare insert statement")
                 insert_stmt:bind_value(1, bin_id)
                 insert_stmt:bind_value(2, project_id)
                 insert_stmt:bind_value(3, BIN_NAMESPACE)
-                insert_stmt:bind_value(4, clip_id)
+                insert_stmt:bind_value(4, entity_type)
+                insert_stmt:bind_value(5, eid)
                 success = insert_stmt:exec()
                 local insert_detail = insert_stmt:last_error()
                 local insert_rc = insert_stmt:last_result_code()
                 insert_stmt:finalize()
                 if success == false then
                     rollback_transaction(started)
-                    return false, string.format("assign_master_clips_to_bin: insert failed for clip %s (%s, rc=%s)", tostring(clip_id), tostring(insert_detail or "unknown error"), tostring(insert_rc))
+                    error(string.format("database.set_bin: insert failed for %s %s (%s, rc=%s)",
+                        entity_type, eid, tostring(insert_detail), tostring(insert_rc)))
                 end
             end
         end
     end
 
-    if not commit_transaction(started, "assign_master_clips_to_bin") then
-        return false, "assign_master_clips_to_bin: commit failed"
+    assert(commit_transaction(started, "set_bin"), "database.set_bin: commit failed")
+    return true
+end
+
+-- Legacy aliases: delegate to generic functions.
+-- These preserve the old (false, reason) error contract for existing callers.
+function M.assign_master_clips_to_bin(project_id, clip_ids, bin_id)
+    if not project_id or project_id == "" then
+        return false, "Missing project_id"
+    end
+    if type(clip_ids) ~= "table" or #clip_ids == 0 then
+        return true
+    end
+    if bin_id and (type(bin_id) ~= "string" or bin_id == "") then
+        return false, string.format("assign_master_clips_to_bin: invalid bin %s", tostring(bin_id))
+    end
+    local ok, err = pcall(M.set_bin, project_id, clip_ids, bin_id, "master_clip")
+    if not ok then
+        return false, tostring(err)
     end
     return true
 end

@@ -1243,7 +1243,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
                     table.insert(iter_clip_ids, clip_id)
                 end
                 if #iter_clip_ids > 0 then
-                    local assign_ok, assign_err = tag_service.assign_master_clips(project_id, iter_clip_ids, iter_bin_id)
+                    local assign_ok, assign_err = tag_service.add_to_bin(project_id, iter_clip_ids, iter_bin_id, "master_clip")
                     if not assign_ok then
                         logger.warn("import_fcp7", string.format(
                             "Failed to persist %d master clip assignments for bin %s: %s",

@@ -215,15 +215,28 @@ function M.list_master_clip_assignments(project_id)
     return database.load_master_clip_bin_map(project_id)
 end
 
+--- Add entities to a bin (INSERT OR IGNORE — idempotent, many-to-many safe).
+-- Use for import paths where an entity may already be in the bin.
+function M.add_to_bin(project_id, entity_ids, bin_id, entity_type)
+    return database.add_to_bin(project_id, entity_ids, bin_id, entity_type or "master_clip")
+end
+
+--- Move entities to a bin (DELETE old + INSERT new).
+-- Use for user-facing MoveToBin where entity should leave its old bin.
+function M.set_bin(project_id, entity_ids, bin_id, entity_type)
+    return database.set_bin(project_id, entity_ids, bin_id, entity_type or "master_clip")
+end
+
+-- Legacy aliases
 function M.assign_master_clips(project_id, clip_ids, bin_id)
-    return database.assign_master_clips_to_bin(project_id, clip_ids, bin_id)
+    return M.set_bin(project_id, clip_ids, bin_id, "master_clip")
 end
 
 function M.assign_master_clip(project_id, clip_id, bin_id)
     if not clip_id or clip_id == "" then
         return false
     end
-    return database.assign_master_clip_to_bin(project_id, clip_id, bin_id)
+    return M.set_bin(project_id, {clip_id}, bin_id, "master_clip")
 end
 
 return M

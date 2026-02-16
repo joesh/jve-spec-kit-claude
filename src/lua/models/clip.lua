@@ -193,7 +193,9 @@ function M.create(name, media_id, opts)
             assert(opts.project_id and opts.project_id ~= "",
                 "Clip.create: project_id is required to auto-resolve master_clip_id")
             local Sequence = require("models.sequence")
-            opts.master_clip_id = Sequence.ensure_masterclip(media_id, opts.project_id)
+            opts.master_clip_id = Sequence.ensure_masterclip(media_id, opts.project_id, {
+                bin_id = opts.bin_id,
+            })
         end
     end
 

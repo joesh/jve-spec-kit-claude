@@ -507,10 +507,50 @@ end
 -- @param tmp_dir string: Extracted .drp temp directory
 -- @return table: Map of sequence_id → {name=string, fps=number|nil}
 --
+--- Extract metadata from an Sm2Timeline element into metadata_map.
+-- @param metadata_map table: seq_id → {name, fps, width, height, folder_id}
+-- @param timeline_elem table: <Sm2Timeline> XML element
+-- @param folder_id string|nil: parent folder DbId (from Sm2MpTimelineClip)
+local function extract_timeline_metadata(metadata_map, timeline_elem, folder_id)
+    local name_elem = find_direct_child(timeline_elem, "Name")
+    local timeline_name = name_elem and get_text(name_elem) or nil
+    if not timeline_name or timeline_name == "" then return end
+
+    -- Structure: <Sm2Timeline><Sequence><Sm2Sequence DbId="..."><FrameRate>hex
+    local seq_wrapper = find_direct_child(timeline_elem, "Sequence")
+    if not seq_wrapper then return end
+
+    local sm2_seq = find_direct_child(seq_wrapper, "Sm2Sequence")
+    if not sm2_seq or not sm2_seq.attrs or not sm2_seq.attrs.DbId then return end
+
+    local seq_id = sm2_seq.attrs.DbId
+
+    local fps = nil
+    local frame_rate_elem = find_direct_child(sm2_seq, "FrameRate")
+    if frame_rate_elem then
+        fps = decode_hex_double(get_text(frame_rate_elem))
+    end
+
+    local width, height = nil, nil
+    local resolution_elem = find_direct_child(sm2_seq, "Resolution")
+    if resolution_elem then
+        width, height = decode_hex_resolution(get_text(resolution_elem))
+        if width then width = math.floor(width) end
+        if height then height = math.floor(height) end
+    end
+
+    metadata_map[seq_id] = {
+        name = timeline_name,
+        fps = fps,
+        width = width,
+        height = height,
+        folder_id = folder_id,
+    }
+end
+
 local function build_timeline_metadata_map(tmp_dir)
     local metadata_map = {}
 
-    -- Find all MpFolder.xml files recursively
     local find_cmd = string.format('find "%s/MediaPool" -name "MpFolder.xml" 2>/dev/null', tmp_dir)
     local find_handle = io.popen(find_cmd)
     if not find_handle then
@@ -523,47 +563,27 @@ local function build_timeline_metadata_map(tmp_dir)
     for mp_file in mp_files:gmatch("[^\n]+") do
         local mp_root = parse_xml_file(mp_file)
         if mp_root then
-            -- Find all Sm2Timeline elements (timelines can be in any folder)
-            local timelines = find_all_elements(mp_root, "Sm2Timeline")
-            for _, timeline_elem in ipairs(timelines) do
-                -- Get the timeline's display name
-                local name_elem = find_direct_child(timeline_elem, "Name")
-                local timeline_name = name_elem and get_text(name_elem) or nil
+            -- Primary: find Sm2MpTimelineClip elements (contain folder ref + nested Sm2Timeline)
+            local timeline_clips = find_all_elements(mp_root, "Sm2MpTimelineClip")
+            for _, tc_elem in ipairs(timeline_clips) do
+                local folder_ref_elem = find_direct_child(tc_elem, "MpFolder")
+                local tc_folder_id = folder_ref_elem and get_text(folder_ref_elem) or nil
 
-                if timeline_name and timeline_name ~= "" then
-                    -- Find the nested Sm2Sequence to get its DbId and FrameRate
-                    -- Structure: <Sm2Timeline><Sequence><Sm2Sequence DbId="..."><FrameRate>hex</FrameRate>
-                    local seq_wrapper = find_direct_child(timeline_elem, "Sequence")
-                    if seq_wrapper then
-                        local sm2_seq = find_direct_child(seq_wrapper, "Sm2Sequence")
-                        if sm2_seq and sm2_seq.attrs and sm2_seq.attrs.DbId then
-                            local seq_id = sm2_seq.attrs.DbId
+                local nested_timeline = find_element(tc_elem, "Sm2Timeline")
+                if nested_timeline then
+                    extract_timeline_metadata(metadata_map, nested_timeline, tc_folder_id)
+                end
+            end
 
-                            -- Extract frame rate from hex-encoded double
-                            local fps = nil
-                            local frame_rate_elem = find_direct_child(sm2_seq, "FrameRate")
-                            if frame_rate_elem then
-                                local hex_str = get_text(frame_rate_elem)
-                                fps = decode_hex_double(hex_str)
-                            end
-
-                            -- Extract resolution from hex-encoded double pair
-                            local width, height = nil, nil
-                            local resolution_elem = find_direct_child(sm2_seq, "Resolution")
-                            if resolution_elem then
-                                local hex_str = get_text(resolution_elem)
-                                width, height = decode_hex_resolution(hex_str)
-                                -- Floor: hex-decoded doubles may have fractional bits
-                                if width then width = math.floor(width) end
-                                if height then height = math.floor(height) end
-                            end
-
-                            metadata_map[seq_id] = {
-                                name = timeline_name,
-                                fps = fps,
-                                width = width,
-                                height = height
-                            }
+            -- Fallback: bare Sm2Timeline elements not inside Sm2MpTimelineClip
+            local all_timelines = find_all_elements(mp_root, "Sm2Timeline")
+            for _, timeline_elem in ipairs(all_timelines) do
+                local seq_wrapper = find_direct_child(timeline_elem, "Sequence")
+                if seq_wrapper then
+                    local sm2_seq = find_direct_child(seq_wrapper, "Sm2Sequence")
+                    if sm2_seq and sm2_seq.attrs and sm2_seq.attrs.DbId then
+                        if not metadata_map[sm2_seq.attrs.DbId] then
+                            extract_timeline_metadata(metadata_map, timeline_elem, nil)
                         end
                     end
                 end
@@ -984,6 +1004,9 @@ function M.parse_drp_file(drp_path)
                 timeline.width = (meta_w and meta_w > 0) and meta_w or project.settings.width
                 timeline.height = (meta_h and meta_h > 0) and meta_h or project.settings.height
 
+                -- Store folder_id for bin hierarchy import
+                timeline.folder_id = metadata and metadata.folder_id or nil
+
                 table.insert(timelines, timeline)
             end
         end
@@ -1207,6 +1230,9 @@ function M.import_into_project(project_id, parse_result, opts)
     opts = opts or {}
     local project_settings = opts.project_settings or parse_result.project.settings
 
+    local tag_service = require("core.tag_service")
+    local uuid = require("uuid")
+
     -- Track created entity IDs for undo
     local result = {
         media_ids = {},
@@ -1214,6 +1240,25 @@ function M.import_into_project(project_id, parse_result, opts)
         track_ids = {},
         clip_ids = {},
     }
+
+    -- Import DRP folder hierarchy as bins
+    local drp_folder_to_bin = {}  -- DRP folder DbId → JVE bin_id
+    for _, folder in ipairs(parse_result.folders or {}) do
+        -- Map DRP parent_ref to JVE parent_id (already-created bin)
+        local parent_bin_id = folder.parent_id and drp_folder_to_bin[folder.parent_id] or nil
+        local bin_id = uuid.generate_with_prefix("bin")
+        local ok, def = tag_service.create_bin(project_id, {
+            id = bin_id,
+            name = folder.name,
+            parent_id = parent_bin_id,
+        })
+        if ok and def then
+            drp_folder_to_bin[folder.id] = def.id
+            logger.debug("drp_importer", string.format("  Created bin: %s (parent=%s)", folder.name, tostring(parent_bin_id)))
+        else
+            logger.warn("drp_importer", string.format("Failed to create bin: %s", folder.name))
+        end
+    end
 
     -- Import media items
     local media_by_path = {}
@@ -1327,6 +1372,21 @@ function M.import_into_project(project_id, parse_result, opts)
                 string.format("  Created timeline: %s @ %d/%d fps, %dx%d, viewport [%d..%d]",
                     timeline_data.name, fps_num, fps_den, seq_width, seq_height, view_start, view_start + view_duration))
 
+            -- Create per-sequence master clip bin: "{seq_name} Master Clips"
+            -- Parent = timeline's folder bin (from DRP hierarchy), or nil (root)
+            local parent_bin_id = timeline_data.folder_id and drp_folder_to_bin[timeline_data.folder_id] or nil
+            local mc_bin_label = string.format("%s Master Clips", timeline_data.name)
+            local mc_bin_id = uuid.generate_with_prefix("bin")
+            local mc_ok, mc_def = tag_service.create_bin(project_id, {
+                id = mc_bin_id,
+                name = mc_bin_label,
+                parent_id = parent_bin_id,
+            })
+            local master_bin_id = (mc_ok and mc_def) and mc_def.id or nil
+            if master_bin_id then
+                logger.debug("drp_importer", string.format("  Created master clip bin: %s", mc_bin_label))
+            end
+
             local clips_for_linking = {}
 
             -- STEP 5: Import tracks + clips
@@ -1374,6 +1434,7 @@ function M.import_into_project(project_id, parse_result, opts)
                             source_out = source_out,
                             fps_numerator = clip_rate_num,
                             fps_denominator = clip_rate_den,
+                            bin_id = master_bin_id,
                         })
 
                         if clip:save() then
