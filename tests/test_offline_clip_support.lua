@@ -59,6 +59,9 @@ local mock_emp = {
     end,
     PCM_DATA_PTR = function() return nil end,
     SET_DECODE_MODE = function() end,
+    COMPOSE_OFFLINE_FRAME = function(_png_path, _lines)
+        return "offline_frame_handle"
+    end,
 }
 
 local mock_qt_constants = { EMP = mock_emp }
@@ -270,9 +273,9 @@ assert(seq, "Failed to load test sequence")
 local renderer = require("core.renderer")
 local frame_handle, metadata = renderer.get_video_frame(seq, 10, "test_ctx_renderer")
 
--- Frame handle should be nil (offline)
-assert(frame_handle == nil, "Expected nil frame_handle for offline clip")
--- Metadata should contain offline info (not nil)
+-- Frame handle should be non-nil (composited offline frame)
+assert(frame_handle ~= nil, "Expected non-nil frame_handle for offline clip (composited)")
+-- Metadata should contain offline info
 assert(metadata, "Expected non-nil metadata for offline clip")
 assert(metadata.offline == true, "Expected metadata.offline=true")
 assert(metadata.clip_id == "clip_off", "Expected clip_id in offline metadata")

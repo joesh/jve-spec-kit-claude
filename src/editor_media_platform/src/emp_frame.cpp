@@ -15,6 +15,12 @@ Frame::Frame(std::unique_ptr<FrameImpl> impl) : m_impl(std::move(impl)) {
     assert(m_impl && "Frame impl cannot be null");
 }
 
+std::shared_ptr<Frame> Frame::CreateCPU(int w, int h, int stride,
+                                        TimeUS pts, std::vector<uint8_t> data) {
+    auto impl = std::make_unique<FrameImpl>(w, h, stride, pts, std::move(data));
+    return std::make_shared<Frame>(std::move(impl));
+}
+
 Frame::~Frame() = default;
 
 int Frame::width() const { return m_impl->width(); }

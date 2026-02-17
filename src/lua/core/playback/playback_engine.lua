@@ -14,7 +14,6 @@
 -- Callbacks (set at construction):
 --   on_show_frame(frame_handle, metadata)  — display decoded video frame
 --   on_show_gap()                          — display black/gap
---   on_show_offline(metadata)              — display offline frame + label
 --   on_set_rotation(degrees)               — apply rotation for media
 --   on_position_changed(frame)             — position update notification
 --
@@ -70,9 +69,6 @@ function PlaybackEngine.new(config)
         "PlaybackEngine.new: on_set_rotation callback required")
     assert(type(config.on_position_changed) == "function",
         "PlaybackEngine.new: on_position_changed callback required")
-    -- on_show_offline is optional; defaults to on_show_gap
-    assert(config.on_show_offline == nil or type(config.on_show_offline) == "function",
-        "PlaybackEngine.new: on_show_offline must be function or nil")
 
     local self = setmetatable({}, PlaybackEngine)
 
@@ -102,7 +98,6 @@ function PlaybackEngine.new(config)
     self.media_context_id = config.media_context_id
     self._on_show_frame = config.on_show_frame
     self._on_show_gap = config.on_show_gap
-    self._on_show_offline = config.on_show_offline or config.on_show_gap
     self._on_set_rotation = config.on_set_rotation
     self._on_position_changed = config.on_position_changed
 
@@ -601,10 +596,14 @@ function PlaybackEngine:_display_frame(frame_idx)
         assert(metadata, string.format(
             "PlaybackEngine:_display_frame: Renderer returned frame but nil metadata at frame %d",
             frame_idx))
+
+        local is_offline = metadata.offline
+
         -- Detect clip switch → rotation callback + reset lookahead
         if metadata.clip_id ~= self.current_clip_id then
             self.current_clip_id = metadata.clip_id
-            self._on_set_rotation(metadata.rotation)
+            -- Offline frames are upright (composed at 0 degrees)
+            self._on_set_rotation(is_offline and 0 or metadata.rotation)
             -- Entering new clip: clear pre-buffer state from previous clip
             self._pre_buffered_video_id = nil
             self._pre_buffered_audio_ids = {}
@@ -620,23 +619,12 @@ function PlaybackEngine:_display_frame(frame_idx)
 
         self._on_show_frame(frame_handle, metadata)
 
-        -- Notify prefetch of source-space position (use clip's rate for timestamp accuracy)
-        if self.direction ~= 0 then
+        -- Notify prefetch of source-space position (skip for offline — no media to buffer)
+        if not is_offline and self.direction ~= 0 then
             media_cache.set_playhead(
                 metadata.source_frame, self.direction, self.speed,
                 self.media_context_id,
                 metadata.clip_fps_num, metadata.clip_fps_den)
-        end
-    elseif metadata and metadata.offline then
-        -- Offline clip at playhead: show offline frame resource
-        self._on_show_offline(metadata)
-        self.current_clip_id = metadata.clip_id
-        -- Store clip bounds so lookahead skips this clip (no media to pre-buffer)
-        if metadata.clip_end_frame then
-            self._video_clip_bounds = {
-                start_frame = metadata.clip_start_frame,
-                end_frame = metadata.clip_end_frame,
-            }
         end
     else
         -- Gap at playhead

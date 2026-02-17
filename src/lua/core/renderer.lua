@@ -12,6 +12,7 @@
 -- @file renderer.lua
 
 local media_cache = require("core.media.media_cache")
+local offline_frame_cache = require("core.media.offline_frame_cache")
 local Sequence = require("models.sequence")
 local logger = require("core.logger")
 
@@ -42,13 +43,13 @@ function M.get_video_frame(sequence, playhead_frame, context_id)
     -- Activate reader in pool for this context
     local info = media_cache.activate(top.media_path, context_id)
     if not info then
-        -- Media offline: return offline metadata so engine can show offline frame.
-        -- get_offline_info MUST return an entry — activate just registered it.
+        -- Media offline: compose text into frame pixels so both preview and
+        -- export pipelines get a self-contained offline frame.
         local offline_info = media_cache.get_offline_info(top.media_path)
         assert(offline_info, string.format(
             "renderer: activate returned nil for '%s' but no offline registry entry (clip=%s)",
             top.media_path, top.clip.id))
-        return nil, {
+        local offline_metadata = {
             offline = true,
             clip_id = top.clip.id,
             media_path = top.media_path,
@@ -57,6 +58,8 @@ function M.get_video_frame(sequence, playhead_frame, context_id)
             clip_start_frame = top.clip.timeline_start,
             clip_end_frame = top.clip.timeline_start + top.clip.duration,
         }
+        local frame = offline_frame_cache.get_frame(offline_metadata)
+        return frame, offline_metadata
     end
 
     -- Absolute timecode → file-relative frame (matches audio Mixer pattern).

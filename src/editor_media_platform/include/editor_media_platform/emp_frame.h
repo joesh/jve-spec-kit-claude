@@ -3,6 +3,7 @@
 #include "emp_time.h"
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace emp {
 
@@ -36,6 +37,11 @@ public:
     // For Metal zero-copy rendering path
     void* native_buffer() const;
 #endif
+
+    // Create a CPU-backed frame from raw BGRA32 pixel data.
+    // Public factory — avoids exposing FrameImpl to callers.
+    static std::shared_ptr<Frame> CreateCPU(int w, int h, int stride,
+                                            TimeUS pts, std::vector<uint8_t> data);
 
     // Internal: Constructor is public but FrameImpl is opaque, so only EMP can create Frames
     explicit Frame(std::unique_ptr<FrameImpl> impl);

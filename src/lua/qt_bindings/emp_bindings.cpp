@@ -11,6 +11,12 @@
 #include "gpu_video_surface.h"
 #include "cpu_video_surface.h"
 #include <QDebug>
+#include <QImage>
+#include <QPainter>
+#include <QFont>
+#include <QFontMetrics>
+#include <QColor>
+#include <QLinearGradient>
 #include "binding_macros.h"
 
 #include <lua.hpp>
@@ -452,6 +458,130 @@ static int lua_emp_pcm_gc(lua_State* L) {
 }
 
 // ============================================================================
+// Offline Frame Compositor
+// ============================================================================
+
+// EMP.COMPOSE_OFFLINE_FRAME(png_path, lines_table) -> frame_handle
+// lines_table = array of { text=string, size=number, color=string, bold=bool }
+// Loads PNG, composites text band in bottom third, returns frame handle.
+static int lua_emp_compose_offline_frame(lua_State* L) {
+    const char* png_path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+
+    // Load PNG for dimensions, then paint gradient background over it
+    QImage img(png_path);
+    if (img.isNull()) {
+        return luaL_error(L, "COMPOSE_OFFLINE_FRAME: failed to load PNG: %s", png_path);
+    }
+    img = img.convertToFormat(QImage::Format_ARGB32);
+
+    int w = img.width();
+    int h = img.height();
+
+    // Vertical gradient: bright red top → dark red bottom (Premiere-style)
+    {
+        QPainter bgPainter(&img);
+        QLinearGradient grad(0, 0, 0, h);
+        grad.setColorAt(0.0, QColor(0xc0, 0x28, 0x28));
+        grad.setColorAt(1.0, QColor(0x30, 0x08, 0x08));
+        bgPainter.fillRect(0, 0, w, h, grad);
+        bgPainter.end();
+    }
+
+    // Line spacing as percentage of frame height
+    int line_spacing = std::max(4, h / 80);
+
+    // First pass: parse lines, create fonts, measure text heights
+    struct LineInfo {
+        QString text;
+        QFont font;
+        QColor color;
+        int height;
+        int gap_after;  // extra space after this line (pixels)
+    };
+
+    int line_count = static_cast<int>(lua_objlen(L, 2));
+    std::vector<LineInfo> lines;
+    int total_height = 0;
+
+    for (int i = 1; i <= line_count; ++i) {
+        lua_rawgeti(L, 2, i);
+        if (!lua_istable(L, -1)) {
+            lua_pop(L, 1);
+            continue;
+        }
+
+        lua_getfield(L, -1, "text");
+        const char* text = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "height_pct");
+        double height_pct = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 3.0;
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "color");
+        const char* color_str = lua_isstring(L, -1) ? lua_tostring(L, -1) : "#ffffff";
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "bold");
+        bool bold = lua_isboolean(L, -1) ? lua_toboolean(L, -1) : false;
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "gap_after_pct");
+        double gap_after_pct = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : 0.0;
+        lua_pop(L, 1);
+
+        int pixel_size = std::max(10, static_cast<int>(height_pct / 100.0 * h));
+        QFont font("Helvetica Neue");
+        font.setPixelSize(pixel_size);
+        font.setBold(bold);
+
+        QFontMetrics fm(font);
+        int line_h = fm.height();
+        int gap = static_cast<int>(gap_after_pct / 100.0 * h);
+
+        if (!lines.empty()) total_height += line_spacing;
+        total_height += line_h + gap;
+
+        lines.push_back({QString::fromUtf8(text), font, QColor(color_str), line_h, gap});
+        lua_pop(L, 1); // pop line table
+    }
+
+    // Second pass: draw text block centered vertically in frame
+    QPainter painter(&img);
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
+
+    int y_cursor = (h - total_height) / 2;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const auto& line = lines[i];
+        painter.setFont(line.font);
+        painter.setPen(line.color);
+        QRect text_rect(0, y_cursor, w, line.height);
+        painter.drawText(text_rect, Qt::AlignHCenter | Qt::AlignVCenter, line.text);
+        y_cursor += line.height + line.gap_after + line_spacing;
+    }
+    painter.end();
+
+    // Copy QImage scanlines to vector<uint8_t>
+    // QImage Format_ARGB32 on little-endian = BGRA in memory — matches EMP convention
+    int stride = static_cast<int>(img.bytesPerLine());
+    std::vector<uint8_t> pixels(static_cast<size_t>(stride) * h);
+    for (int y = 0; y < h; ++y) {
+        std::memcpy(pixels.data() + y * stride,
+                    img.constScanLine(y),
+                    static_cast<size_t>(stride));
+    }
+
+    // Create Frame via public factory
+    auto frame = emp::Frame::CreateCPU(w, h, stride, 0, std::move(pixels));
+
+    // Register in g_frames and return handle
+    void* frame_key = push_userdata(L, frame, EMP_FRAME_METATABLE);
+    g_frames[frame_key] = frame;
+    return 1;
+}
+
+// ============================================================================
 // Video Surface bindings
 // ============================================================================
 
@@ -672,6 +802,10 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "PCM_DATA_PTR");
     lua_pushcfunction(L, lua_emp_pcm_release);
     lua_setfield(L, -2, "PCM_RELEASE");
+
+    // Offline frame compositor
+    lua_pushcfunction(L, lua_emp_compose_offline_frame);
+    lua_setfield(L, -2, "COMPOSE_OFFLINE_FRAME");
 
     // Surface functions
     lua_pushcfunction(L, lua_emp_surface_set_frame);
