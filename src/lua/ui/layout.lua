@@ -27,6 +27,7 @@ local Track = require("models.track")
 local logger = require("core.logger")
 local project_open = require("core.project_open")
 local dkjson = require("dkjson")
+local Signals = require("core.signals")
 
 -- Project settings keys for window state persistence
 local WINDOW_GEOMETRY_KEY = "window_geometry"
@@ -74,18 +75,41 @@ logger.info("layout", "Initializing database...")
 local db_module = require("core.database")
 
 -- Determine database path - check for test environment variable first
+local is_default_project = false
 local db_path = os.getenv("JVE_PROJECT_PATH")
 if db_path then
     logger.info("layout", "Using test database: " .. tostring(db_path))
 else
-    -- Normal production path - single .jvp file is the project file
     local home = os.getenv("HOME")
     local projects_dir = home .. "/Documents/JVE Projects"
-    db_path = projects_dir .. "/Untitled Project.jvp"
-    logger.info("layout", "Project file: " .. tostring(db_path))
 
     -- Create projects directory if it doesn't exist
     os.execute('mkdir -p "' .. projects_dir .. '"')
+
+    -- Try last-opened project first
+    local last_project_file = home .. "/.jve/last_project_path"
+    local f = io.open(last_project_file, "r")
+    if f then
+        local last_path = f:read("*a"):match("^%s*(.-)%s*$")  -- trim
+        f:close()
+        if last_path and last_path ~= "" then
+            local check = io.open(last_path, "rb")
+            if check then
+                check:close()
+                db_path = last_path
+                logger.info("layout", "Reopening last project: " .. db_path)
+            else
+                logger.warn("layout", "Last project not found: " .. last_path)
+            end
+        end
+    end
+
+    -- Fallback to default project
+    if not db_path then
+        db_path = projects_dir .. "/Untitled Project.jvp"
+        is_default_project = true
+        logger.info("layout", "Using default project: " .. db_path)
+    end
 end
 
 local project_display_name = nil
@@ -103,22 +127,38 @@ if not db_success then
 else
     logger.debug("layout", "Database connection established")
 
-    -- Ensure default project exists
-    local project = Project.ensure_default()
-    assert(project, "FATAL: Failed to ensure default project")
+    local project, sequence
+
+    if is_default_project then
+        -- Fresh/default startup: ensure project + sequence + tracks exist
+        project = Project.ensure_default()
+        assert(project, "FATAL: Failed to ensure default project")
+        sequence = Sequence.ensure_default(project.id)
+        assert(sequence, "FATAL: Failed to ensure default sequence")
+        local tracks_ok = Track.ensure_defaults_for_sequence(sequence.id)
+        assert(tracks_ok, "FATAL: Failed to ensure default tracks")
+    else
+        -- Reopening last project: use existing project (don't create anything)
+        local pid = db_module.get_current_project_id()
+        project = Project.load(pid)
+        assert(project, "FATAL: Failed to load project " .. tostring(pid) .. " from " .. db_path)
+
+        -- Find best sequence: last-open or most recent
+        local last_seq_id = db_module.get_project_setting(pid, "last_open_sequence_id")
+        if last_seq_id and last_seq_id ~= "" then
+            sequence = Sequence.load(last_seq_id)
+        end
+        if not sequence then
+            sequence = Sequence.find_most_recent()
+        end
+        assert(sequence, "FATAL: No sequences in last project " .. db_path)
+    end
+
     active_project_id = project.id
     project_display_name = project.name
-    logger.debug("layout", "Using project: " .. project.name)
-
-    -- Ensure default sequence exists
-    local sequence = Sequence.ensure_default(active_project_id)
-    assert(sequence, "FATAL: Failed to ensure default sequence")
     active_sequence_id = sequence.id
+    logger.debug("layout", "Using project: " .. project.name)
     logger.debug("layout", "Using sequence: " .. sequence.name)
-
-    -- Ensure default tracks exist for the sequence
-    local tracks_ok = Track.ensure_defaults_for_sequence(active_sequence_id)
-    assert(tracks_ok, "FATAL: Failed to ensure default tracks")
 
     -- Initialize CommandManager
     command_manager.init(active_sequence_id, active_project_id)
@@ -129,6 +169,13 @@ else
     bug_reporter.init()
     logger.debug("layout", "Bug reporter initialized (background capture active)")
 end
+
+-- Update active_project_id when project changes (prevents stale ID writing to wrong DB)
+Signals.connect("project_changed", function(new_project_id)
+    logger.info("layout", "project_changed: updating active_project_id "
+        .. tostring(active_project_id) .. " → " .. tostring(new_project_id))
+    active_project_id = new_project_id
+end, 50)
 
 
 if not project_display_name then

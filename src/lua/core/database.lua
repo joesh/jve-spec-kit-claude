@@ -1429,30 +1429,17 @@ local function decode_settings_json(raw)
     return decoded
 end
 
-local function ensure_project_record(project_id)
-    if not project_id or project_id == "" or not db_connection then
-        return false
-    end
+local function assert_project_exists(project_id)
+    assert(project_id and project_id ~= "", "assert_project_exists: project_id is required")
+    assert(db_connection, "assert_project_exists: no database connection")
 
-    local stmt = db_connection:prepare("SELECT 1 FROM projects WHERE id = ?")
-    if stmt then
-        stmt:bind_value(1, project_id)
-        local exists = stmt:exec() and stmt:next()
-        stmt:finalize()
-        if exists then
-            return true
-        end
-    end
-
-    local Project = require("models.project")
-    local project = Project.create_with_id(project_id, "Untitled Project")
-    if not project then
-        error("FATAL: ensure_project_record: Failed to create project object")
-    end
-    if not project:save(db_connection) then
-        error("FATAL: ensure_project_record: Failed to save project " .. tostring(project_id))
-    end
-    return true
+    -- Verify this project_id is the SOLE project in the database.
+    -- If count != 1 or the id doesn't match, something wrote a phantom row.
+    local sole_id = M.get_current_project_id()  -- asserts exactly 1 project
+    assert(sole_id == project_id, string.format(
+        "assert_project_exists: project_id '%s' != sole project '%s' in '%s'. "
+        .. "Stale project_id after project switch?",
+        tostring(project_id), tostring(sole_id), tostring(db_path)))
 end
 
 function M.get_project_settings(project_id)
@@ -1501,7 +1488,7 @@ function M.set_project_setting(project_id, key, value)
         error("FATAL: set_project_setting: No database connection")
     end
 
-    ensure_project_record(project_id)
+    assert_project_exists(project_id)
     local settings = M.get_project_settings(project_id)
     if value == nil then
         settings[key] = nil

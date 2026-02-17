@@ -220,6 +220,17 @@ function M.register(executors, undoers, db, set_last_error)
             end
         end
 
+        -- Persist last-opened project path for startup
+        local home = os.getenv("HOME")
+        if home then
+            os.execute('mkdir -p "' .. home .. '/.jve"')
+            local f = io.open(home .. "/.jve/last_project_path", "w")
+            if f then
+                f:write(project_path)
+                f:close()
+            end
+        end
+
         logger.info("open_project", string.format("Opened project: %s (sequence: %s)", sequence.project_id, sequence.id))
 
         return { success = true, project_id = sequence.project_id, sequence_id = sequence.id }
