@@ -100,6 +100,55 @@ assert(not status3, "SURFACE_SET_FRAME with string should error")
 print("    ✓ SURFACE_SET_FRAME with invalid frame errors")
 
 -- ============================================================================
+-- Test: SW-decoded frame on GPU surface displays via BGRA pipeline
+-- Regression: previously JVE_ASSERT in GPUVideoSurface::setFrame called _exit
+-- ============================================================================
+
+print("  Testing: SW-decoded frame on GPU surface (BGRA pipeline)")
+if WIDGET.CREATE_GPU_VIDEO_SURFACE and EMP.ASSET_OPEN then
+    -- offline_frame.png is always sw-decoded (PNG → FFmpeg software path → no hw_buffer)
+    local script_dir = debug.getinfo(1, "S").source:match("@(.*/)")
+    local project_root = script_dir and script_dir:match("(.*/)[^/]*/") or "../"
+    local png_path = project_root .. "resources/offline_frame.png"
+
+    local asset = EMP.ASSET_OPEN(png_path)
+    if asset then
+        local info = EMP.ASSET_INFO(asset)
+        local reader = EMP.READER_CREATE(asset)
+        if reader and info and info.has_video then
+            local frame = EMP.READER_DECODE_FRAME(reader, 0,
+                info.fps_num or 1, info.fps_den or 1)
+            if frame then
+                local gpu_ok, gpu_surface = pcall(WIDGET.CREATE_GPU_VIDEO_SURFACE)
+                if gpu_ok and gpu_surface then
+                    -- Must succeed (BGRA pipeline handles sw-decoded frames)
+                    -- Previously this crashed the process via JVE_ASSERT
+                    local set_ok, set_err = pcall(EMP.SURFACE_SET_FRAME,
+                        gpu_surface, frame)
+                    assert(set_ok,
+                        "SW frame on GPU surface should succeed via BGRA pipeline: "
+                        .. tostring(set_err))
+                    print("    ✓ SW frame displayed on GPU surface (BGRA pipeline)")
+                else
+                    print("    ⚠ Skipped: GPU surface creation failed")
+                end
+                EMP.FRAME_RELEASE(frame)
+            else
+                print("    ⚠ Skipped: could not decode PNG frame")
+            end
+            if reader then EMP.READER_CLOSE(reader) end
+        else
+            print("    ⚠ Skipped: could not create reader for PNG")
+        end
+        EMP.ASSET_CLOSE(asset)
+    else
+        print("    ⚠ Skipped: offline_frame.png not found at " .. png_path)
+    end
+else
+    print("    ⚠ Skipped: GPU surface or ASSET_OPEN not available")
+end
+
+-- ============================================================================
 -- Find test video for full integration
 -- ============================================================================
 

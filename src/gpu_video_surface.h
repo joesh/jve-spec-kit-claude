@@ -12,8 +12,8 @@ namespace emp { class Frame; }
 class GPUVideoSurfaceImpl;
 
 // GPUVideoSurface - Hardware-accelerated video renderer (Metal on macOS)
-// Requires frames with native hw buffer. Asserts if frame has no hw buffer.
-// For CPU-decoded frames, use CPUVideoSurface instead.
+// Supports both hw-decoded frames (VideoToolbox YUV, zero-copy) and
+// sw-decoded frames (BGRA CPU data, uploaded to Metal texture).
 class GPUVideoSurface : public QWidget {
     Q_OBJECT
 
@@ -21,8 +21,8 @@ public:
     explicit GPUVideoSurface(QWidget* parent = nullptr);
     ~GPUVideoSurface() override;
 
-    // Set frame to display (MUST have native hw buffer)
-    // Asserts if frame->native_buffer() is null
+    // Set frame to display. Accepts both hw-decoded (native_buffer) and
+    // sw-decoded (CPU BGRA data) frames.
     void setFrame(const std::shared_ptr<emp::Frame>& frame);
 
     // Clear display
@@ -50,8 +50,12 @@ private:
     void initMetal();
     void cleanupMetal();
     void renderTexture();
-
     void rebuildVertexBuffer();
+
+    // HW path: zero-copy from VideoToolbox CVPixelBuffer (YUV bi-planar)
+    void setFrameHW(void* pixelBuffer, int w, int h);
+    // SW path: upload BGRA CPU data to Metal texture
+    void setFrameSW(const uint8_t* data, int w, int h, int stride);
 
     std::unique_ptr<GPUVideoSurfaceImpl> m_impl;
     int m_frameWidth = 0;

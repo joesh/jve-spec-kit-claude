@@ -26,6 +26,7 @@ local monitor_mark_bar = require("ui.monitor_mark_bar")
 local database = require("core.database")
 local project_gen = require("core.project_generation")
 
+local path_utils = require("core.path_utils")
 local Signals = require("core.signals")
 
 local SequenceMonitor = {}
@@ -70,6 +71,10 @@ function SequenceMonitor.new(config)
     -- Create media_cache context for this view
     media_cache.create_context(self.media_context_id)
 
+    -- Offline frame resource (cached after first use)
+    self._offline_frame_path = path_utils.resolve_repo_path("resources/offline_frame.png")
+    self._offline_context_id = self.media_context_id .. "_offline"
+
     -- Create PlaybackEngine
     self.engine = PlaybackEngine.new({
         media_context_id = self.media_context_id,
@@ -78,6 +83,9 @@ function SequenceMonitor.new(config)
         end,
         on_show_gap = function()
             self:_on_show_gap()
+        end,
+        on_show_offline = function(meta)
+            self:_on_show_offline(meta)
         end,
         on_set_rotation = function(deg)
             self:_on_set_rotation(deg)
@@ -449,10 +457,63 @@ end
 
 function SequenceMonitor:_on_show_frame(frame_handle, metadata)
     qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, frame_handle)
+    if self._offline_label then
+        qt_constants.DISPLAY.SET_VISIBLE(self._offline_label, false)
+    end
 end
 
 function SequenceMonitor:_on_show_gap()
     qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, nil)
+    if self._offline_label then
+        qt_constants.DISPLAY.SET_VISIBLE(self._offline_label, false)
+    end
+end
+
+--- Show offline frame resource + overlay label with error info.
+-- Loads resources/offline_frame.png via media_cache (cached after first load).
+-- Displays overlay text with filename + error reason.
+function SequenceMonitor:_on_show_offline(metadata)
+    -- Try to load and display the offline frame PNG
+    local offline_info = media_cache.activate(self._offline_frame_path, self._offline_context_id)
+    if offline_info then
+        local frame = media_cache.get_video_frame(0, self._offline_context_id)
+        if frame then
+            qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, frame)
+        else
+            qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, nil)
+        end
+    else
+        -- Offline frame resource itself missing — just show black
+        qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, nil)
+    end
+
+    -- Show overlay label (create lazily)
+    if not self._offline_label and qt_constants.WIDGET.CREATE_LABEL then
+        self._offline_label = qt_constants.WIDGET.CREATE_LABEL("")
+        qt_constants.PROPERTIES.SET_STYLE(self._offline_label, [[
+            QLabel {
+                color: #ff6666;
+                background: rgba(0, 0, 0, 180);
+                padding: 8px 12px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+        ]])
+        -- Add to video surface's parent layout
+        -- The label is positioned as an overlay; exact placement depends on layout
+    end
+
+    if self._offline_label then
+        local filename = metadata.media_path and metadata.media_path:match("[^/]+$") or "?"
+        local msg = string.format("MEDIA OFFLINE\n%s\n%s",
+            filename, metadata.error_msg or "")
+        qt_constants.PROPERTIES.SET_TEXT(self._offline_label, msg)
+        qt_constants.DISPLAY.SET_VISIBLE(self._offline_label, true)
+    end
+
+    logger.warn("sequence_monitor", string.format(
+        "%s: offline clip %s (%s)",
+        self.view_id, metadata.clip_id or "?", metadata.media_path or "?"))
 end
 
 function SequenceMonitor:_on_set_rotation(degrees)

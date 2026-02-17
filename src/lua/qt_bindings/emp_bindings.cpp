@@ -18,6 +18,7 @@
 #include <unordered_map>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 
 // Forward declaration from binding_macros.h
 extern const char* WIDGET_METATABLE;
@@ -574,11 +575,15 @@ static int lua_emp_surface_set_frame(lua_State* L) {
     }
     auto frame = it->second;
 
-    // Dispatch to appropriate surface
-    if (gpu_surface) {
-        gpu_surface->setFrame(frame);  // Will assert if frame has no hw buffer
-    } else {
-        cpu_surface->setFrame(frame);  // Calls frame->data() for CPU pixels
+    // Dispatch to appropriate surface, catching any C++ exceptions
+    try {
+        if (gpu_surface) {
+            gpu_surface->setFrame(frame);
+        } else {
+            cpu_surface->setFrame(frame);
+        }
+    } catch (const std::exception& e) {
+        return luaL_error(L, "EMP.SURFACE_SET_FRAME: C++ exception: %s", e.what());
     }
 
     return 0;

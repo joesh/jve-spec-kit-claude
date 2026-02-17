@@ -17,20 +17,30 @@ struct Vertex {
     float texCoord[2];
 };
 
+// Which render path the current frame uses
+enum class FrameMode { None, YUV, BGRA };
+
 class GPUVideoSurfaceImpl {
 public:
     id<MTLDevice> device = nil;
     id<MTLCommandQueue> commandQueue = nil;
-    id<MTLRenderPipelineState> pipelineState = nil;
     id<MTLBuffer> vertexBuffer = nil;
     CVMetalTextureCacheRef textureCache = nullptr;
     CAMetalLayer* metalLayer = nil;
 
-    // Bi-planar textures (Y plane + UV plane) - supports NV12 (8-bit) and P010 (10-bit)
+    // YUV pipeline (hw-decoded VideoToolbox frames)
+    id<MTLRenderPipelineState> yuvPipelineState = nil;
     CVMetalTextureRef textureY = nullptr;
     CVMetalTextureRef textureUV = nullptr;
     id<MTLTexture> metalTextureY = nil;
     id<MTLTexture> metalTextureUV = nil;
+
+    // BGRA pipeline (sw-decoded CPU frames)
+    id<MTLRenderPipelineState> bgraPipelineState = nil;
+    id<MTLTexture> bgraTexture = nil;
+
+    // Which pipeline is active for the current frame
+    FrameMode frameMode = FrameMode::None;
 
     ~GPUVideoSurfaceImpl() { cleanup(); }
 
@@ -41,7 +51,8 @@ public:
             textureCache = nullptr;
         }
         vertexBuffer = nil;
-        pipelineState = nil;
+        yuvPipelineState = nil;
+        bgraPipelineState = nil;
         commandQueue = nil;
         device = nil;
         metalLayer = nil;
@@ -52,6 +63,8 @@ public:
         if (textureUV) { CFRelease(textureUV); textureUV = nullptr; }
         metalTextureY = nil;
         metalTextureUV = nil;
+        bgraTexture = nil;
+        frameMode = FrameMode::None;
     }
 };
 
@@ -98,6 +111,14 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
     float b = y + 1.8556 * u;
 
     return float4(saturate(float3(r, g, b)), 1.0);
+}
+
+// BGRA passthrough for sw-decoded frames (PNG, JPEG, etc.)
+// MTLPixelFormatBGRA8Unorm swizzles on read, so sampling returns RGBA directly.
+fragment float4 bgraFragmentShader(VertexOut in [[stage_in]],
+                                   texture2d<float> tex [[texture(0)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear);
+    return tex.sample(s, in.texCoord);
 }
 )";
 
@@ -150,7 +171,8 @@ void GPUVideoSurface::initMetal() {
         JVE_ASSERT(library, "Shader compile failed");
 
         id<MTLFunction> vertexFunc = [library newFunctionWithName:@"vertexShader"];
-        id<MTLFunction> fragmentFunc = [library newFunctionWithName:@"fragmentShader"];
+        id<MTLFunction> yuvFragmentFunc = [library newFunctionWithName:@"fragmentShader"];
+        id<MTLFunction> bgraFragmentFunc = [library newFunctionWithName:@"bgraFragmentShader"];
 
         MTLVertexDescriptor* vertexDesc = [MTLVertexDescriptor new];
         vertexDesc.attributes[0].format = MTLVertexFormatFloat2;
@@ -161,14 +183,25 @@ void GPUVideoSurface::initMetal() {
         vertexDesc.attributes[1].bufferIndex = 0;
         vertexDesc.layouts[0].stride = sizeof(Vertex);
 
-        MTLRenderPipelineDescriptor* pipelineDesc = [MTLRenderPipelineDescriptor new];
-        pipelineDesc.vertexFunction = vertexFunc;
-        pipelineDesc.fragmentFunction = fragmentFunc;
-        pipelineDesc.vertexDescriptor = vertexDesc;
-        pipelineDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+        // YUV pipeline (hw-decoded VideoToolbox frames)
+        MTLRenderPipelineDescriptor* yuvDesc = [MTLRenderPipelineDescriptor new];
+        yuvDesc.vertexFunction = vertexFunc;
+        yuvDesc.fragmentFunction = yuvFragmentFunc;
+        yuvDesc.vertexDescriptor = vertexDesc;
+        yuvDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
 
-        m_impl->pipelineState = [m_impl->device newRenderPipelineStateWithDescriptor:pipelineDesc error:&error];
-        JVE_ASSERT(m_impl->pipelineState, "Pipeline creation failed");
+        m_impl->yuvPipelineState = [m_impl->device newRenderPipelineStateWithDescriptor:yuvDesc error:&error];
+        JVE_ASSERT(m_impl->yuvPipelineState, "YUV pipeline creation failed");
+
+        // BGRA pipeline (sw-decoded CPU frames)
+        MTLRenderPipelineDescriptor* bgraDesc = [MTLRenderPipelineDescriptor new];
+        bgraDesc.vertexFunction = vertexFunc;
+        bgraDesc.fragmentFunction = bgraFragmentFunc;
+        bgraDesc.vertexDescriptor = vertexDesc;
+        bgraDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+
+        m_impl->bgraPipelineState = [m_impl->device newRenderPipelineStateWithDescriptor:bgraDesc error:&error];
+        JVE_ASSERT(m_impl->bgraPipelineState, "BGRA pipeline creation failed");
 
         Vertex vertices[] = {
             {{-1, -1}, {0, 1}},
@@ -198,7 +231,7 @@ void GPUVideoSurface::setRotation(int degrees) {
     m_rotation = degrees;
     if (m_initialized) {
         rebuildVertexBuffer();
-        if (m_impl->metalTextureY) renderTexture();
+        if (m_impl->frameMode != FrameMode::None) renderTexture();
     }
 }
 
@@ -244,19 +277,26 @@ void GPUVideoSurface::setFrame(const std::shared_ptr<emp::Frame>& frame) {
 
 #ifdef EMP_HAS_VIDEOTOOLBOX
     void* hw_buffer = frame->native_buffer();
-    JVE_ASSERT(hw_buffer, "Frame has no hw_buffer - use CPUVideoSurface for sw-decoded frames");
+    if (hw_buffer) {
+        setFrameHW(hw_buffer, frame->width(), frame->height());
+    } else {
+        setFrameSW(frame->data(), frame->width(), frame->height(), frame->stride_bytes());
+    }
+#else
+    setFrameSW(frame->data(), frame->width(), frame->height(), frame->stride_bytes());
+#endif
+}
 
-    m_frameWidth = frame->width();
-    m_frameHeight = frame->height();
+#ifdef EMP_HAS_VIDEOTOOLBOX
+void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
+    CVPixelBufferRef pixelBuffer = (CVPixelBufferRef)hw_buffer;
+    m_frameWidth = w;
+    m_frameHeight = h;
 
     @autoreleasepool {
-        CVPixelBufferRef pixelBuffer = (CVPixelBufferRef)hw_buffer;
-
-        // Verify bi-planar format
         size_t planeCount = CVPixelBufferGetPlaneCount(pixelBuffer);
         JVE_ASSERT(planeCount == 2, "Expected bi-planar format from VideoToolbox");
 
-        // Detect pixel format to choose correct Metal texture formats
         OSType pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
 
         MTLPixelFormat yFormat = MTLPixelFormatR8Unorm;
@@ -264,37 +304,29 @@ void GPUVideoSurface::setFrame(const std::shared_ptr<emp::Frame>& frame) {
         switch (pixelFormat) {
             case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
             case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
-                // NV12 (8-bit): R8 for Y, RG8 for UV
                 yFormat = MTLPixelFormatR8Unorm;
                 uvFormat = MTLPixelFormatRG8Unorm;
                 break;
 
             case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
             case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
-                // P010 (10-bit 4:2:0): R16 for Y, RG16 for UV
-                // Note: P010 stores 10-bit data in upper bits of 16-bit values
-                // Metal's R16Unorm normalizes to [0,1] which works correctly
                 yFormat = MTLPixelFormatR16Unorm;
                 uvFormat = MTLPixelFormatRG16Unorm;
                 break;
 
             case kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange:
             case kCVPixelFormatType_422YpCbCr10BiPlanarFullRange:
-                // ProRes 10-bit 4:2:2: R16 for Y, RG16 for UV
-                // UV plane is half width but FULL height (unlike 4:2:0)
                 yFormat = MTLPixelFormatR16Unorm;
                 uvFormat = MTLPixelFormatRG16Unorm;
                 break;
 
             case kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange:
             case kCVPixelFormatType_422YpCbCr8BiPlanarFullRange:
-                // 8-bit 4:2:2: R8 for Y, RG8 for UV
                 yFormat = MTLPixelFormatR8Unorm;
                 uvFormat = MTLPixelFormatRG8Unorm;
                 break;
 
             default: {
-                // Debug: print unknown format
                 char fmt_str[5] = {0};
                 fmt_str[0] = (pixelFormat >> 24) & 0xFF;
                 fmt_str[1] = (pixelFormat >> 16) & 0xFF;
@@ -308,7 +340,6 @@ void GPUVideoSurface::setFrame(const std::shared_ptr<emp::Frame>& frame) {
 
         m_impl->releaseTextures();
 
-        // Y plane (full resolution)
         size_t yWidth = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0);
         size_t yHeight = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0);
 
@@ -317,7 +348,6 @@ void GPUVideoSurface::setFrame(const std::shared_ptr<emp::Frame>& frame) {
             yFormat, yWidth, yHeight, 0, &m_impl->textureY);
         JVE_ASSERT(ret == kCVReturnSuccess && m_impl->textureY, "Failed to create Y texture");
 
-        // UV plane (half resolution for 420)
         size_t uvWidth = CVPixelBufferGetWidthOfPlane(pixelBuffer, 1);
         size_t uvHeight = CVPixelBufferGetHeightOfPlane(pixelBuffer, 1);
 
@@ -328,12 +358,41 @@ void GPUVideoSurface::setFrame(const std::shared_ptr<emp::Frame>& frame) {
 
         m_impl->metalTextureY = CVMetalTextureGetTexture(m_impl->textureY);
         m_impl->metalTextureUV = CVMetalTextureGetTexture(m_impl->textureUV);
+        m_impl->frameMode = FrameMode::YUV;
 
         renderTexture();
     }
-#else
-    JVE_FAIL("EMP_HAS_VIDEOTOOLBOX not defined");
+}
 #endif
+
+void GPUVideoSurface::setFrameSW(const uint8_t* data, int w, int h, int stride) {
+    JVE_ASSERT(data, "GPUVideoSurface::setFrameSW: null data pointer");
+    JVE_ASSERT(w > 0 && h > 0, "GPUVideoSurface::setFrameSW: invalid dimensions");
+
+    m_frameWidth = w;
+    m_frameHeight = h;
+
+    @autoreleasepool {
+        m_impl->releaseTextures();
+
+        // Create (or reuse) a BGRA Metal texture and upload CPU data
+        MTLTextureDescriptor* desc = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+            width:w height:h mipmapped:NO];
+        desc.usage = MTLTextureUsageShaderRead;
+
+        m_impl->bgraTexture = [m_impl->device newTextureWithDescriptor:desc];
+        JVE_ASSERT(m_impl->bgraTexture, "GPUVideoSurface::setFrameSW: failed to create BGRA texture");
+
+        [m_impl->bgraTexture replaceRegion:MTLRegionMake2D(0, 0, w, h)
+            mipmapLevel:0
+            withBytes:data
+            bytesPerRow:stride];
+
+        m_impl->frameMode = FrameMode::BGRA;
+
+        renderTexture();
+    }
 }
 
 void GPUVideoSurface::clearFrame() {
@@ -364,7 +423,7 @@ void GPUVideoSurface::renderTexture() {
         id<MTLCommandBuffer> cmdBuffer = [m_impl->commandQueue commandBuffer];
         id<MTLRenderCommandEncoder> encoder = [cmdBuffer renderCommandEncoderWithDescriptor:passDesc];
 
-        if (m_impl->metalTextureY && m_impl->metalTextureUV && m_frameWidth > 0 && m_frameHeight > 0) {
+        if (m_impl->frameMode != FrameMode::None && m_frameWidth > 0 && m_frameHeight > 0) {
             // Letterbox viewport - swap dimensions for 90°/270° rotation
             float widget_w = width() * scale;
             float widget_h = height() * scale;
@@ -383,12 +442,19 @@ void GPUVideoSurface::renderTexture() {
                 viewport = CGRectMake((widget_w - w) / 2, 0, w, widget_h);
             }
 
-            [encoder setRenderPipelineState:m_impl->pipelineState];
             [encoder setViewport:(MTLViewport){viewport.origin.x, viewport.origin.y,
                                                viewport.size.width, viewport.size.height, 0.0, 1.0}];
             [encoder setVertexBuffer:m_impl->vertexBuffer offset:0 atIndex:0];
-            [encoder setFragmentTexture:m_impl->metalTextureY atIndex:0];
-            [encoder setFragmentTexture:m_impl->metalTextureUV atIndex:1];
+
+            if (m_impl->frameMode == FrameMode::YUV) {
+                [encoder setRenderPipelineState:m_impl->yuvPipelineState];
+                [encoder setFragmentTexture:m_impl->metalTextureY atIndex:0];
+                [encoder setFragmentTexture:m_impl->metalTextureUV atIndex:1];
+            } else {
+                [encoder setRenderPipelineState:m_impl->bgraPipelineState];
+                [encoder setFragmentTexture:m_impl->bgraTexture atIndex:0];
+            }
+
             [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         }
 
@@ -404,7 +470,7 @@ void GPUVideoSurface::resizeEvent(QResizeEvent* event) {
         CGFloat scale = devicePixelRatioF();
         m_impl->metalLayer.drawableSize = CGSizeMake(width() * scale, height() * scale);
     }
-    if (m_impl->metalTextureY) renderTexture();
+    if (m_impl->frameMode != FrameMode::None) renderTexture();
 }
 
 bool GPUVideoSurface::event(QEvent* event) {
