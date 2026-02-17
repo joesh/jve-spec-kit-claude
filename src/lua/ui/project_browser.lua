@@ -604,6 +604,7 @@ local function populate_tree()
 
     local settings = db.get_project_settings(M.project_id)
     M.media_bin_map = tag_service.list_master_clip_assignments(M.project_id)
+    local seq_bin_map = tag_service.list_sequence_assignments(M.project_id)
 
     local bins = tag_service.list(project_id)
     M.bins = bins
@@ -697,45 +698,52 @@ local function populate_tree()
         return tree_id
     end
 
-    -- Root sequences
-	    for _, sequence in ipairs(sequences) do
-	        if not sequence.kind or sequence.kind == "timeline" then
-	        local duration_str = format_duration(sequence.duration, sequence.frame_rate)
-	        local resolution_str = (sequence.width and sequence.height and sequence.width > 0)
-	            and string.format("%dx%d", sequence.width, sequence.height)
-	            or ""
-        
-        local fps_val = get_fps_float(sequence.frame_rate)
-        local fps_str = (fps_val > 0)
-            and string.format("%.2f", fps_val)
+    local function add_sequence_item(parent_tree_id, sequence)
+        local duration_str = format_duration(sequence.duration, sequence.frame_rate)
+        local resolution_str = (sequence.width and sequence.height and sequence.width > 0)
+            and string.format("%dx%d", sequence.width, sequence.height)
             or ""
+        local fps_val = get_fps_float(sequence.frame_rate)
+        local fps_str = (fps_val > 0) and string.format("%.2f", fps_val) or ""
 
-        local tree_id = qt_constants.CONTROL.ADD_TREE_ITEM(M.tree, {
-            sequence.name,
-            duration_str,
-            resolution_str,
-            fps_str,
-            "Timeline",
-            ""
-        })
+        local columns = { sequence.name, duration_str, resolution_str, fps_str, "Timeline", "" }
+        local tree_id
+        if parent_tree_id then
+            tree_id = qt_constants.CONTROL.ADD_TREE_CHILD_ITEM(M.tree, parent_tree_id, columns)
+        else
+            tree_id = qt_constants.CONTROL.ADD_TREE_ITEM(M.tree, columns)
+        end
 
-	        local sequence_info = {
-	            type = "timeline",
-	            id = sequence.id,
-	            project_id = sequence.project_id or project_id,
-	            name = sequence.name,
-	            frame_rate = sequence.frame_rate,
-	            width = sequence.width,
-	            height = sequence.height,
-	            duration = sequence.duration,
-	            tree_id = tree_id
-	        }
-
+        local sequence_info = {
+            type = "timeline",
+            id = sequence.id,
+            project_id = sequence.project_id or project_id,
+            name = sequence.name,
+            frame_rate = sequence.frame_rate,
+            width = sequence.width,
+            height = sequence.height,
+            duration = sequence.duration,
+            tree_id = tree_id
+        }
         store_tree_item(M.tree, tree_id, sequence_info)
         M.sequence_map[sequence.id] = sequence_info
         if qt_constants.CONTROL.SET_TREE_ITEM_ICON then
             qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, "timeline")
         end
+    end
+
+    -- Collect timeline sequences for bin-aware placement
+    local timeline_sequences = {}
+    for _, sequence in ipairs(sequences) do
+        if not sequence.kind or sequence.kind == "timeline" then
+            table.insert(timeline_sequences, sequence)
+        end
+    end
+
+    -- Root sequences (those NOT assigned to a bin)
+    for _, sequence in ipairs(timeline_sequences) do
+        if not seq_bin_map[sequence.id] then
+            add_sequence_item(nil, sequence)
         end
     end
 
@@ -750,6 +758,18 @@ local function populate_tree()
     for _, bin in ipairs(bins) do
         if bin.parent_id and bin_tree_map[bin.parent_id] then
             add_bin(bin, bin_tree_map[bin.parent_id])
+        end
+    end
+
+    -- Sequences inside bins
+    for _, sequence in ipairs(timeline_sequences) do
+        local bin_ids = seq_bin_map[sequence.id]
+        if bin_ids then
+            for _, bid in ipairs(bin_ids) do
+                if bin_tree_map[bid] then
+                    add_sequence_item(bin_tree_map[bid], sequence)
+                end
+            end
         end
     end
 
@@ -822,36 +842,23 @@ local function populate_tree()
         clip.tree_id = tree_id
     end
 
-    -- Root master clips
+    -- Master clips: show in each assigned bin (many-to-many)
     for _, clip in ipairs(master_clips) do
-        local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
-        local assigned_bin = nil
-        if M.media_bin_map then
-            assigned_bin = M.media_bin_map[clip.clip_id]
-        end
-        clip.bin_id = assigned_bin
-        if not clip.bin_id then
-            local bin_tag = get_bin_tag(media)
-            if bin_tag then
-                local derived_bin_id = bin_path_lookup[bin_tag]
-                clip.bin_id = derived_bin_id
-            end
-        end
-        if clip.bin_id then
-            local parent_tree = bin_tree_map[clip.bin_id]
+        local bin_ids = M.media_bin_map and M.media_bin_map[clip.clip_id] or {}
+        local placed = false
+        for _, bid in ipairs(bin_ids) do
+            local parent_tree = bin_tree_map[bid]
             if parent_tree then
+                clip.bin_id = bid
                 add_master_clip_item(parent_tree, clip)
-            else
-                clip.bin_id = nil
-                add_master_clip_item(nil, clip)
+                placed = true
             end
-        else
+        end
+        if not placed then
+            clip.bin_id = nil
             add_master_clip_item(nil, clip)
         end
     end
-
-    -- Master clips inside bins
-    -- (handled above via assigned bin IDs)
 
     local function restore_previous_selection_from_cache(previous)
         if not previous or #previous == 0 then
@@ -1409,10 +1416,14 @@ handle_tree_drop = function(event)
         local project_id = M.project_id or db.get_current_project_id()
 
         -- Collect clip_ids that actually need reassignment
+        -- Group by source_bin_id since MoveToBin needs explicit source
         local changed_ids = {}
+        local source_bin_id = nil
         for _, clip_info in ipairs(dragged_clips) do
             if clip_info.bin_id ~= target_bin_id then
                 table.insert(changed_ids, clip_info.clip_id)
+                -- All dragged clips come from the same bin (project browser context)
+                source_bin_id = clip_info.bin_id
             end
         end
 
@@ -1424,6 +1435,7 @@ handle_tree_drop = function(event)
         local cmd = Command.create("MoveToBin", project_id)
         cmd:set_parameter("project_id", project_id)
         cmd:set_parameter("entity_ids", changed_ids)
+        cmd:set_parameter("source_bin_id", source_bin_id)
         cmd:set_parameter("target_bin_id", target_bin_id)
         local result = command_manager.execute(cmd)
 
