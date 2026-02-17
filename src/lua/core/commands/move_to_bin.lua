@@ -13,6 +13,7 @@ local SPEC = {
     args = {
         entity_ids = { required = true },  -- array of bin or clip IDs
         target_bin_id = { kind = "string" },  -- nil = move to root (bins) or unassign (clips)
+        source_bin_id = { kind = "string" },  -- explicit source bin (for many-to-many clip moves)
         project_id = { required = true, kind = "string" },
     },
     persisted = {
@@ -67,6 +68,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local project_id = args.project_id
         local entity_ids = args.entity_ids
         local target_bin_id = args.target_bin_id
+        local source_bin_id = args.source_bin_id
 
         if type(entity_ids) ~= "table" or #entity_ids == 0 then
             return true  -- no-op for empty list
@@ -85,32 +87,35 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
+        -- Validate source exists (if specified)
+        if source_bin_id and not bins_lookup[source_bin_id] then
+            set_last_error("MoveToBin: source bin does not exist: " .. tostring(source_bin_id))
+            return false
+        end
+
+        -- TODO: validate all command parameters upfront (entity_ids exist, no duplicates, etc.)
+
         -- Separate bins from clips and capture previous state
         local bin_moves = {}  -- {bin_id, previous_parent_id}
-        local clip_ids = {}
-        local current_clip_assignments = tag_service.list_master_clip_assignments(project_id)
         local clip_moves = {}  -- clip_id -> previous_bin_id
 
         for _, entity_id in ipairs(entity_ids) do
             if is_bin_id(project_id, entity_id, bins_lookup) then
                 local bin = bins_lookup[entity_id]
                 if bin.parent_id ~= target_bin_id then
-                    -- Validate no cycle
                     if would_create_cycle(bins, entity_id, target_bin_id) then
                         set_last_error("MoveToBin: cannot move bin into its own descendant")
                         return false
                     end
                     table.insert(bin_moves, {
                         bin_id = entity_id,
-                        previous_parent_id = bin.parent_id,  -- may be nil
+                        previous_parent_id = bin.parent_id,
                     })
                 end
             else
-                -- Assume it's a clip
-                local current_bin = current_clip_assignments[entity_id]
-                if current_bin ~= target_bin_id then
-                    table.insert(clip_ids, entity_id)
-                    clip_moves[entity_id] = current_bin or "__unassigned__"
+                -- source_bin_id: which bin the clip is being dragged FROM (nil = unassigned)
+                if source_bin_id ~= target_bin_id then
+                    clip_moves[entity_id] = source_bin_id or "__unassigned__"
                 end
             end
         end
@@ -131,12 +136,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        -- Execute clip moves
-        if #clip_ids > 0 then
-            local ok, err = tag_service.assign_master_clips(project_id, clip_ids, target_bin_id)
-            if not ok then
-                set_last_error("MoveToBin: failed to assign clips: " .. tostring(err))
-                return false
+        -- Execute clip moves: remove from old bin + add to new (preserves other assignments)
+        for clip_id, prev_bin_key in pairs(clip_moves) do
+            if prev_bin_key ~= "__unassigned__" then
+                tag_service.remove_from_bin(project_id, {clip_id}, prev_bin_key, "master_clip")
+            end
+            if target_bin_id then
+                tag_service.add_to_bin(project_id, {clip_id}, target_bin_id, "master_clip")
             end
         end
 
@@ -171,22 +177,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        -- Undo clip moves - group by previous bin for efficiency
-        if next(clip_moves) then
-            local by_bin = {}  -- bin_id -> {clip_ids}
-            for clip_id, prev_bin in pairs(clip_moves) do
-                local key = prev_bin  -- includes "__unassigned__" sentinel
-                by_bin[key] = by_bin[key] or {}
-                table.insert(by_bin[key], clip_id)
+        -- Undo clip moves: remove from target bin + add back to previous
+        local target_bin_id = args.target_bin_id
+        for clip_id, prev_bin_key in pairs(clip_moves) do
+            if target_bin_id then
+                tag_service.remove_from_bin(project_id, {clip_id}, target_bin_id, "master_clip")
             end
-
-            for bin_key, clip_ids in pairs(by_bin) do
-                local actual_bin_id = (bin_key ~= "__unassigned__") and bin_key or nil
-                local ok, err = tag_service.assign_master_clips(project_id, clip_ids, actual_bin_id)
-                if not ok then
-                    set_last_error("UndoMoveToBin: failed to restore clip assignments: " .. tostring(err))
-                    return false
-                end
+            if prev_bin_key ~= "__unassigned__" then
+                tag_service.add_to_bin(project_id, {clip_id}, prev_bin_key, "master_clip")
             end
         end
 

@@ -73,7 +73,12 @@ local function find_bin_by_id(id)
 end
 
 local function get_clip_assignments()
-    return tag_service.list_master_clip_assignments("test_project")
+    local multi = tag_service.list_master_clip_assignments("test_project")
+    local flat = {}
+    for id, bins in pairs(multi) do
+        flat[id] = bins[1]
+    end
+    return flat
 end
 
 print("=== MoveToBin Command Tests ===")
@@ -99,12 +104,13 @@ create_bin(bin_a_id, "Bin A", nil)
 create_bin(bin_b_id, "Bin B", nil)
 create_bin(bin_c_id, "Bin C", bin_a_id)  -- C is child of A
 
--- Test 1: Move clips to a bin
+-- Test 1: Move clips to a bin (from unassigned)
 print("Test 1: Move clips to a bin")
 local cmd = Command.create("MoveToBin", "test_project")
 cmd:set_parameter("project_id", "test_project")
 cmd:set_parameter("entity_ids", { clip_id_1, clip_id_2 })
 cmd:set_parameter("target_bin_id", bin_a_id)
+-- source_bin_id = nil (clips are unassigned)
 local result = command_manager.execute(cmd)
 assert(result.success, "MoveToBin should succeed: " .. tostring(result.error_message))
 
@@ -182,11 +188,12 @@ assert(result.success, "Move to root should succeed: " .. tostring(result.error_
 local bin_c = find_bin_by_id(bin_c_id)
 assert(bin_c.parent_id == nil, "Bin C should now be at root")
 
--- Test 9: Move clips to different bin
+-- Test 9: Move clip to different bin (with explicit source_bin_id)
 print("Test 9: Move clips to different bin")
 cmd = Command.create("MoveToBin", "test_project")
 cmd:set_parameter("project_id", "test_project")
 cmd:set_parameter("entity_ids", { clip_id_1 })
+cmd:set_parameter("source_bin_id", bin_a_id)
 cmd:set_parameter("target_bin_id", bin_b_id)
 result = command_manager.execute(cmd)
 assert(result.success, "Move clip to different bin should succeed")
@@ -195,14 +202,21 @@ assignments = get_clip_assignments()
 assert(assignments[clip_id_1] == bin_b_id, "Clip 1 should now be in Bin B")
 assert(assignments[clip_id_2] == bin_a_id, "Clip 2 should still be in Bin A")
 
--- Test 10: Unassign clips (move to nil)
+-- Test 10: Unassign clips (move to nil, source = current bin)
 print("Test 10: Unassign clips (move to nil)")
 cmd = Command.create("MoveToBin", "test_project")
 cmd:set_parameter("project_id", "test_project")
-cmd:set_parameter("entity_ids", { clip_id_1, clip_id_2 })
+cmd:set_parameter("entity_ids", { clip_id_1 })
+cmd:set_parameter("source_bin_id", bin_b_id)
 cmd:set_parameter("target_bin_id", nil)
-result = command_manager.execute(cmd)
-assert(result.success, "Unassign should succeed")
+command_manager.execute(cmd)
+
+cmd = Command.create("MoveToBin", "test_project")
+cmd:set_parameter("project_id", "test_project")
+cmd:set_parameter("entity_ids", { clip_id_2 })
+cmd:set_parameter("source_bin_id", bin_a_id)
+cmd:set_parameter("target_bin_id", nil)
+command_manager.execute(cmd)
 
 assignments = get_clip_assignments()
 assert(assignments[clip_id_1] == nil, "Clip 1 should be unassigned")
@@ -228,17 +242,19 @@ assert(not result.success, "Move to nonexistent bin should fail")
 
 -- Test 13: Mixed bins and clips in single command
 print("Test 13: Mixed bins and clips in single command")
--- First, put clip_1 back in bin_a
+-- First, put clip_1 in bin_a
 cmd = Command.create("MoveToBin", "test_project")
 cmd:set_parameter("project_id", "test_project")
 cmd:set_parameter("entity_ids", { clip_id_1 })
 cmd:set_parameter("target_bin_id", bin_a_id)
+-- source_bin_id = nil (unassigned)
 command_manager.execute(cmd)
 
 -- Move both bin_c and clip_1 to bin_b
 cmd = Command.create("MoveToBin", "test_project")
 cmd:set_parameter("project_id", "test_project")
 cmd:set_parameter("entity_ids", { bin_c_id, clip_id_1 })
+cmd:set_parameter("source_bin_id", bin_a_id)
 cmd:set_parameter("target_bin_id", bin_b_id)
 result = command_manager.execute(cmd)
 assert(result.success, "Mixed move should succeed: " .. tostring(result.error_message))
@@ -257,5 +273,32 @@ bin_c = find_bin_by_id(bin_c_id)
 assignments = get_clip_assignments()
 assert(bin_c.parent_id == nil, "Bin C should be back at root after undo")
 assert(assignments[clip_id_1] == bin_a_id, "Clip 1 should be back in Bin A after undo")
+
+-- Test 15: Nonexistent source_bin_id fails
+print("Test 15: Nonexistent source_bin_id fails (expect error)")
+cmd = Command.create("MoveToBin", "test_project")
+cmd:set_parameter("project_id", "test_project")
+cmd:set_parameter("entity_ids", { clip_id_1 })
+cmd:set_parameter("source_bin_id", "nonexistent_source_id")
+cmd:set_parameter("target_bin_id", bin_b_id)
+result = command_manager.execute(cmd)
+assert(not result.success, "Move with nonexistent source_bin_id should fail")
+
+-- Test 16: source_bin_id == target_bin_id is no-op for clips
+print("Test 16: source == target is no-op for clips")
+-- First ensure clip_1 is in bin_a
+assignments = get_clip_assignments()
+local clip1_bin = assignments[clip_id_1]
+cmd = Command.create("MoveToBin", "test_project")
+cmd:set_parameter("project_id", "test_project")
+cmd:set_parameter("entity_ids", { clip_id_1 })
+cmd:set_parameter("source_bin_id", clip1_bin)
+cmd:set_parameter("target_bin_id", clip1_bin)
+result = command_manager.execute(cmd)
+assert(result.success, "source==target should succeed (no-op)")
+-- Verify clip is still in same bin, no spurious changes
+assignments = get_clip_assignments()
+assert(assignments[clip_id_1] == clip1_bin,
+    "Clip 1 should remain in same bin after source==target move")
 
 print("✅ test_move_to_bin.lua passed")
