@@ -295,33 +295,55 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
 
     @autoreleasepool {
         size_t planeCount = CVPixelBufferGetPlaneCount(pixelBuffer);
-        JVE_ASSERT(planeCount == 2, "Expected bi-planar format from VideoToolbox");
+        if (planeCount != 2) {
+            qWarning() << "GPUVideoSurface::setFrameHW: expected 2 planes, got"
+                       << planeCount << "— skipping frame";
+            return;
+        }
 
         OSType pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
 
         MTLPixelFormat yFormat = MTLPixelFormatR8Unorm;
         MTLPixelFormat uvFormat = MTLPixelFormatRG8Unorm;
         switch (pixelFormat) {
+            // 4:2:0 8-bit
             case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
             case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
                 yFormat = MTLPixelFormatR8Unorm;
                 uvFormat = MTLPixelFormatRG8Unorm;
                 break;
 
+            // 4:2:0 10-bit
             case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
             case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
                 yFormat = MTLPixelFormatR16Unorm;
                 uvFormat = MTLPixelFormatRG16Unorm;
                 break;
 
+            // 4:2:2 10-bit
             case kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange:
             case kCVPixelFormatType_422YpCbCr10BiPlanarFullRange:
                 yFormat = MTLPixelFormatR16Unorm;
                 uvFormat = MTLPixelFormatRG16Unorm;
                 break;
 
+            // 4:2:2 8-bit
             case kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange:
             case kCVPixelFormatType_422YpCbCr8BiPlanarFullRange:
+                yFormat = MTLPixelFormatR8Unorm;
+                uvFormat = MTLPixelFormatRG8Unorm;
+                break;
+
+            // 4:4:4 10-bit (ProRes 4444, etc.)
+            case kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange:
+            case kCVPixelFormatType_444YpCbCr10BiPlanarFullRange:
+                yFormat = MTLPixelFormatR16Unorm;
+                uvFormat = MTLPixelFormatRG16Unorm;
+                break;
+
+            // 4:4:4 8-bit
+            case kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange:
+            case kCVPixelFormatType_444YpCbCr8BiPlanarFullRange:
                 yFormat = MTLPixelFormatR8Unorm;
                 uvFormat = MTLPixelFormatRG8Unorm;
                 break;
@@ -332,9 +354,11 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
                 fmt_str[1] = (pixelFormat >> 16) & 0xFF;
                 fmt_str[2] = (pixelFormat >> 8) & 0xFF;
                 fmt_str[3] = pixelFormat & 0xFF;
-                qWarning() << "GPUVideoSurface: Unknown pixel format" << QString::fromLatin1(fmt_str)
-                           << "(" << QString::number(pixelFormat, 16) << ")";
-                JVE_FAIL("Unsupported CVPixelBuffer format for GPU rendering");
+                qWarning() << "GPUVideoSurface::setFrameHW: unsupported pixel format"
+                           << QString::fromLatin1(fmt_str)
+                           << "(" << QString::number(pixelFormat, 16)
+                           << ") — skipping frame";
+                return;
             }
         }
 
@@ -346,7 +370,11 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
         CVReturn ret = CVMetalTextureCacheCreateTextureFromImage(
             kCFAllocatorDefault, m_impl->textureCache, pixelBuffer, nullptr,
             yFormat, yWidth, yHeight, 0, &m_impl->textureY);
-        JVE_ASSERT(ret == kCVReturnSuccess && m_impl->textureY, "Failed to create Y texture");
+        if (ret != kCVReturnSuccess || !m_impl->textureY) {
+            qWarning() << "GPUVideoSurface::setFrameHW: failed to create Y texture (ret="
+                       << ret << ") — skipping frame";
+            return;
+        }
 
         size_t uvWidth = CVPixelBufferGetWidthOfPlane(pixelBuffer, 1);
         size_t uvHeight = CVPixelBufferGetHeightOfPlane(pixelBuffer, 1);
@@ -354,7 +382,12 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
         ret = CVMetalTextureCacheCreateTextureFromImage(
             kCFAllocatorDefault, m_impl->textureCache, pixelBuffer, nullptr,
             uvFormat, uvWidth, uvHeight, 1, &m_impl->textureUV);
-        JVE_ASSERT(ret == kCVReturnSuccess && m_impl->textureUV, "Failed to create UV texture");
+        if (ret != kCVReturnSuccess || !m_impl->textureUV) {
+            qWarning() << "GPUVideoSurface::setFrameHW: failed to create UV texture (ret="
+                       << ret << ") — skipping frame";
+            m_impl->releaseTextures();
+            return;
+        }
 
         m_impl->metalTextureY = CVMetalTextureGetTexture(m_impl->textureY);
         m_impl->metalTextureUV = CVMetalTextureGetTexture(m_impl->textureUV);
