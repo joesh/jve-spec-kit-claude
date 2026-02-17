@@ -84,7 +84,8 @@ local function normalize_master_clip(item, context)
     if item.bin_id then
         bin_id = item.bin_id
     elseif bin_lookup and clip.clip_id then
-        bin_id = bin_lookup[clip.clip_id]
+        local bins = bin_lookup[clip.clip_id]
+        bin_id = bins and bins[1]
     end
 
     local entry = {

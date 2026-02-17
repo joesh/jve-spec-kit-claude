@@ -102,7 +102,7 @@ assert(clip_kind == "master", "duplicated clip should be a master clip")
 assert(media_id == "media_master", "duplicated clip should reference original media")
 
 local bin_map = database.load_master_clip_bin_map("default_project")
-assert(bin_map["master_clip_copy"] == "bin_target", "duplicated clip should be assigned to target bin")
+assert(bin_map["master_clip_copy"] and bin_map["master_clip_copy"][1] == "bin_target", "duplicated clip should be assigned to target bin")
 
 local undo_result = command_manager.undo()
 assert(undo_result.success, "Undo DuplicateMasterClip should succeed")

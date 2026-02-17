@@ -388,7 +388,7 @@ database.save_bins("proj1", {
 })
 
 local clip_bin_map = database.load_master_clip_bin_map("proj1")
-check("assignment survives re-save", clip_bin_map["clip1"] == "bin_a")
+check("assignment survives re-save", clip_bin_map["clip1"] and clip_bin_map["clip1"][1] == "bin_a")
 
 
 -- ═══════════════════════════════════════════════════════════════
@@ -434,14 +434,14 @@ ok = database.assign_master_clips_to_bin("proj1", {"clip1"}, "bin_x")
 check("assign valid → true", ok == true)
 
 clip_bin_map = database.load_master_clip_bin_map("proj1")
-check("clip1 assigned to bin_x", clip_bin_map["clip1"] == "bin_x")
+check("clip1 assigned to bin_x", clip_bin_map["clip1"] and clip_bin_map["clip1"][1] == "bin_x")
 
 -- 5h. Reassign to different bin → moves
 ok = database.assign_master_clips_to_bin("proj1", {"clip1"}, "bin_y")
 check("reassign → true", ok == true)
 
 clip_bin_map = database.load_master_clip_bin_map("proj1")
-check("clip1 moved to bin_y", clip_bin_map["clip1"] == "bin_y")
+check("clip1 moved to bin_y", clip_bin_map["clip1"] and clip_bin_map["clip1"][1] == "bin_y")
 
 -- 5i. nil bin_id → unassign (delete assignment, no insert)
 ok = database.assign_master_clips_to_bin("proj1", {"clip1"}, nil)
@@ -455,8 +455,8 @@ ok = database.assign_master_clips_to_bin("proj1", {"clip1", "clip2"}, "bin_x")
 check("assign 2 clips → true", ok == true)
 
 clip_bin_map = database.load_master_clip_bin_map("proj1")
-check("clip1 in bin_x", clip_bin_map["clip1"] == "bin_x")
-check("clip2 in bin_x", clip_bin_map["clip2"] == "bin_x")
+check("clip1 in bin_x", clip_bin_map["clip1"] and clip_bin_map["clip1"][1] == "bin_x")
+check("clip2 in bin_x", clip_bin_map["clip2"] and clip_bin_map["clip2"][1] == "bin_x")
 
 
 -- ═══════════════════════════════════════════════════════════════

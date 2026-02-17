@@ -1934,10 +1934,15 @@ function M.save_bins(project_id, bins, opts)
     return true
 end
 
-function M.load_master_clip_bin_map(project_id)
-    if not project_id or project_id == "" then
-        error("FATAL: load_master_clip_bin_map requires project_id", 2)
-    end
+--- Load bin assignments for a given entity type (many-to-many).
+-- @param project_id string
+-- @param entity_type string: e.g. "master_clip", "sequence"
+-- @return table: {entity_id → {tag_id, ...}}
+function M.load_bin_map(project_id, entity_type)
+    assert(project_id and project_id ~= "",
+        "database.load_bin_map: missing project_id")
+    assert(entity_type and entity_type ~= "",
+        "database.load_bin_map: missing entity_type")
     local assignments = {}
     if not db_connection then
         return assignments
@@ -1948,25 +1953,31 @@ function M.load_master_clip_bin_map(project_id)
     local stmt = db_connection:prepare([[
         SELECT entity_id, tag_id
         FROM tag_assignments
-        WHERE project_id = ? AND namespace_id = ? AND entity_type = 'master_clip'
+        WHERE project_id = ? AND namespace_id = ? AND entity_type = ?
     ]])
     if not stmt then
         return assignments
     end
     stmt:bind_value(1, project_id)
     stmt:bind_value(2, BIN_NAMESPACE)
+    stmt:bind_value(3, entity_type)
 
     if stmt:exec() then
         while stmt:next() do
             local entity_id = stmt:value(0)
             local tag_id = stmt:value(1)
             if entity_id and tag_id then
-                assignments[entity_id] = tag_id
+                assignments[entity_id] = assignments[entity_id] or {}
+                table.insert(assignments[entity_id], tag_id)
             end
         end
     end
     stmt:finalize()
     return assignments
+end
+
+function M.load_master_clip_bin_map(project_id)
+    return M.load_bin_map(project_id, "master_clip")
 end
 
 function M.save_master_clip_bin_map(project_id, bin_map)
@@ -2091,6 +2102,54 @@ function M.add_to_bin(project_id, entity_ids, bin_id, entity_type)
     end
 
     assert(commit_transaction(started, "add_to_bin"), "database.add_to_bin: commit failed")
+    return true
+end
+
+--- Remove entities from a specific bin (DELETE targeted assignment only).
+-- Preserves assignments to OTHER bins (many-to-many safe).
+-- @param project_id string
+-- @param entity_ids table: array of entity IDs
+-- @param bin_id string: bin to remove from
+-- @param entity_type string: e.g. "master_clip"
+function M.remove_from_bin(project_id, entity_ids, bin_id, entity_type)
+    assert(project_id and project_id ~= "", "database.remove_from_bin: missing project_id")
+    assert(bin_id and bin_id ~= "", "database.remove_from_bin: missing bin_id")
+    assert(entity_type and entity_type ~= "", "database.remove_from_bin: missing entity_type")
+    assert(db_connection, "database.remove_from_bin: no database connection")
+    if type(entity_ids) ~= "table" or #entity_ids == 0 then
+        return true
+    end
+
+    require_tag_tables()
+
+    local started, begin_err = begin_write_transaction()
+    assert(started ~= nil, "database.remove_from_bin: failed to begin transaction: " .. tostring(begin_err))
+
+    for _, eid in ipairs(entity_ids) do
+        if type(eid) == "string" and eid ~= "" then
+            local stmt = db_connection:prepare([[
+                DELETE FROM tag_assignments
+                WHERE project_id = ? AND namespace_id = ? AND entity_type = ? AND entity_id = ? AND tag_id = ?
+            ]])
+            assert(stmt, "database.remove_from_bin: failed to prepare delete statement")
+            stmt:bind_value(1, project_id)
+            stmt:bind_value(2, BIN_NAMESPACE)
+            stmt:bind_value(3, entity_type)
+            stmt:bind_value(4, eid)
+            stmt:bind_value(5, bin_id)
+            local success = stmt:exec()
+            local detail = stmt:last_error()
+            local rc = stmt:last_result_code()
+            stmt:finalize()
+            if success == false then
+                rollback_transaction(started)
+                error(string.format("database.remove_from_bin: delete failed for %s %s from bin %s (%s, rc=%s)",
+                    entity_type, eid, bin_id, tostring(detail), tostring(rc)))
+            end
+        end
+    end
+
+    assert(commit_transaction(started, "remove_from_bin"), "database.remove_from_bin: commit failed")
     return true
 end
 

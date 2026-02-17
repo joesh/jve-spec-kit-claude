@@ -255,9 +255,12 @@ assert(sample_master_stmt:exec() and sample_master_stmt:next(), "Should fetch at
 sample_master_stmt:finalize()
 local media_bin_map = database.load_master_clip_bin_map("default_project")
 local assigned_count = 0
-for _, bin_id in pairs(media_bin_map) do
-    if bin_id == master_bin_id then
-        assigned_count = assigned_count + 1
+for _, bin_ids in pairs(media_bin_map) do
+    for _, bid in ipairs(bin_ids) do
+        if bid == master_bin_id then
+            assigned_count = assigned_count + 1
+            break
+        end
     end
 end
 assert(assigned_count == master_clip_count,

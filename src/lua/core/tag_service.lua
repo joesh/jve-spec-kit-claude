@@ -215,14 +215,24 @@ function M.list_master_clip_assignments(project_id)
     return database.load_master_clip_bin_map(project_id)
 end
 
+function M.list_sequence_assignments(project_id)
+    return database.load_bin_map(project_id, "sequence")
+end
+
 --- Add entities to a bin (INSERT OR IGNORE — idempotent, many-to-many safe).
 -- Use for import paths where an entity may already be in the bin.
 function M.add_to_bin(project_id, entity_ids, bin_id, entity_type)
     return database.add_to_bin(project_id, entity_ids, bin_id, entity_type or "master_clip")
 end
 
---- Move entities to a bin (DELETE old + INSERT new).
--- Use for user-facing MoveToBin where entity should leave its old bin.
+--- Remove entities from a specific bin (targeted DELETE, many-to-many safe).
+-- Use for MoveToBin where only the source assignment should be removed.
+function M.remove_from_bin(project_id, entity_ids, bin_id, entity_type)
+    return database.remove_from_bin(project_id, entity_ids, bin_id, entity_type or "master_clip")
+end
+
+--- Move entities to a bin (DELETE ALL old + INSERT new — exclusive assignment).
+-- Use only when entity should be in exactly one bin.
 function M.set_bin(project_id, entity_ids, bin_id, entity_type)
     return database.set_bin(project_id, entity_ids, bin_id, entity_type or "master_clip")
 end
