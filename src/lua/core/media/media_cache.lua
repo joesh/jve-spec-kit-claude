@@ -29,6 +29,13 @@ local M = {
 
     -- Per-context state: { [context_id] = context }
     contexts = {},
+
+    -- Offline registry: { [file_path] = { error_code, error_msg, path, first_seen } }
+    -- Populated when ASSET_OPEN fails for any filesystem reason.
+    -- Cleared on cleanup() / project change.
+    -- TODO: Register FSEvents interest for each offline path to detect when files
+    -- come back online. Also watch online paths to detect deletion/modification.
+    _offline_registry = {},
 }
 
 --------------------------------------------------------------------------------
@@ -146,9 +153,18 @@ local function open_reader(file_path)
     assert(qt_constants.EMP, "media_cache.open_reader: EMP bindings not available")
 
     local first_asset, err = qt_constants.EMP.ASSET_OPEN(file_path)
-    assert(first_asset, string.format(
-        "media_cache.open_reader: ASSET_OPEN failed for '%s': %s",
-        file_path, err and err.msg or "unknown error"))
+    if not first_asset then
+        local entry = {
+            error_code = err and err.code or "Unknown",
+            error_msg = err and err.msg or "unknown error",
+            path = file_path,
+            first_seen = os.clock(),
+        }
+        M._offline_registry[file_path] = entry
+        logger.warn("media_cache", string.format(
+            "Media offline: '%s' (%s: %s)", file_path, entry.error_code, entry.error_msg))
+        return nil, entry
+    end
 
     local info = qt_constants.EMP.ASSET_INFO(first_asset)
     assert(info, string.format(
@@ -308,6 +324,11 @@ end
 --------------------------------------------------------------------------------
 
 local function ensure_in_pool(file_path)
+    -- Fast-path: already known offline
+    if M._offline_registry[file_path] then
+        return nil
+    end
+
     local entry = M.reader_pool[file_path]
     if entry then
         entry.last_used = os.clock()
@@ -319,6 +340,9 @@ local function ensure_in_pool(file_path)
     end
 
     entry = open_reader(file_path)
+    if not entry then
+        return nil  -- offline; open_reader already registered in _offline_registry
+    end
     M.reader_pool[file_path] = entry
 
     logger.debug("media_cache", string.format("Pool miss (ensure_in_pool), opened: %s", file_path))
@@ -453,6 +477,10 @@ function M.activate(file_path, context_id)
 
     -- Ensure in pool (opens if needed)
     local entry = ensure_in_pool(file_path)
+    if not entry then
+        -- Offline: don't set active_path (context stays on previous or nil)
+        return nil
+    end
     ctx.active_path = file_path
 
     logger.debug("media_cache", string.format("Activated '%s' in context '%s'",
@@ -478,6 +506,13 @@ function M.unload(context_id)
         "Unloaded Lua caches for context '%s' (reader stays pooled)", context_id))
 end
 
+--- Get offline info for a path (nil if path is not offline).
+-- @param file_path string
+-- @return table|nil: { error_code, error_msg, path, first_seen }
+function M.get_offline_info(file_path)
+    return M._offline_registry[file_path]
+end
+
 --- Release ALL pooled readers and ALL contexts.
 -- Called on application exit or when switching projects.
 function M.cleanup()
@@ -491,6 +526,7 @@ function M.cleanup()
         close_entry(entry)
     end
     M.reader_pool = {}
+    M._offline_registry = {}
 
     logger.debug("media_cache", "Cleaned up all pooled readers and contexts")
 end
@@ -530,6 +566,9 @@ function M.ensure_audio_pooled(file_path)
         type(file_path)))
 
     local entry = ensure_in_pool(file_path)
+    if not entry then
+        return nil  -- offline
+    end
     return entry.info
 end
 
@@ -827,6 +866,9 @@ function M.pre_buffer(path, entry_frame, fps_num, fps_den)
 
     -- Warm the reader pool (opens file if not already pooled)
     local entry = ensure_in_pool(path)
+    if not entry then
+        return  -- offline; can't pre-buffer
+    end
 
     -- Pre-decode ~5 frames starting at entry point (if video reader exists).
     -- Stop early if decode returns nil (past EOF).

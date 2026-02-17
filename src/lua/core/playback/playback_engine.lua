@@ -14,6 +14,7 @@
 -- Callbacks (set at construction):
 --   on_show_frame(frame_handle, metadata)  — display decoded video frame
 --   on_show_gap()                          — display black/gap
+--   on_show_offline(metadata)              — display offline frame + label
 --   on_set_rotation(degrees)               — apply rotation for media
 --   on_position_changed(frame)             — position update notification
 --
@@ -69,6 +70,9 @@ function PlaybackEngine.new(config)
         "PlaybackEngine.new: on_set_rotation callback required")
     assert(type(config.on_position_changed) == "function",
         "PlaybackEngine.new: on_position_changed callback required")
+    -- on_show_offline is optional; defaults to on_show_gap
+    assert(config.on_show_offline == nil or type(config.on_show_offline) == "function",
+        "PlaybackEngine.new: on_show_offline must be function or nil")
 
     local self = setmetatable({}, PlaybackEngine)
 
@@ -98,6 +102,7 @@ function PlaybackEngine.new(config)
     self.media_context_id = config.media_context_id
     self._on_show_frame = config.on_show_frame
     self._on_show_gap = config.on_show_gap
+    self._on_show_offline = config.on_show_offline or config.on_show_gap
     self._on_set_rotation = config.on_set_rotation
     self._on_position_changed = config.on_position_changed
 
@@ -622,6 +627,17 @@ function PlaybackEngine:_display_frame(frame_idx)
                 self.media_context_id,
                 metadata.clip_fps_num, metadata.clip_fps_den)
         end
+    elseif metadata and metadata.offline then
+        -- Offline clip at playhead: show offline frame resource
+        self._on_show_offline(metadata)
+        self.current_clip_id = metadata.clip_id
+        -- Store clip bounds so lookahead skips this clip (no media to pre-buffer)
+        if metadata.clip_end_frame then
+            self._video_clip_bounds = {
+                start_frame = metadata.clip_start_frame,
+                end_frame = metadata.clip_end_frame,
+            }
+        end
     else
         -- Gap at playhead
         self._on_show_gap()
@@ -922,11 +938,15 @@ function PlaybackEngine:_try_init_audio_session(media_path)
         return
     end
 
-    -- Path was already pooled by Mixer.resolve_audio_sources — nil here is a bug
+    -- Path was already pooled by Mixer.resolve_audio_sources.
+    -- Can be nil if media is offline (mixer now skips offline clips, but
+    -- race between resolve and init is possible during project open).
     local info = media_cache.ensure_audio_pooled(media_path)
-    assert(info, string.format(
-        "PlaybackEngine:_try_init_audio_session: ensure_audio_pooled returned nil for '%s' "
-        .. "(path was already resolved by Mixer)", media_path))
+    if not info then
+        logger.warn("playback_engine",
+            "Cannot init audio session: media offline: " .. media_path)
+        return
+    end
     assert(info.has_audio, string.format(
         "PlaybackEngine:_try_init_audio_session: '%s' has no audio "
         .. "(should not have been in Mixer source list)", media_path))

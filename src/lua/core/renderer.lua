@@ -41,6 +41,23 @@ function M.get_video_frame(sequence, playhead_frame, context_id)
 
     -- Activate reader in pool for this context
     local info = media_cache.activate(top.media_path, context_id)
+    if not info then
+        -- Media offline: return offline metadata so engine can show offline frame.
+        -- get_offline_info MUST return an entry — activate just registered it.
+        local offline_info = media_cache.get_offline_info(top.media_path)
+        assert(offline_info, string.format(
+            "renderer: activate returned nil for '%s' but no offline registry entry (clip=%s)",
+            top.media_path, top.clip.id))
+        return nil, {
+            offline = true,
+            clip_id = top.clip.id,
+            media_path = top.media_path,
+            error_code = offline_info.error_code,
+            error_msg = offline_info.error_msg,
+            clip_start_frame = top.clip.timeline_start,
+            clip_end_frame = top.clip.timeline_start + top.clip.duration,
+        }
+    end
 
     -- Absolute timecode → file-relative frame (matches audio Mixer pattern).
     -- Camera footage embeds time-of-day TC (e.g., 14:28:00:00 → frame 1249920).

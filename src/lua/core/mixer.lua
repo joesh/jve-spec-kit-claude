@@ -15,6 +15,7 @@
 -- @file mixer.lua
 
 local ffi = require("ffi")
+local logger = require("core.logger")
 
 local M = {}
 
@@ -107,8 +108,13 @@ local function build_sources(audio_clips, playhead_frame, seq_fps_num, seq_fps_d
 
     for _, ac in ipairs(audio_clips) do
         local media_info = media_cache.ensure_audio_pooled(ac.media_path)
-        assert(media_info, string.format(
-            "mixer.build_sources: ensure_audio_pooled returned nil for %s", ac.media_path))
+        if not media_info then
+            -- Media offline: skip this clip (no audio to mix)
+            -- TODO: substitute offline_tone.wav resource for audible offline indicator
+            logger.warn("mixer", string.format(
+                "Skipping offline audio clip %s (%s)", ac.clip.id, ac.media_path))
+            goto continue
+        end
 
         local timeline_start_frames = ac.clip.timeline_start
         local source_in_frames = ac.clip.source_in
@@ -202,6 +208,7 @@ local function build_sources(audio_clips, playhead_frame, seq_fps_num, seq_fps_d
             clip_end_us = clip_end_us,
             clip_id = ac.clip.id,
         }
+        ::continue::
     end
 
     return sources

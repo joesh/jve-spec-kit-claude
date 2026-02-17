@@ -672,7 +672,12 @@ function M.render(view)
         -- Resolve colors
         local is_audio = (track_layout.track_type == "AUDIO")
         local body_color, text_color
-        if clip_enabled then
+        local label_prefix = ""
+        if clip.offline then
+            body_color = is_audio and state_module.colors.clip_audio_offline or state_module.colors.clip_video_offline
+            text_color = state_module.colors.clip_offline_text
+            label_prefix = "OFFLINE - "
+        elseif clip_enabled then
             body_color = is_audio and state_module.colors.clip_audio or state_module.colors.clip_video
             text_color = state_module.colors.text
         else
@@ -686,7 +691,7 @@ function M.render(view)
             local label_padding = 10
             local max_label_width = visible_width - label_padding
             if max_label_width > 35 then
-                local display_label = truncate_label(clip.label or clip.name or clip.id or "", max_label_width)
+                local display_label = truncate_label(label_prefix .. (clip.label or clip.name or clip.id or ""), max_label_width)
                 if display_label ~= "" then
                     local label_baseline = y + math.min(clip_height - 10, 22)
                     timeline.add_text(view.widget, visible_x + 5, label_baseline, display_label, text_color)
