@@ -19,6 +19,7 @@
 local M = {}
 
 local xml2 = require("xml2")
+local logger = require("core.logger")
 
 --- Unzip .drp file to temporary directory
 -- @param drp_path string: Path to .drp file
@@ -140,6 +141,38 @@ local function find_all_elements(elem, tag_name)
         end
     end
 
+    return results
+end
+
+--- Find top-level clips within an Sm2TiTrack element.
+-- DRP structure: Track > Items > Element > Sm2TiVideoClip/Sm2TiAudioClip
+-- Must NOT recurse into clip internals (Fusion/compound clips nest source clips inside)
+--
+-- TODO: Nested clips (Fusion comps, compound clips) contain source material refs inside
+-- the parent clip. We currently ignore these. To properly import them we'd need to:
+--   1. Detect nested Sm2TiVideoClip/Sm2TiAudioClip within a parent clip
+--   2. Determine if the parent is a compound clip or Fusion comp
+--   3. Import the parent as a single clip (the rendered result)
+--   4. Optionally import the nested structure as a compound clip sequence
+--
+-- @param track_elem table: Sm2TiTrack element
+-- @param clip_tag string: "Sm2TiVideoClip" or "Sm2TiAudioClip"
+-- @return table: Array of clip elements at the Items/Element level only
+local function find_track_clips(track_elem, clip_tag)
+    local results = {}
+    local items = find_direct_child(track_elem, "Items")
+    if not items then return results end
+
+    for _, wrapper in ipairs(items.children) do
+        -- Each Element wrapper contains one clip
+        if wrapper.tag == "Element" then
+            for _, child in ipairs(wrapper.children) do
+                if child.tag == clip_tag then
+                    table.insert(results, child)
+                end
+            end
+        end
+    end
     return results
 end
 
@@ -476,10 +509,45 @@ local function parse_media_pool_hierarchy(tmp_dir)
         end
     end
 
+    -- Exclude "Master" root — it's the DRP MediaPool root, not a user bin.
+    -- Reparent its children to root (nil).
+    local master_root_id = nil
+    for _, folder in ipairs(folders) do
+        if folder.parent_id == nil and folder.name == "Master" then
+            master_root_id = folder.id
+            break
+        end
+    end
+
+    if master_root_id then
+        -- Reparent children of Master to root
+        for _, folder in ipairs(folders) do
+            if folder.parent_id == master_root_id then
+                folder.parent_id = nil
+                folder.parent_name = nil
+            end
+        end
+        -- Reparent pool master clips whose folder_id == Master root
+        for _, clip in ipairs(master_clips) do
+            if clip.folder_id == master_root_id then
+                clip.folder_id = nil
+            end
+        end
+        -- Remove Master from folders list
+        for i, folder in ipairs(folders) do
+            if folder.id == master_root_id then
+                table.remove(folders, i)
+                break
+            end
+        end
+        folder_map[master_root_id] = nil
+    end
+
     return {
         folders = folders,
         master_clips = master_clips,
         folder_map = folder_map,
+        excluded_root_id = master_root_id,
     }
 end
 
@@ -647,7 +715,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
         }
 
         local clip_tag = track_type == "AUDIO" and "Sm2TiAudioClip" or "Sm2TiVideoClip"
-        local clip_elements = find_all_elements(track_elem, clip_tag)
+        local clip_elements = find_track_clips(track_elem, clip_tag)
         local clip_count = 0
 
         for _, clip_elem in ipairs(clip_elements) do
@@ -733,26 +801,26 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
                 frame_rate = frame_rate
             }
 
-            -- NSF: Assert on invalid duration (no silent fix to 1)
-            assert(clip.duration > 0, string.format(
-                "parse_resolve_tracks: clip '%s' has invalid duration=%d",
-                clip_name, clip.duration))
+            -- Skip degenerate zero-duration clips (Resolve artifacts: speed changes, disabled items)
+            if clip.duration <= 0 then
+                logger.warn("drp_importer", string.format("Skipping zero-duration clip '%s' (duration=%d)", clip_name, clip.duration))
+            else
+                table.insert(track_info.clips, clip)
+                clip_count = clip_count + 1
 
-            table.insert(track_info.clips, clip)
-            clip_count = clip_count + 1
-
-            if file_path and file_path ~= "" and not media_lookup[file_path] then
-                media_lookup[file_path] = {
-                    id = clip.file_id,
-                    name = clip.name or file_path,
-                    path = file_path,
-                    duration = clip.duration,
-                    frame_rate = frame_rate,
-                    width = 1920,
-                    height = 1080,
-                    audio_channels = track_type == "AUDIO" and 2 or 0,
-                    key = file_path
-                }
+                if file_path and file_path ~= "" and not media_lookup[file_path] then
+                    media_lookup[file_path] = {
+                        id = clip.file_id,
+                        name = clip.name or file_path,
+                        path = file_path,
+                        duration = clip.duration,
+                        frame_rate = frame_rate,
+                        width = 1920,
+                        height = 1080,
+                        audio_channels = track_type == "AUDIO" and 2 or 0,
+                        key = file_path
+                    }
+                end
             end
         end
 
@@ -981,12 +1049,15 @@ function M.parse_drp_file(drp_path)
                 local seq_ref_id = extract_sequence_ref_id(seq_elem)
                 local metadata = seq_ref_id and timeline_metadata_map[seq_ref_id]
 
-                -- NSF: fps MUST come from DRP metadata - no fallbacks
+                -- Skip orphan sequences with no MediaPool metadata (compound clips, deleted timelines)
                 local fps_for_parsing = metadata and metadata.fps
-                assert(fps_for_parsing and fps_for_parsing > 0, string.format(
-                    "parse_drp_file: timeline '%s' (seq_ref_id=%s) missing fps in DRP metadata",
-                    seq_file:match("([^/]+)%.xml$") or seq_file,
-                    tostring(seq_ref_id)))
+                if not fps_for_parsing or fps_for_parsing <= 0 then
+                    logger.warn("drp_importer", string.format(
+                        "Skipping sequence '%s' (seq_ref_id=%s) - no fps in MediaPool metadata",
+                        seq_file:match("([^/]+)%.xml$") or seq_file,
+                        tostring(seq_ref_id)))
+                    goto continue_seq
+                end
                 local timeline = parse_sequence(seq_elem, fps_for_parsing)
 
                 -- Apply timeline name from metadata
@@ -1008,6 +1079,7 @@ function M.parse_drp_file(drp_path)
                 timeline.folder_id = metadata and metadata.folder_id or nil
 
                 table.insert(timelines, timeline)
+                ::continue_seq::
             end
         end
     end
@@ -1068,6 +1140,15 @@ function M.parse_drp_file(drp_path)
     -- Parse MediaPool folder hierarchy for bins and master clips
     local media_pool_hierarchy = parse_media_pool_hierarchy(tmp_dir)
 
+    -- Nil out timeline folder_ids that referenced the excluded Master root
+    if media_pool_hierarchy.excluded_root_id then
+        for _, timeline in ipairs(timelines) do
+            if timeline.folder_id == media_pool_hierarchy.excluded_root_id then
+                timeline.folder_id = nil
+            end
+        end
+    end
+
     -- Cleanup temp directory
     os.execute("rm -rf " .. tmp_dir)
 
@@ -1096,8 +1177,6 @@ M._parse_resolve_tracks = parse_resolve_tracks
 --
 -- import_into_project() is the single source of truth for DRP entity creation:
 -- media records, sequences, tracks, clips, A/V link groups.
-
-local logger = require("core.logger")
 
 -- Models (SQL isolation: all DB access goes through models)
 local Project = require("models.project")
@@ -1217,6 +1296,59 @@ end
 -- import_into_project: Shared entity-creation for both Open and Import verbs
 -- ---------------------------------------------------------------------------
 
+--- Mark clips offline whose media files don't exist on disk.
+-- Loads each clip, checks its media path, sets offline=true and saves.
+-- @param clip_ids table: list of clip IDs to check
+-- @return number: count of clips marked offline
+local function mark_offline_clips(clip_ids)
+    local Clip_model = require("models.clip")
+    local Media_model = require("models.media")
+
+    -- Collect unique media paths → file existence
+    local path_exists_cache = {}
+    local offline_count = 0
+
+    for _, clip_id in ipairs(clip_ids) do
+        local clip = Clip_model.load(clip_id)
+        assert(clip, string.format(
+            "mark_offline_clips: Clip.load failed for just-created clip %s", clip_id))
+
+        -- Master clips (clip_kind="master") may not have media_id — skip
+        if not clip.media_id then goto next_clip end
+
+        local media = Media_model.load(clip.media_id)
+        assert(media, string.format(
+            "mark_offline_clips: Media.load failed for clip %s media_id %s",
+            clip_id, tostring(clip.media_id)))
+        assert(media.file_path, string.format(
+            "mark_offline_clips: media %s has nil file_path", media.id))
+
+        local path = media.file_path
+        if path_exists_cache[path] == nil then
+            local f = io.open(path, "r")
+            if f then
+                f:close()
+                path_exists_cache[path] = true
+            else
+                path_exists_cache[path] = false
+                logger.warn("drp_importer", string.format(
+                    "Media file not found: %s", path))
+            end
+        end
+
+        if not path_exists_cache[path] and not clip.offline then
+            clip.offline = true
+            assert(clip:save({skip_occlusion = true}), string.format(
+                "mark_offline_clips: save failed for clip %s", clip_id))
+            offline_count = offline_count + 1
+        end
+
+        ::next_clip::
+    end
+
+    return offline_count
+end
+
 --- Import parsed DRP data into an existing project.
 -- Creates: media records, sequences, tracks, clips, A/V link groups.
 -- @param project_id string: Target project ID (must already exist)
@@ -1257,6 +1389,16 @@ function M.import_into_project(project_id, parse_result, opts)
             logger.debug("drp_importer", string.format("  Created bin: %s (parent=%s)", folder.name, tostring(parent_bin_id)))
         else
             logger.warn("drp_importer", string.format("Failed to create bin: %s", folder.name))
+        end
+    end
+
+    -- Build pool master clip name → DRP folder bin mapping
+    -- pool_master_clips have {name, folder_id} from MediaPool hierarchy
+    -- Two indexes: by exact name and by filename (for audio-from-video matching)
+    local pool_name_to_drp_bin = {}
+    for _, pmc in ipairs(parse_result.pool_master_clips or {}) do
+        if pmc.folder_id and drp_folder_to_bin[pmc.folder_id] then
+            pool_name_to_drp_bin[pmc.name] = drp_folder_to_bin[pmc.folder_id]
         end
     end
 
@@ -1372,9 +1514,15 @@ function M.import_into_project(project_id, parse_result, opts)
                 string.format("  Created timeline: %s @ %d/%d fps, %dx%d, viewport [%d..%d]",
                     timeline_data.name, fps_num, fps_den, seq_width, seq_height, view_start, view_start + view_duration))
 
+            -- Assign timeline sequence to DRP folder bin
+            local timeline_folder_bin = timeline_data.folder_id and drp_folder_to_bin[timeline_data.folder_id] or nil
+            if timeline_folder_bin then
+                tag_service.add_to_bin(project_id, {sequence.id}, timeline_folder_bin, "sequence")
+            end
+
             -- Create per-sequence master clip bin: "{seq_name} Master Clips"
             -- Parent = timeline's folder bin (from DRP hierarchy), or nil (root)
-            local parent_bin_id = timeline_data.folder_id and drp_folder_to_bin[timeline_data.folder_id] or nil
+            local parent_bin_id = timeline_folder_bin
             local mc_bin_label = string.format("%s Master Clips", timeline_data.name)
             local mc_bin_id = uuid.generate_with_prefix("bin")
             local mc_ok, mc_def = tag_service.create_bin(project_id, {
@@ -1412,6 +1560,14 @@ function M.import_into_project(project_id, parse_result, opts)
                             media_id = media_by_path[clip_data.file_path].id
                         end
 
+                        -- Skip clips with no resolvable media (generated clips, titles, removed media)
+                        if not media_id then
+                            logger.warn("drp_importer", string.format(
+                                "Skipping clip '%s' - no media record for path: %s",
+                                clip_data.name or "unnamed", tostring(clip_data.file_path)))
+                            goto continue_clip
+                        end
+
                         local clip_rate_num, clip_rate_den
                         if track_data.type == "VIDEO" then
                             clip_rate_num, clip_rate_den = fps_num, fps_den
@@ -1440,6 +1596,21 @@ function M.import_into_project(project_id, parse_result, opts)
                         if clip:save() then
                             table.insert(result.clip_ids, clip.id)
 
+                            -- Assign masterclip sequence to DRP folder bin (many-to-many safe)
+                            -- Match by media name first, then by file path basename
+                            -- (audio-from-video clips have different names than pool master clips)
+                            if clip.master_clip_id and clip_data.file_path then
+                                local media = media_by_path[clip_data.file_path]
+                                local drp_bin = media and pool_name_to_drp_bin[media.name]
+                                if not drp_bin then
+                                    local basename = clip_data.file_path:match("([^/\\]+)$")
+                                    drp_bin = basename and pool_name_to_drp_bin[basename]
+                                end
+                                if drp_bin then
+                                    tag_service.add_to_bin(project_id, {clip.master_clip_id}, drp_bin, "master_clip")
+                                end
+                            end
+
                             if clip_data.file_path then
                                 table.insert(clips_for_linking, {
                                     clip_id = clip.id,
@@ -1451,6 +1622,7 @@ function M.import_into_project(project_id, parse_result, opts)
                         else
                             logger.warn("drp_importer", string.format("Failed to import clip: %s", clip_data.name))
                         end
+                        ::continue_clip::
                     end
                 end
             end
@@ -1492,8 +1664,15 @@ function M.import_into_project(project_id, parse_result, opts)
         end
     end
 
-    logger.info("drp_importer", string.format("Import complete: %d media, %d sequences, %d tracks, %d clips",
-        #result.media_ids, #result.sequence_ids, #result.track_ids, #result.clip_ids))
+    -- STEP 7: Mark clips offline for missing media files
+    local offline_count = mark_offline_clips(result.clip_ids)
+    if offline_count > 0 then
+        logger.warn("drp_importer", string.format(
+            "%d clip(s) marked offline (media files not found)", offline_count))
+    end
+
+    logger.info("drp_importer", string.format("Import complete: %d media, %d sequences, %d tracks, %d clips (%d offline)",
+        #result.media_ids, #result.sequence_ids, #result.track_ids, #result.clip_ids, offline_count))
 
     return result
 end

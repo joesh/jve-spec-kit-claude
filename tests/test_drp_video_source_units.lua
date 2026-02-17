@@ -32,6 +32,15 @@ local function elem(tag, text, children)
     }
 end
 
+-- Helper: wrap clips in Items > Element structure matching real DRP XML
+local function wrap_clips(...)
+    local elements = {}
+    for _, clip in ipairs({...}) do
+        table.insert(elements, elem("Element", "", {clip}))
+    end
+    return elem("Items", "", elements)
+end
+
 --------------------------------------------------------------------------------
 -- Test 1: Video clip with empty <In/> → source_in = 0 (untrimmed)
 --------------------------------------------------------------------------------
@@ -41,14 +50,16 @@ print("\n--- Test 1: Video untrimmed clip (In empty) → source_in=0 ---")
 local seq_elem = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),  -- 0 = VIDEO
-        elem("Sm2TiVideoClip", "", {
-            elem("Name", "test_video_clip"),
-            elem("Start", "86400"),
-            elem("Duration", "1496"),
-            elem("MediaStartTime", "45274"),  -- 12:34:34 in seconds (file TC origin)
-            elem("In", ""),                    -- empty = untrimmed, start at file beginning
-            elem("MediaFilePath", "/test/C095.mov"),
-        }),
+        wrap_clips(
+            elem("Sm2TiVideoClip", "", {
+                elem("Name", "test_video_clip"),
+                elem("Start", "86400"),
+                elem("Duration", "1496"),
+                elem("MediaStartTime", "45274"),  -- 12:34:34 in seconds (file TC origin)
+                elem("In", ""),                    -- empty = untrimmed, start at file beginning
+                elem("MediaFilePath", "/test/C095.mov"),
+            })
+        ),
     }),
 })
 
@@ -79,14 +90,16 @@ print("\n--- Test 2: Video trimmed clip (In=100) → source_in=100 ---")
 local seq_trim = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
-        elem("Sm2TiVideoClip", "", {
-            elem("Name", "trimmed_video"),
-            elem("Start", "86400"),
-            elem("Duration", "200"),
-            elem("MediaStartTime", "45274"),
-            elem("In", "100"),  -- starts 100 frames into the file
-            elem("MediaFilePath", "/test/C095.mov"),
-        }),
+        wrap_clips(
+            elem("Sm2TiVideoClip", "", {
+                elem("Name", "trimmed_video"),
+                elem("Start", "86400"),
+                elem("Duration", "200"),
+                elem("MediaStartTime", "45274"),
+                elem("In", "100"),  -- starts 100 frames into the file
+                elem("MediaFilePath", "/test/C095.mov"),
+            })
+        ),
     }),
 })
 
@@ -110,14 +123,16 @@ print("\n--- Test 3: Audio untrimmed clip → source_in=0 ---")
 local seq_audio = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "1"),  -- 1 = AUDIO
-        elem("Sm2TiAudioClip", "", {
-            elem("Name", "test_audio.WAV"),
-            elem("Start", "86400"),
-            elem("Duration", "73794"),        -- timeline frames
-            elem("MediaStartTime", "45845"),  -- file TC origin (12:44:05 seconds)
-            elem("In", ""),                    -- empty = start at file beginning
-            elem("MediaFilePath", "/test/audio.wav"),
-        }),
+        wrap_clips(
+            elem("Sm2TiAudioClip", "", {
+                elem("Name", "test_audio.WAV"),
+                elem("Start", "86400"),
+                elem("Duration", "73794"),        -- timeline frames
+                elem("MediaStartTime", "45845"),  -- file TC origin (12:44:05 seconds)
+                elem("In", ""),                    -- empty = start at file beginning
+                elem("MediaFilePath", "/test/audio.wav"),
+            })
+        ),
     }),
 })
 
@@ -146,14 +161,16 @@ print("\n--- Test 4: Audio trimmed clip (In=73794 timeline frames) → source_in
 local seq_audio_trim = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "1"),
-        elem("Sm2TiAudioClip", "", {
-            elem("Name", "test_audio.WAV"),
-            elem("Start", "160194"),
-            elem("Duration", "30867"),
-            elem("MediaStartTime", "45845"),
-            elem("In", "73794"),  -- 73794 timeline frames into the audio file
-            elem("MediaFilePath", "/test/audio.wav"),
-        }),
+        wrap_clips(
+            elem("Sm2TiAudioClip", "", {
+                elem("Name", "test_audio.WAV"),
+                elem("Start", "160194"),
+                elem("Duration", "30867"),
+                elem("MediaStartTime", "45845"),
+                elem("In", "73794"),  -- 73794 timeline frames into the audio file
+                elem("MediaFilePath", "/test/audio.wav"),
+            })
+        ),
     }),
 })
 
@@ -177,22 +194,24 @@ print("\n--- Test 5: Different MediaStartTime, same In → same source_in ---")
 local seq_regression = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
-        elem("Sm2TiVideoClip", "", {
-            elem("Name", "clip_a"),
-            elem("Start", "86400"),
-            elem("Duration", "100"),
-            elem("MediaStartTime", "45274"),  -- TC 12:34:34
-            elem("In", ""),
-            elem("MediaFilePath", "/test/a.mov"),
-        }),
-        elem("Sm2TiVideoClip", "", {
-            elem("Name", "clip_b"),
-            elem("Start", "86500"),
-            elem("Duration", "100"),
-            elem("MediaStartTime", "99999"),  -- completely different TC
-            elem("In", ""),
-            elem("MediaFilePath", "/test/b.mov"),
-        }),
+        wrap_clips(
+            elem("Sm2TiVideoClip", "", {
+                elem("Name", "clip_a"),
+                elem("Start", "86400"),
+                elem("Duration", "100"),
+                elem("MediaStartTime", "45274"),  -- TC 12:34:34
+                elem("In", ""),
+                elem("MediaFilePath", "/test/a.mov"),
+            }),
+            elem("Sm2TiVideoClip", "", {
+                elem("Name", "clip_b"),
+                elem("Start", "86500"),
+                elem("Duration", "100"),
+                elem("MediaStartTime", "99999"),  -- completely different TC
+                elem("In", ""),
+                elem("MediaFilePath", "/test/b.mov"),
+            })
+        ),
     }),
 })
 
