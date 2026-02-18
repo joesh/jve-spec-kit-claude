@@ -34,6 +34,8 @@ void TimelineMediaBuffer::SetTrackClips(int track_id, const std::vector<ClipInfo
     std::lock_guard<std::mutex> lock(m_tracks_mutex);
     auto& ts = m_tracks[track_id];
     ts.clips = clips;
+    ts.video_cache.clear();
+    ts.audio_cache.clear();
 }
 
 // ============================================================================
@@ -73,6 +75,7 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
             }
 
             if (next) {
+                // Video pre-buffer
                 int64_t entry_frame = (direction >= 0)
                     ? next->source_in
                     : next->source_in + next->duration - 1;
@@ -80,14 +83,59 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
                     ? next->timeline_start
                     : next->timeline_end() - 1;
 
-                submit_pre_buffer({
-                    tid,
-                    next->clip_id,
-                    next->media_path,
-                    entry_frame,
-                    entry_tl_frame,
-                    next->rate()
-                });
+                PreBufferJob video_job{};
+                video_job.type = PreBufferJob::VIDEO;
+                video_job.track_id = tid;
+                video_job.clip_id = next->clip_id;
+                video_job.media_path = next->media_path;
+                video_job.source_frame = entry_frame;
+                video_job.timeline_frame = entry_tl_frame;
+                video_job.rate = next->rate();
+                submit_pre_buffer(video_job);
+
+                // Audio pre-buffer (~200ms from next clip's entry point)
+                if (m_audio_fmt.sample_rate > 0 && m_seq_rate.num > 0) {
+                    assert(next->rate_den > 0 && "SetPlayhead: audio pre-buffer clip has zero rate_den");
+                    assert(next->speed_ratio > 0.0f && "SetPlayhead: audio pre-buffer clip has non-positive speed_ratio");
+                    constexpr TimeUS AUDIO_PRE_BUFFER_US = 200000; // 200ms
+
+                    TimeUS next_start_us = FrameTime::from_frame(
+                        next->timeline_start, m_seq_rate).to_us();
+                    TimeUS next_end_us = FrameTime::from_frame(
+                        next->timeline_end(), m_seq_rate).to_us();
+
+                    TimeUS tl_t0, tl_t1;
+                    if (direction >= 0) {
+                        tl_t0 = next_start_us;
+                        tl_t1 = std::min(next_start_us + AUDIO_PRE_BUFFER_US, next_end_us);
+                    } else {
+                        tl_t1 = next_end_us;
+                        tl_t0 = std::max(next_end_us - AUDIO_PRE_BUFFER_US, next_start_us);
+                    }
+
+                    if (tl_t1 > tl_t0) {
+                        // Map timeline range to source range
+                        TimeUS src_origin = FrameTime::from_frame(
+                            next->source_in, next->rate()).to_us();
+                        double sr = static_cast<double>(next->speed_ratio);
+                        TimeUS src_t0 = src_origin +
+                            static_cast<int64_t>((tl_t0 - next_start_us) * sr);
+                        TimeUS src_t1 = src_origin +
+                            static_cast<int64_t>((tl_t1 - next_start_us) * sr);
+
+                        PreBufferJob audio_job{};
+                        audio_job.type = PreBufferJob::AUDIO;
+                        audio_job.track_id = tid;
+                        audio_job.clip_id = next->clip_id;
+                        audio_job.media_path = next->media_path;
+                        audio_job.source_t0 = src_t0;
+                        audio_job.source_t1 = src_t1;
+                        audio_job.timeline_t0 = tl_t0;
+                        audio_job.timeline_t1 = tl_t1;
+                        audio_job.speed_ratio = next->speed_ratio;
+                        submit_pre_buffer(audio_job);
+                    }
+                }
             }
         }
     }
@@ -215,6 +263,16 @@ void TimelineMediaBuffer::SetSequenceRate(int32_t num, int32_t den) {
 }
 
 // ============================================================================
+// SetAudioFormat
+// ============================================================================
+
+void TimelineMediaBuffer::SetAudioFormat(const AudioFormat& fmt) {
+    assert(fmt.sample_rate > 0 && "SetAudioFormat: sample_rate must be positive");
+    assert(fmt.channels > 0 && "SetAudioFormat: channels must be positive");
+    m_audio_fmt = fmt;
+}
+
+// ============================================================================
 // find_clip_at_us — microsecond-based clip search (audio path)
 // ============================================================================
 
@@ -334,6 +392,55 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::build_audio_output(
 }
 
 // ============================================================================
+// check_audio_cache — scan for pre-buffered PCM with full coverage
+// ============================================================================
+
+std::shared_ptr<PcmChunk> TimelineMediaBuffer::check_audio_cache(
+        TrackState& ts, const std::string& clip_id,
+        TimeUS seg_t0, TimeUS seg_t1, const AudioFormat& fmt) const {
+
+    assert(seg_t1 > seg_t0 && "check_audio_cache: inverted time range");
+    assert(fmt.sample_rate > 0 && "check_audio_cache: sample_rate must be positive");
+    assert(fmt.channels > 0 && "check_audio_cache: channels must be positive");
+
+    for (const auto& entry : ts.audio_cache) {
+        if (entry.clip_id != clip_id) continue;
+        // Full coverage: cached range must contain [seg_t0, seg_t1)
+        if (entry.timeline_t0 > seg_t0 || entry.timeline_t1 < seg_t1) continue;
+
+        assert(entry.pcm && "check_audio_cache: cached entry has null pcm");
+
+        // Exact match — return as-is
+        if (entry.timeline_t0 == seg_t0 && entry.timeline_t1 == seg_t1) {
+            return entry.pcm;
+        }
+
+        // Sub-range extraction: trim cached PCM to [seg_t0, seg_t1)
+        const float* data = entry.pcm->data_f32();
+        int64_t total_frames = entry.pcm->frames();
+        int32_t sr = fmt.sample_rate;
+        int32_t ch = fmt.channels;
+
+        int64_t skip_frames = ((seg_t0 - entry.timeline_t0) * sr) / 1000000;
+        int64_t want_frames = ((seg_t1 - seg_t0) * sr) / 1000000;
+        if (skip_frames + want_frames > total_frames) {
+            want_frames = total_frames - skip_frames;
+        }
+        if (want_frames <= 0) continue;
+
+        std::vector<float> sub(want_frames * ch);
+        std::copy(data + skip_frames * ch,
+                  data + (skip_frames + want_frames) * ch,
+                  sub.data());
+
+        auto impl = std::make_unique<PcmChunkImpl>(
+            sr, ch, fmt.fmt, seg_t0, std::move(sub));
+        return std::make_shared<PcmChunk>(std::move(impl));
+    }
+    return nullptr;
+}
+
+// ============================================================================
 // GetTrackAudio
 // ============================================================================
 
@@ -370,30 +477,39 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     TimeUS source_t0 = source_origin_us + static_cast<int64_t>((clamped_t0 - clip_start_us) * sr);
     TimeUS source_t1 = source_origin_us + static_cast<int64_t>((clamped_t1 - clip_start_us) * sr);
 
+    // Check audio cache before decode
+    std::string clip_id = clip->clip_id;
+    auto cached = check_audio_cache(ts, clip_id, clamped_t0, clamped_t1, fmt);
+
     // Copy locals before releasing lock
     std::string media_path = clip->media_path;
     float speed_ratio = clip->speed_ratio;
     TimeUS first_clip_end_us = clip_end_us;
     tracks_lock.unlock();
 
-    // Offline check
-    {
-        std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
-        if (m_offline.count(media_path)) return nullptr;
+    std::shared_ptr<PcmChunk> first_chunk;
+    if (cached) {
+        first_chunk = cached;
+    } else {
+        // Offline check
+        {
+            std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
+            if (m_offline.count(media_path)) return nullptr;
+        }
+
+        // Acquire reader and decode first clip
+        auto reader = acquire_reader(track_id, media_path);
+        if (!reader) return nullptr;
+
+        auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt);
+        if (decode_result.is_error()) return nullptr;
+
+        auto chunk = decode_result.value();
+        if (!chunk || chunk->frames() == 0) return nullptr;
+
+        first_chunk = build_audio_output(chunk, source_t0, source_t1,
+                                         clamped_t0, clamped_t1, speed_ratio, fmt);
     }
-
-    // Acquire reader and decode first clip
-    auto reader = acquire_reader(track_id, media_path);
-    if (!reader) return nullptr;
-
-    auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt);
-    if (decode_result.is_error()) return nullptr;
-
-    auto chunk = decode_result.value();
-    if (!chunk || chunk->frames() == 0) return nullptr;
-
-    auto first_chunk = build_audio_output(chunk, source_t0, source_t1,
-                                          clamped_t0, clamped_t1, speed_ratio, fmt);
 
     // ── Fast path: request fully within first clip ──
     if (clamped_t1 >= t1 || !first_chunk) return first_chunk;
@@ -429,6 +545,17 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         TimeUS seg_t0 = std::max(cursor, next_start_us);
         TimeUS seg_t1 = std::min(t1, next_end_us);
         if (seg_t1 <= seg_t0) { cursor = next_end_us; continue; }
+
+        // Check audio cache before decode
+        std::string next_clip_id = next->clip_id;
+        auto next_cached = check_audio_cache(tit->second, next_clip_id, seg_t0, seg_t1, fmt);
+        if (next_cached) {
+            segments.push_back({next_cached, seg_t0});
+            if (seg_t1 > output_end) output_end = seg_t1;
+            tlock.unlock();
+            cursor = next_end_us;
+            continue;
+        }
 
         // Map to source coordinates
         TimeUS next_src_origin = FrameTime::from_frame(next->source_in, next->rate()).to_us();
@@ -635,9 +762,9 @@ void TimelineMediaBuffer::stop_workers() {
 void TimelineMediaBuffer::submit_pre_buffer(const PreBufferJob& job) {
     std::lock_guard<std::mutex> lock(m_jobs_mutex);
 
-    // De-duplicate: don't submit if same (track_id, clip_id) already queued
+    // De-duplicate: don't submit if same (track_id, clip_id, type) already queued
     for (const auto& j : m_jobs) {
-        if (j.track_id == job.track_id && j.clip_id == job.clip_id) {
+        if (j.track_id == job.track_id && j.clip_id == job.clip_id && j.type == job.type) {
             return;
         }
     }
@@ -665,24 +792,53 @@ void TimelineMediaBuffer::worker_loop() {
         auto reader = acquire_reader(job.track_id, job.media_path);
         if (!reader) continue;
 
-        // Pre-decode video frame
-        const auto& info = reader->media_file()->info();
-        int64_t file_frame = job.source_frame - info.start_tc;
-        FrameTime ft = FrameTime::from_frame(file_frame, job.rate);
-        auto result = reader->DecodeAt(ft);
+        if (job.type == PreBufferJob::VIDEO) {
+            // Pre-decode video frame
+            const auto& info = reader->media_file()->info();
+            int64_t file_frame = job.source_frame - info.start_tc;
+            FrameTime ft = FrameTime::from_frame(file_frame, job.rate);
+            auto result = reader->DecodeAt(ft);
 
-        if (result.is_ok()) {
-            // Store in track's video cache
+            if (result.is_ok()) {
+                // Store in track's video cache
+                std::lock_guard<std::mutex> lock(m_tracks_mutex);
+                auto it = m_tracks.find(job.track_id);
+                if (it != m_tracks.end()) {
+                    auto& cache = it->second.video_cache;
+                    while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
+                        cache.erase(cache.begin());
+                    }
+                    cache[job.timeline_frame] = {
+                        job.clip_id, job.source_frame, result.value()
+                    };
+                }
+            }
+        } else {
+            // Pre-decode audio PCM
+            assert(job.source_t1 > job.source_t0 && "worker_loop: AUDIO job has inverted source range");
+            assert(job.timeline_t1 > job.timeline_t0 && "worker_loop: AUDIO job has inverted timeline range");
+            auto decode_result = reader->DecodeAudioRangeUS(
+                job.source_t0, job.source_t1, m_audio_fmt);
+            if (decode_result.is_error()) continue;
+
+            auto decoded = decode_result.value();
+            if (!decoded || decoded->frames() == 0) continue;
+
+            auto pcm = build_audio_output(decoded, job.source_t0, job.source_t1,
+                                          job.timeline_t0, job.timeline_t1,
+                                          job.speed_ratio, m_audio_fmt);
+            if (!pcm || pcm->frames() == 0) continue;
+
+            // Store in track's audio cache
             std::lock_guard<std::mutex> lock(m_tracks_mutex);
             auto it = m_tracks.find(job.track_id);
             if (it != m_tracks.end()) {
-                auto& cache = it->second.video_cache;
-                while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
+                auto& cache = it->second.audio_cache;
+                // Evict oldest if at capacity
+                while (cache.size() >= TrackState::MAX_AUDIO_CACHE) {
                     cache.erase(cache.begin());
                 }
-                cache[job.timeline_frame] = {
-                    job.clip_id, job.source_frame, result.value()
-                };
+                cache.push_back({job.clip_id, job.timeline_t0, job.timeline_t1, pcm});
             }
         }
     }

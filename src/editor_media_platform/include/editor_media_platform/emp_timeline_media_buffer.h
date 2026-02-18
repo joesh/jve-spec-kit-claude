@@ -72,6 +72,9 @@ public:
     // Sequence rate (required before GetTrackAudio — converts timeline frames to us)
     void SetSequenceRate(int32_t num, int32_t den);
 
+    // Audio format for pre-buffer (call once before playback)
+    void SetAudioFormat(const AudioFormat& fmt);
+
     // Configuration
     void SetMaxReaders(int max);
 
@@ -118,6 +121,16 @@ private:
         };
         std::map<int64_t, CachedFrame> video_cache; // key = timeline_frame
         static constexpr size_t MAX_VIDEO_CACHE = 8;
+
+        // Audio PCM cache (pre-buffered at clip boundaries)
+        struct CachedAudio {
+            std::string clip_id;
+            TimeUS timeline_t0;
+            TimeUS timeline_t1;
+            std::shared_ptr<PcmChunk> pcm;
+        };
+        std::vector<CachedAudio> audio_cache;
+        static constexpr size_t MAX_AUDIO_CACHE = 4;
     };
 
     std::mutex m_tracks_mutex;
@@ -133,6 +146,12 @@ private:
     // Find first clip starting at or after t_us (for boundary spanning)
     const ClipInfo* find_next_clip_at_us(const TrackState& ts, TimeUS t_us) const;
 
+    // Check audio cache for pre-buffered PCM covering [seg_t0, seg_t1) for clip_id
+    // Returns sub-range PcmChunk on hit (full coverage required), nullptr on miss
+    std::shared_ptr<PcmChunk> check_audio_cache(
+        TrackState& ts, const std::string& clip_id,
+        TimeUS seg_t0, TimeUS seg_t1, const AudioFormat& fmt) const;
+
     // Build output PcmChunk: trim decoded audio to source range, conform, rebase to timeline
     std::shared_ptr<PcmChunk> build_audio_output(
         const std::shared_ptr<PcmChunk>& decoded,
@@ -142,12 +161,24 @@ private:
 
     // ── Pre-buffer thread pool ──
     struct PreBufferJob {
+        enum Type { VIDEO, AUDIO };
+        Type type = VIDEO;
+
         int track_id;
         std::string clip_id;
         std::string media_path;
-        int64_t source_frame;
-        int64_t timeline_frame;
-        Rate rate;
+
+        // VIDEO fields
+        int64_t source_frame = 0;
+        int64_t timeline_frame = 0;
+        Rate rate{0, 1};
+
+        // AUDIO fields
+        TimeUS source_t0 = 0;
+        TimeUS source_t1 = 0;
+        TimeUS timeline_t0 = 0;
+        TimeUS timeline_t1 = 0;
+        float speed_ratio = 1.0f;
     };
 
     void start_workers(int count);
@@ -163,6 +194,9 @@ private:
 
     // ── Sequence rate (for timeline frame → us conversion) ──
     Rate m_seq_rate{0, 1};
+
+    // ── Audio format (for pre-buffer — set once before playback) ──
+    AudioFormat m_audio_fmt{SampleFormat::F32, 0, 0};
 
     // ── Playhead state ──
     std::atomic<int64_t> m_playhead_frame{0};

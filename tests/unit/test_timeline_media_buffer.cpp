@@ -770,6 +770,174 @@ private slots:
                  qPrintable(QString("frames=%1 expected<=%2").arg(result->frames()).arg(expected_frames + 10)));
         QCOMPARE(result->start_time_us(), (int64_t)500000);
     }
+
+    // ── Phase 2d: Audio pre-buffering at clip boundaries ──
+
+    void test_audio_pre_buffer_fires() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        tmb->SetSequenceRate(24, 1);
+
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        tmb->SetAudioFormat(fmt);
+
+        // Two adjacent clips: clip1 [0,50) clip2 [50,100)
+        std::vector<ClipInfo> clips = {
+            {"clipA", m_testVideoPath.toStdString(), 0, 50, 0, 24, 1, 1.0f},
+            {"clipB", m_testVideoPath.toStdString(), 50, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // Seek near boundary (frame 48 — within PRE_BUFFER_THRESHOLD of 48)
+        tmb->SetPlayhead(48, 1, 1.0f);
+
+        // Give workers time to pre-buffer
+        QThread::msleep(300);
+
+        // Audio at clip2 entry point should be pre-buffered
+        // clip2 starts at frame 50 → 50/24 = 2.083333s
+        TimeUS clip2_start = FrameTime::from_frame(50, Rate{24, 1}).to_us();
+        TimeUS clip2_end = clip2_start + 200000; // 200ms
+        auto result = tmb->GetTrackAudio(1, clip2_start, clip2_end, fmt);
+        QVERIFY(result != nullptr);
+        QVERIFY(result->frames() > 0);
+    }
+
+    void test_audio_pre_buffer_cleared_on_set_clips() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        tmb->SetSequenceRate(24, 1);
+
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        tmb->SetAudioFormat(fmt);
+
+        // Two adjacent clips
+        std::vector<ClipInfo> clips = {
+            {"clipA", m_testVideoPath.toStdString(), 0, 50, 0, 24, 1, 1.0f},
+            {"clipB", m_testVideoPath.toStdString(), 50, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // Trigger pre-buffer
+        tmb->SetPlayhead(48, 1, 1.0f);
+        QThread::msleep(300);
+
+        // Now replace clips with different layout — cache should be cleared
+        std::vector<ClipInfo> clips2 = {
+            {"clipC", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips2);
+
+        // Audio should still work (fresh decode, not stale cache)
+        auto result = tmb->GetTrackAudio(1, 0, 100000, fmt);
+        QVERIFY(result != nullptr);
+        QVERIFY(result->frames() > 0);
+    }
+
+    void test_audio_pre_buffer_no_crash_zero_threads() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(0); // no workers
+        tmb->SetSequenceRate(24, 1);
+
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        tmb->SetAudioFormat(fmt);
+
+        // Two adjacent clips
+        std::vector<ClipInfo> clips = {
+            {"clipA", m_testVideoPath.toStdString(), 0, 50, 0, 24, 1, 1.0f},
+            {"clipB", m_testVideoPath.toStdString(), 50, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // SetPlayhead near boundary — no workers, should not crash
+        tmb->SetPlayhead(48, 1, 1.0f);
+
+        // GetTrackAudio works on-demand (no pre-buffer, no crash)
+        TimeUS clip2_start = FrameTime::from_frame(50, Rate{24, 1}).to_us();
+        auto result = tmb->GetTrackAudio(1, clip2_start, clip2_start + 100000, fmt);
+        QVERIFY(result != nullptr);
+        QVERIFY(result->frames() > 0);
+    }
+
+    void test_audio_pre_buffer_sub_range_extraction() {
+        // Pre-buffer caches 200ms, but GetTrackAudio requests a narrower sub-range
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        tmb->SetSequenceRate(24, 1);
+
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        tmb->SetAudioFormat(fmt);
+
+        // Two adjacent clips: clip1 [0,50) clip2 [50,100)
+        std::vector<ClipInfo> clips = {
+            {"clipA", m_testVideoPath.toStdString(), 0, 50, 0, 24, 1, 1.0f},
+            {"clipB", m_testVideoPath.toStdString(), 50, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // Trigger pre-buffer (caches ~200ms from clip2 entry)
+        tmb->SetPlayhead(48, 1, 1.0f);
+        QThread::msleep(300);
+
+        // Request only 50ms starting 50ms into clip2 (sub-range of cached 200ms)
+        TimeUS clip2_start = FrameTime::from_frame(50, Rate{24, 1}).to_us();
+        TimeUS req_t0 = clip2_start + 50000;  // 50ms in
+        TimeUS req_t1 = req_t0 + 50000;       // 50ms duration
+        auto result = tmb->GetTrackAudio(1, req_t0, req_t1, fmt);
+        QVERIFY(result != nullptr);
+
+        // Should get ~50ms worth of samples (2400 frames at 48kHz)
+        int64_t expected = (50000LL * 48000) / 1000000; // 2400
+        QVERIFY2(result->frames() >= expected - 10,
+                 qPrintable(QString("frames=%1 expected>=%2").arg(result->frames()).arg(expected - 10)));
+        QVERIFY2(result->frames() <= expected + 10,
+                 qPrintable(QString("frames=%1 expected<=%2").arg(result->frames()).arg(expected + 10)));
+        // Verify start time is the requested sub-range start
+        QCOMPARE(result->start_time_us(), req_t0);
+    }
+
+    void test_audio_cache_eviction_at_capacity() {
+        // Fill audio cache past MAX_AUDIO_CACHE (4), verify no crash and audio still works
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        // 1 worker: sequential job processing avoids concurrent reader access
+        auto tmb = TimelineMediaBuffer::Create(1);
+        tmb->SetSequenceRate(24, 1);
+
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        tmb->SetAudioFormat(fmt);
+
+        // 6 adjacent clips (more than MAX_AUDIO_CACHE=4)
+        std::vector<ClipInfo> clips;
+        for (int i = 0; i < 6; ++i) {
+            clips.push_back({
+                "clip" + std::to_string(i),
+                m_testVideoPath.toStdString(),
+                static_cast<int64_t>(i * 50), 50, 0, 24, 1, 1.0f
+            });
+        }
+        tmb->SetTrackClips(1, clips);
+
+        // Trigger pre-buffer at each boundary, wait for 1 worker to finish each pair
+        for (int i = 0; i < 5; ++i) {
+            int64_t boundary_frame = (i + 1) * 50;
+            tmb->SetPlayhead(boundary_frame - 2, 1, 1.0f);
+            QThread::msleep(300); // enough for 1 worker to process VIDEO + AUDIO jobs
+        }
+
+        // Wait for final jobs to complete
+        QThread::msleep(300);
+
+        // Audio at last clip should still work (on-demand decode, not stale cache)
+        TimeUS last_clip_start = FrameTime::from_frame(250, Rate{24, 1}).to_us();
+        auto result = tmb->GetTrackAudio(1, last_clip_start, last_clip_start + 100000, fmt);
+        QVERIFY(result != nullptr);
+        QVERIFY(result->frames() > 0);
+    }
 };
 
 QTEST_MAIN(TestTimelineMediaBuffer)
