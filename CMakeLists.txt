@@ -65,6 +65,7 @@ include_directories(
 set(EMP_SOURCES
     src/editor_media_platform/src/emp_media_file.cpp
     src/editor_media_platform/src/emp_reader.cpp
+    src/editor_media_platform/src/emp_timeline_media_buffer.cpp
     src/editor_media_platform/src/emp_frame.cpp
     src/editor_media_platform/src/emp_pcm_chunk.cpp
     src/editor_media_platform/src/impl/ffmpeg_context.cpp
@@ -387,6 +388,33 @@ set_target_properties(test_sse_decimate PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 add_test(NAME test_sse_decimate COMMAND test_sse_decimate)
+
+# TMB (TimelineMediaBuffer) test
+add_executable(test_tmb
+    tests/unit/test_timeline_media_buffer.cpp
+)
+target_link_libraries(test_tmb
+    JVECore
+    EditorMediaPlatform
+    Qt6::Test
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Gui
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_tmb PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/editor_media_platform/include
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_tmb PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_tmb PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+add_test(NAME test_tmb COMMAND test_tmb)
 
 add_custom_target(lua_tests ALL
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_lua_tests.sh
