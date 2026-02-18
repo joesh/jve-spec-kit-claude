@@ -1,6 +1,6 @@
 #pragma once
 
-#include "emp_asset.h"
+#include "emp_media_file.h"
 #include "emp_frame.h"
 #include "emp_audio.h"
 #include "emp_errors.h"
@@ -25,13 +25,13 @@ DecodeMode GetDecodeMode();
 // Forward declaration for implementation
 class ReaderImpl;
 
-// Video reader for decoding frames from an asset
+// Video reader for decoding frames from a media file
 class Reader {
 public:
     ~Reader();
 
-    // Create a reader for an asset
-    static Result<std::shared_ptr<Reader>> Create(std::shared_ptr<Asset> asset);
+    // Create a reader for a media file
+    static Result<std::shared_ptr<Reader>> Create(std::shared_ptr<MediaFile> media_file);
 
     // Seek to a frame time (invalidates current frame)
     Result<void> Seek(FrameTime t);
@@ -86,15 +86,15 @@ public:
     // Used by tests to verify seek-vs-forward-decode behavior.
     int64_t PrefetchFramesDecoded() const;
 
-    // Get the underlying asset
-    std::shared_ptr<Asset> asset() const;
+    // Get the underlying media file
+    std::shared_ptr<MediaFile> media_file() const;
 
     // Internal: Constructor is public but ReaderImpl is opaque, so only EMP can create Readers
-    explicit Reader(std::unique_ptr<ReaderImpl> impl, std::shared_ptr<Asset> asset);
+    explicit Reader(std::unique_ptr<ReaderImpl> impl, std::shared_ptr<MediaFile> media_file);
 
 private:
     std::unique_ptr<ReaderImpl> m_impl;
-    std::shared_ptr<Asset> m_asset;
+    std::shared_ptr<MediaFile> m_media_file;
 
     // Prefetch worker thread function
     void prefetch_worker();

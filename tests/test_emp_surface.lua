@@ -105,16 +105,16 @@ print("    ✓ SURFACE_SET_FRAME with invalid frame errors")
 -- ============================================================================
 
 print("  Testing: SW-decoded frame on GPU surface (BGRA pipeline)")
-if WIDGET.CREATE_GPU_VIDEO_SURFACE and EMP.ASSET_OPEN then
+if WIDGET.CREATE_GPU_VIDEO_SURFACE and EMP.MEDIA_FILE_OPEN then
     -- offline_frame.png is always sw-decoded (PNG → FFmpeg software path → no hw_buffer)
     local script_dir = debug.getinfo(1, "S").source:match("@(.*/)")
     local project_root = script_dir and script_dir:match("(.*/)[^/]*/") or "../"
     local png_path = project_root .. "resources/offline_frame.png"
 
-    local asset = EMP.ASSET_OPEN(png_path)
-    if asset then
-        local info = EMP.ASSET_INFO(asset)
-        local reader = EMP.READER_CREATE(asset)
+    local media_file = EMP.MEDIA_FILE_OPEN(png_path)
+    if media_file then
+        local info = EMP.MEDIA_FILE_INFO(media_file)
+        local reader = EMP.READER_CREATE(media_file)
         if reader and info and info.has_video then
             local frame = EMP.READER_DECODE_FRAME(reader, 0,
                 info.fps_num or 1, info.fps_den or 1)
@@ -140,12 +140,12 @@ if WIDGET.CREATE_GPU_VIDEO_SURFACE and EMP.ASSET_OPEN then
         else
             print("    ⚠ Skipped: could not create reader for PNG")
         end
-        EMP.ASSET_CLOSE(asset)
+        EMP.MEDIA_FILE_CLOSE(media_file)
     else
         print("    ⚠ Skipped: offline_frame.png not found at " .. png_path)
     end
 else
-    print("    ⚠ Skipped: GPU surface or ASSET_OPEN not available")
+    print("    ⚠ Skipped: GPU surface or MEDIA_FILE_OPEN not available")
 end
 
 -- ============================================================================
@@ -165,13 +165,13 @@ local function find_test_video()
             local path = handle:read("*l")
             handle:close()
             if path and path ~= "" then
-                local asset, _ = EMP.ASSET_OPEN(path)
-                if asset then
-                    local info = EMP.ASSET_INFO(asset)
+                local media_file, _ = EMP.MEDIA_FILE_OPEN(path)
+                if media_file then
+                    local info = EMP.MEDIA_FILE_INFO(media_file)
                     if info and info.has_video then
-                        return path, asset, info
+                        return path, media_file, info
                     end
-                    EMP.ASSET_CLOSE(asset)
+                    EMP.MEDIA_FILE_CLOSE(media_file)
                 end
             end
         end
@@ -179,7 +179,7 @@ local function find_test_video()
     return nil
 end
 
-local test_path, test_asset, test_info = find_test_video()
+local test_path, test_media_file, test_info = find_test_video()
 
 if not test_path then
     print("  ⚠ No test video found - skipping full surface tests")
@@ -194,7 +194,7 @@ print("  Found test video: " .. test_path)
 -- ============================================================================
 
 print("  Testing: Full decode -> display pipeline")
-local reader = EMP.READER_CREATE(test_asset)
+local reader = EMP.READER_CREATE(test_media_file)
 assert(reader, "Reader should create")
 
 local frame = EMP.READER_DECODE_FRAME(reader, 0, test_info.fps_num, test_info.fps_den)
@@ -300,6 +300,6 @@ print("    ✓ Rapid display stress test passed")
 
 EMP.SURFACE_SET_FRAME(surface, nil)
 EMP.READER_CLOSE(reader)
-EMP.ASSET_CLOSE(test_asset)
+EMP.MEDIA_FILE_CLOSE(test_media_file)
 
 print("✅ test_emp_surface.lua passed")

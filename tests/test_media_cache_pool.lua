@@ -13,37 +13,37 @@
 require('test_env')
 
 -- Track resource lifecycle for verification
-local open_assets = {}
+local open_media_files = {}
 local open_readers = {}
-local closed_assets = {}
+local closed_media_files = {}
 local closed_readers = {}
-local asset_counter = 0
+local media_file_counter = 0
 local reader_counter = 0
 local stopped_prefetch = {}
 local decode_calls = {}
 local max_cache_calls = {}
 
-local function make_mock_asset(path)
-    asset_counter = asset_counter + 1
-    local id = "asset_" .. asset_counter
-    open_assets[id] = path
+local function make_mock_media_file(path)
+    media_file_counter = media_file_counter + 1
+    local id = "media_file_" .. media_file_counter
+    open_media_files[id] = path
     return id
 end
 
-local function make_mock_reader(asset_id)
+local function make_mock_reader(media_file_id)
     reader_counter = reader_counter + 1
     local id = "reader_" .. reader_counter
-    open_readers[id] = asset_id
+    open_readers[id] = media_file_id
     return id
 end
 
 local mock_qt_constants = {
     EMP = {
-        ASSET_OPEN = function(path)
-            return make_mock_asset(path)
+        MEDIA_FILE_OPEN = function(path)
+            return make_mock_media_file(path)
         end,
-        ASSET_INFO = function(asset)
-            assert(open_assets[asset], "ASSET_INFO: asset not open: " .. tostring(asset))
+        MEDIA_FILE_INFO = function(mf)
+            assert(open_media_files[mf], "MEDIA_FILE_INFO: media file not open: " .. tostring(mf))
             return {
                 has_video = true,
                 has_audio = true,
@@ -56,14 +56,14 @@ local mock_qt_constants = {
                 audio_channels = 2,
             }
         end,
-        ASSET_CLOSE = function(asset)
-            assert(open_assets[asset], "ASSET_CLOSE: asset not open: " .. tostring(asset))
-            table.insert(closed_assets, asset)
-            open_assets[asset] = nil
+        MEDIA_FILE_CLOSE = function(mf)
+            assert(open_media_files[mf], "MEDIA_FILE_CLOSE: media file not open: " .. tostring(mf))
+            table.insert(closed_media_files, mf)
+            open_media_files[mf] = nil
         end,
-        READER_CREATE = function(asset)
-            assert(open_assets[asset], "READER_CREATE: asset not open: " .. tostring(asset))
-            return make_mock_reader(asset)
+        READER_CREATE = function(mf)
+            assert(open_media_files[mf], "READER_CREATE: media file not open: " .. tostring(mf))
+            return make_mock_reader(mf)
         end,
         READER_CLOSE = function(reader)
             assert(open_readers[reader], "READER_CLOSE: reader not open: " .. tostring(reader))
@@ -125,9 +125,9 @@ assert(media_cache.reader_pool["/test/clip_a.mov"],
     "Pool should contain /test/clip_a.mov")
 
 local entry_a = media_cache.reader_pool["/test/clip_a.mov"]
-assert(entry_a.video_asset, "Pool entry should have video_asset")
+assert(entry_a.video_media_file, "Pool entry should have video_media_file")
 assert(entry_a.video_reader, "Pool entry should have video_reader")
-assert(entry_a.audio_asset, "Pool entry should have audio_asset")
+assert(entry_a.audio_media_file, "Pool entry should have audio_media_file")
 assert(entry_a.audio_reader, "Pool entry should have audio_reader")
 assert(entry_a.info, "Pool entry should have info")
 assert(entry_a.last_used, "Pool entry should have last_used")
@@ -139,10 +139,10 @@ print("  OK: activate() opens and pools reader")
 --------------------------------------------------------------------------------
 print("Test 3: activate() same path is no-op")
 
-local prev_asset_count = asset_counter
+local prev_asset_count = media_file_counter
 media_cache.activate("/test/clip_a.mov", CTX)
-assert(asset_counter == prev_asset_count,
-    "activate() same path should not open new assets")
+assert(media_file_counter == prev_asset_count,
+    "activate() same path should not open new media files")
 
 print("  OK: activate() same path is no-op")
 
@@ -245,19 +245,19 @@ assert(#closed_readers > pre_cleanup_closed,
 print("  OK: cleanup() releases all pooled readers")
 
 --------------------------------------------------------------------------------
--- Test 9: get_asset_info returns active reader's info
+-- Test 9: get_media_file_info returns active reader's info
 --------------------------------------------------------------------------------
-print("Test 9: get_asset_info returns active reader's info")
+print("Test 9: get_media_file_info returns active reader's info")
 
 media_cache.activate("/test/info_test.mov", CTX)
-local info = media_cache.get_asset_info(CTX)
-assert(info, "get_asset_info should return info for active reader")
+local info = media_cache.get_media_file_info(CTX)
+assert(info, "get_media_file_info should return info for active reader")
 assert(info.width == 1920, "Info should have correct width")
 assert(info.fps_num == 24, "Info should have correct fps_num")
 
 media_cache.cleanup()
 
-print("  OK: get_asset_info works with pool")
+print("  OK: get_media_file_info works with pool")
 
 --------------------------------------------------------------------------------
 -- Test 10: Two contexts with independent active_path

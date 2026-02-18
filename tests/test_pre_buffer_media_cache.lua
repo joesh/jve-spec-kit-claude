@@ -9,15 +9,15 @@ print("=== test_pre_buffer_media_cache.lua ===")
 -- Mock EMP bindings BEFORE loading media_cache (qt_constants must be in package.loaded)
 local decoded_frames = {}  -- { {reader, frame_idx, fps_num, fps_den}, ... }
 local mock_reader_counter = 0
-local mock_asset_counter = 0
+local mock_media_file_counter = 0
 
 local mock_emp = {
-    ASSET_OPEN = function(path)
-        mock_asset_counter = mock_asset_counter + 1
-        return { _id = mock_asset_counter, _path = path }
+    MEDIA_FILE_OPEN = function(path)
+        mock_media_file_counter = mock_media_file_counter + 1
+        return { _id = mock_media_file_counter, _path = path }
     end,
-    ASSET_CLOSE = function() end,
-    ASSET_INFO = function()
+    MEDIA_FILE_CLOSE = function() end,
+    MEDIA_FILE_INFO = function()
         return {
             has_video = true,
             has_audio = true,
@@ -134,15 +134,15 @@ do
     local pool_count_before = 0
     for _ in pairs(media_cache.reader_pool) do pool_count_before = pool_count_before + 1 end
 
-    local open_count_before = mock_asset_counter
+    local open_count_before = mock_media_file_counter
 
     -- Pre-buffer a path already in pool
     decoded_frames = {}
     media_cache.pre_buffer("/test/next_clip.mov", 0, 24, 1)
 
-    -- No new asset opens
-    assert(mock_asset_counter == open_count_before, string.format(
-        "Should not open new asset, opened %d new", mock_asset_counter - open_count_before))
+    -- No new media file opens
+    assert(mock_media_file_counter == open_count_before, string.format(
+        "Should not open new media file, opened %d new", mock_media_file_counter - open_count_before))
 
     -- Should still decode frames
     assert(#decoded_frames >= 5, "Should decode frames from existing reader")

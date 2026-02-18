@@ -3,9 +3,9 @@ require('test_env')
 -- Mock qt_constants
 local mock_qt_constants = {
     EMP = {
-        ASSET_OPEN = function() return nil, { msg = "mock" } end,
-        ASSET_INFO = function() return nil end,
-        ASSET_CLOSE = function() end,
+        MEDIA_FILE_OPEN = function() return nil, { msg = "mock" } end,
+        MEDIA_FILE_INFO = function() return nil end,
+        MEDIA_FILE_CLOSE = function() end,
         READER_CREATE = function() return nil, { msg = "mock" } end,
         READER_CLOSE = function() end,
         READER_DECODE_FRAME = function() return nil, { msg = "mock" } end,
@@ -46,7 +46,7 @@ package.loaded["core.qt_constants"] = mock_qt_constants
 package.loaded["ui.media_cache"] = {
     is_loaded = function() return true end,
     set_playhead = function() end,
-    get_asset_info = function() return { fps_num = 30, fps_den = 1, has_audio = true, audio_sample_rate = 48000, duration_us = 3333333 } end,
+    get_media_file_info = function() return { fps_num = 30, fps_den = 1, has_audio = true, audio_sample_rate = 48000, duration_us = 3333333 } end,
     get_file_path = function() return "/mock/media.mov" end,
     ensure_audio_pooled = function() return { has_audio = true, audio_sample_rate = 48000, duration_us = 3333333 } end,
     get_audio_pcm_for_path = function(path, start_us, end_us, sr) return "mock_pcm_ptr", 1024, start_us end,

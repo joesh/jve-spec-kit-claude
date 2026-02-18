@@ -22,7 +22,7 @@ local release_context_caches
 
 local M = {
     -- LRU reader pool: { [file_path] = pool_entry }
-    -- pool_entry = { video_asset, video_reader, audio_asset, audio_reader, info,
+    -- pool_entry = { video_media_file, video_reader, audio_media_file, audio_reader, info,
     --               audio_cache, last_used }
     reader_pool = {},
     max_readers = 8,
@@ -31,7 +31,7 @@ local M = {
     contexts = {},
 
     -- Offline registry: { [file_path] = { error_code, error_msg, path, first_seen } }
-    -- Populated when ASSET_OPEN fails for any filesystem reason.
+    -- Populated when MEDIA_FILE_OPEN fails for any filesystem reason.
     -- Cleared on cleanup() / project change.
     -- TODO: Register FSEvents interest for each offline path to detect when files
     -- come back online. Also watch online paths to detect deletion/modification.
@@ -152,8 +152,8 @@ local function open_reader(file_path)
     assert(qt_constants, "media_cache.open_reader: qt_constants not available")
     assert(qt_constants.EMP, "media_cache.open_reader: EMP bindings not available")
 
-    local first_asset, err = qt_constants.EMP.ASSET_OPEN(file_path)
-    if not first_asset then
+    local first_media_file, err = qt_constants.EMP.MEDIA_FILE_OPEN(file_path)
+    if not first_media_file then
         local entry = {
             error_code = err and err.code or "Unknown",
             error_msg = err and err.msg or "unknown error",
@@ -166,16 +166,16 @@ local function open_reader(file_path)
         return nil, entry
     end
 
-    local info = qt_constants.EMP.ASSET_INFO(first_asset)
+    local info = qt_constants.EMP.MEDIA_FILE_INFO(first_media_file)
     assert(info, string.format(
-        "media_cache.open_reader: ASSET_INFO failed for '%s'", file_path))
+        "media_cache.open_reader: MEDIA_FILE_INFO failed for '%s'", file_path))
     assert(info.has_video or info.has_audio, string.format(
         "media_cache.open_reader: no video or audio stream in '%s'", file_path))
 
     local entry = {
-        video_asset = nil,
+        video_media_file = nil,
         video_reader = nil,
-        audio_asset = nil,
+        audio_media_file = nil,
         audio_reader = nil,
         info = info,
         audio_cache = new_audio_cache(),
@@ -183,8 +183,8 @@ local function open_reader(file_path)
     }
 
     if info.has_video then
-        entry.video_asset = first_asset
-        local video_reader, reader_err = qt_constants.EMP.READER_CREATE(first_asset)
+        entry.video_media_file = first_media_file
+        local video_reader, reader_err = qt_constants.EMP.READER_CREATE(first_media_file)
         assert(video_reader, string.format(
             "media_cache.open_reader: READER_CREATE failed for video: %s",
             reader_err and reader_err.msg or "unknown error"))
@@ -192,33 +192,33 @@ local function open_reader(file_path)
     end
 
     if info.has_audio then
-        local audio_asset, audio_err = qt_constants.EMP.ASSET_OPEN(file_path)
-        assert(audio_asset, string.format(
-            "media_cache.open_reader: ASSET_OPEN failed for audio '%s': %s",
+        local audio_media_file, audio_err = qt_constants.EMP.MEDIA_FILE_OPEN(file_path)
+        assert(audio_media_file, string.format(
+            "media_cache.open_reader: MEDIA_FILE_OPEN failed for audio '%s': %s",
             file_path, audio_err and audio_err.msg or "unknown error"))
 
-        local audio_reader, areader_err = qt_constants.EMP.READER_CREATE(audio_asset)
+        local audio_reader, areader_err = qt_constants.EMP.READER_CREATE(audio_media_file)
         assert(audio_reader, string.format(
             "media_cache.open_reader: READER_CREATE failed for audio: %s",
             areader_err and areader_err.msg or "unknown error"))
 
-        entry.audio_asset = audio_asset
+        entry.audio_media_file = audio_media_file
         entry.audio_reader = audio_reader
 
         if info.has_video then
             logger.info("media_cache", string.format(
-                "Opened dual assets: video + audio for '%s'", file_path))
+                "Opened dual media files: video + audio for '%s'", file_path))
         else
             logger.info("media_cache", string.format(
-                "Opened audio-only asset for '%s'", file_path))
+                "Opened audio-only media file for '%s'", file_path))
         end
     else
         logger.info("media_cache", string.format(
-            "Opened single asset (no audio) for '%s'", file_path))
+            "Opened single media file (no audio) for '%s'", file_path))
     end
 
     if not info.has_video then
-        qt_constants.EMP.ASSET_CLOSE(first_asset)
+        qt_constants.EMP.MEDIA_FILE_CLOSE(first_media_file)
     end
 
     if info.has_video then
@@ -251,17 +251,17 @@ local function close_entry(entry)
         qt_constants.EMP.READER_CLOSE(entry.video_reader)
         entry.video_reader = nil
     end
-    if entry.video_asset then
-        qt_constants.EMP.ASSET_CLOSE(entry.video_asset)
-        entry.video_asset = nil
+    if entry.video_media_file then
+        qt_constants.EMP.MEDIA_FILE_CLOSE(entry.video_media_file)
+        entry.video_media_file = nil
     end
     if entry.audio_reader then
         qt_constants.EMP.READER_CLOSE(entry.audio_reader)
         entry.audio_reader = nil
     end
-    if entry.audio_asset then
-        qt_constants.EMP.ASSET_CLOSE(entry.audio_asset)
-        entry.audio_asset = nil
+    if entry.audio_media_file then
+        qt_constants.EMP.MEDIA_FILE_CLOSE(entry.audio_media_file)
+        entry.audio_media_file = nil
     end
 
     entry.info = nil
@@ -391,16 +391,16 @@ function M.is_loaded(context_id)
     return ctx.active_path ~= nil and M.reader_pool[ctx.active_path] ~= nil
 end
 
-function M.get_video_asset(context_id)
+function M.get_video_media_file(context_id)
     local ctx = get_context(context_id)
     if not ctx.active_path then return nil end
-    return context_active_entry(ctx).video_asset
+    return context_active_entry(ctx).video_media_file
 end
 
-function M.get_audio_asset(context_id)
+function M.get_audio_media_file(context_id)
     local ctx = get_context(context_id)
     if not ctx.active_path then return nil end
-    return context_active_entry(ctx).audio_asset
+    return context_active_entry(ctx).audio_media_file
 end
 
 function M.get_video_reader(context_id)
@@ -415,9 +415,9 @@ function M.get_audio_reader(context_id)
     return context_active_entry(ctx).audio_reader
 end
 
---- Get asset info for context's active reader.
+--- Get media file info for context's active reader.
 -- @param context_id string
-function M.get_asset_info(context_id)
+function M.get_media_file_info(context_id)
     local ctx = get_context(context_id)
     if not ctx.active_path or not M.reader_pool[ctx.active_path] then return nil end
     return context_active_entry(ctx).info
@@ -446,7 +446,7 @@ end
 -- If not in pool, open and add. LRU-evict if pool full.
 -- @param file_path Path to media file
 -- @param context_id string
--- @return asset_info
+-- @return media_file_info
 function M.activate(file_path, context_id)
     assert(file_path, "media_cache.activate: file_path is nil")
     assert(type(file_path) == "string", string.format(
@@ -492,7 +492,7 @@ end
 --- Legacy load() — calls activate() for backward compat.
 -- @param file_path Path to media file
 -- @param context_id string
--- @return asset_info
+-- @return media_file_info
 function M.load(file_path, context_id)
     return M.activate(file_path, context_id)
 end
@@ -558,7 +558,7 @@ end
 --- Ensure a path is in the reader pool for audio access.
 -- Opens the file if not already pooled. Does NOT change any context's active_path.
 -- @param file_path Path to media file
--- @return asset_info
+-- @return media_file_info
 function M.ensure_audio_pooled(file_path)
     assert(file_path, "media_cache.ensure_audio_pooled: file_path is nil")
     assert(type(file_path) == "string", string.format(

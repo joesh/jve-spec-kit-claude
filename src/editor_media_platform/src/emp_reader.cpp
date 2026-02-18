@@ -1,7 +1,7 @@
 #include <editor_media_platform/emp_reader.h>
 #include "impl/ffmpeg_context.h"
 #include "impl/ffmpeg_resample.h"
-#include "impl/asset_impl.h"
+#include "impl/media_file_impl.h"
 #include "impl/frame_impl.h"
 #include "impl/pcm_chunk_impl.h"
 #include <cassert>
@@ -186,9 +186,9 @@ public:
     std::atomic<TimeUS> max_floor_gap_us{84000};  // conservative default ~2 frames @ 24fps
 };
 
-Reader::Reader(std::unique_ptr<ReaderImpl> impl, std::shared_ptr<Asset> asset)
-    : m_impl(std::move(impl)), m_asset(std::move(asset)) {
-    assert(m_impl && m_asset && "Reader impl/asset cannot be null");
+Reader::Reader(std::unique_ptr<ReaderImpl> impl, std::shared_ptr<MediaFile> asset)
+    : m_impl(std::move(impl)), m_media_file(std::move(asset)) {
+    assert(m_impl && m_media_file && "Reader impl/media_file cannot be null");
 }
 
 Reader::~Reader() {
@@ -196,22 +196,22 @@ Reader::~Reader() {
     StopPrefetch();
 }
 
-std::shared_ptr<Asset> Reader::asset() const {
-    return m_asset;
+std::shared_ptr<MediaFile> Reader::media_file() const {
+    return m_media_file;
 }
 
-Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<Asset> asset) {
+Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset) {
     if (!asset) {
-        return Error::invalid_arg("Asset is null");
+        return Error::invalid_arg("MediaFile is null");
     }
     if (!asset->info().has_video && !asset->info().has_audio) {
-        return Error::unsupported("Asset has no video or audio stream");
+        return Error::unsupported("MediaFile has no video or audio stream");
     }
 
     auto impl = std::make_unique<ReaderImpl>();
 
     // Get format context from asset (requires friend access)
-    AssetImpl* asset_impl = asset->impl_ptr();
+    MediaFileImpl* asset_impl = asset->impl_ptr();
 
     // Initialize video codec if asset has video
     if (asset->info().has_video) {
@@ -256,11 +256,11 @@ Result<void> Reader::Seek(FrameTime t) {
 }
 
 Result<void> Reader::SeekUS(TimeUS t_us) {
-    if (!m_asset->info().has_video) {
+    if (!m_media_file->info().has_video) {
         return Error::unsupported("Seek requires video stream");
     }
 
-    AssetImpl* asset_impl = m_asset->impl_ptr();
+    MediaFileImpl* asset_impl = m_media_file->impl_ptr();
     AVStream* stream = asset_impl->fmt_ctx.video_stream();
 
     auto result = impl::seek_with_backoff(
@@ -371,11 +371,11 @@ int64_t Reader::PrefetchFramesDecoded() const {
 }
 
 Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
-    if (!m_asset->info().has_video) {
+    if (!m_media_file->info().has_video) {
         return Error::unsupported("DecodeAt requires video stream");
     }
 
-    AssetImpl* asset_impl = m_asset->impl_ptr();
+    MediaFileImpl* asset_impl = m_media_file->impl_ptr();
     AVFormatContext* fmt_ctx = asset_impl->fmt_ctx.get();
     AVStream* stream = asset_impl->fmt_ctx.video_stream();
     int stream_idx = asset_impl->fmt_ctx.video_stream_index();
@@ -682,8 +682,8 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
     constexpr int RESAMPLER_OUTPUT_CHANNELS = 2;
 
     // Validate
-    if (!m_asset->info().has_audio) {
-        return Error::unsupported("Asset has no audio stream");
+    if (!m_media_file->info().has_audio) {
+        return Error::unsupported("MediaFile has no audio stream");
     }
     if (!m_impl->audio_initialized) {
         return Error::unsupported("Audio codec not initialized");
@@ -692,7 +692,7 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
         return Error::invalid_arg("DecodeAudioRangeUS: t1 must be > t0");
     }
 
-    AssetImpl* asset_impl = m_asset->impl_ptr();
+    MediaFileImpl* asset_impl = m_media_file->impl_ptr();
     AVFormatContext* fmt_ctx = asset_impl->fmt_ctx.get();
     AVStream* audio_stream = asset_impl->fmt_ctx.audio_stream();
     int audio_stream_idx = asset_impl->fmt_ctx.audio_stream_index();
@@ -867,7 +867,7 @@ void Reader::StartPrefetch(int direction) {
     }
 
     // Prefetch is for video frames - skip for audio-only files
-    if (!m_asset->info().has_video) {
+    if (!m_media_file->info().has_video) {
         return;
     }
 
@@ -889,7 +889,7 @@ void Reader::StartPrefetch(int direction) {
 
     // Initialize prefetch decoder if not already done (lazy init)
     if (!m_impl->prefetch_decoder_initialized) {
-        const std::string& path = m_asset->info().path;
+        const std::string& path = m_media_file->info().path;
 
         // Open separate format context for prefetch thread
         auto fmt_result = m_impl->prefetch_fmt_ctx.open(path);
@@ -1026,7 +1026,7 @@ void Reader::prefetch_worker() {
 
         // Clamp to valid range
         if (prefetch_to < 0) prefetch_to = 0;
-        TimeUS duration = m_asset->info().duration_us;
+        TimeUS duration = m_media_file->info().duration_us;
         if (prefetch_to > duration) prefetch_to = duration;
 
         // Check if we need to decode (simple bounds check).

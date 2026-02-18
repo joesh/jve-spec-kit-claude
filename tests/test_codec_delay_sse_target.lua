@@ -71,7 +71,7 @@ end
 local CODEC_DELAY_US = 20000
 
 local mock_media_cache = {
-    get_asset_info = function()
+    get_media_file_info = function()
         return {
             has_audio = true,
             audio_sample_rate = 48000,

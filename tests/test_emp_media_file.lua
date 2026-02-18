@@ -1,19 +1,19 @@
--- Test EMP Asset operations
--- Tests: ASSET_OPEN, ASSET_INFO, ASSET_CLOSE, error handling
+-- Test EMP MediaFile operations
+-- Tests: MEDIA_FILE_OPEN, MEDIA_FILE_INFO, MEDIA_FILE_CLOSE, error handling
 require('test_env')
 
-print("Testing EMP Asset operations...")
+print("Testing EMP MediaFile operations...")
 
 -- Skip if qt_constants not available (standalone Lua tests)
 if not qt_constants then
     print("  ⚠ Skipping: qt_constants not available (requires C++ Qt context)")
-    print("✅ test_emp_asset.lua passed (skipped - no Qt context)")
+    print("✅ test_emp_media_file.lua passed (skipped - no Qt context)")
     return
 end
 
 if not qt_constants.EMP then
     print("  ⚠ Skipping: EMP bindings not registered")
-    print("✅ test_emp_asset.lua passed (skipped - no EMP)")
+    print("✅ test_emp_media_file.lua passed (skipped - no EMP)")
     return
 end
 
@@ -24,18 +24,18 @@ local EMP = qt_constants.EMP
 -- ============================================================================
 
 print("  Testing: Required functions exist")
-assert(EMP.ASSET_OPEN, "ASSET_OPEN should exist")
-assert(EMP.ASSET_INFO, "ASSET_INFO should exist")
-assert(EMP.ASSET_CLOSE, "ASSET_CLOSE should exist")
-print("    ✓ All required asset functions exist")
+assert(EMP.MEDIA_FILE_OPEN, "MEDIA_FILE_OPEN should exist")
+assert(EMP.MEDIA_FILE_INFO, "MEDIA_FILE_INFO should exist")
+assert(EMP.MEDIA_FILE_CLOSE, "MEDIA_FILE_CLOSE should exist")
+print("    ✓ All required media file functions exist")
 
 -- ============================================================================
 -- Test: Opening non-existent file returns error
 -- ============================================================================
 
 print("  Testing: Non-existent file error")
-local asset, err = EMP.ASSET_OPEN("/nonexistent/path/to/video.mp4")
-assert(asset == nil, "Should return nil for non-existent file")
+local media_file, err = EMP.MEDIA_FILE_OPEN("/nonexistent/path/to/video.mp4")
+assert(media_file == nil, "Should return nil for non-existent file")
 assert(err ~= nil, "Should return error table")
 assert(err.code == "FileNotFound", "Error code should be FileNotFound, got: " .. tostring(err.code))
 assert(type(err.msg) == "string", "Error should have message string")
@@ -53,8 +53,8 @@ if f then
     f:write("not a video file")
     f:close()
 
-    local asset2, err2 = EMP.ASSET_OPEN(tmp_path)
-    assert(asset2 == nil, "Should return nil for invalid file")
+    local media_file2, err2 = EMP.MEDIA_FILE_OPEN(tmp_path)
+    assert(media_file2 == nil, "Should return nil for invalid file")
     assert(err2 ~= nil, "Should return error table")
     -- Error code could be Unsupported or Internal
     assert(err2.code ~= "Ok", "Error code should not be Ok")
@@ -66,27 +66,27 @@ else
 end
 
 -- ============================================================================
--- Test: ASSET_INFO on nil errors
+-- Test: MEDIA_FILE_INFO on nil handle errors
 -- ============================================================================
 
-print("  Testing: ASSET_INFO error handling")
+print("  Testing: MEDIA_FILE_INFO error handling")
 local status = pcall(function()
-    return EMP.ASSET_INFO(nil)
+    return EMP.MEDIA_FILE_INFO(nil)
 end)
-assert(not status, "ASSET_INFO(nil) should error")
-print("    ✓ ASSET_INFO(nil) throws error")
+assert(not status, "MEDIA_FILE_INFO(nil) should error")
+print("    ✓ MEDIA_FILE_INFO(nil) throws error")
 
 -- ============================================================================
--- Test: ASSET_CLOSE on nil doesn't crash
+-- Test: MEDIA_FILE_CLOSE on nil handle doesn't crash
 -- ============================================================================
 
-print("  Testing: ASSET_CLOSE error handling")
+print("  Testing: MEDIA_FILE_CLOSE error handling")
 local status2 = pcall(function()
-    return EMP.ASSET_CLOSE(nil)
+    return EMP.MEDIA_FILE_CLOSE(nil)
 end)
 -- Should error but not crash
-assert(not status2, "ASSET_CLOSE(nil) should error")
-print("    ✓ ASSET_CLOSE(nil) throws error (doesn't crash)")
+assert(not status2, "MEDIA_FILE_CLOSE(nil) should error")
+print("    ✓ MEDIA_FILE_CLOSE(nil) throws error (doesn't crash)")
 
 -- ============================================================================
 -- Test: Opening same file twice works
@@ -109,9 +109,9 @@ for _, dir in ipairs(test_video_paths) do
         local path = handle:read("*l")
         handle:close()
         if path and path ~= "" then
-            local test_asset = EMP.ASSET_OPEN(path)
-            if test_asset then
-                EMP.ASSET_CLOSE(test_asset)
+            local test_mf = EMP.MEDIA_FILE_OPEN(path)
+            if test_mf then
+                EMP.MEDIA_FILE_CLOSE(test_mf)
                 found_video = path
                 break
             end
@@ -120,32 +120,32 @@ for _, dir in ipairs(test_video_paths) do
 end
 
 if found_video then
-    local a1 = EMP.ASSET_OPEN(found_video)
-    local a2 = EMP.ASSET_OPEN(found_video)
+    local a1 = EMP.MEDIA_FILE_OPEN(found_video)
+    local a2 = EMP.MEDIA_FILE_OPEN(found_video)
 
     assert(a1 ~= nil, "First open should succeed")
     assert(a2 ~= nil, "Second open should succeed")
     assert(a1 ~= a2, "Should be different handles")
 
-    local info1 = EMP.ASSET_INFO(a1)
-    local info2 = EMP.ASSET_INFO(a2)
+    local info1 = EMP.MEDIA_FILE_INFO(a1)
+    local info2 = EMP.MEDIA_FILE_INFO(a2)
 
     assert(info1.width == info2.width, "Same file should have same width")
     assert(info1.height == info2.height, "Same file should have same height")
 
-    EMP.ASSET_CLOSE(a1)
-    EMP.ASSET_CLOSE(a2)
+    EMP.MEDIA_FILE_CLOSE(a1)
+    EMP.MEDIA_FILE_CLOSE(a2)
     print("    ✓ Multiple opens work correctly")
 
     -- ============================================================================
-    -- Test: ASSET_INFO returns complete info
+    -- Test: MEDIA_FILE_INFO returns complete info
     -- ============================================================================
 
-    print("  Testing: ASSET_INFO completeness")
-    local info_asset = EMP.ASSET_OPEN(found_video)
-    assert(info_asset, "Asset should open")
+    print("  Testing: MEDIA_FILE_INFO completeness")
+    local info_mf = EMP.MEDIA_FILE_OPEN(found_video)
+    assert(info_mf, "MediaFile should open")
 
-    local info = EMP.ASSET_INFO(info_asset)
+    local info = EMP.MEDIA_FILE_INFO(info_mf)
     assert(type(info) == "table", "Info should be table")
     assert(type(info.path) == "string", "path should be string")
     assert(type(info.has_video) == "boolean", "has_video should be boolean")
@@ -163,13 +163,13 @@ if found_video then
     assert(info.fps_den > 0, "fps_den should be positive")
     assert(info.duration_us > 0, "duration_us should be positive")
 
-    print("    ✓ ASSET_INFO returns complete info")
+    print("    ✓ MEDIA_FILE_INFO returns complete info")
     print("      Video: " .. info.width .. "x" .. info.height .. " @ " ..
           string.format("%.2f", info.fps_num / info.fps_den) .. " fps")
 
-    EMP.ASSET_CLOSE(info_asset)
+    EMP.MEDIA_FILE_CLOSE(info_mf)
 else
     print("    ⚠ No test video found, skipping real video tests")
 end
 
-print("✅ test_emp_asset.lua passed")
+print("✅ test_emp_media_file.lua passed")

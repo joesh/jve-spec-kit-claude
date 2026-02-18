@@ -34,7 +34,7 @@ assert(EMP.FRAME_DATA_PTR, "FRAME_DATA_PTR should exist")
 print("    ✓ All required reader/frame functions exist")
 
 -- ============================================================================
--- Test: READER_CREATE with nil asset
+-- Test: READER_CREATE with nil media file
 -- ============================================================================
 
 print("  Testing: READER_CREATE error handling")
@@ -92,13 +92,13 @@ local function find_test_video()
             local path = handle:read("*l")
             handle:close()
             if path and path ~= "" then
-                local asset = EMP.ASSET_OPEN(path)
-                if asset then
-                    local info = EMP.ASSET_INFO(asset)
+                local media_file = EMP.MEDIA_FILE_OPEN(path)
+                if media_file then
+                    local info = EMP.MEDIA_FILE_INFO(media_file)
                     if info and info.has_video then
-                        return path, asset, info
+                        return path, media_file, info
                     end
-                    EMP.ASSET_CLOSE(asset)
+                    EMP.MEDIA_FILE_CLOSE(media_file)
                 end
             end
         end
@@ -106,7 +106,7 @@ local function find_test_video()
     return nil
 end
 
-local test_path, test_asset, test_info = find_test_video()
+local test_path, test_media_file, test_info = find_test_video()
 
 if not test_path then
     print("  ⚠ No test video found - skipping video tests")
@@ -123,7 +123,7 @@ print("    " .. test_info.width .. "x" .. test_info.height ..
 -- ============================================================================
 
 print("  Testing: READER_CREATE success")
-local reader, err = EMP.READER_CREATE(test_asset)
+local reader, err = EMP.READER_CREATE(test_media_file)
 assert(reader ~= nil, "READER_CREATE should succeed, got: " .. tostring(err and err.msg))
 print("    ✓ Reader created successfully")
 
@@ -143,8 +143,8 @@ print("    ✓ First frame decoded")
 print("  Testing: FRAME_INFO complete")
 local finfo = EMP.FRAME_INFO(frame)
 assert(type(finfo) == "table", "FRAME_INFO should return table")
-assert(finfo.width == test_info.width, "Frame width should match asset")
-assert(finfo.height == test_info.height, "Frame height should match asset")
+assert(finfo.width == test_info.width, "Frame width should match media file")
+assert(finfo.height == test_info.height, "Frame height should match media file")
 assert(type(finfo.stride) == "number", "stride should be number")
 assert(finfo.stride >= finfo.width * 4, "stride >= width*4 (BGRA32)")
 assert(finfo.stride % 32 == 0, "stride should be 32-byte aligned")
@@ -284,14 +284,14 @@ print("    ✓ Recovery after EOF works")
 -- ============================================================================
 
 print("  Testing: Frame outlives reader")
-local temp_asset = EMP.ASSET_OPEN(test_path)
-local temp_reader = EMP.READER_CREATE(temp_asset)
+local temp_media_file = EMP.MEDIA_FILE_OPEN(test_path)
+local temp_reader = EMP.READER_CREATE(temp_media_file)
 local outliving_frame = EMP.READER_DECODE_FRAME(temp_reader, 0, test_info.fps_num, test_info.fps_den)
 assert(outliving_frame, "Should decode frame")
 
--- Close reader and asset
+-- Close reader and media file
 EMP.READER_CLOSE(temp_reader)
-EMP.ASSET_CLOSE(temp_asset)
+EMP.MEDIA_FILE_CLOSE(temp_media_file)
 
 -- Frame should still be valid
 local outliving_info = EMP.FRAME_INFO(outliving_frame)
@@ -302,12 +302,12 @@ EMP.FRAME_RELEASE(outliving_frame)
 print("    ✓ Frame outlives reader")
 
 -- ============================================================================
--- Test: Multiple readers on same asset
+-- Test: Multiple readers on same media file
 -- ============================================================================
 
-print("  Testing: Multiple readers on same asset")
-local reader2 = EMP.READER_CREATE(test_asset)
-local reader3 = EMP.READER_CREATE(test_asset)
+print("  Testing: Multiple readers on same media file")
+local reader2 = EMP.READER_CREATE(test_media_file)
+local reader3 = EMP.READER_CREATE(test_media_file)
 assert(reader2, "Second reader should create")
 assert(reader3, "Third reader should create")
 
@@ -343,6 +343,6 @@ print("    ✓ Rapid decode stress test passed")
 -- ============================================================================
 
 EMP.READER_CLOSE(reader)
-EMP.ASSET_CLOSE(test_asset)
+EMP.MEDIA_FILE_CLOSE(test_media_file)
 
 print("✅ test_emp_reader_frame.lua passed")

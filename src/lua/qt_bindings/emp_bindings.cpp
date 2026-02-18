@@ -1,7 +1,7 @@
 // EMP (Editor Media Platform) Lua bindings
 // Provides frame-first video decoding for Source Viewer
 
-#include <editor_media_platform/emp_asset.h>
+#include <editor_media_platform/emp_media_file.h>
 #include <editor_media_platform/emp_reader.h>
 #include <editor_media_platform/emp_frame.h>
 #include <editor_media_platform/emp_audio.h>
@@ -32,7 +32,7 @@ extern const char* WIDGET_METATABLE;
 namespace {
 
 // Metatable names for EMP types
-const char* EMP_ASSET_METATABLE = "JVE.EMP.Asset";
+const char* EMP_MEDIA_FILE_METATABLE = "JVE.EMP.MediaFile";
 const char* EMP_READER_METATABLE = "JVE.EMP.Reader";
 const char* EMP_FRAME_METATABLE = "JVE.EMP.Frame";
 const char* EMP_PCM_METATABLE = "JVE.EMP.PcmChunk";
@@ -43,7 +43,7 @@ const char* EMP_PCM_METATABLE = "JVE.EMP.PcmChunk";
 // decoder cache can return the same shared_ptr<Frame> for repeated decodes of
 // the same timestamp. If raw ptrs were used as keys, two Lua userdata objects
 // would share one map entry, and GC of the first would invalidate the second.
-static std::unordered_map<void*, std::shared_ptr<emp::Asset>> g_assets;
+static std::unordered_map<void*, std::shared_ptr<emp::MediaFile>> g_media_files;
 static std::unordered_map<void*, std::shared_ptr<emp::Reader>> g_readers;
 static std::unordered_map<void*, std::shared_ptr<emp::Frame>> g_frames;
 static std::unordered_map<void*, std::shared_ptr<emp::PcmChunk>> g_pcm_chunks;
@@ -76,38 +76,38 @@ void* get_map_key(lua_State* L, int idx, const char* metatable) {
 }
 
 // ============================================================================
-// Asset bindings
+// MediaFile bindings
 // ============================================================================
 
-// EMP.ASSET_OPEN(path) -> asset | nil, err
-static int lua_emp_asset_open(lua_State* L) {
+// EMP.MEDIA_FILE_OPEN(path) -> media_file | nil, err
+static int lua_emp_media_file_open(lua_State* L) {
     const char* path = luaL_checkstring(L, 1);
 
-    auto result = emp::Asset::Open(path);
+    auto result = emp::MediaFile::Open(path);
     if (result.is_error()) {
         push_emp_error(L, result.error());
         return 2;
     }
 
     auto asset = result.value();
-    void* key = push_userdata(L, asset, EMP_ASSET_METATABLE);
-    g_assets[key] = asset;
+    void* key = push_userdata(L, asset, EMP_MEDIA_FILE_METATABLE);
+    g_media_files[key] = asset;
     return 1;
 }
 
-// EMP.ASSET_CLOSE(asset)
-static int lua_emp_asset_close(lua_State* L) {
-    void* key = get_map_key(L, 1, EMP_ASSET_METATABLE);
-    g_assets.erase(key);
+// EMP.MEDIA_FILE_CLOSE(media_file)
+static int lua_emp_media_file_close(lua_State* L) {
+    void* key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
+    g_media_files.erase(key);
     return 0;
 }
 
-// EMP.ASSET_INFO(asset) -> { path, has_video, width, height, fps_num, fps_den, duration_us, is_vfr, has_audio, audio_sample_rate, audio_channels }
-static int lua_emp_asset_info(lua_State* L) {
-    void* key = get_map_key(L, 1, EMP_ASSET_METATABLE);
-    auto it = g_assets.find(key);
-    if (it == g_assets.end()) {
-        return luaL_error(L, "EMP.ASSET_INFO: invalid asset handle");
+// EMP.MEDIA_FILE_INFO(media_file) -> { path, has_video, width, height, fps_num, fps_den, duration_us, is_vfr, has_audio, audio_sample_rate, audio_channels }
+static int lua_emp_media_file_info(lua_State* L) {
+    void* key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
+    auto it = g_media_files.find(key);
+    if (it == g_media_files.end()) {
+        return luaL_error(L, "EMP.MEDIA_FILE_INFO: invalid media file handle");
     }
 
     const auto& info = it->second->info();
@@ -149,10 +149,10 @@ static int lua_emp_asset_info(lua_State* L) {
     return 1;
 }
 
-// Asset __gc metamethod
-static int lua_emp_asset_gc(lua_State* L) {
-    void* key = get_map_key(L, 1, EMP_ASSET_METATABLE);
-    g_assets.erase(key);
+// MediaFile __gc metamethod
+static int lua_emp_media_file_gc(lua_State* L) {
+    void* key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
+    g_media_files.erase(key);
     return 0;
 }
 
@@ -160,16 +160,16 @@ static int lua_emp_asset_gc(lua_State* L) {
 // Reader bindings
 // ============================================================================
 
-// EMP.READER_CREATE(asset) -> reader | nil, err
+// EMP.READER_CREATE(media_file) -> reader | nil, err
 static int lua_emp_reader_create(lua_State* L) {
-    void* asset_key = get_map_key(L, 1, EMP_ASSET_METATABLE);
-    auto asset_it = g_assets.find(asset_key);
-    if (asset_it == g_assets.end()) {
-        push_emp_error(L, emp::Error::invalid_arg("Invalid asset handle"));
+    void* mf_key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
+    auto mf_it = g_media_files.find(mf_key);
+    if (mf_it == g_media_files.end()) {
+        push_emp_error(L, emp::Error::invalid_arg("Invalid media file handle"));
         return 2;
     }
 
-    auto result = emp::Reader::Create(asset_it->second);
+    auto result = emp::Reader::Create(mf_it->second);
     if (result.is_error()) {
         push_emp_error(L, result.error());
         return 2;
@@ -731,8 +731,8 @@ static int lua_emp_surface_set_frame(lua_State* L) {
 
 void register_emp_bindings(lua_State* L) {
     // Create metatables with __gc
-    luaL_newmetatable(L, EMP_ASSET_METATABLE);
-    lua_pushcfunction(L, lua_emp_asset_gc);
+    luaL_newmetatable(L, EMP_MEDIA_FILE_METATABLE);
+    lua_pushcfunction(L, lua_emp_media_file_gc);
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
@@ -755,13 +755,13 @@ void register_emp_bindings(lua_State* L) {
     // Assumes qt_constants is on stack at index -1
     lua_newtable(L);
 
-    // Asset functions
-    lua_pushcfunction(L, lua_emp_asset_open);
-    lua_setfield(L, -2, "ASSET_OPEN");
-    lua_pushcfunction(L, lua_emp_asset_close);
-    lua_setfield(L, -2, "ASSET_CLOSE");
-    lua_pushcfunction(L, lua_emp_asset_info);
-    lua_setfield(L, -2, "ASSET_INFO");
+    // MediaFile functions
+    lua_pushcfunction(L, lua_emp_media_file_open);
+    lua_setfield(L, -2, "MEDIA_FILE_OPEN");
+    lua_pushcfunction(L, lua_emp_media_file_close);
+    lua_setfield(L, -2, "MEDIA_FILE_CLOSE");
+    lua_pushcfunction(L, lua_emp_media_file_info);
+    lua_setfield(L, -2, "MEDIA_FILE_INFO");
 
     // Reader functions
     lua_pushcfunction(L, lua_emp_reader_create);

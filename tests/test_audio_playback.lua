@@ -118,18 +118,18 @@ expect_assert(
 )
 print("  ✓ switch_source(nil) asserts with context")
 
-print("\nTest 3.2: switch_source with cache missing get_asset_info asserts")
+print("\nTest 3.2: switch_source with cache missing get_media_file_info asserts")
 expect_assert(
     function() audio_playback.switch_source({ get_audio_reader = function() end }) end,
-    "get_asset_info",
-    "switch_source without get_asset_info"
+    "get_media_file_info",
+    "switch_source without get_media_file_info"
 )
-print("  ✓ switch_source validates cache.get_asset_info")
+print("  ✓ switch_source validates cache.get_media_file_info")
 
 print("\nTest 3.3: switch_source with cache missing get_audio_reader asserts")
 expect_assert(
     function() audio_playback.switch_source({
-        get_asset_info = function()
+        get_media_file_info = function()
             return { has_audio = true, duration_us = 1000000, fps_num = 30, fps_den = 1 }
         end,
     }) end,
@@ -138,11 +138,11 @@ expect_assert(
 )
 print("  ✓ switch_source validates cache.get_audio_reader")
 
-print("\nTest 3.4: switch_source with cache.get_asset_info returning nil asserts")
+print("\nTest 3.4: switch_source with cache.get_media_file_info returning nil asserts")
 expect_assert(
     function()
         audio_playback.switch_source({
-            get_asset_info = function() return nil end,
+            get_media_file_info = function() return nil end,
             get_audio_reader = function() end
         })
     end,

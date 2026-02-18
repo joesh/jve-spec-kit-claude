@@ -1,18 +1,18 @@
-#include <editor_media_platform/emp_asset.h>
+#include <editor_media_platform/emp_media_file.h>
 #include <editor_media_platform/emp_rate.h>
-#include "impl/asset_impl.h"
+#include "impl/media_file_impl.h"
 #include <cassert>
 
 namespace emp {
 
-Asset::Asset(std::unique_ptr<AssetImpl> impl, AssetInfo info)
+MediaFile::MediaFile(std::unique_ptr<MediaFileImpl> impl, MediaFileInfo info)
     : m_impl(std::move(impl)), m_info(std::move(info)) {
-    assert(m_impl && "Asset impl cannot be null");
+    assert(m_impl && "MediaFile impl cannot be null");
 }
 
-Asset::~Asset() = default;
+MediaFile::~MediaFile() = default;
 
-const AssetInfo& Asset::info() const {
+const MediaFileInfo& MediaFile::info() const {
     return m_info;
 }
 
@@ -67,8 +67,8 @@ static Rate select_nominal_rate(AVStream* stream, bool* is_vfr_out) {
     return RateUtils::snap_to_canonical(result);
 }
 
-Result<std::shared_ptr<Asset>> Asset::Open(const std::string& path) {
-    auto impl = std::make_unique<AssetImpl>();
+Result<std::shared_ptr<MediaFile>> MediaFile::Open(const std::string& path) {
+    auto impl = std::make_unique<MediaFileImpl>();
 
     // Open file
     auto open_result = impl->fmt_ctx.open(path);
@@ -76,8 +76,8 @@ Result<std::shared_ptr<Asset>> Asset::Open(const std::string& path) {
         return open_result.error();
     }
 
-    // Build AssetInfo
-    AssetInfo info;
+    // Build MediaFileInfo
+    MediaFileInfo info;
     info.path = path;
 
     // Try to find video stream (optional - audio-only files are valid)
@@ -176,7 +176,7 @@ Result<std::shared_ptr<Asset>> Asset::Open(const std::string& path) {
         info.start_tc = (start_us * info.video_fps_num) / (1000000LL * info.video_fps_den);
     }
 
-    return std::make_shared<Asset>(std::move(impl), std::move(info));
+    return std::make_shared<MediaFile>(std::move(impl), std::move(info));
 }
 
 } // namespace emp

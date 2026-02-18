@@ -93,7 +93,7 @@ package.loaded["core.logger"] = {
 -- Mock caches for two different sources
 local function make_mock_cache(opts)
     return {
-        get_asset_info = function()
+        get_media_file_info = function()
             return {
                 has_audio = opts.has_audio,
                 audio_sample_rate = opts.sample_rate or 48000,

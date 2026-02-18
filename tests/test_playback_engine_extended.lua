@@ -38,9 +38,9 @@ end
 package.loaded["core.qt_constants"] = {
     EMP = {
         SET_DECODE_MODE = function() end,
-        ASSET_OPEN = function() return nil end,
-        ASSET_INFO = function() return nil end,
-        ASSET_CLOSE = function() end,
+        MEDIA_FILE_OPEN = function() return nil end,
+        MEDIA_FILE_INFO = function() return nil end,
+        MEDIA_FILE_CLOSE = function() end,
         READER_CREATE = function() return nil end,
         READER_CLOSE = function() end,
         READER_DECODE_FRAME = function() return nil end,
@@ -63,7 +63,7 @@ package.loaded["core.media.media_cache"] = {
         }
     end,
     is_loaded = function() return true end,
-    get_asset_info = function() return { rotation = 0 } end,
+    get_media_file_info = function() return { rotation = 0 } end,
     stop_all_prefetch = function() end,
     ensure_audio_pooled = function(path)
         return { has_audio = true, audio_sample_rate = 48000 }

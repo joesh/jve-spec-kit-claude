@@ -20,7 +20,7 @@ namespace impl {
 // Convert FFmpeg error code to EMP Error
 Error ffmpeg_error(int errnum, const std::string& context);
 
-// FFmpeg format context wrapper (for Asset)
+// FFmpeg format context wrapper (for MediaFile)
 class FFmpegFormatContext {
 public:
     FFmpegFormatContext() = default;

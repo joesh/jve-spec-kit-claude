@@ -641,10 +641,10 @@ function M.switch_source(cache)
     assert(M.session_initialized,
         "audio_playback.switch_source: session_initialized is false (call init_session first)")
     assert(cache, "audio_playback.switch_source: cache is nil")
-    assert(cache.get_asset_info, "audio_playback.switch_source: cache must have get_asset_info")
+    assert(cache.get_media_file_info, "audio_playback.switch_source: cache must have get_media_file_info")
 
-    local info = cache.get_asset_info()
-    assert(info, "audio_playback.switch_source: cache.get_asset_info() returned nil")
+    local info = cache.get_media_file_info()
+    assert(info, "audio_playback.switch_source: cache.get_media_file_info() returned nil")
 
     if not info.has_audio then
         logger.info("audio_playback", "Source has no audio track")

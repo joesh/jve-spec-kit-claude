@@ -76,7 +76,7 @@ _G.qt_create_single_shot_timer = function() end
 
 -- Mock media_cache that tracks which path PCM is fetched from
 local mock_cache = {
-    get_asset_info = function()
+    get_media_file_info = function()
         return {
             has_audio = true,
             audio_sample_rate = 48000,

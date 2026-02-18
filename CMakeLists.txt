@@ -63,7 +63,7 @@ include_directories(
 # Editor Media Platform (EMP) Library - FFmpeg-backed video decoding
 # ============================================================================
 set(EMP_SOURCES
-    src/editor_media_platform/src/emp_asset.cpp
+    src/editor_media_platform/src/emp_media_file.cpp
     src/editor_media_platform/src/emp_reader.cpp
     src/editor_media_platform/src/emp_frame.cpp
     src/editor_media_platform/src/emp_pcm_chunk.cpp
@@ -279,7 +279,7 @@ set_target_properties(test_qt_bindings PROPERTIES
 )
 add_test(NAME test_qt_bindings COMMAND test_qt_bindings)
 
-# EMP Core test (Asset, Reader, Frame, HW accel)
+# EMP Core test (MediaFile, Reader, Frame, HW accel)
 add_executable(test_emp_core
     tests/unit/test_emp_core.cpp
 )

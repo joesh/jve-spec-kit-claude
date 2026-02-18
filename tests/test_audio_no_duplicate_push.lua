@@ -71,7 +71,7 @@ local mock_aop = {
 -- Mock media_cache that returns predictable PCM ranges
 local media_cache_fetch_count = 0
 local mock_media_cache = {
-    get_asset_info = function()
+    get_media_file_info = function()
         return {
             has_audio = true,
             audio_sample_rate = 48000,

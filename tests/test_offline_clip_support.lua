@@ -2,7 +2,7 @@
 -- @file test_offline_clip_support.lua
 --
 -- Tests:
--- 1. media_cache offline registry: ASSET_OPEN fail → nil + registry entry
+-- 1. media_cache offline registry: MEDIA_FILE_OPEN fail → nil + registry entry
 -- 2. media_cache.activate: offline path → nil return
 -- 3. media_cache.ensure_audio_pooled: offline path → nil return
 -- 4. media_cache.pre_buffer: offline path → early return
@@ -18,18 +18,18 @@ local import_schema = require("import_schema")
 -- ============================================================================
 -- Mock EMP bindings
 -- ============================================================================
-local mock_asset_counter = 0
-local offline_paths = {}  -- paths that will fail ASSET_OPEN
+local mock_media_file_counter = 0
+local offline_paths = {}  -- paths that will fail MEDIA_FILE_OPEN
 
 local mock_emp = {
-    ASSET_OPEN = function(path)
+    MEDIA_FILE_OPEN = function(path)
         if offline_paths[path] then
             return nil, { code = "FileNotFound", msg = "File not found: " .. path }
         end
-        mock_asset_counter = mock_asset_counter + 1
-        return "asset_" .. mock_asset_counter
+        mock_media_file_counter = mock_media_file_counter + 1
+        return "media_file_" .. mock_media_file_counter
     end,
-    ASSET_INFO = function()
+    MEDIA_FILE_INFO = function()
         return {
             has_video = true,
             has_audio = true,
@@ -42,8 +42,8 @@ local mock_emp = {
             start_tc = 0,
         }
     end,
-    ASSET_CLOSE = function() end,
-    READER_CREATE = function() return "reader_" .. mock_asset_counter end,
+    MEDIA_FILE_CLOSE = function() end,
+    READER_CREATE = function() return "reader_" .. mock_media_file_counter end,
     READER_CLOSE = function() end,
     READER_STOP_PREFETCH = function() end,
     READER_START_PREFETCH = function() end,
@@ -111,7 +111,7 @@ print("Test 2: activate fast-path for known offline path")
 local result2 = media_cache.activate("/missing/video.mov", "test_ctx_1")
 assert(result2 == nil, "Expected nil from second activate call")
 
-print("  OK: fast-path returns nil without re-trying ASSET_OPEN")
+print("  OK: fast-path returns nil without re-trying MEDIA_FILE_OPEN")
 
 -- ============================================================================
 -- Test 3: activate succeeds for online path
@@ -156,17 +156,17 @@ assert(media_cache.get_offline_info("/missing/prebuf.mov"),
 print("  OK: pre_buffer handles offline gracefully")
 
 -- ============================================================================
--- Test 5b: ASSET_OPEN fails with nil error struct (no error details)
+-- Test 5b: MEDIA_FILE_OPEN fails with nil error struct (no error details)
 -- ============================================================================
-print("Test 5b: ASSET_OPEN nil error struct")
+print("Test 5b: MEDIA_FILE_OPEN nil error struct")
 
--- Override ASSET_OPEN to return nil without error struct
-local orig_asset_open = mock_emp.ASSET_OPEN
-mock_emp.ASSET_OPEN = function(path)
+-- Override MEDIA_FILE_OPEN to return nil without error struct
+local orig_media_file_open = mock_emp.MEDIA_FILE_OPEN
+mock_emp.MEDIA_FILE_OPEN = function(path)
     if path == "/missing/nil_error.mov" then
         return nil, nil  -- no error struct at all
     end
-    return orig_asset_open(path)
+    return orig_media_file_open(path)
 end
 
 local nil_err_result = media_cache.activate("/missing/nil_error.mov", "test_ctx_1")
@@ -178,21 +178,21 @@ assert(nil_err_info.error_code == "Unknown",
 assert(nil_err_info.error_msg == "unknown error",
     "Expected error_msg='unknown error' when no error struct")
 
-mock_emp.ASSET_OPEN = orig_asset_open
+mock_emp.MEDIA_FILE_OPEN = orig_media_file_open
 
 print("  OK: nil error struct handled correctly")
 
 -- ============================================================================
--- Test 5c: ASSET_OPEN fails with PermissionDenied (non-FileNotFound)
+-- Test 5c: MEDIA_FILE_OPEN fails with PermissionDenied (non-FileNotFound)
 -- ============================================================================
 print("Test 5c: non-FileNotFound error code")
 
-local orig_asset_open2 = mock_emp.ASSET_OPEN
-mock_emp.ASSET_OPEN = function(path)
+local orig_media_file_open2 = mock_emp.MEDIA_FILE_OPEN
+mock_emp.MEDIA_FILE_OPEN = function(path)
     if path == "/restricted/video.mov" then
         return nil, { code = "PermissionDenied", msg = "Permission denied: /restricted/video.mov" }
     end
-    return orig_asset_open2(path)
+    return orig_media_file_open2(path)
 end
 
 local perm_result = media_cache.activate("/restricted/video.mov", "test_ctx_1")
@@ -202,7 +202,7 @@ assert(perm_info, "Expected offline registry entry for permission-denied path")
 assert(perm_info.error_code == "PermissionDenied",
     "Expected error_code=PermissionDenied, got: " .. tostring(perm_info.error_code))
 
-mock_emp.ASSET_OPEN = orig_asset_open2
+mock_emp.MEDIA_FILE_OPEN = orig_media_file_open2
 
 print("  OK: PermissionDenied error preserved in registry")
 

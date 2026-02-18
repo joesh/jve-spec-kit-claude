@@ -11,9 +11,9 @@ require('test_env')
 -- (media_cache requires qt_constants at load time)
 local mock_qt_constants = {
     EMP = {
-        ASSET_OPEN = function() return nil, { msg = "mock" } end,
-        ASSET_INFO = function() return nil end,
-        ASSET_CLOSE = function() end,
+        MEDIA_FILE_OPEN = function() return nil, { msg = "mock" } end,
+        MEDIA_FILE_INFO = function() return nil end,
+        MEDIA_FILE_CLOSE = function() end,
         READER_CREATE = function() return nil, { msg = "mock" } end,
         READER_CLOSE = function() end,
         READER_DECODE_FRAME = function() return nil, { msg = "mock" } end,
@@ -44,11 +44,11 @@ assert(media_cache.unload, "media_cache.unload missing")
 assert(media_cache.get_video_frame, "media_cache.get_video_frame missing")
 assert(media_cache.get_audio_pcm, "media_cache.get_audio_pcm missing")
 assert(media_cache.set_playhead, "media_cache.set_playhead missing")
-assert(media_cache.get_video_asset, "media_cache.get_video_asset missing")
-assert(media_cache.get_audio_asset, "media_cache.get_audio_asset missing")
+assert(media_cache.get_video_media_file, "media_cache.get_video_media_file missing")
+assert(media_cache.get_audio_media_file, "media_cache.get_audio_media_file missing")
 assert(media_cache.get_video_reader, "media_cache.get_video_reader missing")
 assert(media_cache.get_audio_reader, "media_cache.get_audio_reader missing")
-assert(media_cache.get_asset_info, "media_cache.get_asset_info missing")
+assert(media_cache.get_media_file_info, "media_cache.get_media_file_info missing")
 assert(media_cache.is_loaded, "media_cache.is_loaded missing")
 assert(media_cache.create_context, "media_cache.create_context missing")
 assert(media_cache.destroy_context, "media_cache.destroy_context missing")
@@ -61,8 +61,8 @@ print("  OK: All expected functions present")
 print("Test 2: Initial state")
 
 assert(media_cache.is_loaded(CTX) == false, "Should start unloaded")
-assert(media_cache.get_video_asset(CTX) == nil, "video_asset should be nil")
-assert(media_cache.get_audio_asset(CTX) == nil, "audio_asset should be nil")
+assert(media_cache.get_video_media_file(CTX) == nil, "video_media_file should be nil")
+assert(media_cache.get_audio_media_file(CTX) == nil, "audio_media_file should be nil")
 assert(media_cache.get_video_reader(CTX) == nil, "video_reader should be nil")
 assert(media_cache.get_audio_reader(CTX) == nil, "audio_reader should be nil")
 
@@ -160,11 +160,11 @@ print("Test 8: context_id required on all APIs")
 local nil_ctx_apis = {
     { "is_loaded",       function() media_cache.is_loaded() end },
     { "get_file_path",   function() media_cache.get_file_path() end },
-    { "get_video_asset", function() media_cache.get_video_asset() end },
-    { "get_audio_asset", function() media_cache.get_audio_asset() end },
+    { "get_video_media_file", function() media_cache.get_video_media_file() end },
+    { "get_audio_media_file", function() media_cache.get_audio_media_file() end },
     { "get_video_reader",function() media_cache.get_video_reader() end },
     { "get_audio_reader",function() media_cache.get_audio_reader() end },
-    { "get_asset_info",  function() media_cache.get_asset_info() end },
+    { "get_media_file_info",  function() media_cache.get_media_file_info() end },
     { "get_rotation",    function() media_cache.get_rotation() end },
 }
 for _, case in ipairs(nil_ctx_apis) do
@@ -189,18 +189,18 @@ end
 if has_qt then
 
 --------------------------------------------------------------------------------
--- Test 8: Dual asset creation (the core fix)
+-- Test 8: Dual media file creation (the core fix)
 --------------------------------------------------------------------------------
-print("Test 8: Dual asset creation (requires EMP)")
+print("Test 8: Dual media file creation (requires EMP)")
 
 -- This test would require an actual video file
 -- For now, just verify the bindings exist
-assert(qt_constants.EMP.ASSET_OPEN, "EMP.ASSET_OPEN missing")
+assert(qt_constants.EMP.MEDIA_FILE_OPEN, "EMP.MEDIA_FILE_OPEN missing")
 assert(qt_constants.EMP.READER_CREATE, "EMP.READER_CREATE missing")
 assert(qt_constants.EMP.READER_CLOSE, "EMP.READER_CLOSE missing")
-assert(qt_constants.EMP.ASSET_CLOSE, "EMP.ASSET_CLOSE missing")
+assert(qt_constants.EMP.MEDIA_FILE_CLOSE, "EMP.MEDIA_FILE_CLOSE missing")
 
-print("  OK: EMP bindings available for dual asset creation")
+print("  OK: EMP bindings available for dual media file creation")
 
 end  -- has_qt
 
