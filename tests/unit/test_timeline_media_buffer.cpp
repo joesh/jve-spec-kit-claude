@@ -643,6 +643,133 @@ private slots:
         QVERIFY(r2 != nullptr);
         QCOMPARE(r2->start_time_us(), (int64_t)1000000);
     }
+
+    // ── Phase 2c: Boundary-spanning audio ──
+
+    void test_audio_boundary_spanning() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        // Two adjacent clips: clip1 [0,24) = 0.0s-1.0s, clip2 [24,48) = 1.0s-2.0s
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 24, 0, 24, 1, 1.0f},
+            {"clip2", m_testVideoPath.toStdString(), 24, 24, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // Request spans boundary: [0.5s, 1.5s)
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        auto result = tmb->GetTrackAudio(1, 500000, 1500000, fmt);
+        QVERIFY(result != nullptr);
+
+        // Should get full 1.0s of audio (not truncated 0.5s)
+        int64_t expected_frames = (1000000LL * 48000) / 1000000; // 48000
+        QVERIFY2(result->frames() >= expected_frames - 10,
+                 qPrintable(QString("frames=%1 expected>=%2").arg(result->frames()).arg(expected_frames - 10)));
+        QVERIFY2(result->frames() <= expected_frames + 10,
+                 qPrintable(QString("frames=%1 expected<=%2").arg(result->frames()).arg(expected_frames + 10)));
+        QCOMPARE(result->start_time_us(), (int64_t)500000);
+    }
+
+    void test_audio_gap_between_clips_filled() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        // clip1 [0,24) = 0.0s-1.0s, clip2 [48,72) = 2.0s-3.0s
+        // Gap from 1.0s to 2.0s
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 24, 0, 24, 1, 1.0f},
+            {"clip2", m_testVideoPath.toStdString(), 48, 24, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // Request [0.5s, 2.5s) — spans clip1 end, gap, and into clip2
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        auto result = tmb->GetTrackAudio(1, 500000, 2500000, fmt);
+        QVERIFY(result != nullptr);
+
+        // Should get full 2.0s of audio covering both clips + gap
+        int64_t expected_frames = (2000000LL * 48000) / 1000000; // 96000
+        QVERIFY2(result->frames() >= expected_frames - 10,
+                 qPrintable(QString("frames=%1 expected>=%2").arg(result->frames()).arg(expected_frames - 10)));
+        QVERIFY2(result->frames() <= expected_frames + 10,
+                 qPrintable(QString("frames=%1 expected<=%2").arg(result->frames()).arg(expected_frames + 10)));
+        QCOMPARE(result->start_time_us(), (int64_t)500000);
+
+        // Verify gap region [1.0s, 2.0s) is silent
+        // In output coords: gap starts at offset 0.5s, ends at 1.5s
+        const float* data = result->data_f32();
+        const int ch = 2;
+        int64_t gap_start_sample = (500000LL * 48000) / 1000000;  // 24000
+        int64_t gap_end_sample = (1500000LL * 48000) / 1000000;   // 72000
+        float max_gap_val = 0.0f;
+        for (int64_t i = gap_start_sample; i < gap_end_sample && i < result->frames(); ++i) {
+            for (int c = 0; c < ch; ++c) {
+                float v = std::abs(data[i * ch + c]);
+                if (v > max_gap_val) max_gap_val = v;
+            }
+        }
+        QVERIFY2(max_gap_val < 0.001f, "Gap region should be silent");
+    }
+
+    void test_audio_boundary_second_clip_offline() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        // clip1 valid, clip2 offline — request spans boundary
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 24, 0, 24, 1, 1.0f},
+            {"clip2", "/nonexistent/offline_media.mp4", 24, 24, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // Request [0.5s, 1.5s) — first clip OK, second offline
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        auto result = tmb->GetTrackAudio(1, 500000, 1500000, fmt);
+        QVERIFY(result != nullptr);
+
+        // Should get truncated first-clip audio (~0.5s), NOT crash or full 1.0s
+        int64_t expected_frames = (500000LL * 48000) / 1000000; // 24000
+        QVERIFY2(result->frames() >= expected_frames - 10,
+                 qPrintable(QString("frames=%1 expected>=%2").arg(result->frames()).arg(expected_frames - 10)));
+        QVERIFY2(result->frames() <= expected_frames + 10,
+                 qPrintable(QString("frames=%1 expected<=%2").arg(result->frames()).arg(expected_frames + 10)));
+    }
+
+    void test_audio_boundary_with_conform() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(30, 1);
+
+        // clip1: 24fps media in 30fps sequence (speed_ratio=1.25)
+        // clip2: 30fps media in 30fps sequence (speed_ratio=1.0)
+        // Both 30 timeline frames = 1.0s each at 30fps
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 30, 0, 24, 1, 1.25f},
+            {"clip2", m_testVideoPath.toStdString(), 30, 30, 0, 30, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // Request spans boundary: [0.5s, 1.5s)
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        auto result = tmb->GetTrackAudio(1, 500000, 1500000, fmt);
+        QVERIFY(result != nullptr);
+
+        // Should get full 1.0s of timeline audio despite different conform ratios
+        int64_t expected_frames = (1000000LL * 48000) / 1000000; // 48000
+        QVERIFY2(result->frames() >= expected_frames - 10,
+                 qPrintable(QString("frames=%1 expected>=%2").arg(result->frames()).arg(expected_frames - 10)));
+        QVERIFY2(result->frames() <= expected_frames + 10,
+                 qPrintable(QString("frames=%1 expected<=%2").arg(result->frames()).arg(expected_frames + 10)));
+        QCOMPARE(result->start_time_us(), (int64_t)500000);
+    }
 };
 
 QTEST_MAIN(TestTimelineMediaBuffer)

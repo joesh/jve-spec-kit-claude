@@ -3,6 +3,7 @@
 #include <cassert>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace emp {
 
@@ -231,6 +232,24 @@ const ClipInfo* TimelineMediaBuffer::find_clip_at_us(const TrackState& ts, TimeU
 }
 
 // ============================================================================
+// find_next_clip_at_us — first clip starting at or after t_us (boundary spanning)
+// ============================================================================
+
+const ClipInfo* TimelineMediaBuffer::find_next_clip_at_us(const TrackState& ts, TimeUS t_us) const {
+    assert(m_seq_rate.num > 0 && "find_next_clip_at_us: SetSequenceRate not called");
+    const ClipInfo* best = nullptr;
+    TimeUS best_start = std::numeric_limits<TimeUS>::max();
+    for (const auto& clip : ts.clips) {
+        TimeUS start = FrameTime::from_frame(clip.timeline_start, m_seq_rate).to_us();
+        if (start >= t_us && start < best_start) {
+            best = &clip;
+            best_start = start;
+        }
+    }
+    return best;
+}
+
+// ============================================================================
 // build_audio_output — trim decoded audio, conform (resample), rebase to timeline
 // ============================================================================
 
@@ -340,7 +359,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     TimeUS clip_start_us = FrameTime::from_frame(clip->timeline_start, m_seq_rate).to_us();
     TimeUS clip_end_us = FrameTime::from_frame(clip->timeline_end(), m_seq_rate).to_us();
 
-    // Clamp request to clip boundaries (Phase 2b: single-clip only)
+    // Clamp request to first clip
     TimeUS clamped_t0 = std::max(t0, clip_start_us);
     TimeUS clamped_t1 = std::min(t1, clip_end_us);
     if (clamped_t1 <= clamped_t0) return nullptr;
@@ -354,6 +373,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     // Copy locals before releasing lock
     std::string media_path = clip->media_path;
     float speed_ratio = clip->speed_ratio;
+    TimeUS first_clip_end_us = clip_end_us;
     tracks_lock.unlock();
 
     // Offline check
@@ -362,7 +382,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         if (m_offline.count(media_path)) return nullptr;
     }
 
-    // Acquire reader and decode
+    // Acquire reader and decode first clip
     auto reader = acquire_reader(track_id, media_path);
     if (!reader) return nullptr;
 
@@ -372,9 +392,99 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     auto chunk = decode_result.value();
     if (!chunk || chunk->frames() == 0) return nullptr;
 
-    // Trim, conform, rebase to timeline coordinates
-    return build_audio_output(chunk, source_t0, source_t1,
-                              clamped_t0, clamped_t1, speed_ratio, fmt);
+    auto first_chunk = build_audio_output(chunk, source_t0, source_t1,
+                                          clamped_t0, clamped_t1, speed_ratio, fmt);
+
+    // ── Fast path: request fully within first clip ──
+    if (clamped_t1 >= t1 || !first_chunk) return first_chunk;
+
+    // ── Boundary spanning: fill remainder from subsequent clips ──
+    const int32_t sample_rate = fmt.sample_rate;
+    const int32_t channels = fmt.channels;
+
+    struct AudioSegment {
+        std::shared_ptr<PcmChunk> pcm;
+        TimeUS seg_t0;
+    };
+    std::vector<AudioSegment> segments;
+    segments.push_back({first_chunk, clamped_t0});
+    TimeUS output_end = clamped_t1;
+    TimeUS cursor = first_clip_end_us;
+
+    while (cursor < t1) {
+        std::unique_lock<std::mutex> tlock(m_tracks_mutex);
+        auto tit = m_tracks.find(track_id);
+        if (tit == m_tracks.end()) break;
+
+        const ClipInfo* next = find_next_clip_at_us(tit->second, cursor);
+        if (!next) break;
+
+        TimeUS next_start_us = FrameTime::from_frame(next->timeline_start, m_seq_rate).to_us();
+        if (next_start_us >= t1) break;
+
+        assert(next->rate_den > 0 && "GetTrackAudio: next clip has zero rate_den");
+        assert(next->speed_ratio > 0.0f && "GetTrackAudio: next clip has non-positive speed_ratio");
+
+        TimeUS next_end_us = FrameTime::from_frame(next->timeline_end(), m_seq_rate).to_us();
+        TimeUS seg_t0 = std::max(cursor, next_start_us);
+        TimeUS seg_t1 = std::min(t1, next_end_us);
+        if (seg_t1 <= seg_t0) { cursor = next_end_us; continue; }
+
+        // Map to source coordinates
+        TimeUS next_src_origin = FrameTime::from_frame(next->source_in, next->rate()).to_us();
+        double next_sr = static_cast<double>(next->speed_ratio);
+        TimeUS next_src_t0 = next_src_origin + static_cast<int64_t>((seg_t0 - next_start_us) * next_sr);
+        TimeUS next_src_t1 = next_src_origin + static_cast<int64_t>((seg_t1 - next_start_us) * next_sr);
+
+        std::string next_path = next->media_path;
+        float next_speed = next->speed_ratio;
+        tlock.unlock();
+
+        // Offline check
+        {
+            std::lock_guard<std::mutex> plock(m_pool_mutex);
+            if (m_offline.count(next_path)) { cursor = next_end_us; continue; }
+        }
+
+        auto next_reader = acquire_reader(track_id, next_path);
+        if (!next_reader) { cursor = next_end_us; continue; }
+
+        auto next_decoded = next_reader->DecodeAudioRangeUS(next_src_t0, next_src_t1, fmt);
+        if (next_decoded.is_ok() && next_decoded.value() && next_decoded.value()->frames() > 0) {
+            auto seg = build_audio_output(next_decoded.value(), next_src_t0, next_src_t1,
+                                          seg_t0, seg_t1, next_speed, fmt);
+            if (seg && seg->frames() > 0) {
+                segments.push_back({seg, seg_t0});
+                if (seg_t1 > output_end) output_end = seg_t1;
+            }
+        }
+
+        cursor = next_end_us;
+    }
+
+    // Single segment: return it directly (no combining needed)
+    if (segments.size() == 1) return first_chunk;
+
+    // Combine segments into one output buffer (gaps are zero-filled)
+    assert(output_end > t0 && "GetTrackAudio: output_end must exceed t0 when combining segments");
+    int64_t total_frames = ((output_end - t0) * sample_rate) / 1000000;
+    assert(total_frames > 0 && "GetTrackAudio: total_frames must be positive when combining segments");
+
+    std::vector<float> combined(total_frames * channels, 0.0f);
+
+    for (const auto& seg : segments) {
+        int64_t offset = ((seg.seg_t0 - t0) * sample_rate) / 1000000;
+        assert(offset >= 0 && "GetTrackAudio: segment offset must be non-negative");
+        int64_t copy_frames = std::min(seg.pcm->frames(), total_frames - offset);
+        assert(copy_frames > 0 && "GetTrackAudio: segment copy_frames must be positive");
+        std::copy(seg.pcm->data_f32(),
+                  seg.pcm->data_f32() + copy_frames * channels,
+                  combined.data() + offset * channels);
+    }
+
+    auto impl = std::make_unique<PcmChunkImpl>(
+        sample_rate, channels, fmt.fmt, t0, std::move(combined));
+    return std::make_shared<PcmChunk>(std::move(impl));
 }
 
 // ============================================================================

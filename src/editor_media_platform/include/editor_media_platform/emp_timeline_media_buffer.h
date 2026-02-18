@@ -130,6 +130,9 @@ private:
     // Requires m_seq_rate to be set
     const ClipInfo* find_clip_at_us(const TrackState& ts, TimeUS t_us) const;
 
+    // Find first clip starting at or after t_us (for boundary spanning)
+    const ClipInfo* find_next_clip_at_us(const TrackState& ts, TimeUS t_us) const;
+
     // Build output PcmChunk: trim decoded audio to source range, conform, rebase to timeline
     std::shared_ptr<PcmChunk> build_audio_output(
         const std::shared_ptr<PcmChunk>& decoded,
