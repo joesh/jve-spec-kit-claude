@@ -118,10 +118,12 @@ For short-term debug prints that will immediately be removed you may use print.
 
 **Remember**: Your efficiency comes from leveraging the robust systems already built, not from avoiding their "overhead".
 
+**REMEMBER**: The planning module always writes plans in ~/.claude/plans. The names are meaningless so just sort by modification time to find the latest plans. DONT proceed from a handoff if you can't find the plan for it! Ask Joe if you need help.
+
 ## **⚠️ REFACTOR SAFEGUARD**
 
 **Before starting any refactor**: Run `git status` and warn the user if there are uncommitted changes. Refactors should start from a clean working tree so changes can be tracked, reviewed, and reverted if needed. Commit or stash existing work first.
 
-**When addressing a bug**: First write a regression test that fails. Verify the failure. Only then implement the fix and confirm the test passes.
-
 **Bug ownership**: Don't distinguish between "your" bugs and "pre-existing" bugs. If you find a bug, it becomes yours to fix. We care about fixing things, not about blame. "You" means Claude (any session), not just this specific context.
+
+**When addressing a bug**: First write a regression test that fails. Verify the failure. Only then implement the fix and confirm the test passes.

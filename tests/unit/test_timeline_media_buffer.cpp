@@ -904,8 +904,7 @@ private slots:
         // Fill audio cache past MAX_AUDIO_CACHE (4), verify no crash and audio still works
         if (!m_hasTestAudio) QSKIP("No test audio");
 
-        // 1 worker: sequential job processing avoids concurrent reader access
-        auto tmb = TimelineMediaBuffer::Create(1);
+        auto tmb = TimelineMediaBuffer::Create(2);
         tmb->SetSequenceRate(24, 1);
 
         AudioFormat fmt{SampleFormat::F32, 48000, 2};

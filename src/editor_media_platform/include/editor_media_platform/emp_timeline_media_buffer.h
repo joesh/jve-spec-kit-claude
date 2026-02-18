@@ -7,6 +7,7 @@
 #include "emp_errors.h"
 #include "emp_time.h"
 
+#include <cassert>
 #include <memory>
 #include <string>
 #include <vector>
@@ -95,9 +96,23 @@ private:
         std::shared_ptr<Reader> reader;
         int track_id;       // which track opened this reader
         int64_t last_used;  // monotonic counter for LRU
+        std::shared_ptr<std::mutex> use_mutex;  // exclusive access during decode
     };
 
-    std::shared_ptr<Reader> acquire_reader(int track_id, const std::string& path);
+    // RAII handle — holds reader + exclusive lock, released on destruction
+    struct ReaderHandle {
+        std::shared_ptr<Reader> reader;
+        std::unique_lock<std::mutex> lock;
+
+        bool valid() const { return reader != nullptr; }
+        Reader* operator->() const {
+            assert(reader && "ReaderHandle::operator->: dereferencing invalid handle");
+            return reader.get();
+        }
+        explicit operator bool() const { return valid(); }
+    };
+
+    ReaderHandle acquire_reader(int track_id, const std::string& path);
     void release_reader(int track_id, const std::string& path);
     void evict_lru_reader();
 

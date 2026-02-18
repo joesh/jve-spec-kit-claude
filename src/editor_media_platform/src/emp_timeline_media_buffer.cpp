@@ -677,44 +677,52 @@ void TimelineMediaBuffer::ReleaseAll() {
 // Reader pool — LRU with per-(track, path) isolation
 // ============================================================================
 
-std::shared_ptr<Reader> TimelineMediaBuffer::acquire_reader(
+TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
         int track_id, const std::string& path) {
 
-    std::lock_guard<std::mutex> lock(m_pool_mutex);
+    std::shared_ptr<Reader> reader;
+    std::shared_ptr<std::mutex> use_mtx;
 
-    auto key = std::make_pair(track_id, path);
-    auto it = m_readers.find(key);
-    if (it != m_readers.end()) {
-        it->second.last_used = ++m_pool_clock;
-        return it->second.reader;
+    {
+        std::lock_guard<std::mutex> lock(m_pool_mutex);
+
+        auto key = std::make_pair(track_id, path);
+        auto it = m_readers.find(key);
+        if (it != m_readers.end()) {
+            it->second.last_used = ++m_pool_clock;
+            reader = it->second.reader;
+            use_mtx = it->second.use_mutex;
+        } else {
+            // Not in pool — open new reader
+            // Evict if at capacity
+            while (static_cast<int>(m_readers.size()) >= m_max_readers) {
+                evict_lru_reader();
+            }
+
+            // Open media file
+            auto mf_result = MediaFile::Open(path);
+            if (mf_result.is_error()) {
+                m_offline[path] = mf_result.error();
+                return ReaderHandle{};
+            }
+
+            auto mf = mf_result.value();
+
+            // Create reader
+            auto reader_result = Reader::Create(mf);
+            if (reader_result.is_error()) {
+                m_offline[path] = reader_result.error();
+                return ReaderHandle{};
+            }
+
+            reader = reader_result.value();
+            use_mtx = std::make_shared<std::mutex>();
+            m_readers[key] = PoolEntry{path, mf, reader, track_id, ++m_pool_clock, use_mtx};
+        }
     }
 
-    // Not in pool — open new reader
-    // Evict if at capacity
-    while (static_cast<int>(m_readers.size()) >= m_max_readers) {
-        evict_lru_reader();
-    }
-
-    // Open media file
-    auto mf_result = MediaFile::Open(path);
-    if (mf_result.is_error()) {
-        // Mark offline
-        m_offline[path] = mf_result.error();
-        return nullptr;
-    }
-
-    auto mf = mf_result.value();
-
-    // Create reader
-    auto reader_result = Reader::Create(mf);
-    if (reader_result.is_error()) {
-        m_offline[path] = reader_result.error();
-        return nullptr;
-    }
-
-    auto reader = reader_result.value();
-    m_readers[key] = PoolEntry{path, mf, reader, track_id, ++m_pool_clock};
-    return reader;
+    // Lock use_mutex OUTSIDE m_pool_mutex to avoid deadlock
+    return ReaderHandle{reader, std::unique_lock<std::mutex>(*use_mtx)};
 }
 
 void TimelineMediaBuffer::release_reader(int track_id, const std::string& path) {

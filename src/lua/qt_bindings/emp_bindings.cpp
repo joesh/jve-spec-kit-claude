@@ -7,6 +7,7 @@
 #include <editor_media_platform/emp_audio.h>
 #include <editor_media_platform/emp_errors.h>
 #include <editor_media_platform/emp_time.h>
+#include <editor_media_platform/emp_timeline_media_buffer.h>
 
 #include "gpu_video_surface.h"
 #include "cpu_video_surface.h"
@@ -36,6 +37,7 @@ const char* EMP_MEDIA_FILE_METATABLE = "JVE.EMP.MediaFile";
 const char* EMP_READER_METATABLE = "JVE.EMP.Reader";
 const char* EMP_FRAME_METATABLE = "JVE.EMP.Frame";
 const char* EMP_PCM_METATABLE = "JVE.EMP.PcmChunk";
+const char* EMP_TMB_METATABLE = "JVE.EMP.TMB";
 
 // Global registry for shared_ptr instances (prevent premature destruction)
 // Key: Lua userdata address (unique per allocation), Value: shared_ptr
@@ -47,6 +49,7 @@ static std::unordered_map<void*, std::shared_ptr<emp::MediaFile>> g_media_files;
 static std::unordered_map<void*, std::shared_ptr<emp::Reader>> g_readers;
 static std::unordered_map<void*, std::shared_ptr<emp::Frame>> g_frames;
 static std::unordered_map<void*, std::shared_ptr<emp::PcmChunk>> g_pcm_chunks;
+static std::unordered_map<void*, std::shared_ptr<emp::TimelineMediaBuffer>> g_tmb_instances;
 
 // Helper: Push EMP error to Lua (nil, { code=string, msg=string })
 void push_emp_error(lua_State* L, const emp::Error& err) {
@@ -462,6 +465,306 @@ static int lua_emp_pcm_gc(lua_State* L) {
 }
 
 // ============================================================================
+// TimelineMediaBuffer (TMB) bindings
+// ============================================================================
+
+// EMP.TMB_CREATE(pool_threads) -> tmb | nil, err
+static int lua_emp_tmb_create(lua_State* L) {
+    int pool_threads = static_cast<int>(luaL_optinteger(L, 1, 2));
+    if (pool_threads < 0) {
+        return luaL_error(L, "TMB_CREATE: pool_threads must be >= 0, got %d", pool_threads);
+    }
+
+    auto tmb = emp::TimelineMediaBuffer::Create(pool_threads);
+    // Convert unique_ptr to shared_ptr for the global registry
+    std::shared_ptr<emp::TimelineMediaBuffer> shared_tmb(std::move(tmb));
+
+    void* key = push_userdata(L, shared_tmb, EMP_TMB_METATABLE);
+    g_tmb_instances[key] = shared_tmb;
+    return 1;
+}
+
+// EMP.TMB_CLOSE(tmb)
+static int lua_emp_tmb_close(lua_State* L) {
+    void* key = get_map_key(L, 1, EMP_TMB_METATABLE);
+    g_tmb_instances.erase(key);
+    return 0;
+}
+
+// TMB __gc metamethod
+static int lua_emp_tmb_gc(lua_State* L) {
+    void* key = get_map_key(L, 1, EMP_TMB_METATABLE);
+    g_tmb_instances.erase(key);
+    return 0;
+}
+
+// Helper: get TMB from Lua arg or error
+static std::shared_ptr<emp::TimelineMediaBuffer> get_tmb(lua_State* L, int idx) {
+    void* key = get_map_key(L, idx, EMP_TMB_METATABLE);
+    auto it = g_tmb_instances.find(key);
+    if (it == g_tmb_instances.end()) {
+        luaL_error(L, "TMB: invalid handle");
+        return nullptr;
+    }
+    return it->second;
+}
+
+// EMP.TMB_SET_MAX_READERS(tmb, max)
+static int lua_emp_tmb_set_max_readers(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int max = static_cast<int>(luaL_checkinteger(L, 2));
+    if (max < 1) {
+        return luaL_error(L, "TMB_SET_MAX_READERS: max must be >= 1, got %d", max);
+    }
+    tmb->SetMaxReaders(max);
+    return 0;
+}
+
+// EMP.TMB_SET_SEQUENCE_RATE(tmb, num, den)
+static int lua_emp_tmb_set_sequence_rate(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int32_t num = static_cast<int32_t>(luaL_checkinteger(L, 2));
+    int32_t den = static_cast<int32_t>(luaL_checkinteger(L, 3));
+    if (num <= 0) return luaL_error(L, "TMB_SET_SEQUENCE_RATE: num must be > 0, got %d", num);
+    if (den <= 0) return luaL_error(L, "TMB_SET_SEQUENCE_RATE: den must be > 0, got %d", den);
+    tmb->SetSequenceRate(num, den);
+    return 0;
+}
+
+// EMP.TMB_SET_AUDIO_FORMAT(tmb, sample_rate, channels)
+static int lua_emp_tmb_set_audio_format(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int32_t sample_rate = static_cast<int32_t>(luaL_checkinteger(L, 2));
+    int32_t channels = static_cast<int32_t>(luaL_checkinteger(L, 3));
+    if (sample_rate <= 0) return luaL_error(L, "TMB_SET_AUDIO_FORMAT: sample_rate must be > 0, got %d", sample_rate);
+    if (channels <= 0) return luaL_error(L, "TMB_SET_AUDIO_FORMAT: channels must be > 0, got %d", channels);
+    emp::AudioFormat fmt{emp::SampleFormat::F32, sample_rate, channels};
+    tmb->SetAudioFormat(fmt);
+    return 0;
+}
+
+// EMP.TMB_SET_TRACK_CLIPS(tmb, track_id, clips_table)
+// clips_table = array of { clip_id, media_path, timeline_start, duration, source_in, rate_num, rate_den, speed_ratio }
+static int lua_emp_tmb_set_track_clips(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int track_id = static_cast<int>(luaL_checkinteger(L, 2));
+    luaL_checktype(L, 3, LUA_TTABLE);
+
+    int n = static_cast<int>(lua_objlen(L, 3));
+    std::vector<emp::ClipInfo> clips;
+    clips.reserve(static_cast<size_t>(n));
+
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, 3, i);
+        if (!lua_istable(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d is not a table", i);
+        }
+
+        emp::ClipInfo ci{};
+
+        lua_getfield(L, -1, "clip_id");
+        if (!lua_isstring(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing clip_id", i);
+        }
+        ci.clip_id = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "media_path");
+        if (!lua_isstring(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing media_path", i);
+        }
+        ci.media_path = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "timeline_start");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing timeline_start", i);
+        }
+        ci.timeline_start = static_cast<int64_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "duration");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing duration", i);
+        }
+        ci.duration = static_cast<int64_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "source_in");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing source_in", i);
+        }
+        ci.source_in = static_cast<int64_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "rate_num");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing rate_num", i);
+        }
+        ci.rate_num = static_cast<int32_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "rate_den");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing rate_den", i);
+        }
+        ci.rate_den = static_cast<int32_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "speed_ratio");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing speed_ratio", i);
+        }
+        ci.speed_ratio = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+
+        lua_pop(L, 1); // pop clip table
+
+        if (ci.rate_den <= 0) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d rate_den must be > 0, got %d", i, ci.rate_den);
+        }
+        if (ci.speed_ratio <= 0.0f) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d speed_ratio must be > 0", i);
+        }
+
+        clips.push_back(std::move(ci));
+    }
+
+    tmb->SetTrackClips(track_id, clips);
+    return 0;
+}
+
+// EMP.TMB_SET_PLAYHEAD(tmb, frame, direction, speed)
+static int lua_emp_tmb_set_playhead(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int64_t frame = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    int direction = static_cast<int>(luaL_checkinteger(L, 3));
+    float speed = static_cast<float>(luaL_checknumber(L, 4));
+    tmb->SetPlayhead(frame, direction, speed);
+    return 0;
+}
+
+// EMP.TMB_GET_VIDEO_FRAME(tmb, track_id, timeline_frame) -> frame|nil, info_table
+static int lua_emp_tmb_get_video_frame(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int track_id = static_cast<int>(luaL_checkinteger(L, 2));
+    int64_t timeline_frame = static_cast<int64_t>(luaL_checkinteger(L, 3));
+
+    auto result = tmb->GetVideoFrame(track_id, timeline_frame);
+
+    // Push frame handle (or nil for gap/offline)
+    if (result.frame) {
+        void* frame_key = push_userdata(L, result.frame, EMP_FRAME_METATABLE);
+        g_frames[frame_key] = result.frame;
+    } else {
+        lua_pushnil(L);
+    }
+
+    // Push metadata table (always returned)
+    lua_newtable(L);
+    lua_pushstring(L, result.clip_id.c_str());
+    lua_setfield(L, -2, "clip_id");
+    lua_pushinteger(L, result.rotation);
+    lua_setfield(L, -2, "rotation");
+    lua_pushinteger(L, static_cast<lua_Integer>(result.source_frame));
+    lua_setfield(L, -2, "source_frame");
+    lua_pushinteger(L, result.clip_fps_num);
+    lua_setfield(L, -2, "clip_fps_num");
+    lua_pushinteger(L, result.clip_fps_den);
+    lua_setfield(L, -2, "clip_fps_den");
+    lua_pushinteger(L, static_cast<lua_Integer>(result.clip_start_frame));
+    lua_setfield(L, -2, "clip_start_frame");
+    lua_pushinteger(L, static_cast<lua_Integer>(result.clip_end_frame));
+    lua_setfield(L, -2, "clip_end_frame");
+    lua_pushboolean(L, result.offline);
+    lua_setfield(L, -2, "offline");
+
+    return 2;
+}
+
+// EMP.TMB_GET_TRACK_AUDIO(tmb, track_id, t0_us, t1_us, sample_rate, channels) -> pcm|nil
+static int lua_emp_tmb_get_track_audio(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int track_id = static_cast<int>(luaL_checkinteger(L, 2));
+    int64_t t0 = static_cast<int64_t>(luaL_checkinteger(L, 3));
+    int64_t t1 = static_cast<int64_t>(luaL_checkinteger(L, 4));
+    int32_t sample_rate = static_cast<int32_t>(luaL_checkinteger(L, 5));
+    int32_t channels = static_cast<int32_t>(luaL_checkinteger(L, 6));
+    if (t1 <= t0) return luaL_error(L, "TMB_GET_TRACK_AUDIO: t1 (%lld) must be > t0 (%lld)", (long long)t1, (long long)t0);
+    if (sample_rate <= 0) return luaL_error(L, "TMB_GET_TRACK_AUDIO: sample_rate must be > 0, got %d", sample_rate);
+    if (channels <= 0) return luaL_error(L, "TMB_GET_TRACK_AUDIO: channels must be > 0, got %d", channels);
+
+    emp::AudioFormat fmt{emp::SampleFormat::F32, sample_rate, channels};
+    auto pcm = tmb->GetTrackAudio(track_id, t0, t1, fmt);
+
+    if (!pcm) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    void* pcm_key = push_userdata(L, pcm, EMP_PCM_METATABLE);
+    g_pcm_chunks[pcm_key] = pcm;
+    return 1;
+}
+
+// EMP.TMB_RELEASE_TRACK(tmb, track_id)
+static int lua_emp_tmb_release_track(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int track_id = static_cast<int>(luaL_checkinteger(L, 2));
+    tmb->ReleaseTrack(track_id);
+    return 0;
+}
+
+// EMP.TMB_RELEASE_ALL(tmb)
+static int lua_emp_tmb_release_all(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    tmb->ReleaseAll();
+    return 0;
+}
+
+// EMP.MEDIA_FILE_PROBE(path) -> info_table | nil, err
+static int lua_emp_media_file_probe(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+
+    auto result = emp::TimelineMediaBuffer::ProbeFile(path);
+    if (result.is_error()) {
+        push_emp_error(L, result.error());
+        return 2;
+    }
+
+    const auto& info = result.value();
+    lua_newtable(L);
+    lua_pushstring(L, info.path.c_str());
+    lua_setfield(L, -2, "path");
+    lua_pushboolean(L, info.has_video);
+    lua_setfield(L, -2, "has_video");
+    lua_pushinteger(L, info.video_width);
+    lua_setfield(L, -2, "width");
+    lua_pushinteger(L, info.video_height);
+    lua_setfield(L, -2, "height");
+    lua_pushinteger(L, info.video_fps_num);
+    lua_setfield(L, -2, "fps_num");
+    lua_pushinteger(L, info.video_fps_den);
+    lua_setfield(L, -2, "fps_den");
+    lua_pushinteger(L, static_cast<lua_Integer>(info.duration_us));
+    lua_setfield(L, -2, "duration_us");
+    lua_pushboolean(L, info.is_vfr);
+    lua_setfield(L, -2, "is_vfr");
+    lua_pushinteger(L, static_cast<lua_Integer>(info.start_tc));
+    lua_setfield(L, -2, "start_tc");
+    lua_pushinteger(L, info.rotation);
+    lua_setfield(L, -2, "rotation");
+    lua_pushboolean(L, info.has_audio);
+    lua_setfield(L, -2, "has_audio");
+    lua_pushinteger(L, info.audio_sample_rate);
+    lua_setfield(L, -2, "audio_sample_rate");
+    lua_pushinteger(L, info.audio_channels);
+    lua_setfield(L, -2, "audio_channels");
+
+    return 1;
+}
+
+// ============================================================================
 // Offline Frame Compositor
 // ============================================================================
 
@@ -751,6 +1054,11 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
+    luaL_newmetatable(L, EMP_TMB_METATABLE);
+    lua_pushcfunction(L, lua_emp_tmb_gc);
+    lua_setfield(L, -2, "__gc");
+    lua_pop(L, 1);
+
     // Create EMP subtable in qt_constants
     // Assumes qt_constants is on stack at index -1
     lua_newtable(L);
@@ -810,6 +1118,32 @@ void register_emp_bindings(lua_State* L) {
     // Offline frame compositor
     lua_pushcfunction(L, lua_emp_compose_offline_frame);
     lua_setfield(L, -2, "COMPOSE_OFFLINE_FRAME");
+
+    // TimelineMediaBuffer (TMB) functions
+    lua_pushcfunction(L, lua_emp_tmb_create);
+    lua_setfield(L, -2, "TMB_CREATE");
+    lua_pushcfunction(L, lua_emp_tmb_close);
+    lua_setfield(L, -2, "TMB_CLOSE");
+    lua_pushcfunction(L, lua_emp_tmb_set_max_readers);
+    lua_setfield(L, -2, "TMB_SET_MAX_READERS");
+    lua_pushcfunction(L, lua_emp_tmb_set_sequence_rate);
+    lua_setfield(L, -2, "TMB_SET_SEQUENCE_RATE");
+    lua_pushcfunction(L, lua_emp_tmb_set_audio_format);
+    lua_setfield(L, -2, "TMB_SET_AUDIO_FORMAT");
+    lua_pushcfunction(L, lua_emp_tmb_set_track_clips);
+    lua_setfield(L, -2, "TMB_SET_TRACK_CLIPS");
+    lua_pushcfunction(L, lua_emp_tmb_set_playhead);
+    lua_setfield(L, -2, "TMB_SET_PLAYHEAD");
+    lua_pushcfunction(L, lua_emp_tmb_get_video_frame);
+    lua_setfield(L, -2, "TMB_GET_VIDEO_FRAME");
+    lua_pushcfunction(L, lua_emp_tmb_get_track_audio);
+    lua_setfield(L, -2, "TMB_GET_TRACK_AUDIO");
+    lua_pushcfunction(L, lua_emp_tmb_release_track);
+    lua_setfield(L, -2, "TMB_RELEASE_TRACK");
+    lua_pushcfunction(L, lua_emp_tmb_release_all);
+    lua_setfield(L, -2, "TMB_RELEASE_ALL");
+    lua_pushcfunction(L, lua_emp_media_file_probe);
+    lua_setfield(L, -2, "MEDIA_FILE_PROBE");
 
     // Surface functions
     lua_pushcfunction(L, lua_emp_surface_set_frame);
