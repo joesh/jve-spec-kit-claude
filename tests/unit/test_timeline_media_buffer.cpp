@@ -16,9 +16,11 @@ class TestTimelineMediaBuffer : public QObject {
 private:
     QString m_testVideoPath;
     bool m_hasTestVideo = false;
+    bool m_hasTestAudio = false;
 
     void findTestVideo() {
         QStringList candidates = {
+            QDir::homePath() + "/Local/jve-spec-kit-claude/fixtures/media/test_bars_tone.mp4",
             QDir::homePath() + "/Local/jve-spec-kit-claude/fixtures/test_video.mp4",
             QDir::homePath() + "/Local/jve-spec-kit-claude/fixtures/countdown_24fps.mp4",
         };
@@ -46,6 +48,12 @@ private:
 private slots:
     void initTestCase() {
         findTestVideo();
+        if (m_hasTestVideo) {
+            auto probe = TimelineMediaBuffer::ProbeFile(m_testVideoPath.toStdString());
+            if (probe.is_ok() && probe.value().has_audio) {
+                m_hasTestAudio = true;
+            }
+        }
     }
 
     // ── Create / Destroy ──
@@ -387,6 +395,253 @@ private slots:
         QVERIFY(result.frame != nullptr);
         // rotation should be a valid value (0, 90, 180, or 270)
         QVERIFY(result.rotation >= 0 && result.rotation < 360);
+    }
+    // ── Audio: GetTrackAudio ──
+
+    void test_audio_gap_returns_null() {
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        // No clips on track → gap
+        auto result = tmb->GetTrackAudio(1, 0, 100000,
+            AudioFormat{SampleFormat::F32, 48000, 2});
+        QVERIFY(result == nullptr);
+    }
+
+    void test_audio_no_track_returns_null() {
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        auto result = tmb->GetTrackAudio(99, 0, 100000,
+            AudioFormat{SampleFormat::F32, 48000, 2});
+        QVERIFY(result == nullptr);
+    }
+
+    void test_audio_offline_returns_null() {
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        std::vector<ClipInfo> clips = {
+            {"clip1", "/nonexistent/audio.mp4", 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        auto result = tmb->GetTrackAudio(1, 0, 100000,
+            AudioFormat{SampleFormat::F32, 48000, 2});
+        QVERIFY(result == nullptr);
+    }
+
+    void test_audio_basic_decode() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        // Clip at timeline frame 0, 100 frames long, source_in = 0
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // Request first ~0.1s (100000 us)
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        auto result = tmb->GetTrackAudio(1, 0, 100000, fmt);
+        QVERIFY(result != nullptr);
+        QVERIFY(result->frames() > 0);
+        QCOMPARE(result->sample_rate(), 48000);
+        QCOMPARE(result->channels(), 2);
+        QCOMPARE(result->start_time_us(), (int64_t)0);
+    }
+
+    void test_audio_mid_clip() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        // Clip starts at timeline frame 24 (= 1.0s at 24fps), source_in = 0
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 24, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // Request at 1.5s (mid-clip)
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        auto result = tmb->GetTrackAudio(1, 1500000, 1600000, fmt);
+        QVERIFY(result != nullptr);
+        QVERIFY(result->frames() > 0);
+        // Start time should be rebased to timeline
+        QCOMPARE(result->start_time_us(), (int64_t)1500000);
+    }
+
+    void test_audio_clamps_to_clip_end() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        // Clip: 48 frames at 24fps = 2.0s (timeline frames 0-47)
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 48, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // Request 1.5s to 2.5s — should clamp to clip end (2.0s)
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        auto result = tmb->GetTrackAudio(1, 1500000, 2500000, fmt);
+        QVERIFY(result != nullptr);
+
+        // Should get ~0.5s of audio (not 1.0s)
+        int64_t expected_frames = (500000LL * 48000) / 1000000; // ~24000
+        // Allow some tolerance for rounding
+        QVERIFY(result->frames() <= expected_frames + 10);
+        QVERIFY(result->frames() >= expected_frames - 10);
+    }
+
+    void test_audio_request_past_clip_end() {
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        // Clip: 24 frames = 1.0s
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 24, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // Request starts after clip end → gap
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        auto result = tmb->GetTrackAudio(1, 2000000, 3000000, fmt);
+        QVERIFY(result == nullptr);
+    }
+
+    void test_audio_with_source_in() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        // Clip starts at source frame 12 (0.5s into media at 24fps)
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 48, 12, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        auto result = tmb->GetTrackAudio(1, 0, 100000, fmt);
+        QVERIFY(result != nullptr);
+        QVERIFY(result->frames() > 0);
+        QCOMPARE(result->start_time_us(), (int64_t)0);
+    }
+
+    void test_audio_conform_speed_ratio() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(30, 1);
+
+        // 24fps media in 30fps sequence: speed_ratio = 30/24 = 1.25
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.25f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // Request 0.5s of timeline audio
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        auto result = tmb->GetTrackAudio(1, 0, 500000, fmt);
+        QVERIFY(result != nullptr);
+
+        // Should get ~0.5s of output (timeline duration), not 0.625s (source)
+        int64_t expected = (500000LL * 48000) / 1000000; // 24000 frames
+        QVERIFY(result->frames() >= expected - 10);
+        QVERIFY(result->frames() <= expected + 10);
+    }
+
+    void test_set_sequence_rate() {
+        auto tmb = TimelineMediaBuffer::Create(0);
+        // Should not crash
+        tmb->SetSequenceRate(30, 1);
+        tmb->SetSequenceRate(24, 1);
+        tmb->SetSequenceRate(24000, 1001);
+    }
+
+    // ── Audio: edge cases ──
+
+    void test_audio_empty_clips_returns_null() {
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        // Track exists but has empty clip vector
+        std::vector<ClipInfo> clips = {};
+        tmb->SetTrackClips(1, clips);
+
+        auto result = tmb->GetTrackAudio(1, 0, 100000,
+            AudioFormat{SampleFormat::F32, 48000, 2});
+        QVERIFY(result == nullptr);
+    }
+
+    void test_audio_zero_duration_clip_returns_null() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        // Clip with duration=0 → timeline_end() == timeline_start, half-open range [s,s) is empty
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 10, 0, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // Request at clip's start — zero-duration clip should never match
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        auto result = tmb->GetTrackAudio(1, 416666, 500000, fmt);
+        QVERIFY(result == nullptr);
+    }
+
+    void test_audio_request_clamps_to_clip_start() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        // Clip starts at timeline frame 24 (1.0s at 24fps)
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 24, 48, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        // Request [0.5s, 1.5s) — t0 is before clip start (1.0s)
+        // find_clip_at_us(t0=500000) won't find the clip → nullptr (gap before clip)
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        auto result = tmb->GetTrackAudio(1, 500000, 1500000, fmt);
+        QVERIFY(result == nullptr);
+    }
+
+    void test_audio_multiple_clips_correct_selection() {
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        // Two adjacent clips: clip1 at [0, 24) frames, clip2 at [24, 48) frames
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 24, 0, 24, 1, 1.0f},
+            {"clip2", m_testVideoPath.toStdString(), 24, 24, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(1, clips);
+
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+
+        // Request in clip1's range (0.5s)
+        auto r1 = tmb->GetTrackAudio(1, 0, 500000, fmt);
+        QVERIFY(r1 != nullptr);
+        QCOMPARE(r1->start_time_us(), (int64_t)0);
+
+        // Request in clip2's range (1.0s - 1.5s)
+        auto r2 = tmb->GetTrackAudio(1, 1000000, 1500000, fmt);
+        QVERIFY(r2 != nullptr);
+        QCOMPARE(r2->start_time_us(), (int64_t)1000000);
     }
 };
 

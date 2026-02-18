@@ -1,4 +1,5 @@
 #include <editor_media_platform/emp_timeline_media_buffer.h>
+#include "impl/pcm_chunk_impl.h"
 #include <cassert>
 #include <algorithm>
 #include <cmath>
@@ -203,14 +204,177 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(int track_id, int64_t timeline_fr
 }
 
 // ============================================================================
-// GetTrackAudio (Phase 2b — stub for now)
+// SetSequenceRate
+// ============================================================================
+
+void TimelineMediaBuffer::SetSequenceRate(int32_t num, int32_t den) {
+    assert(num > 0 && "SetSequenceRate: num must be positive");
+    assert(den > 0 && "SetSequenceRate: den must be positive");
+    m_seq_rate = Rate{num, den};
+}
+
+// ============================================================================
+// find_clip_at_us — microsecond-based clip search (audio path)
+// ============================================================================
+
+const ClipInfo* TimelineMediaBuffer::find_clip_at_us(const TrackState& ts, TimeUS t_us) const {
+    assert(m_seq_rate.num > 0 && "find_clip_at_us: SetSequenceRate not called");
+    for (const auto& clip : ts.clips) {
+        assert(clip.rate_den > 0 && "find_clip_at_us: clip has zero rate_den");
+        TimeUS start = FrameTime::from_frame(clip.timeline_start, m_seq_rate).to_us();
+        TimeUS end = FrameTime::from_frame(clip.timeline_end(), m_seq_rate).to_us();
+        if (t_us >= start && t_us < end) {
+            return &clip;
+        }
+    }
+    return nullptr;
+}
+
+// ============================================================================
+// build_audio_output — trim decoded audio, conform (resample), rebase to timeline
+// ============================================================================
+
+std::shared_ptr<PcmChunk> TimelineMediaBuffer::build_audio_output(
+        const std::shared_ptr<PcmChunk>& decoded,
+        TimeUS source_t0, TimeUS source_t1,
+        TimeUS timeline_t0, TimeUS timeline_t1,
+        float speed_ratio, const AudioFormat& fmt) const {
+
+    assert(decoded && "build_audio_output: decoded chunk is null");
+    assert(source_t1 > source_t0 && "build_audio_output: inverted source range");
+    assert(timeline_t1 > timeline_t0 && "build_audio_output: inverted timeline range");
+    assert(fmt.sample_rate > 0 && "build_audio_output: sample_rate must be positive");
+    assert(fmt.channels > 0 && "build_audio_output: channels must be positive");
+    assert(speed_ratio > 0.0f && "build_audio_output: speed_ratio must be positive");
+
+    const int32_t sr = fmt.sample_rate;
+    const int32_t ch = fmt.channels;
+    const float* src_data = decoded->data_f32();
+    const int64_t src_frames = decoded->frames();
+    const TimeUS src_start = decoded->start_time_us();
+
+    // How many input samples to skip (decoder may have started before source_t0)
+    int64_t skip = 0;
+    if (src_start < source_t0) {
+        skip = ((source_t0 - src_start) * sr) / 1000000;
+    }
+    if (skip >= src_frames) return nullptr;
+
+    // How many input samples span [source_t0, source_t1]
+    int64_t source_duration_us = source_t1 - source_t0;
+    int64_t source_sample_count = (source_duration_us * sr) / 1000000;
+    int64_t available = src_frames - skip;
+    if (source_sample_count > available) {
+        source_sample_count = available;
+    }
+    if (source_sample_count <= 0) return nullptr;
+
+    // Output sample count (timeline duration)
+    int64_t timeline_duration_us = timeline_t1 - timeline_t0;
+    int64_t out_frames = (timeline_duration_us * sr) / 1000000;
+    if (out_frames <= 0) return nullptr;
+
+    std::vector<float> out_data(out_frames * ch);
+
+    if (std::abs(speed_ratio - 1.0f) < 0.001f) {
+        // No conform — direct copy (trim only)
+        int64_t copy_frames = std::min(out_frames, source_sample_count);
+        const float* src = src_data + skip * ch;
+        std::copy(src, src + copy_frames * ch, out_data.data());
+        // Zero-fill if we got fewer samples than requested
+        if (copy_frames < out_frames) {
+            std::fill(out_data.data() + copy_frames * ch,
+                      out_data.data() + out_frames * ch, 0.0f);
+        }
+    } else {
+        // Conform: linear interpolation from source_sample_count → out_frames
+        const float* src = src_data + skip * ch;
+        double ratio = static_cast<double>(source_sample_count) / out_frames;
+
+        int64_t max_idx = source_sample_count - 1;
+        for (int64_t i = 0; i < out_frames; ++i) {
+            double src_pos = i * ratio;
+            int64_t s0 = static_cast<int64_t>(src_pos);
+            double frac = src_pos - s0;
+
+            // Clamp both indices to valid range (float edge cases)
+            if (s0 > max_idx) s0 = max_idx;
+            int64_t s1 = std::min(s0 + 1, max_idx);
+
+            for (int c = 0; c < ch; ++c) {
+                float v0 = src[s0 * ch + c];
+                float v1 = src[s1 * ch + c];
+                out_data[i * ch + c] = static_cast<float>(v0 * (1.0 - frac) + v1 * frac);
+            }
+        }
+    }
+
+    auto impl = std::make_unique<PcmChunkImpl>(
+        sr, ch, fmt.fmt, timeline_t0, std::move(out_data));
+    return std::make_shared<PcmChunk>(std::move(impl));
+}
+
+// ============================================================================
+// GetTrackAudio
 // ============================================================================
 
 std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         int track_id, TimeUS t0, TimeUS t1, const AudioFormat& fmt) {
-    // Phase 2b will implement this
-    (void)track_id; (void)t0; (void)t1; (void)fmt;
-    return nullptr;
+    assert(t1 > t0 && "GetTrackAudio: t1 must be greater than t0");
+    assert(m_seq_rate.num > 0 && "GetTrackAudio: SetSequenceRate not called");
+
+    // Find track
+    std::unique_lock<std::mutex> tracks_lock(m_tracks_mutex);
+    auto track_it = m_tracks.find(track_id);
+    if (track_it == m_tracks.end()) return nullptr;
+    auto& ts = track_it->second;
+
+    // Find clip at t0
+    const ClipInfo* clip = find_clip_at_us(ts, t0);
+    if (!clip) return nullptr;
+
+    assert(clip->rate_den > 0 && "GetTrackAudio: clip has zero rate_den");
+    assert(clip->speed_ratio > 0.0f && "GetTrackAudio: clip has non-positive speed_ratio");
+
+    // Clip boundaries in timeline microseconds
+    TimeUS clip_start_us = FrameTime::from_frame(clip->timeline_start, m_seq_rate).to_us();
+    TimeUS clip_end_us = FrameTime::from_frame(clip->timeline_end(), m_seq_rate).to_us();
+
+    // Clamp request to clip boundaries (Phase 2b: single-clip only)
+    TimeUS clamped_t0 = std::max(t0, clip_start_us);
+    TimeUS clamped_t1 = std::min(t1, clip_end_us);
+    if (clamped_t1 <= clamped_t0) return nullptr;
+
+    // Map timeline us → source us
+    TimeUS source_origin_us = FrameTime::from_frame(clip->source_in, clip->rate()).to_us();
+    double sr = static_cast<double>(clip->speed_ratio);
+    TimeUS source_t0 = source_origin_us + static_cast<int64_t>((clamped_t0 - clip_start_us) * sr);
+    TimeUS source_t1 = source_origin_us + static_cast<int64_t>((clamped_t1 - clip_start_us) * sr);
+
+    // Copy locals before releasing lock
+    std::string media_path = clip->media_path;
+    float speed_ratio = clip->speed_ratio;
+    tracks_lock.unlock();
+
+    // Offline check
+    {
+        std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
+        if (m_offline.count(media_path)) return nullptr;
+    }
+
+    // Acquire reader and decode
+    auto reader = acquire_reader(track_id, media_path);
+    if (!reader) return nullptr;
+
+    auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt);
+    if (decode_result.is_error()) return nullptr;
+
+    auto chunk = decode_result.value();
+    if (!chunk || chunk->frames() == 0) return nullptr;
+
+    // Trim, conform, rebase to timeline coordinates
+    return build_audio_output(chunk, source_t0, source_t1,
+                              clamped_t0, clamped_t1, speed_ratio, fmt);
 }
 
 // ============================================================================

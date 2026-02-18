@@ -69,6 +69,9 @@ public:
     std::shared_ptr<PcmChunk> GetTrackAudio(int track_id, TimeUS t0, TimeUS t1,
                                              const AudioFormat& fmt);
 
+    // Sequence rate (required before GetTrackAudio — converts timeline frames to us)
+    void SetSequenceRate(int32_t num, int32_t den);
+
     // Configuration
     void SetMaxReaders(int max);
 
@@ -123,6 +126,17 @@ private:
     // Find clip at timeline_frame in track's clip list
     const ClipInfo* find_clip_at(const TrackState& ts, int64_t timeline_frame) const;
 
+    // Find clip at timeline microsecond position (for audio path)
+    // Requires m_seq_rate to be set
+    const ClipInfo* find_clip_at_us(const TrackState& ts, TimeUS t_us) const;
+
+    // Build output PcmChunk: trim decoded audio to source range, conform, rebase to timeline
+    std::shared_ptr<PcmChunk> build_audio_output(
+        const std::shared_ptr<PcmChunk>& decoded,
+        TimeUS source_t0, TimeUS source_t1,
+        TimeUS timeline_t0, TimeUS timeline_t1,
+        float speed_ratio, const AudioFormat& fmt) const;
+
     // ── Pre-buffer thread pool ──
     struct PreBufferJob {
         int track_id;
@@ -143,6 +157,9 @@ private:
     std::condition_variable m_jobs_cv;
     std::vector<PreBufferJob> m_jobs;
     std::atomic<bool> m_shutdown{false};
+
+    // ── Sequence rate (for timeline frame → us conversion) ──
+    Rate m_seq_rate{0, 1};
 
     // ── Playhead state ──
     std::atomic<int64_t> m_playhead_frame{0};
