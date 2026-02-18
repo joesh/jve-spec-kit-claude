@@ -15,10 +15,10 @@
 "L" = "ShuttleForward @timeline @source_monitor @timeline_monitor"
 
 [Navigation]
-"Home" = "GoToStart @timeline"
-"End" = "GoToEnd @timeline"
-"Up" = "GoToPrevEdit @timeline"
-"Down" = "GoToNextEdit @timeline"
+"Home" = "GoToStart @timeline @source_monitor"
+"End" = "GoToEnd @timeline @source_monitor"
+"Up" = "GoToPrevEdit @timeline @source_monitor"
+"Down" = "GoToNextEdit @timeline @source_monitor"
 # Left/Right handled in keyboard_shortcuts.lua (arrow repeat management)
 
 [Marks]

@@ -1,28 +1,18 @@
---- TODO: one-line summary (human review required)
+--- GoToEnd: move playhead to the last frame in the active monitor
 --
--- Responsibilities:
--- - TODO
+-- Respects focus: operates on whichever SequenceMonitor (source or timeline)
+-- is currently active via panel_manager.
 --
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~42 LOC
--- Volatility: unknown
+-- For timeline: last clip end. For source: total_frames.
 --
 -- @file go_to_end.lua
 local M = {}
-local timeline_state = require('ui.timeline.timeline_state')
-
 
 local SPEC = {
     undoable = false,
     args = {
         dry_run = { kind = "boolean" },
         project_id = { required = true },
-        sequence_id = {},
     }
 }
 
@@ -30,37 +20,22 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["GoToEnd"] = function(command)
         local args = command:get_all_parameters()
 
-        if not args.dry_run then
-            print("Executing GoToEnd command")
-        end
-
-        local clips = timeline_state.get_clips()
-        local max_end = 0
-        
-        for _, clip in ipairs(clips) do
-            local start = clip.timeline_start
-            local duration = clip.duration
-            if start and duration then
-                local clip_end = start + duration
-                if clip_end > max_end then
-                    max_end = clip_end
-                end
-            end
-        end
-
-        if args.dry_run then
-            return true, { timeline_end = max_end }
-        end
-
-        -- Stop playback before navigating (NLE convention)
         local pm = require('ui.panel_manager')
         local sv = pm.get_active_sequence_monitor()
-        if sv and sv.engine:is_playing() then
+        assert(sv and sv.sequence_id, "GoToEnd: no sequence loaded in active view")
+
+        -- End = total frames in the monitor's loaded sequence
+        local end_frame = sv.total_frames
+
+        if args.dry_run then
+            return true, { end_frame = end_frame }
+        end
+
+        if sv.engine:is_playing() then
             sv.engine:stop()
         end
 
-        timeline_state.set_playhead_position(max_end)
-        print(string.format("✅ Moved playhead to timeline end (%s)", tostring(max_end)))
+        sv:seek_to_frame(end_frame)
         return true
     end
 

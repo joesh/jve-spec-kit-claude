@@ -286,26 +286,45 @@ function Sequence.count()
     return count
 end
 
--- Ensure a default sequence exists for a project, creating one if needed
--- Returns the default sequence (existing or newly created)
-function Sequence.ensure_default(project_id)
-    assert(project_id, "Sequence.ensure_default: project_id is required")
+--- Rebind all sequences from one project_id to another.
+-- Used by project_templates when stamping a new identity on a copied .jvp.
+-- @param old_project_id string
+-- @param new_project_id string
+function Sequence.rebind_to_project(old_project_id, new_project_id)
+    assert(old_project_id and old_project_id ~= "",
+        "Sequence.rebind_to_project: old_project_id required")
+    assert(new_project_id and new_project_id ~= "",
+        "Sequence.rebind_to_project: new_project_id required")
 
-    local existing = Sequence.load("default_sequence")
-    if existing then
-        return existing
-    end
+    local conn = resolve_db()
+    local stmt = assert(conn:prepare(
+        "UPDATE sequences SET project_id = ? WHERE project_id = ?"),
+        "Sequence.rebind_to_project: failed to prepare UPDATE")
+    stmt:bind_value(1, new_project_id)
+    stmt:bind_value(2, old_project_id)
+    assert(stmt:exec(), "Sequence.rebind_to_project: UPDATE failed")
+    stmt:finalize()
+end
 
-    -- Create default sequence with standard settings
-    local frame_rate = {fps_numerator = 30, fps_denominator = 1}
-    local sequence = Sequence.create("Default Sequence", project_id, frame_rate, 1920, 1080, {
-        id = "default_sequence",
-        audio_rate = 48000
-    })
-    if sequence and sequence:save() then
-        return sequence
+--- Find the first sequence belonging to a project.
+-- @param project_id string
+-- @return string|nil: sequence id
+function Sequence.find_first_by_project(project_id)
+    assert(project_id and project_id ~= "",
+        "Sequence.find_first_by_project: project_id required")
+
+    local conn = resolve_db()
+    local stmt = assert(conn:prepare(
+        "SELECT id FROM sequences WHERE project_id = ? LIMIT 1"),
+        "Sequence.find_first_by_project: failed to prepare query")
+    stmt:bind_value(1, project_id)
+    if not stmt:exec() or not stmt:next() then
+        stmt:finalize()
+        return nil
     end
-    return nil
+    local id = stmt:value(0)
+    stmt:finalize()
+    return id
 end
 
 -- Find the most recently modified sequence in the database

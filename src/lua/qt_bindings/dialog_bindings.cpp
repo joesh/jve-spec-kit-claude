@@ -6,7 +6,7 @@
 
 // File Dialog Bindings
 int lua_file_dialog_open(lua_State* L) {
-    QWidget* parent = get_widget<QWidget>(L, 1);
+    QWidget* parent = lua_isnil(L, 1) ? nullptr : get_widget<QWidget>(L, 1);
     const char* title = luaL_optstring(L, 2, "Open File");
     const char* filter = luaL_optstring(L, 3, "All Files (*)");
     const char* dir = luaL_optstring(L, 4, "");

@@ -38,7 +38,11 @@ const char* EMP_FRAME_METATABLE = "JVE.EMP.Frame";
 const char* EMP_PCM_METATABLE = "JVE.EMP.PcmChunk";
 
 // Global registry for shared_ptr instances (prevent premature destruction)
-// Key: raw pointer, Value: shared_ptr (via unique_ptr to type-erase)
+// Key: Lua userdata address (unique per allocation), Value: shared_ptr
+// IMPORTANT: Keys must be userdata addresses, NOT raw C++ pointers. The C++
+// decoder cache can return the same shared_ptr<Frame> for repeated decodes of
+// the same timestamp. If raw ptrs were used as keys, two Lua userdata objects
+// would share one map entry, and GC of the first would invalidate the second.
 static std::unordered_map<void*, std::shared_ptr<emp::Asset>> g_assets;
 static std::unordered_map<void*, std::shared_ptr<emp::Reader>> g_readers;
 static std::unordered_map<void*, std::shared_ptr<emp::Frame>> g_frames;
@@ -54,21 +58,21 @@ void push_emp_error(lua_State* L, const emp::Error& err) {
     lua_setfield(L, -2, "msg");
 }
 
-// Helper: Create userdata with metatable
+// Helper: Create userdata with metatable, return userdata address (map key)
 template<typename T>
 void* push_userdata(lua_State* L, std::shared_ptr<T> ptr, const char* metatable) {
     void** ud = static_cast<void**>(lua_newuserdata(L, sizeof(void*)));
     *ud = ptr.get();
     luaL_getmetatable(L, metatable);
     lua_setmetatable(L, -2);
-    return ptr.get();
+    return static_cast<void*>(ud);
 }
 
-// Helper: Get userdata pointer
-template<typename T>
-T* get_userdata(lua_State* L, int idx, const char* metatable) {
-    void** ud = static_cast<void**>(luaL_checkudata(L, idx, metatable));
-    return static_cast<T*>(*ud);
+// Helper: Get Lua userdata address for map key lookup
+// Returns the userdata allocation address (unique per Lua object), NOT the
+// contained C++ pointer. This ensures each Lua handle has its own map entry.
+void* get_map_key(lua_State* L, int idx, const char* metatable) {
+    return static_cast<void*>(luaL_checkudata(L, idx, metatable));
 }
 
 // ============================================================================
@@ -93,14 +97,14 @@ static int lua_emp_asset_open(lua_State* L) {
 
 // EMP.ASSET_CLOSE(asset)
 static int lua_emp_asset_close(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_ASSET_METATABLE);
+    void* key = get_map_key(L, 1, EMP_ASSET_METATABLE);
     g_assets.erase(key);
     return 0;
 }
 
 // EMP.ASSET_INFO(asset) -> { path, has_video, width, height, fps_num, fps_den, duration_us, is_vfr, has_audio, audio_sample_rate, audio_channels }
 static int lua_emp_asset_info(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_ASSET_METATABLE);
+    void* key = get_map_key(L, 1, EMP_ASSET_METATABLE);
     auto it = g_assets.find(key);
     if (it == g_assets.end()) {
         return luaL_error(L, "EMP.ASSET_INFO: invalid asset handle");
@@ -147,7 +151,7 @@ static int lua_emp_asset_info(lua_State* L) {
 
 // Asset __gc metamethod
 static int lua_emp_asset_gc(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_ASSET_METATABLE);
+    void* key = get_map_key(L, 1, EMP_ASSET_METATABLE);
     g_assets.erase(key);
     return 0;
 }
@@ -158,7 +162,7 @@ static int lua_emp_asset_gc(lua_State* L) {
 
 // EMP.READER_CREATE(asset) -> reader | nil, err
 static int lua_emp_reader_create(lua_State* L) {
-    void* asset_key = get_userdata<void>(L, 1, EMP_ASSET_METATABLE);
+    void* asset_key = get_map_key(L, 1, EMP_ASSET_METATABLE);
     auto asset_it = g_assets.find(asset_key);
     if (asset_it == g_assets.end()) {
         push_emp_error(L, emp::Error::invalid_arg("Invalid asset handle"));
@@ -179,14 +183,14 @@ static int lua_emp_reader_create(lua_State* L) {
 
 // EMP.READER_CLOSE(reader)
 static int lua_emp_reader_close(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     g_readers.erase(key);
     return 0;
 }
 
 // EMP.READER_SEEK_FRAME(reader, frame_idx, rate_num, rate_den) -> true | nil, err
 static int lua_emp_reader_seek_frame(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         push_emp_error(L, emp::Error::invalid_arg("Invalid reader handle"));
@@ -211,7 +215,7 @@ static int lua_emp_reader_seek_frame(lua_State* L) {
 
 // EMP.READER_DECODE_FRAME(reader, frame_idx, rate_num, rate_den) -> frame | nil, err
 static int lua_emp_reader_decode_frame(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         push_emp_error(L, emp::Error::invalid_arg("Invalid reader handle"));
@@ -239,7 +243,7 @@ static int lua_emp_reader_decode_frame(lua_State* L) {
 // EMP.READER_START_PREFETCH(reader, direction)
 // direction: 1=forward, -1=reverse, 0=stop
 static int lua_emp_reader_start_prefetch(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         return luaL_error(L, "READER_START_PREFETCH: invalid reader handle");
@@ -256,7 +260,7 @@ static int lua_emp_reader_start_prefetch(lua_State* L) {
 
 // EMP.READER_STOP_PREFETCH(reader)
 static int lua_emp_reader_stop_prefetch(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         return luaL_error(L, "READER_STOP_PREFETCH: invalid reader handle");
@@ -268,7 +272,7 @@ static int lua_emp_reader_stop_prefetch(lua_State* L) {
 
 // EMP.READER_UPDATE_PREFETCH_TARGET(reader, frame_idx, rate_num, rate_den)
 static int lua_emp_reader_update_prefetch_target(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         return luaL_error(L, "READER_UPDATE_PREFETCH_TARGET: invalid reader handle");
@@ -285,7 +289,7 @@ static int lua_emp_reader_update_prefetch_target(lua_State* L) {
 
 // EMP.READER_GET_CACHED_FRAME(reader, frame_idx, rate_num, rate_den) -> frame | nil
 static int lua_emp_reader_get_cached_frame(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         return luaL_error(L, "READER_GET_CACHED_FRAME: invalid reader handle");
@@ -310,7 +314,7 @@ static int lua_emp_reader_get_cached_frame(lua_State* L) {
 
 // Reader __gc metamethod
 static int lua_emp_reader_gc(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     g_readers.erase(key);
     return 0;
 }
@@ -321,7 +325,7 @@ static int lua_emp_reader_gc(lua_State* L) {
 
 // EMP.FRAME_INFO(frame) -> { width, height, stride, source_pts_us }
 static int lua_emp_frame_info(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_FRAME_METATABLE);
+    void* key = get_map_key(L, 1, EMP_FRAME_METATABLE);
     auto it = g_frames.find(key);
     if (it == g_frames.end()) {
         return luaL_error(L, "EMP.FRAME_INFO: invalid frame handle");
@@ -344,14 +348,14 @@ static int lua_emp_frame_info(lua_State* L) {
 
 // EMP.FRAME_RELEASE(frame)
 static int lua_emp_frame_release(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_FRAME_METATABLE);
+    void* key = get_map_key(L, 1, EMP_FRAME_METATABLE);
     g_frames.erase(key);
     return 0;
 }
 
 // EMP.FRAME_DATA_PTR(frame) -> lightuserdata (for FFI or surface widget)
 static int lua_emp_frame_data_ptr(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_FRAME_METATABLE);
+    void* key = get_map_key(L, 1, EMP_FRAME_METATABLE);
     auto it = g_frames.find(key);
     if (it == g_frames.end()) {
         return luaL_error(L, "EMP.FRAME_DATA_PTR: invalid frame handle");
@@ -363,7 +367,7 @@ static int lua_emp_frame_data_ptr(lua_State* L) {
 
 // Frame __gc metamethod
 static int lua_emp_frame_gc(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_FRAME_METATABLE);
+    void* key = get_map_key(L, 1, EMP_FRAME_METATABLE);
     g_frames.erase(key);
     return 0;
 }
@@ -374,7 +378,7 @@ static int lua_emp_frame_gc(lua_State* L) {
 
 // EMP.READER_DECODE_AUDIO_RANGE(reader, frame0, frame1, rate_num, rate_den, out_sample_rate, out_channels) -> pcm | nil, err
 static int lua_emp_reader_decode_audio_range(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         push_emp_error(L, emp::Error::invalid_arg("Invalid reader handle"));
@@ -410,7 +414,7 @@ static int lua_emp_reader_decode_audio_range(lua_State* L) {
 
 // EMP.PCM_INFO(pcm) -> { sample_rate, channels, frames, start_time_us }
 static int lua_emp_pcm_info(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_PCM_METATABLE);
+    void* key = get_map_key(L, 1, EMP_PCM_METATABLE);
     auto it = g_pcm_chunks.find(key);
     if (it == g_pcm_chunks.end()) {
         return luaL_error(L, "EMP.PCM_INFO: invalid pcm handle");
@@ -433,7 +437,7 @@ static int lua_emp_pcm_info(lua_State* L) {
 
 // EMP.PCM_DATA_PTR(pcm) -> lightuserdata (for direct buffer access)
 static int lua_emp_pcm_data_ptr(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_PCM_METATABLE);
+    void* key = get_map_key(L, 1, EMP_PCM_METATABLE);
     auto it = g_pcm_chunks.find(key);
     if (it == g_pcm_chunks.end()) {
         return luaL_error(L, "EMP.PCM_DATA_PTR: invalid pcm handle");
@@ -445,14 +449,14 @@ static int lua_emp_pcm_data_ptr(lua_State* L) {
 
 // EMP.PCM_RELEASE(pcm)
 static int lua_emp_pcm_release(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_PCM_METATABLE);
+    void* key = get_map_key(L, 1, EMP_PCM_METATABLE);
     g_pcm_chunks.erase(key);
     return 0;
 }
 
 // PCM __gc metamethod
 static int lua_emp_pcm_gc(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_PCM_METATABLE);
+    void* key = get_map_key(L, 1, EMP_PCM_METATABLE);
     g_pcm_chunks.erase(key);
     return 0;
 }
@@ -637,7 +641,7 @@ static int lua_emp_set_decode_mode(lua_State* L) {
 
 // EMP.READER_SET_MAX_CACHE(reader, max_frames)
 static int lua_emp_reader_set_max_cache(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         return luaL_error(L, "READER_SET_MAX_CACHE: invalid reader handle");
@@ -698,7 +702,7 @@ static int lua_emp_surface_set_frame(lua_State* L) {
     }
 
     // Get frame
-    void* frame_key = get_userdata<void>(L, 2, EMP_FRAME_METATABLE);
+    void* frame_key = get_map_key(L, 2, EMP_FRAME_METATABLE);
     auto it = g_frames.find(frame_key);
     if (it == g_frames.end()) {
         return luaL_error(L, "EMP.SURFACE_SET_FRAME: invalid frame handle");

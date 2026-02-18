@@ -23,7 +23,6 @@ local ui_constants = require("core.ui_constants")
 local qt_constants = require("core.qt_constants")
 local Project = require("models.project")
 local Sequence = require("models.sequence")
-local Track = require("models.track")
 local logger = require("core.logger")
 local project_open = require("core.project_open")
 local dkjson = require("dkjson")
@@ -74,17 +73,12 @@ local layout_dir = layout_path:match("(.*/)")
 logger.info("layout", "Initializing database...")
 local db_module = require("core.database")
 
--- Determine database path - check for test environment variable first
-local is_default_project = false
+-- Determine database path: test env → last project → welcome screen
 local db_path = os.getenv("JVE_PROJECT_PATH")
 if db_path then
-    logger.info("layout", "Using test database: " .. tostring(db_path))
+    logger.info("layout", "Using CLI project path: " .. tostring(db_path))
 else
     local home = os.getenv("HOME")
-    local projects_dir = home .. "/Documents/JVE Projects"
-
-    -- Create projects directory if it doesn't exist
-    os.execute('mkdir -p "' .. projects_dir .. '"')
 
     -- Try last-opened project first
     local last_project_file = home .. "/.jve/last_project_path"
@@ -104,13 +98,44 @@ else
         end
     end
 
-    -- Fallback to default project
+    -- No last project → show welcome screen
     if not db_path then
-        db_path = projects_dir .. "/Untitled Project.jvp"
-        is_default_project = true
-        logger.info("layout", "Using default project: " .. db_path)
+        local welcome_screen = require("ui.welcome_screen")
+        local file_browser = require("core.file_browser")
+        local new_project_cmd = require("core.commands.new_project")
+
+        local action = welcome_screen.show()
+
+        if not action then
+            logger.info("layout", "User quit from welcome screen")
+            os.exit(0)
+        elseif action.action == "open" then
+            db_path = action.path
+            logger.info("layout", "Welcome: opening recent project: " .. db_path)
+        elseif action.action == "open_browse" then
+            db_path = file_browser.open_file(
+                "open_project", nil,
+                "Open Project",
+                "JVE Projects (*.jvp);;All Files (*)",
+                home .. "/Documents/JVE Projects")
+            if not db_path or db_path == "" then
+                logger.info("layout", "User cancelled file browser from welcome screen")
+                os.exit(0)
+            end
+            logger.info("layout", "Welcome: opening browsed project: " .. db_path)
+        elseif action.action == "new" then
+            local result = new_project_cmd.show_dialog(nil)
+            if not result then
+                logger.info("layout", "User cancelled new project from welcome screen")
+                os.exit(0)
+            end
+            db_path = result.project_path
+            logger.info("layout", "Welcome: created new project: " .. db_path)
+        end
     end
 end
+
+assert(db_path and db_path ~= "", "FATAL: No project path resolved at startup")
 
 local project_display_name = nil
 local active_project_id
@@ -127,32 +152,33 @@ if not db_success then
 else
     logger.debug("layout", "Database connection established")
 
-    local project, sequence
-
-    if is_default_project then
-        -- Fresh/default startup: ensure project + sequence + tracks exist
-        project = Project.ensure_default()
-        assert(project, "FATAL: Failed to ensure default project")
-        sequence = Sequence.ensure_default(project.id)
-        assert(sequence, "FATAL: Failed to ensure default sequence")
-        local tracks_ok = Track.ensure_defaults_for_sequence(sequence.id)
-        assert(tracks_ok, "FATAL: Failed to ensure default tracks")
-    else
-        -- Reopening last project: use existing project (don't create anything)
-        local pid = db_module.get_current_project_id()
-        project = Project.load(pid)
-        assert(project, "FATAL: Failed to load project " .. tostring(pid) .. " from " .. db_path)
-
-        -- Find best sequence: last-open or most recent
-        local last_seq_id = db_module.get_project_setting(pid, "last_open_sequence_id")
-        if last_seq_id and last_seq_id ~= "" then
-            sequence = Sequence.load(last_seq_id)
+    -- Guard: detect empty DB (e.g. stale last_project_path, sqlite3 auto-created file)
+    if not db_module.has_projects() then
+        logger.warn("layout", "Database has no projects: " .. db_path)
+        -- Self-heal: clear stale last_project_path so next launch shows welcome screen
+        local home = os.getenv("HOME")
+        if home then
+            os.remove(home .. "/.jve/last_project_path")
+            logger.info("layout", "Cleared stale last_project_path; re-launch to see welcome screen")
         end
-        if not sequence then
-            sequence = Sequence.find_most_recent()
-        end
-        assert(sequence, "FATAL: No sequences in last project " .. db_path)
+        error("Database at " .. db_path .. " has no projects. Stale reference cleared — please re-launch.")
     end
+
+    -- Load existing project (never create silently)
+    local pid = db_module.get_current_project_id()
+    local project = Project.load(pid)
+    assert(project, "FATAL: Failed to load project " .. tostring(pid) .. " from " .. db_path)
+
+    -- Find best sequence: last-open or most recent
+    local sequence
+    local last_seq_id = db_module.get_project_setting(pid, "last_open_sequence_id")
+    if last_seq_id and last_seq_id ~= "" then
+        sequence = Sequence.load(last_seq_id)
+    end
+    if not sequence then
+        sequence = Sequence.find_most_recent()
+    end
+    assert(sequence, "FATAL: No sequences in project " .. db_path)
 
     active_project_id = project.id
     project_display_name = project.name
@@ -163,6 +189,21 @@ else
     -- Initialize CommandManager
     command_manager.init(active_sequence_id, active_project_id)
     logger.debug("layout", "CommandManager initialized with database")
+
+    -- Persist last-opened path (for subsequent launches to skip welcome screen)
+    local home = os.getenv("HOME")
+    if home then
+        os.execute('mkdir -p "' .. home .. '/.jve"')
+        local lf = io.open(home .. "/.jve/last_project_path", "w")
+        if lf then
+            lf:write(db_path)
+            lf:close()
+        end
+    end
+
+    -- Add to recent projects
+    local recent_projects = require("core.recent_projects")
+    recent_projects.add(project.name, db_path)
 
     -- Initialize bug reporter (continuous background capture)
     local bug_reporter = require("bug_reporter.init")
