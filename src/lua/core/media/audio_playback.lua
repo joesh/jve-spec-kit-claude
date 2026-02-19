@@ -25,8 +25,6 @@ local ffi = require("ffi")
 local logger = require("core.logger")
 local qt_constants = require("core.qt_constants")
 local project_gen = require("core.project_generation")
-local Mixer = require("core.mixer")
-
 -- Quality mode constants (match SSE C++ enum)
 local Q1 = 1          -- Editor mode: 0.25x-4x
 local Q2 = 2          -- Extreme slomo: down to 0.10x
@@ -67,11 +65,8 @@ local M = {
     -- MIX state (TMB-based)
     _tmb = nil,             -- TMB handle (decode source)
     _mix_params = nil,      -- array of {track_index, volume, muted, soloed}
-    -- LEGACY state (Mixer/media_cache pipeline — tests only)
-    audio_sources = {},     -- list of {path, source_offset_us, volume, duration_us}
-    media_cache_ref = nil,  -- media_cache module reference
     has_audio = false,
-    _project_gen = -1,      -- sentinel: must call apply_mix or set_audio_sources before start()
+    _project_gen = -1,      -- sentinel: must call apply_mix before start()
 
     -- TRANSPORT state (per-event, unchanged)
     playing = false,
@@ -440,118 +435,6 @@ function M.decode_mix_and_send_to_sse()
         }
         last_fetch_pb_start_us = pb_start
     end
-end
-
---------------------------------------------------------------------------------
--- Legacy Source Lifecycle (Mixer/media_cache — tests only)
---------------------------------------------------------------------------------
-
-function M.set_audio_sources(sources, cache, restart_time_us)
-    assert(M.session_initialized,
-        "audio_playback.set_audio_sources: session not initialized (call init_session first)")
-    assert(type(sources) == "table",
-        "audio_playback.set_audio_sources: sources must be a table")
-    assert(cache, "audio_playback.set_audio_sources: cache is nil")
-    assert(cache.get_audio_pcm_for_path,
-        "audio_playback.set_audio_sources: cache missing get_audio_pcm_for_path")
-
-    local was_playing = M.playing
-
-    local sources_changed = false
-    local old_count = M.audio_sources and #M.audio_sources or 0
-    if old_count ~= #sources then
-        sources_changed = true
-    elseif old_count > 0 then
-        for i, old_src in ipairs(M.audio_sources) do
-            local new_src = sources[i]
-            if not new_src
-                or old_src.path ~= new_src.path
-                or old_src.seek_us ~= new_src.seek_us
-                or old_src.clip_start_us ~= new_src.clip_start_us
-                or old_src.speed_ratio ~= new_src.speed_ratio
-                or old_src.duration_us ~= new_src.duration_us then
-                sources_changed = true
-                break
-            end
-        end
-    end
-
-    if M.playing and #sources > 0 and not sources_changed then
-        M.media_time_us = M.get_time_us()
-        M.media_anchor_us = M.media_time_us
-        M.aop_epoch_playhead_us = qt_constants.AOP.PLAYHEAD_US(M.aop)
-        M.audio_sources = sources
-        M.media_cache_ref = cache
-        M.has_audio = true
-        M._project_gen = project_gen.current()
-        last_pcm_range = { start_us = 0, end_us = 0 }
-        last_fetch_pb_start_us = nil
-        M._ensure_pcm_cache()
-    else
-        if M.playing then
-            M.media_time_us = restart_time_us or M.get_time_us()
-            M.playing = false
-            M._cancel_pump()
-            qt_constants.AOP.STOP(M.aop)
-            qt_constants.AOP.FLUSH(M.aop)
-        elseif restart_time_us then
-            M.media_time_us = restart_time_us
-        end
-        M.audio_sources = sources
-        M.media_cache_ref = cache
-        M.has_audio = #sources > 0
-        M._project_gen = project_gen.current()
-        last_pcm_range = { start_us = 0, end_us = 0 }
-        last_fetch_pb_start_us = nil
-        qt_constants.SSE.RESET(M.sse)
-        if was_playing and M.has_audio then
-            M.media_time_us = clamp_to_source_boundaries(M.media_time_us, sources, M.speed)
-            reanchor(M.media_time_us, M.speed, M.quality_mode)
-            M._ensure_pcm_cache()
-            advance_sse_past_codec_delay()
-            qt_constants.AOP.START(M.aop)
-            M.playing = true
-            M._start_pump()
-        end
-    end
-    logger.debug("audio_playback", string.format(
-        "Audio sources set: %d source(s)", #sources))
-end
-
-function M.switch_source(cache)
-    assert(M.session_initialized,
-        "audio_playback.switch_source: session_initialized is false (call init_session first)")
-    assert(cache, "audio_playback.switch_source: cache is nil")
-    assert(cache.get_media_file_info, "audio_playback.switch_source: cache must have get_media_file_info")
-    local info = cache.get_media_file_info()
-    assert(info, "audio_playback.switch_source: cache.get_media_file_info() returned nil")
-    if not info.has_audio then
-        logger.info("audio_playback", "Source has no audio track")
-        M.audio_sources = {}
-        M.media_cache_ref = nil
-        M.has_audio = false
-        return
-    end
-    assert(cache.get_audio_reader, "audio_playback.switch_source: cache must have get_audio_reader")
-    local audio_reader = cache.get_audio_reader()
-    assert(audio_reader, "audio_playback.switch_source: cache has no audio_reader")
-    local total_frames = math.floor(info.duration_us / 1000000 * info.fps_num / info.fps_den)
-    local max_us = math.floor((total_frames - 1) * 1000000 * info.fps_den / info.fps_num)
-    assert(cache.get_file_path, "audio_playback.switch_source: cache must have get_file_path")
-    local file_path = cache.get_file_path()
-    assert(file_path, "audio_playback.switch_source: cache.get_file_path() returned nil")
-    cache.ensure_audio_pooled(file_path)
-    M.set_audio_sources({{
-        path = file_path,
-        source_offset_us = 0,
-        seek_us = 0,
-        speed_ratio = 1.0,
-        volume = 1.0,
-        duration_us = info.duration_us,
-        clip_start_us = 0,
-        clip_end_us = info.duration_us,
-    }}, cache)
-    M.max_media_time_us = max_us
 end
 
 --- Render time-stretched audio and write to output device.
