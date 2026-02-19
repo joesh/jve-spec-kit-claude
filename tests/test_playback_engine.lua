@@ -30,25 +30,27 @@ end
 package.loaded["core.qt_constants"] = {
     EMP = {
         SET_DECODE_MODE = function() end,
-        ASSET_OPEN = function() return nil end,
-        ASSET_INFO = function() return nil end,
-        ASSET_CLOSE = function() end,
+        MEDIA_FILE_OPEN = function() return nil end,
+        MEDIA_FILE_INFO = function() return nil end,
+        MEDIA_FILE_CLOSE = function() end,
         READER_CREATE = function() return nil end,
         READER_CLOSE = function() end,
         READER_DECODE_FRAME = function() return nil end,
         FRAME_RELEASE = function() end,
         PCM_RELEASE = function() end,
+        -- TMB functions (video path uses TMB, not media_cache)
+        TMB_CREATE = function() return "mock_tmb" end,
+        TMB_CLOSE = function() end,
+        TMB_SET_SEQUENCE_RATE = function() end,
+        TMB_SET_AUDIO_FORMAT = function() end,
+        TMB_SET_TRACK_CLIPS = function() end,
+        TMB_SET_PLAYHEAD = function() end,
+        TMB_GET_VIDEO_FRAME = function() return nil, { offline = false } end,
     },
 }
 
--- Mock media_cache
+-- Mock media_cache (audio functions only — video path uses TMB now)
 package.loaded["core.media.media_cache"] = {
-    activate = function() return { rotation = 0 } end,
-    get_video_frame = function(frame, ctx) return "frame_" .. frame end,
-    set_playhead = function() end,
-    is_loaded = function() return true end,
-    get_asset_info = function() return { rotation = 0 } end,
-    stop_all_prefetch = function() end,
     ensure_audio_pooled = function(path)
         return { has_audio = true, audio_sample_rate = 48000 }
     end,
@@ -78,7 +80,7 @@ package.loaded["core.renderer"] = {
             audio_sample_rate = 48000,
         }
     end,
-    get_video_frame = function(seq, frame, ctx_id)
+    get_video_frame = function(tmb, track_indices, frame)
         local entry = video_map[frame]
         if entry then
             return "frame_handle_" .. frame, {
@@ -128,8 +130,10 @@ local mock_content_end = 100
 local mock_sequence = {
     id = "seq1",
     compute_content_end = function() return mock_content_end end,
+    get_video_at = function(self, frame) return {} end,
     get_next_video = function() return {} end,
     get_prev_video = function() return {} end,
+    get_audio_at = function() return {} end,
     get_next_audio = function() return {} end,
     get_prev_audio = function() return {} end,
 }
@@ -161,7 +165,10 @@ local function make_mock_audio()
         set_speed = function() end,
         set_max_time = function() end,
         set_audio_sources = function(sources, mc, restart_time)
-            -- Track that sources were set
+            -- Track that sources were set (legacy path)
+        end,
+        apply_mix = function(tmb, mix_params, edit_time_us)
+            -- TMB audio mix (Phase 3c)
         end,
         latch = function() end,
         play_burst = function() end,
@@ -187,8 +194,7 @@ local PlaybackEngine = require("core.playback.playback_engine")
 -- Test Helper: create engine with tracking callbacks
 --------------------------------------------------------------------------------
 
-local function make_engine(opts)
-    opts = opts or {}
+local function make_engine()
     local log = {
         frames_shown = {},
         gaps_shown = 0,
@@ -197,7 +203,6 @@ local function make_engine(opts)
     }
 
     local engine = PlaybackEngine.new({
-        media_context_id = opts.context_id or "test_ctx",
         on_show_frame = function(frame_handle, metadata)
             log.frames_shown[#log.frames_shown + 1] = {
                 handle = frame_handle,
@@ -230,11 +235,10 @@ print("=== test_playback_engine.lua ===")
 print("\n--- constructor validation ---")
 do
     local ok, _ = pcall(PlaybackEngine.new, {})
-    assert(not ok, "missing media_context_id should assert")
-    print("  missing context_id: asserts ok")
+    assert(not ok, "missing callbacks should assert")
+    print("  missing callbacks: asserts ok")
 
     ok, _ = pcall(PlaybackEngine.new, {
-        media_context_id = "x",
         on_show_frame = function() end,
         on_show_gap = function() end,
         on_set_rotation = function() end,
@@ -848,6 +852,18 @@ do
 
     engine:stop()
     mock_content_end = 100
+    print("  ok")
+end
+
+-- ─── Regression: load_sequence stores audio_sample_rate ───
+-- Bug: _init_audio_session asserted nil because load_sequence never copied
+-- audio_sample_rate from get_sequence_info() to self.
+print("\n--- load_sequence stores audio_sample_rate ---")
+do
+    local engine = make_engine()
+    engine:load_sequence("seq1")
+    assert(engine.audio_sample_rate == 48000,
+        "audio_sample_rate should be 48000, got " .. tostring(engine.audio_sample_rate))
     print("  ok")
 end
 

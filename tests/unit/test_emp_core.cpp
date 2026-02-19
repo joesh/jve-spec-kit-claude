@@ -8,7 +8,7 @@
 #include <QThread>
 #include <QElapsedTimer>
 
-#include <editor_media_platform/emp_asset.h>
+#include <editor_media_platform/emp_media_file.h>
 #include <editor_media_platform/emp_reader.h>
 #include <editor_media_platform/emp_frame.h>
 #include <editor_media_platform/emp_errors.h>
@@ -40,7 +40,7 @@ private:
             QStringList files = dir.entryList(videoExtensions, QDir::Files, QDir::Size);
             for (const QString& file : files) {
                 QString fullPath = dir.absoluteFilePath(file);
-                auto result = emp::Asset::Open(fullPath.toStdString());
+                auto result = emp::MediaFile::Open(fullPath.toStdString());
                 if (result.is_ok() && result.value()->info().has_video) {
                     m_testVideoPath = fullPath;
                     m_hasTestVideo = true;
@@ -188,45 +188,45 @@ private slots:
     }
 
     // ========================================================================
-    // ASSET TESTS - All error paths
+    // MEDIA FILE TESTS - All error paths
     // ========================================================================
 
-    void test_asset_open_empty_path() {
-        auto result = emp::Asset::Open("");
+    void test_media_file_open_empty_path() {
+        auto result = emp::MediaFile::Open("");
         QVERIFY(result.is_error());
     }
 
-    void test_asset_open_nonexistent_file() {
-        auto result = emp::Asset::Open("/nonexistent/path/video.mp4");
-        QVERIFY(result.is_error());
-        QCOMPARE(result.error().code, emp::ErrorCode::FileNotFound);
-    }
-
-    void test_asset_open_nonexistent_directory() {
-        auto result = emp::Asset::Open("/nonexistent_dir_12345/video.mp4");
+    void test_media_file_open_nonexistent_file() {
+        auto result = emp::MediaFile::Open("/nonexistent/path/video.mp4");
         QVERIFY(result.is_error());
         QCOMPARE(result.error().code, emp::ErrorCode::FileNotFound);
     }
 
-    void test_asset_open_directory_not_file() {
-        auto result = emp::Asset::Open("/tmp");
+    void test_media_file_open_nonexistent_directory() {
+        auto result = emp::MediaFile::Open("/nonexistent_dir_12345/video.mp4");
+        QVERIFY(result.is_error());
+        QCOMPARE(result.error().code, emp::ErrorCode::FileNotFound);
+    }
+
+    void test_media_file_open_directory_not_file() {
+        auto result = emp::MediaFile::Open("/tmp");
         QVERIFY(result.is_error());
         // Opening a directory should fail
     }
 
-    void test_asset_open_invalid_format() {
+    void test_media_file_open_invalid_format() {
         QTemporaryFile temp;
         QVERIFY(temp.open());
         temp.write("not a video file - random garbage data 12345");
         temp.close();
 
-        auto result = emp::Asset::Open(temp.fileName().toStdString());
+        auto result = emp::MediaFile::Open(temp.fileName().toStdString());
         QVERIFY(result.is_error());
         // Should be Unsupported or Internal
         QVERIFY(result.error().code != emp::ErrorCode::Ok);
     }
 
-    void test_asset_open_truncated_file() {
+    void test_media_file_open_truncated_file() {
         QTemporaryFile temp;
         temp.setFileTemplate(QDir::tempPath() + "/test_XXXXXX.mp4");
         QVERIFY(temp.open());
@@ -234,21 +234,21 @@ private slots:
         temp.write("\x00\x00\x00\x1c\x66\x74\x79\x70"); // Partial ftyp box
         temp.close();
 
-        auto result = emp::Asset::Open(temp.fileName().toStdString());
+        auto result = emp::MediaFile::Open(temp.fileName().toStdString());
         QVERIFY(result.is_error());
     }
 
-    void test_asset_open_zero_byte_file() {
+    void test_media_file_open_zero_byte_file() {
         QTemporaryFile temp;
         QVERIFY(temp.open());
         // Don't write anything - 0 byte file
         temp.close();
 
-        auto result = emp::Asset::Open(temp.fileName().toStdString());
+        auto result = emp::MediaFile::Open(temp.fileName().toStdString());
         QVERIFY(result.is_error());
     }
 
-    void test_asset_open_permission_denied() {
+    void test_media_file_open_permission_denied() {
         // Create a file with no read permission
         QTemporaryFile temp;
         QVERIFY(temp.open());
@@ -258,7 +258,7 @@ private slots:
         QString path = temp.fileName();
         QFile::setPermissions(path, QFileDevice::WriteOwner);
 
-        auto result = emp::Asset::Open(path.toStdString());
+        auto result = emp::MediaFile::Open(path.toStdString());
         // Should fail (permission denied)
         // Note: This might not work on all systems
         if (result.is_error()) {
@@ -268,10 +268,10 @@ private slots:
         QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
     }
 
-    void test_asset_valid_video_info_complete() {
+    void test_media_file_valid_video_info_complete() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto result = emp::Asset::Open(m_testVideoPath.toStdString());
+        auto result = emp::MediaFile::Open(m_testVideoPath.toStdString());
         QVERIFY(result.is_ok());
 
         const auto& info = result.value()->info();
@@ -288,12 +288,12 @@ private slots:
         QVERIFY(info.duration_us > 0);
     }
 
-    void test_asset_shared_ptr_lifecycle() {
+    void test_media_file_shared_ptr_lifecycle() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        std::weak_ptr<emp::Asset> weak;
+        std::weak_ptr<emp::MediaFile> weak;
         {
-            auto result = emp::Asset::Open(m_testVideoPath.toStdString());
+            auto result = emp::MediaFile::Open(m_testVideoPath.toStdString());
             QVERIFY(result.is_ok());
             weak = result.value();
             QVERIFY(!weak.expired());
@@ -302,12 +302,12 @@ private slots:
         QVERIFY(weak.expired());
     }
 
-    void test_asset_multiple_opens_same_file() {
+    void test_media_file_multiple_opens_same_file() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto r1 = emp::Asset::Open(m_testVideoPath.toStdString());
-        auto r2 = emp::Asset::Open(m_testVideoPath.toStdString());
-        auto r3 = emp::Asset::Open(m_testVideoPath.toStdString());
+        auto r1 = emp::MediaFile::Open(m_testVideoPath.toStdString());
+        auto r2 = emp::MediaFile::Open(m_testVideoPath.toStdString());
+        auto r3 = emp::MediaFile::Open(m_testVideoPath.toStdString());
 
         QVERIFY(r1.is_ok());
         QVERIFY(r2.is_ok());
@@ -322,7 +322,7 @@ private slots:
     // READER TESTS - All error paths
     // ========================================================================
 
-    void test_reader_create_null_asset() {
+    void test_reader_create_null_media_file() {
         auto result = emp::Reader::Create(nullptr);
         QVERIFY(result.is_error());
         QCOMPARE(result.error().code, emp::ErrorCode::InvalidArg);
@@ -331,35 +331,35 @@ private slots:
     void test_reader_create_valid() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto result = emp::Reader::Create(asset);
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto result = emp::Reader::Create(mf);
         QVERIFY(result.is_ok());
-        QVERIFY(result.value()->asset() == asset);
+        QVERIFY(result.value()->media_file() == mf);
     }
 
-    void test_reader_asset_reference_kept() {
+    void test_reader_media_file_reference_kept() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        std::weak_ptr<emp::Asset> weakAsset;
+        std::weak_ptr<emp::MediaFile> weak_mf;
         std::shared_ptr<emp::Reader> reader;
         {
-            auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-            weakAsset = asset;
-            reader = emp::Reader::Create(asset).value();
+            auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+            weak_mf = mf;
+            reader = emp::Reader::Create(mf).value();
         }
         // Asset should still be alive (held by reader)
-        QVERIFY(!weakAsset.expired());
+        QVERIFY(!weak_mf.expired());
         reader.reset();
-        QVERIFY(weakAsset.expired());
+        QVERIFY(weak_mf.expired());
     }
 
     void test_reader_decode_first_frame() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         auto result = reader->DecodeAt(emp::FrameTime::from_frame(0, rate));
@@ -371,8 +371,8 @@ private slots:
     void test_reader_decode_negative_time() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
         auto result = reader->DecodeAtUS(-1000000);
         // Should return first frame, not error
@@ -383,10 +383,10 @@ private slots:
     void test_reader_decode_past_eof_returns_last_or_eof() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         auto result = reader->DecodeAtUS(info.duration_us + 10000000);
 
         // Either returns last frame or EOF error - both valid
@@ -400,10 +400,10 @@ private slots:
     void test_reader_decode_exact_duration() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         auto result = reader->DecodeAtUS(info.duration_us);
 
         // Should work (last frame)
@@ -415,8 +415,8 @@ private slots:
     void test_reader_seek_to_zero() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
         auto result = reader->SeekUS(0);
         QVERIFY(result.is_ok());
@@ -425,8 +425,8 @@ private slots:
     void test_reader_seek_negative() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
         auto result = reader->SeekUS(-1000000);
         // Should succeed (clamps to 0)
@@ -436,10 +436,10 @@ private slots:
     void test_reader_seek_past_duration() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         auto result = reader->SeekUS(info.duration_us + 10000000);
         // Seek should succeed (will just land at end)
         QVERIFY(result.is_ok());
@@ -448,10 +448,10 @@ private slots:
     void test_reader_sequential_decode() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         // Decode 10 sequential frames
@@ -471,10 +471,10 @@ private slots:
     void test_reader_backward_seek() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         // Decode frame 20, then frame 5 (backward)
@@ -493,10 +493,10 @@ private slots:
         // was past cache_max).
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         // Decode frames 0, 1, 2, 3, 4 and verify PTS is strictly increasing
@@ -527,10 +527,10 @@ private slots:
     void test_reader_random_access_pattern() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         // Random access pattern: 0, 50, 10, 100, 5, 0
@@ -554,10 +554,10 @@ private slots:
         // frame handles if the binding didn't use shared_ptr correctly.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         // Decode frames 10-15 and hold references
@@ -601,10 +601,10 @@ private slots:
     void test_reader_reuse_after_eof() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         // Go past EOF
@@ -622,8 +622,8 @@ private slots:
     void test_frame_data_not_null() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
         auto frame = reader->DecodeAtUS(0).value();
 
         QVERIFY(frame->data() != nullptr);
@@ -632,8 +632,8 @@ private slots:
     void test_frame_data_multiple_calls_same_pointer() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
         auto frame = reader->DecodeAtUS(0).value();
 
         const uint8_t* p1 = frame->data();
@@ -647,8 +647,8 @@ private slots:
     void test_frame_stride_32_byte_aligned() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
         auto frame = reader->DecodeAtUS(0).value();
 
         QCOMPARE(frame->stride_bytes() % 32, 0);
@@ -657,8 +657,8 @@ private slots:
     void test_frame_stride_ge_width_times_4() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
         auto frame = reader->DecodeAtUS(0).value();
 
         QVERIFY(frame->stride_bytes() >= frame->width() * 4);
@@ -667,8 +667,8 @@ private slots:
     void test_frame_data_size_equals_stride_times_height() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
         auto frame = reader->DecodeAtUS(0).value();
 
         QCOMPARE(frame->data_size(),
@@ -678,8 +678,8 @@ private slots:
     void test_frame_bgra_alpha_255() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
         auto frame = reader->DecodeAtUS(0).value();
 
         const uint8_t* data = frame->data();
@@ -698,8 +698,8 @@ private slots:
     void test_frame_data_readable_entire_buffer() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
         auto frame = reader->DecodeAtUS(0).value();
 
         const uint8_t* data = frame->data();
@@ -716,8 +716,8 @@ private slots:
     void test_frame_pts_first_frame_near_zero() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
         auto frame = reader->DecodeAtUS(0).value();
 
         // First frame PTS should be 0 or very small
@@ -728,10 +728,10 @@ private slots:
     void test_frame_pts_increases() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         auto f0 = reader->DecodeAt(emp::FrameTime::from_frame(0, rate));
@@ -747,8 +747,8 @@ private slots:
 
         std::weak_ptr<emp::Frame> weak;
         {
-            auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-            auto reader = emp::Reader::Create(asset).value();
+            auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+            auto reader = emp::Reader::Create(mf).value();
             auto frame = reader->DecodeAtUS(0).value();
             weak = frame;
             QVERIFY(!weak.expired());
@@ -761,11 +761,11 @@ private slots:
 
         std::shared_ptr<emp::Frame> frame;
         {
-            auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-            auto reader = emp::Reader::Create(asset).value();
+            auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+            auto reader = emp::Reader::Create(mf).value();
             frame = reader->DecodeAtUS(0).value();
         }
-        // Reader and asset destroyed, frame should still be valid
+        // Reader and media file destroyed, frame should still be valid
         QVERIFY(frame->data() != nullptr);
         QVERIFY(frame->width() > 0);
     }
@@ -778,8 +778,8 @@ private slots:
     void test_hw_native_buffer_method_exists() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
         auto frame = reader->DecodeAtUS(0).value();
 
         // Method should exist and not crash
@@ -791,8 +791,8 @@ private slots:
     void test_hw_data_after_native_buffer() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
         auto frame = reader->DecodeAtUS(0).value();
 
         // Call native_buffer first
@@ -806,8 +806,8 @@ private slots:
     void test_hw_lazy_transfer_triggered_by_data() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
         auto frame = reader->DecodeAtUS(0).value();
 
         // Calling data() triggers lazy transfer if hw frame
@@ -831,8 +831,8 @@ private slots:
         // Even if hw init fails, decoding should work via sw fallback
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
         auto frame = reader->DecodeAtUS(0).value();
 
         // Should always succeed (hw or sw)
@@ -848,10 +848,10 @@ private slots:
     void test_stress_rapid_decode() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         // Decode 100 frames rapidly
@@ -867,26 +867,26 @@ private slots:
     void test_stress_many_assets() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        std::vector<std::shared_ptr<emp::Asset>> assets;
+        std::vector<std::shared_ptr<emp::MediaFile>> media_files;
         for (int i = 0; i < 10; ++i) {
-            auto result = emp::Asset::Open(m_testVideoPath.toStdString());
+            auto result = emp::MediaFile::Open(m_testVideoPath.toStdString());
             QVERIFY(result.is_ok());
-            assets.push_back(result.value());
+            media_files.push_back(result.value());
         }
         // All should be valid
-        for (auto& a : assets) {
+        for (auto& a : media_files) {
             QVERIFY(a->info().has_video);
         }
     }
 
-    void test_stress_many_readers_same_asset() {
+    void test_stress_many_readers_same_media_file() {
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
 
         std::vector<std::shared_ptr<emp::Reader>> readers;
         for (int i = 0; i < 5; ++i) {
-            auto result = emp::Reader::Create(asset);
+            auto result = emp::Reader::Create(mf);
             QVERIFY(result.is_ok());
             readers.push_back(result.value());
         }
@@ -906,8 +906,8 @@ private slots:
         // Test that StartPrefetch/StopPrefetch don't crash
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
         // Start forward prefetch
         reader->StartPrefetch(1);
@@ -930,8 +930,8 @@ private slots:
         // GetCachedFrame should return nullptr for uncached frames
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
         // Without any decoding, cache should be empty
         auto cached = reader->GetCachedFrame(1000000);  // 1 second
@@ -943,10 +943,10 @@ private slots:
         // After starting prefetch, cache should fill ahead of playhead
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::TimeUS frame_duration_us = (info.video_fps_den * 1000000LL) / info.video_fps_num;
 
         // Decode first frame to establish position
@@ -978,10 +978,10 @@ private slots:
         // Test concurrent access to cache (main thread + prefetch thread)
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         // Start prefetch
@@ -1005,11 +1005,11 @@ private slots:
         // Test changing prefetch direction mid-playback
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
         // Decode to middle of video
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::TimeUS mid = info.duration_us / 2;
         auto midFrame = reader->DecodeAtUS(mid);
         if (midFrame.is_error()) QSKIP("Video too short");
@@ -1044,10 +1044,10 @@ private slots:
         // scattered Park frames don't poison sequential playback.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
         int total_frames = static_cast<int>(
             info.duration_us / 1e6 * info.video_fps_num / info.video_fps_den);
@@ -1095,10 +1095,10 @@ private slots:
         // target and decoder position are never decoded → stale frames returned.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         // Park at frame 50
@@ -1135,10 +1135,10 @@ private slots:
         // With the fix, it seeks to nearest keyframe first (≤GOP frames).
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         // Decode frame 0 to initialize decoder position
@@ -1174,8 +1174,8 @@ private slots:
         if (!m_hasTestVideo) QSKIP("No test video");
 
         {
-            auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-            auto reader = emp::Reader::Create(asset).value();
+            auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+            auto reader = emp::Reader::Create(mf).value();
 
             reader->StartPrefetch(1);
             reader->UpdatePrefetchTarget(0);
@@ -1210,12 +1210,12 @@ private slots:
         }
         if (!QFile::exists(fixturePath)) QSKIP("Fixture video not found");
 
-        auto asset_r = emp::Asset::Open(fixturePath.toStdString());
-        QVERIFY2(asset_r.is_ok(), "Failed to open fixture video");
-        auto asset = asset_r.value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf_r = emp::MediaFile::Open(fixturePath.toStdString());
+        QVERIFY2(mf_r.is_ok(), "Failed to open fixture video");
+        auto mf = mf_r.value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
         emp::TimeUS frame_dur_us = (info.video_fps_num > 0)
             ? (1000000LL * info.video_fps_den + info.video_fps_num - 1)
@@ -1238,7 +1238,7 @@ private slots:
             if (start_frame + 10 >= total_frames) continue;
 
             // Create fresh reader for each position (simulates clip switch)
-            auto fresh_reader = emp::Reader::Create(asset).value();
+            auto fresh_reader = emp::Reader::Create(mf).value();
 
             // First decode at target: triggers batch decode + cache fill
             emp::TimeUS target_us = emp::FrameTime::from_frame(start_frame, rate).to_us();
@@ -1310,10 +1310,10 @@ private slots:
 
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         int total_frames = static_cast<int>(
@@ -1422,15 +1422,15 @@ private slots:
         };
         int num_clips = sizeof(clips) / sizeof(clips[0]);
 
-        // Open all assets up front; skip if any missing.
-        // Use the asset's ACTUAL frame rate (from stream metadata), not the
+        // Open all media files up front; skip if any missing.
+        // Use the media file's ACTUAL frame rate (from stream metadata), not the
         // DB's imported rate — VFR footage (e.g. iPhone ProRes) has irregular
         // PTS that diverges from the nominal rate. The reader caches by actual
         // stream PTS, so lookups must use the stream's rate to hit.
         struct OpenClip {
-            std::shared_ptr<emp::Asset> asset;
+            std::shared_ptr<emp::MediaFile> mf;
             std::shared_ptr<emp::Reader> reader;
-            emp::Rate rate;  // from asset->info(), not DB
+            emp::Rate rate;  // from mf->info(), not DB
             int source_in;
             int source_out;
         };
@@ -1440,19 +1440,19 @@ private slots:
             if (!QFile::exists(clips[i].path)) {
                 QSKIP(qPrintable(QString("Missing: %1").arg(clips[i].path)));
             }
-            auto asset_r = emp::Asset::Open(clips[i].path);
-            QVERIFY2(asset_r.is_ok(),
+            auto mf_r = emp::MediaFile::Open(clips[i].path);
+            QVERIFY2(mf_r.is_ok(),
                 qPrintable(QString("Failed to open %1: %2")
                     .arg(clips[i].path)
-                    .arg(asset_r.is_error()
-                        ? QString::fromStdString(asset_r.error().message) : "")));
+                    .arg(mf_r.is_error()
+                        ? QString::fromStdString(mf_r.error().message) : "")));
 
-            auto reader_r = emp::Reader::Create(asset_r.value());
+            auto reader_r = emp::Reader::Create(mf_r.value());
             QVERIFY(reader_r.is_ok());
 
-            const auto& info = asset_r.value()->info();
+            const auto& info = mf_r.value()->info();
             open_clips.push_back({
-                asset_r.value(),
+                mf_r.value(),
                 reader_r.value(),
                 emp::Rate{info.video_fps_num, info.video_fps_den},
                 clips[i].source_in_frame,
@@ -1553,12 +1553,12 @@ private slots:
                        "DAY 9_Viper Room/011 Viper Room Hallway/11C-3.mov";
         if (!QFile::exists(path)) QSKIP("Missing test media");
 
-        auto asset = emp::Asset::Open(path.toStdString());
-        QVERIFY(asset.is_ok());
-        auto reader = emp::Reader::Create(asset.value());
+        auto mf = emp::MediaFile::Open(path.toStdString());
+        QVERIFY(mf.is_ok());
+        auto reader = emp::Reader::Create(mf.value());
         QVERIFY(reader.is_ok());
 
-        const auto& info = asset.value()->info();
+        const auto& info = mf.value()->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         int total_frames = static_cast<int>(
@@ -1639,10 +1639,10 @@ private slots:
         // constantly flush the cache.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         int total_frames = static_cast<int>(
@@ -1677,10 +1677,10 @@ private slots:
         // at the same position must preserve the cache.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto asset = emp::Asset::Open(m_testVideoPath.toStdString()).value();
-        auto reader = emp::Reader::Create(asset).value();
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
 
-        const auto& info = asset->info();
+        const auto& info = mf->info();
         emp::Rate rate{info.video_fps_num, info.video_fps_den};
 
         int total_frames = static_cast<int>(

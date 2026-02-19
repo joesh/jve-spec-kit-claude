@@ -8,7 +8,7 @@
 -- Native JVE clips use clip.rate = timeline_fps/1 (e.g. 24/1)
 -- Their source_in/source_out are in frame units.
 --
--- The mixer uses clip.rate for the conversion, so the importer
+-- TMB uses clip.rate for the conversion, so the importer
 -- must set the correct rate based on what units source positions are stored in.
 
 require("test_env")
@@ -74,32 +74,5 @@ local ratio = wrong_seek_us / correct_seek_us
 print(string.format("  Error ratio: %.0fx too large!", ratio))
 assert(ratio > 1000, "Bug would produce values 2000x too large")
 print("✓ Confirmed: using wrong rate causes 2000x error")
-
---------------------------------------------------------------------------------
--- Test: Verify mixer code uses clip.rate
---------------------------------------------------------------------------------
-
-print("\n--- Test: mixer uses clip.rate (code check) ---")
-
-local f = io.open("../src/lua/core/mixer.lua", "r")
-assert(f, "Could not open mixer.lua")
-local content = f:read("*a")
-f:close()
-
--- Find the audio clip processing loop
-local audio_loop = content:match("for _, ac in ipairs%(audio_clips%)(.-)sources%[#sources %+ 1%]")
-assert(audio_loop, "Could not find audio clip processing loop")
-
--- Verify it uses clip_fps_num/clip_fps_den (from clip.rate)
-local uses_clip_fps = audio_loop:match("clip_fps_num") and audio_loop:match("clip_fps_den")
-assert(uses_clip_fps, "Audio loop should use clip_fps_num/clip_fps_den from clip.rate")
-print("✓ mixer uses clip.rate (clip_fps_num/clip_fps_den)")
-
--- Verify the seek/duration calculation uses clip_fps
-local seek_calc = audio_loop:match("seek_us.-clip_fps_num")
-local dur_calc = audio_loop:match("source_duration_us.-clip_fps_num")
-assert(seek_calc, "seek_us calculation should use clip_fps_num")
-assert(dur_calc, "source_duration_us calculation should use clip_fps_num")
-print("✓ Time conversions use clip.rate for audio source positions")
 
 print("\n✅ test_audio_source_uses_sample_rate.lua passed")

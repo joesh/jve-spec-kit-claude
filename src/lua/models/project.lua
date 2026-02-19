@@ -153,19 +153,47 @@ function Project.count()
     return count
 end
 
--- Ensure a default project exists, creating one if needed
--- Returns the default project (existing or newly created)
-function Project.ensure_default()
-    local existing = Project.load("default_project")
-    if existing then
-        return existing
+--- Replace project identity (id + name) in a template database.
+-- Used by project_templates to stamp a new identity on a copied .jvp.
+-- Temporarily defers foreign key checks since sequences reference projects(id).
+-- @param old_id string: current project id
+-- @param new_id string: new project id (UUID)
+-- @param new_name string: new project name
+function Project.update_identity(old_id, new_id, new_name)
+    assert(old_id and old_id ~= "", "Project.update_identity: old_id required")
+    assert(new_id and new_id ~= "", "Project.update_identity: new_id required")
+    assert(new_name and new_name ~= "", "Project.update_identity: new_name required")
+
+    local conn = resolve_db(nil)
+
+    -- Defer FK checks: project.id is referenced by sequences.project_id
+    conn:exec("PRAGMA defer_foreign_keys = ON;")
+    conn:exec("BEGIN;")
+
+    local stmt = assert(conn:prepare("UPDATE projects SET id = ?, name = ? WHERE id = ?"),
+        "Project.update_identity: failed to prepare UPDATE")
+    stmt:bind_value(1, new_id)
+    stmt:bind_value(2, new_name)
+    stmt:bind_value(3, old_id)
+    local ok = stmt:exec()
+    stmt:finalize()
+
+    if not ok then
+        conn:exec("ROLLBACK;")
+        error("Project.update_identity: UPDATE failed")
     end
 
-    local project = Project.create("Untitled Project", {id = "default_project"})
-    if project and project:save() then
-        return project
-    end
-    return nil
+    -- Caller MUST update sequences before commit; return a commit function
+    -- Actually, we leave the transaction open — caller calls Sequence.rebind_to_project
+    -- then calls Project.commit_identity_update()
+end
+
+--- Commit the identity update transaction started by update_identity.
+function Project.commit_identity_update()
+    local conn = resolve_db(nil)
+    local ok, err = conn:exec("COMMIT;")
+    assert(ok ~= false, "Project.commit_identity_update: COMMIT failed: " .. tostring(err))
+    conn:exec("PRAGMA defer_foreign_keys = OFF;")
 end
 
 return Project

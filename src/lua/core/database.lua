@@ -724,6 +724,18 @@ function M.ensure_media_record(media_id)
     return restored
 end
 
+-- Check whether the database contains any projects (non-erroring startup check)
+function M.has_projects()
+    assert(db_connection, "FATAL: No database connection - cannot check projects")
+    local stmt = db_connection:prepare("SELECT count(*) FROM projects")
+    assert(stmt, "FATAL: Failed to prepare project count query")
+    assert(stmt:exec(), "FATAL: Failed to execute project count query")
+    stmt:next()
+    local count = stmt:value(0)
+    stmt:finalize()
+    return count > 0
+end
+
 -- Get current project ID
 function M.get_current_project_id()
     if not db_connection then

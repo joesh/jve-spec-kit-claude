@@ -3,15 +3,18 @@ require('test_env')
 -- Mock qt_constants
 local mock_qt_constants = {
     EMP = {
-        ASSET_OPEN = function() return nil, { msg = "mock" } end,
-        ASSET_INFO = function() return nil end,
-        ASSET_CLOSE = function() end,
+        MEDIA_FILE_OPEN = function() return nil, { msg = "mock" } end,
+        MEDIA_FILE_INFO = function() return nil end,
+        MEDIA_FILE_CLOSE = function() end,
         READER_CREATE = function() return nil, { msg = "mock" } end,
         READER_CLOSE = function() end,
         READER_DECODE_FRAME = function() return nil, { msg = "mock" } end,
         FRAME_RELEASE = function() end,
         PCM_RELEASE = function() end,
         SET_DECODE_MODE = function() end,
+        TMB_GET_TRACK_AUDIO = function() return nil end,
+        PCM_INFO = function() return { frames = 0, start_time_us = 0 } end,
+        PCM_DATA_PTR = function() return nil end,
     },
     SSE = {
         CREATE = function() return "mock_sse" end,
@@ -46,7 +49,7 @@ package.loaded["core.qt_constants"] = mock_qt_constants
 package.loaded["ui.media_cache"] = {
     is_loaded = function() return true end,
     set_playhead = function() end,
-    get_asset_info = function() return { fps_num = 30, fps_den = 1, has_audio = true, audio_sample_rate = 48000, duration_us = 3333333 } end,
+    get_media_file_info = function() return { fps_num = 30, fps_den = 1, has_audio = true, audio_sample_rate = 48000, duration_us = 3333333 } end,
     get_file_path = function() return "/mock/media.mov" end,
     ensure_audio_pooled = function() return { has_audio = true, audio_sample_rate = 48000, duration_us = 3333333 } end,
     get_audio_pcm_for_path = function(path, start_us, end_us, sr) return "mock_pcm_ptr", 1024, start_us end,
@@ -78,22 +81,10 @@ local Q3_DECIMATE = audio_pb.Q3_DECIMATE
 audio_pb.init_session(48000, 2)
 audio_pb.set_max_time(3333333)
 
--- Set sources
-local mock_cache = {
-    get_audio_pcm_for_path = function(path, start_us, end_us, sr)
-        return "mock_pcm", 1024, start_us
-    end,
-}
-audio_pb.set_audio_sources({{
-    path = "/mock/media.mov",
-    source_offset_us = 0,
-    seek_us = 0,
-    speed_ratio = 1.0,
-    clip_start_us = 0,
-    volume = 1.0,
-    duration_us = 3333333,
-    clip_end_us = 3333333,  -- explicit boundary
-}}, mock_cache)
+-- Set TMB mix (replaces legacy set_audio_sources)
+audio_pb.apply_mix("mock_tmb", {
+    { track_index = 1, volume = 1.0, muted = false, soloed = false },
+}, 0)
 
 --------------------------------------------------------------------------------
 -- Test 1: 0.5x speed selects Q3_DECIMATE (varispeed, no pitch correction)

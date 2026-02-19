@@ -35,36 +35,35 @@ local function clear_timers()
 end
 
 -- Mock qt_constants
+local tmb_set_playhead_calls = {}
 package.loaded["core.qt_constants"] = {
     EMP = {
         SET_DECODE_MODE = function() end,
-        ASSET_OPEN = function() return nil end,
-        ASSET_INFO = function() return nil end,
-        ASSET_CLOSE = function() end,
+        MEDIA_FILE_OPEN = function() return nil end,
+        MEDIA_FILE_INFO = function() return nil end,
+        MEDIA_FILE_CLOSE = function() end,
         READER_CREATE = function() return nil end,
         READER_CLOSE = function() end,
         READER_DECODE_FRAME = function() return nil end,
         FRAME_RELEASE = function() end,
         PCM_RELEASE = function() end,
+        -- TMB functions (video path uses TMB, not media_cache)
+        TMB_CREATE = function() return "mock_tmb" end,
+        TMB_CLOSE = function() end,
+        TMB_SET_SEQUENCE_RATE = function() end,
+        TMB_SET_AUDIO_FORMAT = function() end,
+        TMB_SET_TRACK_CLIPS = function() end,
+        TMB_SET_PLAYHEAD = function(tmb, frame, dir, speed)
+            tmb_set_playhead_calls[#tmb_set_playhead_calls + 1] = {
+                frame = frame, direction = dir, speed = speed,
+            }
+        end,
+        TMB_GET_VIDEO_FRAME = function() return nil, { offline = false } end,
     },
 }
 
--- Prefetch tracking
-local prefetch_calls = {}
-
--- Mock media_cache
+-- Mock media_cache (audio functions only — video path uses TMB now)
 package.loaded["core.media.media_cache"] = {
-    activate = function() return { rotation = 0 } end,
-    get_video_frame = function(frame, ctx) return "frame_" .. frame end,
-    set_playhead = function(frame, dir, speed, ctx, fps_num, fps_den)
-        prefetch_calls[#prefetch_calls + 1] = {
-            frame = frame, direction = dir, speed = speed, ctx = ctx,
-            fps_num = fps_num, fps_den = fps_den,
-        }
-    end,
-    is_loaded = function() return true end,
-    get_asset_info = function() return { rotation = 0 } end,
-    stop_all_prefetch = function() end,
     ensure_audio_pooled = function(path)
         return { has_audio = true, audio_sample_rate = 48000 }
     end,
@@ -85,6 +84,9 @@ package.loaded["core.logger"] = {
 local video_map = {}
 local function set_video_map(map) video_map = map end
 
+-- Configurable audio_at response (parallels video_map for get_audio_at)
+local audio_at_map = nil  -- nil = use default; table = per-frame entries
+
 -- Mock Renderer
 package.loaded["core.renderer"] = {
     get_sequence_info = function(seq_id)
@@ -94,7 +96,7 @@ package.loaded["core.renderer"] = {
             audio_sample_rate = 48000,
         }
     end,
-    get_video_frame = function(seq, frame, ctx_id)
+    get_video_frame = function(tmb, track_indices, frame)
         local entry = video_map[frame]
         if entry then
             return "frame_handle_" .. frame, {
@@ -146,8 +148,30 @@ local mock_content_end = 100
 local mock_sequence = {
     id = "seq1",
     compute_content_end = function() return mock_content_end end,
+    get_video_at = function(self, frame) return {} end,
     get_next_video = function() return {} end,
     get_prev_video = function() return {} end,
+    get_audio_at = function(self, frame)
+        if audio_at_map then
+            return audio_at_map[frame] or {}
+        end
+        -- Default: audio clip for frames 0-99 (matches default Mixer mock)
+        if frame >= 0 and frame < 100 then
+            return {{
+                media_path = "/test.mov",
+                source_frame = frame,
+                clip = {
+                    id = "aclip1",
+                    rate = { fps_numerator = 24, fps_denominator = 1 },
+                    timeline_start = 0, duration = 100, source_in = 0,
+                },
+                track = { id = "track_a1", track_index = 1, muted = false, soloed = false, volume = 1.0 },
+                media_fps_num = 24,
+                media_fps_den = 1,
+            }}
+        end
+        return {}
+    end,
     get_next_audio = function() return {} end,
     get_prev_audio = function() return {} end,
 }
@@ -195,6 +219,10 @@ local function make_tracked_audio()
         track("set_audio_sources", sources, mc, restart_time)
         audio.has_audio = (#sources > 0)
     end
+    audio.apply_mix = function(tmb, mix_params, edit_time_us)
+        track("apply_mix", tmb, mix_params, edit_time_us)
+        audio.has_audio = (#mix_params > 0)
+    end
     audio.latch = function(t) track("latch", t) end
     audio.play_burst = function(time, dur)
         track("play_burst", time, dur)
@@ -214,8 +242,7 @@ local PlaybackEngine = require("core.playback.playback_engine")
 -- Test helper
 --------------------------------------------------------------------------------
 
-local function make_engine(opts)
-    opts = opts or {}
+local function make_engine()
     local log = {
         frames_shown = {},
         gaps_shown = 0,
@@ -224,7 +251,6 @@ local function make_engine(opts)
     }
 
     local engine = PlaybackEngine.new({
-        media_context_id = opts.context_id or "test_ctx",
         on_show_frame = function(frame_handle, metadata)
             log.frames_shown[#log.frames_shown + 1] = {
                 handle = frame_handle,
@@ -249,9 +275,10 @@ end
 
 local function reset()
     clear_timers()
-    prefetch_calls = {}
+    tmb_set_playhead_calls = {}
     video_map = {}
     audio_sources_map = {}
+    audio_at_map = nil
 end
 
 print("=== test_playback_engine_extended.lua ===")
@@ -661,9 +688,21 @@ do
     for f = 50, 99 do
         video_map[f] = { clip_id = "clip1" }
     end
-    -- Audio: gap for 0-49, sources for 50-99
-    for f = 0, 49 do
-        audio_sources_map[f] = { sources = {}, clip_ids = {} }
+    -- Audio: gap for 0-49, audio entries for 50-99
+    audio_at_map = {}
+    for f = 50, 99 do
+        audio_at_map[f] = {{
+            media_path = "/test.mov",
+            source_frame = f - 50,
+            clip = {
+                id = "aclip1",
+                rate = { fps_numerator = 24, fps_denominator = 1 },
+                timeline_start = 50, duration = 50, source_in = 0,
+            },
+            track = { id = "track_a1", track_index = 1, muted = false, soloed = false, volume = 1.0 },
+            media_fps_num = 24,
+            media_fps_den = 1,
+        }}
     end
 
     local engine, _ = make_engine()
@@ -819,69 +858,56 @@ do
 end
 
 --------------------------------------------------------------------------------
--- Test 10: Prefetch signaling
+-- Test 10: TMB pre-buffer signaling (TMB_SET_PLAYHEAD)
+--
+-- Video pre-buffer is now TMB-internal. TMB_SET_PLAYHEAD is called in _tick()
+-- with timeline frame, direction, and speed. TMB translates to source frames
+-- and manages the worker pool internally.
 --------------------------------------------------------------------------------
-print("\n--- prefetch: set_playhead called with source_frame during display ---")
+print("\n--- TMB_SET_PLAYHEAD called during forward playback ---")
 do
     reset()
     local mock_audio = make_tracked_audio()
     PlaybackEngine.init_audio(mock_audio)
-
-    -- Custom video map with source_frame != frame
-    set_video_map({})
-    for f = 0, 99 do
-        video_map[f] = {
-            clip_id = "clip1",
-            source_frame = f + 100,  -- source_frame offset
-            media_path = "/test.mov",
-        }
-    end
 
     local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     engine:set_position_silent(10)
 
-    engine:shuttle(1)  -- direction=1
+    engine:shuttle(1)  -- direction=1, speed=1
     pump_tick()
 
-    -- Should have called set_playhead with source_frame, not timeline frame
-    assert(#prefetch_calls > 0, "set_playhead should be called during display")
-    local last = prefetch_calls[#prefetch_calls]
-    assert(last.direction == 1, "Prefetch direction should match shuttle")
-    -- source_frame = displayed frame + 100
-    assert(last.frame >= 100, string.format(
-        "set_playhead should use source_frame (>= 100), got %d", last.frame))
-    -- Verify clip fps is threaded through to prefetch
-    assert(last.fps_num == 24, string.format(
-        "set_playhead should receive clip_fps_num=24, got %s", tostring(last.fps_num)))
-    assert(last.fps_den == 1, string.format(
-        "set_playhead should receive clip_fps_den=1, got %s", tostring(last.fps_den)))
+    -- TMB_SET_PLAYHEAD should be called with timeline frame, direction, speed
+    assert(#tmb_set_playhead_calls > 0,
+        "TMB_SET_PLAYHEAD should be called during playback")
+    local last = tmb_set_playhead_calls[#tmb_set_playhead_calls]
+    assert(last.direction == 1, string.format(
+        "TMB_SET_PLAYHEAD direction should be 1, got %s", tostring(last.direction)))
+    assert(last.speed == 1, string.format(
+        "TMB_SET_PLAYHEAD speed should be 1, got %s", tostring(last.speed)))
 
     engine:stop()
-    print("  prefetch with source_frame and clip fps passed")
+    print("  TMB_SET_PLAYHEAD during forward playback passed")
 end
 
-print("\n--- prefetch: no set_playhead during gap ---")
+print("\n--- TMB_SET_PLAYHEAD not called when direction=0 (seek) ---")
 do
     reset()
     local mock_audio = make_tracked_audio()
     PlaybackEngine.init_audio(mock_audio)
 
-    -- All frames are gaps
-    set_video_map({})
-
     local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
 
-    -- Seek to gap frame (direction=0 for seek, so no prefetch anyway)
-    -- But let's test display directly
-    prefetch_calls = {}
-    engine:_display_frame(50)  -- gap: no clip data
+    -- Seek (direction=0) — TMB_SET_PLAYHEAD should NOT be called
+    tmb_set_playhead_calls = {}
+    engine:seek(50)
 
-    assert(#prefetch_calls == 0,
-        "Gap should not call set_playhead")
+    assert(#tmb_set_playhead_calls == 0, string.format(
+        "TMB_SET_PLAYHEAD should not be called on seek (direction=0), got %d calls",
+        #tmb_set_playhead_calls))
 
-    print("  no prefetch during gap passed")
+    print("  no TMB_SET_PLAYHEAD on seek passed")
 end
 
 --------------------------------------------------------------------------------
@@ -1099,15 +1125,15 @@ do
     -- The resolve call itself will set the new clip IDs.
     -- Key invariant: the OLD IDs must not persist (they'd cause false no-change).
 
-    -- Check that set_audio_sources was called (meaning change detection fired)
-    local saw_set_sources = false
+    -- Check that apply_mix was called (meaning change detection fired)
+    local saw_apply_mix = false
     for _, call in ipairs(mock_audio._calls) do
-        if call.name == "set_audio_sources" then
-            saw_set_sources = true
+        if call.name == "apply_mix" then
+            saw_apply_mix = true
         end
     end
-    assert(saw_set_sources,
-        "activate_audio must re-push audio sources (stale clip IDs should be cleared)")
+    assert(saw_apply_mix,
+        "activate_audio must re-push audio mix (stale clip IDs should be cleared)")
 
     print("  activate_audio clears stale clip IDs passed")
 end
@@ -1158,6 +1184,173 @@ do
         "audio must be nil after project_changed (prevents stale sources)")
 
     print("  project_changed shuts down audio session passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 16 (NSF-F1): _build_audio_mix_params must assert on nil fields
+--
+-- Bug: entry.clip.volume was always nil (clips don't have volume — tracks do).
+-- The `or 1.0` fallback masked this, causing track volume to be ignored.
+-- After fix: uses entry.track.volume, asserts on nil.
+--------------------------------------------------------------------------------
+print("\n--- NSF-F1: _build_audio_mix_params asserts on nil fields ---")
+do
+    reset()
+    local mock_audio = make_tracked_audio()
+    PlaybackEngine.init_audio(mock_audio)
+
+    local engine, _ = make_engine()
+    engine:load_sequence("seq1", 100)
+
+    -- nil volume on track → must assert
+    local ok, err = pcall(function()
+        engine:_build_audio_mix_params({{
+            clip = { id = "c1" },
+            track = { id = "t1", track_index = 1, muted = false, soloed = false },
+            -- track.volume is nil
+        }})
+    end)
+    assert(not ok, "nil track.volume should assert")
+    assert(tostring(err):find("volume"),
+        "Error should mention volume, got: " .. tostring(err))
+
+    -- nil muted on track → must assert
+    ok, _ = pcall(function()
+        engine:_build_audio_mix_params({{
+            clip = { id = "c1" },
+            track = { id = "t1", track_index = 1, volume = 1.0, soloed = false },
+            -- track.muted is nil
+        }})
+    end)
+    assert(not ok, "nil track.muted should assert")
+
+    -- nil soloed on track → must assert
+    ok, _ = pcall(function()
+        engine:_build_audio_mix_params({{
+            clip = { id = "c1" },
+            track = { id = "t1", track_index = 1, volume = 1.0, muted = false },
+            -- track.soloed is nil
+        }})
+    end)
+    assert(not ok, "nil track.soloed should assert")
+
+    -- Valid entry passes
+    local params = engine:_build_audio_mix_params({{
+        clip = { id = "c1" },
+        track = { id = "t1", track_index = 1, volume = 0.8, muted = false, soloed = false },
+    }})
+    assert(#params == 1, "Should return 1 param")
+    assert(params[1].volume == 0.8, "Volume should be 0.8 from track, not fallback 1.0")
+
+    print("  _build_audio_mix_params NSF asserts passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 17 (NSF-F2): _compute_audio_speed_ratio must assert on nil fps
+--
+-- Bug: nil media_fps_num/den silently returned 1.0, which could cause
+-- wrong audio pitch if data pipeline had a bug.
+--------------------------------------------------------------------------------
+print("\n--- NSF-F2: _compute_audio_speed_ratio asserts on nil fps ---")
+do
+    reset()
+    local mock_audio = make_tracked_audio()
+    PlaybackEngine.init_audio(mock_audio)
+
+    local engine, _ = make_engine()
+    engine:load_sequence("seq1", 100)
+
+    -- nil media_fps_num → must assert
+    local ok, err = pcall(function()
+        engine:_compute_audio_speed_ratio({
+            media_fps_num = nil,
+            media_fps_den = 1,
+        })
+    end)
+    assert(not ok, "nil media_fps_num should assert")
+    assert(tostring(err):find("media_fps_num"),
+        "Error should mention media_fps_num, got: " .. tostring(err))
+
+    -- nil media_fps_den → must assert
+    ok, _ = pcall(function()
+        engine:_compute_audio_speed_ratio({
+            media_fps_num = 24,
+            media_fps_den = nil,
+        })
+    end)
+    assert(not ok, "nil media_fps_den should assert")
+
+    -- media_fps_den == 0 → must assert
+    ok, _ = pcall(function()
+        engine:_compute_audio_speed_ratio({
+            media_fps_num = 24,
+            media_fps_den = 0,
+        })
+    end)
+    assert(not ok, "media_fps_den == 0 should assert")
+
+    -- Valid fps → returns ratio
+    local ratio = engine:_compute_audio_speed_ratio({
+        media_fps_num = 24, media_fps_den = 1,
+    })
+    assert(ratio == 1.0, "24fps media in 24fps seq should return 1.0")
+
+    -- Audio-only media (rate >= 1000) → returns 1.0
+    ratio = engine:_compute_audio_speed_ratio({
+        media_fps_num = 48000, media_fps_den = 1,
+    })
+    assert(ratio == 1.0, "Audio-only media should return 1.0")
+
+    print("  _compute_audio_speed_ratio NSF asserts passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 18 (NSF-F3): _try_audio must rethrow errors (fail-fast in dev)
+--
+-- Bug: _try_audio wrapped audio calls in pcall + logger.error, silently
+-- swallowing audio failures. In development, errors must crash immediately.
+--------------------------------------------------------------------------------
+print("\n--- NSF-F3: _try_audio rethrows errors ---")
+do
+    reset()
+    local mock_audio = make_tracked_audio()
+    PlaybackEngine.init_audio(mock_audio)
+
+    local engine, _ = make_engine()
+    engine:load_sequence("seq1", 100)
+    engine:activate_audio()
+
+    -- _try_audio with function that errors → must rethrow
+    local ok, err = pcall(function()
+        engine:_try_audio(function()
+            error("deliberate test error")
+        end)
+    end)
+    assert(not ok, "_try_audio must rethrow errors (fail-fast NSF)")
+    assert(tostring(err):find("deliberate test error"),
+        "Rethrown error should contain original message, got: " .. tostring(err))
+
+    -- _try_audio with method name that errors → must rethrow
+    engine._test_error_fn = function()
+        error("method error")
+    end
+    ok, err = pcall(function()
+        engine:_try_audio("_test_error_fn")
+    end)
+    assert(not ok, "_try_audio must rethrow method errors")
+    assert(tostring(err):find("method error"),
+        "Rethrown error should contain method message")
+
+    -- _try_audio when not audio owner → no-op (no error)
+    engine._audio_owner = false
+    ok = pcall(function()
+        engine:_try_audio(function()
+            error("should not reach")
+        end)
+    end)
+    assert(ok, "_try_audio should no-op when not audio owner")
+
+    print("  _try_audio rethrows errors passed")
 end
 
 print("\n✅ test_playback_engine_extended.lua passed")

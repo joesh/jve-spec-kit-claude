@@ -65,6 +65,27 @@ function timeline_state.pop_viewport_guard() return 0 end
 
 package.loaded['ui.timeline.timeline_state'] = timeline_state
 
+-- Mock sequence monitor (simulates timeline_monitor for GoToStart/GoToEnd)
+local mock_monitor = {
+    sequence_id = "default_sequence",
+    total_frames = 350,
+    playhead = 150,
+    engine = {
+        is_playing = function() return false end,
+        stop = function() end,
+    },
+}
+function mock_monitor:seek_to_frame(frame)
+    self.playhead = math.max(0, math.floor(frame))
+    -- Simulate the listener sync that timeline_panel installs
+    timeline_state.playhead_position = self.playhead
+end
+
+-- Mock panel_manager to return the mock monitor
+package.loaded['ui.panel_manager'] = {
+    get_active_sequence_monitor = function() return mock_monitor end,
+}
+
 command_manager.init('default_sequence', 'default_project')
 
 print("=== GoToStart / GoToEnd Tests ===")
@@ -82,12 +103,9 @@ assert(timeline_state.playhead_position == 0,
     string.format("GoToStart should move to frame 0, got %s", tostring(timeline_state.playhead_position)))
 print("  ✓ playhead moved to 0")
 
--- Test 2: GoToEnd moves playhead to end of last clip (frame 350)
-print("Test 2: GoToEnd moves playhead to end of last clip")
-timeline_state.clips = {
-    {id = 'clip_a', timeline_start = 0, duration = 100},
-    {id = 'clip_b', timeline_start = 200, duration = 150},
-}
+-- Test 2: GoToEnd moves playhead to total_frames of the active monitor
+print("Test 2: GoToEnd moves playhead to total_frames")
+mock_monitor.total_frames = 350
 timeline_state.playhead_position = 0
 result = command_manager.execute("GoToEnd", { project_id = "default_project" })
 assert(result.success, "GoToEnd should succeed: " .. tostring(result.error_message))
@@ -111,15 +129,15 @@ assert(result.success, "GoToEnd should succeed when already at end")
 assert(timeline_state.playhead_position == 350, "GoToEnd should stay at 350")
 print("  ✓ playhead stayed at 350")
 
--- Test 5: GoToEnd with empty timeline returns 0
-print("Test 5: GoToEnd with empty timeline")
-timeline_state.clips = {}
+-- Test 5: GoToEnd with zero total_frames goes to 0
+print("Test 5: GoToEnd with zero total_frames")
+mock_monitor.total_frames = 0
 timeline_state.playhead_position = 100
 result = command_manager.execute("GoToEnd", { project_id = "default_project" })
-assert(result.success, "GoToEnd should succeed with empty timeline")
+assert(result.success, "GoToEnd should succeed with zero total_frames")
 assert(timeline_state.playhead_position == 0,
-    string.format("GoToEnd on empty timeline should go to 0, got %s", tostring(timeline_state.playhead_position)))
-print("  ✓ playhead moved to 0 on empty timeline")
+    string.format("GoToEnd with zero total_frames should go to 0, got %s", tostring(timeline_state.playhead_position)))
+print("  ✓ playhead moved to 0")
 
 --------------------------------------------------------------------------------
 -- TYPE VALIDATION TESTS (verify integer-only API)

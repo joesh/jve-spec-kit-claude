@@ -21,6 +21,7 @@ local M = {}
 local logger = require("core.logger")
 local project_open = require("core.project_open")
 local file_browser = require("core.file_browser")
+local recent_projects = require("core.recent_projects")
 
 -- ---------------------------------------------------------------------------
 -- Format Detection
@@ -56,6 +57,80 @@ local SPEC = {
     no_persist = true,  -- Opening a project is not a typical undoable command
     no_project_context = true,  -- Doesn't require active project (it OPENS a project)
 }
+
+--- Post-open initialization: wires up UI, emits signals, persists state.
+-- Shared by OpenProject and NewProject executors.
+-- @param sequence table: loaded Sequence object (must have .id and .project_id)
+-- @param project_path string: absolute path to the .jvp file
+-- @return table: {success=true, project_id=..., sequence_id=...}
+function M.post_open_init(sequence, project_path)
+    assert(sequence and sequence.id and sequence.project_id,
+        "open_project.post_open_init: valid sequence required")
+    assert(project_path and project_path ~= "",
+        "open_project.post_open_init: project_path required")
+
+    -- Notify all interested modules of project change (stops playback, clears caches)
+    local Signals = require("core.signals")
+    Signals.emit("project_changed", sequence.project_id)
+
+    -- Re-initialize command manager with new database
+    local command_manager = require("core.command_manager")
+    command_manager.init(sequence.id, sequence.project_id)
+
+    -- Get UI references
+    local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
+    local main_window = ui_state_ok and ui_state.get_main_window() or nil
+    local project_browser = ui_state_ok and ui_state.get_project_browser() or nil
+    local timeline_panel = ui_state_ok and ui_state.get_timeline_panel() or nil
+
+    -- Load timeline
+    if timeline_panel and timeline_panel.load_sequence then
+        timeline_panel.load_sequence(sequence.id)
+    end
+
+    -- Refresh project browser (set project_id first to avoid stale cache)
+    if project_browser then
+        if project_browser.set_project_id then
+            project_browser.set_project_id(sequence.project_id)
+        end
+        if project_browser.refresh then
+            project_browser.refresh()
+        end
+    end
+
+    if project_browser and project_browser.focus_sequence then
+        project_browser.focus_sequence(sequence.id)
+    end
+
+    -- Set window title
+    local Project = require("models.project")
+    local project = Project.load(sequence.project_id)
+    if project and project.name and project.name ~= "" then
+        if main_window and qt_constants and qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TITLE then
+            qt_constants.PROPERTIES.SET_TITLE(main_window, project.name)
+        end
+    end
+
+    -- Persist last-opened project path for startup
+    local home = os.getenv("HOME")
+    if home then
+        os.execute('mkdir -p "' .. home .. '/.jve"')
+        local f = io.open(home .. "/.jve/last_project_path", "w")
+        if f then
+            f:write(project_path)
+            f:close()
+        end
+    end
+
+    -- Add to recent projects list
+    local display_name = (project and project.name) or "Untitled"
+    recent_projects.add(display_name, project_path)
+
+    logger.info("open_project", string.format(
+        "Opened project: %s (sequence: %s)", sequence.project_id, sequence.id))
+
+    return { success = true, project_id = sequence.project_id, sequence_id = sequence.id }
+end
 
 function M.register(executors, undoers, db, set_last_error)
 
@@ -137,11 +212,9 @@ function M.register(executors, undoers, db, set_last_error)
             return { success = false, error_message = "Unknown project format: " .. tostring(project_path) }
         end
 
-        -- Get UI references
+        -- Get main_window for error dialogs
         local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
         local main_window = ui_state_ok and ui_state.get_main_window() or nil
-        local project_browser = ui_state_ok and ui_state.get_project_browser() or nil
-        local timeline_panel = ui_state_ok and ui_state.get_timeline_panel() or nil
 
         -- Open .jvp database
         local database = require("core.database")
@@ -184,56 +257,8 @@ function M.register(executors, undoers, db, set_last_error)
             return { success = false, error_message = "Sequence missing project_id" }
         end
 
-        -- Notify all interested modules of project change (stops playback, clears caches)
-        local Signals = require("core.signals")
-        Signals.emit("project_changed", sequence.project_id)
-
-        -- Re-initialize command manager with new database
-        local command_manager = require("core.command_manager")
-        command_manager.init(sequence.id, sequence.project_id)
-
-        -- Load timeline
-        if timeline_panel and timeline_panel.load_sequence then
-            timeline_panel.load_sequence(sequence.id)
-        end
-
-        -- Refresh project browser (set project_id first to avoid stale cache)
-        if project_browser then
-            if project_browser.set_project_id then
-                project_browser.set_project_id(sequence.project_id)
-            end
-            if project_browser.refresh then
-                project_browser.refresh()
-            end
-        end
-
-        if project_browser and project_browser.focus_sequence then
-            project_browser.focus_sequence(sequence.id)
-        end
-
-        -- Set window title
-        local Project = require("models.project")
-        local project = Project.load(sequence.project_id)
-        if project and project.name and project.name ~= "" then
-            if main_window and qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TITLE then
-                qt_constants.PROPERTIES.SET_TITLE(main_window, project.name)
-            end
-        end
-
-        -- Persist last-opened project path for startup
-        local home = os.getenv("HOME")
-        if home then
-            os.execute('mkdir -p "' .. home .. '/.jve"')
-            local f = io.open(home .. "/.jve/last_project_path", "w")
-            if f then
-                f:write(project_path)
-                f:close()
-            end
-        end
-
-        logger.info("open_project", string.format("Opened project: %s (sequence: %s)", sequence.project_id, sequence.id))
-
-        return { success = true, project_id = sequence.project_id, sequence_id = sequence.id }
+        local result = M.post_open_init(sequence, project_path)
+        return result
     end
 
     -- No undoer - opening a project is not undoable

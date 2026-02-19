@@ -1,12 +1,13 @@
 // EMP (Editor Media Platform) Lua bindings
 // Provides frame-first video decoding for Source Viewer
 
-#include <editor_media_platform/emp_asset.h>
+#include <editor_media_platform/emp_media_file.h>
 #include <editor_media_platform/emp_reader.h>
 #include <editor_media_platform/emp_frame.h>
 #include <editor_media_platform/emp_audio.h>
 #include <editor_media_platform/emp_errors.h>
 #include <editor_media_platform/emp_time.h>
+#include <editor_media_platform/emp_timeline_media_buffer.h>
 
 #include "gpu_video_surface.h"
 #include "cpu_video_surface.h"
@@ -32,17 +33,23 @@ extern const char* WIDGET_METATABLE;
 namespace {
 
 // Metatable names for EMP types
-const char* EMP_ASSET_METATABLE = "JVE.EMP.Asset";
+const char* EMP_MEDIA_FILE_METATABLE = "JVE.EMP.MediaFile";
 const char* EMP_READER_METATABLE = "JVE.EMP.Reader";
 const char* EMP_FRAME_METATABLE = "JVE.EMP.Frame";
 const char* EMP_PCM_METATABLE = "JVE.EMP.PcmChunk";
+const char* EMP_TMB_METATABLE = "JVE.EMP.TMB";
 
 // Global registry for shared_ptr instances (prevent premature destruction)
-// Key: raw pointer, Value: shared_ptr (via unique_ptr to type-erase)
-static std::unordered_map<void*, std::shared_ptr<emp::Asset>> g_assets;
+// Key: Lua userdata address (unique per allocation), Value: shared_ptr
+// IMPORTANT: Keys must be userdata addresses, NOT raw C++ pointers. The C++
+// decoder cache can return the same shared_ptr<Frame> for repeated decodes of
+// the same timestamp. If raw ptrs were used as keys, two Lua userdata objects
+// would share one map entry, and GC of the first would invalidate the second.
+static std::unordered_map<void*, std::shared_ptr<emp::MediaFile>> g_media_files;
 static std::unordered_map<void*, std::shared_ptr<emp::Reader>> g_readers;
 static std::unordered_map<void*, std::shared_ptr<emp::Frame>> g_frames;
 static std::unordered_map<void*, std::shared_ptr<emp::PcmChunk>> g_pcm_chunks;
+static std::unordered_map<void*, std::shared_ptr<emp::TimelineMediaBuffer>> g_tmb_instances;
 
 // Helper: Push EMP error to Lua (nil, { code=string, msg=string })
 void push_emp_error(lua_State* L, const emp::Error& err) {
@@ -54,56 +61,56 @@ void push_emp_error(lua_State* L, const emp::Error& err) {
     lua_setfield(L, -2, "msg");
 }
 
-// Helper: Create userdata with metatable
+// Helper: Create userdata with metatable, return userdata address (map key)
 template<typename T>
 void* push_userdata(lua_State* L, std::shared_ptr<T> ptr, const char* metatable) {
     void** ud = static_cast<void**>(lua_newuserdata(L, sizeof(void*)));
     *ud = ptr.get();
     luaL_getmetatable(L, metatable);
     lua_setmetatable(L, -2);
-    return ptr.get();
+    return static_cast<void*>(ud);
 }
 
-// Helper: Get userdata pointer
-template<typename T>
-T* get_userdata(lua_State* L, int idx, const char* metatable) {
-    void** ud = static_cast<void**>(luaL_checkudata(L, idx, metatable));
-    return static_cast<T*>(*ud);
+// Helper: Get Lua userdata address for map key lookup
+// Returns the userdata allocation address (unique per Lua object), NOT the
+// contained C++ pointer. This ensures each Lua handle has its own map entry.
+void* get_map_key(lua_State* L, int idx, const char* metatable) {
+    return static_cast<void*>(luaL_checkudata(L, idx, metatable));
 }
 
 // ============================================================================
-// Asset bindings
+// MediaFile bindings
 // ============================================================================
 
-// EMP.ASSET_OPEN(path) -> asset | nil, err
-static int lua_emp_asset_open(lua_State* L) {
+// EMP.MEDIA_FILE_OPEN(path) -> media_file | nil, err
+static int lua_emp_media_file_open(lua_State* L) {
     const char* path = luaL_checkstring(L, 1);
 
-    auto result = emp::Asset::Open(path);
+    auto result = emp::MediaFile::Open(path);
     if (result.is_error()) {
         push_emp_error(L, result.error());
         return 2;
     }
 
     auto asset = result.value();
-    void* key = push_userdata(L, asset, EMP_ASSET_METATABLE);
-    g_assets[key] = asset;
+    void* key = push_userdata(L, asset, EMP_MEDIA_FILE_METATABLE);
+    g_media_files[key] = asset;
     return 1;
 }
 
-// EMP.ASSET_CLOSE(asset)
-static int lua_emp_asset_close(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_ASSET_METATABLE);
-    g_assets.erase(key);
+// EMP.MEDIA_FILE_CLOSE(media_file)
+static int lua_emp_media_file_close(lua_State* L) {
+    void* key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
+    g_media_files.erase(key);
     return 0;
 }
 
-// EMP.ASSET_INFO(asset) -> { path, has_video, width, height, fps_num, fps_den, duration_us, is_vfr, has_audio, audio_sample_rate, audio_channels }
-static int lua_emp_asset_info(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_ASSET_METATABLE);
-    auto it = g_assets.find(key);
-    if (it == g_assets.end()) {
-        return luaL_error(L, "EMP.ASSET_INFO: invalid asset handle");
+// EMP.MEDIA_FILE_INFO(media_file) -> { path, has_video, width, height, fps_num, fps_den, duration_us, is_vfr, has_audio, audio_sample_rate, audio_channels }
+static int lua_emp_media_file_info(lua_State* L) {
+    void* key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
+    auto it = g_media_files.find(key);
+    if (it == g_media_files.end()) {
+        return luaL_error(L, "EMP.MEDIA_FILE_INFO: invalid media file handle");
     }
 
     const auto& info = it->second->info();
@@ -145,10 +152,10 @@ static int lua_emp_asset_info(lua_State* L) {
     return 1;
 }
 
-// Asset __gc metamethod
-static int lua_emp_asset_gc(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_ASSET_METATABLE);
-    g_assets.erase(key);
+// MediaFile __gc metamethod
+static int lua_emp_media_file_gc(lua_State* L) {
+    void* key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
+    g_media_files.erase(key);
     return 0;
 }
 
@@ -156,16 +163,16 @@ static int lua_emp_asset_gc(lua_State* L) {
 // Reader bindings
 // ============================================================================
 
-// EMP.READER_CREATE(asset) -> reader | nil, err
+// EMP.READER_CREATE(media_file) -> reader | nil, err
 static int lua_emp_reader_create(lua_State* L) {
-    void* asset_key = get_userdata<void>(L, 1, EMP_ASSET_METATABLE);
-    auto asset_it = g_assets.find(asset_key);
-    if (asset_it == g_assets.end()) {
-        push_emp_error(L, emp::Error::invalid_arg("Invalid asset handle"));
+    void* mf_key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
+    auto mf_it = g_media_files.find(mf_key);
+    if (mf_it == g_media_files.end()) {
+        push_emp_error(L, emp::Error::invalid_arg("Invalid media file handle"));
         return 2;
     }
 
-    auto result = emp::Reader::Create(asset_it->second);
+    auto result = emp::Reader::Create(mf_it->second);
     if (result.is_error()) {
         push_emp_error(L, result.error());
         return 2;
@@ -179,14 +186,14 @@ static int lua_emp_reader_create(lua_State* L) {
 
 // EMP.READER_CLOSE(reader)
 static int lua_emp_reader_close(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     g_readers.erase(key);
     return 0;
 }
 
 // EMP.READER_SEEK_FRAME(reader, frame_idx, rate_num, rate_den) -> true | nil, err
 static int lua_emp_reader_seek_frame(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         push_emp_error(L, emp::Error::invalid_arg("Invalid reader handle"));
@@ -211,7 +218,7 @@ static int lua_emp_reader_seek_frame(lua_State* L) {
 
 // EMP.READER_DECODE_FRAME(reader, frame_idx, rate_num, rate_den) -> frame | nil, err
 static int lua_emp_reader_decode_frame(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         push_emp_error(L, emp::Error::invalid_arg("Invalid reader handle"));
@@ -239,7 +246,7 @@ static int lua_emp_reader_decode_frame(lua_State* L) {
 // EMP.READER_START_PREFETCH(reader, direction)
 // direction: 1=forward, -1=reverse, 0=stop
 static int lua_emp_reader_start_prefetch(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         return luaL_error(L, "READER_START_PREFETCH: invalid reader handle");
@@ -256,7 +263,7 @@ static int lua_emp_reader_start_prefetch(lua_State* L) {
 
 // EMP.READER_STOP_PREFETCH(reader)
 static int lua_emp_reader_stop_prefetch(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         return luaL_error(L, "READER_STOP_PREFETCH: invalid reader handle");
@@ -268,7 +275,7 @@ static int lua_emp_reader_stop_prefetch(lua_State* L) {
 
 // EMP.READER_UPDATE_PREFETCH_TARGET(reader, frame_idx, rate_num, rate_den)
 static int lua_emp_reader_update_prefetch_target(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         return luaL_error(L, "READER_UPDATE_PREFETCH_TARGET: invalid reader handle");
@@ -285,7 +292,7 @@ static int lua_emp_reader_update_prefetch_target(lua_State* L) {
 
 // EMP.READER_GET_CACHED_FRAME(reader, frame_idx, rate_num, rate_den) -> frame | nil
 static int lua_emp_reader_get_cached_frame(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         return luaL_error(L, "READER_GET_CACHED_FRAME: invalid reader handle");
@@ -310,7 +317,7 @@ static int lua_emp_reader_get_cached_frame(lua_State* L) {
 
 // Reader __gc metamethod
 static int lua_emp_reader_gc(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     g_readers.erase(key);
     return 0;
 }
@@ -321,7 +328,7 @@ static int lua_emp_reader_gc(lua_State* L) {
 
 // EMP.FRAME_INFO(frame) -> { width, height, stride, source_pts_us }
 static int lua_emp_frame_info(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_FRAME_METATABLE);
+    void* key = get_map_key(L, 1, EMP_FRAME_METATABLE);
     auto it = g_frames.find(key);
     if (it == g_frames.end()) {
         return luaL_error(L, "EMP.FRAME_INFO: invalid frame handle");
@@ -344,14 +351,14 @@ static int lua_emp_frame_info(lua_State* L) {
 
 // EMP.FRAME_RELEASE(frame)
 static int lua_emp_frame_release(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_FRAME_METATABLE);
+    void* key = get_map_key(L, 1, EMP_FRAME_METATABLE);
     g_frames.erase(key);
     return 0;
 }
 
 // EMP.FRAME_DATA_PTR(frame) -> lightuserdata (for FFI or surface widget)
 static int lua_emp_frame_data_ptr(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_FRAME_METATABLE);
+    void* key = get_map_key(L, 1, EMP_FRAME_METATABLE);
     auto it = g_frames.find(key);
     if (it == g_frames.end()) {
         return luaL_error(L, "EMP.FRAME_DATA_PTR: invalid frame handle");
@@ -363,7 +370,7 @@ static int lua_emp_frame_data_ptr(lua_State* L) {
 
 // Frame __gc metamethod
 static int lua_emp_frame_gc(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_FRAME_METATABLE);
+    void* key = get_map_key(L, 1, EMP_FRAME_METATABLE);
     g_frames.erase(key);
     return 0;
 }
@@ -374,7 +381,7 @@ static int lua_emp_frame_gc(lua_State* L) {
 
 // EMP.READER_DECODE_AUDIO_RANGE(reader, frame0, frame1, rate_num, rate_den, out_sample_rate, out_channels) -> pcm | nil, err
 static int lua_emp_reader_decode_audio_range(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         push_emp_error(L, emp::Error::invalid_arg("Invalid reader handle"));
@@ -410,7 +417,7 @@ static int lua_emp_reader_decode_audio_range(lua_State* L) {
 
 // EMP.PCM_INFO(pcm) -> { sample_rate, channels, frames, start_time_us }
 static int lua_emp_pcm_info(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_PCM_METATABLE);
+    void* key = get_map_key(L, 1, EMP_PCM_METATABLE);
     auto it = g_pcm_chunks.find(key);
     if (it == g_pcm_chunks.end()) {
         return luaL_error(L, "EMP.PCM_INFO: invalid pcm handle");
@@ -433,7 +440,7 @@ static int lua_emp_pcm_info(lua_State* L) {
 
 // EMP.PCM_DATA_PTR(pcm) -> lightuserdata (for direct buffer access)
 static int lua_emp_pcm_data_ptr(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_PCM_METATABLE);
+    void* key = get_map_key(L, 1, EMP_PCM_METATABLE);
     auto it = g_pcm_chunks.find(key);
     if (it == g_pcm_chunks.end()) {
         return luaL_error(L, "EMP.PCM_DATA_PTR: invalid pcm handle");
@@ -445,16 +452,334 @@ static int lua_emp_pcm_data_ptr(lua_State* L) {
 
 // EMP.PCM_RELEASE(pcm)
 static int lua_emp_pcm_release(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_PCM_METATABLE);
+    void* key = get_map_key(L, 1, EMP_PCM_METATABLE);
     g_pcm_chunks.erase(key);
     return 0;
 }
 
 // PCM __gc metamethod
 static int lua_emp_pcm_gc(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_PCM_METATABLE);
+    void* key = get_map_key(L, 1, EMP_PCM_METATABLE);
     g_pcm_chunks.erase(key);
     return 0;
+}
+
+// ============================================================================
+// TimelineMediaBuffer (TMB) bindings
+// ============================================================================
+
+// EMP.TMB_CREATE(pool_threads) -> tmb | nil, err
+static int lua_emp_tmb_create(lua_State* L) {
+    int pool_threads = static_cast<int>(luaL_optinteger(L, 1, 2));
+    if (pool_threads < 0) {
+        return luaL_error(L, "TMB_CREATE: pool_threads must be >= 0, got %d", pool_threads);
+    }
+
+    auto tmb = emp::TimelineMediaBuffer::Create(pool_threads);
+    // Convert unique_ptr to shared_ptr for the global registry
+    std::shared_ptr<emp::TimelineMediaBuffer> shared_tmb(std::move(tmb));
+
+    void* key = push_userdata(L, shared_tmb, EMP_TMB_METATABLE);
+    g_tmb_instances[key] = shared_tmb;
+    return 1;
+}
+
+// EMP.TMB_CLOSE(tmb)
+static int lua_emp_tmb_close(lua_State* L) {
+    void* key = get_map_key(L, 1, EMP_TMB_METATABLE);
+    g_tmb_instances.erase(key);
+    return 0;
+}
+
+// TMB __gc metamethod
+static int lua_emp_tmb_gc(lua_State* L) {
+    void* key = get_map_key(L, 1, EMP_TMB_METATABLE);
+    g_tmb_instances.erase(key);
+    return 0;
+}
+
+// Helper: get TMB from Lua arg or error
+static std::shared_ptr<emp::TimelineMediaBuffer> get_tmb(lua_State* L, int idx) {
+    void* key = get_map_key(L, idx, EMP_TMB_METATABLE);
+    auto it = g_tmb_instances.find(key);
+    if (it == g_tmb_instances.end()) {
+        luaL_error(L, "TMB: invalid handle");
+        return nullptr;
+    }
+    return it->second;
+}
+
+// Helper: parse track type string ("video" or "audio") from Lua arg
+static emp::TrackType parse_track_type(lua_State* L, int idx) {
+    const char* type_str = luaL_checkstring(L, idx);
+    if (strcmp(type_str, "video") == 0) return emp::TrackType::Video;
+    if (strcmp(type_str, "audio") == 0) return emp::TrackType::Audio;
+    luaL_error(L, "invalid track type: '%s' (expected 'video' or 'audio')", type_str);
+    return emp::TrackType::Video; // unreachable
+}
+
+// EMP.TMB_SET_MAX_READERS(tmb, max)
+static int lua_emp_tmb_set_max_readers(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int max = static_cast<int>(luaL_checkinteger(L, 2));
+    if (max < 1) {
+        return luaL_error(L, "TMB_SET_MAX_READERS: max must be >= 1, got %d", max);
+    }
+    tmb->SetMaxReaders(max);
+    return 0;
+}
+
+// EMP.TMB_SET_SEQUENCE_RATE(tmb, num, den)
+static int lua_emp_tmb_set_sequence_rate(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int32_t num = static_cast<int32_t>(luaL_checkinteger(L, 2));
+    int32_t den = static_cast<int32_t>(luaL_checkinteger(L, 3));
+    if (num <= 0) return luaL_error(L, "TMB_SET_SEQUENCE_RATE: num must be > 0, got %d", num);
+    if (den <= 0) return luaL_error(L, "TMB_SET_SEQUENCE_RATE: den must be > 0, got %d", den);
+    tmb->SetSequenceRate(num, den);
+    return 0;
+}
+
+// EMP.TMB_SET_AUDIO_FORMAT(tmb, sample_rate, channels)
+static int lua_emp_tmb_set_audio_format(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int32_t sample_rate = static_cast<int32_t>(luaL_checkinteger(L, 2));
+    int32_t channels = static_cast<int32_t>(luaL_checkinteger(L, 3));
+    if (sample_rate <= 0) return luaL_error(L, "TMB_SET_AUDIO_FORMAT: sample_rate must be > 0, got %d", sample_rate);
+    if (channels <= 0) return luaL_error(L, "TMB_SET_AUDIO_FORMAT: channels must be > 0, got %d", channels);
+    emp::AudioFormat fmt{emp::SampleFormat::F32, sample_rate, channels};
+    tmb->SetAudioFormat(fmt);
+    return 0;
+}
+
+// EMP.TMB_SET_TRACK_CLIPS(tmb, type_string, track_index, clips_table)
+// clips_table = array of { clip_id, media_path, timeline_start, duration, source_in, rate_num, rate_den, speed_ratio }
+static int lua_emp_tmb_set_track_clips(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    auto track_type = parse_track_type(L, 2);
+    int track_index = static_cast<int>(luaL_checkinteger(L, 3));
+    emp::TrackId track{track_type, track_index};
+    luaL_checktype(L, 4, LUA_TTABLE);
+
+    int n = static_cast<int>(lua_objlen(L, 4));
+    std::vector<emp::ClipInfo> clips;
+    clips.reserve(static_cast<size_t>(n));
+
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, 4, i);
+        if (!lua_istable(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d is not a table", i);
+        }
+
+        emp::ClipInfo ci{};
+
+        lua_getfield(L, -1, "clip_id");
+        if (!lua_isstring(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing clip_id", i);
+        }
+        ci.clip_id = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "media_path");
+        if (!lua_isstring(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing media_path", i);
+        }
+        ci.media_path = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "timeline_start");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing timeline_start", i);
+        }
+        ci.timeline_start = static_cast<int64_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "duration");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing duration", i);
+        }
+        ci.duration = static_cast<int64_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "source_in");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing source_in", i);
+        }
+        ci.source_in = static_cast<int64_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "rate_num");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing rate_num", i);
+        }
+        ci.rate_num = static_cast<int32_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "rate_den");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing rate_den", i);
+        }
+        ci.rate_den = static_cast<int32_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "speed_ratio");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing speed_ratio", i);
+        }
+        ci.speed_ratio = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+
+        lua_pop(L, 1); // pop clip table
+
+        if (ci.rate_den <= 0) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d rate_den must be > 0, got %d", i, ci.rate_den);
+        }
+        if (ci.speed_ratio <= 0.0f) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d speed_ratio must be > 0", i);
+        }
+
+        clips.push_back(std::move(ci));
+    }
+
+    tmb->SetTrackClips(track, clips);
+    return 0;
+}
+
+// EMP.TMB_SET_PLAYHEAD(tmb, frame, direction, speed)
+static int lua_emp_tmb_set_playhead(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int64_t frame = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    int direction = static_cast<int>(luaL_checkinteger(L, 3));
+    float speed = static_cast<float>(luaL_checknumber(L, 4));
+    tmb->SetPlayhead(frame, direction, speed);
+    return 0;
+}
+
+// EMP.TMB_GET_VIDEO_FRAME(tmb, track_index, timeline_frame) -> frame|nil, info_table
+// Type is implied: always Video
+static int lua_emp_tmb_get_video_frame(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int track_index = static_cast<int>(luaL_checkinteger(L, 2));
+    int64_t timeline_frame = static_cast<int64_t>(luaL_checkinteger(L, 3));
+
+    emp::TrackId track{emp::TrackType::Video, track_index};
+    auto result = tmb->GetVideoFrame(track, timeline_frame);
+
+    // Push frame handle (or nil for gap/offline)
+    if (result.frame) {
+        void* frame_key = push_userdata(L, result.frame, EMP_FRAME_METATABLE);
+        g_frames[frame_key] = result.frame;
+    } else {
+        lua_pushnil(L);
+    }
+
+    // Push metadata table (always returned)
+    lua_newtable(L);
+    lua_pushstring(L, result.clip_id.c_str());
+    lua_setfield(L, -2, "clip_id");
+    lua_pushstring(L, result.media_path.c_str());
+    lua_setfield(L, -2, "media_path");
+    lua_pushinteger(L, result.rotation);
+    lua_setfield(L, -2, "rotation");
+    lua_pushinteger(L, static_cast<lua_Integer>(result.source_frame));
+    lua_setfield(L, -2, "source_frame");
+    lua_pushinteger(L, result.clip_fps_num);
+    lua_setfield(L, -2, "clip_fps_num");
+    lua_pushinteger(L, result.clip_fps_den);
+    lua_setfield(L, -2, "clip_fps_den");
+    lua_pushinteger(L, static_cast<lua_Integer>(result.clip_start_frame));
+    lua_setfield(L, -2, "clip_start_frame");
+    lua_pushinteger(L, static_cast<lua_Integer>(result.clip_end_frame));
+    lua_setfield(L, -2, "clip_end_frame");
+    lua_pushboolean(L, result.offline);
+    lua_setfield(L, -2, "offline");
+
+    return 2;
+}
+
+// EMP.TMB_GET_TRACK_AUDIO(tmb, track_index, t0_us, t1_us, sample_rate, channels) -> pcm|nil
+// Type is implied: always Audio
+static int lua_emp_tmb_get_track_audio(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int track_index = static_cast<int>(luaL_checkinteger(L, 2));
+    int64_t t0 = static_cast<int64_t>(luaL_checkinteger(L, 3));
+    int64_t t1 = static_cast<int64_t>(luaL_checkinteger(L, 4));
+    int32_t sample_rate = static_cast<int32_t>(luaL_checkinteger(L, 5));
+    int32_t channels = static_cast<int32_t>(luaL_checkinteger(L, 6));
+    if (t1 <= t0) return luaL_error(L, "TMB_GET_TRACK_AUDIO: t1 (%lld) must be > t0 (%lld)", (long long)t1, (long long)t0);
+    if (sample_rate <= 0) return luaL_error(L, "TMB_GET_TRACK_AUDIO: sample_rate must be > 0, got %d", sample_rate);
+    if (channels <= 0) return luaL_error(L, "TMB_GET_TRACK_AUDIO: channels must be > 0, got %d", channels);
+
+    emp::TrackId track{emp::TrackType::Audio, track_index};
+    emp::AudioFormat fmt{emp::SampleFormat::F32, sample_rate, channels};
+    auto pcm = tmb->GetTrackAudio(track, t0, t1, fmt);
+
+    if (!pcm) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    void* pcm_key = push_userdata(L, pcm, EMP_PCM_METATABLE);
+    g_pcm_chunks[pcm_key] = pcm;
+    return 1;
+}
+
+// EMP.TMB_RELEASE_TRACK(tmb, type_string, track_index)
+static int lua_emp_tmb_release_track(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    auto track_type = parse_track_type(L, 2);
+    int track_index = static_cast<int>(luaL_checkinteger(L, 3));
+    tmb->ReleaseTrack(emp::TrackId{track_type, track_index});
+    return 0;
+}
+
+// EMP.TMB_RELEASE_ALL(tmb)
+static int lua_emp_tmb_release_all(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    tmb->ReleaseAll();
+    return 0;
+}
+
+// EMP.MEDIA_FILE_PROBE(path) -> info_table | nil, err
+static int lua_emp_media_file_probe(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+
+    auto result = emp::TimelineMediaBuffer::ProbeFile(path);
+    if (result.is_error()) {
+        push_emp_error(L, result.error());
+        return 2;
+    }
+
+    const auto& info = result.value();
+    lua_newtable(L);
+    lua_pushstring(L, info.path.c_str());
+    lua_setfield(L, -2, "path");
+    lua_pushboolean(L, info.has_video);
+    lua_setfield(L, -2, "has_video");
+    lua_pushinteger(L, info.video_width);
+    lua_setfield(L, -2, "width");
+    lua_pushinteger(L, info.video_height);
+    lua_setfield(L, -2, "height");
+    lua_pushinteger(L, info.video_fps_num);
+    lua_setfield(L, -2, "fps_num");
+    lua_pushinteger(L, info.video_fps_den);
+    lua_setfield(L, -2, "fps_den");
+    lua_pushinteger(L, static_cast<lua_Integer>(info.duration_us));
+    lua_setfield(L, -2, "duration_us");
+    lua_pushboolean(L, info.is_vfr);
+    lua_setfield(L, -2, "is_vfr");
+    lua_pushinteger(L, static_cast<lua_Integer>(info.start_tc));
+    lua_setfield(L, -2, "start_tc");
+    lua_pushinteger(L, info.rotation);
+    lua_setfield(L, -2, "rotation");
+    lua_pushboolean(L, info.has_audio);
+    lua_setfield(L, -2, "has_audio");
+    lua_pushinteger(L, info.audio_sample_rate);
+    lua_setfield(L, -2, "audio_sample_rate");
+    lua_pushinteger(L, info.audio_channels);
+    lua_setfield(L, -2, "audio_channels");
+
+    return 1;
 }
 
 // ============================================================================
@@ -637,7 +962,7 @@ static int lua_emp_set_decode_mode(lua_State* L) {
 
 // EMP.READER_SET_MAX_CACHE(reader, max_frames)
 static int lua_emp_reader_set_max_cache(lua_State* L) {
-    void* key = get_userdata<void>(L, 1, EMP_READER_METATABLE);
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
     auto it = g_readers.find(key);
     if (it == g_readers.end()) {
         return luaL_error(L, "READER_SET_MAX_CACHE: invalid reader handle");
@@ -698,7 +1023,7 @@ static int lua_emp_surface_set_frame(lua_State* L) {
     }
 
     // Get frame
-    void* frame_key = get_userdata<void>(L, 2, EMP_FRAME_METATABLE);
+    void* frame_key = get_map_key(L, 2, EMP_FRAME_METATABLE);
     auto it = g_frames.find(frame_key);
     if (it == g_frames.end()) {
         return luaL_error(L, "EMP.SURFACE_SET_FRAME: invalid frame handle");
@@ -727,8 +1052,8 @@ static int lua_emp_surface_set_frame(lua_State* L) {
 
 void register_emp_bindings(lua_State* L) {
     // Create metatables with __gc
-    luaL_newmetatable(L, EMP_ASSET_METATABLE);
-    lua_pushcfunction(L, lua_emp_asset_gc);
+    luaL_newmetatable(L, EMP_MEDIA_FILE_METATABLE);
+    lua_pushcfunction(L, lua_emp_media_file_gc);
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
@@ -747,17 +1072,22 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
+    luaL_newmetatable(L, EMP_TMB_METATABLE);
+    lua_pushcfunction(L, lua_emp_tmb_gc);
+    lua_setfield(L, -2, "__gc");
+    lua_pop(L, 1);
+
     // Create EMP subtable in qt_constants
     // Assumes qt_constants is on stack at index -1
     lua_newtable(L);
 
-    // Asset functions
-    lua_pushcfunction(L, lua_emp_asset_open);
-    lua_setfield(L, -2, "ASSET_OPEN");
-    lua_pushcfunction(L, lua_emp_asset_close);
-    lua_setfield(L, -2, "ASSET_CLOSE");
-    lua_pushcfunction(L, lua_emp_asset_info);
-    lua_setfield(L, -2, "ASSET_INFO");
+    // MediaFile functions
+    lua_pushcfunction(L, lua_emp_media_file_open);
+    lua_setfield(L, -2, "MEDIA_FILE_OPEN");
+    lua_pushcfunction(L, lua_emp_media_file_close);
+    lua_setfield(L, -2, "MEDIA_FILE_CLOSE");
+    lua_pushcfunction(L, lua_emp_media_file_info);
+    lua_setfield(L, -2, "MEDIA_FILE_INFO");
 
     // Reader functions
     lua_pushcfunction(L, lua_emp_reader_create);
@@ -806,6 +1136,32 @@ void register_emp_bindings(lua_State* L) {
     // Offline frame compositor
     lua_pushcfunction(L, lua_emp_compose_offline_frame);
     lua_setfield(L, -2, "COMPOSE_OFFLINE_FRAME");
+
+    // TimelineMediaBuffer (TMB) functions
+    lua_pushcfunction(L, lua_emp_tmb_create);
+    lua_setfield(L, -2, "TMB_CREATE");
+    lua_pushcfunction(L, lua_emp_tmb_close);
+    lua_setfield(L, -2, "TMB_CLOSE");
+    lua_pushcfunction(L, lua_emp_tmb_set_max_readers);
+    lua_setfield(L, -2, "TMB_SET_MAX_READERS");
+    lua_pushcfunction(L, lua_emp_tmb_set_sequence_rate);
+    lua_setfield(L, -2, "TMB_SET_SEQUENCE_RATE");
+    lua_pushcfunction(L, lua_emp_tmb_set_audio_format);
+    lua_setfield(L, -2, "TMB_SET_AUDIO_FORMAT");
+    lua_pushcfunction(L, lua_emp_tmb_set_track_clips);
+    lua_setfield(L, -2, "TMB_SET_TRACK_CLIPS");
+    lua_pushcfunction(L, lua_emp_tmb_set_playhead);
+    lua_setfield(L, -2, "TMB_SET_PLAYHEAD");
+    lua_pushcfunction(L, lua_emp_tmb_get_video_frame);
+    lua_setfield(L, -2, "TMB_GET_VIDEO_FRAME");
+    lua_pushcfunction(L, lua_emp_tmb_get_track_audio);
+    lua_setfield(L, -2, "TMB_GET_TRACK_AUDIO");
+    lua_pushcfunction(L, lua_emp_tmb_release_track);
+    lua_setfield(L, -2, "TMB_RELEASE_TRACK");
+    lua_pushcfunction(L, lua_emp_tmb_release_all);
+    lua_setfield(L, -2, "TMB_RELEASE_ALL");
+    lua_pushcfunction(L, lua_emp_media_file_probe);
+    lua_setfield(L, -2, "MEDIA_FILE_PROBE");
 
     // Surface functions
     lua_pushcfunction(L, lua_emp_surface_set_frame);

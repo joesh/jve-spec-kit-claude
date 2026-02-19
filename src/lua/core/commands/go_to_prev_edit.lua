@@ -62,16 +62,25 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["GoToPrevEdit"] = function(command)
         local args = command:get_all_parameters()
 
-        if not args.dry_run then
-            print("Executing GoToPrevEdit command")
+        local pm = require('ui.panel_manager')
+        local sv = pm.get_active_sequence_monitor()
+        assert(sv and sv.sequence_id, "GoToPrevEdit: no sequence loaded in active view")
+
+        -- Source monitor: "prev edit" = go to start of clip
+        if sv.view_id == "source_monitor" then
+            if not args.dry_run then
+                if sv.engine:is_playing() then sv.engine:stop() end
+                sv:seek_to_frame(0)
+            end
+            return true
         end
 
+        -- Timeline: navigate to previous edit point
         local points = collect_edit_points()
         local playhead = timeline_state.get_playhead_position()
         assert(type(playhead) == "number", "GoToPrevEdit: playhead must be integer frames")
 
         local target = playhead
-        -- Iterate backwards
         for i = #points, 1, -1 do
             local point = points[i]
             if point < playhead then
@@ -84,16 +93,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true, { target = target }
         end
 
-        -- Stop playback before navigating (NLE convention)
-        local pm = require('ui.panel_manager')
-        local sv = pm.get_active_sequence_monitor()
-        if sv and sv.engine:is_playing() then
+        if sv.engine:is_playing() then
             sv.engine:stop()
         end
 
         if target ~= playhead then
             timeline_state.set_playhead_position(target)
-            print(string.format("✅ Moved playhead to previous edit (frame %d)", target))
         end
         return true
     end

@@ -248,12 +248,10 @@ int main(int argc, char *argv[])
         qunsetenv("JVE_TEST_MODE");
         qCInfo(jveMain, "Opening project from CLI argument: %s", qPrintable(projectPath));
     } else {
-        const QString defaultDir = QDir(QDir::homePath()).filePath("Documents/JVE Projects");
-        QDir().mkpath(defaultDir);
-        projectPath = QDir(defaultDir).filePath("Untitled Project.jvp");
-        qputenv("JVE_PROJECT_PATH", projectPath.toUtf8());
+        // No CLI argument — Lua handles startup (last_project_path → welcome screen)
+        qunsetenv("JVE_PROJECT_PATH");
         qunsetenv("JVE_TEST_MODE");
-        qCInfo(jveMain, "Opening default project: %s", qPrintable(projectPath));
+        qCInfo(jveMain, "No project specified; Lua will handle startup");
     }
 
     // Create Lua engine for pure Lua UI

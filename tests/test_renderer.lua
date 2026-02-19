@@ -185,127 +185,10 @@ local function test_get_sequence_info()
 end
 
 -- ============================================================================
--- Test Renderer.get_video_frame() with mocked media_cache
--- ============================================================================
-
--- renderer is loaded here (before mocks) so the module captures media_cache ref
-local renderer = require("core.renderer")
-
--- Mock media_cache on the already-loaded module table so renderer sees the mocks.
-local mc = require("core.media.media_cache")
-local orig_activate = mc.activate
-local orig_get_video_frame = mc.get_video_frame
-
-local function test_get_video_frame_passes_clip_fps()
-    -- Track what fps gets passed to media_cache.get_video_frame
-    local captured_fps_num, captured_fps_den
-    mc.activate = function(_path, _ctx)
-        return { start_tc = 0, rotation = 0 }
-    end
-    mc.get_video_frame = function(_frame_idx, _ctx, fps_num, fps_den)
-        captured_fps_num = fps_num
-        captured_fps_den = fps_den
-        return "mock_frame_handle"
-    end
-
-    -- Frame 10 → clip_v2 (on V2, fps_numerator=24, fps_denominator=1 in DB)
-    -- Clip model stores these as clip.rate = {fps_numerator=24, fps_denominator=1}
-    -- Renderer must access clip.rate.fps_numerator, NOT clip.fps_numerator (which is nil)
-    local frame, meta = renderer.get_video_frame(seq, 10, "test_ctx")
-    assert(frame == "mock_frame_handle", "Expected mock frame handle back")
-    assert(meta, "Expected metadata")
-    assert(captured_fps_num == 24, string.format(
-        "media_cache.get_video_frame should receive clip fps_num=24, got %s",
-        tostring(captured_fps_num)))
-    assert(captured_fps_den == 1, string.format(
-        "media_cache.get_video_frame should receive clip fps_den=1, got %s",
-        tostring(captured_fps_den)))
-    -- Metadata should also carry clip fps
-    assert(meta.clip_fps_num == 24, string.format(
-        "metadata.clip_fps_num should be 24, got %s", tostring(meta.clip_fps_num)))
-    assert(meta.clip_fps_den == 1, string.format(
-        "metadata.clip_fps_den should be 1, got %s", tostring(meta.clip_fps_den)))
-
-    -- Restore
-    mc.activate = orig_activate
-    mc.get_video_frame = orig_get_video_frame
-    print("  test_get_video_frame_passes_clip_fps passed")
-end
-
-local function test_get_video_frame_start_tc_subtracted()
-    local captured_frame_idx
-    mc.activate = function(_path, _ctx)
-        return { start_tc = 1000, rotation = 90 }
-    end
-    mc.get_video_frame = function(frame_idx, _ctx, _fps_num, _fps_den)
-        captured_frame_idx = frame_idx
-        return "mock_frame"
-    end
-
-    -- Frame 10 → clip_v2: source_in=0, offset=10, source_frame=10
-    -- file_frame = source_frame(10) - start_tc(1000) = -990
-    -- But renderer should still pass it (decoder handles negative → assert or clamp)
-    -- Actually, the assert in media_cache requires frame_idx >= 0, so this would fail.
-    -- Use frame 30 → clip_v1: source_in=10, offset=30-24=6, source_frame=16
-    -- file_frame = 16 - 1000 = -984... still negative.
-    -- Use start_tc=5 instead for a sane test
-    mc.activate = function(_path, _ctx)
-        return { start_tc = 5, rotation = 90 }
-    end
-    local frame, meta = renderer.get_video_frame(seq, 10, "test_ctx")
-    assert(frame == "mock_frame", "Expected mock frame")
-    -- source_frame=10, start_tc=5 → file_frame=5
-    assert(captured_frame_idx == 5, string.format(
-        "file_frame should be source_frame(10) - start_tc(5) = 5, got %d",
-        captured_frame_idx))
-    assert(meta.rotation == 90, "rotation should come from info")
-
-    mc.activate = orig_activate
-    mc.get_video_frame = orig_get_video_frame
-    print("  test_get_video_frame_start_tc_subtracted passed")
-end
-
-local function test_get_video_frame_returns_nil_on_eof()
-    mc.activate = function() return { start_tc = 0, rotation = 0 } end
-    mc.get_video_frame = function() return nil end  -- simulate EOF
-
-    local frame, meta = renderer.get_video_frame(seq, 10, "test_ctx")
-    assert(frame == nil, "Should return nil on decode failure")
-    assert(meta == nil, "Metadata should be nil on decode failure")
-
-    mc.activate = orig_activate
-    mc.get_video_frame = orig_get_video_frame
-    print("  test_get_video_frame_returns_nil_on_eof passed")
-end
-
-local function test_get_video_frame_clip_bounds_in_metadata()
-    mc.activate = function() return { start_tc = 0, rotation = 0 } end
-    mc.get_video_frame = function() return "mock_frame" end
-
-    -- Frame 10 → clip_v2 (timeline_start=0, duration=48)
-    local _, meta = renderer.get_video_frame(seq, 10, "test_ctx")
-    assert(meta, "Expected metadata")
-    assert(meta.clip_end_frame == 48, string.format(
-        "clip_end_frame should be 0+48=48, got %s", tostring(meta.clip_end_frame)))
-    assert(meta.clip_start_frame == 0, string.format(
-        "clip_start_frame should be 0, got %s", tostring(meta.clip_start_frame)))
-
-    -- Frame 30 → clip_v1 (timeline_start=24, duration=48)
-    local _, meta2 = renderer.get_video_frame(seq, 30, "test_ctx")
-    assert(meta2, "Expected metadata at frame 30")
-    assert(meta2.clip_end_frame == 72, string.format(
-        "clip_end_frame should be 24+48=72, got %s", tostring(meta2.clip_end_frame)))
-    assert(meta2.clip_start_frame == 24, string.format(
-        "clip_start_frame should be 24, got %s", tostring(meta2.clip_start_frame)))
-
-    mc.activate = orig_activate
-    mc.get_video_frame = orig_get_video_frame
-    print("  test_get_video_frame_clip_bounds_in_metadata passed")
-end
-
--- ============================================================================
 -- NSF: Parameter validation tests
 -- ============================================================================
+
+local renderer = require("core.renderer")
 
 local function test_get_sequence_info_nil_id_asserts()
     local ok, err = pcall(function()
@@ -337,34 +220,35 @@ local function test_get_sequence_info_nonexistent_asserts()
     print("  test_get_sequence_info_nonexistent_asserts passed")
 end
 
-local function test_get_video_frame_nil_sequence_asserts()
+-- New API: get_video_frame(tmb, video_track_indices, playhead_frame)
+local function test_get_video_frame_nil_tmb_asserts()
     local ok, err = pcall(function()
-        renderer.get_video_frame(nil, 0, "test")
+        renderer.get_video_frame(nil, {1}, 0)
     end)
-    assert(not ok, "nil sequence should assert")
-    assert(string.find(tostring(err), "sequence"),
-        "Error should mention sequence, got: " .. tostring(err))
-    print("  test_get_video_frame_nil_sequence_asserts passed")
+    assert(not ok, "nil tmb should assert")
+    assert(string.find(tostring(err), "tmb"),
+        "Error should mention tmb, got: " .. tostring(err))
+    print("  test_get_video_frame_nil_tmb_asserts passed")
+end
+
+local function test_get_video_frame_bad_track_indices_asserts()
+    local ok, err = pcall(function()
+        renderer.get_video_frame("tmb", "not_a_table", 0)
+    end)
+    assert(not ok, "non-table track_indices should assert")
+    assert(string.find(tostring(err), "video_track_indices"),
+        "Error should mention video_track_indices, got: " .. tostring(err))
+    print("  test_get_video_frame_bad_track_indices_asserts passed")
 end
 
 local function test_get_video_frame_nil_playhead_asserts()
     local ok, err = pcall(function()
-        renderer.get_video_frame(seq, nil, "test")
+        renderer.get_video_frame("tmb", {1}, nil)
     end)
     assert(not ok, "nil playhead should assert")
     assert(string.find(tostring(err), "playhead_frame"),
         "Error should mention playhead_frame, got: " .. tostring(err))
     print("  test_get_video_frame_nil_playhead_asserts passed")
-end
-
-local function test_get_video_frame_nil_context_asserts()
-    local ok, err = pcall(function()
-        renderer.get_video_frame(seq, 0, nil)
-    end)
-    assert(not ok, "nil context_id should assert")
-    assert(string.find(tostring(err), "context_id"),
-        "Error should mention context_id, got: " .. tostring(err))
-    print("  test_get_video_frame_nil_context_asserts passed")
 end
 
 -- ============================================================================
@@ -385,36 +269,12 @@ test_get_audio_at_gap()
 print("Testing Renderer.get_sequence_info()...")
 test_get_sequence_info()
 
-print("Testing Renderer.get_video_frame() with mock media_cache...")
-test_get_video_frame_passes_clip_fps()
-test_get_video_frame_start_tc_subtracted()
-test_get_video_frame_returns_nil_on_eof()
-test_get_video_frame_clip_bounds_in_metadata()
-
-local function test_get_video_frame_negative_file_frame_asserts()
-    -- If start_tc > source_frame, file_frame goes negative — renderer should assert
-    mc.activate = function() return { start_tc = 9999, rotation = 0 } end
-    mc.get_video_frame = function() return "mock_frame" end
-
-    -- Frame 10 → clip_v2: source_frame=10, start_tc=9999 → file_frame = -9989
-    local ok, err = pcall(function()
-        renderer.get_video_frame(seq, 10, "test_ctx")
-    end)
-    assert(not ok, "Negative file_frame should assert")
-    assert(tostring(err):find("file_frame"), "Error should mention file_frame, got: " .. tostring(err))
-
-    mc.activate = orig_activate
-    mc.get_video_frame = orig_get_video_frame
-    print("  test_get_video_frame_negative_file_frame_asserts passed")
-end
-
 print("Testing Renderer NSF: parameter validation...")
 test_get_sequence_info_nil_id_asserts()
 test_get_sequence_info_empty_id_asserts()
 test_get_sequence_info_nonexistent_asserts()
-test_get_video_frame_nil_sequence_asserts()
+test_get_video_frame_nil_tmb_asserts()
+test_get_video_frame_bad_track_indices_asserts()
 test_get_video_frame_nil_playhead_asserts()
-test_get_video_frame_nil_context_asserts()
-test_get_video_frame_negative_file_frame_asserts()
 
 print("✅ test_renderer.lua passed")

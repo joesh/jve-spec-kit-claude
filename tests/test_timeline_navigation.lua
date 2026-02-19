@@ -109,10 +109,25 @@ end
 
 package.loaded['ui.timeline.timeline_state'] = timeline_state
 
--- luacheck: ignore 211 (unused local variable)
-local executors = {}  -- placeholder for potential future use
-local undoers = {}    -- placeholder for potential future use
--- command_impl.register_commands(executors, undoers, db)
+-- Mock sequence monitor for GoToStart/GoToEnd (routes through active monitor)
+local mock_monitor = {
+    sequence_id = "default_sequence",
+    view_id = "timeline_monitor",
+    total_frames = 3500,
+    playhead = 500,
+    engine = {
+        is_playing = function() return false end,
+        stop = function() end,
+    },
+}
+function mock_monitor:seek_to_frame(frame)
+    self.playhead = math.max(0, math.floor(frame))
+    timeline_state.playhead_position = self.playhead
+end
+
+package.loaded['ui.panel_manager'] = {
+    get_active_sequence_monitor = function() return mock_monitor end,
+}
 
 command_manager.init('default_sequence', 'default_project')
 

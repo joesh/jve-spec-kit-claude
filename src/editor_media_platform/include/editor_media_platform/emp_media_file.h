@@ -8,10 +8,10 @@
 namespace emp {
 
 // Forward declaration for implementation
-class AssetImpl;
+class MediaFileImpl;
 
-// Information about an opened media asset
-struct AssetInfo {
+// Information about an opened media file
+struct MediaFileInfo {
     // Duration in microseconds
     TimeUS duration_us;
 
@@ -51,26 +51,26 @@ struct AssetInfo {
     }
 };
 
-// Media asset handle (opened file)
-class Asset {
+// Media file handle (opened file)
+class MediaFile {
 public:
-    ~Asset();
+    ~MediaFile();
 
     // Open a media file
-    static Result<std::shared_ptr<Asset>> Open(const std::string& path);
+    static Result<std::shared_ptr<MediaFile>> Open(const std::string& path);
 
-    // Get asset information
-    const AssetInfo& info() const;
+    // Get file information
+    const MediaFileInfo& info() const;
 
-    // Internal: Constructor is public but AssetImpl is opaque, so only EMP can create Assets
-    explicit Asset(std::unique_ptr<AssetImpl> impl, AssetInfo info);
+    // Internal: Constructor is public but MediaFileImpl is opaque, so only EMP can create MediaFiles
+    explicit MediaFile(std::unique_ptr<MediaFileImpl> impl, MediaFileInfo info);
 
     // Internal: Access impl for Reader
-    AssetImpl* impl_ptr() const { return m_impl.get(); }
+    MediaFileImpl* impl_ptr() const { return m_impl.get(); }
 
 private:
-    std::unique_ptr<AssetImpl> m_impl;
-    AssetInfo m_info;
+    std::unique_ptr<MediaFileImpl> m_impl;
+    MediaFileInfo m_info;
 };
 
 } // namespace emp

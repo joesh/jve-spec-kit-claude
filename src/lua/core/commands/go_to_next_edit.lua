@@ -62,10 +62,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["GoToNextEdit"] = function(command)
         local args = command:get_all_parameters()
 
-        if not args.dry_run then
-            print("Executing GoToNextEdit command")
+        local pm = require('ui.panel_manager')
+        local sv = pm.get_active_sequence_monitor()
+        assert(sv and sv.sequence_id, "GoToNextEdit: no sequence loaded in active view")
+
+        -- Source monitor: "next edit" = go to end of clip
+        if sv.view_id == "source_monitor" then
+            if not args.dry_run then
+                if sv.engine:is_playing() then sv.engine:stop() end
+                sv:seek_to_frame(sv.total_frames)
+            end
+            return true
         end
 
+        -- Timeline: navigate to next edit point
         local points = collect_edit_points()
         local playhead = timeline_state.get_playhead_position()
         assert(type(playhead) == "number", "GoToNextEdit: playhead must be integer frames")
@@ -82,16 +92,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true, { target = target }
         end
 
-        -- Stop playback before navigating (NLE convention)
-        local pm = require('ui.panel_manager')
-        local sv = pm.get_active_sequence_monitor()
-        if sv and sv.engine:is_playing() then
+        if sv.engine:is_playing() then
             sv.engine:stop()
         end
 
         if target ~= playhead then
             timeline_state.set_playhead_position(target)
-            print(string.format("✅ Moved playhead to next edit (frame %d)", target))
         end
         return true
     end

@@ -5,7 +5,6 @@
 -- - A GPUVideoSurface for video frame display
 -- - A mark bar for mark in/out range + playhead visualization
 -- - A title label
--- - A media_cache context for independent frame caching
 --
 -- Absorbs widget creation from viewer_panel.lua and playhead/mark state
 -- management from source_viewer_state.lua. SequenceMonitor treats all sequence
@@ -19,7 +18,6 @@
 
 local logger = require("core.logger")
 local qt_constants = require("core.qt_constants")
-local media_cache = require("core.media.media_cache")
 local PlaybackEngine = require("core.playback.playback_engine")
 local Sequence = require("models.sequence")
 local monitor_mark_bar = require("ui.monitor_mark_bar")
@@ -50,7 +48,6 @@ function SequenceMonitor.new(config)
     local self = setmetatable({}, SequenceMonitor)
 
     self.view_id = config.view_id
-    self.media_context_id = config.view_id
 
     -- Sequence state
     self.sequence_id = nil
@@ -67,12 +64,8 @@ function SequenceMonitor.new(config)
     self._persist_generation = 0
     self._project_gen = project_gen.current()
 
-    -- Create media_cache context for this view
-    media_cache.create_context(self.media_context_id)
-
     -- Create PlaybackEngine
     self.engine = PlaybackEngine.new({
-        media_context_id = self.media_context_id,
         on_show_frame = function(fh, meta)
             self:_on_show_frame(fh, meta)
         end,
@@ -94,10 +87,11 @@ function SequenceMonitor.new(config)
     self._marks_changed_id = Signals.connect("marks_changed", function(sequence_id)
         if self.sequence and self.sequence_id == sequence_id then
             local fresh = Sequence.load(sequence_id)
-            if fresh then
-                self.sequence.mark_in = fresh.mark_in
-                self.sequence.mark_out = fresh.mark_out
-            end
+            assert(fresh, string.format(
+                "SequenceMonitor:marks_changed: Sequence.load(%s) returned nil",
+                tostring(sequence_id)))
+            self.sequence.mark_in = fresh.mark_in
+            self.sequence.mark_out = fresh.mark_out
             self:_notify()
         end
     end)
@@ -114,6 +108,10 @@ function SequenceMonitor.new(config)
         if self.sequence_id == sequence_id then
             self.engine:_refresh_content_bounds()
             self.total_frames = self.engine.total_frames
+            -- Re-feed TMB clips (clip layout may have changed)
+            if self.engine._tmb then
+                self.engine:_send_clips_to_tmb(math.floor(self.engine:get_position()))
+            end
             self:_notify()
         end
     end)
@@ -492,8 +490,7 @@ function SequenceMonitor:destroy()
     if self.sequence and self.sequence:is_masterclip() then
         self:save_playhead_to_db()
     end
-    self.engine:stop()
-    media_cache.destroy_context(self.media_context_id)
+    self.engine:destroy()
     self._listeners = {}
     if self._marks_changed_id then
         Signals.disconnect(self._marks_changed_id)

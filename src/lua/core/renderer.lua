@@ -1,109 +1,61 @@
---- Renderer: resolves sequence content at playhead and returns display-ready frames.
+--- Renderer: resolves TMB video output and returns display-ready frames.
 --
 -- Responsibilities:
--- - Sequence accessor + media_cache I/O + frame decode
+-- - Iterates video tracks in priority order (lowest track_index = topmost)
+-- - Calls TMB_GET_VIDEO_FRAME per track
+-- - Handles offline via offline_frame_cache
 -- - Returns EMP frame handle for display (or nil for gaps)
 -- - Provides sequence info (resolution, fps, total_frames) for any sequence kind
 --
--- No sequence-kind branching. All sequences are resolved uniformly via
--- Sequence:get_video_at(). Masterclips have one video track with one clip;
--- timelines have multiple tracks with priority ordering.
+-- No sequence-kind branching. No media_cache calls. TMB owns reader lifecycle,
+-- decoding, caching, and pre-buffering internally.
 --
 -- @file renderer.lua
 
-local media_cache = require("core.media.media_cache")
+local qt_constants = require("core.qt_constants")
 local offline_frame_cache = require("core.media.offline_frame_cache")
 local Sequence = require("models.sequence")
-local logger = require("core.logger")
 
 local M = {}
 
---- Get video frame for a sequence at a given playhead position.
--- @param sequence Sequence object
+--- Get video frame via TMB for tracks at a given playhead position.
+-- @param tmb userdata TMB handle (from TMB_CREATE)
+-- @param video_track_indices table array of track indices (priority order: lowest first)
 -- @param playhead_frame integer
--- @param context_id string media_cache context for this view
 -- @return frame_handle|nil, metadata_table|nil
---   metadata = {clip_id, media_path, source_frame, rotation}
-function M.get_video_frame(sequence, playhead_frame, context_id)
-    assert(sequence, "renderer.get_video_frame: sequence is nil")
+function M.get_video_frame(tmb, video_track_indices, playhead_frame)
+    assert(tmb, "renderer.get_video_frame: tmb is nil")
+    assert(type(video_track_indices) == "table",
+        "renderer.get_video_frame: video_track_indices must be a table")
     assert(type(playhead_frame) == "number",
         "renderer.get_video_frame: playhead_frame must be integer")
-    assert(context_id, "renderer.get_video_frame: context_id is required")
 
-    local entries = sequence:get_video_at(playhead_frame)
+    local EMP = qt_constants.EMP
 
-    if #entries == 0 then
-        -- Gap at playhead
-        return nil, nil
+    -- Iterate tracks in priority order (lowest track_index = topmost = wins)
+    for _, track_idx in ipairs(video_track_indices) do
+        local frame_handle, metadata = EMP.TMB_GET_VIDEO_FRAME(
+            tmb, track_idx, playhead_frame)
+
+        if metadata.offline then
+            -- TMB reports offline: compose offline frame
+            local frame = offline_frame_cache.get_frame(metadata)
+            assert(frame, string.format(
+                "renderer.get_video_frame: offline_frame_cache.get_frame returned nil "
+                .. "for clip_id=%s, media_path=%s at frame %d",
+                tostring(metadata.clip_id), tostring(metadata.media_path),
+                playhead_frame))
+            return frame, metadata
+        end
+
+        if frame_handle then
+            return frame_handle, metadata
+        end
+        -- nil frame + not offline = gap on this track, try next
     end
 
-    -- Use topmost entry (first in list, lowest track_index = highest priority)
-    local top = entries[1]
-
-    -- Activate reader in pool for this context
-    local info = media_cache.activate(top.media_path, context_id)
-    if not info then
-        -- Media offline: compose text into frame pixels so both preview and
-        -- export pipelines get a self-contained offline frame.
-        local offline_info = media_cache.get_offline_info(top.media_path)
-        assert(offline_info, string.format(
-            "renderer: activate returned nil for '%s' but no offline registry entry (clip=%s)",
-            top.media_path, top.clip.id))
-        local offline_metadata = {
-            offline = true,
-            clip_id = top.clip.id,
-            media_path = top.media_path,
-            error_code = offline_info.error_code,
-            error_msg = offline_info.error_msg,
-            clip_start_frame = top.clip.timeline_start,
-            clip_end_frame = top.clip.timeline_start + top.clip.duration,
-        }
-        local frame = offline_frame_cache.get_frame(offline_metadata)
-        return frame, offline_metadata
-    end
-
-    -- Absolute timecode → file-relative frame (matches audio Mixer pattern).
-    -- Camera footage embeds time-of-day TC (e.g., 14:28:00:00 → frame 1249920).
-    -- DRP imports store these as source_in. Decoder needs file-relative (0-based).
-    -- start_tc may be nil for files without embedded timecode; nil means 0.
-    local file_frame = top.source_frame - (info.start_tc or 0)
-    assert(file_frame >= 0, string.format(
-        "renderer: file_frame=%d < 0 (source_frame=%d, start_tc=%s, clip=%s, media=%s)",
-        file_frame, top.source_frame, tostring(info.start_tc),
-        top.clip.id, tostring(top.media_path)))
-
-    -- Decode using the clip's timebase (not the media's native rate).
-    -- source_frame is in clip rate units (e.g., 24/1 for a 24fps timeline).
-    -- If we used the media's rate (e.g., 24000/1001), the timestamp would drift
-    -- and overshoot the file at clip boundaries.
-    local clip_fps_num = top.clip.rate.fps_numerator
-    local clip_fps_den = top.clip.rate.fps_denominator
-    local frame = media_cache.get_video_frame(file_frame, context_id, clip_fps_num, clip_fps_den)
-    if not frame then
-        logger.warn("renderer", string.format(
-            "DECODE_NIL playhead=%d source_frame=%d file_frame=%d start_tc=%s clip_fps=%d/%d "
-            .. "src_in=%s src_out=%s dur=%s media=%s",
-            playhead_frame, top.source_frame, file_frame,
-            tostring(info.start_tc),
-            clip_fps_num, clip_fps_den,
-            tostring(top.clip.source_in), tostring(top.clip.source_out),
-            tostring(top.clip.duration),
-            tostring(top.media_path)))
-        return nil, nil
-    end
-
-    local metadata = {
-        clip_id = top.clip.id,
-        media_path = top.media_path,
-        source_frame = file_frame,
-        rotation = info.rotation or 0,
-        clip_fps_num = clip_fps_num,
-        clip_fps_den = clip_fps_den,
-        clip_end_frame = top.clip.timeline_start + top.clip.duration,
-        clip_start_frame = top.clip.timeline_start,
-    }
-
-    return frame, metadata
+    -- All tracks are gaps at this position
+    return nil, nil
 end
 
 --- Get sequence info for playback setup.

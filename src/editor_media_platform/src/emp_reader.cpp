@@ -1,7 +1,7 @@
 #include <editor_media_platform/emp_reader.h>
 #include "impl/ffmpeg_context.h"
 #include "impl/ffmpeg_resample.h"
-#include "impl/asset_impl.h"
+#include "impl/media_file_impl.h"
 #include "impl/frame_impl.h"
 #include "impl/pcm_chunk_impl.h"
 #include <cassert>
@@ -184,11 +184,16 @@ public:
     // before treating as cache miss. Computed from stream frame rate in DecodeAtUS,
     // shared with GetCachedFrame (which doesn't have stream access).
     std::atomic<TimeUS> max_floor_gap_us{84000};  // conservative default ~2 frames @ 24fps
+
+    // Per-reader decode mode override (for TMB pre-buffer workers).
+    // When set, DecodeAtUS uses this instead of global g_decode_mode.
+    bool has_mode_override = false;
+    DecodeMode mode_override = DecodeMode::Play;
 };
 
-Reader::Reader(std::unique_ptr<ReaderImpl> impl, std::shared_ptr<Asset> asset)
-    : m_impl(std::move(impl)), m_asset(std::move(asset)) {
-    assert(m_impl && m_asset && "Reader impl/asset cannot be null");
+Reader::Reader(std::unique_ptr<ReaderImpl> impl, std::shared_ptr<MediaFile> asset)
+    : m_impl(std::move(impl)), m_media_file(std::move(asset)) {
+    assert(m_impl && m_media_file && "Reader impl/media_file cannot be null");
 }
 
 Reader::~Reader() {
@@ -196,22 +201,22 @@ Reader::~Reader() {
     StopPrefetch();
 }
 
-std::shared_ptr<Asset> Reader::asset() const {
-    return m_asset;
+std::shared_ptr<MediaFile> Reader::media_file() const {
+    return m_media_file;
 }
 
-Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<Asset> asset) {
+Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset) {
     if (!asset) {
-        return Error::invalid_arg("Asset is null");
+        return Error::invalid_arg("MediaFile is null");
     }
     if (!asset->info().has_video && !asset->info().has_audio) {
-        return Error::unsupported("Asset has no video or audio stream");
+        return Error::unsupported("MediaFile has no video or audio stream");
     }
 
     auto impl = std::make_unique<ReaderImpl>();
 
     // Get format context from asset (requires friend access)
-    AssetImpl* asset_impl = asset->impl_ptr();
+    MediaFileImpl* asset_impl = asset->impl_ptr();
 
     // Initialize video codec if asset has video
     if (asset->info().has_video) {
@@ -236,12 +241,14 @@ Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<Asset> asset) {
         }
     }
 
-    // Initialize audio codec if asset has audio
+    // Initialize audio codec if asset has audio.
+    // NSF-ACCEPT: Audio codec failure is non-fatal — Reader::Create succeeds
+    // but audio_initialized=false. DecodeAudioRangeUS returns Error::unsupported
+    // when called on such a Reader. Caller (TMB) treats this as silence/gap.
     if (asset->info().has_audio) {
         AVCodecParameters* audio_params = asset_impl->fmt_ctx.audio_codec_params();
         auto audio_codec_result = impl->audio_codec_ctx.init(audio_params);
         if (audio_codec_result.is_error()) {
-            // Audio codec init failure is not fatal - we just won't have audio
             impl->audio_initialized = false;
         } else {
             impl->audio_initialized = true;
@@ -256,11 +263,11 @@ Result<void> Reader::Seek(FrameTime t) {
 }
 
 Result<void> Reader::SeekUS(TimeUS t_us) {
-    if (!m_asset->info().has_video) {
+    if (!m_media_file->info().has_video) {
         return Error::unsupported("Seek requires video stream");
     }
 
-    AssetImpl* asset_impl = m_asset->impl_ptr();
+    MediaFileImpl* asset_impl = m_media_file->impl_ptr();
     AVStream* stream = asset_impl->fmt_ctx.video_stream();
 
     auto result = impl::seek_with_backoff(
@@ -370,12 +377,26 @@ int64_t Reader::PrefetchFramesDecoded() const {
     return m_impl->prefetch_frames_decoded.load();
 }
 
+// NSF-ACCEPT: Simple setters — no validation needed. TMB is the sole caller
+// and always passes DecodeMode::Play. No concurrent access (called under
+// pool lock or before Reader is shared).
+void Reader::SetDecodeModeOverride(DecodeMode mode) {
+    m_impl->has_mode_override = true;
+    m_impl->mode_override = mode;
+    // Sync last_mode so no phantom transition triggers on first decode
+    m_impl->last_mode = mode;
+}
+
+void Reader::ClearDecodeModeOverride() {
+    m_impl->has_mode_override = false;
+}
+
 Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
-    if (!m_asset->info().has_video) {
+    if (!m_media_file->info().has_video) {
         return Error::unsupported("DecodeAt requires video stream");
     }
 
-    AssetImpl* asset_impl = m_asset->impl_ptr();
+    MediaFileImpl* asset_impl = m_media_file->impl_ptr();
     AVFormatContext* fmt_ctx = asset_impl->fmt_ctx.get();
     AVStream* stream = asset_impl->fmt_ctx.video_stream();
     int stream_idx = asset_impl->fmt_ctx.video_stream_index();
@@ -422,7 +443,8 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
     // 0. Mode transition: Park/Scrub→Play clears scattered cache.
     //    Scattered park frames cause stale floor matches during sequential play
     //    and fool the prefetch into thinking the cache is already ahead.
-    DecodeMode mode = GetDecodeMode();
+    DecodeMode mode = m_impl->has_mode_override
+        ? m_impl->mode_override : GetDecodeMode();
     if (mode == DecodeMode::Play && m_impl->last_mode != DecodeMode::Play) {
         std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
         if (!m_impl->frame_cache.empty()) {
@@ -682,8 +704,8 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
     constexpr int RESAMPLER_OUTPUT_CHANNELS = 2;
 
     // Validate
-    if (!m_asset->info().has_audio) {
-        return Error::unsupported("Asset has no audio stream");
+    if (!m_media_file->info().has_audio) {
+        return Error::unsupported("MediaFile has no audio stream");
     }
     if (!m_impl->audio_initialized) {
         return Error::unsupported("Audio codec not initialized");
@@ -692,7 +714,7 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
         return Error::invalid_arg("DecodeAudioRangeUS: t1 must be > t0");
     }
 
-    AssetImpl* asset_impl = m_asset->impl_ptr();
+    MediaFileImpl* asset_impl = m_media_file->impl_ptr();
     AVFormatContext* fmt_ctx = asset_impl->fmt_ctx.get();
     AVStream* audio_stream = asset_impl->fmt_ctx.audio_stream();
     int audio_stream_idx = asset_impl->fmt_ctx.audio_stream_index();
@@ -867,13 +889,16 @@ void Reader::StartPrefetch(int direction) {
     }
 
     // Prefetch is for video frames - skip for audio-only files
-    if (!m_asset->info().has_video) {
+    if (!m_media_file->info().has_video) {
         return;
     }
 
-    // Sync last_mode to current global mode so prefetch output doesn't get
+    // Sync last_mode to effective mode so prefetch output doesn't get
     // cleared by a phantom mode transition on the next main-thread decode.
-    m_impl->last_mode = GetDecodeMode();
+    // Uses override mode when set (TMB forces Play), otherwise global mode.
+    DecodeMode effective = m_impl->has_mode_override
+        ? m_impl->mode_override : GetDecodeMode();
+    m_impl->last_mode = effective;
 
     // Reset decode counter for diagnostics/testing.
     m_impl->prefetch_frames_decoded.store(0);
@@ -887,16 +912,20 @@ void Reader::StartPrefetch(int direction) {
     // stale-cache rejections on every frame past the initial batch.
     m_impl->have_prefetch_pos.store(false);
 
-    // Initialize prefetch decoder if not already done (lazy init)
+    // Initialize prefetch decoder if not already done (lazy init).
+    // NSF-ACCEPT: Early returns on init failure are intentional — prefetch is a
+    // best-effort optimization. If it fails, main-thread decode still works.
+    // prefetch_decoder_initialized stays false, so prefetch_worker() returns
+    // early without accessing uninitialized contexts. Failures are logged.
     if (!m_impl->prefetch_decoder_initialized) {
-        const std::string& path = m_asset->info().path;
+        const std::string& path = m_media_file->info().path;
 
         // Open separate format context for prefetch thread
         auto fmt_result = m_impl->prefetch_fmt_ctx.open(path);
         if (fmt_result.is_error()) {
             EMP_LOG_WARN("Failed to open format ctx: %s",
                     fmt_result.error().message.c_str());
-            return;  // Can't prefetch without decoder
+            return;
         }
 
         auto stream_result = m_impl->prefetch_fmt_ctx.find_video_stream();
@@ -1026,7 +1055,7 @@ void Reader::prefetch_worker() {
 
         // Clamp to valid range
         if (prefetch_to < 0) prefetch_to = 0;
-        TimeUS duration = m_asset->info().duration_us;
+        TimeUS duration = m_media_file->info().duration_us;
         if (prefetch_to > duration) prefetch_to = duration;
 
         // Check if we need to decode (simple bounds check).
