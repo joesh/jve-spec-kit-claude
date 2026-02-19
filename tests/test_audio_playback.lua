@@ -40,19 +40,17 @@ local function reset_module_state()
     audio_playback.has_audio = false
     audio_playback.aop = nil
     audio_playback.sse = nil
-    audio_playback.media_cache = nil
+    audio_playback._tmb = nil
+    audio_playback._mix_params = nil
+    audio_playback._project_gen = -1
     audio_playback.media_time_us = 0
     audio_playback.media_anchor_us = 0
     audio_playback.aop_epoch_playhead_us = 0
     audio_playback.max_media_time_us = 0
     audio_playback.speed = 1.0
     audio_playback.quality_mode = 1
-    audio_playback.sample_rate = 0
     audio_playback.session_sample_rate = 0
     audio_playback.session_channels = 0
-    audio_playback.duration_us = 0
-    audio_playback.fps_num = 0
-    audio_playback.fps_den = 1
 end
 
 --------------------------------------------------------------------------------
@@ -62,7 +60,7 @@ print("--- Section 1: Module Interface ---")
 
 print("\nTest 1.1: All expected functions present")
 assert(audio_playback.init_session, "audio_playback.init_session missing")
-assert(audio_playback.switch_source, "audio_playback.switch_source missing")
+assert(audio_playback.apply_mix, "audio_playback.apply_mix missing")
 assert(audio_playback.shutdown_session, "audio_playback.shutdown_session missing")
 assert(audio_playback.is_ready, "audio_playback.is_ready missing")
 assert(audio_playback.start, "audio_playback.start missing")
@@ -76,11 +74,14 @@ assert(audio_playback.had_underrun, "audio_playback.had_underrun missing")
 assert(audio_playback.clear_underrun, "audio_playback.clear_underrun missing")
 assert(audio_playback.init == nil, "audio_playback.init should be removed")
 assert(audio_playback.shutdown == nil, "audio_playback.shutdown should be removed")
+assert(audio_playback.switch_source == nil, "audio_playback.switch_source should be removed")
+assert(audio_playback.set_audio_sources == nil, "audio_playback.set_audio_sources should be removed")
 print("  ✓ All public functions present")
 
 print("\nTest 1.2: Internal functions present")
 assert(audio_playback._start_pump, "_start_pump missing")
-assert(audio_playback._ensure_pcm_cache, "_ensure_pcm_cache missing")
+assert(audio_playback.decode_mix_and_send_to_sse, "decode_mix_and_send_to_sse missing")
+assert(audio_playback.render_and_write_to_device, "render_and_write_to_device missing")
 assert(audio_playback._pump_tick, "_pump_tick missing")
 print("  ✓ Internal functions present")
 
@@ -100,56 +101,51 @@ assert(audio_playback.sse == nil, "sse should be nil")
 print("  ✓ Initial state correct")
 
 --------------------------------------------------------------------------------
--- SECTION 3: init_session() / switch_source() Validation
+-- SECTION 3: apply_mix() Validation
 --------------------------------------------------------------------------------
-print("\n--- Section 3: init_session/switch_source Validation ---")
+print("\n--- Section 3: apply_mix Validation ---")
 
 reset_module_state()
 
-print("\nTest 3.1: switch_source(nil) asserts")
--- First need a session to test switch_source validation
-audio_playback.session_initialized = true  -- fake session for validation tests
+print("\nTest 3.1: apply_mix when no session asserts")
+audio_playback.session_initialized = false
+expect_assert(
+    function()
+        audio_playback.apply_mix("tmb", {{ track_index = 1, volume = 1.0, muted = false, soloed = false }}, 0)
+    end,
+    "session not initialized",
+    "apply_mix without session"
+)
+print("  ✓ apply_mix asserts when no session")
+
+print("\nTest 3.2: apply_mix(nil tmb) asserts")
+audio_playback.session_initialized = true
 audio_playback.aop = "fake_aop"
 audio_playback.sse = "fake_sse"
 expect_assert(
-    function() audio_playback.switch_source(nil) end,
-    "cache.*nil",
-    "switch_source(nil)"
-)
-print("  ✓ switch_source(nil) asserts with context")
-
-print("\nTest 3.2: switch_source with cache missing get_media_file_info asserts")
-expect_assert(
-    function() audio_playback.switch_source({ get_audio_reader = function() end }) end,
-    "get_media_file_info",
-    "switch_source without get_media_file_info"
-)
-print("  ✓ switch_source validates cache.get_media_file_info")
-
-print("\nTest 3.3: switch_source with cache missing get_audio_reader asserts")
-expect_assert(
-    function() audio_playback.switch_source({
-        get_media_file_info = function()
-            return { has_audio = true, duration_us = 1000000, fps_num = 30, fps_den = 1 }
-        end,
-    }) end,
-    "audio_reader",
-    "switch_source without get_audio_reader"
-)
-print("  ✓ switch_source validates cache.get_audio_reader")
-
-print("\nTest 3.4: switch_source with cache.get_media_file_info returning nil asserts")
-expect_assert(
     function()
-        audio_playback.switch_source({
-            get_media_file_info = function() return nil end,
-            get_audio_reader = function() end
-        })
+        audio_playback.apply_mix(nil, {{ track_index = 1, volume = 1.0, muted = false, soloed = false }}, 0)
     end,
-    "returned nil",
-    "switch_source with nil asset_info"
+    "tmb is nil",
+    "apply_mix(nil tmb)"
 )
-print("  ✓ switch_source validates asset_info not nil")
+print("  ✓ apply_mix(nil tmb) asserts")
+
+print("\nTest 3.3: apply_mix with non-table mix_params asserts")
+expect_assert(
+    function() audio_playback.apply_mix("tmb", "bad", 0) end,
+    "mix_params must be a table",
+    "apply_mix with string mix_params"
+)
+print("  ✓ apply_mix validates mix_params type")
+
+print("\nTest 3.4: apply_mix with non-number edit_time asserts")
+expect_assert(
+    function() audio_playback.apply_mix("tmb", {}, nil) end,
+    "edit_time_us must be a number",
+    "apply_mix with nil edit_time"
+)
+print("  ✓ apply_mix validates edit_time_us type")
 reset_module_state()
 
 --------------------------------------------------------------------------------

@@ -44,6 +44,12 @@ local mock_qt_constants = {
         CLEAR_STARVED = function() end,
         CURRENT_TIME_US = function() return 0 end,
     },
+    EMP = {
+        TMB_GET_TRACK_AUDIO = function() return nil end,
+        PCM_INFO = function() return { frames = 0, start_time_us = 0 } end,
+        PCM_DATA_PTR = function() return nil end,
+        PCM_RELEASE = function() end,
+    },
 }
 
 -- Set both global and package.loaded so require("core.qt_constants") returns our mock
@@ -52,34 +58,6 @@ package.loaded["core.qt_constants"] = mock_qt_constants
 
 -- Mock timer
 _G.qt_create_single_shot_timer = function(interval, callback) end
-
--- Mock media_cache
-local mock_cache = {
-    get_media_file_info = function()
-        return {
-            has_audio = true,
-            audio_sample_rate = 48000,
-            audio_channels = 2,
-            duration_us = 10000000,  -- 10 seconds
-            fps_num = 30,
-            fps_den = 1,
-        }
-    end,
-    get_audio_reader = function()
-        return { _name = "mock_reader" }
-    end,
-    get_audio_pcm = function(start_us, end_us)
-        -- Return mock PCM data (pointer, frames, actual_start)
-        local frames = math.floor((end_us - start_us) * 48000 / 1000000)
-        return "mock_pcm_ptr", frames, start_us
-    end,
-    get_audio_pcm_for_path = function(path, start_us, end_us)
-        local frames = math.floor((end_us - start_us) * 48000 / 1000000)
-        return "mock_pcm_ptr", frames, start_us
-    end,
-    get_file_path = function() return "/mock/test.mov" end,
-    ensure_audio_pooled = function() end,
-}
 
 -- Load audio_playback fresh
 package.loaded["ui.audio_playback"] = nil
@@ -130,9 +108,11 @@ print("  ok MAX_SPEED_DECIMATE = 16.0")
 --------------------------------------------------------------------------------
 print("\n--- Section 2: Mode selection ---")
 
--- Initialize audio (session + source)
+-- Initialize audio (session + TMB mix)
 audio_playback.init_session(48000, 2)
-audio_playback.switch_source(mock_cache)
+audio_playback.apply_mix("mock_tmb", {
+    { track_index = 1, volume = 1.0, muted = false, soloed = false },
+}, 0)
 audio_playback.set_max_media_time(10000000)
 clear_sse_calls()
 
@@ -186,7 +166,9 @@ audio_playback.shutdown_session()
 package.loaded["core.media.audio_playback"] = nil
 audio_playback = require("core.media.audio_playback")
 audio_playback.init_session(48000, 2)
-audio_playback.switch_source(mock_cache)
+audio_playback.apply_mix("mock_tmb", {
+    { track_index = 1, volume = 1.0, muted = false, soloed = false },
+}, 0)
 audio_playback.set_max_media_time(10000000)
 audio_playback.media_time_us = 1000000  -- Start at 1 second
 clear_sse_calls()

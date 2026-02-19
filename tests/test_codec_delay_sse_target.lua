@@ -5,8 +5,14 @@
 --
 -- This test verifies that start() adjusts SSE target to match actual PCM start.
 -- Per architecture: SET_TARGET is only called on transport events (start is one).
+--
+-- TMB path: decode_mix_and_send_to_sse() calls TMB_GET_TRACK_AUDIO which returns
+-- PcmChunk with start_time_us = CODEC_DELAY_US. advance_sse_past_codec_delay()
+-- detects SSE target < actual PCM start and advances SSE.
 
 require("test_env")
+
+local ffi = require("ffi")
 
 print("=== test_codec_delay_sse_target.lua ===")
 
@@ -16,6 +22,12 @@ local sse_calls = {
     current_time = 0,
     pcm_start = 0,
 }
+
+-- Mock media_cache with 20ms codec delay
+local CODEC_DELAY_US = 20000
+
+-- Pre-allocate FFI buffer for mock PCM data (stereo, ~5s at 48kHz)
+local mock_pcm_buf = ffi.new("float[?]", 480000)
 
 -- Mock qt_constants with call tracking
 local mock_qt_constants = {
@@ -35,7 +47,7 @@ local mock_qt_constants = {
             sse_calls.pcm_start = start_us
         end,
         RENDER_ALLOC = function(sse, frames)
-            return "mock_pcm", frames
+            return mock_pcm_buf, frames
         end,
         STARVED = function(sse)
             -- Starved if trying to render before PCM starts
@@ -56,7 +68,31 @@ local mock_qt_constants = {
         CLEAR_UNDERRUN = function(aop) end,
         CLOSE = function(aop) end,
     },
-    EMP = {},
+    EMP = {
+        -- Simulate AAC codec delay: when requesting audio starting before
+        -- CODEC_DELAY_US, the actual PCM starts at CODEC_DELAY_US.
+        TMB_GET_TRACK_AUDIO = function(tmb, track_index, t0, t1, sr, ch)
+            local actual_start = t0
+            if t0 < CODEC_DELAY_US then
+                actual_start = CODEC_DELAY_US
+            end
+            local duration_us = t1 - actual_start
+            if duration_us <= 0 then return nil end
+            local frames = math.floor(duration_us * sr / 1000000)
+            return {
+                _start_us = actual_start,
+                _frames = frames,
+                _channels = ch or 2,
+            }
+        end,
+        PCM_INFO = function(pcm)
+            return { frames = pcm._frames, start_time_us = pcm._start_us }
+        end,
+        PCM_DATA_PTR = function(pcm)
+            return mock_pcm_buf
+        end,
+        PCM_RELEASE = function(pcm) end,
+    },
 }
 
 package.loaded["core.qt_constants"] = mock_qt_constants
@@ -67,51 +103,15 @@ function qt_create_single_shot_timer(ms, callback)
     table.insert(timer_callbacks, callback)
 end
 
--- Mock media_cache with 20ms codec delay
-local CODEC_DELAY_US = 20000
-
-local mock_media_cache = {
-    get_media_file_info = function()
-        return {
-            has_audio = true,
-            audio_sample_rate = 48000,
-            audio_channels = 2,
-            duration_us = 10000000,
-            fps_num = 30,
-            fps_den = 1,
-        }
-    end,
-    get_audio_reader = function()
-        return { id = "mock_audio_reader" }
-    end,
-    get_audio_pcm = function(start_us, end_us)
-        -- Simulate AAC codec delay: actual data starts at CODEC_DELAY_US
-        local actual_start = start_us
-        if start_us < CODEC_DELAY_US then
-            actual_start = CODEC_DELAY_US
-        end
-        local frames = math.floor((end_us - actual_start) * 48000 / 1000000)
-        return "mock_pcm_ptr", frames, actual_start
-    end,
-    get_audio_pcm_for_path = function(path, start_us, end_us)
-        local actual_start = start_us
-        if start_us < CODEC_DELAY_US then
-            actual_start = CODEC_DELAY_US
-        end
-        local frames = math.floor((end_us - actual_start) * 48000 / 1000000)
-        return "mock_pcm_ptr", frames, actual_start
-    end,
-    get_file_path = function() return "/mock/codec_delay_test.mov" end,
-    ensure_audio_pooled = function() end,
-}
-
 -- Fresh load
 package.loaded["core.media.audio_playback"] = nil
 local audio_playback = require("core.media.audio_playback")
 
--- Initialize (session + source)
+-- Initialize session + TMB mix
 audio_playback.init_session(48000, 2)
-audio_playback.switch_source(mock_media_cache)
+audio_playback.apply_mix("mock_tmb", {
+    { track_index = 1, volume = 1.0, muted = false, soloed = false },
+}, 0)
 audio_playback.set_max_media_time(10000000)
 
 -- Seek to time 0 (where codec delay will cause gap)

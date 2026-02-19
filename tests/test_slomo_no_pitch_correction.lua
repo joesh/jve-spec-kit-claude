@@ -12,6 +12,9 @@ local mock_qt_constants = {
         FRAME_RELEASE = function() end,
         PCM_RELEASE = function() end,
         SET_DECODE_MODE = function() end,
+        TMB_GET_TRACK_AUDIO = function() return nil end,
+        PCM_INFO = function() return { frames = 0, start_time_us = 0 } end,
+        PCM_DATA_PTR = function() return nil end,
     },
     SSE = {
         CREATE = function() return "mock_sse" end,
@@ -78,22 +81,10 @@ local Q3_DECIMATE = audio_pb.Q3_DECIMATE
 audio_pb.init_session(48000, 2)
 audio_pb.set_max_time(3333333)
 
--- Set sources
-local mock_cache = {
-    get_audio_pcm_for_path = function(path, start_us, end_us, sr)
-        return "mock_pcm", 1024, start_us
-    end,
-}
-audio_pb.set_audio_sources({{
-    path = "/mock/media.mov",
-    source_offset_us = 0,
-    seek_us = 0,
-    speed_ratio = 1.0,
-    clip_start_us = 0,
-    volume = 1.0,
-    duration_us = 3333333,
-    clip_end_us = 3333333,  -- explicit boundary
-}}, mock_cache)
+-- Set TMB mix (replaces legacy set_audio_sources)
+audio_pb.apply_mix("mock_tmb", {
+    { track_index = 1, volume = 1.0, muted = false, soloed = false },
+}, 0)
 
 --------------------------------------------------------------------------------
 -- Test 1: 0.5x speed selects Q3_DECIMATE (varispeed, no pitch correction)
