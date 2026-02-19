@@ -86,7 +86,7 @@ local M = {
     aop_epoch_playhead_us = 0,   -- AOP playhead reading at last reanchor
     max_media_time_us = 0,       -- Max playback time (set by controller)
 
-    -- Pre-buffer state for warm edit-point transitions
+    -- Pre-buffer state for warm edit-point transitions (LEGACY — tests only)
     _pre_buffered = nil,  -- {clip_start_us, clip_end_us, path} or nil
 
     -- Export constants for tests/external access
@@ -376,87 +376,7 @@ end
 -- Source Lifecycle (multi-source, replaces switch_source)
 --------------------------------------------------------------------------------
 
---- Pre-buffer audio for an upcoming clip transition.
--- Decodes PCM for the next clip's start region and pushes to SSE.
--- When set_audio_sources detects matching pre-buffered data, it skips the
--- cold restart (STOP/FLUSH/RESET) for a seamless edit-point crossover.
--- @param source table: source entry {path, clip_start_us, clip_end_us, ...}
--- @param cache media_cache module reference
-function M.pre_buffer(source, cache)
-    assert(source and type(source) == "table",
-        "audio_playback.pre_buffer: source must be a table")
-    assert(cache and cache.get_audio_pcm_for_path,
-        "audio_playback.pre_buffer: cache must have get_audio_pcm_for_path")
-    assert(source.path and type(source.path) == "string",
-        "audio_playback.pre_buffer: source.path must be a non-nil string")
-    assert(source.clip_start_us,
-        "audio_playback.pre_buffer: source missing clip_start_us")
-    assert(source.clip_end_us,
-        "audio_playback.pre_buffer: source missing clip_end_us")
-
-    if not M.session_initialized then return end
-
-    -- Ensure reader is pooled (warm I/O)
-    assert(cache.ensure_audio_pooled,
-        "audio_playback.pre_buffer: cache missing ensure_audio_pooled")
-    cache.ensure_audio_pooled(source.path)
-
-    -- Decode a half-window of PCM starting at clip start
-    local decode_start_us = source.clip_start_us
-    local decode_end_us = math.min(
-        source.clip_end_us,
-        decode_start_us + CFG.AUDIO_CACHE_HALF_WINDOW_US)
-
-    local pushed = false
-    if decode_end_us > decode_start_us then
-        -- Delegate decode to Mixer for proper time-mapping + conform
-        local mix_buf, mix_frames, actual_start = Mixer.mix_sources(
-            { source }, decode_start_us, decode_end_us,
-            M.session_sample_rate, M.session_channels, cache)
-
-        if mix_buf and mix_frames > 0 then
-            -- Push pre-decoded PCM to SSE at the FUTURE timeline position.
-            -- SSE replaces overlapping chunks, so this won't interfere with
-            -- currently-playing audio from the old clip.
-            qt_constants.SSE.PUSH_PCM(M.sse, mix_buf, mix_frames, actual_start)
-            pushed = true
-        end
-    end
-
-    -- Only store pre-buffer identity if PCM was actually pushed to SSE.
-    -- Storing without PCM would cause warm transition to skip RESET
-    -- even though SSE has no data for the new clip.
-    if pushed then
-        M._pre_buffered = {
-            clip_start_us = source.clip_start_us,
-            clip_end_us = source.clip_end_us,
-            path = source.path,
-        }
-        logger.debug("audio_playback", string.format(
-            "Pre-buffered audio: path=%s start=%.3fs end=%.3fs",
-            source.path, decode_start_us / 1000000, decode_end_us / 1000000))
-    else
-        logger.warn("audio_playback", string.format(
-            "Pre-buffer decode failed (no PCM): path=%s start=%.3fs",
-            source.path, decode_start_us / 1000000))
-    end
-end
-
---- Check if sources match the pre-buffered clip.
--- Match on single-source transitions where path and clip_start_us agree.
--- @param sources table: list of source entries
--- @return boolean
-local function sources_match_pre_buffer(sources)
-    if not M._pre_buffered then return false end
-    if #sources ~= 1 then return false end
-
-    local src = sources[1]
-    return src.path == M._pre_buffered.path
-       and src.clip_start_us == M._pre_buffered.clip_start_us
-       and src.clip_end_us == M._pre_buffered.clip_end_us
-end
-
---- Set audio sources for playback. THE ONLY way to configure audio.
+--- Set audio sources for playback (LEGACY path — tests only).
 -- Stops pump, resets SSE, stores new sources list. Restarts if was playing.
 -- Source mode: one entry with source_offset_us=0.
 -- Timeline mode: N entries, each with own offset.
@@ -545,50 +465,6 @@ function M.set_audio_sources(sources, cache, restart_time_us)
         last_fetch_pb_start_us = nil
         M._ensure_pcm_cache()
     else
-        -- Warm pre-buffered transition: edit point with pre-loaded audio in SSE.
-        -- pre_buffer() already pushed the next clip's PCM to SSE, so we can
-        -- skip the cold restart (STOP → FLUSH → RESET → decode → restart).
-        if sources_match_pre_buffer(sources) then
-            M.audio_sources = sources
-            M.media_cache_ref = cache
-            M.has_audio = #sources > 0
-            M._project_gen = project_gen.current()
-            -- Clear pre-buffer (consumed). Reset PCM cache so pump refetches
-            -- from new sources on next tick. SSE retains pre-buffered PCM.
-            M._pre_buffered = nil
-            last_pcm_range = { start_us = 0, end_us = 0 }
-            last_fetch_pb_start_us = nil
-
-            if was_playing and M.has_audio then
-                -- Warm reanchor: update SSE target WITHOUT RESET.
-                -- SSE already has pre-buffered PCM — RESET would wipe it.
-                local t = restart_time_us or M.get_time_us()
-                t = clamp_to_source_boundaries(t, sources, M.speed)
-                t = clamp_media_us(t)
-
-                M.media_anchor_us = t
-                M.media_time_us = t
-                qt_constants.AOP.FLUSH(M.aop)
-                M.aop_epoch_playhead_us = qt_constants.AOP.PLAYHEAD_US(M.aop)
-                qt_constants.SSE.SET_TARGET(M.sse, t, M.speed, M.quality_mode)
-
-                M._ensure_pcm_cache()
-                advance_sse_past_codec_delay()
-                qt_constants.AOP.START(M.aop)
-                M.playing = true
-                M._start_pump()
-                logger.debug("audio_playback",
-                    "Warm transition (playing): reanchored, skipped SSE.RESET")
-            else
-                logger.debug("audio_playback",
-                    "Warm transition (stopped): skipped SSE.RESET (pre-buffered)")
-            end
-            return
-        end
-
-        -- Clear stale pre-buffer on mismatch
-        M._pre_buffered = nil
-
         -- Cold path: sources changed, cleared, or not playing — full stop/restart
         if M.playing then
             -- Use explicit restart time if provided (for video sync),
@@ -711,7 +587,8 @@ function M.apply_mix(tmb, mix_params, edit_time_us)
 end
 
 --- Decode all tracks from TMB, mix with volume, push to SSE.
--- Replaces _ensure_pcm_cache: no Mixer, no media_cache. TMB handles per-track decode.
+-- Replaces _ensure_pcm_cache for TMB path. No Mixer, no media_cache.
+-- Uses FFI to mix PcmChunk data (same pattern as mixer.lua mix_sources).
 function M.decode_mix_and_send_to_sse()
     if not M._tmb or not M._mix_params or #M._mix_params == 0 then return end
 
@@ -731,6 +608,7 @@ function M.decode_mix_and_send_to_sse()
     if pb_end <= pb_start then return end
 
     local EMP = qt_constants.EMP
+    local channels = M.session_channels
 
     -- Determine solo state
     local any_solo = false
@@ -738,9 +616,10 @@ function M.decode_mix_and_send_to_sse()
         if track.soloed then any_solo = true; break end
     end
 
-    -- Decode each track from TMB, apply volume, sum into mix
-    local mix_pcm = nil
-    local mix_start_us = nil
+    -- Decode each track from TMB, copy into Lua-owned FFI buffer, mix with volume
+    local mix_buf = nil       -- ffi float array (owned by Lua GC)
+    local mix_frames = 0
+    local mix_start_us = pb_start
 
     for _, track in ipairs(M._mix_params) do
         -- Effective volume (solo/mute logic)
@@ -754,36 +633,68 @@ function M.decode_mix_and_send_to_sse()
 
         local pcm = EMP.TMB_GET_TRACK_AUDIO(
             M._tmb, track.track_index, pb_start, pb_end,
-            M.session_sample_rate, M.session_channels)
+            M.session_sample_rate, channels)
         if not pcm then goto continue end
 
         local info = EMP.PCM_INFO(pcm)
-        if not mix_pcm then
-            -- First track: use as base (scale by volume)
-            mix_pcm = pcm
+        local float_ptr = ffi.cast("float*", EMP.PCM_DATA_PTR(pcm))
+        local n_samples = info.frames * channels
+
+        if not mix_buf then
+            -- First track: allocate mix buffer and copy scaled data
+            mix_frames = info.frames
             mix_start_us = info.start_time_us
-            if vol ~= 1.0 then
-                EMP.PCM_SCALE(pcm, vol)
+            mix_buf = ffi.new("float[?]", n_samples)
+            if vol == 1.0 then
+                ffi.copy(mix_buf, float_ptr, n_samples * ffi.sizeof("float"))
+            else
+                for i = 0, n_samples - 1 do
+                    mix_buf[i] = float_ptr[i] * vol
+                end
             end
         else
-            -- Subsequent tracks: accumulate into mix
-            EMP.PCM_MIX_INTO(mix_pcm, pcm, vol)
-            EMP.PCM_RELEASE(pcm)
+            -- Subsequent tracks: accumulate into mix buffer
+            local n = math.min(info.frames, mix_frames) * channels
+            for i = 0, n - 1 do
+                mix_buf[i] = mix_buf[i] + float_ptr[i] * vol
+            end
         end
+
+        EMP.PCM_RELEASE(pcm)
         ::continue::
     end
 
     -- Push mixed audio to SSE
-    if mix_pcm then
-        local info = EMP.PCM_INFO(mix_pcm)
-        qt_constants.SSE.PUSH_PCM(M.sse, mix_pcm, info.frames, mix_start_us or pb_start)
-        last_pcm_range = { start_us = pb_start, end_us = pb_end }
+    if mix_buf and mix_frames > 0 then
+        qt_constants.SSE.PUSH_PCM(M.sse, mix_buf, mix_frames, mix_start_us)
+        last_pcm_range = {
+            start_us = pb_start,
+            end_us = pb_end,
+            pcm_ptr = mix_buf,
+            frames = mix_frames,
+        }
         last_fetch_pb_start_us = pb_start
-        EMP.PCM_RELEASE(mix_pcm)
     end
 end
 
---- Switch source for source-mode playback.
+--- Render time-stretched audio and write to output device.
+-- Wraps SSE.RENDER_ALLOC + AOP.WRITE_F32 (Rule 2.5: named sub-function).
+-- @param frames_needed number: frames to render from SSE
+-- @return number: frames actually produced
+function M.render_and_write_to_device(frames_needed)
+    assert(frames_needed > 0,
+        "audio_playback.render_and_write_to_device: frames_needed must be positive")
+    local pcm, produced = qt_constants.SSE.RENDER_ALLOC(M.sse, frames_needed)
+    assert(produced >= 0 and produced <= frames_needed,
+        ("audio_playback.render_and_write_to_device: invalid produced=%d for requested=%d")
+            :format(produced, frames_needed))
+    if produced > 0 then
+        qt_constants.AOP.WRITE_F32(M.aop, pcm, produced)
+    end
+    return produced
+end
+
+--- Switch source for source-mode playback (LEGACY — tests only).
 -- Convenience wrapper around set_audio_sources for single-source playback.
 -- @param cache media_cache module reference
 function M.switch_source(cache)
@@ -807,7 +718,6 @@ function M.switch_source(cache)
     local audio_reader = cache.get_audio_reader()
     assert(audio_reader, "audio_playback.switch_source: cache has no audio_reader")
 
-    -- Derive max_media_time_us from source
     local total_frames = math.floor(info.duration_us / 1000000 * info.fps_num / info.fps_den)
     local max_us = math.floor((total_frames - 1) * 1000000 * info.fps_den / info.fps_num)
 
@@ -817,7 +727,6 @@ function M.switch_source(cache)
 
     cache.ensure_audio_pooled(file_path)
 
-    -- Source mode: clip_end = full duration (play entire source)
     M.set_audio_sources({{
         path = file_path,
         source_offset_us = 0,
@@ -826,14 +735,10 @@ function M.switch_source(cache)
         volume = 1.0,
         duration_us = info.duration_us,
         clip_start_us = 0,
-        clip_end_us = info.duration_us,  -- explicit: entire source
+        clip_end_us = info.duration_us,
     }}, cache)
 
     M.max_media_time_us = max_us
-
-    logger.info("audio_playback", string.format(
-        "Source switched: duration=%.2fs (session=%dHz)",
-        info.duration_us / 1000000, M.session_sample_rate))
 end
 
 --- Check if fully ready for playback (session + at least one audio source).
@@ -878,7 +783,9 @@ function M.shutdown_session()
     last_pcm_range = { start_us = 0, end_us = 0 }
     last_fetch_pb_start_us = nil
     pumping = false
-    M._pre_buffered = nil
+
+    M._tmb = nil
+    M._mix_params = nil
     M.audio_sources = {}
     M.media_cache_ref = nil
     M.has_audio = false
@@ -915,16 +822,17 @@ function M.start()
     reanchor(M.media_time_us, M.speed, M.quality_mode)
 
     -- Pre-fill PCM cache and push to SSE
-    M._ensure_pcm_cache()
+    if M._tmb then
+        M.decode_mix_and_send_to_sse()
+    else
+        M._ensure_pcm_cache()
+    end
     advance_sse_past_codec_delay()
 
     -- Pre-render some audio to AOP buffer before starting device
     local target_frames = (M.session_sample_rate * CFG.TARGET_BUFFER_MS) / 1000
     local prefill_frames = math.min(target_frames, CFG.MAX_RENDER_FRAMES)
-    local pcm, produced = qt_constants.SSE.RENDER_ALLOC(M.sse, prefill_frames)
-    if produced > 0 then
-        qt_constants.AOP.WRITE_F32(M.aop, pcm, produced)
-    end
+    M.render_and_write_to_device(prefill_frames)
 
     -- Start AOP device
     qt_constants.AOP.START(M.aop)
@@ -985,7 +893,11 @@ function M.seek(time_us)
         -- Reanchor while playing (transport event)
         reanchor(time_us, M.speed, M.quality_mode)
         -- Refill PCM cache and push to SSE
-        M._ensure_pcm_cache()
+        if M._tmb then
+            M.decode_mix_and_send_to_sse()
+        else
+            M._ensure_pcm_cache()
+        end
         advance_sse_past_codec_delay()
     else
         -- Just update stopped-state position
@@ -1062,7 +974,11 @@ function M.set_speed(new_signed_speed)
         local current_media_us = M.get_time_us()
         reanchor(current_media_us, new_signed_speed, new_mode)
         -- Refill PCM cache for new direction/mode
-        M._ensure_pcm_cache()
+        if M._tmb then
+            M.decode_mix_and_send_to_sse()
+        else
+            M._ensure_pcm_cache()
+        end
         advance_sse_past_codec_delay()
     else
         M.speed = new_signed_speed
@@ -1353,28 +1269,19 @@ function M._pump_tick()
             M._ensure_pcm_cache()
         end
 
-        -- Check buffer level and render if needed
+        -- Render time-stretched audio to output device
         local buffered0 = qt_constants.AOP.BUFFERED_FRAMES(M.aop)
         local target_frames = (M.session_sample_rate * CFG.TARGET_BUFFER_MS) / 1000
         local frames_needed = math.max(0, target_frames - buffered0)
         frames_needed = math.min(frames_needed, CFG.MAX_RENDER_FRAMES)
 
         if frames_needed > 0 then
-            local pcm, produced = qt_constants.SSE.RENDER_ALLOC(M.sse, frames_needed)
+            local produced = M.render_and_write_to_device(frames_needed)
 
-            -- Validate render output
-            assert(produced >= 0 and produced <= frames_needed,
-                ("audio_playback._pump_tick: invalid produced=%d for requested=%d")
-                    :format(produced, frames_needed))
-
-            if produced > 0 then
-                local written = qt_constants.AOP.WRITE_F32(M.aop, pcm, produced)
-                -- Log first few pumps for debugging
-                logger.debug("audio_playback", string.format(
-                    "Pump: needed=%d produced=%d written=%d SSE_time=%.3fs",
-                    frames_needed, produced, written,
-                    qt_constants.SSE.CURRENT_TIME_US(M.sse) / 1000000))
-            end
+            logger.debug("audio_playback", string.format(
+                "Pump: needed=%d produced=%d SSE_time=%.3fs",
+                frames_needed, produced,
+                qt_constants.SSE.CURRENT_TIME_US(M.sse) / 1000000))
 
             -- SSE starvation logging (stuckness detection is in timeline_playback.tick)
             if qt_constants.SSE.STARVED(M.sse) then
