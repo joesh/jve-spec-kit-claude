@@ -84,6 +84,9 @@ package.loaded["core.logger"] = {
 local video_map = {}
 local function set_video_map(map) video_map = map end
 
+-- Configurable audio_at response (parallels video_map for get_audio_at)
+local audio_at_map = nil  -- nil = use default; table = per-frame entries
+
 -- Mock Renderer
 package.loaded["core.renderer"] = {
     get_sequence_info = function(seq_id)
@@ -148,7 +151,26 @@ local mock_sequence = {
     get_video_at = function(self, frame) return {} end,
     get_next_video = function() return {} end,
     get_prev_video = function() return {} end,
-    get_audio_at = function() return {} end,
+    get_audio_at = function(self, frame)
+        if audio_at_map then
+            return audio_at_map[frame] or {}
+        end
+        -- Default: audio clip for frames 0-99 (matches default Mixer mock)
+        if frame >= 0 and frame < 100 then
+            return {{
+                media_path = "/test.mov",
+                source_frame = frame,
+                clip = {
+                    id = "aclip1",
+                    rate = { fps_numerator = 24, fps_denominator = 1 },
+                    timeline_start = 0, duration = 100, source_in = 0,
+                    volume = 1.0,
+                },
+                track = { id = "track_a1", track_index = 1, muted = false, soloed = false },
+            }}
+        end
+        return {}
+    end,
     get_next_audio = function() return {} end,
     get_prev_audio = function() return {} end,
 }
@@ -195,6 +217,10 @@ local function make_tracked_audio()
     audio.set_audio_sources = function(sources, mc, restart_time)
         track("set_audio_sources", sources, mc, restart_time)
         audio.has_audio = (#sources > 0)
+    end
+    audio.apply_mix = function(tmb, mix_params, edit_time_us)
+        track("apply_mix", tmb, mix_params, edit_time_us)
+        audio.has_audio = (#mix_params > 0)
     end
     audio.latch = function(t) track("latch", t) end
     audio.play_burst = function(time, dur)
@@ -253,6 +279,7 @@ local function reset()
     tmb_set_playhead_calls = {}
     video_map = {}
     audio_sources_map = {}
+    audio_at_map = nil
 end
 
 print("=== test_playback_engine_extended.lua ===")
@@ -662,9 +689,20 @@ do
     for f = 50, 99 do
         video_map[f] = { clip_id = "clip1" }
     end
-    -- Audio: gap for 0-49, sources for 50-99
-    for f = 0, 49 do
-        audio_sources_map[f] = { sources = {}, clip_ids = {} }
+    -- Audio: gap for 0-49, audio entries for 50-99
+    audio_at_map = {}
+    for f = 50, 99 do
+        audio_at_map[f] = {{
+            media_path = "/test.mov",
+            source_frame = f - 50,
+            clip = {
+                id = "aclip1",
+                rate = { fps_numerator = 24, fps_denominator = 1 },
+                timeline_start = 50, duration = 50, source_in = 0,
+                volume = 1.0,
+            },
+            track = { id = "track_a1", track_index = 1, muted = false, soloed = false },
+        }}
     end
 
     local engine, _ = make_engine()
@@ -1087,15 +1125,15 @@ do
     -- The resolve call itself will set the new clip IDs.
     -- Key invariant: the OLD IDs must not persist (they'd cause false no-change).
 
-    -- Check that set_audio_sources was called (meaning change detection fired)
-    local saw_set_sources = false
+    -- Check that apply_mix was called (meaning change detection fired)
+    local saw_apply_mix = false
     for _, call in ipairs(mock_audio._calls) do
-        if call.name == "set_audio_sources" then
-            saw_set_sources = true
+        if call.name == "apply_mix" then
+            saw_apply_mix = true
         end
     end
-    assert(saw_set_sources,
-        "activate_audio must re-push audio sources (stale clip IDs should be cleared)")
+    assert(saw_apply_mix,
+        "activate_audio must re-push audio mix (stale clip IDs should be cleared)")
 
     print("  activate_audio clears stale clip IDs passed")
 end

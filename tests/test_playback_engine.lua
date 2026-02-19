@@ -165,7 +165,10 @@ local function make_mock_audio()
         set_speed = function() end,
         set_max_time = function() end,
         set_audio_sources = function(sources, mc, restart_time)
-            -- Track that sources were set
+            -- Track that sources were set (legacy path)
+        end,
+        apply_mix = function(tmb, mix_params, edit_time_us)
+            -- TMB audio mix (Phase 3c)
         end,
         latch = function() end,
         play_burst = function() end,

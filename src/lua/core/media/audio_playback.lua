@@ -26,6 +26,7 @@
 --
 -- @file audio_playback.lua
 
+local ffi = require("ffi")
 local logger = require("core.logger")
 local qt_constants = require("core.qt_constants")
 local Mixer = require("core.mixer")
@@ -634,6 +635,154 @@ function M.set_audio_sources(sources, cache, restart_time_us)
         "Audio sources set: %d source(s)", #sources))
 end
 
+--- Update audio mix params for TMB-based decode path.
+-- Replaces set_audio_sources: TMB handles decode, this just stores mix params.
+-- @param tmb userdata: TMB handle (decode source)
+-- @param mix_params array of {track_index, volume, muted, soloed}
+-- @param edit_time_us number: timeline time of the edit boundary
+function M.apply_mix(tmb, mix_params, edit_time_us)
+    assert(M.session_initialized,
+        "audio_playback.apply_mix: session not initialized")
+    assert(tmb, "audio_playback.apply_mix: tmb is nil")
+    assert(type(mix_params) == "table",
+        "audio_playback.apply_mix: mix_params must be a table")
+    assert(type(edit_time_us) == "number",
+        "audio_playback.apply_mix: edit_time_us must be a number")
+
+    local was_playing = M.playing
+
+    -- Detect structural track changes (not just volume/mute/solo)
+    local tracks_changed = false
+    local old_params = M._mix_params or {}
+    if #old_params ~= #mix_params then
+        tracks_changed = true
+    else
+        for i, old in ipairs(old_params) do
+            if old.track_index ~= mix_params[i].track_index then
+                tracks_changed = true
+                break
+            end
+        end
+    end
+
+    -- Store new state
+    M._tmb = tmb
+    M._mix_params = mix_params
+    M.has_audio = #mix_params > 0
+    M._project_gen = project_gen.current()
+
+    if not tracks_changed then
+        -- HOT SWAP: only volume/mute/solo changed. No SSE reset needed.
+        -- Next decode_mix_and_send_to_sse will use new params.
+        return
+    end
+
+    -- COLD PATH: track set changed — reset SSE and restart
+
+    -- Clear PCM cache (stale data from previous track set)
+    last_pcm_range = { start_us = 0, end_us = 0 }
+    last_fetch_pb_start_us = nil
+
+    if was_playing then
+        M.media_time_us = edit_time_us
+        M.playing = false
+        M._cancel_pump()
+        qt_constants.AOP.STOP(M.aop)
+        qt_constants.AOP.FLUSH(M.aop)
+    elseif edit_time_us then
+        M.media_time_us = edit_time_us
+    end
+
+    -- Reset SSE (clear buffered audio from previous clips)
+    qt_constants.SSE.RESET(M.sse)
+
+    if was_playing and M.has_audio then
+        M.media_time_us = math.max(0, math.min(edit_time_us, M.max_media_time_us))
+        reanchor(M.media_time_us, M.speed, M.quality_mode)
+        M.decode_mix_and_send_to_sse()
+        advance_sse_past_codec_delay()
+        qt_constants.AOP.START(M.aop)
+        M.playing = true
+        M._start_pump()
+    end
+
+    logger.debug("audio_playback", string.format(
+        "apply_mix: %d track(s), tracks_changed=%s", #mix_params, tostring(tracks_changed)))
+end
+
+--- Decode all tracks from TMB, mix with volume, push to SSE.
+-- Replaces _ensure_pcm_cache: no Mixer, no media_cache. TMB handles per-track decode.
+function M.decode_mix_and_send_to_sse()
+    if not M._tmb or not M._mix_params or #M._mix_params == 0 then return end
+
+    local current_us = M.get_time_us()
+    local half = CFG.AUDIO_CACHE_HALF_WINDOW_US
+    local pb_start = math.max(0, current_us - half)
+    local pb_end = math.min(M.max_media_time_us, current_us + half)
+
+    -- Skip if SSE already has data covering this window
+    if last_pcm_range.start_us <= pb_start and last_pcm_range.end_us >= pb_end then
+        return
+    end
+
+    -- Skip if pb_start unchanged from last fetch (dedup)
+    if last_fetch_pb_start_us == pb_start then return end
+
+    if pb_end <= pb_start then return end
+
+    local EMP = qt_constants.EMP
+
+    -- Determine solo state
+    local any_solo = false
+    for _, track in ipairs(M._mix_params) do
+        if track.soloed then any_solo = true; break end
+    end
+
+    -- Decode each track from TMB, apply volume, sum into mix
+    local mix_pcm = nil
+    local mix_start_us = nil
+
+    for _, track in ipairs(M._mix_params) do
+        -- Effective volume (solo/mute logic)
+        local vol
+        if any_solo then
+            vol = track.soloed and track.volume or 0
+        else
+            vol = track.muted and 0 or track.volume
+        end
+        if vol == 0 then goto continue end
+
+        local pcm = EMP.TMB_GET_TRACK_AUDIO(
+            M._tmb, track.track_index, pb_start, pb_end,
+            M.session_sample_rate, M.session_channels)
+        if not pcm then goto continue end
+
+        local info = EMP.PCM_INFO(pcm)
+        if not mix_pcm then
+            -- First track: use as base (scale by volume)
+            mix_pcm = pcm
+            mix_start_us = info.start_time_us
+            if vol ~= 1.0 then
+                EMP.PCM_SCALE(pcm, vol)
+            end
+        else
+            -- Subsequent tracks: accumulate into mix
+            EMP.PCM_MIX_INTO(mix_pcm, pcm, vol)
+            EMP.PCM_RELEASE(pcm)
+        end
+        ::continue::
+    end
+
+    -- Push mixed audio to SSE
+    if mix_pcm then
+        local info = EMP.PCM_INFO(mix_pcm)
+        qt_constants.SSE.PUSH_PCM(M.sse, mix_pcm, info.frames, mix_start_us or pb_start)
+        last_pcm_range = { start_us = pb_start, end_us = pb_end }
+        last_fetch_pb_start_us = pb_start
+        EMP.PCM_RELEASE(mix_pcm)
+    end
+end
+
 --- Switch source for source-mode playback.
 -- Convenience wrapper around set_audio_sources for single-source playback.
 -- @param cache media_cache module reference
@@ -960,15 +1109,14 @@ function M.play_burst(time_us, duration_us)
     if not M.has_audio then return end
     if M.playing then return end
 
-    -- Validate cache against clip boundary
-    local clip_end_us = get_min_clip_end_us()
-    invalidate_stale_cache(clip_end_us)
-
-    -- DEBUG: Log clip boundary for diagnosis
-    logger.debug("audio_playback", string.format(
-        "play_burst clip_end=%.3fs, time=%.3fs, would_end=%.3fs, needs_clamp=%s",
-        clip_end_us / 1000000, time_us / 1000000, (time_us + duration_us) / 1000000,
-        tostring(time_us + duration_us > clip_end_us)))
+    -- Clip boundary: TMB handles boundaries internally, legacy uses source descriptors
+    local clip_end_us
+    if M._tmb then
+        clip_end_us = M.max_media_time_us
+    else
+        clip_end_us = get_min_clip_end_us()
+        invalidate_stale_cache(clip_end_us)
+    end
 
     assert(type(time_us) == "number",
         "audio_playback.play_burst: time_us must be number")
@@ -1012,7 +1160,11 @@ function M.play_burst(time_us, duration_us)
     else
         last_pcm_range = { start_us = 0, end_us = 0 }
         last_fetch_pb_start_us = nil
-        M._ensure_pcm_cache()
+        if M._tmb then
+            M.decode_mix_and_send_to_sse()
+        else
+            M._ensure_pcm_cache()
+        end
     end
     advance_sse_past_codec_delay()
 
@@ -1194,8 +1346,12 @@ function M._pump_tick()
 
     -- Use xpcall for traceback, but rethrow on error (no swallowing)
     local ok, err = xpcall(function()
-        -- Ensure PCM cache covers render position
-        M._ensure_pcm_cache()
+        -- Decode and push audio to SSE (TMB path or legacy Mixer path)
+        if M._tmb then
+            M.decode_mix_and_send_to_sse()
+        else
+            M._ensure_pcm_cache()
+        end
 
         -- Check buffer level and render if needed
         local buffered0 = qt_constants.AOP.BUFFERED_FRAMES(M.aop)

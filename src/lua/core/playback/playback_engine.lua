@@ -3,7 +3,7 @@
 -- Replaces the singleton playback_controller. Each SequenceMonitor owns one instance.
 --
 -- Key design: NO sequence-kind branching. Masterclips and timelines use
--- identical code paths via Renderer (video) and Mixer (audio).
+-- identical code paths via Renderer (video) and TMB (audio).
 --
 -- Video path uses TimelineMediaBuffer (TMB) — a C++ class that owns readers,
 -- caches frames, and pre-buffers at clip boundaries. Lua feeds clip windows
@@ -25,9 +25,7 @@
 
 local logger = require("core.logger")
 local qt_constants = require("core.qt_constants")
-local media_cache = require("core.media.media_cache")
 local Renderer = require("core.renderer")
-local Mixer = require("core.mixer")
 local Sequence = require("models.sequence")
 local helpers = require("core.playback.playback_helpers")
 
@@ -118,10 +116,6 @@ function PlaybackEngine.new(config)
     self._tmb = nil
     self._video_track_indices = {}   -- track indices for Renderer iteration
     self._audio_track_indices = {}   -- audio track indices for TMB audio path
-
-    -- Audio lookahead state (kept until Phase 3c replaces audio path)
-    self._pre_buffered_audio_ids = {}   -- {[clip_id] = true}
-    self._current_audio_sources = nil   -- sources from last _resolve_and_set_audio
 
     return self
 end
@@ -588,10 +582,6 @@ function PlaybackEngine:stop()
     self._last_audio_frame = nil
     self:_clear_latch()
 
-    -- Clear audio lookahead state (stale across stop/start cycles)
-    self._current_audio_sources = nil
-    self._pre_buffered_audio_ids = {}
-
     self:_stop_audio()
     -- TMB stays alive across stop/play — no need to re-create
     qt_constants.EMP.SET_DECODE_MODE("park")
@@ -631,7 +621,7 @@ function PlaybackEngine:seek(frame_idx)
 
     -- Audio resolve + restart/scrub (non-fatal: must not prevent seek)
     self:_try_audio(function(eng)
-        eng:_resolve_and_set_audio(frame)
+        eng:_if_clip_changed_update_audio_mix(frame)
         if was_playing then
             eng:_start_audio()
         else
@@ -689,7 +679,7 @@ function PlaybackEngine:activate_audio()
         if audio_playback and audio_playback.session_initialized then
             audio_playback.set_max_time(self.max_media_time_us)
         end
-        self:_resolve_and_set_audio(math.floor(self._position))
+        self:_if_clip_changed_update_audio_mix(math.floor(self._position))
     end
 end
 
@@ -794,7 +784,7 @@ function PlaybackEngine:_tick()
     if self._audio_owner then
         self:_try_audio(function(eng)
             if frame_idx ~= eng._last_tick_frame then
-                eng:_resolve_and_set_audio(frame_idx)
+                eng:_if_clip_changed_update_audio_mix(frame_idx)
             end
             if audio_playback and audio_playback.has_audio and not audio_playback.playing then
                 eng:_start_audio()
@@ -802,10 +792,7 @@ function PlaybackEngine:_tick()
         end)
     end
 
-    -- 8. Audio lookahead (video pre-buffer handled by TMB internally)
-    self:_check_lookahead(frame_idx)
-
-    -- 9. Commit position
+    -- 8. Commit position
     self:set_position(pos)
     self._last_committed_frame = math.floor(pos)
     self._last_tick_frame = frame_idx
@@ -857,13 +844,11 @@ function PlaybackEngine:_display_frame(frame_idx)
 
         local is_offline = metadata.offline
 
-        -- Detect clip switch -> rotation callback + reset audio lookahead
+        -- Detect clip switch -> rotation callback
         if metadata.clip_id ~= self.current_clip_id then
             self.current_clip_id = metadata.clip_id
             -- Offline frames are upright (composed at 0 degrees)
             self._on_set_rotation(is_offline and 0 or metadata.rotation)
-            -- Entering new clip: clear audio pre-buffer state from previous clip
-            self._pre_buffered_audio_ids = {}
         end
 
         self._on_show_frame(frame_handle, metadata)
@@ -871,162 +856,6 @@ function PlaybackEngine:_display_frame(frame_idx)
         -- Gap at playhead
         self._on_show_gap()
         self.current_clip_id = nil
-    end
-end
-
---------------------------------------------------------------------------------
--- Lookahead Pre-Buffer (Audio Only)
---
--- Video pre-buffer is handled by TMB's SetPlayhead + worker pool.
--- Audio lookahead remains until Phase 3c replaces the audio path.
---------------------------------------------------------------------------------
-
---- Check proximity to clip boundaries and pre-buffer next/prev audio clip.
--- Called from _tick() after display and audio resolve.
--- @param frame_idx integer: current display frame
-function PlaybackEngine:_check_lookahead(frame_idx)
-    if not self.sequence then return end
-    if self.direction == 0 then return end
-
-    if self.direction > 0 then
-        self:_lookahead_audio_forward(frame_idx)
-    else
-        self:_lookahead_audio_reverse(frame_idx)
-    end
-end
-
---- Audio lookahead (forward): pre-buffer when within 2 seconds of clip_end_us.
-function PlaybackEngine:_lookahead_audio_forward(frame_idx)
-    if not self._audio_owner then return end
-    if not audio_playback then return end
-    if not self._current_audio_sources or #self._current_audio_sources == 0 then return end
-
-    local threshold_us = 2000000 -- 2 seconds
-    local current_time_us = helpers.calc_time_us_from_frame(
-        frame_idx, self.fps_num, self.fps_den)
-
-    for _, src in ipairs(self._current_audio_sources) do
-        if not src.clip_end_us then goto continue end
-
-        local distance_us = src.clip_end_us - current_time_us
-        if distance_us > threshold_us or distance_us <= 0 then goto continue end
-
-        -- Already pre-buffered this audio clip?
-        local src_id = src.clip_id or src.path
-        if self._pre_buffered_audio_ids[src_id] then goto continue end
-
-        -- Resolve next audio clip at the boundary frame.
-        -- Round (not floor) to avoid losing the boundary due to us->frame truncation.
-        -- Example: 100 frames @ 24fps -> 4166666us -> floor(99.999) = 99 (wrong).
-        local boundary_frame = math.floor(
-            src.clip_end_us * self.fps_num / (1000000 * self.fps_den) + 0.5)
-        local entries = self.sequence:get_next_audio(boundary_frame)
-        if #entries == 0 then goto continue end
-
-        -- Build source for pre-buffer from resolved entry
-        local entry = entries[1]
-        assert(entry.source_time_us, string.format(
-            "PlaybackEngine:_lookahead_audio_forward: entry missing source_time_us "
-            .. "(clip_id=%s, media_path=%s, timeline_start=%s)",
-            tostring(entry.clip and entry.clip.id), tostring(entry.media_path),
-            tostring(entry.clip and entry.clip.timeline_start)))
-
-        local clip_start_us = helpers.calc_time_us_from_frame(
-            entry.clip.timeline_start, self.fps_num, self.fps_den)
-        local clip_end_us = helpers.calc_time_us_from_frame(
-            entry.clip.timeline_start + entry.clip.duration, self.fps_num, self.fps_den)
-
-        -- Compute conform speed_ratio (same logic as mixer.resolve_audio_sources)
-        local media_video_fps = entry.media_fps_num and entry.media_fps_den
-            and (entry.media_fps_num / entry.media_fps_den) or nil
-        local seq_fps = self.fps_num / self.fps_den
-        local pre_speed_ratio = 1.0
-        if media_video_fps and media_video_fps < 1000
-           and math.abs(media_video_fps - seq_fps) > 0.01 then
-            pre_speed_ratio = seq_fps / media_video_fps
-        end
-
-        local pre_source = {
-            path = entry.media_path,
-            clip_start_us = clip_start_us,
-            clip_end_us = clip_end_us,
-            seek_us = entry.source_time_us,
-            speed_ratio = pre_speed_ratio,
-            volume = 1.0, -- Pre-buffer uses unity; real volume applied at playback
-        }
-        audio_playback.pre_buffer(pre_source, media_cache)
-        self._pre_buffered_audio_ids[src_id] = true
-
-        logger.debug("playback_engine", string.format(
-            "Audio lookahead: pre-buffered '%s' (%.3fs from boundary)",
-            entry.media_path, distance_us / 1000000))
-
-        ::continue::
-    end
-end
-
---- Audio lookahead (reverse): pre-buffer when within 2 seconds of clip_start_us.
-function PlaybackEngine:_lookahead_audio_reverse(frame_idx)
-    if not self._audio_owner then return end
-    if not audio_playback then return end
-    if not self._current_audio_sources or #self._current_audio_sources == 0 then return end
-
-    local threshold_us = 2000000
-    local current_time_us = helpers.calc_time_us_from_frame(
-        frame_idx, self.fps_num, self.fps_den)
-
-    for _, src in ipairs(self._current_audio_sources) do
-        if not src.clip_start_us then goto continue end
-
-        local distance_us = current_time_us - src.clip_start_us
-        if distance_us > threshold_us or distance_us <= 0 then goto continue end
-
-        local src_id = src.clip_id or src.path
-        if self._pre_buffered_audio_ids[src_id] then goto continue end
-
-        local boundary_frame = math.floor(
-            src.clip_start_us * self.fps_num / (1000000 * self.fps_den) + 0.5)
-        local entries = self.sequence:get_prev_audio(boundary_frame)
-        if #entries == 0 then goto continue end
-
-        local entry = entries[1]
-        assert(entry.source_time_us, string.format(
-            "PlaybackEngine:_lookahead_audio_reverse: entry missing source_time_us "
-            .. "(clip_id=%s, media_path=%s, timeline_start=%s)",
-            tostring(entry.clip and entry.clip.id), tostring(entry.media_path),
-            tostring(entry.clip and entry.clip.timeline_start)))
-
-        local clip_start_us = helpers.calc_time_us_from_frame(
-            entry.clip.timeline_start, self.fps_num, self.fps_den)
-        local clip_end_us = helpers.calc_time_us_from_frame(
-            entry.clip.timeline_start + entry.clip.duration, self.fps_num, self.fps_den)
-
-        -- Compute conform speed_ratio (same logic as mixer.resolve_audio_sources)
-        local media_video_fps = entry.media_fps_num and entry.media_fps_den
-            and (entry.media_fps_num / entry.media_fps_den) or nil
-        local seq_fps = self.fps_num / self.fps_den
-        local pre_speed_ratio = 1.0
-        if media_video_fps and media_video_fps < 1000
-           and math.abs(media_video_fps - seq_fps) > 0.01 then
-            pre_speed_ratio = seq_fps / media_video_fps
-        end
-
-        local pre_source = {
-            path = entry.media_path,
-            clip_start_us = clip_start_us,
-            clip_end_us = clip_end_us,
-            seek_us = entry.source_time_us,
-            speed_ratio = pre_speed_ratio,
-            volume = 1.0, -- Pre-buffer uses unity; real volume applied at playback
-        }
-        audio_playback.pre_buffer(pre_source, media_cache)
-        self._pre_buffered_audio_ids[src_id] = true
-
-        logger.debug("playback_engine", string.format(
-            "Audio lookahead (rev): pre-buffered '%s' (%.3fs from boundary)",
-            entry.media_path, distance_us / 1000000))
-
-        ::continue::
     end
 end
 
@@ -1052,7 +881,7 @@ end
 --- Configure audio sources and start playback (transport start).
 function PlaybackEngine:_configure_and_start_audio()
     if not self._audio_owner then return end
-    self:_resolve_and_set_audio(math.floor(self:get_position()))
+    self:_if_clip_changed_update_audio_mix(math.floor(self:get_position()))
     self:_start_audio()
 end
 
@@ -1076,43 +905,60 @@ function PlaybackEngine:_sync_audio()
     helpers.sync_audio(audio_playback, self.direction, self.speed)
 end
 
---- Resolve audio clips at frame via Mixer and update audio_playback if changed.
-function PlaybackEngine:_resolve_and_set_audio(frame)
+--- Detect clip changes at frame and update audio_playback mix params.
+-- Called every frame during playback. Common case (no edit boundary) returns early.
+function PlaybackEngine:_if_clip_changed_update_audio_mix(frame)
     if not self._audio_owner then return end
     assert(self.sequence,
-        "PlaybackEngine:_resolve_and_set_audio: no sequence loaded")
+        "PlaybackEngine:_if_clip_changed_update_audio_mix: no sequence loaded")
 
-    local sources, clip_ids = Mixer.resolve_audio_sources(
-        self.sequence, frame, self.fps_num, self.fps_den, media_cache)
-    assert(type(sources) == "table", string.format(
-        "PlaybackEngine:_resolve_and_set_audio: Mixer returned non-table sources at frame %d",
-        frame))
-    assert(type(clip_ids) == "table", string.format(
-        "PlaybackEngine:_resolve_and_set_audio: Mixer returned non-table clip_ids at frame %d",
-        frame))
+    local entries = self.sequence:get_audio_at(frame)
+    local clip_ids = self:_extract_clip_ids(entries)
 
-    -- Always store for lookahead (even if clips unchanged)
-    self._current_audio_sources = sources
-
-    -- Change detection: compare clip ID sets
+    -- Common case: same clips as last frame → nothing to do
     if not self:_audio_clips_changed(clip_ids) then return end
 
-    -- Lazy-init audio session from first source
-    if #sources > 0
-       and not (audio_playback and audio_playback.session_initialized) then
-        self:_try_init_audio_session(sources[1].path)
+    -- Lazy-init audio session (uses stored sample rate, no media_cache probe)
+    if not (audio_playback and audio_playback.session_initialized) then
+        self:_init_audio_session()
     end
 
     if audio_playback and audio_playback.session_initialized then
         self.current_audio_clip_ids = clip_ids
-        local restart_time_us = helpers.calc_time_us_from_frame(
+        local mix_params = self:_build_audio_mix_params(entries)
+        local edit_time_us = helpers.calc_time_us_from_frame(
             frame, self.fps_num, self.fps_den)
-        audio_playback.set_audio_sources(sources, media_cache, restart_time_us)
+        audio_playback.apply_mix(self._tmb, mix_params, edit_time_us)
     end
 end
 
---- Lazy-init audio session using sample rate from media file.
-function PlaybackEngine:_try_init_audio_session(media_path)
+--- Extract clip ID set from audio entries (for change detection).
+-- @return table: {[clip_id] = true, ...}
+function PlaybackEngine:_extract_clip_ids(entries)
+    local ids = {}
+    for _, entry in ipairs(entries) do
+        ids[entry.clip.id] = true
+    end
+    return ids
+end
+
+--- Build per-track mix params from audio entries.
+-- @return array of {track_index, volume, muted, soloed}
+function PlaybackEngine:_build_audio_mix_params(entries)
+    local params = {}
+    for _, entry in ipairs(entries) do
+        params[#params + 1] = {
+            track_index = entry.track.track_index,
+            volume = entry.clip.volume or 1.0,
+            muted = entry.track.muted or false,
+            soloed = entry.track.soloed or false,
+        }
+    end
+    return params
+end
+
+--- Init audio session using stored sample rate (no media_cache dependency).
+function PlaybackEngine:_init_audio_session()
     if not (qt_constants.SSE and qt_constants.AOP) then return end
 
     local audio_pb = require("core.media.audio_playback")
@@ -1121,24 +967,15 @@ function PlaybackEngine:_try_init_audio_session(media_path)
         return
     end
 
-    -- Path was already pooled by Mixer.resolve_audio_sources.
-    -- Can be nil if media is offline (mixer now skips offline clips, but
-    -- race between resolve and init is possible during project open).
-    local info = media_cache.ensure_audio_pooled(media_path)
-    if not info then
-        logger.warn("playback_engine",
-            "Cannot init audio session: media offline: " .. media_path)
-        return
-    end
-    assert(info.has_audio, string.format(
-        "PlaybackEngine:_try_init_audio_session: '%s' has no audio "
-        .. "(should not have been in Mixer source list)", media_path))
+    assert(self.audio_sample_rate and self.audio_sample_rate > 0, string.format(
+        "PlaybackEngine:_init_audio_session: audio_sample_rate not set (got %s)",
+        tostring(self.audio_sample_rate)))
 
-    audio_pb.init_session(info.audio_sample_rate, 2)
+    audio_pb.init_session(self.audio_sample_rate, 2)
     audio_pb.set_max_time(self.max_media_time_us)
     audio_playback = audio_pb
     logger.info("playback_engine",
-        "Lazy-init audio session for " .. media_path)
+        "Init audio session: sr=" .. self.audio_sample_rate)
 end
 
 --- Compare clip ID sets for change detection.
@@ -1235,7 +1072,7 @@ function PlaybackEngine:play_frame_audio(frame_idx)
         "PlaybackEngine:play_frame_audio: fps not set")
 
     -- Resolve audio sources at the stepped-to frame
-    self:_resolve_and_set_audio(frame_idx)
+    self:_if_clip_changed_update_audio_mix(frame_idx)
 
     local time_us = helpers.calc_time_us_from_frame(
         frame_idx, self.fps_num, self.fps_den)
