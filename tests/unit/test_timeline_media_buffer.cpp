@@ -262,6 +262,37 @@ private slots:
         QVERIFY(result.frame != nullptr);
     }
 
+    void test_two_clips_same_file_no_thrash() {
+        // Two clips from the same file on the same track at very different source
+        // positions should not thrash each other's reader cache. Before the fix,
+        // both clips shared one Reader keyed by (track, path) — the Reader's
+        // stale-session logic cleared its cache on every alternating decode.
+        // Now readers are keyed by (track, clip_id), so each clip gets its own.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        // clip1 at source_in=0, clip2 at source_in=100 (far apart in source space)
+        std::vector<ClipInfo> clips = {
+            {"clipA", m_testVideoPath.toStdString(), 0, 50, 0, 24, 1, 1.0f},
+            {"clipB", m_testVideoPath.toStdString(), 50, 50, 100, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Alternate between clips multiple times — both should always decode OK
+        for (int i = 0; i < 5; ++i) {
+            auto rA = tmb->GetVideoFrame(V1, 10);
+            QVERIFY2(rA.frame != nullptr,
+                      qPrintable(QString("clipA decode failed on iteration %1").arg(i)));
+            QCOMPARE(rA.clip_id, std::string("clipA"));
+
+            auto rB = tmb->GetVideoFrame(V1, 60);
+            QVERIFY2(rB.frame != nullptr,
+                      qPrintable(QString("clipB decode failed on iteration %1").arg(i)));
+            QCOMPARE(rB.clip_id, std::string("clipB"));
+        }
+    }
+
     // ── Multi-track ──
 
     void test_multi_track_independent() {
@@ -385,6 +416,68 @@ private slots:
         auto result = tmb->GetVideoFrame(V1, 50);
         QVERIFY(result.frame != nullptr);
         QCOMPARE(result.clip_id, std::string("clipB"));
+    }
+
+    void test_pre_buffer_survives_playback_across_boundary() {
+        // Verifies that the pre-buffer covers enough frames so the main thread
+        // NEVER falls through to a Reader decode during boundary playback.
+        //
+        // Any Reader decode on the main thread is a potential hitch — h264
+        // decode at certain stream positions can take 100ms+. The pre-buffer
+        // must move ALL decodes to the background worker.
+        //
+        // Tests the structural property (cache miss count), not timing,
+        // so it works regardless of test video h264 complexity.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        // clipA [0,50), clipB [50,100) — both from same file, source_in=0
+        std::vector<ClipInfo> both_clips = {
+            {"clipA", path, 0, 50, 0, 24, 1, 1.0f},
+            {"clipB", path, 50, 50, 0, 24, 1, 1.0f},
+        };
+        std::vector<ClipInfo> clip_b_only = {
+            {"clipB", path, 50, 50, 0, 24, 1, 1.0f},
+        };
+
+        // Park near boundary, let pre-buffer run
+        emp::SetDecodeMode(emp::DecodeMode::Park);
+        tmb->SetTrackClips(V1, both_clips);
+        tmb->SetPlayhead(48, 1, 1.0f);
+        tmb->GetVideoFrame(V1, 48);  // park decode of clipA
+        QThread::msleep(800);         // pre-buffer worker decodes clipB
+
+        // Press play — reset miss counter AFTER clipA playback
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+
+        // Play clipA's last frames (these will have Reader decodes — that's OK)
+        for (int f = 40; f <= 49; ++f) {
+            tmb->SetPlayhead(f, 1, 1.0f);
+            tmb->SetTrackClips(V1, both_clips);
+            tmb->GetVideoFrame(V1, f);
+        }
+
+        // Reset counter — from here, clipB frames must ALL be TMB cache hits
+        tmb->ResetVideoCacheMissCount();
+
+        // Play 2 seconds of clipB (frames 50..97)
+        for (int f = 50; f <= 97; ++f) {
+            tmb->SetPlayhead(f, 1, 1.0f);
+            tmb->SetTrackClips(V1, clip_b_only);
+            auto r = tmb->GetVideoFrame(V1, f);
+            QVERIFY2(r.frame != nullptr,
+                     qPrintable(QString("frame %1 null").arg(f)));
+        }
+
+        int64_t misses = tmb->GetVideoCacheMissCount();
+        QVERIFY2(misses == 0,
+                 qPrintable(QString("Pre-buffer gap: %1 cache misses during clipB "
+                                    "playback (each miss = potential 100ms+ hitch)")
+                            .arg(misses)));
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
     }
 
     // ── Metadata passthrough ──

@@ -184,6 +184,11 @@ public:
     // before treating as cache miss. Computed from stream frame rate in DecodeAtUS,
     // shared with GetCachedFrame (which doesn't have stream access).
     std::atomic<TimeUS> max_floor_gap_us{84000};  // conservative default ~2 frames @ 24fps
+
+    // Per-reader decode mode override (for TMB pre-buffer workers).
+    // When set, DecodeAtUS uses this instead of global g_decode_mode.
+    bool has_mode_override = false;
+    DecodeMode mode_override = DecodeMode::Play;
 };
 
 Reader::Reader(std::unique_ptr<ReaderImpl> impl, std::shared_ptr<MediaFile> asset)
@@ -370,6 +375,17 @@ int64_t Reader::PrefetchFramesDecoded() const {
     return m_impl->prefetch_frames_decoded.load();
 }
 
+void Reader::SetDecodeModeOverride(DecodeMode mode) {
+    m_impl->has_mode_override = true;
+    m_impl->mode_override = mode;
+    // Sync last_mode so no phantom transition triggers on first decode
+    m_impl->last_mode = mode;
+}
+
+void Reader::ClearDecodeModeOverride() {
+    m_impl->has_mode_override = false;
+}
+
 Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
     if (!m_media_file->info().has_video) {
         return Error::unsupported("DecodeAt requires video stream");
@@ -422,7 +438,8 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
     // 0. Mode transition: Park/Scrub→Play clears scattered cache.
     //    Scattered park frames cause stale floor matches during sequential play
     //    and fool the prefetch into thinking the cache is already ahead.
-    DecodeMode mode = GetDecodeMode();
+    DecodeMode mode = m_impl->has_mode_override
+        ? m_impl->mode_override : GetDecodeMode();
     if (mode == DecodeMode::Play && m_impl->last_mode != DecodeMode::Play) {
         std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
         if (!m_impl->frame_cache.empty()) {
@@ -871,9 +888,12 @@ void Reader::StartPrefetch(int direction) {
         return;
     }
 
-    // Sync last_mode to current global mode so prefetch output doesn't get
+    // Sync last_mode to effective mode so prefetch output doesn't get
     // cleared by a phantom mode transition on the next main-thread decode.
-    m_impl->last_mode = GetDecodeMode();
+    // Uses override mode when set (TMB forces Play), otherwise global mode.
+    DecodeMode effective = m_impl->has_mode_override
+        ? m_impl->mode_override : GetDecodeMode();
+    m_impl->last_mode = effective;
 
     // Reset decode counter for diagnostics/testing.
     m_impl->prefetch_frames_decoded.store(0);

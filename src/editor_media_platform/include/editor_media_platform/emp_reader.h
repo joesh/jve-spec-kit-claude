@@ -77,6 +77,12 @@ public:
     // Use this for display path; falls back to DecodeAtUS on miss
     std::shared_ptr<Frame> GetCachedFrame(TimeUS t_us);
 
+    // Override global decode mode for this reader instance.
+    // TMB sets Play to ensure pre-buffer workers use batch decode path
+    // (maintains codec position, prevents Park→Play cache clears).
+    void SetDecodeModeOverride(DecodeMode mode);
+    void ClearDecodeModeOverride();
+
     // Set maximum cached BGRA frames. Reader evicts down to new limit immediately.
     // Used by Lua to control per-reader cache size based on state
     // (e.g., active+playing=120, active+scrubbing=8, pooled=1).

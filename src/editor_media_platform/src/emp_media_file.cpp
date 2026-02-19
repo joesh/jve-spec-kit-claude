@@ -1,7 +1,9 @@
 #include <editor_media_platform/emp_media_file.h>
 #include <editor_media_platform/emp_rate.h>
 #include "impl/media_file_impl.h"
+#include "impl/ffmpeg_context.h"  // av_log_set_level
 #include <cassert>
+#include <mutex>
 
 namespace emp {
 
@@ -68,6 +70,13 @@ static Rate select_nominal_rate(AVStream* stream, bool* is_vfr_out) {
 }
 
 Result<std::shared_ptr<MediaFile>> MediaFile::Open(const std::string& path) {
+    // Suppress FFmpeg's h264 decoder warnings (e.g. "co located POCs unavailable"
+    // after seeks). These are normal and harmless but noisy on stderr.
+    static std::once_flag s_ffmpeg_log_init;
+    std::call_once(s_ffmpeg_log_init, [] {
+        av_log_set_level(AV_LOG_FATAL);
+    });
+
     auto impl = std::make_unique<MediaFileImpl>();
 
     // Open file

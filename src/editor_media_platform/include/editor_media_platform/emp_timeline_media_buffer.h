@@ -107,6 +107,11 @@ public:
     // Probe file without buffering (for import)
     static Result<MediaFileInfo> ProbeFile(const std::string& path);
 
+    // Diagnostics: count of GetVideoFrame calls that required a Reader decode
+    // (TMB cache miss). Reset with ResetVideoCacheMissCount().
+    int64_t GetVideoCacheMissCount() const { return m_video_cache_misses.load(); }
+    void ResetVideoCacheMissCount() { m_video_cache_misses.store(0); }
+
     // Lifecycle
     void ReleaseTrack(TrackId track);
     void ReleaseAll();
@@ -137,12 +142,14 @@ private:
         explicit operator bool() const { return valid(); }
     };
 
-    ReaderHandle acquire_reader(TrackId track, const std::string& path);
-    void release_reader(TrackId track, const std::string& path);
+    ReaderHandle acquire_reader(TrackId track, const std::string& clip_id,
+                                const std::string& path);
+    void release_reader(TrackId track, const std::string& clip_id);
     void evict_lru_reader();
 
     std::mutex m_pool_mutex;
-    // Key: (track, path) → ensures no seek contention between tracks
+    // Key: (track, clip_id) → each clip gets its own reader/decode session
+    // (avoids cache thrashing when two clips from the same file have different source positions)
     std::map<std::pair<TrackId, std::string>, PoolEntry> m_readers;
     int m_max_readers = 16;
     int64_t m_pool_clock = 0;  // monotonic counter for LRU ordering
@@ -160,7 +167,7 @@ private:
             std::shared_ptr<Frame> frame;
         };
         std::map<int64_t, CachedFrame> video_cache; // key = timeline_frame
-        static constexpr size_t MAX_VIDEO_CACHE = 8;
+        static constexpr size_t MAX_VIDEO_CACHE = 72;
 
         // Audio PCM cache (pre-buffered at clip boundaries)
         struct CachedAudio {
@@ -212,6 +219,8 @@ private:
         int64_t source_frame = 0;
         int64_t timeline_frame = 0;
         Rate rate{0, 1};
+        int direction = 1;            // playback direction (+1 forward, -1 reverse)
+        int64_t clip_duration = 0;    // clip length in frames (bounds batch size)
 
         // AUDIO fields
         TimeUS source_t0 = 0;
@@ -242,6 +251,9 @@ private:
     std::atomic<int64_t> m_playhead_frame{0};
     std::atomic<int> m_playhead_direction{0};
     std::atomic<float> m_playhead_speed{1.0f};
+
+    // ── Diagnostics ──
+    std::atomic<int64_t> m_video_cache_misses{0};
 };
 
 } // namespace emp
