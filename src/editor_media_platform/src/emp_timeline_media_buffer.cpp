@@ -30,9 +30,9 @@ std::unique_ptr<TimelineMediaBuffer> TimelineMediaBuffer::Create(int pool_thread
 // Track clip layout
 // ============================================================================
 
-void TimelineMediaBuffer::SetTrackClips(int track_id, const std::vector<ClipInfo>& clips) {
+void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInfo>& clips) {
     std::lock_guard<std::mutex> lock(m_tracks_mutex);
-    auto& ts = m_tracks[track_id];
+    auto& ts = m_tracks[track];
     ts.clips = clips;
     ts.video_cache.clear();
     ts.audio_cache.clear();
@@ -49,7 +49,7 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
 
     // Evaluate pre-buffer needs for each track
     std::lock_guard<std::mutex> lock(m_tracks_mutex);
-    for (auto& [tid, ts] : m_tracks) {
+    for (auto& [track, ts] : m_tracks) {
         const ClipInfo* current = find_clip_at(ts, frame);
         if (!current) continue;
 
@@ -85,7 +85,7 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
 
                 PreBufferJob video_job{};
                 video_job.type = PreBufferJob::VIDEO;
-                video_job.track_id = tid;
+                video_job.track = track;
                 video_job.clip_id = next->clip_id;
                 video_job.media_path = next->media_path;
                 video_job.source_frame = entry_frame;
@@ -125,7 +125,7 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
 
                         PreBufferJob audio_job{};
                         audio_job.type = PreBufferJob::AUDIO;
-                        audio_job.track_id = tid;
+                        audio_job.track = track;
                         audio_job.clip_id = next->clip_id;
                         audio_job.media_path = next->media_path;
                         audio_job.source_t0 = src_t0;
@@ -158,14 +158,14 @@ const ClipInfo* TimelineMediaBuffer::find_clip_at(const TrackState& ts, int64_t 
 // GetVideoFrame
 // ============================================================================
 
-VideoResult TimelineMediaBuffer::GetVideoFrame(int track_id, int64_t timeline_frame) {
+VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_frame) {
     VideoResult result{};
     result.frame = nullptr;
     result.offline = false;
 
     // Find track and clip
     std::unique_lock<std::mutex> tracks_lock(m_tracks_mutex);
-    auto track_it = m_tracks.find(track_id);
+    auto track_it = m_tracks.find(track);
     if (track_it == m_tracks.end()) {
         return result; // gap — no track data
     }
@@ -214,7 +214,7 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(int track_id, int64_t timeline_fr
     }
 
     // Acquire reader and decode
-    auto reader = acquire_reader(track_id, media_path);
+    auto reader = acquire_reader(track, media_path);
     if (!reader) {
         result.offline = true;
         return result;
@@ -236,7 +236,7 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(int track_id, int64_t timeline_fr
 
         // Cache the decoded frame
         std::lock_guard<std::mutex> tlock(m_tracks_mutex);
-        auto tit = m_tracks.find(track_id);
+        auto tit = m_tracks.find(track);
         if (tit != m_tracks.end()) {
             auto& cache = tit->second.video_cache;
 
@@ -446,13 +446,13 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::check_audio_cache(
 // ============================================================================
 
 std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
-        int track_id, TimeUS t0, TimeUS t1, const AudioFormat& fmt) {
+        TrackId track, TimeUS t0, TimeUS t1, const AudioFormat& fmt) {
     assert(t1 > t0 && "GetTrackAudio: t1 must be greater than t0");
     assert(m_seq_rate.num > 0 && "GetTrackAudio: SetSequenceRate not called");
 
     // Find track
     std::unique_lock<std::mutex> tracks_lock(m_tracks_mutex);
-    auto track_it = m_tracks.find(track_id);
+    auto track_it = m_tracks.find(track);
     if (track_it == m_tracks.end()) return nullptr;
     auto& ts = track_it->second;
 
@@ -499,7 +499,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         }
 
         // Acquire reader and decode first clip
-        auto reader = acquire_reader(track_id, media_path);
+        auto reader = acquire_reader(track, media_path);
         if (!reader) return nullptr;
 
         auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt);
@@ -530,7 +530,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
 
     while (cursor < t1) {
         std::unique_lock<std::mutex> tlock(m_tracks_mutex);
-        auto tit = m_tracks.find(track_id);
+        auto tit = m_tracks.find(track);
         if (tit == m_tracks.end()) break;
 
         const ClipInfo* next = find_next_clip_at_us(tit->second, cursor);
@@ -574,7 +574,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
             if (m_offline.count(next_path)) { cursor = next_end_us; continue; }
         }
 
-        auto next_reader = acquire_reader(track_id, next_path);
+        auto next_reader = acquire_reader(track, next_path);
         if (!next_reader) { cursor = next_end_us; continue; }
 
         auto next_decoded = next_reader->DecodeAudioRangeUS(next_src_t0, next_src_t1, fmt);
@@ -644,17 +644,17 @@ void TimelineMediaBuffer::SetMaxReaders(int max) {
 // Lifecycle
 // ============================================================================
 
-void TimelineMediaBuffer::ReleaseTrack(int track_id) {
+void TimelineMediaBuffer::ReleaseTrack(TrackId track) {
     // Remove track state
     {
         std::lock_guard<std::mutex> lock(m_tracks_mutex);
-        m_tracks.erase(track_id);
+        m_tracks.erase(track);
     }
 
     // Release readers for this track
     std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
     for (auto it = m_readers.begin(); it != m_readers.end(); ) {
-        if (it->first.first == track_id) {
+        if (it->first.first == track) {
             it = m_readers.erase(it);
         } else {
             ++it;
@@ -679,7 +679,7 @@ void TimelineMediaBuffer::ReleaseAll() {
 // ============================================================================
 
 TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
-        int track_id, const std::string& path) {
+        TrackId track, const std::string& path) {
 
     std::shared_ptr<Reader> reader;
     std::shared_ptr<std::mutex> use_mtx;
@@ -687,7 +687,7 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
     {
         std::lock_guard<std::mutex> lock(m_pool_mutex);
 
-        auto key = std::make_pair(track_id, path);
+        auto key = std::make_pair(track, path);
         auto it = m_readers.find(key);
         if (it != m_readers.end()) {
             it->second.last_used = ++m_pool_clock;
@@ -718,7 +718,7 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
 
             reader = reader_result.value();
             use_mtx = std::make_shared<std::mutex>();
-            m_readers[key] = PoolEntry{path, mf, reader, track_id, ++m_pool_clock, use_mtx};
+            m_readers[key] = PoolEntry{path, mf, reader, track, ++m_pool_clock, use_mtx};
         }
     }
 
@@ -726,9 +726,9 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
     return ReaderHandle{reader, std::unique_lock<std::mutex>(*use_mtx)};
 }
 
-void TimelineMediaBuffer::release_reader(int track_id, const std::string& path) {
+void TimelineMediaBuffer::release_reader(TrackId track, const std::string& path) {
     std::lock_guard<std::mutex> lock(m_pool_mutex);
-    m_readers.erase(std::make_pair(track_id, path));
+    m_readers.erase(std::make_pair(track, path));
 }
 
 void TimelineMediaBuffer::evict_lru_reader() {
@@ -771,9 +771,9 @@ void TimelineMediaBuffer::stop_workers() {
 void TimelineMediaBuffer::submit_pre_buffer(const PreBufferJob& job) {
     std::lock_guard<std::mutex> lock(m_jobs_mutex);
 
-    // De-duplicate: don't submit if same (track_id, clip_id, type) already queued
+    // De-duplicate: don't submit if same (track, clip_id, type) already queued
     for (const auto& j : m_jobs) {
-        if (j.track_id == job.track_id && j.clip_id == job.clip_id && j.type == job.type) {
+        if (j.track == job.track && j.clip_id == job.clip_id && j.type == job.type) {
             return;
         }
     }
@@ -798,7 +798,7 @@ void TimelineMediaBuffer::worker_loop() {
         }
 
         // Acquire reader (may open a new one)
-        auto reader = acquire_reader(job.track_id, job.media_path);
+        auto reader = acquire_reader(job.track, job.media_path);
         if (!reader) continue;
 
         if (job.type == PreBufferJob::VIDEO) {
@@ -811,7 +811,7 @@ void TimelineMediaBuffer::worker_loop() {
             if (result.is_ok()) {
                 // Store in track's video cache
                 std::lock_guard<std::mutex> lock(m_tracks_mutex);
-                auto it = m_tracks.find(job.track_id);
+                auto it = m_tracks.find(job.track);
                 if (it != m_tracks.end()) {
                     auto& cache = it->second.video_cache;
                     while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
@@ -840,7 +840,7 @@ void TimelineMediaBuffer::worker_loop() {
 
             // Store in track's audio cache
             std::lock_guard<std::mutex> lock(m_tracks_mutex);
-            auto it = m_tracks.find(job.track_id);
+            auto it = m_tracks.find(job.track);
             if (it != m_tracks.end()) {
                 auto& cache = it->second.audio_cache;
                 // Evict oldest if at capacity

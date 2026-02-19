@@ -7,7 +7,7 @@
 --
 -- Video path uses TimelineMediaBuffer (TMB) — a C++ class that owns readers,
 -- caches frames, and pre-buffers at clip boundaries. Lua feeds clip windows
--- incrementally via _feed_tmb_clips() and reads decoded frames via Renderer.
+-- incrementally via _send_clips_to_tmb() and reads decoded frames via Renderer.
 --
 -- Unified tick combines source_playback boundary-latch logic and
 -- timeline_playback audio-following/stuckness-detection into one algorithm.
@@ -117,6 +117,7 @@ function PlaybackEngine.new(config)
     -- TMB (TimelineMediaBuffer) — owns video readers, cache, pre-buffer
     self._tmb = nil
     self._video_track_indices = {}   -- track indices for Renderer iteration
+    self._audio_track_indices = {}   -- audio track indices for TMB audio path
 
     -- Audio lookahead state (kept until Phase 3c replaces audio path)
     self._pre_buffered_audio_ids = {}   -- {[clip_id] = true}
@@ -178,7 +179,7 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames)
     self:_create_tmb()
 
     -- Initial clip feed at starting position
-    self:_feed_tmb_clips(0)
+    self:_send_clips_to_tmb(0)
 
     logger.debug("playback_engine", string.format(
         "Loaded sequence %s (%s): %d frames @ %d/%d fps",
@@ -244,15 +245,16 @@ function PlaybackEngine:_close_tmb()
         self._tmb = nil
     end
     self._video_track_indices = {}
+    self._audio_track_indices = {}
 end
 
---- Feed TMB with current + next clips for each video track.
+--- Feed TMB with current + next clips for each video and audio track.
 -- Builds a small clip window (2-3 clips per track) from sequence queries.
 -- Called every frame during playback (lightweight: reuses existing SQL queries).
 -- @param frame integer: current playhead frame
-function PlaybackEngine:_feed_tmb_clips(frame)
-    assert(self._tmb, "PlaybackEngine:_feed_tmb_clips: no TMB")
-    assert(self.sequence, "PlaybackEngine:_feed_tmb_clips: no sequence")
+function PlaybackEngine:_send_clips_to_tmb(frame)
+    assert(self._tmb, "PlaybackEngine:_send_clips_to_tmb: no TMB")
+    assert(self.sequence, "PlaybackEngine:_send_clips_to_tmb: no sequence")
 
     local EMP = qt_constants.EMP
 
@@ -267,7 +269,7 @@ function PlaybackEngine:_feed_tmb_clips(frame)
         if not track_clips[idx] then
             track_clips[idx] = {}
         end
-        track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(entry)
+        track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(entry, 1.0)
     end
 
     -- Get next clips (direction-aware) and add to same track
@@ -296,7 +298,7 @@ function PlaybackEngine:_feed_tmb_clips(frame)
                     end
                 end
                 if not dominated then
-                    track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne)
+                    track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne, 1.0)
                 end
             end
         end
@@ -310,34 +312,107 @@ function PlaybackEngine:_feed_tmb_clips(frame)
             if not track_clips[idx] then
                 track_clips[idx] = {}
             end
-            track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne)
+            track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne, 1.0)
         end
     end
 
-    -- Feed each track to TMB
+    -- Feed each video track to TMB
     local indices = {}
     for idx, clips in pairs(track_clips) do
-        EMP.TMB_SET_TRACK_CLIPS(self._tmb, idx, clips)
+        EMP.TMB_SET_TRACK_CLIPS(self._tmb, "video", idx, clips)
         indices[#indices + 1] = idx
     end
 
     -- Sort indices (lowest = topmost = highest priority)
     table.sort(indices)
     self._video_track_indices = indices
+
+    -- ── Audio tracks ──
+    self:_send_audio_clips_to_tmb(frame, EMP)
 end
 
---- Build a TMB clip table from a sequence entry (get_video_at/get_next_video result).
+--- Feed audio clips near the playhead to TMB (same pattern as video).
+-- Called from _send_clips_to_tmb every tick.
+function PlaybackEngine:_send_audio_clips_to_tmb(frame, EMP)
+    local audio_entries = self.sequence:get_audio_at(frame)
+
+    -- Build track_index → clip list mapping
+    local audio_track_clips = {}
+
+    for _, entry in ipairs(audio_entries) do
+        local idx = entry.track.track_index
+        if not audio_track_clips[idx] then
+            audio_track_clips[idx] = {}
+        end
+        local sr = self:_compute_audio_speed_ratio(entry)
+        audio_track_clips[idx][#audio_track_clips[idx] + 1] =
+            self:_build_tmb_clip(entry, sr)
+    end
+
+    -- Direction-aware next/prev for pre-buffer
+    for _, entry in ipairs(audio_entries) do
+        local clip_end = entry.clip.timeline_start + entry.clip.duration
+        local nexts
+        if self.direction >= 0 then
+            nexts = self.sequence:get_next_audio(clip_end)
+        else
+            nexts = self.sequence:get_prev_audio(entry.clip.timeline_start)
+        end
+        for _, ne in ipairs(nexts) do
+            local idx = ne.track.track_index
+            if not audio_track_clips[idx] then
+                audio_track_clips[idx] = {}
+            end
+            local dominated = false
+            for _, existing in ipairs(audio_track_clips[idx]) do
+                if existing.clip_id == ne.clip.id then
+                    dominated = true
+                    break
+                end
+            end
+            if not dominated then
+                local sr = self:_compute_audio_speed_ratio(ne)
+                audio_track_clips[idx][#audio_track_clips[idx] + 1] =
+                    self:_build_tmb_clip(ne, sr)
+            end
+        end
+    end
+
+    -- Gap: no current audio entries → try finding next clip ahead
+    if #audio_entries == 0 then
+        local next_audio = self.sequence:get_next_audio(frame)
+        for _, ne in ipairs(next_audio or {}) do
+            local idx = ne.track.track_index
+            if not audio_track_clips[idx] then
+                audio_track_clips[idx] = {}
+            end
+            local sr = self:_compute_audio_speed_ratio(ne)
+            audio_track_clips[idx][#audio_track_clips[idx] + 1] =
+                self:_build_tmb_clip(ne, sr)
+        end
+    end
+
+    -- Feed each audio track to TMB
+    local audio_indices = {}
+    for idx, clips in pairs(audio_track_clips) do
+        EMP.TMB_SET_TRACK_CLIPS(self._tmb, "audio", idx, clips)
+        audio_indices[#audio_indices + 1] = idx
+    end
+    table.sort(audio_indices)
+    self._audio_track_indices = audio_indices
+end
+
+--- Build a TMB clip table from a sequence entry (get_video_at/get_audio_at result).
 -- @param entry table: {media_path, clip, track, ...}
+-- @param speed_ratio number: conform ratio (1.0 for video, seq_fps/media_fps for audio)
 -- @return table matching TMB_SET_TRACK_CLIPS format
-function PlaybackEngine:_build_tmb_clip(entry)
+function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
     local clip = entry.clip
     assert(clip.rate, string.format(
         "PlaybackEngine:_build_tmb_clip: clip %s missing rate", clip.id))
-
-    -- Compute speed_ratio for video conform (seq_fps / media_fps)
-    -- For video, speed_ratio=1.0 is typical; non-1.0 only matters for audio conform.
-    -- TMB uses it for audio path; video path uses clip rate directly.
-    local speed_ratio = 1.0
+    assert(type(speed_ratio) == "number" and speed_ratio > 0, string.format(
+        "PlaybackEngine:_build_tmb_clip: clip %s speed_ratio must be > 0, got %s",
+        clip.id, tostring(speed_ratio)))
 
     return {
         clip_id = clip.id,
@@ -349,6 +424,24 @@ function PlaybackEngine:_build_tmb_clip(entry)
         rate_den = clip.rate.fps_denominator,
         speed_ratio = speed_ratio,
     }
+end
+
+--- Compute audio conform speed_ratio: seq_fps / media_video_fps.
+-- When media_video_fps >= 1000 (audio-only) or matches seq_fps, returns 1.0.
+-- @param entry table: audio entry from get_audio_at (has media_fps_num/den)
+-- @return number: speed_ratio > 0
+function PlaybackEngine:_compute_audio_speed_ratio(entry)
+    local media_fps_num = entry.media_fps_num
+    local media_fps_den = entry.media_fps_den
+    if not media_fps_num or not media_fps_den or media_fps_den == 0 then
+        return 1.0
+    end
+    local media_video_fps = media_fps_num / media_fps_den
+    -- Audio-only media (rate >= 1000) or matching fps → no conform
+    if media_video_fps >= 1000 then return 1.0 end
+    local seq_fps = self.fps_num / self.fps_den
+    if math.abs(media_video_fps - seq_fps) < 0.01 then return 1.0 end
+    return seq_fps / media_video_fps
 end
 
 --------------------------------------------------------------------------------
@@ -532,7 +625,7 @@ function PlaybackEngine:seek(frame_idx)
 
     -- Feed TMB clips for seek position + display via Renderer
     if self._tmb then
-        self:_feed_tmb_clips(frame)
+        self:_send_clips_to_tmb(frame)
     end
     self:_display_frame(frame)
 
@@ -692,7 +785,7 @@ function PlaybackEngine:_tick()
             self._tmb, frame_idx, self.direction, self.speed)
     end
     if self._tmb then
-        self:_feed_tmb_clips(frame_idx)
+        self:_send_clips_to_tmb(frame_idx)
     end
 
     self:_display_frame(frame_idx)

@@ -117,7 +117,7 @@ function SequenceMonitor.new(config)
             self.total_frames = self.engine.total_frames
             -- Re-feed TMB clips (clip layout may have changed)
             if self.engine._tmb then
-                self.engine:_feed_tmb_clips(math.floor(self.engine:get_position()))
+                self.engine:_send_clips_to_tmb(math.floor(self.engine:get_position()))
             end
             self:_notify()
         end

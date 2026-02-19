@@ -22,6 +22,30 @@
 
 namespace emp {
 
+// Track type: video or audio (prevents ID collision between track kinds)
+enum class TrackType { Video, Audio };
+
+// Composite track identifier — uniquely identifies a track in TMB
+struct TrackId {
+    TrackType type;
+    int index;
+
+    bool operator==(const TrackId& o) const {
+        return type == o.type && index == o.index;
+    }
+    bool operator!=(const TrackId& o) const { return !(*this == o); }
+    bool operator<(const TrackId& o) const {
+        if (type != o.type) return type < o.type;
+        return index < o.index;
+    }
+};
+
+struct TrackIdHash {
+    size_t operator()(const TrackId& id) const {
+        return std::hash<int>()(static_cast<int>(id.type)) ^ (std::hash<int>()(id.index) << 1);
+    }
+};
+
 // Clip layout entry (passed from Lua per track)
 struct ClipInfo {
     std::string clip_id;
@@ -58,17 +82,17 @@ public:
 
     // Per-track clip layout (call incrementally as playhead moves).
     // Lua passes current clip + next 1-3 clips per track.
-    void SetTrackClips(int track_id, const std::vector<ClipInfo>& clips);
+    void SetTrackClips(TrackId track, const std::vector<ClipInfo>& clips);
 
     // Transport hint for pre-buffer direction
     void SetPlayhead(int64_t frame, int direction, float speed);
 
     // Constant-time per-track video access
-    VideoResult GetVideoFrame(int track_id, int64_t timeline_frame);
+    VideoResult GetVideoFrame(TrackId track, int64_t timeline_frame);
 
     // Per-track audio access
     // Returns nullptr for gaps (Lua fills with silence)
-    std::shared_ptr<PcmChunk> GetTrackAudio(int track_id, TimeUS t0, TimeUS t1,
+    std::shared_ptr<PcmChunk> GetTrackAudio(TrackId track, TimeUS t0, TimeUS t1,
                                              const AudioFormat& fmt);
 
     // Sequence rate (required before GetTrackAudio — converts timeline frames to us)
@@ -84,7 +108,7 @@ public:
     static Result<MediaFileInfo> ProbeFile(const std::string& path);
 
     // Lifecycle
-    void ReleaseTrack(int track_id);
+    void ReleaseTrack(TrackId track);
     void ReleaseAll();
 
 private:
@@ -95,7 +119,7 @@ private:
         std::string path;
         std::shared_ptr<MediaFile> media_file;
         std::shared_ptr<Reader> reader;
-        int track_id;       // which track opened this reader
+        TrackId track;       // which track opened this reader
         int64_t last_used;  // monotonic counter for LRU
         std::shared_ptr<std::mutex> use_mutex;  // exclusive access during decode
     };
@@ -113,13 +137,13 @@ private:
         explicit operator bool() const { return valid(); }
     };
 
-    ReaderHandle acquire_reader(int track_id, const std::string& path);
-    void release_reader(int track_id, const std::string& path);
+    ReaderHandle acquire_reader(TrackId track, const std::string& path);
+    void release_reader(TrackId track, const std::string& path);
     void evict_lru_reader();
 
     std::mutex m_pool_mutex;
-    // Key: (track_id, path) → ensures no seek contention between tracks
-    std::map<std::pair<int, std::string>, PoolEntry> m_readers;
+    // Key: (track, path) → ensures no seek contention between tracks
+    std::map<std::pair<TrackId, std::string>, PoolEntry> m_readers;
     int m_max_readers = 16;
     int64_t m_pool_clock = 0;  // monotonic counter for LRU ordering
 
@@ -150,7 +174,7 @@ private:
     };
 
     std::mutex m_tracks_mutex;
-    std::unordered_map<int, TrackState> m_tracks;
+    std::unordered_map<TrackId, TrackState, TrackIdHash> m_tracks;
 
     // Find clip at timeline_frame in track's clip list
     const ClipInfo* find_clip_at(const TrackState& ts, int64_t timeline_frame) const;
@@ -180,7 +204,7 @@ private:
         enum Type { VIDEO, AUDIO };
         Type type = VIDEO;
 
-        int track_id;
+        TrackId track{TrackType::Video, 0};
         std::string clip_id;
         std::string media_path;
 

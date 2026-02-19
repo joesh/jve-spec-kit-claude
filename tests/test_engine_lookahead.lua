@@ -166,6 +166,7 @@ local mock_sequence = {
         end
         return {}
     end,
+    get_audio_at = function() return {} end,
     get_next_audio = function(self, after_frame)
         if after_frame == 100 then
             return {{
@@ -178,7 +179,7 @@ local mock_sequence = {
                     timeline_start = 100, duration = 100,
                     source_in = 0, speed_ratio = 1.0, volume = 1.0,
                 },
-                track = { id = "track_a1" },
+                track = { id = "track_a1", track_index = 1 },
             }}
         end
         return {}

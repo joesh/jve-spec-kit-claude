@@ -10,6 +10,12 @@
 
 using namespace emp;
 
+// Shorthand for test readability
+static const TrackId V1{TrackType::Video, 1};
+static const TrackId V2{TrackType::Video, 2};
+static const TrackId V3{TrackType::Video, 3};
+static const TrackId A1{TrackType::Audio, 1};
+
 class TestTimelineMediaBuffer : public QObject {
     Q_OBJECT
 
@@ -72,7 +78,7 @@ private slots:
 
     void test_get_video_empty_track() {
         auto tmb = TimelineMediaBuffer::Create(0);
-        auto result = tmb->GetVideoFrame(1, 100);
+        auto result = tmb->GetVideoFrame(V1, 100);
         QVERIFY(result.frame == nullptr);
         QVERIFY(!result.offline);
         QVERIFY(result.clip_id.empty());
@@ -88,10 +94,10 @@ private slots:
             {"clip1", m_testVideoPath.toStdString(), 0, 10, 0, 24, 1, 1.0f},
             {"clip2", m_testVideoPath.toStdString(), 20, 10, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(V1, clips);
 
         // Frame 15 is in the gap
-        auto result = tmb->GetVideoFrame(1, 15);
+        auto result = tmb->GetVideoFrame(V1, 15);
         QVERIFY(result.frame == nullptr);
         QVERIFY(!result.offline);
     }
@@ -106,9 +112,9 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(V1, clips);
 
-        auto result = tmb->GetVideoFrame(1, 0);
+        auto result = tmb->GetVideoFrame(V1, 0);
         QVERIFY(result.frame != nullptr);
         QCOMPARE(result.clip_id, std::string("clip1"));
         QCOMPARE(result.media_path, m_testVideoPath.toStdString());
@@ -127,10 +133,10 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 100, 50, 10, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(V1, clips);
 
         // Timeline frame 120 → source = 10 + (120-100) = 30
-        auto result = tmb->GetVideoFrame(1, 120);
+        auto result = tmb->GetVideoFrame(V1, 120);
         QVERIFY(result.frame != nullptr);
         QCOMPARE(result.source_frame, (int64_t)30);
     }
@@ -144,15 +150,15 @@ private slots:
             {"clipA", m_testVideoPath.toStdString(), 0, 50, 0, 24, 1, 1.0f},
             {"clipB", m_testVideoPath.toStdString(), 50, 50, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(V1, clips);
 
         // Last frame of clipA
-        auto r1 = tmb->GetVideoFrame(1, 49);
+        auto r1 = tmb->GetVideoFrame(V1, 49);
         QCOMPARE(r1.clip_id, std::string("clipA"));
         QCOMPARE(r1.source_frame, (int64_t)49);
 
         // First frame of clipB
-        auto r2 = tmb->GetVideoFrame(1, 50);
+        auto r2 = tmb->GetVideoFrame(V1, 50);
         QCOMPARE(r2.clip_id, std::string("clipB"));
         QCOMPARE(r2.source_frame, (int64_t)0);
     }
@@ -165,14 +171,14 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(V1, clips);
 
         // First decode
-        auto r1 = tmb->GetVideoFrame(1, 5);
+        auto r1 = tmb->GetVideoFrame(V1, 5);
         QVERIFY(r1.frame != nullptr);
 
         // Second access should hit cache (same frame pointer)
-        auto r2 = tmb->GetVideoFrame(1, 5);
+        auto r2 = tmb->GetVideoFrame(V1, 5);
         QVERIFY(r2.frame != nullptr);
         QVERIFY(r1.frame.get() == r2.frame.get());
     }
@@ -185,9 +191,9 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", "/nonexistent/path/video.mp4", 0, 100, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(V1, clips);
 
-        auto result = tmb->GetVideoFrame(1, 0);
+        auto result = tmb->GetVideoFrame(V1, 0);
         QVERIFY(result.frame == nullptr);
         QVERIFY(result.offline);
         QCOMPARE(result.clip_id, std::string("clip1"));
@@ -199,13 +205,13 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", "/nonexistent/path/video.mp4", 0, 100, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(V1, clips);
 
         // First access marks offline
-        tmb->GetVideoFrame(1, 0);
+        tmb->GetVideoFrame(V1, 0);
 
         // Second access should still be offline (no retry)
-        auto result = tmb->GetVideoFrame(1, 5);
+        auto result = tmb->GetVideoFrame(V1, 5);
         QVERIFY(result.offline);
     }
 
@@ -219,12 +225,12 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(V1, clips);
 
         // Multiple frames from same clip should reuse the reader
-        auto r1 = tmb->GetVideoFrame(1, 0);
-        auto r2 = tmb->GetVideoFrame(1, 1);
-        auto r3 = tmb->GetVideoFrame(1, 2);
+        auto r1 = tmb->GetVideoFrame(V1, 0);
+        auto r2 = tmb->GetVideoFrame(V1, 1);
+        auto r3 = tmb->GetVideoFrame(V1, 2);
         QVERIFY(r1.frame != nullptr);
         QVERIFY(r2.frame != nullptr);
         QVERIFY(r3.frame != nullptr);
@@ -237,21 +243,22 @@ private slots:
         tmb->SetMaxReaders(2);
 
         // Set up 3 tracks using the same file (different track IDs = different readers)
-        for (int i = 1; i <= 3; ++i) {
+        const TrackId video_tracks[] = {V1, V2, V3};
+        for (int i = 0; i < 3; ++i) {
             std::vector<ClipInfo> clips = {
-                {"clip" + std::to_string(i), m_testVideoPath.toStdString(),
+                {"clip" + std::to_string(i + 1), m_testVideoPath.toStdString(),
                  0, 100, 0, 24, 1, 1.0f},
             };
-            tmb->SetTrackClips(i, clips);
+            tmb->SetTrackClips(video_tracks[i], clips);
         }
 
         // Access all 3 tracks — 3rd should evict 1st
-        tmb->GetVideoFrame(1, 0);
-        tmb->GetVideoFrame(2, 0);
-        tmb->GetVideoFrame(3, 0);
+        tmb->GetVideoFrame(V1, 0);
+        tmb->GetVideoFrame(V2, 0);
+        tmb->GetVideoFrame(V3, 0);
 
         // Track 1 should still work (re-opens reader)
-        auto result = tmb->GetVideoFrame(1, 1);
+        auto result = tmb->GetVideoFrame(V1, 1);
         QVERIFY(result.frame != nullptr);
     }
 
@@ -271,16 +278,16 @@ private slots:
             {"t2_clip", m_testVideoPath.toStdString(), 10, 50, 5, 24, 1, 1.0f},
         };
 
-        tmb->SetTrackClips(1, clips1);
-        tmb->SetTrackClips(2, clips2);
+        tmb->SetTrackClips(V1, clips1);
+        tmb->SetTrackClips(V2, clips2);
 
         // Track 1, frame 25 → source = 0 + (25-0) = 25
-        auto r1 = tmb->GetVideoFrame(1, 25);
+        auto r1 = tmb->GetVideoFrame(V1, 25);
         QCOMPARE(r1.source_frame, (int64_t)25);
         QCOMPARE(r1.clip_id, std::string("t1_clip"));
 
         // Track 2, frame 25 → source = 5 + (25-10) = 20
-        auto r2 = tmb->GetVideoFrame(2, 25);
+        auto r2 = tmb->GetVideoFrame(V2, 25);
         QCOMPARE(r2.source_frame, (int64_t)20);
         QCOMPARE(r2.clip_id, std::string("t2_clip"));
     }
@@ -295,13 +302,13 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
-        tmb->GetVideoFrame(1, 0);  // open reader
+        tmb->SetTrackClips(V1, clips);
+        tmb->GetVideoFrame(V1, 0);  // open reader
 
-        tmb->ReleaseTrack(1);
+        tmb->ReleaseTrack(V1);
 
         // After release, track should be gone
-        auto result = tmb->GetVideoFrame(1, 0);
+        auto result = tmb->GetVideoFrame(V1, 0);
         QVERIFY(result.frame == nullptr);
         QVERIFY(!result.offline);  // gap, not offline
     }
@@ -314,15 +321,15 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
-        tmb->SetTrackClips(2, clips);
-        tmb->GetVideoFrame(1, 0);
-        tmb->GetVideoFrame(2, 0);
+        tmb->SetTrackClips(V1, clips);
+        tmb->SetTrackClips(V2, clips);
+        tmb->GetVideoFrame(V1, 0);
+        tmb->GetVideoFrame(V2, 0);
 
         tmb->ReleaseAll();
 
-        auto r1 = tmb->GetVideoFrame(1, 0);
-        auto r2 = tmb->GetVideoFrame(2, 0);
+        auto r1 = tmb->GetVideoFrame(V1, 0);
+        auto r2 = tmb->GetVideoFrame(V2, 0);
         QVERIFY(r1.frame == nullptr);
         QVERIFY(r2.frame == nullptr);
     }
@@ -366,7 +373,7 @@ private slots:
             {"clipA", m_testVideoPath.toStdString(), 0, 50, 0, 24, 1, 1.0f},
             {"clipB", m_testVideoPath.toStdString(), 50, 50, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(V1, clips);
 
         // Seek near boundary (frame 48, within threshold of 48 frames)
         tmb->SetPlayhead(48, 1, 1.0f);
@@ -375,7 +382,7 @@ private slots:
         QThread::msleep(200);
 
         // Frame 50 (first frame of clipB) should be cached
-        auto result = tmb->GetVideoFrame(1, 50);
+        auto result = tmb->GetVideoFrame(V1, 50);
         QVERIFY(result.frame != nullptr);
         QCOMPARE(result.clip_id, std::string("clipB"));
     }
@@ -390,9 +397,9 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(V1, clips);
 
-        auto result = tmb->GetVideoFrame(1, 0);
+        auto result = tmb->GetVideoFrame(V1, 0);
         QVERIFY(result.frame != nullptr);
         // rotation should be a valid value (0, 90, 180, or 270)
         QVERIFY(result.rotation >= 0 && result.rotation < 360);
@@ -404,7 +411,7 @@ private slots:
         tmb->SetSequenceRate(24, 1);
 
         // No clips on track → gap
-        auto result = tmb->GetTrackAudio(1, 0, 100000,
+        auto result = tmb->GetTrackAudio(A1, 0, 100000,
             AudioFormat{SampleFormat::F32, 48000, 2});
         QVERIFY(result == nullptr);
     }
@@ -413,7 +420,7 @@ private slots:
         auto tmb = TimelineMediaBuffer::Create(0);
         tmb->SetSequenceRate(24, 1);
 
-        auto result = tmb->GetTrackAudio(99, 0, 100000,
+        auto result = tmb->GetTrackAudio(TrackId{TrackType::Audio, 99}, 0, 100000,
             AudioFormat{SampleFormat::F32, 48000, 2});
         QVERIFY(result == nullptr);
     }
@@ -425,9 +432,9 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", "/nonexistent/audio.mp4", 0, 100, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
-        auto result = tmb->GetTrackAudio(1, 0, 100000,
+        auto result = tmb->GetTrackAudio(A1, 0, 100000,
             AudioFormat{SampleFormat::F32, 48000, 2});
         QVERIFY(result == nullptr);
     }
@@ -442,11 +449,11 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Request first ~0.1s (100000 us)
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
-        auto result = tmb->GetTrackAudio(1, 0, 100000, fmt);
+        auto result = tmb->GetTrackAudio(A1, 0, 100000, fmt);
         QVERIFY(result != nullptr);
         QVERIFY(result->frames() > 0);
         QCOMPARE(result->sample_rate(), 48000);
@@ -464,11 +471,11 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 24, 100, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Request at 1.5s (mid-clip)
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
-        auto result = tmb->GetTrackAudio(1, 1500000, 1600000, fmt);
+        auto result = tmb->GetTrackAudio(A1, 1500000, 1600000, fmt);
         QVERIFY(result != nullptr);
         QVERIFY(result->frames() > 0);
         // Start time should be rebased to timeline
@@ -485,11 +492,11 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 0, 48, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Request 1.5s to 2.5s — should clamp to clip end (2.0s)
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
-        auto result = tmb->GetTrackAudio(1, 1500000, 2500000, fmt);
+        auto result = tmb->GetTrackAudio(A1, 1500000, 2500000, fmt);
         QVERIFY(result != nullptr);
 
         // Should get ~0.5s of audio (not 1.0s)
@@ -509,11 +516,11 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 0, 24, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Request starts after clip end → gap
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
-        auto result = tmb->GetTrackAudio(1, 2000000, 3000000, fmt);
+        auto result = tmb->GetTrackAudio(A1, 2000000, 3000000, fmt);
         QVERIFY(result == nullptr);
     }
 
@@ -527,10 +534,10 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 0, 48, 12, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
-        auto result = tmb->GetTrackAudio(1, 0, 100000, fmt);
+        auto result = tmb->GetTrackAudio(A1, 0, 100000, fmt);
         QVERIFY(result != nullptr);
         QVERIFY(result->frames() > 0);
         QCOMPARE(result->start_time_us(), (int64_t)0);
@@ -546,11 +553,11 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.25f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Request 0.5s of timeline audio
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
-        auto result = tmb->GetTrackAudio(1, 0, 500000, fmt);
+        auto result = tmb->GetTrackAudio(A1, 0, 500000, fmt);
         QVERIFY(result != nullptr);
 
         // Should get ~0.5s of output (timeline duration), not 0.625s (source)
@@ -575,9 +582,9 @@ private slots:
 
         // Track exists but has empty clip vector
         std::vector<ClipInfo> clips = {};
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
-        auto result = tmb->GetTrackAudio(1, 0, 100000,
+        auto result = tmb->GetTrackAudio(A1, 0, 100000,
             AudioFormat{SampleFormat::F32, 48000, 2});
         QVERIFY(result == nullptr);
     }
@@ -592,11 +599,11 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 10, 0, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Request at clip's start — zero-duration clip should never match
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
-        auto result = tmb->GetTrackAudio(1, 416666, 500000, fmt);
+        auto result = tmb->GetTrackAudio(A1, 416666, 500000, fmt);
         QVERIFY(result == nullptr);
     }
 
@@ -610,12 +617,12 @@ private slots:
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 24, 48, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Request [0.5s, 1.5s) — t0 is before clip start (1.0s)
         // find_clip_at_us(t0=500000) won't find the clip → nullptr (gap before clip)
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
-        auto result = tmb->GetTrackAudio(1, 500000, 1500000, fmt);
+        auto result = tmb->GetTrackAudio(A1, 500000, 1500000, fmt);
         QVERIFY(result == nullptr);
     }
 
@@ -630,17 +637,17 @@ private slots:
             {"clip1", m_testVideoPath.toStdString(), 0, 24, 0, 24, 1, 1.0f},
             {"clip2", m_testVideoPath.toStdString(), 24, 24, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
 
         // Request in clip1's range (0.5s)
-        auto r1 = tmb->GetTrackAudio(1, 0, 500000, fmt);
+        auto r1 = tmb->GetTrackAudio(A1, 0, 500000, fmt);
         QVERIFY(r1 != nullptr);
         QCOMPARE(r1->start_time_us(), (int64_t)0);
 
         // Request in clip2's range (1.0s - 1.5s)
-        auto r2 = tmb->GetTrackAudio(1, 1000000, 1500000, fmt);
+        auto r2 = tmb->GetTrackAudio(A1, 1000000, 1500000, fmt);
         QVERIFY(r2 != nullptr);
         QCOMPARE(r2->start_time_us(), (int64_t)1000000);
     }
@@ -658,11 +665,11 @@ private slots:
             {"clip1", m_testVideoPath.toStdString(), 0, 24, 0, 24, 1, 1.0f},
             {"clip2", m_testVideoPath.toStdString(), 24, 24, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Request spans boundary: [0.5s, 1.5s)
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
-        auto result = tmb->GetTrackAudio(1, 500000, 1500000, fmt);
+        auto result = tmb->GetTrackAudio(A1, 500000, 1500000, fmt);
         QVERIFY(result != nullptr);
 
         // Should get full 1.0s of audio (not truncated 0.5s)
@@ -686,11 +693,11 @@ private slots:
             {"clip1", m_testVideoPath.toStdString(), 0, 24, 0, 24, 1, 1.0f},
             {"clip2", m_testVideoPath.toStdString(), 48, 24, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Request [0.5s, 2.5s) — spans clip1 end, gap, and into clip2
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
-        auto result = tmb->GetTrackAudio(1, 500000, 2500000, fmt);
+        auto result = tmb->GetTrackAudio(A1, 500000, 2500000, fmt);
         QVERIFY(result != nullptr);
 
         // Should get full 2.0s of audio covering both clips + gap
@@ -728,11 +735,11 @@ private slots:
             {"clip1", m_testVideoPath.toStdString(), 0, 24, 0, 24, 1, 1.0f},
             {"clip2", "/nonexistent/offline_media.mp4", 24, 24, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Request [0.5s, 1.5s) — first clip OK, second offline
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
-        auto result = tmb->GetTrackAudio(1, 500000, 1500000, fmt);
+        auto result = tmb->GetTrackAudio(A1, 500000, 1500000, fmt);
         QVERIFY(result != nullptr);
 
         // Should get truncated first-clip audio (~0.5s), NOT crash or full 1.0s
@@ -756,11 +763,11 @@ private slots:
             {"clip1", m_testVideoPath.toStdString(), 0, 30, 0, 24, 1, 1.25f},
             {"clip2", m_testVideoPath.toStdString(), 30, 30, 0, 30, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Request spans boundary: [0.5s, 1.5s)
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
-        auto result = tmb->GetTrackAudio(1, 500000, 1500000, fmt);
+        auto result = tmb->GetTrackAudio(A1, 500000, 1500000, fmt);
         QVERIFY(result != nullptr);
 
         // Should get full 1.0s of timeline audio despite different conform ratios
@@ -788,7 +795,7 @@ private slots:
             {"clipA", m_testVideoPath.toStdString(), 0, 50, 0, 24, 1, 1.0f},
             {"clipB", m_testVideoPath.toStdString(), 50, 50, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Seek near boundary (frame 48 — within PRE_BUFFER_THRESHOLD of 48)
         tmb->SetPlayhead(48, 1, 1.0f);
@@ -800,7 +807,7 @@ private slots:
         // clip2 starts at frame 50 → 50/24 = 2.083333s
         TimeUS clip2_start = FrameTime::from_frame(50, Rate{24, 1}).to_us();
         TimeUS clip2_end = clip2_start + 200000; // 200ms
-        auto result = tmb->GetTrackAudio(1, clip2_start, clip2_end, fmt);
+        auto result = tmb->GetTrackAudio(A1, clip2_start, clip2_end, fmt);
         QVERIFY(result != nullptr);
         QVERIFY(result->frames() > 0);
     }
@@ -819,7 +826,7 @@ private slots:
             {"clipA", m_testVideoPath.toStdString(), 0, 50, 0, 24, 1, 1.0f},
             {"clipB", m_testVideoPath.toStdString(), 50, 50, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Trigger pre-buffer
         tmb->SetPlayhead(48, 1, 1.0f);
@@ -829,10 +836,10 @@ private slots:
         std::vector<ClipInfo> clips2 = {
             {"clipC", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips2);
+        tmb->SetTrackClips(A1, clips2);
 
         // Audio should still work (fresh decode, not stale cache)
-        auto result = tmb->GetTrackAudio(1, 0, 100000, fmt);
+        auto result = tmb->GetTrackAudio(A1, 0, 100000, fmt);
         QVERIFY(result != nullptr);
         QVERIFY(result->frames() > 0);
     }
@@ -851,14 +858,14 @@ private slots:
             {"clipA", m_testVideoPath.toStdString(), 0, 50, 0, 24, 1, 1.0f},
             {"clipB", m_testVideoPath.toStdString(), 50, 50, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // SetPlayhead near boundary — no workers, should not crash
         tmb->SetPlayhead(48, 1, 1.0f);
 
         // GetTrackAudio works on-demand (no pre-buffer, no crash)
         TimeUS clip2_start = FrameTime::from_frame(50, Rate{24, 1}).to_us();
-        auto result = tmb->GetTrackAudio(1, clip2_start, clip2_start + 100000, fmt);
+        auto result = tmb->GetTrackAudio(A1, clip2_start, clip2_start + 100000, fmt);
         QVERIFY(result != nullptr);
         QVERIFY(result->frames() > 0);
     }
@@ -878,7 +885,7 @@ private slots:
             {"clipA", m_testVideoPath.toStdString(), 0, 50, 0, 24, 1, 1.0f},
             {"clipB", m_testVideoPath.toStdString(), 50, 50, 0, 24, 1, 1.0f},
         };
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Trigger pre-buffer (caches ~200ms from clip2 entry)
         tmb->SetPlayhead(48, 1, 1.0f);
@@ -888,7 +895,7 @@ private slots:
         TimeUS clip2_start = FrameTime::from_frame(50, Rate{24, 1}).to_us();
         TimeUS req_t0 = clip2_start + 50000;  // 50ms in
         TimeUS req_t1 = req_t0 + 50000;       // 50ms duration
-        auto result = tmb->GetTrackAudio(1, req_t0, req_t1, fmt);
+        auto result = tmb->GetTrackAudio(A1, req_t0, req_t1, fmt);
         QVERIFY(result != nullptr);
 
         // Should get ~50ms worth of samples (2400 frames at 48kHz)
@@ -920,7 +927,7 @@ private slots:
                 static_cast<int64_t>(i * 50), 50, 0, 24, 1, 1.0f
             });
         }
-        tmb->SetTrackClips(1, clips);
+        tmb->SetTrackClips(A1, clips);
 
         // Trigger pre-buffer at each boundary, wait for 1 worker to finish each pair
         for (int i = 0; i < 5; ++i) {
@@ -934,7 +941,7 @@ private slots:
 
         // Audio at last clip should still work (on-demand decode, not stale cache)
         TimeUS last_clip_start = FrameTime::from_frame(250, Rate{24, 1}).to_us();
-        auto result = tmb->GetTrackAudio(1, last_clip_start, last_clip_start + 100000, fmt);
+        auto result = tmb->GetTrackAudio(A1, last_clip_start, last_clip_start + 100000, fmt);
         QVERIFY(result != nullptr);
         QVERIFY(result->frames() > 0);
     }

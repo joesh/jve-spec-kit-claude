@@ -133,6 +133,7 @@ local mock_sequence = {
     get_video_at = function(self, frame) return {} end,
     get_next_video = function() return {} end,
     get_prev_video = function() return {} end,
+    get_audio_at = function() return {} end,
     get_next_audio = function() return {} end,
     get_prev_audio = function() return {} end,
 }

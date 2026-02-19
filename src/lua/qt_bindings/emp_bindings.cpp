@@ -509,6 +509,15 @@ static std::shared_ptr<emp::TimelineMediaBuffer> get_tmb(lua_State* L, int idx) 
     return it->second;
 }
 
+// Helper: parse track type string ("video" or "audio") from Lua arg
+static emp::TrackType parse_track_type(lua_State* L, int idx) {
+    const char* type_str = luaL_checkstring(L, idx);
+    if (strcmp(type_str, "video") == 0) return emp::TrackType::Video;
+    if (strcmp(type_str, "audio") == 0) return emp::TrackType::Audio;
+    luaL_error(L, "invalid track type: '%s' (expected 'video' or 'audio')", type_str);
+    return emp::TrackType::Video; // unreachable
+}
+
 // EMP.TMB_SET_MAX_READERS(tmb, max)
 static int lua_emp_tmb_set_max_readers(lua_State* L) {
     auto tmb = get_tmb(L, 1);
@@ -543,19 +552,21 @@ static int lua_emp_tmb_set_audio_format(lua_State* L) {
     return 0;
 }
 
-// EMP.TMB_SET_TRACK_CLIPS(tmb, track_id, clips_table)
+// EMP.TMB_SET_TRACK_CLIPS(tmb, type_string, track_index, clips_table)
 // clips_table = array of { clip_id, media_path, timeline_start, duration, source_in, rate_num, rate_den, speed_ratio }
 static int lua_emp_tmb_set_track_clips(lua_State* L) {
     auto tmb = get_tmb(L, 1);
-    int track_id = static_cast<int>(luaL_checkinteger(L, 2));
-    luaL_checktype(L, 3, LUA_TTABLE);
+    auto track_type = parse_track_type(L, 2);
+    int track_index = static_cast<int>(luaL_checkinteger(L, 3));
+    emp::TrackId track{track_type, track_index};
+    luaL_checktype(L, 4, LUA_TTABLE);
 
-    int n = static_cast<int>(lua_objlen(L, 3));
+    int n = static_cast<int>(lua_objlen(L, 4));
     std::vector<emp::ClipInfo> clips;
     clips.reserve(static_cast<size_t>(n));
 
     for (int i = 1; i <= n; ++i) {
-        lua_rawgeti(L, 3, i);
+        lua_rawgeti(L, 4, i);
         if (!lua_istable(L, -1)) {
             return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d is not a table", i);
         }
@@ -630,7 +641,7 @@ static int lua_emp_tmb_set_track_clips(lua_State* L) {
         clips.push_back(std::move(ci));
     }
 
-    tmb->SetTrackClips(track_id, clips);
+    tmb->SetTrackClips(track, clips);
     return 0;
 }
 
@@ -644,13 +655,15 @@ static int lua_emp_tmb_set_playhead(lua_State* L) {
     return 0;
 }
 
-// EMP.TMB_GET_VIDEO_FRAME(tmb, track_id, timeline_frame) -> frame|nil, info_table
+// EMP.TMB_GET_VIDEO_FRAME(tmb, track_index, timeline_frame) -> frame|nil, info_table
+// Type is implied: always Video
 static int lua_emp_tmb_get_video_frame(lua_State* L) {
     auto tmb = get_tmb(L, 1);
-    int track_id = static_cast<int>(luaL_checkinteger(L, 2));
+    int track_index = static_cast<int>(luaL_checkinteger(L, 2));
     int64_t timeline_frame = static_cast<int64_t>(luaL_checkinteger(L, 3));
 
-    auto result = tmb->GetVideoFrame(track_id, timeline_frame);
+    emp::TrackId track{emp::TrackType::Video, track_index};
+    auto result = tmb->GetVideoFrame(track, timeline_frame);
 
     // Push frame handle (or nil for gap/offline)
     if (result.frame) {
@@ -684,10 +697,11 @@ static int lua_emp_tmb_get_video_frame(lua_State* L) {
     return 2;
 }
 
-// EMP.TMB_GET_TRACK_AUDIO(tmb, track_id, t0_us, t1_us, sample_rate, channels) -> pcm|nil
+// EMP.TMB_GET_TRACK_AUDIO(tmb, track_index, t0_us, t1_us, sample_rate, channels) -> pcm|nil
+// Type is implied: always Audio
 static int lua_emp_tmb_get_track_audio(lua_State* L) {
     auto tmb = get_tmb(L, 1);
-    int track_id = static_cast<int>(luaL_checkinteger(L, 2));
+    int track_index = static_cast<int>(luaL_checkinteger(L, 2));
     int64_t t0 = static_cast<int64_t>(luaL_checkinteger(L, 3));
     int64_t t1 = static_cast<int64_t>(luaL_checkinteger(L, 4));
     int32_t sample_rate = static_cast<int32_t>(luaL_checkinteger(L, 5));
@@ -696,8 +710,9 @@ static int lua_emp_tmb_get_track_audio(lua_State* L) {
     if (sample_rate <= 0) return luaL_error(L, "TMB_GET_TRACK_AUDIO: sample_rate must be > 0, got %d", sample_rate);
     if (channels <= 0) return luaL_error(L, "TMB_GET_TRACK_AUDIO: channels must be > 0, got %d", channels);
 
+    emp::TrackId track{emp::TrackType::Audio, track_index};
     emp::AudioFormat fmt{emp::SampleFormat::F32, sample_rate, channels};
-    auto pcm = tmb->GetTrackAudio(track_id, t0, t1, fmt);
+    auto pcm = tmb->GetTrackAudio(track, t0, t1, fmt);
 
     if (!pcm) {
         lua_pushnil(L);
@@ -709,11 +724,12 @@ static int lua_emp_tmb_get_track_audio(lua_State* L) {
     return 1;
 }
 
-// EMP.TMB_RELEASE_TRACK(tmb, track_id)
+// EMP.TMB_RELEASE_TRACK(tmb, type_string, track_index)
 static int lua_emp_tmb_release_track(lua_State* L) {
     auto tmb = get_tmb(L, 1);
-    int track_id = static_cast<int>(luaL_checkinteger(L, 2));
-    tmb->ReleaseTrack(track_id);
+    auto track_type = parse_track_type(L, 2);
+    int track_index = static_cast<int>(luaL_checkinteger(L, 3));
+    tmb->ReleaseTrack(emp::TrackId{track_type, track_index});
     return 0;
 }
 
