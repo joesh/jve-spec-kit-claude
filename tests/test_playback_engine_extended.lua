@@ -164,9 +164,10 @@ local mock_sequence = {
                     id = "aclip1",
                     rate = { fps_numerator = 24, fps_denominator = 1 },
                     timeline_start = 0, duration = 100, source_in = 0,
-                    volume = 1.0,
                 },
-                track = { id = "track_a1", track_index = 1, muted = false, soloed = false },
+                track = { id = "track_a1", track_index = 1, muted = false, soloed = false, volume = 1.0 },
+                media_fps_num = 24,
+                media_fps_den = 1,
             }}
         end
         return {}
@@ -697,9 +698,10 @@ do
                 id = "aclip1",
                 rate = { fps_numerator = 24, fps_denominator = 1 },
                 timeline_start = 50, duration = 50, source_in = 0,
-                volume = 1.0,
             },
-            track = { id = "track_a1", track_index = 1, muted = false, soloed = false },
+            track = { id = "track_a1", track_index = 1, muted = false, soloed = false, volume = 1.0 },
+            media_fps_num = 24,
+            media_fps_den = 1,
         }}
     end
 
@@ -1182,6 +1184,173 @@ do
         "audio must be nil after project_changed (prevents stale sources)")
 
     print("  project_changed shuts down audio session passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 16 (NSF-F1): _build_audio_mix_params must assert on nil fields
+--
+-- Bug: entry.clip.volume was always nil (clips don't have volume — tracks do).
+-- The `or 1.0` fallback masked this, causing track volume to be ignored.
+-- After fix: uses entry.track.volume, asserts on nil.
+--------------------------------------------------------------------------------
+print("\n--- NSF-F1: _build_audio_mix_params asserts on nil fields ---")
+do
+    reset()
+    local mock_audio = make_tracked_audio()
+    PlaybackEngine.init_audio(mock_audio)
+
+    local engine, _ = make_engine()
+    engine:load_sequence("seq1", 100)
+
+    -- nil volume on track → must assert
+    local ok, err = pcall(function()
+        engine:_build_audio_mix_params({{
+            clip = { id = "c1" },
+            track = { id = "t1", track_index = 1, muted = false, soloed = false },
+            -- track.volume is nil
+        }})
+    end)
+    assert(not ok, "nil track.volume should assert")
+    assert(tostring(err):find("volume"),
+        "Error should mention volume, got: " .. tostring(err))
+
+    -- nil muted on track → must assert
+    ok, _ = pcall(function()
+        engine:_build_audio_mix_params({{
+            clip = { id = "c1" },
+            track = { id = "t1", track_index = 1, volume = 1.0, soloed = false },
+            -- track.muted is nil
+        }})
+    end)
+    assert(not ok, "nil track.muted should assert")
+
+    -- nil soloed on track → must assert
+    ok, _ = pcall(function()
+        engine:_build_audio_mix_params({{
+            clip = { id = "c1" },
+            track = { id = "t1", track_index = 1, volume = 1.0, muted = false },
+            -- track.soloed is nil
+        }})
+    end)
+    assert(not ok, "nil track.soloed should assert")
+
+    -- Valid entry passes
+    local params = engine:_build_audio_mix_params({{
+        clip = { id = "c1" },
+        track = { id = "t1", track_index = 1, volume = 0.8, muted = false, soloed = false },
+    }})
+    assert(#params == 1, "Should return 1 param")
+    assert(params[1].volume == 0.8, "Volume should be 0.8 from track, not fallback 1.0")
+
+    print("  _build_audio_mix_params NSF asserts passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 17 (NSF-F2): _compute_audio_speed_ratio must assert on nil fps
+--
+-- Bug: nil media_fps_num/den silently returned 1.0, which could cause
+-- wrong audio pitch if data pipeline had a bug.
+--------------------------------------------------------------------------------
+print("\n--- NSF-F2: _compute_audio_speed_ratio asserts on nil fps ---")
+do
+    reset()
+    local mock_audio = make_tracked_audio()
+    PlaybackEngine.init_audio(mock_audio)
+
+    local engine, _ = make_engine()
+    engine:load_sequence("seq1", 100)
+
+    -- nil media_fps_num → must assert
+    local ok, err = pcall(function()
+        engine:_compute_audio_speed_ratio({
+            media_fps_num = nil,
+            media_fps_den = 1,
+        })
+    end)
+    assert(not ok, "nil media_fps_num should assert")
+    assert(tostring(err):find("media_fps_num"),
+        "Error should mention media_fps_num, got: " .. tostring(err))
+
+    -- nil media_fps_den → must assert
+    ok, _ = pcall(function()
+        engine:_compute_audio_speed_ratio({
+            media_fps_num = 24,
+            media_fps_den = nil,
+        })
+    end)
+    assert(not ok, "nil media_fps_den should assert")
+
+    -- media_fps_den == 0 → must assert
+    ok, _ = pcall(function()
+        engine:_compute_audio_speed_ratio({
+            media_fps_num = 24,
+            media_fps_den = 0,
+        })
+    end)
+    assert(not ok, "media_fps_den == 0 should assert")
+
+    -- Valid fps → returns ratio
+    local ratio = engine:_compute_audio_speed_ratio({
+        media_fps_num = 24, media_fps_den = 1,
+    })
+    assert(ratio == 1.0, "24fps media in 24fps seq should return 1.0")
+
+    -- Audio-only media (rate >= 1000) → returns 1.0
+    ratio = engine:_compute_audio_speed_ratio({
+        media_fps_num = 48000, media_fps_den = 1,
+    })
+    assert(ratio == 1.0, "Audio-only media should return 1.0")
+
+    print("  _compute_audio_speed_ratio NSF asserts passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 18 (NSF-F3): _try_audio must rethrow errors (fail-fast in dev)
+--
+-- Bug: _try_audio wrapped audio calls in pcall + logger.error, silently
+-- swallowing audio failures. In development, errors must crash immediately.
+--------------------------------------------------------------------------------
+print("\n--- NSF-F3: _try_audio rethrows errors ---")
+do
+    reset()
+    local mock_audio = make_tracked_audio()
+    PlaybackEngine.init_audio(mock_audio)
+
+    local engine, _ = make_engine()
+    engine:load_sequence("seq1", 100)
+    engine:activate_audio()
+
+    -- _try_audio with function that errors → must rethrow
+    local ok, err = pcall(function()
+        engine:_try_audio(function()
+            error("deliberate test error")
+        end)
+    end)
+    assert(not ok, "_try_audio must rethrow errors (fail-fast NSF)")
+    assert(tostring(err):find("deliberate test error"),
+        "Rethrown error should contain original message, got: " .. tostring(err))
+
+    -- _try_audio with method name that errors → must rethrow
+    engine._test_error_fn = function()
+        error("method error")
+    end
+    ok, err = pcall(function()
+        engine:_try_audio("_test_error_fn")
+    end)
+    assert(not ok, "_try_audio must rethrow method errors")
+    assert(tostring(err):find("method error"),
+        "Rethrown error should contain method message")
+
+    -- _try_audio when not audio owner → no-op (no error)
+    engine._audio_owner = false
+    ok = pcall(function()
+        engine:_try_audio(function()
+            error("should not reach")
+        end)
+    end)
+    assert(ok, "_try_audio should no-op when not audio owner")
+
+    print("  _try_audio rethrows errors passed")
 end
 
 print("\n✅ test_playback_engine_extended.lua passed")

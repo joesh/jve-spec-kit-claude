@@ -223,4 +223,55 @@ print("  ok 20x asserts")
 audio_playback.stop()
 audio_playback.shutdown_session()
 
+--------------------------------------------------------------------------------
+-- SECTION 5 (NSF-F4): Sample rate mismatch must assert
+--------------------------------------------------------------------------------
+print("\n--- Section 5 (NSF-F4): Sample rate mismatch asserts ---")
+
+-- Reload with AOP.SAMPLE_RATE that returns a different rate
+package.loaded["core.media.audio_playback"] = nil
+
+local mismatch_aop_handle = { _name = "mismatch_aop" }
+mock_qt_constants.AOP.OPEN = function(sr, ch, buf)
+    return mismatch_aop_handle
+end
+mock_qt_constants.AOP.SAMPLE_RATE = function(aop)
+    return 44100  -- Device gives 44100, but we requested 48000
+end
+mock_qt_constants.AOP.CHANNELS = function(aop)
+    return 2
+end
+
+audio_playback = require("core.media.audio_playback")
+
+print("\nTest 5.1: init_session asserts when device rate != requested rate")
+local ok5, err5 = pcall(function()
+    audio_playback.init_session(48000, 2)
+end)
+assert(not ok5, "Should assert on sample rate mismatch")
+assert(tostring(err5):find("sample rate mismatch"),
+    "Error should mention sample rate mismatch, got: " .. tostring(err5))
+print("  ok sample rate mismatch asserts")
+
+print("\nTest 5.2: init_session succeeds when device rate matches")
+-- Fix mock to return matching rate
+mock_qt_constants.AOP.SAMPLE_RATE = function(aop)
+    return 48000
+end
+
+package.loaded["core.media.audio_playback"] = nil
+audio_playback = require("core.media.audio_playback")
+
+local ok6, err6 = pcall(function()
+    audio_playback.init_session(48000, 2)
+end)
+assert(ok6, "Should succeed when rates match, got: " .. tostring(err6))
+audio_playback.shutdown_session()
+print("  ok matching rate succeeds")
+
+-- Cleanup: restore original AOP.OPEN
+mock_qt_constants.AOP.OPEN = function() return { _name = "mock_aop" } end
+mock_qt_constants.AOP.SAMPLE_RATE = nil
+mock_qt_constants.AOP.CHANNELS = nil
+
 print("\n ok test_audio_decimate.lua passed")

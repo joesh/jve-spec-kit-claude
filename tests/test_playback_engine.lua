@@ -855,4 +855,16 @@ do
     print("  ok")
 end
 
+-- ─── Regression: load_sequence stores audio_sample_rate ───
+-- Bug: _init_audio_session asserted nil because load_sequence never copied
+-- audio_sample_rate from get_sequence_info() to self.
+print("\n--- load_sequence stores audio_sample_rate ---")
+do
+    local engine = make_engine()
+    engine:load_sequence("seq1")
+    assert(engine.audio_sample_rate == 48000,
+        "audio_sample_rate should be 48000, got " .. tostring(engine.audio_sample_rate))
+    print("  ok")
+end
+
 print("\n✅ test_playback_engine.lua passed")

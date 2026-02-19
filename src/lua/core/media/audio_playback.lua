@@ -229,18 +229,15 @@ function M.init_session(sample_rate, channels)
     assert(aop, "audio_playback.init_session: AOP.OPEN failed: " .. tostring(err))
     M.aop = aop
 
-    -- Check actual sample rate (device may not support requested rate)
+    -- Verify actual sample rate matches requested (NSF: no silent rate mismatch)
     if qt_constants.AOP.SAMPLE_RATE then
         local actual_rate = qt_constants.AOP.SAMPLE_RATE(aop)
         local actual_channels = qt_constants.AOP.CHANNELS(aop)
-        if actual_rate ~= sample_rate then
-            logger.warn("audio_playback", string.format(
-                "Sample rate mismatch! Requested %d, got %d.",
-                sample_rate, actual_rate))
-        end
+        assert(actual_rate == sample_rate, string.format(
+            "audio_playback.init_session: sample rate mismatch (requested %d, device gave %d)",
+            sample_rate, actual_rate))
         logger.info("audio_playback", string.format(
-            "AOP opened: %dHz %dch (requested: %dHz %dch)",
-            actual_rate, actual_channels, sample_rate, channels))
+            "AOP opened: %dHz %dch", actual_rate, actual_channels))
     end
 
     -- Create SSE engine at session rate

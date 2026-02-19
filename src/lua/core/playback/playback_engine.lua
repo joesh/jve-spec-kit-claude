@@ -146,6 +146,7 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames)
     self.fps_num = info.fps_num
     self.fps_den = info.fps_den
     self.fps = info.fps_num / info.fps_den
+    self.audio_sample_rate = info.audio_sample_rate
     self.current_clip_id = nil
     self.current_audio_clip_ids = {}
     self._position = 0
@@ -423,9 +424,12 @@ end
 function PlaybackEngine:_compute_audio_speed_ratio(entry)
     local media_fps_num = entry.media_fps_num
     local media_fps_den = entry.media_fps_den
-    if not media_fps_num or not media_fps_den or media_fps_den == 0 then
-        return 1.0
-    end
+    assert(type(media_fps_num) == "number", string.format(
+        "PlaybackEngine:_compute_audio_speed_ratio: missing media_fps_num (got %s)",
+        type(media_fps_num)))
+    assert(type(media_fps_den) == "number" and media_fps_den > 0, string.format(
+        "PlaybackEngine:_compute_audio_speed_ratio: invalid media_fps_den=%s",
+        tostring(media_fps_den)))
     local media_video_fps = media_fps_num / media_fps_den
     -- Audio-only media (rate >= 1000) or matching fps → no conform
     if media_video_fps >= 1000 then return 1.0 end
@@ -859,18 +863,14 @@ end
 -- Audio Helpers
 --------------------------------------------------------------------------------
 
---- Non-fatal audio call: logs error but does not crash video playback.
+--- Audio call (fail-fast in development: errors propagate immediately).
 -- @param fn_or_name  string method name on self, or function(engine)
 function PlaybackEngine:_try_audio(fn_or_name)
     if not self._audio_owner then return end
-    local ok, err
     if type(fn_or_name) == "string" then
-        ok, err = pcall(self[fn_or_name], self)
+        self[fn_or_name](self)
     else
-        ok, err = pcall(fn_or_name, self)
-    end
-    if not ok then
-        logger.error("playback_engine", "audio failed: " .. tostring(err))
+        fn_or_name(self)
     end
 end
 
@@ -943,11 +943,20 @@ end
 function PlaybackEngine:_build_audio_mix_params(entries)
     local params = {}
     for _, entry in ipairs(entries) do
+        assert(type(entry.track.volume) == "number", string.format(
+            "PlaybackEngine:_build_audio_mix_params: track %s missing volume",
+            tostring(entry.track.id)))
+        assert(type(entry.track.muted) == "boolean", string.format(
+            "PlaybackEngine:_build_audio_mix_params: track %s muted must be boolean, got %s",
+            tostring(entry.track.id), type(entry.track.muted)))
+        assert(type(entry.track.soloed) == "boolean", string.format(
+            "PlaybackEngine:_build_audio_mix_params: track %s soloed must be boolean, got %s",
+            tostring(entry.track.id), type(entry.track.soloed)))
         params[#params + 1] = {
             track_index = entry.track.track_index,
-            volume = entry.clip.volume or 1.0,
-            muted = entry.track.muted or false,
-            soloed = entry.track.soloed or false,
+            volume = entry.track.volume,
+            muted = entry.track.muted,
+            soloed = entry.track.soloed,
         }
     end
     return params
