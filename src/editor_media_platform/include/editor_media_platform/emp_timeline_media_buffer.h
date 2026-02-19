@@ -57,7 +57,11 @@ struct ClipInfo {
     float speed_ratio;            // conform: seq_fps / media_fps (1.0 = none)
 
     int64_t timeline_end() const { return timeline_start + duration; }
-    Rate rate() const { return Rate{rate_num, rate_den}; }
+    Rate rate() const {
+        assert(rate_num > 0 && "ClipInfo::rate: rate_num must be positive");
+        assert(rate_den > 0 && "ClipInfo::rate: rate_den must be positive");
+        return Rate{rate_num, rate_den};
+    }
 };
 
 // Video decode result (returned to Lua per track)

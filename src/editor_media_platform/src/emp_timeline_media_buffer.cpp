@@ -45,7 +45,10 @@ void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInf
                 a.timeline_start != b.timeline_start ||
                 a.duration != b.duration ||
                 a.source_in != b.source_in ||
-                a.media_path != b.media_path) {
+                a.media_path != b.media_path ||
+                a.rate_num != b.rate_num ||
+                a.rate_den != b.rate_den ||
+                a.speed_ratio != b.speed_ratio) {
                 same = false;
                 break;
             }
@@ -909,6 +912,10 @@ void TimelineMediaBuffer::worker_loop() {
                 auto result = reader->DecodeAt(ft);
                 if (result.is_ok()) {
                     decoded.push_back({tf, sf, result.value()});
+                } else {
+                    // Decode failed — stop batch (remaining frames will also fail).
+                    // Main thread will handle these frames via its own decode path.
+                    break;
                 }
             }
 
