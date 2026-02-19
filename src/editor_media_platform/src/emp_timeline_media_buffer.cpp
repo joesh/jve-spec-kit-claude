@@ -393,6 +393,10 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::build_audio_output(
     const int64_t src_frames = decoded->frames();
     const TimeUS src_start = decoded->start_time_us();
 
+    // NSF-ACCEPT: nullptr returns below are legitimate edge cases — decoder may
+    // return less audio than requested (e.g. near EOF). Callers treat nullptr as
+    // "no audio available" (gap/silence), same as no-clip-at-position.
+
     // How many input samples to skip (decoder may have started before source_t0)
     int64_t skip = 0;
     if (src_start < source_t0) {
@@ -466,6 +470,8 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::check_audio_cache(
     assert(fmt.sample_rate > 0 && "check_audio_cache: sample_rate must be positive");
     assert(fmt.channels > 0 && "check_audio_cache: channels must be positive");
 
+    // NSF-ACCEPT: Entries that don't fully cover [seg_t0, seg_t1) are skipped
+    // (partial cache coverage = cache miss). Falls through to on-demand decode.
     for (const auto& entry : ts.audio_cache) {
         if (entry.clip_id != clip_id) continue;
         // Full coverage: cached range must contain [seg_t0, seg_t1)
@@ -630,7 +636,9 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         float next_speed = next->speed_ratio;
         tlock.unlock();
 
-        // Offline check
+        // NSF-ACCEPT: Offline/decode failures in boundary spanning produce silence
+        // gaps — correct behavior. Lua's audio pipeline zero-fills gaps. The first
+        // clip's audio is still returned; only subsequent clips degrade gracefully.
         {
             std::lock_guard<std::mutex> plock(m_pool_mutex);
             if (m_offline.count(next_path)) { cursor = next_end_us; continue; }
@@ -663,6 +671,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     std::vector<float> combined(total_frames * channels, 0.0f);
 
     for (const auto& seg : segments) {
+        assert(seg.pcm && "GetTrackAudio: segment has null pcm");
         int64_t offset = ((seg.seg_t0 - t0) * sample_rate) / 1000000;
         assert(offset >= 0 && "GetTrackAudio: segment offset must be non-negative");
         int64_t copy_frames = std::min(seg.pcm->frames(), total_frames - offset);
@@ -762,7 +771,10 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
                 evict_lru_reader();
             }
 
-            // Open media file
+            // Open media file.
+            // NSF-ACCEPT: Failed opens register in m_offline to prevent repeated
+            // open attempts on the same path. Callers (GetVideoFrame, GetTrackAudio)
+            // check the empty ReaderHandle and return offline/nullptr to Lua.
             auto mf_result = MediaFile::Open(path);
             if (mf_result.is_error()) {
                 m_offline[path] = mf_result.error();
@@ -934,7 +946,10 @@ void TimelineMediaBuffer::worker_loop() {
                 }
             }
         } else {
-            // Pre-decode audio PCM
+            // Pre-decode audio PCM.
+            // NSF-ACCEPT: Decode failures continue to next job — pre-buffer is
+            // best-effort. Main-thread GetTrackAudio handles on-demand decode
+            // if pre-buffer missed.
             assert(job.source_t1 > job.source_t0 && "worker_loop: AUDIO job has inverted source range");
             assert(job.timeline_t1 > job.timeline_t0 && "worker_loop: AUDIO job has inverted timeline range");
             auto decode_result = reader->DecodeAudioRangeUS(

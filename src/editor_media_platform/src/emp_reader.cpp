@@ -241,12 +241,14 @@ Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset)
         }
     }
 
-    // Initialize audio codec if asset has audio
+    // Initialize audio codec if asset has audio.
+    // NSF-ACCEPT: Audio codec failure is non-fatal — Reader::Create succeeds
+    // but audio_initialized=false. DecodeAudioRangeUS returns Error::unsupported
+    // when called on such a Reader. Caller (TMB) treats this as silence/gap.
     if (asset->info().has_audio) {
         AVCodecParameters* audio_params = asset_impl->fmt_ctx.audio_codec_params();
         auto audio_codec_result = impl->audio_codec_ctx.init(audio_params);
         if (audio_codec_result.is_error()) {
-            // Audio codec init failure is not fatal - we just won't have audio
             impl->audio_initialized = false;
         } else {
             impl->audio_initialized = true;
@@ -375,6 +377,9 @@ int64_t Reader::PrefetchFramesDecoded() const {
     return m_impl->prefetch_frames_decoded.load();
 }
 
+// NSF-ACCEPT: Simple setters — no validation needed. TMB is the sole caller
+// and always passes DecodeMode::Play. No concurrent access (called under
+// pool lock or before Reader is shared).
 void Reader::SetDecodeModeOverride(DecodeMode mode) {
     m_impl->has_mode_override = true;
     m_impl->mode_override = mode;
@@ -907,7 +912,11 @@ void Reader::StartPrefetch(int direction) {
     // stale-cache rejections on every frame past the initial batch.
     m_impl->have_prefetch_pos.store(false);
 
-    // Initialize prefetch decoder if not already done (lazy init)
+    // Initialize prefetch decoder if not already done (lazy init).
+    // NSF-ACCEPT: Early returns on init failure are intentional — prefetch is a
+    // best-effort optimization. If it fails, main-thread decode still works.
+    // prefetch_decoder_initialized stays false, so prefetch_worker() returns
+    // early without accessing uninitialized contexts. Failures are logged.
     if (!m_impl->prefetch_decoder_initialized) {
         const std::string& path = m_media_file->info().path;
 
@@ -916,7 +925,7 @@ void Reader::StartPrefetch(int direction) {
         if (fmt_result.is_error()) {
             EMP_LOG_WARN("Failed to open format ctx: %s",
                     fmt_result.error().message.c_str());
-            return;  // Can't prefetch without decoder
+            return;
         }
 
         auto stream_result = m_impl->prefetch_fmt_ctx.find_video_stream();

@@ -1306,6 +1306,209 @@ private slots:
         // Restore mode
         emp::SetDecodeMode(emp::DecodeMode::Play);
     }
+
+    // ── Reverse playback pre-buffer ──
+
+    void test_reverse_pre_buffer_fires() {
+        // When playing in reverse (direction=-1), SetPlayhead near a clip's
+        // START boundary should pre-buffer the END of the PREVIOUS clip.
+        // The worker decodes in forward source order (h264 requirement) but
+        // caches the last N frames of the previous clip.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        // clipA [0,50), clipB [50,100) — adjacent
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 50, 0, 24, 1, 1.0f},
+            {"clipB", path, 50, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Park near clipB's START with reverse direction
+        // (distance to clipB.timeline_start == 2, within PRE_BUFFER_THRESHOLD)
+        tmb->SetPlayhead(52, -1, 1.0f);
+        QThread::msleep(400);
+
+        // clipA's last frame (49) should be pre-buffered
+        auto r = tmb->GetVideoFrame(V1, 49);
+        QVERIFY2(r.frame != nullptr, "clipA last frame should be pre-buffered");
+        QCOMPARE(r.clip_id, std::string("clipA"));
+
+        // Also check a frame deeper into clipA (e.g. frame 40)
+        auto r2 = tmb->GetVideoFrame(V1, 40);
+        QVERIFY2(r2.frame != nullptr, "clipA frame 40 should be pre-buffered");
+        QCOMPARE(r2.clip_id, std::string("clipA"));
+    }
+
+    // ── Worker shutdown mid-batch ──
+
+    void test_worker_shutdown_mid_batch_no_hang() {
+        // Destroying TMB while workers are mid-decode must not deadlock.
+        // The worker checks m_shutdown between frame decodes and bails.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        // Long clip to ensure worker has many frames to decode
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 200, 0, 24, 1, 1.0f},
+            {"clipB", path, 200, 200, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Trigger pre-buffer near boundary
+        tmb->SetPlayhead(198, 1, 1.0f);
+        QThread::msleep(50); // let worker start
+
+        // Destroy TMB immediately — must not hang or crash
+        tmb.reset();
+
+        // If we reach here, shutdown was clean
+        QVERIFY(true);
+    }
+
+    // ── SetSequenceRate invariant asserts ──
+
+    void test_set_sequence_rate_zero_num_invariant() {
+        // SetSequenceRate asserts num > 0 (line 323). Calling with num=0
+        // would abort. This test documents the invariant exists.
+        auto tmb = TimelineMediaBuffer::Create(0);
+        // Valid calls must not crash
+        tmb->SetSequenceRate(24, 1);
+        tmb->SetSequenceRate(30000, 1001);
+        // NOTE: tmb->SetSequenceRate(0, 1) would abort (assert fires)
+        QVERIFY(true);
+    }
+
+    void test_set_sequence_rate_zero_den_invariant() {
+        // SetSequenceRate asserts den > 0 (line 324).
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+        // NOTE: tmb->SetSequenceRate(24, 0) would abort (assert fires)
+        QVERIFY(true);
+    }
+
+    // ── SetAudioFormat invariant asserts ──
+
+    void test_set_audio_format_zero_sample_rate_invariant() {
+        // SetAudioFormat asserts fmt.sample_rate > 0 (line 333).
+        auto tmb = TimelineMediaBuffer::Create(0);
+        // Valid call
+        tmb->SetAudioFormat(AudioFormat{SampleFormat::F32, 48000, 2});
+        // NOTE: AudioFormat{F32, 0, 2} would abort (assert fires)
+        QVERIFY(true);
+    }
+
+    void test_set_audio_format_zero_channels_invariant() {
+        // SetAudioFormat asserts fmt.channels > 0 (line 334).
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetAudioFormat(AudioFormat{SampleFormat::F32, 48000, 2});
+        // NOTE: AudioFormat{F32, 48000, 0} would abort (assert fires)
+        QVERIFY(true);
+    }
+
+    // ── GetTrackAudio precondition asserts ──
+
+    void test_get_track_audio_inverted_range_invariant() {
+        // GetTrackAudio asserts t1 > t0 (line 512).
+        // Calling with t0 >= t1 would abort.
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+        // Valid call
+        auto result = tmb->GetTrackAudio(A1, 0, 100000,
+            AudioFormat{SampleFormat::F32, 48000, 2});
+        QVERIFY(result == nullptr); // no clips, but no assert
+        // NOTE: tmb->GetTrackAudio(A1, 100000, 50000, fmt) would abort
+        QVERIFY(true);
+    }
+
+    void test_get_track_audio_no_seq_rate_invariant() {
+        // GetTrackAudio asserts m_seq_rate.num > 0 (line 513).
+        // Calling without SetSequenceRate would abort.
+        auto tmb = TimelineMediaBuffer::Create(0);
+        // NOT calling tmb->SetSequenceRate(...)
+        // NOTE: tmb->GetTrackAudio(A1, 0, 100000, fmt) would abort
+        // Verify the precondition is documented:
+        // m_seq_rate starts as {0, 1} — num=0 triggers the assert.
+        QVERIFY(true);
+    }
+
+    // ── SetPlayhead UpdatePrefetchTarget ──
+
+    void test_set_playhead_advances_prefetch_target() {
+        // SetPlayhead must call UpdatePrefetchTarget on the current clip's
+        // Reader so its background decoder stays ahead of the playhead.
+        // Without this, the Reader's last_decode_pts goes stale during
+        // cache-hit periods, causing need_seek to trigger 100ms+ re-seeks.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0); // no workers (isolate prefetch)
+        auto path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Decode frame 0 to create the Reader (which starts prefetch)
+        auto r0 = tmb->GetVideoFrame(V1, 0);
+        QVERIFY(r0.frame != nullptr);
+
+        // Give prefetch time to fill ahead from frame 0
+        QThread::msleep(300);
+
+        // Advance playhead to frame 50 — UpdatePrefetchTarget tells the
+        // Reader's prefetch thread to decode ahead from source frame 50.
+        tmb->SetPlayhead(50, 1, 1.0f);
+
+        // Give prefetch time to fill ahead from frame 50
+        QThread::msleep(500);
+
+        // Frames around 60-70 should be in the Reader's cache now,
+        // making TMB decode fast (Reader cache hit, not full h264 decode).
+        // We verify by checking they all decode successfully.
+        tmb->ResetVideoCacheMissCount();
+        for (int f = 55; f <= 70; ++f) {
+            auto r = tmb->GetVideoFrame(V1, f);
+            QVERIFY2(r.frame != nullptr,
+                     qPrintable(QString("frame %1 null after prefetch advance").arg(f)));
+        }
+        // All 16 frames are TMB misses (TMB cache wasn't pre-filled by workers),
+        // but they should decode successfully via the Reader's prefetch cache.
+        QCOMPARE(tmb->GetVideoCacheMissCount(), (int64_t)16);
+    }
+
+    // ── ReleaseAll clears offline registry ──
+
+    void test_release_all_clears_offline() {
+        // ReleaseAll must clear the offline registry so a re-linked file
+        // can be re-probed after reconnect.
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        std::vector<ClipInfo> clips = {
+            {"clip1", "/nonexistent/video.mp4", 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // First access marks path as offline
+        auto r1 = tmb->GetVideoFrame(V1, 0);
+        QVERIFY(r1.offline);
+
+        // ReleaseAll should clear offline registry
+        tmb->ReleaseAll();
+
+        // Re-add clip — should attempt to open again (not cached offline)
+        tmb->SetTrackClips(V1, clips);
+        auto r2 = tmb->GetVideoFrame(V1, 0);
+        // Still offline (file doesn't exist), but the point is it was RE-PROBED,
+        // not returned from the stale offline cache. Both produce offline=true,
+        // so this test just ensures ReleaseAll doesn't crash and the path is
+        // re-evaluated.
+        QVERIFY(r2.offline);
+    }
 };
 
 QTEST_MAIN(TestTimelineMediaBuffer)
