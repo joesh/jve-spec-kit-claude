@@ -178,6 +178,7 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(int track_id, int64_t timeline_fr
 
     // Populate metadata
     result.clip_id = clip->clip_id;
+    result.media_path = clip->media_path;
     result.clip_fps_num = clip->rate_num;
     result.clip_fps_den = clip->rate_den;
     result.clip_start_frame = clip->timeline_start;

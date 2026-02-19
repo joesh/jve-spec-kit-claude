@@ -38,17 +38,19 @@ package.loaded["core.qt_constants"] = {
         READER_DECODE_FRAME = function() return nil end,
         FRAME_RELEASE = function() end,
         PCM_RELEASE = function() end,
+        -- TMB functions (video path uses TMB, not media_cache)
+        TMB_CREATE = function() return "mock_tmb" end,
+        TMB_CLOSE = function() end,
+        TMB_SET_SEQUENCE_RATE = function() end,
+        TMB_SET_AUDIO_FORMAT = function() end,
+        TMB_SET_TRACK_CLIPS = function() end,
+        TMB_SET_PLAYHEAD = function() end,
+        TMB_GET_VIDEO_FRAME = function() return nil, { offline = false } end,
     },
 }
 
--- Mock media_cache
+-- Mock media_cache (audio functions only — video path uses TMB now)
 package.loaded["core.media.media_cache"] = {
-    activate = function() return { rotation = 0 } end,
-    get_video_frame = function(frame, ctx) return "frame_" .. frame end,
-    set_playhead = function() end,
-    is_loaded = function() return true end,
-    get_media_file_info = function() return { rotation = 0 } end,
-    stop_all_prefetch = function() end,
     ensure_audio_pooled = function(path)
         return { has_audio = true, audio_sample_rate = 48000 }
     end,
@@ -78,7 +80,7 @@ package.loaded["core.renderer"] = {
             audio_sample_rate = 48000,
         }
     end,
-    get_video_frame = function(seq, frame, ctx_id)
+    get_video_frame = function(tmb, track_indices, frame)
         local entry = video_map[frame]
         if entry then
             return "frame_handle_" .. frame, {
@@ -128,6 +130,7 @@ local mock_content_end = 100
 local mock_sequence = {
     id = "seq1",
     compute_content_end = function() return mock_content_end end,
+    get_video_at = function(self, frame) return {} end,
     get_next_video = function() return {} end,
     get_prev_video = function() return {} end,
     get_next_audio = function() return {} end,

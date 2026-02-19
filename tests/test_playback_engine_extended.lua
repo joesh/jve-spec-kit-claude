@@ -35,6 +35,7 @@ local function clear_timers()
 end
 
 -- Mock qt_constants
+local tmb_set_playhead_calls = {}
 package.loaded["core.qt_constants"] = {
     EMP = {
         SET_DECODE_MODE = function() end,
@@ -46,25 +47,23 @@ package.loaded["core.qt_constants"] = {
         READER_DECODE_FRAME = function() return nil end,
         FRAME_RELEASE = function() end,
         PCM_RELEASE = function() end,
+        -- TMB functions (video path uses TMB, not media_cache)
+        TMB_CREATE = function() return "mock_tmb" end,
+        TMB_CLOSE = function() end,
+        TMB_SET_SEQUENCE_RATE = function() end,
+        TMB_SET_AUDIO_FORMAT = function() end,
+        TMB_SET_TRACK_CLIPS = function() end,
+        TMB_SET_PLAYHEAD = function(tmb, frame, dir, speed)
+            tmb_set_playhead_calls[#tmb_set_playhead_calls + 1] = {
+                frame = frame, direction = dir, speed = speed,
+            }
+        end,
+        TMB_GET_VIDEO_FRAME = function() return nil, { offline = false } end,
     },
 }
 
--- Prefetch tracking
-local prefetch_calls = {}
-
--- Mock media_cache
+-- Mock media_cache (audio functions only — video path uses TMB now)
 package.loaded["core.media.media_cache"] = {
-    activate = function() return { rotation = 0 } end,
-    get_video_frame = function(frame, ctx) return "frame_" .. frame end,
-    set_playhead = function(frame, dir, speed, ctx, fps_num, fps_den)
-        prefetch_calls[#prefetch_calls + 1] = {
-            frame = frame, direction = dir, speed = speed, ctx = ctx,
-            fps_num = fps_num, fps_den = fps_den,
-        }
-    end,
-    is_loaded = function() return true end,
-    get_media_file_info = function() return { rotation = 0 } end,
-    stop_all_prefetch = function() end,
     ensure_audio_pooled = function(path)
         return { has_audio = true, audio_sample_rate = 48000 }
     end,
@@ -94,7 +93,7 @@ package.loaded["core.renderer"] = {
             audio_sample_rate = 48000,
         }
     end,
-    get_video_frame = function(seq, frame, ctx_id)
+    get_video_frame = function(tmb, track_indices, frame)
         local entry = video_map[frame]
         if entry then
             return "frame_handle_" .. frame, {
@@ -146,6 +145,7 @@ local mock_content_end = 100
 local mock_sequence = {
     id = "seq1",
     compute_content_end = function() return mock_content_end end,
+    get_video_at = function(self, frame) return {} end,
     get_next_video = function() return {} end,
     get_prev_video = function() return {} end,
     get_next_audio = function() return {} end,
@@ -249,7 +249,7 @@ end
 
 local function reset()
     clear_timers()
-    prefetch_calls = {}
+    tmb_set_playhead_calls = {}
     video_map = {}
     audio_sources_map = {}
 end
@@ -819,69 +819,56 @@ do
 end
 
 --------------------------------------------------------------------------------
--- Test 10: Prefetch signaling
+-- Test 10: TMB pre-buffer signaling (TMB_SET_PLAYHEAD)
+--
+-- Video pre-buffer is now TMB-internal. TMB_SET_PLAYHEAD is called in _tick()
+-- with timeline frame, direction, and speed. TMB translates to source frames
+-- and manages the worker pool internally.
 --------------------------------------------------------------------------------
-print("\n--- prefetch: set_playhead called with source_frame during display ---")
+print("\n--- TMB_SET_PLAYHEAD called during forward playback ---")
 do
     reset()
     local mock_audio = make_tracked_audio()
     PlaybackEngine.init_audio(mock_audio)
-
-    -- Custom video map with source_frame != frame
-    set_video_map({})
-    for f = 0, 99 do
-        video_map[f] = {
-            clip_id = "clip1",
-            source_frame = f + 100,  -- source_frame offset
-            media_path = "/test.mov",
-        }
-    end
 
     local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
     engine:set_position_silent(10)
 
-    engine:shuttle(1)  -- direction=1
+    engine:shuttle(1)  -- direction=1, speed=1
     pump_tick()
 
-    -- Should have called set_playhead with source_frame, not timeline frame
-    assert(#prefetch_calls > 0, "set_playhead should be called during display")
-    local last = prefetch_calls[#prefetch_calls]
-    assert(last.direction == 1, "Prefetch direction should match shuttle")
-    -- source_frame = displayed frame + 100
-    assert(last.frame >= 100, string.format(
-        "set_playhead should use source_frame (>= 100), got %d", last.frame))
-    -- Verify clip fps is threaded through to prefetch
-    assert(last.fps_num == 24, string.format(
-        "set_playhead should receive clip_fps_num=24, got %s", tostring(last.fps_num)))
-    assert(last.fps_den == 1, string.format(
-        "set_playhead should receive clip_fps_den=1, got %s", tostring(last.fps_den)))
+    -- TMB_SET_PLAYHEAD should be called with timeline frame, direction, speed
+    assert(#tmb_set_playhead_calls > 0,
+        "TMB_SET_PLAYHEAD should be called during playback")
+    local last = tmb_set_playhead_calls[#tmb_set_playhead_calls]
+    assert(last.direction == 1, string.format(
+        "TMB_SET_PLAYHEAD direction should be 1, got %s", tostring(last.direction)))
+    assert(last.speed == 1, string.format(
+        "TMB_SET_PLAYHEAD speed should be 1, got %s", tostring(last.speed)))
 
     engine:stop()
-    print("  prefetch with source_frame and clip fps passed")
+    print("  TMB_SET_PLAYHEAD during forward playback passed")
 end
 
-print("\n--- prefetch: no set_playhead during gap ---")
+print("\n--- TMB_SET_PLAYHEAD not called when direction=0 (seek) ---")
 do
     reset()
     local mock_audio = make_tracked_audio()
     PlaybackEngine.init_audio(mock_audio)
 
-    -- All frames are gaps
-    set_video_map({})
-
     local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
 
-    -- Seek to gap frame (direction=0 for seek, so no prefetch anyway)
-    -- But let's test display directly
-    prefetch_calls = {}
-    engine:_display_frame(50)  -- gap: no clip data
+    -- Seek (direction=0) — TMB_SET_PLAYHEAD should NOT be called
+    tmb_set_playhead_calls = {}
+    engine:seek(50)
 
-    assert(#prefetch_calls == 0,
-        "Gap should not call set_playhead")
+    assert(#tmb_set_playhead_calls == 0, string.format(
+        "TMB_SET_PLAYHEAD should not be called on seek (direction=0), got %d calls",
+        #tmb_set_playhead_calls))
 
-    print("  no prefetch during gap passed")
+    print("  no TMB_SET_PLAYHEAD on seek passed")
 end
 
 --------------------------------------------------------------------------------

@@ -220,12 +220,56 @@ assert(media_cache.get_offline_info("/missing/video.mov") == nil,
 print("  OK: cleanup clears registry")
 
 -- ============================================================================
--- Test 7: Renderer returns offline metadata when activate returns nil
+-- Test 7: Renderer returns offline metadata via TMB path
+--
+-- Renderer now calls TMB_GET_VIDEO_FRAME (not media_cache). TMB reports
+-- offline=true in metadata. Renderer delegates to offline_frame_cache.
 -- ============================================================================
-print("Test 7: Renderer offline metadata")
+print("Test 7: Renderer offline metadata (TMB path)")
 
--- Set up DB for renderer test
-local DB_PATH = "/tmp/jve/test_offline_renderer.db"
+-- Set up TMB_GET_VIDEO_FRAME to report offline for track 1 at frame 10
+mock_emp.TMB_GET_VIDEO_FRAME = function(tmb, track_idx, frame)
+    if frame >= 0 and frame < 48 and track_idx == 1 then
+        return nil, {
+            clip_id = "clip_off",
+            media_path = "/missing/offline_clip.mov",
+            source_frame = frame,
+            rotation = 0,
+            offline = true,
+            clip_fps_num = 24,
+            clip_fps_den = 1,
+            clip_start_frame = 0,
+            clip_end_frame = 48,
+        }
+    end
+    -- Gap
+    return nil, { clip_id = "", offline = false }
+end
+
+local renderer = require("core.renderer")
+local mock_tmb = "test_offline_tmb"
+local frame_handle, metadata = renderer.get_video_frame(mock_tmb, {1}, 10)
+
+-- Frame handle should be non-nil (composited offline frame from offline_frame_cache)
+assert(frame_handle ~= nil,
+    "Expected non-nil frame_handle for offline clip (composited), got nil")
+-- Metadata should contain offline info
+assert(metadata, "Expected non-nil metadata for offline clip")
+assert(metadata.offline == true, "Expected metadata.offline=true")
+assert(metadata.clip_id == "clip_off", "Expected clip_id in offline metadata")
+assert(metadata.media_path == "/missing/offline_clip.mov", "Expected media_path in offline metadata")
+assert(metadata.clip_start_frame == 0, "Expected clip_start_frame=0")
+assert(metadata.clip_end_frame == 48, "Expected clip_end_frame=48")
+
+print("  OK: Renderer returns offline metadata")
+
+-- ============================================================================
+-- Test 8: Mixer skips offline audio clips gracefully
+-- ============================================================================
+print("Test 8: Mixer handles offline audio clips")
+
+-- Set up DB for mixer test (Tests 8-9 need real DB + sequence)
+local DB_PATH = "/tmp/jve/test_offline_mixer.db"
 os.remove(DB_PATH)
 assert(database.init(DB_PATH))
 local db = database.get_connection()
@@ -243,56 +287,6 @@ assert(db:exec([[
     VALUES('seq', 'proj', 'TestTimeline', 'timeline', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
            strftime('%s','now'), strftime('%s','now'))
 ]]))
-
-assert(db:exec([[
-    INSERT INTO tracks(id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-    VALUES('v1', 'seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0)
-]]))
-
-assert(db:exec([[
-    INSERT INTO media(id, project_id, file_path, name, duration_frames, fps_numerator, fps_denominator,
-                     width, height, audio_channels, codec, created_at, modified_at, metadata)
-    VALUES('media_off', 'proj', '/missing/offline_clip.mov', 'offline_clip', 100, 24, 1, 1920, 1080, 2, 'h264',
-           strftime('%s','now'), strftime('%s','now'), '{}')
-]]))
-
-assert(db:exec([[
-    INSERT INTO clips(id, project_id, clip_kind, name, track_id, media_id,
-                     timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-                     fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-    VALUES('clip_off', 'proj', 'timeline', 'OfflineClip', 'v1', 'media_off', 0, 48, 0, 48, 24, 1, 1, 1,
-           strftime('%s','now'), strftime('%s','now'))
-]]))
-
-offline_paths["/missing/offline_clip.mov"] = true
-
-local Sequence = require("models.sequence")
-local seq = Sequence.load("seq")
-assert(seq, "Failed to load test sequence")
-
-local renderer = require("core.renderer")
-local frame_handle, metadata = renderer.get_video_frame(seq, 10, "test_ctx_renderer")
-
--- Frame handle should be non-nil (composited offline frame)
-assert(frame_handle ~= nil, "Expected non-nil frame_handle for offline clip (composited)")
--- Metadata should contain offline info
-assert(metadata, "Expected non-nil metadata for offline clip")
-assert(metadata.offline == true, "Expected metadata.offline=true")
-assert(metadata.clip_id == "clip_off", "Expected clip_id in offline metadata")
-assert(metadata.media_path == "/missing/offline_clip.mov", "Expected media_path in offline metadata")
-assert(metadata.error_code, "Expected error_code in offline metadata")
-assert(metadata.error_msg, "Expected error_msg in offline metadata")
-assert(type(metadata.error_msg) == "string",
-    "Expected error_msg to be string, got: " .. type(metadata.error_msg))
-assert(metadata.clip_start_frame == 0, "Expected clip_start_frame=0")
-assert(metadata.clip_end_frame == 48, "Expected clip_end_frame=48")
-
-print("  OK: Renderer returns offline metadata")
-
--- ============================================================================
--- Test 8: Mixer skips offline audio clips gracefully
--- ============================================================================
-print("Test 8: Mixer handles offline audio clips")
 
 -- Create audio track + clip for mixer test
 assert(db:exec([[
@@ -317,8 +311,8 @@ assert(db:exec([[
 
 offline_paths["/missing/audio_offline.wav"] = true
 
--- Reload sequence to pick up new tracks/clips
-seq = Sequence.load("seq")
+local Sequence = require("models.sequence")
+local seq = Sequence.load("seq")
 assert(seq)
 
 local Mixer = require("core.mixer")
@@ -345,7 +339,9 @@ print("  OK: get_offline_info returns nil for unknown paths")
 -- ============================================================================
 print("Test 10: Renderer gap vs offline distinction")
 
-local gap_frame, gap_meta = renderer.get_video_frame(seq, 200, "test_ctx_renderer")
+-- TMB_GET_VIDEO_FRAME at frame 200 returns gap (nil frame, offline=false)
+-- (already the default from mock_emp.TMB_GET_VIDEO_FRAME)
+local gap_frame, gap_meta = renderer.get_video_frame(mock_tmb, {1}, 200)
 assert(gap_frame == nil, "Expected nil frame_handle for gap")
 assert(gap_meta == nil, "Expected nil metadata for gap (not offline)")
 

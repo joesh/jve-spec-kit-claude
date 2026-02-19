@@ -40,6 +40,7 @@ struct ClipInfo {
 struct VideoResult {
     std::shared_ptr<Frame> frame; // nullptr = gap or offline
     std::string clip_id;
+    std::string media_path;       // source file (for offline display, diagnostics)
     int rotation;
     int64_t source_frame;         // file-relative frame index
     int32_t clip_fps_num, clip_fps_den;

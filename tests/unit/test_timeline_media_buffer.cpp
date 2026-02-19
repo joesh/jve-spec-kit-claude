@@ -111,6 +111,7 @@ private slots:
         auto result = tmb->GetVideoFrame(1, 0);
         QVERIFY(result.frame != nullptr);
         QCOMPARE(result.clip_id, std::string("clip1"));
+        QCOMPARE(result.media_path, m_testVideoPath.toStdString());
         QCOMPARE(result.source_frame, (int64_t)0);
         QCOMPARE(result.clip_start_frame, (int64_t)0);
         QCOMPARE(result.clip_end_frame, (int64_t)100);

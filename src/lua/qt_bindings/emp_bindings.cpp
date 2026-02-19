@@ -664,6 +664,8 @@ static int lua_emp_tmb_get_video_frame(lua_State* L) {
     lua_newtable(L);
     lua_pushstring(L, result.clip_id.c_str());
     lua_setfield(L, -2, "clip_id");
+    lua_pushstring(L, result.media_path.c_str());
+    lua_setfield(L, -2, "media_path");
     lua_pushinteger(L, result.rotation);
     lua_setfield(L, -2, "rotation");
     lua_pushinteger(L, static_cast<lua_Integer>(result.source_frame));

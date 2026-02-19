@@ -5,6 +5,10 @@
 -- Key design: NO sequence-kind branching. Masterclips and timelines use
 -- identical code paths via Renderer (video) and Mixer (audio).
 --
+-- Video path uses TimelineMediaBuffer (TMB) — a C++ class that owns readers,
+-- caches frames, and pre-buffers at clip boundaries. Lua feeds clip windows
+-- incrementally via _feed_tmb_clips() and reads decoded frames via Renderer.
+--
 -- Unified tick combines source_playback boundary-latch logic and
 -- timeline_playback audio-following/stuckness-detection into one algorithm.
 --
@@ -110,9 +114,11 @@ function PlaybackEngine.new(config)
     -- Audio ownership (only one engine owns audio at a time)
     self._audio_owner = false
 
-    -- Lookahead pre-buffer state
-    self._video_clip_bounds = nil       -- {start_frame, end_frame} from metadata
-    self._pre_buffered_video_id = nil   -- clip_id of pre-buffered video clip
+    -- TMB (TimelineMediaBuffer) — owns video readers, cache, pre-buffer
+    self._tmb = nil
+    self._video_track_indices = {}   -- track indices for Renderer iteration
+
+    -- Audio lookahead state (kept until Phase 3c replaces audio path)
     self._pre_buffered_audio_ids = {}   -- {[clip_id] = true}
     self._current_audio_sources = nil   -- sources from last _resolve_and_set_audio
 
@@ -167,6 +173,13 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames)
         audio_playback.set_max_time(self.max_media_time_us)
     end
 
+    -- TMB lifecycle: close previous, create new
+    self:_close_tmb()
+    self:_create_tmb()
+
+    -- Initial clip feed at starting position
+    self:_feed_tmb_clips(0)
+
     logger.debug("playback_engine", string.format(
         "Loaded sequence %s (%s): %d frames @ %d/%d fps",
         sequence_id:sub(1, 8), info.kind,
@@ -203,6 +216,139 @@ function PlaybackEngine:_refresh_content_bounds()
     logger.debug("playback_engine", string.format(
         "Refreshed content bounds: %d frames, max_time=%.3fs",
         self.total_frames, self.max_media_time_us / 1000000))
+end
+
+--------------------------------------------------------------------------------
+-- TMB Lifecycle
+--------------------------------------------------------------------------------
+
+--- Create TMB instance and configure sequence rate + audio format.
+function PlaybackEngine:_create_tmb()
+    assert(self.fps_num and self.fps_den,
+        "PlaybackEngine:_create_tmb: fps not set")
+
+    local EMP = qt_constants.EMP
+    self._tmb = EMP.TMB_CREATE(2)
+    assert(self._tmb, "PlaybackEngine:_create_tmb: TMB_CREATE returned nil")
+
+    EMP.TMB_SET_SEQUENCE_RATE(self._tmb, self.fps_num, self.fps_den)
+
+    -- Audio format: 48kHz stereo F32 (standard output format)
+    EMP.TMB_SET_AUDIO_FORMAT(self._tmb, 48000, 2)
+end
+
+--- Close TMB instance if active.
+function PlaybackEngine:_close_tmb()
+    if self._tmb then
+        qt_constants.EMP.TMB_CLOSE(self._tmb)
+        self._tmb = nil
+    end
+    self._video_track_indices = {}
+end
+
+--- Feed TMB with current + next clips for each video track.
+-- Builds a small clip window (2-3 clips per track) from sequence queries.
+-- Called every frame during playback (lightweight: reuses existing SQL queries).
+-- @param frame integer: current playhead frame
+function PlaybackEngine:_feed_tmb_clips(frame)
+    assert(self._tmb, "PlaybackEngine:_feed_tmb_clips: no TMB")
+    assert(self.sequence, "PlaybackEngine:_feed_tmb_clips: no sequence")
+
+    local EMP = qt_constants.EMP
+
+    -- Get current clips per track
+    local current_entries = self.sequence:get_video_at(frame)
+
+    -- Build track_index → clip list mapping
+    local track_clips = {}   -- {[track_index] = {clip_table, ...}}
+
+    for _, entry in ipairs(current_entries) do
+        local idx = entry.track.track_index
+        if not track_clips[idx] then
+            track_clips[idx] = {}
+        end
+        track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(entry)
+    end
+
+    -- Get next clips (direction-aware) and add to same track
+    local next_entries
+    if #current_entries > 0 then
+        -- Use clip end frame of first entry as boundary for next lookup
+        for _, entry in ipairs(current_entries) do
+            local clip_end = entry.clip.timeline_start + entry.clip.duration
+            local nexts
+            if self.direction >= 0 then
+                nexts = self.sequence:get_next_video(clip_end)
+            else
+                nexts = self.sequence:get_prev_video(entry.clip.timeline_start)
+            end
+            for _, ne in ipairs(nexts) do
+                local idx = ne.track.track_index
+                if not track_clips[idx] then
+                    track_clips[idx] = {}
+                end
+                -- Avoid duplicate clip_ids
+                local dominated = false
+                for _, existing in ipairs(track_clips[idx]) do
+                    if existing.clip_id == ne.clip.id then
+                        dominated = true
+                        break
+                    end
+                end
+                if not dominated then
+                    track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne)
+                end
+            end
+        end
+    end
+
+    -- If no current entries but we have a direction, try finding next clip ahead
+    if #current_entries == 0 then
+        next_entries = self.sequence:get_next_video(frame)
+        for _, ne in ipairs(next_entries or {}) do
+            local idx = ne.track.track_index
+            if not track_clips[idx] then
+                track_clips[idx] = {}
+            end
+            track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne)
+        end
+    end
+
+    -- Feed each track to TMB
+    local indices = {}
+    for idx, clips in pairs(track_clips) do
+        EMP.TMB_SET_TRACK_CLIPS(self._tmb, idx, clips)
+        indices[#indices + 1] = idx
+    end
+
+    -- Sort indices (lowest = topmost = highest priority)
+    table.sort(indices)
+    self._video_track_indices = indices
+end
+
+--- Build a TMB clip table from a sequence entry (get_video_at/get_next_video result).
+-- @param entry table: {media_path, clip, track, ...}
+-- @return table matching TMB_SET_TRACK_CLIPS format
+function PlaybackEngine:_build_tmb_clip(entry)
+    local clip = entry.clip
+    assert(clip.rate, string.format(
+        "PlaybackEngine:_build_tmb_clip: clip %s missing rate", clip.id))
+
+    -- Compute speed_ratio for video conform (seq_fps / media_fps)
+    -- For video, speed_ratio=1.0 is typical; non-1.0 only matters for audio conform.
+    -- TMB uses it for audio path; video path uses clip rate directly.
+    local speed_ratio = 1.0
+
+    return {
+        clip_id = clip.id,
+        media_path = entry.media_path,
+        timeline_start = clip.timeline_start,
+        duration = clip.duration,
+        source_in = clip.source_in,
+        rate_num = clip.rate.fps_numerator,
+        rate_den = clip.rate.fps_denominator,
+        speed_ratio = speed_ratio,
+    }
 end
 
 --------------------------------------------------------------------------------
@@ -349,13 +495,12 @@ function PlaybackEngine:stop()
     self._last_audio_frame = nil
     self:_clear_latch()
 
-    -- Clear lookahead state (stale across stop/start cycles)
+    -- Clear audio lookahead state (stale across stop/start cycles)
     self._current_audio_sources = nil
-    self._pre_buffered_video_id = nil
     self._pre_buffered_audio_ids = {}
 
     self:_stop_audio()
-    media_cache.stop_all_prefetch()
+    -- TMB stays alive across stop/play — no need to re-create
     qt_constants.EMP.SET_DECODE_MODE("park")
 end
 
@@ -385,7 +530,10 @@ function PlaybackEngine:seek(frame_idx)
         self:_stop_audio()
     end
 
-    -- Display via Renderer
+    -- Feed TMB clips for seek position + display via Renderer
+    if self._tmb then
+        self:_feed_tmb_clips(frame)
+    end
     self:_display_frame(frame)
 
     -- Audio resolve + restart/scrub (non-fatal: must not prevent seek)
@@ -466,6 +614,12 @@ function PlaybackEngine.shutdown_audio_session()
     end
 end
 
+--- Destroy engine: close TMB + stop audio.
+function PlaybackEngine:destroy()
+    self:stop()
+    self:_close_tmb()
+end
+
 --------------------------------------------------------------------------------
 -- Unified Tick
 --
@@ -530,8 +684,17 @@ function PlaybackEngine:_tick()
         return
     end
 
-    -- 5. Display via Renderer
+    -- 5. Pre-buffer hint + clip feed + decode via TMB
     local frame_idx = math.floor(pos)
+
+    if self._tmb and self.direction ~= 0 then
+        qt_constants.EMP.TMB_SET_PLAYHEAD(
+            self._tmb, frame_idx, self.direction, self.speed)
+    end
+    if self._tmb then
+        self:_feed_tmb_clips(frame_idx)
+    end
+
     self:_display_frame(frame_idx)
 
     -- 6-7. Audio resolve + gap-entry start (non-fatal: must not kill video tick loop)
@@ -546,7 +709,7 @@ function PlaybackEngine:_tick()
         end)
     end
 
-    -- 8. Lookahead: pre-buffer next/prev clip near edit points
+    -- 8. Audio lookahead (video pre-buffer handled by TMB internally)
     self:_check_lookahead(frame_idx)
 
     -- 9. Commit position
@@ -584,13 +747,15 @@ function PlaybackEngine:_advance_position()
     end
 end
 
---- Display frame via Renderer. Handles clip switch and gap detection.
+--- Display frame via Renderer (TMB path). Handles clip switch and gap detection.
 function PlaybackEngine:_display_frame(frame_idx)
     assert(self.sequence,
         "PlaybackEngine:_display_frame: no sequence loaded")
+    assert(self._tmb,
+        "PlaybackEngine:_display_frame: no TMB")
 
     local frame_handle, metadata = Renderer.get_video_frame(
-        self.sequence, frame_idx, self.media_context_id)
+        self._tmb, self._video_track_indices, frame_idx)
 
     if frame_handle then
         assert(metadata, string.format(
@@ -599,33 +764,16 @@ function PlaybackEngine:_display_frame(frame_idx)
 
         local is_offline = metadata.offline
 
-        -- Detect clip switch → rotation callback + reset lookahead
+        -- Detect clip switch -> rotation callback + reset audio lookahead
         if metadata.clip_id ~= self.current_clip_id then
             self.current_clip_id = metadata.clip_id
             -- Offline frames are upright (composed at 0 degrees)
             self._on_set_rotation(is_offline and 0 or metadata.rotation)
-            -- Entering new clip: clear pre-buffer state from previous clip
-            self._pre_buffered_video_id = nil
+            -- Entering new clip: clear audio pre-buffer state from previous clip
             self._pre_buffered_audio_ids = {}
         end
 
-        -- Store clip bounds for lookahead (always, not just on clip switch)
-        if metadata.clip_end_frame then
-            self._video_clip_bounds = {
-                start_frame = metadata.clip_start_frame,
-                end_frame = metadata.clip_end_frame,
-            }
-        end
-
         self._on_show_frame(frame_handle, metadata)
-
-        -- Notify prefetch of source-space position (skip for offline — no media to buffer)
-        if not is_offline and self.direction ~= 0 then
-            media_cache.set_playhead(
-                metadata.source_frame, self.direction, self.speed,
-                self.media_context_id,
-                metadata.clip_fps_num, metadata.clip_fps_den)
-        end
     else
         -- Gap at playhead
         self._on_show_gap()
@@ -634,14 +782,13 @@ function PlaybackEngine:_display_frame(frame_idx)
 end
 
 --------------------------------------------------------------------------------
--- Lookahead Pre-Buffer
+-- Lookahead Pre-Buffer (Audio Only)
 --
--- Detects when playback approaches a clip boundary and pre-buffers the
--- next (or prev) clip's data. Video threshold: 1 second. Audio: 2 seconds.
--- Each clip is pre-buffered at most once (tracked by clip_id).
+-- Video pre-buffer is handled by TMB's SetPlayhead + worker pool.
+-- Audio lookahead remains until Phase 3c replaces the audio path.
 --------------------------------------------------------------------------------
 
---- Check proximity to clip boundaries and pre-buffer next/prev clip.
+--- Check proximity to clip boundaries and pre-buffer next/prev audio clip.
 -- Called from _tick() after display and audio resolve.
 -- @param frame_idx integer: current display frame
 function PlaybackEngine:_check_lookahead(frame_idx)
@@ -649,61 +796,10 @@ function PlaybackEngine:_check_lookahead(frame_idx)
     if self.direction == 0 then return end
 
     if self.direction > 0 then
-        self:_lookahead_video_forward(frame_idx)
         self:_lookahead_audio_forward(frame_idx)
     else
-        self:_lookahead_video_reverse(frame_idx)
         self:_lookahead_audio_reverse(frame_idx)
     end
-end
-
---- Video lookahead (forward): pre-buffer when within 1 second of clip_end.
-function PlaybackEngine:_lookahead_video_forward(frame_idx)
-    if not self._video_clip_bounds then return end
-
-    local threshold_frames = math.ceil(self.fps) -- 1 second
-    local distance = self._video_clip_bounds.end_frame - frame_idx
-    if distance > threshold_frames or distance <= 0 then return end
-
-    -- Resolve next video clip at the boundary
-    local entries = self.sequence:get_next_video(self._video_clip_bounds.end_frame)
-    if #entries == 0 then return end
-
-    local entry = entries[1]
-    if self._pre_buffered_video_id == entry.clip.id then return end -- already done
-
-    media_cache.pre_buffer(
-        entry.media_path, entry.source_frame,
-        entry.clip.rate.fps_numerator, entry.clip.rate.fps_denominator)
-    self._pre_buffered_video_id = entry.clip.id
-
-    logger.debug("playback_engine", string.format(
-        "Video lookahead: pre-buffered '%s' at frame %d (boundary in %d frames)",
-        entry.media_path, entry.source_frame, distance))
-end
-
---- Video lookahead (reverse): pre-buffer when within 1 second of clip_start.
-function PlaybackEngine:_lookahead_video_reverse(frame_idx)
-    if not self._video_clip_bounds then return end
-
-    local threshold_frames = math.ceil(self.fps)
-    local distance = frame_idx - self._video_clip_bounds.start_frame
-    if distance > threshold_frames or distance <= 0 then return end
-
-    local entries = self.sequence:get_prev_video(self._video_clip_bounds.start_frame)
-    if #entries == 0 then return end
-
-    local entry = entries[1]
-    if self._pre_buffered_video_id == entry.clip.id then return end
-
-    media_cache.pre_buffer(
-        entry.media_path, entry.source_frame,
-        entry.clip.rate.fps_numerator, entry.clip.rate.fps_denominator)
-    self._pre_buffered_video_id = entry.clip.id
-
-    logger.debug("playback_engine", string.format(
-        "Video lookahead (rev): pre-buffered '%s' at frame %d (boundary in %d frames)",
-        entry.media_path, entry.source_frame, distance))
 end
 
 --- Audio lookahead (forward): pre-buffer when within 2 seconds of clip_end_us.
@@ -727,8 +823,8 @@ function PlaybackEngine:_lookahead_audio_forward(frame_idx)
         if self._pre_buffered_audio_ids[src_id] then goto continue end
 
         -- Resolve next audio clip at the boundary frame.
-        -- Round (not floor) to avoid losing the boundary due to us→frame truncation.
-        -- Example: 100 frames @ 24fps → 4166666us → floor(99.999) = 99 (wrong).
+        -- Round (not floor) to avoid losing the boundary due to us->frame truncation.
+        -- Example: 100 frames @ 24fps -> 4166666us -> floor(99.999) = 99 (wrong).
         local boundary_frame = math.floor(
             src.clip_end_us * self.fps_num / (1000000 * self.fps_den) + 0.5)
         local entries = self.sequence:get_next_audio(boundary_frame)
@@ -736,8 +832,11 @@ function PlaybackEngine:_lookahead_audio_forward(frame_idx)
 
         -- Build source for pre-buffer from resolved entry
         local entry = entries[1]
-        assert(entry.source_time_us,
-            "playback_engine._lookahead_audio_forward: entry missing source_time_us")
+        assert(entry.source_time_us, string.format(
+            "PlaybackEngine:_lookahead_audio_forward: entry missing source_time_us "
+            .. "(clip_id=%s, media_path=%s, timeline_start=%s)",
+            tostring(entry.clip and entry.clip.id), tostring(entry.media_path),
+            tostring(entry.clip and entry.clip.timeline_start)))
 
         local clip_start_us = helpers.calc_time_us_from_frame(
             entry.clip.timeline_start, self.fps_num, self.fps_den)
@@ -798,8 +897,11 @@ function PlaybackEngine:_lookahead_audio_reverse(frame_idx)
         if #entries == 0 then goto continue end
 
         local entry = entries[1]
-        assert(entry.source_time_us,
-            "playback_engine._lookahead_audio_reverse: entry missing source_time_us")
+        assert(entry.source_time_us, string.format(
+            "PlaybackEngine:_lookahead_audio_reverse: entry missing source_time_us "
+            .. "(clip_id=%s, media_path=%s, timeline_start=%s)",
+            tostring(entry.clip and entry.clip.id), tostring(entry.media_path),
+            tostring(entry.clip and entry.clip.timeline_start)))
 
         local clip_start_us = helpers.calc_time_us_from_frame(
             entry.clip.timeline_start, self.fps_num, self.fps_den)

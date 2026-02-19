@@ -36,6 +36,14 @@ package.loaded["core.qt_constants"] = {
         READER_DECODE_FRAME = function() return nil end,
         FRAME_RELEASE = function() end,
         PCM_RELEASE = function() end,
+        -- TMB functions (video path uses TMB)
+        TMB_CREATE = function() return "mock_tmb" end,
+        TMB_CLOSE = function() end,
+        TMB_SET_SEQUENCE_RATE = function() end,
+        TMB_SET_AUDIO_FORMAT = function() end,
+        TMB_SET_TRACK_CLIPS = function() end,
+        TMB_SET_PLAYHEAD = function() end,
+        TMB_GET_VIDEO_FRAME = function() return nil, { offline = false } end,
         SURFACE_SET_FRAME = function(surface, frame)
             qt_log[#qt_log + 1] = {
                 type = "set_frame", surface = surface, frame = frame,
@@ -96,7 +104,7 @@ _G.timeline = {
     set_desired_height = function() end,
 }
 
--- Mock media_cache (with context tracking)
+-- Mock media_cache (audio functions only — video path uses TMB now)
 local created_contexts = {}
 package.loaded["core.media.media_cache"] = {
     create_context = function(id)
@@ -105,12 +113,6 @@ package.loaded["core.media.media_cache"] = {
     destroy_context = function(id)
         created_contexts[id] = nil
     end,
-    activate = function() return { rotation = 0 } end,
-    get_video_frame = function(frame, ctx) return "frame_" .. frame end,
-    set_playhead = function() end,
-    is_loaded = function() return true end,
-    get_media_file_info = function() return { rotation = 0 } end,
-    stop_all_prefetch = function() end,
     ensure_audio_pooled = function()
         return { has_audio = true, audio_sample_rate = 48000 }
     end,
@@ -139,7 +141,7 @@ package.loaded["core.renderer"] = {
             audio_sample_rate = 48000,
         }
     end,
-    get_video_frame = function(seq, frame, ctx_id)
+    get_video_frame = function(tmb, track_indices, frame)
         if frame >= 0 and frame < 100 then
             return "frame_handle_" .. frame, {
                 clip_id = "clip1",
@@ -959,6 +961,34 @@ do
     -- Reset
     reloaded.playhead_position = 0
     reloaded:save()
+    print("  ok")
+end
+
+-- ─── Test 33: NSF: marks_changed with Sequence.load nil asserts ───
+print("\n--- NSF: marks_changed Sequence.load nil asserts ---")
+do
+    local Sequence = require("models.sequence")
+    local view = SequenceMonitor.new({ view_id = "test_marks_nsf" })
+    timer_callbacks = {}
+    view:load_sequence(mc_id)
+
+    -- Monkey-patch Sequence.load to return nil (simulates DB corruption)
+    local orig_load = Sequence.load
+    Sequence.load = function() return nil end
+
+    local Signals = package.loaded["core.signals"]
+    local ok, err = pcall(function()
+        Signals.emit("marks_changed", mc_id)
+    end)
+
+    -- Restore before assertions
+    Sequence.load = orig_load
+
+    assert(not ok, "marks_changed should assert when Sequence.load returns nil")
+    assert(tostring(err):find("marks_changed"),
+        "error should mention marks_changed, got: " .. tostring(err))
+
+    view:destroy()
     print("  ok")
 end
 

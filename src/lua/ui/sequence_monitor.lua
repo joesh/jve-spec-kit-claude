@@ -94,10 +94,11 @@ function SequenceMonitor.new(config)
     self._marks_changed_id = Signals.connect("marks_changed", function(sequence_id)
         if self.sequence and self.sequence_id == sequence_id then
             local fresh = Sequence.load(sequence_id)
-            if fresh then
-                self.sequence.mark_in = fresh.mark_in
-                self.sequence.mark_out = fresh.mark_out
-            end
+            assert(fresh, string.format(
+                "SequenceMonitor:marks_changed: Sequence.load(%s) returned nil",
+                tostring(sequence_id)))
+            self.sequence.mark_in = fresh.mark_in
+            self.sequence.mark_out = fresh.mark_out
             self:_notify()
         end
     end)
@@ -114,6 +115,10 @@ function SequenceMonitor.new(config)
         if self.sequence_id == sequence_id then
             self.engine:_refresh_content_bounds()
             self.total_frames = self.engine.total_frames
+            -- Re-feed TMB clips (clip layout may have changed)
+            if self.engine._tmb then
+                self.engine:_feed_tmb_clips(math.floor(self.engine:get_position()))
+            end
             self:_notify()
         end
     end)
@@ -492,7 +497,7 @@ function SequenceMonitor:destroy()
     if self.sequence and self.sequence:is_masterclip() then
         self:save_playhead_to_db()
     end
-    self.engine:stop()
+    self.engine:destroy()
     media_cache.destroy_context(self.media_context_id)
     self._listeners = {}
     if self._marks_changed_id then
