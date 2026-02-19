@@ -66,7 +66,8 @@ local function load_internal(clip_id, raise_errors)
                c.master_clip_id, c.owner_sequence_id,
                c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
                c.fps_numerator, c.fps_denominator, c.enabled, c.offline,
-               s.fps_numerator, s.fps_denominator
+               s.fps_numerator, s.fps_denominator,
+               c.mark_in_frame, c.mark_out_frame, c.playhead_frame
         FROM clips c
         LEFT JOIN tracks t ON c.track_id = t.id
         LEFT JOIN sequences s ON t.sequence_id = s.id
@@ -151,6 +152,13 @@ local function load_internal(clip_id, raise_errors)
 
         enabled = query:value(14) == 1 or query:value(14) == true,
         offline = query:value(15) == 1 or query:value(15) == true,
+
+        -- Source viewer state (nullable marks + playhead)
+        mark_in = query:value(18),           -- nil when NULL
+        mark_out = query:value(19),          -- nil when NULL
+        playhead_frame = assert(query:value(20) ~= nil and query:value(20),
+            string.format("Clip.load: playhead_frame is NULL for clip %s (NOT NULL column)",
+                tostring(query:value(0)))),
     }
     
     query:finalize()
@@ -224,7 +232,24 @@ function M.create(name, media_id, opts)
         
         enabled = opts.enabled ~= false,
         offline = opts.offline or false,
+
+        -- Source viewer state (nullable marks + playhead)
+        mark_in = opts.mark_in,           -- nil = no mark
+        mark_out = opts.mark_out,         -- nil = no mark
+        playhead_frame = (opts.playhead_frame == nil) and 0 or opts.playhead_frame,
     }
+
+    -- Validate mark fields: nil is valid (no mark), but non-nil must be integer
+    if clip.mark_in ~= nil then
+        assert(type(clip.mark_in) == "number",
+            string.format("Clip.create: mark_in must be integer or nil (got %s)", type(clip.mark_in)))
+    end
+    if clip.mark_out ~= nil then
+        assert(type(clip.mark_out) == "number",
+            string.format("Clip.create: mark_out must be integer or nil (got %s)", type(clip.mark_out)))
+    end
+    assert(type(clip.playhead_frame) == "number",
+        string.format("Clip.create: playhead_frame must be integer (got %s)", type(clip.playhead_frame)))
 
     clip.name = derive_display_name(clip.id, clip.name)
 
@@ -351,6 +376,21 @@ local function save_internal(self, _opts)
     assert(type(self.source_in) == "number", "Clip.save: source_in must be integer (got " .. type(self.source_in) .. ")")
     assert(type(self.source_out) == "number", "Clip.save: source_out must be integer (got " .. type(self.source_out) .. ")")
 
+    -- Verify mark field types (nullable marks must be number or nil)
+    if self.mark_in ~= nil then
+        assert(type(self.mark_in) == "number",
+            string.format("Clip.save: mark_in must be integer or nil (got %s) for clip %s",
+                type(self.mark_in), tostring(self.id)))
+    end
+    if self.mark_out ~= nil then
+        assert(type(self.mark_out) == "number",
+            string.format("Clip.save: mark_out must be integer or nil (got %s) for clip %s",
+                type(self.mark_out), tostring(self.id)))
+    end
+    assert(type(self.playhead_frame) == "number",
+        string.format("Clip.save: playhead_frame must be number (got %s) for clip %s",
+            type(self.playhead_frame), tostring(self.id)))
+
     ensure_project_context(self, db)
     assert(self.clip_kind, "Clip.save: clip_kind is required for clip " .. tostring(self.id))
     self.offline = self.offline and true or false
@@ -389,7 +429,9 @@ local function save_internal(self, _opts)
             SET project_id = ?, clip_kind = ?, name = ?, track_id = ?, media_id = ?,
                 master_clip_id = ?, owner_sequence_id = ?,
                 timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?,
-                fps_numerator = ?, fps_denominator = ?, enabled = ?, offline = ?, modified_at = strftime('%s','now')
+                fps_numerator = ?, fps_denominator = ?, enabled = ?, offline = ?,
+                mark_in_frame = ?, mark_out_frame = ?, playhead_frame = ?,
+                modified_at = strftime('%s','now')
             WHERE id = ?
         ]])
     else
@@ -398,13 +440,26 @@ local function save_internal(self, _opts)
                 id, project_id, clip_kind, name, track_id, media_id,
                 master_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-                fps_numerator, fps_denominator, enabled, offline, created_at, modified_at
+                fps_numerator, fps_denominator, enabled, offline,
+                mark_in_frame, mark_out_frame, playhead_frame,
+                created_at, modified_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
         ]])
     end
 
     assert(query, "Clip.save: Failed to prepare query for clip " .. tostring(self.id))
+
+    -- Helper: bind nullable integer (mark_in, mark_out are nullable)
+    local function bind_nullable(stmt, idx, val)
+        if val ~= nil then
+            stmt:bind_value(idx, val)
+        elseif stmt.bind_null then
+            stmt:bind_null(idx)
+        else
+            stmt:bind_value(idx, nil)
+        end
+    end
 
     if exists then
         query:bind_value(1, self.project_id)
@@ -422,7 +477,10 @@ local function save_internal(self, _opts)
         query:bind_value(13, db_fps_den)
         query:bind_value(14, self.enabled and 1 or 0)
         query:bind_value(15, self.offline and 1 or 0)
-        query:bind_value(16, self.id)
+        bind_nullable(query, 16, self.mark_in)
+        bind_nullable(query, 17, self.mark_out)
+        query:bind_value(18, self.playhead_frame)
+        query:bind_value(19, self.id)
     else
         query:bind_value(1, self.id)
         query:bind_value(2, self.project_id)
@@ -440,6 +498,9 @@ local function save_internal(self, _opts)
         query:bind_value(14, db_fps_den)
         query:bind_value(15, self.enabled and 1 or 0)
         query:bind_value(16, self.offline and 1 or 0)
+        bind_nullable(query, 17, self.mark_in)
+        bind_nullable(query, 18, self.mark_out)
+        query:bind_value(19, self.playhead_frame)
     end
 
     local krono_exec = (krono_enabled and krono_exists and krono.now and krono.now()) or nil

@@ -1296,6 +1296,87 @@ end
 -- import_into_project: Shared entity-creation for both Open and Import verbs
 -- ---------------------------------------------------------------------------
 
+--- Apply pool master clip marks (mark_in, mark_out, playhead) to JVE master clips.
+-- DRP stores per-clip marks in MediaPool master clip elements. After import creates
+-- masterclip sequences, this function matches by media name and applies the marks
+-- to the corresponding stream clips (video/audio) in each masterclip sequence.
+-- Uses model APIs only (SQL isolation: no database.get_connection() in importers).
+-- @param pool_master_clips table: Array from parse_drp_file().pool_master_clips
+-- @param media_by_path table: file_path → Media record (from import loop)
+local function apply_pool_master_clip_marks(pool_master_clips, media_by_path)
+    if not pool_master_clips or #pool_master_clips == 0 then return end
+
+    -- Build name → marks map, keyed by (media_name, clip_type)
+    -- clip_type is "video" or "audio" from pool master clip parsing
+    local marks_by_name = {}  -- name → { video = {mark_in, mark_out, playhead}, audio = {...} }
+    for _, pmc in ipairs(pool_master_clips) do
+        if pmc.mark_in or pmc.mark_out or (pmc.playhead and pmc.playhead > 0) then
+            if not marks_by_name[pmc.name] then
+                marks_by_name[pmc.name] = {}
+            end
+            marks_by_name[pmc.name][pmc.clip_type] = {
+                mark_in = pmc.mark_in,
+                mark_out = pmc.mark_out,
+                playhead = pmc.playhead or 0,
+            }
+        end
+    end
+
+    local applied_count = 0
+    for _, media in pairs(media_by_path) do
+        local name_marks = marks_by_name[media.name]
+        if not name_marks then goto next_media end
+
+        -- Find the masterclip sequence for this media (via Sequence model)
+        local mc_seq_id = Sequence.find_masterclip_for_media(media.id)
+        if not mc_seq_id then
+            logger.warn("drp_importer", string.format(
+                "apply_marks: no masterclip sequence for media '%s' (id=%s)",
+                media.name, media.id))
+            goto next_media
+        end
+
+        local mc_seq = Sequence.load(mc_seq_id)
+        assert(mc_seq, string.format(
+            "apply_marks: Sequence.load failed for masterclip %s (media=%s)",
+            mc_seq_id, media.name))
+
+        -- Apply video marks to video stream clip
+        if name_marks.video then
+            local video_clip = mc_seq:video_stream()
+            if video_clip then
+                video_clip.mark_in = name_marks.video.mark_in
+                video_clip.mark_out = name_marks.video.mark_out
+                video_clip.playhead_frame = name_marks.video.playhead
+                assert(video_clip:save({skip_occlusion = true}), string.format(
+                    "apply_marks: save failed for video clip %s (media=%s)",
+                    video_clip.id, media.name))
+                applied_count = applied_count + 1
+            end
+        end
+
+        -- Apply audio marks to all audio stream clips
+        if name_marks.audio then
+            for _, audio_clip in ipairs(mc_seq:audio_streams()) do
+                audio_clip.mark_in = name_marks.audio.mark_in
+                audio_clip.mark_out = name_marks.audio.mark_out
+                audio_clip.playhead_frame = name_marks.audio.playhead
+                assert(audio_clip:save({skip_occlusion = true}), string.format(
+                    "apply_marks: save failed for audio clip %s (media=%s)",
+                    audio_clip.id, media.name))
+                applied_count = applied_count + 1
+            end
+        end
+
+        ::next_media::
+    end
+
+    if applied_count > 0 then
+        logger.info("drp_importer", string.format(
+            "Applied marks to %d master clip stream(s)", applied_count))
+    end
+end
+
 --- Mark clips offline whose media files don't exist on disk.
 -- Loads each clip, checks its media path, sets offline=true and saves.
 -- @param clip_ids table: list of clip IDs to check
@@ -1664,7 +1745,10 @@ function M.import_into_project(project_id, parse_result, opts)
         end
     end
 
-    -- STEP 7: Mark clips offline for missing media files
+    -- STEP 7: Apply pool master clip marks to JVE master clips
+    apply_pool_master_clip_marks(parse_result.pool_master_clips, media_by_path)
+
+    -- STEP 8: Mark clips offline for missing media files
     local offline_count = mark_offline_clips(result.clip_ids)
     if offline_count > 0 then
         logger.warn("drp_importer", string.format(

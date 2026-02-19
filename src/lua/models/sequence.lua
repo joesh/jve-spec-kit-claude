@@ -500,7 +500,17 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
     return seq.id
 end
 
---- Internal: find masterclip sequence_id for a media_id.
+--- Find the masterclip sequence_id for a given media_id.
+-- @param media_id string
+-- @return string|nil masterclip sequence_id, or nil if none exists
+function Sequence.find_masterclip_for_media(media_id)
+    assert(media_id and media_id ~= "",
+        "Sequence.find_masterclip_for_media: media_id is required")
+    local conn = resolve_db()
+    return Sequence._find_masterclip_for_media(conn, media_id)
+end
+
+--- Internal: find masterclip sequence_id for a media_id (caller provides conn).
 -- @param conn database connection
 -- @param media_id string
 -- @return string|nil masterclip sequence_id, or nil if none exists
