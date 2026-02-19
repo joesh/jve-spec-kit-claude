@@ -194,8 +194,7 @@ local PlaybackEngine = require("core.playback.playback_engine")
 -- Test Helper: create engine with tracking callbacks
 --------------------------------------------------------------------------------
 
-local function make_engine(opts)
-    opts = opts or {}
+local function make_engine()
     local log = {
         frames_shown = {},
         gaps_shown = 0,
@@ -204,7 +203,6 @@ local function make_engine(opts)
     }
 
     local engine = PlaybackEngine.new({
-        media_context_id = opts.context_id or "test_ctx",
         on_show_frame = function(frame_handle, metadata)
             log.frames_shown[#log.frames_shown + 1] = {
                 handle = frame_handle,
@@ -237,11 +235,10 @@ print("=== test_playback_engine.lua ===")
 print("\n--- constructor validation ---")
 do
     local ok, _ = pcall(PlaybackEngine.new, {})
-    assert(not ok, "missing media_context_id should assert")
-    print("  missing context_id: asserts ok")
+    assert(not ok, "missing callbacks should assert")
+    print("  missing callbacks: asserts ok")
 
     ok, _ = pcall(PlaybackEngine.new, {
-        media_context_id = "x",
         on_show_frame = function() end,
         on_show_gap = function() end,
         on_set_rotation = function() end,

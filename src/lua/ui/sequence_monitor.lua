@@ -5,7 +5,6 @@
 -- - A GPUVideoSurface for video frame display
 -- - A mark bar for mark in/out range + playhead visualization
 -- - A title label
--- - A media_cache context for independent frame caching
 --
 -- Absorbs widget creation from viewer_panel.lua and playhead/mark state
 -- management from source_viewer_state.lua. SequenceMonitor treats all sequence
@@ -19,7 +18,6 @@
 
 local logger = require("core.logger")
 local qt_constants = require("core.qt_constants")
-local media_cache = require("core.media.media_cache")
 local PlaybackEngine = require("core.playback.playback_engine")
 local Sequence = require("models.sequence")
 local monitor_mark_bar = require("ui.monitor_mark_bar")
@@ -50,7 +48,6 @@ function SequenceMonitor.new(config)
     local self = setmetatable({}, SequenceMonitor)
 
     self.view_id = config.view_id
-    self.media_context_id = config.view_id
 
     -- Sequence state
     self.sequence_id = nil
@@ -67,12 +64,8 @@ function SequenceMonitor.new(config)
     self._persist_generation = 0
     self._project_gen = project_gen.current()
 
-    -- Create media_cache context for this view
-    media_cache.create_context(self.media_context_id)
-
     -- Create PlaybackEngine
     self.engine = PlaybackEngine.new({
-        media_context_id = self.media_context_id,
         on_show_frame = function(fh, meta)
             self:_on_show_frame(fh, meta)
         end,
@@ -498,7 +491,6 @@ function SequenceMonitor:destroy()
         self:save_playhead_to_db()
     end
     self.engine:destroy()
-    media_cache.destroy_context(self.media_context_id)
     self._listeners = {}
     if self._marks_changed_id then
         Signals.disconnect(self._marks_changed_id)

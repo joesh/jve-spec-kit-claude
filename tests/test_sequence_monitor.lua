@@ -104,21 +104,6 @@ _G.timeline = {
     set_desired_height = function() end,
 }
 
--- Mock media_cache (audio functions only — video path uses TMB now)
-local created_contexts = {}
-package.loaded["core.media.media_cache"] = {
-    create_context = function(id)
-        created_contexts[id] = true
-    end,
-    destroy_context = function(id)
-        created_contexts[id] = nil
-    end,
-    ensure_audio_pooled = function()
-        return { has_audio = true, audio_sample_rate = 48000 }
-    end,
-    get_audio_pcm_for_path = function() return nil, 0, 0 end,
-}
-
 -- Mock logger
 package.loaded["core.logger"] = {
     debug = function() end,
@@ -288,17 +273,14 @@ do
     local view = SequenceMonitor.new({ view_id = "test_view_1" })
 
     assert(view.view_id == "test_view_1", "view_id stored")
-    assert(view.media_context_id == "test_view_1", "media_context_id matches view_id")
     assert(view.engine, "engine created")
     assert(view:get_widget(), "container widget created")
     assert(view:get_title_widget(), "title widget created")
     assert(view:get_video_surface(), "video surface created")
-    assert(created_contexts["test_view_1"], "media_cache context created")
     assert(view.total_frames == 0, "no frames before load")
     assert(not view:has_clip(), "no clip before load")
 
     view:destroy()
-    assert(not created_contexts["test_view_1"], "context destroyed")
     print("  ok")
 end
 
@@ -612,9 +594,6 @@ do
     local view1 = SequenceMonitor.new({ view_id = "view_a" })
     local view2 = SequenceMonitor.new({ view_id = "view_b" })
     timer_callbacks = {}
-
-    assert(created_contexts["view_a"], "context a created")
-    assert(created_contexts["view_b"], "context b created")
 
     view1:load_sequence(mc_id)
     view2:load_sequence("timeline1")

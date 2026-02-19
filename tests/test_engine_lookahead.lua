@@ -256,7 +256,6 @@ PlaybackEngine.init_audio(mock_audio)
 local function make_engine()
     local log = { frames = {}, gaps = 0 }
     local engine = PlaybackEngine.new({
-        media_context_id = "test_ctx",
         on_show_frame = function(fh, meta) log.frames[#log.frames + 1] = meta end,
         on_show_gap = function() log.gaps = log.gaps + 1 end,
         on_set_rotation = function() end,

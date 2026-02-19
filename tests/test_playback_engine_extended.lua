@@ -241,8 +241,7 @@ local PlaybackEngine = require("core.playback.playback_engine")
 -- Test helper
 --------------------------------------------------------------------------------
 
-local function make_engine(opts)
-    opts = opts or {}
+local function make_engine()
     local log = {
         frames_shown = {},
         gaps_shown = 0,
@@ -251,7 +250,6 @@ local function make_engine(opts)
     }
 
     local engine = PlaybackEngine.new({
-        media_context_id = opts.context_id or "test_ctx",
         on_show_frame = function(frame_handle, metadata)
             log.frames_shown[#log.frames_shown + 1] = {
                 handle = frame_handle,

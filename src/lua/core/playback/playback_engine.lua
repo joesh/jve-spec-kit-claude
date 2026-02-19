@@ -53,7 +53,6 @@ end
 
 --- Create a new PlaybackEngine instance.
 -- @param config table:
---   media_context_id  string   media_cache context for this view
 --   on_show_frame     function(frame_handle, metadata)
 --   on_show_gap       function()
 --   on_set_rotation   function(degrees)
@@ -61,8 +60,6 @@ end
 function PlaybackEngine.new(config)
     assert(type(config) == "table",
         "PlaybackEngine.new: config must be a table")
-    assert(config.media_context_id,
-        "PlaybackEngine.new: media_context_id required")
     assert(type(config.on_show_frame) == "function",
         "PlaybackEngine.new: on_show_frame callback required")
     assert(type(config.on_show_gap) == "function",
@@ -97,7 +94,6 @@ function PlaybackEngine.new(config)
     self.current_audio_clip_ids = {}
 
     -- Config (immutable after construction)
-    self.media_context_id = config.media_context_id
     self._on_show_frame = config.on_show_frame
     self._on_show_gap = config.on_show_gap
     self._on_set_rotation = config.on_set_rotation
