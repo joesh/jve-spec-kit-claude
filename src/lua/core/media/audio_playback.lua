@@ -41,11 +41,11 @@ local CFG = {
     PUMP_INTERVAL_OK_MS = 15,
     MAX_RENDER_FRAMES = 4096,
 
-    -- Audio cache window: SYMMETRIC bidirectional (both directions equal)
-    -- This enables reverse playback without constant AAC decoder seeks.
-    -- 10 seconds total = ~4MB at 48kHz stereo float32 (cheap to cache)
-    -- Half-window = 5 seconds in each direction from playhead
-    AUDIO_CACHE_HALF_WINDOW_US = 5000000,  -- 5 seconds each direction
+    -- Mixed audio: forward-only lookahead pushed to SSE.
+    -- C++ mix thread pre-fills MIX_LOOKAHEAD_US (2s) ahead autonomously.
+    -- Lua requests match-sized chunks and refills when running low.
+    MIX_LOOKAHEAD_US = 2000000,     -- 2s ahead (matches C++ MIX_LOOKAHEAD_US)
+    MIX_REFILL_AT_US = 500000,      -- refill when <500ms of audio remains in SSE
 
     -- Audio output latency compensation (Qt buffer + CoreAudio + driver + DAC)
     -- This is the delay between when Qt consumes audio and when it reaches ears.
@@ -91,7 +91,6 @@ local M = {
 local pumping = false        -- Re-entrancy guard
 local burst_generation = 0   -- Monotonic counter; stop-timer only fires if gen matches
 local last_pcm_range = { start_us = 0, end_us = 0 }
-local last_fetch_pb_start_us = nil  -- pb_start from the last actual fetch (nil = no prior fetch)
 
 --------------------------------------------------------------------------------
 -- Time Utilities (epoch-based, FLUSH-agnostic)
@@ -188,7 +187,7 @@ local function reanchor(new_media_time_us, new_signed_speed, new_quality_mode)
 
     -- Clear cached PCM range (will refetch around new position)
     last_pcm_range = { start_us = 0, end_us = 0 }
-    last_fetch_pb_start_us = nil
+
 
     logger.debug("audio_playback", ("reanchor: t=%.3fs speed=%.2f Q%d")
         :format(new_media_time_us / 1000000, new_signed_speed, new_quality_mode))
@@ -266,6 +265,31 @@ end
 -- Mix Lifecycle (TMB-based, per-clip-change)
 --------------------------------------------------------------------------------
 
+--- Resolve solo/mute into effective volumes, send to TMB as mix params.
+-- Called on apply_mix (both hot and cold paths) so C++ knows about volume changes.
+local function send_mix_params_to_tmb()
+    if not M._tmb or not M._mix_params or not M.session_initialized then return end
+
+    local any_solo = false
+    for _, track in ipairs(M._mix_params) do
+        if track.soloed then any_solo = true; break end
+    end
+
+    local resolved = {}
+    for _, track in ipairs(M._mix_params) do
+        local vol
+        if any_solo then
+            vol = track.soloed and track.volume or 0
+        else
+            vol = track.muted and 0 or track.volume
+        end
+        resolved[#resolved + 1] = { track_index = track.track_index, volume = vol }
+    end
+
+    qt_constants.EMP.TMB_SET_AUDIO_MIX_PARAMS(
+        M._tmb, resolved, M.session_sample_rate, M.session_channels)
+end
+
 --- Update audio mix params for TMB-based decode path.
 -- Called by engine when clip set changes at edit boundaries.
 -- @param tmb userdata: TMB handle (decode source)
@@ -302,9 +326,14 @@ function M.apply_mix(tmb, mix_params, edit_time_us)
     M.has_audio = #mix_params > 0
     M._project_gen = project_gen.current()
 
+    -- Always push resolved volumes to C++ (both hot and cold paths)
+    -- so the autonomous mix thread uses current solo/mute/volume state.
+    send_mix_params_to_tmb()
+
     if not tracks_changed then
         -- HOT SWAP: only volume/mute/solo changed. No SSE reset needed.
-        -- Next decode_mix_and_send_to_sse will use new params.
+        -- C++ mix cache was invalidated by send_mix_params_to_tmb above.
+        -- Next decode_mix_and_send_to_sse will fetch fresh mixed audio.
         return
     end
 
@@ -312,7 +341,7 @@ function M.apply_mix(tmb, mix_params, edit_time_us)
 
     -- Clear PCM cache (stale data from previous track set)
     last_pcm_range = { start_us = 0, end_us = 0 }
-    last_fetch_pb_start_us = nil
+
 
     if was_playing then
         M.media_time_us = edit_time_us
@@ -341,96 +370,59 @@ function M.apply_mix(tmb, mix_params, edit_time_us)
         "apply_mix: %d track(s), tracks_changed=%s", #mix_params, tostring(tracks_changed)))
 end
 
---- Decode all tracks from TMB, mix with volume, push to SSE.
--- Uses FFI to mix PcmChunk data (same pattern as mixer.lua mix_sources).
+--- Fetch pre-mixed audio from TMB and push to SSE.
+-- TMB mixes all tracks autonomously in C++ (volume-weighted sum).
+-- Lua requests forward-only 2s range and refills when SSE runs low.
+-- Push replaces the SSE chunk (SSE can't span chunk boundaries).
+-- C++ mix thread pre-fills 2s ahead; sync fallback on cold cache.
 function M.decode_mix_and_send_to_sse()
     if not M._tmb or not M._mix_params or #M._mix_params == 0 then return end
 
     local current_us = M.get_time_us()
-    local half = CFG.AUDIO_CACHE_HALF_WINDOW_US
-    local pb_start = math.max(0, current_us - half)
-    local pb_end = math.min(M.max_media_time_us, current_us + half)
 
-    -- Skip if SSE already has data covering this window
-    if last_pcm_range.start_us <= pb_start and last_pcm_range.end_us >= pb_end then
-        return
+    -- Check if SSE still has enough audio ahead
+    local remaining = last_pcm_range.end_us - current_us
+    if M.speed < 0 then
+        remaining = current_us - last_pcm_range.start_us
     end
+    if remaining > CFG.MIX_REFILL_AT_US then return end
 
-    -- Skip if pb_start unchanged from last fetch (dedup)
-    if last_fetch_pb_start_us == pb_start then return end
-
+    -- Fetch full range from current position (single chunk — SSE can't span boundaries)
+    local pb_start, pb_end
+    if M.speed >= 0 then
+        pb_start = current_us
+        pb_end = math.min(M.max_media_time_us, current_us + CFG.MIX_LOOKAHEAD_US)
+    else
+        pb_start = math.max(0, current_us - CFG.MIX_LOOKAHEAD_US)
+        pb_end = current_us
+    end
     if pb_end <= pb_start then return end
 
     local EMP = qt_constants.EMP
-    local channels = M.session_channels
+    local pcm = EMP.TMB_GET_MIXED_AUDIO(M._tmb, pb_start, pb_end)
+    if not pcm then return end
 
-    -- Determine solo state
-    local any_solo = false
-    for _, track in ipairs(M._mix_params) do
-        if track.soloed then any_solo = true; break end
-    end
-
-    -- Decode each track from TMB, copy into Lua-owned FFI buffer, mix with volume
-    local mix_buf = nil       -- ffi float array (owned by Lua GC)
-    local mix_frames = 0
-    local mix_start_us = pb_start
-
-    for _, track in ipairs(M._mix_params) do
-        -- Effective volume (solo/mute logic)
-        local vol
-        if any_solo then
-            vol = track.soloed and track.volume or 0
-        else
-            vol = track.muted and 0 or track.volume
-        end
-        if vol == 0 then goto continue end
-
-        local pcm = EMP.TMB_GET_TRACK_AUDIO(
-            M._tmb, track.track_index, pb_start, pb_end,
-            M.session_sample_rate, channels)
-        if not pcm then goto continue end
-
-        local info = EMP.PCM_INFO(pcm)
-        local float_ptr = ffi.cast("float*", EMP.PCM_DATA_PTR(pcm))
-        local n_samples = info.frames * channels
-
-        if not mix_buf then
-            -- First track: allocate mix buffer and copy scaled data
-            mix_frames = info.frames
-            mix_start_us = info.start_time_us
-            mix_buf = ffi.new("float[?]", n_samples)
-            if vol == 1.0 then
-                ffi.copy(mix_buf, float_ptr, n_samples * ffi.sizeof("float"))
-            else
-                for i = 0, n_samples - 1 do
-                    mix_buf[i] = float_ptr[i] * vol
-                end
-            end
-        else
-            -- Subsequent tracks: accumulate into mix buffer
-            local n = math.min(info.frames, mix_frames) * channels
-            for i = 0, n - 1 do
-                mix_buf[i] = mix_buf[i] + float_ptr[i] * vol
-            end
-        end
-
+    local info = EMP.PCM_INFO(pcm)
+    if info.frames > 0 then
+        local raw_ptr = EMP.PCM_DATA_PTR(pcm)
+        local float_ptr = ffi.cast("float*", raw_ptr)
+        local n = info.frames * M.session_channels
+        local buf = ffi.new("float[?]", n)
+        ffi.copy(buf, float_ptr, n * ffi.sizeof("float"))
         EMP.PCM_RELEASE(pcm)
-        ::continue::
-    end
 
-    -- Push mixed audio to SSE
-    if mix_buf and mix_frames > 0 then
-        qt_constants.SSE.PUSH_PCM(M.sse, mix_buf, mix_frames, mix_start_us)
-        -- start_us = actual PCM start (may differ from pb_start due to codec delay)
-        -- This is needed by advance_sse_past_codec_delay to adjust SSE target.
-        -- Dedup uses last_fetch_pb_start_us separately.
+        qt_constants.SSE.PUSH_PCM(M.sse, buf, info.frames, info.start_time_us)
+
+        local push_end = info.start_time_us
+            + math.floor(info.frames * 1000000 / M.session_sample_rate)
         last_pcm_range = {
-            start_us = mix_start_us,
-            end_us = pb_end,
-            pcm_ptr = mix_buf,
-            frames = mix_frames,
+            start_us = info.start_time_us,
+            end_us = push_end,
+            pcm_ptr = buf,
+            frames = info.frames,
         }
-        last_fetch_pb_start_us = pb_start
+    else
+        EMP.PCM_RELEASE(pcm)
     end
 end
 
@@ -491,7 +483,7 @@ function M.shutdown_session()
 
     -- Clear ALL state
     last_pcm_range = { start_us = 0, end_us = 0 }
-    last_fetch_pb_start_us = nil
+
     pumping = false
 
     M._tmb = nil
@@ -765,7 +757,7 @@ function M.play_burst(time_us, duration_us)
         end
     else
         last_pcm_range = { start_us = 0, end_us = 0 }
-        last_fetch_pb_start_us = nil
+    
         M.decode_mix_and_send_to_sse()
     end
     advance_sse_past_codec_delay()

@@ -1481,6 +1481,117 @@ private slots:
         QCOMPARE(tmb->GetVideoCacheMissCount(), (int64_t)16);
     }
 
+    // ── Autonomous pre-mixed audio (SetAudioMixParams + GetMixedAudio) ──
+
+    void test_set_audio_mix_params_and_get_mixed() {
+        // SetAudioMixParams + GetMixedAudio: set params, clips, playhead → valid PCM
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        tmb->SetSequenceRate(24, 1);
+        tmb->SetAudioFormat(AudioFormat{SampleFormat::F32, 48000, 2});
+
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(TrackId{TrackType::Audio, 1}, clips);
+
+        std::vector<MixTrackParam> params = {{1, 1.0f}};
+        tmb->SetAudioMixParams(params, AudioFormat{SampleFormat::F32, 48000, 2});
+
+        auto result = tmb->GetMixedAudio(0, 100000);
+        QVERIFY(result != nullptr);
+        QVERIFY(result->frames() > 0);
+        QCOMPARE(result->sample_rate(), 48000);
+        QCOMPARE(result->channels(), 2);
+    }
+
+    void test_get_mixed_audio_no_params() {
+        // GetMixedAudio with no params → nullptr
+        auto tmb = TimelineMediaBuffer::Create(0);
+        tmb->SetSequenceRate(24, 1);
+
+        auto result = tmb->GetMixedAudio(0, 100000);
+        QVERIFY(result == nullptr);
+    }
+
+    void test_mixed_cache_invalidation() {
+        // SetAudioMixParams twice → second GetMixedAudio still works
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        tmb->SetSequenceRate(24, 1);
+        tmb->SetAudioFormat(AudioFormat{SampleFormat::F32, 48000, 2});
+
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(TrackId{TrackType::Audio, 1}, clips);
+
+        // First params
+        std::vector<MixTrackParam> params1 = {{1, 1.0f}};
+        tmb->SetAudioMixParams(params1, AudioFormat{SampleFormat::F32, 48000, 2});
+        auto r1 = tmb->GetMixedAudio(0, 100000);
+        QVERIFY(r1 != nullptr);
+
+        // Second params (volume change → cache invalidated)
+        std::vector<MixTrackParam> params2 = {{1, 0.5f}};
+        tmb->SetAudioMixParams(params2, AudioFormat{SampleFormat::F32, 48000, 2});
+        auto r2 = tmb->GetMixedAudio(0, 100000);
+        QVERIFY(r2 != nullptr);
+        QVERIFY(r2->frames() > 0);
+    }
+
+    void test_get_mixed_audio_sync_fallback() {
+        // Cold cache → sync path returns valid audio
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(0); // no workers
+        tmb->SetSequenceRate(24, 1);
+
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(TrackId{TrackType::Audio, 1}, clips);
+
+        std::vector<MixTrackParam> params = {{1, 1.0f}};
+        tmb->SetAudioMixParams(params, AudioFormat{SampleFormat::F32, 48000, 2});
+
+        // No SetPlayhead (mix thread idle), no pre-fill time
+        // GetMixedAudio must use sync fallback
+        auto result = tmb->GetMixedAudio(0, 100000);
+        QVERIFY(result != nullptr);
+        QVERIFY(result->frames() > 0);
+    }
+
+    void test_mixed_audio_pre_fill() {
+        // Set playhead direction=1, wait, GetMixedAudio → cache hit (no sync)
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        tmb->SetSequenceRate(24, 1);
+        tmb->SetAudioFormat(AudioFormat{SampleFormat::F32, 48000, 2});
+
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 200, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(TrackId{TrackType::Audio, 1}, clips);
+
+        std::vector<MixTrackParam> params = {{1, 1.0f}};
+        tmb->SetAudioMixParams(params, AudioFormat{SampleFormat::F32, 48000, 2});
+
+        // Start playback: direction=1 wakes mix thread
+        tmb->SetPlayhead(0, 1, 1.0f);
+
+        // Wait for mix thread to pre-fill
+        QThread::msleep(500);
+
+        // GetMixedAudio at 0.5s should hit the pre-filled cache
+        auto result = tmb->GetMixedAudio(500000, 600000);
+        QVERIFY(result != nullptr);
+        QVERIFY(result->frames() > 0);
+    }
+
     // ── ReleaseAll clears offline registry ──
 
     void test_release_all_clears_offline() {

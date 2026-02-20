@@ -85,6 +85,23 @@ local mock_qt_constants = {
                 _channels = ch or 2,
             }
         end,
+        TMB_SET_AUDIO_MIX_PARAMS = function() end,
+        -- Simulate codec delay for pre-mixed audio too
+        TMB_GET_MIXED_AUDIO = function(tmb, t0, t1)
+            local actual_start = t0
+            if t0 < CODEC_DELAY_US then
+                actual_start = CODEC_DELAY_US
+            end
+            local duration_us = t1 - actual_start
+            if duration_us <= 0 then return nil end
+            local sr = 48000
+            local frames = math.floor(duration_us * sr / 1000000)
+            return {
+                _start_us = actual_start,
+                _frames = frames,
+                _channels = 2,
+            }
+        end,
         PCM_INFO = function(pcm)
             return { frames = pcm._frames, start_time_us = pcm._start_us }
         end,

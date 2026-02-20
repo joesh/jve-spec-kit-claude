@@ -13,6 +13,8 @@ local mock_qt_constants = {
         PCM_RELEASE = function() end,
         SET_DECODE_MODE = function() end,
         TMB_GET_TRACK_AUDIO = function() return nil end,
+        TMB_SET_AUDIO_MIX_PARAMS = function() end,
+        TMB_GET_MIXED_AUDIO = function() return nil end,
         PCM_INFO = function() return { frames = 0, start_time_us = 0 } end,
         PCM_DATA_PTR = function() return nil end,
     },

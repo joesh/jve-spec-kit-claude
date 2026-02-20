@@ -724,6 +724,68 @@ static int lua_emp_tmb_get_track_audio(lua_State* L) {
     return 1;
 }
 
+// EMP.TMB_SET_AUDIO_MIX_PARAMS(tmb, params_table, sample_rate, channels)
+// params_table = array of { track_index=N, volume=V }
+static int lua_emp_tmb_set_audio_mix_params(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    int32_t sample_rate = static_cast<int32_t>(luaL_checkinteger(L, 3));
+    int32_t channels = static_cast<int32_t>(luaL_checkinteger(L, 4));
+    if (sample_rate <= 0) return luaL_error(L, "TMB_SET_AUDIO_MIX_PARAMS: sample_rate must be > 0, got %d", sample_rate);
+    if (channels <= 0) return luaL_error(L, "TMB_SET_AUDIO_MIX_PARAMS: channels must be > 0, got %d", channels);
+
+    int n = static_cast<int>(lua_objlen(L, 2));
+    std::vector<emp::MixTrackParam> params;
+    params.reserve(static_cast<size_t>(n));
+
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, 2, i);
+        if (!lua_istable(L, -1)) {
+            return luaL_error(L, "TMB_SET_AUDIO_MIX_PARAMS: element %d is not a table", i);
+        }
+
+        emp::MixTrackParam p{};
+        lua_getfield(L, -1, "track_index");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_SET_AUDIO_MIX_PARAMS: element %d missing track_index", i);
+        }
+        p.track_index = static_cast<int>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "volume");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_SET_AUDIO_MIX_PARAMS: element %d missing volume", i);
+        }
+        p.volume = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+
+        lua_pop(L, 1); // pop element table
+        params.push_back(p);
+    }
+
+    emp::AudioFormat fmt{emp::SampleFormat::F32, sample_rate, channels};
+    tmb->SetAudioMixParams(params, fmt);
+    return 0;
+}
+
+// EMP.TMB_GET_MIXED_AUDIO(tmb, t0_us, t1_us) -> pcm | nil
+static int lua_emp_tmb_get_mixed_audio(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int64_t t0 = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    int64_t t1 = static_cast<int64_t>(luaL_checkinteger(L, 3));
+    if (t1 <= t0) return luaL_error(L, "TMB_GET_MIXED_AUDIO: t1 (%lld) must be > t0 (%lld)", (long long)t1, (long long)t0);
+
+    auto pcm = tmb->GetMixedAudio(t0, t1);
+    if (!pcm) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    void* pcm_key = push_userdata(L, pcm, EMP_PCM_METATABLE);
+    g_pcm_chunks[pcm_key] = pcm;
+    return 1;
+}
+
 // EMP.TMB_RELEASE_TRACK(tmb, type_string, track_index)
 static int lua_emp_tmb_release_track(lua_State* L) {
     auto tmb = get_tmb(L, 1);
@@ -1156,6 +1218,10 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "TMB_GET_VIDEO_FRAME");
     lua_pushcfunction(L, lua_emp_tmb_get_track_audio);
     lua_setfield(L, -2, "TMB_GET_TRACK_AUDIO");
+    lua_pushcfunction(L, lua_emp_tmb_set_audio_mix_params);
+    lua_setfield(L, -2, "TMB_SET_AUDIO_MIX_PARAMS");
+    lua_pushcfunction(L, lua_emp_tmb_get_mixed_audio);
+    lua_setfield(L, -2, "TMB_GET_MIXED_AUDIO");
     lua_pushcfunction(L, lua_emp_tmb_release_track);
     lua_setfield(L, -2, "TMB_RELEASE_TRACK");
     lua_pushcfunction(L, lua_emp_tmb_release_all);

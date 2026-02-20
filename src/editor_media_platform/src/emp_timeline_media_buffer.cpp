@@ -15,6 +15,7 @@ namespace emp {
 TimelineMediaBuffer::TimelineMediaBuffer() = default;
 
 TimelineMediaBuffer::~TimelineMediaBuffer() {
+    stop_mix_thread();
     stop_workers();
     ReleaseAll();
 }
@@ -24,6 +25,7 @@ std::unique_ptr<TimelineMediaBuffer> TimelineMediaBuffer::Create(int pool_thread
     if (pool_threads > 0) {
         tmb->start_workers(pool_threads);
     }
+    tmb->start_mix_thread();
     return tmb;
 }
 
@@ -88,9 +90,15 @@ void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInf
 // ============================================================================
 
 void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed) {
+    int prev_direction = m_playhead_direction.load(std::memory_order_relaxed);
     m_playhead_frame.store(frame, std::memory_order_relaxed);
     m_playhead_direction.store(direction, std::memory_order_relaxed);
     m_playhead_speed.store(speed, std::memory_order_relaxed);
+
+    // Wake mix thread on play start (0→nonzero) or direction flip
+    if (direction != 0 && (prev_direction == 0 || prev_direction != direction)) {
+        m_mix_cv.notify_one();
+    }
 
     // Evaluate pre-buffer needs for each track
     std::lock_guard<std::mutex> lock(m_tracks_mutex);
@@ -687,6 +695,307 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
 }
 
 // ============================================================================
+// Autonomous pre-mixed audio: MixedAudioCache
+// ============================================================================
+
+bool TimelineMediaBuffer::MixedAudioCache::covers(TimeUS t0, TimeUS t1) const {
+    return !data.empty() && start_us <= t0 && end_us >= t1;
+}
+
+std::shared_ptr<PcmChunk> TimelineMediaBuffer::MixedAudioCache::extract(
+        TimeUS t0, TimeUS t1) const {
+    assert(!data.empty() && "MixedAudioCache::extract: cache is empty");
+    assert(sample_rate > 0 && channels > 0 && "MixedAudioCache::extract: invalid format");
+    assert(t0 >= start_us && t1 <= end_us && "MixedAudioCache::extract: range not covered");
+
+    int64_t total_frames = static_cast<int64_t>(data.size()) / channels;
+    int64_t skip = ((t0 - start_us) * sample_rate) / 1000000;
+    int64_t want = ((t1 - t0) * sample_rate) / 1000000;
+    if (skip < 0) skip = 0;
+    if (skip + want > total_frames) want = total_frames - skip;
+    if (want <= 0) return nullptr;
+
+    std::vector<float> out(want * channels);
+    std::copy(data.data() + skip * channels,
+              data.data() + (skip + want) * channels,
+              out.data());
+    auto impl = std::make_unique<PcmChunkImpl>(
+        sample_rate, channels, SampleFormat::F32, t0, std::move(out));
+    return std::make_shared<PcmChunk>(std::move(impl));
+}
+
+void TimelineMediaBuffer::MixedAudioCache::append(
+        const std::shared_ptr<PcmChunk>& chunk, int dir) {
+    assert(chunk && chunk->frames() > 0 && "MixedAudioCache::append: null/empty chunk");
+
+    const float* src = chunk->data_f32();
+    int64_t n = chunk->frames() * channels;
+    TimeUS chunk_end = chunk->start_time_us() +
+        (chunk->frames() * 1000000LL) / sample_rate;
+
+    if (data.empty()) {
+        start_us = chunk->start_time_us();
+        end_us = chunk_end;
+        data.assign(src, src + n);
+        direction = dir;
+        return;
+    }
+
+    if (dir > 0) {
+        // Forward: append to end
+        data.insert(data.end(), src, src + n);
+        end_us = chunk_end;
+    } else {
+        // Reverse: prepend to start
+        data.insert(data.begin(), src, src + n);
+        start_us = chunk->start_time_us();
+    }
+}
+
+void TimelineMediaBuffer::MixedAudioCache::evict_behind(TimeUS playhead_us, int dir) {
+    if (data.empty() || sample_rate <= 0 || channels <= 0) return;
+
+    constexpr TimeUS KEEP_BEHIND_US = 500000; // 0.5s margin behind playhead
+
+    if (dir > 0) {
+        TimeUS evict_before = playhead_us - KEEP_BEHIND_US;
+        if (evict_before <= start_us) return;
+        int64_t evict_frames = ((evict_before - start_us) * sample_rate) / 1000000;
+        if (evict_frames <= 0) return;
+        int64_t total = static_cast<int64_t>(data.size()) / channels;
+        if (evict_frames >= total) { clear(); return; }
+        data.erase(data.begin(), data.begin() + evict_frames * channels);
+        start_us = evict_before;
+    } else {
+        TimeUS evict_after = playhead_us + KEEP_BEHIND_US;
+        if (evict_after >= end_us) return;
+        int64_t total = static_cast<int64_t>(data.size()) / channels;
+        int64_t keep_frames = ((evict_after - start_us) * sample_rate) / 1000000;
+        if (keep_frames <= 0) { clear(); return; }
+        if (keep_frames >= total) return;
+        data.resize(keep_frames * channels);
+        end_us = evict_after;
+    }
+}
+
+void TimelineMediaBuffer::MixedAudioCache::clear() {
+    data.clear();
+    start_us = end_us = 0;
+    direction = 0;
+}
+
+// ============================================================================
+// SetAudioMixParams
+// ============================================================================
+
+void TimelineMediaBuffer::SetAudioMixParams(
+        const std::vector<MixTrackParam>& params, const AudioFormat& fmt) {
+    assert(fmt.sample_rate > 0 && "SetAudioMixParams: sample_rate must be positive");
+    assert(fmt.channels > 0 && "SetAudioMixParams: channels must be positive");
+
+    {
+        std::lock_guard<std::mutex> lock(m_mix_mutex);
+        m_audio_mix_params = params;
+        m_audio_mix_fmt = fmt;
+        m_mixed_cache.clear();
+        m_mixed_cache.sample_rate = fmt.sample_rate;
+        m_mixed_cache.channels = fmt.channels;
+        m_mix_params_changed = true;
+    }
+    m_mix_cv.notify_one();
+}
+
+// ============================================================================
+// GetMixedAudio — cache read + sync fallback
+// ============================================================================
+
+std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetMixedAudio(TimeUS t0, TimeUS t1) {
+    assert(t1 > t0 && "GetMixedAudio: t1 must be greater than t0");
+
+    std::unique_lock<std::mutex> lock(m_mix_mutex);
+    if (m_audio_mix_params.empty()) return nullptr;
+
+    // Cache hit
+    if (m_mixed_cache.covers(t0, t1)) {
+        return m_mixed_cache.extract(t0, t1);
+    }
+
+    // Sync fallback (startup/seek — cache cold)
+    auto params = m_audio_mix_params;
+    auto fmt = m_audio_mix_fmt;
+    lock.unlock();
+
+    return execute_mix_range(params, fmt, t0, t1);
+}
+
+// ============================================================================
+// execute_mix_range — per-track decode + volume-weighted sum
+// ============================================================================
+
+std::shared_ptr<PcmChunk> TimelineMediaBuffer::execute_mix_range(
+        const std::vector<MixTrackParam>& params,
+        const AudioFormat& fmt, TimeUS t0, TimeUS t1) {
+
+    assert(t1 > t0 && "execute_mix_range: inverted range");
+    assert(fmt.sample_rate > 0 && fmt.channels > 0 && "execute_mix_range: invalid format");
+
+    const int32_t sr = fmt.sample_rate;
+    const int32_t ch = fmt.channels;
+    int64_t out_frames = ((t1 - t0) * sr) / 1000000;
+    if (out_frames <= 0) return nullptr;
+
+    std::vector<float> mix_buf;
+    bool has_audio = false;
+    TimeUS actual_start = t0;
+
+    for (const auto& param : params) {
+        if (param.volume <= 0.0f) continue;
+
+        TrackId track{TrackType::Audio, param.track_index};
+        auto pcm = GetTrackAudio(track, t0, t1, fmt);
+        if (!pcm || pcm->frames() == 0) continue;
+
+        const float* src = pcm->data_f32();
+        int64_t src_frames = pcm->frames();
+        float vol = param.volume;
+
+        if (!has_audio) {
+            // First track: allocate and copy scaled
+            mix_buf.resize(out_frames * ch, 0.0f);
+            actual_start = pcm->start_time_us();
+            int64_t copy_frames = std::min(src_frames, out_frames);
+            int64_t n = copy_frames * ch;
+            if (std::abs(vol - 1.0f) < 0.001f) {
+                std::copy(src, src + n, mix_buf.data());
+            } else {
+                for (int64_t i = 0; i < n; ++i) {
+                    mix_buf[i] = src[i] * vol;
+                }
+            }
+            has_audio = true;
+        } else {
+            // Subsequent tracks: accumulate
+            int64_t n = std::min(src_frames, out_frames) * ch;
+            for (int64_t i = 0; i < n; ++i) {
+                mix_buf[i] += src[i] * vol;
+            }
+        }
+    }
+
+    if (!has_audio) return nullptr;
+
+    auto impl = std::make_unique<PcmChunkImpl>(
+        sr, ch, fmt.fmt, actual_start, std::move(mix_buf));
+    return std::make_shared<PcmChunk>(std::move(impl));
+}
+
+// ============================================================================
+// Mix thread — autonomous pre-mixing
+// ============================================================================
+
+static constexpr emp::TimeUS MIX_LOOKAHEAD_US = 2000000;  // 2s ahead
+static constexpr emp::TimeUS MIX_CHUNK_US = 200000;       // 200ms per chunk
+
+void TimelineMediaBuffer::start_mix_thread() {
+    m_mix_shutdown.store(false);
+    m_mix_thread = std::thread(&TimelineMediaBuffer::mix_thread_loop, this);
+}
+
+void TimelineMediaBuffer::stop_mix_thread() {
+    m_mix_shutdown.store(true);
+    m_mix_cv.notify_one();
+    if (m_mix_thread.joinable()) {
+        m_mix_thread.join();
+    }
+}
+
+void TimelineMediaBuffer::mix_thread_loop() {
+    while (true) {
+        // Wait for work: params change, direction change, or 50ms poll
+        {
+            std::unique_lock<std::mutex> lock(m_mix_mutex);
+            m_mix_cv.wait_for(lock, std::chrono::milliseconds(50), [this] {
+                return m_mix_shutdown.load() || m_mix_params_changed;
+            });
+
+            if (m_mix_shutdown.load()) break;
+            m_mix_params_changed = false;
+        }
+
+        // Check preconditions (atomics, no lock needed)
+        int direction = m_playhead_direction.load(std::memory_order_relaxed);
+        if (direction == 0) continue;
+
+        Rate seq_rate = m_seq_rate; // struct copy, written once before playback
+        if (seq_rate.num <= 0) continue;
+
+        // Read mix params under lock
+        std::vector<MixTrackParam> params;
+        AudioFormat fmt{SampleFormat::F32, 0, 0};
+        {
+            std::lock_guard<std::mutex> lock(m_mix_mutex);
+            if (m_audio_mix_params.empty()) continue;
+            params = m_audio_mix_params;
+            fmt = m_audio_mix_fmt;
+        }
+
+        if (fmt.sample_rate <= 0) continue;
+
+        // Compute playhead position in us
+        int64_t ph_frame = m_playhead_frame.load(std::memory_order_relaxed);
+        TimeUS playhead_us = FrameTime::from_frame(ph_frame, seq_rate).to_us();
+
+        // Determine target range
+        TimeUS target_start, target_end;
+        if (direction > 0) {
+            target_start = playhead_us;
+            target_end = playhead_us + MIX_LOOKAHEAD_US;
+        } else {
+            target_start = std::max(static_cast<TimeUS>(0), playhead_us - MIX_LOOKAHEAD_US);
+            target_end = playhead_us;
+        }
+
+        // Check cache state and compute chunk to mix
+        TimeUS chunk_t0, chunk_t1;
+        {
+            std::lock_guard<std::mutex> lock(m_mix_mutex);
+
+            // Direction flip → invalidate cache
+            if (m_mixed_cache.direction != 0 && m_mixed_cache.direction != direction) {
+                m_mixed_cache.clear();
+                m_mixed_cache.sample_rate = fmt.sample_rate;
+                m_mixed_cache.channels = fmt.channels;
+            }
+
+            if (direction > 0) {
+                TimeUS cache_end = m_mixed_cache.data.empty()
+                    ? playhead_us : m_mixed_cache.end_us;
+                if (cache_end >= target_end) continue; // already far enough ahead
+                chunk_t0 = cache_end;
+                chunk_t1 = std::min(chunk_t0 + MIX_CHUNK_US, target_end);
+            } else {
+                TimeUS cache_start = m_mixed_cache.data.empty()
+                    ? playhead_us : m_mixed_cache.start_us;
+                if (cache_start <= target_start) continue;
+                chunk_t1 = cache_start;
+                chunk_t0 = std::max(chunk_t1 - MIX_CHUNK_US, target_start);
+            }
+        }
+
+        if (chunk_t1 <= chunk_t0) continue;
+
+        // Mix this chunk (no locks held — calls GetTrackAudio internally)
+        auto pcm = execute_mix_range(params, fmt, chunk_t0, chunk_t1);
+
+        if (pcm && pcm->frames() > 0) {
+            std::lock_guard<std::mutex> lock(m_mix_mutex);
+            m_mixed_cache.append(pcm, direction);
+            m_mixed_cache.evict_behind(playhead_us, direction);
+        }
+    }
+}
+
+// ============================================================================
 // ProbeFile (Phase 2e — implemented here since it's simple)
 // ============================================================================
 
@@ -742,6 +1051,10 @@ void TimelineMediaBuffer::ReleaseAll() {
         std::lock_guard<std::mutex> lock(m_pool_mutex);
         m_readers.clear();
         m_offline.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_mix_mutex);
+        m_mixed_cache.clear();
     }
 }
 

@@ -25,6 +25,12 @@ namespace emp {
 // Track type: video or audio (prevents ID collision between track kinds)
 enum class TrackType { Video, Audio };
 
+// Mix parameter for one audio track (volume already resolves solo/mute on Lua side)
+struct MixTrackParam {
+    int track_index;
+    float volume;  // 0.0 = muted, 1.0 = full
+};
+
 // Composite track identifier — uniquely identifies a track in TMB
 struct TrackId {
     TrackType type;
@@ -104,6 +110,16 @@ public:
 
     // Audio format for pre-buffer (call once before playback)
     void SetAudioFormat(const AudioFormat& fmt);
+
+    // ── Autonomous pre-mixed audio ──
+
+    // Tell TMB what tracks to pre-mix. Invalidates mixed cache.
+    // Mix thread wakes and refills ahead of playhead.
+    void SetAudioMixParams(const std::vector<MixTrackParam>& params, const AudioFormat& fmt);
+
+    // Non-blocking cache read. Sync fallback on miss (startup/seek).
+    // Returns nullptr if no mix params set.
+    std::shared_ptr<PcmChunk> GetMixedAudio(TimeUS t0, TimeUS t1);
 
     // Configuration
     void SetMaxReaders(int max);
@@ -255,6 +271,46 @@ private:
     std::atomic<int64_t> m_playhead_frame{0};
     std::atomic<int> m_playhead_direction{0};
     std::atomic<float> m_playhead_speed{1.0f};
+
+    // ── Autonomous pre-mixed audio ──
+
+    // Mixed audio cache (internal, protected by m_mix_mutex)
+    struct MixedAudioCache {
+        std::vector<float> data;  // interleaved samples
+        TimeUS start_us = 0;
+        TimeUS end_us = 0;
+        int32_t sample_rate = 0;
+        int32_t channels = 0;
+        int direction = 0;        // direction cache was filled for
+
+        bool covers(TimeUS t0, TimeUS t1) const;
+        std::shared_ptr<PcmChunk> extract(TimeUS t0, TimeUS t1) const;
+        void append(const std::shared_ptr<PcmChunk>& chunk, int dir);
+        void evict_behind(TimeUS playhead_us, int dir);
+        void clear();
+    };
+
+    // Execute mix for a time range (calls GetTrackAudio per track, sums with volume)
+    // Thread-safe: does not hold m_mix_mutex
+    std::shared_ptr<PcmChunk> execute_mix_range(
+        const std::vector<MixTrackParam>& params,
+        const AudioFormat& fmt, TimeUS t0, TimeUS t1);
+
+    // Mix thread loop (autonomous pre-mixing)
+    void mix_thread_loop();
+    void start_mix_thread();
+    void stop_mix_thread();
+
+    std::thread m_mix_thread;
+    std::mutex m_mix_mutex;
+    std::condition_variable m_mix_cv;
+    std::atomic<bool> m_mix_shutdown{false};
+
+    // Protected by m_mix_mutex
+    std::vector<MixTrackParam> m_audio_mix_params;
+    AudioFormat m_audio_mix_fmt{SampleFormat::F32, 0, 0};
+    bool m_mix_params_changed = false;
+    MixedAudioCache m_mixed_cache;
 
     // ── Diagnostics ──
     std::atomic<int64_t> m_video_cache_misses{0};

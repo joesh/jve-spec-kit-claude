@@ -1,16 +1,14 @@
 #!/usr/bin/env luajit
 --- Test TMB-based audio mix path (decode_mix_and_send_to_sse + apply_mix).
 --
--- Replaces coverage from deleted test_mixer.lua/test_mixer_extended.lua.
 -- Verifies:
--- - Single-track decode + push to SSE
--- - Multi-track mixing with volume scaling
--- - Solo/mute logic
--- - PCM_RELEASE lifecycle
+-- - Pre-mixed PCM fetch from TMB and push to SSE
+-- - send_mix_params_to_tmb resolves solo/mute into effective volumes
 -- - Dedup (same pb_start skipped)
 -- - apply_mix hot-swap vs cold-swap
+-- - apply_mix calls send_mix_params_to_tmb on both paths
 --
--- Uses real FFI for float arrays to verify actual mixing math.
+-- Uses real FFI for float arrays to verify actual PCM push.
 --
 -- @file test_audio_mix_tmb.lua
 
@@ -32,8 +30,11 @@ local aop_start_calls = 0
 local aop_stop_calls = 0
 local aop_flush_calls = 0
 
--- Per-track PCM responses: {[track_index] = {buf=ffi_float_ptr, info={frames, start_time_us}}}
-local track_pcm_map = {}
+-- TMB_SET_AUDIO_MIX_PARAMS call tracking
+local mix_params_calls = {}
+
+-- What TMB_GET_MIXED_AUDIO returns (set per-test)
+local mixed_audio_response = nil
 
 local function reset_mocks()
     pcm_release_calls = {}
@@ -43,7 +44,8 @@ local function reset_mocks()
     aop_start_calls = 0
     aop_stop_calls = 0
     aop_flush_calls = 0
-    track_pcm_map = {}
+    mix_params_calls = {}
+    mixed_audio_response = nil
 end
 
 --- Create a mock PCM chunk with known float data.
@@ -73,10 +75,18 @@ local mock_aop = { _name = "mock_aop" }
 package.loaded["core.qt_constants"] = {
     EMP = {
         SET_DECODE_MODE = function() end,
-        TMB_GET_TRACK_AUDIO = function(tmb, track_index, t0, t1, sr, ch)
-            local entry = track_pcm_map[track_index]
-            if not entry then return nil end
-            return entry
+        -- Legacy per-track API (still available but not used by audio_playback)
+        TMB_GET_TRACK_AUDIO = function()
+            return nil
+        end,
+        -- New autonomous mix API
+        TMB_SET_AUDIO_MIX_PARAMS = function(tmb, params, sr, ch)
+            mix_params_calls[#mix_params_calls + 1] = {
+                params = params, sample_rate = sr, channels = ch,
+            }
+        end,
+        TMB_GET_MIXED_AUDIO = function(tmb, t0, t1)
+            return mixed_audio_response
         end,
         PCM_INFO = function(pcm)
             return { frames = pcm._frames, start_time_us = pcm._start_us }
@@ -175,77 +185,46 @@ local function approx(a, b, eps)
 end
 
 --------------------------------------------------------------------------------
--- F5: decode_mix_and_send_to_sse tests
+-- F5: decode_mix_and_send_to_sse tests (now fetches pre-mixed from TMB)
 --------------------------------------------------------------------------------
 
-print("\n--- F5.1: single track, volume 1.0 ---")
+print("\n--- F5.1: pre-mixed PCM pushed to SSE ---")
 do
     reset_mocks()
     teardown()
     init_test_session()
 
-    -- Set up mix with 1 track
     local mock_tmb = "test_tmb"
     audio_playback.apply_mix(mock_tmb, {
         { track_index = 1, volume = 1.0, muted = false, soloed = false },
     }, 0)
     audio_playback.set_max_time(10000000)
-    audio_playback.media_time_us = 5000000  -- 5s (center of 10s window)
+    audio_playback.media_time_us = 5000000
     audio_playback.max_media_time_us = 10000000
 
-    -- Mock TMB returns 100 frames of value 0.5
-    track_pcm_map[1] = make_pcm(100, CHANNELS, 0, 0.5)
+    -- TMB returns pre-mixed 100 frames of value 0.5, starting at current time
+    mixed_audio_response = make_pcm(100, CHANNELS, 5000000, 0.5)
 
-    -- Call decode
     audio_playback.decode_mix_and_send_to_sse()
 
-    -- Should have pushed to SSE
     assert(#sse_push_calls == 1, string.format(
         "Expected 1 SSE push, got %d", #sse_push_calls))
     assert(sse_push_calls[1].frames == 100, string.format(
         "Expected 100 frames, got %d", sse_push_calls[1].frames))
 
-    -- Verify sample values (volume 1.0, should be unchanged 0.5)
+    -- Verify sample values passed through unchanged
     for i = 1, 100 * CHANNELS do
         assert(approx(sse_push_calls[1].data[i], 0.5), string.format(
             "Sample[%d] should be 0.5, got %f", i, sse_push_calls[1].data[i]))
     end
 
     -- PCM should be released
-    assert(#pcm_release_calls == 1, "PCM should be released after mixing")
+    assert(#pcm_release_calls == 1, "PCM should be released after push")
 
-    print("  single track volume 1.0 passed")
+    print("  pre-mixed PCM push passed")
 end
 
-print("\n--- F5.2: single track, volume 0.5 ---")
-do
-    reset_mocks()
-    teardown()
-    init_test_session()
-
-    local mock_tmb = "test_tmb"
-    audio_playback.apply_mix(mock_tmb, {
-        { track_index = 1, volume = 0.5, muted = false, soloed = false },
-    }, 0)
-    audio_playback.set_max_time(10000000)
-    audio_playback.media_time_us = 5000000
-    audio_playback.max_media_time_us = 10000000
-
-    track_pcm_map[1] = make_pcm(100, CHANNELS, 0, 1.0)
-
-    audio_playback.decode_mix_and_send_to_sse()
-
-    assert(#sse_push_calls == 1, "Expected 1 SSE push")
-    -- Volume 0.5 applied to 1.0 → 0.5
-    for i = 1, 100 * CHANNELS do
-        assert(approx(sse_push_calls[1].data[i], 0.5), string.format(
-            "Sample[%d] should be 0.5 (1.0 * 0.5), got %f", i, sse_push_calls[1].data[i]))
-    end
-
-    print("  single track volume 0.5 passed")
-end
-
-print("\n--- F5.3: multi-track mixing ---")
+print("\n--- F5.2: nil PCM → no SSE push ---")
 do
     reset_mocks()
     teardown()
@@ -254,34 +233,22 @@ do
     local mock_tmb = "test_tmb"
     audio_playback.apply_mix(mock_tmb, {
         { track_index = 1, volume = 1.0, muted = false, soloed = false },
-        { track_index = 2, volume = 0.5, muted = false, soloed = false },
     }, 0)
     audio_playback.set_max_time(10000000)
     audio_playback.media_time_us = 5000000
     audio_playback.max_media_time_us = 10000000
 
-    -- Track 1: all 0.3, Track 2: all 0.4
-    track_pcm_map[1] = make_pcm(100, CHANNELS, 0, 0.3)
-    track_pcm_map[2] = make_pcm(100, CHANNELS, 0, 0.4)
+    mixed_audio_response = nil  -- gap
 
     audio_playback.decode_mix_and_send_to_sse()
 
-    assert(#sse_push_calls == 1, "Expected 1 SSE push (mixed)")
-    -- Mix: track1 * 1.0 + track2 * 0.5 = 0.3 + 0.2 = 0.5
-    for i = 1, 100 * CHANNELS do
-        assert(approx(sse_push_calls[1].data[i], 0.5), string.format(
-            "Sample[%d] should be 0.5 (0.3*1.0 + 0.4*0.5), got %f",
-            i, sse_push_calls[1].data[i]))
-    end
+    assert(#sse_push_calls == 0, string.format(
+        "Expected 0 SSE pushes (nil PCM), got %d", #sse_push_calls))
 
-    -- Both PCMs released
-    assert(#pcm_release_calls == 2, string.format(
-        "Expected 2 PCM releases, got %d", #pcm_release_calls))
-
-    print("  multi-track mixing passed")
+    print("  nil PCM → no push passed")
 end
 
-print("\n--- F5.4: muted track excluded ---")
+print("\n--- F5.3: threshold refill skips when enough audio ahead ---")
 do
     reset_mocks()
     teardown()
@@ -289,34 +256,33 @@ do
 
     local mock_tmb = "test_tmb"
     audio_playback.apply_mix(mock_tmb, {
-        { track_index = 1, volume = 1.0, muted = true, soloed = false },
-        { track_index = 2, volume = 1.0, muted = false, soloed = false },
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
     }, 0)
     audio_playback.set_max_time(10000000)
     audio_playback.media_time_us = 5000000
     audio_playback.max_media_time_us = 10000000
 
-    track_pcm_map[1] = make_pcm(100, CHANNELS, 0, 0.7)  -- muted: should be ignored
-    track_pcm_map[2] = make_pcm(100, CHANNELS, 0, 0.3)
+    -- Return 2s of audio starting at current position (covers MIX_REFILL_AT threshold)
+    local two_sec_frames = SAMPLE_RATE * 2  -- 96000 frames = 2 seconds
+    mixed_audio_response = make_pcm(two_sec_frames, CHANNELS, 5000000, 0.5)
 
+    -- First call: should push (cold start, no audio ahead)
     audio_playback.decode_mix_and_send_to_sse()
+    assert(#sse_push_calls == 1, "First call should push")
 
-    assert(#sse_push_calls == 1, "Expected 1 SSE push")
-    -- Only track 2 (unmuted): 0.3 * 1.0 = 0.3
-    for i = 1, 100 * CHANNELS do
-        assert(approx(sse_push_calls[1].data[i], 0.3), string.format(
-            "Sample[%d] should be 0.3 (muted track excluded), got %f",
-            i, sse_push_calls[1].data[i]))
-    end
+    -- Second call: 2s ahead > 500ms threshold → should skip
+    audio_playback.decode_mix_and_send_to_sse()
+    assert(#sse_push_calls == 1, string.format(
+        "Second call should skip (2s > 500ms threshold), got %d pushes", #sse_push_calls))
 
-    -- Only track 2's PCM released (track 1 skipped entirely due to vol=0)
-    assert(#pcm_release_calls == 1, string.format(
-        "Expected 1 PCM release (muted track skipped), got %d", #pcm_release_calls))
-
-    print("  muted track excluded passed")
+    print("  threshold refill dedup passed")
 end
 
-print("\n--- F5.5: solo logic ---")
+--------------------------------------------------------------------------------
+-- F5.4: send_mix_params_to_tmb resolves solo/mute correctly
+--------------------------------------------------------------------------------
+
+print("\n--- F5.4: send_mix_params_to_tmb solo/mute resolution ---")
 do
     reset_mocks()
     teardown()
@@ -325,29 +291,26 @@ do
     local mock_tmb = "test_tmb"
     audio_playback.apply_mix(mock_tmb, {
         { track_index = 1, volume = 1.0, muted = false, soloed = true },
-        { track_index = 2, volume = 1.0, muted = false, soloed = false },
+        { track_index = 2, volume = 0.8, muted = false, soloed = false },
     }, 0)
-    audio_playback.set_max_time(10000000)
-    audio_playback.media_time_us = 5000000
-    audio_playback.max_media_time_us = 10000000
 
-    track_pcm_map[1] = make_pcm(100, CHANNELS, 0, 0.8)
-    track_pcm_map[2] = make_pcm(100, CHANNELS, 0, 0.5)  -- not soloed: excluded
+    -- apply_mix calls send_mix_params_to_tmb which calls TMB_SET_AUDIO_MIX_PARAMS
+    assert(#mix_params_calls >= 1, "Should have called TMB_SET_AUDIO_MIX_PARAMS")
+    local last_call = mix_params_calls[#mix_params_calls]
+    assert(#last_call.params == 2, "Should have 2 params")
+    -- Track 1: soloed, volume=1.0 → effective=1.0
+    assert(last_call.params[1].track_index == 1)
+    assert(approx(last_call.params[1].volume, 1.0), string.format(
+        "Track 1 volume should be 1.0 (soloed), got %f", last_call.params[1].volume))
+    -- Track 2: not soloed → effective=0
+    assert(last_call.params[2].track_index == 2)
+    assert(approx(last_call.params[2].volume, 0.0), string.format(
+        "Track 2 volume should be 0.0 (not soloed), got %f", last_call.params[2].volume))
 
-    audio_playback.decode_mix_and_send_to_sse()
-
-    assert(#sse_push_calls == 1, "Expected 1 SSE push")
-    -- Solo: only track 1 plays
-    for i = 1, 100 * CHANNELS do
-        assert(approx(sse_push_calls[1].data[i], 0.8), string.format(
-            "Sample[%d] should be 0.8 (only soloed track), got %f",
-            i, sse_push_calls[1].data[i]))
-    end
-
-    print("  solo logic passed")
+    print("  solo resolution passed")
 end
 
-print("\n--- F5.6: TMB returns nil PCM → track skipped gracefully ---")
+print("\n--- F5.5: send_mix_params_to_tmb mute resolution ---")
 do
     reset_mocks()
     teardown()
@@ -355,79 +318,20 @@ do
 
     local mock_tmb = "test_tmb"
     audio_playback.apply_mix(mock_tmb, {
-        { track_index = 1, volume = 1.0, muted = false, soloed = false },
-        { track_index = 2, volume = 1.0, muted = false, soloed = false },
+        { track_index = 1, volume = 1.0, muted = true, soloed = false },
+        { track_index = 2, volume = 0.5, muted = false, soloed = false },
     }, 0)
-    audio_playback.set_max_time(10000000)
-    audio_playback.media_time_us = 5000000
-    audio_playback.max_media_time_us = 10000000
 
-    -- Track 1: nil (gap), Track 2: has data
-    track_pcm_map[1] = nil
-    track_pcm_map[2] = make_pcm(100, CHANNELS, 0, 0.6)
+    assert(#mix_params_calls >= 1, "Should have called TMB_SET_AUDIO_MIX_PARAMS")
+    local last_call = mix_params_calls[#mix_params_calls]
+    -- Track 1: muted → effective=0
+    assert(approx(last_call.params[1].volume, 0.0), string.format(
+        "Track 1 volume should be 0.0 (muted), got %f", last_call.params[1].volume))
+    -- Track 2: not muted → effective=0.5
+    assert(approx(last_call.params[2].volume, 0.5), string.format(
+        "Track 2 volume should be 0.5, got %f", last_call.params[2].volume))
 
-    audio_playback.decode_mix_and_send_to_sse()
-
-    assert(#sse_push_calls == 1, "Expected 1 SSE push (track 2 only)")
-    for i = 1, 100 * CHANNELS do
-        assert(approx(sse_push_calls[1].data[i], 0.6), string.format(
-            "Sample[%d] should be 0.6 (track 1 gap skipped), got %f",
-            i, sse_push_calls[1].data[i]))
-    end
-
-    print("  nil PCM track skipped passed")
-end
-
-print("\n--- F5.7: all tracks nil → no SSE push ---")
-do
-    reset_mocks()
-    teardown()
-    init_test_session()
-
-    local mock_tmb = "test_tmb"
-    audio_playback.apply_mix(mock_tmb, {
-        { track_index = 1, volume = 1.0, muted = false, soloed = false },
-    }, 0)
-    audio_playback.set_max_time(10000000)
-    audio_playback.media_time_us = 5000000
-    audio_playback.max_media_time_us = 10000000
-
-    track_pcm_map[1] = nil  -- gap
-
-    audio_playback.decode_mix_and_send_to_sse()
-
-    assert(#sse_push_calls == 0, string.format(
-        "Expected 0 SSE pushes (all gaps), got %d", #sse_push_calls))
-
-    print("  all tracks nil → no push passed")
-end
-
-print("\n--- F5.8: dedup skips second call with same pb_start ---")
-do
-    reset_mocks()
-    teardown()
-    init_test_session()
-
-    local mock_tmb = "test_tmb"
-    audio_playback.apply_mix(mock_tmb, {
-        { track_index = 1, volume = 1.0, muted = false, soloed = false },
-    }, 0)
-    audio_playback.set_max_time(10000000)
-    audio_playback.media_time_us = 5000000
-    audio_playback.max_media_time_us = 10000000
-
-    track_pcm_map[1] = make_pcm(100, CHANNELS, 0, 0.5)
-
-    -- First call: should push
-    audio_playback.decode_mix_and_send_to_sse()
-    assert(#sse_push_calls == 1, "First call should push")
-
-    -- Second call: same position → should be deduped
-    audio_playback.decode_mix_and_send_to_sse()
-    assert(#sse_push_calls == 1, string.format(
-        "Second call should be deduped, got %d pushes", #sse_push_calls))
-
-    print("  dedup passed")
+    print("  mute resolution passed")
 end
 
 --------------------------------------------------------------------------------
@@ -446,7 +350,8 @@ do
     audio_playback.apply_mix(mock_tmb, {
         { track_index = 1, volume = 1.0, muted = false, soloed = false },
     }, 0)
-    sse_reset_calls = 0  -- clear reset from initial apply
+    sse_reset_calls = 0
+    local initial_params_calls = #mix_params_calls
 
     -- Hot swap: same track, different volume
     audio_playback.apply_mix(mock_tmb, {
@@ -455,6 +360,10 @@ do
 
     assert(sse_reset_calls == 0, string.format(
         "Hot swap should NOT reset SSE, got %d resets", sse_reset_calls))
+
+    -- Verify TMB_SET_AUDIO_MIX_PARAMS was called for the hot swap
+    assert(#mix_params_calls > initial_params_calls,
+        "Hot swap should call TMB_SET_AUDIO_MIX_PARAMS")
 
     -- Verify new volume is stored
     assert(audio_playback._mix_params[1].volume == 0.5,
@@ -583,8 +492,8 @@ do
     aop_stop_calls = 0
     aop_start_calls = 0
 
-    -- Track 1 data for restart decode
-    track_pcm_map[1] = make_pcm(100, CHANNELS, 0, 0.5)
+    -- Provide PCM for restart decode
+    mixed_audio_response = make_pcm(100, CHANNELS, 0, 0.5)
 
     -- Cold swap (track added) while playing → must stop and restart
     audio_playback.apply_mix(mock_tmb, {
@@ -618,6 +527,31 @@ do
     assert(audio_playback.has_audio == false, "Should not have audio after empty apply_mix")
 
     print("  empty params → has_audio=false passed")
+end
+
+print("\n--- F6.8: apply_mix calls TMB_SET_AUDIO_MIX_PARAMS on both paths ---")
+do
+    reset_mocks()
+    teardown()
+    init_test_session()
+
+    local mock_tmb = "test_tmb"
+
+    -- Cold path
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+    }, 0)
+    local cold_calls = #mix_params_calls
+    assert(cold_calls >= 1, "Cold path should call TMB_SET_AUDIO_MIX_PARAMS")
+
+    -- Hot path (same track, different volume)
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 0.5, muted = false, soloed = false },
+    }, 1000000)
+    assert(#mix_params_calls > cold_calls,
+        "Hot path should also call TMB_SET_AUDIO_MIX_PARAMS")
+
+    print("  both paths call TMB_SET_AUDIO_MIX_PARAMS passed")
 end
 
 --------------------------------------------------------------------------------
