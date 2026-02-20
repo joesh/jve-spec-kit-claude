@@ -74,3 +74,4 @@
 "Cmd+Z" = "Undo"
 "Cmd+Shift+Z" = "Redo"
 "F12" = "ReportBug"
+"Shift+F12" = "ToggleProfiler"

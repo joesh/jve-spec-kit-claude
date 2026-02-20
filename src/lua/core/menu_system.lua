@@ -10,7 +10,7 @@
 -- - Dialog handling (moved to commands)
 --
 -- Invariants:
--- - All menu items dispatch to commands (except Insert/Overwrite/Quit)
+-- - All menu items dispatch to commands (except Insert/Overwrite)
 -- - Menu item name = command name (no indirection)
 --
 -- Size: ~400 LOC
@@ -394,21 +394,6 @@ local function create_action_callback(command_name, params)
         if command_name == "Insert" or command_name == "Overwrite" then
             local project_browser = require("ui.project_browser")
             project_browser.add_selected_to_timeline(command_name, {advance_playhead = true})
-            return
-        end
-
-        if command_name == "Quit" then
-            logger.info("menu", "Quitting application")
-            local ok, err = pcall(function()
-                local database = require("core.database")
-                if database and database.shutdown then
-                    database.shutdown({ best_effort = true })
-                end
-            end)
-            if not ok then
-                logger.error("menu", "Quit shutdown failed: " .. tostring(err))
-            end
-            os.exit(0)
             return
         end
 
