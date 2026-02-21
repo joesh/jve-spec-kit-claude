@@ -37,6 +37,11 @@ struct MediaFileInfo {
     // Applies to phone footage recorded in portrait/landscape modes
     int rotation;
 
+    // Pixel aspect ratio (sample aspect ratio in FFmpeg terms)
+    // 1:1 = square pixels. Non-square examples: 1440x1080 anamorphic HD = 4:3
+    int32_t video_par_num = 1;
+    int32_t video_par_den = 1;
+
     // Audio stream info
     bool has_audio;
     int32_t audio_sample_rate;  // Source sample rate (e.g., 48000)

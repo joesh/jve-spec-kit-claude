@@ -3,6 +3,7 @@
 #include "impl/media_file_impl.h"
 #include "impl/ffmpeg_context.h"  // av_log_set_level
 #include <cassert>
+#include <climits>  // INT_MAX for av_reduce
 #include <mutex>
 
 namespace emp {
@@ -122,6 +123,22 @@ Result<std::shared_ptr<MediaFile>> MediaFile::Open(const std::string& path) {
                 info.rotation = ((rot + 45) / 90) * 90 % 360;
                 break;
             }
+        }
+
+        // Extract pixel aspect ratio (sample aspect ratio in FFmpeg terms)
+        // Prefer stream-level SAR (container metadata), fall back to codec-level
+        AVRational sar = video_stream->sample_aspect_ratio;
+        if (sar.num <= 0 || sar.den <= 0) {
+            sar = params->sample_aspect_ratio;
+        }
+        if (sar.num > 0 && sar.den > 0) {
+            int num, den;
+            av_reduce(&num, &den, sar.num, sar.den, INT_MAX);
+            info.video_par_num = static_cast<int32_t>(num);
+            info.video_par_den = static_cast<int32_t>(den);
+        } else {
+            info.video_par_num = 1;
+            info.video_par_den = 1;
         }
     } else {
         info.has_video = false;

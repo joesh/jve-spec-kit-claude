@@ -32,6 +32,11 @@ public:
     void setRotation(int degrees);
     int rotation() const { return m_rotation; }
 
+    // Set pixel aspect ratio (1:1 = square pixels, 4:3 = anamorphic HD)
+    void setPixelAspectRatio(int num, int den);
+    int parNum() const { return m_par_num; }
+    int parDen() const { return m_par_den; }
+
     int frameWidth() const { return m_frameWidth; }
     int frameHeight() const { return m_frameHeight; }
 
@@ -61,6 +66,8 @@ private:
     int m_frameWidth = 0;
     int m_frameHeight = 0;
     int m_rotation = 0;
+    int m_par_num = 1;
+    int m_par_den = 1;
     bool m_initialized = false;
 };
 
@@ -75,6 +82,9 @@ public:
     void clearFrame() {}
     void setRotation(int) {}
     int rotation() const { return 0; }
+    void setPixelAspectRatio(int, int) {}
+    int parNum() const { return 1; }
+    int parDen() const { return 1; }
     int frameWidth() const { return 0; }
     int frameHeight() const { return 0; }
     static bool isAvailable() { return false; }

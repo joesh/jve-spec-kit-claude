@@ -235,6 +235,17 @@ void GPUVideoSurface::setRotation(int degrees) {
     }
 }
 
+void GPUVideoSurface::setPixelAspectRatio(int num, int den) {
+    JVE_ASSERT(num > 0 && den > 0,
+        "GPUVideoSurface::setPixelAspectRatio: num and den must be > 0");
+    if (num == m_par_num && den == m_par_den) return;
+    m_par_num = num;
+    m_par_den = den;
+    if (m_initialized && m_impl->frameMode != FrameMode::None) {
+        renderTexture();
+    }
+}
+
 void GPUVideoSurface::rebuildVertexBuffer() {
     JVE_ASSERT(m_initialized, "GPUVideoSurface::rebuildVertexBuffer: Metal not initialized");
 
@@ -334,9 +345,21 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
                 uvFormat = MTLPixelFormatRG8Unorm;
                 break;
 
+            // 4:2:2 16-bit (video range only — no full-range variant in SDK)
+            case kCVPixelFormatType_422YpCbCr16BiPlanarVideoRange:
+                yFormat = MTLPixelFormatR16Unorm;
+                uvFormat = MTLPixelFormatRG16Unorm;
+                break;
+
             // 4:4:4 10-bit (ProRes 4444, etc.)
             case kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange:
             case kCVPixelFormatType_444YpCbCr10BiPlanarFullRange:
+                yFormat = MTLPixelFormatR16Unorm;
+                uvFormat = MTLPixelFormatRG16Unorm;
+                break;
+
+            // 4:4:4 16-bit (video range only — no full-range variant in SDK)
+            case kCVPixelFormatType_444YpCbCr16BiPlanarVideoRange:
                 yFormat = MTLPixelFormatR16Unorm;
                 uvFormat = MTLPixelFormatRG16Unorm;
                 break;
@@ -463,7 +486,8 @@ void GPUVideoSurface::renderTexture() {
             bool rotated = (m_rotation == 90 || m_rotation == 270);
             float eff_w = rotated ? (float)m_frameHeight : (float)m_frameWidth;
             float eff_h = rotated ? (float)m_frameWidth : (float)m_frameHeight;
-            float frame_aspect = eff_w / eff_h;
+            // Apply pixel aspect ratio to get display aspect ratio
+            float frame_aspect = (eff_w * m_par_num) / (eff_h * m_par_den);
             float widget_aspect = widget_w / widget_h;
 
             CGRect viewport;
