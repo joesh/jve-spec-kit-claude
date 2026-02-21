@@ -141,6 +141,12 @@ static int lua_emp_media_file_info(lua_State* L) {
     lua_pushinteger(L, info.rotation);
     lua_setfield(L, -2, "rotation");
 
+    // Pixel aspect ratio
+    lua_pushinteger(L, info.video_par_num);
+    lua_setfield(L, -2, "par_num");
+    lua_pushinteger(L, info.video_par_den);
+    lua_setfield(L, -2, "par_den");
+
     // Audio fields
     lua_pushboolean(L, info.has_audio);
     lua_setfield(L, -2, "has_audio");
@@ -681,6 +687,10 @@ static int lua_emp_tmb_get_video_frame(lua_State* L) {
     lua_setfield(L, -2, "media_path");
     lua_pushinteger(L, result.rotation);
     lua_setfield(L, -2, "rotation");
+    lua_pushinteger(L, result.par_num);
+    lua_setfield(L, -2, "par_num");
+    lua_pushinteger(L, result.par_den);
+    lua_setfield(L, -2, "par_den");
     lua_pushinteger(L, static_cast<lua_Integer>(result.source_frame));
     lua_setfield(L, -2, "source_frame");
     lua_pushinteger(L, result.clip_fps_num);
@@ -786,6 +796,14 @@ static int lua_emp_tmb_get_mixed_audio(lua_State* L) {
     return 1;
 }
 
+// EMP.TMB_PARK_READERS(tmb)
+// Stop all background decode work (prefetch threads + pre-buffer jobs).
+static int lua_emp_tmb_park_readers(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    tmb->ParkReaders();
+    return 0;
+}
+
 // EMP.TMB_RELEASE_TRACK(tmb, type_string, track_index)
 static int lua_emp_tmb_release_track(lua_State* L) {
     auto tmb = get_tmb(L, 1);
@@ -834,6 +852,10 @@ static int lua_emp_media_file_probe(lua_State* L) {
     lua_setfield(L, -2, "start_tc");
     lua_pushinteger(L, info.rotation);
     lua_setfield(L, -2, "rotation");
+    lua_pushinteger(L, info.video_par_num);
+    lua_setfield(L, -2, "par_num");
+    lua_pushinteger(L, info.video_par_den);
+    lua_setfield(L, -2, "par_den");
     lua_pushboolean(L, info.has_audio);
     lua_setfield(L, -2, "has_audio");
     lua_pushinteger(L, info.audio_sample_rate);
@@ -1063,6 +1085,24 @@ static int lua_emp_surface_set_rotation(lua_State* L) {
     return 0;
 }
 
+// EMP.SURFACE_SET_PAR(surface_widget, num, den)
+// Set pixel aspect ratio for video surface (1:1 = square, 4:3 = anamorphic HD)
+static int lua_emp_surface_set_par(lua_State* L) {
+    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 1, WIDGET_METATABLE));
+    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+    int num = static_cast<int>(luaL_checkinteger(L, 2));
+    int den = static_cast<int>(luaL_checkinteger(L, 3));
+
+    GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
+    if (gpu_surface) {
+        gpu_surface->setPixelAspectRatio(num, den);
+        return 0;
+    }
+
+    // CPUVideoSurface does not support PAR (no letterboxing)
+    return 0;
+}
+
 // EMP.SURFACE_SET_FRAME(surface_widget, frame|nil)
 // Works with both GPUVideoSurface and CPUVideoSurface
 static int lua_emp_surface_set_frame(lua_State* L) {
@@ -1222,6 +1262,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "TMB_SET_AUDIO_MIX_PARAMS");
     lua_pushcfunction(L, lua_emp_tmb_get_mixed_audio);
     lua_setfield(L, -2, "TMB_GET_MIXED_AUDIO");
+    lua_pushcfunction(L, lua_emp_tmb_park_readers);
+    lua_setfield(L, -2, "TMB_PARK_READERS");
     lua_pushcfunction(L, lua_emp_tmb_release_track);
     lua_setfield(L, -2, "TMB_RELEASE_TRACK");
     lua_pushcfunction(L, lua_emp_tmb_release_all);
@@ -1234,6 +1276,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "SURFACE_SET_FRAME");
     lua_pushcfunction(L, lua_emp_surface_set_rotation);
     lua_setfield(L, -2, "SURFACE_SET_ROTATION");
+    lua_pushcfunction(L, lua_emp_surface_set_par);
+    lua_setfield(L, -2, "SURFACE_SET_PAR");
 
     lua_setfield(L, -2, "EMP");
 

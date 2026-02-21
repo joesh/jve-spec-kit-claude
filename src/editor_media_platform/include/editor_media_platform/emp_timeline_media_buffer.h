@@ -13,6 +13,7 @@
 #include <vector>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <mutex>
 #include <list>
 #include <thread>
@@ -76,6 +77,8 @@ struct VideoResult {
     std::string clip_id;
     std::string media_path;       // source file (for offline display, diagnostics)
     int rotation;
+    int32_t par_num = 1;          // pixel aspect ratio (1:1 = square pixels)
+    int32_t par_den = 1;
     int64_t source_frame;         // file-relative frame index
     int32_t clip_fps_num, clip_fps_den;
     int64_t clip_start_frame;     // timeline coords
@@ -132,6 +135,11 @@ public:
     int64_t GetVideoCacheMissCount() const { return m_video_cache_misses.load(); }
     void ResetVideoCacheMissCount() { m_video_cache_misses.store(0); }
 
+    // Stop all background decode work (prefetch threads + pre-buffer jobs).
+    // Called on playback stop to release HW decoder sessions immediately.
+    // Prefetch is restarted on next play via SetPlayhead().
+    void ParkReaders();
+
     // Lifecycle
     void ReleaseTrack(TrackId track);
     void ReleaseAll();
@@ -185,6 +193,9 @@ private:
             std::string clip_id;
             int64_t source_frame;
             std::shared_ptr<Frame> frame;
+            int rotation = 0;
+            int32_t par_num = 1;
+            int32_t par_den = 1;
         };
         std::map<int64_t, CachedFrame> video_cache; // key = timeline_frame
         static constexpr size_t MAX_VIDEO_CACHE = 72;
@@ -254,11 +265,15 @@ private:
     void stop_workers();
     void worker_loop();
     void submit_pre_buffer(const PreBufferJob& job);
+    static std::string job_key(const PreBufferJob& job);
 
     std::vector<std::thread> m_workers;
     std::mutex m_jobs_mutex;
     std::condition_variable m_jobs_cv;
     std::vector<PreBufferJob> m_jobs;
+    // Keys of jobs currently being pre-buffered by workers (in-flight dedup).
+    // Format: "V1:clip_id:0" or "A3:clip_id:1". Protected by m_jobs_mutex.
+    std::unordered_set<std::string> m_pre_buffering;
     std::atomic<bool> m_shutdown{false};
 
     // ── Sequence rate (for timeline frame → us conversion) ──

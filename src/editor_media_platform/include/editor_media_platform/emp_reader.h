@@ -69,6 +69,18 @@ public:
     // Stop background prefetch (safe to call even if not running)
     void StopPrefetch();
 
+    // Two-phase stop for parallel teardown (used by TMB::ParkReaders):
+    // SignalPrefetchStop: sets flags, wakes thread — does NOT join
+    // JoinPrefetch: blocks until prefetch thread exits
+    void SignalPrefetchStop();
+    void JoinPrefetch();
+
+    // Lightweight pause/resume — sets direction to 0 (idle) or playback dir
+    // without touching thread lifecycle. Prefetch thread stays alive, just idles.
+    // Use for pausing decode on non-current readers during playback.
+    void PausePrefetch();
+    void ResumePrefetch(int direction);
+
     // Update prefetch target position (call from playback tick)
     // Prefetch thread will decode ahead of this position
     void UpdatePrefetchTarget(TimeUS t_us);

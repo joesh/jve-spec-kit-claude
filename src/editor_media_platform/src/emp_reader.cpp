@@ -227,6 +227,12 @@ Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset)
             return codec_result.error();
         }
 
+        // Log HW decode status for diagnostics
+        EMP_LOG_DEBUG("Reader::Create: codec=%d hw_accel=%s path=%s",
+                params->codec_id,
+                impl->codec_ctx.is_hw_accelerated() ? "VT" : "SW",
+                asset->info().path.c_str());
+
         // Only initialize software scaler if NOT using hw accel
         // (hw path uses GPU YUV→RGB, sw path needs swscale BGRA conversion)
         if (!impl->codec_ctx.is_hw_accelerated()) {
@@ -639,33 +645,42 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
             m_impl->have_decode_pos = true;
         }
 
+        // Phase 1: Convert outside lock (scale_ctx is main-thread-only)
+        struct ConvertedFrame { TimeUS pts_us; std::shared_ptr<Frame> frame; };
+        std::vector<ConvertedFrame> converted;
+        converted.reserve(decoded_frames.size());
+        for (auto& df : decoded_frames) {
+            auto emp_frame = avframe_to_emp_frame(
+                df.frame, df.pts_us, m_impl->scale_ctx, m_impl->codec_ctx
+            );
+            converted.push_back({df.pts_us, std::move(emp_frame)});
+            av_frame_free(&df.frame);
+        }
+
+        auto decode_end = std::chrono::steady_clock::now();
+        auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            decode_end - decode_start).count();
+        if (decode_ms > 10) {
+            EMP_LOG_DEBUG("Decode batch: %zu frames in %lldms (%.1fms/frame) mode=play",
+                    decoded_frames.size(), static_cast<long long>(decode_ms),
+                    decoded_frames.size() > 0 ? (double)decode_ms / decoded_frames.size() : 0);
+        }
+
+        // Phase 2: Insert under lock (pointer copies only)
         {
             std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
 
-            for (auto& df : decoded_frames) {
-                if (m_impl->frame_cache.find(df.pts_us) == m_impl->frame_cache.end()) {
-                    auto emp_frame = avframe_to_emp_frame(
-                        df.frame, df.pts_us, m_impl->scale_ctx, m_impl->codec_ctx
-                    );
-                    m_impl->frame_cache[df.pts_us] = emp_frame;
+            for (auto& cf : converted) {
+                if (m_impl->frame_cache.find(cf.pts_us) == m_impl->frame_cache.end()) {
+                    m_impl->frame_cache[cf.pts_us] = std::move(cf.frame);
 
-                    if (df.pts_us < m_impl->cache_min_pts) {
-                        m_impl->cache_min_pts = df.pts_us;
+                    if (cf.pts_us < m_impl->cache_min_pts) {
+                        m_impl->cache_min_pts = cf.pts_us;
                     }
-                    if (df.pts_us > m_impl->cache_max_pts) {
-                        m_impl->cache_max_pts = df.pts_us;
+                    if (cf.pts_us > m_impl->cache_max_pts) {
+                        m_impl->cache_max_pts = cf.pts_us;
                     }
                 }
-                av_frame_free(&df.frame);
-            }
-
-            auto decode_end = std::chrono::steady_clock::now();
-            auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                decode_end - decode_start).count();
-            if (decode_ms > 10) {
-                EMP_LOG_DEBUG("Decode batch: %zu frames in %lldms (%.1fms/frame) mode=play",
-                        decoded_frames.size(), static_cast<long long>(decode_ms),
-                        decoded_frames.size() > 0 ? (double)decode_ms / decoded_frames.size() : 0);
             }
 
             evict_cache_frames(
@@ -989,6 +1004,30 @@ void Reader::StopPrefetch() {
     }
 }
 
+void Reader::SignalPrefetchStop() {
+    m_impl->prefetch_direction.store(0);
+    m_impl->prefetch_running.store(false);
+    m_impl->prefetch_cv.notify_all();
+}
+
+void Reader::JoinPrefetch() {
+    if (m_impl->prefetch_thread.joinable()) {
+        m_impl->prefetch_thread.join();
+    }
+}
+
+void Reader::PausePrefetch() {
+    m_impl->prefetch_direction.store(0);
+    m_impl->prefetch_cv.notify_one();
+}
+
+void Reader::ResumePrefetch(int direction) {
+    assert((direction == 1 || direction == -1) &&
+           "ResumePrefetch: direction must be +1 or -1 (not 0 — use PausePrefetch)");
+    m_impl->prefetch_direction.store(direction);
+    m_impl->prefetch_cv.notify_one();
+}
+
 void Reader::UpdatePrefetchTarget(TimeUS t_us) {
     m_impl->prefetch_target.store(t_us);
     m_impl->prefetch_cv.notify_one();
@@ -1147,26 +1186,34 @@ void Reader::prefetch_worker() {
                 m_impl->have_prefetch_pos.store(true);
             }
 
+            // Phase 1: Convert outside lock (prefetch_scale_ctx is thread-local)
+            struct ConvertedFrame { TimeUS pts_us; std::shared_ptr<Frame> frame; };
+            std::vector<ConvertedFrame> converted;
+            converted.reserve(decoded_frames.size());
+            for (auto& df : decoded_frames) {
+                auto emp_frame = avframe_to_emp_frame(
+                    df.frame, df.pts_us,
+                    m_impl->prefetch_scale_ctx, m_impl->prefetch_codec_ctx
+                );
+                converted.push_back({df.pts_us, std::move(emp_frame)});
+                av_frame_free(&df.frame);
+            }
+
+            // Phase 2: Insert under lock (pointer copies only)
             {
                 std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
 
-                for (auto& df : decoded_frames) {
-                    if (m_impl->frame_cache.find(df.pts_us) == m_impl->frame_cache.end()) {
-                        // Use prefetch thread's scale context
-                        auto emp_frame = avframe_to_emp_frame(
-                            df.frame, df.pts_us,
-                            m_impl->prefetch_scale_ctx, m_impl->prefetch_codec_ctx
-                        );
-                        m_impl->frame_cache[df.pts_us] = emp_frame;
+                for (auto& cf : converted) {
+                    if (m_impl->frame_cache.find(cf.pts_us) == m_impl->frame_cache.end()) {
+                        m_impl->frame_cache[cf.pts_us] = std::move(cf.frame);
 
-                        if (df.pts_us < m_impl->cache_min_pts) {
-                            m_impl->cache_min_pts = df.pts_us;
+                        if (cf.pts_us < m_impl->cache_min_pts) {
+                            m_impl->cache_min_pts = cf.pts_us;
                         }
-                        if (df.pts_us > m_impl->cache_max_pts) {
-                            m_impl->cache_max_pts = df.pts_us;
+                        if (cf.pts_us > m_impl->cache_max_pts) {
+                            m_impl->cache_max_pts = cf.pts_us;
                         }
                     }
-                    av_frame_free(&df.frame);
                 }
 
                 // Evict old frames
