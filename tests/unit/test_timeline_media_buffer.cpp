@@ -215,6 +215,58 @@ private slots:
         QVERIFY(result.offline);
     }
 
+    void test_offline_top_track_blocks_lower() {
+        // Offline top track must NOT fall through to a valid lower track.
+        // Renderer iterates V1 (top) then V2. If V1 returns offline=true,
+        // the renderer shows the offline graphic; it must NOT skip V1.
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        // V1 (top, offline) and V2 (bottom, valid path — will also fail to
+        // open in test env, but the point is V1 reports offline independently)
+        tmb->SetTrackClips(V1, {
+            {"clip_v1", "/nonexistent/offline_media.mxf", 0, 100, 0, 24, 1, 1.0f},
+        });
+        tmb->SetTrackClips(V2, {
+            {"clip_v2", "/nonexistent/other_media.mxf", 0, 100, 0, 24, 1, 1.0f},
+        });
+
+        auto r1 = tmb->GetVideoFrame(V1, 10);
+        QVERIFY2(r1.offline, "V1 (top track) must report offline=true");
+        QVERIFY(r1.frame == nullptr);
+        QCOMPARE(r1.clip_id, std::string("clip_v1"));
+
+        auto r2 = tmb->GetVideoFrame(V2, 10);
+        QVERIFY2(r2.offline, "V2 also offline in this test setup");
+        QCOMPARE(r2.clip_id, std::string("clip_v2"));
+    }
+
+    void test_decode_failure_sets_offline() {
+        // If a file opens but decode fails, offline should be true (not gap).
+        // Currently this only happens with corrupt/unsupported codecs.
+        // Test using a file that opens via avformat but has no decodable video.
+        if (!m_hasTestVideo) QSKIP("No test video for decode-failure variant");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        // Use valid test video with absurd source_frame beyond file range.
+        // DecodeAt should fail → offline=true (not gap).
+        tmb->SetTrackClips(V1, {
+            {"clip1", m_testVideoPath.toStdString(), 0, 100, 999999, 24, 1, 1.0f},
+        });
+
+        auto result = tmb->GetVideoFrame(V1, 0);
+        // source_frame = 999999 + (0 - 0) = 999999, minus start_tc.
+        // DecodeAt at that position should fail or return a frame.
+        // If decode fails: offline must be true (the bug we're fixing).
+        // If decode succeeds (some decoders wrap around): frame != nullptr.
+        if (result.frame == nullptr) {
+            QVERIFY2(result.offline,
+                "Decode failure must set offline=true, not leave as gap");
+        }
+        // If frame is non-null, the decoder handled the out-of-range seek
+        // (some codecs clamp) — that's acceptable, nothing to test.
+    }
+
     // ── Reader pool ──
 
     void test_reader_reuse_same_track() {

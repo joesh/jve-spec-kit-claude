@@ -407,8 +407,12 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
             cache[timeline_frame] = {clip_id, source_frame, result.frame,
                                      result.rotation, result.par_num, result.par_den};
         }
+    } else {
+        // Decode failure: clip exists, reader opened, but frame can't be decoded
+        // (corrupt media, unsupported codec, out-of-range seek). Must set offline
+        // so the renderer shows the offline graphic, not skip to the next track.
+        result.offline = true;
     }
-    // decode failure → frame stays nullptr (treated like offline by Lua)
 
     return result;
 }
