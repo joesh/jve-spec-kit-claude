@@ -927,54 +927,6 @@ void Reader::StartPrefetch(int direction) {
     // stale-cache rejections on every frame past the initial batch.
     m_impl->have_prefetch_pos.store(false);
 
-    // Initialize prefetch decoder if not already done (lazy init).
-    // NSF-ACCEPT: Early returns on init failure are intentional — prefetch is a
-    // best-effort optimization. If it fails, main-thread decode still works.
-    // prefetch_decoder_initialized stays false, so prefetch_worker() returns
-    // early without accessing uninitialized contexts. Failures are logged.
-    if (!m_impl->prefetch_decoder_initialized) {
-        const std::string& path = m_media_file->info().path;
-
-        // Open separate format context for prefetch thread
-        auto fmt_result = m_impl->prefetch_fmt_ctx.open(path);
-        if (fmt_result.is_error()) {
-            EMP_LOG_WARN("Failed to open format ctx: %s",
-                    fmt_result.error().message.c_str());
-            return;
-        }
-
-        auto stream_result = m_impl->prefetch_fmt_ctx.find_video_stream();
-        if (stream_result.is_error()) {
-            EMP_LOG_WARN("Failed to find video stream");
-            return;
-        }
-
-        AVCodecParameters* params = m_impl->prefetch_fmt_ctx.video_codec_params();
-        auto codec_result = m_impl->prefetch_codec_ctx.init(params);
-        if (codec_result.is_error()) {
-            EMP_LOG_WARN("Failed to init codec: %s",
-                    codec_result.error().message.c_str());
-            return;
-        }
-
-        // Initialize scaler if software decode
-        if (!m_impl->prefetch_codec_ctx.is_hw_accelerated()) {
-            auto scale_result = m_impl->prefetch_scale_ctx.init(
-                params->width, params->height,
-                static_cast<AVPixelFormat>(params->format),
-                params->width, params->height
-            );
-            if (scale_result.is_error()) {
-                EMP_LOG_WARN("Failed to init scaler");
-                return;
-            }
-        }
-
-        m_impl->prefetch_decoder_initialized = true;
-        EMP_LOG_DEBUG("Decoder initialized (hw=%d)",
-                m_impl->prefetch_codec_ctx.is_hw_accelerated());
-    }
-
     // Update direction (wakes thread if already running)
     m_impl->prefetch_direction.store(direction);
     m_impl->prefetch_cv.notify_one();
@@ -1067,6 +1019,51 @@ std::shared_ptr<Frame> Reader::GetCachedFrame(TimeUS t_us) {
 void Reader::prefetch_worker() {
     // Prefetch thread uses its OWN decoder resources - no contention with main thread!
     // Both threads share only the frame cache (protected by cache_mutex).
+
+    // Lazy init: open separate format context + codec on THIS thread.
+    // Keeps expensive I/O (file open, VT session creation) off the caller's
+    // thread (main thread / TMB worker). prefetch_decoder_initialized guards
+    // against double-init on subsequent StartPrefetch calls.
+    if (!m_impl->prefetch_decoder_initialized) {
+        const std::string& path = m_media_file->info().path;
+
+        auto fmt_result = m_impl->prefetch_fmt_ctx.open(path);
+        if (fmt_result.is_error()) {
+            EMP_LOG_WARN("Prefetch init failed (format ctx): %s",
+                    fmt_result.error().message.c_str());
+            return;
+        }
+
+        auto stream_result = m_impl->prefetch_fmt_ctx.find_video_stream();
+        if (stream_result.is_error()) {
+            EMP_LOG_WARN("Prefetch init failed (video stream)");
+            return;
+        }
+
+        AVCodecParameters* params = m_impl->prefetch_fmt_ctx.video_codec_params();
+        auto codec_result = m_impl->prefetch_codec_ctx.init(params);
+        if (codec_result.is_error()) {
+            EMP_LOG_WARN("Prefetch init failed (codec): %s",
+                    codec_result.error().message.c_str());
+            return;
+        }
+
+        if (!m_impl->prefetch_codec_ctx.is_hw_accelerated()) {
+            auto scale_result = m_impl->prefetch_scale_ctx.init(
+                params->width, params->height,
+                static_cast<AVPixelFormat>(params->format),
+                params->width, params->height
+            );
+            if (scale_result.is_error()) {
+                EMP_LOG_WARN("Prefetch init failed (scaler)");
+                return;
+            }
+        }
+
+        m_impl->prefetch_decoder_initialized = true;
+        EMP_LOG_DEBUG("Prefetch decoder initialized (hw=%d)",
+                m_impl->prefetch_codec_ctx.is_hw_accelerated());
+    }
 
     // Use prefetch thread's own format context, codec context, etc.
     AVFormatContext* fmt_ctx = m_impl->prefetch_fmt_ctx.get();

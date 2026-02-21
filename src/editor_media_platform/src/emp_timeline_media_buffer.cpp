@@ -199,28 +199,33 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
                 if (next) {
                     active_keys.push_back({track, next->clip_id});
 
-                    // Video pre-buffer
-                    int64_t entry_frame = (direction >= 0)
-                        ? next->source_in
-                        : next->source_in + next->duration - 1;
-                    int64_t entry_tl_frame = (direction >= 0)
-                        ? next->timeline_start
-                        : next->timeline_end() - 1;
+                    // Video pre-buffer (video tracks only — audio tracks don't
+                    // need video frame decode-ahead)
+                    if (track.type == TrackType::Video) {
+                        int64_t entry_frame = (direction >= 0)
+                            ? next->source_in
+                            : next->source_in + next->duration - 1;
+                        int64_t entry_tl_frame = (direction >= 0)
+                            ? next->timeline_start
+                            : next->timeline_end() - 1;
 
-                    PreBufferJob video_job{};
-                    video_job.type = PreBufferJob::VIDEO;
-                    video_job.track = track;
-                    video_job.clip_id = next->clip_id;
-                    video_job.media_path = next->media_path;
-                    video_job.source_frame = entry_frame;
-                    video_job.timeline_frame = entry_tl_frame;
-                    video_job.rate = next->rate();
-                    video_job.direction = direction;
-                    video_job.clip_duration = next->duration;
-                    submit_pre_buffer(video_job);
+                        PreBufferJob video_job{};
+                        video_job.type = PreBufferJob::VIDEO;
+                        video_job.track = track;
+                        video_job.clip_id = next->clip_id;
+                        video_job.media_path = next->media_path;
+                        video_job.source_frame = entry_frame;
+                        video_job.timeline_frame = entry_tl_frame;
+                        video_job.rate = next->rate();
+                        video_job.direction = direction;
+                        video_job.clip_duration = next->duration;
+                        submit_pre_buffer(video_job);
+                    }
 
-                    // Audio pre-buffer (~200ms from next clip's entry point)
-                    if (m_audio_fmt.sample_rate > 0 && m_seq_rate.num > 0) {
+                    // Audio pre-buffer (audio tracks only — video tracks don't
+                    // need PCM decode-ahead)
+                    if (track.type == TrackType::Audio &&
+                        m_audio_fmt.sample_rate > 0 && m_seq_rate.num > 0) {
                         assert(next->rate_den > 0 && "SetPlayhead: audio pre-buffer clip has zero rate_den");
                         assert(next->speed_ratio > 0.0f && "SetPlayhead: audio pre-buffer clip has non-positive speed_ratio");
                         constexpr TimeUS AUDIO_PRE_BUFFER_US = 200000; // 200ms
