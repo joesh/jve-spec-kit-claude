@@ -39,6 +39,7 @@ package.loaded["core.qt_constants"] = {
         -- TMB functions (video path uses TMB)
         TMB_CREATE = function() return "mock_tmb" end,
         TMB_CLOSE = function() end,
+        TMB_PARK_READERS = function() end,
         TMB_SET_SEQUENCE_RATE = function() end,
         TMB_SET_AUDIO_FORMAT = function() end,
         TMB_SET_TRACK_CLIPS = function() end,
@@ -52,6 +53,11 @@ package.loaded["core.qt_constants"] = {
         SURFACE_SET_ROTATION = function(surface, deg)
             qt_log[#qt_log + 1] = {
                 type = "set_rotation", surface = surface, degrees = deg,
+            }
+        end,
+        SURFACE_SET_PAR = function(surface, num, den)
+            qt_log[#qt_log + 1] = {
+                type = "set_par", surface = surface, par_num = num, par_den = den,
             }
         end,
     },
@@ -133,6 +139,8 @@ package.loaded["core.renderer"] = {
                 media_path = "/test.mov",
                 source_frame = frame,
                 rotation = 0,
+                par_num = 1,
+                par_den = 1,
             }
         end
         return nil, nil

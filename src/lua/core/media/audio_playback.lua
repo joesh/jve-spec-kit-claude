@@ -370,24 +370,29 @@ function M.apply_mix(tmb, mix_params, edit_time_us)
         "apply_mix: %d track(s), tracks_changed=%s", #mix_params, tostring(tracks_changed)))
 end
 
---- Fetch pre-mixed audio from TMB and push to SSE.
--- TMB mixes all tracks autonomously in C++ (volume-weighted sum).
--- Lua requests forward-only 2s range and refills when SSE runs low.
--- Push replaces the SSE chunk (SSE can't span chunk boundaries).
--- C++ mix thread pre-fills 2s ahead; sync fallback on cold cache.
-function M.decode_mix_and_send_to_sse()
-    if not M._tmb or not M._mix_params or #M._mix_params == 0 then return end
+--- Refresh mix volumes mid-playback (mute/solo/volume change, same track set).
+-- Unlike apply_mix hot swap, this also invalidates the SSE buffer so the
+-- volume change is heard immediately (not after the existing buffer drains).
+-- @param mix_params array of {track_index, volume, muted, soloed}
+function M.refresh_mix_volumes(mix_params)
+    assert(M.session_initialized,
+        "audio_playback.refresh_mix_volumes: session not initialized")
+    assert(type(mix_params) == "table",
+        "audio_playback.refresh_mix_volumes: mix_params must be a table")
 
-    local current_us = M.get_time_us()
+    M._mix_params = mix_params
+    M.has_audio = #mix_params > 0
+    send_mix_params_to_tmb()
 
-    -- Check if SSE still has enough audio ahead
-    local remaining = last_pcm_range.end_us - current_us
-    if M.speed < 0 then
-        remaining = current_us - last_pcm_range.start_us
-    end
-    if remaining > CFG.MIX_REFILL_AT_US then return end
+    -- Invalidate SSE buffer so next pump tick does a cold fetch with new volumes
+    last_pcm_range = { start_us = 0, end_us = 0 }
 
-    -- Fetch full range from current position (single chunk — SSE can't span boundaries)
+    logger.debug("audio_playback", string.format(
+        "refresh_mix_volumes: %d track(s)", #mix_params))
+end
+
+--- Cold start: full fetch from current position. No prior buffer to preserve.
+local function cold_fetch_and_push(current_us)
     local pb_start, pb_end
     if M.speed >= 0 then
         pb_start = current_us
@@ -406,7 +411,8 @@ function M.decode_mix_and_send_to_sse()
     if info.frames > 0 then
         local raw_ptr = EMP.PCM_DATA_PTR(pcm)
         local float_ptr = ffi.cast("float*", raw_ptr)
-        local n = info.frames * M.session_channels
+        local ch = M.session_channels
+        local n = info.frames * ch
         local buf = ffi.new("float[?]", n)
         ffi.copy(buf, float_ptr, n * ffi.sizeof("float"))
         EMP.PCM_RELEASE(pcm)
@@ -423,6 +429,124 @@ function M.decode_mix_and_send_to_sse()
         }
     else
         EMP.PCM_RELEASE(pcm)
+    end
+end
+
+--- Warm extension: fetch only NEW audio past old buffer, combine with old,
+--- push combined chunk so SSE sees byte-identical data at its render position.
+local function extend_and_push(current_us)
+    local EMP = qt_constants.EMP
+    local ch = M.session_channels
+    local sr = M.session_sample_rate
+
+    -- Determine what new audio to fetch (extension from old buffer end)
+    local fetch_start, fetch_end
+    if M.speed >= 0 then
+        fetch_start = last_pcm_range.end_us
+        fetch_end = math.min(M.max_media_time_us, current_us + CFG.MIX_LOOKAHEAD_US)
+    else
+        fetch_end = last_pcm_range.start_us
+        fetch_start = math.max(0, current_us - CFG.MIX_LOOKAHEAD_US)
+    end
+    if fetch_end <= fetch_start then return end
+
+    local pcm = EMP.TMB_GET_MIXED_AUDIO(M._tmb, fetch_start, fetch_end)
+    if not pcm then return end
+
+    local info = EMP.PCM_INFO(pcm)
+    if info.frames <= 0 then
+        EMP.PCM_RELEASE(pcm)
+        return
+    end
+
+    local raw_ptr = EMP.PCM_DATA_PTR(pcm)
+    local float_ptr = ffi.cast("float*", raw_ptr)
+    local new_frames = info.frames
+
+    -- Trim old buffer: keep from SSE render pos minus WSOLA margin forward.
+    -- WSOLA needs ~1024 samples of overlap (snippet_frames). 50ms > 2400 samples.
+    local sse_pos = qt_constants.SSE.CURRENT_TIME_US(M.sse)
+    local margin_us = 50000  -- 50ms safety for WSOLA overlap
+    local keep_from_us = math.max(last_pcm_range.start_us, sse_pos - margin_us)
+    local samples_per_us = sr / 1000000
+    local skip_frames = math.max(0, math.floor(
+        (keep_from_us - last_pcm_range.start_us) * samples_per_us))
+    local old_keep_frames = math.max(0, last_pcm_range.frames - skip_frames)
+
+    -- Build combined buffer: old[trimmed..end] + new
+    local total_frames = old_keep_frames + new_frames
+    local combined = ffi.new("float[?]", total_frames * ch)
+
+    if old_keep_frames > 0 then
+        ffi.copy(combined,
+                 last_pcm_range.pcm_ptr + skip_frames * ch,
+                 old_keep_frames * ch * ffi.sizeof("float"))
+    end
+
+    if M.speed >= 0 then
+        -- Forward: append new after old
+        ffi.copy(combined + old_keep_frames * ch,
+                 float_ptr, new_frames * ch * ffi.sizeof("float"))
+    else
+        -- Reverse: prepend new before old (shift old right, copy new to start)
+        if old_keep_frames > 0 then
+            local tmp = ffi.new("float[?]", old_keep_frames * ch)
+            ffi.copy(tmp, combined, old_keep_frames * ch * ffi.sizeof("float"))
+            ffi.copy(combined + new_frames * ch,
+                     tmp, old_keep_frames * ch * ffi.sizeof("float"))
+        end
+        ffi.copy(combined, float_ptr, new_frames * ch * ffi.sizeof("float"))
+        keep_from_us = info.start_time_us
+    end
+
+    EMP.PCM_RELEASE(pcm)
+
+    qt_constants.SSE.PUSH_PCM(M.sse, combined, total_frames, keep_from_us)
+
+    -- Compute new range end from actual data
+    local new_end
+    if M.speed >= 0 then
+        new_end = last_pcm_range.end_us
+            + math.floor(new_frames * 1000000 / sr)
+    else
+        new_end = last_pcm_range.end_us  -- reverse: end stays, start shrinks
+    end
+
+    last_pcm_range = {
+        start_us = keep_from_us,
+        end_us = new_end,
+        pcm_ptr = combined,
+        frames = total_frames,
+    }
+end
+
+--- Fetch pre-mixed audio from TMB and push to SSE.
+-- TMB mixes all tracks autonomously in C++ (volume-weighted sum).
+--
+-- Two paths:
+--   COLD (no prior buffer): full fetch [current, current+2s], push directly.
+--   WARM (have buffer): fetch EXTENSION [old_end, target] only, combine
+--     old+new into single buffer, push combined. Old audio at SSE render
+--     position is byte-identical → WSOLA overlap-add is seamless → no pop.
+--
+-- C++ mix thread pre-fills 2s ahead; sync fallback on cold cache.
+function M.decode_mix_and_send_to_sse()
+    if not M._tmb or not M._mix_params or #M._mix_params == 0 then return end
+
+    local current_us = M.get_time_us()
+    local warm = last_pcm_range.end_us > 0 and last_pcm_range.pcm_ptr ~= nil
+
+    if warm then
+        -- Only refill when buffer is running low
+        local remaining = last_pcm_range.end_us - current_us
+        if M.speed < 0 then
+            remaining = current_us - last_pcm_range.start_us
+        end
+        if remaining > CFG.MIX_REFILL_AT_US then return end
+        extend_and_push(current_us)
+    else
+        -- Cold: always fetch (no prior buffer to check remaining against)
+        cold_fetch_and_push(current_us)
     end
 end
 
@@ -858,6 +982,15 @@ function M._pump_tick()
                 "Pump: needed=%d produced=%d SSE_time=%.3fs",
                 frames_needed, produced,
                 qt_constants.SSE.CURRENT_TIME_US(M.sse) / 1000000))
+
+            -- AOP underrun detection
+            if qt_constants.AOP.HAD_UNDERRUN(M.aop) then
+                logger.warn("audio_playback", string.format(
+                    "AOP UNDERRUN: buffered=%d/%d SSE_time=%.3fs",
+                    buffered0, target_frames,
+                    qt_constants.SSE.CURRENT_TIME_US(M.sse) / 1000000))
+                qt_constants.AOP.CLEAR_UNDERRUN(M.aop)
+            end
 
             -- SSE starvation logging (stuckness detection is in timeline_playback.tick)
             if qt_constants.SSE.STARVED(M.sse) then

@@ -50,6 +50,7 @@ package.loaded["core.qt_constants"] = {
         -- TMB functions (video path uses TMB, not media_cache)
         TMB_CREATE = function() return "mock_tmb" end,
         TMB_CLOSE = function() end,
+        TMB_PARK_READERS = function() end,
         TMB_SET_SEQUENCE_RATE = function() end,
         TMB_SET_AUDIO_FORMAT = function() end,
         TMB_SET_TRACK_CLIPS = function() end,
@@ -80,7 +81,7 @@ package.loaded["core.logger"] = {
     trace = function() end,
 }
 
--- Configurable video map: frame → {clip_id, rotation, source_frame, media_path}
+-- Configurable video map: frame → {clip_id, rotation, par_num, par_den, source_frame, media_path}
 local video_map = {}
 local function set_video_map(map) video_map = map end
 
@@ -104,6 +105,8 @@ package.loaded["core.renderer"] = {
                 media_path = entry.media_path or "/test.mov",
                 source_frame = entry.source_frame or frame,
                 rotation = entry.rotation or 0,
+                par_num = entry.par_num or 1,
+                par_den = entry.par_den or 1,
                 clip_fps_num = entry.clip_fps_num or 24,
                 clip_fps_den = entry.clip_fps_den or 1,
             }
@@ -115,6 +118,8 @@ package.loaded["core.renderer"] = {
                 media_path = "/test.mov",
                 source_frame = frame,
                 rotation = 0,
+                par_num = 1,
+                par_den = 1,
                 clip_fps_num = 24,
                 clip_fps_den = 1,
             }
@@ -265,6 +270,7 @@ local function make_engine()
         on_set_rotation = function(degrees)
             log.rotations[#log.rotations + 1] = degrees
         end,
+        on_set_par = function() end,
         on_position_changed = function(frame)
             log.positions[#log.positions + 1] = frame
         end,

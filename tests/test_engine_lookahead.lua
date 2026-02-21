@@ -42,6 +42,7 @@ package.loaded["core.qt_constants"] = {
         SET_DECODE_MODE = function() end,
         TMB_CREATE = function() return mock_tmb end,
         TMB_CLOSE = function() end,
+        TMB_PARK_READERS = function() end,
         TMB_SET_SEQUENCE_RATE = function() end,
         TMB_SET_AUDIO_FORMAT = function() end,
         TMB_SET_TRACK_CLIPS = function() end,
@@ -56,6 +57,7 @@ package.loaded["core.qt_constants"] = {
                 return "frame_" .. frame, {
                     clip_id = "clip_a", media_path = "/clip_a.mov",
                     source_frame = frame, rotation = 0,
+                    par_num = 1, par_den = 1,
                     clip_fps_num = 24, clip_fps_den = 1,
                     clip_end_frame = 100, clip_start_frame = 0,
                     offline = false,
@@ -64,6 +66,7 @@ package.loaded["core.qt_constants"] = {
                 return "frame_" .. frame, {
                     clip_id = "clip_b", media_path = "/clip_b.mov",
                     source_frame = frame - 100, rotation = 0,
+                    par_num = 1, par_den = 1,
                     clip_fps_num = 24, clip_fps_den = 1,
                     clip_end_frame = 200, clip_start_frame = 100,
                     offline = false,
@@ -261,6 +264,7 @@ local function make_engine()
         on_show_frame = function(fh, meta) log.frames[#log.frames + 1] = meta end,
         on_show_gap = function() log.gaps = log.gaps + 1 end,
         on_set_rotation = function() end,
+        on_set_par = function() end,
         on_position_changed = function() end,
     })
     engine:load_sequence("seq1")

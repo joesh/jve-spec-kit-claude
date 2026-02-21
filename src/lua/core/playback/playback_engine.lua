@@ -19,6 +19,7 @@
 --   on_show_frame(frame_handle, metadata)  — display decoded video frame
 --   on_show_gap()                          — display black/gap
 --   on_set_rotation(degrees)               — apply rotation for media
+--   on_set_par(num, den)                   — apply pixel aspect ratio
 --   on_position_changed(frame)             — position update notification
 --
 -- @file playback_engine.lua
@@ -28,6 +29,7 @@ local qt_constants = require("core.qt_constants")
 local Renderer = require("core.renderer")
 local Sequence = require("models.sequence")
 local helpers = require("core.playback.playback_helpers")
+local Signals = require("core.signals")
 
 local PlaybackEngine = {}
 PlaybackEngine.__index = PlaybackEngine
@@ -56,6 +58,7 @@ end
 --   on_show_frame     function(frame_handle, metadata)
 --   on_show_gap       function()
 --   on_set_rotation   function(degrees)
+--   on_set_par        function(num, den)
 --   on_position_changed function(frame)
 function PlaybackEngine.new(config)
     assert(type(config) == "table",
@@ -66,6 +69,8 @@ function PlaybackEngine.new(config)
         "PlaybackEngine.new: on_show_gap callback required")
     assert(type(config.on_set_rotation) == "function",
         "PlaybackEngine.new: on_set_rotation callback required")
+    assert(type(config.on_set_par) == "function",
+        "PlaybackEngine.new: on_set_par callback required")
     assert(type(config.on_position_changed) == "function",
         "PlaybackEngine.new: on_position_changed callback required")
 
@@ -97,6 +102,7 @@ function PlaybackEngine.new(config)
     self._on_show_frame = config.on_show_frame
     self._on_show_gap = config.on_show_gap
     self._on_set_rotation = config.on_set_rotation
+    self._on_set_par = config.on_set_par
     self._on_position_changed = config.on_position_changed
 
     -- Tick state
@@ -585,6 +591,11 @@ function PlaybackEngine:stop()
     self:_stop_audio()
     -- TMB stays alive across stop/play — no need to re-create
     qt_constants.EMP.SET_DECODE_MODE("park")
+    -- Stop all background decode work (prefetch threads + pre-buffer jobs).
+    -- Prevents zombie HW decoders from competing for GPU decode engine.
+    if self._tmb then
+        qt_constants.EMP.TMB_PARK_READERS(self._tmb)
+    end
 end
 
 --- Seek to specific frame.
@@ -681,10 +692,19 @@ function PlaybackEngine:activate_audio()
         end
         self:_if_clip_changed_update_audio_mix(math.floor(self._position))
     end
+
+    -- Listen for mid-playback mute/solo/volume changes
+    self._track_mix_conn = Signals.connect("track_mix_changed", function()
+        self:_refresh_audio_mix()
+    end)
 end
 
 --- Release audio output.
 function PlaybackEngine:deactivate_audio()
+    if self._track_mix_conn then
+        Signals.disconnect(self._track_mix_conn)
+        self._track_mix_conn = nil
+    end
     self._audio_owner = false
     self:_stop_audio()
 end
@@ -699,6 +719,10 @@ end
 
 --- Destroy engine: close TMB + stop audio.
 function PlaybackEngine:destroy()
+    if self._track_mix_conn then
+        Signals.disconnect(self._track_mix_conn)
+        self._track_mix_conn = nil
+    end
     self:stop()
     self:_close_tmb()
 end
@@ -841,14 +865,23 @@ function PlaybackEngine:_display_frame(frame_idx)
         assert(metadata, string.format(
             "PlaybackEngine:_display_frame: Renderer returned frame but nil metadata at frame %d",
             frame_idx))
+        assert(metadata.par_num and metadata.par_num >= 1, string.format(
+            "PlaybackEngine:_display_frame: metadata.par_num must be >= 1 at frame %d, got %s",
+            frame_idx, tostring(metadata.par_num)))
+        assert(metadata.par_den and metadata.par_den >= 1, string.format(
+            "PlaybackEngine:_display_frame: metadata.par_den must be >= 1 at frame %d, got %s",
+            frame_idx, tostring(metadata.par_den)))
 
         local is_offline = metadata.offline
 
-        -- Detect clip switch -> rotation callback
+        -- Detect clip switch -> rotation + PAR callbacks
         if metadata.clip_id ~= self.current_clip_id then
             self.current_clip_id = metadata.clip_id
-            -- Offline frames are upright (composed at 0 degrees)
+            -- Offline frames are upright with square pixels
             self._on_set_rotation(is_offline and 0 or metadata.rotation)
+            self._on_set_par(
+                is_offline and 1 or metadata.par_num,
+                is_offline and 1 or metadata.par_den)
         end
 
         self._on_show_frame(frame_handle, metadata)
@@ -926,6 +959,21 @@ function PlaybackEngine:_if_clip_changed_update_audio_mix(frame)
             frame, self.fps_num, self.fps_den)
         audio_playback.apply_mix(self._tmb, mix_params, edit_time_us)
     end
+end
+
+--- Refresh audio mix volumes immediately (mid-playback mute/solo/volume change).
+-- Re-reads track state from DB and pushes to audio_playback.
+-- Unlike _if_clip_changed_update_audio_mix, skips the clip-change check.
+function PlaybackEngine:_refresh_audio_mix()
+    if not self._audio_owner then return end  -- signal fires for all engines
+    assert(self.sequence,
+        "PlaybackEngine:_refresh_audio_mix: audio owner has no sequence")
+    if not (audio_playback and audio_playback.session_initialized) then return end
+
+    local frame = math.floor(self._position)
+    local entries = self.sequence:get_audio_at(frame)
+    local mix_params = self:_build_audio_mix_params(entries)
+    audio_playback.refresh_mix_volumes(mix_params)
 end
 
 --- Extract clip ID set from audio entries (for change detection).
@@ -1093,7 +1141,6 @@ end
 -- Project change: tear down audio session (prevents stale sources from
 -- previous project being used after media_cache clears its pool).
 --------------------------------------------------------------------------------
-local Signals = require("core.signals")
 Signals.connect("project_changed", PlaybackEngine.shutdown_audio_session, 5)
 
 return PlaybackEngine

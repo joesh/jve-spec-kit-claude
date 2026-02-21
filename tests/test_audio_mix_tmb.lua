@@ -33,8 +33,12 @@ local aop_flush_calls = 0
 -- TMB_SET_AUDIO_MIX_PARAMS call tracking
 local mix_params_calls = {}
 
--- What TMB_GET_MIXED_AUDIO returns (set per-test)
-local mixed_audio_response = nil
+-- TMB_GET_MIXED_AUDIO: tracks calls and supports static or function responses
+local get_mixed_audio_calls = {}
+local mixed_audio_response = nil  -- static value or function(t0, t1)
+
+-- SSE.CURRENT_TIME_US: configurable for extension tests
+local mock_sse_current_time = 0
 
 local function reset_mocks()
     pcm_release_calls = {}
@@ -45,7 +49,9 @@ local function reset_mocks()
     aop_stop_calls = 0
     aop_flush_calls = 0
     mix_params_calls = {}
+    get_mixed_audio_calls = {}
     mixed_audio_response = nil
+    mock_sse_current_time = 0
 end
 
 --- Create a mock PCM chunk with known float data.
@@ -86,6 +92,10 @@ package.loaded["core.qt_constants"] = {
             }
         end,
         TMB_GET_MIXED_AUDIO = function(tmb, t0, t1)
+            get_mixed_audio_calls[#get_mixed_audio_calls + 1] = { t0 = t0, t1 = t1 }
+            if type(mixed_audio_response) == "function" then
+                return mixed_audio_response(t0, t1)
+            end
             return mixed_audio_response
         end,
         PCM_INFO = function(pcm)
@@ -122,7 +132,7 @@ package.loaded["core.qt_constants"] = {
             }
         end,
         RENDER_ALLOC = function(sse, frames) return ffi.new("float[?]", frames * 2), 0 end,
-        CURRENT_TIME_US = function() return 0 end,
+        CURRENT_TIME_US = function() return mock_sse_current_time end,
         STARVED = function() return false end,
         CLEAR_STARVED = function() end,
     },
@@ -276,6 +286,127 @@ do
         "Second call should skip (2s > 500ms threshold), got %d pushes", #sse_push_calls))
 
     print("  threshold refill dedup passed")
+end
+
+print("\n--- F5.3b: refill extends from old_end, not current_us (pop-free) ---")
+do
+    reset_mocks()
+    teardown()
+    init_test_session()
+
+    local mock_tmb = "test_tmb"
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+    }, 0)
+    audio_playback.set_max_time(20000000)  -- 20s
+    audio_playback.media_time_us = 5000000  -- start at 5s
+    audio_playback.max_media_time_us = 20000000
+
+    -- Initial fetch returns 2s of value 0.3 starting at 5s
+    mixed_audio_response = function(t0, t1)
+        -- Return PCM starting at t0, length = requested range
+        local dur_us = t1 - t0
+        local frames = math.floor(dur_us * SAMPLE_RATE / 1000000)
+        if frames <= 0 then return nil end
+        return make_pcm(frames, CHANNELS, t0, 0.3)
+    end
+
+    -- First call: cold start, pushes initial chunk
+    audio_playback.decode_mix_and_send_to_sse()
+    assert(#sse_push_calls == 1, "Initial fetch should push to SSE")
+    assert(#get_mixed_audio_calls == 1, "Initial fetch should call TMB once")
+
+    -- Verify initial fetch starts at current_us (5s)
+    assert(get_mixed_audio_calls[1].t0 == 5000000, string.format(
+        "Initial fetch t0 should be 5000000, got %d", get_mixed_audio_calls[1].t0))
+
+    -- Simulate time advancing to 6.6s (remaining = 7s - 6.6s = 400ms < 500ms threshold)
+    audio_playback.media_time_us = 6600000
+    mock_sse_current_time = 6500000  -- SSE render pos at 6.5s
+
+    -- Refill should request [old_end=7s, current+2s=8.6s], NOT [6.6s, 8.6s]
+    audio_playback.decode_mix_and_send_to_sse()
+    assert(#get_mixed_audio_calls == 2, string.format(
+        "Refill should call TMB again, got %d calls", #get_mixed_audio_calls))
+
+    -- KEY ASSERTION: refill starts from old buffer end, not from current_us
+    local refill_t0 = get_mixed_audio_calls[2].t0
+    assert(refill_t0 == 7000000, string.format(
+        "Refill t0 should be 7000000 (old_end), got %d — fetching from current_us causes pops",
+        refill_t0))
+
+    -- Combined push should start before SSE render pos (preserves WSOLA continuity)
+    assert(#sse_push_calls == 2, "Refill should push combined buffer to SSE")
+    assert(sse_push_calls[2].start_us <= mock_sse_current_time, string.format(
+        "Combined push start (%d) should be <= SSE render pos (%d)",
+        sse_push_calls[2].start_us, mock_sse_current_time))
+
+    -- Combined push should have MORE frames than just the new audio
+    -- (old audio preserved + new audio appended)
+    local new_only_frames = math.floor(1600000 * SAMPLE_RATE / 1000000)  -- 8.6s-7s = 1.6s
+    assert(sse_push_calls[2].frames > new_only_frames, string.format(
+        "Combined buffer (%d frames) should exceed new-only (%d frames)",
+        sse_push_calls[2].frames, new_only_frames))
+
+    print("  refill extends from old_end passed")
+end
+
+print("\n--- F5.3c: combined buffer preserves old audio samples ---")
+do
+    reset_mocks()
+    teardown()
+    init_test_session()
+
+    local mock_tmb = "test_tmb"
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+    }, 0)
+    audio_playback.set_max_time(20000000)
+    audio_playback.media_time_us = 0
+    audio_playback.max_media_time_us = 20000000
+
+    -- Initial fetch: value 0.7, extension: value 0.2 (distinct values to verify ordering)
+    local call_count = 0
+    mixed_audio_response = function(t0, t1)
+        call_count = call_count + 1
+        local dur_us = t1 - t0
+        local frames = math.floor(dur_us * SAMPLE_RATE / 1000000)
+        if frames <= 0 then return nil end
+        if call_count == 1 then
+            return make_pcm(frames, CHANNELS, t0, 0.7)  -- initial
+        else
+            return make_pcm(frames, CHANNELS, t0, 0.2)  -- extension
+        end
+    end
+
+    -- Initial push
+    audio_playback.decode_mix_and_send_to_sse()
+    assert(#sse_push_calls == 1, "Initial push")
+
+    -- Verify initial audio has value 0.7
+    assert(approx(sse_push_calls[1].data[1], 0.7), string.format(
+        "Initial audio should be 0.7, got %f", sse_push_calls[1].data[1]))
+
+    -- Advance time to trigger refill (remaining < 500ms)
+    audio_playback.media_time_us = 1600000  -- 1.6s in, remaining = 2s - 1.6s = 400ms
+    mock_sse_current_time = 1500000  -- SSE at 1.5s
+
+    audio_playback.decode_mix_and_send_to_sse()
+    assert(#sse_push_calls == 2, "Refill should push")
+
+    -- Combined buffer: first samples should be from OLD audio (0.7), not new (0.2)
+    -- This proves old audio is preserved at the SSE render position → no WSOLA pop
+    assert(approx(sse_push_calls[2].data[1], 0.7), string.format(
+        "Combined buffer start should preserve old audio (0.7), got %f — WSOLA pop risk!",
+        sse_push_calls[2].data[1]))
+
+    -- Last samples should be from NEW audio (0.2)
+    local last_idx = sse_push_calls[2].frames * CHANNELS
+    assert(approx(sse_push_calls[2].data[last_idx], 0.2), string.format(
+        "Combined buffer end should be new audio (0.2), got %f",
+        sse_push_calls[2].data[last_idx]))
+
+    print("  combined buffer preserves old audio passed")
 end
 
 --------------------------------------------------------------------------------
@@ -552,6 +683,374 @@ do
         "Hot path should also call TMB_SET_AUDIO_MIX_PARAMS")
 
     print("  both paths call TMB_SET_AUDIO_MIX_PARAMS passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 9: refresh_mix_volumes — updates params and invalidates SSE buffer
+--------------------------------------------------------------------------------
+do
+    print("\n--- Test 9: refresh_mix_volumes updates params and invalidates SSE ---")
+    teardown()
+    reset_mocks()
+    audio_playback = require("core.media.audio_playback")
+    audio_playback.init_session(48000, 2)
+
+    local mock_tmb = "test_tmb"
+    local pcm = make_pcm(96000, 2, 0, 0.5)
+    mixed_audio_response = pcm
+
+    -- Set up initial mix (creates SSE buffer via cold fetch)
+    audio_playback.set_max_time(10000000)  -- 10s playback range
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+    }, 0)
+
+    reset_mocks()
+
+    -- refresh_mix_volumes with muted track
+    audio_playback.refresh_mix_volumes({
+        { track_index = 1, volume = 1.0, muted = true, soloed = false },
+    })
+
+    -- Should have sent mix params to TMB with volume=0 (muted)
+    assert(#mix_params_calls >= 1,
+        "refresh_mix_volumes must call TMB_SET_AUDIO_MIX_PARAMS")
+    local resolved = mix_params_calls[#mix_params_calls].params
+    assert(#resolved == 1, "Should have 1 track param")
+    assert(resolved[1].volume == 0,
+        "Muted track should resolve to volume=0, got " .. tostring(resolved[1].volume))
+
+    -- has_audio should still be true (1 track, even if muted)
+    assert(audio_playback.has_audio == true,
+        "has_audio should be true when tracks exist (even muted)")
+
+    -- Next decode_mix_and_send_to_sse should do cold fetch (SSE invalidated)
+    mixed_audio_response = pcm
+    audio_playback.decode_mix_and_send_to_sse()
+    assert(#get_mixed_audio_calls >= 1,
+        "SSE buffer invalidated → cold fetch should call TMB_GET_MIXED_AUDIO")
+
+    print("  refresh_mix_volumes mute passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 10: refresh_mix_volumes — solo resolution
+--------------------------------------------------------------------------------
+do
+    print("\n--- Test 10: refresh_mix_volumes solo resolution ---")
+    teardown()
+    reset_mocks()
+    audio_playback = require("core.media.audio_playback")
+    audio_playback.init_session(48000, 2)
+
+    local mock_tmb = "test_tmb"
+    local pcm = make_pcm(96000, 2, 0, 0.5)
+    mixed_audio_response = pcm
+
+    -- Set up initial 2-track mix
+    audio_playback.set_max_time(10000000)  -- 10s playback range
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+        { track_index = 2, volume = 0.8, muted = false, soloed = false },
+    }, 0)
+
+    reset_mocks()
+
+    -- Solo track 1 → track 2 should get volume 0
+    audio_playback.refresh_mix_volumes({
+        { track_index = 1, volume = 1.0, muted = false, soloed = true },
+        { track_index = 2, volume = 0.8, muted = false, soloed = false },
+    })
+
+    assert(#mix_params_calls >= 1,
+        "refresh_mix_volumes must call TMB_SET_AUDIO_MIX_PARAMS")
+    local resolved = mix_params_calls[#mix_params_calls].params
+    assert(#resolved == 2, "Should have 2 track params")
+    assert(resolved[1].volume == 1.0,
+        "Soloed track should keep volume=1.0, got " .. tostring(resolved[1].volume))
+    assert(resolved[2].volume == 0,
+        "Non-soloed track should resolve to volume=0, got " .. tostring(resolved[2].volume))
+
+    print("  refresh_mix_volumes solo passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 11: refresh_mix_volumes — assert on nil session
+--------------------------------------------------------------------------------
+do
+    print("\n--- Test 11: refresh_mix_volumes asserts without session ---")
+    teardown()
+    reset_mocks()
+    audio_playback = require("core.media.audio_playback")
+    -- Do NOT init session
+
+    local ok, err = pcall(function()
+        audio_playback.refresh_mix_volumes({
+            { track_index = 1, volume = 1.0, muted = false, soloed = false },
+        })
+    end)
+    assert(not ok, "Should assert when session not initialized")
+    assert(err:find("session not initialized"),
+        "Error should mention session, got: " .. tostring(err))
+
+    print("  refresh_mix_volumes session assert passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 12: refresh_mix_volumes — assert on non-table mix_params
+--------------------------------------------------------------------------------
+do
+    print("\n--- Test 12: refresh_mix_volumes asserts on bad input ---")
+    teardown()
+    reset_mocks()
+    audio_playback = require("core.media.audio_playback")
+    audio_playback.init_session(48000, 2)
+
+    local ok, err = pcall(function()
+        audio_playback.refresh_mix_volumes("not_a_table")
+    end)
+    assert(not ok, "Should assert on non-table mix_params")
+    assert(err:find("must be a table"),
+        "Error should mention table, got: " .. tostring(err))
+
+    print("  refresh_mix_volumes bad input assert passed")
+end
+
+--------------------------------------------------------------------------------
+-- G1: Reverse audio warm extension (extend_and_push with speed < 0)
+--------------------------------------------------------------------------------
+print("\n--- G1: reverse warm extension fetches from old_start backward ---")
+do
+    reset_mocks()
+    teardown()
+    init_test_session()
+
+    local mock_tmb = "test_tmb"
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+    }, 0)
+    audio_playback.set_max_time(20000000)  -- 20s
+    audio_playback.max_media_time_us = 20000000
+    audio_playback.speed = -1.0  -- REVERSE
+
+    -- Position at 10s, reverse cold fetch covers [8s, 10s]
+    audio_playback.media_time_us = 10000000
+
+    mixed_audio_response = function(t0, t1)
+        local dur_us = t1 - t0
+        local frames = math.floor(dur_us * SAMPLE_RATE / 1000000)
+        if frames <= 0 then return nil end
+        return make_pcm(frames, CHANNELS, t0, 0.4)
+    end
+
+    -- Cold fetch (reverse: [8s, 10s])
+    audio_playback.decode_mix_and_send_to_sse()
+    assert(#sse_push_calls == 1, "Cold reverse push")
+    assert(#get_mixed_audio_calls == 1, "Cold reverse fetch")
+    assert(get_mixed_audio_calls[1].t0 == 8000000, string.format(
+        "Reverse cold t0 should be 8000000, got %d", get_mixed_audio_calls[1].t0))
+    assert(get_mixed_audio_calls[1].t1 == 10000000, string.format(
+        "Reverse cold t1 should be 10000000, got %d", get_mixed_audio_calls[1].t1))
+
+    -- Advance backward to 8.4s (remaining = 10s - 8.4s = 400ms < 500ms threshold)
+    -- Wait — reverse remaining = current - start = 8.4s - 8s = 400ms < 500ms
+    audio_playback.media_time_us = 8400000
+    mock_sse_current_time = 8500000  -- SSE render at 8.5s
+
+    -- Extension should now return different value to distinguish from old
+    mixed_audio_response = function(t0, t1)
+        local dur_us = t1 - t0
+        local frames = math.floor(dur_us * SAMPLE_RATE / 1000000)
+        if frames <= 0 then return nil end
+        return make_pcm(frames, CHANNELS, t0, 0.9)  -- distinct value
+    end
+
+    audio_playback.decode_mix_and_send_to_sse()
+    assert(#get_mixed_audio_calls == 2, string.format(
+        "Refill should call TMB again, got %d", #get_mixed_audio_calls))
+
+    -- Reverse extension: fetch_end = old start (8s), fetch_start = max(0, 8.4s-2s) = 6.4s
+    local refill_t1 = get_mixed_audio_calls[2].t1
+    assert(refill_t1 == 8000000, string.format(
+        "Reverse refill t1 should be 8000000 (old start), got %d", refill_t1))
+    local refill_t0 = get_mixed_audio_calls[2].t0
+    assert(refill_t0 == 6400000, string.format(
+        "Reverse refill t0 should be 6400000, got %d", refill_t0))
+
+    -- Combined push should have happened
+    assert(#sse_push_calls == 2, "Reverse refill should push combined buffer")
+
+    -- Combined buffer: first samples are NEW (0.9), later samples are OLD (0.4)
+    -- (reverse: new audio is prepended before old)
+    assert(approx(sse_push_calls[2].data[1], 0.9), string.format(
+        "Reverse combined start should be new audio (0.9), got %f",
+        sse_push_calls[2].data[1]))
+
+    print("  reverse warm extension passed")
+end
+
+--------------------------------------------------------------------------------
+-- G2: Nil TMB response during warm extension
+--------------------------------------------------------------------------------
+print("\n--- G2: nil TMB during warm extension retains old buffer ---")
+do
+    reset_mocks()
+    teardown()
+    init_test_session()
+
+    local mock_tmb = "test_tmb"
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+    }, 0)
+    audio_playback.set_max_time(20000000)
+    audio_playback.media_time_us = 0
+    audio_playback.max_media_time_us = 20000000
+
+    -- Cold fetch succeeds with 2s of audio
+    mixed_audio_response = function(t0, t1)
+        local dur_us = t1 - t0
+        local frames = math.floor(dur_us * SAMPLE_RATE / 1000000)
+        if frames <= 0 then return nil end
+        return make_pcm(frames, CHANNELS, t0, 0.6)
+    end
+
+    audio_playback.decode_mix_and_send_to_sse()
+    assert(#sse_push_calls == 1, "Cold push")
+
+    -- Advance to trigger refill
+    audio_playback.media_time_us = 1600000
+    mock_sse_current_time = 1500000
+
+    -- TMB returns nil for extension (e.g. gap in next clip)
+    mixed_audio_response = nil
+
+    audio_playback.decode_mix_and_send_to_sse()
+
+    -- No new push (extension returned nil)
+    assert(#sse_push_calls == 1, string.format(
+        "Nil extension should not push to SSE, got %d pushes", #sse_push_calls))
+
+    -- Buffer state should be unchanged (still warm with old data)
+    -- Verify by calling again — it should try extension again, not cold
+    audio_playback.decode_mix_and_send_to_sse()
+    assert(#get_mixed_audio_calls == 3, string.format(
+        "Should keep trying extension (warm path), got %d TMB calls",
+        #get_mixed_audio_calls))
+
+    print("  nil TMB warm extension passed")
+end
+
+--------------------------------------------------------------------------------
+-- G3: AOP underrun detection fires CLEAR_UNDERRUN
+--------------------------------------------------------------------------------
+print("\n--- G3: AOP underrun detected and cleared in pump_tick ---")
+do
+    reset_mocks()
+    teardown()
+    init_test_session()
+
+    local mock_tmb = "test_tmb"
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+    }, 0)
+    audio_playback.set_max_time(10000000)
+    audio_playback.media_time_us = 0
+    audio_playback.max_media_time_us = 10000000
+    mixed_audio_response = make_pcm(96000, CHANNELS, 0, 0.5)
+
+    -- Set up playing state for _pump_tick
+    audio_playback.playing = true
+
+    -- Track underrun calls
+    local had_underrun_calls = 0
+    local clear_underrun_calls = 0
+    local warn_messages = {}
+
+    -- Override mocks for this test
+    local qt = package.loaded["core.qt_constants"]
+    local orig_had = qt.AOP.HAD_UNDERRUN
+    local orig_clear = qt.AOP.CLEAR_UNDERRUN
+    qt.AOP.HAD_UNDERRUN = function()
+        had_underrun_calls = had_underrun_calls + 1
+        return true  -- simulate underrun
+    end
+    qt.AOP.CLEAR_UNDERRUN = function()
+        clear_underrun_calls = clear_underrun_calls + 1
+    end
+
+    -- Override logger to capture warn calls
+    local orig_warn = package.loaded["core.logger"].warn
+    package.loaded["core.logger"].warn = function(component, msg)
+        warn_messages[#warn_messages + 1] = { component = component, msg = msg }
+    end
+
+    -- Call _pump_tick (needs frames_needed > 0 to enter the underrun check)
+    audio_playback._pump_tick()
+
+    -- Restore mocks
+    qt.AOP.HAD_UNDERRUN = orig_had
+    qt.AOP.CLEAR_UNDERRUN = orig_clear
+    package.loaded["core.logger"].warn = orig_warn
+    audio_playback.playing = false
+
+    -- Verify underrun was detected and cleared
+    assert(had_underrun_calls >= 1, string.format(
+        "HAD_UNDERRUN should be called, got %d calls", had_underrun_calls))
+    assert(clear_underrun_calls >= 1, string.format(
+        "CLEAR_UNDERRUN must be called after underrun detected, got %d calls",
+        clear_underrun_calls))
+
+    -- Verify warn message was logged
+    local found_underrun_warn = false
+    for _, w in ipairs(warn_messages) do
+        if w.component == "audio_playback" and w.msg:find("UNDERRUN") then
+            found_underrun_warn = true
+            break
+        end
+    end
+    assert(found_underrun_warn,
+        "logger.warn should log AOP UNDERRUN message")
+
+    print("  AOP underrun detection passed")
+end
+
+--------------------------------------------------------------------------------
+-- G4: Cold fetch with zero-frame PCM
+--------------------------------------------------------------------------------
+print("\n--- G4: cold fetch with zero-frame PCM releases and skips ---")
+do
+    reset_mocks()
+    teardown()
+    init_test_session()
+
+    local mock_tmb = "test_tmb"
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+    }, 0)
+    audio_playback.set_max_time(10000000)
+    audio_playback.media_time_us = 5000000
+    audio_playback.max_media_time_us = 10000000
+
+    -- TMB returns PCM with 0 frames (e.g. very short gap)
+    mixed_audio_response = make_pcm(0, CHANNELS, 5000000, 0.0)
+
+    audio_playback.decode_mix_and_send_to_sse()
+
+    -- PCM should be released (not leaked)
+    assert(#pcm_release_calls == 1, string.format(
+        "Zero-frame PCM must be released, got %d releases", #pcm_release_calls))
+
+    -- No SSE push (nothing to push)
+    assert(#sse_push_calls == 0, string.format(
+        "Zero-frame PCM should not push to SSE, got %d pushes", #sse_push_calls))
+
+    -- Buffer should NOT be updated (still cold)
+    -- Verify: next call should still be cold path (not warm)
+    mixed_audio_response = make_pcm(96000, CHANNELS, 5000000, 0.5)
+    audio_playback.decode_mix_and_send_to_sse()
+    assert(#sse_push_calls == 1, "Second call should cold-fetch and push")
+
+    print("  zero-frame PCM release passed")
 end
 
 --------------------------------------------------------------------------------

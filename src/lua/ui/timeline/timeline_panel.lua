@@ -30,6 +30,7 @@ local logger = require("core.logger")
 local timecode = require("core.timecode")
 local timecode_input = require("core.timecode_input")
 local Track = require("models.track")
+local Signals = require("core.signals")
 
 -- luacheck: globals qt_line_edit_select_all
 
@@ -934,6 +935,7 @@ local function create_audio_headers()
             t:save()
             qt_constants.PROPERTIES.SET_STYLE(captured_mute_btn,
                 build_track_header_btn_stylesheet(t.muted, "#cc3333"))
+            Signals.emit("track_mix_changed")
         end)
         qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(mute_btn, mute_handler)
 
@@ -952,6 +954,7 @@ local function create_audio_headers()
             t:save()
             qt_constants.PROPERTIES.SET_STYLE(captured_solo_btn,
                 build_track_header_btn_stylesheet(t.soloed, "#ccaa00"))
+            Signals.emit("track_mix_changed")
         end)
         qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(solo_btn, solo_handler)
 
@@ -1783,7 +1786,6 @@ function M.on_project_change()
 end
 
 -- Register for project_changed signal
-local Signals = require("core.signals")
 Signals.connect("project_changed", M.on_project_change, 50)
 
 return M

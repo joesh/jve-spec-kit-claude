@@ -75,6 +75,9 @@ function SequenceMonitor.new(config)
         on_set_rotation = function(deg)
             self:_on_set_rotation(deg)
         end,
+        on_set_par = function(num, den)
+            self:_on_set_par(num, den)
+        end,
         on_position_changed = function(frame)
             self:_on_position_changed(frame)
         end,
@@ -188,6 +191,8 @@ function SequenceMonitor:_create_widgets()
         "SequenceMonitor: EMP.SURFACE_SET_FRAME not available")
     assert(qt_constants.EMP.SURFACE_SET_ROTATION,
         "SequenceMonitor: EMP.SURFACE_SET_ROTATION not available")
+    assert(qt_constants.EMP.SURFACE_SET_PAR,
+        "SequenceMonitor: EMP.SURFACE_SET_PAR not available")
     assert(qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TEXT,
         "SequenceMonitor: PROPERTIES.SET_TEXT not available")
     if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
@@ -460,6 +465,10 @@ end
 
 function SequenceMonitor:_on_set_rotation(degrees)
     qt_constants.EMP.SURFACE_SET_ROTATION(self._video_surface, degrees)
+end
+
+function SequenceMonitor:_on_set_par(num, den)
+    qt_constants.EMP.SURFACE_SET_PAR(self._video_surface, num, den)
 end
 
 --- Called by engine during playback ticks (set_position fires this).

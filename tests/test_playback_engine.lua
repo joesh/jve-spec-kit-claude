@@ -41,6 +41,7 @@ package.loaded["core.qt_constants"] = {
         -- TMB functions (video path uses TMB, not media_cache)
         TMB_CREATE = function() return "mock_tmb" end,
         TMB_CLOSE = function() end,
+        TMB_PARK_READERS = function() end,
         TMB_SET_SEQUENCE_RATE = function() end,
         TMB_SET_AUDIO_FORMAT = function() end,
         TMB_SET_TRACK_CLIPS = function() end,
@@ -67,7 +68,7 @@ package.loaded["core.logger"] = {
     trace = function() end,
 }
 
--- Configurable video: maps frame → {clip_id, rotation} or nil (gap)
+-- Configurable video: maps frame → {clip_id, rotation, par_num, par_den} or nil (gap)
 local video_map = {}
 local function set_video_map(map) video_map = map end
 
@@ -88,6 +89,8 @@ package.loaded["core.renderer"] = {
                 media_path = entry.media_path or "/test.mov",
                 source_frame = entry.source_frame or frame,
                 rotation = entry.rotation or 0,
+                par_num = entry.par_num or 1,
+                par_den = entry.par_den or 1,
             }
         end
         -- Default: clip1 for frames 0-99, gap otherwise
@@ -97,6 +100,8 @@ package.loaded["core.renderer"] = {
                 media_path = "/test.mov",
                 source_frame = frame,
                 rotation = 0,
+                par_num = 1,
+                par_den = 1,
             }
         end
         return nil, nil
@@ -199,6 +204,7 @@ local function make_engine()
         frames_shown = {},
         gaps_shown = 0,
         rotations = {},
+        pars = {},
         positions = {},
     }
 
@@ -216,6 +222,9 @@ local function make_engine()
         end,
         on_set_rotation = function(degrees)
             log.rotations[#log.rotations + 1] = degrees
+        end,
+        on_set_par = function(num, den)
+            log.pars[#log.pars + 1] = {num, den}
         end,
         on_position_changed = function(frame)
             log.positions[#log.positions + 1] = frame
@@ -242,10 +251,22 @@ do
         on_show_frame = function() end,
         on_show_gap = function() end,
         on_set_rotation = function() end,
+        on_set_par = function() end,
         -- missing on_position_changed
     })
     assert(not ok, "missing on_position_changed should assert")
-    print("  missing callback: asserts ok")
+    print("  missing on_position_changed: asserts ok")
+
+    -- missing on_set_par specifically
+    ok, _ = pcall(PlaybackEngine.new, {
+        on_show_frame = function() end,
+        on_show_gap = function() end,
+        on_set_rotation = function() end,
+        -- missing on_set_par
+        on_position_changed = function() end,
+    })
+    assert(not ok, "missing on_set_par should assert")
+    print("  missing on_set_par: asserts ok")
 end
 
 -- ─── Test 2: load_sequence sets fps and total_frames ───
@@ -476,6 +497,45 @@ do
     assert(log.rotations[2] == 90, "clipB rotation=90")
 
     -- Reset video map
+    set_video_map({})
+    print("  ok")
+end
+
+-- ─── Test 10b: clip switch triggers PAR callback ───
+print("\n--- clip switch + PAR ---")
+do
+    -- clipC: square pixels (1:1), clipD: anamorphic HD (4:3)
+    set_video_map({
+        [20] = { clip_id = "clipC", rotation = 0, par_num = 1, par_den = 1, source_frame = 20 },
+        [21] = { clip_id = "clipC", rotation = 0, par_num = 1, par_den = 1, source_frame = 21 },
+        [22] = { clip_id = "clipD", rotation = 0, par_num = 4, par_den = 3, source_frame = 0 },
+        [23] = { clip_id = "clipD", rotation = 0, par_num = 4, par_den = 3, source_frame = 1 },
+    })
+
+    local engine, log = make_engine()
+    clear_timers()
+    engine:load_sequence("seq1", 100)
+
+    -- Seek to clipC (square pixels)
+    engine:seek(20)
+    assert(#log.pars == 1, "first clip → PAR callback, got " .. #log.pars)
+    assert(log.pars[1][1] == 1 and log.pars[1][2] == 1,
+        string.format("clipC PAR should be 1:1, got %d:%d", log.pars[1][1], log.pars[1][2]))
+
+    -- Same clip, different frame → no new PAR callback
+    engine:seek(21)
+    assert(#log.pars == 1, "same clip → no PAR callback, got " .. #log.pars)
+
+    -- Seek to clipD (anamorphic)
+    engine:seek(22)
+    assert(#log.pars == 2, "clip switch → PAR callback, got " .. #log.pars)
+    assert(log.pars[2][1] == 4 and log.pars[2][2] == 3,
+        string.format("clipD PAR should be 4:3, got %d:%d", log.pars[2][1], log.pars[2][2]))
+
+    -- Same clip → no new callback
+    engine:seek(23)
+    assert(#log.pars == 2, "same clip → no PAR callback, got " .. #log.pars)
+
     set_video_map({})
     print("  ok")
 end
