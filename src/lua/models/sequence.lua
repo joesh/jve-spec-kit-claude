@@ -797,9 +797,9 @@ local function calc_source_time_us(clip, playhead_frame)
     return source_time_us, source_frame
 end
 
---- Get ALL video clips at position, ordered by track_index ascending (topmost first).
+--- Get ALL video clips at position, ordered by track_index ascending.
 -- Returns one entry per video track that has a clip at playhead.
--- Renderer uses first entry (topmost) for display. Future: composite all layers.
+-- Renderer iterates highest-index-first for display. Future: composite all layers.
 -- @param playhead_frame integer
 -- @return list of {media_path, source_time_us, source_frame, clip, track} (may be empty = gap)
 function Sequence:get_video_at(playhead_frame)
@@ -816,7 +816,7 @@ function Sequence:get_video_at(playhead_frame)
     end
 
     local results = {}
-    -- Tracks are sorted by track_index ASC (topmost = lowest index = highest priority)
+    -- Tracks are sorted by track_index ASC (V1=1, V2=2, ...; highest = topmost)
     for _, track in ipairs(tracks) do
         local clip = Clip.find_at_time(track.id, playhead_frame)
         if clip then

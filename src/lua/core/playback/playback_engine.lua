@@ -320,8 +320,8 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
         indices[#indices + 1] = idx
     end
 
-    -- Sort indices (lowest = topmost = highest priority)
-    table.sort(indices)
+    -- Sort indices descending: highest track_index = topmost = highest priority
+    table.sort(indices, function(a, b) return a > b end)
     self._video_track_indices = indices
 
     -- ── Audio tracks ──

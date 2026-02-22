@@ -3,7 +3,7 @@
 -- Resolution order:
 -- 1. Get all clips under the playhead
 -- 2. If any are selected, filter to only selected clips
--- 3. Pick the topmost (lowest track_index) from the candidates
+-- 3. Pick the topmost (highest track_index) from the candidates
 -- 4. Focus that clip's master clip in the project browser
 --
 -- @file match_frame.lua
@@ -36,13 +36,13 @@ local function track_index_for_clip(clip)
     return math.huge
 end
 
---- From candidates, pick the topmost (lowest track_index).
+--- From candidates, pick the topmost (highest track_index).
 local function pick_topmost(candidates)
     local best = nil
-    local best_index = math.huge
+    local best_index = -1
     for _, clip in ipairs(candidates) do
         local idx = track_index_for_clip(clip)
-        if idx < best_index then
+        if idx ~= math.huge and idx > best_index then
             best = clip
             best_index = idx
         end

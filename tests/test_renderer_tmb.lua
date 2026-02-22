@@ -6,7 +6,7 @@
 -- - Normal frame decode returns frame + metadata
 -- - Gap returns nil, nil
 -- - Offline returns offline frame + metadata
--- - Multi-track priority (lowest track_index = topmost = wins)
+-- - Multi-track priority (first element in array = highest priority = wins)
 -- - Empty track list returns nil, nil
 --
 -- @file test_renderer_tmb.lua
@@ -193,12 +193,12 @@ do
 end
 
 --------------------------------------------------------------------------------
--- Test 5: Multi-track priority (lowest track_index = topmost = wins)
+-- Test 5: Multi-track priority (first element in array wins)
 --------------------------------------------------------------------------------
 print("\n--- multi-track priority ---")
 do
     reset_mocks()
-    -- Track 1 (topmost): clip at frame 30
+    -- Track 1 (first in array): clip at frame 30
     track_frame_map[1] = {
         [30] = {
             handle = "frame_track1",
@@ -229,9 +229,9 @@ do
         },
     }
 
-    -- Track indices sorted: {1, 2} — track 1 wins
+    -- Array order: {1, 2} — first element (track 1) wins
     local frame, meta = Renderer.get_video_frame(mock_tmb, {1, 2}, 30)
-    assert(frame == "frame_track1", "Track 1 (topmost) should win")
+    assert(frame == "frame_track1", "First element in array should win")
     assert(meta.clip_id == "clip_v1", "Should return track 1's clip_id")
     assert(meta.rotation == 0, "Should return track 1's rotation")
 

@@ -1,7 +1,7 @@
 --- Renderer: resolves TMB video output and returns display-ready frames.
 --
 -- Responsibilities:
--- - Iterates video tracks in priority order (lowest track_index = topmost)
+-- - Iterates video tracks in priority order (highest track_index = topmost)
 -- - Calls TMB_GET_VIDEO_FRAME per track
 -- - Handles offline via offline_frame_cache
 -- - Returns EMP frame handle for display (or nil for gaps)
@@ -20,7 +20,7 @@ local M = {}
 
 --- Get video frame via TMB for tracks at a given playhead position.
 -- @param tmb userdata TMB handle (from TMB_CREATE)
--- @param video_track_indices table array of track indices (priority order: lowest first)
+-- @param video_track_indices table array of track indices (priority order: highest first)
 -- @param playhead_frame integer
 -- @return frame_handle|nil, metadata_table|nil
 function M.get_video_frame(tmb, video_track_indices, playhead_frame)
@@ -32,7 +32,7 @@ function M.get_video_frame(tmb, video_track_indices, playhead_frame)
 
     local EMP = qt_constants.EMP
 
-    -- Iterate tracks in priority order (lowest track_index = topmost = wins)
+    -- Iterate tracks in priority order (highest track_index = topmost = wins)
     for _, track_idx in ipairs(video_track_indices) do
         local frame_handle, metadata = EMP.TMB_GET_VIDEO_FRAME(
             tmb, track_idx, playhead_frame)

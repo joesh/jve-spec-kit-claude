@@ -134,7 +134,7 @@ assert(#focus_calls == 1)
 assert(focus_calls[1].master_id == 'master_clip_a', "Should focus master_clip_a")
 timeline_state.clips = saved_clips
 
--- Test 4: Multiple clips under playhead, no selection → topmost (lowest track_index)
+-- Test 4: Multiple clips under playhead, no selection → topmost (highest track_index)
 print("Test 4: Multiple clips, no selection, picks topmost")
 focus_calls = {}
 timeline_state.playhead_position = 50  -- clip_v1 (track_index=1) and clip_v2 (track_index=2)
@@ -142,8 +142,8 @@ timeline_state.selected_clips = {}
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
 assert(result.success, "Should succeed: " .. tostring(result.error_message))
 assert(#focus_calls == 1)
-assert(focus_calls[1].master_id == 'master_clip_a',
-    "Should pick topmost (V1), got " .. tostring(focus_calls[1].master_id))
+assert(focus_calls[1].master_id == 'master_clip_b',
+    "Should pick topmost (V2, track_index=2), got " .. tostring(focus_calls[1].master_id))
 
 -- Test 5: Multiple clips under playhead, lower one selected → uses selected
 print("Test 5: Multiple clips, lower one selected")
@@ -164,8 +164,8 @@ timeline_state.selected_clips = {clip_v2, clip_v1}  -- both selected, v2 listed 
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
 assert(result.success, "Should succeed: " .. tostring(result.error_message))
 assert(#focus_calls == 1)
-assert(focus_calls[1].master_id == 'master_clip_a',
-    "Should pick topmost selected (V1), got " .. tostring(focus_calls[1].master_id))
+assert(focus_calls[1].master_id == 'master_clip_b',
+    "Should pick topmost selected (V2, track_index=2), got " .. tostring(focus_calls[1].master_id))
 
 -- Test 7: skip_focus option passes through
 print("Test 7: skip_focus option")
