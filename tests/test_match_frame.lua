@@ -185,4 +185,49 @@ result = command_manager.execute("MatchFrame", { project_id = "default_project",
 assert(result.success, "Should succeed")
 assert(focus_calls[1].opts.skip_activate == true, "skip_activate should pass through")
 
+-- Test 9: Clip with unresolvable track_id → fails with track error (not "not linked")
+print("Test 9: Clip with unresolvable track_id fails with track error")
+focus_calls = {}
+local clip_bad_track = {id = 'clip_bad', track_id = 'track_nonexistent', master_clip_id = 'mc_x', timeline_start = 0, duration = 100}
+timeline_state.clips = {clip_bad_track}
+timeline_state.playhead_position = 50
+timeline_state.selected_clips = {}
+result = command_manager.execute("MatchFrame", { project_id = "default_project" })
+assert(not result.success, "Should fail on unresolvable track_id")
+assert(result.error_message:match("track_nonexistent") or result.error_message:match("track_index_for_clip"),
+    "Error should mention the bad track, got: " .. tostring(result.error_message))
+timeline_state.clips = saved_clips
+print("  ✓ unresolvable track_id surfaces real error")
+
+-- Test 10: focus_master_clip throws → error surfaced (not swallowed)
+print("Test 10: focus_master_clip error surfaces")
+focus_calls = {}
+timeline_state.clips = {clip_v1}
+timeline_state.playhead_position = 50
+timeline_state.selected_clips = {}
+local orig_focus = project_browser.focus_master_clip
+project_browser.focus_master_clip = function() error("browser exploded") end
+result = command_manager.execute("MatchFrame", { project_id = "default_project" })
+assert(not result.success, "Should fail when focus_master_clip throws")
+assert(result.error_message:match("browser exploded"),
+    "Error message should contain original error, got: " .. tostring(result.error_message))
+project_browser.focus_master_clip = orig_focus
+timeline_state.clips = saved_clips
+print("  ✓ focus_master_clip error surfaced")
+
+-- Test 11: focus_master_clip returns false → error surfaced
+print("Test 11: focus_master_clip returns false")
+focus_calls = {}
+timeline_state.clips = {clip_v1}
+timeline_state.playhead_position = 50
+timeline_state.selected_clips = {}
+project_browser.focus_master_clip = function() return false end
+result = command_manager.execute("MatchFrame", { project_id = "default_project" })
+assert(not result.success, "Should fail when focus_master_clip returns false")
+assert(result.error_message:match("Failed to focus"),
+    "Error should say failed to focus, got: " .. tostring(result.error_message))
+project_browser.focus_master_clip = orig_focus
+timeline_state.clips = saved_clips
+print("  ✓ focus_master_clip false surfaced")
+
 print("✅ test_match_frame.lua passed")

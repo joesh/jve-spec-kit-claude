@@ -31,18 +31,23 @@ local function extract_master_clip_id(clip)
 end
 
 local function track_index_for_clip(clip)
+    assert(clip.track_id, string.format(
+        "track_index_for_clip: clip %s has no track_id", tostring(clip.id)))
     local track = timeline_state.get_track_by_id(clip.track_id)
-    if track then return track.track_index end
-    return math.huge
+    assert(track, string.format(
+        "track_index_for_clip: track %s not found for clip %s",
+        tostring(clip.track_id), tostring(clip.id)))
+    return track.track_index
 end
 
 --- From candidates, pick the topmost (highest track_index).
 local function pick_topmost(candidates)
+    assert(#candidates > 0, "pick_topmost: candidates must be non-empty")
     local best = nil
     local best_index = -1
     for _, clip in ipairs(candidates) do
         local idx = track_index_for_clip(clip)
-        if idx ~= math.huge and idx > best_index then
+        if idx > best_index then
             best = clip
             best_index = idx
         end
@@ -63,7 +68,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- If any clip under playhead is selected, prefer selected clips
-        local selected = timeline_state.get_selected_clips and timeline_state.get_selected_clips() or {}
+        assert(timeline_state.get_selected_clips,
+            "MatchFrame: timeline_state.get_selected_clips is missing")
+        local selected = timeline_state.get_selected_clips()
         local selected_set = {}
         for _, clip in ipairs(selected) do
             if clip.id then selected_set[clip.id] = true end
