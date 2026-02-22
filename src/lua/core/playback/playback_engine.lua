@@ -118,6 +118,7 @@ function PlaybackEngine.new(config)
     self._tmb = nil
     self._video_track_indices = {}   -- track indices for Renderer iteration
     self._audio_track_indices = {}   -- audio track indices for TMB audio path
+    self._tmb_clip_window = nil      -- {lo, hi, direction} — valid frame range for current clip feed
 
     return self
 end
@@ -243,15 +244,22 @@ function PlaybackEngine:_close_tmb()
     end
     self._video_track_indices = {}
     self._audio_track_indices = {}
+    self._tmb_clip_window = nil
 end
 
 --- Feed TMB with current + next clips for each video and audio track.
 -- Builds a small clip window (2-3 clips per track) from sequence queries.
--- Called every frame during playback (lightweight: reuses existing SQL queries).
+-- Skips re-query when playhead is still inside the cached clip window.
 -- @param frame integer: current playhead frame
 function PlaybackEngine:_send_clips_to_tmb(frame)
     assert(self._tmb, "PlaybackEngine:_send_clips_to_tmb: no TMB")
     assert(self.sequence, "PlaybackEngine:_send_clips_to_tmb: no sequence")
+
+    -- Still inside the clip window TMB already has? Skip re-query.
+    local w = self._tmb_clip_window
+    if w and frame >= w.lo and frame < w.hi and self.direction == w.direction then
+        return
+    end
 
     local EMP = qt_constants.EMP
 
@@ -325,11 +333,40 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
     self._video_track_indices = indices
 
     -- ── Audio tracks ──
-    self:_send_audio_clips_to_tmb(frame, EMP)
+    local audio_entries = self:_send_audio_clips_to_tmb(frame, EMP)
+
+    -- ── Compute clip window: intersection of all current clip ranges ──
+    -- Playhead stays in-window as long as every current clip still covers it.
+    local window_lo = 0
+    local window_hi = self.total_frames or math.huge
+
+    local has_clips = false
+    for _, entry in ipairs(current_entries) do
+        has_clips = true
+        local c = entry.clip
+        window_lo = math.max(window_lo, c.timeline_start)
+        window_hi = math.min(window_hi, c.timeline_start + c.duration)
+    end
+    for _, entry in ipairs(audio_entries) do
+        has_clips = true
+        local c = entry.clip
+        window_lo = math.max(window_lo, c.timeline_start)
+        window_hi = math.min(window_hi, c.timeline_start + c.duration)
+    end
+
+    if has_clips and window_hi > window_lo then
+        self._tmb_clip_window = {
+            lo = window_lo, hi = window_hi, direction = self.direction,
+        }
+    else
+        -- Gap or degenerate: don't cache, re-query next tick
+        self._tmb_clip_window = nil
+    end
 end
 
 --- Feed audio clips near the playhead to TMB (same pattern as video).
--- Called from _send_clips_to_tmb every tick.
+-- Called from _send_clips_to_tmb at clip boundaries.
+-- @return audio_entries for clip window computation
 function PlaybackEngine:_send_audio_clips_to_tmb(frame, EMP)
     local audio_entries = self.sequence:get_audio_at(frame)
 
@@ -397,6 +434,7 @@ function PlaybackEngine:_send_audio_clips_to_tmb(frame, EMP)
     end
     table.sort(audio_indices)
     self._audio_track_indices = audio_indices
+    return audio_entries
 end
 
 --- Build a TMB clip table from a sequence entry (get_video_at/get_audio_at result).
