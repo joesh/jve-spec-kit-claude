@@ -251,6 +251,7 @@ end
 -- Builds a small clip window (2-3 clips per track) from sequence queries.
 -- Skips re-query when playhead is still inside the cached clip window.
 -- @param frame integer: current playhead frame
+-- @return boolean: true if clips were re-queried (boundary crossing), false if cached
 function PlaybackEngine:_send_clips_to_tmb(frame)
     assert(self._tmb, "PlaybackEngine:_send_clips_to_tmb: no TMB")
     assert(self.sequence, "PlaybackEngine:_send_clips_to_tmb: no sequence")
@@ -258,7 +259,7 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
     -- Still inside the clip window TMB already has? Skip re-query.
     local w = self._tmb_clip_window
     if w and frame >= w.lo and frame < w.hi and self.direction == w.direction then
-        return
+        return false  -- no boundary crossing
     end
 
     local EMP = qt_constants.EMP
@@ -362,6 +363,7 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
         -- Gap or degenerate: don't cache, re-query next tick
         self._tmb_clip_window = nil
     end
+    return true  -- boundary crossing: clips were re-queried
 end
 
 --- Feed audio clips near the playhead to TMB (same pattern as video).
@@ -836,8 +838,9 @@ function PlaybackEngine:_tick()
         qt_constants.EMP.TMB_SET_PLAYHEAD(
             self._tmb, frame_idx, self.direction, self.speed)
     end
+    local clips_changed = false
     if self._tmb then
-        self:_send_clips_to_tmb(frame_idx)
+        clips_changed = self:_send_clips_to_tmb(frame_idx)
     end
 
     self:_display_frame(frame_idx)
@@ -845,7 +848,8 @@ function PlaybackEngine:_tick()
     -- 6-7. Audio resolve + gap-entry start (non-fatal: must not kill video tick loop)
     if self._audio_owner then
         self:_try_audio(function(eng)
-            if frame_idx ~= eng._last_tick_frame then
+            -- Only check audio mix at clip boundaries (not every tick)
+            if clips_changed and frame_idx ~= eng._last_tick_frame then
                 eng:_if_clip_changed_update_audio_mix(frame_idx)
             end
             if audio_playback and audio_playback.has_audio and not audio_playback.playing then

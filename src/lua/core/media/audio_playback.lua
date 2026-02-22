@@ -330,44 +330,37 @@ function M.apply_mix(tmb, mix_params, edit_time_us)
     -- so the autonomous mix thread uses current solo/mute/volume state.
     send_mix_params_to_tmb()
 
-    if not tracks_changed then
-        -- HOT SWAP: only volume/mute/solo changed. No SSE reset needed.
-        -- C++ mix cache was invalidated by send_mix_params_to_tmb above.
-        -- Next decode_mix_and_send_to_sse will fetch fresh mixed audio.
+    if was_playing then
+        if not M.has_audio then
+            -- All audio tracks removed mid-playback — stop audio output.
+            M.playing = false
+            M._cancel_pump()
+            qt_constants.AOP.STOP(M.aop)
+            qt_constants.AOP.FLUSH(M.aop)
+            qt_constants.SSE.RESET(M.sse)
+            last_pcm_range = { start_us = 0, end_us = 0 }
+        end
+        -- TMB handles clip transitions autonomously in C++.
+        -- send_mix_params_to_tmb() already invalidated the C++ mix cache.
+        -- Pump continues — next decode_mix_and_send_to_sse fetches fresh data.
+        logger.debug("audio_playback", string.format(
+            "apply_mix: %d track(s), tracks_changed=%s",
+            #mix_params, tostring(tracks_changed)))
         return
     end
 
-    -- COLD PATH: track set changed — reset SSE and restart
-
-    -- Clear PCM cache (stale data from previous track set)
-    last_pcm_range = { start_us = 0, end_us = 0 }
-
-
-    if was_playing then
-        M.media_time_us = edit_time_us
-        M.playing = false
-        M._cancel_pump()
-        qt_constants.AOP.STOP(M.aop)
-        qt_constants.AOP.FLUSH(M.aop)
-    elseif edit_time_us then
-        M.media_time_us = edit_time_us
+    -- Stopped: store position, reset SSE for next start
+    if tracks_changed then
+        last_pcm_range = { start_us = 0, end_us = 0 }
+        qt_constants.SSE.RESET(M.sse)
     end
-
-    -- Reset SSE (clear buffered audio from previous clips)
-    qt_constants.SSE.RESET(M.sse)
-
-    if was_playing and M.has_audio then
-        M.media_time_us = math.max(0, math.min(edit_time_us, M.max_media_time_us))
-        reanchor(M.media_time_us, M.speed, M.quality_mode)
-        M.decode_mix_and_send_to_sse()
-        advance_sse_past_codec_delay()
-        qt_constants.AOP.START(M.aop)
-        M.playing = true
-        M._start_pump()
+    if edit_time_us then
+        M.media_time_us = edit_time_us
     end
 
     logger.debug("audio_playback", string.format(
-        "apply_mix: %d track(s), tracks_changed=%s", #mix_params, tostring(tracks_changed)))
+        "apply_mix: %d track(s), tracks_changed=%s",
+        #mix_params, tostring(tracks_changed)))
 end
 
 --- Refresh mix volumes mid-playback (mute/solo/volume change, same track set).

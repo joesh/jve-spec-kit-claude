@@ -605,7 +605,7 @@ do
     print("  cold swap (track index change) → reset passed")
 end
 
-print("\n--- F6.6: cold swap while playing → stop + restart ---")
+print("\n--- F6.6: track change while playing → hot update (TMB handles transition) ---")
 do
     reset_mocks()
     teardown()
@@ -623,20 +623,47 @@ do
     aop_stop_calls = 0
     aop_start_calls = 0
 
-    -- Provide PCM for restart decode
-    mixed_audio_response = make_pcm(100, CHANNELS, 0, 0.5)
-
-    -- Cold swap (track added) while playing → must stop and restart
+    -- Track change while playing → TMB handles it, no stop/restart
     audio_playback.apply_mix(mock_tmb, {
         { track_index = 1, volume = 1.0, muted = false, soloed = false },
         { track_index = 2, volume = 1.0, muted = false, soloed = false },
     }, 5000000)
 
-    assert(aop_stop_calls > 0, "Cold swap while playing must stop AOP")
-    assert(aop_start_calls > 0, "Cold swap while playing must restart AOP")
-    assert(audio_playback.playing == true, "Should resume playing after cold swap")
+    assert(aop_stop_calls == 0, "Track change during playback must NOT stop AOP (TMB handles it)")
+    assert(audio_playback.playing == true, "Should remain playing")
 
-    print("  cold swap while playing → stop + restart passed")
+    print("  track change while playing → hot update passed")
+end
+
+print("\n--- F6.6b: all tracks removed during playback → AOP stops ---")
+do
+    reset_mocks()
+    teardown()
+    init_test_session()
+
+    local mock_tmb = "test_tmb"
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+        { track_index = 2, volume = 1.0, muted = false, soloed = false },
+    }, 0)
+    audio_playback.set_max_time(10000000)
+    audio_playback.media_time_us = 5000000
+
+    -- Simulate playing state
+    audio_playback.playing = true
+    aop_stop_calls = 0
+
+    -- Remove all tracks during playback
+    audio_playback.apply_mix(mock_tmb, {}, 5000000)
+
+    assert(audio_playback.has_audio == false,
+        "has_audio must be false after removing all tracks")
+    assert(audio_playback.playing == false,
+        "Must stop playing when all audio tracks removed")
+    assert(aop_stop_calls > 0,
+        "Must stop AOP when all audio tracks removed during playback")
+
+    print("  all tracks removed during playback → AOP stops passed")
 end
 
 print("\n--- F6.7: apply_mix with empty params → has_audio = false ---")
