@@ -84,6 +84,7 @@ struct VideoResult {
     int64_t clip_start_frame;     // timeline coords
     int64_t clip_end_frame;       // timeline coords
     bool offline;
+    bool pending = false;   // true = stale frame returned, async decode in progress
 };
 
 // Timeline media buffer — owns readers and clip layout per track,
@@ -198,7 +199,9 @@ private:
             int32_t par_den = 1;
         };
         std::map<int64_t, CachedFrame> video_cache; // key = timeline_frame
-        static constexpr size_t MAX_VIDEO_CACHE = 72;
+        // Must hold at least 2 × PRE_BUFFER_BATCH (48) so current clip + next
+        // clip pre-buffer don't thrash each other via eviction.
+        static constexpr size_t MAX_VIDEO_CACHE = 144;
 
         // Audio PCM cache (pre-buffered at clip boundaries)
         struct CachedAudio {
@@ -209,6 +212,11 @@ private:
         };
         std::vector<CachedAudio> audio_cache;
         static constexpr size_t MAX_AUDIO_CACHE = 4;
+
+        // Stale-return buffer: last frame displayed via GetVideoFrame (Play cache hit).
+        // Returned on cache miss during Play so main thread never blocks.
+        CachedFrame last_displayed;
+        bool has_last_displayed = false;
     };
 
     std::mutex m_tracks_mutex;

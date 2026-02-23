@@ -703,6 +703,8 @@ static int lua_emp_tmb_get_video_frame(lua_State* L) {
     lua_setfield(L, -2, "clip_end_frame");
     lua_pushboolean(L, result.offline);
     lua_setfield(L, -2, "offline");
+    lua_pushboolean(L, result.pending);
+    lua_setfield(L, -2, "pending");
 
     return 2;
 }

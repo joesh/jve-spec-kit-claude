@@ -110,6 +110,14 @@ void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInf
         }
     }
 
+    // Invalidate last_displayed if its clip was removed from the layout.
+    // Prevents stale-return path from showing frames from deleted clips.
+    if (ts.has_last_displayed &&
+        new_clip_ids.find(ts.last_displayed.clip_id) == new_clip_ids.end()) {
+        ts.has_last_displayed = false;
+        ts.last_displayed = {};
+    }
+
     ts.clips = clips;
 }
 
@@ -179,9 +187,10 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
             int64_t boundary = (direction >= 0) ? current->timeline_end() : current->timeline_start;
             int64_t distance = std::abs(frame - boundary);
 
-            // Pre-buffer threshold: ~2 seconds of frames at assumed 24fps
-            // (actual rate doesn't matter much — this is just a heuristic)
-            constexpr int64_t PRE_BUFFER_THRESHOLD = 48;
+            // Pre-buffer threshold: ~4 seconds of frames at assumed 24fps.
+            // Increased to 96 to give workers more lead time for non-blocking
+            // Play-mode video (stale-return needs frames ready on next tick).
+            constexpr int64_t PRE_BUFFER_THRESHOLD = 96;
 
             if (distance < PRE_BUFFER_THRESHOLD) {
                 // Find next clip in playback direction
@@ -202,24 +211,32 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
                     // Video pre-buffer (video tracks only — audio tracks don't
                     // need video frame decode-ahead)
                     if (track.type == TrackType::Video) {
-                        int64_t entry_frame = (direction >= 0)
-                            ? next->source_in
-                            : next->source_in + next->duration - 1;
                         int64_t entry_tl_frame = (direction >= 0)
                             ? next->timeline_start
                             : next->timeline_end() - 1;
 
-                        PreBufferJob video_job{};
-                        video_job.type = PreBufferJob::VIDEO;
-                        video_job.track = track;
-                        video_job.clip_id = next->clip_id;
-                        video_job.media_path = next->media_path;
-                        video_job.source_frame = entry_frame;
-                        video_job.timeline_frame = entry_tl_frame;
-                        video_job.rate = next->rate();
-                        video_job.direction = direction;
-                        video_job.clip_duration = next->duration;
-                        submit_pre_buffer(video_job);
+                        // Skip if entry frame already cached (prevents redundant
+                        // re-decoding that wastes CPU and churns the cache).
+                        bool already_cached = (ts.video_cache.find(entry_tl_frame) != ts.video_cache.end()
+                            && ts.video_cache.at(entry_tl_frame).clip_id == next->clip_id);
+
+                        if (!already_cached) {
+                            int64_t entry_frame = (direction >= 0)
+                                ? next->source_in
+                                : next->source_in + next->duration - 1;
+
+                            PreBufferJob video_job{};
+                            video_job.type = PreBufferJob::VIDEO;
+                            video_job.track = track;
+                            video_job.clip_id = next->clip_id;
+                            video_job.media_path = next->media_path;
+                            video_job.source_frame = entry_frame;
+                            video_job.timeline_frame = entry_tl_frame;
+                            video_job.rate = next->rate();
+                            video_job.direction = direction;
+                            video_job.clip_duration = next->duration;
+                            submit_pre_buffer(video_job);
+                        }
                     }
 
                     // Audio pre-buffer (audio tracks only — video tracks don't
@@ -350,8 +367,84 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         result.rotation = cache_it->second.rotation;
         result.par_num = cache_it->second.par_num;
         result.par_den = cache_it->second.par_den;
+        // Update stale-return buffer for future Play-mode cache misses
+        ts.last_displayed = cache_it->second;
+        ts.has_last_displayed = true;
         return result;
     }
+
+    // ── Cache miss: branch on Play vs Scrub/Park ──
+    int direction = m_playhead_direction.load(std::memory_order_relaxed);
+
+    if (direction != 0 && ts.has_last_displayed) {
+        // Play mode with stale frame available: return stale immediately,
+        // submit async decode job. Main thread never blocks on video decode
+        // → audio pump fires on schedule → no AOP underrun.
+        assert(ts.last_displayed.frame &&
+            "GetVideoFrame: last_displayed has null frame but has_last_displayed=true");
+
+        // Snapshot stale metadata and clip locals under tracks_lock
+        auto stale_frame = ts.last_displayed.frame;
+        auto stale_clip_id_display = ts.last_displayed.clip_id;
+        int stale_rotation = ts.last_displayed.rotation;
+        int32_t stale_par_num = ts.last_displayed.par_num;
+        int32_t stale_par_den = ts.last_displayed.par_den;
+        int64_t stale_source_frame = ts.last_displayed.source_frame;
+
+        // Copy locals needed for pre-buffer job submission.
+        // Use REMAINING frames (not total clip duration) to prevent the
+        // batch from decoding past clip end into the next clip's region.
+        std::string job_clip_id = clip->clip_id;
+        std::string job_media_path = clip->media_path;
+        Rate job_rate = clip->rate();
+        int64_t remaining_frames = clip->timeline_end() - timeline_frame;
+
+        // Release tracks_lock BEFORE acquiring pool_lock (lock ordering:
+        // pool → tracks in worker, so main thread must not reverse it).
+        tracks_lock.unlock();
+
+        // Check offline registry — non-blocking (~1µs hashmap lookup).
+        // Ensures Lua learns about offline clips during playback.
+        {
+            std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
+            auto offline_it = m_offline.find(job_media_path);
+            if (offline_it != m_offline.end()) {
+                result.offline = true;
+                result.frame = nullptr;
+                return result;
+            }
+        }
+
+        // Return stale frame
+        result.frame = stale_frame;
+        result.clip_id = stale_clip_id_display;
+        result.rotation = stale_rotation;
+        result.par_num = stale_par_num;
+        result.par_den = stale_par_den;
+        result.source_frame = stale_source_frame;
+        result.pending = true;
+
+        // Preserve clip metadata from the CURRENT clip (not stale) for
+        // clip_fps_num/den and clip_start/end_frame — already set above.
+
+        // Submit async VIDEO decode job to worker pool
+        PreBufferJob job{};
+        job.type = PreBufferJob::VIDEO;
+        job.track = track;
+        job.clip_id = job_clip_id;
+        job.media_path = job_media_path;
+        job.source_frame = source_frame;
+        job.timeline_frame = timeline_frame;
+        job.rate = job_rate;
+        job.direction = direction;
+        job.clip_duration = remaining_frames;
+        submit_pre_buffer(job);
+
+        m_video_cache_misses.fetch_add(1, std::memory_order_relaxed);
+        return result;
+    }
+
+    // ── Scrub/Park (or Play with no stale frame): synchronous decode ──
 
     // Release tracks lock before acquiring pool lock (avoid deadlock)
     std::string media_path = clip->media_path;
@@ -406,6 +499,11 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
 
             cache[timeline_frame] = {clip_id, source_frame, result.frame,
                                      result.rotation, result.par_num, result.par_den};
+
+            // Update stale-return buffer
+            tit->second.last_displayed = {clip_id, source_frame, result.frame,
+                                          result.rotation, result.par_num, result.par_den};
+            tit->second.has_last_displayed = true;
         }
     } else {
         // Decode failure: clip exists, reader opened, but frame can't be decoded

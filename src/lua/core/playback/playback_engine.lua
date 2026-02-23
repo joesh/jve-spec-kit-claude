@@ -914,6 +914,12 @@ function PlaybackEngine:_display_frame(frame_idx)
             "PlaybackEngine:_display_frame: metadata.par_den must be >= 1 at frame %d, got %s",
             frame_idx, tostring(metadata.par_den)))
 
+        if metadata.pending then
+            logger.debug("playback_engine",
+                "_display_frame: pending (stale) frame at %d, async decode in progress",
+                frame_idx)
+        end
+
         local is_offline = metadata.offline
 
         -- Detect clip switch -> rotation + PAR callbacks

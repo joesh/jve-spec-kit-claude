@@ -2049,6 +2049,223 @@ private slots:
                  "clipB should be re-pre-buffered after park/resume");
         QCOMPARE(rb.clip_id, std::string("clipB"));
     }
+
+    // ── Non-blocking GetVideoFrame during Play mode ──
+
+    void test_play_mode_cache_miss_returns_pending_stale() {
+        // During Play (direction != 0), a TMB cache miss must return the
+        // stale (last_displayed) frame with pending=true instead of blocking
+        // on synchronous video decode. This prevents audio pump starvation.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Park mode: decode frame 0 synchronously (populates last_displayed)
+        tmb->SetPlayhead(0, 0, 0.0f);
+        auto r0 = tmb->GetVideoFrame(V1, 0);
+        QVERIFY(r0.frame != nullptr);
+        QVERIFY(!r0.pending);
+
+        // Switch to Play mode
+        tmb->SetPlayhead(0, 1, 1.0f);
+
+        // Frame 50 is NOT in the TMB video cache (never decoded).
+        // In Play mode, GetVideoFrame should return stale frame + pending=true.
+        auto r50 = tmb->GetVideoFrame(V1, 50);
+        QVERIFY2(r50.frame != nullptr,
+                 "Play-mode cache miss must return stale frame, not nullptr");
+        QVERIFY2(r50.pending,
+                 "Play-mode cache miss must set pending=true");
+        // Stale frame should be the same pointer as the last decoded frame
+        QVERIFY2(r50.frame.get() == r0.frame.get(),
+                 "Stale frame should match last_displayed");
+        // Stale metadata (rotation, PAR) should come from last_displayed
+        QCOMPARE(r50.rotation, r0.rotation);
+        QCOMPARE(r50.par_num, r0.par_num);
+        QCOMPARE(r50.par_den, r0.par_den);
+
+        // Give worker time to decode frame 50 asynchronously
+        QThread::msleep(500);
+
+        // Now frame 50 should be in the cache (worker decoded it)
+        auto r50b = tmb->GetVideoFrame(V1, 50);
+        QVERIFY2(r50b.frame != nullptr,
+                 "Frame 50 should be available after async decode");
+        QVERIFY2(!r50b.pending,
+                 "Cache hit should not be pending");
+    }
+
+    void test_scrub_mode_cache_miss_returns_sync_frame() {
+        // During Scrub/Park (direction == 0), a TMB cache miss must decode
+        // synchronously and return the actual frame with pending=false.
+        // Visual latency matters more than audio pump protection.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        auto path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Park mode (direction=0): decode frame 30 — should be synchronous
+        tmb->SetPlayhead(30, 0, 0.0f);
+        auto r = tmb->GetVideoFrame(V1, 30);
+        QVERIFY2(r.frame != nullptr,
+                 "Scrub-mode decode must return actual frame");
+        QVERIFY2(!r.pending,
+                 "Scrub-mode decode must not be pending");
+        QCOMPARE(r.clip_id, std::string("clipA"));
+        QCOMPARE(r.source_frame, (int64_t)30);
+    }
+
+    void test_play_mode_no_stale_falls_through_to_sync() {
+        // When Play mode has no last_displayed (first frame ever), it must
+        // fall through to synchronous decode (no stale frame to return).
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        auto path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Jump straight to Play mode without prior decode (no last_displayed)
+        tmb->SetPlayhead(0, 1, 1.0f);
+        auto r = tmb->GetVideoFrame(V1, 0);
+        QVERIFY2(r.frame != nullptr,
+                 "Play-mode with no stale frame must fall through to sync decode");
+        QVERIFY2(!r.pending,
+                 "Sync fallback should not be pending");
+    }
+
+    void test_play_mode_stale_preserves_current_clip_metadata() {
+        // When returning a stale frame during Play, the result's clip metadata
+        // (clip_fps_num/den, clip_start/end_frame) must reflect the CURRENT
+        // clip, not the stale clip. This prevents playback_engine's clip-switch
+        // detection from misfiring.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        // Two clips with different rates to distinguish metadata
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 50, 0, 24, 1, 1.0f},
+            {"clipB", path, 50, 50, 0, 30, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Park-mode: decode frame 0 of clipA (sets last_displayed)
+        tmb->SetPlayhead(0, 0, 0.0f);
+        auto r0 = tmb->GetVideoFrame(V1, 0);
+        QVERIFY(r0.frame != nullptr);
+
+        // Play mode, request frame 55 (clipB, rate 30/1).
+        // Should return stale frame from clipA but with clipB's metadata.
+        tmb->SetPlayhead(55, 1, 1.0f);
+        auto r55 = tmb->GetVideoFrame(V1, 55);
+        QVERIFY(r55.pending);
+        // Current clip metadata must reflect clipB
+        QCOMPARE(r55.clip_fps_num, (int32_t)30);
+        QCOMPARE(r55.clip_fps_den, (int32_t)1);
+        QCOMPARE(r55.clip_start_frame, (int64_t)50);
+        QCOMPARE(r55.clip_end_frame, (int64_t)100);
+    }
+
+    // ── NSF: offline clip during Play mode must surface offline ──
+
+    void test_play_mode_offline_clip_surfaces_offline() {
+        // NSF: When a clip is known-offline (registered in m_offline), the stale
+        // return path must check the offline registry and return offline=true.
+        // Without this check, the Lua side never learns the clip is offline
+        // during playback — the UI won't show the offline indicator.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        // clipA: valid (for priming last_displayed)
+        // clipB: offline path
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 50, 0, 24, 1, 1.0f},
+            {"clipB", "/nonexistent/offline.mp4", 50, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Park-mode: decode clipA frame 0 to populate last_displayed
+        tmb->SetPlayhead(0, 0, 0.0f);
+        auto r0 = tmb->GetVideoFrame(V1, 0);
+        QVERIFY(r0.frame != nullptr);
+        QVERIFY(!r0.offline);
+
+        // Force clipB's path into the offline registry by probing it once in park mode
+        tmb->SetPlayhead(50, 0, 0.0f);
+        auto r50_park = tmb->GetVideoFrame(V1, 50);
+        QVERIFY(r50_park.offline);
+
+        // Now switch to Play mode and request clipB frame
+        tmb->SetPlayhead(55, 1, 1.0f);
+        auto r55 = tmb->GetVideoFrame(V1, 55);
+
+        // NSF assertion: offline must be surfaced, not hidden behind stale frame
+        QVERIFY2(r55.offline,
+                 "Play-mode GetVideoFrame must surface offline for known-offline clips, "
+                 "not silently return stale frame");
+        QVERIFY2(r55.frame == nullptr,
+                 "Offline result must have nullptr frame");
+    }
+
+    // ── NSF: SetTrackClips invalidates last_displayed for removed clips ──
+
+    void test_set_track_clips_invalidates_last_displayed() {
+        // NSF: When a clip is removed from the track layout, last_displayed
+        // referencing that clip must be invalidated. Otherwise stale frames
+        // from a removed clip silently appear during playback.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        auto path = m_testVideoPath.toStdString();
+
+        // Setup: clipA and clipB
+        std::vector<ClipInfo> both = {
+            {"clipA", path, 0, 50, 0, 24, 1, 1.0f},
+            {"clipB", path, 50, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, both);
+
+        // Decode frame 0 of clipA (populates last_displayed with clipA data)
+        tmb->SetPlayhead(0, 0, 0.0f);
+        auto r0 = tmb->GetVideoFrame(V1, 0);
+        QVERIFY(r0.frame != nullptr);
+        QCOMPARE(r0.clip_id, std::string("clipA"));
+
+        // Remove clipA, keep only clipB
+        std::vector<ClipInfo> b_only = {
+            {"clipB", path, 50, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, b_only);
+
+        // Play mode: request frame 55 (clipB). If last_displayed was NOT
+        // invalidated, this would return a stale frame from clipA (removed).
+        // With proper invalidation, it falls through to sync decode.
+        tmb->SetPlayhead(55, 1, 1.0f);
+        auto r55 = tmb->GetVideoFrame(V1, 55);
+        QVERIFY2(r55.frame != nullptr,
+                 "clipB frame should decode (sync fallback after last_displayed invalidated)");
+        QVERIFY2(!r55.pending,
+                 "Sync decode should not be pending");
+        QCOMPARE(r55.clip_id, std::string("clipB"));
+    }
 };
 
 QTEST_MAIN(TestTimelineMediaBuffer)
