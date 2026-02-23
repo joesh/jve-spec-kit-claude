@@ -285,6 +285,13 @@ void PlaybackController::Play(int direction, float speed) {
     JVE_ASSERT(speed > 0,
         "PlaybackController::Play: speed must be positive");
 
+    // Direction change invalidates clip windows: next/prev clips were resolved
+    // for the OLD direction, need fresh resolution for NEW direction.
+    int old_direction = m_direction.load(std::memory_order_relaxed);
+    if (old_direction != 0 && old_direction != direction) {
+        InvalidateClipWindows();
+    }
+
     m_direction.store(direction, std::memory_order_relaxed);
     m_speed.store(speed, std::memory_order_relaxed);
     m_hit_boundary.store(false, std::memory_order_relaxed);

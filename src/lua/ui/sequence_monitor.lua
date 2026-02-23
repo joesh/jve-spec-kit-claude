@@ -111,6 +111,10 @@ function SequenceMonitor.new(config)
         if self.sequence_id == sequence_id then
             self.engine:_refresh_content_bounds()
             self.total_frames = self.engine.total_frames
+            -- Invalidate C++ clip windows so NeedClips fires on next tick
+            if self.engine._playback_controller and qt_constants.PLAYBACK then
+                qt_constants.PLAYBACK.INVALIDATE_CLIP_WINDOWS(self.engine._playback_controller)
+            end
             -- Re-feed TMB clips (clip layout may have changed)
             if self.engine._tmb then
                 self.engine:_send_clips_to_tmb(math.floor(self.engine:get_position()))
