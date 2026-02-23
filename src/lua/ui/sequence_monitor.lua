@@ -205,6 +205,11 @@ function SequenceMonitor:_create_widgets()
             content_layout, self._video_surface, 1)
     end
 
+    -- Wire video surface to PlaybackEngine for C++ CVDisplayLink playback
+    if self.engine.set_surface then
+        self.engine:set_surface(self._video_surface)
+    end
+
     -- Mark bar (ScriptableTimeline widget)
     assert(qt_constants.WIDGET.CREATE_TIMELINE,
         "SequenceMonitor: CREATE_TIMELINE not available")

@@ -120,7 +120,26 @@ function PlaybackEngine.new(config)
     self._audio_track_indices = {}   -- audio track indices for TMB audio path
     self._tmb_clip_window = nil      -- {lo, hi, direction} — valid frame range for current clip feed
 
+    -- PlaybackController (C++ CVDisplayLink-driven playback)
+    self._playback_controller = nil
+    self._video_surface = nil
+
     return self
+end
+
+--------------------------------------------------------------------------------
+-- Surface Setup (called after widget creation)
+--------------------------------------------------------------------------------
+
+--- Set video surface for C++ PlaybackController.
+-- Must be called after the video surface widget is created.
+-- @param surface userdata GPUVideoSurface widget
+function PlaybackEngine:set_surface(surface)
+    assert(surface, "PlaybackEngine:set_surface: surface is nil")
+    self._video_surface = surface
+    if self._playback_controller then
+        qt_constants.PLAYBACK.SET_SURFACE(self._playback_controller, surface)
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -175,6 +194,9 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames)
     -- TMB lifecycle: close previous, create new
     self:_close_tmb()
     self:_create_tmb()
+
+    -- PlaybackController setup
+    self:_setup_playback_controller()
 
     -- Initial clip feed at starting position
     self:_send_clips_to_tmb(0)
@@ -245,6 +267,291 @@ function PlaybackEngine:_close_tmb()
     self._video_track_indices = {}
     self._audio_track_indices = {}
     self._tmb_clip_window = nil
+end
+
+--------------------------------------------------------------------------------
+-- PlaybackController Setup
+--------------------------------------------------------------------------------
+
+--- Create and configure C++ PlaybackController for CVDisplayLink-driven playback.
+function PlaybackEngine:_setup_playback_controller()
+    local PLAYBACK = qt_constants.PLAYBACK
+    if not PLAYBACK then
+        -- PLAYBACK bindings not available (test mode without C++)
+        logger.debug("playback_engine", "PLAYBACK bindings not available, using Lua tick")
+        return
+    end
+
+    -- Close previous controller if any
+    if self._playback_controller then
+        PLAYBACK.CLOSE(self._playback_controller)
+        self._playback_controller = nil
+    end
+
+    -- Create new controller
+    local pc = PLAYBACK.CREATE()
+    if not pc then
+        logger.warn("playback_engine", "PlaybackController not available on this platform")
+        return
+    end
+    self._playback_controller = pc
+
+    -- Configure: TMB, bounds, video tracks
+    PLAYBACK.SET_TMB(pc, self._tmb)
+    PLAYBACK.SET_BOUNDS(pc, self.total_frames, self.fps_num, self.fps_den)
+    PLAYBACK.SET_VIDEO_TRACKS(pc, self._video_track_indices)
+
+    -- Wire surface if already set
+    if self._video_surface then
+        PLAYBACK.SET_SURFACE(pc, self._video_surface)
+    end
+
+    -- Wire NeedClips callback: C++ fires when approaching clip window edge
+    local engine = self
+    PLAYBACK.SET_NEED_CLIPS_CALLBACK(pc, function(frame, direction, track_type)
+        engine:_on_need_clips(frame, direction, track_type)
+    end)
+
+    -- Wire PositionCallback: C++ fires coalesced position updates for UI
+    PLAYBACK.SET_POSITION_CALLBACK(pc, function(frame, stopped)
+        engine:_on_controller_position(frame, stopped)
+    end)
+
+    -- Wire ClipTransitionCallback: C++ fires when displayed clip changes
+    PLAYBACK.SET_CLIP_TRANSITION_CALLBACK(pc, function(clip_id, rotation, par_num, par_den, is_offline)
+        engine:_on_clip_transition(clip_id, rotation, par_num, par_den, is_offline)
+    end)
+
+    logger.debug("playback_engine", "PlaybackController created and configured")
+end
+
+--- NeedClips callback: C++ requests clips when approaching window edge.
+function PlaybackEngine:_on_need_clips(frame, direction, track_type)
+    assert(type(frame) == "number", string.format(
+        "PlaybackEngine:_on_need_clips: frame must be number, got %s", type(frame)))
+    assert(direction == 1 or direction == -1 or direction == 0, string.format(
+        "PlaybackEngine:_on_need_clips: direction must be -1/0/1, got %s", tostring(direction)))
+    assert(track_type == "video" or track_type == "audio", string.format(
+        "PlaybackEngine:_on_need_clips: track_type must be 'video' or 'audio', got %s",
+        tostring(track_type)))
+
+    logger.debug("playback_engine", string.format(
+        "NeedClips: frame=%d dir=%d type=%s", frame, direction, track_type))
+
+    -- Update direction for clip window tracking
+    self.direction = direction
+
+    if track_type == "video" then
+        self:_send_video_clips_to_tmb(frame)
+    else
+        self:_send_audio_clips_only(frame)
+    end
+end
+
+--- Position callback from C++: update UI playhead.
+function PlaybackEngine:_on_controller_position(frame, stopped)
+    assert(type(frame) == "number", string.format(
+        "PlaybackEngine:_on_controller_position: frame must be number, got %s", type(frame)))
+    assert(type(stopped) == "boolean", string.format(
+        "PlaybackEngine:_on_controller_position: stopped must be boolean, got %s", type(stopped)))
+
+    self._position = frame
+    self._on_position_changed(frame)
+
+    if stopped then
+        self.state = "stopped"
+        self.direction = 0
+        self:_stop_audio()
+    end
+end
+
+--- Clip transition callback from C++: update rotation/PAR.
+function PlaybackEngine:_on_clip_transition(clip_id, rotation, par_num, par_den, is_offline)
+    assert(type(clip_id) == "string", string.format(
+        "PlaybackEngine:_on_clip_transition: clip_id must be string, got %s", type(clip_id)))
+    assert(type(rotation) == "number", string.format(
+        "PlaybackEngine:_on_clip_transition: rotation must be number, got %s", type(rotation)))
+    assert(type(par_num) == "number" and par_num >= 1, string.format(
+        "PlaybackEngine:_on_clip_transition: par_num must be >= 1, got %s", tostring(par_num)))
+    assert(type(par_den) == "number" and par_den >= 1, string.format(
+        "PlaybackEngine:_on_clip_transition: par_den must be >= 1, got %s", tostring(par_den)))
+    assert(type(is_offline) == "boolean", string.format(
+        "PlaybackEngine:_on_clip_transition: is_offline must be boolean, got %s", type(is_offline)))
+
+    if clip_id ~= self.current_clip_id then
+        self.current_clip_id = clip_id
+        -- Offline frames are upright with square pixels
+        self._on_set_rotation(is_offline and 0 or rotation)
+        self._on_set_par(
+            is_offline and 1 or par_num,
+            is_offline and 1 or par_den)
+    end
+end
+
+--- Send only video clips to TMB (for NeedClips VIDEO callback).
+function PlaybackEngine:_send_video_clips_to_tmb(frame)
+    assert(self._tmb, "PlaybackEngine:_send_video_clips_to_tmb: no TMB (call load_sequence first)")
+    assert(self.sequence, "PlaybackEngine:_send_video_clips_to_tmb: no sequence loaded")
+
+    local EMP = qt_constants.EMP
+    local current_entries = self.sequence:get_video_at(frame)
+
+    local track_clips = {}
+    for _, entry in ipairs(current_entries) do
+        local idx = entry.track.track_index
+        if not track_clips[idx] then
+            track_clips[idx] = {}
+        end
+        track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(entry, 1.0)
+    end
+
+    -- Next clips (direction-aware)
+    for _, entry in ipairs(current_entries) do
+        local clip_end = entry.clip.timeline_start + entry.clip.duration
+        local nexts
+        if self.direction >= 0 then
+            nexts = self.sequence:get_next_video(clip_end)
+        else
+            nexts = self.sequence:get_prev_video(entry.clip.timeline_start)
+        end
+        for _, ne in ipairs(nexts) do
+            local idx = ne.track.track_index
+            if not track_clips[idx] then
+                track_clips[idx] = {}
+            end
+            local dominated = false
+            for _, existing in ipairs(track_clips[idx]) do
+                if existing.clip_id == ne.clip.id then
+                    dominated = true
+                    break
+                end
+            end
+            if not dominated then
+                track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne, 1.0)
+            end
+        end
+    end
+
+    -- Gap: try finding next clip
+    if #current_entries == 0 then
+        local next_entries = self.sequence:get_next_video(frame)
+        for _, ne in ipairs(next_entries or {}) do
+            local idx = ne.track.track_index
+            if not track_clips[idx] then
+                track_clips[idx] = {}
+            end
+            track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne, 1.0)
+        end
+    end
+
+    -- Feed to TMB + compute window
+    local indices = {}
+    local window_lo, window_hi = 0, self.total_frames
+    for idx, clips in pairs(track_clips) do
+        EMP.TMB_SET_TRACK_CLIPS(self._tmb, "video", idx, clips)
+        indices[#indices + 1] = idx
+    end
+    table.sort(indices, function(a, b) return a > b end)
+    self._video_track_indices = indices
+
+    -- Update PlaybackController video tracks
+    if self._playback_controller then
+        qt_constants.PLAYBACK.SET_VIDEO_TRACKS(self._playback_controller, indices)
+    end
+
+    -- Compute clip window
+    for _, entry in ipairs(current_entries) do
+        local c = entry.clip
+        window_lo = math.max(window_lo, c.timeline_start)
+        window_hi = math.min(window_hi, c.timeline_start + c.duration)
+    end
+
+    -- Report clip window to C++
+    if self._playback_controller and window_hi > window_lo then
+        qt_constants.PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "video", window_lo, window_hi)
+    end
+end
+
+--- Send only audio clips to TMB (for NeedClips AUDIO callback).
+function PlaybackEngine:_send_audio_clips_only(frame)
+    assert(self._tmb, "PlaybackEngine:_send_audio_clips_only: no TMB (call load_sequence first)")
+    assert(self.sequence, "PlaybackEngine:_send_audio_clips_only: no sequence loaded")
+
+    local EMP = qt_constants.EMP
+    local audio_entries = self.sequence:get_audio_at(frame)
+
+    local audio_track_clips = {}
+    for _, entry in ipairs(audio_entries) do
+        local idx = entry.track.track_index
+        if not audio_track_clips[idx] then
+            audio_track_clips[idx] = {}
+        end
+        local sr = self:_compute_audio_speed_ratio(entry)
+        audio_track_clips[idx][#audio_track_clips[idx] + 1] = self:_build_tmb_clip(entry, sr)
+    end
+
+    -- Direction-aware next/prev
+    for _, entry in ipairs(audio_entries) do
+        local clip_end = entry.clip.timeline_start + entry.clip.duration
+        local nexts
+        if self.direction >= 0 then
+            nexts = self.sequence:get_next_audio(clip_end)
+        else
+            nexts = self.sequence:get_prev_audio(entry.clip.timeline_start)
+        end
+        for _, ne in ipairs(nexts) do
+            local idx = ne.track.track_index
+            if not audio_track_clips[idx] then
+                audio_track_clips[idx] = {}
+            end
+            local dominated = false
+            for _, existing in ipairs(audio_track_clips[idx]) do
+                if existing.clip_id == ne.clip.id then
+                    dominated = true
+                    break
+                end
+            end
+            if not dominated then
+                local sr = self:_compute_audio_speed_ratio(ne)
+                audio_track_clips[idx][#audio_track_clips[idx] + 1] = self:_build_tmb_clip(ne, sr)
+            end
+        end
+    end
+
+    -- Gap: try next audio
+    if #audio_entries == 0 then
+        local next_audio = self.sequence:get_next_audio(frame)
+        for _, ne in ipairs(next_audio or {}) do
+            local idx = ne.track.track_index
+            if not audio_track_clips[idx] then
+                audio_track_clips[idx] = {}
+            end
+            local sr = self:_compute_audio_speed_ratio(ne)
+            audio_track_clips[idx][#audio_track_clips[idx] + 1] = self:_build_tmb_clip(ne, sr)
+        end
+    end
+
+    -- Feed to TMB
+    local audio_indices = {}
+    local window_lo, window_hi = 0, self.total_frames
+    for idx, clips in pairs(audio_track_clips) do
+        EMP.TMB_SET_TRACK_CLIPS(self._tmb, "audio", idx, clips)
+        audio_indices[#audio_indices + 1] = idx
+    end
+    table.sort(audio_indices)
+    self._audio_track_indices = audio_indices
+
+    -- Compute audio clip window
+    for _, entry in ipairs(audio_entries) do
+        local c = entry.clip
+        window_lo = math.max(window_lo, c.timeline_start)
+        window_hi = math.min(window_hi, c.timeline_start + c.duration)
+    end
+
+    -- Report clip window to C++
+    if self._playback_controller and window_hi > window_lo then
+        qt_constants.PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "audio", window_lo, window_hi)
+    end
 end
 
 --- Feed TMB with current + next clips for each video and audio track.
@@ -534,7 +841,14 @@ function PlaybackEngine:shuttle(dir)
                 audio_playback.set_speed(dir * 1)
                 audio_playback.start()
             end
-            self:_schedule_tick()
+            -- Resume via PlaybackController or Lua tick
+            if self._playback_controller then
+                local PLAYBACK = qt_constants.PLAYBACK
+                PLAYBACK.SET_SHUTTLE_MODE(self._playback_controller, true)
+                PLAYBACK.PLAY(self._playback_controller, dir, 1.0)
+            else
+                self:_schedule_tick()
+            end
             return
         else
             return  -- same direction as boundary, stay latched
@@ -575,7 +889,14 @@ function PlaybackEngine:shuttle(dir)
         self:_try_audio("_sync_audio")
     end
 
-    self:_schedule_tick()
+    -- Delegate to C++ PlaybackController if available
+    if self._playback_controller then
+        local PLAYBACK = qt_constants.PLAYBACK
+        PLAYBACK.SET_SHUTTLE_MODE(self._playback_controller, true)
+        PLAYBACK.PLAY(self._playback_controller, self.direction, self.speed)
+    else
+        self:_schedule_tick()
+    end
 end
 
 --- K+J or K+L: slow playback at 0.5x
@@ -594,7 +915,15 @@ function PlaybackEngine:slow_play(dir)
 
     qt_constants.EMP.SET_DECODE_MODE("play")
     self:_try_audio("_configure_and_start_audio")
-    self:_schedule_tick()
+
+    -- Delegate to C++ PlaybackController if available
+    if self._playback_controller then
+        local PLAYBACK = qt_constants.PLAYBACK
+        PLAYBACK.SET_SHUTTLE_MODE(self._playback_controller, true)
+        PLAYBACK.PLAY(self._playback_controller, dir, 0.5)
+    else
+        self:_schedule_tick()
+    end
 end
 
 --- Play forward at 1x speed (spacebar).
@@ -613,11 +942,24 @@ function PlaybackEngine:play()
 
     qt_constants.EMP.SET_DECODE_MODE("play")
     self:_try_audio("_configure_and_start_audio")
-    self:_schedule_tick()
+
+    -- Delegate to C++ PlaybackController if available
+    if self._playback_controller then
+        local PLAYBACK = qt_constants.PLAYBACK
+        PLAYBACK.SET_SHUTTLE_MODE(self._playback_controller, false)
+        PLAYBACK.PLAY(self._playback_controller, 1, 1.0)
+    else
+        self:_schedule_tick()
+    end
 end
 
 --- Stop playback.
 function PlaybackEngine:stop()
+    -- Stop C++ PlaybackController if active
+    if self._playback_controller then
+        qt_constants.PLAYBACK.STOP(self._playback_controller)
+    end
+
     self.state = "stopped"
     self.direction = 0
     self.speed = 1
@@ -664,11 +1006,18 @@ function PlaybackEngine:seek(frame_idx)
         self:_stop_audio()
     end
 
-    -- Feed TMB clips for seek position + display via Renderer
+    -- Feed TMB clips for seek position
     if self._tmb then
         self:_send_clips_to_tmb(frame)
     end
-    self:_display_frame(frame)
+
+    -- Delegate seek to C++ PlaybackController (handles frame display)
+    if self._playback_controller then
+        qt_constants.PLAYBACK.SEEK(self._playback_controller, frame)
+    else
+        -- Fallback: display via Lua Renderer
+        self:_display_frame(frame)
+    end
 
     -- Audio resolve + restart/scrub (non-fatal: must not prevent seek)
     self:_try_audio(function(eng)
@@ -757,7 +1106,7 @@ function PlaybackEngine.shutdown_audio_session()
     end
 end
 
---- Destroy engine: close TMB + stop audio.
+--- Destroy engine: close TMB + PlaybackController + stop audio.
 function PlaybackEngine:destroy()
     if self._track_mix_conn then
         Signals.disconnect(self._track_mix_conn)
@@ -765,6 +1114,12 @@ function PlaybackEngine:destroy()
     end
     self:stop()
     self:_close_tmb()
+
+    -- Close PlaybackController
+    if self._playback_controller then
+        qt_constants.PLAYBACK.CLOSE(self._playback_controller)
+        self._playback_controller = nil
+    end
 end
 
 --------------------------------------------------------------------------------

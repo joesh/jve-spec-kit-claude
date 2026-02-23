@@ -77,6 +77,11 @@ The first argument is always the component/subsystem name (e.g., "command_manage
 
 For short-term debug prints that will immediately be removed you may use print.
 
+## Lua Error Handling in C++ Callbacks
+When C++ code calls Lua callbacks (e.g., via `lua_pcall`), **NEVER use qWarning() to log errors** — warnings get buried in voluminous debug output. Instead:
+- Use `JVE_ASSERT(false, err_msg)` to crash with stack trace
+- Lua's assert/error doesn't crash the app — it generates a stack trace and unwinds to the nearest pcall
+- Stack traces are essential for debugging; silent qWarning logs are not
 
 ## CRITICAL: Main Engineering Principles to ALWAYS keep in mind:
 

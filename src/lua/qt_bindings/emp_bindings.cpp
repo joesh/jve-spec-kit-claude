@@ -11,6 +11,8 @@
 
 #include "gpu_video_surface.h"
 #include "cpu_video_surface.h"
+#include "playback_controller.h"
+#include "assert_handler.h"
 #include <QDebug>
 #include <QImage>
 #include <QPainter>
@@ -38,6 +40,7 @@ const char* EMP_READER_METATABLE = "JVE.EMP.Reader";
 const char* EMP_FRAME_METATABLE = "JVE.EMP.Frame";
 const char* EMP_PCM_METATABLE = "JVE.EMP.PcmChunk";
 const char* EMP_TMB_METATABLE = "JVE.EMP.TMB";
+const char* PLAYBACK_CONTROLLER_METATABLE = "JVE.PlaybackController";
 
 // Global registry for shared_ptr instances (prevent premature destruction)
 // Key: Lua userdata address (unique per allocation), Value: shared_ptr
@@ -50,6 +53,7 @@ static std::unordered_map<void*, std::shared_ptr<emp::Reader>> g_readers;
 static std::unordered_map<void*, std::shared_ptr<emp::Frame>> g_frames;
 static std::unordered_map<void*, std::shared_ptr<emp::PcmChunk>> g_pcm_chunks;
 static std::unordered_map<void*, std::shared_ptr<emp::TimelineMediaBuffer>> g_tmb_instances;
+static std::unordered_map<void*, std::unique_ptr<PlaybackController>> g_playback_controllers;
 
 // Helper: Push EMP error to Lua (nil, { code=string, msg=string })
 void push_emp_error(lua_State* L, const emp::Error& err) {
@@ -1148,6 +1152,304 @@ static int lua_emp_surface_set_frame(lua_State* L) {
     return 0;
 }
 
+// ============================================================================
+// PlaybackController bindings
+// ============================================================================
+
+// Helper: get PlaybackController from Lua arg or error
+static PlaybackController* get_playback_controller(lua_State* L, int idx) {
+    void* key = get_map_key(L, idx, PLAYBACK_CONTROLLER_METATABLE);
+    auto it = g_playback_controllers.find(key);
+    if (it == g_playback_controllers.end()) {
+        luaL_error(L, "PLAYBACK: invalid controller handle");
+        return nullptr;
+    }
+    return it->second.get();
+}
+
+// PLAYBACK.CREATE() -> controller
+static int lua_playback_create(lua_State* L) {
+    auto controller = PlaybackController::Create();
+    if (!controller) {
+        return luaL_error(L, "PLAYBACK.CREATE: PlaybackController not available on this platform");
+    }
+
+    void** ud = static_cast<void**>(lua_newuserdata(L, sizeof(void*)));
+    *ud = controller.get();
+    luaL_getmetatable(L, PLAYBACK_CONTROLLER_METATABLE);
+    lua_setmetatable(L, -2);
+
+    void* key = static_cast<void*>(ud);
+    g_playback_controllers[key] = std::move(controller);
+    return 1;
+}
+
+// PLAYBACK.CLOSE(controller)
+static int lua_playback_close(lua_State* L) {
+    void* key = get_map_key(L, 1, PLAYBACK_CONTROLLER_METATABLE);
+    g_playback_controllers.erase(key);
+    return 0;
+}
+
+// PLAYBACK __gc metamethod
+static int lua_playback_gc(lua_State* L) {
+    void* key = get_map_key(L, 1, PLAYBACK_CONTROLLER_METATABLE);
+    g_playback_controllers.erase(key);
+    return 0;
+}
+
+// PLAYBACK.SET_SURFACE(controller, surface_widget)
+static int lua_playback_set_surface(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+
+    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 2, WIDGET_METATABLE));
+    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+    GPUVideoSurface* surface = qobject_cast<GPUVideoSurface*>(qwidget);
+    if (!surface) {
+        return luaL_error(L, "PLAYBACK.SET_SURFACE: widget is not a GPUVideoSurface");
+    }
+
+    controller->SetSurface(surface);
+    return 0;
+}
+
+// PLAYBACK.SET_TMB(controller, tmb)
+static int lua_playback_set_tmb(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    auto tmb = get_tmb(L, 2);
+    controller->SetTMB(tmb.get());
+    return 0;
+}
+
+// PLAYBACK.SET_VIDEO_TRACKS(controller, track_indices_table)
+static int lua_playback_set_video_tracks(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+
+    std::vector<int> indices;
+    int n = static_cast<int>(lua_objlen(L, 2));
+    indices.reserve(static_cast<size_t>(n));
+
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, 2, i);
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "PLAYBACK.SET_VIDEO_TRACKS: element %d is not a number", i);
+        }
+        indices.push_back(static_cast<int>(lua_tointeger(L, -1)));
+        lua_pop(L, 1);
+    }
+
+    controller->SetVideoTracks(indices);
+    return 0;
+}
+
+// PLAYBACK.SET_BOUNDS(controller, total_frames, fps_num, fps_den)
+static int lua_playback_set_bounds(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    int64_t total_frames = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    int32_t fps_num = static_cast<int32_t>(luaL_checkinteger(L, 3));
+    int32_t fps_den = static_cast<int32_t>(luaL_checkinteger(L, 4));
+    controller->SetBounds(total_frames, fps_num, fps_den);
+    return 0;
+}
+
+// PLAYBACK.PLAY(controller, direction, speed)
+static int lua_playback_play(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    int direction = static_cast<int>(luaL_checkinteger(L, 2));
+    float speed = static_cast<float>(luaL_checknumber(L, 3));
+    controller->Play(direction, speed);
+    return 0;
+}
+
+// PLAYBACK.STOP(controller)
+static int lua_playback_stop(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    controller->Stop();
+    return 0;
+}
+
+// PLAYBACK.SEEK(controller, frame)
+static int lua_playback_seek(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    int64_t frame = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    controller->Seek(frame);
+    return 0;
+}
+
+// PLAYBACK.SET_AUDIO_POSITION(controller, frame)
+static int lua_playback_set_audio_position(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    int64_t frame = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    controller->SetAudioPosition(frame);
+    return 0;
+}
+
+// PLAYBACK.SET_SHUTTLE_MODE(controller, enabled)
+static int lua_playback_set_shuttle_mode(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    bool enabled = lua_toboolean(L, 2) != 0;
+    controller->SetShuttleMode(enabled);
+    return 0;
+}
+
+// PLAYBACK.HIT_BOUNDARY(controller) -> boolean
+static int lua_playback_hit_boundary(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    lua_pushboolean(L, controller->HitBoundary() ? 1 : 0);
+    return 1;
+}
+
+// PLAYBACK.CURRENT_FRAME(controller) -> integer
+static int lua_playback_current_frame(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    lua_pushinteger(L, static_cast<lua_Integer>(controller->CurrentFrame()));
+    return 1;
+}
+
+// PLAYBACK.IS_PLAYING(controller) -> boolean
+static int lua_playback_is_playing(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    lua_pushboolean(L, controller->IsPlaying() ? 1 : 0);
+    return 1;
+}
+
+// PLAYBACK.SET_POSITION_CALLBACK(controller, callback_function)
+// The callback receives (frame, stopped_boolean)
+static int lua_playback_set_position_callback(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+
+    if (lua_isnil(L, 2)) {
+        controller->SetPositionCallback(nullptr);
+        return 0;
+    }
+
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+
+    // Store the Lua state and create a reference to the callback function
+    // Note: This is a simplification. In production, we'd need a more robust
+    // callback system with proper ref management.
+    lua_pushvalue(L, 2);
+    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_State* main_L = L;
+
+    controller->SetPositionCallback([main_L, ref](int64_t frame, bool stopped) {
+        // This callback is called from the main thread (via dispatch_async)
+        lua_rawgeti(main_L, LUA_REGISTRYINDEX, ref);
+        if (lua_isfunction(main_L, -1)) {
+            lua_pushinteger(main_L, static_cast<lua_Integer>(frame));
+            lua_pushboolean(main_L, stopped ? 1 : 0);
+            if (lua_pcall(main_L, 2, 0, 0) != 0) {
+                // NSF: Callback errors must crash with stack trace, not get buried
+                const char* err = lua_tostring(main_L, -1);
+                JVE_ASSERT(false, err ? err : "PLAYBACK position callback failed");
+            }
+        } else {
+            lua_pop(main_L, 1);
+        }
+    });
+
+    return 0;
+}
+
+// PLAYBACK.SET_NEED_CLIPS_CALLBACK(controller, callback_function)
+// The callback receives (frame_idx, direction, track_type_string)
+static int lua_playback_set_need_clips_callback(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+
+    if (lua_isnil(L, 2)) {
+        controller->SetNeedClipsCallback(nullptr);
+        return 0;
+    }
+
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+
+    lua_pushvalue(L, 2);
+    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_State* main_L = L;
+
+    controller->SetNeedClipsCallback([main_L, ref](int64_t frame, int direction, emp::TrackType type) {
+        lua_rawgeti(main_L, LUA_REGISTRYINDEX, ref);
+        if (lua_isfunction(main_L, -1)) {
+            lua_pushinteger(main_L, static_cast<lua_Integer>(frame));
+            lua_pushinteger(main_L, direction);
+            lua_pushstring(main_L, type == emp::TrackType::Video ? "video" : "audio");
+            if (lua_pcall(main_L, 3, 0, 0) != 0) {
+                const char* err = lua_tostring(main_L, -1);
+                JVE_ASSERT(false, err ? err : "PLAYBACK need_clips callback failed");
+            }
+        } else {
+            lua_pop(main_L, 1);
+        }
+    });
+
+    return 0;
+}
+
+// PLAYBACK.SET_CLIP_WINDOW(controller, track_type_string, lo, hi)
+static int lua_playback_set_clip_window(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    const char* type_str = luaL_checkstring(L, 2);
+    int64_t lo = static_cast<int64_t>(luaL_checkinteger(L, 3));
+    int64_t hi = static_cast<int64_t>(luaL_checkinteger(L, 4));
+
+    emp::TrackType type;
+    if (strcmp(type_str, "video") == 0) {
+        type = emp::TrackType::Video;
+    } else if (strcmp(type_str, "audio") == 0) {
+        type = emp::TrackType::Audio;
+    } else {
+        return luaL_error(L, "PLAYBACK.SET_CLIP_WINDOW: invalid track type '%s' (expected 'video' or 'audio')", type_str);
+    }
+
+    controller->SetClipWindow(type, lo, hi);
+    return 0;
+}
+
+// PLAYBACK.INVALIDATE_CLIP_WINDOWS(controller)
+static int lua_playback_invalidate_clip_windows(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    controller->InvalidateClipWindows();
+    return 0;
+}
+
+// PLAYBACK.SET_CLIP_TRANSITION_CALLBACK(controller, callback_function)
+// The callback receives (clip_id, rotation, par_num, par_den, is_offline)
+static int lua_playback_set_clip_transition_callback(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+
+    if (lua_isnil(L, 2)) {
+        controller->SetClipTransitionCallback(nullptr);
+        return 0;
+    }
+
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+
+    lua_pushvalue(L, 2);
+    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_State* main_L = L;
+
+    controller->SetClipTransitionCallback([main_L, ref](
+        const std::string& clip_id, int rotation, int par_num, int par_den, bool offline) {
+        lua_rawgeti(main_L, LUA_REGISTRYINDEX, ref);
+        if (lua_isfunction(main_L, -1)) {
+            lua_pushstring(main_L, clip_id.c_str());
+            lua_pushinteger(main_L, rotation);
+            lua_pushinteger(main_L, par_num);
+            lua_pushinteger(main_L, par_den);
+            lua_pushboolean(main_L, offline ? 1 : 0);
+            if (lua_pcall(main_L, 5, 0, 0) != 0) {
+                const char* err = lua_tostring(main_L, -1);
+                JVE_ASSERT(false, err ? err : "PLAYBACK clip_transition callback failed");
+            }
+        } else {
+            lua_pop(main_L, 1);
+        }
+    });
+
+    return 0;
+}
+
 } // anonymous namespace
 
 // ============================================================================
@@ -1178,6 +1480,11 @@ void register_emp_bindings(lua_State* L) {
 
     luaL_newmetatable(L, EMP_TMB_METATABLE);
     lua_pushcfunction(L, lua_emp_tmb_gc);
+    lua_setfield(L, -2, "__gc");
+    lua_pop(L, 1);
+
+    luaL_newmetatable(L, PLAYBACK_CONTROLLER_METATABLE);
+    lua_pushcfunction(L, lua_playback_gc);
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
@@ -1282,6 +1589,48 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "SURFACE_SET_PAR");
 
     lua_setfield(L, -2, "EMP");
+
+    // Create PLAYBACK subtable in qt_constants
+    lua_newtable(L);
+    lua_pushcfunction(L, lua_playback_create);
+    lua_setfield(L, -2, "CREATE");
+    lua_pushcfunction(L, lua_playback_close);
+    lua_setfield(L, -2, "CLOSE");
+    lua_pushcfunction(L, lua_playback_set_surface);
+    lua_setfield(L, -2, "SET_SURFACE");
+    lua_pushcfunction(L, lua_playback_set_tmb);
+    lua_setfield(L, -2, "SET_TMB");
+    lua_pushcfunction(L, lua_playback_set_video_tracks);
+    lua_setfield(L, -2, "SET_VIDEO_TRACKS");
+    lua_pushcfunction(L, lua_playback_set_bounds);
+    lua_setfield(L, -2, "SET_BOUNDS");
+    lua_pushcfunction(L, lua_playback_play);
+    lua_setfield(L, -2, "PLAY");
+    lua_pushcfunction(L, lua_playback_stop);
+    lua_setfield(L, -2, "STOP");
+    lua_pushcfunction(L, lua_playback_seek);
+    lua_setfield(L, -2, "SEEK");
+    lua_pushcfunction(L, lua_playback_set_audio_position);
+    lua_setfield(L, -2, "SET_AUDIO_POSITION");
+    lua_pushcfunction(L, lua_playback_set_shuttle_mode);
+    lua_setfield(L, -2, "SET_SHUTTLE_MODE");
+    lua_pushcfunction(L, lua_playback_hit_boundary);
+    lua_setfield(L, -2, "HIT_BOUNDARY");
+    lua_pushcfunction(L, lua_playback_current_frame);
+    lua_setfield(L, -2, "CURRENT_FRAME");
+    lua_pushcfunction(L, lua_playback_is_playing);
+    lua_setfield(L, -2, "IS_PLAYING");
+    lua_pushcfunction(L, lua_playback_set_position_callback);
+    lua_setfield(L, -2, "SET_POSITION_CALLBACK");
+    lua_pushcfunction(L, lua_playback_set_need_clips_callback);
+    lua_setfield(L, -2, "SET_NEED_CLIPS_CALLBACK");
+    lua_pushcfunction(L, lua_playback_set_clip_window);
+    lua_setfield(L, -2, "SET_CLIP_WINDOW");
+    lua_pushcfunction(L, lua_playback_invalidate_clip_windows);
+    lua_setfield(L, -2, "INVALIDATE_CLIP_WINDOWS");
+    lua_pushcfunction(L, lua_playback_set_clip_transition_callback);
+    lua_setfield(L, -2, "SET_CLIP_TRANSITION_CALLBACK");
+    lua_setfield(L, -2, "PLAYBACK");
 
     // Add video surface creators to qt_constants.WIDGET
     lua_getfield(L, -1, "WIDGET");

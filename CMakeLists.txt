@@ -138,10 +138,14 @@ set(UI_SOURCES
     src/cpu_video_surface.cpp
 )
 
-# GPU video surface (macOS only, Objective-C++ Metal)
+# GPU video surface and playback controller (macOS only, Objective-C++ Metal)
 if(APPLE)
     list(APPEND UI_SOURCES src/gpu_video_surface.mm)
+    list(APPEND UI_SOURCES src/playback_controller.mm)
     set_source_files_properties(src/gpu_video_surface.mm PROPERTIES
+        COMPILE_FLAGS "-x objective-c++"
+    )
+    set_source_files_properties(src/playback_controller.mm PROPERTIES
         COMPILE_FLAGS "-x objective-c++"
     )
 endif()
