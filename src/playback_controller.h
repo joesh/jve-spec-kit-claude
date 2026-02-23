@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 // Forward declarations
@@ -18,6 +19,87 @@ class Frame;
 struct VideoResult;
 enum class TrackType;
 }
+
+namespace aop {
+class AudioOutput;
+}
+
+namespace sse {
+class ScrubStretchEngine;
+enum class QualityMode;
+}
+
+// ============================================================================
+// PlaybackClock - epoch-based A/V sync
+// ============================================================================
+// Tracks media time using AOP playhead as master clock.
+// Uses epoch-based subtraction: media_anchor + (playhead - epoch) * speed
+// This is FLUSH-agnostic (doesn't assume FLUSH resets playhead).
+class PlaybackClock {
+public:
+    // Reanchor at transport event (play, seek, speed change)
+    void Reanchor(int64_t media_time_us, float speed, int64_t aop_playhead_us);
+
+    // Get current media time from AOP playhead
+    int64_t CurrentTimeUS(int64_t aop_playhead_us) const;
+
+    // Convert media time to frame index
+    static int64_t FrameFromTimeUS(int64_t time_us, int32_t fps_num, int32_t fps_den);
+
+    // Getters for pump loop
+    int64_t MediaAnchorUS() const { return m_media_anchor_us.load(std::memory_order_relaxed); }
+    float Speed() const { return m_speed.load(std::memory_order_relaxed); }
+
+private:
+    std::atomic<int64_t> m_media_anchor_us{0};   // Media time at last reanchor
+    std::atomic<int64_t> m_aop_epoch_us{0};      // AOP playhead at last reanchor
+    std::atomic<float> m_speed{1.0f};            // Signed speed (negative = reverse)
+
+    // Audio output latency compensation (OS mixer + driver + DAC)
+    static constexpr int64_t OUTPUT_LATENCY_US = 150000;  // 150ms
+};
+
+// ============================================================================
+// AudioPump - dedicated thread for TMB→SSE→AOP
+// ============================================================================
+class AudioPump {
+public:
+    AudioPump();
+    ~AudioPump();
+
+    // Start pump thread with dependencies
+    void Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* sse,
+               aop::AudioOutput* aop, PlaybackClock* clock,
+               int32_t sample_rate, int32_t channels);
+    void Stop();
+    bool IsRunning() const;
+
+    // Quality mode (computed from speed in SetSpeed)
+    void SetQualityMode(int mode);
+    int QualityMode() const;
+
+private:
+    void pumpLoop();
+
+    std::thread m_thread;
+    std::atomic<bool> m_running{false};
+    std::atomic<bool> m_stop_requested{false};
+    std::atomic<int> m_quality_mode{1};  // Q1=1, Q2=2, Q3=3
+
+    // Dependencies (set by Start, read by pumpLoop)
+    emp::TimelineMediaBuffer* m_tmb{nullptr};
+    sse::ScrubStretchEngine* m_sse{nullptr};
+    aop::AudioOutput* m_aop{nullptr};
+    PlaybackClock* m_clock{nullptr};
+    int32_t m_sample_rate{48000};
+    int32_t m_channels{2};
+
+    // Pump timing constants (match Lua CFG)
+    static constexpr int TARGET_BUFFER_MS = 100;
+    static constexpr int PUMP_INTERVAL_HUNGRY_MS = 2;
+    static constexpr int PUMP_INTERVAL_OK_MS = 15;
+    static constexpr int MAX_RENDER_FRAMES = 4096;
+};
 
 #ifdef __APPLE__
 
@@ -49,8 +131,16 @@ public:
     void Stop();
     void Seek(int64_t frame);
 
-    // Audio-following (from Lua audio tick)
+    // Audio-following (from Lua audio tick) - DEPRECATED, use ActivateAudio
     void SetAudioPosition(int64_t frame);
+
+    // Audio pump control (Phase 3)
+    void ActivateAudio(aop::AudioOutput* aop, sse::ScrubStretchEngine* sse,
+                       int32_t sample_rate, int32_t channels);
+    void DeactivateAudio();
+    void SetSpeed(float signed_speed);  // mid-playback speed change with reanchor
+    void PlayBurst(int64_t frame_idx, int direction, int duration_ms);
+    bool HasAudio() const;
 
     // Shuttle mode
     void SetShuttleMode(bool enabled);
@@ -134,6 +224,15 @@ private:
     GPUVideoSurface* m_surface{nullptr};
     std::vector<int> m_video_track_indices;
 
+    // ---- Audio pump (Phase 3) ----
+    PlaybackClock m_clock;
+    std::unique_ptr<AudioPump> m_audio_pump;
+    aop::AudioOutput* m_aop{nullptr};
+    sse::ScrubStretchEngine* m_sse{nullptr};
+    std::atomic<bool> m_has_audio{false};
+    int32_t m_audio_sample_rate{48000};
+    int32_t m_audio_channels{2};
+
     // ---- CVDisplayLink ----
     void* m_displayLink{nullptr};  // CVDisplayLinkRef (opaque for header)
     uint64_t m_last_host_time{0};
@@ -170,6 +269,11 @@ public:
     void Seek(int64_t) {}
 
     void SetAudioPosition(int64_t) {}
+    void ActivateAudio(aop::AudioOutput*, sse::ScrubStretchEngine*, int32_t, int32_t) {}
+    void DeactivateAudio() {}
+    void SetSpeed(float) {}
+    void PlayBurst(int64_t, int, int) {}
+    bool HasAudio() const { return false; }
     void SetShuttleMode(bool) {}
     bool HitBoundary() const { return false; }
 

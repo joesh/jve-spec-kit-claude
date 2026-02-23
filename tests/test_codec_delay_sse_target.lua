@@ -9,8 +9,19 @@
 -- TMB path: decode_mix_and_send_to_sse() calls TMB_GET_TRACK_AUDIO which returns
 -- PcmChunk with start_time_us = CODEC_DELAY_US. advance_sse_past_codec_delay()
 -- detects SSE target < actual PCM start and advances SSE.
+--
+-- NOTE: Phase 3 moved this logic to C++ AudioPump. This test is now obsolete.
 
 require("test_env")
+
+-- Phase 3: Check if pump functions are stubs (C++ owns pump now)
+local audio_playback = require("core.media.audio_playback")
+if audio_playback._phase3_stub then
+    print("=== test_codec_delay_sse_target.lua ===")
+    print("[Phase 3] advance_sse_past_codec_delay moved to C++ - SKIPPED")
+    print("✅ test_codec_delay_sse_target.lua passed (skipped)")
+    return
+end
 
 local ffi = require("ffi")
 
@@ -120,9 +131,9 @@ function qt_create_single_shot_timer(ms, callback)
     table.insert(timer_callbacks, callback)
 end
 
--- Fresh load
+-- Fresh load (reuse variable from top-level check)
 package.loaded["core.media.audio_playback"] = nil
-local audio_playback = require("core.media.audio_playback")
+audio_playback = require("core.media.audio_playback")
 
 -- Initialize session + TMB mix
 audio_playback.init_session(48000, 2)

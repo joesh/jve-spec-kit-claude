@@ -13,6 +13,8 @@
 #include "cpu_video_surface.h"
 #include "playback_controller.h"
 #include "assert_handler.h"
+#include "audio_output_platform/aop.h"
+#include "scrub_stretch_engine/sse.h"
 #include <QDebug>
 #include <QImage>
 #include <QPainter>
@@ -31,6 +33,14 @@
 
 // Forward declaration from binding_macros.h
 extern const char* WIDGET_METATABLE;
+
+// External metatable names (defined in aop_bindings.cpp and sse_bindings.cpp)
+extern const char* AOP_METATABLE;
+extern const char* SSE_METATABLE;
+
+// External lookup functions (defined in aop_bindings.cpp and sse_bindings.cpp)
+extern aop::AudioOutput* get_aop_userdata(lua_State* L, int idx);
+extern sse::ScrubStretchEngine* get_sse_userdata(lua_State* L, int idx);
 
 namespace {
 
@@ -1413,6 +1423,56 @@ static int lua_playback_invalidate_clip_windows(lua_State* L) {
     return 0;
 }
 
+// PLAYBACK.ACTIVATE_AUDIO(controller, aop, sse, sample_rate, channels)
+static int lua_playback_activate_audio(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    aop::AudioOutput* aop = get_aop_userdata(L, 2);
+    if (!aop) {
+        return luaL_error(L, "PLAYBACK.ACTIVATE_AUDIO: invalid aop handle");
+    }
+    sse::ScrubStretchEngine* sse = get_sse_userdata(L, 3);
+    if (!sse) {
+        return luaL_error(L, "PLAYBACK.ACTIVATE_AUDIO: invalid sse handle");
+    }
+    int32_t sample_rate = static_cast<int32_t>(luaL_checkinteger(L, 4));
+    int32_t channels = static_cast<int32_t>(luaL_checkinteger(L, 5));
+
+    controller->ActivateAudio(aop, sse, sample_rate, channels);
+    return 0;
+}
+
+// PLAYBACK.DEACTIVATE_AUDIO(controller)
+static int lua_playback_deactivate_audio(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    controller->DeactivateAudio();
+    return 0;
+}
+
+// PLAYBACK.SET_SPEED(controller, signed_speed)
+static int lua_playback_set_speed(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    float speed = static_cast<float>(luaL_checknumber(L, 2));
+    controller->SetSpeed(speed);
+    return 0;
+}
+
+// PLAYBACK.PLAY_BURST(controller, frame, direction, duration_ms)
+static int lua_playback_play_burst(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    int64_t frame = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    int direction = static_cast<int>(luaL_checkinteger(L, 3));
+    int duration_ms = static_cast<int>(luaL_checkinteger(L, 4));
+    controller->PlayBurst(frame, direction, duration_ms);
+    return 0;
+}
+
+// PLAYBACK.HAS_AUDIO(controller) -> boolean
+static int lua_playback_has_audio(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    lua_pushboolean(L, controller->HasAudio() ? 1 : 0);
+    return 1;
+}
+
 // PLAYBACK.SET_CLIP_TRANSITION_CALLBACK(controller, callback_function)
 // The callback receives (clip_id, rotation, par_num, par_den, is_offline)
 static int lua_playback_set_clip_transition_callback(lua_State* L) {
@@ -1630,6 +1690,16 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "INVALIDATE_CLIP_WINDOWS");
     lua_pushcfunction(L, lua_playback_set_clip_transition_callback);
     lua_setfield(L, -2, "SET_CLIP_TRANSITION_CALLBACK");
+    lua_pushcfunction(L, lua_playback_activate_audio);
+    lua_setfield(L, -2, "ACTIVATE_AUDIO");
+    lua_pushcfunction(L, lua_playback_deactivate_audio);
+    lua_setfield(L, -2, "DEACTIVATE_AUDIO");
+    lua_pushcfunction(L, lua_playback_set_speed);
+    lua_setfield(L, -2, "SET_SPEED");
+    lua_pushcfunction(L, lua_playback_play_burst);
+    lua_setfield(L, -2, "PLAY_BURST");
+    lua_pushcfunction(L, lua_playback_has_audio);
+    lua_setfield(L, -2, "HAS_AUDIO");
     lua_setfield(L, -2, "PLAYBACK");
 
     // Add video surface creators to qt_constants.WIDGET

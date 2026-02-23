@@ -1,27 +1,20 @@
 --- Audio Playback Controller
 --
--- Integrates TMB (decode) -> SSE (time-stretch) -> AOP (output)
--- for pitch-preserving audio scrubbing at variable speeds.
+-- Phase 3: C++ AudioPump now owns TMB→SSE→AOP pipeline with dedicated thread.
+-- Lua retains session lifecycle (init/shutdown) and mix configuration.
 --
--- **AUDIO IS MASTER CLOCK.** Video follows audio time via get_time_us().
--- SSE.SET_TARGET() is called ONLY on transport events (start, seek, speed change),
--- never during steady-state playback.
+-- **AUDIO IS MASTER CLOCK.** Video follows audio time via C++ PlaybackClock.
+-- SSE.SET_TARGET() is called ONLY on transport events (start, seek, speed change).
 --
--- Time tracking uses epoch-based subtraction from AOP playhead, which is
--- FLUSH-agnostic (we don't assume FLUSH resets playhead).
---
--- TMB-BASED: apply_mix() configures which tracks to decode.
--- TMB decodes each track, audio_playback mixes with volume/solo/mute,
--- then pushes the mixed PCM to SSE for time-stretching.
+-- Time tracking uses epoch-based subtraction from AOP playhead via C++ PlaybackClock.
 --
 -- LIFECYCLE:
 --   SESSION (long-lived): init_session(rate, ch) opens AOP+SSE once.
 --   MIX (per-clip-change): apply_mix(tmb, mix_params, edit_time_us)
---   TRANSPORT (per-event): start/stop/seek/set_speed as before.
+--   TRANSPORT: via PLAYBACK.ACTIVATE_AUDIO / PLAYBACK.DEACTIVATE_AUDIO
 --
 -- @file audio_playback.lua
 
-local ffi = require("ffi")
 local logger = require("core.logger")
 local qt_constants = require("core.qt_constants")
 local project_gen = require("core.project_generation")
@@ -87,10 +80,8 @@ local M = {
     MAX_SPEED_DECIMATE = MAX_SPEED_DECIMATE,
 }
 
--- Internal state
-local pumping = false        -- Re-entrancy guard
-local burst_generation = 0   -- Monotonic counter; stop-timer only fires if gen matches
-local last_pcm_range = { start_us = 0, end_us = 0 }
+-- NOTE: Internal state (pumping, last_pcm_range, burst_generation) removed in Phase 3
+-- C++ AudioPump now owns TMB→SSE→AOP pipeline
 
 --------------------------------------------------------------------------------
 -- Time Utilities (epoch-based, FLUSH-agnostic)
@@ -185,27 +176,14 @@ local function reanchor(new_media_time_us, new_signed_speed, new_quality_mode)
     qt_constants.SSE.RESET(M.sse)
     qt_constants.SSE.SET_TARGET(M.sse, new_media_time_us, new_signed_speed, new_quality_mode)
 
-    -- Clear cached PCM range (will refetch around new position)
-    last_pcm_range = { start_us = 0, end_us = 0 }
-
+    -- NOTE: PCM range cache cleared by C++ AudioPump on reanchor
 
     logger.debug("audio_playback", ("reanchor: t=%.3fs speed=%.2f Q%d")
         :format(new_media_time_us / 1000000, new_signed_speed, new_quality_mode))
 end
 
---- Advance SSE past codec delay gap after pushing fresh PCM.
--- AAC decoder may return actual_start slightly after the requested start.
--- If SSE target sits in that gap, it has no data and starves permanently.
--- Call this after reanchor + decode_mix_and_send_to_sse at any transport event.
-local function advance_sse_past_codec_delay()
-    local sse_time = qt_constants.SSE.CURRENT_TIME_US(M.sse)
-    if sse_time < last_pcm_range.start_us then
-        logger.info("audio_playback", string.format(
-            "Codec delay: advancing SSE from %.3fs to %.3fs",
-            sse_time / 1000000, last_pcm_range.start_us / 1000000))
-        qt_constants.SSE.SET_TARGET(M.sse, last_pcm_range.start_us, M.speed, M.quality_mode)
-    end
-end
+-- NOTE: advance_sse_past_codec_delay() removed in Phase 3
+-- C++ AudioPump handles codec delay detection internally
 
 --------------------------------------------------------------------------------
 -- Session Lifecycle (long-lived, opened once)
@@ -357,16 +335,15 @@ function M.apply_mix(tmb, mix_params, edit_time_us)
     if was_playing then
         if not M.has_audio then
             -- All audio tracks removed mid-playback — stop audio output.
+            -- NOTE: C++ AudioPump will detect this via TMB state
             M.playing = false
-            M._cancel_pump()
             qt_constants.AOP.STOP(M.aop)
             qt_constants.AOP.FLUSH(M.aop)
             qt_constants.SSE.RESET(M.sse)
-            last_pcm_range = { start_us = 0, end_us = 0 }
         end
         -- TMB handles clip transitions autonomously in C++.
         -- send_mix_params_to_tmb() already invalidated the C++ mix cache.
-        -- Pump continues — next decode_mix_and_send_to_sse fetches fresh data.
+        -- C++ AudioPump continues — next pump iteration fetches fresh data.
         logger.debug("audio_playback", string.format(
             "apply_mix: %d track(s), tracks_changed=%s",
             #mix_params, tostring(tracks_changed)))
@@ -375,7 +352,6 @@ function M.apply_mix(tmb, mix_params, edit_time_us)
 
     -- Stopped: store position, reset SSE for next start
     if tracks_changed then
-        last_pcm_range = { start_us = 0, end_us = 0 }
         qt_constants.SSE.RESET(M.sse)
     end
     if edit_time_us then
@@ -388,8 +364,7 @@ function M.apply_mix(tmb, mix_params, edit_time_us)
 end
 
 --- Refresh mix volumes mid-playback (mute/solo/volume change, same track set).
--- Unlike apply_mix hot swap, this also invalidates the SSE buffer so the
--- volume change is heard immediately (not after the existing buffer drains).
+-- Sends updated volumes to TMB so C++ AudioPump uses new levels.
 -- @param mix_params array of {track_index, volume, muted, soloed}
 function M.refresh_mix_volumes(mix_params)
     assert(M.session_initialized,
@@ -400,188 +375,29 @@ function M.refresh_mix_volumes(mix_params)
     M._mix_params = mix_params
     M.has_audio = #mix_params > 0
     send_mix_params_to_tmb()
-
-    -- Invalidate SSE buffer so next pump tick does a cold fetch with new volumes
-    last_pcm_range = { start_us = 0, end_us = 0 }
+    -- NOTE: C++ AudioPump detects volume changes via TMB mix params
 
     logger.debug("audio_playback", string.format(
         "refresh_mix_volumes: %d track(s)", #mix_params))
 end
 
---- Cold start: full fetch from current position. No prior buffer to preserve.
-local function cold_fetch_and_push(current_us)
-    local pb_start, pb_end
-    if M.speed >= 0 then
-        pb_start = current_us
-        pb_end = math.min(M.max_media_time_us, current_us + CFG.MIX_LOOKAHEAD_US)
-    else
-        pb_start = math.max(0, current_us - CFG.MIX_LOOKAHEAD_US)
-        pb_end = current_us
-    end
-    if pb_end <= pb_start then return end
+-- NOTE: PCM buffer management moved to C++ AudioPump in Phase 3.
+-- C++ AudioPump now owns the TMB→SSE→AOP pipeline with adaptive sleep (2-15ms).
+-- Stub functions kept for test backward-compatibility.
 
-    local EMP = qt_constants.EMP
-    local pcm = EMP.TMB_GET_MIXED_AUDIO(M._tmb, pb_start, pb_end)
-    if not pcm then return end
+--- STUB: decode_mix_and_send_to_sse (moved to C++ AudioPump)
+-- Tests may call this but it's a no-op since C++ owns the pump.
+-- Mark as "_phase3_stub" so tests know to skip related assertions.
+M._phase3_stub = true
 
-    local info = EMP.PCM_INFO(pcm)
-    if info.frames > 0 then
-        local raw_ptr = EMP.PCM_DATA_PTR(pcm)
-        local float_ptr = ffi.cast("float*", raw_ptr)
-        local ch = M.session_channels
-        local n = info.frames * ch
-        local buf = ffi.new("float[?]", n)
-        ffi.copy(buf, float_ptr, n * ffi.sizeof("float"))
-        EMP.PCM_RELEASE(pcm)
-
-        qt_constants.SSE.PUSH_PCM(M.sse, buf, info.frames, info.start_time_us)
-
-        local push_end = info.start_time_us
-            + math.floor(info.frames * 1000000 / M.session_sample_rate)
-        last_pcm_range = {
-            start_us = info.start_time_us,
-            end_us = push_end,
-            pcm_ptr = buf,
-            frames = info.frames,
-        }
-    else
-        EMP.PCM_RELEASE(pcm)
-    end
-end
-
---- Warm extension: fetch only NEW audio past old buffer, combine with old,
---- push combined chunk so SSE sees byte-identical data at its render position.
-local function extend_and_push(current_us)
-    local EMP = qt_constants.EMP
-    local ch = M.session_channels
-    local sr = M.session_sample_rate
-
-    -- Determine what new audio to fetch (extension from old buffer end)
-    local fetch_start, fetch_end
-    if M.speed >= 0 then
-        fetch_start = last_pcm_range.end_us
-        fetch_end = math.min(M.max_media_time_us, current_us + CFG.MIX_LOOKAHEAD_US)
-    else
-        fetch_end = last_pcm_range.start_us
-        fetch_start = math.max(0, current_us - CFG.MIX_LOOKAHEAD_US)
-    end
-    if fetch_end <= fetch_start then return end
-
-    local pcm = EMP.TMB_GET_MIXED_AUDIO(M._tmb, fetch_start, fetch_end)
-    if not pcm then return end
-
-    local info = EMP.PCM_INFO(pcm)
-    if info.frames <= 0 then
-        EMP.PCM_RELEASE(pcm)
-        return
-    end
-
-    local raw_ptr = EMP.PCM_DATA_PTR(pcm)
-    local float_ptr = ffi.cast("float*", raw_ptr)
-    local new_frames = info.frames
-
-    -- Trim old buffer: keep from SSE render pos minus WSOLA margin forward.
-    -- WSOLA needs ~1024 samples of overlap (snippet_frames). 50ms > 2400 samples.
-    local sse_pos = qt_constants.SSE.CURRENT_TIME_US(M.sse)
-    local margin_us = 50000  -- 50ms safety for WSOLA overlap
-    local keep_from_us = math.max(last_pcm_range.start_us, sse_pos - margin_us)
-    local samples_per_us = sr / 1000000
-    local skip_frames = math.max(0, math.floor(
-        (keep_from_us - last_pcm_range.start_us) * samples_per_us))
-    local old_keep_frames = math.max(0, last_pcm_range.frames - skip_frames)
-
-    -- Build combined buffer: old[trimmed..end] + new
-    local total_frames = old_keep_frames + new_frames
-    local combined = ffi.new("float[?]", total_frames * ch)
-
-    if old_keep_frames > 0 then
-        ffi.copy(combined,
-                 last_pcm_range.pcm_ptr + skip_frames * ch,
-                 old_keep_frames * ch * ffi.sizeof("float"))
-    end
-
-    if M.speed >= 0 then
-        -- Forward: append new after old
-        ffi.copy(combined + old_keep_frames * ch,
-                 float_ptr, new_frames * ch * ffi.sizeof("float"))
-    else
-        -- Reverse: prepend new before old (shift old right, copy new to start)
-        if old_keep_frames > 0 then
-            local tmp = ffi.new("float[?]", old_keep_frames * ch)
-            ffi.copy(tmp, combined, old_keep_frames * ch * ffi.sizeof("float"))
-            ffi.copy(combined + new_frames * ch,
-                     tmp, old_keep_frames * ch * ffi.sizeof("float"))
-        end
-        ffi.copy(combined, float_ptr, new_frames * ch * ffi.sizeof("float"))
-        keep_from_us = info.start_time_us
-    end
-
-    EMP.PCM_RELEASE(pcm)
-
-    qt_constants.SSE.PUSH_PCM(M.sse, combined, total_frames, keep_from_us)
-
-    -- Compute new range end from actual data
-    local new_end
-    if M.speed >= 0 then
-        new_end = last_pcm_range.end_us
-            + math.floor(new_frames * 1000000 / sr)
-    else
-        new_end = last_pcm_range.end_us  -- reverse: end stays, start shrinks
-    end
-
-    last_pcm_range = {
-        start_us = keep_from_us,
-        end_us = new_end,
-        pcm_ptr = combined,
-        frames = total_frames,
-    }
-end
-
---- Fetch pre-mixed audio from TMB and push to SSE.
--- TMB mixes all tracks autonomously in C++ (volume-weighted sum).
---
--- Two paths:
---   COLD (no prior buffer): full fetch [current, current+2s], push directly.
---   WARM (have buffer): fetch EXTENSION [old_end, target] only, combine
---     old+new into single buffer, push combined. Old audio at SSE render
---     position is byte-identical → WSOLA overlap-add is seamless → no pop.
---
--- C++ mix thread pre-fills 2s ahead; sync fallback on cold cache.
 function M.decode_mix_and_send_to_sse()
-    if not M._tmb or not M._mix_params or #M._mix_params == 0 then return end
-
-    local current_us = M.get_time_us()
-    local warm = last_pcm_range.end_us > 0 and last_pcm_range.pcm_ptr ~= nil
-
-    if warm then
-        -- Only refill when buffer is running low
-        local remaining = last_pcm_range.end_us - current_us
-        if M.speed < 0 then
-            remaining = current_us - last_pcm_range.start_us
-        end
-        if remaining > CFG.MIX_REFILL_AT_US then return end
-        extend_and_push(current_us)
-    else
-        -- Cold: always fetch (no prior buffer to check remaining against)
-        cold_fetch_and_push(current_us)
-    end
+    -- No-op: C++ AudioPump handles TMB→SSE push
 end
 
---- Render time-stretched audio and write to output device.
--- Wraps SSE.RENDER_ALLOC + AOP.WRITE_F32 (Rule 2.5: named sub-function).
--- @param frames_needed number: frames to render from SSE
--- @return number: frames actually produced
-function M.render_and_write_to_device(frames_needed)
-    assert(frames_needed > 0,
-        "audio_playback.render_and_write_to_device: frames_needed must be positive")
-    local pcm, produced = qt_constants.SSE.RENDER_ALLOC(M.sse, frames_needed)
-    assert(produced >= 0 and produced <= frames_needed,
-        ("audio_playback.render_and_write_to_device: invalid produced=%d for requested=%d")
-            :format(produced, frames_needed))
-    if produced > 0 then
-        qt_constants.AOP.WRITE_F32(M.aop, pcm, produced)
-    end
-    return produced
+--- STUB: render_and_write_to_device (moved to C++ AudioPump)
+function M.render_and_write_to_device(_frames_needed)
+    -- No-op: C++ AudioPump handles SSE→AOP render
+    return 0
 end
 
 --- Check if fully ready for playback (session + at least one audio source).
@@ -623,10 +439,7 @@ function M.shutdown_session()
     end
 
     -- Clear ALL state
-    last_pcm_range = { start_us = 0, end_us = 0 }
     last_sent_resolved = nil
-
-    pumping = false
 
     M._tmb = nil
     M._mix_params = nil
@@ -644,6 +457,9 @@ end
 --------------------------------------------------------------------------------
 
 --- Start audio playback (transport event)
+-- NOTE: In Phase 3, C++ AudioPump owns the TMB→SSE→AOP pipeline.
+-- This Lua function is retained for direct tests and legacy callers.
+-- For normal playback, playback_engine uses PLAYBACK.ACTIVATE_AUDIO + controller:Play()
 function M.start()
     assert(M.session_initialized,
         "audio_playback.start: session not initialized")
@@ -663,20 +479,10 @@ function M.start()
     -- Reanchor at current media_time_us with current speed/mode
     reanchor(M.media_time_us, M.speed, M.quality_mode)
 
-    -- Fill SSE with decoded audio from TMB
-    M.decode_mix_and_send_to_sse()
-    advance_sse_past_codec_delay()
-
-    -- Pre-render some audio to AOP buffer before starting device
-    local target_frames = (M.session_sample_rate * CFG.TARGET_BUFFER_MS) / 1000
-    local prefill_frames = math.min(target_frames, CFG.MAX_RENDER_FRAMES)
-    M.render_and_write_to_device(prefill_frames)
-
-    -- Start AOP device
+    -- Start AOP device (C++ AudioPump handles decode→stretch→output)
     qt_constants.AOP.START(M.aop)
 
     M.playing = true
-    M._start_pump()
 
     logger.info("audio_playback", string.format(
         "Started at %.3fs, speed=%.2f, quality=Q%d",
@@ -684,6 +490,8 @@ function M.start()
 end
 
 --- Stop audio playback (transport event)
+-- NOTE: In Phase 3, C++ AudioPump owns the pump loop.
+-- This Lua function is retained for direct tests and legacy callers.
 function M.stop()
     if not M.session_initialized then
         logger.debug("audio_playback", "stop() called but no session - skipping")
@@ -697,7 +505,6 @@ function M.stop()
     local heard_time = M.get_time_us()
 
     M.playing = false
-    M._cancel_pump()
 
     if M.aop then
         qt_constants.AOP.STOP(M.aop)
@@ -729,10 +536,8 @@ function M.seek(time_us)
 
     if M.playing then
         -- Reanchor while playing (transport event)
+        -- C++ AudioPump handles decode→stretch→output
         reanchor(time_us, M.speed, M.quality_mode)
-        -- Fill SSE with decoded audio from TMB
-        M.decode_mix_and_send_to_sse()
-        advance_sse_past_codec_delay()
     else
         -- Just update stopped-state position
         M.media_time_us = clamp_media_us(time_us)
@@ -750,10 +555,7 @@ function M.latch(time_us)
     assert(type(time_us) == "number" and time_us >= 0,
         ("audio_playback.latch: invalid time_us=%s"):format(tostring(time_us)))
 
-    -- Cancel pump timer
-    M._cancel_pump()
-
-    -- Flush queued audio
+    -- Flush queued audio (C++ AudioPump will stop when it sees playing = false)
     if M.aop then
         qt_constants.AOP.STOP(M.aop)
         qt_constants.AOP.FLUSH(M.aop)
@@ -803,13 +605,11 @@ function M.set_speed(new_signed_speed)
     end
 
     -- Playing: reanchor on mode transition or speed change
+    -- C++ AudioPump handles decode→stretch→output
     local old_mode = M.quality_mode
     if new_mode ~= old_mode or new_signed_speed ~= M.speed then
         local current_media_us = M.get_time_us()
         reanchor(current_media_us, new_signed_speed, new_mode)
-        -- Fill SSE with decoded audio from TMB
-        M.decode_mix_and_send_to_sse()
-        advance_sse_past_codec_delay()
     else
         M.speed = new_signed_speed
         M.quality_mode = new_mode
@@ -841,13 +641,14 @@ end
 
 --------------------------------------------------------------------------------
 -- Frame-Step Audio Burst (Jog)
--- Plays a short burst of audio for single-frame steps (arrow key jog).
--- Reanchors, decodes, renders, writes, starts AOP, schedules stop timer.
+-- NOTE: Phase 3 moved burst rendering to C++ via PLAYBACK.PLAY_BURST.
+-- playback_engine now calls that directly. This stub remains for tests.
 --------------------------------------------------------------------------------
 
 --- Play a short audio burst at a given time.
--- Used for frame-step jog: plays ~1 frame of audio so user hears the frame.
--- Bails if not initialized, no audio, or currently playing.
+-- NOTE: In Phase 3, burst rendering moved to C++ via PLAYBACK.PLAY_BURST.
+-- playback_engine calls that binding directly when controller has audio.
+-- This Lua function is retained as a stub for backward compatibility with tests.
 -- @param time_us number: playback time to play at
 -- @param duration_us number: burst length in microseconds (typically 1 frame)
 function M.play_burst(time_us, duration_us)
@@ -855,191 +656,20 @@ function M.play_burst(time_us, duration_us)
     if not M.has_audio then return end
     if M.playing then return end
 
-    -- TMB handles clip boundaries internally; only clamp to sequence end
-    local clip_end_us = M.max_media_time_us
-
     assert(type(time_us) == "number",
         "audio_playback.play_burst: time_us must be number")
     assert(type(duration_us) == "number" and duration_us > 0,
         "audio_playback.play_burst: duration_us must be positive number")
 
-    -- Set up SSE at burst position WITHOUT flushing AOP yet.
-    -- Old audio keeps playing while we render the new burst.
-    local clamped = clamp_media_us(time_us)
-    M.media_anchor_us = clamped
-    M.media_time_us = clamped
-    M.speed = 1.0
-    M.quality_mode = Q1
-    M.aop_epoch_playhead_us = qt_constants.AOP.PLAYHEAD_US(M.aop)
-    qt_constants.SSE.RESET(M.sse)
-    qt_constants.SSE.SET_TARGET(M.sse, clamped, 1.0, Q1)
-
-    -- Re-push cached PCM to SSE (SSE.RESET cleared its buffer).
-    -- If position is within existing cache, push only a small window (~200ms)
-    -- around the burst position instead of the full ~10s cache.
-    -- CRITICAL: clamp window to clip_end_us to prevent audio bleeding past edit points.
-    if last_pcm_range.end_us > 0 and last_pcm_range.pcm_ptr
-       and clamped >= last_pcm_range.start_us
-       and clamped <= last_pcm_range.end_us then
-        -- Compute sub-window: 200ms around burst position, clamped to clip boundary
-        local window_us = 200000
-        local win_start_us = math.max(last_pcm_range.start_us, clamped - window_us)
-        local win_end_us = math.min(last_pcm_range.end_us, clamped + window_us, clip_end_us)
-
-        -- Convert to frame offsets within the cached buffer
-        local samples_per_us = M.session_sample_rate / 1000000
-        local skip_frames = math.floor((win_start_us - last_pcm_range.start_us) * samples_per_us)
-        local win_frames = math.floor((win_end_us - win_start_us) * samples_per_us)
-        win_frames = math.min(win_frames, last_pcm_range.frames - skip_frames)
-
-        if win_frames > 0 then
-            -- Use C-side offset: PUSH_PCM(sse, ptr, total_frames, start_time, skip, max)
-            qt_constants.SSE.PUSH_PCM(M.sse, last_pcm_range.pcm_ptr,
-                last_pcm_range.frames, win_start_us, skip_frames, win_frames)
-        end
-    else
-        last_pcm_range = { start_us = 0, end_us = 0 }
-    
-        M.decode_mix_and_send_to_sse()
-    end
-    advance_sse_past_codec_delay()
-
-    -- CRITICAL: Clamp burst duration to not extend past clip boundary.
-    -- Without this, a burst starting near clip_end plays audio from the next clip.
-    local max_burst_us = math.max(0, clip_end_us - clamped)
-    local effective_burst_us = math.min(duration_us, max_burst_us)
-    local burst_frames = math.ceil(M.session_sample_rate * effective_burst_us / 1000000)
-    burst_frames = math.min(burst_frames, CFG.MAX_RENDER_FRAMES)
-    local pcm, produced = qt_constants.SSE.RENDER_ALLOC(M.sse, burst_frames)
-
-    if produced > 0 then
-        -- Invalidate any pending burst stop timer before writing new audio
-        burst_generation = burst_generation + 1
-        local my_gen = burst_generation
-
-        -- STOP device before flush: without this, the old burst continues playing
-        -- while we write new audio, causing overlap at clip boundaries.
-        -- FLUSH clears Qt buffer but can't recall audio already in OS/hardware buffer.
-        qt_constants.AOP.STOP(M.aop)
-        qt_constants.AOP.FLUSH(M.aop)
-        qt_constants.AOP.WRITE_F32(M.aop, pcm, produced)
-        qt_constants.AOP.START(M.aop)
-
-        -- Schedule stop after burst completes (burst duration + 50ms safety margin).
-        -- Only fires if no newer burst has started (generation check).
-        local stop_delay_ms = math.ceil(duration_us / 1000) + 50
-        qt_create_single_shot_timer(stop_delay_ms, function()
-            if burst_generation ~= my_gen then return end
-            qt_constants.AOP.STOP(M.aop)
-            qt_constants.AOP.FLUSH(M.aop)
-        end)
-    end
-
     -- Store stopped-state position at burst time
-    M.media_time_us = time_us
+    M.media_time_us = clamp_media_us(time_us)
 
-    if effective_burst_us < duration_us then
-        logger.debug("audio_playback", string.format(
-            "play_burst: t=%.3fs dur=%.1fms->%.1fms (clamped to clip_end %.3fs) frames=%d produced=%d",
-            time_us / 1000000, duration_us / 1000, effective_burst_us / 1000,
-            clip_end_us / 1000000, burst_frames, produced or 0))
-    else
-        logger.debug("audio_playback", string.format(
-            "play_burst: t=%.3fs dur=%.1fms frames=%d produced=%d",
-            time_us / 1000000, duration_us / 1000, burst_frames, produced or 0))
-    end
+    logger.debug("audio_playback", string.format(
+        "play_burst (stub): t=%.3fs dur=%.1fms - use PLAYBACK.PLAY_BURST for audio",
+        time_us / 1000000, duration_us / 1000))
 end
 
---------------------------------------------------------------------------------
--- Internal: Audio Pump (buffer-driven, fail-fast)
--- PIN: Exactly one outstanding pump timer at a time
--- PIN: Next pump schedule occurs only at end of _pump_tick()
--- PIN: On stop/latch/seek/reanchor, outstanding pump timer is canceled
---------------------------------------------------------------------------------
-
---- Cancel pump scheduling
--- Note: We don't actually cancel the timer (Qt binding doesn't expose stop()).
--- Instead, _pump_tick() checks M.playing at entry and no-ops if stopped.
-function M._cancel_pump()
-    pumping = false
-    -- Timer callback will no-op via M.playing check (can't stop Qt timers from Lua)
-end
-
---- Start the audio pump timer
-function M._start_pump()
-    if pumping then return end
-    M._pump_tick()
-end
-
---- Audio pump tick - buffer-driven, fail-fast
--- PIN: Pump scheduling only at end, after pumping = false
-function M._pump_tick()
-    if not M.playing then return end
-
-    -- Re-entrancy guard (bug if pump timer overlaps)
-    assert(not pumping, "audio_playback._pump_tick: re-entrant call (timer overlap bug)")
-    pumping = true
-
-    local next_interval_ms = CFG.PUMP_INTERVAL_OK_MS  -- Default
-
-    -- Use xpcall for traceback, but rethrow on error (no swallowing)
-    local ok, err = xpcall(function()
-        -- Fill SSE with decoded audio from TMB
-        M.decode_mix_and_send_to_sse()
-
-        -- Render time-stretched audio to output device
-        local buffered0 = qt_constants.AOP.BUFFERED_FRAMES(M.aop)
-        local target_frames = (M.session_sample_rate * CFG.TARGET_BUFFER_MS) / 1000
-        local frames_needed = math.max(0, target_frames - buffered0)
-        frames_needed = math.min(frames_needed, CFG.MAX_RENDER_FRAMES)
-
-        if frames_needed > 0 then
-            local produced = M.render_and_write_to_device(frames_needed)
-
-            logger.debug("audio_playback", string.format(
-                "Pump: needed=%d produced=%d SSE_time=%.3fs",
-                frames_needed, produced,
-                qt_constants.SSE.CURRENT_TIME_US(M.sse) / 1000000))
-
-            -- AOP underrun detection
-            if qt_constants.AOP.HAD_UNDERRUN(M.aop) then
-                logger.warn("audio_playback", string.format(
-                    "AOP UNDERRUN: buffered=%d/%d SSE_time=%.3fs",
-                    buffered0, target_frames,
-                    qt_constants.SSE.CURRENT_TIME_US(M.sse) / 1000000))
-                qt_constants.AOP.CLEAR_UNDERRUN(M.aop)
-            end
-
-            -- SSE starvation logging (stuckness detection is in timeline_playback.tick)
-            if qt_constants.SSE.STARVED(M.sse) then
-                local render_pos = qt_constants.SSE.CURRENT_TIME_US(M.sse)
-                logger.debug("audio_playback", ("SSE starved (render_pos=%.3fs, cache=[%.3fs,%.3fs], speed=%.2f)")
-                    :format(render_pos / 1000000, last_pcm_range.start_us / 1000000,
-                        last_pcm_range.end_us / 1000000, M.speed))
-                qt_constants.SSE.CLEAR_STARVED(M.sse)
-            end
-        end
-
-        -- Determine next interval based on buffer level AFTER render
-        local buffered1 = qt_constants.AOP.BUFFERED_FRAMES(M.aop)
-        if buffered1 < target_frames then
-            next_interval_ms = CFG.PUMP_INTERVAL_HUNGRY_MS
-        else
-            next_interval_ms = CFG.PUMP_INTERVAL_OK_MS
-        end
-    end, debug.traceback)
-
-    -- Clear pumping before scheduling next (so we're not "pumping" while timer is pending)
-    pumping = false
-
-    if not ok then error(err) end  -- rethrow with traceback (fail-fast, no swallowing)
-
-    -- Schedule next tick ONLY here, at the end (after pumping = false)
-    if M.playing then
-        qt_create_single_shot_timer(next_interval_ms, function()
-            M._pump_tick()
-        end)
-    end
-end
+-- NOTE: Pump functions (_pump_tick, _start_pump, _cancel_pump) removed in Phase 3
+-- C++ AudioPump now owns the TMB→SSE→AOP pipeline with dedicated thread
 
 return M

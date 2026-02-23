@@ -9,24 +9,13 @@
 #include <unordered_map>
 #include <vector>
 
-namespace {
-
-// Metatable name for SSE type
+// Metatable name for SSE type (extern for cross-file access)
 const char* SSE_METATABLE = "JVE.SSE.ScrubStretchEngine";
 
 // Global registry for SSE instances
 static std::unordered_map<void*, std::unique_ptr<sse::ScrubStretchEngine>> g_sse_instances;
 
-// Helper: Create userdata with metatable
-void* push_sse_userdata(lua_State* L, sse::ScrubStretchEngine* ptr) {
-    void** ud = static_cast<void**>(lua_newuserdata(L, sizeof(void*)));
-    *ud = ptr;
-    luaL_getmetatable(L, SSE_METATABLE);
-    lua_setmetatable(L, -2);
-    return ptr;
-}
-
-// Helper: Get userdata pointer
+// Helper: Get userdata pointer (extern for cross-file access)
 sse::ScrubStretchEngine* get_sse_userdata(lua_State* L, int idx) {
     void** ud = static_cast<void**>(luaL_checkudata(L, idx, SSE_METATABLE));
     void* key = *ud;
@@ -35,6 +24,17 @@ sse::ScrubStretchEngine* get_sse_userdata(lua_State* L, int idx) {
         return nullptr;
     }
     return it->second.get();
+}
+
+namespace {
+
+// Helper: Create userdata with metatable
+void* push_sse_userdata(lua_State* L, sse::ScrubStretchEngine* ptr) {
+    void** ud = static_cast<void**>(lua_newuserdata(L, sizeof(void*)));
+    *ud = ptr;
+    luaL_getmetatable(L, SSE_METATABLE);
+    lua_setmetatable(L, -2);
+    return ptr;
 }
 
 // ============================================================================

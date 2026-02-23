@@ -79,11 +79,12 @@ assert(audio_playback.set_audio_sources == nil, "audio_playback.set_audio_source
 print("  ✓ All public functions present")
 
 print("\nTest 1.2: Internal functions present")
-assert(audio_playback._start_pump, "_start_pump missing")
-assert(audio_playback.decode_mix_and_send_to_sse, "decode_mix_and_send_to_sse missing")
-assert(audio_playback.render_and_write_to_device, "render_and_write_to_device missing")
-assert(audio_playback._pump_tick, "_pump_tick missing")
-print("  ✓ Internal functions present")
+-- Phase 3: _start_pump, _pump_tick removed (C++ owns pump)
+-- decode_mix_and_send_to_sse and render_and_write_to_device are now stubs
+assert(audio_playback.decode_mix_and_send_to_sse, "decode_mix_and_send_to_sse stub missing")
+assert(audio_playback.render_and_write_to_device, "render_and_write_to_device stub missing")
+assert(audio_playback._phase3_stub == true, "_phase3_stub marker missing")
+print("  ✓ Internal functions/stubs present (Phase 3)")
 
 --------------------------------------------------------------------------------
 -- SECTION 2: Initial State

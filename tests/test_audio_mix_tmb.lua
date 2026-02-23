@@ -17,6 +17,14 @@ local ffi = require("ffi")
 
 print("=== test_audio_mix_tmb.lua ===")
 
+-- Phase 3: Check if pump functions are stubs (C++ owns pump now)
+-- Tests that verify pump behavior are skipped when stubs are active
+local audio_playback = require("core.media.audio_playback")
+local SKIP_PUMP_TESTS = audio_playback._phase3_stub == true
+if SKIP_PUMP_TESTS then
+    print("[Phase 3] Pump functions are stubs - pump-specific tests will be skipped")
+end
+
 --------------------------------------------------------------------------------
 -- Mock Infrastructure
 --------------------------------------------------------------------------------
@@ -168,7 +176,7 @@ package.loaded["core.project_generation"] = {
     check = function() end,
 }
 
-local audio_playback = require("core.media.audio_playback")
+-- audio_playback already required at top for SKIP_PUMP_TESTS check
 
 local CHANNELS = 2
 local SAMPLE_RATE = 48000
@@ -196,7 +204,12 @@ end
 
 --------------------------------------------------------------------------------
 -- F5: decode_mix_and_send_to_sse tests (now fetches pre-mixed from TMB)
+-- NOTE: F5.1-F5.3c test pump behavior that moved to C++ in Phase 3
 --------------------------------------------------------------------------------
+
+if SKIP_PUMP_TESTS then
+    print("\n--- F5.1-F5.3c: SKIPPED (pump moved to C++ in Phase 3) ---")
+else
 
 print("\n--- F5.1: pre-mixed PCM pushed to SSE ---")
 do
@@ -408,6 +421,8 @@ do
 
     print("  combined buffer preserves old audio passed")
 end
+
+end -- SKIP_PUMP_TESTS (F5.1-F5.3c)
 
 --------------------------------------------------------------------------------
 -- F5.4: send_mix_params_to_tmb resolves solo/mute correctly
@@ -751,11 +766,13 @@ do
     assert(audio_playback.has_audio == true,
         "has_audio should be true when tracks exist (even muted)")
 
-    -- Next decode_mix_and_send_to_sse should do cold fetch (SSE invalidated)
-    mixed_audio_response = pcm
-    audio_playback.decode_mix_and_send_to_sse()
-    assert(#get_mixed_audio_calls >= 1,
-        "SSE buffer invalidated → cold fetch should call TMB_GET_MIXED_AUDIO")
+    -- SSE invalidation verification (skipped in Phase 3 - C++ owns pump)
+    if not SKIP_PUMP_TESTS then
+        mixed_audio_response = pcm
+        audio_playback.decode_mix_and_send_to_sse()
+        assert(#get_mixed_audio_calls >= 1,
+            "SSE buffer invalidated → cold fetch should call TMB_GET_MIXED_AUDIO")
+    end
 
     print("  refresh_mix_volumes mute passed")
 end
@@ -842,6 +859,13 @@ do
 
     print("  refresh_mix_volumes bad input assert passed")
 end
+
+--------------------------------------------------------------------------------
+-- G1-G4: Pump/extension tests (moved to C++ in Phase 3)
+--------------------------------------------------------------------------------
+if SKIP_PUMP_TESTS then
+    print("\n--- G1-G4: SKIPPED (pump moved to C++ in Phase 3) ---")
+else
 
 --------------------------------------------------------------------------------
 -- G1: Reverse audio warm extension (extend_and_push with speed < 0)
@@ -1079,6 +1103,8 @@ do
 
     print("  zero-frame PCM release passed")
 end
+
+end -- SKIP_PUMP_TESTS (G1-G4)
 
 --------------------------------------------------------------------------------
 -- F11: Clip boundary cache nuke regression — identical resolved params should

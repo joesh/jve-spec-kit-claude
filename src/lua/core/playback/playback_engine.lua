@@ -1082,6 +1082,18 @@ function PlaybackEngine:activate_audio()
         self:_if_clip_changed_update_audio_mix(math.floor(self._position))
     end
 
+    -- Wire C++ PlaybackController to audio devices (Phase 3)
+    if self._playback_controller and audio_playback
+       and audio_playback.session_initialized
+       and audio_playback.aop and audio_playback.sse then
+        qt_constants.PLAYBACK.ACTIVATE_AUDIO(
+            self._playback_controller,
+            audio_playback.aop,
+            audio_playback.sse,
+            audio_playback.session_sample_rate,
+            audio_playback.session_channels)
+    end
+
     -- Listen for mid-playback mute/solo/volume changes
     self._track_mix_conn = Signals.connect("track_mix_changed", function()
         self:_refresh_audio_mix()
@@ -1093,6 +1105,10 @@ function PlaybackEngine:deactivate_audio()
     if self._track_mix_conn then
         Signals.disconnect(self._track_mix_conn)
         self._track_mix_conn = nil
+    end
+    -- Disconnect C++ audio pump (Phase 3)
+    if self._playback_controller and qt_constants.PLAYBACK then
+        qt_constants.PLAYBACK.DEACTIVATE_AUDIO(self._playback_controller)
     end
     self._audio_owner = false
     self:_stop_audio()
@@ -1521,14 +1537,28 @@ end
 function PlaybackEngine:play_frame_audio(frame_idx)
     if self.state == "playing" then return end
     if not self._audio_owner then return end
-    if not audio_playback then return end
-    if not audio_playback.is_ready() then return end
-    if not audio_playback.play_burst then return end
     assert(self.fps_num and self.fps_den,
         "PlaybackEngine:play_frame_audio: fps not set")
 
     -- Resolve audio sources at the stepped-to frame
     self:_if_clip_changed_update_audio_mix(frame_idx)
+
+    -- C++ path: use PlaybackController's PlayBurst (Phase 3)
+    if self._playback_controller and qt_constants.PLAYBACK
+       and qt_constants.PLAYBACK.HAS_AUDIO(self._playback_controller) then
+        local frame_duration_us = helpers.calc_time_us_from_frame(
+            1, self.fps_num, self.fps_den)
+        local burst_ms = math.max(40, math.min(60,
+            math.floor(frame_duration_us * 1.5 / 1000)))
+        qt_constants.PLAYBACK.PLAY_BURST(
+            self._playback_controller, frame_idx, 1, burst_ms)
+        return
+    end
+
+    -- Fallback: Lua path for when PlaybackController not available
+    if not audio_playback then return end
+    if not audio_playback.is_ready() then return end
+    if not audio_playback.play_burst then return end
 
     local time_us = helpers.calc_time_us_from_frame(
         frame_idx, self.fps_num, self.fps_den)

@@ -13,6 +13,8 @@
 
 #include <editor_media_platform/emp_timeline_media_buffer.h>
 #include <editor_media_platform/emp_frame.h>
+#include <audio_output_platform/aop.h>
+#include <scrub_stretch_engine/sse.h>
 
 #ifdef __APPLE__
 
@@ -51,6 +53,167 @@ CVReturn displayLinkCallback(
 }
 
 } // anonymous namespace
+
+// ============================================================================
+// PlaybackClock implementation
+// ============================================================================
+
+void PlaybackClock::Reanchor(int64_t media_time_us, float speed, int64_t aop_playhead_us) {
+    m_media_anchor_us.store(media_time_us, std::memory_order_relaxed);
+    m_aop_epoch_us.store(aop_playhead_us, std::memory_order_relaxed);
+    m_speed.store(speed, std::memory_order_relaxed);
+}
+
+int64_t PlaybackClock::CurrentTimeUS(int64_t aop_playhead_us) const {
+    int64_t anchor = m_media_anchor_us.load(std::memory_order_relaxed);
+    int64_t epoch = m_aop_epoch_us.load(std::memory_order_relaxed);
+    float speed = m_speed.load(std::memory_order_relaxed);
+
+    int64_t elapsed_us = aop_playhead_us - epoch;
+
+    // Compensate for audio output latency (OS mixer + driver + DAC)
+    // The playhead reports audio consumed by OS, but there's additional delay
+    // before it reaches the speakers. Subtract this to sync video with heard audio.
+    int64_t compensated_elapsed_us = std::max<int64_t>(0, elapsed_us - OUTPUT_LATENCY_US);
+
+    // Apply speed scaling
+    double delta = static_cast<double>(compensated_elapsed_us) * speed;
+
+    // Symmetric rounding: floor for positive speed, ceil for negative
+    int64_t result;
+    if (speed >= 0) {
+        result = anchor + static_cast<int64_t>(std::floor(delta));
+    } else {
+        result = anchor + static_cast<int64_t>(std::ceil(delta));
+    }
+
+    return result;
+}
+
+int64_t PlaybackClock::FrameFromTimeUS(int64_t time_us, int32_t fps_num, int32_t fps_den) {
+    // frame = time_us * fps_num / (1000000 * fps_den)
+    // Use integer math to avoid floating point precision issues
+    return (time_us * fps_num) / (1000000LL * fps_den);
+}
+
+// ============================================================================
+// AudioPump implementation
+// ============================================================================
+
+AudioPump::AudioPump() = default;
+
+AudioPump::~AudioPump() {
+    Stop();
+}
+
+void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* sse,
+                      aop::AudioOutput* aop, PlaybackClock* clock,
+                      int32_t sample_rate, int32_t channels) {
+    JVE_ASSERT(tmb, "AudioPump::Start: tmb is null");
+    JVE_ASSERT(sse, "AudioPump::Start: sse is null");
+    JVE_ASSERT(aop, "AudioPump::Start: aop is null");
+    JVE_ASSERT(clock, "AudioPump::Start: clock is null");
+
+    if (m_running.load(std::memory_order_relaxed)) {
+        return;  // Already running
+    }
+
+    m_tmb = tmb;
+    m_sse = sse;
+    m_aop = aop;
+    m_clock = clock;
+    m_sample_rate = sample_rate;
+    m_channels = channels;
+    m_stop_requested.store(false, std::memory_order_relaxed);
+    m_running.store(true, std::memory_order_relaxed);
+
+    m_thread = std::thread(&AudioPump::pumpLoop, this);
+    qWarning() << "AudioPump: started";
+}
+
+void AudioPump::Stop() {
+    if (!m_running.load(std::memory_order_relaxed)) {
+        return;
+    }
+
+    m_stop_requested.store(true, std::memory_order_relaxed);
+
+    if (m_thread.joinable()) {
+        m_thread.join();
+    }
+
+    m_running.store(false, std::memory_order_relaxed);
+    qWarning() << "AudioPump: stopped";
+}
+
+bool AudioPump::IsRunning() const {
+    return m_running.load(std::memory_order_relaxed);
+}
+
+void AudioPump::SetQualityMode(int mode) {
+    m_quality_mode.store(mode, std::memory_order_relaxed);
+}
+
+int AudioPump::QualityMode() const {
+    return m_quality_mode.load(std::memory_order_relaxed);
+}
+
+void AudioPump::pumpLoop() {
+    // Buffer for rendered audio
+    std::vector<float> render_buffer(MAX_RENDER_FRAMES * m_channels);
+
+    while (!m_stop_requested.load(std::memory_order_relaxed)) {
+        // 1. Get current media time from clock
+        int64_t aop_playhead = m_aop->PlayheadTimeUS();
+        int64_t media_time_us = m_clock->CurrentTimeUS(aop_playhead);
+        float speed = m_clock->Speed();
+        int mode = m_quality_mode.load(std::memory_order_relaxed);
+
+        // 2. Fetch mixed audio from TMB (2s lookahead)
+        constexpr int64_t MIX_LOOKAHEAD_US = 2000000;
+        int64_t fetch_start, fetch_end;
+        if (speed >= 0) {
+            fetch_start = media_time_us;
+            fetch_end = media_time_us + MIX_LOOKAHEAD_US;
+        } else {
+            fetch_start = media_time_us - MIX_LOOKAHEAD_US;
+            fetch_end = media_time_us;
+        }
+
+        auto pcm = m_tmb->GetMixedAudio(fetch_start, fetch_end);
+        if (pcm && pcm->frames() > 0) {
+            // 3. Push to SSE
+            m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(), pcm->start_time_us());
+
+            // 4. Update SSE target (only if needed - SSE handles this internally)
+            m_sse->SetTarget(media_time_us, speed, static_cast<sse::QualityMode>(mode));
+        }
+
+        // 5. Render from SSE and write to AOP
+        int64_t buffered = m_aop->BufferedFrames();
+        int64_t target_frames = (m_sample_rate * TARGET_BUFFER_MS) / 1000;
+        int64_t frames_needed = std::max<int64_t>(0, target_frames - buffered);
+        frames_needed = std::min<int64_t>(frames_needed, MAX_RENDER_FRAMES);
+
+        if (frames_needed > 0) {
+            int64_t produced = m_sse->Render(render_buffer.data(), frames_needed);
+            if (produced > 0) {
+                m_aop->WriteF32(render_buffer.data(), produced);
+            }
+        }
+
+        // 6. Adaptive sleep based on buffer level
+        int sleep_ms;
+        int64_t buffered_after = m_aop->BufferedFrames();
+        if (buffered_after < target_frames) {
+            sleep_ms = PUMP_INTERVAL_HUNGRY_MS;
+        } else {
+            sleep_ms = PUMP_INTERVAL_OK_MS;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+    }
+}
 
 // ============================================================================
 // Factory
@@ -128,12 +291,52 @@ void PlaybackController::Play(int direction, float speed) {
     m_audio_position.store(-1, std::memory_order_relaxed);
     m_last_displayed_frame = -1;
 
+    // Start audio pump if audio is active
+    if (m_has_audio.load(std::memory_order_relaxed) && m_aop && m_sse && m_tmb) {
+        // Compute quality mode from speed
+        float abs_speed = speed;
+        int quality_mode;
+        if (abs_speed > 4.0f) {
+            quality_mode = 3;  // Q3_DECIMATE
+        } else if (abs_speed >= 1.0f) {
+            quality_mode = 1;  // Q1
+        } else if (abs_speed >= 0.25f) {
+            quality_mode = 3;  // Q3_DECIMATE (varispeed)
+        } else {
+            quality_mode = 2;  // Q2
+        }
+
+        // Reanchor clock at current position
+        int64_t current_pos = m_position.load(std::memory_order_relaxed);
+        int64_t time_us = (current_pos * 1000000LL * m_fps_den) / m_fps_num;
+        float signed_speed = direction * speed;
+
+        m_aop->Flush();
+        m_sse->Reset();
+        int64_t aop_playhead = m_aop->PlayheadTimeUS();
+        m_clock.Reanchor(time_us, signed_speed, aop_playhead);
+        m_sse->SetTarget(time_us, signed_speed, static_cast<sse::QualityMode>(quality_mode));
+
+        // Start audio output
+        m_aop->Start();
+
+        // Start pump thread
+        if (m_audio_pump) {
+            m_audio_pump->SetQualityMode(quality_mode);
+            if (!m_audio_pump->IsRunning()) {
+                m_audio_pump->Start(m_tmb, m_sse, m_aop, &m_clock,
+                                    m_audio_sample_rate, m_audio_channels);
+            }
+        }
+    }
+
     if (!m_playing.load(std::memory_order_relaxed)) {
         m_playing.store(true, std::memory_order_relaxed);
         startDisplayLink();
     }
 
-    qWarning() << "PlaybackController: Play dir=" << direction << "speed=" << speed;
+    qWarning() << "PlaybackController: Play dir=" << direction << "speed=" << speed
+               << "audio=" << m_has_audio.load(std::memory_order_relaxed);
 }
 
 void PlaybackController::Stop() {
@@ -143,6 +346,15 @@ void PlaybackController::Stop() {
 
     m_playing.store(false, std::memory_order_relaxed);
     stopDisplayLink();
+
+    // Stop audio pump and output
+    if (m_audio_pump && m_audio_pump->IsRunning()) {
+        m_audio_pump->Stop();
+    }
+    if (m_aop) {
+        m_aop->Stop();
+        m_aop->Flush();
+    }
 
     // Immediate position report on stop
     int64_t pos = m_position.load(std::memory_order_relaxed);
@@ -183,6 +395,154 @@ void PlaybackController::SetShuttleMode(bool enabled) {
 
 bool PlaybackController::HitBoundary() const {
     return m_hit_boundary.load(std::memory_order_relaxed);
+}
+
+// ============================================================================
+// Audio pump control (Phase 3)
+// ============================================================================
+
+void PlaybackController::ActivateAudio(aop::AudioOutput* aop, sse::ScrubStretchEngine* sse,
+                                       int32_t sample_rate, int32_t channels) {
+    JVE_ASSERT(aop, "PlaybackController::ActivateAudio: aop is null");
+    JVE_ASSERT(sse, "PlaybackController::ActivateAudio: sse is null");
+    JVE_ASSERT(sample_rate > 0, "PlaybackController::ActivateAudio: sample_rate must be > 0");
+    JVE_ASSERT(channels > 0, "PlaybackController::ActivateAudio: channels must be > 0");
+
+    m_aop = aop;
+    m_sse = sse;
+    m_audio_sample_rate = sample_rate;
+    m_audio_channels = channels;
+    m_has_audio.store(true, std::memory_order_relaxed);
+
+    // Create audio pump if needed
+    if (!m_audio_pump) {
+        m_audio_pump = std::make_unique<AudioPump>();
+    }
+
+    qWarning() << "PlaybackController: ActivateAudio" << sample_rate << "Hz" << channels << "ch";
+}
+
+void PlaybackController::DeactivateAudio() {
+    if (m_audio_pump && m_audio_pump->IsRunning()) {
+        m_audio_pump->Stop();
+    }
+    m_has_audio.store(false, std::memory_order_relaxed);
+    m_aop = nullptr;
+    m_sse = nullptr;
+
+    qWarning() << "PlaybackController: DeactivateAudio";
+}
+
+bool PlaybackController::HasAudio() const {
+    return m_has_audio.load(std::memory_order_relaxed);
+}
+
+void PlaybackController::SetSpeed(float signed_speed) {
+    JVE_ASSERT(signed_speed != 0, "PlaybackController::SetSpeed: speed cannot be zero");
+
+    float abs_speed = std::abs(signed_speed);
+    JVE_ASSERT(abs_speed <= 16.0f,
+        "PlaybackController::SetSpeed: abs_speed exceeds MAX_SPEED_DECIMATE (16)");
+
+    m_speed.store(abs_speed, std::memory_order_relaxed);
+    int dir = (signed_speed >= 0) ? 1 : -1;
+    m_direction.store(dir, std::memory_order_relaxed);
+
+    // Auto-select quality mode from abs(speed)
+    // >4x        → Q3_DECIMATE (sample-skipping)
+    // 1x-4x      → Q1 (editor, pitch-corrected)
+    // 0.25x-1x   → Q3_DECIMATE (varispeed, natural pitch drop)
+    // <0.25x     → Q2 (extreme slomo, pitch-corrected)
+    int quality_mode;
+    if (abs_speed > 4.0f) {
+        quality_mode = 3;  // Q3_DECIMATE
+    } else if (abs_speed >= 1.0f) {
+        quality_mode = 1;  // Q1
+    } else if (abs_speed >= 0.25f) {
+        quality_mode = 3;  // Q3_DECIMATE (varispeed)
+    } else {
+        quality_mode = 2;  // Q2
+    }
+
+    // If playing with audio, reanchor and update pump
+    if (m_playing.load(std::memory_order_relaxed) &&
+        m_has_audio.load(std::memory_order_relaxed) && m_aop && m_sse) {
+
+        // Capture current position, reanchor clock
+        int64_t aop_playhead = m_aop->PlayheadTimeUS();
+        int64_t current_time_us = m_clock.CurrentTimeUS(aop_playhead);
+
+        // Flush SSE for speed change
+        m_aop->Flush();
+        m_sse->Reset();
+
+        // Reanchor at new speed
+        int64_t new_epoch = m_aop->PlayheadTimeUS();
+        m_clock.Reanchor(current_time_us, signed_speed, new_epoch);
+        m_sse->SetTarget(current_time_us, signed_speed, static_cast<sse::QualityMode>(quality_mode));
+
+        if (m_audio_pump) {
+            m_audio_pump->SetQualityMode(quality_mode);
+        }
+    }
+
+    qWarning() << "PlaybackController: SetSpeed" << signed_speed << "Q" << quality_mode;
+}
+
+void PlaybackController::PlayBurst(int64_t frame_idx, int direction, int duration_ms) {
+    if (!m_has_audio.load(std::memory_order_relaxed) || !m_aop || !m_sse || !m_tmb) {
+        return;
+    }
+    if (m_playing.load(std::memory_order_relaxed)) {
+        return;  // Don't burst while playing
+    }
+
+    JVE_ASSERT(direction == 1 || direction == -1,
+        "PlaybackController::PlayBurst: direction must be 1 or -1");
+    JVE_ASSERT(duration_ms > 0 && duration_ms <= 500,
+        "PlaybackController::PlayBurst: duration_ms must be 1-500");
+
+    // Convert frame to time
+    int64_t time_us = (frame_idx * 1000000LL * m_fps_den) / m_fps_num;
+    int64_t duration_us = duration_ms * 1000LL;
+    float speed = static_cast<float>(direction);
+
+    // Setup SSE for burst
+    m_aop->Stop();
+    m_aop->Flush();
+    m_sse->Reset();
+    m_sse->SetTarget(time_us, speed, sse::QualityMode::Q1);
+
+    // Fetch audio for burst window
+    int64_t fetch_start, fetch_end;
+    if (direction >= 0) {
+        fetch_start = time_us;
+        fetch_end = time_us + duration_us + 200000;  // 200ms extra for WSOLA
+    } else {
+        fetch_start = time_us - duration_us - 200000;
+        fetch_end = time_us;
+    }
+
+    auto pcm = m_tmb->GetMixedAudio(fetch_start, fetch_end);
+    if (pcm && pcm->frames() > 0) {
+        m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(), pcm->start_time_us());
+    }
+
+    // Render burst
+    int64_t burst_frames = (m_audio_sample_rate * duration_ms) / 1000;
+    burst_frames = std::min<int64_t>(burst_frames, 4096);
+    std::vector<float> burst_buffer(static_cast<size_t>(burst_frames * m_audio_channels));
+    int64_t produced = m_sse->Render(burst_buffer.data(), burst_frames);
+
+    if (produced > 0) {
+        m_aop->WriteF32(burst_buffer.data(), produced);
+        m_aop->Start();
+
+        // Note: Lua should schedule stop via timer. For now, audio will drain naturally.
+    }
+
+    qWarning() << "PlaybackController: PlayBurst frame=" << frame_idx
+               << "dir=" << direction << "duration=" << duration_ms << "ms";
 }
 
 // ============================================================================
@@ -389,14 +749,27 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
 int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     int64_t current = m_position.load(std::memory_order_relaxed);
 
-    // Check for audio-driven position
+    // Audio-following via PlaybackClock (Phase 3)
+    if (m_has_audio.load(std::memory_order_relaxed) &&
+        m_audio_pump && m_audio_pump->IsRunning() && m_aop) {
+        // Audio is master clock — query PlaybackClock for current time
+        int64_t aop_playhead = m_aop->PlayheadTimeUS();
+        int64_t time_us = m_clock.CurrentTimeUS(aop_playhead);
+        int64_t frame = PlaybackClock::FrameFromTimeUS(time_us, m_fps_num, m_fps_den);
+
+        // Clamp to valid range
+        frame = std::max<int64_t>(0, std::min(frame, m_total_frames - 1));
+        return frame;
+    }
+
+    // Legacy: Check for audio-driven position from Lua (deprecated)
     int64_t audio_pos = m_audio_position.load(std::memory_order_relaxed);
     if (audio_pos >= 0) {
         // Audio is driving — use its position directly
         return audio_pos;
     }
 
-    // Frame-based advancement
+    // Frame-based advancement (no audio)
     int dir = m_direction.load(std::memory_order_relaxed);
     float speed = m_speed.load(std::memory_order_relaxed);
     double frames_elapsed = elapsed_seconds * m_fps * speed;

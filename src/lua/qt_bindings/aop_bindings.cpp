@@ -8,13 +8,24 @@
 #include <memory>
 #include <unordered_map>
 
-namespace {
-
-// Metatable name for AOP type
+// Metatable name for AOP type (extern for cross-file access)
 const char* AOP_METATABLE = "JVE.AOP.AudioOutput";
 
 // Global registry for AudioOutput instances
 static std::unordered_map<void*, std::unique_ptr<aop::AudioOutput>> g_audio_outputs;
+
+// Helper: Get userdata pointer (extern for cross-file access)
+aop::AudioOutput* get_aop_userdata(lua_State* L, int idx) {
+    void** ud = static_cast<void**>(luaL_checkudata(L, idx, AOP_METATABLE));
+    void* key = *ud;
+    auto it = g_audio_outputs.find(key);
+    if (it == g_audio_outputs.end()) {
+        return nullptr;
+    }
+    return it->second.get();
+}
+
+namespace {
 
 // Helper: Push AOP error to Lua (nil, error_string)
 void push_aop_error(lua_State* L, const char* msg) {
@@ -29,17 +40,6 @@ void* push_aop_userdata(lua_State* L, aop::AudioOutput* ptr) {
     luaL_getmetatable(L, AOP_METATABLE);
     lua_setmetatable(L, -2);
     return ptr;
-}
-
-// Helper: Get userdata pointer
-aop::AudioOutput* get_aop_userdata(lua_State* L, int idx) {
-    void** ud = static_cast<void**>(luaL_checkudata(L, idx, AOP_METATABLE));
-    void* key = *ud;
-    auto it = g_audio_outputs.find(key);
-    if (it == g_audio_outputs.end()) {
-        return nullptr;
-    }
-    return it->second.get();
 }
 
 // ============================================================================
