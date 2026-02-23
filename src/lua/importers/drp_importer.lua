@@ -228,6 +228,119 @@ local function decode_hex_resolution(hex_str)
     return width, height
 end
 
+--- Decode a protobuf varint from raw byte string
+-- @param bytes string: raw byte string
+-- @param pos number: 1-indexed start position
+-- @return number|nil: decoded value
+-- @return number: next position after varint
+local function decode_protobuf_varint(bytes, pos)
+    local value = 0
+    local mult = 1
+    while pos <= #bytes do
+        local b = bytes:byte(pos)
+        value = value + (b % 128) * mult
+        pos = pos + 1
+        if b < 128 then
+            return value, pos
+        end
+        mult = mult * 128
+    end
+    return nil, pos
+end
+
+--- Decode BtVideoInfo/BtAudioInfo Clip binary blob to extract original source path.
+-- DaVinci Resolve encodes the original media file path in a protobuf-like binary
+-- structure inside <Clip> elements under BtVideoInfo and BtAudioInfo.
+--
+-- Binary layout:
+--   [4B version=2] [4B payload_len] [2B marker 0x81,0x28] [8B entry_id]
+--   [2B video_prefix (video only)] [protobuf fields...]
+--
+-- Detection: byte at offset 18 (0-indexed) == 0x0a means audio (no prefix);
+--            otherwise video (2-byte prefix before protobuf).
+--
+-- Protobuf field 1 (tag 0x0a) = directory path
+-- Protobuf field 2 (tag 0x12) = filename
+-- Full path = field1 .. "/" .. field2
+--
+-- @param hex_str string: hex-encoded binary blob from <Clip> element
+-- @return string|nil: decoded file path, or nil if unparseable
+local function decode_bt_clip_path(hex_str)
+    if not hex_str or #hex_str < 40 then return nil end
+
+    -- Hex decode to raw bytes
+    local parts = {}
+    local clean = hex_str:gsub("%s+", "")
+    if #clean % 2 ~= 0 then return nil end  -- odd-length hex = corrupt
+    for i = 1, #clean, 2 do
+        local h = clean:sub(i, i + 1)
+        local n = tonumber(h, 16)
+        if not n then return nil end
+        parts[#parts + 1] = string.char(n)
+    end
+    local bytes = table.concat(parts)
+
+    if #bytes < 21 then return nil end
+
+    -- Determine protobuf start (1-indexed)
+    -- Audio: byte at 0-indexed offset 18 (pos 19) is 0x0a, protobuf starts there
+    -- Video: 2-byte prefix at pos 19-20, protobuf starts at pos 21
+    local proto_start
+    if bytes:byte(19) == 0x0a then
+        proto_start = 19  -- audio: field 1 tag is the first byte
+    else
+        proto_start = 21  -- video: skip 2-byte prefix
+    end
+
+    if proto_start > #bytes then return nil end
+
+    -- Field 1: directory (tag 0x0a = field 1, wire type LEN)
+    if bytes:byte(proto_start) ~= 0x0a then return nil end
+    local dir_len, dir_data_pos = decode_protobuf_varint(bytes, proto_start + 1)
+    if not dir_len or dir_data_pos + dir_len - 1 > #bytes then return nil end
+    local directory = bytes:sub(dir_data_pos, dir_data_pos + dir_len - 1)
+
+    -- Field 2: filename (tag 0x12 = field 2, wire type LEN)
+    local f2_pos = dir_data_pos + dir_len
+    if f2_pos > #bytes or bytes:byte(f2_pos) ~= 0x12 then return nil end
+    local fname_len, fname_data_pos = decode_protobuf_varint(bytes, f2_pos + 1)
+    if not fname_len or fname_data_pos + fname_len - 1 > #bytes then return nil end
+    local filename = bytes:sub(fname_data_pos, fname_data_pos + fname_len - 1)
+
+    -- Both components must be non-empty to form a valid path
+    if #directory == 0 or #filename == 0 then return nil end
+
+    return directory .. "/" .. filename
+end
+
+--- Extract original source file path from a MediaPool master clip element.
+-- Searches BtVideoInfo and BtAudioInfo children for Clip binary blobs.
+-- @param clip_elem table: Sm2MpVideoClip or Sm2MpAudioClip XML element
+-- @return string|nil: decoded original path, or nil if no blob found/parseable
+local function extract_original_path(clip_elem)
+    -- Try BtVideoInfo first (video master clips)
+    local bt_video = find_element(clip_elem, "BtVideoInfo")
+    if bt_video then
+        local blob_elem = find_direct_child(bt_video, "Clip")
+        if blob_elem then
+            local path = decode_bt_clip_path(get_text(blob_elem))
+            if path then return path end
+        end
+    end
+
+    -- Try BtAudioInfo (audio master clips or embedded audio)
+    local bt_audio = find_element(clip_elem, "BtAudioInfo")
+    if bt_audio then
+        local blob_elem = find_direct_child(bt_audio, "Clip")
+        if blob_elem then
+            local path = decode_bt_clip_path(get_text(blob_elem))
+            if path then return path end
+        end
+    end
+
+    return nil
+end
+
 --- Parse Resolve timecode string to integer frames
 -- Resolve uses rational notation: "900/30" = frame 900 at 30fps
 -- @param timecode_str string: Timecode string (e.g., "900/30")
@@ -394,9 +507,8 @@ local function parse_master_clip_element(clip_elem, folder_id)
     local mark_out_elem = find_direct_child(clip_elem, "MarkOut")
     local playhead_elem = find_direct_child(clip_elem, "CurPlayheadPosition")
 
-    -- TODO: Extract file path from Video/BtVideoInfo or embedded audio
-    -- Video clips have path encoded in Clip field (binary) - we'll match by name later
-    -- For now, we rely on the name matching the media file
+    -- Decode original source path from BtVideoInfo/BtAudioInfo binary blob
+    local original_path = extract_original_path(clip_elem)
 
     -- TODO: Parse duration from Video/BtVideoInfo/Time if available
 
@@ -408,6 +520,7 @@ local function parse_master_clip_element(clip_elem, folder_id)
         mark_out = mark_out_elem and tonumber(get_text(mark_out_elem)) or nil,
         playhead = playhead_elem and tonumber(get_text(playhead_elem)) or nil,
         clip_type = clip_elem.tag == "Sm2MpVideoClip" and "video" or "audio",
+        file_path = original_path,
     }
 
     return master_clip
@@ -684,7 +797,7 @@ end
 -- @param seq_elem table: XML sequence element
 -- @param frame_rate number: Frame rate from DRP metadata (required)
 -- @return video_tracks, audio_tracks, media_lookup
-local function parse_resolve_tracks(seq_elem, frame_rate)
+local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
     -- NSF: frame_rate is required, no fallbacks
     assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
         "parse_resolve_tracks: frame_rate is required (got %s) - DRP must provide fps metadata",
@@ -720,6 +833,17 @@ local function parse_resolve_tracks(seq_elem, frame_rate)
 
         for _, clip_elem in ipairs(clip_elements) do
             local file_path = get_text(find_element(clip_elem, "MediaFilePath"))
+
+            -- Prefer original source path from MediaPool blob over stale MediaFilePath.
+            -- DaVinci rewrites MediaFilePath when toggling proxy mode or relinking,
+            -- but the pool master clip's binary blob preserves the original path.
+            if media_ref_path_map then
+                local media_ref = get_text(find_element(clip_elem, "MediaRef"))
+                if media_ref ~= "" and media_ref_path_map[media_ref] then
+                    file_path = media_ref_path_map[media_ref]
+                end
+            end
+
             local clip_name = get_text(find_element(clip_elem, "Name")) or file_path or "unnamed"
 
             -- NSF: Assert on missing required clip fields
@@ -845,8 +969,9 @@ local parse_clip_item
 -- NSF: frame_rate is REQUIRED - DRP reliably encodes fps
 -- @param seq_elem table: XML element for <Sequence>
 -- @param frame_rate number: Frame rate from DRP metadata (required)
+-- @param media_ref_path_map table|nil: MediaRef DbId → original file path (for stale-path resolution)
 -- @return table: Timeline data
-local function parse_sequence(seq_elem, frame_rate)
+local function parse_sequence(seq_elem, frame_rate, media_ref_path_map)
     -- NSF: frame_rate is required
     assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
         "parse_sequence: frame_rate is required (got %s) - DRP must provide fps metadata",
@@ -904,7 +1029,7 @@ local function parse_sequence(seq_elem, frame_rate)
     end
 
     if #timeline.tracks == 0 then
-        local resolve_video_tracks, resolve_audio_tracks, media_map = parse_resolve_tracks(seq_elem, frame_rate)
+        local resolve_video_tracks, resolve_audio_tracks, media_map = parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
         timeline.media_files = media_map
 
         for _, track in ipairs(resolve_video_tracks) do
@@ -1019,6 +1144,21 @@ function M.parse_drp_file(drp_path)
     -- This maps Sequence IDs to {name, fps} from Sm2Timeline/Sm2Sequence elements
     local timeline_metadata_map = build_timeline_metadata_map(tmp_dir)
 
+    -- Parse MediaPool folder hierarchy (with blob-decoded original source paths)
+    -- Must happen before sequence parsing so we can resolve stale MediaFilePath values
+    local media_pool_hierarchy = parse_media_pool_hierarchy(tmp_dir)
+
+    -- Build MediaRef DbId → original file path map.
+    -- Timeline clips reference pool master clips via <MediaRef>. The pool master clip's
+    -- binary blob encodes the original source path, while the timeline clip's <MediaFilePath>
+    -- may be stale (e.g., proxy path or old volume name from a prior relink).
+    local media_ref_path_map = {}
+    for _, pmc in ipairs(media_pool_hierarchy.master_clips) do
+        if pmc.id and pmc.file_path then
+            media_ref_path_map[pmc.id] = pmc.file_path
+        end
+    end
+
     -- Parse sequence XMLs
     local timelines = {}
     local seq_dir = tmp_dir .. "/SeqContainer"
@@ -1058,7 +1198,7 @@ function M.parse_drp_file(drp_path)
                         tostring(seq_ref_id)))
                     goto continue_seq
                 end
-                local timeline = parse_sequence(seq_elem, fps_for_parsing)
+                local timeline = parse_sequence(seq_elem, fps_for_parsing, media_ref_path_map)
 
                 -- Apply timeline name from metadata
                 if metadata and metadata.name then
@@ -1136,9 +1276,6 @@ function M.parse_drp_file(drp_path)
         assert(timelines[1].fps, "parse_drp_file: first timeline has no fps")
         project.settings.frame_rate = timelines[1].fps
     end
-
-    -- Parse MediaPool folder hierarchy for bins and master clips
-    local media_pool_hierarchy = parse_media_pool_hierarchy(tmp_dir)
 
     -- Nil out timeline folder_ids that referenced the excluded Master root
     if media_pool_hierarchy.excluded_root_id then
@@ -1820,7 +1957,8 @@ function M.convert(drp_path, jvp_path)
     return true
 end
 
--- Test-only export for frame_rate_to_rational
+-- Test-only exports
 M._frame_rate_to_rational = frame_rate_to_rational
+M._decode_bt_clip_path = decode_bt_clip_path
 
 return M
