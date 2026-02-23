@@ -265,8 +265,27 @@ end
 -- Mix Lifecycle (TMB-based, per-clip-change)
 --------------------------------------------------------------------------------
 
+--- Compare two resolved param arrays for equality.
+-- @param a array of {track_index, volume} (may be nil)
+-- @param b array of {track_index, volume}
+-- @return boolean
+local function resolved_params_equal(a, b)
+    if not a then return false end
+    if #a ~= #b then return false end
+    for i = 1, #a do
+        if a[i].track_index ~= b[i].track_index then return false end
+        if math.abs(a[i].volume - b[i].volume) > 0.001 then return false end
+    end
+    return true
+end
+
+-- Last resolved params sent to C++ (dedup: skip SetAudioMixParams when unchanged)
+local last_sent_resolved = nil
+
 --- Resolve solo/mute into effective volumes, send to TMB as mix params.
 -- Called on apply_mix (both hot and cold paths) so C++ knows about volume changes.
+-- Skips C++ call when resolved params are identical to last send (prevents
+-- mix cache nuke at clip boundaries where track set/volumes haven't changed).
 local function send_mix_params_to_tmb()
     if not M._tmb or not M._mix_params or not M.session_initialized then return end
 
@@ -285,6 +304,11 @@ local function send_mix_params_to_tmb()
         end
         resolved[#resolved + 1] = { track_index = track.track_index, volume = vol }
     end
+
+    -- Skip C++ call if resolved params unchanged (prevents mix cache nuke
+    -- at audio clip boundaries where only the clip_id changed, not the tracks)
+    if resolved_params_equal(last_sent_resolved, resolved) then return end
+    last_sent_resolved = resolved
 
     qt_constants.EMP.TMB_SET_AUDIO_MIX_PARAMS(
         M._tmb, resolved, M.session_sample_rate, M.session_channels)
@@ -600,6 +624,7 @@ function M.shutdown_session()
 
     -- Clear ALL state
     last_pcm_range = { start_us = 0, end_us = 0 }
+    last_sent_resolved = nil
 
     pumping = false
 

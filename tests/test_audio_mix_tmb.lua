@@ -1081,6 +1081,122 @@ do
 end
 
 --------------------------------------------------------------------------------
+-- F11: Clip boundary cache nuke regression — identical resolved params should
+-- NOT call TMB_SET_AUDIO_MIX_PARAMS a second time (prevents mix cache nuke).
+-- Bug: at audio clip boundaries, apply_mix fires even though the track set
+-- and volumes are identical. send_mix_params_to_tmb called SetAudioMixParams
+-- unconditionally, which clears the C++ mixed audio cache. Next GetMixedAudio
+-- falls through to sync decode on main thread, blocking pump → AOP underrun.
+--------------------------------------------------------------------------------
+
+print("\n--- F11.1: identical resolved params → no redundant TMB_SET_AUDIO_MIX_PARAMS ---")
+do
+    reset_mocks()
+    teardown()
+    init_test_session()
+
+    local mock_tmb = "test_tmb"
+
+    -- First apply_mix: track 1 at full volume
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+    }, 0)
+    local calls_after_first = #mix_params_calls
+    assert(calls_after_first >= 1,
+        "First apply_mix must call TMB_SET_AUDIO_MIX_PARAMS")
+
+    -- Second apply_mix: IDENTICAL params (simulates clip boundary, same track)
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+    }, 1000000)
+
+    assert(#mix_params_calls == calls_after_first, string.format(
+        "Identical resolved params must NOT re-call TMB_SET_AUDIO_MIX_PARAMS "
+        .. "(expected %d calls, got %d)", calls_after_first, #mix_params_calls))
+
+    print("  identical params → no redundant TMB call passed")
+end
+
+print("\n--- F11.2: different volume → DOES call TMB_SET_AUDIO_MIX_PARAMS ---")
+do
+    reset_mocks()
+    teardown()
+    init_test_session()
+
+    local mock_tmb = "test_tmb"
+
+    -- First apply_mix
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+    }, 0)
+    local calls_after_first = #mix_params_calls
+
+    -- Second with different volume → resolved params differ → must call
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 0.5, muted = false, soloed = false },
+    }, 1000000)
+
+    assert(#mix_params_calls > calls_after_first,
+        "Different volume must trigger TMB_SET_AUDIO_MIX_PARAMS")
+
+    print("  different volume → TMB call passed")
+end
+
+print("\n--- F11.3: mute toggle → DOES call TMB_SET_AUDIO_MIX_PARAMS ---")
+do
+    reset_mocks()
+    teardown()
+    init_test_session()
+
+    local mock_tmb = "test_tmb"
+
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+    }, 0)
+    local calls_after_first = #mix_params_calls
+
+    -- Mute → resolved volume changes from 1.0 to 0
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = true, soloed = false },
+    }, 1000000)
+
+    assert(#mix_params_calls > calls_after_first,
+        "Mute toggle must trigger TMB_SET_AUDIO_MIX_PARAMS (volume 1.0 → 0)")
+
+    print("  mute toggle → TMB call passed")
+end
+
+print("\n--- F11.4: identical params during playback → no cache nuke ---")
+do
+    reset_mocks()
+    teardown()
+    init_test_session()
+
+    local mock_tmb = "test_tmb"
+
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+    }, 0)
+    audio_playback.set_max_time(10000000)
+    audio_playback.media_time_us = 5000000
+    audio_playback.playing = true
+
+    local calls_after_first = #mix_params_calls
+
+    -- Clip boundary during playback: same track, same settings
+    audio_playback.apply_mix(mock_tmb, {
+        { track_index = 1, volume = 1.0, muted = false, soloed = false },
+    }, 5000000)
+
+    assert(#mix_params_calls == calls_after_first, string.format(
+        "Identical params during playback must NOT nuke C++ mix cache "
+        .. "(expected %d calls, got %d)", calls_after_first, #mix_params_calls))
+    assert(audio_playback.playing == true, "Must remain playing")
+
+    print("  identical params during playback → no cache nuke passed")
+end
+
+--------------------------------------------------------------------------------
 -- Cleanup
 --------------------------------------------------------------------------------
 teardown()
