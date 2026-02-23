@@ -67,6 +67,7 @@ static void printHelp(const char* programName)
     std::cout << "Options:\n";
     std::cout << "  --help, -h          Show this help message and exit\n";
     std::cout << "  --version, -v       Show version information and exit\n";
+    std::cout << "  --test <script>     Run a Lua test script with full C++ bindings, then exit\n";
     std::cout << "\n";
     std::cout << "Arguments:\n";
     std::cout << "  project.jvp         Path to project file (created if doesn't exist)\n";
@@ -173,7 +174,8 @@ int main(int argc, char *argv[])
     // Install abort handler early to catch all assert()/abort() with stack traces
     jve_install_abort_handler();
 
-    // Handle --help and --version before creating QApplication
+    // Handle --help, --version, and --test before creating QApplication
+    const char* testScript = nullptr;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             printHelp(argv[0]);
@@ -182,6 +184,14 @@ int main(int argc, char *argv[])
         if (std::strcmp(argv[i], "--version") == 0 || std::strcmp(argv[i], "-v") == 0) {
             printVersion();
             return 0;
+        }
+        if (std::strcmp(argv[i], "--test") == 0) {
+            if (i + 1 >= argc) {
+                std::cerr << "ERROR: --test requires a script path argument\n";
+                return 1;
+            }
+            testScript = argv[i + 1];
+            ++i; // skip the script argument in further parsing
         }
     }
 
@@ -199,7 +209,50 @@ int main(int argc, char *argv[])
     
     // Initialize logging (quiet by default; opt-in via JVE_DEBUG_STARTUP=1).
     configureLogging();
-    
+
+    // --test mode: run a Lua script with full C++ bindings, then exit
+    if (testScript) {
+        qputenv("JVE_TEST_MODE", "1");
+
+        SimpleLuaEngine luaEngine;
+
+        // Add tests/ to package.path so integration tests can require("integration.integration_test_env")
+        lua_State* L = luaEngine.getLuaState();
+        std::string appDir = JVE::ResourcePaths::getApplicationDirectory();
+        std::string testsDir = appDir + "/tests";
+
+        lua_getglobal(L, "package");
+        lua_getfield(L, -1, "path");
+        std::string currentPath = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+        lua_pop(L, 1);
+
+        std::string newPath = testsDir + "/?.lua;" + testsDir + "/?/init.lua;" + currentPath;
+        lua_pushstring(L, newPath.c_str());
+        lua_setfield(L, -2, "path");
+        lua_pop(L, 1); // pop package table
+
+        // Resolve test script path (relative to appDir if not absolute)
+        QString scriptPath = QString::fromLocal8Bit(testScript);
+        QFileInfo scriptInfo(scriptPath);
+        if (scriptInfo.isRelative()) {
+            scriptInfo.setFile(QString::fromStdString(appDir), scriptPath);
+        }
+        scriptPath = scriptInfo.absoluteFilePath();
+
+        if (!scriptInfo.exists()) {
+            std::cerr << "ERROR: test script not found: " << scriptPath.toStdString() << "\n";
+            return 1;
+        }
+
+        qCInfo(jveMain, "Running test script: %s", qPrintable(scriptPath));
+        bool ok = luaEngine.executeFile(scriptPath);
+        if (!ok) {
+            std::cerr << "TEST FAILED: " << luaEngine.getLastError().toStdString() << "\n";
+            return 1;
+        }
+        return 0;
+    }
+
     // Apply professional dark theme
     app.setStyle(QStyleFactory::create("Fusion"));
     QPalette darkPalette;

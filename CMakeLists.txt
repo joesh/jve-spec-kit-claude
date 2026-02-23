@@ -428,6 +428,17 @@ add_test(NAME lua_suite
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+add_custom_target(integration_tests ALL
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/run_integration_tests.sh
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running integration tests (real C++ EMP bindings)"
+)
+add_dependencies(integration_tests JVEEditor lua_tests)
+add_test(NAME integration_suite
+    COMMAND ${CMAKE_SOURCE_DIR}/tests/run_integration_tests.sh
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # Standalone Lua timeline logic test (no test_base dependency)
 # Installation (not applicable for M1 Foundation tests)
 
