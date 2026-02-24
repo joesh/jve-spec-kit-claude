@@ -406,12 +406,19 @@ void PlaybackController::Stop() {
 void PlaybackController::Seek(int64_t frame) {
     JVE_ASSERT(frame >= 0,
         "PlaybackController::Seek: frame must be >= 0");
+    JVE_ASSERT(m_total_frames > 0,
+        "PlaybackController::Seek: bounds not set (call SetBounds before Seek)");
+    {
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+            "PlaybackController::Seek: frame %lld >= total_frames %lld",
+            (long long)frame, (long long)m_total_frames);
+        JVE_ASSERT(frame < m_total_frames, buf);
+    }
     JVE_ASSERT(m_tmb,
         "PlaybackController::Seek: TMB not set (call SetTMB before Seek)");
     JVE_ASSERT(m_surface,
         "PlaybackController::Seek: surface not set (call SetSurface before Seek)");
-    JVE_ASSERT(m_fps > 0,
-        "PlaybackController::Seek: bounds not set (call SetBounds before Seek)");
 
     m_position.store(frame, std::memory_order_relaxed);
     m_hit_boundary.store(false, std::memory_order_relaxed);
@@ -542,6 +549,8 @@ void PlaybackController::PlayBurst(int64_t frame_idx, int direction, int duratio
     JVE_ASSERT(m_aop, "PlaybackController::PlayBurst: AOP is null");
     JVE_ASSERT(m_sse, "PlaybackController::PlayBurst: SSE is null");
     JVE_ASSERT(m_tmb, "PlaybackController::PlayBurst: TMB is null");
+    JVE_ASSERT(frame_idx >= 0,
+        "PlaybackController::PlayBurst: frame_idx must be >= 0");
     if (m_playing.load(std::memory_order_relaxed)) {
         return;  // Don't burst while playing — valid guard
     }
@@ -618,6 +627,16 @@ void PlaybackController::SetClipTransitionCallback(ClipTransitionCallback cb) {
 // ============================================================================
 
 void PlaybackController::SetClipWindow(emp::TrackType type, int64_t lo, int64_t hi) {
+    {
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+            "PlaybackController::SetClipWindow: lo %lld must be < hi %lld",
+            (long long)lo, (long long)hi);
+        JVE_ASSERT(lo < hi, buf);
+    }
+    JVE_ASSERT(lo >= 0,
+        "PlaybackController::SetClipWindow: lo must be >= 0");
+
     ClipWindow& window = (type == emp::TrackType::Video) ? m_video_window : m_audio_window;
     window.lo.store(lo, std::memory_order_relaxed);
     window.hi.store(hi, std::memory_order_relaxed);
@@ -699,15 +718,19 @@ bool PlaybackController::IsPlaying() const {
 // CVDisplayLink lifecycle
 // ============================================================================
 
-void PlaybackController::startDisplayLink() {
+bool PlaybackController::startDisplayLink() {
     if (m_displayLink) {
-        return;  // Already running
+        return true;  // Already running
     }
 
     CVDisplayLinkRef displayLink;
     CVReturn result = CVDisplayLinkCreateWithActiveCGDisplays(&displayLink);
-    JVE_ASSERT(result == kCVReturnSuccess,
-        "PlaybackController::startDisplayLink: CVDisplayLink creation failed (headless?)");
+    if (result != kCVReturnSuccess) {
+        // CVDisplayLink unavailable — headless / --test mode / no display.
+        // Video ticks won't fire but audio can still work.
+        qWarning() << "PlaybackController: CVDisplayLink creation failed (headless?)";
+        return false;
+    }
 
     result = CVDisplayLinkSetOutputCallback(displayLink, &displayLinkCallback, this);
     JVE_ASSERT(result == kCVReturnSuccess,
@@ -721,6 +744,7 @@ void PlaybackController::startDisplayLink() {
         "PlaybackController: CVDisplayLinkStart failed");
 
     qWarning() << "PlaybackController: CVDisplayLink started";
+    return true;
 }
 
 void PlaybackController::stopDisplayLink() {

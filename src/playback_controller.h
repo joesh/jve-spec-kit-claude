@@ -188,7 +188,7 @@ private:
     int64_t advancePosition(double elapsed_seconds);
 
     // CVDisplayLink setup/teardown
-    void startDisplayLink();
+    bool startDisplayLink();  // returns false if display unavailable (headless)
     void stopDisplayLink();
 
     // ---- Atomics for cross-thread access ----
