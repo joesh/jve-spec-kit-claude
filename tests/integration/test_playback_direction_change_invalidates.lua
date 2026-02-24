@@ -13,6 +13,20 @@ if not qt_constants then
     return
 end
 
+-- Create GPU video surface (required by SET_SURFACE type check)
+local WIDGET = qt_constants.WIDGET
+if not WIDGET or not WIDGET.CREATE_GPU_VIDEO_SURFACE then
+    print("  ⚠ Skipping: CREATE_GPU_VIDEO_SURFACE not available")
+    print("✅ test_playback_direction_change_invalidates.lua passed (skipped)")
+    return
+end
+local ok_surf, test_surface = pcall(WIDGET.CREATE_GPU_VIDEO_SURFACE)
+if not ok_surf or not test_surface then
+    print("  ⚠ Skipping: GPU video surface creation failed (headless?)")
+    print("✅ test_playback_direction_change_invalidates.lua passed (skipped)")
+    return
+end
+
 -- Create controller
 local pc = qt_constants.PLAYBACK.CREATE()
 assert(pc, "test_playback_direction_change_invalidates: failed to create PlaybackController")
@@ -27,6 +41,7 @@ EMP.TMB_SET_SEQUENCE_RATE(tmb, 24, 1)
 qt_constants.PLAYBACK.SET_TMB(pc, tmb)
 qt_constants.PLAYBACK.SET_BOUNDS(pc, 1000, 24, 1)
 qt_constants.PLAYBACK.SET_VIDEO_TRACKS(pc, {0})
+qt_constants.PLAYBACK.SET_SURFACE(pc, test_surface)
 
 -- Track NeedClips callback invocations
 local need_clips_calls = {}

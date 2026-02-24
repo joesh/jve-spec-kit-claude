@@ -35,6 +35,20 @@ end
 
 local EMP = qt_constants.EMP
 local PLAYBACK = qt_constants.PLAYBACK
+local WIDGET = qt_constants.WIDGET
+
+-- Create GPU video surface (required by SET_SURFACE type check)
+if not WIDGET or not WIDGET.CREATE_GPU_VIDEO_SURFACE then
+    print("  ⚠ Skipping: CREATE_GPU_VIDEO_SURFACE not available")
+    print("✅ test_playback_controller_preconditions.lua passed (skipped)")
+    return
+end
+local ok_surf, test_surface = pcall(WIDGET.CREATE_GPU_VIDEO_SURFACE)
+if not ok_surf or not test_surface then
+    print("  ⚠ Skipping: GPU video surface creation failed (headless?)")
+    print("✅ test_playback_controller_preconditions.lua passed (skipped)")
+    return
+end
 
 --------------------------------------------------------------------------------
 -- 1. Valid usage: full setup before Play
@@ -45,10 +59,11 @@ do
     local tmb = EMP.TMB_CREATE(2)
     EMP.TMB_SET_SEQUENCE_RATE(tmb, 24, 1)
 
-    -- Proper sequence: bounds → TMB → tracks → play
-    PLAYBACK.SET_BOUNDS(pc, 1000, 24, 1)
+    -- Proper sequence: TMB → bounds → tracks → surface → play
     PLAYBACK.SET_TMB(pc, tmb)
+    PLAYBACK.SET_BOUNDS(pc, 1000, 24, 1)
     PLAYBACK.SET_VIDEO_TRACKS(pc, {0})
+    PLAYBACK.SET_SURFACE(pc, test_surface)
 
     -- Now Play should work
     PLAYBACK.PLAY(pc, 1, 1.0)
@@ -65,9 +80,13 @@ end
 section("2. Seek with bounds set")
 do
     local pc = PLAYBACK.CREATE()
+    local tmb = EMP.TMB_CREATE(2)
+    EMP.TMB_SET_SEQUENCE_RATE(tmb, 30, 1)
 
-    -- Set bounds first (required for seek to make sense)
+    -- Full setup required for Seek: TMB, bounds, surface
+    PLAYBACK.SET_TMB(pc, tmb)
     PLAYBACK.SET_BOUNDS(pc, 500, 30, 1)
+    PLAYBACK.SET_SURFACE(pc, test_surface)
 
     -- Seek should work
     PLAYBACK.SEEK(pc, 100)
@@ -78,6 +97,7 @@ do
     check(PLAYBACK.CURRENT_FRAME(pc) == 0, "Seek to 0 works")
 
     PLAYBACK.CLOSE(pc)
+    EMP.TMB_CLOSE(tmb)
 end
 
 --------------------------------------------------------------------------------
@@ -104,7 +124,12 @@ end
 section("4. Play validates parameters")
 do
     local pc = PLAYBACK.CREATE()
+    local tmb = EMP.TMB_CREATE(2)
+    EMP.TMB_SET_SEQUENCE_RATE(tmb, 24, 1)
+
+    PLAYBACK.SET_TMB(pc, tmb)
     PLAYBACK.SET_BOUNDS(pc, 1000, 24, 1)
+    PLAYBACK.SET_SURFACE(pc, test_surface)
 
     -- Valid: direction=1, speed=1.0
     PLAYBACK.PLAY(pc, 1, 1.0)
@@ -125,6 +150,7 @@ do
     -- We can't test this without crashing.
 
     PLAYBACK.CLOSE(pc)
+    EMP.TMB_CLOSE(tmb)
 end
 
 --------------------------------------------------------------------------------
@@ -133,7 +159,12 @@ end
 section("5. Shuttle mode boundary latch")
 do
     local pc = PLAYBACK.CREATE()
+    local tmb = EMP.TMB_CREATE(2)
+    EMP.TMB_SET_SEQUENCE_RATE(tmb, 24, 1)
+
+    PLAYBACK.SET_TMB(pc, tmb)
     PLAYBACK.SET_BOUNDS(pc, 100, 24, 1)
+    PLAYBACK.SET_SURFACE(pc, test_surface)
 
     -- Initially not at boundary
     check(PLAYBACK.HIT_BOUNDARY(pc) == false, "HIT_BOUNDARY initially false")
@@ -150,6 +181,7 @@ do
     check(PLAYBACK.HIT_BOUNDARY(pc) == false, "HIT_BOUNDARY false after seek (set by tick)")
 
     PLAYBACK.CLOSE(pc)
+    EMP.TMB_CLOSE(tmb)
 end
 
 --------------------------------------------------------------------------------

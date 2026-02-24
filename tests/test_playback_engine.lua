@@ -485,10 +485,12 @@ do
     local engine, log = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
+    -- Clear log: load_sequence's seek(0) fires rotation for default clip at frame 0
+    log.rotations = {}
 
     -- Seek to clipA
     engine:seek(10)
-    assert(#log.rotations == 1, "first clip → rotation callback")
+    assert(#log.rotations == 1, "first clip → rotation callback, got " .. #log.rotations)
     assert(log.rotations[1] == 0, "clipA rotation=0")
 
     -- Seek to clipB (different clip_id → rotation callback)
@@ -515,6 +517,8 @@ do
     local engine, log = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
+    -- Clear log: load_sequence's seek(0) fires PAR for default clip at frame 0
+    log.pars = {}
 
     -- Seek to clipC (square pixels)
     engine:seek(20)

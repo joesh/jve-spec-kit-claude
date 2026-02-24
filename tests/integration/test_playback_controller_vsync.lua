@@ -16,6 +16,21 @@ if not qt_constants then
     return
 end
 
+-- Create GPU video surface (required by SET_SURFACE type check)
+local WIDGET = qt_constants.WIDGET
+if not WIDGET or not WIDGET.CREATE_GPU_VIDEO_SURFACE then
+    print("  ⚠ Skipping: CREATE_GPU_VIDEO_SURFACE not available")
+    print("✅ test_playback_controller_vsync.lua passed (skipped)")
+    return
+end
+local ok_surf, surface = pcall(WIDGET.CREATE_GPU_VIDEO_SURFACE)
+if not ok_surf or not surface then
+    print("  ⚠ Skipping: GPU video surface creation failed (headless?)")
+    print("✅ test_playback_controller_vsync.lua passed (skipped)")
+    return
+end
+print("  ✓ Created GPU video surface")
+
 -- Create controller
 local pc = qt_constants.PLAYBACK.CREATE()
 assert(pc, "Failed to create PlaybackController")
@@ -32,7 +47,8 @@ print("  ✓ Created TMB")
 qt_constants.PLAYBACK.SET_TMB(pc, tmb)
 qt_constants.PLAYBACK.SET_BOUNDS(pc, 1000, 24, 1)
 qt_constants.PLAYBACK.SET_VIDEO_TRACKS(pc, {0})
-print("  ✓ Configured controller (TMB, bounds, tracks)")
+qt_constants.PLAYBACK.SET_SURFACE(pc, surface)
+print("  ✓ Configured controller (TMB, bounds, tracks, surface)")
 
 -- Set position callback
 qt_constants.PLAYBACK.SET_POSITION_CALLBACK(pc, function(_, _)
