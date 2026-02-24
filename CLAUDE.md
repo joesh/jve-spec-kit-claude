@@ -61,27 +61,28 @@ Tests are LuaJIT scripts in `tests/` with `test_*.lua` naming. Each test:
 - Ends with `print("✅ test_name.lua passed")` on success
 
 ## Logger Usage
-Use the logger module for all informational output (never bare `print`):
+Use the unified logger (never bare `print`). Each module binds to a functional area once:
 
 ```lua
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ticks")  -- or: audio, video, timeline, commands, database, ui, media
 
-logger.info("component_name", "Message here")
-logger.debug("component_name", "Debug details")
-logger.warn("component_name", "Warning message")
-logger.error("component_name", "Error message")
-logger.trace("component_name", "Verbose tracing")
+log.detail("per-frame data: %d", frame)   -- high-frequency, off by default
+log.event("state change: %s", state)      -- transitions, off by default
+log.warn("suspicious: %s", msg)           -- survived but odd, ON by default
+log.error("broken invariant: %s", msg)    -- broken, ON by default
 ```
 
-The first argument is always the component/subsystem name (e.g., "command_manager", "test", "ripple_delete"). Log levels from lowest to highest priority: TRACE, DEBUG, INFO, WARN, ERROR, FATAL.
+C++ uses macros: `JVE_LOG_DETAIL(Ticks, ...)`, `JVE_LOG_EVENT(Ticks, ...)`, `JVE_LOG_WARN(Ticks, ...)`, `JVE_LOG_ERROR(Ticks, ...)`.
+
+Control via env var: `JVE_LOG=play:detail,commands:event` (meta: `play`=ticks+audio+video, `all`=everything).
 
 For short-term debug prints that will immediately be removed you may use print.
 
 ## Lua Error Handling in C++ Callbacks
-When C++ code calls Lua callbacks (e.g., via `lua_pcall`), **NEVER use qWarning() to log errors** — warnings get buried in voluminous debug output. Instead:
+When C++ code calls Lua callbacks (e.g., via `lua_pcall`), **NEVER silently log errors**. Instead:
 - Use `JVE_ASSERT(false, err_msg)` to crash with stack trace
 - Lua's assert/error doesn't crash the app — it generates a stack trace and unwinds to the nearest pcall
-- Stack traces are essential for debugging; silent qWarning logs are not
+- Stack traces are essential for debugging; silent logs are not
 
 ## CRITICAL: Main Engineering Principles to ALWAYS keep in mind:
 
@@ -117,9 +118,10 @@ When C++ code calls Lua callbacks (e.g., via `lua_pcall`), **NEVER use qWarning(
 ## **✅ SUCCESS PATTERN**
 
 1. **Understand** → Study existing implementation first
-2. **Extend** → Add to existing patterns, don't replace
-3. **Test** → Verify integration with existing systems. You MUST write black-box as well as white-box tests. Black-box tests to make sure the standalone module and integrated modules do what they claim to do.
-4. **Verify** → Confirm no competing implementations created
+2. **Research** → Don't reinvent the wheel. Look at the net for what other NLEs do - especially with performance-critical code.
+3. **Extend** → Add to existing patterns, don't replace
+4. **Test** → Verify integration with existing systems. You MUST write black-box as well as white-box tests. Black-box tests to make sure the standalone module and integrated modules do what they claim to do.
+5. **Verify** → Confirm no competing implementations created
 
 **Remember**: Your efficiency comes from leveraging the robust systems already built, not from avoiding their "overhead".
 
