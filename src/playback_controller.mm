@@ -161,6 +161,7 @@ int AudioPump::QualityMode() const {
 void AudioPump::pumpLoop() {
     // Buffer for rendered audio
     std::vector<float> render_buffer(MAX_RENDER_FRAMES * m_channels);
+    int consecutive_dry_cycles = 0;
 
     while (!m_stop_requested.load(std::memory_order_relaxed)) {
         // 1. Get current media time from clock
@@ -180,14 +181,15 @@ void AudioPump::pumpLoop() {
             fetch_end = media_time_us;
         }
 
+        bool pushed_source = false;
         auto pcm = m_tmb->GetMixedAudio(fetch_start, fetch_end);
         if (pcm && pcm->frames() > 0) {
             // 3. Push to SSE (source data for time-stretching)
-            // Note: SSE target is set once at transport start (Play/SetSpeed).
-            // SSE manages its own time cursor via advance_time() after each Render.
-            // Calling SetTarget here would reset the cursor every pump cycle,
-            // preventing audio from progressing.
             m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(), pcm->start_time_us());
+            pushed_source = true;
+
+            // 4. Update SSE target (position + speed + quality)
+            m_sse->SetTarget(media_time_us, speed, static_cast<sse::QualityMode>(mode));
         }
 
         // 5. Render from SSE and write to AOP
@@ -196,11 +198,28 @@ void AudioPump::pumpLoop() {
         int64_t frames_needed = std::max<int64_t>(0, target_frames - buffered);
         frames_needed = std::min<int64_t>(frames_needed, MAX_RENDER_FRAMES);
 
+        int64_t produced = 0;
         if (frames_needed > 0) {
-            int64_t produced = m_sse->Render(render_buffer.data(), frames_needed);
+            produced = m_sse->Render(render_buffer.data(), frames_needed);
             if (produced > 0) {
                 m_aop->WriteF32(render_buffer.data(), produced);
             }
+        }
+
+        // Output invariant: if we pushed source data, SSE must eventually produce frames.
+        // Consecutive dry cycles (source pushed but nothing rendered) indicate SSE is broken.
+        if (pushed_source && produced == 0 && frames_needed > 0) {
+            consecutive_dry_cycles++;
+            if (consecutive_dry_cycles >= 50) {
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                    "AudioPump: SSE produced 0 frames for 50 consecutive cycles "
+                    "(media_time=%lld us, speed=%.2f, mode=%d)",
+                    (long long)media_time_us, speed, mode);
+                JVE_ASSERT(false, buf);
+            }
+        } else {
+            consecutive_dry_cycles = 0;
         }
 
         // 6. Adaptive sleep based on buffer level
@@ -789,6 +808,21 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
         int64_t aop_playhead = m_aop->PlayheadTimeUS();
         int64_t time_us = m_clock.CurrentTimeUS(aop_playhead);
         int64_t frame = PlaybackClock::FrameFromTimeUS(time_us, m_fps_num, m_fps_den);
+
+        // Output invariant: position can't teleport.
+        // At 60Hz with 8x speed, max sane delta ≈ 8*fps/60 ≈ 3 frames at 24fps.
+        // Allow generous margin (240 frames ≈ 10 seconds) to catch clock bugs
+        // without false positives from legitimate large seeks.
+        int64_t delta = std::abs(frame - current);
+        if (delta >= 240) {
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                "advancePosition: audio-following jumped %lld frames in one tick "
+                "(current=%lld, computed=%lld, time_us=%lld, aop=%lld)",
+                (long long)delta, (long long)current, (long long)frame,
+                (long long)time_us, (long long)aop_playhead);
+            JVE_ASSERT(false, buf);
+        }
 
         // Clamp to valid range
         frame = std::max<int64_t>(0, std::min(frame, m_total_frames - 1));
