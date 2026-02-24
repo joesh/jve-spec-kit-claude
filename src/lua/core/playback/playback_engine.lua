@@ -195,11 +195,18 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames)
     self:_close_tmb()
     self:_create_tmb()
 
-    -- PlaybackController setup
+    -- Feed TMB with clips BEFORE creating PlaybackController.
+    -- _send_clips_to_tmb populates _video_track_indices which the controller
+    -- needs for frame delivery. Without this ordering, C++ gets empty tracks
+    -- and deliverFrame() returns early → no video display.
+    self:_send_clips_to_tmb(0)
+
+    -- PlaybackController setup (uses populated _video_track_indices)
     self:_setup_playback_controller()
 
-    -- Initial clip feed at starting position
-    self:_send_clips_to_tmb(0)
+    -- Display parked frame at starting position.
+    -- All prerequisites (TMB, surface, tracks) are wired by this point.
+    self:seek(0)
 
     logger.debug("playback_engine", string.format(
         "Loaded sequence %s (%s): %d frames @ %d/%d fps",
@@ -296,10 +303,17 @@ function PlaybackEngine:_setup_playback_controller()
     end
     self._playback_controller = pc
 
-    -- Configure: TMB, bounds, video tracks
+    -- Configure: TMB, bounds, video tracks (populated by prior _send_clips_to_tmb)
     PLAYBACK.SET_TMB(pc, self._tmb)
     PLAYBACK.SET_BOUNDS(pc, self.total_frames, self.fps_num, self.fps_den)
     PLAYBACK.SET_VIDEO_TRACKS(pc, self._video_track_indices)
+
+    -- Send initial clip window so C++ doesn't need to wait for NeedClips
+    local w = self._tmb_clip_window
+    if w and w.hi > w.lo then
+        PLAYBACK.SET_CLIP_WINDOW(pc, "video", w.lo, w.hi)
+        PLAYBACK.SET_CLIP_WINDOW(pc, "audio", w.lo, w.hi)
+    end
 
     -- Wire surface if already set
     if self._video_surface then
@@ -444,9 +458,8 @@ function PlaybackEngine:_send_video_clips_to_tmb(frame)
         end
     end
 
-    -- Feed to TMB + compute window
+    -- Feed to TMB
     local indices = {}
-    local window_lo, window_hi = 0, self.total_frames
     for idx, clips in pairs(track_clips) do
         EMP.TMB_SET_TRACK_CLIPS(self._tmb, "video", idx, clips)
         indices[#indices + 1] = idx
@@ -459,11 +472,16 @@ function PlaybackEngine:_send_video_clips_to_tmb(frame)
         qt_constants.PLAYBACK.SET_VIDEO_TRACKS(self._playback_controller, indices)
     end
 
-    -- Compute clip window
-    for _, entry in ipairs(current_entries) do
-        local c = entry.clip
-        window_lo = math.max(window_lo, c.timeline_start)
-        window_hi = math.min(window_hi, c.timeline_start + c.duration)
+    -- Compute clip window: union of ALL loaded clips (current + next).
+    -- TMB has all these clips cached, so C++ doesn't need NeedClips
+    -- until the playhead approaches the edge of this range.
+    local window_lo = self.total_frames
+    local window_hi = 0
+    for _, clips in pairs(track_clips) do
+        for _, clip_data in ipairs(clips) do
+            window_lo = math.min(window_lo, clip_data.timeline_start)
+            window_hi = math.max(window_hi, clip_data.timeline_start + clip_data.duration)
+        end
     end
 
     -- Report clip window to C++
@@ -533,7 +551,6 @@ function PlaybackEngine:_send_audio_clips_only(frame)
 
     -- Feed to TMB
     local audio_indices = {}
-    local window_lo, window_hi = 0, self.total_frames
     for idx, clips in pairs(audio_track_clips) do
         EMP.TMB_SET_TRACK_CLIPS(self._tmb, "audio", idx, clips)
         audio_indices[#audio_indices + 1] = idx
@@ -541,11 +558,14 @@ function PlaybackEngine:_send_audio_clips_only(frame)
     table.sort(audio_indices)
     self._audio_track_indices = audio_indices
 
-    -- Compute audio clip window
-    for _, entry in ipairs(audio_entries) do
-        local c = entry.clip
-        window_lo = math.max(window_lo, c.timeline_start)
-        window_hi = math.min(window_hi, c.timeline_start + c.duration)
+    -- Compute audio clip window: union of ALL loaded clips (current + next).
+    local window_lo = self.total_frames
+    local window_hi = 0
+    for _, clips in pairs(audio_track_clips) do
+        for _, clip_data in ipairs(clips) do
+            window_lo = math.min(window_lo, clip_data.timeline_start)
+            window_hi = math.max(window_hi, clip_data.timeline_start + clip_data.duration)
+        end
     end
 
     -- Report clip window to C++
@@ -640,26 +660,34 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
     table.sort(indices, function(a, b) return a > b end)
     self._video_track_indices = indices
 
-    -- ── Audio tracks ──
-    local audio_entries = self:_send_audio_clips_to_tmb(frame, EMP)
+    -- Propagate video tracks to C++ controller (seek() calls this)
+    if self._playback_controller then
+        qt_constants.PLAYBACK.SET_VIDEO_TRACKS(self._playback_controller, indices)
+    end
 
-    -- ── Compute clip window: intersection of all current clip ranges ──
-    -- Playhead stays in-window as long as every current clip still covers it.
-    local window_lo = 0
-    local window_hi = self.total_frames or math.huge
+    -- ── Audio tracks ──
+    local audio_track_clips = self:_send_audio_clips_to_tmb(frame, EMP)
+
+    -- ── Compute clip window: union of ALL loaded clips (video + audio) ──
+    -- TMB has all these clips cached. The window tells C++ (and Lua tick)
+    -- not to request new clips until approaching the edge of this range.
+    local window_lo = self.total_frames or math.huge
+    local window_hi = 0
 
     local has_clips = false
-    for _, entry in ipairs(current_entries) do
-        has_clips = true
-        local c = entry.clip
-        window_lo = math.max(window_lo, c.timeline_start)
-        window_hi = math.min(window_hi, c.timeline_start + c.duration)
+    for _, clips in pairs(track_clips) do
+        for _, clip_data in ipairs(clips) do
+            has_clips = true
+            window_lo = math.min(window_lo, clip_data.timeline_start)
+            window_hi = math.max(window_hi, clip_data.timeline_start + clip_data.duration)
+        end
     end
-    for _, entry in ipairs(audio_entries) do
-        has_clips = true
-        local c = entry.clip
-        window_lo = math.max(window_lo, c.timeline_start)
-        window_hi = math.min(window_hi, c.timeline_start + c.duration)
+    for _, clips in pairs(audio_track_clips) do
+        for _, clip_data in ipairs(clips) do
+            has_clips = true
+            window_lo = math.min(window_lo, clip_data.timeline_start)
+            window_hi = math.max(window_hi, clip_data.timeline_start + clip_data.duration)
+        end
     end
 
     if has_clips and window_hi > window_lo then
@@ -675,7 +703,7 @@ end
 
 --- Feed audio clips near the playhead to TMB (same pattern as video).
 -- Called from _send_clips_to_tmb at clip boundaries.
--- @return audio_entries for clip window computation
+-- @return audio_track_clips table {[track_idx] = {clip_data, ...}} for window union
 function PlaybackEngine:_send_audio_clips_to_tmb(frame, EMP)
     local audio_entries = self.sequence:get_audio_at(frame)
 
@@ -743,7 +771,7 @@ function PlaybackEngine:_send_audio_clips_to_tmb(frame, EMP)
     end
     table.sort(audio_indices)
     self._audio_track_indices = audio_indices
-    return audio_entries
+    return audio_track_clips
 end
 
 --- Build a TMB clip table from a sequence entry (get_video_at/get_audio_at result).
@@ -831,22 +859,21 @@ function PlaybackEngine:shuttle(dir)
         if moving_away then
             self.direction = dir
             self.speed = 1
-            local t_us = 0
-            if audio_playback and audio_playback.is_ready() then
-                t_us = audio_playback.get_media_time_us()
-            end
             self:_clear_latch()
-            if audio_playback and audio_playback.is_ready() then
-                audio_playback.seek(t_us)
-                audio_playback.set_speed(dir * 1)
-                audio_playback.start()
-            end
             -- Resume via PlaybackController or Lua tick
             if self._playback_controller then
+                -- C++ Play() handles audio transport (Flush/Reset/SetTarget/Start)
                 local PLAYBACK = qt_constants.PLAYBACK
                 PLAYBACK.SET_SHUTTLE_MODE(self._playback_controller, true)
                 PLAYBACK.PLAY(self._playback_controller, dir, 1.0)
             else
+                -- Lua path: restart audio manually
+                if audio_playback and audio_playback.is_ready() then
+                    local t_us = audio_playback.get_media_time_us()
+                    audio_playback.seek(t_us)
+                    audio_playback.set_speed(dir * 1)
+                    audio_playback.start()
+                end
                 self:_schedule_tick()
             end
             return
@@ -1024,7 +1051,9 @@ function PlaybackEngine:seek(frame_idx)
         eng:_if_clip_changed_update_audio_mix(frame)
         if was_playing then
             eng:_start_audio()
-        else
+        elseif not eng._playback_controller then
+            -- Lua path only: seek audio device to match video position.
+            -- When C++ controller active, it handles audio positioning.
             local time_us = helpers.calc_time_us_from_frame(
                 frame, eng.fps_num, eng.fps_den)
             if audio_playback and audio_playback.is_ready() then
@@ -1334,8 +1363,11 @@ function PlaybackEngine:_configure_and_start_audio()
 end
 
 --- Start audio at current position.
+-- When C++ PlaybackController is active, it owns audio transport
+-- (Flush/Reset/SetTarget/Start happen in C++ Play/SetSpeed).
 function PlaybackEngine:_start_audio()
     if not self._audio_owner then return end
+    if self._playback_controller then return end  -- C++ owns transport
     if not audio_playback or not audio_playback.is_ready() then return end
 
     local time_us = helpers.calc_time_us_from_frame(
@@ -1346,10 +1378,12 @@ function PlaybackEngine:_start_audio()
 end
 
 function PlaybackEngine:_stop_audio()
+    if self._playback_controller then return end  -- C++ owns transport
     helpers.stop_audio(audio_playback)
 end
 
 function PlaybackEngine:_sync_audio()
+    if self._playback_controller then return end  -- C++ owns transport
     helpers.sync_audio(audio_playback, self.direction, self.speed)
 end
 
