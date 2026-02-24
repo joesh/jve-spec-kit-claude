@@ -15,7 +15,7 @@
 #include "assert_handler.h"
 #include "audio_output_platform/aop.h"
 #include "scrub_stretch_engine/sse.h"
-#include <QDebug>
+#include "jve_log.h"
 #include <QImage>
 #include <QPainter>
 #include <QFont>
@@ -1018,7 +1018,7 @@ static int lua_create_gpu_video_surface(lua_State* L) {
         return luaL_error(L, "CREATE_GPU_VIDEO_SURFACE: GPU video surface not available on this platform");
     }
 
-    qWarning() << "Creating GPUVideoSurface (hw-accelerated)";
+    JVE_LOG_EVENT(Video, "Creating GPUVideoSurface (hw-accelerated)");
     GPUVideoSurface* widget = new GPUVideoSurface();
 
     void** widget_ptr = static_cast<void**>(lua_newuserdata(L, sizeof(void*)));
@@ -1303,11 +1303,12 @@ static int lua_playback_seek(lua_State* L) {
     return 0;
 }
 
-// PLAYBACK.SET_AUDIO_POSITION(controller, frame)
-static int lua_playback_set_audio_position(lua_State* L) {
+// PLAYBACK.TICK(controller) — manual display link tick for integration tests.
+// Call when CVDisplayLink is unavailable (headless/CLI). Follow with
+// CONTROL.PROCESS_EVENTS() to drain GCD main queue for frame delivery.
+static int lua_playback_tick(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
-    int64_t frame = static_cast<int64_t>(luaL_checkinteger(L, 2));
-    controller->SetAudioPosition(frame);
+    controller->Tick();
     return 0;
 }
 
@@ -1688,8 +1689,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "STOP");
     lua_pushcfunction(L, lua_playback_seek);
     lua_setfield(L, -2, "SEEK");
-    lua_pushcfunction(L, lua_playback_set_audio_position);
-    lua_setfield(L, -2, "SET_AUDIO_POSITION");
+    lua_pushcfunction(L, lua_playback_tick);
+    lua_setfield(L, -2, "TICK");
     lua_pushcfunction(L, lua_playback_set_shuttle_mode);
     lua_setfield(L, -2, "SET_SHUTTLE_MODE");
     lua_pushcfunction(L, lua_playback_hit_boundary);

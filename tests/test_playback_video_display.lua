@@ -2,8 +2,7 @@
 --
 -- Observable output = the surface. After load_sequence, the surface must
 -- have a non-nil, non-black frame. After seek to a different position,
--- the surface frame must change. During play, the surface must receive
--- distinct advancing frames.
+-- the surface frame must change.
 --
 -- on_show_frame wires through to EMP.SURFACE_SET_FRAME exactly like the
 -- real SequenceMonitor does. C++ PLAYBACK mock SEEK models the real
@@ -27,8 +26,6 @@ local function make_surface()
         _history = {},          -- ordered list of frames set
     }
 end
-
-local controller_enabled = false
 
 --------------------------------------------------------------------------------
 -- Stubs
@@ -65,7 +62,6 @@ qt_constants_mock = {
     },
     PLAYBACK = {
         CREATE = function()
-            if not controller_enabled then return nil end
             pc_surface = nil  -- fresh controller state
             return "mock_controller"
         end,
@@ -109,6 +105,7 @@ package.loaded["core.qt_constants"] = qt_constants_mock
 package.loaded["core.logger"] = {
     debug = function() end, info = function() end,
     warn = function() end, error = function() end, trace = function() end,
+    for_area = function() return { event = function() end, detail = function() end, warn = function() end, error = function() end } end,
 }
 
 package.loaded["core.renderer"] = {
@@ -219,12 +216,6 @@ local function make_engine()
     return engine, surface
 end
 
-local function drain_timers()
-    local cbs = timer_callbacks
-    timer_callbacks = {}
-    for _, cb in ipairs(cbs) do cb() end
-end
-
 print("=== test_playback_video_display.lua ===")
 
 --------------------------------------------------------------------------------
@@ -232,9 +223,8 @@ print("=== test_playback_video_display.lua ===")
 -- Engine's load_sequence sets up infrastructure; caller (SequenceMonitor)
 -- is responsible for initial seek to saved_playhead from DB.
 --------------------------------------------------------------------------------
-print("\n--- 1. seek after load_sequence: surface has non-black frame (parked still) ---")
+print("\n--- 1. seek after load_sequence: surface has non-black frame ---")
 do
-    controller_enabled = false
     local engine, surface = make_engine()
     engine:load_sequence("seq1", 200)
     engine:seek(0)  -- caller's responsibility
@@ -243,19 +233,7 @@ do
         "surface._frame is nil after seek — no frame delivered")
     assert(surface._frame ~= BLACK_FRAME,
         "surface has BLACK frame after seek — should be a real frame")
-    print("  PASS: Lua path")
-end
-do
-    controller_enabled = true
-    local engine, surface = make_engine()
-    engine:load_sequence("seq1", 200)
-    engine:seek(0)  -- caller's responsibility
-
-    assert(surface._frame ~= nil,
-        "surface._frame is nil after seek (C++ path) — no frame delivered")
-    assert(surface._frame ~= BLACK_FRAME,
-        "surface has BLACK frame after seek (C++ path) — should be a real frame")
-    print("  PASS: C++ path")
+    print("  PASS")
 end
 
 --------------------------------------------------------------------------------
@@ -263,7 +241,6 @@ end
 --------------------------------------------------------------------------------
 print("\n--- 2. seek: surface frame changes ---")
 do
-    controller_enabled = false
     local engine, surface = make_engine()
     engine:load_sequence("seq1", 200)
     engine:seek(0)  -- initial park
@@ -278,90 +255,27 @@ do
     assert(surface._frame ~= parked_frame, string.format(
         "surface frame must change after seek: was %s, still %s",
         tostring(parked_frame), tostring(surface._frame)))
-    print("  PASS: Lua path")
-end
-do
-    controller_enabled = true
-    local engine, surface = make_engine()
-    engine:load_sequence("seq1", 200)
-    engine:seek(0)  -- initial park
-    local parked_frame = surface._frame
-
-    engine:seek(50)
-
-    assert(surface._frame ~= nil,
-        "surface._frame is nil after seek(50) (C++ path)")
-    assert(surface._frame ~= BLACK_FRAME,
-        "surface has BLACK frame after seek(50) (C++ path)")
-    assert(surface._frame ~= parked_frame, string.format(
-        "surface frame must change after seek (C++ path): was %s, still %s",
-        tostring(parked_frame), tostring(surface._frame)))
-    print("  PASS: C++ path")
+    print("  PASS")
 end
 
+-- Test 3 (play: surface shows advancing frames) deleted — relied on Lua tick
+-- loop (_tick → _display_frame → SURFACE_SET_FRAME). C++ CVDisplayLink drives
+-- frame delivery in production. Play behavior tested via PLAYBACK.PLAY delegation
+-- in test_playback_engine.lua.
+
 --------------------------------------------------------------------------------
--- 3. Play: surface receives distinct advancing frames
+-- 3. Seek into gap: surface shows black (not stale frame)
 --------------------------------------------------------------------------------
-print("\n--- 3. play: surface shows advancing frames ---")
+print("\n--- 3. seek into gap: surface shows black ---")
 do
-    controller_enabled = false
-    local engine, surface = make_engine()
-    engine:load_sequence("seq1", 200)
-    engine:seek(0)  -- initial park
-    local before_count = surface._frame_count
-
-    engine:play()
-    for i = 1, 10 do
-        mock_audio._time_us = i * 41667  -- ~24fps
-        drain_timers()
-    end
-    engine:stop()
-
-    local play_deliveries = surface._frame_count - before_count
-    assert(play_deliveries >= 2, string.format(
-        "surface must receive multiple frames during play, got %d", play_deliveries))
-
-    -- Verify frames advanced (not the same frame repeated)
-    local seen = {}
-    local distinct = 0
-    for i = before_count + 1, #surface._history do
-        local f = surface._history[i]
-        if f ~= BLACK_FRAME and not seen[f] then
-            seen[f] = true
-            distinct = distinct + 1
-        end
-    end
-    assert(distinct >= 2, string.format(
-        "surface must show distinct frames during play, got %d distinct", distinct))
-    print("  PASS: Lua path")
-end
-
---------------------------------------------------------------------------------
--- 4. Seek into gap: surface shows black (not stale frame)
---------------------------------------------------------------------------------
-print("\n--- 4. seek into gap: surface shows black ---")
-do
-    controller_enabled = false
-    local engine, surface = make_engine()
-    engine:load_sequence("seq1", 200)
-
-    -- Seek beyond clip range (frame 200+ is a gap in mock)
-    engine:seek(250)
-
-    assert(surface._frame == BLACK_FRAME, string.format(
-        "surface must show BLACK in gap, got %s", tostring(surface._frame)))
-    print("  PASS: Lua path")
-end
-do
-    controller_enabled = true
     local engine, surface = make_engine()
     engine:load_sequence("seq1", 200)
 
     engine:seek(250)  -- gap frame
 
     assert(surface._frame == BLACK_FRAME, string.format(
-        "surface must show BLACK in gap (C++ path), got %s", tostring(surface._frame)))
-    print("  PASS: C++ path")
+        "surface must show BLACK in gap, got %s", tostring(surface._frame)))
+    print("  PASS")
 end
 
 --------------------------------------------------------------------------------

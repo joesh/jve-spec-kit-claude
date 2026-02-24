@@ -6,6 +6,16 @@
 #include <QGroupBox>
 #include <QTextEdit>
 #include <QProgressBar>
+#include <QApplication>
+
+// CONTROL.PROCESS_EVENTS() — drain Qt event queue (also drains GCD main queue on macOS).
+// Essential for integration tests: PlaybackController dispatches frame delivery
+// and callbacks via dispatch_async(dispatch_get_main_queue()), which requires
+// the main run loop to be pumped.
+static int lua_process_events(lua_State*) {
+    QApplication::processEvents();
+    return 0;
+}
 
 
 

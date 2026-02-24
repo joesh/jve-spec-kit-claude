@@ -123,4 +123,33 @@ function M.create_two_clip_tmb(opts)
     return tmb, clip_a, clip_b, EMP
 end
 
+--- Try to open audio output (AOP + SSE).
+-- Returns (aop, sse) if audio device available, (nil, nil) otherwise.
+-- Non-fatal: CI/headless environments may lack audio devices.
+function M.try_open_audio(sample_rate, channels)
+    sample_rate = sample_rate or 48000
+    channels = channels or 2
+    local AOP = qt_constants.AOP
+    local SSE = qt_constants.SSE
+    if not AOP or not SSE then
+        print("  (audio unavailable: AOP/SSE bindings not found)")
+        return nil, nil
+    end
+    local ok, aop_or_err = pcall(AOP.OPEN, sample_rate, channels, 100)
+    if not ok then
+        print("  (audio unavailable: AOP.OPEN threw: " .. tostring(aop_or_err) .. ")")
+        return nil, nil
+    end
+    if not aop_or_err then
+        print("  (audio unavailable: AOP.OPEN returned nil)")
+        return nil, nil
+    end
+    local aop = aop_or_err
+    local sse = SSE.CREATE({
+        sample_rate = sample_rate, channels = channels, block_frames = 512,
+    })
+    assert(sse, "try_open_audio: SSE.CREATE failed after AOP succeeded")
+    return aop, sse
+end
+
 return M

@@ -99,6 +99,11 @@ private:
     static constexpr int PUMP_INTERVAL_HUNGRY_MS = 2;
     static constexpr int PUMP_INTERVAL_OK_MS = 15;
     static constexpr int MAX_RENDER_FRAMES = 4096;
+
+    // Sampled logging (every 50th cycle)
+    int64_t m_pump_cycle{0};
+    int64_t m_last_fetch_start{-1};
+    int64_t m_last_fetch_end{-1};
 };
 
 #ifdef __APPLE__
@@ -130,9 +135,6 @@ public:
     void Play(int direction, float speed);
     void Stop();
     void Seek(int64_t frame);
-
-    // Audio-following (from Lua audio tick) - DEPRECATED, use ActivateAudio
-    void SetAudioPosition(int64_t frame);
 
     // Audio pump control (Phase 3)
     void ActivateAudio(aop::AudioOutput* aop, sse::ScrubStretchEngine* sse,
@@ -173,6 +175,11 @@ public:
     // Public because it's called from C callback function
     void displayLinkTick(uint64_t host_time, uint64_t output_time);
 
+    // Manual tick for integration tests when CVDisplayLink is unavailable (headless/CLI).
+    // Calls displayLinkTick with current mach_absolute_time. Caller must drain the
+    // GCD main queue afterwards (CONTROL.PROCESS_EVENTS) for frame delivery.
+    void Tick();
+
 private:
     PlaybackController();
 
@@ -193,7 +200,6 @@ private:
 
     // ---- Atomics for cross-thread access ----
     std::atomic<int64_t> m_position{0};
-    std::atomic<int64_t> m_audio_position{-1};  // -1 = not set
     std::atomic<int> m_direction{0};
     std::atomic<float> m_speed{1.0f};
     std::atomic<bool> m_playing{false};
@@ -206,7 +212,17 @@ private:
     int32_t m_fps_den{1};
     double m_fps{24.0};  // precomputed fps_num/fps_den
     int64_t m_last_displayed_frame{-1};
+    double m_fractional_frames{0.0};   // video clock accumulator (CVDisplayLink elapsed → frames)
     std::string m_current_clip_id;
+
+    // Sampled logging counters
+    int64_t m_deliver_count{0};         // deliverFrame call count (sampled every 30th)
+    int64_t m_repeat_streak{0};         // consecutive frame repeats (stall detector)
+    int64_t m_advance_count{0};         // advancePosition call count (sampled every 30th)
+
+    // ---- A/V sync thresholds (ffplay model) ----
+    static constexpr double SYNC_THRESHOLD_MIN = 0.04;  // 40ms — ignore drift below this
+    static constexpr double SYNC_THRESHOLD_MAX = 0.1;   // 100ms — hard correction above this
 
     // ---- Clip windows ----
     // Track valid frame ranges where TMB has clips loaded.
@@ -219,7 +235,7 @@ private:
     };
     ClipWindow m_video_window;
     ClipWindow m_audio_window;
-    static constexpr int64_t PREFETCH_MARGIN_FRAMES = 30;  // ~1s at 24fps
+    static constexpr int64_t PREFETCH_MARGIN_FRAMES = 72;  // ~3s at 24fps
 
     // ---- Dependencies ----
     emp::TimelineMediaBuffer* m_tmb{nullptr};
@@ -270,7 +286,6 @@ public:
     void Stop() {}
     void Seek(int64_t) {}
 
-    void SetAudioPosition(int64_t) {}
     void ActivateAudio(aop::AudioOutput*, sse::ScrubStretchEngine*, int32_t, int32_t) {}
     void DeactivateAudio() {}
     void SetSpeed(float) {}

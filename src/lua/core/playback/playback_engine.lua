@@ -9,8 +9,9 @@
 -- caches frames, and pre-buffers at clip boundaries. Lua feeds clip windows
 -- incrementally via _send_clips_to_tmb() and reads decoded frames via Renderer.
 --
--- Unified tick combines source_playback boundary-latch logic and
--- timeline_playback audio-following/stuckness-detection into one algorithm.
+-- Position advancement and frame display are driven entirely by C++
+-- PlaybackController (CVDisplayLink tick). Lua owns transport state machine,
+-- boundary latch logic, audio mix resolution, and clip window feeding.
 --
 -- Audio coordination: only one PlaybackEngine "owns" audio at a time.
 -- activate_audio() / deactivate_audio() manage ownership.
@@ -24,7 +25,7 @@
 --
 -- @file playback_engine.lua
 
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ticks")
 local qt_constants = require("core.qt_constants")
 local Renderer = require("core.renderer")
 local Sequence = require("models.sequence")
@@ -41,7 +42,7 @@ local audio_playback = nil
 -- @param ap audio_playback module
 function PlaybackEngine.init_audio(ap)
     audio_playback = ap
-    logger.debug("playback_engine", "Audio module initialized")
+    log.event("Audio module initialized")
 end
 
 --- Get class-level audio module reference (for tests/inspection).
@@ -105,10 +106,7 @@ function PlaybackEngine.new(config)
     self._on_set_par = config.on_set_par
     self._on_position_changed = config.on_position_changed
 
-    -- Tick state
-    self._tick_generation = 0
-    self._last_tick_frame = nil
-    self._last_audio_frame = nil
+    -- Seek dedup
     self._last_committed_frame = nil
 
     -- Audio ownership (only one engine owns audio at a time)
@@ -208,10 +206,9 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames)
     -- positioning via saved_playhead from DB. Hardcoding seek(0) is wrong when
     -- content starts at frame N (e.g., DRP imports with gaps before first clip).
 
-    logger.debug("playback_engine", string.format(
-        "Loaded sequence %s (%s): %d frames @ %d/%d fps",
+    log.event("Loaded sequence %s (%s): %d frames @ %d/%d fps",
         sequence_id:sub(1, 8), info.kind,
-        self.total_frames, self.fps_num, self.fps_den))
+        self.total_frames, self.fps_num, self.fps_den)
 end
 
 --- Compute content end frame from sequence clips (max of timeline_start + duration).
@@ -241,9 +238,8 @@ function PlaybackEngine:_refresh_content_bounds()
         audio_playback.set_max_time(self.max_media_time_us)
     end
 
-    logger.debug("playback_engine", string.format(
-        "Refreshed content bounds: %d frames, max_time=%.3fs",
-        self.total_frames, self.max_media_time_us / 1000000))
+    log.event("Refreshed content bounds: %d frames, max_time=%.3fs",
+        self.total_frames, self.max_media_time_us / 1000000)
 end
 
 --------------------------------------------------------------------------------
@@ -283,11 +279,7 @@ end
 --- Create and configure C++ PlaybackController for CVDisplayLink-driven playback.
 function PlaybackEngine:_setup_playback_controller()
     local PLAYBACK = qt_constants.PLAYBACK
-    if not PLAYBACK then
-        -- PLAYBACK bindings not available (test mode without C++)
-        logger.debug("playback_engine", "PLAYBACK bindings not available, using Lua tick")
-        return
-    end
+    assert(PLAYBACK, "PlaybackEngine:_setup_playback_controller: PLAYBACK bindings required")
 
     -- Close previous controller if any
     if self._playback_controller then
@@ -297,10 +289,7 @@ function PlaybackEngine:_setup_playback_controller()
 
     -- Create new controller
     local pc = PLAYBACK.CREATE()
-    if not pc then
-        logger.warn("playback_engine", "PlaybackController not available on this platform")
-        return
-    end
+    assert(pc, "PlaybackEngine:_setup_playback_controller: CREATE returned nil")
     self._playback_controller = pc
 
     -- Configure: TMB, bounds, video tracks (populated by prior _send_clips_to_tmb)
@@ -346,11 +335,11 @@ function PlaybackEngine:_setup_playback_controller()
             PLAYBACK.INVALIDATE_CLIP_WINDOWS(engine._playback_controller)
             -- Also clear Lua-side clip window cache
             engine._tmb_clip_window = nil
-            logger.debug("playback_engine", "Edit detected: invalidated clip windows")
+            log.event("Edit detected: invalidated clip windows")
         end
     end)
 
-    logger.debug("playback_engine", "PlaybackController created and configured")
+    log.event("PlaybackController created and configured")
 end
 
 --- NeedClips callback: C++ requests clips when approaching window edge.
@@ -363,8 +352,7 @@ function PlaybackEngine:_on_need_clips(frame, direction, track_type)
         "PlaybackEngine:_on_need_clips: track_type must be 'video' or 'audio', got %s",
         tostring(track_type)))
 
-    logger.debug("playback_engine", string.format(
-        "NeedClips: frame=%d dir=%d type=%s", frame, direction, track_type))
+    log.detail("NeedClips: frame=%d dir=%d type=%s", frame, direction, track_type)
 
     -- Update direction for clip window tracking
     self.direction = direction
@@ -390,6 +378,13 @@ function PlaybackEngine:_on_controller_position(frame, stopped)
         self.state = "stopped"
         self.direction = 0
         self:_stop_audio()
+    elseif self.transport_mode == "shuttle" and not self.latched then
+        -- Boundary latch detection (migrated from deleted Lua _tick)
+        local hit_start = (self.direction < 0 and frame <= 0)
+        local hit_end = (self.direction > 0 and frame >= self.total_frames - 1)
+        if hit_start or hit_end then
+            self:_apply_latch(frame)
+        end
     end
 end
 
@@ -407,6 +402,8 @@ function PlaybackEngine:_on_clip_transition(clip_id, rotation, par_num, par_den,
         "PlaybackEngine:_on_clip_transition: is_offline must be boolean, got %s", type(is_offline)))
 
     if clip_id ~= self.current_clip_id then
+        log.event("clip_transition: clip=%s rotation=%d par=%d/%d offline=%s",
+            clip_id, rotation, par_num, par_den, tostring(is_offline))
         self.current_clip_id = clip_id
         -- Offline frames are upright with square pixels
         self._on_set_rotation(is_offline and 0 or rotation)
@@ -680,7 +677,7 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
     end
 
     -- ── Audio tracks ──
-    self:_send_audio_clips_to_tmb(frame, EMP)
+    local audio_track_clips = self:_send_audio_clips_to_tmb(frame, EMP)
 
     -- ── Compute clip window from VIDEO clips only ──
     -- The clip window determines when Lua re-queries TMB for new clips.
@@ -707,6 +704,28 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
         -- Gap or degenerate: don't cache, re-query next tick
         self._tmb_clip_window = nil
     end
+
+    -- Report clip windows to C++ (keeps windows fresh after seek).
+    -- Without this, C++ retains stale windows from _setup_playback_controller
+    -- and fires spurious NeedClips at play start.
+    if self._playback_controller and has_clips and window_hi > window_lo then
+        local PLAYBACK = qt_constants.PLAYBACK
+        PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "video", window_lo, window_hi)
+    end
+
+    -- Compute audio clip window separately (audio clips may span different range)
+    local audio_lo, audio_hi = self.total_frames, 0
+    for _, clips in pairs(audio_track_clips) do
+        for _, clip_data in ipairs(clips) do
+            audio_lo = math.min(audio_lo, clip_data.timeline_start)
+            audio_hi = math.max(audio_hi, clip_data.timeline_start + clip_data.duration)
+        end
+    end
+    if self._playback_controller and audio_hi > audio_lo then
+        qt_constants.PLAYBACK.SET_CLIP_WINDOW(
+            self._playback_controller, "audio", audio_lo, audio_hi)
+    end
+
     return true  -- boundary crossing: clips were re-queried
 end
 
@@ -869,22 +888,12 @@ function PlaybackEngine:shuttle(dir)
             self.direction = dir
             self.speed = 1
             self:_clear_latch()
-            -- Resume via PlaybackController or Lua tick
-            if self._playback_controller then
-                -- C++ Play() handles audio transport (Flush/Reset/SetTarget/Start)
-                local PLAYBACK = qt_constants.PLAYBACK
-                PLAYBACK.SET_SHUTTLE_MODE(self._playback_controller, true)
-                PLAYBACK.PLAY(self._playback_controller, dir, 1.0)
-            else
-                -- Lua path: restart audio manually
-                if audio_playback and audio_playback.is_ready() then
-                    local t_us = audio_playback.get_media_time_us()
-                    audio_playback.seek(t_us)
-                    audio_playback.set_speed(dir * 1)
-                    audio_playback.start()
-                end
-                self:_schedule_tick()
-            end
+            -- Resume via C++ PlaybackController
+            assert(self._playback_controller,
+                "PlaybackEngine:shuttle: unlatch requires _playback_controller")
+            local PLAYBACK = qt_constants.PLAYBACK
+            PLAYBACK.SET_SHUTTLE_MODE(self._playback_controller, true)
+            PLAYBACK.PLAY(self._playback_controller, dir, 1.0)
             return
         else
             return  -- same direction as boundary, stay latched
@@ -899,7 +908,6 @@ function PlaybackEngine:shuttle(dir)
         self.state = "playing"
         self.transport_mode = "shuttle"
         self._last_committed_frame = math.floor(self:get_position())
-        self._last_tick_frame = math.floor(self:get_position())
         qt_constants.EMP.SET_DECODE_MODE("play")
     elseif self.direction == dir then
         if self.speed < 8 then
@@ -925,14 +933,12 @@ function PlaybackEngine:shuttle(dir)
         self:_try_audio("_sync_audio")
     end
 
-    -- Delegate to C++ PlaybackController if available
-    if self._playback_controller then
-        local PLAYBACK = qt_constants.PLAYBACK
-        PLAYBACK.SET_SHUTTLE_MODE(self._playback_controller, true)
-        PLAYBACK.PLAY(self._playback_controller, self.direction, self.speed)
-    else
-        self:_schedule_tick()
-    end
+    -- Delegate to C++ PlaybackController
+    assert(self._playback_controller,
+        "PlaybackEngine:shuttle: _playback_controller required")
+    local PLAYBACK = qt_constants.PLAYBACK
+    PLAYBACK.SET_SHUTTLE_MODE(self._playback_controller, true)
+    PLAYBACK.PLAY(self._playback_controller, self.direction, self.speed)
 end
 
 --- K+J or K+L: slow playback at 0.5x
@@ -947,19 +953,16 @@ function PlaybackEngine:slow_play(dir)
     self.state = "playing"
     self.transport_mode = "shuttle"
     self._last_committed_frame = math.floor(self:get_position())
-    self._last_tick_frame = math.floor(self:get_position())
 
     qt_constants.EMP.SET_DECODE_MODE("play")
     self:_try_audio("_configure_and_start_audio")
 
-    -- Delegate to C++ PlaybackController if available
-    if self._playback_controller then
-        local PLAYBACK = qt_constants.PLAYBACK
-        PLAYBACK.SET_SHUTTLE_MODE(self._playback_controller, true)
-        PLAYBACK.PLAY(self._playback_controller, dir, 0.5)
-    else
-        self:_schedule_tick()
-    end
+    -- Delegate to C++ PlaybackController
+    assert(self._playback_controller,
+        "PlaybackEngine:slow_play: _playback_controller required")
+    local PLAYBACK = qt_constants.PLAYBACK
+    PLAYBACK.SET_SHUTTLE_MODE(self._playback_controller, true)
+    PLAYBACK.PLAY(self._playback_controller, dir, 0.5)
 end
 
 --- Play forward at 1x speed (spacebar).
@@ -973,20 +976,17 @@ function PlaybackEngine:play()
     self.state = "playing"
     self.transport_mode = "play"
     self._last_committed_frame = math.floor(self:get_position())
-    self._last_tick_frame = math.floor(self:get_position())
     self:_clear_latch()
 
     qt_constants.EMP.SET_DECODE_MODE("play")
     self:_try_audio("_configure_and_start_audio")
 
-    -- Delegate to C++ PlaybackController if available
-    if self._playback_controller then
-        local PLAYBACK = qt_constants.PLAYBACK
-        PLAYBACK.SET_SHUTTLE_MODE(self._playback_controller, false)
-        PLAYBACK.PLAY(self._playback_controller, 1, 1.0)
-    else
-        self:_schedule_tick()
-    end
+    -- Delegate to C++ PlaybackController
+    assert(self._playback_controller,
+        "PlaybackEngine:play: _playback_controller required")
+    local PLAYBACK = qt_constants.PLAYBACK
+    PLAYBACK.SET_SHUTTLE_MODE(self._playback_controller, false)
+    PLAYBACK.PLAY(self._playback_controller, 1, 1.0)
 end
 
 --- Stop playback.
@@ -1001,9 +1001,6 @@ function PlaybackEngine:stop()
     self.speed = 1
     self.transport_mode = "none"
     self._last_committed_frame = nil
-    self._tick_generation = self._tick_generation + 1
-    self._last_tick_frame = nil
-    self._last_audio_frame = nil
     self:_clear_latch()
 
     self:_stop_audio()
@@ -1034,8 +1031,6 @@ function PlaybackEngine:seek(frame_idx)
     self:_clear_latch()
     self:set_position_silent(frame)
     self._last_committed_frame = frame
-    self._last_tick_frame = frame
-    self._last_audio_frame = nil
 
     local was_playing = (self.state == "playing")
     if was_playing then
@@ -1048,26 +1043,15 @@ function PlaybackEngine:seek(frame_idx)
     end
 
     -- Delegate seek to C++ PlaybackController (handles frame display)
-    if self._playback_controller then
-        qt_constants.PLAYBACK.SEEK(self._playback_controller, frame)
-    else
-        -- Fallback: display via Lua Renderer
-        self:_display_frame(frame)
-    end
+    assert(self._playback_controller,
+        "PlaybackEngine:seek: _playback_controller required")
+    qt_constants.PLAYBACK.SEEK(self._playback_controller, frame)
 
-    -- Audio resolve + restart/scrub (non-fatal: must not prevent seek)
+    -- Audio resolve + restart (non-fatal: must not prevent seek)
     self:_try_audio(function(eng)
         eng:_if_clip_changed_update_audio_mix(frame)
         if was_playing then
             eng:_start_audio()
-        elseif not eng._playback_controller then
-            -- Lua path only: seek audio device to match video position.
-            -- When C++ controller active, it handles audio positioning.
-            local time_us = helpers.calc_time_us_from_frame(
-                frame, eng.fps_num, eng.fps_den)
-            if audio_playback and audio_playback.is_ready() then
-                audio_playback.seek(time_us)
-            end
         end
     end)
 end
@@ -1180,178 +1164,9 @@ function PlaybackEngine:destroy()
     end
 end
 
---------------------------------------------------------------------------------
--- Unified Tick
---
--- Single algorithm for all sequence kinds. Combines:
--- - source_playback boundary-latch logic (shuttle latches at ends)
--- - timeline_playback audio-following + stuckness detection
--- - Renderer for video display (no mode branching)
--- - Mixer for audio resolution (no mode branching)
---------------------------------------------------------------------------------
-
-function PlaybackEngine:_tick()
-    if self.state ~= "playing" then return end
-    assert(self.sequence,
-        "PlaybackEngine:_tick: no sequence loaded")
-    assert(self.fps_num and self.fps_num > 0
-       and self.fps_den and self.fps_den > 0,
-        "PlaybackEngine:_tick: fps must be set and positive")
-
-    -- 1. Latched: keep displaying boundary frame, keep ticking
-    if self.latched then
-        self:_display_frame(math.floor(self._position))
-        self:_schedule_tick()
-        return
-    end
-
-    -- 2. Frame advancement with audio-following and stuckness detection
-    local pos, audio_frame = self:_advance_position()
-
-    -- Update audio tracker (only when audio was driving, not stuck).
-    -- Keeping this separate from _last_tick_frame prevents oscillation:
-    -- frame-based advance changes _last_tick_frame but must NOT reset
-    -- the audio stuckness tracker.
-    if audio_frame ~= nil then
-        self._last_audio_frame = audio_frame
-    end
-
-    -- 3. Clamp to valid range
-    pos = math.max(0, math.min(pos, self.total_frames - 1))
-
-    -- 4. Boundary detection
-    local hit_start = (self.direction < 0 and pos <= 0)
-    local hit_end = (self.direction > 0 and pos >= self.total_frames - 1)
-
-    if hit_start or hit_end then
-        local boundary_frame = hit_start and 0 or (self.total_frames - 1)
-
-        if self.transport_mode == "shuttle" then
-            -- Shuttle: latch at boundary, keep ticking
-            self:_apply_latch(boundary_frame)
-            self:set_position(boundary_frame)
-            self._last_committed_frame = math.floor(boundary_frame)
-            self._last_tick_frame = math.floor(boundary_frame)
-            self:_schedule_tick()
-        else
-            -- Play: stop at boundary
-            self:_display_frame(math.floor(boundary_frame))
-            self:set_position(boundary_frame)
-            self._last_committed_frame = math.floor(boundary_frame)
-            self._last_tick_frame = math.floor(boundary_frame)
-            self:stop()
-        end
-        return
-    end
-
-    -- 5. Pre-buffer hint + clip feed + decode via TMB
-    local frame_idx = math.floor(pos)
-
-    if self._tmb and self.direction ~= 0 then
-        qt_constants.EMP.TMB_SET_PLAYHEAD(
-            self._tmb, frame_idx, self.direction, self.speed)
-    end
-    local clips_changed = false
-    if self._tmb then
-        clips_changed = self:_send_clips_to_tmb(frame_idx)
-    end
-
-    self:_display_frame(frame_idx)
-
-    -- 6-7. Audio resolve + gap-entry start (non-fatal: must not kill video tick loop)
-    if self._audio_owner then
-        self:_try_audio(function(eng)
-            -- Only check audio mix at clip boundaries (not every tick)
-            if clips_changed and frame_idx ~= eng._last_tick_frame then
-                eng:_if_clip_changed_update_audio_mix(frame_idx)
-            end
-            if audio_playback and audio_playback.has_audio and not audio_playback.playing then
-                eng:_start_audio()
-            end
-        end)
-    end
-
-    -- 8. Commit position
-    self:set_position(pos)
-    self._last_committed_frame = math.floor(pos)
-    self._last_tick_frame = frame_idx
-
-    self:_schedule_tick()
-end
-
---- Advance position: audio-following with stuckness detection.
--- @return new_pos, audio_frame_or_nil
---   audio_frame is non-nil only when audio is actively driving (for tracker).
-function PlaybackEngine:_advance_position()
-    local audio_can_drive = self._audio_owner
-        and audio_playback and audio_playback.is_ready()
-        and audio_playback.playing and audio_playback.has_audio
-
-    if audio_can_drive then
-        local audio_time_us = audio_playback.get_time_us()
-        local audio_frame = helpers.calc_frame_from_time_us(
-            audio_time_us, self.fps_num, self.fps_den)
-
-        if self._last_audio_frame ~= nil
-           and audio_frame == self._last_audio_frame then
-            -- Audio stuck (J-cut, gap, exhaustion): frame-based advance
-            return self._position + (self.direction * self.speed), nil
-        else
-            -- Audio advancing: video follows audio time
-            return audio_frame, audio_frame
-        end
-    else
-        -- No audio: frame-based advance
-        return self._position + (self.direction * self.speed), nil
-    end
-end
-
---- Display frame via Renderer (TMB path). Handles clip switch and gap detection.
-function PlaybackEngine:_display_frame(frame_idx)
-    assert(self.sequence,
-        "PlaybackEngine:_display_frame: no sequence loaded")
-    assert(self._tmb,
-        "PlaybackEngine:_display_frame: no TMB")
-
-    local frame_handle, metadata = Renderer.get_video_frame(
-        self._tmb, self._video_track_indices, frame_idx)
-
-    if frame_handle then
-        assert(metadata, string.format(
-            "PlaybackEngine:_display_frame: Renderer returned frame but nil metadata at frame %d",
-            frame_idx))
-        assert(metadata.par_num and metadata.par_num >= 1, string.format(
-            "PlaybackEngine:_display_frame: metadata.par_num must be >= 1 at frame %d, got %s",
-            frame_idx, tostring(metadata.par_num)))
-        assert(metadata.par_den and metadata.par_den >= 1, string.format(
-            "PlaybackEngine:_display_frame: metadata.par_den must be >= 1 at frame %d, got %s",
-            frame_idx, tostring(metadata.par_den)))
-
-        if metadata.pending then
-            logger.debug("playback_engine",
-                "_display_frame: pending (stale) frame at %d, async decode in progress",
-                frame_idx)
-        end
-
-        local is_offline = metadata.offline
-
-        -- Detect clip switch -> rotation + PAR callbacks
-        if metadata.clip_id ~= self.current_clip_id then
-            self.current_clip_id = metadata.clip_id
-            -- Offline frames are upright with square pixels
-            self._on_set_rotation(is_offline and 0 or metadata.rotation)
-            self._on_set_par(
-                is_offline and 1 or metadata.par_num,
-                is_offline and 1 or metadata.par_den)
-        end
-
-        self._on_show_frame(frame_handle, metadata)
-    else
-        -- Gap at playhead
-        self._on_show_gap()
-        self.current_clip_id = nil
-    end
-end
+-- NOTE: _tick(), _advance_position(), _display_frame() DELETED.
+-- C++ displayLinkTick / deliverFrame owns position advancement and frame display.
+-- Latch detection migrated to _on_controller_position() above.
 
 --------------------------------------------------------------------------------
 -- Audio Helpers
@@ -1493,8 +1308,7 @@ function PlaybackEngine:_init_audio_session()
     audio_pb.init_session(self.audio_sample_rate, 2)
     audio_pb.set_max_time(self.max_media_time_us)
     audio_playback = audio_pb
-    logger.info("playback_engine",
-        "Init audio session: sr=" .. self.audio_sample_rate)
+    log.event("Init audio session: sr=%s", tostring(self.audio_sample_rate))
 end
 
 --- Compare clip ID sets for change detection.
@@ -1533,14 +1347,13 @@ function PlaybackEngine:_apply_latch(boundary_frame)
         audio_playback.latch(t_us)
     end
 
-    self:_display_frame(boundary_frame)
+    -- NOTE: no _display_frame here — C++ deliverFrame handles display.
 
     self.latched = true
     self.latched_boundary = (boundary_frame == 0) and "start" or "end"
 
-    logger.debug("playback_engine", string.format(
-        "Latched at %s boundary (frame %d)",
-        self.latched_boundary, boundary_frame))
+    log.event("Latched at %s boundary (frame %d)",
+        self.latched_boundary, boundary_frame)
 end
 
 function PlaybackEngine:_clear_latch()
@@ -1548,33 +1361,7 @@ function PlaybackEngine:_clear_latch()
     self.latched_boundary = nil
 end
 
---------------------------------------------------------------------------------
--- Tick Scheduling
---------------------------------------------------------------------------------
-
-function PlaybackEngine:_schedule_tick()
-    if self.state ~= "playing" then return end
-    assert(self.fps and self.fps > 0,
-        "PlaybackEngine:_schedule_tick: fps not set")
-
-    local base_interval = math.floor(1000 / self.fps)
-    local interval
-
-    if self.speed < 1 then
-        interval = math.floor(base_interval / self.speed)
-    else
-        interval = base_interval
-    end
-
-    interval = math.max(interval, 16)  -- ~60fps cap
-
-    local gen = self._tick_generation
-    local engine = self
-    qt_create_single_shot_timer(interval, function()
-        if engine._tick_generation ~= gen then return end
-        engine:_tick()
-    end)
-end
+-- NOTE: _schedule_tick() DELETED. C++ CVDisplayLink drives tick loop.
 
 --------------------------------------------------------------------------------
 -- Frame Step Audio (Jog)

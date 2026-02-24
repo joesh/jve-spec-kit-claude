@@ -16,7 +16,7 @@
 --
 -- @file sequence_monitor.lua
 
-local logger = require("core.logger")
+local log = require("core.logger").for_area("video")
 local qt_constants = require("core.qt_constants")
 local PlaybackEngine = require("core.playback.playback_engine")
 local Sequence = require("models.sequence")
@@ -245,8 +245,7 @@ function SequenceMonitor:_create_widgets()
 
     qt_constants.LAYOUT.SET_ON_WIDGET(self._container, layout)
 
-    logger.info("sequence_monitor", string.format(
-        "%s: widgets created", self.view_id))
+    log.event("%s: widgets created", self.view_id)
 end
 
 --------------------------------------------------------------------------------
@@ -300,10 +299,9 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
 
     self:_notify()
 
-    logger.info("sequence_monitor", string.format(
-        "%s: loaded %s %s (%d frames @ %d/%d fps)",
+    log.event("%s: loaded %s %s (%d frames @ %d/%d fps)",
         self.view_id, seq.kind or "?", sequence_id:sub(1, 8),
-        self.total_frames, self.fps_num, self.fps_den))
+        self.total_frames, self.fps_num, self.fps_den)
 end
 
 --- Unload current sequence.
@@ -469,10 +467,15 @@ end
 --------------------------------------------------------------------------------
 
 function SequenceMonitor:_on_show_frame(frame_handle, _metadata)
+    self._frame_count = (self._frame_count or 0) + 1
+    if self._frame_count % 30 == 0 then
+        log.detail("show_frame: view=%s count=%d", self.view_id, self._frame_count)
+    end
     qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, frame_handle)
 end
 
 function SequenceMonitor:_on_show_gap()
+    log.event("show_gap: view=%s", self.view_id)
     qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, nil)
 end
 

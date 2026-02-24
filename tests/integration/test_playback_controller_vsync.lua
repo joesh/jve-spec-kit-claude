@@ -81,10 +81,6 @@ qt_constants.PLAYBACK.SEEK(pc, 500)
 assert(qt_constants.PLAYBACK.CURRENT_FRAME(pc) == 500, "Should be at frame 500 after seek")
 print("  ✓ Seek to frame 500")
 
--- Test audio position API
-qt_constants.PLAYBACK.SET_AUDIO_POSITION(pc, 100)
-print("  ✓ Set audio position (audio-following API)")
-
 -- Clean up
 qt_constants.PLAYBACK.CLOSE(pc)
 EMP.TMB_CLOSE(tmb)

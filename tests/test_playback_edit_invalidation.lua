@@ -78,6 +78,7 @@ package.loaded["core.qt_constants"] = {
 package.loaded["core.logger"] = {
     debug = function() end, info = function() end,
     warn = function() end, error = function() end, trace = function() end,
+    for_area = function() return { event = function() end, detail = function() end, warn = function() end, error = function() end } end,
 }
 
 package.loaded["core.renderer"] = {

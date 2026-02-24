@@ -5,7 +5,7 @@
 
 #include <editor_media_platform/emp_frame.h>
 #include <QResizeEvent>
-#include <QDebug>
+#include "jve_log.h"
 
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -213,7 +213,7 @@ void GPUVideoSurface::initMetal() {
             length:sizeof(vertices) options:MTLResourceStorageModeShared];
 
         m_initialized = true;
-        qWarning() << "GPUVideoSurface: Metal initialized";
+        JVE_LOG_EVENT(Video, "GPUVideoSurface: Metal initialized");
     }
 }
 
@@ -282,11 +282,22 @@ void GPUVideoSurface::setFrame(const std::shared_ptr<emp::Frame>& frame) {
 
     if (!m_initialized) initMetal();
     if (!m_initialized) {
-        qDebug() << "GPUVideoSurface::setFrame: Metal not initialized, dropping frame";
+        JVE_LOG_WARN(Video, "GPUVideoSurface::setFrame: Metal not initialized, dropping frame");
         return;
     }
 
     ++m_frame_count;
+
+    // Sampled DETAIL log: every 30th frame
+    if (m_frame_count % 30 == 0) {
+        bool hw = false;
+#ifdef EMP_HAS_VIDEOTOOLBOX
+        hw = (frame->native_buffer() != nullptr);
+#endif
+        JVE_LOG_DETAIL(Video, "setFrame: count=%lld mode=%s %dx%d",
+                      (long long)m_frame_count, hw ? "HW" : "SW",
+                      frame->width(), frame->height());
+    }
 
 #ifdef EMP_HAS_VIDEOTOOLBOX
     void* hw_buffer = frame->native_buffer();
@@ -309,8 +320,7 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
     @autoreleasepool {
         size_t planeCount = CVPixelBufferGetPlaneCount(pixelBuffer);
         if (planeCount != 2) {
-            qWarning() << "GPUVideoSurface::setFrameHW: expected 2 planes, got"
-                       << planeCount << "— skipping frame";
+            JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: expected 2 planes, got %zu — skipping frame", planeCount);
             return;
         }
 
@@ -379,10 +389,8 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
                 fmt_str[1] = (pixelFormat >> 16) & 0xFF;
                 fmt_str[2] = (pixelFormat >> 8) & 0xFF;
                 fmt_str[3] = pixelFormat & 0xFF;
-                qWarning() << "GPUVideoSurface::setFrameHW: unsupported pixel format"
-                           << QString::fromLatin1(fmt_str)
-                           << "(" << QString::number(pixelFormat, 16)
-                           << ") — skipping frame";
+                JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: unsupported pixel format %s (0x%x) — skipping frame",
+                             fmt_str, pixelFormat);
                 return;
             }
         }
@@ -396,8 +404,7 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
             kCFAllocatorDefault, m_impl->textureCache, pixelBuffer, nullptr,
             yFormat, yWidth, yHeight, 0, &m_impl->textureY);
         if (ret != kCVReturnSuccess || !m_impl->textureY) {
-            qWarning() << "GPUVideoSurface::setFrameHW: failed to create Y texture (ret="
-                       << ret << ") — skipping frame";
+            JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: failed to create Y texture (ret=%d) — skipping frame", ret);
             return;
         }
 
@@ -408,8 +415,7 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
             kCFAllocatorDefault, m_impl->textureCache, pixelBuffer, nullptr,
             uvFormat, uvWidth, uvHeight, 1, &m_impl->textureUV);
         if (ret != kCVReturnSuccess || !m_impl->textureUV) {
-            qWarning() << "GPUVideoSurface::setFrameHW: failed to create UV texture (ret="
-                       << ret << ") — skipping frame";
+            JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: failed to create UV texture (ret=%d) — skipping frame", ret);
             m_impl->releaseTextures();
             return;
         }

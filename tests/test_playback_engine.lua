@@ -1,8 +1,9 @@
---- Test: PlaybackEngine unified tick, transport, audio-following, boundary latch
+--- Test: PlaybackEngine transport state machine, boundary latch, audio ownership.
 --
--- Tests the instantiable PlaybackEngine class. All modules (Renderer, Mixer,
--- Sequence, media_cache) are mocked at module level so tests focus on the
--- tick algorithm, transport state machine, and audio change detection.
+-- All transport goes through C++ PlaybackController (PLAYBACK mock).
+-- Position updates come from stored_position_cb (simulating C++ callbacks).
+-- Clip transitions come from stored_clip_transition_cb.
+-- No Lua tick path exists — tests verify the C++ delegation is correct.
 
 require("test_env")
 
@@ -10,23 +11,47 @@ require("test_env")
 -- Mock Infrastructure
 --------------------------------------------------------------------------------
 
--- Timer: captures callback for manual tick pumping
+-- Timer: only needed for non-tick uses (UI debounce, etc.)
 local timer_callbacks = {}
 _G.qt_create_single_shot_timer = function(interval, callback)
     timer_callbacks[#timer_callbacks + 1] = callback
-end
-
-local function pump_tick()
-    assert(#timer_callbacks > 0, "pump_tick: no pending timer callback")
-    local cb = table.remove(timer_callbacks, 1)
-    cb()
 end
 
 local function clear_timers()
     timer_callbacks = {}
 end
 
--- Mock qt_constants
+-- PLAYBACK mock: tracks all C++ PlaybackController calls
+local playback_calls = {}
+local stored_position_cb = nil
+local stored_clip_transition_cb = nil
+
+local function reset_playback()
+    playback_calls = {}
+    stored_position_cb = nil
+    stored_clip_transition_cb = nil
+end
+
+local function track(name, ...)
+    playback_calls[#playback_calls + 1] = { name = name, args = {...} }
+end
+
+local function find_call(name)
+    for _, c in ipairs(playback_calls) do
+        if c.name == name then return c end
+    end
+    return nil
+end
+
+local function count_calls(name)
+    local n = 0
+    for _, c in ipairs(playback_calls) do
+        if c.name == name then n = n + 1 end
+    end
+    return n
+end
+
+-- Mock qt_constants with PLAYBACK namespace
 package.loaded["core.qt_constants"] = {
     EMP = {
         SET_DECODE_MODE = function() end,
@@ -38,7 +63,6 @@ package.loaded["core.qt_constants"] = {
         READER_DECODE_FRAME = function() return nil end,
         FRAME_RELEASE = function() end,
         PCM_RELEASE = function() end,
-        -- TMB functions (video path uses TMB, not media_cache)
         TMB_CREATE = function() return "mock_tmb" end,
         TMB_CLOSE = function() end,
         TMB_PARK_READERS = function() end,
@@ -48,9 +72,30 @@ package.loaded["core.qt_constants"] = {
         TMB_SET_PLAYHEAD = function() end,
         TMB_GET_VIDEO_FRAME = function() return nil, { offline = false } end,
     },
+    PLAYBACK = {
+        CREATE = function() return "mock_controller" end,
+        PLAY = function(pc, dir, speed) track("PLAY", dir, speed) end,
+        STOP = function(pc) track("STOP") end,
+        SEEK = function(pc, frame) track("SEEK", frame) end,
+        SET_TMB = function() end,
+        SET_BOUNDS = function() end,
+        SET_VIDEO_TRACKS = function() end,
+        SET_SURFACE = function() end,
+        SET_CLIP_WINDOW = function() end,
+        SET_SHUTTLE_MODE = function(pc, enabled) track("SET_SHUTTLE_MODE", enabled) end,
+        SET_NEED_CLIPS_CALLBACK = function() end,
+        SET_POSITION_CALLBACK = function(pc, fn) stored_position_cb = fn end,
+        SET_CLIP_TRANSITION_CALLBACK = function(pc, fn) stored_clip_transition_cb = fn end,
+        INVALIDATE_CLIP_WINDOWS = function() end,
+        CLOSE = function() end,
+        HAS_AUDIO = function() return false end,
+        ACTIVATE_AUDIO = function() end,
+        DEACTIVATE_AUDIO = function() end,
+        PLAY_BURST = function() end,
+    },
 }
 
--- Mock media_cache (audio functions only — video path uses TMB now)
+-- Mock media_cache (audio functions only)
 package.loaded["core.media.media_cache"] = {
     ensure_audio_pooled = function(path)
         return { has_audio = true, audio_sample_rate = 48000 }
@@ -66,11 +111,8 @@ package.loaded["core.logger"] = {
     warn = function() end,
     error = function() end,
     trace = function() end,
+    for_area = function() return { event = function() end, detail = function() end, warn = function() end, error = function() end } end,
 }
-
--- Configurable video: maps frame → {clip_id, rotation, par_num, par_den} or nil (gap)
-local video_map = {}
-local function set_video_map(map) video_map = map end
 
 -- Mock Renderer
 package.loaded["core.renderer"] = {
@@ -82,17 +124,6 @@ package.loaded["core.renderer"] = {
         }
     end,
     get_video_frame = function(tmb, track_indices, frame)
-        local entry = video_map[frame]
-        if entry then
-            return "frame_handle_" .. frame, {
-                clip_id = entry.clip_id or "clip1",
-                media_path = entry.media_path or "/test.mov",
-                source_frame = entry.source_frame or frame,
-                rotation = entry.rotation or 0,
-                par_num = entry.par_num or 1,
-                par_den = entry.par_den or 1,
-            }
-        end
         -- Default: clip1 for frames 0-99, gap otherwise
         if frame >= 0 and frame < 100 then
             return "frame_handle_" .. frame, {
@@ -108,29 +139,7 @@ package.loaded["core.renderer"] = {
     end,
 }
 
--- Configurable audio: maps frame → sources list or empty
-local audio_sources_map = {}
-
--- Mock Mixer
-package.loaded["core.mixer"] = {
-    resolve_audio_sources = function(seq, frame, fps_num, fps_den, mc)
-        local entry = audio_sources_map[frame]
-        if entry then return entry.sources, entry.clip_ids end
-        -- Default: one audio clip for frames 0-99
-        if frame >= 0 and frame < 100 then
-            return {
-                { path = "/test.mov", source_offset_us = 0, seek_us = 0,
-                  speed_ratio = 1.0, volume = 1.0,
-                  duration_us = 4166666, clip_start_us = 0,
-                  clip_end_us = 4166666, clip_id = "aclip1" },
-            }, { aclip1 = true }
-        end
-        return {}, {}
-    end,
-}
-
--- Mock Sequence model (includes lookahead stubs)
--- mock_content_end: configurable return for compute_content_end (simulates DB state)
+-- Mock Sequence model
 local mock_content_end = 100
 local mock_sequence = {
     id = "seq1",
@@ -146,47 +155,10 @@ package.loaded["models.sequence"] = {
     load = function(id) return mock_sequence end,
 }
 
--- Mock audio_playback
-local function make_mock_audio()
-    return {
-        session_initialized = true,
-        playing = false,
-        has_audio = false,
-        max_media_time_us = 10000000,
-        _time_us = 0,
-
-        is_ready = function() return true end,
-        get_time_us = function(self_or_nothing)
-            -- Handle both module-style and method-style calls
-            if type(self_or_nothing) == "table" then
-                return self_or_nothing._time_us
-            end
-            return make_mock_audio._shared._time_us
-        end,
-        get_media_time_us = function() return 0 end,
-        seek = function() end,
-        start = function() end,
-        stop = function() end,
-        set_speed = function() end,
-        set_max_time = function() end,
-        set_audio_sources = function(sources, mc, restart_time)
-            -- Track that sources were set (legacy path)
-        end,
-        apply_mix = function(tmb, mix_params, edit_time_us)
-            -- TMB audio mix (Phase 3c)
-        end,
-        latch = function() end,
-        play_burst = function() end,
-    }
-end
-
--- Shared mock audio instance for get_time_us module-level calls
-local mock_audio = make_mock_audio()
-mock_audio.get_time_us = function() return mock_audio._time_us end
-
--- Mock signals (required by old playback_controller if loaded transitionally)
+-- Mock signals
 package.loaded["core.signals"] = {
-    connect = function() end,
+    connect = function() return "conn_id" end,
+    disconnect = function() end,
     emit = function() end,
 }
 
@@ -207,6 +179,8 @@ local function make_engine()
         pars = {},
         positions = {},
     }
+
+    reset_playback()
 
     local engine = PlaybackEngine.new({
         on_show_frame = function(frame_handle, metadata)
@@ -281,29 +255,40 @@ do
     assert(engine.total_frames == 100, "total_frames")
     assert(engine.sequence == mock_sequence, "sequence object stored")
     assert(engine:get_position() == 0, "position starts at 0")
+    assert(engine._playback_controller == "mock_controller",
+        "controller created during load")
     print("  ok")
 end
 
--- ─── Test 3: play → tick advances → stop ───
-print("\n--- play/tick/stop ---")
+-- ─── Test 3: play → PLAYBACK.PLAY called → position callback → stop ───
+print("\n--- play delegates to C++ → position callback → stop ---")
 do
     local engine, log = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
+    playback_calls = {}  -- reset after load_sequence setup
 
     engine:play()
     assert(engine:is_playing(), "should be playing")
     assert(engine.direction == 1, "forward")
     assert(engine.speed == 1, "1x")
 
-    -- Pump one tick: frame-based advance (no audio)
-    pump_tick()
-    assert(engine:get_position() == 1, "advanced to frame 1, got " .. engine:get_position())
-    assert(#log.frames_shown > 0, "frame was displayed")
+    -- Verify PLAY was called on controller
+    local play_call = find_call("PLAY")
+    assert(play_call, "PLAYBACK.PLAY must be called")
+    assert(play_call.args[1] == 1, "direction=1")
+    assert(play_call.args[2] == 1.0, "speed=1.0")
 
-    engine:stop()
-    assert(not engine:is_playing(), "should be stopped")
-    assert(engine.direction == 0, "direction reset")
+    -- Simulate C++ position callback (as if displayLinkTick advanced to frame 5)
+    assert(stored_position_cb, "position callback must be set")
+    stored_position_cb(5, false)
+    assert(engine:get_position() == 5, "position updated to 5")
+    assert(#log.positions > 0, "position callback fired")
+
+    -- Simulate boundary stop from C++
+    stored_position_cb(99, true)
+    assert(not engine:is_playing(), "stopped from boundary callback")
+    assert(engine:get_position() == 99, "at boundary frame")
     print("  ok")
 end
 
@@ -345,19 +330,19 @@ do
     print("  ok")
 end
 
--- ─── Test 5: boundary stop in play mode ───
-print("\n--- boundary stop (play mode) ---")
+-- ─── Test 5: boundary stop in play mode (via position callback) ───
+print("\n--- boundary stop (play mode, via position callback) ---")
 do
     mock_content_end = 5
     local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 5)
-    engine:set_position_silent(3)
-    engine._last_committed_frame = 3
 
     engine:play()
-    -- First tick: advance 3→4, hit boundary (4 >= total_frames-1), stop
-    pump_tick()
+    assert(engine:is_playing(), "should be playing")
+
+    -- Simulate C++ boundary stop: position callback with stopped=true
+    stored_position_cb(4, true)
     assert(not engine:is_playing(), "stopped at boundary")
     assert(engine:get_position() == 4, "parked at last frame")
     assert(not engine.latched, "play mode doesn't latch")
@@ -366,183 +351,111 @@ do
 end
 
 -- ─── Test 6: boundary latch in shuttle mode + unlatch ───
-print("\n--- boundary latch (shuttle mode) ---")
+print("\n--- boundary latch (shuttle mode, via position callback) ---")
 do
     mock_content_end = 5
     local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 5)
-    engine:set_position_silent(3)
-    engine._last_committed_frame = 3
 
     engine:shuttle(1)  -- forward shuttle
-    -- First tick: advance 3→4, hit boundary (4 >= 4), latch
-    pump_tick()
+    assert(engine:is_playing(), "playing")
+    assert(engine.transport_mode == "shuttle", "shuttle mode")
+
+    -- Simulate C++ position at boundary (frame 4 = total_frames-1), NOT stopped
+    -- (C++ shuttle keeps ticking at boundary with m_hit_boundary=true)
+    stored_position_cb(4, false)
     assert(engine:is_playing(), "still playing (latched)")
     assert(engine.latched, "latched at boundary")
     assert(engine.latched_boundary == "end", "latched at end")
     assert(engine:get_position() == 4, "at last frame")
 
     -- Same direction while latched → no-op
+    playback_calls = {}
     engine:shuttle(1)
     assert(engine.latched, "still latched")
 
-    -- Opposite direction → unlatch
+    -- Opposite direction → unlatch + resume via PLAYBACK.PLAY
     engine:shuttle(-1)
     assert(not engine.latched, "unlatched")
     assert(engine.direction == -1, "reversed")
     assert(engine.speed == 1, "1x after unlatch")
+    assert(find_call("PLAY"), "PLAY called on unlatch")
     mock_content_end = 100
     print("  ok")
 end
 
--- ─── Test 7: audio following (video follows audio time) ───
-print("\n--- audio following ---")
+-- ─── Test 9: gap display (via seek → PLAYBACK.SEEK) ───
+-- Tests 7 (audio following) and 8 (stuckness detection) deleted —
+-- C++ two-clock owns position advancement.
+print("\n--- seek triggers PLAYBACK.SEEK ---")
 do
     local engine, _ = make_engine()
-    clear_timers()
-    engine:load_sequence("seq1", 100)
-
-    -- Set up audio ownership with mock audio
-    PlaybackEngine.init_audio(mock_audio)
-    engine:activate_audio()
-    mock_audio.playing = true
-    mock_audio.has_audio = true
-
-    engine:play()
-    -- Simulate audio at frame 10 (time = 10 * 1000000 / 24 = 416666us)
-    mock_audio._time_us = 416666
-    pump_tick()
-    local pos = engine:get_position()
-    -- audio frame = floor(416666 * 24 / 1000000) = floor(9.999984) = 9
-    -- (rounding is inherent in integer frame math)
-    assert(pos >= 9 and pos <= 10,
-        "audio following: pos=" .. pos .. " expected ~10")
-
-    engine:stop()
-    mock_audio.playing = false
-    mock_audio.has_audio = false
-    PlaybackEngine.init_audio(nil)
-    print("  ok")
-end
-
--- ─── Test 8: stuckness detection → frame-based advance ───
-print("\n--- stuckness detection ---")
-do
-    local engine, _ = make_engine()
-    clear_timers()
-    engine:load_sequence("seq1", 100)
-
-    PlaybackEngine.init_audio(mock_audio)
-    engine:activate_audio()
-    mock_audio.playing = true
-    mock_audio.has_audio = true
-
-    engine:play()
-
-    -- First tick: audio at frame 5
-    mock_audio._time_us = 5 * 1000000 / 24
-    pump_tick()
-    local pos1 = engine:get_position()
-
-    -- Second tick: audio STUCK at same time
-    pump_tick()
-    local pos2 = engine:get_position()
-    -- Should advance frame-based (pos1 + 1) since audio is stuck
-    assert(pos2 > pos1,
-        "stuckness: should advance frame-based, pos1=" .. pos1 .. " pos2=" .. pos2)
-
-    engine:stop()
-    mock_audio.playing = false
-    mock_audio.has_audio = false
-    PlaybackEngine.init_audio(nil)
-    print("  ok")
-end
-
--- ─── Test 9: gap display ───
-print("\n--- gap display ---")
-do
-    local engine, log = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 200)
+    playback_calls = {}
 
-    -- Seek to gap (frame 150, default video_map returns nil for >= 100)
     engine:seek(150)
-    assert(log.gaps_shown > 0, "gap callback fired")
+    local seek_call = find_call("SEEK")
+    assert(seek_call, "SEEK called")
+    assert(seek_call.args[1] == 150, "seeked to frame 150")
     print("  ok")
 end
 
--- ─── Test 10: clip switch triggers rotation callback ───
-print("\n--- clip switch + rotation ---")
+-- ─── Test 10: clip transition callback triggers rotation ───
+print("\n--- clip transition callback + rotation ---")
 do
-    -- Set up two clips with different rotations
-    set_video_map({
-        [10] = { clip_id = "clipA", rotation = 0, source_frame = 10 },
-        [11] = { clip_id = "clipA", rotation = 0, source_frame = 11 },
-        [12] = { clip_id = "clipB", rotation = 90, source_frame = 0 },
-    })
-
     local engine, log = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
-    log.rotations = {}  -- load_sequence no longer auto-seeks; clear for safety
+    log.rotations = {}
 
-    -- Seek to clipA
-    engine:seek(10)
-    assert(#log.rotations == 1, "first clip → rotation callback, got " .. #log.rotations)
+    -- Simulate C++ clip transition: clipA with rotation=0
+    assert(stored_clip_transition_cb, "clip transition callback must be set")
+    stored_clip_transition_cb("clipA", 0, 1, 1, false)
+    assert(#log.rotations == 1, "first clip → rotation callback")
     assert(log.rotations[1] == 0, "clipA rotation=0")
 
-    -- Seek to clipB (different clip_id → rotation callback)
-    engine:seek(12)
+    -- Same clip again → no new callback
+    stored_clip_transition_cb("clipA", 0, 1, 1, false)
+    assert(#log.rotations == 1, "same clip → no rotation callback")
+
+    -- Different clip → rotation callback
+    stored_clip_transition_cb("clipB", 90, 1, 1, false)
     assert(#log.rotations == 2, "clip switch → rotation callback")
     assert(log.rotations[2] == 90, "clipB rotation=90")
 
-    -- Reset video map
-    set_video_map({})
     print("  ok")
 end
 
--- ─── Test 10b: clip switch triggers PAR callback ───
-print("\n--- clip switch + PAR ---")
+-- ─── Test 10b: clip transition callback triggers PAR ───
+print("\n--- clip transition callback + PAR ---")
 do
-    -- clipC: square pixels (1:1), clipD: anamorphic HD (4:3)
-    set_video_map({
-        [20] = { clip_id = "clipC", rotation = 0, par_num = 1, par_den = 1, source_frame = 20 },
-        [21] = { clip_id = "clipC", rotation = 0, par_num = 1, par_den = 1, source_frame = 21 },
-        [22] = { clip_id = "clipD", rotation = 0, par_num = 4, par_den = 3, source_frame = 0 },
-        [23] = { clip_id = "clipD", rotation = 0, par_num = 4, par_den = 3, source_frame = 1 },
-    })
-
     local engine, log = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
-    log.pars = {}  -- load_sequence no longer auto-seeks; clear for safety
+    log.pars = {}
 
-    -- Seek to clipC (square pixels)
-    engine:seek(20)
+    -- clipC: square pixels (1:1)
+    stored_clip_transition_cb("clipC", 0, 1, 1, false)
     assert(#log.pars == 1, "first clip → PAR callback, got " .. #log.pars)
     assert(log.pars[1][1] == 1 and log.pars[1][2] == 1,
         string.format("clipC PAR should be 1:1, got %d:%d", log.pars[1][1], log.pars[1][2]))
 
-    -- Same clip, different frame → no new PAR callback
-    engine:seek(21)
-    assert(#log.pars == 1, "same clip → no PAR callback, got " .. #log.pars)
-
-    -- Seek to clipD (anamorphic)
-    engine:seek(22)
-    assert(#log.pars == 2, "clip switch → PAR callback, got " .. #log.pars)
+    -- clipD: anamorphic HD (4:3)
+    stored_clip_transition_cb("clipD", 0, 4, 3, false)
+    assert(#log.pars == 2, "clip switch → PAR callback")
     assert(log.pars[2][1] == 4 and log.pars[2][2] == 3,
         string.format("clipD PAR should be 4:3, got %d:%d", log.pars[2][1], log.pars[2][2]))
 
     -- Same clip → no new callback
-    engine:seek(23)
-    assert(#log.pars == 2, "same clip → no PAR callback, got " .. #log.pars)
+    stored_clip_transition_cb("clipD", 0, 4, 3, false)
+    assert(#log.pars == 2, "same clip → no PAR callback")
 
-    set_video_map({})
     print("  ok")
 end
 
--- ─── Test 11: seek while playing ───
+-- ─── Test 11: seek while playing → SEEK called ───
 print("\n--- seek while playing ---")
 do
     local engine, _ = make_engine()
@@ -550,33 +463,32 @@ do
     engine:load_sequence("seq1", 100)
 
     engine:play()
-    pump_tick()
-    assert(engine:is_playing(), "playing before seek")
+    playback_calls = {}
 
     engine:seek(50)
     assert(engine:is_playing(), "still playing after seek")
     assert(engine:get_position() == 50, "seeked to 50")
+    assert(find_call("SEEK"), "SEEK called")
 
     engine:stop()
     print("  ok")
 end
 
--- ─── Test 12: seek while stopped (parked) ───
+-- ─── Test 12: seek while stopped (parked) + dedup ───
 print("\n--- seek while stopped ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 
+    playback_calls = {}
     engine:seek(25)
     assert(engine:get_position() == 25, "seeked to 25")
-    assert(#log.frames_shown > 0, "frame displayed on seek")
-    assert(not engine:is_playing(), "still stopped")
+    assert(count_calls("SEEK") == 1, "SEEK called once")
 
     -- Redundant seek to same frame → skip
-    local count_before = #log.frames_shown
     engine:seek(25)
-    assert(#log.frames_shown == count_before, "redundant seek skipped")
+    assert(count_calls("SEEK") == 1, "redundant seek skipped")
     print("  ok")
 end
 
@@ -603,6 +515,7 @@ do
     local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
+    playback_calls = {}
 
     engine:slow_play(-1)
     assert(engine:is_playing(), "playing")
@@ -610,43 +523,30 @@ do
     assert(engine.direction == -1, "reverse")
     assert(engine.transport_mode == "shuttle", "shuttle mode for slow_play")
 
+    -- Verify PLAY called with correct params
+    local play_call = find_call("PLAY")
+    assert(play_call, "PLAY called")
+    assert(play_call.args[1] == -1, "direction=-1")
+    assert(play_call.args[2] == 0.5, "speed=0.5")
+
     engine:stop()
     print("  ok")
 end
 
--- ─── Test 15: tick generation prevents stale callbacks ───
-print("\n--- tick generation ---")
-do
-    local engine, _ = make_engine()
-    clear_timers()
-    engine:load_sequence("seq1", 100)
-
-    engine:play()
-    assert(#timer_callbacks == 1, "one timer scheduled")
-
-    -- Stop invalidates the generation
-    engine:stop()
-
-    -- Pump the stale callback — should be no-op
-    local pos_before = engine:get_position()
-    pump_tick()
-    assert(engine:get_position() == pos_before, "stale tick was no-op")
-    assert(not engine:is_playing(), "still stopped")
-    print("  ok")
-end
+-- Test 15 (tick generation) deleted — no more Lua ticks.
 
 -- ─── Test 16: reverse shuttle → latch at start boundary ───
-print("\n--- reverse latch at start ---")
+print("\n--- reverse latch at start (via position callback) ---")
 do
     local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
-    engine:set_position_silent(1)
-    engine._last_committed_frame = 1
 
     engine:shuttle(-1)  -- reverse
-    -- First tick: advance 1→0, hit start boundary (dir<0, pos<=0), latch
-    pump_tick()
+    assert(engine.transport_mode == "shuttle", "shuttle mode")
+
+    -- Simulate C++ position at start boundary, not stopped
+    stored_position_cb(0, false)
     assert(engine.latched, "latched")
     assert(engine.latched_boundary == "start", "latched at start")
     assert(engine:get_position() == 0, "at frame 0")
@@ -774,9 +674,9 @@ do
 
     assert(engine.total_frames == 1, "total_frames=1")
 
-    -- Play → immediately hit boundary at frame 0 (already there)
+    -- Play → C++ will immediately boundary-stop via position callback
     engine:play()
-    pump_tick()
+    stored_position_cb(0, true)
     assert(not engine:is_playing(), "stopped (only 1 frame)")
     assert(engine:get_position() == 0, "at frame 0")
     mock_content_end = 100
@@ -791,13 +691,10 @@ do
     engine:load_sequence("seq1", 100)
 
     engine:play()
-    local gen_before = engine._tick_generation
-    local timer_count_before = #timer_callbacks
+    playback_calls = {}
 
     engine:play()  -- should be no-op
-    assert(engine._tick_generation == gen_before, "generation unchanged")
-    -- No additional timer scheduled
-    assert(#timer_callbacks == timer_count_before, "no extra timer")
+    assert(not find_call("PLAY"), "no second PLAY call")
 
     engine:stop()
     print("  ok")
@@ -836,14 +733,15 @@ end
 -- ─── Test 29: seek to frame 0 (start boundary, parked) ───
 print("\n--- seek to frame 0 ---")
 do
-    local engine, log = make_engine()
+    local engine, _ = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
 
     engine:seek(50)
     engine:seek(0)
     assert(engine:get_position() == 0, "at frame 0")
-    assert(#log.frames_shown >= 2, "frames displayed for both seeks")
+    -- Both seeks should have called SEEK
+    assert(count_calls("SEEK") >= 2, "SEEK called for both seeks")
     print("  ok")
 end
 
@@ -859,9 +757,7 @@ do
     print("  ok")
 end
 
--- ─── Test 31: play() refreshes total_frames after clip added to empty sequence ───
--- Regression: adding a clip to an empty sequence then pressing play did nothing
--- because total_frames and max_media_time_us were stale from load_sequence.
+-- ─── Test 31: play() refreshes total_frames after clip added ───
 print("\n--- play refreshes stale total_frames ---")
 do
     mock_content_end = 0
@@ -869,7 +765,6 @@ do
     local engine, _ = make_engine()
     clear_timers()
 
-    -- Load empty sequence (total_frames computed = max(1, 0) = 1)
     engine:load_sequence("seq1")
     assert(engine.total_frames == 1,
         "empty sequence: total_frames=" .. engine.total_frames .. " expected 1")
@@ -877,19 +772,11 @@ do
     -- Simulate clip insertion: content_end now 100 frames
     mock_content_end = 100
 
-    -- Play: engine should recompute total_frames before starting tick loop
     engine:play()
     assert(engine.total_frames == 100,
         "after play: total_frames=" .. engine.total_frames .. " expected 100")
     assert(engine.max_media_time_us > 0,
         "after play: max_media_time_us=" .. engine.max_media_time_us .. " expected > 0")
-
-    -- Pump tick: should advance normally (not hit boundary at frame 0)
-    pump_tick()
-    assert(engine:is_playing(),
-        "should still be playing after first tick (not boundary-stopped)")
-    assert(engine:get_position() >= 1,
-        "should have advanced past frame 0")
 
     engine:stop()
     mock_content_end = 100
@@ -917,15 +804,35 @@ do
     print("  ok")
 end
 
--- ─── Regression: load_sequence stores audio_sample_rate ───
--- Bug: _init_audio_session asserted nil because load_sequence never copied
--- audio_sample_rate from get_sequence_info() to self.
+-- ─── Test 33: load_sequence stores audio_sample_rate ───
 print("\n--- load_sequence stores audio_sample_rate ---")
 do
     local engine = make_engine()
     engine:load_sequence("seq1")
     assert(engine.audio_sample_rate == 48000,
         "audio_sample_rate should be 48000, got " .. tostring(engine.audio_sample_rate))
+    print("  ok")
+end
+
+-- ─── Test 34: offline clip → rotation=0, PAR=1:1 (via clip transition) ───
+print("\n--- offline clip resets rotation + PAR ---")
+do
+    local engine, log = make_engine()
+    clear_timers()
+    engine:load_sequence("seq1", 100)
+    log.rotations = {}
+    log.pars = {}
+
+    -- Online clip with rotation
+    stored_clip_transition_cb("clipA", 90, 4, 3, false)
+    assert(log.rotations[1] == 90, "online: rotation=90")
+    assert(log.pars[1][1] == 4 and log.pars[1][2] == 3, "online: PAR=4:3")
+
+    -- Offline clip → upright, square pixels
+    stored_clip_transition_cb("clipB", 180, 16, 9, true)
+    assert(log.rotations[2] == 0, "offline: rotation=0")
+    assert(log.pars[2][1] == 1 and log.pars[2][2] == 1, "offline: PAR=1:1")
+
     print("  ok")
 end
 

@@ -185,6 +185,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_tree_item_double_click_handler); lua_setfield(L, -2, "SET_TREE_DOUBLE_CLICK_HANDLER");
     lua_pushcfunction(L, lua_set_tree_current_item); lua_setfield(L, -2, "SET_TREE_CURRENT_ITEM");
     lua_pushcfunction(L, lua_get_tree_item_at); lua_setfield(L, -2, "GET_TREE_ITEM_AT");
+    lua_pushcfunction(L, lua_process_events); lua_setfield(L, -2, "PROCESS_EVENTS");
     lua_setfield(L, -2, "CONTROL");
     
     // Register global signal functions for direct access in Lua (e.g., qt_set_button_click_handler)

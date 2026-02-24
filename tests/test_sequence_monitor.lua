@@ -93,6 +93,32 @@ package.loaded["core.qt_constants"] = {
     CONTROL = {
         SET_WIDGET_SIZE_POLICY = function() end,
     },
+    PLAYBACK = {
+        CREATE = function() return "mock_pc" end,
+        CLOSE = function() end,
+        SET_TMB = function() end,
+        SET_BOUNDS = function() end,
+        SET_VIDEO_TRACKS = function() end,
+        SET_CLIP_WINDOW = function() end,
+        SET_SURFACE = function() end,
+        SET_NEED_CLIPS_CALLBACK = function() end,
+        SET_POSITION_CALLBACK = function() end,
+        SET_CLIP_TRANSITION_CALLBACK = function() end,
+        INVALIDATE_CLIP_WINDOWS = function() end,
+        SEEK = function(pc, frame)
+            qt_log[#qt_log + 1] = {
+                type = "seek", pc = pc, frame = frame,
+            }
+        end,
+        STOP = function() end,
+        PLAY = function() end,
+        HAS_AUDIO = function() return false end,
+        SET_SHUTTLE_MODE = function() end,
+        ACTIVATE_AUDIO = function() end,
+        DEACTIVATE_AUDIO = function() end,
+        PLAY_BURST = function() end,
+        TICK = function() end,
+    },
 }
 
 -- Mock global timeline API (for mark bar)
@@ -117,6 +143,7 @@ package.loaded["core.logger"] = {
     warn = function() end,
     error = function() end,
     trace = function() end,
+    for_area = function() return { event = function() end, detail = function() end, warn = function() end, error = function() end } end,
 }
 
 -- Mock Renderer (returns info from DB-loaded sequence)
@@ -520,15 +547,15 @@ do
     view:seek_to_frame(42)
     assert(view.playhead == 42, "playhead updated after seek")
 
-    -- Should have called SURFACE_SET_FRAME (via engine → _on_show_frame)
-    local found_frame = false
+    -- Should have called PLAYBACK.SEEK (C++ handles frame display)
+    local found_seek = false
     for _, entry in ipairs(qt_log) do
-        if entry.type == "set_frame" and entry.frame then
-            found_frame = true
+        if entry.type == "seek" and entry.frame == 42 then
+            found_seek = true
             break
         end
     end
-    assert(found_frame, "frame displayed via SURFACE_SET_FRAME")
+    assert(found_seek, "PLAYBACK.SEEK called with frame 42")
 
     view:destroy()
     print("  ok")
