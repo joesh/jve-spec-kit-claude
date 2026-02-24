@@ -228,29 +228,33 @@ end
 print("=== test_playback_video_display.lua ===")
 
 --------------------------------------------------------------------------------
--- 1. Park: load_sequence must put a non-black frame on the surface
+-- 1. Park: caller seeks after load_sequence → surface has non-black frame.
+-- Engine's load_sequence sets up infrastructure; caller (SequenceMonitor)
+-- is responsible for initial seek to saved_playhead from DB.
 --------------------------------------------------------------------------------
-print("\n--- 1. load_sequence: surface has non-black frame (parked still) ---")
+print("\n--- 1. seek after load_sequence: surface has non-black frame (parked still) ---")
 do
     controller_enabled = false
     local engine, surface = make_engine()
     engine:load_sequence("seq1", 200)
+    engine:seek(0)  -- caller's responsibility
 
     assert(surface._frame ~= nil,
-        "surface._frame is nil after load_sequence — no frame delivered")
+        "surface._frame is nil after seek — no frame delivered")
     assert(surface._frame ~= BLACK_FRAME,
-        "surface has BLACK frame after load — should be a real frame")
+        "surface has BLACK frame after seek — should be a real frame")
     print("  PASS: Lua path")
 end
 do
     controller_enabled = true
     local engine, surface = make_engine()
     engine:load_sequence("seq1", 200)
+    engine:seek(0)  -- caller's responsibility
 
     assert(surface._frame ~= nil,
-        "surface._frame is nil after load_sequence (C++ path) — no frame delivered")
+        "surface._frame is nil after seek (C++ path) — no frame delivered")
     assert(surface._frame ~= BLACK_FRAME,
-        "surface has BLACK frame after load (C++ path) — should be a real frame")
+        "surface has BLACK frame after seek (C++ path) — should be a real frame")
     print("  PASS: C++ path")
 end
 
@@ -262,6 +266,7 @@ do
     controller_enabled = false
     local engine, surface = make_engine()
     engine:load_sequence("seq1", 200)
+    engine:seek(0)  -- initial park
     local parked_frame = surface._frame
 
     engine:seek(50)
@@ -279,6 +284,7 @@ do
     controller_enabled = true
     local engine, surface = make_engine()
     engine:load_sequence("seq1", 200)
+    engine:seek(0)  -- initial park
     local parked_frame = surface._frame
 
     engine:seek(50)
@@ -301,6 +307,7 @@ do
     controller_enabled = false
     local engine, surface = make_engine()
     engine:load_sequence("seq1", 200)
+    engine:seek(0)  -- initial park
     local before_count = surface._frame_count
 
     engine:play()
@@ -339,7 +346,6 @@ do
     engine:load_sequence("seq1", 200)
 
     -- Seek beyond clip range (frame 200+ is a gap in mock)
-    -- Our mock returns nil for frame >= 200
     engine:seek(250)
 
     assert(surface._frame == BLACK_FRAME, string.format(
@@ -351,7 +357,7 @@ do
     local engine, surface = make_engine()
     engine:load_sequence("seq1", 200)
 
-    engine:seek(250)
+    engine:seek(250)  -- gap frame
 
     assert(surface._frame == BLACK_FRAME, string.format(
         "surface must show BLACK in gap (C++ path), got %s", tostring(surface._frame)))

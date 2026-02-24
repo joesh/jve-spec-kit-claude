@@ -231,7 +231,7 @@ local function make_engine_with_controller()
     -- _setup_playback_controller creates the C++ controller via PLAYBACK.CREATE
     assert(engine._playback_controller, "controller should be created")
 
-    -- Reset tracking AFTER load (load_sequence now calls seek(0) internally)
+    -- Reset tracking AFTER load (load_sequence sets up infrastructure)
     reset_playback_calls()
     reset_audio_calls()
     reset_tmb_clips()
@@ -568,9 +568,11 @@ do
 end
 
 --------------------------------------------------------------------------------
--- 11. _send_clips_to_tmb window includes audio clips (not video-only)
+-- 11. _send_clips_to_tmb window uses VIDEO clips only (not audio)
+-- Audio clips may extend far beyond video, inflating the window and preventing
+-- re-query when seeking to positions where TMB has no video data.
 --------------------------------------------------------------------------------
-print("\n--- 11. _send_clips_to_tmb window includes audio clips ---")
+print("\n--- 11. _send_clips_to_tmb window uses video clips only ---")
 do
     local engine = make_engine_with_controller()
     engine.direction = 1
@@ -589,14 +591,14 @@ do
     engine._tmb_clip_window = nil  -- force re-query
     engine:_send_clips_to_tmb(150)
 
-    -- Window must be union of video AND audio: [50, 300)
+    -- Window must be VIDEO-only: [100, 200), NOT [50, 300)
     local w = engine._tmb_clip_window
-    assert(w, "_tmb_clip_window must be set (video + audio clips present)")
-    assert(w.lo == 50, string.format(
-        "_send_clips_to_tmb window lo must include audio start 50, got %s", tostring(w.lo)))
-    assert(w.hi == 300, string.format(
-        "_send_clips_to_tmb window hi must include audio end 300, got %s", tostring(w.hi)))
-    print("  PASS: combined window includes audio clip range")
+    assert(w, "_tmb_clip_window must be set (video clips present)")
+    assert(w.lo == 100, string.format(
+        "_send_clips_to_tmb window lo must be video start 100, got %s", tostring(w.lo)))
+    assert(w.hi == 200, string.format(
+        "_send_clips_to_tmb window hi must be video end 200, got %s", tostring(w.hi)))
+    print("  PASS: window bounded by video clips only (audio excluded)")
 end
 
 --------------------------------------------------------------------------------

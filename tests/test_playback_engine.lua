@@ -485,8 +485,7 @@ do
     local engine, log = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
-    -- Clear log: load_sequence's seek(0) fires rotation for default clip at frame 0
-    log.rotations = {}
+    log.rotations = {}  -- load_sequence no longer auto-seeks; clear for safety
 
     -- Seek to clipA
     engine:seek(10)
@@ -517,8 +516,7 @@ do
     local engine, log = make_engine()
     clear_timers()
     engine:load_sequence("seq1", 100)
-    -- Clear log: load_sequence's seek(0) fires PAR for default clip at frame 0
-    log.pars = {}
+    log.pars = {}  -- load_sequence no longer auto-seeks; clear for safety
 
     -- Seek to clipC (square pixels)
     engine:seek(20)
