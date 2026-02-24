@@ -39,6 +39,7 @@ public:
 
     int frameWidth() const { return m_frameWidth; }
     int frameHeight() const { return m_frameHeight; }
+    int frameCount() const { return m_frame_count; }
 
     // Check if GPU rendering is available
     static bool isAvailable();
@@ -68,6 +69,7 @@ private:
     int m_rotation = 0;
     int m_par_num = 1;
     int m_par_den = 1;
+    int m_frame_count = 0;
     bool m_initialized = false;
 };
 
@@ -87,6 +89,7 @@ public:
     int parDen() const { return 1; }
     int frameWidth() const { return 0; }
     int frameHeight() const { return 0; }
+    int frameCount() const { return 0; }
     static bool isAvailable() { return false; }
 };
 #endif

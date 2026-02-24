@@ -286,6 +286,8 @@ void GPUVideoSurface::setFrame(const std::shared_ptr<emp::Frame>& frame) {
         return;
     }
 
+    ++m_frame_count;
+
 #ifdef EMP_HAS_VIDEOTOOLBOX
     void* hw_buffer = frame->native_buffer();
     if (hw_buffer) {

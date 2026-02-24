@@ -1119,6 +1119,22 @@ static int lua_emp_surface_set_par(lua_State* L) {
     return 0;
 }
 
+// EMP.SURFACE_FRAME_COUNT(surface_widget) -> int
+// Returns the number of times setFrame was called on a GPUVideoSurface.
+// Used by integration tests to verify frame delivery without mocks.
+static int lua_emp_surface_frame_count(lua_State* L) {
+    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 1, WIDGET_METATABLE));
+    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+
+    GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
+    if (!gpu_surface) {
+        return luaL_error(L, "SURFACE_FRAME_COUNT: widget is not a GPUVideoSurface");
+    }
+
+    lua_pushinteger(L, gpu_surface->frameCount());
+    return 1;
+}
+
 // EMP.SURFACE_SET_FRAME(surface_widget, frame|nil)
 // Works with both GPUVideoSurface and CPUVideoSurface
 static int lua_emp_surface_set_frame(lua_State* L) {
@@ -1647,6 +1663,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "SURFACE_SET_ROTATION");
     lua_pushcfunction(L, lua_emp_surface_set_par);
     lua_setfield(L, -2, "SURFACE_SET_PAR");
+    lua_pushcfunction(L, lua_emp_surface_frame_count);
+    lua_setfield(L, -2, "SURFACE_FRAME_COUNT");
 
     lua_setfield(L, -2, "EMP");
 
