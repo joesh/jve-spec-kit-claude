@@ -336,6 +336,20 @@ function PlaybackEngine:_setup_playback_controller()
         engine:_on_clip_transition(clip_id, rotation, par_num, par_den, is_offline)
     end)
 
+    -- Wire content_changed: invalidate clip windows when timeline edits occur.
+    -- This ensures C++ re-queries clip data after insert/delete/ripple commands.
+    if self._content_changed_conn then
+        Signals.disconnect(self._content_changed_conn)
+    end
+    self._content_changed_conn = Signals.connect("content_changed", function(seq_id)
+        if seq_id == engine.sequence_id and engine._playback_controller then
+            PLAYBACK.INVALIDATE_CLIP_WINDOWS(engine._playback_controller)
+            -- Also clear Lua-side clip window cache
+            engine._tmb_clip_window = nil
+            logger.debug("playback_engine", "Edit detected: invalidated clip windows")
+        end
+    end)
+
     logger.debug("playback_engine", "PlaybackController created and configured")
 end
 
@@ -1156,6 +1170,10 @@ function PlaybackEngine:destroy()
     if self._track_mix_conn then
         Signals.disconnect(self._track_mix_conn)
         self._track_mix_conn = nil
+    end
+    if self._content_changed_conn then
+        Signals.disconnect(self._content_changed_conn)
+        self._content_changed_conn = nil
     end
     self:stop()
     self:_close_tmb()

@@ -843,6 +843,20 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
 
     int64_t new_pos = current + static_cast<int64_t>(dir * frames_elapsed);
 
+    // Output invariant: position can't teleport even in frame-based mode.
+    // At 60Hz with 8x speed and 60fps content, max sane delta ≈ 8 frames/tick.
+    // Allow generous margin (240 frames) to catch clock bugs without false positives.
+    int64_t delta = std::abs(new_pos - current);
+    if (delta >= 240) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "advancePosition: frame-based jumped %lld frames in one tick "
+            "(current=%lld, new=%lld, elapsed=%.4fs, speed=%.2f)",
+            (long long)delta, (long long)current, (long long)new_pos,
+            elapsed_seconds, speed);
+        JVE_ASSERT(false, buf);
+    }
+
     // Clamp to valid range
     new_pos = std::max<int64_t>(0, std::min(new_pos, m_total_frames - 1));
 
