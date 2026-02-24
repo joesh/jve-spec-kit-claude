@@ -204,9 +204,9 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames)
     -- PlaybackController setup (uses populated _video_track_indices)
     self:_setup_playback_controller()
 
-    -- Display parked frame at starting position.
-    -- All prerequisites (TMB, surface, tracks) are wired by this point.
-    self:seek(0)
+    -- NOTE: No seek here. Caller (SequenceMonitor) is responsible for initial
+    -- positioning via saved_playhead from DB. Hardcoding seek(0) is wrong when
+    -- content starts at frame N (e.g., DRP imports with gaps before first clip).
 
     logger.debug("playback_engine", string.format(
         "Loaded sequence %s (%s): %d frames @ %d/%d fps",
@@ -680,23 +680,18 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
     end
 
     -- ── Audio tracks ──
-    local audio_track_clips = self:_send_audio_clips_to_tmb(frame, EMP)
+    self:_send_audio_clips_to_tmb(frame, EMP)
 
-    -- ── Compute clip window: union of ALL loaded clips (video + audio) ──
-    -- TMB has all these clips cached. The window tells C++ (and Lua tick)
-    -- not to request new clips until approaching the edge of this range.
+    -- ── Compute clip window from VIDEO clips only ──
+    -- The clip window determines when Lua re-queries TMB for new clips.
+    -- It MUST be based on video coverage because deliverFrame needs video frames
+    -- at every seek position. Audio clips may extend far beyond video clips;
+    -- including them inflates the window and masks gaps where TMB has no video.
     local window_lo = self.total_frames or math.huge
     local window_hi = 0
 
     local has_clips = false
     for _, clips in pairs(track_clips) do
-        for _, clip_data in ipairs(clips) do
-            has_clips = true
-            window_lo = math.min(window_lo, clip_data.timeline_start)
-            window_hi = math.max(window_hi, clip_data.timeline_start + clip_data.duration)
-        end
-    end
-    for _, clips in pairs(audio_track_clips) do
         for _, clip_data in ipairs(clips) do
             has_clips = true
             window_lo = math.min(window_lo, clip_data.timeline_start)

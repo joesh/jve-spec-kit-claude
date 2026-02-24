@@ -420,6 +420,8 @@ void PlaybackController::Seek(int64_t frame) {
     // Tell TMB we're parking (direction=0 → synchronous decode)
     m_tmb->SetPlayhead(frame, 0, 1.0f);
     deliverFrame(frame, true);  // synchronous: Seek is on main thread
+    // deliverFrame asserts if TMB returns a clip but no frame data (decode failure).
+    // Gap seeks (no clip at frame) legitimately produce no frame.
 }
 
 // ============================================================================
@@ -883,9 +885,23 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
         return;
     }
 
-    int track_idx = m_video_track_indices[0];
-    emp::TrackId track{emp::TrackType::Video, track_idx};
-    emp::VideoResult result = m_tmb->GetVideoFrame(track, frame);
+    // Query tracks top-to-bottom (highest index = topmost = highest priority).
+    // If the topmost track is a gap at this frame, fall through to the next.
+    emp::VideoResult result;
+    bool found_frame = false;
+    for (int track_idx : m_video_track_indices) {
+        emp::TrackId track{emp::TrackType::Video, track_idx};
+        result = m_tmb->GetVideoFrame(track, frame);
+        if (result.frame || !result.clip_id.empty()) {
+            found_frame = true;
+            break;
+        }
+    }
+
+    if (!found_frame) {
+        // All tracks are gaps at this frame — nothing to display (valid)
+        return;
+    }
 
     // Detect clip transition → fire callback with metadata for rotation/PAR
     if (result.clip_id != m_current_clip_id) {
@@ -905,10 +921,8 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
             bool offline = result.offline;
 
             if (synchronous) {
-                // Seek path: already on main thread, call directly
                 cb(clip_id, rotation, par_num, par_den, offline);
             } else {
-                // displayLinkTick path: hop to main thread
                 dispatch_async(dispatch_get_main_queue(), ^{
                     cb(clip_id, rotation, par_num, par_den, offline);
                 });
@@ -917,25 +931,26 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     }
 
     if (result.frame) {
-        // Mark as displayed ONLY after successful decode.
-        // If TMB returns no frame (pending async decode), we must retry
-        // on the next CVDisplayLink tick — don't mark as consumed.
         m_last_displayed_frame = frame;
 
         std::shared_ptr<emp::Frame> frame_ptr = result.frame;
         GPUVideoSurface* surface = m_surface;
 
         if (synchronous) {
-            // Seek path: already on main thread, render immediately.
-            // Without this, dispatch_async defers setFrame to the next
-            // event loop pass and the parked frame never appears.
             surface->setFrame(frame_ptr);
         } else {
-            // displayLinkTick path: dispatch to main thread for Metal rendering
             dispatch_async(dispatch_get_main_queue(), ^{
                 surface->setFrame(frame_ptr);
             });
         }
+    } else if (synchronous && !result.clip_id.empty()) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "PlaybackController::deliverFrame: Seek to frame %lld returned no frame "
+            "data but clip_id='%s' (decode failure? offline=%d pending=%d)",
+            (long long)frame, result.clip_id.c_str(),
+            (int)result.offline, (int)result.pending);
+        JVE_ASSERT(false, buf);
     }
 }
 

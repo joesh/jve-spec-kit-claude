@@ -285,8 +285,12 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     self.fps_num = self.engine.fps_num
     self.fps_den = self.engine.fps_den
 
-    -- Restore playhead from DB (both masterclips and timelines)
-    local saved_playhead = seq.playhead_position or 0
+    -- Restore playhead from DB (both masterclips and timelines).
+    -- Sequence.load() asserts playhead_position is NOT NULL — no fallback.
+    local saved_playhead = seq.playhead_position
+    assert(type(saved_playhead) == "number", string.format(
+        "SequenceMonitor(%s):load_sequence: playhead_position must be number, got %s (seq=%s)",
+        self.view_id, type(saved_playhead), sequence_id:sub(1, 8)))
     self.playhead = saved_playhead
     self.engine:seek(saved_playhead)
 

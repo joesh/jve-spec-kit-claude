@@ -399,7 +399,23 @@ panel_manager.init({
 -- Initialize all panels to unfocused state
 focus_manager.initialize_all_panels()
 
--- Restore last-open sequence when available
+-- Add four panels to top splitter
+qt_constants.LAYOUT.ADD_WIDGET(top_splitter, project_browser)
+qt_constants.LAYOUT.ADD_WIDGET(top_splitter, source_monitor:get_widget())
+qt_constants.LAYOUT.ADD_WIDGET(top_splitter, timeline_monitor:get_widget())
+qt_constants.LAYOUT.ADD_WIDGET(top_splitter, inspector_panel)
+
+-- Add top row and timeline to main splitter
+qt_constants.LAYOUT.ADD_WIDGET(main_splitter, top_splitter)
+qt_constants.LAYOUT.ADD_WIDGET(main_splitter, timeline_panel)
+
+-- Set as central widget
+qt_constants.LAYOUT.SET_CENTRAL_WIDGET(main_window, main_splitter)
+
+-- Restore last-open sequence AFTER widget tree is assembled.
+-- The seek in load_sequence delivers a frame to the GPUVideoSurface via Metal.
+-- If the surface isn't in the visible widget tree yet, the rendered drawable
+-- is discarded when the widget is reparented into the layout.
 local project_id = active_project_id
 assert(project_id and project_id ~= "", "FATAL: missing active_project_id during sequence restore")
 local sequences = db_module.load_sequences(project_id)
@@ -432,19 +448,6 @@ if initial_sequence_id and project_browser_mod.focus_sequence then
         focus_manager.focus_panel("timeline")
     end
 end
-
--- Add four panels to top splitter
-qt_constants.LAYOUT.ADD_WIDGET(top_splitter, project_browser)
-qt_constants.LAYOUT.ADD_WIDGET(top_splitter, source_monitor:get_widget())
-qt_constants.LAYOUT.ADD_WIDGET(top_splitter, timeline_monitor:get_widget())
-qt_constants.LAYOUT.ADD_WIDGET(top_splitter, inspector_panel)
-
--- Add top row and timeline to main splitter
-qt_constants.LAYOUT.ADD_WIDGET(main_splitter, top_splitter)
-qt_constants.LAYOUT.ADD_WIDGET(main_splitter, timeline_panel)
-
--- Set as central widget
-qt_constants.LAYOUT.SET_CENTRAL_WIDGET(main_window, main_splitter)
 
 -- Install global keyboard shortcut handler (skip in test mode to avoid crashes)
 local test_mode_flag = os.getenv("JVE_TEST_MODE")
