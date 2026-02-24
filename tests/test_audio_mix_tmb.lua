@@ -168,6 +168,7 @@ package.loaded["core.logger"] = {
     warn = function() end,
     error = function() end,
     trace = function() end,
+    for_area = function() return { event = function() end, detail = function() end, warn = function() end, error = function() end } end,
 }
 
 -- Mock project_generation

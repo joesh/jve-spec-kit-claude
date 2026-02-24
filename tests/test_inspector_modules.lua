@@ -58,6 +58,7 @@ package.loaded["core.logger"] = {
     debug = function() end,
     warn = function() end,
     error = function() end,
+    for_area = function() return { event = function() end, detail = function() end, warn = function() end, error = function() end } end,
 }
 
 -- Stub qt_signals for widget_pool

@@ -48,6 +48,7 @@ package.loaded["core.logger"] = {
     trace = function() end,
     fatal = function() end,
     set_level = function() end,
+    for_area = function() return { event = function() end, detail = function() end, warn = function() end, error = function() end } end,
 }
 
 -- Mock other deps command_manager needs

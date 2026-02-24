@@ -6,6 +6,7 @@ package.loaded["core.logger"] = {
     debug = function() end,
     warn = function() end,
     error = function() end,
+    for_area = function() return { event = function() end, detail = function() end, warn = function() end, error = function() end } end,
 }
 -- Stub time_utils (required by project_open but unused in our paths)
 package.loaded["core.time_utils"] = {}
