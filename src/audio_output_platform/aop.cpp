@@ -281,6 +281,14 @@ public:
         m_io_device.clear_underrun();
     }
 
+    void set_volume(float v) {
+        if (m_sink) m_sink->setVolume(static_cast<qreal>(v));
+    }
+
+    float volume() const {
+        return m_sink ? static_cast<float>(m_sink->volume()) : 1.0f;
+    }
+
     int sample_rate() const { return m_sample_rate; }
     int channels() const { return m_channels; }
 
@@ -373,6 +381,14 @@ int32_t AudioOutput::SampleRate() const {
 
 int32_t AudioOutput::Channels() const {
     return m_impl->channels();
+}
+
+void AudioOutput::SetVolume(float volume) {
+    m_impl->set_volume(volume);
+}
+
+float AudioOutput::Volume() const {
+    return m_impl->volume();
 }
 
 } // namespace aop

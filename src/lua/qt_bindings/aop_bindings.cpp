@@ -215,6 +215,27 @@ static int lua_aop_channels(lua_State* L) {
     return 1;
 }
 
+// AOP.SET_VOLUME(aop, volume) — volume 0.0 (mute) to 1.0 (full)
+static int lua_aop_set_volume(lua_State* L) {
+    aop::AudioOutput* output = get_aop_userdata(L, 1);
+    if (!output) {
+        return luaL_error(L, "AOP.SET_VOLUME: invalid aop handle");
+    }
+    float volume = static_cast<float>(luaL_checknumber(L, 2));
+    output->SetVolume(volume);
+    return 0;
+}
+
+// AOP.VOLUME(aop) -> float
+static int lua_aop_volume(lua_State* L) {
+    aop::AudioOutput* output = get_aop_userdata(L, 1);
+    if (!output) {
+        return luaL_error(L, "AOP.VOLUME: invalid aop handle");
+    }
+    lua_pushnumber(L, static_cast<double>(output->Volume()));
+    return 1;
+}
+
 // AOP __gc metamethod
 static int lua_aop_gc(lua_State* L) {
     void** ud = static_cast<void**>(luaL_checkudata(L, 1, AOP_METATABLE));
@@ -268,6 +289,10 @@ void register_aop_bindings(lua_State* L) {
     lua_setfield(L, -2, "SAMPLE_RATE");
     lua_pushcfunction(L, lua_aop_channels);
     lua_setfield(L, -2, "CHANNELS");
+    lua_pushcfunction(L, lua_aop_set_volume);
+    lua_setfield(L, -2, "SET_VOLUME");
+    lua_pushcfunction(L, lua_aop_volume);
+    lua_setfield(L, -2, "VOLUME");
 
     lua_setfield(L, -2, "AOP");
 }

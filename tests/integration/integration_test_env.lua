@@ -149,6 +149,9 @@ function M.try_open_audio(sample_rate, channels)
         sample_rate = sample_rate, channels = channels, block_frames = 512,
     })
     assert(sse, "try_open_audio: SSE.CREATE failed after AOP succeeded")
+    -- Mute audio output during tests — pipeline still runs (playhead, underruns,
+    -- A/V sync all functional) but no sound reaches the speakers.
+    AOP.SET_VOLUME(aop, 0)
     return aop, sse
 end
 

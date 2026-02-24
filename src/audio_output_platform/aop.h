@@ -69,6 +69,10 @@ public:
     // Get actual channel count
     int32_t Channels() const;
 
+    // Volume control (0.0 = muted, 1.0 = full)
+    void SetVolume(float volume);
+    float Volume() const;
+
     // Internal constructor (public but impl is opaque)
     explicit AudioOutput(std::unique_ptr<AudioOutputImpl> impl);
 
