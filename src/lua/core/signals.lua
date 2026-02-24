@@ -241,13 +241,11 @@ function Signals.emit(signal_name, ...)
         }
 
         if not success then
-            local logger = require("core.logger")
-            logger.error("signals", string.format(
-                "Handler failure: signal=%s connection=%s error=%s",
+            local log = require("core.logger").for_area("commands")
+            log.error("Handler failure: signal=%s connection=%s error=%s",
                 signal_name,
                 tostring(handler_record.id),
-                tostring(result)
-            ))
+                tostring(result))
             handler_result.error = result
         end
 

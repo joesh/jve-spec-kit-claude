@@ -21,7 +21,7 @@ local M = {}
 local db = nil
 local profile_scope = require("core.profile_scope")
 local json = require("dkjson")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("commands")
 
 local TEMP_GAP_PREFIX = "temp_gap_"
 
@@ -225,7 +225,7 @@ function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json)
     end
     local clip = Clip.load_optional(clip_id, db)
     if not clip then
-        logger.warn("command_state", string.format("Failed to restore selection for clip %s (clip not found)", tostring(clip_id)))
+        log.warn("Failed to restore selection for clip %s (clip not found)", tostring(clip_id))
     end
     return clip
     end

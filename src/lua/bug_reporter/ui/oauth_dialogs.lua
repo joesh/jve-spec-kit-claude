@@ -18,7 +18,7 @@
 -- OAuth configuration dialogs for YouTube and GitHub
 local youtube_oauth = require("bug_reporter.youtube_oauth")
 local _github_issue_creator = require("bug_reporter.github_issue_creator")  -- luacheck: ignore (loaded for side effects)
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local qt = require("bug_reporter.qt_compat")
 
 local OAuthDialogs = {}
@@ -34,13 +34,13 @@ function OAuthDialogs.show_youtube_credentials_dialog()
 
     local dialog = qt.CREATE_DIALOG("Configure YouTube OAuth Credentials")
     if not dialog then
-        logger.error("bug_reporter", "Failed to create YouTube credentials dialog")
+        log.error("Failed to create YouTube credentials dialog")
         return nil
     end
 
     local layout = qt.CREATE_LAYOUT("vertical")
     if not layout then
-        logger.error("bug_reporter", "Failed to create YouTube credentials layout")
+        log.error("Failed to create YouTube credentials layout")
         return nil
     end
 
@@ -120,13 +120,13 @@ function OAuthDialogs.show_youtube_auth_dialog()
 
     local dialog = qt.CREATE_DIALOG("Authorize YouTube Access")
     if not dialog then
-        logger.error("bug_reporter", "Failed to create YouTube auth dialog")
+        log.error("Failed to create YouTube auth dialog")
         return nil
     end
 
     local layout = qt.CREATE_LAYOUT("vertical")
     if not layout then
-        logger.error("bug_reporter", "Failed to create YouTube auth layout")
+        log.error("Failed to create YouTube auth layout")
         return nil
     end
 
@@ -211,13 +211,13 @@ function OAuthDialogs.show_github_token_dialog()
 
     local dialog = qt.CREATE_DIALOG("Configure GitHub Personal Access Token")
     if not dialog then
-        logger.error("bug_reporter", "Failed to create GitHub token dialog")
+        log.error("Failed to create GitHub token dialog")
         return nil
     end
 
     local layout = qt.CREATE_LAYOUT("vertical")
     if not layout then
-        logger.error("bug_reporter", "Failed to create GitHub token layout")
+        log.error("Failed to create GitHub token layout")
         return nil
     end
 
@@ -312,13 +312,13 @@ function OAuthDialogs.show_connection_test_result(success, message)
 
     local dialog = qt.CREATE_DIALOG("Connection Test")
     if not dialog then
-        logger.error("bug_reporter", "Failed to create connection test dialog")
+        log.error("Failed to create connection test dialog")
         return nil
     end
 
     local layout = qt.CREATE_LAYOUT("vertical")
     if not layout then
-        logger.error("bug_reporter", "Failed to create connection test layout")
+        log.error("Failed to create connection test layout")
         return nil
     end
 
@@ -361,13 +361,13 @@ function OAuthDialogs.show_auth_result(success, message)
 
     local dialog = qt.CREATE_DIALOG("Authorization Result")
     if not dialog then
-        logger.error("bug_reporter", "Failed to create auth result dialog")
+        log.error("Failed to create auth result dialog")
         return nil
     end
 
     local layout = qt.CREATE_LAYOUT("vertical")
     if not layout then
-        logger.error("bug_reporter", "Failed to create auth result layout")
+        log.error("Failed to create auth result layout")
         return nil
     end
 

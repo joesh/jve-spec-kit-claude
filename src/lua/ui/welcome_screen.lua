@@ -19,7 +19,7 @@
 --
 -- @file welcome_screen.lua
 local M = {}
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local recent_projects = require("core.recent_projects")
 
 --- Show the welcome screen modal dialog.
@@ -120,7 +120,7 @@ function M.show()
     qt.DIALOG.SET_LAYOUT(dialog, main_layout)
 
     -- Show (blocking)
-    logger.info("welcome_screen", "Showing welcome screen")
+    log.event("Showing welcome screen")
     qt.DIALOG.SHOW(dialog)
 
     -- Cleanup globals

@@ -19,7 +19,7 @@
 -- Supports: sequences, tracks, clips, media references
 local M = {}
 local uuid = require("uuid")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("media")
 
 -- Parse FCP7 time value (rational number like "900/30")
 -- Returns integer frames at the sequence's frame rate
@@ -871,7 +871,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
                 height = clip_info.height,
                 audio_channels = 0
             }
-            logger.warn("import_fcp7", string.format("create_entities: missing media info for key %s; generating synthetic placeholder", tostring(key)))
+            log.warn("create_entities: missing media info for key %s; generating synthetic placeholder", tostring(key))
         end
         if not key or key == "" then
             key = media_info.key
@@ -910,11 +910,11 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             if media_info.is_compound then
                 -- Compound clip (nested sequence) - no file exists, this is expected
                 file_path = string.format("compound://%s", placeholder_name)
-                logger.info("import_fcp7", string.format("create_entities: compound clip %s", placeholder_name))
+                log.event("create_entities: compound clip %s", placeholder_name)
             else
                 -- Missing file path - likely offline media
                 file_path = string.format("synthetic://%s", placeholder_name)
-                logger.warn("import_fcp7", string.format("create_entities: missing file path for media %s; using placeholder %s", tostring(key), tostring(file_path)))
+                log.warn("create_entities: missing file path for media %s; using placeholder %s", tostring(key), tostring(file_path))
             end
         end
 
@@ -1232,7 +1232,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         local save_ok, save_err = tag_service.save_hierarchy(project_id, bins)
         if not save_ok then
             bins_saved = false
-            logger.warn("import_fcp7", "Failed to persist bin hierarchy: " .. tostring(save_err))
+            log.warn("Failed to persist bin hierarchy: %s", tostring(save_err))
         end
     end
     if bin_assignment_dirty and bins_saved then
@@ -1245,15 +1245,14 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
                 if #iter_clip_ids > 0 then
                     local assign_ok, assign_err = tag_service.add_to_bin(project_id, iter_clip_ids, iter_bin_id, "master_clip")
                     if not assign_ok then
-                        logger.warn("import_fcp7", string.format(
-                            "Failed to persist %d master clip assignments for bin %s: %s",
-                            #iter_clip_ids, tostring(iter_bin_id), tostring(assign_err or "unknown error")))
+                        log.warn("Failed to persist %d master clip assignments for bin %s: %s",
+                            #iter_clip_ids, tostring(iter_bin_id), tostring(assign_err or "unknown error"))
                     end
                 end
             end
         end
     elseif bin_assignment_dirty and not bins_saved then
-        logger.warn("import_fcp7", "Skipping master clip bin assignment because bin hierarchy could not be saved")
+        log.warn("Skipping master clip bin assignment because bin hierarchy could not be saved")
     end
 
     return result

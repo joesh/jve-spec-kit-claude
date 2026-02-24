@@ -21,7 +21,7 @@ local command_helper = require("core.command_helper")
 local edge_utils = require("core.edge_utils")
 local ui_constants = require("core.ui_constants")
 local clip_mutator = require('core.clip_mutator') -- New dependency
-local logger = require("core.logger")
+local log = require("core.logger").for_area("commands")
 local ripple_edge = require("core.ripple.edge_info")
 local ripple_track = require("core.ripple.track_index")
 local ripple_undo = require("core.ripple.undo_hydrator")
@@ -997,10 +997,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     applied_delta = constraints.max
                 end
                 if before_clamp ~= applied_delta then
-                    logger.debug("ripple", string.format("Multitrack roll edge %s: requested=%d, clamped to %d (min=%s, max=%s)",
+                    log.event("Multitrack roll edge %s: requested=%d, clamped to %d (min=%s, max=%s)",
                         edge_key, before_clamp, applied_delta,
                         constraints.min == -math.huge and "-inf" or tostring(constraints.min),
-                        constraints.max == math.huge and "+inf" or tostring(constraints.max)))
+                        constraints.max == math.huge and "+inf" or tostring(constraints.max))
                 end
             end
         else
@@ -1010,8 +1010,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 applied_delta = -ctx.clamped_delta_frames
             end
         end
-        logger.debug("ripple", string.format("compute_applied_delta: key=%s, is_multitrack_roll=%s, delta_frames=%s, clamped=%s, result=%s",
-            edge_key, tostring(is_multitrack_roll), tostring(ctx.delta_frames), tostring(ctx.clamped_delta_frames), tostring(applied_delta)))
+        log.event("compute_applied_delta: key=%s, is_multitrack_roll=%s, delta_frames=%s, clamped=%s, result=%s",
+            edge_key, tostring(is_multitrack_roll), tostring(ctx.delta_frames), tostring(ctx.clamped_delta_frames), tostring(applied_delta))
         return applied_delta
     end
 
@@ -1230,7 +1230,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local clip_id = edge_info.clip_id
             local clip = load_clip_for_edit(ctx, clip_id)
             if not clip then
-                logger.warn("ripple", string.format("BatchRippleEdit: Clip %s not found. Skipping.", tostring(clip_id)))
+                log.warn("BatchRippleEdit: Clip %s not found. Skipping.", tostring(clip_id))
                 goto continue_edge_process
             end
 
@@ -1245,11 +1245,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             local _, success, deleted_clip = apply_edge_ripple(clip, normalized_edge, applied_delta, edge_info.trim_type, edge_info.edge_type)
             if not success then
-                logger.error("ripple", string.format("Ripple failed for clip %s (edge=%s trim=%s delta=%s)",
+                log.error("Ripple failed for clip %s (edge=%s trim=%s delta=%s)",
                     tostring(clip.id),
                     tostring(edge_info.edge_type),
                     tostring(edge_info.trim_type),
-                    tostring(applied_delta)))
+                    tostring(applied_delta))
                 return false
             end
 
@@ -1501,7 +1501,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
 
             if not shift_clip then
-                logger.warn("ripple", string.format("BatchRippleEdit: Downstream clip %s not found. Skipping shift.", tostring(shift_clip_data.id)))
+                log.warn("BatchRippleEdit: Downstream clip %s not found. Skipping shift.", tostring(shift_clip_data.id))
                 goto continue_shift
             end
 
@@ -1918,8 +1918,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	            end
 	        end
 
-	        logger.info("ripple", string.format("Batch ripple: processed %d edges, shifted %d downstream clips by %d frames",
-	            #ctx.edge_infos, #(ctx.clips_to_shift or {}), ctx.downstream_shift_frames or 0))
+	        log.event("Batch ripple: processed %d edges, shifted %d downstream clips by %d frames",
+	            #ctx.edge_infos, #(ctx.clips_to_shift or {}), ctx.downstream_shift_frames or 0)
 
 	        return true
 	    end
@@ -1928,17 +1928,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local ctx = batch_context.create(command)
 
         if not ctx.edge_infos or #ctx.edge_infos == 0 then
-            logger.error("ripple", "BatchRippleEdit missing edge_infos")
+            log.error("BatchRippleEdit missing edge_infos")
             return { success = false, error_message = "BatchRippleEdit missing edge_infos" }
         end
 
         if not ctx.delta_frames and not ctx.delta_ms then
-            logger.error("ripple", "BatchRippleEdit missing delta")
+            log.error("BatchRippleEdit missing delta")
             return { success = false, error_message = "BatchRippleEdit missing delta" }
         end
 
         if not ctx.dry_run then
-            logger.info("ripple", "Executing BatchRippleEdit command")
+            log.event("Executing BatchRippleEdit command")
         end
 
         return batch_pipeline.run(ctx, db, {
@@ -1959,7 +1959,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
 		    command_undoers["BatchRippleEdit"] = function(command)
 		        local args = command:get_all_parameters()
-		        logger.info("ripple", "Undoing BatchRippleEdit command")
+		        log.event("Undoing BatchRippleEdit command")
 
 		        local executed_mutations = hydrate_executed_mutations_if_missing(command)
 
@@ -1967,7 +1967,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		        if command.sequence_number and executed_mutations then
 		            local save_ok, save_err = pcall(function() return command:save(db) end)
 		            if not save_ok then
-		                logger.warn("ripple", "Failed to persist hydrated mutations: " .. tostring(save_err))
+		                log.warn("Failed to persist hydrated mutations: %s", tostring(save_err))
 		            end
 		        end
 
@@ -1976,7 +1976,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		            if string.find(tostring(begin_err), "cannot start a transaction within a transaction") then
 		                started = nil
 		            else
-		                logger.error("ripple", "UndoBatchRippleEdit: Failed to begin transaction: " .. tostring(begin_err))
+		                log.error("UndoBatchRippleEdit: Failed to begin transaction: %s", tostring(begin_err))
 		                return { success = false, error_message = "Failed to begin transaction: " .. tostring(begin_err) }
 		            end
 		        end
@@ -1984,12 +1984,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		        local ok, success, err = pcall(command_helper.revert_mutations, db, executed_mutations, command, args.sequence_id)
 		        if not ok then
 		            if started then db:rollback_transaction(started) end
-		            logger.error("ripple", "UndoBatchRippleEdit: Failed to revert mutations: " .. tostring(success))
+		            log.error("UndoBatchRippleEdit: Failed to revert mutations: %s", tostring(success))
 		            return { success = false, error_message = "Failed to revert mutations: " .. tostring(success) }
 		        end
 		        if success ~= true then
 		            if started then db:rollback_transaction(started) end
-		            logger.error("ripple", "UndoBatchRippleEdit: Failed to revert mutations: " .. tostring(err))
+		            log.error("UndoBatchRippleEdit: Failed to revert mutations: %s", tostring(err))
 		            return { success = false, error_message = "Failed to revert mutations: " .. tostring(err) }
 		        end
 
@@ -2001,7 +2001,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		            end
 		        end
 
-	        logger.info("ripple", "Undo Batch ripple: Reverted all changes")
+	        log.event("Undo Batch ripple: Reverted all changes")
 	        return { success = true }
 	    end
 

@@ -144,7 +144,7 @@ local profile_scope = require("core.profile_scope")
 local command_scope = require("core.command_scope")
 local frame_utils = require("core.frame_utils")
 local json = require("dkjson")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("commands")
 
 -- Sub-modules
 local registry = require("core.command_registry")
@@ -178,7 +178,7 @@ local function notify_command_event(event)
         -- NSF-OK: pcall isolates broadcast listeners; one failing listener must not block others
         local ok, err = pcall(listener, event)
         if not ok then
-            logger.error("command_manager", string.format("Command listener failed: %s", tostring(err)))
+            log.error("Command listener failed: %s", tostring(err))
         end
     end
 
@@ -499,37 +499,23 @@ extract_sequence_id = function(command)
 end
 
 local function create_command_perf_tracker(command)
-    local enabled = os.getenv("JVE_DEBUG_COMMAND_PERF") == "1"
-    local start_time = enabled and os.clock() or 0
+    local start_time = os.clock()
 
     local function reset()
-        if enabled then
-            start_time = os.clock()
-        end
+        start_time = os.clock()
     end
 
-    local function log(phase)
-        if not enabled then
-            return
-        end
+    local function log_phase(phase)
         local elapsed_ms = (os.clock() - start_time) * 1000.0
-        local logger = require("core.logger")
-        logger.warn(
-            "command_perf",
-            string.format(
-                "%s took %.2fms (cmd=%s seq=%s)",
-                phase,
-                elapsed_ms,
-                tostring(command and command.type),
-                tostring(command and command.sequence_number)
-            )
-        )
+        log.detail("%s took %.2fms (cmd=%s seq=%s)",
+            phase, elapsed_ms,
+            tostring(command and command.type),
+            tostring(command and command.sequence_number))
     end
 
     return {
-        enabled = enabled,
         reset = reset,
-        log = log
+        log = log_phase
     }
 end
 
@@ -645,11 +631,9 @@ function M.init(sequence_id, project_id)
     
     ensure_command_selection_columns()
     
-    logger.debug("command_manager", string.format(
-        "Initialized (last_sequence=%d current_position=%s)",
+    log.event("Initialized (last_sequence=%d current_position=%s)",
         history.get_last_sequence_number(),
-        tostring(history.get_current_sequence_number())
-    ))
+        tostring(history.get_current_sequence_number()))
 end
 
 -- Validate command parameters
@@ -696,7 +680,7 @@ local function execute_command_implementation(command)
             command
         )
         if not ok then
-            logger.error("command_manager", string.format("Executor failed (%s):\n%s", tostring(command and command.type), tostring(result)))
+            log.error("Executor failed (%s):\n%s", tostring(command and command.type), tostring(result))
             last_error_message = tostring(result) -- includes traceback
             scope:finish("executor_error")
             return false
@@ -713,7 +697,7 @@ local function execute_command_implementation(command)
         return true
     else
         local error_msg = string.format("Unknown command type: %s", command.type)
-        logger.error("command_manager", error_msg)
+        log.error("Unknown command type: %s", command.type)
         last_error_message = error_msg
         scope:finish("unknown_command")
         return false
@@ -892,9 +876,8 @@ function M._execute_body(command_or_name, params)
             if saved then
                 -- Advance cursor so next nested command chains correctly
                 history.set_current_sequence_number(sequence_number)
-                logger.debug("command_manager", string.format(
-                    "Nested command %s (seq=%d) saved, group=%s",
-                    command.type, sequence_number, tostring(root_command_sequence_number)))
+                log.event("Nested command %s (seq=%d) saved, group=%s",
+                    command.type, sequence_number, tostring(root_command_sequence_number))
             else
                 result.success = false
                 result.error_message = "Failed to save nested command to database"
@@ -997,7 +980,7 @@ function M._execute_body(command_or_name, params)
         pre_hash = state_mgr.calculate_state_hash(command.project_id)
         perf.log("state_hash_pre")
         perf.reset()
-    elseif perf.enabled then
+    else
         perf.reset()
         perf.log("state_hash_pre_skipped")
         perf.reset()
@@ -1023,7 +1006,7 @@ function M._execute_body(command_or_name, params)
     if not command.parent_sequence_number then
         executing_from_root = history.get_current_sequence_number() == nil
         if not executing_from_root and sequence_number > 1 then
-            logger.error("command_manager", string.format("Command %d has NULL parent but is not first!", sequence_number))
+            log.error("Command %d has NULL parent but is not first!", sequence_number)
             rollback_transaction()
             history.decrement_sequence_number()
             result.error_message = "FATAL: undo tree corruption"
@@ -1053,10 +1036,8 @@ function M._execute_body(command_or_name, params)
 
     -- EXECUTE
     exec_result = execute_command_implementation(command)
-    if perf.enabled then
-        perf.log("execute_command_implementation")
-        perf.reset()
-    end
+    perf.log("execute_command_implementation")
+    perf.reset()
     execution_success, execution_error_message, execution_result_data = normalize_executor_result(exec_result, command)
     if execution_result_data ~= nil then
         result.executor_result_data = execution_result_data
@@ -1114,7 +1095,7 @@ function M._execute_body(command_or_name, params)
             post_hash = state_mgr.calculate_state_hash(command.project_id)
             perf.log("state_hash_post")
             perf.reset()
-        elseif perf.enabled then
+        else
             perf.reset()
             perf.log("state_hash_post_skipped")
             perf.reset()
@@ -1128,10 +1109,8 @@ function M._execute_body(command_or_name, params)
         end
 
         saved = command:save(db)
-        if perf.enabled then
-            perf.log("command:save")
-            perf.reset()
-        end
+        perf.log("command:save")
+        perf.reset()
         if saved then
             result.success = true
             result.result_data = command:serialize()
@@ -1153,10 +1132,8 @@ function M._execute_body(command_or_name, params)
             if seq_id and (force_snapshot or snapshot_mgr.should_snapshot(sequence_number)) then
                  local clips = require('core.database').load_clips(seq_id)
                  snapshot_mgr.create_snapshot(db, seq_id, sequence_number, clips)
-                 if perf.enabled then
-                    perf.log("snapshotting")
-                    perf.reset()
-                 end
+                 perf.log("snapshotting")
+                 perf.reset()
             end
 
             -- COMMIT (skip if undo group is active - savepoint will handle commit)
@@ -1164,10 +1141,8 @@ function M._execute_body(command_or_name, params)
                 local db_module = require("core.database")
                 assert(db_module.commit(), "command_manager: post-command commit failed")
             end
-            if perf.enabled then
-                perf.log("db_commit")
-                perf.reset()
-            end
+            perf.log("db_commit")
+            perf.reset()
 
             -- UI Refresh / Mutation Handling
             local skip_timeline_reload = command_flag(command, "skip_timeline_reload", "__skip_timeline_reload")
@@ -1199,10 +1174,8 @@ function M._execute_body(command_or_name, params)
                      -- Fallback
                      timeline_state.reload_clips(reload_sequence_id)
                  end
-                 if perf.enabled then
-                    perf.log("ui_refresh")
-                    perf.reset()
-                 end
+                 perf.log("ui_refresh")
+                 perf.reset()
             end
 
             notify_command_event({
@@ -1212,9 +1185,7 @@ function M._execute_body(command_or_name, params)
                 stack_id = stack_id,
                 sequence_number = sequence_number
             })
-            if perf.enabled then
-                perf.log("notify_command_event")
-            end
+            perf.log("notify_command_event")
 
         else
             result.error_message = "Failed to save command to database"
@@ -1560,7 +1531,7 @@ local function execute_redo_command(cmd)
     -- Persist updated mutations (e.g., new split clip IDs generated during redo)
     local saved = cmd:save(db)
     if not saved then
-        logger.warn("command_manager", string.format("Redo: failed to persist updated command %s", cmd.type))
+        log.warn("Redo: failed to persist updated command %s", cmd.type)
     end
 
     history.set_current_sequence_number(cmd.sequence_number)
@@ -1698,7 +1669,7 @@ function M.redo_group(group_id)
 end
 
 function M.execute_undo(original_command)
-    logger.debug("command_manager", string.format("Executing undo for command: %s", tostring(original_command.type)))
+    log.event("Executing undo for command: %s", tostring(original_command.type))
 
     -- Set flag to prevent UI persistence commands from executing during undo
     undo_redo_in_progress = true
@@ -1713,7 +1684,7 @@ function M.execute_undo(original_command)
         undoer = registry.get_undoer(original_command.type)
         if not undoer then
             local msg = string.format("No undoer registered for %s", tostring(original_command.type))
-            logger.error("command_manager", msg)
+            log.error("No undoer registered for %s", tostring(original_command.type))
             undo_redo_in_progress = false
             return { success = false, error_message = msg }
         end
@@ -1771,7 +1742,7 @@ function M.execute_undo(original_command)
             timeline_state.set_playhead_position(original_command.playhead_value)
         end
 
-        logger.info("command_manager", string.format("Undo successful (position=%s)", tostring(history.get_current_sequence_number())))
+        log.event("Undo successful (position=%s)", tostring(history.get_current_sequence_number()))
         
         notify_command_event({
             event = "undo",
@@ -1781,7 +1752,7 @@ function M.execute_undo(original_command)
     else
         last_error_message = undo_error_message ~= "" and undo_error_message or last_error_message
         result.error_message = last_error_message or "Undo execution failed"
-        logger.error("command_manager", "Undo failed: " .. tostring(result.error_message))
+        log.error("Undo failed: %s", tostring(result.error_message))
     end
 
     -- Clear undo-in-progress flag
@@ -1791,13 +1762,13 @@ function M.execute_undo(original_command)
 end
 
 function M.execute_batch(commands)
-    logger.debug("command_manager", string.format("Executing batch of %d commands", #commands))
+    log.event("Executing batch of %d commands", #commands)
     local results = {}
     for _, command in ipairs(commands) do
         local result = M.execute(command)
         table.insert(results, result)
         if not result.success then
-            logger.error("command_manager", string.format("Batch execution failed at command: %s", tostring(command.type)))
+            log.error("Batch execution failed at command: %s", tostring(command.type))
             break
         end
     end
@@ -1820,7 +1791,7 @@ end
 
 -- Revert to sequence (Debug/Dev tool)
 function M.revert_to_sequence(sequence_number)
-    logger.info("command_manager", string.format("Reverting to sequence: %d", sequence_number))
+    log.event("Reverting to sequence: %d", sequence_number)
     -- Delegate to Command model (no raw SQL in command_manager)
     local Command = require("command")
     assert(Command.mark_undone_after(sequence_number),
@@ -1850,13 +1821,13 @@ end
 -- Replay events for a sequence (lightweight, UI-oriented replay)
 function M.replay_events(sequence_id, target_sequence_number)
     if not db then
-        logger.warn("command_manager", "replay_events: no database connection")
+        log.warn("replay_events: no database connection")
         return false
     end
 
     local seq_id = sequence_id or active_sequence_id
     if not seq_id or seq_id == "" then
-        logger.warn("command_manager", "replay_events: missing sequence_id and no active sequence set")
+        log.warn("replay_events: missing sequence_id and no active sequence set")
         return false
     end
     local target_seq = target_sequence_number
@@ -1869,7 +1840,7 @@ function M.replay_events(sequence_id, target_sequence_number)
     local Sequence = require("models.sequence")
     local seq_record = Sequence.load(seq_id)
     if not seq_record then
-        logger.warn("command_manager", string.format("replay_events: sequence '%s' missing; skipping replay", tostring(seq_id)))
+        log.warn("replay_events: sequence '%s' missing; skipping replay", tostring(seq_id))
         return true
     end
 
@@ -1921,7 +1892,7 @@ function M.replay_events(sequence_id, target_sequence_number)
     restore_view()
 
     if not ok then
-        logger.warn("command_manager", string.format("replay_events: timeline reload failed: %s", tostring(err)))
+        log.warn("replay_events: timeline reload failed: %s", tostring(err))
         return false
     end
 
@@ -1930,7 +1901,7 @@ end
 
 -- Replay from sequence
 function M.replay_from_sequence(start_sequence_number)
-    logger.info("command_manager", string.format("Replaying commands from sequence: %d", start_sequence_number))
+    log.event("Replaying commands from sequence: %d", start_sequence_number)
     local result = {
         success = true,
         commands_replayed = 0,
@@ -1962,7 +1933,7 @@ end
 
 -- Replay all
 function M.replay_all()
-    logger.info("command_manager", "Replaying all commands")
+    log.event("Replaying all commands")
     return M.replay_from_sequence(1)
 end
 

@@ -18,7 +18,7 @@
 --
 -- @file open_project.lua
 local M = {}
-local logger = require("core.logger")
+local log = require("core.logger").for_area("media")
 local project_open = require("core.project_open")
 local file_browser = require("core.file_browser")
 local recent_projects = require("core.recent_projects")
@@ -126,8 +126,7 @@ function M.post_open_init(sequence, project_path)
     local display_name = (project and project.name) or "Untitled"
     recent_projects.add(display_name, project_path)
 
-    logger.info("open_project", string.format(
-        "Opened project: %s (sequence: %s)", sequence.project_id, sequence.id))
+    log.event("Opened project: %s (sequence: %s)", sequence.project_id, sequence.id)
 
     return { success = true, project_id = sequence.project_id, sequence_id = sequence.id }
 end
@@ -143,7 +142,7 @@ function M.register(executors, undoers, db, set_last_error)
 
         -- If interactive mode or no project path provided, show dialog
         if args.interactive or not project_path or project_path == "" then
-            logger.info("open_project", "OpenProject: Showing file picker dialog")
+            log.event("OpenProject: Showing file picker dialog")
 
             -- Get UI references for dialog
             local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
@@ -167,7 +166,7 @@ function M.register(executors, undoers, db, set_last_error)
             )
 
             if not project_path or project_path == "" then
-                logger.debug("open_project", "OpenProject: User cancelled file picker")
+                log.event("OpenProject: User cancelled file picker")
                 return { success = true, cancelled = true }
             end
 
@@ -175,11 +174,11 @@ function M.register(executors, undoers, db, set_last_error)
             command:set_parameter("project_path", project_path)
         end
 
-        logger.info("open_project", "Opening project: " .. tostring(project_path))
+        log.event("Opening project: %s", tostring(project_path))
 
         -- Detect format and route accordingly
         local format = detect_project_format(project_path)
-        logger.debug("open_project", "Detected format: " .. format)
+        log.event("Detected format: %s", format)
 
         if format == "drp" then
             -- .drp requires conversion to .jvp first
@@ -191,7 +190,7 @@ function M.register(executors, undoers, db, set_last_error)
 
             local jvp_path = drp_converter.show_conversion_dialog(project_path, conv_window)
             if not jvp_path then
-                logger.debug("open_project", "OpenProject: User cancelled conversion dialog")
+                log.event("OpenProject: User cancelled conversion dialog")
                 return { success = true, cancelled = true }
             end
 
@@ -202,7 +201,7 @@ function M.register(executors, undoers, db, set_last_error)
 
             -- Now open the converted .jvp
             project_path = jvp_path
-            logger.info("open_project", "Converted .drp, now opening: " .. project_path)
+            log.event("Converted .drp, now opening: %s", project_path)
 
         elseif format == "resolve_db" then
             -- Resolve DB peer mode - not yet implemented

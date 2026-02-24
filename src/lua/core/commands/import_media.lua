@@ -28,7 +28,7 @@
 local M = {}
 local Sequence = require("models.sequence")
 local MediaReader = require("media.media_reader")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("media")
 local file_browser = require("core.file_browser")
 
 -- Schema for ImportMedia command
@@ -156,7 +156,7 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
     -- Currently auto-updates existing masterclip. Later: show dialog with Skip/Replace/Keep Both.
     local media_id, metadata, err = MediaReader.import_media(file_path, db, project_id, replay_ids.media_id)
     if not media_id then
-        logger.error("import_media", string.format("Failed to import %s: %s", file_path, err or "unknown error"))
+        log.error("Failed to import %s: %s", file_path, err or "unknown error")
         return nil
     end
 
@@ -178,12 +178,11 @@ local function import_single_file(file_path, project_id, db, replay_ids, set_las
     local existing = find_existing_masterclip(db, media_id)
     if existing then
         if existing.old_fps_num ~= fps_num or existing.old_fps_den ~= fps_den then
-            logger.info("import_media", string.format(
-                "Updating masterclip fps: %d/%d -> %d/%d for %s",
-                existing.old_fps_num, existing.old_fps_den, fps_num, fps_den, file_path))
+            log.event("Updating masterclip fps: %d/%d -> %d/%d for %s",
+                existing.old_fps_num, existing.old_fps_den, fps_num, fps_den, file_path)
             update_masterclip_fps(db, existing.masterclip_sequence_id, fps_num, fps_den)
         else
-            logger.debug("import_media", string.format("Masterclip already exists for %s, no fps change", file_path))
+            log.event("Masterclip already exists for %s, no fps change", file_path)
         end
         return {
             media_id = media_id,
@@ -248,7 +247,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- If interactive mode or no file paths provided, show dialog
         if args.interactive or not file_paths or type(file_paths) ~= "table" or #file_paths == 0 then
-            logger.info("import_media", "ImportMedia: Showing file picker dialog")
+            log.event("ImportMedia: Showing file picker dialog")
 
             -- Get UI references for dialog
             local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
@@ -272,7 +271,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             if not file_paths or type(file_paths) ~= "table" or #file_paths == 0 then
                 -- User cancelled - this is not an error
-                logger.debug("import_media", "ImportMedia: User cancelled file picker")
+                log.event("ImportMedia: User cancelled file picker")
                 return { success = true, cancelled = true }
             end
 
@@ -280,7 +279,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             command:set_parameter("file_paths", file_paths)
         end
 
-        logger.info("import_media", "Executing ImportMedia command")
+        log.event("Executing ImportMedia command")
 
         -- Re-check file_paths (may have been set by dialog above)
         file_paths = args.file_paths
@@ -309,7 +308,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local error_messages = {}
 
         for i, file_path in ipairs(file_paths) do
-            logger.debug("import_media", string.format("ImportMedia[%d]: %s", i, tostring(file_path)))
+            log.event("ImportMedia[%d]: %s", i, tostring(file_path))
 
             -- Build replay IDs for deterministic replay
             local replay_ids = {
@@ -334,7 +333,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 media_metadata[i] = result.metadata
 
                 success_count = success_count + 1
-                logger.info("import_media", string.format("Imported: %s", file_path))
+                log.event("Imported: %s", file_path)
             else
                 table.insert(error_messages, string.format("Failed to import: %s", file_path))
             end
@@ -364,13 +363,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        logger.info("import_media", string.format("Imported %d of %d files", success_count, #file_paths))
+        log.event("Imported %d of %d files", success_count, #file_paths)
         return { success = true, imported_count = success_count, total_count = #file_paths }
     end
 
     command_undoers["ImportMedia"] = function(command)
         local args = command:get_all_parameters()
-        logger.info("import_media", "Undoing ImportMedia command")
+        log.event("Undoing ImportMedia command")
 
         -- Delete in reverse order: clips, tracks, sequences, media
         local video_clip_ids = args.video_clip_ids or {}
@@ -454,7 +453,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        logger.info("import_media", string.format("Undone: deleted %d imported media files", #media_ids))
+        log.event("Undone: deleted %d imported media files", #media_ids)
         return true
     end
 

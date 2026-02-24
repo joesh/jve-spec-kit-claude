@@ -17,7 +17,7 @@ local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local timeline_state = require('ui.timeline.timeline_state')
-local logger = require("core.logger")
+local log = require("core.logger").for_area("commands")
 
 
 local SPEC = {
@@ -37,12 +37,6 @@ local SPEC = {
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
-    local debug_enabled = os.getenv("JVE_DEBUG_RIPPLE_DELETE_SELECTION") == "1"
-    local function debug_log(message)
-        if debug_enabled then
-            logger.debug("ripple_delete_selection", message)
-        end
-    end
 
     local function require_number(value, name)
         if value == nil then
@@ -140,7 +134,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
 
         if not args.dry_run then
-            debug_log("Executing RippleDeleteSelection command")
+            log.detail("Executing RippleDeleteSelection command")
         end
 
         local clip_ids = args.clip_ids
@@ -162,7 +156,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if not clip_ids or #clip_ids == 0 then
-            logger.warn("ripple_delete_selection", "No clips selected")
+            log.warn("No clips selected")
             return false
         end
 
@@ -189,12 +183,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 window_end = window_end and math.max(window_end, clip_end) or clip_end
                 table.insert(clip_ids_for_delete, clip.id)
             else
-                logger.warn("ripple_delete_selection", string.format("Clip %s not found", tostring(clip_id)))
+                log.warn("Clip %s not found", tostring(clip_id))
             end
         end
 
         if #clips == 0 then
-            logger.warn("ripple_delete_selection", "No valid clips to delete")
+            log.warn("No valid clips to delete")
             return false
         end
 
@@ -219,7 +213,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if not sequence_id or sequence_id == "" then
-            logger.error("ripple_delete_selection", "Unable to determine sequence_id")
+            log.error("Unable to determine sequence_id")
             return false
         end
 
@@ -257,7 +251,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         for _, clip in ipairs(clips) do
             if not clip:delete() then
-                logger.error("ripple_delete_selection", string.format("Failed to delete clip %s", tostring(clip.id)))
+                log.error("Failed to delete clip %s", tostring(clip.id))
                 return false
             end
         end
@@ -351,7 +345,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                             if not deleted_lookup[entry.id] then
                                 local status, err = process_shift_candidate(entry.id, entry.start_value or 0)
                                 if status == false then
-                                    logger.error("ripple_delete_selection", tostring(err))
+                                    log.error("%s", tostring(err))
                                     return false
                                 end
                             end
@@ -362,7 +356,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 if not processed then
                     local shift_query = db:prepare([[SELECT id, timeline_start_frame FROM clips WHERE track_id = ? ORDER BY timeline_start_frame ASC]])
                     if not shift_query then
-                        logger.error("ripple_delete_selection", "Failed to prepare per-track shift query")
+                        log.error("Failed to prepare per-track shift query")
                         return false
                     end
                     shift_query:bind_value(1, track_id)
@@ -378,13 +372,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                             local status, err = process_shift_candidate(shifted_id, original_start)
                             if status == false then
                                 shift_query:finalize()
-                                logger.error("ripple_delete_selection", tostring(err))
+                                log.error("%s", tostring(err))
                                 return false
                             end
                         end
                     else
                         shift_query:finalize()
-                        logger.error("ripple_delete_selection", "Failed to execute per-track shift query")
+                        log.error("Failed to execute per-track shift query")
                         return false
                     end
 
@@ -417,8 +411,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        debug_log(string.format("Ripple delete selection: removed %d clip(s), shifted %d clip(s) by %s",
-            #clips, #shifted_clips, tostring(shift_amount)))
+        log.detail("Ripple delete selection: removed %d clip(s), shifted %d clip(s) by %s",
+            #clips, #shifted_clips, tostring(shift_amount))
         return true
     end
 
@@ -445,7 +439,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if clip and info.original_start then
                 clip.timeline_start = info.original_start
                 if not clip:save({skip_occlusion = true}) then
-                    logger.warn("ripple_delete_selection", string.format("Undo: Failed to restore shifted clip %s", tostring(info.clip_id)))
+                    log.warn("Undo: Failed to restore shifted clip %s", tostring(info.clip_id))
                     failed = true
                 else
                     local update_payload = command_helper.clip_update_payload(clip, args.ripple_selection_sequence_id)
@@ -467,7 +461,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
                 local ok = restored:save({skip_occlusion = true})
                 if not ok then
-                    logger.warn("ripple_delete_selection", string.format("Undo: Failed to reinsert deleted clip %s", tostring(restored.id)))
+                    log.warn("Undo: Failed to reinsert deleted clip %s", tostring(restored.id))
                     failed = true
                 else
                     local insert_payload = command_helper.clip_insert_payload(restored, args.ripple_selection_sequence_id or restored.owner_sequence_id)
@@ -480,7 +474,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- flush_timeline_mutations assumed handled by manager
 
-        debug_log(string.format("Undo RippleDeleteSelection: restored %d clip(s)", #deleted_states))
+        log.detail("Undo RippleDeleteSelection: restored %d clip(s)", #deleted_states)
         if failed then
             return false, "RippleDeleteSelection undo: one or more clips failed to restore (overlap/DB error)"
         end

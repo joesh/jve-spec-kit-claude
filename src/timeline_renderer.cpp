@@ -1,11 +1,11 @@
 #include "timeline_renderer.h"
 #include "qt_bindings.h"
+#include "jve_log.h"
 #include <QPaintEvent>
 #include <QResizeEvent>
 #include <QApplication>
 #include <QWheelEvent>
 #include <QPolygon>
-#include <QtDebug>
 
 namespace JVE {
 
@@ -250,7 +250,7 @@ void TimelineRenderer::mousePressEvent(QMouseEvent* event)
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
                 const char* error_msg = lua_tostring(lua_state_, -1);
-                qWarning() << "Lua error in mousePressEvent:" << (error_msg ? error_msg : "unknown error");
+                JVE_LOG_WARN(Ui, "Lua error in mousePressEvent: %s", error_msg ? error_msg : "unknown error");
                 lua_pop(lua_state_, 1);
             }
         } else {
@@ -303,7 +303,7 @@ void TimelineRenderer::mouseReleaseEvent(QMouseEvent* event)
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
                 const char* error_msg = lua_tostring(lua_state_, -1);
-                qWarning() << "Lua error in mouseReleaseEvent:" << (error_msg ? error_msg : "unknown error");
+                JVE_LOG_WARN(Ui, "Lua error in mouseReleaseEvent: %s", error_msg ? error_msg : "unknown error");
                 lua_pop(lua_state_, 1);
             }
         } else {
@@ -356,7 +356,7 @@ void TimelineRenderer::mouseMoveEvent(QMouseEvent* event)
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
                 const char* error_msg = lua_tostring(lua_state_, -1);
-                qWarning() << "Lua error in mouseMoveEvent:" << (error_msg ? error_msg : "unknown error");
+                JVE_LOG_WARN(Ui, "Lua error in mouseMoveEvent: %s", error_msg ? error_msg : "unknown error");
                 lua_pop(lua_state_, 1);
             }
         } else {
@@ -413,7 +413,7 @@ void TimelineRenderer::wheelEvent(QWheelEvent* event)
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
                 const char* error_msg = lua_tostring(lua_state_, -1);
-                qWarning() << "Lua error in wheelEvent:" << (error_msg ? error_msg : "unknown error");
+                JVE_LOG_WARN(Ui, "Lua error in wheelEvent: %s", error_msg ? error_msg : "unknown error");
                 lua_pop(lua_state_, 1);
             }
         } else {
@@ -446,7 +446,7 @@ void TimelineRenderer::keyPressEvent(QKeyEvent* event)
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
                 const char* error_msg = lua_tostring(lua_state_, -1);
-                qWarning() << "Lua error in keyPressEvent:" << (error_msg ? error_msg : "unknown error");
+                JVE_LOG_WARN(Ui, "Lua error in keyPressEvent: %s", error_msg ? error_msg : "unknown error");
                 lua_pop(lua_state_, 1);
             }
         } else {
@@ -474,7 +474,7 @@ void TimelineRenderer::resizeEvent(QResizeEvent* event)
             int result = lua_pcall(lua_state_, 1, 0, 0);
             if (result != 0) {
                 const char* error_msg = lua_tostring(lua_state_, -1);
-                qWarning() << "Lua error in resizeEvent:" << (error_msg ? error_msg : "unknown error");
+                JVE_LOG_WARN(Ui, "Lua error in resizeEvent: %s", error_msg ? error_msg : "unknown error");
                 lua_pop(lua_state_, 1);
             }
         } else {

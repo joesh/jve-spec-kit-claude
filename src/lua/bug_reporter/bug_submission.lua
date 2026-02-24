@@ -19,7 +19,7 @@
 local json_test_loader = require("bug_reporter.json_test_loader")
 local youtube_uploader = require("bug_reporter.youtube_uploader")
 local github_issue_creator = require("bug_reporter.github_issue_creator")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local utils = require("bug_reporter.utils")
 
 local BugSubmission = {}
@@ -72,20 +72,20 @@ function BugSubmission.submit_bug_report(test_path, options)
     }
 
     -- 1. Load test data
-    logger.info("bug_reporter", "Loading bug report...")
+    log.event("Loading bug report...")
     local test, load_err = json_test_loader.load(test_path)
     if not test then
         return nil, "Failed to load test: " .. load_err
     end
 
-    logger.info("bug_reporter", "Test loaded: " .. test.test_name)
+    log.event("Test loaded: %s", test.test_name)
 
     -- 2. Upload video to YouTube (if enabled and video exists)
     if upload_video then
         local video_path = BugSubmission.find_slideshow_video(test_path)
 
         if video_path then
-            logger.info("bug_reporter", "Uploading video to YouTube...")
+            log.event("Uploading video to YouTube...")
 
             local metadata = {
                 title = test.test_name or "JVE Bug Report",
@@ -96,20 +96,20 @@ function BugSubmission.submit_bug_report(test_path, options)
             local upload_result, upload_err = youtube_uploader.upload_video(video_path, metadata)
             if upload_result then
                 result.video_url = upload_result.url
-                logger.info("bug_reporter", "✓ Video uploaded: " .. upload_result.url)
+                log.event("Video uploaded: %s", upload_result.url)
             else
                 local error_msg = "Failed to upload video: " .. upload_err
                 table.insert(result.errors, error_msg)
-                logger.error("bug_reporter", "✗ " .. error_msg)
+                log.error("%s", error_msg)
             end
         else
-            logger.info("bug_reporter", "No slideshow video found, skipping upload")
+            log.event("No slideshow video found, skipping upload")
         end
     end
 
     -- 3. Create GitHub issue (if enabled)
     if create_issue then
-        logger.info("bug_reporter", "Creating GitHub issue...")
+        log.event("Creating GitHub issue...")
 
         local issue_data = {
             title = BugSubmission.format_issue_title(test),
@@ -124,11 +124,11 @@ function BugSubmission.submit_bug_report(test_path, options)
         if issue_result then
             result.issue_url = issue_result.url
             result.issue_number = issue_result.issue_number
-            logger.info("bug_reporter", "✓ Issue created: " .. issue_result.url)
+            log.event("Issue created: %s", issue_result.url)
         else
             local error_msg = "Failed to create issue: " .. issue_err
             table.insert(result.errors, error_msg)
-            logger.error("bug_reporter", "✗ " .. error_msg)
+            log.error("%s", error_msg)
         end
     end
 
@@ -249,9 +249,9 @@ function BugSubmission.batch_submit(test_dir, options)
 
     -- Submit each test
     for _, test in ipairs(tests) do
-        logger.info("bug_reporter", "\n" .. string.rep("=", 60))
-        logger.info("bug_reporter", "Submitting: " .. test.test_name)
-        logger.info("bug_reporter", string.rep("=", 60))
+        log.event("\n%s", string.rep("=", 60))
+        log.event("Submitting: %s", test.test_name)
+        log.event("%s", string.rep("=", 60))
 
         local submit_result, submit_err = BugSubmission.submit_bug_report(test._source_file, options)
 
@@ -275,26 +275,26 @@ end
 -- Print submission summary
 -- @param summary: Summary from batch_submit
 function BugSubmission.print_summary(summary)
-    logger.info("bug_reporter", "\n" .. string.rep("=", 60))
-    logger.info("bug_reporter", "Bug Submission Summary")
-    logger.info("bug_reporter", string.rep("=", 60))
-    logger.info("bug_reporter", string.format("Total:     %d reports", summary.total))
-    logger.info("bug_reporter", string.format("Succeeded: %d reports (%.1f%%)", summary.succeeded,
-        summary.total > 0 and (summary.succeeded / summary.total * 100) or 0))
-    logger.info("bug_reporter", string.format("Failed:    %d reports (%.1f%%)", summary.failed,
-        summary.total > 0 and (summary.failed / summary.total * 100) or 0))
+    log.event("\n%s", string.rep("=", 60))
+    log.event("Bug Submission Summary")
+    log.event("%s", string.rep("=", 60))
+    log.event("Total:     %d reports", summary.total)
+    log.event("Succeeded: %d reports (%.1f%%)", summary.succeeded,
+        summary.total > 0 and (summary.succeeded / summary.total * 100) or 0)
+    log.event("Failed:    %d reports (%.1f%%)", summary.failed,
+        summary.total > 0 and (summary.failed / summary.total * 100) or 0)
 
     if summary.failed > 0 then
-        logger.info("bug_reporter", "\nFailed submissions:")
+        log.event("\nFailed submissions:")
         for _, result in ipairs(summary.results) do
             if not result.success then
-                logger.error("bug_reporter", "  ✗ " .. result.test_name .. ": " .. (result.error or "unknown error"))
+                log.error("  %s: %s", result.test_name, result.error or "unknown error")
             end
         end
     end
 
     if summary.succeeded > 0 then
-        logger.info("bug_reporter", "\nSuccessful submissions:")
+        log.event("\nSuccessful submissions:")
         for _, result in ipairs(summary.results) do
             if result.success and result.result then
                 local details = {}
@@ -304,15 +304,15 @@ function BugSubmission.print_summary(summary)
                 if result.result.issue_url then
                     table.insert(details, "issue: " .. result.result.issue_url)
                 end
-                logger.info("bug_reporter", "  ✓ " .. result.test_name)
+                log.event("  %s", result.test_name)
                 if #details > 0 then
-                    logger.info("bug_reporter", "    " .. table.concat(details, ", "))
+                    log.event("    %s", table.concat(details, ", "))
                 end
             end
         end
     end
 
-    logger.info("bug_reporter", string.rep("=", 60))
+    log.event("%s", string.rep("=", 60))
 end
 
 -- Check if submission is configured

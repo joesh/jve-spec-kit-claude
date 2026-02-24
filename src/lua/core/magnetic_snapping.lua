@@ -16,13 +16,10 @@
 -- Original intent (unreviewed):
 -- Magnetic snapping: Find snap points for clip edges and playhead
 -- Provides snap detection logic for drag operations in the timeline
-local logger = require("core.logger")
+local log = require("core.logger").for_area("timeline")
 
 local M = {}
 
-local function debug_snapping_enabled()
-    return os.getenv("JVE_DEBUG_SNAPPING") == "1"
-end
 
 local function get_candidate_clips(state, opts)
     if type(opts) == "table" then
@@ -71,9 +68,7 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs, opts)
             local ts = clip.timeline_start
             local dur = clip.duration
             if type(ts) ~= "number" or type(dur) ~= "number" or dur <= 0 then
-                if debug_snapping_enabled() then
-                    logger.debug("snapping", string.format("Skipping clip %s with invalid time bounds", tostring(clip.id)))
-                end
+                log.detail("Skipping clip %s with invalid time bounds", tostring(clip.id))
                 goto continue_clip
             end
 
@@ -149,16 +144,14 @@ function M.apply_snap(state, target_time, is_snapping_enabled, excluded_clip_ids
     local snap_point, distance_px = M.find_closest_snap(state, target_time, excluded_clip_ids, excluded_edge_specs, viewport_width_px, opts)
 
     if snap_point then
-        if debug_snapping_enabled() then
-            -- Convert integer frames to milliseconds for debug printing
-            local rate = state.get_sequence_frame_rate and state.get_sequence_frame_rate()
-            if rate then
-                local fps = rate.fps_numerator / rate.fps_denominator
-                local target_ms = target_time * 1000 / fps
-                local snap_ms = snap_point.time * 1000 / fps
-                logger.debug("snapping", string.format("SNAP: target=%.2fms → snapped to %.2fms (%s) [distance=%.1fpx]",
-                    target_ms, snap_ms, snap_point.description, distance_px))
-            end
+        -- Convert integer frames to milliseconds for debug printing
+        local rate = state.get_sequence_frame_rate and state.get_sequence_frame_rate()
+        if rate then
+            local fps = rate.fps_numerator / rate.fps_denominator
+            local target_ms = target_time * 1000 / fps
+            local snap_ms = snap_point.time * 1000 / fps
+            log.detail("SNAP: target=%.2fms → snapped to %.2fms (%s) [distance=%.1fpx]",
+                target_ms, snap_ms, snap_point.description, distance_px)
         end
         return snap_point.time, {snapped = true, snap_point = snap_point, distance_px = distance_px}
     else

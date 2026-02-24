@@ -15,7 +15,7 @@
 --
 -- @file audio_playback.lua
 
-local logger = require("core.logger")
+local log = require("core.logger").for_area("audio")
 local qt_constants = require("core.qt_constants")
 local project_gen = require("core.project_generation")
 -- Quality mode constants (match SSE C++ enum)
@@ -178,8 +178,8 @@ local function reanchor(new_media_time_us, new_signed_speed, new_quality_mode)
 
     -- NOTE: PCM range cache cleared by C++ AudioPump on reanchor
 
-    logger.debug("audio_playback", ("reanchor: t=%.3fs speed=%.2f Q%d")
-        :format(new_media_time_us / 1000000, new_signed_speed, new_quality_mode))
+    log.event("reanchor: t=%.3fs speed=%.2f Q%d",
+        new_media_time_us / 1000000, new_signed_speed, new_quality_mode)
 end
 
 -- NOTE: advance_sse_past_codec_delay() removed in Phase 3
@@ -213,8 +213,7 @@ function M.init_session(sample_rate, channels)
         assert(actual_rate == sample_rate, string.format(
             "audio_playback.init_session: sample rate mismatch (requested %d, device gave %d)",
             sample_rate, actual_rate))
-        logger.info("audio_playback", string.format(
-            "AOP opened: %dHz %dch", actual_rate, actual_channels))
+        log.event("AOP opened: %dHz %dch", actual_rate, actual_channels)
     end
 
     -- Create SSE engine at session rate
@@ -235,8 +234,7 @@ function M.init_session(sample_rate, channels)
     M.speed = 1.0
     M.quality_mode = Q1
 
-    logger.info("audio_playback", string.format(
-        "Session initialized: %dHz %dch", sample_rate, channels))
+    log.event("Session initialized: %dHz %dch", sample_rate, channels)
 end
 
 --------------------------------------------------------------------------------
@@ -344,9 +342,8 @@ function M.apply_mix(tmb, mix_params, edit_time_us)
         -- TMB handles clip transitions autonomously in C++.
         -- send_mix_params_to_tmb() already invalidated the C++ mix cache.
         -- C++ AudioPump continues — next pump iteration fetches fresh data.
-        logger.debug("audio_playback", string.format(
-            "apply_mix: %d track(s), tracks_changed=%s",
-            #mix_params, tostring(tracks_changed)))
+        log.event("apply_mix: %d track(s), tracks_changed=%s",
+            #mix_params, tostring(tracks_changed))
         return
     end
 
@@ -358,9 +355,8 @@ function M.apply_mix(tmb, mix_params, edit_time_us)
         M.media_time_us = edit_time_us
     end
 
-    logger.debug("audio_playback", string.format(
-        "apply_mix: %d track(s), tracks_changed=%s",
-        #mix_params, tostring(tracks_changed)))
+    log.event("apply_mix: %d track(s), tracks_changed=%s",
+        #mix_params, tostring(tracks_changed))
 end
 
 --- Refresh mix volumes mid-playback (mute/solo/volume change, same track set).
@@ -377,8 +373,7 @@ function M.refresh_mix_volumes(mix_params)
     send_mix_params_to_tmb()
     -- NOTE: C++ AudioPump detects volume changes via TMB mix params
 
-    logger.debug("audio_playback", string.format(
-        "refresh_mix_volumes: %d track(s)", #mix_params))
+    log.event("refresh_mix_volumes: %d track(s)", #mix_params)
 end
 
 -- NOTE: PCM buffer management moved to C++ AudioPump in Phase 3.
@@ -415,7 +410,7 @@ function M.set_max_time(max_us)
     assert(type(max_us) == "number" and max_us >= 0,
         "audio_playback.set_max_time: max_us must be non-negative number")
     M.max_media_time_us = max_us
-    logger.debug("audio_playback", ("max_time set to %.3fs"):format(max_us / 1000000))
+    log.event("max_time set to %.3fs", max_us / 1000000)
 end
 
 --- Backward-compat alias
@@ -449,7 +444,7 @@ function M.shutdown_session()
     M.session_sample_rate = 0
     M.session_channels = 0
 
-    logger.info("audio_playback", "Session shutdown")
+    log.event("Session shutdown")
 end
 
 --------------------------------------------------------------------------------
@@ -464,11 +459,11 @@ function M.start()
     assert(M.session_initialized,
         "audio_playback.start: session not initialized")
     if not M.has_audio then
-        logger.debug("audio_playback", "start() called but no audio sources - skipping")
+        log.event("start() called but no audio sources - skipping")
         return
     end
     if M.playing then
-        logger.debug("audio_playback", "start() called but already playing - skipping")
+        log.event("start() called but already playing - skipping")
         return
     end
 
@@ -484,9 +479,8 @@ function M.start()
 
     M.playing = true
 
-    logger.info("audio_playback", string.format(
-        "Started at %.3fs, speed=%.2f, quality=Q%d",
-        M.media_anchor_us / 1000000, M.speed, M.quality_mode))
+    log.event("Started at %.3fs, speed=%.2f, quality=Q%d",
+        M.media_anchor_us / 1000000, M.speed, M.quality_mode)
 end
 
 --- Stop audio playback (transport event)
@@ -494,7 +488,7 @@ end
 -- This Lua function is retained for direct tests and legacy callers.
 function M.stop()
     if not M.session_initialized then
-        logger.debug("audio_playback", "stop() called but no session - skipping")
+        log.event("stop() called but no session - skipping")
         return
     end
     if not M.playing then
@@ -515,7 +509,7 @@ function M.stop()
     M.media_time_us = heard_time
     M.media_anchor_us = heard_time
 
-    logger.debug("audio_playback", ("Stopped at %.3fs"):format(heard_time / 1000000))
+    log.event("Stopped at %.3fs", heard_time / 1000000)
 end
 
 --- Seek to position (transport event)
@@ -524,12 +518,12 @@ function M.seek(time_us)
     assert(type(time_us) == "number", "audio_playback.seek: time_us must be number")
 
     if not M.session_initialized then
-        logger.debug("audio_playback", "seek() called but no session - storing time only")
+        log.event("seek() called but no session - storing time only")
         M.media_time_us = time_us
         return
     end
     if not M.has_audio then
-        logger.debug("audio_playback", "seek() called but no audio - storing time only")
+        log.event("seek() called but no audio - storing time only")
         M.media_time_us = time_us
         return
     end
@@ -544,7 +538,7 @@ function M.seek(time_us)
         M.media_anchor_us = M.media_time_us
     end
 
-    logger.debug("audio_playback", string.format("Seek to %.3fs", time_us / 1000000))
+    log.event("Seek to %.3fs", time_us / 1000000)
 end
 
 --- Latch at boundary (transport event)
@@ -566,7 +560,7 @@ function M.latch(time_us)
     M.media_time_us = time_us
     M.media_anchor_us = time_us
 
-    logger.debug("audio_playback", ("Latched at %.3fs"):format(time_us / 1000000))
+    log.event("Latched at %.3fs", time_us / 1000000)
 end
 
 --- Set playback speed (transport event if playing)
@@ -664,9 +658,8 @@ function M.play_burst(time_us, duration_us)
     -- Store stopped-state position at burst time
     M.media_time_us = clamp_media_us(time_us)
 
-    logger.debug("audio_playback", string.format(
-        "play_burst (stub): t=%.3fs dur=%.1fms - use PLAYBACK.PLAY_BURST for audio",
-        time_us / 1000000, duration_us / 1000))
+    log.event("play_burst (stub): t=%.3fs dur=%.1fms - use PLAYBACK.PLAY_BURST for audio",
+        time_us / 1000000, duration_us / 1000)
 end
 
 -- NOTE: Pump functions (_pump_tick, _start_pump, _cancel_pump) removed in Phase 3

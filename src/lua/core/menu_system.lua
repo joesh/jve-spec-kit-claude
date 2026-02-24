@@ -21,7 +21,7 @@ local M = {}
 
 local lxp = require("lxp")
 local keyboard_shortcut_registry = require("core.keyboard_shortcut_registry")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("media")
 
 local command_manager = nil
 local main_window = nil
@@ -384,11 +384,11 @@ end
 local function create_action_callback(command_name, params)
     return function()
         if not command_manager then
-            logger.error("menu", "Menu system not initialized with command manager")
+            log.error("Menu system not initialized with command manager")
             return
         end
 
-        logger.debug("menu", string.format("Menu clicked: %s", tostring(command_name)))
+        log.event("Menu clicked: %s", tostring(command_name))
 
         -- Special handling for commands that need external context gathering
         if command_name == "Insert" or command_name == "Overwrite" then
@@ -415,11 +415,11 @@ local function create_action_callback(command_name, params)
 		end
 
         if result_value and not result_value.success and not result_value.cancelled then
-            logger.error("menu", string.format("Command '%s' returned error: %s", tostring(command_name), tostring(result_value.error_message or "unknown")))
+            log.error("Command '%s' returned error: %s", tostring(command_name), tostring(result_value.error_message or "unknown"))
         elseif result_value and result_value.cancelled then
-            logger.debug("menu", string.format("Command '%s' cancelled by user", tostring(command_name)))
+            log.event("Command '%s' cancelled by user", tostring(command_name))
         else
-            logger.debug("menu", string.format("Command '%s' executed successfully", tostring(command_name)))
+            log.event("Command '%s' executed successfully", tostring(command_name))
         end
     end
 end
@@ -510,7 +510,7 @@ function M.load_from_file(xml_path)
         defaults_initialized = true
     end
 
-    logger.info("menu", string.format("Loaded %d menus from %s", #menus_elem.children, tostring(xml_path)))
+    log.event("Loaded %d menus from %s", #menus_elem.children, tostring(xml_path))
     update_undo_redo_actions()
     return true
 end

@@ -17,7 +17,7 @@
 -- CommandHistory: Manages undo/redo stacks, sequence numbers, and position persistence
 -- Extracted from command_manager.lua
 local M = {}
-local logger = require("core.logger")
+local log = require("core.logger").for_area("commands")
 
 -- Database connection
 local db = nil
@@ -148,8 +148,8 @@ end
 
 function M.increment_sequence_number()
     last_sequence_number = last_sequence_number + 1
-    logger.debug("command_history", string.format("Assigned sequence number %d (current=%s)",
-        last_sequence_number, tostring(current_sequence_number)))
+    log.event("Assigned sequence number %d (current=%s)",
+        last_sequence_number, tostring(current_sequence_number))
     return last_sequence_number
 end
 
@@ -205,8 +205,8 @@ function M.resolve_stack_for_command(command)
                 return stack_info.stack_id or GLOBAL_STACK_ID, stack_info
             end
         elseif not ok then
-            logger.warn("command_history", string.format("Stack resolver for %s threw error: %s",
-                tostring(command.type), tostring(stack_info)))
+            log.warn("Stack resolver for %s threw error: %s",
+                tostring(command.type), tostring(stack_info))
         end
     end
 
@@ -263,9 +263,8 @@ function M.initialize_stack_position_from_db(stack_id, sequence_id)
         local exists = check:exec() and check:next()
         check:finalize()
         if not exists then
-            logger.warn("command_history", string.format(
-                "Orphaned undo cursor: sequence %s has current_sequence_number=%d but command doesn't exist. Resetting to %s.",
-                sequence_id, saved_value, last_sequence_number > 0 and tostring(last_sequence_number) or "nil"))
+            log.warn("Orphaned undo cursor: sequence %s has current_sequence_number=%d but command doesn't exist. Resetting to %s.",
+                sequence_id, saved_value, last_sequence_number > 0 and tostring(last_sequence_number) or "nil")
             saved_value = last_sequence_number > 0 and last_sequence_number or nil
             -- Persist the fix
             local fix = db:prepare("UPDATE sequences SET current_sequence_number = ? WHERE id = ?")
@@ -356,7 +355,7 @@ function M.find_latest_child_command(parent_sequence)
             if decode_ok then
                 args = decoded
             else
-                logger.warn("command_history", string.format("Failed to decode command args JSON: %s", tostring(decoded)))
+                log.warn("Failed to decode command args JSON: %s", tostring(decoded))
             end
         end
 
@@ -384,18 +383,18 @@ function M.begin_undo_group(label, group_id)
         label = label or ("group_" .. tostring(group_id)),
         cursor_on_entry = current_sequence_number  -- Save cursor for rollback
     })
-    logger.debug("command_history", string.format("Begin undo group %s: %s", tostring(group_id), label or ""))
+    log.event("Begin undo group %s: %s", tostring(group_id), label or "")
     return group_id
 end
 
 function M.end_undo_group()
     if #undo_group_stack == 0 then
         -- NSF-OK: mismatch can happen if error unwinds during group; callers handle nil return
-        logger.warn("command_history", "end_undo_group called with no active group")
+        log.warn("end_undo_group called with no active group")
         return nil
     end
     local group = table.remove(undo_group_stack)
-    logger.debug("command_history", string.format("End undo group %s: %s", tostring(group.id), group.label))
+    log.event("End undo group %s: %s", tostring(group.id), group.label)
     return group.id
 end
 

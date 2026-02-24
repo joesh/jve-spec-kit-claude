@@ -15,7 +15,7 @@
 -- @file project_open.lua
 local M = {}
 
-local logger = require("core.logger")
+local log = require("core.logger").for_area("media")
 
 -- Check if a file is locked by any process (returns true if locked, false if stale)
 local function is_file_locked(path)
@@ -45,10 +45,10 @@ function M.open_project_database_or_prompt_cleanup(db_module, qt_constants, proj
         if not is_file_locked(shm_path) then
             -- Stale SHM: no process holds it, safe to delete
             -- This allows SQLite to open and recover the WAL properly
-            logger.info("project_open", "Removing stale SHM file (WAL will be recovered): " .. shm_path)
+            log.event("Removing stale SHM file (WAL will be recovered): %s", shm_path)
             os.remove(shm_path)
         else
-            logger.debug("project_open", "SHM file is actively locked - proceeding with open")
+            log.event("SHM file is actively locked - proceeding with open")
         end
     end
 
@@ -58,7 +58,7 @@ function M.open_project_database_or_prompt_cleanup(db_module, qt_constants, proj
         return true
     end
 
-    logger.error("project_open", "Failed to open project database: " .. tostring(project_path))
+    log.error("Failed to open project database: %s", tostring(project_path))
     return false
 end
 

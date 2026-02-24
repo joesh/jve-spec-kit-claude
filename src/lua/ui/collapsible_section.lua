@@ -19,15 +19,12 @@
 local error_system = require("core.error_system")
 local qt_signals = require("core.qt_signals")
 local signals = require("core.signals")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local ui_constants = require("core.ui_constants")
 local qt_constants = require("core.qt_constants")
 
 -- Helper for detailed error logging
 local log_detailed_error = error_system.log_detailed_error
-
--- Initialize logger
-logger.init()
 
 local collapsible_section = {}
 
@@ -135,12 +132,12 @@ function CollapsibleSection:create()
     -- Qt defaults to 9px margins which causes excessive spacing between collapsed headers
     local main_spacing_success, main_spacing_error = pcall(qt_constants.LAYOUT.SET_SPACING, main_layout, 1)
     if not main_spacing_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set main layout spacing: " .. log_detailed_error(main_spacing_error))
+        log.warn("[collapsible_section] Failed to set main layout spacing: %s", log_detailed_error(main_spacing_error))
     end
     
     local main_margins_success, main_margins_error = pcall(qt_constants.LAYOUT.SET_MARGINS, main_layout, 0, 0, 0, 0)
     if not main_margins_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set main layout margins: " .. log_detailed_error(main_margins_error))
+        log.warn("[collapsible_section] Failed to set main layout margins: %s", log_detailed_error(main_margins_error))
     end
 
     -- No minimum size constraints - let layout calculate size from content
@@ -149,7 +146,7 @@ function CollapsibleSection:create()
     -- Set appropriate size policy for main widget (QSizePolicy::Expanding = 7, QSizePolicy::Minimum = 1)
     local main_size_policy_success, main_size_policy_error = pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, self.main_widget, 7, 1)
     if not main_size_policy_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set main widget size policy: " .. log_detailed_error(main_size_policy_error))
+        log.warn("[collapsible_section] Failed to set main widget size policy: %s", log_detailed_error(main_size_policy_error))
     end
 
     -- Apply proper section styling (with optional debug colors)
@@ -172,13 +169,13 @@ function CollapsibleSection:create()
     
     local main_style_success, main_style_error = pcall(qt_constants.PROPERTIES.SET_STYLE, self.main_widget, main_style)
     if not main_style_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to style main widget: " .. log_detailed_error(main_style_error))
+        log.warn("[collapsible_section] Failed to style main widget: %s", log_detailed_error(main_style_error))
     end
 
     -- FIX: Make main widget visible immediately to prevent visibility warnings
     local show_main_success, show_main_error = pcall(qt_constants.DISPLAY.SHOW, self.main_widget)
     if not show_main_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to show main widget: " .. log_detailed_error(show_main_error))
+        log.warn("[collapsible_section] Failed to show main widget: %s", log_detailed_error(show_main_error))
     end
 
     -- Step 5: Create header widget (C++ line 39-40)
@@ -235,7 +232,7 @@ function CollapsibleSection:create()
     end
 
     -- Step 9: Widgets will be shown after parenting (moved to ui_toolkit.lua after smart_add_child)
-    logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "Section '" .. self.title .. "' created, visibility will be set after parenting")
+    log.event("Section '%s' created, visibility will be set after parenting", self.title)
 
     return error_system.create_success({
         message = "CollapsibleSection '" .. self.title .. "' created successfully",
@@ -290,7 +287,7 @@ function CollapsibleSection:createHeader(operation_context)
     
     local header_style_success, header_style_error = pcall(qt_constants.PROPERTIES.SET_STYLE, self.header_widget, header_style)
     if not header_style_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to style header: " .. log_detailed_error(header_style_error))
+        log.warn("[collapsible_section] Failed to style header: %s", log_detailed_error(header_style_error))
     end
 
     -- Create vertical layout for header (to stack border line + content)
@@ -365,13 +362,13 @@ function CollapsibleSection:createHeader(operation_context)
     -- Configure header layout margins and spacing (C++ lines 72-73)
     local header_spacing_success, header_spacing_error = pcall(qt_constants.LAYOUT.SET_SPACING, header_layout, 1)
     if not header_spacing_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set header spacing: " .. log_detailed_error(header_spacing_error))
+        log.warn("[collapsible_section] Failed to set header spacing: %s", log_detailed_error(header_spacing_error))
     end
 
     -- Set left margin on layout to indent triangle and title
     local header_margins_success, header_margins_error = pcall(qt_constants.LAYOUT.SET_MARGINS, header_layout, 8, 0, 0, 0)
     if not header_margins_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set header margins: " .. log_detailed_error(header_margins_error))
+        log.warn("[collapsible_section] Failed to set header margins: %s", log_detailed_error(header_margins_error))
     end
 
     -- Create container widget for header content (triangle + title)
@@ -440,14 +437,14 @@ function CollapsibleSection:createHeader(operation_context)
     -- Enable mouse events on header widget so event filter can receive clicks
     local header_hover_success, header_hover_error = pcall(qt_set_widget_attribute, self.header_widget, "WA_Hover", true)
     if not header_hover_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to enable hover on header: " .. tostring(header_hover_error))
+        log.warn("[collapsible_section] Failed to enable hover on header: %s", tostring(header_hover_error))
     end
 
     -- Add click handler to entire header widget for expand/collapse
     local header_callback_name = "CollapsibleSection_header_toggle_" .. self.title:gsub(" ", "_")
     local header_click_success, header_click_error = pcall(qt_constants.CONTROL.SET_WIDGET_CLICK_HANDLER, self.header_widget, header_callback_name)
     if not header_click_success then
-        logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] ERROR: Failed to set header click handler: " .. log_detailed_error(header_click_error))
+        log.error("[collapsible_section] Failed to set header click handler: %s", log_detailed_error(header_click_error))
     end
 
     -- Create the header click callback (same functionality as triangle)
@@ -459,10 +456,10 @@ function CollapsibleSection:createHeader(operation_context)
             return true
         end
 
-        logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "🖱️ Header clicked for: " .. self.title)
+        log.event("Header clicked for: %s", self.title)
         local result = section_instance:setExpanded(not section_instance.expanded)
         if error_system.is_error(result) then
-            logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI, "❌ Header click failed: " .. error_system.format_user_error(result))
+            log.error("Header click failed: %s", error_system.format_user_error(result))
             return false
         end
         return true
@@ -517,13 +514,13 @@ function CollapsibleSection:createEnabledDot(header_layout, operation_context)
 
     local dot_style_success, dot_style_error = pcall(qt_constants.PROPERTIES.SET_STYLE, self.enabled_dot, dot_style)
     if not dot_style_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to style enabled dot: " .. log_detailed_error(dot_style_error))
+        log.warn("[collapsible_section] Failed to style enabled dot: %s", log_detailed_error(dot_style_error))
     end
 
     -- Make dot transparent to mouse events so clicks pass through to header widget
     local dot_attr_success, dot_attr_error = pcall(qt_set_widget_attribute, self.enabled_dot, "WA_TransparentForMouseEvents", true)
     if not dot_attr_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set transparent attribute on dot: " .. tostring(dot_attr_error))
+        log.warn("[collapsible_section] Failed to set transparent attribute on dot: %s", tostring(dot_attr_error))
     end
 
     -- Add dot to header layout (C++ line 133)
@@ -573,7 +570,7 @@ function CollapsibleSection:createDisclosureTriangle(header_layout, operation_co
     local triangle_text = self.expanded and "▼" or "▶"
     local set_text_success, set_text_error = pcall(qt_constants.PROPERTIES.SET_TEXT, self.disclosure_triangle, triangle_text)
     if not set_text_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set triangle text: " .. log_detailed_error(set_text_error))
+        log.warn("[collapsible_section] Failed to set triangle text: %s", log_detailed_error(set_text_error))
     end
 
     -- Style disclosure triangle (C++ line 85: 16x16 fixed size)
@@ -589,7 +586,7 @@ function CollapsibleSection:createDisclosureTriangle(header_layout, operation_co
         }
     ]])
     if not triangle_style_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to style triangle: " .. log_detailed_error(triangle_style_error))
+        log.warn("[collapsible_section] Failed to style triangle: %s", log_detailed_error(triangle_style_error))
     end
 
     -- Triangle doesn't need its own click handler - the header widget handles all clicks
@@ -639,7 +636,7 @@ function CollapsibleSection:createTitleLabel(header_layout, operation_context)
     -- Set title text
     local title_text_success, title_text_error = pcall(qt_constants.PROPERTIES.SET_TEXT, self.title_label, self.title)
     if not title_text_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set title text: " .. log_detailed_error(title_text_error))
+        log.warn("[collapsible_section] Failed to set title text: %s", log_detailed_error(title_text_error))
     end
 
     -- Style title label (C++ lines 63-68)
@@ -652,13 +649,13 @@ function CollapsibleSection:createTitleLabel(header_layout, operation_context)
         }
     ]])
     if not title_style_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to style title: " .. log_detailed_error(title_style_error))
+        log.warn("[collapsible_section] Failed to style title: %s", log_detailed_error(title_style_error))
     end
 
     -- Make title transparent to mouse events so clicks pass through to header widget
     local attr_success, attr_error = pcall(qt_set_widget_attribute, self.title_label, "WA_TransparentForMouseEvents", true)
     if not attr_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set transparent attribute on title: " .. tostring(attr_error))
+        log.warn("[collapsible_section] Failed to set transparent attribute on title: %s", tostring(attr_error))
     end
 
     -- Add title to header layout (C++ line 134)
@@ -722,7 +719,7 @@ function CollapsibleSection:createContentFrame(operation_context)
     
     local content_style_success, content_style_error = pcall(qt_constants.PROPERTIES.SET_STYLE, self.content_frame, content_style)
     if not content_style_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to style content frame: " .. log_detailed_error(content_style_error))
+        log.warn("[collapsible_section] Failed to style content frame: %s", log_detailed_error(content_style_error))
     end
 
     -- Create content layout (C++ lines 149-151)
@@ -764,13 +761,13 @@ function CollapsibleSection:createContentFrame(operation_context)
     -- Configure content layout margins and spacing (C++ lines 150-151)
     local content_spacing_success, content_spacing_error = pcall(qt_constants.LAYOUT.SET_SPACING, self.content_layout, 1)
     if not content_spacing_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set content spacing: " .. log_detailed_error(content_spacing_error))
+        log.warn("[collapsible_section] Failed to set content spacing: %s", log_detailed_error(content_spacing_error))
     end
 
     -- Set 45px right margin on section content for visual balance with scrollbar
     local content_margins_success, content_margins_error = pcall(qt_constants.LAYOUT.SET_MARGINS, self.content_layout, 0, 0, 45, 0)
     if not content_margins_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set content margins: " .. log_detailed_error(content_margins_error))
+        log.warn("[collapsible_section] Failed to set content margins: %s", log_detailed_error(content_margins_error))
     end
 
     -- No minimum size constraints - let layout calculate size from content
@@ -779,7 +776,7 @@ function CollapsibleSection:createContentFrame(operation_context)
     -- Set appropriate size policy for expanding content (QSizePolicy::Expanding = 7, QSizePolicy::Minimum = 1)
     local size_policy_success, size_policy_error = pcall(qt_constants.GEOMETRY.SET_SIZE_POLICY, self.content_frame, 7, 1)
     if not size_policy_success then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to set content frame size policy: " .. log_detailed_error(size_policy_error))
+        log.warn("[collapsible_section] Failed to set content frame size policy: %s", log_detailed_error(size_policy_error))
     end
 
     return error_system.create_success({
@@ -801,7 +798,7 @@ function CollapsibleSection:setExpanded(expanded)
         local triangle_text = expanded and "▼" or "▶"
         local update_triangle_success, update_triangle_error = pcall(qt_constants.PROPERTIES.SET_TEXT, self.disclosure_triangle, triangle_text)
         if not update_triangle_success then
-            logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[collapsible_section] Warning: Failed to update triangle text: " .. log_detailed_error(update_triangle_error))
+            log.warn("[collapsible_section] Failed to update triangle text: %s", log_detailed_error(update_triangle_error))
         end
     end
 
@@ -823,7 +820,7 @@ function CollapsibleSection:setExpanded(expanded)
         })
     end
 
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "📋 Section '" .. self.title .. "' " .. (expanded and "expanded" or "collapsed"))
+    log.event("Section '%s' %s", self.title, expanded and "expanded" or "collapsed")
 
     -- Force layout recalculation by updating both the section widget and its parent
     -- Update the section's main widget first
@@ -834,9 +831,9 @@ function CollapsibleSection:setExpanded(expanded)
     -- Then update the parent to recalculate the overall layout
     if self.parent_widget then
         pcall(qt_update_widget, self.parent_widget)
-        logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "✅ Section " .. (expanded and "expanded" or "collapsed") .. " - triggered parent layout update")
+        log.event("Section %s - triggered parent layout update", expanded and "expanded" or "collapsed")
     else
-        logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "⚠️ Section " .. (expanded and "expanded" or "collapsed") .. " - no parent widget for layout update")
+        log.event("Section %s - no parent widget for layout update", expanded and "expanded" or "collapsed")
     end
 
     return error_system.create_success({
@@ -907,7 +904,7 @@ function CollapsibleSection:cleanup()
     self.content_layout = nil
     self.disclosure_triangle = nil
     
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "🧹 Section cleaned up: " .. self.title)
+    log.event("Section cleaned up: %s", self.title)
     
     return error_system.create_success({message = "Section cleaned up successfully"})
 end

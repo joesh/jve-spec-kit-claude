@@ -19,7 +19,7 @@
 local M = {}
 local sqlite3 = require("core.sqlite3")
 local json = require("dkjson")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("database")
 local path_utils = require("core.path_utils")
 
 local BIN_NAMESPACE = "bin"
@@ -57,7 +57,7 @@ local function safe_remove(path)
     end
     local ok, err = os.remove(path)
     if ok == nil and err and not err:match("No such file") then
-        logger.warn("database", string.format("Failed to remove %s: %s", tostring(path), tostring(err)))
+        log.warn("Failed to remove %s: %s", tostring(path), tostring(err))
     end
 end
 
@@ -133,7 +133,7 @@ local function checkpoint_and_disable_wal(opts)
     local ok, err = db_connection:exec("PRAGMA wal_checkpoint(TRUNCATE);")
     if ok == false then
         if opts.best_effort then
-            logger.warn("database", "wal_checkpoint failed during shutdown (best_effort): " .. tostring(err))
+            log.warn("wal_checkpoint failed during shutdown (best_effort): %s", tostring(err))
             return true
         end
         return false, "wal_checkpoint failed: " .. tostring(err)
@@ -142,7 +142,7 @@ local function checkpoint_and_disable_wal(opts)
     ok, err = db_connection:exec("PRAGMA journal_mode = DELETE;")
     if ok == false then
         if opts.best_effort then
-            logger.warn("database", "journal_mode=DELETE failed during shutdown (best_effort): " .. tostring(err))
+            log.warn("journal_mode=DELETE failed during shutdown (best_effort): %s", tostring(err))
             return true
         end
         return false, "journal_mode=DELETE failed: " .. tostring(err)
@@ -430,7 +430,7 @@ local function commit_transaction(started, context)
     end
     local ok, err = db_connection:exec("COMMIT;")
     if ok == false then
-        logger.warn("database", string.format("%s: failed to commit: %s", tostring(context or "database"), tostring(err)))
+        log.warn("%s: failed to commit: %s", tostring(context or "database"), tostring(err))
         db_connection:exec("ROLLBACK;")
         return false
     end
@@ -454,7 +454,7 @@ function M.set_path(path)
     tag_tables_supported = nil
 
     db_path = path
-    logger.debug("database", "Database path set to: " .. tostring(path))
+    log.event("Database path set to: %s", tostring(path))
 
     -- Open database connection
     local db, err = sqlite3.open(path)
@@ -467,7 +467,7 @@ function M.set_path(path)
                 extra = " Ensure the path is writable and not locked by another application."
             end
         end
-        logger.error("database", "Failed to open database: " .. tostring(err or "unknown error") .. extra)
+        log.error("Failed to open database: %s%s", tostring(err or "unknown error"), extra)
         return false
     end
 
@@ -490,7 +490,7 @@ function M.set_path(path)
     ensure_sequence_track_layouts_table()
     tag_tables_available()
 
-    logger.debug("database", "Database connection opened successfully")
+    log.event("Database connection opened successfully")
     return db_connection
 end
 
@@ -703,7 +703,7 @@ function M.ensure_media_record(media_id)
                 local file_path = args.file_path or args.path
                 local project_id = args.project_id
                 if not project_id or project_id == "" then
-                    logger.warn("database", "ensure_media_record: ImportMedia args missing project_id for media " .. tostring(media_id))
+                    log.warn("ensure_media_record: ImportMedia args missing project_id for media %s", tostring(media_id))
                 elseif file_path and file_path ~= "" then
                     local MediaReader = require('media.media_reader')
                     local new_id, _, import_err = MediaReader.import_media(file_path, db_connection, project_id, media_id)
@@ -712,7 +712,7 @@ function M.ensure_media_record(media_id)
                         break
                     else
                         if import_err then
-                            logger.warn("database", "ensure_media_record: failed to reimport media: " .. tostring(import_err))
+                            log.warn("ensure_media_record: failed to reimport media: %s", tostring(import_err))
                         end
                     end
                 end
@@ -784,7 +784,7 @@ function M.load_tracks(sequence_id)
         error("FATAL: load_tracks() requires sequence_id parameter")
     end
 
-    logger.debug("database", "Loading tracks for sequence: " .. tostring(sequence_id))
+    log.event("Loading tracks for sequence: %s", tostring(sequence_id))
 
     if not db_connection then
         error("FATAL: No database connection - cannot load tracks")
@@ -817,7 +817,7 @@ function M.load_tracks(sequence_id)
         end
     end
 
-    logger.debug("database", string.format("Loaded %d tracks from database", #tracks))
+    log.event("Loaded %d tracks from database", #tracks)
     return tracks
 end
 
@@ -1052,7 +1052,7 @@ function M.load_media()
         end
     end
 
-    logger.debug("database", string.format("Loaded %d media items from database", #media_items))
+    log.event("Loaded %d media items from database", #media_items)
     return media_items
 end
 
@@ -1205,7 +1205,7 @@ function M.load_master_clips(project_id)
 
     query:finalize()
 
-    logger.debug("database", string.format("Loaded %d master clips from database", #clips))
+    log.event("Loaded %d master clips from database", #clips)
     return clips
 end
 
@@ -1734,12 +1734,12 @@ end
 function M.save_bins(project_id, bins, opts)
     if not project_id or project_id == "" then
         local reason = "save_bins: Missing project_id"
-        logger.warn("database", reason)
+        log.warn("%s", reason)
         return false, reason
     end
     if not db_connection then
         local reason = "save_bins: No database connection"
-        logger.warn("database", reason)
+        log.warn("%s", reason)
         return false, reason
     end
 
@@ -1754,7 +1754,7 @@ function M.save_bins(project_id, bins, opts)
         local path = resolve_bin_path(bin.id, lookup, path_cache, {})
         if not path or path == "" then
             local reason = string.format("save_bins: invalid hierarchy for bin %s", tostring(bin.id))
-            logger.warn("database", reason)
+            log.warn("%s", reason)
             return false, reason
         end
     end
@@ -1762,7 +1762,7 @@ function M.save_bins(project_id, bins, opts)
     local started, begin_err = begin_write_transaction()
     if started == nil then
         local reason = "save_bins: failed to begin transaction: " .. tostring(begin_err)
-        logger.warn("database", reason)
+        log.warn("%s", reason)
         return false, reason
     end
 
@@ -1923,7 +1923,7 @@ function M.save_bins(project_id, bins, opts)
             end
             restore_stmt:finalize()
         else
-            logger.warn("database", "save_bins: failed to prepare restore statement")
+            log.warn("save_bins: failed to prepare restore statement")
         end
     end
 
@@ -1993,7 +1993,7 @@ function M.save_master_clip_bin_map(project_id, bin_map)
 
     local started, begin_err = begin_write_transaction()
     if started == nil then
-        logger.warn("database", "save_master_clip_bin_map: failed to begin transaction: " .. tostring(begin_err))
+        log.warn("save_master_clip_bin_map: failed to begin transaction: %s", tostring(begin_err))
         return false
     end
 
@@ -2026,7 +2026,7 @@ function M.save_master_clip_bin_map(project_id, bin_map)
     for clip_id, bin_id in pairs(bin_map or {}) do
         if type(clip_id) == "string" and clip_id ~= "" and type(bin_id) == "string" and bin_id ~= "" then
             if not validate_bin_id(project_id, bin_id) then
-                logger.warn("database", string.format("save_master_clip_bin_map: bin %s does not exist", tostring(bin_id)))
+                log.warn("save_master_clip_bin_map: bin %s does not exist", tostring(bin_id))
                 insert_stmt:finalize()
                 rollback_transaction(started)
                 return false

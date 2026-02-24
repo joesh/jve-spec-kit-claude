@@ -23,7 +23,7 @@ local ui_constants = require("core.ui_constants")
 local qt_constants = require("core.qt_constants")
 local Project = require("models.project")
 local Sequence = require("models.sequence")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local project_open = require("core.project_open")
 local dkjson = require("dkjson")
 local Signals = require("core.signals")
@@ -42,16 +42,16 @@ debug.setmetatable(nil, {
 -- Global error handler for automatic bug capture
 local function global_error_handler(err)
     local stack_trace = debug.traceback(tostring(err), 2)
-    logger.fatal("layout", "FATAL ERROR: " .. tostring(err))
-    logger.fatal("layout", stack_trace)
+    log.error("FATAL ERROR: %s", tostring(err))
+    log.error("%s", stack_trace)
 
     -- Capture bug report automatically on errors
     local ok, bug_reporter = pcall(require, "bug_reporter.init")
     if ok and bug_reporter then
         local test_path = bug_reporter.capture_on_error(tostring(err), stack_trace)
         if test_path then
-            logger.info("layout", "Bug report auto-captured: " .. tostring(test_path))
-            logger.info("layout", "Press F12 to review and submit")
+            log.event("Bug report auto-captured: %s", tostring(test_path))
+            log.event("Press F12 to review and submit")
         end
     end
 
@@ -65,18 +65,18 @@ _G.error_handler = global_error_handler
 io.stdout:setvbuf("no")
 io.stderr:setvbuf("no")
 
-logger.info("layout", "Creating layout...")
+log.event("Creating layout...")
 local layout_path = debug.getinfo(1, "S").source:sub(2)
 local layout_dir = layout_path:match("(.*/)")
 
 -- Initialize database connection
-logger.info("layout", "Initializing database...")
+log.event("Initializing database...")
 local db_module = require("core.database")
 
 -- Determine database path: test env → last project → welcome screen
 local db_path = os.getenv("JVE_PROJECT_PATH")
 if db_path then
-    logger.info("layout", "Using CLI project path: " .. tostring(db_path))
+    log.event("Using CLI project path: %s", tostring(db_path))
 else
     local home = os.getenv("HOME")
 
@@ -91,9 +91,9 @@ else
             if check then
                 check:close()
                 db_path = last_path
-                logger.info("layout", "Reopening last project: " .. db_path)
+                log.event("Reopening last project: %s", db_path)
             else
-                logger.warn("layout", "Last project not found: " .. last_path)
+                log.warn("Last project not found: %s", last_path)
             end
         end
     end
@@ -107,11 +107,11 @@ else
         local action = welcome_screen.show()
 
         if not action then
-            logger.info("layout", "User quit from welcome screen")
+            log.event("User quit from welcome screen")
             os.exit(0)
         elseif action.action == "open" then
             db_path = action.path
-            logger.info("layout", "Welcome: opening recent project: " .. db_path)
+            log.event("Welcome: opening recent project: %s", db_path)
         elseif action.action == "open_browse" then
             db_path = file_browser.open_file(
                 "open_project", nil,
@@ -119,18 +119,18 @@ else
                 "JVE Projects (*.jvp);;All Files (*)",
                 home .. "/Documents/JVE Projects")
             if not db_path or db_path == "" then
-                logger.info("layout", "User cancelled file browser from welcome screen")
+                log.event("User cancelled file browser from welcome screen")
                 os.exit(0)
             end
-            logger.info("layout", "Welcome: opening browsed project: " .. db_path)
+            log.event("Welcome: opening browsed project: %s", db_path)
         elseif action.action == "new" then
             local result = new_project_cmd.show_dialog(nil)
             if not result then
-                logger.info("layout", "User cancelled new project from welcome screen")
+                log.event("User cancelled new project from welcome screen")
                 os.exit(0)
             end
             db_path = result.project_path
-            logger.info("layout", "Welcome: created new project: " .. db_path)
+            log.event("Welcome: created new project: %s", db_path)
         end
     end
 end
@@ -147,19 +147,19 @@ local command_manager = require("core.command_manager")
 -- Open database connection (schema is applied automatically by database.init via load_main_schema)
 local db_success = project_open.open_project_database_or_prompt_cleanup(db_module, qt_constants, db_path)
 if not db_success then
-    logger.error("layout", "Failed to open database connection; exiting")
+    log.error("Failed to open database connection; exiting")
     os.exit(1)
 else
-    logger.debug("layout", "Database connection established")
+    log.event("Database connection established")
 
     -- Guard: detect empty DB (e.g. stale last_project_path, sqlite3 auto-created file)
     if not db_module.has_projects() then
-        logger.warn("layout", "Database has no projects: " .. db_path)
+        log.warn("Database has no projects: %s", db_path)
         -- Self-heal: clear stale last_project_path so next launch shows welcome screen
         local home = os.getenv("HOME")
         if home then
             os.remove(home .. "/.jve/last_project_path")
-            logger.info("layout", "Cleared stale last_project_path; re-launch to see welcome screen")
+            log.event("Cleared stale last_project_path; re-launch to see welcome screen")
         end
         error("Database at " .. db_path .. " has no projects. Stale reference cleared — please re-launch.")
     end
@@ -183,12 +183,12 @@ else
     active_project_id = project.id
     project_display_name = project.name
     active_sequence_id = sequence.id
-    logger.debug("layout", "Using project: " .. project.name)
-    logger.debug("layout", "Using sequence: " .. sequence.name)
+    log.event("Using project: %s", project.name)
+    log.event("Using sequence: %s", sequence.name)
 
     -- Initialize CommandManager
     command_manager.init(active_sequence_id, active_project_id)
-    logger.debug("layout", "CommandManager initialized with database")
+    log.event("CommandManager initialized with database")
 
     -- Persist last-opened path (for subsequent launches to skip welcome screen)
     local home = os.getenv("HOME")
@@ -208,13 +208,13 @@ else
     -- Initialize bug reporter (continuous background capture)
     local bug_reporter = require("bug_reporter.init")
     bug_reporter.init()
-    logger.debug("layout", "Bug reporter initialized (background capture active)")
+    log.event("Bug reporter initialized (background capture active)")
 end
 
 -- Update active_project_id when project changes (prevents stale ID writing to wrong DB)
 Signals.connect("project_changed", function(new_project_id)
-    logger.info("layout", "project_changed: updating active_project_id "
-        .. tostring(active_project_id) .. " → " .. tostring(new_project_id))
+    log.event("project_changed: updating active_project_id %s → %s",
+        tostring(active_project_id), tostring(new_project_id))
     active_project_id = new_project_id
 end, 50)
 
@@ -224,23 +224,23 @@ if not project_display_name then
 end
 
 -- Create main window
-logger.debug("layout", "About to create main window...")
+log.event("About to create main window...")
 local main_window = qt_constants.WIDGET.CREATE_MAIN_WINDOW()
-logger.debug("layout", "Main window created successfully")
-logger.debug("layout", "Applying main window stylesheet...")
+log.event("Main window created successfully")
+log.event("Applying main window stylesheet...")
 assert(ui_constants and ui_constants.STYLES and type(ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR) == "string" and ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR ~= "",
     "MAIN_WINDOW_TITLE_BAR style is required for main window styling")
 qt_set_widget_stylesheet(main_window, ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR)
-logger.debug("layout", "Stylesheet applied")
+log.event("Stylesheet applied")
 local window_title = project_display_name
 qt_constants.PROPERTIES.SET_TITLE(main_window, window_title)
 if qt_constants.PROPERTIES.SET_WINDOW_APPEARANCE then
     local ok, appearance_set = pcall(qt_constants.PROPERTIES.SET_WINDOW_APPEARANCE, main_window, "NSAppearanceNameDarkAqua")
     if not ok or appearance_set ~= true then
-        logger.warn("layout", "Failed to set window appearance to dark mode")
+        log.warn("Failed to set window appearance to dark mode")
     end
 else
-    logger.warn("layout", "Window appearance binding unavailable; title bar color may remain default")
+    log.warn("Window appearance binding unavailable; title bar color may remain default")
 end
 
 -- Window geometry: restore saved or use defaults
@@ -250,12 +250,12 @@ if saved_geo and saved_geo.width and saved_geo.width > 100 and saved_geo.height 
     -- Restore saved geometry (with sanity check on dimensions)
     qt_constants.PROPERTIES.SET_GEOMETRY(main_window,
         saved_geo.x, saved_geo.y, saved_geo.width, saved_geo.height)
-    logger.debug("layout", string.format("Window geometry restored: %d,%d %dx%d",
-        saved_geo.x, saved_geo.y, saved_geo.width, saved_geo.height))
+    log.event("Window geometry restored: %d,%d %dx%d",
+        saved_geo.x, saved_geo.y, saved_geo.width, saved_geo.height)
 else
     -- First launch or corrupt data: just set size, let OS position window
     qt_constants.PROPERTIES.SET_SIZE(main_window, 1600, 900)
-    logger.debug("layout", "Window geometry set to default size 1600x900")
+    log.event("Window geometry set to default size 1600x900")
 end
 
 -- Flag to prevent saving during initial layout (before window is fully shown)
@@ -277,7 +277,7 @@ if project_browser_mod.set_project_title then
 end
 
 -- Initialize menu system AFTER project browser exists
-logger.debug("layout", "Initializing menu system...")
+log.event("Initializing menu system...")
 local menu_system = require("core.menu_system")
 menu_system.init(main_window, command_manager, project_browser_mod)
 
@@ -285,9 +285,9 @@ menu_system.init(main_window, command_manager, project_browser_mod)
 local menu_path = layout_dir .. "../../../menus.xml"
 local menu_success, menu_error = menu_system.load_from_file(menu_path)
 if menu_success then
-    logger.debug("layout", "Menu system loaded successfully")
+    log.event("Menu system loaded successfully")
 else
-    logger.error("layout", "Failed to load menu system: " .. tostring(menu_error))
+    log.error("Failed to load menu system: %s", tostring(menu_error))
 end
 
 -- 2. Source + Timeline Monitors (center)
@@ -319,7 +319,7 @@ local timeline_panel = timeline_panel_mod.create({
 -- Note: Use F9 and F10 to add test clips via commands
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local timeline_state_from_panel = timeline_panel_mod.get_state()
-logger.debug("layout", string.format("timeline_state from panel = %s", tostring(timeline_state_from_panel)))
+log.event("timeline_state from panel = %s", tostring(timeline_state_from_panel))
 keyboard_shortcuts.init(timeline_state_from_panel, command_manager, project_browser_mod, timeline_panel_mod)
 
 -- 6. Initialize focus manager for visual panel indicators
@@ -351,7 +351,7 @@ if mount_result and mount_result.success then
     local inspector_success, inspector_result = pcall(view.create_schema_driven_inspector)
 
     if not inspector_success then
-        logger.error("layout", "Inspector creation failed: " .. tostring(inspector_result))
+        log.error("Inspector creation failed: %s", tostring(inspector_result))
     end
 
     -- Wire up timeline to inspector
@@ -374,7 +374,7 @@ if mount_result and mount_result.success then
     end)
     selection_hub.set_active_panel("timeline")
 else
-    logger.error("layout", "Inspector mount failed: " .. tostring(mount_result))
+    log.error("Inspector mount failed: %s", tostring(mount_result))
 end
 
 -- Register all panels with focus manager for visual indicators
@@ -461,9 +461,9 @@ if not is_test_mode then
         return keyboard_shortcuts.handle_key_release(event)
     end
     qt_set_global_key_handler(main_window, "global_key_handler")
-    logger.debug("layout", "Keyboard shortcuts installed")
+    log.event("Keyboard shortcuts installed")
 else
-    logger.warn("layout", "Keyboard shortcuts disabled (JVE_TEST_MODE set)")
+    log.warn("Keyboard shortcuts disabled (JVE_TEST_MODE set)")
 end
 
 -- Save window state function (saves geometry + splitter sizes)
@@ -482,8 +482,8 @@ local function save_window_state()
     local sizes = panel_manager.get_persistable_sizes()
     db_module.set_project_setting(active_project_id, SPLITTER_SIZES_KEY, sizes)
 
-    logger.trace("layout", string.format("Window state saved: geo=%d,%d %dx%d, splitters top=%s main=%s",
-        x, y, w, h, dkjson.encode(sizes.top), dkjson.encode(sizes.main)))
+    log.detail("Window state saved: geo=%d,%d %dx%d, splitters top=%s main=%s",
+        x, y, w, h, dkjson.encode(sizes.top), dkjson.encode(sizes.main))
 end
 
 -- Register save-on-change handlers (persists even if app is killed)
@@ -492,12 +492,12 @@ if not is_test_mode then
     qt_set_splitter_moved_handler(top_splitter, "__jve_save_window_state")
     qt_set_splitter_moved_handler(main_splitter, "__jve_save_window_state")
     qt_constants.SIGNAL.SET_GEOMETRY_CHANGE_HANDLER(main_window, "__jve_save_window_state")
-    logger.debug("layout", "Window state save handlers registered (geometry + splitters)")
+    log.event("Window state save handlers registered (geometry + splitters)")
 end
 
 -- Show window
 qt_constants.DISPLAY.SHOW(main_window)
-logger.info("layout", "Layout created: 4 panels top (browser, source, timeline viewer, inspector) + timeline bottom")
+log.event("Layout created: 4 panels top (browser, source, timeline viewer, inspector) + timeline bottom")
 
 -- Restore splitter sizes AFTER window is shown (Qt needs layout to be computed first)
 -- Use a short timer to let the layout settle before applying saved sizes
@@ -509,7 +509,7 @@ qt_create_single_shot_timer(50, function()
         -- Split old viewer (index 2) evenly into source_monitor + timeline_monitor
         local half = math.floor(old[2] / 2)
         saved_splitters.top = {old[1], half, old[2] - half, old[3]}
-        logger.info("layout", "Migrated 3-panel splitter to 4-panel")
+        log.event("Migrated 3-panel splitter to 4-panel")
     end
 
     if not saved_splitters then
@@ -519,7 +519,7 @@ qt_create_single_shot_timer(50, function()
         db_module.set_project_setting(active_project_id, SPLITTER_SIZES_KEY, {
             top = {350, 350, 350, 350}, main = {450, 450}
         })
-        logger.debug("layout", "Splitter sizes initialized to defaults")
+        log.event("Splitter sizes initialized to defaults")
     else
         -- Subsequent launches: validate and restore
         assert(saved_splitters.top and #saved_splitters.top == 4,
@@ -528,21 +528,21 @@ qt_create_single_shot_timer(50, function()
             string.format("layout: splitter_sizes.main corrupt, got: %s", dkjson.encode(saved_splitters)))
         qt_constants.LAYOUT.SET_SPLITTER_SIZES(top_splitter, saved_splitters.top)
         qt_constants.LAYOUT.SET_SPLITTER_SIZES(main_splitter, saved_splitters.main)
-        logger.debug("layout", string.format("Splitter sizes restored: top=%s, main=%s",
-            dkjson.encode(saved_splitters.top), dkjson.encode(saved_splitters.main)))
+        log.event("Splitter sizes restored: top=%s, main=%s",
+            dkjson.encode(saved_splitters.top), dkjson.encode(saved_splitters.main))
     end
 
     -- Now that layout is settled, enable save-on-change
     window_ready_to_save = true
-    logger.debug("layout", "Window state persistence enabled")
+    log.event("Window state persistence enabled")
 end)
 
 -- Debug: Check actual widget sizes after window is shown
 local window_w, window_h = qt_constants.PROPERTIES.GET_SIZE(main_window)
 local timeline_w, timeline_h = qt_constants.PROPERTIES.GET_SIZE(timeline_panel)
 local inspector_w, inspector_h = qt_constants.PROPERTIES.GET_SIZE(inspector_panel)
-logger.debug("layout", string.format("Main window size: %dx%d", window_w, window_h))
-logger.debug("layout", string.format("Timeline panel size: %dx%d", timeline_w, timeline_h))
-logger.debug("layout", string.format("Inspector panel size: %dx%d", inspector_w, inspector_h))
+log.event("Main window size: %dx%d", window_w, window_h)
+log.event("Timeline panel size: %dx%d", timeline_w, timeline_h)
+log.event("Inspector panel size: %dx%d", inspector_w, inspector_h)
 
 return main_window

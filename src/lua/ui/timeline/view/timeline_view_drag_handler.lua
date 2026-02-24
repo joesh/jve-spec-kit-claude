@@ -19,7 +19,7 @@
 local M = {}
 local core_command_manager = require("core.command_manager")
 local json = require("dkjson")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("timeline")
 
 function M.handle_release(view, drag_state, modifiers)
     local command_manager = (view and view.command_manager) or core_command_manager
@@ -69,7 +69,7 @@ function M.handle_release(view, drag_state, modifiers)
             end
         end
         if #current_clips == 0 then
-            logger.warn("timeline_drag", "Drag release - no current clips found for drag state")
+            log.warn("Drag release - no current clips found for drag state")
             goto cleanup
         end
 
@@ -117,7 +117,7 @@ function M.handle_release(view, drag_state, modifiers)
                 ["anchor_clip_id"] = reference_clip.id,
             })
             if not result.success then
-                logger.error("timeline_drag", string.format("DuplicateClips failed: %s", result.error_message or "unknown"))
+                log.error("DuplicateClips failed: %s", result.error_message or "unknown")
             end
             goto cleanup
         end
@@ -208,7 +208,7 @@ function M.handle_release(view, drag_state, modifiers)
             end
             local result = command_manager.execute(spec.command_type, params)
             if not result.success then
-                logger.error("timeline_drag", string.format("%s failed: %s", spec.command_type, result.error_message or "unknown"))
+                log.error("%s failed: %s", spec.command_type, result.error_message or "unknown")
             end
         else
             local params = {
@@ -220,7 +220,7 @@ function M.handle_release(view, drag_state, modifiers)
             end
             local result = command_manager.execute("BatchCommand", params)
             if not result.success then
-                logger.error("timeline_drag", string.format("Batch drag failed: %s", result.error_message or "unknown"))
+                log.error("Batch drag failed: %s", result.error_message or "unknown")
             end
         end
 
@@ -304,7 +304,7 @@ function M.handle_release(view, drag_state, modifiers)
         end
         local result = command_manager.execute("BatchRippleEdit", params)
         if not result.success then
-            logger.error("timeline_drag", string.format("BatchRippleEdit failed: %s", result.error_message or "unknown"))
+            log.error("BatchRippleEdit failed: %s", result.error_message or "unknown")
         end
     end
 

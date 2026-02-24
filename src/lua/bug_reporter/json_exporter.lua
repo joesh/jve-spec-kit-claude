@@ -18,7 +18,7 @@
 -- Export captured data to JSON test format
 local dkjson = require("dkjson")
 local utils = require("bug_reporter.utils")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local uuid = require("uuid")
 
 local JsonExporter = {}
@@ -98,9 +98,9 @@ function JsonExporter.export(capture_data, metadata, output_dir)
 
         if video_path then
             slideshow_path = video_path
-            logger.info("bug_reporter", "Slideshow video generated: " .. video_path)
+            log.event("Slideshow video generated: %s", video_path)
         else
-            logger.warn("bug_reporter", "Slideshow generation failed: " .. (gen_err or "unknown"))
+            log.warn("Slideshow generation failed: %s", gen_err or "unknown")
         end
     end
 
@@ -181,7 +181,7 @@ function JsonExporter.export_screenshots(screenshot_buffer, output_dir)
             if success then
                 count = count + 1
             else
-                logger.warn("bug_reporter", "Failed to save screenshot " .. i)
+                log.warn("Failed to save screenshot %d", i)
             end
         end
     end

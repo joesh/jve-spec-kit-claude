@@ -18,7 +18,7 @@
 -- Provides CRUD operations for clips following the Lua-for-logic, C++-for-performance architecture
 local uuid = require("uuid")
 local krono_ok, krono = pcall(require, "core.krono")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("timeline")
 
 local M = {}
 
@@ -514,9 +514,9 @@ local function save_internal(self, _opts)
 
     if krono_enabled and krono_start and krono_exists and krono_exec then
         local total_ms = (krono_exec - krono_start)
-        logger.debug("clip", string.format("Clip.save[%s]: %.2fms (exists=%.2fms run=%.2fms)",
+        log.detail("Clip.save[%s]: %.2fms (exists=%.2fms run=%.2fms)",
             tostring(self.id:sub(1,8)), total_ms,
-            krono_exists - krono_start, krono_exec - krono_exists))
+            krono_exists - krono_start, krono_exec - krono_exists)
     end
 
     return true, occlusion_actions
@@ -572,7 +572,7 @@ function M.find_at_time(track_id, time_frames)
     local database = require("core.database")
     local db = database.get_connection()
     if not db then
-        logger.warn("clip", "Clip.find_at_time: No database connection available")
+        log.warn("Clip.find_at_time: No database connection available")
         return nil
     end
 
@@ -586,7 +586,7 @@ function M.find_at_time(track_id, time_frames)
     ]])
 
     if not stmt then
-        logger.warn("clip", "Clip.find_at_time: Failed to prepare query")
+        log.warn("Clip.find_at_time: Failed to prepare query")
         return nil
     end
 
@@ -616,7 +616,7 @@ function M.get_master_clip_usage(master_clip_id)
     local database = require("core.database")
     local db = database.get_connection()
     if not db then
-        logger.warn("clip", "Clip.get_master_clip_usage: No database connection available")
+        log.warn("Clip.get_master_clip_usage: No database connection available")
         return {}
     end
 
@@ -633,7 +633,7 @@ function M.get_master_clip_usage(master_clip_id)
     ]])
 
     if not query then
-        logger.warn("clip", "Clip.get_master_clip_usage: Failed to prepare query")
+        log.warn("Clip.get_master_clip_usage: Failed to prepare query")
         return {}
     end
 

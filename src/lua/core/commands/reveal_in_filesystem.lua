@@ -9,7 +9,7 @@
 --
 -- @file reveal_in_filesystem.lua
 local M = {}
-local logger = require("core.logger")
+local log = require("core.logger").for_area("commands")
 local project_browser = require("ui.project_browser")
 local Media = require("models.media")
 
@@ -87,7 +87,7 @@ function M.register(command_executors, _command_undoers, _db, set_last_error)
             return false
         end
 
-        logger.info("reveal_in_filesystem", "Revealed: " .. file_path)
+        log.event("Revealed: %s", file_path)
         return true
     end
 

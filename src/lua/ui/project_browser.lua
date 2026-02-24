@@ -31,7 +31,7 @@ local frame_utils = require("core.frame_utils")
 local keymap = require("ui.project_browser.keymap")
 local qt_constants = require("core.qt_constants")
 local profile_scope = require("core.profile_scope")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local uuid = require("uuid")
 local project_gen = require("core.project_generation")
 
@@ -249,9 +249,9 @@ local function finalize_pending_rename(new_name)
                 ["previous_name"] = pending.original_name,
     })
     if result and result.success then
-        logger.debug("project_browser", string.format("RenameItem executed for %s → %s", tostring(pending.target_id), trimmed_name))
+        log.event("RenameItem executed for %s → %s", tostring(pending.target_id), trimmed_name)
     else
-        logger.warn("project_browser", string.format("RenameItem failed for %s → %s (%s)", tostring(pending.target_id), trimmed_name, result and result.error_message or "unknown error"))
+        log.warn("RenameItem failed for %s → %s (%s)", tostring(pending.target_id), trimmed_name, result and result.error_message or "unknown error")
         if qt_constants.CONTROL.SET_TREE_ITEM_TEXT then
             qt_constants.CONTROL.SET_TREE_ITEM_TEXT(M.tree, pending.tree_id, pending.original_name or "", 0)
         end
@@ -326,8 +326,8 @@ local function handle_tree_editor_closed(event)
         return
     end
 
-    logger.debug("project_browser", string.format("Rename close event: item=%s accepted=%s text=%s",
-        tostring(event and event.item_id), tostring(event and event.accepted), tostring(event and event.text)))
+    log.event("Rename close event: item=%s accepted=%s text=%s",
+        tostring(event and event.item_id), tostring(event and event.accepted), tostring(event and event.text))
 
     local pending = M.pending_rename
     if event and event.item_id and event.item_id ~= pending.tree_id then
@@ -358,8 +358,8 @@ local function handle_tree_item_changed(event)
         return
     end
 
-    logger.debug("project_browser", string.format("Rename change event: item=%s column=%s text=%s pending_tree=%s",
-        tostring(event.item_id), tostring(event.column), tostring(event.text), tostring(pending.tree_id)))
+    log.event("Rename change event: item=%s column=%s text=%s pending_tree=%s",
+        tostring(event.item_id), tostring(event.column), tostring(event.text), tostring(pending.tree_id))
     if event.item_id ~= pending.tree_id then
         return
     end
@@ -415,7 +415,7 @@ local function activate_item(item_info)
         if M.timeline_panel and M.timeline_panel.load_sequence then
             M.timeline_panel.load_sequence(item_info.id)
         else
-            logger.warn("project_browser", "Timeline panel not available")
+            log.warn("Timeline panel not available")
         end
 
         if focus_manager and focus_manager.focus_panel then
@@ -526,7 +526,7 @@ local function resolve_tree_item(entry)
     end
 
     if type(entry) ~= "table" then
-        logger.warn("project_browser", "resolve_tree_item received non-table entry: " .. tostring(type(entry)))
+        log.warn("resolve_tree_item received non-table entry: %s", tostring(type(entry)))
         return nil
     end
 
@@ -1184,7 +1184,7 @@ function M.create()
         local result
         result = command_manager.execute(ACTIVATE_COMMAND)
         if not result.success then
-            logger.warn("project_browser", "ActivateBrowserSelection failed: " .. tostring(result.error_message or "unknown error"))
+            log.warn("ActivateBrowserSelection failed: %s", tostring(result.error_message or "unknown error"))
         end
     end)
     if qt_constants.CONTROL.SET_TREE_DOUBLE_CLICK_HANDLER then
@@ -1207,7 +1207,7 @@ function M.create()
                 return handle_tree_drop and handle_tree_drop(evt)
             end, debug.traceback)
             if not ok then
-                logger.error("project_browser", "Drop handler failed: " .. tostring(result))
+                log.error("Drop handler failed: %s", tostring(result))
                 return false
             end
             return result and true or false
@@ -1220,7 +1220,7 @@ function M.create()
                 return handle_tree_key_event(evt)
             end, debug.traceback)
             if not ok then
-                logger.error("project_browser", "Key handler failed: " .. tostring(handled))
+                log.error("Key handler failed: %s", tostring(handled))
                 return false
             end
             return handled and true or false
@@ -1246,7 +1246,7 @@ function M.create()
             end
         end
     end
-    logger.info("project_browser", string.format("Project browser created (media=%d timelines=%d)", media_count, sequence_count))
+    log.event("Project browser created (media=%d timelines=%d)", media_count, sequence_count)
 
     return container
 end
@@ -1339,13 +1339,13 @@ handle_tree_drop = function(event)
         elseif info and info.type == "master_clip" then
             table.insert(dragged_clips, info)
         else
-            logger.warn("project_browser", "Unsupported drag item")
+            log.warn("Unsupported drag item")
             return true
         end
     end
 
     if #dragged_bins > 0 and #dragged_clips > 0 then
-        logger.warn("project_browser", "Mixed drag selections are not supported")
+        log.warn("Mixed drag selections are not supported")
         return true
     end
 
@@ -1378,7 +1378,7 @@ handle_tree_drop = function(event)
         for _, bin_info in ipairs(dragged_bins) do
             if bin_info.id ~= new_parent_id then
                 if is_descendant(new_parent_id, bin_info.id) then
-                    logger.warn("project_browser", "Cannot move a bin inside one of its descendants")
+                    log.warn("Cannot move a bin inside one of its descendants")
                 else
                     table.insert(bins_to_move, bin_info.id)
                 end
@@ -1397,7 +1397,7 @@ handle_tree_drop = function(event)
         local result = command_manager.execute(cmd)
 
         if not result.success then
-            logger.warn("project_browser", string.format("Failed to move bin(s): %s", tostring(result.error_message or "unknown error")))
+            log.warn("Failed to move bin(s): %s", tostring(result.error_message or "unknown error"))
             return true
         end
 
@@ -1440,7 +1440,7 @@ handle_tree_drop = function(event)
         local result = command_manager.execute(cmd)
 
         if not result.success then
-            logger.warn("project_browser", string.format("Failed to move clips to bin: %s", tostring(result.error_message or "unknown error")))
+            log.warn("Failed to move clips to bin: %s", tostring(result.error_message or "unknown error"))
         end
 
         defer_to_ui(function()
@@ -1476,7 +1476,7 @@ handle_tree_key_event = function(event)
         activate_sequence = function()
             local result = command_manager.execute(ACTIVATE_COMMAND)
             if not result or not result.success then
-                logger.warn("project_browser", string.format("ActivateBrowserSelection failed: %s", result and result.error_message or "unknown error"))
+                log.warn("ActivateBrowserSelection failed: %s", result and result.error_message or "unknown error")
                 return false
             end
             return true
@@ -1540,7 +1540,7 @@ local function create_bin_in_root()
         name = temp_name,
     })
     if not result or not result.success then
-        logger.warn("project_browser", string.format("New Bin failed: %s", result and result.error_message or "unknown error"))
+        log.warn("New Bin failed: %s", result and result.error_message or "unknown error")
         return
     end
 
@@ -1572,7 +1572,7 @@ local function create_sequence_in_project()
         height = defaults.height,
     })
     if not result or not result.success then
-        logger.warn("project_browser", string.format("New Sequence failed: %s", result and result.error_message or "unknown error"))
+        log.warn("New Sequence failed: %s", result and result.error_message or "unknown error")
         return
     end
 
@@ -1594,7 +1594,7 @@ local function show_browser_background_menu(global_x, global_y)
         return
     end
     if not qt_constants.MENU or not qt_constants.MENU.CREATE_MENU or not qt_constants.MENU.SHOW_POPUP then
-        logger.warn("project_browser", "Context menu unavailable: Qt menu bindings missing")
+        log.warn("Context menu unavailable: Qt menu bindings missing")
         return
     end
 
@@ -1619,7 +1619,7 @@ show_browser_context_menu = function(event)
     end
 
     if not qt_constants.MENU or not qt_constants.MENU.CREATE_MENU or not qt_constants.MENU.SHOW_POPUP then
-        logger.warn("project_browser", "Context menu unavailable: Qt menu bindings missing")
+        log.warn("Context menu unavailable: Qt menu bindings missing")
         return
     end
 
@@ -1683,7 +1683,7 @@ show_browser_context_menu = function(event)
             handler = function()
                 local result = command_manager.execute("RevealInFilesystem")
                 if result and not result.success then
-                    logger.warn("project_browser", string.format("Reveal in Filesystem failed: %s", result.error_message or "unknown error"))
+                    log.warn("Reveal in Filesystem failed: %s", result.error_message or "unknown error")
                 end
             end
         })
@@ -1705,7 +1705,7 @@ show_browser_context_menu = function(event)
         label = "Delete",
         handler = function()
             if not M.delete_selected_items() then
-                logger.warn("project_browser", "Delete failed: nothing selected")
+                log.warn("Delete failed: nothing selected")
             end
         end
     })
@@ -1811,7 +1811,7 @@ function M.add_selected_to_timeline(command_type, options)
         local result = command_manager.execute(cmd)
         assert(result and result.success, string.format(this_func_label .. ": %s failed: %s", command_type, result and result.error_message or "unknown error"))
 
-        logger.info("project_browser", string.format("Media added to timeline: %s", media and (media.name or media.file_name) or "unknown"))
+        log.event("Media added to timeline: %s", media and (media.name or media.file_name) or "unknown")
     else
         -- Multiple clips: build groups and call AddClipsToSequence directly
         local clip_edit_helper = require("core.clip_edit_helper")
@@ -1930,7 +1930,7 @@ function M.add_selected_to_timeline(command_type, options)
         })
         assert(result and result.success, string.format(this_func_label .. ": %s failed: %s", command_type, result and result.error_message or "unknown error"))
 
-        logger.info("project_browser", string.format("Added %d clips to timeline (%s)", #selected_clips, edit_type))
+        log.event("Added %d clips to timeline (%s)", #selected_clips, edit_type)
     end
 
     if focus_manager and focus_manager.focus_panel then
@@ -2052,7 +2052,7 @@ function M.delete_selected_items()
                 if result and result.success then
                     deleted = deleted + 1
                 else
-                    logger.warn("project_browser", string.format("Delete master clip failed: %s", result and result.error_message or "unknown error"))
+                    log.warn("Delete master clip failed: %s", result and result.error_message or "unknown error")
                     clip_failures = clip_failures + 1
                 end
             end
@@ -2063,7 +2063,7 @@ function M.delete_selected_items()
                 handled_sequences[sequence_id] = true
                 if sequence_id == "default_sequence" then
                     sequence_failures = sequence_failures + 1
-                    logger.warn("project_browser", "Delete sequence default_sequence skipped: primary timeline cannot be removed")
+                    log.warn("Delete sequence default_sequence skipped: primary timeline cannot be removed")
                     goto continue_delete_loop
                 end
 
@@ -2077,7 +2077,7 @@ function M.delete_selected_items()
                     deleted = deleted + 1
                 else
                     sequence_failures = sequence_failures + 1
-                    logger.warn("project_browser", string.format("Delete sequence %s failed: %s", tostring(sequence_id), result and result.error_message or "unknown error"))
+                    log.warn("Delete sequence %s failed: %s", tostring(sequence_id), result and result.error_message or "unknown error")
                 end
                 ::continue_delete_loop::
             end
@@ -2092,7 +2092,7 @@ function M.delete_selected_items()
                 deleted = deleted + 1
             else
                 bin_failures = bin_failures + 1
-                logger.warn("project_browser", string.format("Delete bin %s failed: %s", tostring(item.name or item.id), result and result.error_message or "unknown error"))
+                log.warn("Delete bin %s failed: %s", tostring(item.name or item.id), result and result.error_message or "unknown error")
             end
         end
     end
@@ -2259,7 +2259,7 @@ end
 
 function M.start_inline_rename()
     if not M.tree or not M.selected_item then
-        logger.warn("project_browser", "Rename: No selection to rename")
+        log.warn("Rename: No selection to rename")
         return false
     end
 
@@ -2298,12 +2298,12 @@ function M.start_inline_rename()
             current_name = bin.name or current_name
         end
     else
-        logger.warn("project_browser", string.format("Rename: Unsupported selection type '%s'", tostring(item.type)))
+        log.warn("Rename: Unsupported selection type '%s'", tostring(item.type))
         return false
     end
 
     if not tree_id or not target_id then
-        logger.warn("project_browser", "Rename: Unable to locate selected item in tree")
+        log.warn("Rename: Unable to locate selected item in tree")
         return false
     end
 
@@ -2317,17 +2317,17 @@ function M.start_inline_rename()
     local editable_ok = false
     if qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE and tree_id then
         editable_ok = qt_constants.CONTROL.SET_TREE_ITEM_EDITABLE(M.tree, tree_id, true)
-        logger.debug("project_browser", string.format("Rename: SET_TREE_ITEM_EDITABLE result=%s", tostring(editable_ok)))
+        log.event("Rename: SET_TREE_ITEM_EDITABLE result=%s", tostring(editable_ok))
     else
-        logger.debug("project_browser", "Rename: SET_TREE_ITEM_EDITABLE missing")
+        log.event("Rename: SET_TREE_ITEM_EDITABLE missing")
     end
 
     local edit_started = false
     if qt_constants.CONTROL.EDIT_TREE_ITEM and tree_id then
         edit_started = qt_constants.CONTROL.EDIT_TREE_ITEM(M.tree, tree_id, 0)
-        logger.debug("project_browser", string.format("Rename: EDIT_TREE_ITEM result=%s", tostring(edit_started)))
+        log.event("Rename: EDIT_TREE_ITEM result=%s", tostring(edit_started))
     else
-        logger.debug("project_browser", "Rename: EDIT_TREE_ITEM missing")
+        log.event("Rename: EDIT_TREE_ITEM missing")
     end
     return edit_started
 end

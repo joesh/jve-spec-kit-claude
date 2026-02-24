@@ -20,7 +20,7 @@
 -- @file recent_projects.lua
 local M = {}
 local json = require("dkjson")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("media")
 
 local MAX_RECENT = 10
 
@@ -52,7 +52,7 @@ function M.load()
 
     local decoded, _, err = json.decode(content)
     if err or type(decoded) ~= "table" then
-        logger.warn("recent_projects", "corrupt JSON, resetting: " .. tostring(err))
+        log.warn("corrupt JSON, resetting: %s", tostring(err))
         return {}
     end
 
@@ -104,7 +104,7 @@ function M.add(name, path)
     local encoded = json.encode(filtered, { indent = true })
     local f, err = io.open(persistence, "w")
     if not f then
-        logger.error("recent_projects", "failed to write: " .. tostring(err))
+        log.error("failed to write: %s", tostring(err))
         return
     end
     f:write(encoded)
@@ -128,7 +128,7 @@ function M.remove(path)
     local encoded = json.encode(filtered, { indent = true })
     local f, err = io.open(persistence, "w")
     if not f then
-        logger.error("recent_projects", "failed to write: " .. tostring(err))
+        log.error("failed to write: %s", tostring(err))
         return
     end
     f:write(encoded)

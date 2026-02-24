@@ -24,7 +24,7 @@ local Clip = require("models.clip")
 local Track = require("models.track")
 local Sequence = require("models.sequence")
 local Property = require("models.property")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("commands")
 
 local function lookup_track_sequence(track_id)
     if not track_id or track_id == "" then return nil end
@@ -319,12 +319,10 @@ function M.resolve_sequence_for_track(sequence_id_param, track_id)
     end
 
     if provided and provided ~= "" and provided ~= track_sequence_id then
-        logger.warn("command_helper", string.format(
-            "resolve_sequence_for_track: sequence_id %s does not match track %s (sequence_id=%s); using track sequence",
+        log.warn("resolve_sequence_for_track: sequence_id %s does not match track %s (sequence_id=%s); using track sequence",
             tostring(provided),
             tostring(track_id),
-            tostring(track_sequence_id)
-        ))
+            tostring(track_sequence_id))
     end
 
     return track_sequence_id

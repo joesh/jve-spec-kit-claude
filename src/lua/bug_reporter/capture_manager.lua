@@ -18,7 +18,7 @@
 -- Continuous ring buffer capture system for bug reporting
 -- Captures gestures, commands, logs, and screenshots in memory
 local utils = require("bug_reporter.utils")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local path_utils = require("core.path_utils")
 
 -- Configuration constants
@@ -58,7 +58,7 @@ function CaptureManager:init()
     self.next_gesture_id = 1
     self.next_command_id = 1
 
-    logger.info("bug_reporter", "Capture manager initialized (enabled=" .. tostring(self.capture_enabled) .. ")")
+    log.event("Capture manager initialized (enabled=%s)", tostring(self.capture_enabled))
 end
 
 -- Get elapsed milliseconds since session start
@@ -269,7 +269,7 @@ end
 -- Enable/disable capture (from preferences)
 function CaptureManager:set_enabled(enabled)
     self.capture_enabled = enabled
-    logger.info("bug_reporter", "Capture " .. (enabled and "enabled" or "disabled"))
+    log.event("Capture %s", enabled and "enabled" or "disabled")
 end
 
 -- Clear all buffers (for testing or user request)
@@ -286,7 +286,7 @@ function CaptureManager:clear_buffers()
     self.command_ring_buffer = {}
     self.log_ring_buffer = {}
     self.screenshot_ring_buffer = {}
-    logger.info("bug_reporter", "Buffers cleared")
+    log.event("Buffers cleared")
 end
 
 -- Export current capture to disk (Phase 2 implementation)
@@ -305,7 +305,7 @@ function CaptureManager:export_capture(metadata)
         db_snapshot_path = snapshot_dir .. "/bug-" .. suffix .. ".db"
         local success, err = database.backup_to_file(db_snapshot_path)
         if not success then
-            logger.warn("bug_reporter", "Database backup failed: " .. (err or "unknown"))
+            log.warn("Database backup failed: %s", err or "unknown")
             db_snapshot_path = nil
         end
     end
@@ -332,11 +332,11 @@ function CaptureManager:export_capture(metadata)
     self.capture_enabled = was_enabled
 
     if not json_path then
-        logger.error("bug_reporter", "Export failed: " .. (err or "unknown error"))
+        log.error("Export failed: %s", err or "unknown error")
         return nil, err
     end
 
-    logger.info("bug_reporter", "Exported capture to: " .. json_path)
+    log.event("Exported capture to: %s", json_path)
     return json_path
 end
 

@@ -1,4 +1,5 @@
 #include "binding_macros.h"
+#include "../../jve_log.h"
 #include <QMenu>
 #include <QMenuBar>
 #include <QAction>
@@ -93,7 +94,7 @@ int lua_connect_menu_action(lua_State* L) {
         lua_rawgeti(L, LUA_REGISTRYINDEX, callback_ref);
         if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
             const char* error = lua_tostring(L, -1);
-            qDebug() << "Error in menu action callback:" << error;
+            JVE_LOG_WARN(Ui, "Error in menu action callback: %s", error);
             lua_pop(L, 1);
         }
     });

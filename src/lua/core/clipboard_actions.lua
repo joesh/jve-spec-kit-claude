@@ -16,7 +16,7 @@
 -- Original intent (unreviewed):
 -- Clipboard-aware copy/paste helpers for timeline and project browser
 local clipboard = require("core.clipboard")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("commands")
 local focus_manager = require("ui.focus_manager")
 local timeline_state = require("ui.timeline.timeline_state")
 local command_manager = require("core.command_manager")
@@ -171,7 +171,7 @@ local function copy_timeline_selection()
     assert(payload.sequence_id and payload.sequence_id ~= "", "clipboard_actions.copy_timeline_selection: missing active sequence_id")
 
     clipboard.set(payload)
-    logger.info("clipboard_actions", string.format("Copied %d timeline clip(s)", #clip_payloads))
+    log.event("Copied %d timeline clip(s)", #clip_payloads)
     return true
 end
 
@@ -275,7 +275,7 @@ local function paste_timeline(payload)
         timeline_state.set_selection(new_selection)
     end
 
-    logger.info("clipboard_actions", string.format("Pasted %d timeline clip(s)", #new_selection))
+    log.event("Pasted %d timeline clip(s)", #new_selection)
     return true
 end
 
@@ -360,7 +360,7 @@ local function copy_browser_selection()
     }
 
     clipboard.set(payload)
-    logger.info("clipboard_actions", string.format("Copied %d master clip(s)", #items))
+    log.event("Copied %d master clip(s)", #items)
     return true
 end
 
@@ -427,7 +427,7 @@ local function paste_browser(payload)
         project_browser.refresh()
     end
 
-    logger.info("clipboard_actions", string.format("Pasted %d browser clip(s)", #specs))
+    log.event("Pasted %d browser clip(s)", #specs)
     return true
 end
 

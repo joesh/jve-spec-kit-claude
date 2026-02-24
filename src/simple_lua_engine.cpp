@@ -3,21 +3,18 @@
 #include "timeline_renderer.h"
 #include "resource_paths.h"
 #include "bug_reporter/qt_bindings_bug_reporter.h"
-#include <QDebug>
+#include "jve_log.h"
 #include <QDir>
 #include <QFileInfo>
-#include <QLoggingCategory>
-
-Q_LOGGING_CATEGORY(jveLuaEngine, "jve.lua_engine")
 
 SimpleLuaEngine::SimpleLuaEngine() : L(nullptr)
 {
-    qCDebug(jveLuaEngine, "%s", "Initializing LuaJIT engine");
+    JVE_LOG_EVENT(Ui, "Initializing LuaJIT engine");
 
     // Create new Lua state
     L = luaL_newstate();
     if (!L) {
-        qCritical() << "Failed to create Lua state";
+        JVE_LOG_ERROR(Ui, "Failed to create Lua state");
         return;
     }
     
@@ -51,7 +48,7 @@ SimpleLuaEngine::SimpleLuaEngine() : L(nullptr)
 
     int result = luaL_dostring(L, errorHandler);
     if (result != LUA_OK) {
-        qCritical() << "Failed to install Lua error handler:" << lua_tostring(L, -1);
+        JVE_LOG_ERROR(Ui, "Failed to install Lua error handler: %s", lua_tostring(L, -1));
         lua_pop(L, 1);
     }
 
@@ -64,7 +61,7 @@ SimpleLuaEngine::SimpleLuaEngine() : L(nullptr)
 
 SimpleLuaEngine::~SimpleLuaEngine()
 {
-    qCDebug(jveLuaEngine, "%s", "Shutting down");
+    JVE_LOG_EVENT(Ui, "Shutting down");
     if (L) {
         lua_close(L);
         L = nullptr;
@@ -73,7 +70,7 @@ SimpleLuaEngine::~SimpleLuaEngine()
 
 bool SimpleLuaEngine::executeFile(const QString& scriptPath)
 {
-    qCDebug(jveLuaEngine, "Executing script: %s", qPrintable(scriptPath));
+    JVE_LOG_EVENT(Ui, "Executing script: %s", qPrintable(scriptPath));
     
     if (!L) {
         m_lastError = "Lua state not initialized";
@@ -83,7 +80,7 @@ bool SimpleLuaEngine::executeFile(const QString& scriptPath)
     QFileInfo fileInfo(scriptPath);
     if (!fileInfo.exists()) {
         m_lastError = QString("Script file does not exist: %1").arg(scriptPath);
-        qWarning() << m_lastError;
+        JVE_LOG_WARN(Ui, "%s", qPrintable(m_lastError));
         return false;
     }
     
@@ -109,13 +106,13 @@ bool SimpleLuaEngine::executeFile(const QString& scriptPath)
 
     lua_pop(L, 1);  // Pop error handler
     
-    qCDebug(jveLuaEngine, "Successfully executed script: %s", qPrintable(scriptPath));
+    JVE_LOG_EVENT(Ui, "Successfully executed script: %s", qPrintable(scriptPath));
     return true;
 }
 
 bool SimpleLuaEngine::executeString(const QString& luaCode)
 {
-    qCDebug(jveLuaEngine, "Executing Lua code: %s...", qPrintable(luaCode.left(100)));
+    JVE_LOG_EVENT(Ui, "Executing Lua code: %s...", qPrintable(luaCode.left(100)));
     
     if (!L) {
         m_lastError = "Lua state not initialized";
@@ -150,7 +147,7 @@ bool SimpleLuaEngine::executeString(const QString& luaCode)
 void SimpleLuaEngine::setMainWidget(QWidget* widget)
 {
     m_mainWidget = widget;
-    qCDebug(jveLuaEngine, "Main widget set: %p", static_cast<void*>(widget));
+    JVE_LOG_EVENT(Ui, "Main widget set: %p", static_cast<void*>(widget));
 }
 
 QString SimpleLuaEngine::getLastError() const
@@ -167,10 +164,10 @@ QWidget* SimpleLuaEngine::getCreatedMainWindow() const
 
 void SimpleLuaEngine::setupBindings()
 {
-    qCDebug(jveLuaEngine, "%s", "Setting up Qt bindings with LuaJIT");
+    JVE_LOG_EVENT(Ui, "Setting up Qt bindings with LuaJIT");
 
     if (!L) {
-        qCritical() << "Cannot setup bindings: Lua state not initialized";
+        JVE_LOG_ERROR(Ui, "Cannot setup bindings: Lua state not initialized");
         return;
     }
 
@@ -182,5 +179,5 @@ void SimpleLuaEngine::setupBindings()
 
     // Register bug reporter bindings
     bug_reporter::registerBugReporterBindings(L);
-    qCDebug(jveLuaEngine, "%s", "Bug reporter bindings registered");
+    JVE_LOG_EVENT(Ui, "Bug reporter bindings registered");
 }

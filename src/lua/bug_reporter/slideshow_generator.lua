@@ -17,7 +17,7 @@
 -- slideshow_generator.lua
 -- Generate MP4 slideshow videos from screenshot sequences using ffmpeg
 local utils = require("bug_reporter.utils")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local SlideshowGenerator = {}
 
 -- Check if ffmpeg is available on the system
@@ -96,8 +96,8 @@ function SlideshowGenerator.generate(screenshot_dir, screenshot_count, output_pa
         utils.shell_escape(output_path)
     )
 
-    logger.info("bug_reporter", "Running ffmpeg...")
-    logger.debug("bug_reporter", "Command: " .. cmd)
+    log.event("Running ffmpeg...")
+    log.event("Command: %s", cmd)
 
     -- Execute ffmpeg
     local handle = io.popen(cmd)
@@ -110,8 +110,8 @@ function SlideshowGenerator.generate(screenshot_dir, screenshot_count, output_pa
 
     -- Check if ffmpeg succeeded
     if not success then
-        logger.error("bug_reporter", "ffmpeg output:")
-        logger.error("bug_reporter", output)
+        log.error("ffmpeg output:")
+        log.error("%s", output)
         return nil, "ffmpeg failed to generate video"
     end
 
@@ -124,8 +124,7 @@ function SlideshowGenerator.generate(screenshot_dir, screenshot_count, output_pa
 
     -- Get file size for reporting
     local size = SlideshowGenerator.get_file_size(output_path)
-    logger.info("bug_reporter", string.format("Generated %s (%.2f MB)",
-        output_path, size / (1024 * 1024)))
+    log.event("Generated %s (%.2f MB)", output_path, size / (1024 * 1024))
 
     return output_path
 end

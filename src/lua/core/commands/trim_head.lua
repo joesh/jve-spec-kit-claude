@@ -25,7 +25,7 @@ local SPEC = {
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["TrimHead"] = function(command)
         local args = command:get_all_parameters()
-        local logger = require("core.logger")
+        local log = require("core.logger").for_area("commands")
         local command_manager = require("core.command_manager")
 
         local clip_ids = args.clip_ids
@@ -33,7 +33,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             "TrimHead: clip_ids must be non-empty array")
 
         local trim_frame = args.trim_frame
-        logger.info("trim_head", string.format("TrimHead clips=%d frame=%d", #clip_ids, trim_frame))
+        log.event("TrimHead clips=%d frame=%d", #clip_ids, trim_frame)
 
         -- Load all clips ONCE and validate
         local clips_to_trim = {}  -- {clip, clip_start, clip_end}
@@ -103,8 +103,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 command_helper.add_update_mutation(command, args.sequence_id, update)
             end
 
-            logger.info("trim_head", string.format("TrimHead: trimmed %d frames from head of %s",
-                delta_frames, clip.id))
+            log.event("TrimHead: trimmed %d frames from head of %s",
+                delta_frames, clip.id)
         end
 
         -- Save state for undo
@@ -129,14 +129,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        logger.info("trim_head", string.format("TrimHead: completed with ripple, gap=%d frames", gap_frames))
+        log.event("TrimHead: completed with ripple, gap=%d frames", gap_frames)
         return true
     end
 
     command_undoers["TrimHead"] = function(command)
         local args = command:get_all_parameters()
-        local logger = require("core.logger")
-        logger.info("trim_head", "Undoing TrimHead")
+        local log = require("core.logger").for_area("commands")
+        log.event("Undoing TrimHead")
 
         local original_states = args.original_states
         if not original_states or #original_states == 0 then

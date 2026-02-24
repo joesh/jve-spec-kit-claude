@@ -23,6 +23,7 @@ local timecode = require("core.timecode")
 local frame_utils = require("core.frame_utils")
 local profile_scope = require("core.profile_scope")
 local command_manager = require("core.command_manager")
+local log = require("core.logger").for_area("timeline")
 
 M.RULER_HEIGHT = 32
 local MIN_LABEL_SPACING = 20
@@ -257,13 +258,8 @@ function M.create(widget, state_module)
             local playhead_x = state_module.time_to_pixel(playhead_frame, width)
 
             -- DEBUG: Log ruler width and playhead position
-            if os.getenv("JVE_DEBUG_PLAYHEAD") == "1" then
-                local logger = require("core.logger")
-                logger.debug("playhead_debug", string.format(
-                    "RULER: width=%d playhead_x=%d playhead_frames=%d",
-                    width, playhead_x, playhead_frame
-                ))
-            end
+            log.detail("RULER: width=%d playhead_x=%d playhead_frames=%d",
+                width, playhead_x, playhead_frame)
 
             -- Filled triangle caret at playhead position
             local handle_width = 14   -- width of triangle base

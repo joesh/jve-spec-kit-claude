@@ -7,7 +7,7 @@
 --
 -- @file lua_profiler.lua
 local profile = require("jit.profile")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("media")
 
 local M = {}
 
@@ -38,7 +38,7 @@ function M.start()
     start_time = os.clock()
     profile.start("li" .. SAMPLE_INTERVAL_MS, on_sample)
     is_running = true
-    logger.info("profiler", string.format("STARTED (%dms sampling interval)", SAMPLE_INTERVAL_MS))
+    log.event("STARTED (%dms sampling interval)", SAMPLE_INTERVAL_MS)
 end
 
 function M.stop()
@@ -46,8 +46,7 @@ function M.stop()
     profile.stop()
     local elapsed = os.clock() - start_time
     is_running = false
-    logger.info("profiler", string.format(
-        "STOPPED after %.1fs (%d samples)", elapsed, total_samples))
+    log.event("STOPPED after %.1fs (%d samples)", elapsed, total_samples)
     M._write_report(elapsed)
 end
 
@@ -139,7 +138,7 @@ function M._write_report(elapsed)
     end
 
     f:close()
-    logger.info("profiler", "Report → " .. REPORT_PATH)
+    log.event("Report → %s", REPORT_PATH)
 end
 
 return M

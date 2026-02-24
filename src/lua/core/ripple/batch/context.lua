@@ -78,7 +78,7 @@ function M.create(command)
     }
 
     if ctx.edge_infos_raw then
-        local logger = require("core.logger")
+        local log = require("core.logger").for_area("commands")
         for _, edge in ipairs(ctx.edge_infos_raw) do
             local source_original_id = edge.original_clip_id or edge.clip_id
             local cleaned_id = edge.clip_id
@@ -86,7 +86,7 @@ function M.create(command)
                 cleaned_id = cleaned_id:gsub("^temp_gap_", "")
             end
             if not cleaned_id then
-                logger.warn("batch_context", "skipping edge_info with nil clip_id")
+                log.warn("skipping edge_info with nil clip_id")
                 goto continue_edge
             end
             ctx.edge_infos[#ctx.edge_infos + 1] = {

@@ -17,7 +17,7 @@
 -- json_test_loader.lua
 -- Load and parse JSON test files
 local dkjson = require("dkjson")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local utils = require("bug_reporter.utils")
 
 local JsonTestLoader = {}
@@ -105,9 +105,9 @@ function JsonTestLoader.load_directory(dir_path)
 
     -- Report errors but continue
     if #errors > 0 then
-        logger.warn("bug_reporter", #errors .. " test(s) failed to load")
+        log.warn("%d test(s) failed to load", #errors)
         for _, error_info in ipairs(errors) do
-            logger.warn("bug_reporter", "  " .. error_info.file .. ": " .. error_info.error)
+            log.warn("  %s: %s", error_info.file, error_info.error)
         end
     end
 

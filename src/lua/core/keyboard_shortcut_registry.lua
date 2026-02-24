@@ -10,7 +10,7 @@
 -- @file keyboard_shortcut_registry.lua
 local M = {}
 local kb_constants = require("core.keyboard_constants")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 
 -- Command registry: all commands that can have shortcuts
 -- Format: {id, category, name, description, default_shortcuts, handler}
@@ -414,14 +414,12 @@ function M.load_keybindings(file_path)
             local combo_key = string.format("%d_%d", shortcut.key, shortcut.modifiers)
             binding.shortcut = shortcut
             M.keybindings[combo_key] = binding
-            logger.trace("keyboard_shortcut_registry", string.format(
-                "  loaded: '%s' → combo_key=%s → %s", key_combo_str, combo_key, binding.command_name))
+            log.detail("  loaded: '%s' → combo_key=%s → %s", key_combo_str, combo_key, binding.command_name)
             count = count + 1
         end
     end
 
-    logger.info("keyboard_shortcut_registry",
-        string.format("Loaded %d keybindings from %s", count, file_path))
+    log.event("Loaded %d keybindings from %s", count, file_path)
 end
 
 --- Check if a context matches a list of allowed contexts.
@@ -446,29 +444,25 @@ function M.handle_key_event(key, modifiers, context)
 
     local binding = M.keybindings[combo_key]
     if not binding then
-        logger.trace("keyboard_shortcut_registry", string.format(
-            "  no TOML binding for combo_key=%s", combo_key))
+        log.detail("  no TOML binding for combo_key=%s", combo_key)
         return false
     end
 
-    logger.trace("keyboard_shortcut_registry", string.format(
-        "  found binding: combo_key=%s → command='%s' contexts={%s}",
+    log.detail("  found binding: combo_key=%s → command='%s' contexts={%s}",
         combo_key, binding.command_name,
-        table.concat(binding.contexts or {}, ",")))
+        table.concat(binding.contexts or {}, ","))
 
     assert(command_manager,
         string.format("handle_key_event: command_manager not set (binding '%s' for key %s)",
             binding.command_name, combo_key))
 
     if not context_matches(binding.contexts, context) then
-        logger.trace("keyboard_shortcut_registry", string.format(
-            "  context mismatch: active='%s' required={%s}",
-            tostring(context), table.concat(binding.contexts or {}, ",")))
+        log.detail("  context mismatch: active='%s' required={%s}",
+            tostring(context), table.concat(binding.contexts or {}, ","))
         return false
     end
 
-    logger.trace("keyboard_shortcut_registry", string.format(
-        "  context matched, looking up executor for '%s'", binding.command_name))
+    log.detail("  context matched, looking up executor for '%s'", binding.command_name)
 
     assert(command_manager.get_executor(binding.command_name),
         string.format("handle_key_event: TOML binding '%s' has no registered executor (combo %s)",
@@ -482,13 +476,11 @@ function M.handle_key_event(key, modifiers, context)
         params._positional = binding.positional_args
     end
 
-    logger.trace("keyboard_shortcut_registry", string.format(
-        "  dispatching %s via execute_ui", binding.command_name))
+    log.detail("  dispatching %s via execute_ui", binding.command_name)
 
     local result = command_manager.execute_ui(binding.command_name, params)
     if result and not result.success and result.error_message then
-        logger.warn("keyboard_shortcut_registry",
-            string.format("%s: %s", binding.command_name, result.error_message))
+        log.warn("%s: %s", binding.command_name, result.error_message)
     end
     return true
 end

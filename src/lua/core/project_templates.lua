@@ -19,7 +19,7 @@
 --
 -- @file project_templates.lua
 local M = {}
-local logger = require("core.logger")
+local log = require("core.logger").for_area("media")
 local path_utils = require("core.path_utils")
 local uuid = require("uuid")
 
@@ -58,7 +58,7 @@ function M.get_template_path(template)
     end
 
     -- Generate: open a temp database, create project + sequence + tracks, close
-    logger.info("project_templates", "Generating template: " .. template.name .. " → " .. path)
+    log.event("Generating template: %s → %s", template.name, path)
 
     local database = require("core.database")
     local Project = require("models.project")
@@ -160,9 +160,8 @@ function M.create_project_from_template(template, project_name, dest_path)
         database.set_path(prev_path)
     end
 
-    logger.info("project_templates", string.format(
-        "Created project '%s' from template '%s' at %s",
-        project_name, template.name, dest_path))
+    log.event("Created project '%s' from template '%s' at %s",
+        project_name, template.name, dest_path)
 
     return { project_id = new_project_id, sequence_id = sequence_id }
 end

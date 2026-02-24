@@ -19,7 +19,7 @@ local kb_constants = require("core.keyboard_constants")
 local undo_redo_controller = require("core.undo_redo_controller")
 local arrow_repeat = require("ui.arrow_repeat")
 local focus_manager = require("ui.focus_manager")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 
 -- Key and modifier constants
 local KEY = kb_constants.KEY
@@ -108,9 +108,8 @@ local function handle_key_impl(event)
     local key = event.key
     local modifiers = event.modifiers
 
-    logger.trace("keyboard_shortcuts", string.format(
-        "handle_key: key=%d modifiers=0x%x combo_key=%d_%d",
-        key, modifiers, key, modifiers))
+    log.detail("handle_key: key=%d modifiers=0x%x combo_key=%d_%d",
+        key, modifiers, key, modifiers)
 
     local modifier_meta = has_modifier(modifiers, MOD.Control) or has_modifier(modifiers, MOD.Meta)
     local modifier_shift = has_modifier(modifiers, MOD.Shift)
@@ -119,9 +118,8 @@ local function handle_key_impl(event)
     local focused_panel = focus_manager.get_focused_panel()
     assert(focused_panel, "keyboard_shortcuts: focus_manager.get_focused_panel() returned nil")
 
-    logger.trace("keyboard_shortcuts", string.format(
-        "  focused_panel=%s meta=%s shift=%s alt=%s",
-        focused_panel, tostring(modifier_meta), tostring(modifier_shift), tostring(modifier_alt)))
+    log.detail("  focused_panel=%s meta=%s shift=%s alt=%s",
+        focused_panel, tostring(modifier_meta), tostring(modifier_shift), tostring(modifier_alt))
 
     local panel_active_timeline = (focused_panel == "timeline")
     local panel_active_source = (focused_panel == "source_monitor")
@@ -131,7 +129,7 @@ local function handle_key_impl(event)
 
     -- Tab: toggle timecode entry in timeline
     if key == KEY.Tab and panel_active_timeline and not modifier_meta and not modifier_alt then
-        logger.trace("keyboard_shortcuts", "  → Tab toggle timecode entry")
+        log.detail("  → Tab toggle timecode entry")
         if focus_is_text_input then
             timeline_panel.focus_timeline_view()
         else
@@ -142,17 +140,17 @@ local function handle_key_impl(event)
 
     -- Text input bypass: let text fields consume non-modified keys
     if focus_is_text_input and not modifier_meta then
-        logger.trace("keyboard_shortcuts", "  → text input bypass (returning false)")
+        log.detail("  → text input bypass (returning false)")
         return false
     end
 
     -- Registry dispatch (TOML keybindings → command_manager.execute_ui)
-    logger.trace("keyboard_shortcuts", "  → trying registry dispatch")
+    log.detail("  → trying registry dispatch")
     if shortcut_registry.handle_key_event(key, modifiers, focused_panel) then
-        logger.trace("keyboard_shortcuts", "  → registry handled key")
+        log.detail("  → registry handled key")
         return true
     end
-    logger.trace("keyboard_shortcuts", "  → registry did NOT handle key")
+    log.detail("  → registry did NOT handle key")
 
     -- Arrow keys: need special handling for arrow_repeat timer
     -- (Not in TOML because arrow repeat is input management, not command dispatch)
@@ -267,16 +265,14 @@ local function handle_key_impl(event)
         return true
     end
 
-    logger.trace("keyboard_shortcuts", string.format(
-        "  → unhandled key=%d modifiers=0x%x (no cascade match)", event.key, event.modifiers))
+    log.detail("  → unhandled key=%d modifiers=0x%x (no cascade match)", event.key, event.modifiers)
     return false
 end
 
 -- Public entry: wraps handle_key_impl with command event management
 function keyboard_shortcuts.handle_key(event)
     assert(initialized, "keyboard_shortcuts.handle_key: not initialized")
-    logger.trace("keyboard_shortcuts", string.format(
-        "handle_key ENTRY: key=%d modifiers=0x%x", event.key, event.modifiers))
+    log.detail("handle_key ENTRY: key=%d modifiers=0x%x", event.key, event.modifiers)
 
     local owns_command_event = not command_manager.peek_command_event_origin()
     if owns_command_event then

@@ -16,7 +16,7 @@
 local M = {}
 
 local qt_constants = require("core.qt_constants")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local command_labels = require("core.command_labels")
 local db_module = require("core.database")
 
@@ -114,7 +114,7 @@ local function refresh_tree()
     local command_manager = window_state.command_manager
     local ok, entries_or_err = pcall(command_manager.list_history_entries, command_manager)
     if not ok then
-        logger.error("edit_history", "Failed to load history: " .. tostring(entries_or_err))
+        log.error("Failed to load history: %s", tostring(entries_or_err))
         return
     end
 
@@ -160,12 +160,12 @@ local function jump_to_item(item_id)
 
     local ok, success, err = pcall(window_state.command_manager.jump_to_sequence_number, window_state.command_manager, seq)
     if not ok then
-        logger.error("edit_history", "Jump failed: " .. tostring(success))
+        log.error("Jump failed: %s", tostring(success))
         refresh_tree()
         return
     end
     if not success then
-        logger.error("edit_history", "Jump failed: " .. tostring(err or "unknown"))
+        log.error("Jump failed: %s", tostring(err or "unknown"))
     end
     refresh_tree()
 end

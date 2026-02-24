@@ -18,7 +18,7 @@
 -- Provides command creation, parameter management, and serialization
 local uuid = require("uuid")
 local json = require("dkjson") -- Added
-local logger = require("core.logger")
+local log = require("core.logger").for_area("commands")
 local command_labels = require("core.command_labels")
 
 local M = {}
@@ -467,7 +467,7 @@ function M:save(db)
         db = database.get_connection()
     end
     if not db then
-        logger.warn("command", "Command.save: No database connection available")
+        log.warn("Command.save: No database connection available")
         return false
     end
     -- Serialize parameters to JSON
@@ -489,7 +489,7 @@ function M:save(db)
         if db.last_error then
             err = db:last_error()
         end
-        logger.warn("command", "Command.save: Failed to prepare exists query: " .. err)
+        log.warn("Command.save: Failed to prepare exists query: %s", err)
         return false
     end
 
@@ -560,7 +560,7 @@ function M:save(db)
             if db.last_error then
                 err = db:last_error()
             end
-            logger.warn("command", "Command.save: Failed to prepare UPDATE query: " .. err)
+            log.warn("Command.save: Failed to prepare UPDATE query: %s", err)
             return false
         end
 
@@ -593,7 +593,7 @@ function M:save(db)
             if db.last_error then
                 err = db:last_error()
             end
-            logger.warn("command", "Command.save: Failed to prepare INSERT query: " .. err)
+            log.warn("Command.save: Failed to prepare INSERT query: %s", err)
             return false
         end
 
@@ -620,7 +620,7 @@ function M:save(db)
     end
 
     if not query:exec() then
-        logger.warn("command", string.format("Command.save: Failed to save command: %s", query:last_error()))
+        log.warn("Command.save: Failed to save command: %s", query:last_error())
         query:finalize()
         return false
     end

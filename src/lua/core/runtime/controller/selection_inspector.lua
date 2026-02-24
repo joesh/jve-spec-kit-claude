@@ -17,8 +17,7 @@
 -- scripts/core/runtime/controller/selection_inspector.lua
 -- PURPOSE: Own selection policy (header text + batch), persist filter, and drive the inspector.
 local error_system = require("src.lua.core.error_system")
-local logger = require("src.lua.core.logger")
-local ui_constants = require("src.lua.core.ui_constants")
+local log = require("src.lua.core.logger").for_area("ui")
 
 local M = { _view = nil, _adapter = nil }
 
@@ -45,14 +44,14 @@ function M.bind(view_module, adapter_module)
   
   -- Wire up the view's onFilterChanged callback to our handler
   if M._view.onFilterChanged ~= nil then
-    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][controller] WARNING: onFilterChanged already set, overriding")
+    log.warn("[inspector][controller] onFilterChanged already set, overriding")
   end
   
   M._view.onFilterChanged = function(query) 
     M.on_filter_changed(query) 
   end
   
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][controller] bound")
+  log.event("[inspector][controller] bound")
   
   return error_system.create_success({
     message = "Selection inspector bound successfully"
@@ -86,13 +85,13 @@ end
 -- Call this whenever app selection changes (clips is a Lua array of bridged clip handles)
 function M.on_selection_changed(clips)
   if not (M._view and M._adapter) then 
-    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][controller] on_selection_changed called but not bound")
+    log.warn("[inspector][controller] on_selection_changed called but not bound")
     return 
   end
   
   clips = clips or {}
   local count = #clips
-  logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][controller] on_selection_changed " .. count .. " clips")
+  log.event("[inspector][controller] on_selection_changed %d clips", count)
   
   M._view.set_header_text(header_for_count(count))
   M._view.set_batch_enabled(is_batch(count))
@@ -107,11 +106,11 @@ end
 -- Call when the user edits the filter string (Lua is source of truth)
 function M.on_filter_changed(text)
   if not (M._view and M._adapter) then 
-    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][controller] on_filter_changed called but not bound")
+    log.warn("[inspector][controller] on_filter_changed called but not bound")
     return 
   end
   
-  logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][controller] on_filter_changed " .. (text or '<nil>'))
+  log.event("[inspector][controller] on_filter_changed %s", text or '<nil>')
   
   -- Update view filter without triggering the callback (to prevent circular calls)
   M._view._filter = text or ""

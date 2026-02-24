@@ -19,7 +19,7 @@
 -- Part of the event sourcing architecture
 local uuid = require("uuid")
 local asserts = require("core.asserts")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("database")
 
 local M = {}
 
@@ -371,8 +371,8 @@ function M.create_snapshot(db, sequence_id, sequence_number, clips)
 
     ensure_snapshots_table(db)
 
-    logger.info("snapshot_manager", string.format("Creating snapshot at sequence %d with %d clips",
-        sequence_number, #clips))
+    log.event("Creating snapshot at sequence %d with %d clips",
+        sequence_number, #clips)
 
     -- Build snapshot payload (sequence + tracks + clips + media)
     local payload = build_snapshot_payload(db, sequence_id, clips)
@@ -402,7 +402,7 @@ function M.create_snapshot(db, sequence_id, sequence_number, clips)
 
     assert(query:exec(), "snapshot_manager.create_snapshot: Failed to insert snapshot")
 
-    logger.info("snapshot_manager", string.format("Snapshot created at sequence %d", sequence_number))
+    log.event("Snapshot created at sequence %d", sequence_number)
     return true
 end
 
@@ -429,18 +429,18 @@ function M.load_snapshot(db, sequence_id)
     query:bind_value(1, sequence_id)
 
     if not query:exec() or not query:next() then
-        logger.debug("snapshot_manager", "No snapshot found for sequence: " .. sequence_id)
+        log.event("No snapshot found for sequence: %s", sequence_id)
         return nil
     end
 
     local sequence_number = query:value(0)
     local clips_json = query:value(1)
 
-    logger.info("snapshot_manager", string.format("Loading snapshot from sequence %d", sequence_number))
+    log.event("Loading snapshot from sequence %d", sequence_number)
 
     local snapshot_state = deserialize_snapshot_payload(clips_json)
     local clips = snapshot_state.clips or {}
-    logger.info("snapshot_manager", string.format("Loaded snapshot with %d clips", #clips))
+    log.event("Loaded snapshot with %d clips", #clips)
 
     return {
         sequence_number = sequence_number,

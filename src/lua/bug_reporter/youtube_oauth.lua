@@ -18,7 +18,7 @@
 -- YouTube OAuth 2.0 authentication flow for uploading bug report videos
 local dkjson = require("dkjson")
 local utils = require("bug_reporter.utils")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 
 local YouTubeOAuth = {}
 
@@ -210,7 +210,7 @@ function YouTubeOAuth.save_tokens(tokens)
     -- Use secure file write to prevent race condition
     local success, err = utils.write_secure_file(TOKEN_FILE, json)
     if not success then
-        logger.warn("bug_reporter", "Failed to save YouTube tokens: " .. (err or "unknown error"))
+        log.warn("Failed to save YouTube tokens: %s", err or "unknown error")
     end
 end
 

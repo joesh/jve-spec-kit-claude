@@ -2,7 +2,7 @@
 --
 -- @file panel_manager.lua
 local qt_constants = require("core.qt_constants")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 
 local M = {}
 
@@ -190,7 +190,7 @@ function M.register_sequence_monitor(view_id, sm)
     assert(sm, string.format(
         "panel_manager.register_sequence_monitor: sm required for '%s'", view_id))
     sequence_monitors[view_id] = sm
-    logger.debug("panel_manager", string.format("registered sequence monitor '%s'", view_id))
+    log.event("registered sequence monitor '%s'", view_id)
 end
 
 --- Get a SequenceMonitor by view_id.

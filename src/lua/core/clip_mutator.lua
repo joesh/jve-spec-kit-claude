@@ -15,7 +15,7 @@
 -- @file clip_mutator.lua
 local ClipMutator = {}
 local uuid = require("uuid")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("commands")
 local krono_ok, krono = pcall(require, "core.krono")
 
     local function clone_state(row)
@@ -423,18 +423,17 @@ function ClipMutator.resolve_occlusions(db, params)
 
     for clip_id, pending_state in pairs(pending_lookup) do
         if not pending_state._seen and not pending_state._virtual then
-            logger.warn("clip_mutator", string.format(
-                "resolve_occlusions: pending clip %s was not found on track %s",
-                tostring(clip_id), tostring(track_id)))
+            log.warn("resolve_occlusions: pending clip %s was not found on track %s",
+                tostring(clip_id), tostring(track_id))
         end
     end
 
     local krono_end = krono_enabled and krono.now and krono.now() or nil
     if krono_enabled and krono_start and krono_prepare_done and krono_end then
         local total = krono_end - krono_start
-        logger.debug("clip_mutator", string.format("resolve[%s]: %.2fms (load=%.2fms body=%.2fms)",
+        log.event("resolve[%s]: %.2fms (load=%.2fms body=%.2fms)",
             tostring(track_id or "unknown"), total,
-            krono_prepare_done - krono_start, krono_end - krono_prepare_done))
+            krono_prepare_done - krono_start, krono_end - krono_prepare_done)
     end
 
     return true, nil, actions

@@ -17,7 +17,7 @@
 -- ui/inspector/widget_pool.lua
 -- PURPOSE: Manages a pool of reusable Qt widgets for the inspector panel
 -- Widgets are created once and reused to prevent resource leaks and signal connection issues
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local ui_constants = require("core.ui_constants")
 local qt_constants = require("core.qt_constants")
 local error_system = require("core.error_system")
@@ -139,8 +139,7 @@ local function create_widget(widget_type, config)
     end
 
     if not success or not widget then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-            "[widget_pool] Failed to create widget of type: " .. widget_type)
+        log.warn("[widget_pool] Failed to create widget of type: %s", widget_type)
         return nil
     end
 
@@ -153,8 +152,7 @@ function M.rent(widget_type, config)
 
     local pool = M._pools[widget_type]
     if not pool then
-        logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-            "[widget_pool] Unknown widget type: " .. widget_type)
+        log.error("[widget_pool] Unknown widget type: %s", widget_type)
         return nil
     end
 
@@ -167,11 +165,9 @@ function M.rent(widget_type, config)
         if not widget then
             return nil
         end
-        logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-            string.format("[widget_pool] Created new %s widget (pool was empty)", widget_type))
+        log.event("[widget_pool] Created new %s widget (pool was empty)", widget_type)
     else
-        logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-            string.format("[widget_pool] Reused %s widget from pool", widget_type))
+        log.event("[widget_pool] Reused %s widget from pool", widget_type)
     end
 
     -- Mark as active
@@ -235,8 +231,7 @@ function M.return_widget(widget)
 
     local widget_type = M._active_widgets[widget]
     if not widget_type then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-            "[widget_pool] Attempted to return widget that wasn't rented")
+        log.warn("[widget_pool] Attempted to return widget that wasn't rented")
         return
     end
 
@@ -275,9 +270,8 @@ function M.return_widget(widget)
     local pool = M._pools[widget_type]
     table.insert(pool, widget)
 
-    logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-        string.format("[widget_pool] Returned %s widget to pool (pool size: %d)",
-            widget_type, #pool))
+    log.event("[widget_pool] Returned %s widget to pool (pool size: %d)",
+            widget_type, #pool)
 end
 
 -- Connect a signal handler to a widget (tracked for cleanup)
@@ -299,8 +293,7 @@ function M.connect_signal(widget, signal_name, handler)
     elseif signal_name == "valueChanged" then
         result = qt_signals.onValueChanged(widget, wrapped_handler)
     else
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-            "[widget_pool] Unknown signal type: " .. signal_name)
+        log.warn("[widget_pool] Unknown signal type: %s", signal_name)
         return false
     end
 
@@ -310,7 +303,7 @@ function M.connect_signal(widget, signal_name, handler)
             signal_name,
             result.message or "unknown error"
         )
-        logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI, message)
+        log.error("%s", message)
         return nil, result
     end
 
@@ -326,7 +319,7 @@ function M.connect_signal(widget, signal_name, handler)
                 widget = tostring(widget)
             }
         })
-        logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[widget_pool] " .. error_obj.message)
+        log.error("[widget_pool] %s", error_obj.message)
         return nil, error_obj
     end
 
@@ -373,8 +366,7 @@ function M.clear()
     M._active_widgets = {}
     M._signal_connections = {}
 
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-        "[widget_pool] All pools cleared")
+    log.event("[widget_pool] All pools cleared")
 end
 
 return M

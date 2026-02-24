@@ -18,7 +18,7 @@
 -- Bug submission review dialog (shows before uploading)
 local json_test_loader = require("bug_reporter.json_test_loader")
 local github_issue_creator = require("bug_reporter.github_issue_creator")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local qt = require("bug_reporter.qt_compat")
 
 local SubmissionDialog = {}
@@ -28,27 +28,27 @@ local SubmissionDialog = {}
 -- @return: Dialog widget
 function SubmissionDialog.create(test_path)
     if not qt.is_available() then
-        logger.error("bug_reporter", "Qt bindings not available for submission dialog")
+        log.error("Qt bindings not available for submission dialog")
         return nil
     end
 
     -- Load test data
     local test, err = json_test_loader.load(test_path)
     if not test then
-        logger.error("bug_reporter", "Failed to load test: " .. err)
+        log.error("Failed to load test: %s", err)
         return nil
     end
 
     -- Create dialog
     local dialog = qt.CREATE_DIALOG("Submit Bug Report")
     if not dialog then
-        logger.error("bug_reporter", "Failed to create submission dialog")
+        log.error("Failed to create submission dialog")
         return nil
     end
 
     local main_layout = qt.CREATE_LAYOUT("vertical")
     if not main_layout then
-        logger.error("bug_reporter", "Failed to create submission dialog layout")
+        log.error("Failed to create submission dialog layout")
         return nil
     end
 
@@ -258,13 +258,13 @@ function SubmissionDialog.show_result(result)
 
     local dialog = qt.CREATE_DIALOG("Submission Complete")
     if not dialog then
-        logger.error("bug_reporter", "Failed to create submission result dialog")
+        log.error("Failed to create submission result dialog")
         return nil
     end
 
     local layout = qt.CREATE_LAYOUT("vertical")
     if not layout then
-        logger.error("bug_reporter", "Failed to create submission result layout")
+        log.error("Failed to create submission result layout")
         return nil
     end
 
@@ -344,13 +344,13 @@ function SubmissionDialog.show_progress()
 
     local dialog = qt.CREATE_DIALOG("Submitting Bug Report")
     if not dialog then
-        logger.error("bug_reporter", "Failed to create submission progress dialog")
+        log.error("Failed to create submission progress dialog")
         return nil
     end
 
     local layout = qt.CREATE_LAYOUT("vertical")
     if not layout then
-        logger.error("bug_reporter", "Failed to create submission progress layout")
+        log.error("Failed to create submission progress layout")
         return nil
     end
 

@@ -17,7 +17,7 @@ local M = {}
 local Clip = require('models.clip')
 local ClipLink = require("models.clip_link")
 local command_helper = require("core.command_helper")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("commands")
 
 
 local SPEC = {
@@ -210,9 +210,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
             command_helper.add_delete_mutation(command, args.sequence_id, args.second_clip_id)
         else
-            logger.warn("split_clip", string.format(
-                "UndoSplitClip: Second clip %s already absent, skipping delete",
-                tostring(args.second_clip_id)))
+            log.warn("UndoSplitClip: Second clip %s already absent, skipping delete",
+                tostring(args.second_clip_id))
         end
 
         original_clip.timeline_start = original_timeline_start
@@ -340,8 +339,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     })
                 end
             else
-                logger.error("split", string.format("Split: SplitClip failed for clip %s: %s",
-                    spec.parameters.clip_id, result.error_message or "unknown"))
+                log.error("Split: SplitClip failed for clip %s: %s",
+                    spec.parameters.clip_id, result.error_message or "unknown")
                 any_failed = true
             end
         end
@@ -356,24 +355,22 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 -- Create a new link group with the second halves
                 local new_group_id, err = ClipLink.create_link_group(second_clips, db)
                 if new_group_id then
-                    logger.debug("split", string.format(
-                        "Created new link group %s for %d second-half clips (from original group %s)",
-                        new_group_id, #second_clips, link_group_id))
+                    log.event("Created new link group %s for %d second-half clips (from original group %s)",
+                        new_group_id, #second_clips, link_group_id)
                 else
-                    logger.warn("split", string.format(
-                        "Failed to create link group for second halves: %s", err or "unknown"))
+                    log.warn("Failed to create link group for second halves: %s", err or "unknown")
                 end
             end
             -- If only 1 second clip from a link group, it stays unlinked
             -- (the other linked clip wasn't split)
         end
 
-        logger.debug("split", string.format("Split %d clip(s) at playhead", success_count))
+        log.event("Split %d clip(s) at playhead", success_count)
         return true
     end
 
     command_undoers["Split"] = function(command)
-        logger.debug("split", "Undo Split: no-op (automatic undo handles nested commands)")
+        log.event("Undo Split: no-op (automatic undo handles nested commands)")
         return true
     end
 

@@ -20,7 +20,7 @@ local youtube_oauth = require("bug_reporter.youtube_oauth")
 local github_issue_creator = require("bug_reporter.github_issue_creator")
 local _bug_submission = require("bug_reporter.bug_submission")  -- luacheck: ignore (loaded for side effects)
 local utils = require("bug_reporter.utils")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local qt = require("bug_reporter.qt_compat")
 
 local PreferencesPanel = {}
@@ -30,14 +30,14 @@ local PreferencesPanel = {}
 function PreferencesPanel.create()
     -- Check if Qt bindings are available
     if not qt.is_available() then
-        logger.error("bug_reporter", "Qt bindings not available for preferences panel")
+        log.error("Qt bindings not available for preferences panel")
         return nil
     end
 
     -- Main layout
     local main_layout = qt.CREATE_LAYOUT("vertical")
     if not main_layout then
-        logger.error("bug_reporter", "Failed to create preferences panel layout")
+        log.error("Failed to create preferences panel layout")
         return nil
     end
 
@@ -218,7 +218,7 @@ function PreferencesPanel.create()
     -- Create container widget
     local container = qt.CREATE_WIDGET()
     if not container then
-        logger.error("bug_reporter", "Failed to create preferences panel container widget")
+        log.error("Failed to create preferences panel container widget")
         return nil
     end
 

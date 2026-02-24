@@ -1,4 +1,5 @@
 #include "binding_macros.h"
+#include "../../jve_log.h"
 #include "../../timeline_renderer.h" // For lua_create_timeline_renderer
 #include <QRubberBand>
 #include <QCursor>
@@ -329,7 +330,7 @@ int lua_set_window_appearance(lua_State* L)
     const char* appearance_name = luaL_optstring(L, 2, "NSAppearanceNameDarkAqua");
 
     if (!widget) {
-        qWarning() << "Invalid widget in set_window_appearance";
+        JVE_LOG_WARN(Ui, "Invalid widget in set_window_appearance");
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -525,7 +526,7 @@ int lua_set_scroll_area_alignment(lua_State* L) {
     } else if (strcmp(alignment_str, "AlignVCenter") == 0) {
         alignment = Qt::AlignLeft | Qt::AlignVCenter;
     } else {
-        qWarning() << "Unsupported scroll area alignment string: " << alignment_str;
+        JVE_LOG_WARN(Ui, "Unsupported scroll area alignment: %s", alignment_str);
     }
     sa->setAlignment(alignment);
     return 0;
@@ -594,11 +595,11 @@ int lua_set_widget_alignment(lua_State* L)
             label->setAlignment(align);
             lua_pushboolean(L, 1);
         } else {
-            qWarning() << "Widget type doesn't support alignment:" << widget->metaObject()->className();
+            JVE_LOG_WARN(Ui, "Widget type doesn't support alignment: %s", widget->metaObject()->className());
             lua_pushboolean(L, 0);
         }
     } else {
-        qWarning() << "Invalid widget or alignment in set_widget_alignment";
+        JVE_LOG_WARN(Ui, "Invalid widget or alignment in set_widget_alignment");
         lua_pushboolean(L, 0);
     }
     return 1;

@@ -18,8 +18,7 @@
 -- PURPOSE: Pure Lua main window creation for professional video editor
 -- Creates DaVinci Resolve-style layout with project browser, timeline, and inspector
 local error_system = require("scripts.core.error_system")
-local logger = require("scripts.core.logger")
-local ui_constants = require("scripts.core.ui_constants")
+local log = require("scripts.core.logger").for_area("ui")
 local qt_constants = require("scripts.core.qt_constants")
 
 -- Import the existing inspector modules
@@ -36,7 +35,7 @@ local M = {
 }
 
 function M.create_main_window()
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[main_window] Creating professional video editor layout")
+  log.event("[main_window] Creating professional video editor layout")
   
   -- Create main window
   local main_success, main_window = pcall(qt_constants.WIDGET.CREATE_MAIN_WINDOW)
@@ -69,7 +68,7 @@ function M.create_main_window()
   -- Show the window
   pcall(qt_constants.DISPLAY.SHOW, main_window)
   
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[main_window] ✅ Professional video editor created successfully")
+  log.event("[main_window] Professional video editor created successfully")
   
   return error_system.create_success({
     message = "Main window created successfully",
@@ -83,7 +82,7 @@ function M.create_main_window()
 end
 
 function M.create_professional_layout()
-  logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[main_window] Creating professional layout")
+  log.event("[main_window] Creating professional layout")
   
   -- Create main splitter (horizontal: project browser | center area | inspector)
   local splitter_success, main_splitter = pcall(qt_constants.LAYOUT.CREATE_SPLITTER, "horizontal")
@@ -130,7 +129,7 @@ function M.create_professional_layout()
 end
 
 function M.create_project_browser()
-  logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[main_window] Creating project browser")
+  log.event("[main_window] Creating project browser")
   
   -- Create project browser widget
   local browser_success, browser_widget = pcall(qt_constants.WIDGET.CREATE)
@@ -175,7 +174,7 @@ function M.create_project_browser()
 end
 
 function M.create_center_area()
-  logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[main_window] Creating center area")
+  log.event("[main_window] Creating center area")
   
   -- Create center widget with vertical splitter (preview area + timeline)
   local center_success, center_widget = pcall(qt_constants.WIDGET.CREATE)
@@ -253,7 +252,7 @@ function M.create_center_area()
 end
 
 function M.create_inspector_panel()
-  logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[main_window] Creating inspector panel")
+  log.event("[main_window] Creating inspector panel")
   
   -- Create inspector widget that will be managed by the Lua inspector system
   local inspector_success, inspector_widget = pcall(qt_constants.WIDGET.CREATE)
@@ -276,7 +275,7 @@ function M.create_inspector_panel()
 end
 
 function M.setup_inspector()
-  logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[main_window] Setting up inspector system")
+  log.event("[main_window] Setting up inspector system")
   
   if not M.inspector_panel then
     return error_system.create_error({
@@ -301,11 +300,11 @@ function M.setup_inspector()
   -- Set up the adapter with dummy functions for now
   local adapter_functions = {
     applySearchFilter = function(panel, query)
-      logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[main_window] applySearchFilter called with: " .. (query or ""))
+      log.event("[main_window] applySearchFilter called with: %s", query or "")
       return true
     end,
     setSelectedClips = function(panel, clips)
-      logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[main_window] setSelectedClips called with " .. #(clips or {}) .. " clips")
+      log.event("[main_window] setSelectedClips called with %d clips", #(clips or {}))
       return true
     end
   }
@@ -324,9 +323,9 @@ function M.setup_inspector()
   -- Create the search row UI
   local search_result = inspector_view.ensure_search_row()
   if error_system.is_error(search_result) then
-    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[main_window] Warning: Failed to create search row: " .. error_system.format_debug_error(search_result))
+    log.warn("[main_window] Failed to create search row: %s", error_system.format_debug_error(search_result))
   else
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[main_window] ✅ Inspector search row created successfully")
+    log.event("[main_window] Inspector search row created successfully")
   end
   
   return error_system.create_success({

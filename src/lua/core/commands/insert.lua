@@ -16,7 +16,7 @@ local Sequence = require('models.sequence')
 local Media = require('models.media')
 local clip_edit_helper = require('core.clip_edit_helper')
 local rational_helpers = require('core.command_rational_helpers')
-local logger = require('core.logger')
+local log = require('core.logger').for_area("commands")
 
 local SPEC = {
     args = {
@@ -59,7 +59,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true
         end
 
-        logger.debug("insert", "Executing Insert command (via AddClipsToSequence)")
+        log.event("Executing Insert command (via AddClipsToSequence)")
 
         local track_id = args.track_id
 
@@ -246,7 +246,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        logger.debug("insert", string.format("Inserted clip at frame %d", insert_time or 0))
+        log.event("Inserted clip at frame %d", insert_time or 0)
         return true
     end
 

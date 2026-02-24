@@ -26,7 +26,7 @@ local uuid = require('uuid')
 local command_helper = require('core.command_helper')
 local clip_mutator = require('core.clip_mutator')
 local clip_link = require('models.clip_link')
-local logger = require('core.logger')
+local log = require('core.logger').for_area("commands")
 local _Track = require('models.track')  -- luacheck: ignore 211 (unused, required for model registration)
 
 --- Find source stream clip inside a masterclip sequence by role
@@ -389,7 +389,7 @@ local function link_groups(db, created_clips, groups)
             if link_id then
                 table.insert(link_group_ids, link_id)
             else
-                logger.warn("add_clips_to_sequence", string.format("Failed to create link group: %s", tostring(err)))
+                log.warn("Failed to create link group: %s", tostring(err))
             end
         end
     end
@@ -516,10 +516,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        logger.debug("add_clips_to_sequence", string.format(
-            "Added %d clips at frame %d (%s, %s)",
-            #created_clips, position, edit_type, arrangement
-        ))
+        log.event("Added %d clips at frame %d (%s, %s)",
+            #created_clips, position, edit_type, arrangement)
 
         return true
     end
@@ -550,7 +548,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local ok, err = command_helper.revert_mutations(db, executed_mutations, command, sequence_id)
         assert(ok, this_func_label .. ": failed to revert mutations: " .. tostring(err))
 
-        logger.debug("add_clips_to_sequence", "Undo: reverted all changes")
+        log.event("Undo: reverted all changes")
         return true
     end
 

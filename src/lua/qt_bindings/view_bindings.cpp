@@ -1,11 +1,11 @@
 #include "binding_macros.h"
+#include "../../jve_log.h"
 #include <QTreeWidget>
 #include <QHeaderView>
 #include <QDropEvent>
 #include <QKeyEvent>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
-#include <QDebug>
 #include <QMimeData>
 
 // Global map to associate QTreeWidgetItems with integer IDs
@@ -104,7 +104,7 @@ protected:
                 lua_setfield(lua_state, -2, "position");
 
                 if (lua_pcall(lua_state, 1, 1, 0) != LUA_OK) {
-                    qWarning() << "Error calling Lua drop handler:" << lua_tostring(lua_state, -1);
+                    JVE_LOG_WARN(Ui, "Error calling Lua drop handler: %s", lua_tostring(lua_state, -1));
                     lua_pop(lua_state, 1);
                     event->ignore();
                 } else {
@@ -141,7 +141,7 @@ protected:
                         return;
                     }
                 } else {
-                    qWarning() << "Error calling Lua tree key handler:" << lua_tostring(lua_state, -1);
+                    JVE_LOG_WARN(Ui, "Error calling Lua tree key handler: %s", lua_tostring(lua_state, -1));
                     lua_pop(lua_state, 1);
                 }
             } else {
@@ -438,13 +438,13 @@ int lua_set_tree_selection_changed_handler(lua_State* L) {
                 lua_setfield(L, -2, "items");
 
                 if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                    qWarning() << "Error in selection handler:" << lua_tostring(L, -1);
+                    JVE_LOG_WARN(Ui, "Error in selection handler: %s", lua_tostring(L, -1));
                     lua_pop(L, 1);
                 }
             } else {
                 lua_pushnil(L);
                 if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                    qWarning() << "Error in selection handler:" << lua_tostring(L, -1);
+                    JVE_LOG_WARN(Ui, "Error in selection handler: %s", lua_tostring(L, -1));
                     lua_pop(L, 1);
                 }
             }
@@ -478,7 +478,7 @@ int lua_set_tree_item_changed_handler(lua_State* L) {
             lua_settable(L, -3);
             
             if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                qWarning() << "Error in item changed handler:" << lua_tostring(L, -1);
+                JVE_LOG_WARN(Ui, "Error in item changed handler: %s", lua_tostring(L, -1));
                 lua_pop(L, 1);
             }
         });
@@ -572,7 +572,7 @@ int lua_set_tree_item_double_click_handler(lua_State* L) {
             lua_pushinteger(L, makeTreeItemId(item));
             lua_pushinteger(L, col);
             if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
-                qWarning() << "Error in double click handler:" << lua_tostring(L, -1);
+                JVE_LOG_WARN(Ui, "Error in double click handler: %s", lua_tostring(L, -1));
                 lua_pop(L, 1);
             }
         });

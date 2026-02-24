@@ -1,4 +1,5 @@
 #include "qt_bindings_bug_reporter.h"
+#include "../jve_log.h"
 #include "gesture_logger.h"
 #include <QWidget>
 #include <QPixmap>
@@ -84,7 +85,7 @@ static int lua_install_gesture_logger(lua_State* L) {
         // Call Lua callback with gesture table
         if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
             const char* error = lua_tostring(L, -1);
-            qWarning() << "Gesture callback error:" << error;
+            JVE_LOG_WARN(Ui, "Gesture callback error: %s", error);
             lua_pop(L, 1);
         }
     });
@@ -199,7 +200,7 @@ static int lua_create_timer(lua_State* L) {
         lua_rawgeti(L, LUA_REGISTRYINDEX, callbackRef);
         if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
             const char* error = lua_tostring(L, -1);
-            qWarning() << "Timer callback error:" << error;
+            JVE_LOG_WARN(Ui, "Timer callback error: %s", error);
             lua_pop(L, 1);
         }
     });

@@ -10,8 +10,8 @@ local SPEC = {
 
 function M.register(executors, undoers, db)
     local function executor(command)
-        local logger = require("core.logger")
-        logger.info("quit", "Quitting application")
+        local log = require("core.logger").for_area("commands")
+        log.event("Quitting application")
         local ok, err = pcall(function()
             local database = require("core.database")
             if database and database.shutdown then
@@ -19,7 +19,7 @@ function M.register(executors, undoers, db)
             end
         end)
         if not ok then
-            logger.error("quit", "Shutdown error: " .. tostring(err))
+            log.error("Shutdown error: %s", tostring(err))
         end
         os.exit(0)
         return true

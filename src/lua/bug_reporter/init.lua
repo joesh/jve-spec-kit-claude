@@ -17,7 +17,7 @@
 -- init.lua
 -- Bug reporter initialization and Qt bindings integration
 local capture_manager = require("bug_reporter.capture_manager")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 
 local BugReporter = {
     screenshot_timer = nil,
@@ -35,7 +35,7 @@ function BugReporter.init()
     -- Start screenshot timer
     BugReporter.start_screenshot_timer()
 
-    logger.info("bug_reporter", "Initialized successfully")
+    log.event("Initialized successfully")
 end
 
 -- Install gesture logger with callback to capture_manager
@@ -46,7 +46,7 @@ function BugReporter.install_gesture_logger()
 
     -- Check if Qt binding is available
     if not install_gesture_logger then
-        logger.warn("bug_reporter", "install_gesture_logger not available (Qt bindings not loaded)")
+        log.warn("install_gesture_logger not available (Qt bindings not loaded)")
         return
     end
 
@@ -56,7 +56,7 @@ function BugReporter.install_gesture_logger()
     end)
 
     BugReporter.gesture_logger_installed = true
-    logger.info("bug_reporter", "Gesture logger installed")
+    log.event("Gesture logger installed")
 end
 
 -- Start screenshot timer (captures every 1 second)
@@ -68,7 +68,7 @@ function BugReporter.start_screenshot_timer()
 
     -- Check if Qt binding is available
     if not create_timer then
-        logger.warn("bug_reporter", "create_timer not available (Qt bindings not loaded)")
+        log.warn("create_timer not available (Qt bindings not loaded)")
         return
     end
 
@@ -83,12 +83,12 @@ function BugReporter.start_screenshot_timer()
 
     -- Check if timer creation succeeded
     if not BugReporter.screenshot_timer then
-        logger.error("bug_reporter", "Failed to create screenshot timer")
+        log.error("Failed to create screenshot timer")
         return
     end
 
     BugReporter.screenshot_timer:start()
-    logger.info("bug_reporter", "Screenshot timer started (1 second interval)")
+    log.event("Screenshot timer started (1 second interval)")
 end
 
 -- Capture a screenshot
@@ -139,7 +139,7 @@ function BugReporter.set_enabled(enabled)
         end
     end
 
-    logger.info("bug_reporter", enabled and "Enabled" or "Disabled")
+    log.event(enabled and "Enabled" or "Disabled")
 end
 
 -- Get statistics (delegates to capture_manager)
@@ -167,18 +167,18 @@ function BugReporter.capture_on_error(error_message, stack_trace)
     local json_path, err = BugReporter.export_capture(metadata)
 
     if json_path then
-        logger.info("bug_reporter", "\n" .. string.rep("=", 60))
-        logger.info("bug_reporter", "BUG CAPTURED")
-        logger.info("bug_reporter", string.rep("=", 60))
-        logger.error("bug_reporter", "Error: " .. (error_message or "unknown"))
-        logger.info("bug_reporter", "Capture saved to: " .. json_path)
-        logger.info("bug_reporter", "\nThis capture includes:")
-        logger.info("bug_reporter", "  - Last 5 minutes of gestures and commands")
-        logger.info("bug_reporter", "  - Screenshots from the session")
-        logger.info("bug_reporter", "  - Full error stack trace")
-        logger.info("bug_reporter", string.rep("=", 60) .. "\n")
+        log.event("\n%s", string.rep("=", 60))
+        log.event("BUG CAPTURED")
+        log.event("%s", string.rep("=", 60))
+        log.error("Error: %s", error_message or "unknown")
+        log.event("Capture saved to: %s", json_path)
+        log.event("\nThis capture includes:")
+        log.event("  - Last 5 minutes of gestures and commands")
+        log.event("  - Screenshots from the session")
+        log.event("  - Full error stack trace")
+        log.event("%s\n", string.rep("=", 60))
     else
-        logger.error("bug_reporter", "Auto capture failed: " .. (err or "unknown error"))
+        log.error("Auto capture failed: %s", err or "unknown error")
     end
 
     return json_path
@@ -198,9 +198,9 @@ function BugReporter.capture_manual(description, expected_behavior)
     local json_path, err = BugReporter.export_capture(metadata)
 
     if json_path then
-        logger.info("bug_reporter", "Manual capture saved to: " .. json_path)
+        log.event("Manual capture saved to: %s", json_path)
     else
-        logger.error("bug_reporter", "Manual capture failed: " .. (err or "unknown error"))
+        log.error("Manual capture failed: %s", err or "unknown error")
     end
 
     return json_path

@@ -28,7 +28,7 @@ local command_manager = require("core.command_manager")
 local RIGHT_MOUSE_BUTTON = 2
 local DRAG_THRESHOLD = ui_constants.TIMELINE.DRAG_THRESHOLD
 local qt_constants = require("core.qt_constants")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("timeline")
 
 local function edges_match(a, b)
     return a and b
@@ -259,7 +259,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
                     source = "timeline",
                 })
                 if result and not result.success then
-                    logger.warn("timeline_clip_context", "Reveal failed: " .. (result.error_message or "unknown"))
+                    log.warn("Reveal failed: %s", result.error_message or "unknown")
                 end
             end
         })

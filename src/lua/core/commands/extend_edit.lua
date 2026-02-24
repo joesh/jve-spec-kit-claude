@@ -23,7 +23,7 @@ local SPEC = {
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["ExtendEdit"] = function(command)
         local args = command:get_all_parameters()
-        local logger = require("core.logger")
+        local log = require("core.logger").for_area("commands")
         local command_manager = require("core.command_manager")
         local Clip = require("models.clip")
 
@@ -34,7 +34,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local playhead = args.playhead_frame
         assert(type(playhead) == "number", "ExtendEdit: playhead_frame must be integer")
 
-        logger.info("extend_edit", string.format("ExtendEdit edges=%d playhead=%d", #edge_infos, playhead))
+        log.event("ExtendEdit edges=%d playhead=%d", #edge_infos, playhead)
 
         -- Compute delta for each edge to reach playhead
         -- For simplicity, use lead edge (first edge) to compute single delta
@@ -62,12 +62,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local delta_frames = playhead - edge_position
 
         if delta_frames == 0 then
-            logger.info("extend_edit", "ExtendEdit: edge already at playhead, no-op")
+            log.event("ExtendEdit: edge already at playhead, no-op")
             return true
         end
 
-        logger.info("extend_edit", string.format("ExtendEdit: edge at %d, playhead at %d, delta=%d",
-            edge_position, playhead, delta_frames))
+        log.event("ExtendEdit: edge at %d, playhead at %d, delta=%d",
+            edge_position, playhead, delta_frames)
 
         -- Delegate to RippleEdit/BatchRippleEdit
         local result
@@ -93,7 +93,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        logger.info("extend_edit", string.format("ExtendEdit: completed, delta=%d frames", delta_frames))
+        log.event("ExtendEdit: completed, delta=%d frames", delta_frames)
         return true
     end
 

@@ -5,7 +5,7 @@
 -- subsequent opens.
 
 local json = require("dkjson")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("media")
 
 local M = {}
 
@@ -46,7 +46,7 @@ local function load_paths()
     f:close()
     local decoded, _, err = json.decode(content)
     if err or type(decoded) ~= "table" then
-        logger.warn("file_browser", "corrupt paths JSON, resetting: " .. tostring(err))
+        log.warn("corrupt paths JSON, resetting: %s", tostring(err))
         paths_cache = {}
         return paths_cache
     end
@@ -60,7 +60,7 @@ local function save_paths()
     local encoded = json.encode(paths_cache, { indent = true })
     local f, err = io.open(PERSISTENCE_PATH, "w")
     if not f then
-        logger.error("file_browser", "failed to write " .. PERSISTENCE_PATH .. ": " .. tostring(err))
+        log.error("failed to write %s: %s", PERSISTENCE_PATH, tostring(err))
         return
     end
     f:write(encoded)

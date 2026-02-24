@@ -18,7 +18,7 @@
 -- Create GitHub issues for bug reports with video links
 local dkjson = require("dkjson")
 local utils = require("bug_reporter.utils")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 
 local GitHubIssueCreator = {}
 
@@ -49,7 +49,7 @@ function GitHubIssueCreator.set_token(token)
     -- Save token to file securely
     local success, err = utils.write_secure_file(TOKEN_FILE, token)
     if not success then
-        logger.warn("bug_reporter", "Failed to save GitHub token: " .. (err or "unknown error"))
+        log.warn("Failed to save GitHub token: %s", err or "unknown error")
     end
 end
 
@@ -342,17 +342,17 @@ function GitHubIssueCreator.format_bug_report_body(test)
     -- Log output (warnings and errors)
     if test.log_output then
         local important_logs = {}
-        for _, log in ipairs(test.log_output) do
-            if log.level == "warning" or log.level == "error" then
-                table.insert(important_logs, log)
+        for _, entry in ipairs(test.log_output) do
+            if entry.level == "warning" or entry.level == "error" then
+                table.insert(important_logs, entry)
             end
         end
 
         if #important_logs > 0 then
             table.insert(body, "## Log Output\n")
             table.insert(body, "```")
-            for _, log in ipairs(important_logs) do
-                table.insert(body, string.format("[%s] %s", log.level, log.message))
+            for _, entry in ipairs(important_logs) do
+                table.insert(body, string.format("[%s] %s", entry.level, entry.message))
             end
             table.insert(body, "```")
             table.insert(body, "")

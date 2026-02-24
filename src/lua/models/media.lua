@@ -14,7 +14,7 @@
 --
 -- @file media.lua
 local uuid = require("uuid")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("media")
 
 local M = {}
 
@@ -153,7 +153,7 @@ function M:save()
     local database = require("core.database")
     local db = database.get_connection()
     if not db then
-        logger.warn("media", "Media:save: No database connection available")
+        log.warn("Media:save: No database connection available")
         return false
     end
 
@@ -190,7 +190,7 @@ function M:save()
     ]])
 
     if not query then
-        logger.warn("media", "Media:save: Failed to prepare query")
+        log.warn("Media:save: Failed to prepare query")
         return false
     end
 
@@ -211,7 +211,7 @@ function M:save()
     query:bind_value(15, self.metadata)
 
     if not query:exec() then
-        logger.warn("media", string.format("Media:save: Query execution failed: %s", query:last_error()))
+        log.warn("Media:save: Query execution failed: %s", query:last_error())
         query:finalize()
         return false
     end

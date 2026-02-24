@@ -8,7 +8,7 @@
 
 local qt_constants = require("core.qt_constants")
 local path_utils = require("core.path_utils")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("video")
 local Signals = require("core.signals")
 
 local M = {}
@@ -101,8 +101,7 @@ function M.get_frame(metadata)
         key))
 
     cache[key] = frame
-    logger.debug("offline_frame_cache", string.format(
-        "Composed offline frame for '%s'", key))
+    log.event("Composed offline frame for '%s'", key)
     return frame
 end
 
@@ -112,8 +111,7 @@ function M.clear()
     for _ in pairs(cache) do count = count + 1 end
     cache = {}
     if count > 0 then
-        logger.debug("offline_frame_cache", string.format(
-            "Cleared %d cached offline frames", count))
+        log.event("Cleared %d cached offline frames", count)
     end
 end
 

@@ -17,10 +17,9 @@
 -- scripts/ui/inspector/adapter.lua
 -- PURPOSE: Single point that calls C++ panel methods. Keep policy out.
 local error_system = require("core.error_system")
-local logger = require("core.logger")
-local ui_constants = require("core.ui_constants")
+local log = require("core.logger").for_area("ui")
 
-logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][adapter] loaded")
+log.event("[inspector][adapter] loaded")
 
 local A = {
   _panel = nil,
@@ -102,7 +101,7 @@ local function filterClipMetadata(clip, query)
 end
 
 function A.applySearchFilter(query)
-  logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][adapter] applySearchFilter " .. (query or '<nil>'))
+  log.event("[inspector][adapter] applySearchFilter %s", query or '<nil>')
   
   A._current_filter = query or ""
   
@@ -114,8 +113,8 @@ function A.applySearchFilter(query)
     end
   end
   
-  logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, 
-    "[inspector][adapter] Filtered " .. #A._selected_clips .. " clips to " .. #A._filtered_clips .. " matching '" .. A._current_filter .. "'")
+  log.event("[inspector][adapter] Filtered %d clips to %d matching '%s'",
+    #A._selected_clips, #A._filtered_clips, A._current_filter)
   
   -- Update the inspector panel to show only filtered clips
   A._updateInspectorDisplay()
@@ -124,7 +123,7 @@ function A.applySearchFilter(query)
   if A._panel and A._fn.applySearchFilter then
     local success, result = pcall(A._fn.applySearchFilter, A._panel, query or "")
     if not success then
-      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][adapter] WARNING in C++ applySearchFilter: " .. tostring(result))
+      log.warn("[inspector][adapter] C++ applySearchFilter: %s", tostring(result))
     end
   end
   
@@ -132,7 +131,7 @@ function A.applySearchFilter(query)
 end
 
 function A.setSelectedClips(clips)
-  logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][adapter] setSelectedClips " .. #(clips or {}) .. " clips")
+  log.event("[inspector][adapter] setSelectedClips %d clips", #(clips or {}))
   
   A._selected_clips = clips or {}
   
@@ -143,7 +142,7 @@ function A.setSelectedClips(clips)
   if A._panel and A._fn.setSelectedClips then
     local success, result = pcall(A._fn.setSelectedClips, A._panel, clips or {})
     if not success then
-      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][adapter] WARNING in C++ setSelectedClips: " .. tostring(result))
+      log.warn("[inspector][adapter] C++ setSelectedClips: %s", tostring(result))
     end
   end
   
@@ -152,16 +151,16 @@ end
 
 -- Update the inspector display with filtered clips
 function A._updateInspectorDisplay()
-  logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][adapter] Updating inspector display with " .. #A._filtered_clips .. " clips")
+  log.event("[inspector][adapter] Updating inspector display with %d clips", #A._filtered_clips)
   
   -- This is where we would update the inspector UI to show only the filtered clips
   -- For now, we'll just log what would be displayed
   if #A._filtered_clips == 0 then
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][adapter] No clips match filter '" .. A._current_filter .. "'")
+    log.event("[inspector][adapter] No clips match filter '%s'", A._current_filter)
   else
-    logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][adapter] Displaying " .. #A._filtered_clips .. " filtered clips:")
+    log.event("[inspector][adapter] Displaying %d filtered clips:", #A._filtered_clips)
     for i, clip in ipairs(A._filtered_clips) do
-      logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][adapter]   " .. i .. ". " .. (clip.name or clip.id or "Unknown"))
+      log.event("[inspector][adapter]   %d. %s", i, clip.name or clip.id or "Unknown")
     end
   end
 end

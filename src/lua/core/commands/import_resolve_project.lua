@@ -13,7 +13,7 @@
 --
 -- @file import_resolve_project.lua
 local M = {}
-local logger = require("core.logger")
+local log = require("core.logger").for_area("media")
 local file_browser = require("core.file_browser")
 
 -- Schema for .drp import command
@@ -79,7 +79,7 @@ local function import_undoer(command_name, command, db)
     assert(db:exec(string.format("DELETE FROM projects WHERE id = '%s'", args.result_project_id)),
         command_name .. ": projects DELETE failed for " .. tostring(args.result_project_id))
 
-    logger.info("import_resolve", "Undo: Deleted imported project and all associated data")
+    log.event("Undo: Deleted imported project and all associated data")
     return true
 end
 
@@ -143,7 +143,7 @@ function M.register(executors, undoers, db)
             "drp_path")
         if not drp_path then return cancel end
 
-        logger.info("import_resolve", "Importing Resolve project: " .. tostring(drp_path))
+        log.event("Importing Resolve project: %s", tostring(drp_path))
 
         local drp_importer = require("importers.drp_importer")
         local parse_result = drp_importer.parse_drp_file(drp_path)
@@ -168,8 +168,8 @@ function M.register(executors, undoers, db)
             return { success = false, error_message = "Failed to create project" }
         end
 
-        logger.info("import_resolve", string.format("Created project: %s (%dx%d @ %sfps)",
-            project.name, settings.width, settings.height, tostring(settings.frame_rate)))
+        log.event("Created project: %s (%dx%d @ %sfps)",
+            project.name, settings.width, settings.height, tostring(settings.frame_rate))
 
         local import_result = drp_importer.import_into_project(project.id, parse_result, {
             project_settings = settings,
@@ -199,7 +199,7 @@ function M.register(executors, undoers, db)
             os.getenv("HOME") .. "/Movies/DaVinci Resolve")
         if not db_path then return cancel end
 
-        logger.info("import_resolve", "Importing Resolve database: " .. tostring(db_path))
+        log.event("Importing Resolve database: %s", tostring(db_path))
 
         local resolve_db_importer = require("importers.resolve_database_importer")
         local import_result_raw = resolve_db_importer.import_from_database(db_path)
@@ -228,8 +228,8 @@ function M.register(executors, undoers, db)
             return { success = false, error_message = "Failed to create project" }
         end
 
-        logger.info("import_resolve", string.format("Created project from Resolve DB: %s (%dx%d @ %.2ffps)",
-            project.name, db_settings.width, db_settings.height, db_settings.frame_rate))
+        log.event("Created project from Resolve DB: %s (%dx%d @ %.2ffps)",
+            project.name, db_settings.width, db_settings.height, db_settings.frame_rate)
 
         -- ImportResolveDatabase uses a different data format than DRP parse_result,
         -- so it cannot use import_into_project() directly. Create entities via models.
@@ -256,7 +256,7 @@ function M.register(executors, undoers, db)
                     media_id_map[media_item.resolve_id] = media.id
                 end
             else
-                logger.warn("import_resolve", string.format("Failed to import media: %s", media_item.name))
+                log.warn("Failed to import media: %s", media_item.name)
             end
         end
 
@@ -282,7 +282,7 @@ function M.register(executors, undoers, db)
             )
 
             if not sequence:save() then
-                logger.warn("import_resolve", string.format("Failed to create timeline: %s", timeline_data.name))
+                log.warn("Failed to create timeline: %s", timeline_data.name)
             else
                 table.insert(created_sequence_ids, sequence.id)
 
@@ -299,7 +299,7 @@ function M.register(executors, undoers, db)
                     end
 
                     if not track:save() then
-                        logger.warn("import_resolve", string.format("Failed to create track: %s", track_name))
+                        log.warn("Failed to create track: %s", track_name)
                     else
                         table.insert(created_track_ids, track.id)
 
@@ -329,7 +329,7 @@ function M.register(executors, undoers, db)
                             if clip:save() then
                                 table.insert(created_clip_ids, clip.id)
                             else
-                                logger.warn("import_resolve", string.format("Failed to import clip: %s", clip_data.name))
+                                log.warn("Failed to import clip: %s", clip_data.name)
                             end
                         end
                     end
@@ -337,8 +337,8 @@ function M.register(executors, undoers, db)
             end
         end
 
-        logger.info("import_resolve", string.format("Imported Resolve database: %d media, %d sequences, %d tracks, %d clips",
-            #created_media_ids, #created_sequence_ids, #created_track_ids, #created_clip_ids))
+        log.event("Imported Resolve database: %d media, %d sequences, %d tracks, %d clips",
+            #created_media_ids, #created_sequence_ids, #created_track_ids, #created_clip_ids)
 
         persist_and_refresh(command, project.id, {
             media_ids = created_media_ids,

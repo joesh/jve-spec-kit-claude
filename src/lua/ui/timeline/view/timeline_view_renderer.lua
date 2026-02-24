@@ -21,6 +21,7 @@ local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
 local color_utils = require("ui.color_utils")
 local Command = require("command")
 local command_manager = require("core.command_manager")
+local log = require("core.logger").for_area("timeline")
 
 local function build_edge_signature(edges)
     local parts = {}
@@ -415,13 +416,6 @@ local function normalize_lead_edge(lead_edge, clip_lookup)
 end
 
 local function ensure_edge_preview(drag_state, state_module)
-    local logger = require("core.logger")
-    local debug_enabled = os.getenv("JVE_DEBUG_EDGE_PREVIEW") == "1"
-    local function debug(msg)
-        if debug_enabled then
-            logger.debug("edge_preview", msg)
-        end
-    end
 
     local function clear_preview_state()
         if drag_state then
@@ -434,14 +428,14 @@ local function ensure_edge_preview(drag_state, state_module)
 
     if not drag_state or drag_state.type ~= "edges" then
         clear_preview_state()
-        debug("no drag_state or not edges; skipping preview")
+        log.detail("no drag_state or not edges; skipping preview")
         return
     end
 
     local edges = drag_state.edges or {}
     if #edges == 0 then
         clear_preview_state()
-        debug("no edges available")
+        log.detail("no edges available")
         return
     end
 
@@ -449,7 +443,7 @@ local function ensure_edge_preview(drag_state, state_module)
     local project_id = state_module.get_project_id and state_module.get_project_id()
     if not sequence_id or sequence_id == "" or not project_id or project_id == "" then
         clear_preview_state()
-        debug("missing sequence/project id")
+        log.detail("missing sequence/project id")
         return
     end
 
@@ -457,24 +451,24 @@ local function ensure_edge_preview(drag_state, state_module)
     local delta_frames = assert_integer(drag_state.delta_frames, "ensure_edge_preview: delta_frames")
     if not delta_frames then
         clear_preview_state()
-        debug("missing delta (delta_frames)")
+        log.detail("missing delta (delta_frames)")
         return
     end
 
     local signature = build_edge_signature(edges)
     local token = string.format("%s@%d", signature, delta_frames)
     if drag_state.preview_request_token == token and drag_state.preview_data then
-        debug("preview already computed for token " .. token)
+        log.detail("preview already computed for token %s", token)
         return
     end
 
-    debug("requesting preview for token " .. token)
+    log.detail("requesting preview for token %s", token)
 
     local snapshot = drag_state.preloaded_clip_snapshot
     local active_region = drag_state.timeline_active_region
     if type(snapshot) ~= "table" or type(active_region) ~= "table" then
         clear_preview_state()
-        debug("missing preloaded snapshot or active region")
+        log.detail("missing preloaded snapshot or active region")
         return
     end
 
@@ -516,20 +510,20 @@ local function ensure_edge_preview(drag_state, state_module)
 
     if not executor then
         clear_preview_state()
-        debug("executor not available for dry run")
+        log.detail("executor not available for dry run")
         return
     end
 
     local ok, result, payload = pcall(executor, cmd)
     if not ok then
         clear_preview_state()
-        debug("dry run threw error: " .. tostring(result))
+        log.detail("dry run threw error: %s", tostring(result))
         return
     end
 
     if result == false then
         clear_preview_state()
-        debug("dry run returned false")
+        log.detail("dry run returned false")
         return
     end
 
@@ -549,7 +543,7 @@ local function ensure_edge_preview(drag_state, state_module)
     drag_state.clamped_edges = (drag_state.preview_data and drag_state.preview_data.clamped_edges) or {}
 
     drag_state.preview_request_token = token
-    debug("preview ready; affected=" .. tostring(#(drag_state.preview_data.affected_clips or {})))
+    log.detail("preview ready; affected=%d", #(drag_state.preview_data.affected_clips or {}))
 
     -- Clamped delta is integer frames
     local clamped_frames = cmd.get_parameter and cmd:get_parameter("clamped_delta_frames")
@@ -1025,13 +1019,8 @@ function M.render(view)
         local px = state_module.time_to_pixel(playhead_position, width)
 
         -- DEBUG: Log timeline view width and playhead position
-        if os.getenv("JVE_DEBUG_PLAYHEAD") == "1" then
-            local logger = require("core.logger")
-            logger.debug("playhead_debug", string.format(
-                "TIMELINE[%s]: width=%d playhead_x=%d playhead_frames=%d",
-                view.debug_id or "?", width, px, playhead_position
-            ))
-        end
+        log.detail("TIMELINE[%s]: width=%d playhead_x=%d playhead_frames=%d",
+            view.debug_id or "?", width, px, playhead_position)
 
         timeline.add_line(view.widget, px, 0, px, height, state_module.colors.playhead, 2)
     end

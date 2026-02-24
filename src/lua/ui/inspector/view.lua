@@ -18,7 +18,7 @@
 -- PURPOSE: Lua-owned view helpers for the Inspector (header text, batch banner, filter SoT).
 -- Zero C++ calls here.
 local error_system = require("core.error_system")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 local ui_constants = require("core.ui_constants")
 local qt_constants = require("core.qt_constants")
 local command_manager = require("core.command_manager")
@@ -238,8 +238,7 @@ refresh_selection_label = function()
   local text = compute_selection_label_text(M._selection_label_base, M._selection_label_include_marks)
   local ok, err = pcall(qt_constants.PROPERTIES.SET_TEXT, M._selection_label, text)
   if not ok then
-    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-      "[inspector][view] Failed to refresh selection label: " .. log_detailed_error(err))
+    log.warn("[inspector][view] Failed to refresh selection label: %s", log_detailed_error(err))
   end
 end
 
@@ -274,8 +273,7 @@ refresh_active_inspection = function()
     if inspectable and inspectable.refresh then
       local ok, err = pcall(inspectable.refresh, inspectable)
       if not ok then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-          string.format("[inspector][view] Failed to refresh inspectable: %s", tostring(err)))
+        log.warn("[inspector][view] Failed to refresh inspectable: %s", tostring(err))
       else
         needs_refresh = true
       end
@@ -401,15 +399,13 @@ local function create_inspector_field(section, field, field_widgets)
 
   local container_ok, container = pcall(qt_constants.WIDGET.CREATE)
   if not container_ok or not container then
-    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-      "[inspector][view] Failed to create container for field: " .. label_text)
+    log.warn("[inspector][view] Failed to create container for field: %s", label_text)
     return
   end
 
   local layout_ok, layout = pcall(qt_constants.LAYOUT.CREATE_HBOX)
   if not layout_ok or not layout then
-    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-      "[inspector][view] Failed to create layout for field: " .. label_text)
+    log.warn("[inspector][view] Failed to create layout for field: %s", label_text)
     return
   end
 
@@ -457,8 +453,7 @@ local function create_inspector_field(section, field, field_widgets)
   end
 
   if not control_widget then
-    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-      "[inspector][view] Failed to create control widget for field: " .. label_text)
+    log.warn("[inspector][view] Failed to create control widget for field: %s", label_text)
     return
   end
 
@@ -562,9 +557,8 @@ local function create_inspector_field(section, field, field_widgets)
       end
       local value, err = frame_utils.parse_timecode(text, current_frame_rate())
       if not value then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-          string.format("[inspector][view] Invalid timecode '%s' for field %s: %s",
-            text, self.field_key, tostring(err)))
+        log.warn("[inspector][view] Invalid timecode '%s' for field %s: %s",
+            text, self.field_key, tostring(err))
         return nil
       end
       return value
@@ -645,8 +639,7 @@ local function create_inspector_field(section, field, field_widgets)
   if section and section.addContentWidget then
     local add_result = section:addContentWidget(container)
     if add_result and add_result.success == false then
-      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-        "Failed to add widget for field '" .. label_text .. "' to section")
+      log.warn("Failed to add widget for field '%s' to section", label_text)
     end
   end
 end
@@ -682,11 +675,11 @@ function M.mount(root)
     })
   end
 
-  logger.debug(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] mount() called")
+  log.event("[inspector][view] mount() called")
   M.root = root
   M._panel = root
 
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector] view mounted")
+  log.event("[inspector] view mounted")
   return error_system.create_success({
     message = "Inspector view mounted successfully"
   })
@@ -731,7 +724,7 @@ function M.set_header_text(text)
   if M._header_label then
     local set_text_success, set_text_error = pcall(qt_constants.PROPERTIES.SET_TEXT, M._header_label, M._header_text)
     if not set_text_success then
-      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Warning: Failed to update header text: " .. log_detailed_error(set_text_error))
+      log.warn("[inspector][view] Failed to update header text: %s", log_detailed_error(set_text_error))
     end
   end
 end
@@ -744,13 +737,13 @@ function M.set_batch_enabled(enabled)
   if M._batch_banner then
     local set_visible_success, set_visible_error = pcall(qt_constants.DISPLAY.SET_VISIBLE, M._batch_banner, M._batch_enabled)
     if not set_visible_success then
-      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Warning: Failed to update batch banner visibility: " .. log_detailed_error(set_visible_error))
+      log.warn("[inspector][view] Failed to update batch banner visibility: %s", log_detailed_error(set_visible_error))
     end
   end
 end
 
 function M.create_schema_driven_inspector()
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Creating schema-driven inspector")
+  log.event("[inspector][view] Creating schema-driven inspector")
   if not M.root then
     return error_system.create_error({
       message = "No root panel mounted",
@@ -802,7 +795,7 @@ function M.create_schema_driven_inspector()
         end)
 
         if not success then
-          logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Text changed handler not available: " .. tostring(err))
+          log.warn("[inspector][view] Text changed handler not available: %s", tostring(err))
         end
       end
     end
@@ -912,7 +905,7 @@ function M.create_schema_driven_inspector()
   -- Show the content widget
   pcall(qt_constants.DISPLAY.SHOW, content_widget)
 
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] ✅ Schema-driven inspector created")
+  log.event("[inspector][view] Schema-driven inspector created")
   return error_system.create_success({message = "Schema-driven inspector created successfully"})
 end
 
@@ -923,7 +916,7 @@ function M.set_filter(text)
   if M._search_input then
     local set_text_success, set_text_error = pcall(qt_constants.PROPERTIES.SET_TEXT, M._search_input, M._filter)
     if not set_text_success then
-      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Warning: Failed to update search input text: " .. log_detailed_error(set_text_error))
+      log.warn("[inspector][view] Failed to update search input text: %s", log_detailed_error(set_text_error))
     end
   end
 
@@ -945,7 +938,7 @@ function M.apply_search_filter(query)
   M._filter = query or ""
   local search_text = M._filter:lower()
 
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Applying search filter: '" .. search_text .. "'")
+  log.event("[inspector][view] Applying search filter: '%s'", search_text)
 
   if not M._schemas_active then
     set_sections_visible(false)
@@ -1006,7 +999,7 @@ function M.ensure_search_row()
   end
 
   -- This function was referenced but missing - now implemented
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Creating search row")
+  log.event("[inspector][view] Creating search row")
 
   return error_system.create_success({
     message = "Search row ensured"
@@ -1029,8 +1022,7 @@ function M.save_field_value(field_key, explicit_value)
 
   local property_type = PROPERTY_TYPE_MAP[entry.field_type]
   if not property_type then
-    logger.error(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-      string.format("[inspector][view] Unsupported field type '%s' for field '%s'", tostring(entry.field_type), tostring(field_key)))
+    log.error("[inspector][view] Unsupported field type '%s' for field '%s'", tostring(entry.field_type), tostring(field_key))
     return
   end
 
@@ -1068,8 +1060,7 @@ function M.save_field_value(field_key, explicit_value)
     end
     entry:set_value(value)
   else
-    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-      string.format("[inspector][view] Failed to save field '%s': %s", field_key, tostring(err)))
+    log.warn("[inspector][view] Failed to save field '%s': %s", field_key, tostring(err))
   end
   resume_field_updates()
 end
@@ -1106,13 +1097,13 @@ end
 -- Load clip data into widgets
 function M.load_clip_data(inspectable)
   if not inspectable then
-    logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] No inspectable entity to load")
+    log.warn("[inspector][view] No inspectable entity to load")
     return
   end
 
   M._current_inspectable = inspectable
   M._project_gen = project_gen.current()
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI, "[inspector][view] Loading inspectable data for schema " .. inspectable:get_schema_id())
+  log.event("[inspector][view] Loading inspectable data for schema %s", inspectable:get_schema_id())
 
   suppress_field_updates()
 
@@ -1126,8 +1117,7 @@ function M.load_clip_data(inspectable)
 
     local ok, value = pcall(inspectable.get, inspectable, field_key)
     if not ok then
-      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-        string.format("[inspector][view] Failed to read field '%s': %s", field_key, tostring(value)))
+      log.warn("[inspector][view] Failed to read field '%s': %s", field_key, tostring(value))
       value = nil
     end
 
@@ -1150,17 +1140,15 @@ function M.load_multi_clip_data(inspectables)
   M._current_inspectable = nil
   M._project_gen = project_gen.current()
 
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-      "[inspector][view] Loading multi-inspectable data: " .. #inspectables .. " items")
+  log.event("[inspector][view] Loading multi-inspectable data: %d items", #inspectables)
 
   suppress_field_updates()
 
   for field_key, entry in pairs(M._field_widgets) do
     local ok_first, first_value = pcall(inspectables[1].get, inspectables[1], field_key)
     if not ok_first then
-      logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-        string.format("[inspector][view] Failed to read field '%s' from first inspectable: %s",
-          field_key, tostring(first_value)))
+      log.warn("[inspector][view] Failed to read field '%s' from first inspectable: %s",
+          field_key, tostring(first_value))
       first_value = nil
     end
 
@@ -1206,8 +1194,7 @@ local function apply_multi_edit_new()
   end
   project_gen.check(M._project_gen, "inspector.apply_multi_edit")
 
-  logger.info(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-      "[inspector][view] Applying multi-edit to " .. #M._multi_inspectables .. " items")
+  log.event("[inspector][view] Applying multi-edit to %d items", #M._multi_inspectables)
 
   local pending = {}
   for field_key, entry in pairs(M._field_widgets) do
@@ -1222,8 +1209,7 @@ local function apply_multi_edit_new()
     for field_key, value in pairs(pending) do
       local ok, err = inspectable:set(field_key, value)
       if not ok then
-        logger.warn(ui_constants.LOGGING.COMPONENT_NAMES.UI,
-            string.format("[inspector][view] Failed to save %s during multi-edit: %s", field_key, tostring(err)))
+        log.warn("[inspector][view] Failed to save %s during multi-edit: %s", field_key, tostring(err))
       end
     end
   end

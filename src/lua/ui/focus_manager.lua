@@ -13,18 +13,11 @@ local ui_constants = require("core.ui_constants")
 local selection_hub = require("ui.selection_hub")
 
 local M = {}
-local logger = require("core.logger")
+local log = require("core.logger").for_area("ui")
 
 -- Panel registry: maps panel_id -> {widget, header_widget, panel_name, ...}
 local registered_panels = {}
 
-local focus_debug_enabled = os.getenv("JVE_DEBUG_FOCUS") == "1"
-
-local function focus_debug(message)
-    if focus_debug_enabled then
-        logger.debug("focus", message)
-    end
-end
 
 -- Currently focused panel ID
 local focused_panel_id = nil
@@ -55,7 +48,7 @@ local function safe_set_stylesheet(widget, stylesheet, context)
     local ok, err = pcall(qt_set_widget_stylesheet, widget, stylesheet)
     if not ok then
         local suffix = context and (" (" .. context .. ")") or ""
-        logger.warn("focus", string.format("Failed to set stylesheet%s: %s", suffix, tostring(err)))
+        log.warn("Failed to set stylesheet%s: %s", suffix, tostring(err))
     end
 end
 
@@ -66,8 +59,7 @@ local function apply_border_color(panel, is_focused)
     local color = is_focused and COLORS.focused_border or COLORS.unfocused_border
     local ok, err = pcall(qt_set_widget_property, panel.widget, "focusBorderColor", color)
     if not ok then
-        logger.warn("focus", string.format(
-            "Failed to set focusBorderColor on %s: %s", panel.panel_name, tostring(err)))
+        log.warn("Failed to set focusBorderColor on %s: %s", panel.panel_name, tostring(err))
     end
 end
 
@@ -88,7 +80,7 @@ end
 --       focus_widgets: array of widgets that should trigger focus highlights (defaults to {widget})
 function M.register_panel(panel_id, widget, header_widget, panel_name, options)
     if not panel_id or not widget then
-        logger.warn("focus", "register_panel called with missing panel_id or widget")
+        log.warn("register_panel called with missing panel_id or widget")
         return false
     end
     options = options or {}
@@ -134,7 +126,7 @@ function M.register_panel(panel_id, widget, header_widget, panel_name, options)
         end
     end
 
-    focus_debug(string.format("Focus tracking registered for panel: %s", panel_name or panel_id))
+    log.detail("Focus tracking registered for panel: %s", panel_name or panel_id)
     return true
 end
 
@@ -167,7 +159,7 @@ function M.set_focused_panel(panel_id)
         local new_panel = registered_panels[focused_panel_id]
         apply_border_color(new_panel, true)
         if new_panel then
-            focus_debug(string.format("Focus: %s", new_panel.panel_name))
+            log.detail("Focus: %s", new_panel.panel_name)
         end
     end
 
@@ -236,7 +228,7 @@ end
 function M.focus_panel(panel_id)
     local panel = registered_panels[panel_id]
     if not panel then
-        logger.warn("focus", string.format("focus_panel called with unknown panel %s", tostring(panel_id)))
+        log.warn("focus_panel called with unknown panel %s", tostring(panel_id))
         return false
     end
 

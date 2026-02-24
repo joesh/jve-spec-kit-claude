@@ -19,7 +19,7 @@
 --
 -- @file new_project.lua
 local M = {}
-local logger = require("core.logger")
+local log = require("core.logger").for_area("media")
 local project_templates = require("core.project_templates")
 local file_browser = require("core.file_browser")
 
@@ -192,7 +192,7 @@ function M.show_dialog(parent_window)
     qt.DIALOG.SET_LAYOUT(dialog, main_layout)
 
     -- Show (blocking)
-    logger.info("new_project", "Showing New Project dialog")
+    log.event("Showing New Project dialog")
     qt.DIALOG.SHOW(dialog)
 
     -- Cleanup globals
@@ -215,7 +215,7 @@ function M.register(executors, undoers, db, set_last_error)
 
         local result = M.show_dialog(main_window)
         if not result then
-            logger.debug("new_project", "NewProject: User cancelled")
+            log.event("NewProject: User cancelled")
             return { success = true, cancelled = true }
         end
 

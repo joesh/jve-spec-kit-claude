@@ -15,7 +15,7 @@
 --
 -- @file import_fcp7_xml.lua
 local M = {}
-local logger = require("core.logger")
+local log = require("core.logger").for_area("media")
 local command_helper = require("core.command_helper")
 local file_browser = require("core.file_browser")
 
@@ -66,7 +66,7 @@ local function apply_zoom_to_fit_viewport(sequence_id, db)
     -- Load and update the sequence
     local sequence = Sequence.load(sequence_id)
     if not sequence then
-        logger.warn("import_fcp7_xml", "Failed to load sequence for viewport update: " .. tostring(sequence_id))
+        log.warn("Failed to load sequence for viewport update: %s", tostring(sequence_id))
         return nil
     end
 
@@ -75,7 +75,7 @@ local function apply_zoom_to_fit_viewport(sequence_id, db)
     sequence.viewport_duration = viewport_duration
 
     if not sequence:save() then
-        logger.warn("import_fcp7_xml", "Failed to save sequence viewport: " .. tostring(sequence_id))
+        log.warn("Failed to save sequence viewport: %s", tostring(sequence_id))
         return nil
     end
 
@@ -84,9 +84,8 @@ local function apply_zoom_to_fit_viewport(sequence_id, db)
         duration_frames = viewport_duration,
     }
 
-    logger.info("import_fcp7_xml", string.format(
-        "Set zoom-to-fit viewport for sequence %s: start=%d, duration=%d frames",
-        sequence_id, viewport_data.start_frames, viewport_data.duration_frames))
+    log.event("Set zoom-to-fit viewport for sequence %s: start=%d, duration=%d frames",
+        sequence_id, viewport_data.start_frames, viewport_data.duration_frames)
 
     return viewport_data
 end
@@ -132,7 +131,7 @@ function M.register(executors, undoers, db)
 
         -- If interactive mode or no file path provided, show dialog
         if args.interactive or not file_path or file_path == "" then
-            logger.info("import_fcp7_xml", "ImportFCP7XML: Showing file picker dialog")
+            log.event("ImportFCP7XML: Showing file picker dialog")
 
             -- Get UI references for dialog
             local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
@@ -154,7 +153,7 @@ function M.register(executors, undoers, db)
 
             if not file_path or file_path == "" then
                 -- User cancelled - this is not an error
-                logger.debug("import_fcp7_xml", "ImportFCP7XML: User cancelled file picker")
+                log.event("ImportFCP7XML: User cancelled file picker")
                 return { success = true, cancelled = true }
             end
 
@@ -162,10 +161,10 @@ function M.register(executors, undoers, db)
             command:set_parameter("xml_path", file_path)
         end
 
-        logger.info("import_fcp7_xml", "Importing FCP7 XML: " .. tostring(file_path))
+        log.event("Importing FCP7 XML: %s", tostring(file_path))
 
         if not args.xml_path then
-            logger.error("import_fcp7_xml", "ImportFCP7XML missing xml_path")
+            log.error("ImportFCP7XML missing xml_path")
             return { success = false, error_message = "Missing xml_path" }
         end
 
@@ -173,9 +172,9 @@ function M.register(executors, undoers, db)
 
         -- Parse XML
         if args.xml_path and args.xml_path ~= "" then
-            logger.info("import_fcp7_xml", string.format("Parsing FCP7 XML: %s", args.xml_path))
+            log.event("Parsing FCP7 XML: %s", args.xml_path)
         else
-            logger.info("import_fcp7_xml", "Parsing FCP7 XML from stored content")
+            log.event("Parsing FCP7 XML from stored content")
         end
         local parse_result = fcp7_importer.import_xml(args.xml_path, project_id, {
             xml_content = args.xml_contents
@@ -183,12 +182,12 @@ function M.register(executors, undoers, db)
 
         if not parse_result.success then
             for _, error_msg in ipairs(parse_result.errors) do
-                logger.error("import_fcp7_xml", tostring(error_msg))
+                log.error("%s", tostring(error_msg))
             end
             return { success = false, error_message = table.concat(parse_result.errors, "\n") }
         end
 
-        logger.info("import_fcp7_xml", string.format("Found %d sequence(s)", #parse_result.sequences))
+        log.event("Found %d sequence(s)", #parse_result.sequences)
 
         -- Prepare replay context so importer can reuse deterministic IDs
         local replay_context = {
@@ -206,7 +205,7 @@ function M.register(executors, undoers, db)
         local create_result = fcp7_importer.create_entities(parse_result, db, project_id, replay_context)
 
         if not create_result.success then
-            logger.error("import_fcp7_xml", tostring(create_result.error or "Failed to create entities"))
+            log.error("%s", tostring(create_result.error or "Failed to create entities"))
             return { success = false, error_message = create_result.error or "Failed to create entities" }
         end
 
@@ -271,10 +270,10 @@ function M.register(executors, undoers, db)
         end
         command:set_parameter("__skip_sequence_replay_on_undo", true)
 
-        logger.info("import_fcp7_xml", string.format("Imported %d sequence(s), %d track(s), %d clip(s)",
+        log.event("Imported %d sequence(s), %d track(s), %d clip(s)",
             #create_result.sequence_ids,
             #create_result.track_ids,
-            #create_result.clip_ids))
+            #create_result.clip_ids)
 
         -- Refresh project browser to show newly imported sequences
         local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
@@ -294,8 +293,7 @@ function M.register(executors, undoers, db)
             if active_seq then
                 for _, seq_id in ipairs(create_result.sequence_ids) do
                     if seq_id == active_seq then
-                        logger.info("import_fcp7_xml", string.format(
-                            "Reloading timeline_state for recreated sequence %s", seq_id))
+                        log.event("Reloading timeline_state for recreated sequence %s", seq_id)
                         timeline_state.init(seq_id, project_id)
                         break
                     end
@@ -380,10 +378,9 @@ function M.register(executors, undoers, db)
                     selected_clip_ids_json = clips_ok and clips_json or "[]",
                     selected_edge_infos_json = edges_ok and edges_json or "[]",
                 }
-                logger.debug("import_fcp7_xml", string.format(
-                    "Captured view state from cache: seq=%s, vp_start=%d, vp_dur=%d, playhead=%d, clips=%d, edges=%d",
+                log.event("Captured view state from cache: seq=%s, vp_start=%d, vp_dur=%d, playhead=%d, clips=%d, edges=%d",
                     seq_id, view_state.viewport_start_frames, view_state.viewport_duration_frames, view_state.playhead_frames,
-                    #selected_clip_ids, #edge_descriptors))
+                    #selected_clip_ids, #edge_descriptors)
             else
                 -- Fallback: load from database (all coords are integers now)
                 local sequence = Sequence.load(seq_id)
@@ -399,9 +396,8 @@ function M.register(executors, undoers, db)
                         selected_clip_ids_json = sequence.selected_clip_ids_json or "[]",
                         selected_edge_infos_json = sequence.selected_edge_infos_json or "[]",
                     }
-                    logger.debug("import_fcp7_xml", string.format(
-                        "Captured view state from database: seq=%s, vp_start=%d, vp_dur=%d, playhead=%d",
-                        seq_id, view_state.viewport_start_frames, view_state.viewport_duration_frames, view_state.playhead_frames))
+                    log.event("Captured view state from database: seq=%s, vp_start=%d, vp_dur=%d, playhead=%d",
+                        seq_id, view_state.viewport_start_frames, view_state.viewport_duration_frames, view_state.playhead_frames)
                 end
             end
 
@@ -457,7 +453,7 @@ function M.register(executors, undoers, db)
             end
         end
 
-        logger.info("import_fcp7_xml", "Import undone - deleted all imported entities")
+        log.event("Import undone - deleted all imported entities")
         return true
     end
 

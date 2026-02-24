@@ -6,7 +6,7 @@
 --
 -- @file snapping_state.lua
 local M = {}
-local logger = require("core.logger")
+local log = require("core.logger").for_area("timeline")
 
 -- Baseline preference (persists across drags)
 local baseline_enabled = true  -- Default ON
@@ -26,13 +26,13 @@ end
 --- Toggle baseline snapping preference.
 function M.toggle_baseline()
     baseline_enabled = not baseline_enabled
-    logger.info("snapping_state", string.format("Snapping %s", baseline_enabled and "ON" or "OFF"))
+    log.event("Snapping %s", baseline_enabled and "ON" or "OFF")
 end
 
 --- Invert snapping for current drag only.
 function M.invert_drag()
     drag_inverted = not drag_inverted
-    logger.info("snapping_state", string.format("Snapping temporarily %s for this drag", M.is_enabled() and "ON" or "OFF"))
+    log.event("Snapping temporarily %s for this drag", M.is_enabled() and "ON" or "OFF")
 end
 
 --- Reset drag inversion (call when drag ends).

@@ -19,7 +19,7 @@
 local M = {}
 
 local xml2 = require("xml2")
-local logger = require("core.logger")
+local log = require("core.logger").for_area("media")
 
 --- Unzip .drp file to temporary directory
 -- @param drp_path string: Path to .drp file
@@ -927,7 +927,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
 
             -- Skip degenerate zero-duration clips (Resolve artifacts: speed changes, disabled items)
             if clip.duration <= 0 then
-                logger.warn("drp_importer", string.format("Skipping zero-duration clip '%s' (duration=%d)", clip_name, clip.duration))
+                log.warn("Skipping zero-duration clip '%s' (duration=%d)", clip_name, clip.duration)
             else
                 table.insert(track_info.clips, clip)
                 clip_count = clip_count + 1
@@ -1192,10 +1192,9 @@ function M.parse_drp_file(drp_path)
                 -- Skip orphan sequences with no MediaPool metadata (compound clips, deleted timelines)
                 local fps_for_parsing = metadata and metadata.fps
                 if not fps_for_parsing or fps_for_parsing <= 0 then
-                    logger.warn("drp_importer", string.format(
-                        "Skipping sequence '%s' (seq_ref_id=%s) - no fps in MediaPool metadata",
+                    log.warn("Skipping sequence '%s' (seq_ref_id=%s) - no fps in MediaPool metadata",
                         seq_file:match("([^/]+)%.xml$") or seq_file,
-                        tostring(seq_ref_id)))
+                        tostring(seq_ref_id))
                     goto continue_seq
                 end
                 local timeline = parse_sequence(seq_elem, fps_for_parsing, media_ref_path_map)
@@ -1364,15 +1363,13 @@ local function infer_fps_from_one_hour_start(min_start_frame)
         local upper = expected * (1 + tolerance)
 
         if min_start_frame >= lower and min_start_frame <= upper then
-            logger.info("drp_importer",
-                string.format("Inferred %.3f fps from 1-hour TC start (frame %d ~ %d)",
-                    marker[2], min_start_frame, expected))
+            log.event("Inferred %.3f fps from 1-hour TC start (frame %d ~ %d)",
+                    marker[2], min_start_frame, expected)
             return marker[2], marker[3], marker[4]
         end
     end
 
-    logger.debug("drp_importer",
-        string.format("Could not infer fps from start frame %d (not near 1-hour TC)", min_start_frame))
+    log.event("Could not infer fps from start frame %d (not near 1-hour TC)", min_start_frame)
     return nil
 end
 
@@ -1467,9 +1464,8 @@ local function apply_pool_master_clip_marks(pool_master_clips, media_by_path)
         -- Find the masterclip sequence for this media (via Sequence model)
         local mc_seq_id = Sequence.find_masterclip_for_media(media.id)
         if not mc_seq_id then
-            logger.warn("drp_importer", string.format(
-                "apply_marks: no masterclip sequence for media '%s' (id=%s)",
-                media.name, media.id))
+            log.warn("apply_marks: no masterclip sequence for media '%s' (id=%s)",
+                media.name, media.id)
             goto next_media
         end
 
@@ -1509,8 +1505,7 @@ local function apply_pool_master_clip_marks(pool_master_clips, media_by_path)
     end
 
     if applied_count > 0 then
-        logger.info("drp_importer", string.format(
-            "Applied marks to %d master clip stream(s)", applied_count))
+        log.event("Applied marks to %d master clip stream(s)", applied_count)
     end
 end
 
@@ -1549,8 +1544,7 @@ local function mark_offline_clips(clip_ids)
                 path_exists_cache[path] = true
             else
                 path_exists_cache[path] = false
-                logger.warn("drp_importer", string.format(
-                    "Media file not found: %s", path))
+                log.warn("Media file not found: %s", path)
             end
         end
 
@@ -1604,9 +1598,9 @@ function M.import_into_project(project_id, parse_result, opts)
         })
         if ok and def then
             drp_folder_to_bin[folder.id] = def.id
-            logger.debug("drp_importer", string.format("  Created bin: %s (parent=%s)", folder.name, tostring(parent_bin_id)))
+            log.event("  Created bin: %s (parent=%s)", folder.name, tostring(parent_bin_id))
         else
-            logger.warn("drp_importer", string.format("Failed to create bin: %s", folder.name))
+            log.warn("Failed to create bin: %s", folder.name)
         end
     end
 
@@ -1625,7 +1619,7 @@ function M.import_into_project(project_id, parse_result, opts)
     for _, media_item in ipairs(parse_result.media_items) do
         local dur = media_item.duration or 0
         if dur <= 0 then
-            logger.warn("drp_importer", string.format("Skipping zero-duration media: %s", media_item.name))
+            log.warn("Skipping zero-duration media: %s", media_item.name)
         else
             local media = Media.create({
                 project_id = project_id,
@@ -1641,9 +1635,9 @@ function M.import_into_project(project_id, parse_result, opts)
             if media:save() then
                 media_by_path[media_item.file_path] = media
                 table.insert(result.media_ids, media.id)
-                logger.debug("drp_importer", string.format("  Imported media: %s", media.name))
+                log.event("  Imported media: %s", media.name)
             else
-                logger.warn("drp_importer", string.format("Failed to import media: %s", media_item.name))
+                log.warn("Failed to import media: %s", media_item.name)
             end
         end
     end
@@ -1671,22 +1665,19 @@ function M.import_into_project(project_id, parse_result, opts)
 
         if timeline_data.fps and timeline_data.fps > 0 then
             fps_num, fps_den = frame_rate_to_rational(timeline_data.fps)
-            logger.info("drp_importer",
-                string.format("Using explicit fps from DRP metadata: %.3f (%d/%d)",
-                    timeline_data.fps, fps_num, fps_den))
+            log.event("Using explicit fps from DRP metadata: %.3f (%d/%d)",
+                    timeline_data.fps, fps_num, fps_den)
         else
             local inferred_fps, inferred_num, inferred_den = infer_fps_from_one_hour_start(min_start_frame)
 
             if inferred_fps then
                 fps_num, fps_den = inferred_num, inferred_den
-                logger.info("drp_importer",
-                    string.format("Inferred fps from 1-hour TC: %.3f (%d/%d)",
-                        inferred_fps, fps_num, fps_den))
+                log.event("Inferred fps from 1-hour TC: %.3f (%d/%d)",
+                        inferred_fps, fps_num, fps_den)
             else
                 fps_num, fps_den = frame_rate_to_rational(project_settings.frame_rate)
-                logger.warn("drp_importer",
-                    string.format("No fps metadata, no 1-hour TC; using project default: %d/%d",
-                        fps_num, fps_den))
+                log.warn("No fps metadata, no 1-hour TC; using project default: %d/%d",
+                        fps_num, fps_den)
             end
         end
 
@@ -1725,12 +1716,11 @@ function M.import_into_project(project_id, parse_result, opts)
         )
 
         if not sequence:save() then
-            logger.warn("drp_importer", string.format("Failed to create timeline: %s", timeline_data.name))
+            log.warn("Failed to create timeline: %s", timeline_data.name)
         else
             table.insert(result.sequence_ids, sequence.id)
-            logger.info("drp_importer",
-                string.format("  Created timeline: %s @ %d/%d fps, %dx%d, viewport [%d..%d]",
-                    timeline_data.name, fps_num, fps_den, seq_width, seq_height, view_start, view_start + view_duration))
+            log.event("  Created timeline: %s @ %d/%d fps, %dx%d, viewport [%d..%d]",
+                    timeline_data.name, fps_num, fps_den, seq_width, seq_height, view_start, view_start + view_duration)
 
             -- Assign timeline sequence to DRP folder bin
             local timeline_folder_bin = timeline_data.folder_id and drp_folder_to_bin[timeline_data.folder_id] or nil
@@ -1750,7 +1740,7 @@ function M.import_into_project(project_id, parse_result, opts)
             })
             local master_bin_id = (mc_ok and mc_def) and mc_def.id or nil
             if master_bin_id then
-                logger.debug("drp_importer", string.format("  Created master clip bin: %s", mc_bin_label))
+                log.event("  Created master clip bin: %s", mc_bin_label)
             end
 
             local clips_for_linking = {}
@@ -1768,7 +1758,7 @@ function M.import_into_project(project_id, parse_result, opts)
                 end
 
                 if not track:save() then
-                    logger.warn("drp_importer", string.format("Failed to create track: %s", track_name))
+                    log.warn("Failed to create track: %s", track_name)
                 else
                     table.insert(result.track_ids, track.id)
 
@@ -1780,9 +1770,8 @@ function M.import_into_project(project_id, parse_result, opts)
 
                         -- Skip clips with no resolvable media (generated clips, titles, removed media)
                         if not media_id then
-                            logger.warn("drp_importer", string.format(
-                                "Skipping clip '%s' - no media record for path: %s",
-                                clip_data.name or "unnamed", tostring(clip_data.file_path)))
+                            log.warn("Skipping clip '%s' - no media record for path: %s",
+                                clip_data.name or "unnamed", tostring(clip_data.file_path))
                             goto continue_clip
                         end
 
@@ -1838,7 +1827,7 @@ function M.import_into_project(project_id, parse_result, opts)
                                 })
                             end
                         else
-                            logger.warn("drp_importer", string.format("Failed to import clip: %s", clip_data.name))
+                            log.warn("Failed to import clip: %s", clip_data.name)
                         end
                         ::continue_clip::
                     end
@@ -1869,15 +1858,13 @@ function M.import_into_project(project_id, parse_result, opts)
                     if link_id then
                         link_count = link_count + 1
                     else
-                        logger.warn("drp_importer",
-                            string.format("Failed to create link group: %s", link_err or "unknown error"))
+                        log.warn("Failed to create link group: %s", link_err or "unknown error")
                     end
                 end
             end
 
             if link_count > 0 then
-                logger.info("drp_importer",
-                    string.format("Created %d A/V link groups for timeline: %s", link_count, timeline_data.name))
+                log.event("Created %d A/V link groups for timeline: %s", link_count, timeline_data.name)
             end
         end
     end
@@ -1888,12 +1875,11 @@ function M.import_into_project(project_id, parse_result, opts)
     -- STEP 8: Mark clips offline for missing media files
     local offline_count = mark_offline_clips(result.clip_ids)
     if offline_count > 0 then
-        logger.warn("drp_importer", string.format(
-            "%d clip(s) marked offline (media files not found)", offline_count))
+        log.warn("%d clip(s) marked offline (media files not found)", offline_count)
     end
 
-    logger.info("drp_importer", string.format("Import complete: %d media, %d sequences, %d tracks, %d clips (%d offline)",
-        #result.media_ids, #result.sequence_ids, #result.track_ids, #result.clip_ids, offline_count))
+    log.event("Import complete: %d media, %d sequences, %d tracks, %d clips (%d offline)",
+        #result.media_ids, #result.sequence_ids, #result.track_ids, #result.clip_ids, offline_count)
 
     return result
 end
@@ -1911,7 +1897,7 @@ function M.convert(drp_path, jvp_path)
     assert(drp_path and drp_path ~= "", "drp_importer.convert: drp_path required")
     assert(jvp_path and jvp_path ~= "", "drp_importer.convert: jvp_path required")
 
-    logger.info("drp_importer", string.format("Converting %s -> %s", drp_path, jvp_path))
+    log.event("Converting %s -> %s", drp_path, jvp_path)
 
     local parse_result = M.parse_drp_file(drp_path)
     if not parse_result.success then
@@ -1947,8 +1933,8 @@ function M.convert(drp_path, jvp_path)
         return false, "Failed to save project record"
     end
 
-    logger.info("drp_importer", string.format("Created project: %s (%dx%d @ %sfps)",
-        project.name, settings.width, settings.height, tostring(settings.frame_rate)))
+    log.event("Created project: %s (%dx%d @ %sfps)",
+        project.name, settings.width, settings.height, tostring(settings.frame_rate))
 
     M.import_into_project(project.id, parse_result, {
         project_settings = settings,
