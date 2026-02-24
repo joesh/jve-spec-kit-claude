@@ -118,7 +118,7 @@ When C++ code calls Lua callbacks (e.g., via `lua_pcall`), **NEVER use qWarning(
 
 1. **Understand** → Study existing implementation first
 2. **Extend** → Add to existing patterns, don't replace
-3. **Test** → Verify integration with existing systems
+3. **Test** → Verify integration with existing systems. You MUST write black-box as well as white-box tests. Black-box tests to make sure the standalone module and integrated modules do what they claim to do.
 4. **Verify** → Confirm no competing implementations created
 
 **Remember**: Your efficiency comes from leveraging the robust systems already built, not from avoiding their "overhead".
