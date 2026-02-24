@@ -176,8 +176,10 @@ public:
 private:
     PlaybackController();
 
-    // Frame delivery (called from displayLinkTick)
-    void deliverFrame(int64_t frame);
+    // Frame delivery.
+    // synchronous=true: Seek (main thread) — direct setFrame + callback calls.
+    // synchronous=false: displayLinkTick (CVDisplayLink thread) — dispatch_async to main.
+    void deliverFrame(int64_t frame, bool synchronous);
 
     // Position reporting (coalesced, main thread)
     void reportPosition(int64_t frame, bool immediate);

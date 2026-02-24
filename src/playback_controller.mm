@@ -182,11 +182,12 @@ void AudioPump::pumpLoop() {
 
         auto pcm = m_tmb->GetMixedAudio(fetch_start, fetch_end);
         if (pcm && pcm->frames() > 0) {
-            // 3. Push to SSE
+            // 3. Push to SSE (source data for time-stretching)
+            // Note: SSE target is set once at transport start (Play/SetSpeed).
+            // SSE manages its own time cursor via advance_time() after each Render.
+            // Calling SetTarget here would reset the cursor every pump cycle,
+            // preventing audio from progressing.
             m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(), pcm->start_time_us());
-
-            // 4. Update SSE target (only if needed - SSE handles this internally)
-            m_sse->SetTarget(media_time_us, speed, static_cast<sse::QualityMode>(mode));
         }
 
         // 5. Render from SSE and write to AOP
@@ -241,10 +242,12 @@ PlaybackController::~PlaybackController() {
 // ============================================================================
 
 void PlaybackController::SetSurface(GPUVideoSurface* surface) {
+    JVE_ASSERT(surface, "PlaybackController::SetSurface: surface is null");
     m_surface = surface;
 }
 
 void PlaybackController::SetTMB(emp::TimelineMediaBuffer* tmb) {
+    JVE_ASSERT(tmb, "PlaybackController::SetTMB: tmb is null");
     m_tmb = tmb;
 }
 
@@ -277,9 +280,10 @@ void PlaybackController::Play(int direction, float speed) {
         "PlaybackController::Play: SetBounds must be called before Play");
     JVE_ASSERT(m_total_frames > 0,
         "PlaybackController::Play: total_frames not set (call SetBounds first)");
-    // Note: TMB and surface may be null for audio-only playback or testing.
-    // Video tracks may be empty for audio-only sequences.
-    // These are valid configurations, not errors.
+    JVE_ASSERT(m_tmb,
+        "PlaybackController::Play: TMB not set (call SetTMB before Play)");
+    JVE_ASSERT(m_surface,
+        "PlaybackController::Play: surface not set (call SetSurface before Play)");
     JVE_ASSERT(direction == 1 || direction == -1,
         "PlaybackController::Play: direction must be 1 or -1");
     JVE_ASSERT(speed > 0,
@@ -298,8 +302,18 @@ void PlaybackController::Play(int direction, float speed) {
     m_audio_position.store(-1, std::memory_order_relaxed);
     m_last_displayed_frame = -1;
 
+    // Hint TMB for pre-buffer at play start
+    {
+        int64_t pos = m_position.load(std::memory_order_relaxed);
+        m_tmb->SetPlayhead(pos, direction, speed);
+    }
+
     // Start audio pump if audio is active
-    if (m_has_audio.load(std::memory_order_relaxed) && m_aop && m_sse && m_tmb) {
+    if (m_has_audio.load(std::memory_order_relaxed)) {
+        JVE_ASSERT(m_aop,
+            "PlaybackController::Play: has_audio but AOP is null");
+        JVE_ASSERT(m_sse,
+            "PlaybackController::Play: has_audio but SSE is null");
         // Compute quality mode from speed
         float abs_speed = speed;
         int quality_mode;
@@ -373,15 +387,20 @@ void PlaybackController::Stop() {
 void PlaybackController::Seek(int64_t frame) {
     JVE_ASSERT(frame >= 0,
         "PlaybackController::Seek: frame must be >= 0");
+    JVE_ASSERT(m_tmb,
+        "PlaybackController::Seek: TMB not set (call SetTMB before Seek)");
+    JVE_ASSERT(m_surface,
+        "PlaybackController::Seek: surface not set (call SetSurface before Seek)");
+    JVE_ASSERT(m_fps > 0,
+        "PlaybackController::Seek: bounds not set (call SetBounds before Seek)");
 
     m_position.store(frame, std::memory_order_relaxed);
     m_hit_boundary.store(false, std::memory_order_relaxed);
     m_last_displayed_frame = -1;
 
-    // Display the seeked frame immediately (if we have surface/TMB)
-    if (m_surface && m_tmb) {
-        deliverFrame(frame);
-    }
+    // Tell TMB we're parking (direction=0 → synchronous decode)
+    m_tmb->SetPlayhead(frame, 0, 1.0f);
+    deliverFrame(frame, true);  // synchronous: Seek is on main thread
 }
 
 // ============================================================================
@@ -497,11 +516,13 @@ void PlaybackController::SetSpeed(float signed_speed) {
 }
 
 void PlaybackController::PlayBurst(int64_t frame_idx, int direction, int duration_ms) {
-    if (!m_has_audio.load(std::memory_order_relaxed) || !m_aop || !m_sse || !m_tmb) {
-        return;
-    }
+    JVE_ASSERT(m_has_audio.load(std::memory_order_relaxed),
+        "PlaybackController::PlayBurst: audio not activated");
+    JVE_ASSERT(m_aop, "PlaybackController::PlayBurst: AOP is null");
+    JVE_ASSERT(m_sse, "PlaybackController::PlayBurst: SSE is null");
+    JVE_ASSERT(m_tmb, "PlaybackController::PlayBurst: TMB is null");
     if (m_playing.load(std::memory_order_relaxed)) {
-        return;  // Don't burst while playing
+        return;  // Don't burst while playing — valid guard
     }
 
     JVE_ASSERT(direction == 1 || direction == -1,
@@ -632,12 +653,12 @@ void PlaybackController::checkClipWindow(ClipWindow& window, emp::TrackType type
             cb = m_need_clips_callback;
         }
 
-        if (cb) {
-            // Dispatch to main thread
-            dispatch_async(dispatch_get_main_queue(), ^{
-                cb(frame, dir, type);
-            });
-        }
+        JVE_ASSERT(cb,
+            "PlaybackController::checkClipWindow: NeedClips callback not set");
+        // Dispatch to main thread
+        dispatch_async(dispatch_get_main_queue(), ^{
+            cb(frame, dir, type);
+        });
     }
 }
 
@@ -664,12 +685,8 @@ void PlaybackController::startDisplayLink() {
 
     CVDisplayLinkRef displayLink;
     CVReturn result = CVDisplayLinkCreateWithActiveCGDisplays(&displayLink);
-    if (result != kCVReturnSuccess) {
-        // Headless mode (no display) — can't use CVDisplayLink.
-        // This happens in test environments without a GUI.
-        qWarning() << "PlaybackController: CVDisplayLink not available (headless mode)";
-        return;
-    }
+    JVE_ASSERT(result == kCVReturnSuccess,
+        "PlaybackController::startDisplayLink: CVDisplayLink creation failed (headless?)");
 
     result = CVDisplayLinkSetOutputCallback(displayLink, &displayLinkCallback, this);
     JVE_ASSERT(result == kCVReturnSuccess,
@@ -715,6 +732,15 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
     int64_t new_pos = advancePosition(elapsed);
     m_position.store(new_pos, std::memory_order_relaxed);
 
+    // Hint TMB for pre-buffer at current position.
+    // TMB guaranteed non-null: Play() asserts m_tmb before setting m_playing.
+    JVE_ASSERT(m_tmb, "PlaybackController::displayLinkTick: TMB is null (Play invariant violated)");
+    {
+        int dir = m_direction.load(std::memory_order_relaxed);
+        float spd = m_speed.load(std::memory_order_relaxed);
+        m_tmb->SetPlayhead(new_pos, dir, spd);
+    }
+
     // Boundary detection
     int dir = m_direction.load(std::memory_order_relaxed);
     bool hit_start = (dir < 0 && new_pos <= 0);
@@ -743,7 +769,7 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
     checkClipWindow(m_audio_window, emp::TrackType::Audio, new_pos);
 
     // Deliver frame (if it changed)
-    deliverFrame(new_pos);
+    deliverFrame(new_pos, false);  // async: displayLinkTick is on CVDisplayLink thread
 
     // Coalesced position report
     reportPosition(new_pos, false);
@@ -793,26 +819,18 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
 // Frame delivery
 // ============================================================================
 
-void PlaybackController::deliverFrame(int64_t frame) {
-    // Note: TMB and surface may be null during testing or when surface not yet set.
-    // This is intentional — Seek() calls deliverFrame() which should be a no-op
-    // if display isn't configured yet. Play() is the entry point that requires
-    // full configuration; deliverFrame during play tick must have valid deps.
-    if (!m_tmb || !m_surface) {
-        // During playback, this would be a bug. But we allow it for Seek()
-        // when called before full setup.
-        return;
-    }
+void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
+    // Prerequisites guaranteed by Seek/Play asserts
+    JVE_ASSERT(m_tmb, "PlaybackController::deliverFrame: TMB is null");
+    JVE_ASSERT(m_surface, "PlaybackController::deliverFrame: surface is null");
 
     // Frame repeat: only fetch new frame when video time advances
     // (handles 24fps video on 60Hz display — repeats frames 2-3x)
     if (frame == m_last_displayed_frame) {
         return;
     }
-    m_last_displayed_frame = frame;
 
-    // Get frame from TMB using first video track (topmost layer)
-    // Empty tracks is valid (no video tracks in sequence) — just skip display
+    // Audio-only sequence: no video tracks to display
     if (m_video_track_indices.empty()) {
         return;
     }
@@ -838,20 +856,38 @@ void PlaybackController::deliverFrame(int64_t frame) {
             int par_den = result.par_den;
             bool offline = result.offline;
 
-            dispatch_async(dispatch_get_main_queue(), ^{
+            if (synchronous) {
+                // Seek path: already on main thread, call directly
                 cb(clip_id, rotation, par_num, par_den, offline);
-            });
+            } else {
+                // displayLinkTick path: hop to main thread
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    cb(clip_id, rotation, par_num, par_den, offline);
+                });
+            }
         }
     }
 
     if (result.frame) {
-        // Dispatch to main thread for Metal rendering
+        // Mark as displayed ONLY after successful decode.
+        // If TMB returns no frame (pending async decode), we must retry
+        // on the next CVDisplayLink tick — don't mark as consumed.
+        m_last_displayed_frame = frame;
+
         std::shared_ptr<emp::Frame> frame_ptr = result.frame;
         GPUVideoSurface* surface = m_surface;
 
-        dispatch_async(dispatch_get_main_queue(), ^{
+        if (synchronous) {
+            // Seek path: already on main thread, render immediately.
+            // Without this, dispatch_async defers setFrame to the next
+            // event loop pass and the parked frame never appears.
             surface->setFrame(frame_ptr);
-        });
+        } else {
+            // displayLinkTick path: dispatch to main thread for Metal rendering
+            dispatch_async(dispatch_get_main_queue(), ^{
+                surface->setFrame(frame_ptr);
+            });
+        }
     }
 }
 
