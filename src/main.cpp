@@ -2,62 +2,19 @@
 #include <QStyleFactory>
 #include <QDir>
 #include <QStandardPaths>
-#include <QLoggingCategory>
 #include <QWidget>
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QFileInfo>
-#include <QProcessEnvironment>
 #include <QFile>
 #include <iostream>
 #include <cstring>
 #include <cstdio>
-#include <vector>
-#include <string>
-#include <algorithm>
 
 #include "simple_lua_engine.h"
 #include "resource_paths.h"
 #include "assert_handler.h"
-
-Q_LOGGING_CATEGORY(jveMain, "jve.main")
-
-// Auto-discover logger modules by scanning Lua source files
-static std::vector<std::string> discoverLoggerModules(const char* programPath)
-{
-    std::vector<std::string> modules;
-
-    // Get directory containing the executable
-    std::string exePath(programPath);
-    size_t lastSlash = exePath.rfind('/');
-    std::string exeDir = (lastSlash != std::string::npos) ? exePath.substr(0, lastSlash) : ".";
-
-    // Try dev layout first: build/bin/JVEEditor -> src/lua
-    std::string luaPath = exeDir + "/../../src/lua";
-
-    // Run grep to find logger calls and extract module names
-    std::string cmd =
-        "grep -rhoE 'logger\\.(debug|info|warn|error|trace)\\(\"([^\"]+)\"' '" + luaPath + "' 2>/dev/null | "
-        "sed -E 's/.*\"([^\"]+)\"/\\1/' | sort -u";
-
-    FILE* pipe = popen(cmd.c_str(), "r");
-    if (pipe) {
-        char buffer[256];
-        while (fgets(buffer, sizeof(buffer), pipe)) {
-            std::string mod(buffer);
-            // Trim newline
-            if (!mod.empty() && mod.back() == '\n') {
-                mod.pop_back();
-            }
-            if (!mod.empty()) {
-                modules.push_back(mod);
-            }
-        }
-        pclose(pipe);
-    }
-
-    return modules;
-}
+#include "jve_log.h"
 
 static void printHelp(const char* programName)
 {
@@ -73,66 +30,20 @@ static void printHelp(const char* programName)
     std::cout << "  project.jvp         Path to project file (created if doesn't exist)\n";
     std::cout << "                      Default: ~/Documents/JVE Projects/Untitled Project.jvp\n";
     std::cout << "\n";
-    std::cout << "Debug Environment Variables:\n";
-    std::cout << "  JVE_DEBUG_STARTUP=1\n";
-    std::cout << "      Enable verbose Qt logging during startup.\n";
-    std::cout << "      Shows debug/info messages from all jve.* logging categories.\n";
+    std::cout << "Logging:\n";
+    std::cout << "  JVE_LOG=<spec>      Configure logging areas and levels\n";
     std::cout << "\n";
-    std::cout << "  JVE_DEBUG_PLAYHEAD=1\n";
-    std::cout << "      Log playhead rendering dimensions to diagnose ruler/timeline alignment.\n";
-    std::cout << "      Shows width values used for time-to-pixel calculations.\n";
+    std::cout << "  Areas:    ticks, audio, video, timeline, commands, database, ui, media\n";
+    std::cout << "  Meta:     play (= ticks+audio+video), all (= every area)\n";
+    std::cout << "  Levels:   detail, event, warn, error, none\n";
+    std::cout << "  Default:  all areas at warn (WARN+ERROR on, EVENT+DETAIL off)\n";
     std::cout << "\n";
-    std::cout << "  JVE_DEBUG_FOCUS=1\n";
-    std::cout << "      Log focus management events (focus changes, widget tracking).\n";
-    std::cout << "\n";
-    std::cout << "  JVE_DEBUG_COMMAND_PERF=1\n";
-    std::cout << "      Log command execution performance timings.\n";
-    std::cout << "\n";
-    std::cout << "  JVE_DEBUG_SNAPPING=1\n";
-    std::cout << "      Log magnetic snapping calculations during edge dragging.\n";
-    std::cout << "\n";
-    std::cout << "  JVE_DEBUG_EDGE_PREVIEW=1\n";
-    std::cout << "      Log edge preview calculations during trim/ripple operations.\n";
-    std::cout << "\n";
-    std::cout << "  JVE_DEBUG_RIPPLE_DELETE_SELECTION=1\n";
-    std::cout << "      Log ripple delete selection command details.\n";
-    std::cout << "\n";
-    std::cout << "Lua Logger Environment Variables:\n";
-    std::cout << "  JVE_LOG_LEVEL=<LEVEL>\n";
-    std::cout << "      Set global log level: TRACE, DEBUG, INFO, WARN, ERROR, FATAL\n";
-    std::cout << "      Default: WARN\n";
-    std::cout << "\n";
-    std::cout << "  JVE_LOG_MODULES=\"module:LEVEL,...\"\n";
-    std::cout << "      Set per-module log levels (overrides global for specific modules)\n";
-    std::cout << "      Supports wildcards: command* matches command, command_manager, etc.\n";
-    std::cout << "      Example: JVE_LOG_MODULES=\"mixer:DEBUG,command*:TRACE\"\n";
-    std::cout << "\n";
-
-    // Auto-discover and print available modules
-    auto modules = discoverLoggerModules(programName);
-    if (!modules.empty()) {
-        std::cout << "  Available modules:\n";
-        std::cout << "      ";
-        size_t lineLen = 6;
-        for (size_t i = 0; i < modules.size(); ++i) {
-            const auto& mod = modules[i];
-            size_t needed = mod.size() + (i + 1 < modules.size() ? 2 : 0);
-            if (lineLen + needed > 78) {
-                std::cout << "\n      ";
-                lineLen = 6;
-            }
-            std::cout << mod;
-            if (i + 1 < modules.size()) {
-                std::cout << ", ";
-            }
-            lineLen += needed;
-        }
-        std::cout << "\n\n";
-    }
-
-    std::cout << "Example:\n";
-    std::cout << "  JVE_DEBUG_PLAYHEAD=1 " << programName << " myproject.jvp\n";
-    std::cout << "  JVE_LOG_LEVEL=INFO JVE_LOG_MODULES=\"mixer:DEBUG\" " << programName << "\n";
+    std::cout << "  Examples:\n";
+    std::cout << "    JVE_LOG=play:detail              # Debug playback (per-frame data)\n";
+    std::cout << "    JVE_LOG=audio:event              # Audio state transitions\n";
+    std::cout << "    JVE_LOG=play:detail,commands:event\n";
+    std::cout << "    JVE_LOG=all:detail               # Everything (noisy)\n";
+    std::cout << "    JVE_LOG=all:none                 # Silent\n";
     std::cout << "\n";
 }
 
@@ -142,37 +53,13 @@ static void printVersion()
     std::cout << "Built with Qt " << QT_VERSION_STR << "\n";
 }
 
-static void configureLogging()
-{
-    if (qEnvironmentVariableIsSet("QT_LOGGING_RULES")) {
-        return;
-    }
-
-    const bool debugStartup = qEnvironmentVariableIsSet("JVE_DEBUG_STARTUP")
-        && qgetenv("JVE_DEBUG_STARTUP") == QByteArrayLiteral("1");
-
-    if (debugStartup) {
-        QLoggingCategory::setFilterRules(
-            "jve.*.debug=true\n"
-            "jve.*.info=true\n"
-            "jve.*.warning=true\n"
-            "jve.*.critical=true\n"
-        );
-        return;
-    }
-
-    QLoggingCategory::setFilterRules(
-        "jve.*.debug=false\n"
-        "jve.*.info=false\n"
-        "jve.*.warning=true\n"
-        "jve.*.critical=true\n"
-    );
-}
-
 int main(int argc, char *argv[])
 {
     // Install abort handler early to catch all assert()/abort() with stack traces
     jve_install_abort_handler();
+
+    // Initialize unified logging (parses JVE_LOG env var)
+    jve_init_log();
 
     // Handle --help, --version, and --test before creating QApplication
     const char* testScript = nullptr;
@@ -199,16 +86,13 @@ int main(int argc, char *argv[])
     // Qt::AA_EnableHighDpiScaling and Qt::AA_UseHighDpiPixmaps are deprecated
 
     QApplication app(argc, argv);
-    
+
     // Application metadata
     app.setApplicationName("JVE Editor");
     app.setApplicationVersion("1.0.0");
     app.setApplicationDisplayName("JVE Video Editor - Professional NLE");
     app.setOrganizationName("JVE Project");
     app.setOrganizationDomain("jve-editor.org");
-    
-    // Initialize logging (quiet by default; opt-in via JVE_DEBUG_STARTUP=1).
-    configureLogging();
 
     // --test mode: run a Lua script with full C++ bindings, then exit
     if (testScript) {
@@ -244,7 +128,7 @@ int main(int argc, char *argv[])
             return 1;
         }
 
-        qCInfo(jveMain, "Running test script: %s", qPrintable(scriptPath));
+        JVE_LOG_EVENT(Ui, "Running test script: %s", qPrintable(scriptPath));
         bool ok = luaEngine.executeFile(scriptPath);
         if (!ok) {
             std::cerr << "TEST FAILED: " << luaEngine.getLastError().toStdString() << "\n";
@@ -270,14 +154,14 @@ int main(int argc, char *argv[])
     darkPalette.setColor(QPalette::Highlight, QColor(42, 130, 218));
     darkPalette.setColor(QPalette::HighlightedText, Qt::black);
     app.setPalette(darkPalette);
-    
+
     // Set up application data directory
     QString appDataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     if (!QDir().mkpath(appDataDir)) {
-        qCCritical(jveMain, "Failed to create application data directory: %s", qPrintable(appDataDir));
+        JVE_LOG_ERROR(Ui, "Failed to create application data directory: %s", qPrintable(appDataDir));
         return -1;
     }
-    
+
     // Determine project path (.jvp file)
     QString projectPath;
     if (argc > 1) {
@@ -299,55 +183,48 @@ int main(int argc, char *argv[])
 
         qputenv("JVE_PROJECT_PATH", projectPath.toUtf8());
         qunsetenv("JVE_TEST_MODE");
-        qCInfo(jveMain, "Opening project from CLI argument: %s", qPrintable(projectPath));
+        JVE_LOG_EVENT(Ui, "Opening project from CLI argument: %s", qPrintable(projectPath));
     } else {
         // No CLI argument — Lua handles startup (last_project_path → welcome screen)
         qunsetenv("JVE_PROJECT_PATH");
         qunsetenv("JVE_TEST_MODE");
-        qCInfo(jveMain, "No project specified; Lua will handle startup");
+        JVE_LOG_EVENT(Ui, "No project specified; Lua will handle startup");
     }
 
     // Create Lua engine for pure Lua UI
     SimpleLuaEngine luaEngine;
-    
+
     // Execute Lua main window creation using ResourcePaths
-    QString scriptsDir = QString::fromStdString(JVE::ResourcePaths::getScriptsDirectory());
     QString mainWindowScript = QString::fromStdString(JVE::ResourcePaths::getScriptPath("ui/layout.lua"));
-    
-    qCInfo(jveMain, "Starting pure Lua UI system...");
-    qCInfo(jveMain, "Scripts directory: %s", qPrintable(scriptsDir));
-    qCInfo(jveMain, "Main window script: %s", qPrintable(mainWindowScript));
-    
+
+    JVE_LOG_EVENT(Ui, "Starting Lua UI system...");
+
     if (!QFileInfo(mainWindowScript).exists()) {
-        qCCritical(jveMain, "Main window script not found: %s", qPrintable(mainWindowScript));
+        JVE_LOG_ERROR(Ui, "Main window script not found: %s", qPrintable(mainWindowScript));
         return -1;
     }
-    
+
     // Execute Lua main window creation with real LuaJIT integration
-    qCInfo(jveMain, "Executing Lua main window creation with LuaJIT...");
     bool luaSuccess = luaEngine.executeFile(mainWindowScript);
-    
+
     if (!luaSuccess) {
-        qCCritical(jveMain, "Failed to execute Lua main window script: %s", 
-                   qPrintable(luaEngine.getLastError()));
+        JVE_LOG_ERROR(Ui, "Failed to execute Lua main window script: %s",
+                      qPrintable(luaEngine.getLastError()));
         return -1;
     }
-    
+
     // Get the main window created by Lua to keep it alive
     QWidget* mainWindow = luaEngine.getCreatedMainWindow();
     if (!mainWindow) {
-        qCCritical(jveMain, "No main window was created by Lua script");
+        JVE_LOG_ERROR(Ui, "No main window was created by Lua script");
         return -1;
     }
-    
-    qCInfo(jveMain, "JVE Editor started successfully - Pure Lua UI system ready");
-    qCInfo(jveMain, "Main window: %p", static_cast<void*>(mainWindow));
-    qCInfo(jveMain, "Qt version: %s", QT_VERSION_STR);
-    qCInfo(jveMain, "Application directory: %s", qPrintable(QApplication::applicationDirPath()));
-    
+
+    JVE_LOG_EVENT(Ui, "JVE Editor started successfully");
+
     int result = app.exec();
-    
-    qCInfo(jveMain, "JVE Editor shutdown complete");
-    
+
+    JVE_LOG_EVENT(Ui, "JVE Editor shutdown complete");
+
     return result;
 }

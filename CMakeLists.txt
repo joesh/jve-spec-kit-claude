@@ -121,6 +121,7 @@ set(CORE_SOURCES
     src/simple_lua_engine.cpp
     src/qt_bindings.cpp
     src/assert_handler.cpp
+    src/jve_log.cpp
 
     # Bug reporter system
     src/bug_reporter/gesture_logger.cpp
