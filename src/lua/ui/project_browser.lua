@@ -151,6 +151,9 @@ local function is_descendant(potential_parent_id, target_id)
 end
 
 
+--- Defer callback to next event loop cycle. Only for Qt widget interaction
+--- timing (e.g. tree selection must be processed before entering edit mode).
+--- NEVER use for model/data flow — that's a timing hack.
 local function defer_to_ui(callback)
     if type(qt_create_single_shot_timer) == "function" then
         qt_create_single_shot_timer(0, function()
@@ -259,60 +262,13 @@ local function finalize_pending_rename(new_name)
         return
     end
 
-    local info = M.item_lookup and M.item_lookup[tostring(pending.tree_id)]
-    if info then
-        info.name = trimmed_name
-        info.display_name = trimmed_name
-    end
-
-    if pending.target_type == "master_clip" then
-        local clip = M.master_clip_map and M.master_clip_map[pending.target_id]
-        if clip then
-            clip.name = trimmed_name
-        end
-    elseif pending.target_type == "sequence" then
-        local seq = M.sequence_map and M.sequence_map[pending.target_id]
-        if seq then
-            seq.name = trimmed_name
-        end
-    elseif pending.target_type == "bin" then
-        local bin = M.bin_map and M.bin_map[pending.target_id]
-        if bin then
-            bin.name = trimmed_name
-        end
-    end
-
-    if M.selected_item and M.selected_item.tree_id == pending.tree_id then
-        M.selected_item.name = trimmed_name
-        M.selected_item.display_name = trimmed_name
-    end
-    if M.selected_items then
-        for _, item in ipairs(M.selected_items) do
-            if item.tree_id == pending.tree_id then
-                item.name = trimmed_name
-                item.display_name = trimmed_name
-            end
-        end
-    end
+    -- MVC: no manual cache patching — command_listener already triggers
+    -- M.refresh() which rebuilds from DB. Timeline reload is handled by
+    -- command_helper.reload_timeline() inside RenameItem executor +
+    -- content_changed signal from command_manager.
 
     if pending.target_type ~= "bin" then
         select_browser_items(M.selected_items or {})
-    end
-
-    local ok_state, timeline_state = pcall(require, 'ui.timeline.timeline_state')
-    if ok_state and timeline_state then
-        if pending.target_type == "master_clip" then
-            if timeline_state.get_sequence_id and timeline_state.reload_clips then
-                local active_sequence_id = timeline_state.get_sequence_id()
-                if active_sequence_id and active_sequence_id ~= "" then
-                    timeline_state.reload_clips(active_sequence_id)
-                end
-            end
-        elseif pending.target_type == "sequence" then
-            if timeline_state.reload_clips then
-                timeline_state.reload_clips(pending.target_id)
-            end
-        end
     end
 
     pending.preview_name = nil
@@ -1401,13 +1357,13 @@ handle_tree_drop = function(event)
             return true
         end
 
+        -- MVC: refresh directly — command_listener triggers M.refresh() for
+        -- MoveToBin, but we also need to focus the target bin after rebuild.
         local focus_bin = dragged_bins[1] and dragged_bins[1].id
-        defer_to_ui(function()
-            M.refresh()
-            if focus_bin and M.focus_bin then
-                M.focus_bin(focus_bin, {skip_activate = true})
-            end
-        end)
+        M.refresh()
+        if focus_bin and M.focus_bin then
+            M.focus_bin(focus_bin, {skip_activate = true})
+        end
         return true
     end
 
@@ -1443,18 +1399,17 @@ handle_tree_drop = function(event)
             log.warn("Failed to move clips to bin: %s", tostring(result.error_message or "unknown error"))
         end
 
-        defer_to_ui(function()
-            local first_clip = dragged_clips[1]
-            M.refresh()
-            if target_bin_id then
-                M.focus_bin(target_bin_id, {skip_activate = true})
-            elseif first_clip and first_clip.clip_id then
-                local clip_entry = M.master_clip_map and M.master_clip_map[first_clip.clip_id]
-                if clip_entry and clip_entry.tree_id and qt_constants.CONTROL.SET_TREE_CURRENT_ITEM then
-                    qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(M.tree, clip_entry.tree_id, true, true)
-                end
+        -- MVC: refresh directly, no defer_to_ui timing hack
+        local first_clip = dragged_clips[1]
+        M.refresh()
+        if target_bin_id then
+            M.focus_bin(target_bin_id, {skip_activate = true})
+        elseif first_clip and first_clip.clip_id then
+            local clip_entry = M.master_clip_map and M.master_clip_map[first_clip.clip_id]
+            if clip_entry and clip_entry.tree_id and qt_constants.CONTROL.SET_TREE_CURRENT_ITEM then
+                qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(M.tree, clip_entry.tree_id, true, true)
             end
-        end)
+        end
 
         return true
     end
@@ -1519,6 +1474,9 @@ function M._test_get_tree_id(kind, id)
     return nil
 end
 
+-- NOTE: defer_to_ui is legitimate here — Qt tree widget needs one event loop
+-- cycle to process the focus/selection before entering inline edit mode.
+-- This is a Qt widget interaction requirement, NOT a model/data timing hack.
 local function start_inline_rename_after(focus_fn)
     defer_to_ui(function()
         if type(focus_fn) == "function" then
