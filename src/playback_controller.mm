@@ -183,6 +183,14 @@ void AudioPump::pumpLoop() {
             fetch_end = media_time_us;
         }
 
+        // Dense startup log: first 10 cycles log every iteration
+        if (m_pump_cycle <= 10) {
+            JVE_LOG_DETAIL(Audio, "pump[%lld]: aop_ph=%lldus media_t=%lldus fetch=[%lld..%lld]us",
+                          (long long)m_pump_cycle, (long long)aop_playhead,
+                          (long long)media_time_us,
+                          (long long)fetch_start, (long long)fetch_end);
+        }
+
         bool pushed_source = false;
         auto pcm = m_tmb->GetMixedAudio(fetch_start, fetch_end);
         if (pcm && pcm->frames() > 0) {
@@ -192,6 +200,13 @@ void AudioPump::pumpLoop() {
             // call SetTarget after Reset(). See test_steady_state_render_without_set_target.
             m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(), pcm->start_time_us());
             pushed_source = true;
+        }
+
+        // Dense startup log: push details
+        if (m_pump_cycle <= 10 && pcm) {
+            JVE_LOG_DETAIL(Audio, "pump[%lld]: pushed %lld frames at t=%lldus",
+                          (long long)m_pump_cycle, (long long)pcm->frames(),
+                          (long long)pcm->start_time_us());
         }
 
         // 5. Render from SSE and write to AOP
@@ -208,6 +223,14 @@ void AudioPump::pumpLoop() {
             }
         }
 
+        // Dense startup log: render details
+        if (m_pump_cycle <= 10) {
+            JVE_LOG_DETAIL(Audio, "pump[%lld]: rendered=%lld needed=%lld buf_before=%lld buf_after=%lld",
+                          (long long)m_pump_cycle, (long long)produced,
+                          (long long)frames_needed, (long long)buffered,
+                          (long long)m_aop->BufferedFrames());
+        }
+
         // Sampled DETAIL log: every 50th cycle
         if (m_pump_cycle % 50 == 0) {
             JVE_LOG_DETAIL(Audio, "pump: media_t=%lldus fetched=%lld rendered=%lld buf=%lld",
@@ -216,11 +239,18 @@ void AudioPump::pumpLoop() {
                           (long long)produced, (long long)buffered);
         }
 
-        // Duplicate fetch detection: same audio time range fetched twice in a row
-        if (fetch_start == m_last_fetch_start && fetch_end == m_last_fetch_end && m_pump_cycle > 1) {
-            JVE_LOG_DETAIL(Audio, "pump: duplicate fetch range [%lld..%lld]us",
-                          (long long)fetch_start, (long long)fetch_end);
+        // Duplicate fetch detection: only interesting when media_time hasn't
+        // advanced (clock stuck), not when the 2s lookahead window overlaps.
+        if (media_time_us == m_last_media_time && m_pump_cycle > 1) {
+            m_stalled_cycles++;
+        } else {
+            if (m_stalled_cycles > 0) {
+                JVE_LOG_DETAIL(Audio, "pump: clock stalled for %lld cycles at media_t=%lldus",
+                              (long long)m_stalled_cycles, (long long)m_last_media_time);
+            }
+            m_stalled_cycles = 0;
         }
+        m_last_media_time = media_time_us;
         m_last_fetch_start = fetch_start;
         m_last_fetch_end = fetch_end;
 
@@ -369,14 +399,56 @@ void PlaybackController::Play(int direction, float speed) {
         int64_t time_us = (current_pos * 1000000LL * m_fps_den) / m_fps_num;
         float signed_speed = direction * speed;
 
+        JVE_LOG_DETAIL(Audio, "Play: pre-flush buf=%lld aop_playing=%d",
+                      (long long)m_aop->BufferedFrames(),
+                      (int)m_aop->IsPlaying());
         m_aop->Flush();
         m_sse->Reset();
         int64_t aop_playhead = m_aop->PlayheadTimeUS();
         m_clock.Reanchor(time_us, signed_speed, aop_playhead);
         m_sse->SetTarget(time_us, signed_speed, static_cast<sse::QualityMode>(quality_mode));
 
-        // Start audio output
+        // Pre-fill: decode audio into the ring buffer BEFORE starting AOP.
+        // Fill the full ring buffer capacity (300ms at 3x target) so the pump
+        // has enough runway to warm the TMB cache without CoreAudio starving.
+        // Without this, buf_before=0 for the first ~8 pump cycles → rapid
+        // periodic dropout → audible flutter/roughness at playback start.
+        {
+            constexpr int64_t PREFILL_LOOKAHEAD_US = 2000000;
+            // Ring buffer capacity = 3 * TARGET_BUFFER_MS * sample_rate / 1000
+            int64_t ring_capacity = 3 * (m_audio_sample_rate * AudioPump::TARGET_BUFFER_MS) / 1000;
+            int64_t fetch_t0 = time_us;
+            int64_t fetch_t1 = (signed_speed >= 0)
+                ? time_us + PREFILL_LOOKAHEAD_US
+                : time_us - PREFILL_LOOKAHEAD_US;
+            if (fetch_t1 < fetch_t0) std::swap(fetch_t0, fetch_t1);
+
+            auto pcm = m_tmb->GetMixedAudio(fetch_t0, fetch_t1);
+            if (pcm && pcm->frames() > 0) {
+                m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(),
+                                     pcm->start_time_us());
+            }
+
+            // Render in chunks until ring buffer is full
+            int64_t total_prefilled = 0;
+            constexpr int64_t CHUNK = 4096;
+            std::vector<float> prefill_buf(CHUNK * m_audio_channels);
+            while (total_prefilled < ring_capacity) {
+                int64_t want = std::min(CHUNK, ring_capacity - total_prefilled);
+                int64_t rendered = m_sse->Render(prefill_buf.data(), want);
+                if (rendered <= 0) break;  // SSE starved
+                int64_t written = m_aop->WriteF32(prefill_buf.data(), rendered);
+                if (written <= 0) break;   // ring buffer full
+                total_prefilled += written;
+            }
+            JVE_LOG_DETAIL(Audio, "Play: pre-filled %lld/%lld frames into ring buffer",
+                          (long long)total_prefilled, (long long)ring_capacity);
+        }
+
+        // Start audio output — ring buffer now has ~300ms of decoded audio.
         m_aop->Start();
+        JVE_LOG_DETAIL(Audio, "Play: post-start aop_ph=%lldus media_anchor=%lldus",
+                      (long long)aop_playhead, (long long)time_us);
 
         // Start pump thread
         if (m_audio_pump) {

@@ -78,6 +78,10 @@ public:
     void SetQualityMode(int mode);
     int QualityMode() const;
 
+    // Pump timing constants (match Lua CFG) — public for pre-fill sizing
+    static constexpr int TARGET_BUFFER_MS = 100;
+    static constexpr int MAX_RENDER_FRAMES = 4096;
+
 private:
     void pumpLoop();
 
@@ -94,16 +98,16 @@ private:
     int32_t m_sample_rate{48000};
     int32_t m_channels{2};
 
-    // Pump timing constants (match Lua CFG)
-    static constexpr int TARGET_BUFFER_MS = 100;
+    // Pump timing constants
     static constexpr int PUMP_INTERVAL_HUNGRY_MS = 2;
     static constexpr int PUMP_INTERVAL_OK_MS = 15;
-    static constexpr int MAX_RENDER_FRAMES = 4096;
 
     // Sampled logging (every 50th cycle)
     int64_t m_pump_cycle{0};
     int64_t m_last_fetch_start{-1};
     int64_t m_last_fetch_end{-1};
+    int64_t m_last_media_time{-1};
+    int64_t m_stalled_cycles{0};
 };
 
 #ifdef __APPLE__
