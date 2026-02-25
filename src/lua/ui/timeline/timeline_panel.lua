@@ -686,6 +686,29 @@ local function register_track_btn_handler(callback)
     return name
 end
 
+-- Track button references for MVC re-pull on undo/redo
+-- { [track_id] = { mute_btn = widget, solo_btn = widget } }
+local track_button_refs = {}
+
+local function refresh_track_button_styles()
+    for track_id, refs in pairs(track_button_refs) do
+        local t = Track.load(track_id)
+        if t then
+            if refs.mute_btn then
+                qt_constants.PROPERTIES.SET_STYLE(refs.mute_btn,
+                    build_track_header_btn_stylesheet(t.muted, "#cc3333"))
+            end
+            if refs.solo_btn then
+                qt_constants.PROPERTIES.SET_STYLE(refs.solo_btn,
+                    build_track_header_btn_stylesheet(t.soloed, "#ccaa00"))
+            end
+        end
+    end
+end
+
+-- MVC: update button styles when track state changes externally (undo/redo)
+Signals.connect("track_mix_changed", refresh_track_button_styles)
+
 -- Helper function to create video headers with splitters
 local function create_video_headers()
     local video_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
@@ -975,6 +998,12 @@ local function create_audio_headers()
             end
         end)
         qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(solo_btn, solo_handler)
+
+        -- Register for MVC re-pull on external state changes (undo/redo)
+        track_button_refs[captured_track_id] = {
+            mute_btn = captured_mute_btn,
+            solo_btn = captured_solo_btn,
+        }
 
         -- Record arm button (inert)
         local rec_btn = qt_constants.WIDGET.CREATE_BUTTON("R")
@@ -1801,6 +1830,7 @@ function M.on_project_change()
     end
     open_tabs = {}
     tab_order = {}
+    track_button_refs = {}
 end
 
 -- Register for project_changed signal
