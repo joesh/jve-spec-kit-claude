@@ -227,6 +227,17 @@ function SequenceMonitor:_create_widgets()
         end)
     end
 
+    -- MVC: surface error callback — view learns about render failures
+    -- (unsupported pixel format, texture creation failure) instead of
+    -- silently showing stale content.
+    if qt_constants.EMP.SURFACE_ON_ERROR then
+        qt_constants.EMP.SURFACE_ON_ERROR(self._video_surface, function(error_msg)
+            log.warn("surface error: %s", error_msg)
+            self._surface_error = error_msg
+            self:_notify()
+        end)
+    end
+
     -- Mark bar (ScriptableTimeline widget)
     assert(qt_constants.WIDGET.CREATE_TIMELINE,
         "SequenceMonitor: CREATE_TIMELINE not available")
@@ -497,6 +508,13 @@ function SequenceMonitor:_on_show_frame(frame_handle, _metadata)
     self._frame_count = (self._frame_count or 0) + 1
     if self._frame_count % 30 == 0 then
         log.detail("show_frame: view=%s count=%d", self.view_id, self._frame_count)
+    end
+    -- Clear surface error on successful frame delivery (error callback fires
+    -- from C++ *before* setFrame returns when format is unsupported, so a
+    -- successful setFrame means the error is resolved).
+    if self._surface_error then
+        self._surface_error = nil
+        self:_notify()
     end
     qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, frame_handle)
 end

@@ -1168,6 +1168,41 @@ static int lua_emp_surface_on_ready(lua_State* L) {
     return 0;
 }
 
+// EMP.SURFACE_ON_ERROR(surface_widget, callback_fn)
+// Registers a callback that fires when GPUVideoSurface can't render a frame
+// (unsupported pixel format, texture creation failure, etc.).
+// Callback receives one string argument: the error description.
+static int lua_emp_surface_on_error(lua_State* L) {
+    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 1, WIDGET_METATABLE));
+    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+
+    GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
+    if (!gpu_surface) {
+        return luaL_error(L, "EMP.SURFACE_ON_ERROR: widget is not a GPUVideoSurface");
+    }
+
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+
+    lua_pushvalue(L, 2);
+    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_State* main_L = L;
+
+    gpu_surface->setErrorCallback([main_L, ref](const std::string& error) {
+        lua_rawgeti(main_L, LUA_REGISTRYINDEX, ref);
+        if (lua_isfunction(main_L, -1)) {
+            lua_pushstring(main_L, error.c_str());
+            if (lua_pcall(main_L, 1, 0, 0) != 0) {
+                const char* err = lua_tostring(main_L, -1);
+                JVE_ASSERT(false, err ? err : "SURFACE_ON_ERROR callback failed");
+            }
+        } else {
+            lua_pop(main_L, 1);
+        }
+    });
+
+    return 0;
+}
+
 // EMP.SURFACE_SET_FRAME(surface_widget, frame|nil)
 // Works with both GPUVideoSurface and CPUVideoSurface
 static int lua_emp_surface_set_frame(lua_State* L) {
@@ -1701,6 +1736,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "SURFACE_FRAME_COUNT");
     lua_pushcfunction(L, lua_emp_surface_on_ready);
     lua_setfield(L, -2, "SURFACE_ON_READY");
+    lua_pushcfunction(L, lua_emp_surface_on_error);
+    lua_setfield(L, -2, "SURFACE_ON_ERROR");
 
     lua_setfield(L, -2, "EMP");
 

@@ -149,6 +149,10 @@ void GPUVideoSurface::setReadyCallback(ReadyCallback cb) {
     if (m_initialized && m_ready_callback) m_ready_callback();
 }
 
+void GPUVideoSurface::setErrorCallback(ErrorCallback cb) {
+    m_error_callback = std::move(cb);
+}
+
 void GPUVideoSurface::initMetal() {
     if (m_initialized) return;
 
@@ -329,7 +333,10 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
     @autoreleasepool {
         size_t planeCount = CVPixelBufferGetPlaneCount(pixelBuffer);
         if (planeCount != 2) {
-            JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: expected 2 planes, got %zu — skipping frame", planeCount);
+            char msg[128];
+            snprintf(msg, sizeof(msg), "expected 2 planes, got %zu", planeCount);
+            JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: %s — skipping frame", msg);
+            if (m_error_callback) m_error_callback(msg);
             return;
         }
 
@@ -398,8 +405,10 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
                 fmt_str[1] = (pixelFormat >> 16) & 0xFF;
                 fmt_str[2] = (pixelFormat >> 8) & 0xFF;
                 fmt_str[3] = pixelFormat & 0xFF;
-                JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: unsupported pixel format %s (0x%x) — skipping frame",
-                             fmt_str, pixelFormat);
+                char msg[128];
+                snprintf(msg, sizeof(msg), "unsupported pixel format %s (0x%x)", fmt_str, pixelFormat);
+                JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: %s — skipping frame", msg);
+                if (m_error_callback) m_error_callback(msg);
                 return;
             }
         }
@@ -413,7 +422,10 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
             kCFAllocatorDefault, m_impl->textureCache, pixelBuffer, nullptr,
             yFormat, yWidth, yHeight, 0, &m_impl->textureY);
         if (ret != kCVReturnSuccess || !m_impl->textureY) {
-            JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: failed to create Y texture (ret=%d) — skipping frame", ret);
+            char msg[128];
+            snprintf(msg, sizeof(msg), "failed to create Y texture (ret=%d)", ret);
+            JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: %s — skipping frame", msg);
+            if (m_error_callback) m_error_callback(msg);
             return;
         }
 
@@ -424,8 +436,11 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
             kCFAllocatorDefault, m_impl->textureCache, pixelBuffer, nullptr,
             uvFormat, uvWidth, uvHeight, 1, &m_impl->textureUV);
         if (ret != kCVReturnSuccess || !m_impl->textureUV) {
-            JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: failed to create UV texture (ret=%d) — skipping frame", ret);
+            char msg[128];
+            snprintf(msg, sizeof(msg), "failed to create UV texture (ret=%d)", ret);
+            JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: %s — skipping frame", msg);
             m_impl->releaseTextures();
+            if (m_error_callback) m_error_callback(msg);
             return;
         }
 

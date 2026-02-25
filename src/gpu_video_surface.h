@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 
 namespace emp { class Frame; }
 
@@ -26,6 +27,12 @@ public:
     // If Metal is already initialized when callback is set, fires immediately.
     using ReadyCallback = std::function<void()>;
     void setReadyCallback(ReadyCallback cb);
+
+    // Callback fired when a frame cannot be rendered (unsupported format,
+    // texture creation failure, etc.). Surfaces the error to the View so
+    // it can display an indicator instead of showing stale content.
+    using ErrorCallback = std::function<void(const std::string& error)>;
+    void setErrorCallback(ErrorCallback cb);
 
     // Set frame to display. Accepts both hw-decoded (native_buffer) and
     // sw-decoded (CPU BGRA data) frames.
@@ -78,6 +85,7 @@ private:
     int m_frame_count = 0;
     bool m_initialized = false;
     ReadyCallback m_ready_callback;
+    ErrorCallback m_error_callback;
 };
 
 #else
@@ -87,8 +95,10 @@ class GPUVideoSurface : public QWidget {
     Q_OBJECT
 public:
     using ReadyCallback = std::function<void()>;
+    using ErrorCallback = std::function<void(const std::string&)>;
     explicit GPUVideoSurface(QWidget* parent = nullptr) : QWidget(parent) {}
     void setReadyCallback(ReadyCallback) {}
+    void setErrorCallback(ErrorCallback) {}
     void setFrame(const std::shared_ptr<emp::Frame>&) { assert(false && "GPUVideoSurface not available on this platform"); }
     void clearFrame() {}
     void setRotation(int) {}
