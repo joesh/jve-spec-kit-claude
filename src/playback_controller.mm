@@ -521,6 +521,9 @@ void PlaybackController::Seek(int64_t frame) {
 
     // Tell TMB we're parking (direction=0 → synchronous decode)
     m_tmb->SetPlayhead(frame, 0, 1.0f);
+    JVE_LOG_EVENT(Ticks, "Seek: frame=%lld tracks=%zu surface=%p initialized=%d",
+                 (long long)frame, m_video_track_indices.size(),
+                 (void*)m_surface, m_surface ? 1 : 0);
     deliverFrame(frame, true);  // synchronous: Seek is on main thread
     // deliverFrame asserts if TMB returns a clip but no frame data (decode failure).
     // Gap seeks (no clip at frame) legitimately produce no frame.
@@ -1039,6 +1042,10 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
 
     if (!found_frame) {
         // All tracks are gaps at this frame — nothing to display (valid)
+        if (synchronous) {
+            JVE_LOG_EVENT(Ticks, "deliverFrame: gap at frame %lld (no clip on any track)",
+                         (long long)frame);
+        }
         return;
     }
 
@@ -1082,6 +1089,12 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
 
     if (result.frame) {
         m_last_displayed_frame = frame;
+
+        if (synchronous) {
+            JVE_LOG_EVENT(Ticks, "deliverFrame: sync frame=%lld clip=%s %dx%d",
+                         (long long)frame, result.clip_id.c_str(),
+                         result.frame->width(), result.frame->height());
+        }
 
         // Sampled DETAIL log: every 30th new frame delivered
         if (m_deliver_count % 30 == 0) {
