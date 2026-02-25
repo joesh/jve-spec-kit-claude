@@ -86,6 +86,7 @@ We've got lots of context available when anything goes wrong:
 - **2.33**: Selection-Based Commands Use Implicit Derivation - Commands like Cut, Delete, ToggleClipEnabled derive `clip_ids` from `timeline_state.get_selected_clips()` if not provided. Executors MUST persist derived values for undo/redo. **FUTURE**: If implementing macro recording or command sourcing, revisit this pattern—see `command_manager.lua` header comments for options.
 
 ### **3.x Design Principles**
+- **3.0**: Model-View-Controller — This application is MVC. Views pull from model state; they NEVER depend on receiving an imperative push at the right moment. When a view is instantiated or becomes ready, it queries the model for what to display. When the model changes (new data, state transition), it emits a signal; views listen and re-pull. If a view can't answer "what should I be displaying right now?" by querying the model, the architecture is wrong. Push-based frame delivery is acceptable only on hot paths (60Hz playback); park mode (stopped/seeking) MUST be pull-based. GPUVideoSurface is an implementation detail of the view, not the view itself — SequenceMonitor is the view.
 - **3.1**: Protocol versioning - support only the current protocol/schema; when formats change, bump the version and migrate forward without keeping the old behavior
 - **3.2**: Principle of least amazement - predictable behavior
 - **3.3**: Orthogonality - composable commands

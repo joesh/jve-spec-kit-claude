@@ -84,6 +84,16 @@ When C++ code calls Lua callbacks (e.g., via `lua_pcall`), **NEVER silently log 
 - Lua's assert/error doesn't crash the app — it generates a stack trace and unwinds to the nearest pcall
 - Stack traces are essential for debugging; silent logs are not
 
+## CRITICAL: Architecture — Model-View-Controller
+
+This application is MVC. **Views pull from model state.** They NEVER depend on receiving an imperative push at the right moment.
+
+- When a view is instantiated or becomes ready, it queries the model for what to display
+- When the model changes (new data, state transition), it emits a signal; views listen and re-pull
+- If a view can't answer "what should I be displaying right now?" by querying the model, the architecture is wrong
+- Push-based delivery is acceptable ONLY on hot paths (60Hz playback); park mode (stopped/seeking) MUST be pull-based
+- GPUVideoSurface is an implementation detail of the view — SequenceMonitor is the view
+
 ## CRITICAL: Main Engineering Principles to ALWAYS keep in mind:
 
 ### **1.14 FAIL-FAST ASSERT POLICY (Development Phase)**
