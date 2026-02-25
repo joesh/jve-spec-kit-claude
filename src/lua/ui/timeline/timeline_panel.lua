@@ -925,17 +925,26 @@ local function create_audio_headers()
             build_track_header_btn_stylesheet(track.muted, "#cc3333"))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, mute_btn)
 
-        -- Wire mute toggle
+        -- Wire mute toggle (via SetTrackProperty command for undo/redo)
         local captured_track_id = track.id
         local captured_mute_btn = mute_btn
         local mute_handler = register_track_btn_handler(function()
             local t = Track.load(captured_track_id)
             assert(t, "Mute handler: track not found: " .. tostring(captured_track_id))
-            t.muted = not t.muted
-            t:save()
-            qt_constants.PROPERTIES.SET_STYLE(captured_mute_btn,
-                build_track_header_btn_stylesheet(t.muted, "#cc3333"))
-            Signals.emit("track_mix_changed")
+            local project_id = timeline_state.get_project_id()
+            assert(project_id, "Mute handler: no project_id")
+            command_manager.execute("SetTrackProperty", {
+                track_id = captured_track_id,
+                property = "muted",
+                value = not t.muted,
+                project_id = project_id,
+            })
+            -- Re-query model state for button style (MVC: view pulls from model)
+            local fresh = Track.load(captured_track_id)
+            if fresh then
+                qt_constants.PROPERTIES.SET_STYLE(captured_mute_btn,
+                    build_track_header_btn_stylesheet(fresh.muted, "#cc3333"))
+            end
         end)
         qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(mute_btn, mute_handler)
 
@@ -945,16 +954,25 @@ local function create_audio_headers()
             build_track_header_btn_stylesheet(track.soloed, "#ccaa00"))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, solo_btn)
 
-        -- Wire solo toggle
+        -- Wire solo toggle (via SetTrackProperty command for undo/redo)
         local captured_solo_btn = solo_btn
         local solo_handler = register_track_btn_handler(function()
             local t = Track.load(captured_track_id)
             assert(t, "Solo handler: track not found: " .. tostring(captured_track_id))
-            t.soloed = not t.soloed
-            t:save()
-            qt_constants.PROPERTIES.SET_STYLE(captured_solo_btn,
-                build_track_header_btn_stylesheet(t.soloed, "#ccaa00"))
-            Signals.emit("track_mix_changed")
+            local project_id = timeline_state.get_project_id()
+            assert(project_id, "Solo handler: no project_id")
+            command_manager.execute("SetTrackProperty", {
+                track_id = captured_track_id,
+                property = "soloed",
+                value = not t.soloed,
+                project_id = project_id,
+            })
+            -- Re-query model state for button style (MVC: view pulls from model)
+            local fresh = Track.load(captured_track_id)
+            if fresh then
+                qt_constants.PROPERTIES.SET_STYLE(captured_solo_btn,
+                    build_track_header_btn_stylesheet(fresh.soloed, "#ccaa00"))
+            end
         end)
         qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(solo_btn, solo_handler)
 
