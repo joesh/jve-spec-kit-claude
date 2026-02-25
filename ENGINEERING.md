@@ -55,6 +55,7 @@ We've got lots of context available when anything goes wrong:
 - **DB is treated as internal state**: Persisted project DB contents are considered authoritative internal state. Missing rows/metadata that “should exist” are **bugs** and should assert. If the DB is bad from earlier bugs, Joe’s workflow is to **delete/reset the DB** rather than adding shims or recovery paths.
 - **Renderer/UI paths may assert**: If invalid render inputs occur (bad colors, impossible geometry, etc.), crash immediately to force a fix. Prefer assert messages that identify the exact bad value and callsite.
 - **Make crashes actionable**: Assert messages must include the function/module name and relevant IDs/parameters (sequence_id/track_id/clip_id/command name) so the root cause is obvious.
+- **`if x then` on required data is a silent failure**: `if x then use(x) end` silently skips when x is nil. Flip to `if not x then log.warn/assert end`. Guard clauses are for optional data; required data gets asserts.
 - **Only soften failures with explicit instruction**: Do not add “graceful degradation”, retries, fallbacks, or compatibility shims unless Joe explicitly asks for production-hardening behavior.
 
 ### **2.x Development Standards**
