@@ -191,33 +191,31 @@ public:
 
     bool init(AopOpenReport* out_report) {
         // Set up audio format
-        QAudioFormat format;
-        format.setSampleRate(m_sample_rate);
-        format.setChannelCount(m_channels);
-        format.setSampleFormat(QAudioFormat::Float);
+        m_format.setSampleRate(m_sample_rate);
+        m_format.setChannelCount(m_channels);
+        m_format.setSampleFormat(QAudioFormat::Float);
 
         // Get default output device
-        QAudioDevice device = QMediaDevices::defaultAudioOutput();
-        if (device.isNull()) {
+        m_device = QMediaDevices::defaultAudioOutput();
+        if (m_device.isNull()) {
             if (out_report) out_report->device_name = "No audio device";
             return false;
         }
 
         // Check format support
-        if (!device.isFormatSupported(format)) {
-            // Try to find supported format
-            QAudioFormat nearestFormat = device.preferredFormat();
+        if (!m_device.isFormatSupported(m_format)) {
+            QAudioFormat nearestFormat = m_device.preferredFormat();
             nearestFormat.setSampleFormat(QAudioFormat::Float);
-            if (!device.isFormatSupported(nearestFormat)) {
+            if (!m_device.isFormatSupported(nearestFormat)) {
                 if (out_report) out_report->device_name = "Format not supported";
                 return false;
             }
-            format = nearestFormat;
-            m_sample_rate = format.sampleRate();
-            m_channels = format.channelCount();
+            m_format = nearestFormat;
+            m_sample_rate = m_format.sampleRate();
+            m_channels = m_format.channelCount();
         }
 
-        m_sink = std::make_unique<QAudioSink>(device, format);
+        m_sink = std::make_unique<QAudioSink>(m_device, m_format);
 
         if (out_report) {
             out_report->actual_sample_rate = m_sample_rate;
@@ -225,14 +223,18 @@ public:
             out_report->actual_buffer_ms = static_cast<int32_t>(
                 (m_ring_buffer.available_frames() * 1000) / m_sample_rate
             );
-            out_report->device_name = device.description().toStdString();
+            out_report->device_name = m_device.description().toStdString();
         }
 
         return true;
     }
 
     void start() {
-        if (!m_sink || m_playing) return;
+        if (m_playing) return;
+        // Recreate QAudioSink from scratch to guarantee a fresh CoreAudio
+        // AudioUnit with zero stale internal buffers. reset()+stop() was
+        // insufficient on macOS — stale PCM survived and replayed as echo.
+        m_sink = std::make_unique<QAudioSink>(m_device, m_format);
         m_io_device.open(QIODevice::ReadOnly);
         m_sink->start(&m_io_device);
         m_playing = true;
@@ -250,6 +252,11 @@ public:
     }
 
     void flush() {
+        if (m_sink && m_playing) {
+            m_sink->stop();
+            m_io_device.close();
+            m_playing = false;
+        }
         m_ring_buffer.clear();
         m_io_device.reset_playhead();
     }
@@ -297,6 +304,8 @@ private:
     int m_channels;
     RingBuffer m_ring_buffer;
     AudioIODevice m_io_device;
+    QAudioDevice m_device;
+    QAudioFormat m_format;
     std::unique_ptr<QAudioSink> m_sink;
     bool m_playing;
 };
@@ -317,8 +326,10 @@ std::unique_ptr<AudioOutput> AudioOutput::Open(const AopConfig& config, AopOpenR
     int channels = config.channels > 0 ? config.channels : 2;
     int buffer_ms = config.target_buffer_ms > 0 ? config.target_buffer_ms : 100;
 
-    // Calculate buffer size in frames
-    int buffer_frames = (sample_rate * buffer_ms) / 1000;
+    // Ring buffer 3x target fill: gives CoreAudio headroom to consume while
+    // the AudioPump refills. Without headroom (capacity == target), the buffer
+    // yo-yos between full and empty every pump cycle → underruns at startup.
+    int buffer_frames = 3 * (sample_rate * buffer_ms) / 1000;
 
     auto impl = std::make_unique<AudioOutputImpl>(sample_rate, channels, buffer_frames);
 
