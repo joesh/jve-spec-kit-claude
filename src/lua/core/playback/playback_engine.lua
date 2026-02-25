@@ -193,13 +193,11 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames)
     self:_close_tmb()
     self:_create_tmb()
 
-    -- Feed TMB with clips BEFORE creating PlaybackController.
-    -- _send_clips_to_tmb populates _video_track_indices which the controller
-    -- needs for frame delivery. Without this ordering, C++ gets empty tracks
-    -- and deliverFrame() returns early → no video display.
-    self:_send_clips_to_tmb(0)
-
-    -- PlaybackController setup (uses populated _video_track_indices)
+    -- PlaybackController setup.
+    -- Video track indices start empty — populated by caller's first seek()
+    -- via _send_clips_to_tmb(real_frame). Do NOT pre-load clips here:
+    -- hardcoding frame 0 poisons the clip window cache when the saved
+    -- playhead is far from frame 0.
     self:_setup_playback_controller()
 
     -- NOTE: No seek here. Caller (SequenceMonitor) is responsible for initial
@@ -292,7 +290,7 @@ function PlaybackEngine:_setup_playback_controller()
     assert(pc, "PlaybackEngine:_setup_playback_controller: CREATE returned nil")
     self._playback_controller = pc
 
-    -- Configure: TMB, bounds, video tracks (populated by prior _send_clips_to_tmb)
+    -- Configure: TMB, bounds, video tracks (empty until first seek)
     PLAYBACK.SET_TMB(pc, self._tmb)
     PLAYBACK.SET_BOUNDS(pc, self.total_frames, self.fps_num, self.fps_den)
     PLAYBACK.SET_VIDEO_TRACKS(pc, self._video_track_indices)
@@ -1063,6 +1061,18 @@ function PlaybackEngine:seek_to_frame(frame)
     assert(self.fps_num and self.fps_den,
         "PlaybackEngine:seek_to_frame: fps not set")
     self:seek(math.floor(frame))
+end
+
+--- MVC pull: clear seek dedup and re-seek so View can pull current frame.
+-- Called when the View's render surface becomes ready, or when model content
+-- changes at the parked playhead position (insert/delete at playhead).
+-- The seek dedup guard (_last_committed_frame) prevents redundant decodes
+-- during normal scrubbing, but here we WANT to re-decode because either
+-- the surface wasn't ready before or the content changed under us.
+function PlaybackEngine:on_model_changed(frame)
+    log.event("on_model_changed: frame=%s state=%s", tostring(frame), tostring(self.state))
+    self._last_committed_frame = nil  -- clear dedup so seek() re-decodes
+    self:seek(frame)
 end
 
 function PlaybackEngine:is_playing()

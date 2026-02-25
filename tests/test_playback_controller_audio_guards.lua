@@ -603,7 +603,7 @@ do
 end
 
 --------------------------------------------------------------------------------
--- 12. load_sequence populates _video_track_indices BEFORE controller setup
+-- 12. load_sequence creates controller with empty tracks (first seek populates)
 --------------------------------------------------------------------------------
 print("\n--- 12. load_sequence ordering: tracks before controller ---")
 do
@@ -619,23 +619,31 @@ do
     local engine = make_engine()
     engine:load_sequence("seq1", 200)
 
-    -- After load, controller should exist AND have been given the tracks
+    -- After load, controller should exist with empty tracks
     assert(engine._playback_controller, "controller must be created after load")
-    -- Check that SET_VIDEO_TRACKS was called (which requires populated indices)
     local vt_call = find_call("SET_VIDEO_TRACKS")
     assert(vt_call, "SET_VIDEO_TRACKS must be called during load_sequence")
     local indices = vt_call.args[2]
+    assert(#indices == 0,
+        "SET_VIDEO_TRACKS must receive empty indices (populated by first seek, not load)")
+
+    -- First seek should populate tracks
+    reset_playback_calls()
+    engine:seek(50)
+    vt_call = find_call("SET_VIDEO_TRACKS")
+    assert(vt_call, "SET_VIDEO_TRACKS must be called during first seek")
+    indices = vt_call.args[2]
     assert(#indices > 0,
-        "SET_VIDEO_TRACKS must receive non-empty indices (tracks populated before controller)")
-    print("  PASS: load_sequence populates tracks before controller setup")
+        "SET_VIDEO_TRACKS must receive non-empty indices after seek")
+    print("  PASS: load_sequence creates controller, first seek populates tracks")
 end
 
 --------------------------------------------------------------------------------
--- 13. _setup_playback_controller sends initial clip window
+-- 13. load_sequence does NOT send initial clip window (first seek does)
 --------------------------------------------------------------------------------
-print("\n--- 13. _setup_playback_controller sends initial clip window ---")
+print("\n--- 13. load_sequence sends no initial clip window ---")
 do
-    -- Set up clips so _send_clips_to_tmb populates a window
+    -- Set up clips
     mock_video_entries = {
         make_video_entry("clip_init", 0, 0, 100, 0),
     }
@@ -647,20 +655,25 @@ do
     reset_playback_calls()
     engine:load_sequence("seq1", 200)
 
-    -- Find SET_CLIP_WINDOW calls (should have both video and audio from setup)
-    local video_window = nil
-    local audio_window = nil
+    -- No SET_CLIP_WINDOW during load (no _send_clips_to_tmb(0) anymore)
+    local any_clip_window = false
     for _, c in ipairs(playback_calls) do
-        if c.name == "SET_CLIP_WINDOW" then
-            if c.args[2] == "video" then video_window = c end
-            if c.args[2] == "audio" then audio_window = c end
+        if c.name == "SET_CLIP_WINDOW" then any_clip_window = true end
+    end
+    assert(not any_clip_window,
+        "load_sequence must NOT send clip window (first seek populates)")
+
+    -- First seek should set clip window
+    reset_playback_calls()
+    engine:seek(50)
+    local video_window = nil
+    for _, c in ipairs(playback_calls) do
+        if c.name == "SET_CLIP_WINDOW" and c.args[2] == "video" then
+            video_window = c
         end
     end
-    assert(video_window,
-        "_setup_playback_controller must send initial video clip window")
-    assert(audio_window,
-        "_setup_playback_controller must send initial audio clip window")
-    print("  PASS: initial clip windows sent during setup")
+    assert(video_window, "first seek must send video clip window")
+    print("  PASS: no clip window at load, populated by first seek")
 end
 
 --------------------------------------------------------------------------------

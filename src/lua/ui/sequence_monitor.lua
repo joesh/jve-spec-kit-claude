@@ -111,14 +111,18 @@ function SequenceMonitor.new(config)
         if self.sequence_id == sequence_id then
             self.engine:_refresh_content_bounds()
             self.total_frames = self.engine.total_frames
-            -- Invalidate C++ clip windows so NeedClips fires on next tick
+            -- Invalidate clip windows: C++ side AND Lua-side cache.
+            -- Both must be cleared so _send_clips_to_tmb re-queries with fresh data.
             if self.engine._playback_controller and qt_constants.PLAYBACK then
                 qt_constants.PLAYBACK.INVALIDATE_CLIP_WINDOWS(self.engine._playback_controller)
             end
-            -- Re-feed TMB clips (clip layout may have changed)
+            self.engine._tmb_clip_window = nil
+            -- Re-feed TMB clips (clip layout changed)
             if self.engine._tmb then
                 self.engine:_send_clips_to_tmb(math.floor(self.engine:get_position()))
             end
+            -- MVC pull: re-display frame at parked playhead (content under us changed)
+            self:on_model_changed()
             self:_notify()
         end
     end)
@@ -212,6 +216,15 @@ function SequenceMonitor:_create_widgets()
     -- Wire video surface to PlaybackEngine for C++ CVDisplayLink playback
     if self.engine.set_surface then
         self.engine:set_surface(self._video_surface)
+    end
+
+    -- MVC pull: when Metal backend becomes render-ready, pull current frame.
+    -- Fixes startup race where engine:seek() fires before Metal is initialized,
+    -- dropping the initial frame silently.
+    if qt_constants.EMP.SURFACE_ON_READY then
+        qt_constants.EMP.SURFACE_ON_READY(self._video_surface, function()
+            self:on_model_changed()
+        end)
     end
 
     -- Mark bar (ScriptableTimeline widget)
@@ -460,6 +473,20 @@ function SequenceMonitor:_schedule_persist()
     else
         self:save_playhead_to_db()
     end
+end
+
+--------------------------------------------------------------------------------
+-- MVC Pull: View re-pulls frame from model
+--------------------------------------------------------------------------------
+
+--- Called when the View should re-display the current frame.
+-- Two triggers: (1) surface becomes render-ready (Metal initialized),
+-- (2) content changes at parked playhead (insert/delete at playhead).
+-- No-op during playback (C++ CVDisplayLink push path handles that).
+function SequenceMonitor:on_model_changed()
+    if not self.sequence_id then return end
+    if self.engine:is_playing() then return end
+    self.engine:on_model_changed(self.playhead)
 end
 
 --------------------------------------------------------------------------------

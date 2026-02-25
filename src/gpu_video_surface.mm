@@ -142,6 +142,13 @@ GPUVideoSurface::~GPUVideoSurface() {
     cleanupMetal();
 }
 
+void GPUVideoSurface::setReadyCallback(ReadyCallback cb) {
+    m_ready_callback = std::move(cb);
+    // If Metal is already initialized (race: Show fired before callback was set),
+    // fire immediately so the View can pull its first frame.
+    if (m_initialized && m_ready_callback) m_ready_callback();
+}
+
 void GPUVideoSurface::initMetal() {
     if (m_initialized) return;
 
@@ -214,6 +221,8 @@ void GPUVideoSurface::initMetal() {
 
         m_initialized = true;
         JVE_LOG_EVENT(Video, "GPUVideoSurface: Metal initialized");
+
+        if (m_ready_callback) m_ready_callback();
     }
 }
 

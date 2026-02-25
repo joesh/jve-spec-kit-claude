@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QPaintEngine>
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace emp { class Frame; }
@@ -20,6 +21,11 @@ class GPUVideoSurface : public QWidget {
 public:
     explicit GPUVideoSurface(QWidget* parent = nullptr);
     ~GPUVideoSurface() override;
+
+    // Callback fired once when Metal backend becomes render-ready.
+    // If Metal is already initialized when callback is set, fires immediately.
+    using ReadyCallback = std::function<void()>;
+    void setReadyCallback(ReadyCallback cb);
 
     // Set frame to display. Accepts both hw-decoded (native_buffer) and
     // sw-decoded (CPU BGRA data) frames.
@@ -71,6 +77,7 @@ private:
     int m_par_den = 1;
     int m_frame_count = 0;
     bool m_initialized = false;
+    ReadyCallback m_ready_callback;
 };
 
 #else
@@ -79,7 +86,9 @@ private:
 class GPUVideoSurface : public QWidget {
     Q_OBJECT
 public:
+    using ReadyCallback = std::function<void()>;
     explicit GPUVideoSurface(QWidget* parent = nullptr) : QWidget(parent) {}
+    void setReadyCallback(ReadyCallback) {}
     void setFrame(const std::shared_ptr<emp::Frame>&) { assert(false && "GPUVideoSurface not available on this platform"); }
     void clearFrame() {}
     void setRotation(int) {}
