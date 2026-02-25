@@ -493,17 +493,23 @@ function PlaybackEngine:_send_video_clips_to_tmb(frame)
         qt_constants.PLAYBACK.SET_VIDEO_TRACKS(self._playback_controller, indices)
     end
 
-    -- Compute clip window: union of ALL loaded clips (current + next).
-    -- TMB has all these clips cached, so C++ doesn't need NeedClips
-    -- until the playhead approaches the edge of this range.
+    -- Compute clip window: MINIMUM per-track coverage end.
+    -- NeedClips must fire before ANY track runs dry, not just the last one.
     local window_lo = self.total_frames
-    local window_hi = 0
+    local window_hi = math.huge
+    local has_video_clips = false
     for _, clips in pairs(track_clips) do
-        for _, clip_data in ipairs(clips) do
-            window_lo = math.min(window_lo, clip_data.timeline_start)
-            window_hi = math.max(window_hi, clip_data.timeline_start + clip_data.duration)
+        if #clips > 0 then
+            has_video_clips = true
+            local track_hi = 0
+            for _, clip_data in ipairs(clips) do
+                window_lo = math.min(window_lo, clip_data.timeline_start)
+                track_hi = math.max(track_hi, clip_data.timeline_start + clip_data.duration)
+            end
+            window_hi = math.min(window_hi, track_hi)
         end
     end
+    if not has_video_clips then window_hi = 0 end
 
     -- Report clip window to C++
     if self._playback_controller and window_hi > window_lo then
@@ -691,20 +697,27 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
 
     -- ── Compute clip window from VIDEO clips only ──
     -- The clip window determines when Lua re-queries TMB for new clips.
-    -- It MUST be based on video coverage because deliverFrame needs video frames
-    -- at every seek position. Audio clips may extend far beyond video clips;
-    -- including them inflates the window and masks gaps where TMB has no video.
+    -- window_hi = MINIMUM per-track coverage end (not maximum). This ensures
+    -- NeedClips fires before ANY track runs dry. Using max would let tracks
+    -- with shorter coverage silently become gaps mid-playback → video freeze.
     local window_lo = self.total_frames or math.huge
-    local window_hi = 0
+    local window_hi = math.huge
 
     local has_clips = false
     for _, clips in pairs(track_clips) do
-        for _, clip_data in ipairs(clips) do
+        if #clips > 0 then
             has_clips = true
-            window_lo = math.min(window_lo, clip_data.timeline_start)
-            window_hi = math.max(window_hi, clip_data.timeline_start + clip_data.duration)
+            local track_lo = math.huge
+            local track_hi = 0
+            for _, clip_data in ipairs(clips) do
+                track_lo = math.min(track_lo, clip_data.timeline_start)
+                track_hi = math.max(track_hi, clip_data.timeline_start + clip_data.duration)
+            end
+            window_lo = math.min(window_lo, track_lo)
+            window_hi = math.min(window_hi, track_hi)
         end
     end
+    if not has_clips then window_hi = 0 end
 
     if has_clips and window_hi > window_lo then
         self._tmb_clip_window = {

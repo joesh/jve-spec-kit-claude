@@ -368,6 +368,8 @@ void PlaybackController::Play(int direction, float speed) {
     m_hit_boundary.store(false, std::memory_order_relaxed);
     m_fractional_frames = 0.0;
     m_last_displayed_frame = -1;
+    m_hold_count = 0;
+    m_skip_count = 0;
 
     // Hint TMB for pre-buffer at play start
     {
@@ -494,7 +496,10 @@ void PlaybackController::Stop() {
     int64_t pos = m_position.load(std::memory_order_relaxed);
     reportPosition(pos, true);
 
-    JVE_LOG_EVENT(Ticks, "Stop at frame %lld", (long long)pos);
+    JVE_LOG_EVENT(Ticks, "Stop at frame %lld (ticks=%lld holds=%lld skips=%lld delivers=%lld)",
+                 (long long)pos, (long long)m_advance_count,
+                 (long long)m_hold_count, (long long)m_skip_count,
+                 (long long)m_deliver_count);
 }
 
 void PlaybackController::Seek(int64_t frame) {
@@ -965,16 +970,18 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
         if (diff_seconds < -threshold) {
             // Video behind audio → skip: advance extra frame
             new_pos += dir;
+            ++m_skip_count;
             if (m_advance_count % 30 == 0) {
-                JVE_LOG_DETAIL(Ticks, "advancePosition: SKIP drift=%.4fs frame=%lld",
-                              diff_seconds, (long long)new_pos);
+                JVE_LOG_DETAIL(Ticks, "advancePosition: SKIP drift=%.4fs frame=%lld (skips=%lld)",
+                              diff_seconds, (long long)new_pos, (long long)m_skip_count);
             }
         } else if (diff_seconds > threshold) {
             // Video ahead of audio → hold: undo this tick's advance
             new_pos = current;
+            ++m_hold_count;
             if (m_advance_count % 30 == 0) {
-                JVE_LOG_DETAIL(Ticks, "advancePosition: HOLD drift=%.4fs frame=%lld",
-                              diff_seconds, (long long)current);
+                JVE_LOG_DETAIL(Ticks, "advancePosition: HOLD drift=%.4fs frame=%lld (holds=%lld)",
+                              diff_seconds, (long long)current, (long long)m_hold_count);
             }
         }
     }
@@ -1012,10 +1019,9 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     // (handles 24fps video on 60Hz display — repeats frames 2-3x)
     if (frame == m_last_displayed_frame) {
         ++m_repeat_streak;
-        // Detect stalls: >3x consecutive repeats at 24fps/60Hz is normal (2.5x),
-        // but >3x means decode can't keep up
-        if (m_repeat_streak > 3 && (m_deliver_count % 30 == 0)) {
-            JVE_LOG_DETAIL(Ticks, "deliverFrame: repeat streak=%lld on frame %lld",
+        // Log every 60th repeat when stalling (>3x is suspicious for 24fps/60Hz)
+        if (m_repeat_streak > 3 && (m_repeat_streak % 60 == 0)) {
+            JVE_LOG_DETAIL(Ticks, "deliverFrame: STUCK repeat=%lld on frame %lld (position not advancing)",
                           (long long)m_repeat_streak, (long long)frame);
         }
         return;
@@ -1041,10 +1047,13 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     }
 
     if (!found_frame) {
-        // All tracks are gaps at this frame — nothing to display (valid)
+        // All tracks are gaps at this frame — nothing to display
         if (synchronous) {
             JVE_LOG_EVENT(Ticks, "deliverFrame: gap at frame %lld (no clip on any track)",
                          (long long)frame);
+        } else if (m_deliver_count % 60 == 0) {
+            JVE_LOG_DETAIL(Ticks, "deliverFrame: GAP frame=%lld tracks=%zu (no clip on any track)",
+                          (long long)frame, m_video_track_indices.size());
         }
         return;
     }
@@ -1113,14 +1122,24 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
                 surface->setFrame(frame_ptr);
             });
         }
-    } else if (synchronous && !result.clip_id.empty()) {
-        char buf[256];
-        snprintf(buf, sizeof(buf),
-            "PlaybackController::deliverFrame: Seek to frame %lld returned no frame "
-            "data but clip_id='%s' (decode failure? offline=%d pending=%d)",
-            (long long)frame, result.clip_id.c_str(),
-            (int)result.offline, (int)result.pending);
-        JVE_ASSERT(false, buf);
+    } else if (!result.clip_id.empty()) {
+        // TMB has a clip at this frame but returned no decoded frame data.
+        // Sync (seek): assert — must decode or we display stale content.
+        // Async (playback): log — decoder may be catching up. But if this
+        // persists, video will appear frozen while audio continues.
+        if (synchronous) {
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                "PlaybackController::deliverFrame: Seek to frame %lld returned no frame "
+                "data but clip_id='%s' (decode failure? offline=%d pending=%d)",
+                (long long)frame, result.clip_id.c_str(),
+                (int)result.offline, (int)result.pending);
+            JVE_ASSERT(false, buf);
+        } else if (m_deliver_count % 30 == 0) {
+            JVE_LOG_DETAIL(Ticks, "deliverFrame: NULL FRAME clip=%s frame=%lld pending=%d offline=%d",
+                          result.clip_id.c_str(), (long long)frame,
+                          (int)result.pending, (int)result.offline);
+        }
     }
 }
 

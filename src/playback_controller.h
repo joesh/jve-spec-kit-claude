@@ -223,6 +223,8 @@ private:
     int64_t m_deliver_count{0};         // deliverFrame call count (sampled every 30th)
     int64_t m_repeat_streak{0};         // consecutive frame repeats (stall detector)
     int64_t m_advance_count{0};         // advancePosition call count (sampled every 30th)
+    int64_t m_hold_count{0};            // total HOLD corrections this play session
+    int64_t m_skip_count{0};            // total SKIP corrections this play session
 
     // ---- A/V sync thresholds (ffplay model) ----
     static constexpr double SYNC_THRESHOLD_MIN = 0.04;  // 40ms — ignore drift below this
