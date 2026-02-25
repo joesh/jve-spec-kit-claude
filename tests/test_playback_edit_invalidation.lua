@@ -47,7 +47,7 @@ package.loaded["core.qt_constants"] = {
         TMB_PARK_READERS = function() end,
         TMB_SET_SEQUENCE_RATE = function() end,
         TMB_SET_AUDIO_FORMAT = function() end,
-        TMB_SET_TRACK_CLIPS = function() end,
+        TMB_SET_TRACK_CLIPS = function(...) track_playback("TMB_SET_TRACK_CLIPS", ...) end,
         TMB_SET_PLAYHEAD = function() end,
         TMB_GET_VIDEO_FRAME = function() return nil, { offline = false } end,
     },
@@ -204,11 +204,14 @@ do
     assert(find_call("INVALIDATE_CLIP_WINDOWS"),
         "content_changed must trigger INVALIDATE_CLIP_WINDOWS")
 
-    -- Verify Lua-side clip window cleared
-    assert(engine._tmb_clip_window == nil,
-        "_tmb_clip_window must be cleared after edit")
+    -- Verify Lua-side clip window was invalidated and re-populated with fresh data
+    -- (notify_content_changed clears cache then immediately re-feeds TMB)
+    -- The important observable: INVALIDATE_CLIP_WINDOWS was called (above) and
+    -- TMB_SET_TRACK_CLIPS was called with fresh clip data.
+    assert(find_call("TMB_SET_TRACK_CLIPS") or engine._tmb_clip_window ~= nil,
+        "clip cache should be re-populated with fresh data after invalidation")
 
-    print("  PASS: edit on our sequence → invalidated")
+    print("  PASS: edit on our sequence → invalidated + re-fed")
 
     engine:destroy()
 end

@@ -109,18 +109,8 @@ function SequenceMonitor.new(config)
     -- Refresh content bounds when clips change (insert, delete, undo, redo)
     self._content_changed_id = Signals.connect("content_changed", function(sequence_id)
         if self.sequence_id == sequence_id then
-            self.engine:_refresh_content_bounds()
+            self.engine:notify_content_changed()
             self.total_frames = self.engine.total_frames
-            -- Invalidate clip windows: C++ side AND Lua-side cache.
-            -- Both must be cleared so _send_clips_to_tmb re-queries with fresh data.
-            if self.engine._playback_controller and qt_constants.PLAYBACK then
-                qt_constants.PLAYBACK.INVALIDATE_CLIP_WINDOWS(self.engine._playback_controller)
-            end
-            self.engine._tmb_clip_window = nil
-            -- Re-feed TMB clips (clip layout changed)
-            if self.engine._tmb then
-                self.engine:_send_clips_to_tmb(math.floor(self.engine:get_position()))
-            end
             -- MVC pull: re-display frame at parked playhead (content under us changed)
             self:on_model_changed()
             self:_notify()

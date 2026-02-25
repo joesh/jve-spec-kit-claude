@@ -270,6 +270,20 @@ function PlaybackEngine:_close_tmb()
     self._tmb_clip_window = nil
 end
 
+--- Public: invalidate clip cache + re-feed TMB after timeline edits.
+-- Called by views (sequence_monitor) on content_changed — encapsulates all
+-- internal cache invalidation so views never touch engine privates.
+function PlaybackEngine:notify_content_changed()
+    self:_refresh_content_bounds()
+    if self._playback_controller then
+        qt_constants.PLAYBACK.INVALIDATE_CLIP_WINDOWS(self._playback_controller)
+    end
+    self._tmb_clip_window = nil
+    if self._tmb then
+        self:_send_clips_to_tmb(math.floor(self:get_position()))
+    end
+end
+
 --------------------------------------------------------------------------------
 -- PlaybackController Setup
 --------------------------------------------------------------------------------
@@ -329,10 +343,8 @@ function PlaybackEngine:_setup_playback_controller()
         Signals.disconnect(self._content_changed_conn)
     end
     self._content_changed_conn = Signals.connect("content_changed", function(seq_id)
-        if seq_id == engine.sequence_id and engine._playback_controller then
-            PLAYBACK.INVALIDATE_CLIP_WINDOWS(engine._playback_controller)
-            -- Also clear Lua-side clip window cache
-            engine._tmb_clip_window = nil
+        if seq_id == engine.sequence_id then
+            engine:notify_content_changed()
             log.event("Edit detected: invalidated clip windows")
         end
     end)
