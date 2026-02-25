@@ -693,7 +693,10 @@ local track_button_refs = {}
 local function refresh_track_button_styles()
     for track_id, refs in pairs(track_button_refs) do
         local t = Track.load(track_id)
-        if t then
+        if not t then
+            log.warn("refresh_track_button_styles: track %s not found (deleted?), clearing refs", tostring(track_id))
+            track_button_refs[track_id] = nil
+        else
             if refs.mute_btn then
                 qt_constants.PROPERTIES.SET_STYLE(refs.mute_btn,
                     build_track_header_btn_stylesheet(t.muted, "#cc3333"))

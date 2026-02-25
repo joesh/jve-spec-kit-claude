@@ -169,4 +169,75 @@ do
     print("  PASS: locked toggle + undo")
 end
 
+--------------------------------------------------------------------------------
+-- 6. Non-existent track_id asserts
+--------------------------------------------------------------------------------
+print("\n--- 6. Non-existent track_id rejected ---")
+do
+    local result = command_manager.execute("SetTrackProperty", {
+        track_id = "nonexistent_track",
+        property = "muted",
+        value = true,
+        project_id = "proj1",
+    })
+    assert(not result.success, "should fail for non-existent track_id")
+    assert(tostring(result.error_message):find("not found"),
+        "error should mention 'not found', got: " .. tostring(result.error_message))
+    print("  PASS: non-existent track_id rejected")
+end
+
+--------------------------------------------------------------------------------
+-- 7. Wrong type for number property rejected
+--------------------------------------------------------------------------------
+print("\n--- 7. Wrong type for volume (string) rejected ---")
+do
+    local result = command_manager.execute("SetTrackProperty", {
+        track_id = "at1",
+        property = "volume",
+        value = "loud",
+        project_id = "proj1",
+    })
+    assert(not result.success, "should fail for string volume value")
+    assert(tostring(result.error_message):find("requires number"),
+        "error should mention 'requires number', got: " .. tostring(result.error_message))
+
+    -- Verify track wasn't mutated
+    local fresh = Track.load("at1")
+    assert(fresh, "track must still exist after failed command")
+    assert(math.abs(fresh.volume - 1.0) < 0.001,
+        "volume should be unchanged after failed command, got: " .. tostring(fresh.volume))
+    print("  PASS: wrong type for volume rejected, track unmutated")
+end
+
+--------------------------------------------------------------------------------
+-- 8. Pan boundary values
+--------------------------------------------------------------------------------
+print("\n--- 8. Pan set to boundary values ---")
+do
+    -- Pan = -1.0 (hard left)
+    local result = command_manager.execute("SetTrackProperty", {
+        track_id = "at1",
+        property = "pan",
+        value = -1.0,
+        project_id = "proj1",
+    })
+    assert(result.success, "SetTrackProperty(pan=-1.0) failed: " .. tostring(result.error_message))
+    local fresh = Track.load("at1")
+    assert(math.abs(fresh.pan - (-1.0)) < 0.001, "pan should be -1.0")
+    command_manager.undo()
+
+    -- Pan = 0.0 (center)
+    result = command_manager.execute("SetTrackProperty", {
+        track_id = "at1",
+        property = "pan",
+        value = 0.0,
+        project_id = "proj1",
+    })
+    assert(result.success, "SetTrackProperty(pan=0.0) failed")
+    fresh = Track.load("at1")
+    assert(math.abs(fresh.pan) < 0.001, "pan should be 0.0")
+    command_manager.undo()
+    print("  PASS: pan boundary values")
+end
+
 print("\n✅ test_set_track_property.lua passed")
