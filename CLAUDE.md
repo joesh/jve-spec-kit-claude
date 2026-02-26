@@ -115,6 +115,7 @@ This application is MVC. **Views pull from model state.** They NEVER depend on r
 
 ## **🚫 ABSOLUTE PROHIBITIONS**
 
+- **Patching over a broken model** — When a bug reveals a design gap, fix the model, don't add a special-case mechanism alongside it. If you're adding a heuristic, threshold, or flag to work around a failure in an existing system, STOP and ask: "Is the underlying abstraction wrong?" Special cases accrete into unmaintainable complexity. Priority flags, polling loops, and "near boundary" heuristics are symptoms of a missing abstraction, not solutions. If the fix doesn't make the system simpler, it's probably wrong.
 - Creating new error handling systems (Rule #2)
 - Bypassing existing validation systems (Rule #1)
 - **Using fallback values or defaults** - always fail explicitly (Rule #5)

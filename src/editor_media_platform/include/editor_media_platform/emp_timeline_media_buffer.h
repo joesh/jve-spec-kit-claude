@@ -295,6 +295,11 @@ private:
     // ── Audio format (for pre-buffer — set once before playback) ──
     AudioFormat m_audio_fmt{SampleFormat::F32, 0, 0};
 
+    // Pre-buffer threshold: ~4 seconds at 24fps. Workers decode this far ahead
+    // so Play-mode GetVideoFrame hits cache. Used by SetPlayhead (gap scan)
+    // and trigger_prebuffer_for_new_clips (new-clip pre-buffer).
+    static constexpr int64_t PRE_BUFFER_THRESHOLD = 96;
+
     // ── Playhead state ──
     std::atomic<int64_t> m_playhead_frame{0};
     std::atomic<int> m_playhead_direction{0};

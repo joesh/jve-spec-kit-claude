@@ -1119,7 +1119,7 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
             // Async gap: TMB has no clips here. Invalidate video clip window
             // to force a one-time NeedClips reload — Lua will re-query the
             // timeline and feed any clips that exist at this frame.
-            // Without this, the wide (max-based) window masks stale TMB data.
+            // Without this, the clip window masks stale TMB data at gaps.
             if (m_video_window.valid.load(std::memory_order_relaxed)) {
                 m_video_window.valid.store(false, std::memory_order_relaxed);
                 m_video_window.need_clips_pending.store(false, std::memory_order_relaxed);

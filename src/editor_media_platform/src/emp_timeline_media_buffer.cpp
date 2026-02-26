@@ -71,8 +71,6 @@ void TimelineMediaBuffer::trigger_prebuffer_for_new_clips(
         const std::unordered_set<std::string>& old_clip_ids,
         int64_t playhead, int direction) {
 
-    constexpr int64_t PRE_BUFFER_THRESHOLD = 96;
-
     int64_t boundary = (direction >= 0) ? current.timeline_end() : current.timeline_start;
     int64_t distance = std::abs(playhead - boundary);
     if (distance >= PRE_BUFFER_THRESHOLD) return;
@@ -234,10 +232,6 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
     // Collect active reader keys (current + next clip per track) for Phase 2.
     using ReaderKey = std::pair<TrackId, std::string>;
     std::vector<ReaderKey> active_keys;
-
-    // Pre-buffer threshold: ~4 seconds of frames at assumed 24fps.
-    // Workers must decode ahead so Play-mode GetVideoFrame hits cache.
-    constexpr int64_t PRE_BUFFER_THRESHOLD = 96;
 
     {
         std::lock_guard<std::mutex> lock(m_tracks_mutex);

@@ -35,6 +35,32 @@ local Signals = require("core.signals")
 local PlaybackEngine = {}
 PlaybackEngine.__index = PlaybackEngine
 
+--- Compute MIN-per-track-end clip window from a track_clips map.
+-- Returns the tightest window [lo, hi) that covers all tracks: lo is the
+-- earliest clip start across all tracks, hi is the MIN of each track's
+-- latest clip end. This ensures NeedClips fires before ANY track's loaded
+-- clips run out (not when ALL expire — that was the old MAX-based bug).
+-- @param track_clips_map table {[track_index] = {clip_data, ...}}
+-- @return has_any boolean, lo number, hi number
+local function compute_min_clip_window(track_clips_map)
+    local lo = math.huge
+    local hi = math.huge
+    local has_any = false
+    for _, clips in pairs(track_clips_map) do
+        if #clips > 0 then
+            has_any = true
+            local track_hi = 0
+            for _, clip_data in ipairs(clips) do
+                lo = math.min(lo, clip_data.timeline_start)
+                track_hi = math.max(track_hi, clip_data.timeline_start + clip_data.duration)
+            end
+            hi = math.min(hi, track_hi)
+        end
+    end
+    if not has_any then hi = 0 end
+    return has_any, lo, hi
+end
+
 -- Class-level audio playback reference (singleton audio device)
 local audio_playback = nil
 
@@ -458,25 +484,8 @@ function PlaybackEngine:_send_video_clips_to_tmb(frame)
         qt_constants.PLAYBACK.SET_VIDEO_TRACKS(self._playback_controller, indices)
     end
 
-    -- Compute clip window: MIN per-track end for C++ — ensures NeedClips fires
-    -- before ANY track's loaded clips run out (not just when ALL tracks expire).
-    local window_lo = self.total_frames
-    local window_hi = math.huge
-    local has_any = false
-    for _, clips in pairs(track_clips) do
-        if #clips > 0 then
-            has_any = true
-            local track_hi = 0
-            for _, clip_data in ipairs(clips) do
-                window_lo = math.min(window_lo, clip_data.timeline_start)
-                track_hi = math.max(track_hi, clip_data.timeline_start + clip_data.duration)
-            end
-            window_hi = math.min(window_hi, track_hi)
-        end
-    end
-    if not has_any then window_hi = 0 end
-
-    -- Report clip window to C++
+    -- Report video clip window to C++
+    local has_any, window_lo, window_hi = compute_min_clip_window(track_clips)
     if self._playback_controller and has_any and window_hi > window_lo then
         qt_constants.PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "video", window_lo, window_hi)
     end
@@ -550,26 +559,10 @@ function PlaybackEngine:_send_audio_clips_only(frame)
     table.sort(audio_indices)
     self._audio_track_indices = audio_indices
 
-    -- Compute audio clip window: MIN per-track end (same as video).
-    local window_lo = self.total_frames
-    local window_hi = math.huge
-    local has_audio = false
-    for _, clips in pairs(audio_track_clips) do
-        if #clips > 0 then
-            has_audio = true
-            local track_hi = 0
-            for _, clip_data in ipairs(clips) do
-                window_lo = math.min(window_lo, clip_data.timeline_start)
-                track_hi = math.max(track_hi, clip_data.timeline_start + clip_data.duration)
-            end
-            window_hi = math.min(window_hi, track_hi)
-        end
-    end
-    if not has_audio then window_hi = 0 end
-
-    -- Report clip window to C++
-    if self._playback_controller and has_audio and window_hi > window_lo then
-        qt_constants.PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "audio", window_lo, window_hi)
+    -- Report audio clip window to C++
+    local has_audio, audio_lo, audio_hi = compute_min_clip_window(audio_track_clips)
+    if self._playback_controller and has_audio and audio_hi > audio_lo then
+        qt_constants.PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "audio", audio_lo, audio_hi)
     end
 end
 
@@ -627,31 +620,8 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
     -- ── Audio tracks ──
     local audio_track_clips = self:_send_audio_clips_to_tmb(frame, EMP)
 
-    -- ── Compute clip windows from VIDEO clips ──
-    -- MIN per-track end: ensures NeedClips fires before ANY track's loaded
-    -- clips run out. Previously used MAX (prevented NeedClips thrashing for
-    -- sparse tracks) but that caused 200ms+ gaps when one track's clips
-    -- expired while the MAX-based window was still wide open.
-    -- NeedClips is debounced (need_clips_pending), so the extra calls from
-    -- MIN-based windows are acceptable (<5ms Lua overhead per cycle).
-    local window_lo = self.total_frames or math.huge
-    local window_hi = math.huge   -- min per-track end
-
-    local has_clips = false
-    for _, clips in pairs(track_clips) do
-        if #clips > 0 then
-            has_clips = true
-            local track_lo = math.huge
-            local track_hi = 0
-            for _, clip_data in ipairs(clips) do
-                track_lo = math.min(track_lo, clip_data.timeline_start)
-                track_hi = math.max(track_hi, clip_data.timeline_start + clip_data.duration)
-            end
-            window_lo = math.min(window_lo, track_lo)
-            window_hi = math.min(window_hi, track_hi)
-        end
-    end
-    if not has_clips then window_hi = 0 end
+    -- ── Clip windows (video + audio) ──
+    local has_clips, window_lo, window_hi = compute_min_clip_window(track_clips)
 
     if has_clips and window_hi > window_lo then
         self._tmb_clip_window = {
@@ -661,31 +631,13 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
         self._tmb_clip_window = nil
     end
 
-    -- Report MIN-based window to C++ (NeedClips fires when ANY track nears edge)
     if self._playback_controller and has_clips and window_hi > window_lo then
-        local PLAYBACK = qt_constants.PLAYBACK
-        PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "video", window_lo, window_hi)
+        qt_constants.PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "video", window_lo, window_hi)
     end
 
-    -- Compute audio clip window: MIN per-track end (same logic as video)
-    local audio_lo = self.total_frames
-    local audio_hi = math.huge
-    local has_audio_clips = false
-    for _, clips in pairs(audio_track_clips) do
-        if #clips > 0 then
-            has_audio_clips = true
-            local track_hi = 0
-            for _, clip_data in ipairs(clips) do
-                audio_lo = math.min(audio_lo, clip_data.timeline_start)
-                track_hi = math.max(track_hi, clip_data.timeline_start + clip_data.duration)
-            end
-            audio_hi = math.min(audio_hi, track_hi)
-        end
-    end
-    if not has_audio_clips then audio_hi = 0 end
-    if self._playback_controller and audio_hi > audio_lo then
-        qt_constants.PLAYBACK.SET_CLIP_WINDOW(
-            self._playback_controller, "audio", audio_lo, audio_hi)
+    local has_audio_clips, audio_lo, audio_hi = compute_min_clip_window(audio_track_clips)
+    if self._playback_controller and has_audio_clips and audio_hi > audio_lo then
+        qt_constants.PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "audio", audio_lo, audio_hi)
     end
 
     return true  -- boundary crossing: clips were re-queried
