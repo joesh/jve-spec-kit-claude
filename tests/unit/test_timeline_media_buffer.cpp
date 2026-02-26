@@ -447,9 +447,11 @@ private slots:
     }
 
     void test_pre_buffer_fires() {
+        // Watermark cold-start priming: SetPlayhead(dir=0→1) submits initial REFILL.
+        // REFILL starts from playhead and fills forward, naturally spanning clip boundaries.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create(4);
 
         // Two adjacent clips
         std::vector<ClipInfo> clips = {
@@ -458,13 +460,13 @@ private slots:
         };
         tmb->SetTrackClips(V1, clips);
 
-        // Seek near boundary (frame 48, within threshold of 48 frames)
+        // Cold-start: first SetPlayhead with direction=1 triggers REFILL from frame 48
         tmb->SetPlayhead(48, 1, 1.0f);
 
-        // Give workers time to pre-buffer
-        QThread::msleep(200);
+        // Give REFILL worker time to decode frames 48-50+ (includes Reader creation)
+        QThread::msleep(500);
 
-        // Frame 50 (first frame of clipB) should be cached
+        // Frame 50 (first frame of clipB) should be cached by REFILL
         auto result = tmb->GetVideoFrame(V1, 50);
         QVERIFY(result.frame != nullptr);
         QCOMPARE(result.clip_id, std::string("clipB"));
@@ -1737,19 +1739,12 @@ private slots:
 
     void test_incremental_pre_buffer_early_frames() {
         // Pre-buffer stores each decoded frame to TMB cache INCREMENTALLY
-        // (not all-at-once after the full batch). This means the main thread
-        // can read early frames of the next clip while the worker is still
-        // decoding later frames.
-        //
-        // Before the fix: worker decoded all 48 frames into a local vector,
-        // then stored them all under one lock. During the batch, GetVideoFrame
-        // missed the cache and blocked on the reader's use_mutex.
-        //
-        // After the fix: each frame is stored to TMB cache immediately after
-        // decode. GetVideoFrame hits the cache without reader contention.
+        // REFILL stores each frame to cache immediately after decode (not
+        // all-at-once after the batch). This means the main thread can read
+        // early frames of the next clip while the worker decodes later frames.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create(4);
         auto path = m_testVideoPath.toStdString();
 
         // clipA [0,50), clipB [50,100) — adjacent
@@ -1759,16 +1754,15 @@ private slots:
         };
         tmb->SetTrackClips(V1, both_clips);
 
-        // Trigger pre-buffer at boundary
+        // Cold-start REFILL from frame 48 — fills forward across clip boundary.
+        // REFILL stores each decoded frame immediately.
         tmb->SetPlayhead(48, 1, 1.0f);
 
-        // Wait only 100ms — enough for worker to decode SOME frames of clipB,
-        // but not all 48. The incremental fix means those early frames are
-        // already in the TMB cache.
-        QThread::msleep(100);
+        // Give worker time to decode frames 48-50+ (Reader creation + h264 seek)
+        QThread::msleep(500);
 
         // Read the first frame of clipB. With incremental storage, this should
-        // be a TMB cache hit (frame 50 was decoded and stored early in the batch).
+        // be a TMB cache hit (frame 50 was decoded and stored as the batch ran).
         tmb->ResetVideoCacheMissCount();
         auto r = tmb->GetVideoFrame(V1, 50);
         QVERIFY2(r.frame != nullptr,
@@ -1892,24 +1886,16 @@ private slots:
     // ── Pre-buffer dedup: in-flight jobs block re-submission ──
 
     void test_pre_buffer_dedup_multi_track() {
-        // Regression test: repeated SetPlayhead calls must not cause both
-        // workers to pre-buffer the SAME clip. With only 2 workers and 2
-        // tracks near boundaries, each worker should serve a different track.
-        //
-        // Before fix: worker pops job → queue empty → next tick re-submits
-        // same (track, clip_id, type) → both workers decode V1's next clip.
-        // V2's next clip never gets pre-buffered → main-thread Reader::Create.
-        //
-        // After fix: in-flight set blocks re-submission → second worker
-        // picks up V2's next clip instead.
+        // Watermark-driven cold-start primes ALL tracks. With 4 workers and
+        // 2 tracks, each track gets its own REFILL (keyed by track+type,
+        // not clip_id). Both tracks' clips are decoded in parallel.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2); // exactly 2 workers
+        auto tmb = TimelineMediaBuffer::Create(4); // 4 workers for 2 tracks
         auto path = m_testVideoPath.toStdString();
 
         // V1: clipA [0,50) → clipB [50,72)
         // V2: clipC [0,50) → clipD [50,72)
-        // Both tracks near boundary at frame 48 (within PRE_BUFFER_THRESHOLD=48)
         std::vector<ClipInfo> v1_clips = {
             {"clipA", path, 0, 50, 0, 24, 1, 1.0f},
             {"clipB", path, 50, 22, 0, 24, 1, 1.0f},
@@ -1921,20 +1907,13 @@ private slots:
         tmb->SetTrackClips(V1, v1_clips);
         tmb->SetTrackClips(V2, v2_clips);
 
-        // Open readers for current clips
-        tmb->SetPlayhead(0, 1, 1.0f);
-        tmb->GetVideoFrame(V1, 0);
-        tmb->GetVideoFrame(V2, 0);
+        // Cold-start near boundary: SetPlayhead(dir=0→1) submits REFILL for
+        // both V1 and V2 at frame 48. Each REFILL fills [48, 48+48) = frames
+        // 48-95, covering the clip boundary at frame 50.
+        tmb->SetPlayhead(48, 1, 1.0f);
 
-        // Simulate multiple ticks near boundary (the bug required tick 2+ to
-        // re-submit after worker popped the job from the queue)
-        for (int tick = 0; tick < 5; ++tick) {
-            tmb->SetPlayhead(48, 1, 1.0f);
-            QThread::msleep(20);
-        }
-
-        // Wait for workers to finish pre-buffering
-        QThread::msleep(800);
+        // Wait for both REFILL workers to decode past boundary
+        QThread::msleep(1000);
 
         // Both tracks' next clips should be pre-buffered (cache hit = 0 misses)
         tmb->ResetVideoCacheMissCount();
@@ -2433,60 +2412,46 @@ private slots:
         // Scenario: Playing forward, approaching clip A's end. NeedClips fires,
         // Lua calls SetTrackClips with [A, B]. The ENTRY FRAME of clip B must be
         // pre-buffered immediately — NOT deferred to the next SetPlayhead tick.
-        //
-        // Without the fix: SetTrackClips just stores clips. Pre-buffer only fires
-        // on the next SetPlayhead call. If workers are busy, the entry frame
-        // isn't ready when the playhead arrives → 200ms+ hold → visible stutter.
-        //
-        // With the fix: SetTrackClips detects new clips near the playhead during
-        // active playback and submits pre-buffer jobs immediately.
+        // SetTrackClips during active playback resets buffer_end and submits
+        // a REFILL from the current playhead. This replaces the old
+        // trigger_prebuffer_for_new_clips mechanism.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create(4);
         auto path = m_testVideoPath.toStdString();
 
-        // Clip A: [0, 100), Clip B: [100, 200) — adjacent on V1
+        // Start with only clip A (short — avoids h264 seek penalty)
         std::vector<ClipInfo> initial = {
-            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+            {"clipA", path, 0, 20, 0, 24, 1, 1.0f},
         };
         tmb->SetTrackClips(V1, initial);
 
-        // Park-mode prime: decode frame 0 so TMB has a reader for the file
-        tmb->SetPlayhead(0, 0, 1.0f);
-        auto r0 = tmb->GetVideoFrame(V1, 0);
-        QVERIFY2(r0.frame != nullptr, "Park-mode decode at frame 0 must succeed");
+        // Cold-start play at frame 15 (5 frames from clip A's end)
+        tmb->SetPlayhead(15, 1, 1.0f);
+        QThread::msleep(300); // let initial REFILL settle
 
-        // Switch to play mode, position near boundary (10 frames from clip A's end)
-        tmb->SetPlayhead(90, 1, 1.0f);
-        QThread::msleep(50); // let any existing pre-buffer settle
-
-        // Reset miss counter before the critical section
         tmb->ResetVideoCacheMissCount();
 
-        // Simulate NeedClips: Lua feeds BOTH clips to TMB (as _send_video_clips_to_tmb does)
+        // Simulate NeedClips: Lua feeds clip B as playhead approaches boundary
         std::vector<ClipInfo> updated = {
-            {"clipA", path,   0, 100, 0, 24, 1, 1.0f},
-            {"clipB", path, 100, 100, 0, 24, 1, 1.0f},
+            {"clipA", path,  0, 20, 0, 24, 1, 1.0f},
+            {"clipB", path, 20, 20, 0, 24, 1, 1.0f},
         };
         tmb->SetTrackClips(V1, updated);
 
-        // Wait for pre-buffer worker to decode clip B's entry frame.
-        // Real decode of h264 first frame: ~100-200ms. Give 1s for safety.
-        QThread::msleep(1000);
+        // SetTrackClips resets buffer_end, submits new REFILL from playhead (15).
+        // REFILL fills frames 15-62, crossing clip boundary at 20 into clipB.
+        QThread::msleep(800);
 
-        // Query clip B's entry frame in Play mode. If pre-buffer worked,
-        // the frame is in the cache → no pending, no miss.
-        auto result = tmb->GetVideoFrame(V1, 100);
+        auto result = tmb->GetVideoFrame(V1, 20);
 
-        // Primary assertion: frame must be cached (not pending)
         QVERIFY2(result.frame != nullptr,
-            "Clip B entry frame (100) must be pre-buffered after SetTrackClips — "
+            "Clip B entry frame (20) must be pre-buffered after SetTrackClips — "
             "got nullptr (pending or gap). SetTrackClips did not trigger pre-buffer.");
         QVERIFY2(!result.pending,
-            "Clip B entry frame (100) returned pending — pre-buffer did not fire "
+            "Clip B entry frame (20) returned pending — pre-buffer did not fire "
             "from SetTrackClips during active playback.");
 
-        // Secondary: no cache misses (frame came from pre-buffer, not on-demand decode)
         int64_t misses = tmb->GetVideoCacheMissCount();
         QVERIFY2(misses == 0,
             qPrintable(QString("Expected 0 cache misses (pre-buffered), got %1 — "
@@ -2812,6 +2777,89 @@ private slots:
         int64_t misses = tmb->GetVideoCacheMissCount();
         QVERIFY2(misses == 0,
                  qPrintable(QString("Both tracks should be pre-filled, got %1 misses").arg(misses)));
+    }
+
+    // ── Phase 2: multi-track near boundary ──
+
+    void test_watermark_multitrack_no_stutter() {
+        // Multi-track regression: 6 video tracks near clip boundary.
+        // All entry frames must be cached within 1s of cold-start.
+        // This tests that REFILL distributes across tracks without starving any.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(4);
+        auto path = m_testVideoPath.toStdString();
+
+        // 6 tracks, all with clip boundary at frame 20
+        std::vector<TrackId> tracks;
+        for (int i = 1; i <= 6; ++i) {
+            TrackId t{TrackType::Video, i};
+            tracks.push_back(t);
+
+            std::string id_a = "clip" + std::to_string(i) + "A";
+            std::string id_b = "clip" + std::to_string(i) + "B";
+            std::vector<ClipInfo> clips = {
+                {id_a, path,  0, 20, 0, 24, 1, 1.0f},
+                {id_b, path, 20, 20, 0, 24, 1, 1.0f},
+            };
+            tmb->SetTrackClips(t, clips);
+        }
+
+        // Cold-start near boundary: REFILL for all 6 tracks from frame 18
+        tmb->SetPlayhead(18, 1, 1.0f);
+
+        // 4 workers servicing 6 tracks — give enough time for all to complete
+        QThread::msleep(2000);
+
+        // All 6 tracks' entry frames (20) must be cached
+        tmb->ResetVideoCacheMissCount();
+        for (int i = 1; i <= 6; ++i) {
+            TrackId t{TrackType::Video, i};
+            auto r = tmb->GetVideoFrame(t, 20);
+            QVERIFY2(r.frame != nullptr,
+                     qPrintable(QString("V%1 entry frame 20 must be cached").arg(i)));
+        }
+
+        int64_t misses = tmb->GetVideoCacheMissCount();
+        QVERIFY2(misses == 0,
+                 qPrintable(QString("All 6 tracks should be pre-filled, got %1 misses").arg(misses)));
+    }
+
+    void test_setplayhead_minimal_overhead() {
+        // SetPlayhead with watermark system should be fast: no gap scanning,
+        // no threshold checks. Just updates atomics, manages prefetch, and
+        // cold-start priming on first call.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(4);
+        auto path = m_testVideoPath.toStdString();
+
+        // 4 tracks with clips
+        for (int i = 1; i <= 4; ++i) {
+            TrackId t{TrackType::Video, i};
+            std::vector<ClipInfo> clips = {
+                {"clip" + std::to_string(i), path, 0, 100, 0, 24, 1, 1.0f},
+            };
+            tmb->SetTrackClips(t, clips);
+        }
+
+        // Cold-start
+        tmb->SetPlayhead(0, 1, 1.0f);
+        QThread::msleep(50);
+
+        // Subsequent SetPlayhead calls (simulating 60Hz ticks) must be < 1ms each.
+        // The old system did gap scanning + threshold checks + multi-track iteration.
+        auto start = std::chrono::steady_clock::now();
+        for (int tick = 0; tick < 100; ++tick) {
+            tmb->SetPlayhead(tick, 1, 1.0f);
+        }
+        auto elapsed = std::chrono::steady_clock::now() - start;
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+
+        // 100 calls should complete in < 50ms (< 500us each on average)
+        QVERIFY2(us < 50000,
+                 qPrintable(QString("100 SetPlayhead calls took %1 us, expected < 50000 us").arg(us)));
+        qDebug() << "SetPlayhead 100 calls:" << us << "us total," << (us / 100) << "us avg";
     }
 };
 

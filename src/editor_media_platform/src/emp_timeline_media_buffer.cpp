@@ -61,138 +61,78 @@ std::unique_ptr<TimelineMediaBuffer> TimelineMediaBuffer::Create(int pool_thread
 // Track clip layout
 // ============================================================================
 
-// Pre-buffer helper: submit pre-buffer jobs for newly-loaded clips near the
-// playhead during active playback. Called from SetTrackClips when the clip
-// list changes and direction != 0. This eliminates the 1-tick delay between
-// "TMB learns about a clip" and "SetPlayhead submits pre-buffer".
-// Caller must hold m_tracks_mutex.
-void TimelineMediaBuffer::trigger_prebuffer_for_new_clips(
-        TrackId track, const TrackState& ts, const ClipInfo& current,
-        const std::unordered_set<std::string>& old_clip_ids,
-        int64_t playhead, int direction) {
+void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInfo>& clips) {
+    bool clips_changed = false;
+    {
+        std::lock_guard<std::mutex> lock(m_tracks_mutex);
+        auto& ts = m_tracks[track];
 
-    int64_t boundary = (direction >= 0) ? current.timeline_end() : current.timeline_start;
-    int64_t distance = std::abs(playhead - boundary);
-    if (distance >= PRE_BUFFER_THRESHOLD) return;
-
-    // Find adjacent clip in playback direction
-    for (const auto& clip : ts.clips) {
-        bool is_next = (direction >= 0)
-            ? (clip.timeline_start == current.timeline_end())
-            : (clip.timeline_end() == current.timeline_start);
-
-        if (!is_next) continue;
-
-        // Only pre-buffer if this clip is NEW (wasn't in the old list)
-        if (old_clip_ids.count(clip.clip_id)) continue;
-
-        // Skip if entry frame already cached
-        int64_t entry_tl = (direction >= 0)
-            ? clip.timeline_start
-            : clip.timeline_end() - 1;
-
-        auto cache_it = ts.video_cache.find(entry_tl);
-        if (cache_it != ts.video_cache.end() &&
-            cache_it->second.clip_id == clip.clip_id) {
-            continue;
+        // Fast path: skip entirely if clip list is unchanged (called every tick)
+        if (ts.clips.size() == clips.size()) {
+            bool same = true;
+            for (size_t i = 0; i < clips.size(); ++i) {
+                const auto& a = ts.clips[i];
+                const auto& b = clips[i];
+                if (a.clip_id != b.clip_id ||
+                    a.timeline_start != b.timeline_start ||
+                    a.duration != b.duration ||
+                    a.source_in != b.source_in ||
+                    a.media_path != b.media_path ||
+                    a.rate_num != b.rate_num ||
+                    a.rate_den != b.rate_den ||
+                    a.speed_ratio != b.speed_ratio) {
+                    same = false;
+                    break;
+                }
+            }
+            if (same) return;
         }
 
-        int64_t entry_sf = (direction >= 0)
-            ? clip.source_in
-            : clip.source_in + clip.duration - 1;
-        int64_t remaining = clip.duration;
+        // Clip list changed. Only evict cache entries for clips that were REMOVED.
+        // Pre-buffered frames for clips still in the new list must survive —
+        // the boundary crossing is exactly when we need them most.
+        std::unordered_set<std::string> new_clip_ids;
+        for (const auto& c : clips) {
+            new_clip_ids.insert(c.clip_id);
+        }
 
-        PreBufferJob job{};
-        job.type = PreBufferJob::VIDEO;
-        job.track = track;
-        job.clip_id = clip.clip_id;
-        job.media_path = clip.media_path;
-        job.source_frame = entry_sf;
-        job.timeline_frame = entry_tl;
-        job.rate = clip.rate();
-        job.direction = direction;
-        job.clip_duration = remaining;
-        submit_pre_buffer(job);
-
-        EMP_LOG_DEBUG("SetTrackClips auto-prebuffer: clip %s on %c%d (entry=%lld, dir=%d)",
-                clip.clip_id.c_str(),
-                track.type == TrackType::Video ? 'V' : 'A', track.index,
-                static_cast<long long>(entry_tl), direction);
-        break;  // one adjacent clip per direction
-    }
-}
-
-void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInfo>& clips) {
-    std::lock_guard<std::mutex> lock(m_tracks_mutex);
-    auto& ts = m_tracks[track];
-
-    // Fast path: skip entirely if clip list is unchanged (called every tick)
-    if (ts.clips.size() == clips.size()) {
-        bool same = true;
-        for (size_t i = 0; i < clips.size(); ++i) {
-            const auto& a = ts.clips[i];
-            const auto& b = clips[i];
-            if (a.clip_id != b.clip_id ||
-                a.timeline_start != b.timeline_start ||
-                a.duration != b.duration ||
-                a.source_in != b.source_in ||
-                a.media_path != b.media_path ||
-                a.rate_num != b.rate_num ||
-                a.rate_den != b.rate_den ||
-                a.speed_ratio != b.speed_ratio) {
-                same = false;
-                break;
+        for (auto it = ts.video_cache.begin(); it != ts.video_cache.end(); ) {
+            if (new_clip_ids.find(it->second.clip_id) == new_clip_ids.end()) {
+                it = ts.video_cache.erase(it);
+            } else {
+                ++it;
             }
         }
-        if (same) return;
-    }
 
-    // Clip list changed. Only evict cache entries for clips that were REMOVED.
-    // Pre-buffered frames for clips still in the new list must survive —
-    // the boundary crossing is exactly when we need them most.
-    std::unordered_set<std::string> old_clip_ids;
-    for (const auto& c : ts.clips) {
-        old_clip_ids.insert(c.clip_id);
-    }
-
-    std::unordered_set<std::string> new_clip_ids;
-    for (const auto& c : clips) {
-        new_clip_ids.insert(c.clip_id);
-    }
-
-    for (auto it = ts.video_cache.begin(); it != ts.video_cache.end(); ) {
-        if (new_clip_ids.find(it->second.clip_id) == new_clip_ids.end()) {
-            it = ts.video_cache.erase(it);
-        } else {
-            ++it;
+        for (auto it = ts.audio_cache.begin(); it != ts.audio_cache.end(); ) {
+            if (new_clip_ids.find(it->clip_id) == new_clip_ids.end()) {
+                it = ts.audio_cache.erase(it);
+            } else {
+                ++it;
+            }
         }
+
+        ts.clips = clips;
+
+        // Reset watermark buffer_end so REFILL re-evaluates from playhead.
+        ts.video_buffer_end = -1;
+        ts.audio_buffer_end = -1;
+        clips_changed = true;
     }
-
-    for (auto it = ts.audio_cache.begin(); it != ts.audio_cache.end(); ) {
-        if (new_clip_ids.find(it->clip_id) == new_clip_ids.end()) {
-            it = ts.audio_cache.erase(it);
-        } else {
-            ++it;
-        }
-    }
-
-    ts.clips = clips;
-
-    // Reset watermark buffer_end so REFILL re-evaluates from playhead
-    ts.video_buffer_end = -1;
-    ts.audio_buffer_end = -1;
-
-    // ── Auto-prebuffer: when new clips appear during active playback,
-    // submit pre-buffer immediately instead of waiting for the next
-    // SetPlayhead tick. Eliminates ~200ms stutter at clip transitions
-    // caused by the 1-tick delay between clip feed and pre-buffer trigger.
-    int direction = m_playhead_direction.load(std::memory_order_relaxed);
-    if (direction != 0 && track.type == TrackType::Video) {
-        int64_t playhead = m_playhead_frame.load(std::memory_order_relaxed);
-        const ClipInfo* current = find_clip_at(ts, playhead);
-        if (current) {
-            trigger_prebuffer_for_new_clips(track, ts, *current, old_clip_ids,
-                                            playhead, direction);
+    // tracks_lock released — submit REFILL if playback is active.
+    // This replaces the old trigger_prebuffer_for_new_clips mechanism:
+    // when Lua feeds new clips during playback, immediately begin filling
+    // the buffer from the current playhead position.
+    if (clips_changed) {
+        int dir = m_playhead_direction.load(std::memory_order_relaxed);
+        if (dir != 0) {
+            int64_t ph = m_playhead_frame.load(std::memory_order_relaxed);
+            if (track.type == TrackType::Video) {
+                submit_video_refill(track, ph, dir);
+            } else if (m_seq_rate.num > 0 && m_audio_fmt.sample_rate > 0) {
+                TimeUS ph_us = FrameTime::from_frame(ph, m_seq_rate).to_us();
+                submit_audio_refill(track, ph_us, dir);
+            }
         }
     }
 }
@@ -268,8 +208,9 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
         }
     }
 
-    // Phase 1: evaluate tracks, update current reader targets, submit pre-buffer.
-    // Collect active reader keys (current + next clip per track) for Phase 2.
+    // Update Reader prefetch targets and manage active/idle readers.
+    // Watermark-driven REFILLs handle pre-buffer; this block only updates
+    // prefetch targets and pauses idle readers.
     using ReaderKey = std::pair<TrackId, std::string>;
     std::vector<ReaderKey> active_keys;
 
@@ -277,56 +218,13 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
         std::lock_guard<std::mutex> lock(m_tracks_mutex);
         for (auto& [track, ts] : m_tracks) {
             const ClipInfo* current = find_clip_at(ts, frame);
-            if (!current) {
-                // Track has a gap at the playhead. Pre-buffer the nearest
-                // upcoming clip if within threshold — handles multi-track
-                // scenarios where display falls through to a lower-priority
-                // track at a clip boundary.
-                if (track.type == TrackType::Video && direction != 0) {
-                    const ClipInfo* upcoming = nullptr;
-                    int64_t best_dist = PRE_BUFFER_THRESHOLD;
-                    for (const auto& clip : ts.clips) {
-                        int64_t dist = (direction >= 0)
-                            ? (clip.timeline_start - frame)
-                            : (frame - clip.timeline_end());
-                        if (dist >= 0 && dist < best_dist) {
-                            best_dist = dist;
-                            upcoming = &clip;
-                        }
-                    }
-                    if (upcoming) {
-                        active_keys.push_back({track, upcoming->clip_id});
-                        int64_t entry_tl = (direction >= 0)
-                            ? upcoming->timeline_start
-                            : upcoming->timeline_end() - 1;
-                        bool cached = (ts.video_cache.find(entry_tl) != ts.video_cache.end()
-                            && ts.video_cache.at(entry_tl).clip_id == upcoming->clip_id);
-                        if (!cached) {
-                            int64_t entry_sf = (direction >= 0)
-                                ? upcoming->source_in
-                                : upcoming->source_in + upcoming->duration - 1;
-                            PreBufferJob job{};
-                            job.type = PreBufferJob::VIDEO;
-                            job.track = track;
-                            job.clip_id = upcoming->clip_id;
-                            job.media_path = upcoming->media_path;
-                            job.source_frame = entry_sf;
-                            job.timeline_frame = entry_tl;
-                            job.rate = upcoming->rate();
-                            job.direction = direction;
-                            job.clip_duration = upcoming->duration;
-                            submit_pre_buffer(job);
-                        }
-                    }
-                }
-                continue;
-            }
+            if (!current) continue;
 
             active_keys.push_back({track, current->clip_id});
 
             // Update Reader prefetch target for the current clip so its background
             // decoder stays ahead of the playhead (prevents main-thread cache stalls).
-            {
+            if (track.type == TrackType::Video) {
                 int64_t source_frame = current->source_in + (frame - current->timeline_start);
                 auto key = std::make_pair(track, current->clip_id);
                 std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
@@ -337,111 +235,11 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
                     it->second.reader->UpdatePrefetchTarget(t_us);
                 }
             }
-
-            // Check distance to boundary
-            int64_t boundary = (direction >= 0) ? current->timeline_end() : current->timeline_start;
-            int64_t distance = std::abs(frame - boundary);
-
-            if (distance < PRE_BUFFER_THRESHOLD) {
-                // Find next clip in playback direction
-                const ClipInfo* next = nullptr;
-                for (const auto& clip : ts.clips) {
-                    if (direction >= 0 && clip.timeline_start == current->timeline_end()) {
-                        next = &clip;
-                        break;
-                    } else if (direction < 0 && clip.timeline_end() == current->timeline_start) {
-                        next = &clip;
-                        break;
-                    }
-                }
-
-                if (next) {
-                    active_keys.push_back({track, next->clip_id});
-
-                    // Video pre-buffer (video tracks only — audio tracks don't
-                    // need video frame decode-ahead)
-                    if (track.type == TrackType::Video) {
-                        int64_t entry_tl_frame = (direction >= 0)
-                            ? next->timeline_start
-                            : next->timeline_end() - 1;
-
-                        // Skip if entry frame already cached (prevents redundant
-                        // re-decoding that wastes CPU and churns the cache).
-                        bool already_cached = (ts.video_cache.find(entry_tl_frame) != ts.video_cache.end()
-                            && ts.video_cache.at(entry_tl_frame).clip_id == next->clip_id);
-
-                        if (!already_cached) {
-                            int64_t entry_frame = (direction >= 0)
-                                ? next->source_in
-                                : next->source_in + next->duration - 1;
-
-                            PreBufferJob video_job{};
-                            video_job.type = PreBufferJob::VIDEO;
-                            video_job.track = track;
-                            video_job.clip_id = next->clip_id;
-                            video_job.media_path = next->media_path;
-                            video_job.source_frame = entry_frame;
-                            video_job.timeline_frame = entry_tl_frame;
-                            video_job.rate = next->rate();
-                            video_job.direction = direction;
-                            video_job.clip_duration = next->duration;
-                            submit_pre_buffer(video_job);
-                        }
-                    }
-
-                    // Audio pre-buffer (audio tracks only — video tracks don't
-                    // need PCM decode-ahead)
-                    if (track.type == TrackType::Audio &&
-                        m_audio_fmt.sample_rate > 0 && m_seq_rate.num > 0) {
-                        assert(next->rate_den > 0 && "SetPlayhead: audio pre-buffer clip has zero rate_den");
-                        assert(next->speed_ratio > 0.0f && "SetPlayhead: audio pre-buffer clip has non-positive speed_ratio");
-                        constexpr TimeUS AUDIO_PRE_BUFFER_US = 200000; // 200ms
-
-                        TimeUS next_start_us = FrameTime::from_frame(
-                            next->timeline_start, m_seq_rate).to_us();
-                        TimeUS next_end_us = FrameTime::from_frame(
-                            next->timeline_end(), m_seq_rate).to_us();
-
-                        TimeUS tl_t0, tl_t1;
-                        if (direction >= 0) {
-                            tl_t0 = next_start_us;
-                            tl_t1 = std::min(next_start_us + AUDIO_PRE_BUFFER_US, next_end_us);
-                        } else {
-                            tl_t1 = next_end_us;
-                            tl_t0 = std::max(next_end_us - AUDIO_PRE_BUFFER_US, next_start_us);
-                        }
-
-                        if (tl_t1 > tl_t0) {
-                            // Map timeline range to source range
-                            TimeUS src_origin = FrameTime::from_frame(
-                                next->source_in, next->rate()).to_us();
-                            double sr = static_cast<double>(next->speed_ratio);
-                            TimeUS src_t0 = src_origin +
-                                static_cast<int64_t>((tl_t0 - next_start_us) * sr);
-                            TimeUS src_t1 = src_origin +
-                                static_cast<int64_t>((tl_t1 - next_start_us) * sr);
-
-                            PreBufferJob audio_job{};
-                            audio_job.type = PreBufferJob::AUDIO;
-                            audio_job.track = track;
-                            audio_job.clip_id = next->clip_id;
-                            audio_job.media_path = next->media_path;
-                            audio_job.source_t0 = src_t0;
-                            audio_job.source_t1 = src_t1;
-                            audio_job.timeline_t0 = tl_t0;
-                            audio_job.timeline_t1 = tl_t1;
-                            audio_job.speed_ratio = next->speed_ratio;
-                            submit_pre_buffer(audio_job);
-                        }
-                    }
-                }
-            }
         }
-    } // m_tracks_mutex released
+    }
 
-    // Phase 2: pause prefetch on idle readers, resume on active ones.
+    // Pause prefetch on idle readers, resume on active ones.
     // Only video readers have prefetch — audio readers skip StartPrefetch.
-    // This limits concurrent VT decode sessions to current+next clips only.
     if (direction != 0) {
         std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
         for (auto& [key, entry] : m_readers) {
@@ -1918,126 +1716,64 @@ void TimelineMediaBuffer::worker_loop() {
                 cursor = chunk_t1;
             }
 
-        } else {
-            // ── Legacy per-clip pre-buffer (VIDEO / AUDIO) ──
+        } else if (job.type == PreBufferJob::VIDEO) {
+            // ── On-demand single-clip video decode (safety net for cache misses
+            // during Play mode — submitted by GetVideoFrame when cache is cold).
+            // Batch size bounded by clip_duration, no cooperative yield needed
+            // (REFILL handles bulk decode; this is a targeted catch-up).
 
-            // Acquire reader (may open a new one)
             auto reader = acquire_reader(job.track, job.clip_id, job.media_path);
             if (!reader) continue;
 
-            if (job.type == PreBufferJob::VIDEO) {
-                // Pre-decode enough frames so the main thread NEVER hits a slow h264
-                // decode at the clip boundary. The first ~16 frames after a seek often
-                // include "co located POCs unavailable" batches that take 100ms+.
-                // 48 frames (2s at 24fps) covers this plus margin.
-                constexpr int PRE_BUFFER_BATCH = 48;
-                int n = static_cast<int>(std::min(
-                    static_cast<int64_t>(PRE_BUFFER_BATCH), job.clip_duration));
-                if (n <= 0) continue;
+            int n = static_cast<int>(std::min(
+                static_cast<int64_t>(VIDEO_REFILL_SIZE), job.clip_duration));
+            if (n <= 0) continue;
 
-                const auto& info = reader->media_file()->info();
-                int rotation = info.rotation;
-                int32_t par_num = info.video_par_num;
-                int32_t par_den = info.video_par_den;
+            const auto& info = reader->media_file()->info();
+            int rotation = info.rotation;
+            int32_t par_num = info.video_par_num;
+            int32_t par_den = info.video_par_den;
 
-                // Always decode in forward source order (h264 requires forward decode).
-                // Forward playback: entry is clip start, decode [entry .. entry+N).
-                // Reverse playback: entry is clip end, decode [entry-N+1 .. entry].
-                int64_t start_sf = (job.direction >= 0)
-                    ? job.source_frame
-                    : job.source_frame - (n - 1);
-                int64_t start_tf = (job.direction >= 0)
-                    ? job.timeline_frame
-                    : job.timeline_frame - (n - 1);
+            int64_t start_sf = (job.direction >= 0)
+                ? job.source_frame
+                : job.source_frame - (n - 1);
+            int64_t start_tf = (job.direction >= 0)
+                ? job.timeline_frame
+                : job.timeline_frame - (n - 1);
 
-                // Decode and store INCREMENTALLY: each frame is cached immediately
-                // so the main thread's GetVideoFrame hits the TMB cache and never
-                // blocks on the reader's use_mutex.
-                int frames_decoded = 0;
-                for (int i = 0; i < n; ++i) {
-                    // Bail early if playback stopped or parked (avoids wasted 300ms+ decode)
-                    if (m_shutdown.load() || m_playhead_direction.load(std::memory_order_relaxed) == 0) break;
+            int frames_decoded = 0;
+            for (int i = 0; i < n; ++i) {
+                if (m_shutdown.load() || m_playhead_direction.load(std::memory_order_relaxed) == 0) break;
 
-                    // Cooperative yield: after the entry frame (i > 0), check if
-                    // other jobs are waiting and yield. With 6 video tracks and
-                    // 2 workers, long batches starve on-demand decodes for the
-                    // display track — causing 200ms+ cadence gaps. Yielding after
-                    // each frame limits max wait to ~6ms (one H.264 frame decode).
-                    // Reader cache makes re-decode of already-cached frames ~0ms
-                    // when the batch restarts from the entry point on the next tick.
-                    if (i > 0) {
-                        std::lock_guard<std::mutex> jlock(m_jobs_mutex);
-                        if (!m_jobs.empty()) break;
-                    }
-
-                    int64_t sf = start_sf + i;
-                    int64_t tf = start_tf + i;
-                    int64_t file_frame = sf - info.start_tc;
-                    FrameTime ft = FrameTime::from_frame(file_frame, job.rate);
-                    auto result = reader->DecodeAt(ft);
-                    if (result.is_ok()) {
-                        // Store to TMB cache immediately (lock is brief: pointer copy only)
-                        std::lock_guard<std::mutex> lock(m_tracks_mutex);
-                        auto it = m_tracks.find(job.track);
-                        if (it != m_tracks.end()) {
-                            auto& cache = it->second.video_cache;
-                            while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
-                                cache.erase(cache.begin());
-                            }
-                            cache[tf] = {job.clip_id, sf, result.value(),
-                                         rotation, par_num, par_den};
-                        } else {
-                            // Track removed while worker was decoding — frame no longer needed.
-                            EMP_LOG_DEBUG("Pre-buffer: track %c%d removed mid-job, discarding frame %lld",
-                                    job.track.type == TrackType::Video ? 'V' : 'A',
-                                    job.track.index, static_cast<long long>(tf));
+                int64_t sf = start_sf + i;
+                int64_t tf = start_tf + i;
+                int64_t file_frame = sf - info.start_tc;
+                FrameTime ft = FrameTime::from_frame(file_frame, job.rate);
+                auto result = reader->DecodeAt(ft);
+                if (result.is_ok()) {
+                    std::lock_guard<std::mutex> lock(m_tracks_mutex);
+                    auto it = m_tracks.find(job.track);
+                    if (it != m_tracks.end()) {
+                        auto& cache = it->second.video_cache;
+                        while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
+                            cache.erase(cache.begin());
                         }
-                        frames_decoded++;
-                    } else {
-                        // NSF-ACCEPT: Decode failures stop the batch — pre-buffer is best-effort.
-                        // Main thread's GetVideoFrame handles on-demand decode if pre-buffer missed.
-                        // EOF is expected (short clips); other errors are logged for diagnostics.
-                        EMP_LOG_WARN("Pre-buffer: DecodeAt failed at source frame %lld for clip %s: %s",
-                                static_cast<long long>(sf), job.clip_id.c_str(),
-                                result.error().message.c_str());
-                        break;
+                        cache[tf] = {job.clip_id, sf, result.value(),
+                                     rotation, par_num, par_den};
                     }
-                }
-                EMP_LOG_DEBUG("Pre-buffer: %d/%d frames for clip %s on track %c%d",
-                        frames_decoded, n, job.clip_id.c_str(),
-                        job.track.type == TrackType::Video ? 'V' : 'A', job.track.index);
-            } else {
-                // Pre-decode audio PCM.
-                // NSF-ACCEPT: Decode failures continue to next job — pre-buffer is
-                // best-effort. Main-thread GetTrackAudio handles on-demand decode
-                // if pre-buffer missed.
-                assert(job.source_t1 > job.source_t0 && "worker_loop: AUDIO job has inverted source range");
-                assert(job.timeline_t1 > job.timeline_t0 && "worker_loop: AUDIO job has inverted timeline range");
-                auto decode_result = reader->DecodeAudioRangeUS(
-                    job.source_t0, job.source_t1, m_audio_fmt);
-                if (decode_result.is_error()) continue;
-
-                auto decoded = decode_result.value();
-                if (!decoded || decoded->frames() == 0) continue;
-
-                auto pcm = build_audio_output(decoded, job.source_t0, job.source_t1,
-                                              job.timeline_t0, job.timeline_t1,
-                                              job.speed_ratio, m_audio_fmt);
-                if (!pcm || pcm->frames() == 0) continue;
-
-                // Store in track's audio cache
-                std::lock_guard<std::mutex> lock(m_tracks_mutex);
-                auto it = m_tracks.find(job.track);
-                if (it != m_tracks.end()) {
-                    auto& cache = it->second.audio_cache;
-                    // Evict oldest if at capacity
-                    while (cache.size() >= TrackState::MAX_AUDIO_CACHE) {
-                        cache.erase(cache.begin());
-                    }
-                    cache.push_back({job.clip_id, job.timeline_t0, job.timeline_t1, pcm});
+                    frames_decoded++;
+                } else {
+                    EMP_LOG_WARN("On-demand: DecodeAt failed at sf=%lld clip=%s: %s",
+                            static_cast<long long>(sf), job.clip_id.c_str(),
+                            result.error().message.c_str());
+                    break;
                 }
             }
+            EMP_LOG_DEBUG("On-demand: %d/%d frames for clip %s on track %c%d",
+                    frames_decoded, n, job.clip_id.c_str(),
+                    job.track.type == TrackType::Video ? 'V' : 'A', job.track.index);
         }
+        // AUDIO type jobs no longer submitted — watermark AUDIO_REFILL replaces them
     }
 }
 
