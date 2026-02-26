@@ -222,6 +222,13 @@ private:
     std::mutex m_tracks_mutex;
     std::unordered_map<TrackId, TrackState, TrackIdHash> m_tracks;
 
+    // Global stale-return buffer: last frame displayed via ANY track's GetVideoFrame.
+    // Used as cross-track fallback when a track has no per-track stale frame
+    // (e.g., multi-track priority fallthrough — top track becomes gap, lower track
+    // has never displayed). Prevents sync decode on the CVDisplayLink thread.
+    TrackState::CachedFrame m_global_last_displayed;
+    bool m_has_global_last_displayed = false;
+
     // Find clip at timeline_frame in track's clip list
     const ClipInfo* find_clip_at(const TrackState& ts, int64_t timeline_frame) const;
 

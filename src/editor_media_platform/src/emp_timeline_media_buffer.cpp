@@ -114,6 +114,10 @@ void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInf
     // Prevents stale-return path from showing frames from deleted clips.
     if (ts.has_last_displayed &&
         new_clip_ids.find(ts.last_displayed.clip_id) == new_clip_ids.end()) {
+        EMP_LOG_WARN("SetTrackClips: invalidated last_displayed clip=%s "
+                     "(not in %zu new clips for track %d)",
+                     ts.last_displayed.clip_id.c_str(), clips.size(),
+                     track.index);
         ts.has_last_displayed = false;
         ts.last_displayed = {};
     }
@@ -367,29 +371,38 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         result.rotation = cache_it->second.rotation;
         result.par_num = cache_it->second.par_num;
         result.par_den = cache_it->second.par_den;
-        // Update stale-return buffer for future Play-mode cache misses
+        // Update stale-return buffers for future Play-mode cache misses
         ts.last_displayed = cache_it->second;
         ts.has_last_displayed = true;
+        m_global_last_displayed = cache_it->second;
+        m_has_global_last_displayed = true;
         return result;
     }
 
     // ── Cache miss: branch on Play vs Scrub/Park ──
     int direction = m_playhead_direction.load(std::memory_order_relaxed);
 
-    if (direction != 0 && ts.has_last_displayed) {
+    // Select stale frame source: per-track first, then global cross-track fallback.
+    // Global fallback prevents sync decode when priority shifts between video tracks
+    // (e.g., top track becomes gap → lower track has no per-track stale frame).
+    bool has_stale = ts.has_last_displayed || m_has_global_last_displayed;
+    const TrackState::CachedFrame& stale_source =
+        ts.has_last_displayed ? ts.last_displayed : m_global_last_displayed;
+
+    if (direction != 0 && has_stale) {
         // Play mode with stale frame available: return stale immediately,
         // submit async decode job. Main thread never blocks on video decode
         // → audio pump fires on schedule → no AOP underrun.
-        assert(ts.last_displayed.frame &&
-            "GetVideoFrame: last_displayed has null frame but has_last_displayed=true");
+        assert(stale_source.frame &&
+            "GetVideoFrame: stale has null frame but has_stale=true");
 
         // Snapshot stale metadata and clip locals under tracks_lock
-        auto stale_frame = ts.last_displayed.frame;
-        auto stale_clip_id_display = ts.last_displayed.clip_id;
-        int stale_rotation = ts.last_displayed.rotation;
-        int32_t stale_par_num = ts.last_displayed.par_num;
-        int32_t stale_par_den = ts.last_displayed.par_den;
-        int64_t stale_source_frame = ts.last_displayed.source_frame;
+        auto stale_frame = stale_source.frame;
+        auto stale_clip_id_display = stale_source.clip_id;
+        int stale_rotation = stale_source.rotation;
+        int32_t stale_par_num = stale_source.par_num;
+        int32_t stale_par_den = stale_source.par_den;
+        int64_t stale_source_frame = stale_source.source_frame;
 
         // Copy locals needed for pre-buffer job submission.
         // Use REMAINING frames (not total clip duration) to prevent the
@@ -500,10 +513,13 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
             cache[timeline_frame] = {clip_id, source_frame, result.frame,
                                      result.rotation, result.par_num, result.par_den};
 
-            // Update stale-return buffer
-            tit->second.last_displayed = {clip_id, source_frame, result.frame,
-                                          result.rotation, result.par_num, result.par_den};
+            // Update stale-return buffers (per-track and global)
+            TrackState::CachedFrame cf{clip_id, source_frame, result.frame,
+                                       result.rotation, result.par_num, result.par_den};
+            tit->second.last_displayed = cf;
             tit->second.has_last_displayed = true;
+            m_global_last_displayed = cf;
+            m_has_global_last_displayed = true;
         }
     } else {
         // Decode failure: clip exists, reader opened, but frame can't be decoded

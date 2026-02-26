@@ -2227,10 +2227,117 @@ private slots:
 
     // ── NSF: SetTrackClips invalidates last_displayed for removed clips ──
 
-    void test_set_track_clips_invalidates_last_displayed() {
-        // NSF: When a clip is removed from the track layout, last_displayed
-        // referencing that clip must be invalidated. Otherwise stale frames
-        // from a removed clip silently appear during playback.
+    void test_play_mode_three_clip_no_blocking() {
+        // BLACK-BOX TIMING TEST: simulate real playback loop through 3 clips.
+        // On each "tick": SetPlayhead + GetVideoFrame (mirrors displayLinkTick).
+        // If any GetVideoFrame takes >50ms, sync decode happened → FAIL.
+        // Stale return should be <1ms.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", path,   0, 50, 0, 24, 1, 1.0f},
+            {"clipB", path,  50, 50, 0, 24, 1, 1.0f},
+            {"clipC", path, 100, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Prime: park-mode decode frame 0 (sets has_last_displayed)
+        tmb->SetPlayhead(0, 0, 1.0f);
+        auto r0 = tmb->GetVideoFrame(V1, 0);
+        QVERIFY(r0.frame != nullptr);
+
+        // Play through all 3 clips frame-by-frame
+        int64_t worst_us = 0;
+        int64_t worst_frame = -1;
+
+        for (int64_t f = 1; f < 150; ++f) {
+            tmb->SetPlayhead(f, 1, 1.0f);
+
+            auto t0 = std::chrono::steady_clock::now();
+            auto result = tmb->GetVideoFrame(V1, f);
+            auto t1 = std::chrono::steady_clock::now();
+
+            auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+            if (us > worst_us) {
+                worst_us = us;
+                worst_frame = f;
+            }
+
+            // Verify we got SOMETHING (stale or fresh, never nullptr during Play)
+            QVERIFY2(result.frame != nullptr || result.clip_id.empty(),
+                qPrintable(QString("Frame %1: null frame but clip=%2 pending=%3")
+                    .arg(f).arg(result.clip_id.c_str()).arg(result.pending)));
+
+            // Brief yield so worker threads can run
+            QThread::usleep(100);
+        }
+
+        // 50ms threshold: stale return is <1ms. Sync decode for 2K H.264 is >100ms.
+        QVERIFY2(worst_us < 50000,
+            qPrintable(QString("Frame %1 took %2us (%3ms) — sync decode on hot path! "
+                               "Expected <50ms (stale return).")
+                .arg(worst_frame).arg(worst_us).arg(worst_us / 1000)));
+    }
+
+    void test_clip_list_update_removes_stale_clip_uses_global_fallback() {
+        // When SetTrackClips removes the currently-displayed clip, per-track
+        // has_last_displayed is invalidated. But the GLOBAL stale frame (from
+        // the removed clip) provides a non-blocking fallback → pending=true.
+        // This is correct: 1 frame of old content is imperceptible vs 157ms stutter.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        // Start with clips A and B
+        std::vector<ClipInfo> ab = {
+            {"clipA", path,   0, 50, 0, 24, 1, 1.0f},
+            {"clipB", path,  50, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, ab);
+
+        // Prime: decode clipA frame (sets per-track AND global last_displayed)
+        tmb->SetPlayhead(0, 0, 1.0f);
+        auto r0 = tmb->GetVideoFrame(V1, 0);
+        QVERIFY(r0.frame != nullptr);
+        QCOMPARE(r0.clip_id, std::string("clipA"));
+
+        // Simulate NeedClips: update clip list to [B, C] — clipA REMOVED
+        // Per-track stale invalidated, but global stale survives
+        std::vector<ClipInfo> bc = {
+            {"clipB", path,  50, 50, 0, 24, 1, 1.0f},
+            {"clipC", path, 100, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, bc);
+
+        // Play mode: request frame 55 (clipB)
+        tmb->SetPlayhead(55, 1, 1.0f);
+
+        auto t0 = std::chrono::steady_clock::now();
+        auto r55 = tmb->GetVideoFrame(V1, 55);
+        auto t1 = std::chrono::steady_clock::now();
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+
+        // Global stale fallback: returns clipA's frame with pending=true
+        // Async decode of clipB will be ready on next tick
+        QVERIFY2(r55.frame != nullptr, "Should return global stale frame");
+        QVERIFY2(r55.pending, "Global stale fallback should set pending=true");
+        // clip_id is from the stale frame (clipA), not the target clip (clipB)
+        QCOMPARE(r55.clip_id, std::string("clipA"));
+
+        // MUST be fast (stale return, not sync decode)
+        QVERIFY2(us < 5000,
+            qPrintable(QString("Global stale return took %1us — expected <5ms").arg(us)));
+        qDebug() << "Global stale fallback after clip removal:" << us << "us";
+    }
+
+    void test_set_track_clips_invalidates_per_track_last_displayed() {
+        // NSF: When a clip is removed from the track layout, PER-TRACK
+        // last_displayed is invalidated. The global stale frame provides
+        // a non-blocking fallback (pending=true, async decode submitted).
         if (!m_hasTestVideo) QSKIP("No test video");
 
         auto tmb = TimelineMediaBuffer::Create(0);
@@ -2243,28 +2350,167 @@ private slots:
         };
         tmb->SetTrackClips(V1, both);
 
-        // Decode frame 0 of clipA (populates last_displayed with clipA data)
+        // Decode frame 0 of clipA (populates per-track AND global last_displayed)
         tmb->SetPlayhead(0, 0, 0.0f);
         auto r0 = tmb->GetVideoFrame(V1, 0);
         QVERIFY(r0.frame != nullptr);
         QCOMPARE(r0.clip_id, std::string("clipA"));
 
         // Remove clipA, keep only clipB
+        // Per-track stale invalidated (EMP_LOG_WARN fires), global stale survives
         std::vector<ClipInfo> b_only = {
             {"clipB", path, 50, 50, 0, 24, 1, 1.0f},
         };
         tmb->SetTrackClips(V1, b_only);
 
-        // Play mode: request frame 55 (clipB). If last_displayed was NOT
-        // invalidated, this would return a stale frame from clipA (removed).
-        // With proper invalidation, it falls through to sync decode.
+        // Play mode: request frame 55 (clipB).
+        // Per-track stale was invalidated → falls to global stale → pending=true
         tmb->SetPlayhead(55, 1, 1.0f);
         auto r55 = tmb->GetVideoFrame(V1, 55);
         QVERIFY2(r55.frame != nullptr,
-                 "clipB frame should decode (sync fallback after last_displayed invalidated)");
-        QVERIFY2(!r55.pending,
-                 "Sync decode should not be pending");
-        QCOMPARE(r55.clip_id, std::string("clipB"));
+                 "Should return global stale frame (non-blocking)");
+        QVERIFY2(r55.pending,
+                 "Global stale fallback should be pending");
+        // Stale clip_id is from clipA (the global stale), not clipB
+        QCOMPARE(r55.clip_id, std::string("clipA"));
+    }
+
+    // ── Multi-track fallthrough: top track gap → lower track sync decode ──
+
+    void test_multitrack_fallthrough_uses_global_stale() {
+        // Verify the FIX for the production stutter scenario:
+        //   - V2 (top priority): clip ending at frame 50
+        //   - V1 (lower priority): clip starting at frame 50
+        //   - At frame 50, V2 becomes a gap → falls through to V1
+        //   - V1 has no per-track stale, but GLOBAL stale (from V2) kicks in
+        //   - → Non-blocking stale return (pending=true), async decode submitted
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        // V2 (top priority): clip from 0-50
+        std::vector<ClipInfo> v2_clips = {
+            {"clipV2", path, 0, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V2, v2_clips);
+
+        // V1 (lower priority): clip from 50-100
+        std::vector<ClipInfo> v1_clips = {
+            {"clipV1", path, 50, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, v1_clips);
+
+        // Prime: park-mode decode frame 0 on V2 (sets V2 per-track AND global stale)
+        tmb->SetPlayhead(0, 0, 1.0f);
+        auto r0 = tmb->GetVideoFrame(V2, 0);
+        QVERIFY(r0.frame != nullptr);
+        QCOMPARE(r0.clip_id, std::string("clipV2"));
+
+        // Play through V2's clip (frames 1-49)
+        for (int64_t f = 1; f < 50; ++f) {
+            tmb->SetPlayhead(f, 1, 1.0f);
+            auto result = tmb->GetVideoFrame(V2, f);
+            QVERIFY2(result.frame != nullptr || result.clip_id == "clipV2",
+                qPrintable(QString("V2 frame %1 failed").arg(f)));
+            QThread::usleep(100);
+        }
+
+        // Frame 50: V2 is gap, V1 has clip but no per-track stale.
+        // Global stale from V2 provides non-blocking fallback.
+        tmb->SetPlayhead(50, 1, 1.0f);
+
+        // V2: gap
+        auto r50_v2 = tmb->GetVideoFrame(V2, 50);
+        QVERIFY2(r50_v2.frame == nullptr && r50_v2.clip_id.empty(),
+                 "V2 should be a gap at frame 50");
+
+        // V1: global stale fallback (from V2) — non-blocking
+        auto t0 = std::chrono::steady_clock::now();
+        auto r50_v1 = tmb->GetVideoFrame(V1, 50);
+        auto t1 = std::chrono::steady_clock::now();
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+
+        QVERIFY2(r50_v1.frame != nullptr, "Should return global stale frame");
+        QVERIFY2(r50_v1.pending, "Global stale should set pending=true");
+        // clip_id is from V2's stale frame, not clipV1
+        QCOMPARE(r50_v1.clip_id, std::string("clipV2"));
+
+        // MUST be fast: global stale return, not sync decode
+        QVERIFY2(us < 5000,
+            qPrintable(QString("Global stale took %1us — expected <5ms (was 157ms before fix)")
+                .arg(us)));
+        qDebug() << "Multi-track fallthrough with global stale:" << us << "us";
+    }
+
+    void test_multitrack_playback_loop_timing() {
+        // End-to-end playback simulation with 2 video tracks,
+        // mimicking deliverFrame's top-to-bottom priority loop.
+        // Measures the WORST GetVideoFrame time across the full sequence.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        // V2: clips 0-40 and 80-120
+        // V1: clip 40-80 (fills the V2 gap)
+        std::vector<ClipInfo> v2_clips = {
+            {"v2a", path,  0, 40, 0, 24, 1, 1.0f},
+            {"v2b", path, 80, 40, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V2, v2_clips);
+
+        std::vector<ClipInfo> v1_clips = {
+            {"v1a", path, 40, 40, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, v1_clips);
+
+        // Prime: decode frame 0 on V2
+        tmb->SetPlayhead(0, 0, 1.0f);
+        auto r0 = tmb->GetVideoFrame(V2, 0);
+        QVERIFY(r0.frame != nullptr);
+
+        // Play through all 120 frames, mimicking deliverFrame's priority loop
+        int64_t worst_us = 0;
+        int64_t worst_frame = -1;
+        std::string worst_track;
+
+        for (int64_t f = 1; f < 120; ++f) {
+            tmb->SetPlayhead(f, 1, 1.0f);
+
+            // Top-to-bottom priority (same as PlaybackController::deliverFrame)
+            VideoResult result;
+            std::string track_name;
+            auto t0 = std::chrono::steady_clock::now();
+
+            result = tmb->GetVideoFrame(V2, f);
+            if (result.frame || !result.clip_id.empty()) {
+                track_name = "V2";
+            } else {
+                result = tmb->GetVideoFrame(V1, f);
+                if (result.frame || !result.clip_id.empty()) {
+                    track_name = "V1";
+                }
+            }
+
+            auto t1 = std::chrono::steady_clock::now();
+            auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+            if (us > worst_us) {
+                worst_us = us;
+                worst_frame = f;
+                worst_track = track_name;
+            }
+
+            QThread::usleep(100);
+        }
+
+        qDebug() << "Multi-track worst:" << worst_us << "us at frame" << worst_frame
+                 << "track" << worst_track.c_str();
+
+        // All frames should be <50ms (stale return or cache hit)
+        QVERIFY2(worst_us < 50000,
+            qPrintable(QString("Frame %1 on %2 took %3us — sync decode leaked to hot path")
+                .arg(worst_frame).arg(worst_track.c_str()).arg(worst_us)));
     }
 };
 
