@@ -440,44 +440,9 @@ function PlaybackEngine:_send_video_clips_to_tmb(frame)
         track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(entry, 1.0)
     end
 
-    -- Next clips (direction-aware)
-    for _, entry in ipairs(current_entries) do
-        local clip_end = entry.clip.timeline_start + entry.clip.duration
-        local nexts
-        if self.direction >= 0 then
-            nexts = self.sequence:get_next_video(clip_end)
-        else
-            nexts = self.sequence:get_prev_video(entry.clip.timeline_start)
-        end
-        for _, ne in ipairs(nexts) do
-            local idx = ne.track.track_index
-            if not track_clips[idx] then
-                track_clips[idx] = {}
-            end
-            local dominated = false
-            for _, existing in ipairs(track_clips[idx]) do
-                if existing.clip_id == ne.clip.id then
-                    dominated = true
-                    break
-                end
-            end
-            if not dominated then
-                track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne, 1.0)
-            end
-        end
-    end
-
-    -- Gap: try finding next clip
-    if #current_entries == 0 then
-        local next_entries = self.sequence:get_next_video(frame)
-        for _, ne in ipairs(next_entries or {}) do
-            local idx = ne.track.track_index
-            if not track_clips[idx] then
-                track_clips[idx] = {}
-            end
-            track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne, 1.0)
-        end
-    end
+    -- Lookahead: walk forward per-track to pre-load upcoming clips.
+    -- Covers gaps, clip transitions, and rapid-cut sequences.
+    self:_extend_video_lookahead(frame, track_clips)
 
     -- Feed to TMB
     local indices = {}
@@ -493,23 +458,16 @@ function PlaybackEngine:_send_video_clips_to_tmb(frame)
         qt_constants.PLAYBACK.SET_VIDEO_TRACKS(self._playback_controller, indices)
     end
 
-    -- Compute clip window: MINIMUM per-track coverage end.
-    -- NeedClips must fire before ANY track runs dry, not just the last one.
+    -- Compute clip window: MAX per-track end for C++ (prevents NeedClips thrashing).
+    -- Gap safety handled by C++ deliverFrame invalidation.
     local window_lo = self.total_frames
-    local window_hi = math.huge
-    local has_video_clips = false
+    local window_hi = 0
     for _, clips in pairs(track_clips) do
-        if #clips > 0 then
-            has_video_clips = true
-            local track_hi = 0
-            for _, clip_data in ipairs(clips) do
-                window_lo = math.min(window_lo, clip_data.timeline_start)
-                track_hi = math.max(track_hi, clip_data.timeline_start + clip_data.duration)
-            end
-            window_hi = math.min(window_hi, track_hi)
+        for _, clip_data in ipairs(clips) do
+            window_lo = math.min(window_lo, clip_data.timeline_start)
+            window_hi = math.max(window_hi, clip_data.timeline_start + clip_data.duration)
         end
     end
-    if not has_video_clips then window_hi = 0 end
 
     -- Report clip window to C++
     if self._playback_controller and window_hi > window_lo then
@@ -632,49 +590,9 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
         track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(entry, 1.0)
     end
 
-    -- Get next clips (direction-aware) and add to same track
-    local next_entries
-    if #current_entries > 0 then
-        -- Use clip end frame of first entry as boundary for next lookup
-        for _, entry in ipairs(current_entries) do
-            local clip_end = entry.clip.timeline_start + entry.clip.duration
-            local nexts
-            if self.direction >= 0 then
-                nexts = self.sequence:get_next_video(clip_end)
-            else
-                nexts = self.sequence:get_prev_video(entry.clip.timeline_start)
-            end
-            for _, ne in ipairs(nexts) do
-                local idx = ne.track.track_index
-                if not track_clips[idx] then
-                    track_clips[idx] = {}
-                end
-                -- Avoid duplicate clip_ids
-                local dominated = false
-                for _, existing in ipairs(track_clips[idx]) do
-                    if existing.clip_id == ne.clip.id then
-                        dominated = true
-                        break
-                    end
-                end
-                if not dominated then
-                    track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne, 1.0)
-                end
-            end
-        end
-    end
-
-    -- If no current entries but we have a direction, try finding next clip ahead
-    if #current_entries == 0 then
-        next_entries = self.sequence:get_next_video(frame)
-        for _, ne in ipairs(next_entries or {}) do
-            local idx = ne.track.track_index
-            if not track_clips[idx] then
-                track_clips[idx] = {}
-            end
-            track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne, 1.0)
-        end
-    end
+    -- Lookahead: walk forward per-track to pre-load upcoming clips.
+    -- Covers gaps, clip transitions, and rapid-cut sequences.
+    self:_extend_video_lookahead(frame, track_clips)
 
     -- Feed each video track to TMB
     local indices = {}
@@ -695,13 +613,17 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
     -- ── Audio tracks ──
     local audio_track_clips = self:_send_audio_clips_to_tmb(frame, EMP)
 
-    -- ── Compute clip window from VIDEO clips only ──
-    -- The clip window determines when Lua re-queries TMB for new clips.
-    -- window_hi = MINIMUM per-track coverage end (not maximum). This ensures
-    -- NeedClips fires before ANY track runs dry. Using max would let tracks
-    -- with shorter coverage silently become gaps mid-playback → video freeze.
+    -- ── Compute clip windows from VIDEO clips ──
+    -- Two windows serve different purposes:
+    -- 1. Lua cache (_tmb_clip_window): MIN per-track end — tight, ensures seek
+    --    re-queries when any track's loaded data is stale.
+    -- 2. C++ SetClipWindow: MAX per-track end — wide, prevents NeedClips
+    --    thrashing when a short track has no more clips to load.
+    -- Gap safety: C++ deliverFrame invalidates windows on unexpected gaps,
+    -- so the wide C++ window won't mask stale data during playback.
     local window_lo = self.total_frames or math.huge
-    local window_hi = math.huge
+    local cache_hi = math.huge   -- min per-track (for Lua seek cache)
+    local cpp_hi = 0             -- max per-track (for C++ NeedClips timing)
 
     local has_clips = false
     for _, clips in pairs(track_clips) do
@@ -714,26 +636,29 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
                 track_hi = math.max(track_hi, clip_data.timeline_start + clip_data.duration)
             end
             window_lo = math.min(window_lo, track_lo)
-            window_hi = math.min(window_hi, track_hi)
+            cache_hi = math.min(cache_hi, track_hi)
+            cpp_hi = math.max(cpp_hi, track_hi)
         end
     end
-    if not has_clips then window_hi = 0 end
+    if not has_clips then cache_hi = 0 end
 
-    if has_clips and window_hi > window_lo then
+    -- Output invariant: max >= min is a mathematical certainty
+    assert(not has_clips or cpp_hi >= cache_hi, string.format(
+        "PlaybackEngine:_send_clips_to_tmb: cpp_hi (%d) < cache_hi (%d) — impossible",
+        cpp_hi, cache_hi))
+
+    if has_clips and cache_hi > window_lo then
         self._tmb_clip_window = {
-            lo = window_lo, hi = window_hi, direction = self.direction,
+            lo = window_lo, hi = cache_hi, direction = self.direction,
         }
     else
-        -- Gap or degenerate: don't cache, re-query next tick
         self._tmb_clip_window = nil
     end
 
-    -- Report clip windows to C++ (keeps windows fresh after seek).
-    -- Without this, C++ retains stale windows from _setup_playback_controller
-    -- and fires spurious NeedClips at play start.
-    if self._playback_controller and has_clips and window_hi > window_lo then
+    -- Report wide window to C++ (prevents NeedClips thrashing)
+    if self._playback_controller and has_clips and cpp_hi > window_lo then
         local PLAYBACK = qt_constants.PLAYBACK
-        PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "video", window_lo, window_hi)
+        PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "video", window_lo, cpp_hi)
     end
 
     -- Compute audio clip window separately (audio clips may span different range)
@@ -823,6 +748,67 @@ function PlaybackEngine:_send_audio_clips_to_tmb(frame, EMP)
     table.sort(audio_indices)
     self._audio_track_indices = audio_indices
     return audio_track_clips
+end
+
+-- Lookahead: walk forward per-track to ensure TMB has enough clips pre-loaded.
+-- Without this, clip transitions cause 50-150ms decode stalls on the CVDisplayLink
+-- thread when GetVideoFrame encounters a clip TMB hasn't been told about yet.
+local VIDEO_LOOKAHEAD_FRAMES = 150  -- ~6s at 25fps
+
+--- Extend track_clips with forward lookahead clips.
+-- Walks each video track forward from its current frontier until
+-- coverage reaches frame + VIDEO_LOOKAHEAD_FRAMES or no more clips exist.
+-- @param frame number: current playhead position
+-- @param track_clips table: {[track_index] = {clip_table, ...}} — modified in-place
+function PlaybackEngine:_extend_video_lookahead(frame, track_clips)
+    local target = frame + VIDEO_LOOKAHEAD_FRAMES
+
+    -- Collect all clip_ids already in track_clips (for dedup)
+    local seen = {}
+    for _, clips in pairs(track_clips) do
+        for _, clip_data in ipairs(clips) do
+            seen[clip_data.clip_id] = true
+        end
+    end
+
+    -- Iteratively walk forward using get_next_video until all tracks
+    -- cover the lookahead window. Each call returns one clip per track.
+    for _ = 1, 20 do  -- safety limit
+        -- Find the minimum per-track frontier (least-covered track)
+        local min_frontier = target
+        if not next(track_clips) then
+            -- No clips loaded yet (pure gap) — start from playhead
+            min_frontier = frame
+        else
+            for _, clips in pairs(track_clips) do
+                local track_frontier = frame
+                for _, clip_data in ipairs(clips) do
+                    local clip_end = clip_data.timeline_start + clip_data.duration
+                    if clip_end > track_frontier then track_frontier = clip_end end
+                end
+                if track_frontier < min_frontier then min_frontier = track_frontier end
+            end
+        end
+
+        if min_frontier >= target then break end
+
+        -- Get next clip per track from the frontier
+        local nexts = self.sequence:get_next_video(min_frontier)
+        if not nexts or #nexts == 0 then break end
+
+        local any_added = false
+        for _, ne in ipairs(nexts) do
+            if not seen[ne.clip.id] then
+                local idx = ne.track.track_index
+                if not track_clips[idx] then track_clips[idx] = {} end
+                track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne, 1.0)
+                seen[ne.clip.id] = true
+                any_added = true
+            end
+        end
+
+        if not any_added then break end
+    end
 end
 
 --- Build a TMB clip table from a sequence entry (get_video_at/get_audio_at result).

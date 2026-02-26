@@ -185,17 +185,24 @@ do
 
     assert(video_window, "SET_CLIP_WINDOW for video was never called")
 
-    -- BUG: current code computes max(200, 500) = 500
-    -- FIX: should compute min(200, 500) = 200
-    -- Track 1 runs dry at frame 200. If window_hi = 500, NeedClips won't fire
-    -- until frame 500-72=428, but track 1 has been a gap since frame 200.
-    print(string.format("  video window: lo=%d hi=%d", video_window.lo, video_window.hi))
-    assert(video_window.hi == 200, string.format(
-        "clip window hi must be min per-track end (200), got %d — "
-        .. "tracks with shorter coverage will become false gaps mid-playback",
+    -- C++ clip window uses MAX (500) to prevent NeedClips thrashing.
+    -- Gap safety: C++ deliverFrame invalidates the window when it hits an
+    -- unexpected gap, forcing a one-time NeedClips reload.
+    print(string.format("  C++ video window: lo=%d hi=%d", video_window.lo, video_window.hi))
+    assert(video_window.hi == 500, string.format(
+        "C++ clip window hi must be max per-track end (500), got %d",
         video_window.hi))
 
-    print("  PASS: window hi = 200 (minimum per-track coverage)")
+    -- Lua seek cache uses MIN (200) — tight, ensures re-query when short track is stale.
+    local cache = engine._tmb_clip_window
+    assert(cache, "Lua _tmb_clip_window not set")
+    print(string.format("  Lua cache: lo=%d hi=%d", cache.lo, cache.hi))
+    assert(cache.hi == 200, string.format(
+        "Lua cache hi must be min per-track end (200), got %d — "
+        .. "seeks won't re-query when short track's data is stale",
+        cache.hi))
+
+    print("  PASS: C++ window=500 (max, no thrash), Lua cache=200 (min, seek safety)")
     engine:destroy()
 end
 
@@ -234,6 +241,61 @@ do
     print("  PASS: single track window hi = 500")
     engine:destroy()
     mock_sequence.get_video_at = orig_get_video_at
+end
+
+-- ─── Test 3: no video clips at seek → no clip window set ───
+print("\n--- 3. gap at seek position — no clip window ---")
+do
+    local orig = mock_sequence.get_video_at
+    mock_sequence.get_video_at = function() return {} end
+
+    local engine = make_engine()
+    engine:load_sequence("seq-multitrack")
+    clip_window_calls = {}
+
+    engine:seek(999)
+
+    -- No video SET_CLIP_WINDOW call should have been made (no clips)
+    local video_window_count = 0
+    for _, call in ipairs(clip_window_calls) do
+        if call.type == "video" then video_window_count = video_window_count + 1 end
+    end
+    assert(video_window_count == 0, string.format(
+        "SET_CLIP_WINDOW for video should not fire on gap, got %d calls",
+        video_window_count))
+
+    -- Lua cache should be nil (gap → don't cache, re-query next seek)
+    assert(engine._tmb_clip_window == nil,
+        "Lua cache must be nil when no clips at seek position")
+
+    print("  PASS: gap at seek → no cache, no C++ window")
+    engine:destroy()
+    mock_sequence.get_video_at = orig
+end
+
+-- ─── Test 4: Lua cache hi <= C++ window hi (invariant) ───
+print("\n--- 4. Lua cache hi <= C++ window hi (min <= max invariant) ---")
+do
+    local engine = make_engine()
+    engine:load_sequence("seq-multitrack")
+    clip_window_calls = {}
+
+    engine:seek(50)
+
+    local cpp_window = nil
+    for _, call in ipairs(clip_window_calls) do
+        if call.type == "video" then cpp_window = call end
+    end
+    local cache = engine._tmb_clip_window
+
+    assert(cpp_window and cache, "both windows must exist")
+    assert(cache.hi <= cpp_window.hi, string.format(
+        "Lua cache hi (%d) must be <= C++ window hi (%d)",
+        cache.hi, cpp_window.hi))
+
+    print(string.format("  cache_hi=%d <= cpp_hi=%d", cache.hi, cpp_window.hi))
+    print("  PASS: min <= max invariant holds")
+    engine:destroy()
 end
 
 print("\n✅ test_clip_window_multitrack.lua passed")
