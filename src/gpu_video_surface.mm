@@ -11,6 +11,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <CoreVideo/CoreVideo.h>
 #import <AppKit/NSView.h>
+#import <mach/mach_time.h>
 
 struct Vertex {
     float position[2];
@@ -495,11 +496,15 @@ void GPUVideoSurface::renderTexture() {
     if (!m_initialized) return;
 
     @autoreleasepool {
+        uint64_t t0 = mach_absolute_time();
+
         CGFloat scale = devicePixelRatioF();
         m_impl->metalLayer.contentsScale = scale;
         m_impl->metalLayer.drawableSize = CGSizeMake(width() * scale, height() * scale);
 
+        uint64_t t1 = mach_absolute_time();
         id<CAMetalDrawable> drawable = [m_impl->metalLayer nextDrawable];
+        uint64_t t2 = mach_absolute_time();
         if (!drawable) return;
 
         MTLRenderPassDescriptor* passDesc = [MTLRenderPassDescriptor new];
@@ -550,6 +555,22 @@ void GPUVideoSurface::renderTexture() {
         [encoder endEncoding];
         [cmdBuffer presentDrawable:drawable];
         [cmdBuffer commit];
+
+        uint64_t t3 = mach_absolute_time();
+        // Convert to ms using mach_timebase_info
+        mach_timebase_info_data_t info;
+        mach_timebase_info(&info);
+        auto toMs = [&](uint64_t delta) -> double {
+            return (double)(delta * info.numer / info.denom) / 1e6;
+        };
+        double setup_ms = toMs(t1 - t0);
+        double drawable_ms = toMs(t2 - t1);
+        double render_ms = toMs(t3 - t2);
+        double total_ms = toMs(t3 - t0);
+        if (total_ms > 4.0 || m_frame_count % 60 == 0) {
+            JVE_LOG_DETAIL(Video, "renderTexture: total=%.1fms (setup=%.1f drawable=%.1f render=%.1f) count=%lld",
+                          total_ms, setup_ms, drawable_ms, render_ms, (long long)m_frame_count);
+        }
     }
 }
 
