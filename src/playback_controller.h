@@ -78,8 +78,11 @@ public:
     void SetQualityMode(int mode);
     int QualityMode() const;
 
+    // Diagnostics (read after Stop)
+    int64_t UnderrunCount() const { return m_underrun_count; }
+
     // Pump timing constants (match Lua CFG) — public for pre-fill sizing
-    static constexpr int TARGET_BUFFER_MS = 100;
+    static constexpr int TARGET_BUFFER_MS = 200;
     static constexpr int MAX_RENDER_FRAMES = 4096;
 
 private:
@@ -108,6 +111,7 @@ private:
     int64_t m_last_fetch_end{-1};
     int64_t m_last_media_time{-1};
     int64_t m_stalled_cycles{0};
+    int64_t m_underrun_count{0};
 };
 
 #ifdef __APPLE__
@@ -216,6 +220,7 @@ private:
     int32_t m_fps_den{1};
     double m_fps{24.0};  // precomputed fps_num/fps_den
     int64_t m_last_displayed_frame{-1};
+    uint64_t m_last_new_frame_time{0};  // mach_absolute_time of last new frame delivery
     double m_fractional_frames{0.0};   // video clock accumulator (CVDisplayLink elapsed → frames)
     std::string m_current_clip_id;
 
@@ -226,9 +231,12 @@ private:
     int64_t m_hold_count{0};            // total HOLD corrections this play session
     int64_t m_skip_count{0};            // total SKIP corrections this play session
 
-    // ---- A/V sync thresholds (ffplay model) ----
-    static constexpr double SYNC_THRESHOLD_MIN = 0.04;  // 40ms — ignore drift below this
-    static constexpr double SYNC_THRESHOLD_MAX = 0.1;   // 100ms — hard correction above this
+    // ---- A/V sync PLL (phase-locked loop) ----
+    // Gently steers video frame accumulator toward audio clock each tick.
+    // Eliminates visible skip/hold artifacts while maintaining tight sync.
+    static constexpr double PLL_GAIN = 0.03;              // 3% of drift corrected per tick
+    static constexpr double PLL_MAX_CORRECTION = 0.15;    // max accumulator nudge per tick (in frames)
+    static constexpr double PLL_EMERGENCY_THRESHOLD = 0.2; // 200ms — hard skip/hold as last resort
 
     // ---- Clip windows ----
     // Track valid frame ranges where TMB has clips loaded.

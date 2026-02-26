@@ -29,7 +29,7 @@ local MAX_SPEED_DECIMATE = 16.0  -- Max speed for decimate mode
 
 -- Centralized configuration constants (no scattered literals)
 local CFG = {
-    TARGET_BUFFER_MS = 100,
+    TARGET_BUFFER_MS = 200,
     PUMP_INTERVAL_HUNGRY_MS = 2,
     PUMP_INTERVAL_OK_MS = 15,
     MAX_RENDER_FRAMES = 4096,
