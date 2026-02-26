@@ -200,7 +200,7 @@ private:
             int32_t par_den = 1;
         };
         std::map<int64_t, CachedFrame> video_cache; // key = timeline_frame
-        // Must hold at least 2 × PRE_BUFFER_BATCH (48) so current clip + next
+        // Must hold at least 2 × VIDEO_HIGH_WATER (96) so current clip + next
         // clip pre-buffer don't thrash each other via eviction.
         static constexpr size_t MAX_VIDEO_CACHE = 144;
 
@@ -214,6 +214,11 @@ private:
         std::vector<CachedAudio> audio_cache;
         static constexpr size_t MAX_AUDIO_CACHE = 4;
 
+        // Watermark buffer tracking: furthest timeline position with submitted decode.
+        // -1 = cold (no refill submitted yet). Updated by REFILL worker, reset by
+        // SetTrackClips (clip change), ParkReaders (stop), direction change.
+        int64_t video_buffer_end = -1;    // timeline frame
+        TimeUS audio_buffer_end = -1;     // microseconds
     };
 
     std::mutex m_tracks_mutex;
@@ -252,26 +257,34 @@ private:
 
     // ── Pre-buffer thread pool ──
     struct PreBufferJob {
-        enum Type { VIDEO, AUDIO };
+        enum Type { VIDEO, AUDIO, VIDEO_REFILL, AUDIO_REFILL };
         Type type = VIDEO;
 
         TrackId track{TrackType::Video, 0};
         std::string clip_id;
         std::string media_path;
 
-        // VIDEO fields
+        // VIDEO fields (legacy per-clip pre-buffer)
         int64_t source_frame = 0;
         int64_t timeline_frame = 0;
         Rate rate{0, 1};
         int direction = 1;            // playback direction (+1 forward, -1 reverse)
         int64_t clip_duration = 0;    // clip length in frames (bounds batch size)
 
-        // AUDIO fields
+        // AUDIO fields (legacy per-clip pre-buffer)
         TimeUS source_t0 = 0;
         TimeUS source_t1 = 0;
         TimeUS timeline_t0 = 0;
         TimeUS timeline_t1 = 0;
         float speed_ratio = 1.0f;
+
+        // VIDEO_REFILL fields (watermark-driven)
+        int64_t refill_from_frame = 0;   // first timeline frame to decode
+        int refill_count = 0;             // number of frames to decode
+
+        // AUDIO_REFILL fields (watermark-driven)
+        TimeUS refill_from_us = 0;       // start of refill range (timeline us)
+        TimeUS refill_to_us = 0;         // end of refill range (timeline us)
     };
 
     void start_workers(int count);
@@ -295,10 +308,28 @@ private:
     // ── Audio format (for pre-buffer — set once before playback) ──
     AudioFormat m_audio_fmt{SampleFormat::F32, 0, 0};
 
-    // Pre-buffer threshold: ~4 seconds at 24fps. Workers decode this far ahead
-    // so Play-mode GetVideoFrame hits cache. Used by SetPlayhead (gap scan)
-    // and trigger_prebuffer_for_new_clips (new-clip pre-buffer).
+    // ── Watermark-driven buffer constants ──
+    // High water: stop filling when buffer_end is this far ahead of playhead
+    static constexpr int64_t VIDEO_HIGH_WATER = 96;     // ~4s @24fps
+    // Low water: trigger refill when buffer_end is only this far ahead
+    static constexpr int64_t VIDEO_LOW_WATER = 48;      // ~2s @24fps
+    // Max frames per REFILL worker job (bounds batch size)
+    static constexpr int VIDEO_REFILL_SIZE = 48;
+
+    static constexpr TimeUS AUDIO_HIGH_WATER = 2000000;  // 2s
+    static constexpr TimeUS AUDIO_LOW_WATER = 500000;    // 0.5s
+    static constexpr TimeUS AUDIO_REFILL_SIZE = 200000;  // 200ms
+
+    // Legacy pre-buffer threshold (Phase 1 coexistence — removed in Phase 2)
     static constexpr int64_t PRE_BUFFER_THRESHOLD = 96;
+
+    // ── Watermark check + submit methods ──
+    // Called from GetVideoFrame/GetTrackAudio cache-hit paths during playback.
+    // Caller must NOT hold m_tracks_mutex (methods lock internally).
+    void check_video_watermark(TrackId track, int64_t playhead, int direction);
+    void submit_video_refill(TrackId track, int64_t playhead, int direction);
+    void check_audio_watermark(TrackId track, TimeUS playhead_us, int direction);
+    void submit_audio_refill(TrackId track, TimeUS playhead_us, int direction);
 
     // ── Playhead state ──
     std::atomic<int64_t> m_playhead_frame{0};
