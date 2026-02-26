@@ -249,7 +249,7 @@ private:
     };
     ClipWindow m_video_window;
     ClipWindow m_audio_window;
-    static constexpr int64_t PREFETCH_MARGIN_FRAMES = 72;  // ~3s at 24fps
+    static constexpr int64_t PREFETCH_MARGIN_FRAMES = 120;  // ~5s at 24fps — must exceed TMB's PRE_BUFFER_THRESHOLD (96)
 
     // ---- Dependencies ----
     emp::TimelineMediaBuffer* m_tmb{nullptr};

@@ -1092,22 +1092,6 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     }
     m_repeat_streak = 0;
 
-    // Frame cadence: measure time between consecutive new frames.
-    // At 25fps/60Hz, expect ~40ms (2-3 vsyncs). Log outliers.
-    {
-        uint64_t now = mach_absolute_time();
-        if (m_last_new_frame_time > 0) {
-            double cadence_ms = machTimeToSeconds(now - m_last_new_frame_time) * 1000.0;
-            double expected_ms = 1000.0 / m_fps;  // 40ms at 25fps
-            // Log if >50% off expected cadence
-            if (cadence_ms > expected_ms * 1.5 || cadence_ms < expected_ms * 0.5) {
-                JVE_LOG_DETAIL(Ticks, "deliverFrame: CADENCE %.1fms (expect %.1fms) frame=%lld",
-                              cadence_ms, expected_ms, (long long)frame);
-            }
-        }
-        m_last_new_frame_time = now;
-    }
-
     // Audio-only sequence: no video tracks to display
     if (m_video_track_indices.empty()) {
         return;
@@ -1146,14 +1130,11 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
         return;
     }
 
-    // At clip transitions, TMB may return a stale frame from the OLD clip
-    // with the NEW clip's metadata (pending=true). Displaying it would show
-    // old content with new rotation/PAR → visible glitch. Skip and hold
-    // the last real frame until the new clip's first frame is decoded.
-    // Within-clip stale frames (same clip_id) are fine — same content.
-    if (result.pending && result.clip_id != m_current_clip_id) {
-        JVE_LOG_EVENT(Ticks, "deliverFrame: pending cross-clip hold at frame %lld old=%s new=%s",
-                     (long long)frame, m_current_clip_id.c_str(), result.clip_id.c_str());
+    // Hold on ANY pending result. TMB returns {pending: true, frame: nullptr}
+    // on Play-mode cache miss — no stale pixel data, just metadata + pending flag.
+    // GPU surface retains its last frame. Clip transition fires on next tick
+    // when real frame arrives (~8-16ms delay, invisible at display refresh rates).
+    if (result.pending) {
         return;
     }
 
@@ -1186,6 +1167,22 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
 
     if (result.frame) {
         m_last_displayed_frame = frame;
+
+        // Frame cadence: measure time between consecutive DISPLAYED frames.
+        // At 25fps/60Hz, expect ~40ms (2-3 vsyncs). Log outliers.
+        // Measured here (not earlier) so pending-null holds don't corrupt timing.
+        {
+            uint64_t now = mach_absolute_time();
+            if (m_last_new_frame_time > 0) {
+                double cadence_ms = machTimeToSeconds(now - m_last_new_frame_time) * 1000.0;
+                double expected_ms = 1000.0 / m_fps;  // 40ms at 25fps
+                if (cadence_ms > expected_ms * 1.5 || cadence_ms < expected_ms * 0.5) {
+                    JVE_LOG_DETAIL(Ticks, "deliverFrame: CADENCE %.1fms (expect %.1fms) frame=%lld",
+                                  cadence_ms, expected_ms, (long long)frame);
+                }
+            }
+            m_last_new_frame_time = now;
+        }
 
         if (synchronous) {
             JVE_LOG_EVENT(Ticks, "deliverFrame: sync frame=%lld clip=%s %dx%d",

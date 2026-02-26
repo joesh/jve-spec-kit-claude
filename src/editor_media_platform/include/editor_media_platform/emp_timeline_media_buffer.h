@@ -84,7 +84,8 @@ struct VideoResult {
     int64_t clip_start_frame;     // timeline coords
     int64_t clip_end_frame;       // timeline coords
     bool offline;
-    bool pending = false;   // true = stale frame returned, async decode in progress
+    bool pending = false;   // true = cache miss during Play, async decode submitted
+                             // frame is nullptr — caller holds current display
 };
 
 // Timeline media buffer — owns readers and clip layout per track,
@@ -213,10 +214,6 @@ private:
         std::vector<CachedAudio> audio_cache;
         static constexpr size_t MAX_AUDIO_CACHE = 4;
 
-        // Stale-return buffer: last frame displayed via GetVideoFrame (Play cache hit).
-        // Returned on cache miss during Play so main thread never blocks.
-        CachedFrame last_displayed;
-        bool has_last_displayed = false;
     };
 
     std::mutex m_tracks_mutex;
@@ -224,6 +221,14 @@ private:
 
     // Find clip at timeline_frame in track's clip list
     const ClipInfo* find_clip_at(const TrackState& ts, int64_t timeline_frame) const;
+
+    // Auto-prebuffer: when SetTrackClips adds new clips during active playback,
+    // submit pre-buffer jobs for clips adjacent to the current playhead position.
+    // Caller must hold m_tracks_mutex.
+    void trigger_prebuffer_for_new_clips(
+        TrackId track, const TrackState& ts, const ClipInfo& current,
+        const std::unordered_set<std::string>& old_clip_ids,
+        int64_t playhead, int direction);
 
     // Find clip at timeline microsecond position (for audio path)
     // Requires m_seq_rate to be set

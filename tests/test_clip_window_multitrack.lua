@@ -1,13 +1,13 @@
 --- Test: clip window computation with multi-track timelines.
 --
--- Regression test for video freeze bug: when multiple video tracks have
--- different clip coverage ranges, the clip window must use the MINIMUM
--- per-track end (not the max). Otherwise NeedClips never fires and tracks
--- run dry mid-playback → video freezes while audio continues.
+-- Regression test for multi-track clip transition stutter: when multiple
+-- video tracks have different clip coverage ranges, the clip window must
+-- use the MINIMUM per-track end (not the max). Otherwise NeedClips never
+-- fires before the shortest track runs out → GAP → 200ms+ stutter.
 --
 -- Scenario: Track 1 has clips covering frames 0-200, Track 2 has clips
--- covering frames 0-500. The clip window hi MUST be 200 (the minimum),
--- so C++ fires NeedClips before Track 1 runs dry.
+-- covering frames 0-500. Both C++ window and Lua cache hi = 200 (MIN),
+-- so NeedClips fires before Track 1 runs dry.
 
 require("test_env")
 
@@ -185,24 +185,22 @@ do
 
     assert(video_window, "SET_CLIP_WINDOW for video was never called")
 
-    -- C++ clip window uses MAX (500) to prevent NeedClips thrashing.
-    -- Gap safety: C++ deliverFrame invalidates the window when it hits an
-    -- unexpected gap, forcing a one-time NeedClips reload.
+    -- Both C++ clip window and Lua cache use MIN per-track end (200).
+    -- NeedClips fires before ANY track's clips expire, not just when ALL expire.
+    -- NeedClips is debounced (need_clips_pending), so extra calls are <5ms overhead.
     print(string.format("  C++ video window: lo=%d hi=%d", video_window.lo, video_window.hi))
-    assert(video_window.hi == 500, string.format(
-        "C++ clip window hi must be max per-track end (500), got %d",
+    assert(video_window.hi == 200, string.format(
+        "C++ clip window hi must be min per-track end (200), got %d",
         video_window.hi))
 
-    -- Lua seek cache uses MIN (200) — tight, ensures re-query when short track is stale.
     local cache = engine._tmb_clip_window
     assert(cache, "Lua _tmb_clip_window not set")
     print(string.format("  Lua cache: lo=%d hi=%d", cache.lo, cache.hi))
     assert(cache.hi == 200, string.format(
-        "Lua cache hi must be min per-track end (200), got %d — "
-        .. "seeks won't re-query when short track's data is stale",
+        "Lua cache hi must be min per-track end (200), got %d",
         cache.hi))
 
-    print("  PASS: C++ window=500 (max, no thrash), Lua cache=200 (min, seek safety)")
+    print("  PASS: C++ window=200 (min), Lua cache=200 (min) — NeedClips fires for ANY track")
     engine:destroy()
 end
 
@@ -273,8 +271,8 @@ do
     mock_sequence.get_video_at = orig
 end
 
--- ─── Test 4: Lua cache hi <= C++ window hi (invariant) ───
-print("\n--- 4. Lua cache hi <= C++ window hi (min <= max invariant) ---")
+-- ─── Test 4: Lua cache hi == C++ window hi (both MIN-based) ───
+print("\n--- 4. Lua cache hi == C++ window hi (unified MIN invariant) ---")
 do
     local engine = make_engine()
     engine:load_sequence("seq-multitrack")
@@ -289,12 +287,12 @@ do
     local cache = engine._tmb_clip_window
 
     assert(cpp_window and cache, "both windows must exist")
-    assert(cache.hi <= cpp_window.hi, string.format(
-        "Lua cache hi (%d) must be <= C++ window hi (%d)",
+    assert(cache.hi == cpp_window.hi, string.format(
+        "Lua cache hi (%d) must equal C++ window hi (%d) — both MIN-based",
         cache.hi, cpp_window.hi))
 
-    print(string.format("  cache_hi=%d <= cpp_hi=%d", cache.hi, cpp_window.hi))
-    print("  PASS: min <= max invariant holds")
+    print(string.format("  cache_hi=%d == cpp_hi=%d", cache.hi, cpp_window.hi))
+    print("  PASS: unified MIN invariant holds")
     engine:destroy()
 end
 
