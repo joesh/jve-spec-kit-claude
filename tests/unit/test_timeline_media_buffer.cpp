@@ -2825,6 +2825,64 @@ private slots:
                  qPrintable(QString("All 6 tracks should be pre-filled, got %1 misses").arg(misses)));
     }
 
+    void test_audio_watermark_5_tracks_no_underrun() {
+        // Phase 3 integration: 5 audio tracks with clips, mix thread running.
+        // Simulate real-time consumption via GetMixedAudio. With MAX_AUDIO_CACHE=12
+        // (2s of 200ms chunks), the per-track audio watermark keeps the cache warm.
+        // mix_thread hits cache instead of sync decode → zero underruns.
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(4);
+        tmb->SetSequenceRate(24, 1);
+
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        tmb->SetAudioFormat(fmt);
+        auto path = m_testVideoPath.toStdString();
+
+        // 5 audio tracks, each with a clip covering [0, 100) timeline frames
+        std::vector<MixTrackParam> mix_params;
+        for (int i = 1; i <= 5; ++i) {
+            TrackId t{TrackType::Audio, i};
+            std::vector<ClipInfo> clips = {
+                {"audio" + std::to_string(i), path, 0, 100, 0, 24, 1, 1.0f},
+            };
+            tmb->SetTrackClips(t, clips);
+            mix_params.push_back({i, 1.0f});
+        }
+
+        tmb->SetAudioMixParams(mix_params, fmt);
+
+        // Cold-start: submits audio REFILL for all 5 tracks + wakes mix thread
+        tmb->SetPlayhead(0, 1, 1.0f);
+
+        // Let watermark fill per-track audio cache + mix_thread pre-fill
+        QThread::msleep(1000);
+
+        // Simulate ~1s of real-time audio consumption (20ms chunks at 48kHz)
+        // 50 chunks × 20ms = 1000ms of audio
+        int underruns = 0;
+        TimeUS cursor = 0;
+        TimeUS chunk_size = 20000; // 20ms in us
+        for (int i = 0; i < 50; ++i) {
+            TimeUS t0 = cursor;
+            TimeUS t1 = cursor + chunk_size;
+            auto mixed = tmb->GetMixedAudio(t0, t1);
+            if (!mixed || mixed->frames() == 0) {
+                underruns++;
+            }
+            cursor = t1;
+            // Advance playhead to simulate tick loop
+            int64_t ph_frame = static_cast<int64_t>(
+                cursor * 24.0 / 1000000.0);
+            tmb->SetPlayhead(ph_frame, 1, 1.0f);
+        }
+
+        QVERIFY2(underruns == 0,
+                 qPrintable(QString("Expected 0 audio underruns, got %1 in 50 chunks")
+                     .arg(underruns)));
+        qDebug() << "5 audio tracks, 50 chunks consumed: 0 underruns";
+    }
+
     void test_setplayhead_minimal_overhead() {
         // SetPlayhead with watermark system should be fast: no gap scanning,
         // no threshold checks. Just updates atomics, manages prefetch, and

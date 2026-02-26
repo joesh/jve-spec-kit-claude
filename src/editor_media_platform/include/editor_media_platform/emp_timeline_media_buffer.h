@@ -212,7 +212,9 @@ private:
             std::shared_ptr<PcmChunk> pcm;
         };
         std::vector<CachedAudio> audio_cache;
-        static constexpr size_t MAX_AUDIO_CACHE = 4;
+        // 2s of audio at AUDIO_REFILL_SIZE=200ms per chunk = 10 chunks.
+        // 12 gives headroom for boundary overlaps.
+        static constexpr size_t MAX_AUDIO_CACHE = 12;
 
         // Watermark buffer tracking: furthest timeline position with submitted decode.
         // -1 = cold (no refill submitted yet). Updated by REFILL worker, reset by
