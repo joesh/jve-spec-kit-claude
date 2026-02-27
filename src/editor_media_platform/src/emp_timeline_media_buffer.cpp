@@ -362,6 +362,12 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         // result.frame stays nullptr — caller holds current display
         // result.clip_id already set to CURRENT clip for transition detection
 
+        // Watermark check on cache MISS too: during cold-start, every frame is
+        // a miss. Without this, only cache HITs trigger refill. The 60Hz tick
+        // loop calling GetVideoFrame would never trigger refill if the buffer
+        // starts empty (no hits → no watermark check → no refill).
+        check_video_watermark(track, timeline_frame, direction);
+
         // Submit async VIDEO decode job to worker pool
         PreBufferJob job{};
         job.type = PreBufferJob::VIDEO;
@@ -1564,7 +1570,13 @@ void TimelineMediaBuffer::worker_loop() {
         if (job.type == PreBufferJob::VIDEO_REFILL) {
             // ── Watermark-driven video refill: iterate timeline frames, acquire
             // readers per-clip, skip gaps. One batch spans clip boundaries.
+            //
+            // Hold the reader across consecutive frames in the same clip to
+            // avoid use_mutex contention with Reader's prefetch thread.
             int frames_decoded = 0;
+            std::string held_clip_id;
+            ReaderHandle held_reader;
+
             for (int i = 0; i < job.refill_count; ++i) {
                 if (m_shutdown.load() || m_playhead_direction.load(std::memory_order_relaxed) == 0) break;
 
@@ -1593,19 +1605,28 @@ void TimelineMediaBuffer::worker_loop() {
                         rate_den = clip->rate_den;
                     }
                 }
-                if (is_gap) continue;
+                if (is_gap) {
+                    // Release held reader on gap (clip boundary)
+                    held_reader = {};
+                    held_clip_id.clear();
+                    continue;
+                }
 
-                // Acquire reader for this clip (no locks held)
-                auto reader = acquire_reader(job.track, clip_id, media_path);
-                if (!reader) continue;
+                // Acquire reader only when clip changes (boundary crossing)
+                if (clip_id != held_clip_id || !held_reader) {
+                    held_reader = {};  // release old reader first
+                    held_reader = acquire_reader(job.track, clip_id, media_path);
+                    if (!held_reader) continue;
+                    held_clip_id = clip_id;
+                }
 
                 int64_t source_frame = source_in + (tf - timeline_start);
-                const auto& info = reader->media_file()->info();
+                const auto& info = held_reader->media_file()->info();
                 int64_t file_frame = source_frame - info.start_tc;
                 Rate clip_rate{rate_num, rate_den};
                 FrameTime ft = FrameTime::from_frame(file_frame, clip_rate);
 
-                auto result = reader->DecodeAt(ft);
+                auto result = held_reader->DecodeAt(ft);
                 if (result.is_ok()) {
                     std::lock_guard<std::mutex> tlock(m_tracks_mutex);
                     auto tit = m_tracks.find(job.track);
