@@ -125,8 +125,10 @@ void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInf
         ts.clips = clips;
 
         // Reset watermark buffer_end so REFILL re-evaluates from playhead.
+        // Increment generation so stale in-flight REFILL aborts early.
         ts.video_buffer_end = -1;
         ts.audio_buffer_end = -1;
+        ts.refill_generation++;
         clips_changed = true;
     }
     // tracks_lock released — submit REFILL if playback is active.
@@ -882,6 +884,7 @@ void TimelineMediaBuffer::check_video_watermark(TrackId track, int64_t playhead,
 
 void TimelineMediaBuffer::submit_video_refill(TrackId track, int64_t playhead, int direction) {
     int64_t buffer_end;
+    int64_t gen;
     {
         std::lock_guard<std::mutex> lock(m_tracks_mutex);
         auto it = m_tracks.find(track);
@@ -892,6 +895,7 @@ void TimelineMediaBuffer::submit_video_refill(TrackId track, int64_t playhead, i
             ts.video_buffer_end = playhead;
         }
         buffer_end = ts.video_buffer_end;
+        gen = ts.refill_generation;
     }
 
     // Compute refill range: [buffer_end, buffer_end + REFILL_SIZE], clamped to HIGH_WATER
@@ -922,6 +926,7 @@ void TimelineMediaBuffer::submit_video_refill(TrackId track, int64_t playhead, i
     job.direction = direction;
     job.refill_from_frame = refill_from;
     job.refill_count = refill_count;
+    job.generation = gen;
     submit_pre_buffer(job);
 }
 
@@ -954,6 +959,7 @@ void TimelineMediaBuffer::check_audio_watermark(TrackId track, TimeUS playhead_u
 
 void TimelineMediaBuffer::submit_audio_refill(TrackId track, TimeUS playhead_us, int direction) {
     TimeUS buffer_end;
+    int64_t gen;
     {
         std::lock_guard<std::mutex> lock(m_tracks_mutex);
         auto it = m_tracks.find(track);
@@ -964,6 +970,7 @@ void TimelineMediaBuffer::submit_audio_refill(TrackId track, TimeUS playhead_us,
             ts.audio_buffer_end = playhead_us;
         }
         buffer_end = ts.audio_buffer_end;
+        gen = ts.refill_generation;
     }
 
     TimeUS refill_from, refill_to;
@@ -984,6 +991,7 @@ void TimelineMediaBuffer::submit_audio_refill(TrackId track, TimeUS playhead_us,
     job.direction = direction;
     job.refill_from_us = refill_from;
     job.refill_to_us = refill_to;
+    job.generation = gen;
     submit_pre_buffer(job);
 }
 
@@ -1616,6 +1624,9 @@ void TimelineMediaBuffer::worker_loop() {
                     std::lock_guard<std::mutex> tlock(m_tracks_mutex);
                     auto tit = m_tracks.find(job.track);
                     if (tit == m_tracks.end()) break;
+                    // Stale REFILL: SetTrackClips advanced generation — abort so
+                    // the new REFILL (with fresh clip list) can run promptly.
+                    if (tit->second.refill_generation != job.generation) break;
                     const ClipInfo* clip = find_clip_at(tit->second, tf);
                     if (!clip) {
                         // Gap: advance buffer_end past it, continue to next frame
@@ -1711,6 +1722,7 @@ void TimelineMediaBuffer::worker_loop() {
                     std::lock_guard<std::mutex> tlock(m_tracks_mutex);
                     auto tit = m_tracks.find(job.track);
                     if (tit == m_tracks.end()) break;
+                    if (tit->second.refill_generation != job.generation) break;
                     const ClipInfo* clip = find_clip_at_us(tit->second, cursor);
                     if (!clip) {
                         // Gap: find next clip to skip past it
@@ -1844,6 +1856,20 @@ void TimelineMediaBuffer::worker_loop() {
                     EMP_LOG_WARN("On-demand: DecodeAt failed at sf=%lld clip=%s: %s",
                             static_cast<long long>(sf), job.clip_id.c_str(),
                             result.error().message.c_str());
+                    // Insert null-frame cache entry for this timeline frame so
+                    // GetVideoFrame sees a cache hit (gap) instead of re-submitting
+                    // On-demand jobs for undecodeble frames (EOF spam).
+                    {
+                        std::lock_guard<std::mutex> lock(m_tracks_mutex);
+                        auto it = m_tracks.find(job.track);
+                        if (it != m_tracks.end()) {
+                            auto& cache = it->second.video_cache;
+                            while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
+                                cache.erase(cache.begin());
+                            }
+                            cache[tf] = {job.clip_id, sf, nullptr, 0, 1, 1};
+                        }
+                    }
                     break;
                 }
             }

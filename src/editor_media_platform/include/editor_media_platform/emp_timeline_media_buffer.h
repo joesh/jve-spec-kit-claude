@@ -221,6 +221,11 @@ private:
         // SetTrackClips (clip change), ParkReaders (stop), direction change.
         int64_t video_buffer_end = -1;    // timeline frame
         TimeUS audio_buffer_end = -1;     // microseconds
+
+        // Generation counter: incremented by SetTrackClips on clip list change.
+        // REFILL jobs capture the generation at submission; worker aborts early
+        // on mismatch (stale REFILL from pre-SetTrackClips clip list).
+        int64_t refill_generation = 0;
     };
 
     std::mutex m_tracks_mutex;
@@ -281,6 +286,9 @@ private:
         // AUDIO_REFILL fields (watermark-driven)
         TimeUS refill_from_us = 0;       // start of refill range (timeline us)
         TimeUS refill_to_us = 0;         // end of refill range (timeline us)
+
+        // Generation counter — REFILL aborts if track's generation has advanced
+        int64_t generation = 0;
     };
 
     void start_workers(int count);
