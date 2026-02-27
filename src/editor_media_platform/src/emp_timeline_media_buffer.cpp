@@ -1637,6 +1637,8 @@ void TimelineMediaBuffer::worker_loop() {
             int frames_decoded = 0;
             std::string held_clip_id;
             ReaderHandle held_reader;
+            std::shared_ptr<Frame> last_good_frame;     // for hold-on-EOF
+            int64_t last_good_source_frame = 0;
 
             for (int i = 0; i < job.refill_count; ++i) {
                 if (m_shutdown.load() || m_playhead_direction.load(std::memory_order_relaxed) == 0) break;
@@ -1696,6 +1698,8 @@ void TimelineMediaBuffer::worker_loop() {
 
                 auto result = held_reader->DecodeAt(ft);
                 if (result.is_ok()) {
+                    last_good_frame = result.value();
+                    last_good_source_frame = source_frame;
                     std::lock_guard<std::mutex> tlock(m_tracks_mutex);
                     auto tit = m_tracks.find(job.track);
                     if (tit != m_tracks.end()) {
@@ -1709,25 +1713,37 @@ void TimelineMediaBuffer::worker_loop() {
                     }
                     frames_decoded++;
                 } else {
-                    EMP_LOG_WARN("REFILL: DecodeAt failed at tf=%lld clip=%s: %s",
-                            static_cast<long long>(tf), clip_id.c_str(),
-                            result.error().message.c_str());
-                    // Advance buffer_end to clip end to prevent infinite re-submit.
-                    // EOF typically means clip duration overstates decodable range
-                    // (media boundary rounding). Skip remaining frames in this clip;
-                    // next REFILL will start at the next clip or gap.
-                    // Also record clip EOF so GetVideoFrame skips future frames.
+                    // EOF: clip duration overstates decodable range (common with
+                    // DRP retimed clips where in/out are in retimed timebase).
+                    // Hold last frame for remaining timeline frames in clip
+                    // (matches Resolve behavior — no black gap before next clip).
+                    EMP_LOG_WARN("REFILL: EOF at tf=%lld sf=%lld clip=%s — "
+                            "holding last frame for %lld remaining",
+                            static_cast<long long>(tf), static_cast<long long>(source_frame),
+                            clip_id.c_str(),
+                            static_cast<long long>(timeline_start + clip_duration - tf));
                     {
                         std::lock_guard<std::mutex> tlock(m_tracks_mutex);
                         auto tit = m_tracks.find(job.track);
                         if (tit != m_tracks.end()) {
                             int64_t clip_end = timeline_start + clip_duration;
-                            tit->second.video_buffer_end = std::max(tf + 1, clip_end);
+                            // Record EOF marker
                             auto& eof = tit->second.clip_eof_frame;
                             auto eof_it = eof.find(clip_id);
                             if (eof_it == eof.end() || source_frame < eof_it->second) {
                                 eof[clip_id] = source_frame;
                             }
+                            // Fill remaining frames with last good frame
+                            if (last_good_frame) {
+                                auto& cache = tit->second.video_cache;
+                                for (int64_t fill_tf = tf; fill_tf < clip_end; ++fill_tf) {
+                                    if (cache.size() >= TrackState::MAX_VIDEO_CACHE) break;
+                                    cache[fill_tf] = {clip_id, last_good_source_frame,
+                                                      last_good_frame, info.rotation,
+                                                      info.video_par_num, info.video_par_den};
+                                }
+                            }
+                            tit->second.video_buffer_end = clip_end;
                         }
                     }
                     break;
