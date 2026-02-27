@@ -884,15 +884,23 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
             -- Empty/missing <In> means untrimmed (source_in = 0).
             local in_text = in_elem and get_text(in_elem) or ""
             local in_value
+            local clip_speed = 1.0
             if in_text == "" then
                 in_value = 0  -- empty/missing <In> = untrimmed
             else
                 -- DRP <In> can be "12345" or "12345|hexdata" (pipe-delimited
                 -- with hex-encoded speed ratio). Extract integer before pipe.
-                local num_part = in_text:match("^(%d+)")
+                local num_part, hex_part = in_text:match("^(%d+)|?(%x*)")
                 in_value = assert(num_part and tonumber(num_part), string.format(
                     "parse_resolve_tracks: clip '%s' <In> has no numeric prefix: '%s'",
                     clip_name, in_text))
+                -- Hex part encodes speed ratio as LE IEEE 754 double
+                if hex_part and #hex_part >= 16 then
+                    local speed = decode_hex_double_at(hex_part, 0)
+                    if speed and speed > 0 and speed < 100 then
+                        clip_speed = speed
+                    end
+                end
             end
 
             local duration_timeline_frames = duration_raw
@@ -903,9 +911,11 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
                 source_in_native = math.floor(in_value * 48000 / frame_rate + 0.5)
                 source_duration = math.floor(duration_raw * 48000 / frame_rate + 0.5)
             else
-                -- Video: <In> is already in video frames
+                -- Video: <In> is already in video frames.
+                -- When speed != 1.0, timeline duration > source duration.
+                -- Scale by speed to get actual source frame count.
                 source_in_native = math.floor(in_value)
-                source_duration = duration_raw
+                source_duration = math.floor(duration_raw * clip_speed + 0.5)
             end
 
             local clip = {

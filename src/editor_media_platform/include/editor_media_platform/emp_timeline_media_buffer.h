@@ -272,19 +272,23 @@ private:
         std::string clip_id;
         std::string media_path;
 
-        // VIDEO fields (legacy per-clip pre-buffer)
+        // VIDEO fields (on-demand per-clip pre-buffer)
         int64_t source_frame = 0;
         int64_t timeline_frame = 0;
         Rate rate{0, 1};
         int direction = 1;            // playback direction (+1 forward, -1 reverse)
         int64_t clip_duration = 0;    // clip length in frames (bounds batch size)
+        int64_t clip_source_in = 0;       // clip source_in (for per-frame speed computation)
+        int64_t clip_timeline_start = 0;  // clip timeline_start
 
-        // AUDIO fields (legacy per-clip pre-buffer)
+        // Shared: speed_ratio (video: source_range/timeline_duration; audio: seq_fps/media_fps)
+        float speed_ratio = 1.0f;
+
+        // AUDIO fields (per-clip pre-buffer)
         TimeUS source_t0 = 0;
         TimeUS source_t1 = 0;
         TimeUS timeline_t0 = 0;
         TimeUS timeline_t1 = 0;
-        float speed_ratio = 1.0f;
 
         // VIDEO_REFILL fields (watermark-driven)
         int64_t refill_from_frame = 0;   // first timeline frame to decode

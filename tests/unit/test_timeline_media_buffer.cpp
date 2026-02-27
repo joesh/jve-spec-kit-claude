@@ -183,6 +183,80 @@ private slots:
         QVERIFY(r1.frame.get() == r2.frame.get());
     }
 
+    // ── Video speed_ratio ──
+
+    void test_video_speed_ratio_slow_motion() {
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        // Slow-motion clip: 93 source frames over 100 timeline frames
+        // speed_ratio = 93/100 = 0.93 (< 1.0 = slow motion)
+        // Timeline frame 50 → source_frame = 0 + floor(50 * 0.93) = 46
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 0.93f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Frame 0: source = 0 + floor(0 * 0.93) = 0
+        auto r0 = tmb->GetVideoFrame(V1, 0);
+        QVERIFY(r0.frame != nullptr);
+        QCOMPARE(r0.source_frame, static_cast<int64_t>(0));
+
+        // Frame 50: source = 0 + floor(50 * 0.93) = 46
+        auto r50 = tmb->GetVideoFrame(V1, 50);
+        QVERIFY(r50.frame != nullptr);
+        QCOMPARE(r50.source_frame, static_cast<int64_t>(46));
+
+        // Frame 99 (last): source = 0 + floor(99 * 0.93) = 92
+        auto r99 = tmb->GetVideoFrame(V1, 99);
+        QVERIFY(r99.frame != nullptr);
+        QCOMPARE(r99.source_frame, static_cast<int64_t>(92));
+    }
+
+    void test_video_speed_ratio_with_source_in() {
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        // Speed-changed clip with non-zero source_in
+        // source_in=10, speed_ratio=0.5 (half speed: 50 source frames over 100 timeline)
+        // Timeline frame 20 → source = 10 + floor(20 * 0.5) = 20
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 100, 10, 24, 1, 0.5f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        auto r0 = tmb->GetVideoFrame(V1, 0);
+        QVERIFY(r0.frame != nullptr);
+        QCOMPARE(r0.source_frame, static_cast<int64_t>(10));  // source_in + 0
+
+        auto r20 = tmb->GetVideoFrame(V1, 20);
+        QVERIFY(r20.frame != nullptr);
+        QCOMPARE(r20.source_frame, static_cast<int64_t>(20));  // 10 + floor(20*0.5) = 20
+    }
+
+    void test_video_speed_ratio_cache_hit() {
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        // With speed_ratio < 1, adjacent timeline frames may map to the same
+        // source frame. Both should decode and cache correctly.
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 0.5f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // tf=0: sf = floor(0 * 0.5) = 0
+        // tf=1: sf = floor(1 * 0.5) = 0  (same source frame — slow motion)
+        auto r0 = tmb->GetVideoFrame(V1, 0);
+        auto r1 = tmb->GetVideoFrame(V1, 1);
+        QVERIFY(r0.frame != nullptr);
+        QVERIFY(r1.frame != nullptr);
+        QCOMPARE(r0.source_frame, r1.source_frame);  // both map to sf=0
+    }
+
     // ── Offline ──
 
     void test_offline_detection() {

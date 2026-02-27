@@ -257,7 +257,8 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
             // Update Reader prefetch target for the current clip so its background
             // decoder stays ahead of the playhead (prevents main-thread cache stalls).
             if (track.type == TrackType::Video) {
-                int64_t source_frame = current->source_in + (frame - current->timeline_start);
+                int64_t source_frame = current->source_in +
+                    static_cast<int64_t>((frame - current->timeline_start) * current->speed_ratio);
                 auto key = std::make_pair(track, current->clip_id);
                 std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
                 auto it = m_readers.find(key);
@@ -334,8 +335,10 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
     result.clip_start_frame = clip->timeline_start;
     result.clip_end_frame = clip->timeline_end();
 
-    // Compute source frame: source_in + (timeline_frame - timeline_start)
-    int64_t source_frame = clip->source_in + (timeline_frame - clip->timeline_start);
+    // Compute source frame: source_in + (timeline_offset * speed_ratio)
+    // speed_ratio < 1.0 = slow motion (fewer source frames than timeline frames)
+    int64_t source_frame = clip->source_in +
+        static_cast<int64_t>((timeline_frame - clip->timeline_start) * clip->speed_ratio);
     result.source_frame = source_frame;
 
     // Check video cache (keyed by timeline_frame for this track)
@@ -373,6 +376,9 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         std::string job_media_path = clip->media_path;
         Rate job_rate = clip->rate();
         int64_t remaining_frames = clip->timeline_end() - timeline_frame;
+        float job_speed_ratio = clip->speed_ratio;
+        int64_t job_source_in = clip->source_in;
+        int64_t job_timeline_start = clip->timeline_start;
 
         // Check per-clip EOF: if a previous decode failed at or before this
         // source frame, don't submit another on-demand job (it will just fail).
@@ -421,6 +427,9 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         job.rate = job_rate;
         job.direction = direction;
         job.clip_duration = remaining_frames;
+        job.speed_ratio = job_speed_ratio;
+        job.clip_source_in = job_source_in;
+        job.clip_timeline_start = job_timeline_start;
         submit_pre_buffer(job);
 
         m_video_cache_misses.fetch_add(1, std::memory_order_relaxed);
@@ -1638,6 +1647,7 @@ void TimelineMediaBuffer::worker_loop() {
                 std::string clip_id, media_path;
                 int64_t source_in = 0, timeline_start = 0, clip_duration = 0;
                 int32_t rate_num = 0, rate_den = 1;
+                float speed_ratio = 1.0f;
                 bool is_gap = false;
                 {
                     std::lock_guard<std::mutex> tlock(m_tracks_mutex);
@@ -1659,6 +1669,7 @@ void TimelineMediaBuffer::worker_loop() {
                         clip_duration = clip->duration;
                         rate_num = clip->rate_num;
                         rate_den = clip->rate_den;
+                        speed_ratio = clip->speed_ratio;
                     }
                 }
                 if (is_gap) {
@@ -1676,7 +1687,8 @@ void TimelineMediaBuffer::worker_loop() {
                     held_clip_id = clip_id;
                 }
 
-                int64_t source_frame = source_in + (tf - timeline_start);
+                int64_t source_frame = source_in +
+                    static_cast<int64_t>((tf - timeline_start) * speed_ratio);
                 const auto& info = held_reader->media_file()->info();
                 int64_t file_frame = source_frame - info.start_tc;
                 Rate clip_rate{rate_num, rate_den};
@@ -1847,9 +1859,6 @@ void TimelineMediaBuffer::worker_loop() {
             int32_t par_num = info.video_par_num;
             int32_t par_den = info.video_par_den;
 
-            int64_t start_sf = (job.direction >= 0)
-                ? job.source_frame
-                : job.source_frame - (n - 1);
             int64_t start_tf = (job.direction >= 0)
                 ? job.timeline_frame
                 : job.timeline_frame - (n - 1);
@@ -1858,8 +1867,10 @@ void TimelineMediaBuffer::worker_loop() {
             for (int i = 0; i < n; ++i) {
                 if (m_shutdown.load() || m_playhead_direction.load(std::memory_order_relaxed) == 0) break;
 
-                int64_t sf = start_sf + i;
                 int64_t tf = start_tf + i;
+                // Per-frame source computation: speed_ratio maps timeline offset → source offset
+                int64_t sf = job.clip_source_in +
+                    static_cast<int64_t>((tf - job.clip_timeline_start) * job.speed_ratio);
                 int64_t file_frame = sf - info.start_tc;
                 FrameTime ft = FrameTime::from_frame(file_frame, job.rate);
                 auto result = reader->DecodeAt(ft);

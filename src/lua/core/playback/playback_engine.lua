@@ -463,7 +463,7 @@ function PlaybackEngine:_send_video_clips_to_tmb(frame)
         if not track_clips[idx] then
             track_clips[idx] = {}
         end
-        track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(entry, 1.0)
+        track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(entry, self:_compute_video_speed_ratio(entry))
     end
 
     -- Lookahead: walk forward per-track to pre-load upcoming clips.
@@ -594,7 +594,7 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
         if not track_clips[idx] then
             track_clips[idx] = {}
         end
-        track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(entry, 1.0)
+        track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(entry, self:_compute_video_speed_ratio(entry))
     end
 
     -- Lookahead: walk forward per-track to pre-load upcoming clips.
@@ -767,7 +767,7 @@ function PlaybackEngine:_extend_video_lookahead(frame, track_clips)
             if not seen[ne.clip.id] then
                 local idx = ne.track.track_index
                 if not track_clips[idx] then track_clips[idx] = {} end
-                track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne, 1.0)
+                track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne, self:_compute_video_speed_ratio(ne))
                 seen[ne.clip.id] = true
                 any_added = true
             end
@@ -799,6 +799,28 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
         rate_den = clip.rate.fps_denominator,
         speed_ratio = speed_ratio,
     }
+end
+
+--- Compute video speed_ratio from clip's source range vs timeline duration.
+-- When source_out - source_in == duration, speed is 1.0 (no change).
+-- Otherwise, speed = source_range / timeline_duration (< 1.0 = slow motion).
+-- @param entry table: video entry from get_video_at (has .clip with source_in/source_out/duration)
+-- @return number: speed_ratio > 0
+function PlaybackEngine:_compute_video_speed_ratio(entry)
+    local clip = entry.clip
+    if not clip.source_out or not clip.source_in or not clip.duration then
+        return 1.0
+    end
+    local source_range = clip.source_out - clip.source_in
+    if source_range <= 0 or clip.duration <= 0 then
+        return 1.0
+    end
+    local ratio = source_range / clip.duration
+    -- Near 1.0 = no speed change (avoid floating-point noise)
+    if math.abs(ratio - 1.0) < 0.001 then
+        return 1.0
+    end
+    return ratio
 end
 
 --- Compute audio conform speed_ratio: seq_fps / media_video_fps.
