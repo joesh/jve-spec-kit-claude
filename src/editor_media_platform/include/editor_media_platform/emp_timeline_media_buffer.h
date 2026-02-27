@@ -253,7 +253,7 @@ private:
 
     // ── Pre-buffer thread pool ──
     struct PreBufferJob {
-        enum Type { VIDEO, AUDIO, VIDEO_REFILL, AUDIO_REFILL };
+        enum Type { VIDEO, AUDIO, VIDEO_REFILL, AUDIO_REFILL, READER_WARM };
         Type type = VIDEO;
 
         TrackId track{TrackType::Video, 0};

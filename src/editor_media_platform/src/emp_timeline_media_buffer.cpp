@@ -63,6 +63,8 @@ std::unique_ptr<TimelineMediaBuffer> TimelineMediaBuffer::Create(int pool_thread
 
 void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInfo>& clips) {
     bool clips_changed = false;
+    // Clips not in old list — need reader pre-warming during active playback
+    std::vector<ClipInfo> clips_to_warm;
     {
         std::lock_guard<std::mutex> lock(m_tracks_mutex);
         auto& ts = m_tracks[track];
@@ -91,9 +93,17 @@ void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInf
         // Clip list changed. Only evict cache entries for clips that were REMOVED.
         // Pre-buffered frames for clips still in the new list must survive —
         // the boundary crossing is exactly when we need them most.
+        std::unordered_set<std::string> old_clip_ids;
+        for (const auto& c : ts.clips) {
+            old_clip_ids.insert(c.clip_id);
+        }
         std::unordered_set<std::string> new_clip_ids;
         for (const auto& c : clips) {
             new_clip_ids.insert(c.clip_id);
+            // Clip not in old list = needs reader pre-warming
+            if (old_clip_ids.find(c.clip_id) == old_clip_ids.end()) {
+                clips_to_warm.push_back(c);
+            }
         }
 
         for (auto it = ts.video_cache.begin(); it != ts.video_cache.end(); ) {
@@ -132,6 +142,17 @@ void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInf
             } else if (m_seq_rate.num > 0 && m_audio_fmt.sample_rate > 0) {
                 TimeUS ph_us = FrameTime::from_frame(ph, m_seq_rate).to_us();
                 submit_audio_refill(track, ph_us, dir);
+            }
+            // Pre-warm readers for newly visible clips. NeedClips fires
+            // 50-100 frames before boundary — ample time for async
+            // MediaFile::Open + Reader::Create (~400ms for 4K VideoToolbox).
+            for (const auto& c : clips_to_warm) {
+                PreBufferJob warm;
+                warm.type = PreBufferJob::READER_WARM;
+                warm.track = track;
+                warm.clip_id = c.clip_id;
+                warm.media_path = c.media_path;
+                submit_pre_buffer(warm);
             }
         }
     }
@@ -1514,6 +1535,7 @@ void TimelineMediaBuffer::stop_workers() {
 // Build dedup key from job fields.
 // Legacy per-clip jobs: "V1:clip_id:0" or "A3:clip_id:1"
 // REFILL jobs: "V1:REFILL:2" or "A3:REFILL:3" (keyed by track+type, not clip)
+// READER_WARM jobs: "V1:WARM:clip_id" (keyed by track+clip, one warm per clip)
 std::string TimelineMediaBuffer::job_key(const PreBufferJob& job) {
     char buf[8];
     snprintf(buf, sizeof(buf), "%c%d:",
@@ -1521,6 +1543,9 @@ std::string TimelineMediaBuffer::job_key(const PreBufferJob& job) {
              job.track.index);
     if (job.type == PreBufferJob::VIDEO_REFILL || job.type == PreBufferJob::AUDIO_REFILL) {
         return std::string(buf) + "REFILL:" + std::to_string(static_cast<int>(job.type));
+    }
+    if (job.type == PreBufferJob::READER_WARM) {
+        return std::string(buf) + "WARM:" + job.clip_id;
     }
     return std::string(buf) + job.clip_id + ":" + std::to_string(static_cast<int>(job.type));
 }
@@ -1736,6 +1761,23 @@ void TimelineMediaBuffer::worker_loop() {
                 }
                 cursor = chunk_t1;
             }
+
+        } else if (job.type == PreBufferJob::READER_WARM) {
+            // ── Reader pre-warming: create the reader (MediaFile::Open + Reader::Create)
+            // asynchronously so it's in the pool before REFILL reaches this clip.
+            // acquire_reader does the heavy work; we just drop the handle afterward.
+            // The reader stays in the pool (keyed by track+clip_id), warm and ready.
+            EMP_LOG_DEBUG("WARM: opening reader for clip %s on track %c%d",
+                    job.clip_id.c_str(),
+                    job.track.type == TrackType::Video ? 'V' : 'A', job.track.index);
+            auto handle = acquire_reader(job.track, job.clip_id, job.media_path);
+            if (handle) {
+                EMP_LOG_DEBUG("WARM: reader ready for clip %s", job.clip_id.c_str());
+            } else {
+                EMP_LOG_WARN("WARM: failed to open reader for clip %s path=%s",
+                        job.clip_id.c_str(), job.media_path.c_str());
+            }
+            // handle destructor releases use_mutex — reader remains in pool
 
         } else if (job.type == PreBufferJob::VIDEO) {
             // ── On-demand single-clip video decode (safety net for cache misses

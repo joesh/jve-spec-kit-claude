@@ -2919,6 +2919,57 @@ private slots:
                  qPrintable(QString("100 SetPlayhead calls took %1 us, expected < 50000 us").arg(us)));
         qDebug() << "SetPlayhead 100 calls:" << us << "us total," << (us / 100) << "us avg";
     }
+
+    void test_reader_prewarm_on_new_clips() {
+        // When SetTrackClips adds clips not in the previous list during active
+        // playback, READER_WARM jobs pre-create readers asynchronously.
+        // Verifies that the incoming clip's reader is in the pool before
+        // REFILL reaches the boundary, preventing ~400ms VideoToolbox stalls.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(4);
+        auto path = m_testVideoPath.toStdString();
+
+        // Start with clip A only (frames 0-100)
+        std::vector<ClipInfo> clipsA = {
+            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clipsA);
+        tmb->SetPlayhead(50, 1, 1.0f);
+
+        // Give workers time to start REFILL from cold-start
+        QThread::msleep(200);
+
+        // Simulate NeedClips: Lua adds clip B (frames 100-200).
+        // SetTrackClips should detect clipB is new and submit READER_WARM.
+        std::vector<ClipInfo> clipsAB = {
+            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+            {"clipB", path, 100, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clipsAB);
+
+        // Wait for READER_WARM to complete (~100ms for our test file)
+        QThread::msleep(500);
+
+        // Now request a frame from clipB. If the reader is pre-warmed,
+        // this should NOT incur a full Reader::Create cost.
+        // We verify by measuring: GetVideoFrame should complete within
+        // sync decode time (~5-20ms), not Reader::Create time (~400ms).
+        auto start = std::chrono::steady_clock::now();
+        auto result = tmb->GetVideoFrame(V1, 100);
+        auto elapsed = std::chrono::steady_clock::now() - start;
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+
+        // Frame may be cached (from REFILL) or decoded sync.
+        // Either way, it should be fast because the reader is already warm.
+        QVERIFY2(result.frame != nullptr || result.pending,
+                 "Expected frame or pending result for pre-warmed clip");
+        // Reader creation takes ~400ms. With pre-warming, sync decode is ~20ms.
+        // Allow generous 200ms to account for CI variability.
+        QVERIFY2(ms < 200,
+                 qPrintable(QString("GetVideoFrame took %1ms — reader not pre-warmed?").arg(ms)));
+        qDebug() << "Reader pre-warm: GetVideoFrame on new clip took" << ms << "ms";
+    }
 };
 
 QTEST_MAIN(TestTimelineMediaBuffer)
