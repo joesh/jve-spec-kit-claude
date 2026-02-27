@@ -797,6 +797,40 @@ end
 -- @param seq_elem table: XML sequence element
 -- @param frame_rate number: Frame rate from DRP metadata (required)
 -- @return video_tracks, audio_tracks, media_lookup
+-- Probe cache: file_path → frame count (or false if probe failed).
+-- Persists across parse_resolve_tracks calls within a single import.
+local probe_frame_count_cache = {}
+
+--- Probe a media file to get its actual video frame count.
+-- Uses ffprobe via media_reader. Returns nil if file is offline or has no video.
+-- Results are cached per file path.
+local function probe_video_frame_count(file_path)
+    if not file_path or file_path == "" then return nil end
+    local cached = probe_frame_count_cache[file_path]
+    if cached ~= nil then
+        return cached or nil  -- false → nil (probe failed earlier)
+    end
+    local media_reader_ok, media_reader = pcall(require, "media.media_reader")
+    if not media_reader_ok then
+        probe_frame_count_cache[file_path] = false
+        return nil
+    end
+    local probe, err = media_reader.probe_file(file_path)
+    if not probe or not probe.has_video or not probe.video then
+        log.event("DRP retime: cannot probe '%s': %s", file_path, err or "no video")
+        probe_frame_count_cache[file_path] = false
+        return nil
+    end
+    local fps = probe.video.frame_rate
+    if not fps or fps <= 0 then
+        probe_frame_count_cache[file_path] = false
+        return nil
+    end
+    local frames = math.floor(probe.duration_ms * fps / 1000 + 0.5)
+    probe_frame_count_cache[file_path] = frames
+    return frames
+end
+
 local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
     -- NSF: frame_rate is required, no fallbacks
     assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
@@ -910,12 +944,38 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
                 -- Audio: convert <In> from timeline frames to samples (48kHz)
                 source_in_native = math.floor(in_value * 48000 / frame_rate + 0.5)
                 source_duration = math.floor(duration_raw * 48000 / frame_rate + 0.5)
+            elseif clip_speed ~= 1.0 then
+                -- Retimed video: in_value and duration_raw are in RETIMED timebase
+                -- (not actual source frames). The hex-encoded speed from <In> is
+                -- unreliable (empirically ≠ actual speed for some clips).
+                -- Probe media file to derive actual speed from frame count.
+                local actual_speed = clip_speed  -- fallback: hex speed
+                local file_frames = probe_video_frame_count(file_path)
+                if file_frames then
+                    local retimed_end = in_value + duration_raw
+                    if retimed_end > 0 then
+                        local probed_speed = file_frames / retimed_end
+                        -- Sanity: probed and hex speeds should agree on direction
+                        -- (both < 1 for slow-mo, both > 1 for fast-forward).
+                        -- If they disagree, clip is heavily trimmed and probe-derived
+                        -- speed is unreliable — fall back to hex speed.
+                        if (probed_speed < 1.0) == (clip_speed < 1.0) then
+                            actual_speed = probed_speed
+                            log.event("DRP retime: '%s' speed=%.4f (probed %d frames / %d retimed)",
+                                      clip_name, actual_speed, file_frames, retimed_end)
+                        else
+                            log.warn("DRP retime: '%s' probe/hex disagree (%.4f vs %.4f), using hex",
+                                     clip_name, probed_speed, clip_speed)
+                        end
+                    end
+                end
+                -- Apply speed to BOTH in_value and duration_raw
+                source_in_native = math.floor(in_value * actual_speed + 0.5)
+                source_duration = math.floor(duration_raw * actual_speed + 0.5)
             else
-                -- Video: <In> is already in video frames.
-                -- When speed != 1.0, timeline duration > source duration.
-                -- Scale by speed to get actual source frame count.
+                -- Non-retimed video: in_value IS the source frame directly
                 source_in_native = math.floor(in_value)
-                source_duration = math.floor(duration_raw * clip_speed + 0.5)
+                source_duration = duration_raw
             end
 
             local clip = {
