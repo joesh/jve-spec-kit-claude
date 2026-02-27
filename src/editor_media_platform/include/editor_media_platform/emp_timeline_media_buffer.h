@@ -226,6 +226,13 @@ private:
         // REFILL jobs capture the generation at submission; worker aborts early
         // on mismatch (stale REFILL from pre-SetTrackClips clip list).
         int64_t refill_generation = 0;
+
+        // Per-clip EOF: first undecodeble source frame. When DecodeAt fails
+        // (EOF, codec error), record clip_id → source_frame. GetVideoFrame
+        // checks this before submitting on-demand jobs — avoids repeated
+        // decode attempts for frames beyond the file's actual frame count.
+        // Cleared on SetTrackClips (clip list may change).
+        std::unordered_map<std::string, int64_t> clip_eof_frame;
     };
 
     std::mutex m_tracks_mutex;

@@ -122,6 +122,15 @@ void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInf
             }
         }
 
+        // Clear EOF markers for removed clips (new clip list may have different durations)
+        for (auto it = ts.clip_eof_frame.begin(); it != ts.clip_eof_frame.end(); ) {
+            if (new_clip_ids.find(it->first) == new_clip_ids.end()) {
+                it = ts.clip_eof_frame.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
         ts.clips = clips;
 
         // Reset watermark buffer_end so REFILL re-evaluates from playhead.
@@ -364,6 +373,16 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         std::string job_media_path = clip->media_path;
         Rate job_rate = clip->rate();
         int64_t remaining_frames = clip->timeline_end() - timeline_frame;
+
+        // Check per-clip EOF: if a previous decode failed at or before this
+        // source frame, don't submit another on-demand job (it will just fail).
+        // Return gap (nullptr frame, not pending) so playback skips cleanly.
+        auto eof_it = ts.clip_eof_frame.find(clip->clip_id);
+        if (eof_it != ts.clip_eof_frame.end() && source_frame >= eof_it->second) {
+            tracks_lock.unlock();
+            // result.frame already nullptr, result.pending stays false
+            return result;
+        }
 
         // Release tracks_lock BEFORE acquiring pool_lock (lock ordering:
         // pool → tracks in worker, so main thread must not reverse it).
@@ -1685,14 +1704,18 @@ void TimelineMediaBuffer::worker_loop() {
                     // EOF typically means clip duration overstates decodable range
                     // (media boundary rounding). Skip remaining frames in this clip;
                     // next REFILL will start at the next clip or gap.
+                    // Also record clip EOF so GetVideoFrame skips future frames.
                     {
                         std::lock_guard<std::mutex> tlock(m_tracks_mutex);
                         auto tit = m_tracks.find(job.track);
                         if (tit != m_tracks.end()) {
-                            // timeline_start + duration = clip end in timeline frames
                             int64_t clip_end = timeline_start + clip_duration;
-                            // Ensure forward progress (at minimum, skip the failed frame)
                             tit->second.video_buffer_end = std::max(tf + 1, clip_end);
+                            auto& eof = tit->second.clip_eof_frame;
+                            auto eof_it = eof.find(clip_id);
+                            if (eof_it == eof.end() || source_frame < eof_it->second) {
+                                eof[clip_id] = source_frame;
+                            }
                         }
                     }
                     break;
@@ -1856,18 +1879,17 @@ void TimelineMediaBuffer::worker_loop() {
                     EMP_LOG_WARN("On-demand: DecodeAt failed at sf=%lld clip=%s: %s",
                             static_cast<long long>(sf), job.clip_id.c_str(),
                             result.error().message.c_str());
-                    // Insert null-frame cache entry for this timeline frame so
-                    // GetVideoFrame sees a cache hit (gap) instead of re-submitting
-                    // On-demand jobs for undecodeble frames (EOF spam).
+                    // Record per-clip EOF so GetVideoFrame skips all future
+                    // frames at or beyond this source position (no re-submit).
                     {
                         std::lock_guard<std::mutex> lock(m_tracks_mutex);
                         auto it = m_tracks.find(job.track);
                         if (it != m_tracks.end()) {
-                            auto& cache = it->second.video_cache;
-                            while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
-                                cache.erase(cache.begin());
+                            auto& eof = it->second.clip_eof_frame;
+                            auto eof_it = eof.find(job.clip_id);
+                            if (eof_it == eof.end() || sf < eof_it->second) {
+                                eof[job.clip_id] = sf;
                             }
-                            cache[tf] = {job.clip_id, sf, nullptr, 0, 1, 1};
                         }
                     }
                     break;
