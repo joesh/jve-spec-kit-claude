@@ -1609,7 +1609,7 @@ void TimelineMediaBuffer::worker_loop() {
 
                 // Find clip at this timeline frame (copy fields under tracks_lock)
                 std::string clip_id, media_path;
-                int64_t source_in = 0, timeline_start = 0;
+                int64_t source_in = 0, timeline_start = 0, clip_duration = 0;
                 int32_t rate_num = 0, rate_den = 1;
                 bool is_gap = false;
                 {
@@ -1626,6 +1626,7 @@ void TimelineMediaBuffer::worker_loop() {
                         media_path = clip->media_path;
                         source_in = clip->source_in;
                         timeline_start = clip->timeline_start;
+                        clip_duration = clip->duration;
                         rate_num = clip->rate_num;
                         rate_den = clip->rate_den;
                     }
@@ -1669,6 +1670,20 @@ void TimelineMediaBuffer::worker_loop() {
                     EMP_LOG_WARN("REFILL: DecodeAt failed at tf=%lld clip=%s: %s",
                             static_cast<long long>(tf), clip_id.c_str(),
                             result.error().message.c_str());
+                    // Advance buffer_end to clip end to prevent infinite re-submit.
+                    // EOF typically means clip duration overstates decodable range
+                    // (media boundary rounding). Skip remaining frames in this clip;
+                    // next REFILL will start at the next clip or gap.
+                    {
+                        std::lock_guard<std::mutex> tlock(m_tracks_mutex);
+                        auto tit = m_tracks.find(job.track);
+                        if (tit != m_tracks.end()) {
+                            // timeline_start + duration = clip end in timeline frames
+                            int64_t clip_end = timeline_start + clip_duration;
+                            // Ensure forward progress (at minimum, skip the failed frame)
+                            tit->second.video_buffer_end = std::max(tf + 1, clip_end);
+                        }
+                    }
                     break;
                 }
             }
