@@ -1203,15 +1203,25 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
             JVE_LOG_EVENT(Ticks, "deliverFrame: gap at frame %lld (no clip on any track)",
                          (long long)frame);
         } else {
-            // Async gap: TMB has no clips here. Invalidate video clip window
-            // to force a one-time NeedClips reload — Lua will re-query the
-            // timeline and feed any clips that exist at this frame.
-            // Without this, the clip window masks stale TMB data at gaps.
-            if (m_video_window.valid.load(std::memory_order_relaxed)) {
+            // Stale-data detection: only invalidate the clip window when the
+            // playhead is INSIDE the window but TMB has no clips. This means
+            // the window's clip list is stale (Lua told us clips exist here
+            // but TMB disagrees).
+            //
+            // When the playhead is OUTSIDE the window (before lo or past hi),
+            // the gap is expected — checkClipWindow already handles refetching.
+            // Invalidating here would create a tight loop: invalidate → NeedClips
+            // → Lua sets same window → next tick invalidates again (every tick
+            // until playhead crosses into the window).
+            int64_t lo = m_video_window.lo.load(std::memory_order_relaxed);
+            int64_t hi = m_video_window.hi.load(std::memory_order_relaxed);
+            bool inside_window = m_video_window.valid.load(std::memory_order_relaxed) &&
+                                frame >= lo && frame < hi;
+            if (inside_window) {
                 m_video_window.valid.store(false, std::memory_order_relaxed);
                 m_video_window.need_clips_pending.store(false, std::memory_order_relaxed);
-                JVE_LOG_DETAIL(Ticks, "deliverFrame: GAP frame=%lld tracks=%zu — invalidated video window",
-                              (long long)frame, m_video_track_indices.size());
+                JVE_LOG_DETAIL(Ticks, "deliverFrame: GAP inside window [%lld,%lld) at frame=%lld — invalidated",
+                              (long long)lo, (long long)hi, (long long)frame);
             }
         }
         return;
