@@ -791,7 +791,7 @@ function M.load_tracks(sequence_id)
     end
 
     local query = db_connection:prepare([[
-        SELECT id, name, track_type, track_index, enabled
+        SELECT id, name, track_type, track_index, enabled, muted, soloed, locked
         FROM tracks
         WHERE sequence_id = ?
         ORDER BY track_type DESC, track_index ASC
@@ -812,7 +812,10 @@ function M.load_tracks(sequence_id)
                 name = query:value(1),
                 track_type = query:value(2),  -- Keep as "VIDEO" or "AUDIO"
                 track_index = query:value(3),
-                enabled = query:value(4) == 1
+                enabled = query:value(4) == 1,
+                muted = query:value(5) == 1,
+                soloed = query:value(6) == 1,
+                locked = query:value(7) == 1,
             })
         end
     end
