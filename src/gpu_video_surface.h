@@ -14,8 +14,10 @@ namespace emp { class Frame; }
 class GPUVideoSurfaceImpl;
 
 // GPUVideoSurface - Hardware-accelerated video renderer (Metal on macOS)
-// Supports both hw-decoded frames (VideoToolbox YUV, zero-copy) and
-// sw-decoded frames (BGRA CPU data, uploaded to Metal texture).
+// Three render paths, all GPU-accelerated via Metal:
+//   1. HW YUV: biplanar CVPixelBuffer (NV12/P010/etc.) → zero-copy Y+UV textures → YUV shader
+//   2. HW BGRA: non-planar CVPixelBuffer (ProRes 4444, Animation) → zero-copy BGRA texture
+//   3. SW BGRA: CPU-decoded data → uploaded BGRA texture
 class GPUVideoSurface : public QWidget {
     Q_OBJECT
 
@@ -71,8 +73,11 @@ private:
     void renderTexture();
     void rebuildVertexBuffer();
 
-    // HW path: zero-copy from VideoToolbox CVPixelBuffer (YUV bi-planar)
+    // HW path: zero-copy from VideoToolbox CVPixelBuffer → Metal texture
     void setFrameHW(void* pixelBuffer, int w, int h);
+    void setFrameHW_YUV(void* pixelBuffer, uint32_t pixelFormat);       // biplanar YUV
+    void setFrameHW_BGRA(void* pixelBuffer, uint32_t pixelFormat);      // non-planar BGRA
+    void setFrameHW_PackedYUV(void* pixelBuffer, uint32_t pixelFormat); // non-planar packed YUV (y416)
     // SW path: upload BGRA CPU data to Metal texture
     void setFrameSW(const uint8_t* data, int w, int h, int stride);
 

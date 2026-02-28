@@ -19,7 +19,7 @@ struct Vertex {
 };
 
 // Which render path the current frame uses
-enum class FrameMode { None, YUV, BGRA };
+enum class FrameMode { None, YUV, BGRA, PackedYUV };
 
 class GPUVideoSurfaceImpl {
 public:
@@ -29,16 +29,23 @@ public:
     CVMetalTextureCacheRef textureCache = nullptr;
     CAMetalLayer* metalLayer = nil;
 
-    // YUV pipeline (hw-decoded VideoToolbox frames)
+    // YUV pipeline (hw-decoded biplanar VideoToolbox frames: NV12, P010, etc.)
     id<MTLRenderPipelineState> yuvPipelineState = nil;
     CVMetalTextureRef textureY = nullptr;
     CVMetalTextureRef textureUV = nullptr;
     id<MTLTexture> metalTextureY = nil;
     id<MTLTexture> metalTextureUV = nil;
 
-    // BGRA pipeline (sw-decoded CPU frames)
+    // BGRA pipeline (sw-decoded CPU frames or non-planar BGRA CVPixelBuffers)
     id<MTLRenderPipelineState> bgraPipelineState = nil;
     id<MTLTexture> bgraTexture = nil;
+
+    // Packed YUV pipeline (non-planar AYUV: y416 from ProRes 4444 with alpha)
+    id<MTLRenderPipelineState> packedYuvPipelineState = nil;
+    id<MTLTexture> packedYuvTexture = nil;
+
+    // CVMetalTextureRef for zero-copy non-planar HW paths (BGRA or packed YUV)
+    CVMetalTextureRef textureNonPlanar = nullptr;
 
     // Which pipeline is active for the current frame
     FrameMode frameMode = FrameMode::None;
@@ -54,6 +61,7 @@ public:
         vertexBuffer = nil;
         yuvPipelineState = nil;
         bgraPipelineState = nil;
+        packedYuvPipelineState = nil;
         commandQueue = nil;
         device = nil;
         metalLayer = nil;
@@ -62,9 +70,11 @@ public:
     void releaseTextures() {
         if (textureY) { CFRelease(textureY); textureY = nullptr; }
         if (textureUV) { CFRelease(textureUV); textureUV = nullptr; }
+        if (textureNonPlanar) { CFRelease(textureNonPlanar); textureNonPlanar = nullptr; }
         metalTextureY = nil;
         metalTextureUV = nil;
         bgraTexture = nil;
+        packedYuvTexture = nil;
         frameMode = FrameMode::None;
     }
 };
@@ -120,6 +130,28 @@ fragment float4 bgraFragmentShader(VertexOut in [[stage_in]],
                                    texture2d<float> tex [[texture(0)]]) {
     constexpr sampler s(mag_filter::linear, min_filter::linear);
     return tex.sample(s, in.texCoord);
+}
+
+// Packed 4:4:4:4 AYUV (y416 from ProRes 4444 with alpha).
+// CVPixelBuffer format: A(16) Y(16) Cb(16) Cr(16) per pixel, non-planar.
+// Metal RGBA16Unorm maps to: R=A, G=Y, B=Cb, A=Cr (all [0,1] normalized).
+// Full-range BT.709 conversion (ProRes is full-range).
+fragment float4 packedYuvFragmentShader(VertexOut in [[stage_in]],
+                                        texture2d<float> tex [[texture(0)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear);
+    float4 ayuv = tex.sample(s, in.texCoord);
+
+    float alpha = ayuv.r;
+    float y = ayuv.g;
+    float cb = ayuv.b - 0.5;
+    float cr = ayuv.a - 0.5;
+
+    // BT.709 full-range YCbCr to RGB
+    float r = y + 1.5748 * cr;
+    float g = y - 0.1873 * cb - 0.4681 * cr;
+    float b = y + 1.8556 * cb;
+
+    return float4(saturate(float3(r, g, b)), alpha);
 }
 )";
 
@@ -185,6 +217,7 @@ void GPUVideoSurface::initMetal() {
         id<MTLFunction> vertexFunc = [library newFunctionWithName:@"vertexShader"];
         id<MTLFunction> yuvFragmentFunc = [library newFunctionWithName:@"fragmentShader"];
         id<MTLFunction> bgraFragmentFunc = [library newFunctionWithName:@"bgraFragmentShader"];
+        id<MTLFunction> packedYuvFragmentFunc = [library newFunctionWithName:@"packedYuvFragmentShader"];
 
         MTLVertexDescriptor* vertexDesc = [MTLVertexDescriptor new];
         vertexDesc.attributes[0].format = MTLVertexFormatFloat2;
@@ -205,7 +238,7 @@ void GPUVideoSurface::initMetal() {
         m_impl->yuvPipelineState = [m_impl->device newRenderPipelineStateWithDescriptor:yuvDesc error:&error];
         JVE_ASSERT(m_impl->yuvPipelineState, "YUV pipeline creation failed");
 
-        // BGRA pipeline (sw-decoded CPU frames)
+        // BGRA pipeline (sw-decoded CPU frames or non-planar BGRA CVPixelBuffers)
         MTLRenderPipelineDescriptor* bgraDesc = [MTLRenderPipelineDescriptor new];
         bgraDesc.vertexFunction = vertexFunc;
         bgraDesc.fragmentFunction = bgraFragmentFunc;
@@ -214,6 +247,16 @@ void GPUVideoSurface::initMetal() {
 
         m_impl->bgraPipelineState = [m_impl->device newRenderPipelineStateWithDescriptor:bgraDesc error:&error];
         JVE_ASSERT(m_impl->bgraPipelineState, "BGRA pipeline creation failed");
+
+        // Packed YUV pipeline (non-planar AYUV: y416 from ProRes 4444 with alpha)
+        MTLRenderPipelineDescriptor* packedYuvDesc = [MTLRenderPipelineDescriptor new];
+        packedYuvDesc.vertexFunction = vertexFunc;
+        packedYuvDesc.fragmentFunction = packedYuvFragmentFunc;
+        packedYuvDesc.vertexDescriptor = vertexDesc;
+        packedYuvDesc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+
+        m_impl->packedYuvPipelineState = [m_impl->device newRenderPipelineStateWithDescriptor:packedYuvDesc error:&error];
+        JVE_ASSERT(m_impl->packedYuvPipelineState, "Packed YUV pipeline creation failed");
 
         Vertex vertices[] = {
             {{-1, -1}, {0, 1}},
@@ -297,6 +340,7 @@ void GPUVideoSurface::setFrame(const std::shared_ptr<emp::Frame>& frame) {
     if (!m_initialized) initMetal();
     if (!m_initialized) {
         JVE_LOG_WARN(Video, "GPUVideoSurface::setFrame: Metal not initialized, dropping frame");
+        if (m_error_callback) m_error_callback("Metal not initialized");
         return;
     }
 
@@ -333,124 +377,206 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
 
     @autoreleasepool {
         size_t planeCount = CVPixelBufferGetPlaneCount(pixelBuffer);
-        if (planeCount != 2) {
-            char msg[128];
-            snprintf(msg, sizeof(msg), "expected 2 planes, got %zu", planeCount);
-            JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: %s — skipping frame", msg);
-            if (m_error_callback) m_error_callback(msg);
-            return;
-        }
-
         OSType pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
-
-        MTLPixelFormat yFormat = MTLPixelFormatR8Unorm;
-        MTLPixelFormat uvFormat = MTLPixelFormatRG8Unorm;
-        switch (pixelFormat) {
-            // 4:2:0 8-bit
-            case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
-            case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
-                yFormat = MTLPixelFormatR8Unorm;
-                uvFormat = MTLPixelFormatRG8Unorm;
-                break;
-
-            // 4:2:0 10-bit
-            case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
-            case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
-                yFormat = MTLPixelFormatR16Unorm;
-                uvFormat = MTLPixelFormatRG16Unorm;
-                break;
-
-            // 4:2:2 10-bit
-            case kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange:
-            case kCVPixelFormatType_422YpCbCr10BiPlanarFullRange:
-                yFormat = MTLPixelFormatR16Unorm;
-                uvFormat = MTLPixelFormatRG16Unorm;
-                break;
-
-            // 4:2:2 8-bit
-            case kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange:
-            case kCVPixelFormatType_422YpCbCr8BiPlanarFullRange:
-                yFormat = MTLPixelFormatR8Unorm;
-                uvFormat = MTLPixelFormatRG8Unorm;
-                break;
-
-            // 4:2:2 16-bit (video range only — no full-range variant in SDK)
-            case kCVPixelFormatType_422YpCbCr16BiPlanarVideoRange:
-                yFormat = MTLPixelFormatR16Unorm;
-                uvFormat = MTLPixelFormatRG16Unorm;
-                break;
-
-            // 4:4:4 10-bit (ProRes 4444, etc.)
-            case kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange:
-            case kCVPixelFormatType_444YpCbCr10BiPlanarFullRange:
-                yFormat = MTLPixelFormatR16Unorm;
-                uvFormat = MTLPixelFormatRG16Unorm;
-                break;
-
-            // 4:4:4 16-bit (video range only — no full-range variant in SDK)
-            case kCVPixelFormatType_444YpCbCr16BiPlanarVideoRange:
-                yFormat = MTLPixelFormatR16Unorm;
-                uvFormat = MTLPixelFormatRG16Unorm;
-                break;
-
-            // 4:4:4 8-bit
-            case kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange:
-            case kCVPixelFormatType_444YpCbCr8BiPlanarFullRange:
-                yFormat = MTLPixelFormatR8Unorm;
-                uvFormat = MTLPixelFormatRG8Unorm;
-                break;
-
-            default: {
-                char fmt_str[5] = {0};
-                fmt_str[0] = (pixelFormat >> 24) & 0xFF;
-                fmt_str[1] = (pixelFormat >> 16) & 0xFF;
-                fmt_str[2] = (pixelFormat >> 8) & 0xFF;
-                fmt_str[3] = pixelFormat & 0xFF;
-                char msg[128];
-                snprintf(msg, sizeof(msg), "unsupported pixel format %s (0x%x)", fmt_str, pixelFormat);
-                JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: %s — skipping frame", msg);
-                if (m_error_callback) m_error_callback(msg);
-                return;
-            }
-        }
 
         m_impl->releaseTextures();
 
-        size_t yWidth = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0);
-        size_t yHeight = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0);
-
-        CVReturn ret = CVMetalTextureCacheCreateTextureFromImage(
-            kCFAllocatorDefault, m_impl->textureCache, pixelBuffer, nullptr,
-            yFormat, yWidth, yHeight, 0, &m_impl->textureY);
-        if (ret != kCVReturnSuccess || !m_impl->textureY) {
+        if (planeCount == 0) {
+            // Non-planar CVPixelBuffer: route by pixel format.
+            if (pixelFormat == kCVPixelFormatType_32BGRA) {
+                setFrameHW_BGRA(pixelBuffer, pixelFormat);
+            } else {
+                // Packed YUV (y416 from ProRes 4444 w/ alpha, etc.)
+                setFrameHW_PackedYUV(pixelBuffer, pixelFormat);
+            }
+        } else if (planeCount >= 2) {
+            // Biplanar YUV (NV12, P010, P210, 4:2:2, 4:4:4)
+            setFrameHW_YUV(pixelBuffer, pixelFormat);
+        } else {
             char msg[128];
-            snprintf(msg, sizeof(msg), "failed to create Y texture (ret=%d)", ret);
-            JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: %s — skipping frame", msg);
-            if (m_error_callback) m_error_callback(msg);
-            return;
+            snprintf(msg, sizeof(msg), "unexpected plane count %zu (format 0x%x)",
+                     planeCount, pixelFormat);
+            JVE_ASSERT(false, msg);
         }
-
-        size_t uvWidth = CVPixelBufferGetWidthOfPlane(pixelBuffer, 1);
-        size_t uvHeight = CVPixelBufferGetHeightOfPlane(pixelBuffer, 1);
-
-        ret = CVMetalTextureCacheCreateTextureFromImage(
-            kCFAllocatorDefault, m_impl->textureCache, pixelBuffer, nullptr,
-            uvFormat, uvWidth, uvHeight, 1, &m_impl->textureUV);
-        if (ret != kCVReturnSuccess || !m_impl->textureUV) {
-            char msg[128];
-            snprintf(msg, sizeof(msg), "failed to create UV texture (ret=%d)", ret);
-            JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW: %s — skipping frame", msg);
-            m_impl->releaseTextures();
-            if (m_error_callback) m_error_callback(msg);
-            return;
-        }
-
-        m_impl->metalTextureY = CVMetalTextureGetTexture(m_impl->textureY);
-        m_impl->metalTextureUV = CVMetalTextureGetTexture(m_impl->textureUV);
-        m_impl->frameMode = FrameMode::YUV;
-
-        renderTexture();
     }
+}
+
+void GPUVideoSurface::setFrameHW_BGRA(void* hw_buffer, uint32_t /*pixelFormat*/) {
+    CVPixelBufferRef pixelBuffer = (CVPixelBufferRef)hw_buffer;
+    size_t texW = CVPixelBufferGetWidth(pixelBuffer);
+    size_t texH = CVPixelBufferGetHeight(pixelBuffer);
+
+    CVReturn ret = CVMetalTextureCacheCreateTextureFromImage(
+        kCFAllocatorDefault, m_impl->textureCache, pixelBuffer, nullptr,
+        MTLPixelFormatBGRA8Unorm, texW, texH, 0, &m_impl->textureNonPlanar);
+
+    if (ret != kCVReturnSuccess || !m_impl->textureNonPlanar) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "failed to create BGRA texture (ret=%d)", ret);
+        JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW_BGRA: %s", msg);
+        if (m_error_callback) m_error_callback(msg);
+        return;
+    }
+
+    m_impl->bgraTexture = CVMetalTextureGetTexture(m_impl->textureNonPlanar);
+    JVE_ASSERT(m_impl->bgraTexture, "GPUVideoSurface::setFrameHW_BGRA: CVMetalTextureGetTexture returned nil");
+    m_impl->frameMode = FrameMode::BGRA;
+    renderTexture();
+}
+
+void GPUVideoSurface::setFrameHW_PackedYUV(void* hw_buffer, uint32_t pixelFormat) {
+    CVPixelBufferRef pixelBuffer = (CVPixelBufferRef)hw_buffer;
+    size_t texW = CVPixelBufferGetWidth(pixelBuffer);
+    size_t texH = CVPixelBufferGetHeight(pixelBuffer);
+
+    // Map non-planar packed YUV format to Metal texture format.
+    // y416 (kCVPixelFormatType_4444AYpCbCr16): 64 bpp → RGBA16Unorm
+    MTLPixelFormat mtlFormat;
+    switch (pixelFormat) {
+        case kCVPixelFormatType_4444AYpCbCr16:  // 'y416'
+            mtlFormat = MTLPixelFormatRGBA16Unorm;
+            break;
+        default: {
+            char fourcc[5] = {
+                static_cast<char>((pixelFormat >> 24) & 0xFF),
+                static_cast<char>((pixelFormat >> 16) & 0xFF),
+                static_cast<char>((pixelFormat >> 8) & 0xFF),
+                static_cast<char>(pixelFormat & 0xFF), '\0'
+            };
+            char msg[128];
+            snprintf(msg, sizeof(msg),
+                "setFrameHW_PackedYUV: unsupported format '%s' (0x%x)", fourcc, pixelFormat);
+            JVE_ASSERT(false, msg);
+        }
+    }
+
+    CVReturn ret = CVMetalTextureCacheCreateTextureFromImage(
+        kCFAllocatorDefault, m_impl->textureCache, pixelBuffer, nullptr,
+        mtlFormat, texW, texH, 0, &m_impl->textureNonPlanar);
+
+    if (ret != kCVReturnSuccess || !m_impl->textureNonPlanar) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "failed to create packed YUV texture (ret=%d)", ret);
+        JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW_PackedYUV: %s", msg);
+        if (m_error_callback) m_error_callback(msg);
+        return;
+    }
+
+    m_impl->packedYuvTexture = CVMetalTextureGetTexture(m_impl->textureNonPlanar);
+    JVE_ASSERT(m_impl->packedYuvTexture, "GPUVideoSurface::setFrameHW_PackedYUV: CVMetalTextureGetTexture returned nil");
+    m_impl->frameMode = FrameMode::PackedYUV;
+    renderTexture();
+}
+
+void GPUVideoSurface::setFrameHW_YUV(void* hw_buffer, uint32_t pixelFormat) {
+    CVPixelBufferRef pixelBuffer = (CVPixelBufferRef)hw_buffer;
+    MTLPixelFormat yFormat = MTLPixelFormatR8Unorm;
+    MTLPixelFormat uvFormat = MTLPixelFormatRG8Unorm;
+    switch (pixelFormat) {
+        // 4:2:0 8-bit
+        case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
+        case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
+            yFormat = MTLPixelFormatR8Unorm;
+            uvFormat = MTLPixelFormatRG8Unorm;
+            break;
+
+        // 4:2:0 10-bit
+        case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
+        case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
+            yFormat = MTLPixelFormatR16Unorm;
+            uvFormat = MTLPixelFormatRG16Unorm;
+            break;
+
+        // 4:2:2 10-bit
+        case kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange:
+        case kCVPixelFormatType_422YpCbCr10BiPlanarFullRange:
+            yFormat = MTLPixelFormatR16Unorm;
+            uvFormat = MTLPixelFormatRG16Unorm;
+            break;
+
+        // 4:2:2 8-bit
+        case kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange:
+        case kCVPixelFormatType_422YpCbCr8BiPlanarFullRange:
+            yFormat = MTLPixelFormatR8Unorm;
+            uvFormat = MTLPixelFormatRG8Unorm;
+            break;
+
+        // 4:2:2 16-bit (video range only)
+        case kCVPixelFormatType_422YpCbCr16BiPlanarVideoRange:
+            yFormat = MTLPixelFormatR16Unorm;
+            uvFormat = MTLPixelFormatRG16Unorm;
+            break;
+
+        // 4:4:4 10-bit (ProRes 4444, etc.)
+        case kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange:
+        case kCVPixelFormatType_444YpCbCr10BiPlanarFullRange:
+            yFormat = MTLPixelFormatR16Unorm;
+            uvFormat = MTLPixelFormatRG16Unorm;
+            break;
+
+        // 4:4:4 16-bit (video range only)
+        case kCVPixelFormatType_444YpCbCr16BiPlanarVideoRange:
+            yFormat = MTLPixelFormatR16Unorm;
+            uvFormat = MTLPixelFormatRG16Unorm;
+            break;
+
+        // 4:4:4 8-bit
+        case kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange:
+        case kCVPixelFormatType_444YpCbCr8BiPlanarFullRange:
+            yFormat = MTLPixelFormatR8Unorm;
+            uvFormat = MTLPixelFormatRG8Unorm;
+            break;
+
+        default: {
+            char fourcc[5] = {
+                static_cast<char>((pixelFormat >> 24) & 0xFF),
+                static_cast<char>((pixelFormat >> 16) & 0xFF),
+                static_cast<char>((pixelFormat >> 8) & 0xFF),
+                static_cast<char>(pixelFormat & 0xFF), '\0'
+            };
+            char msg[128];
+            snprintf(msg, sizeof(msg),
+                "setFrameHW_YUV: unsupported biplanar format '%s' (0x%x)", fourcc, pixelFormat);
+            JVE_ASSERT(false, msg);
+        }
+    }
+
+    size_t yWidth = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0);
+    size_t yHeight = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0);
+
+    CVReturn ret = CVMetalTextureCacheCreateTextureFromImage(
+        kCFAllocatorDefault, m_impl->textureCache, pixelBuffer, nullptr,
+        yFormat, yWidth, yHeight, 0, &m_impl->textureY);
+    if (ret != kCVReturnSuccess || !m_impl->textureY) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "failed to create Y texture (ret=%d)", ret);
+        JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW_YUV: %s", msg);
+        if (m_error_callback) m_error_callback(msg);
+        return;
+    }
+
+    size_t uvWidth = CVPixelBufferGetWidthOfPlane(pixelBuffer, 1);
+    size_t uvHeight = CVPixelBufferGetHeightOfPlane(pixelBuffer, 1);
+
+    ret = CVMetalTextureCacheCreateTextureFromImage(
+        kCFAllocatorDefault, m_impl->textureCache, pixelBuffer, nullptr,
+        uvFormat, uvWidth, uvHeight, 1, &m_impl->textureUV);
+    if (ret != kCVReturnSuccess || !m_impl->textureUV) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "failed to create UV texture (ret=%d)", ret);
+        JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameHW_YUV: %s", msg);
+        m_impl->releaseTextures();
+        if (m_error_callback) m_error_callback(msg);
+        return;
+    }
+
+    m_impl->metalTextureY = CVMetalTextureGetTexture(m_impl->textureY);
+    JVE_ASSERT(m_impl->metalTextureY, "GPUVideoSurface::setFrameHW_YUV: CVMetalTextureGetTexture(Y) returned nil");
+    m_impl->metalTextureUV = CVMetalTextureGetTexture(m_impl->textureUV);
+    JVE_ASSERT(m_impl->metalTextureUV, "GPUVideoSurface::setFrameHW_YUV: CVMetalTextureGetTexture(UV) returned nil");
+    m_impl->frameMode = FrameMode::YUV;
+
+    renderTexture();
 }
 #endif
 
@@ -505,7 +631,16 @@ void GPUVideoSurface::renderTexture() {
         uint64_t t1 = mach_absolute_time();
         id<CAMetalDrawable> drawable = [m_impl->metalLayer nextDrawable];
         uint64_t t2 = mach_absolute_time();
-        if (!drawable) return;
+        if (!drawable) {
+            // Metal drawable pool exhausted (triple-buffered). Transient during
+            // playback (next frame retries), but during seek this means the user
+            // sees stale content until the next render.
+            if (m_frame_count % 30 == 0) {
+                JVE_LOG_WARN(Video, "renderTexture: no drawable (pool exhausted) count=%lld",
+                            (long long)m_frame_count);
+            }
+            return;
+        }
 
         MTLRenderPassDescriptor* passDesc = [MTLRenderPassDescriptor new];
         passDesc.colorAttachments[0].texture = drawable.texture;
@@ -544,6 +679,9 @@ void GPUVideoSurface::renderTexture() {
                 [encoder setRenderPipelineState:m_impl->yuvPipelineState];
                 [encoder setFragmentTexture:m_impl->metalTextureY atIndex:0];
                 [encoder setFragmentTexture:m_impl->metalTextureUV atIndex:1];
+            } else if (m_impl->frameMode == FrameMode::PackedYUV) {
+                [encoder setRenderPipelineState:m_impl->packedYuvPipelineState];
+                [encoder setFragmentTexture:m_impl->packedYuvTexture atIndex:0];
             } else {
                 [encoder setRenderPipelineState:m_impl->bgraPipelineState];
                 [encoder setFragmentTexture:m_impl->bgraTexture atIndex:0];
