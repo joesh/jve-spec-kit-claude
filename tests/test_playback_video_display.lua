@@ -133,7 +133,7 @@ package.loaded["core.renderer"] = {
 
 local mock_clip_entry = {
     clip = {
-        id = "clip1", timeline_start = 0, duration = 200, source_in = 0,
+        id = "clip1", timeline_start = 0, duration = 200, source_in = 0, source_out = 200,
         rate = { fps_numerator = 24, fps_denominator = 1 },
     },
     track = { id = "track_0", track_index = 0, volume = 1.0, muted = false, soloed = false },

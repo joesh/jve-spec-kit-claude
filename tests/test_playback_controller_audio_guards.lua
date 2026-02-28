@@ -242,12 +242,14 @@ end
 
 --- Build a mock video entry (matches Sequence:get_video_at return format).
 local function make_video_entry(clip_id, track_idx, tl_start, duration, source_in)
+    local si = source_in or 0
     return {
         clip = {
             id = clip_id,
             timeline_start = tl_start,
             duration = duration,
-            source_in = source_in or 0,
+            source_in = si,
+            source_out = si + duration,
             rate = { fps_numerator = 24, fps_denominator = 1 },
         },
         track = { id = "track_" .. track_idx, track_index = track_idx },

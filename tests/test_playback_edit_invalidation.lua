@@ -124,7 +124,7 @@ package.loaded["core.signals"] = {
 }
 
 local mock_clip = {
-    id = "clip1", timeline_start = 0, duration = 100, source_in = 0,
+    id = "clip1", timeline_start = 0, duration = 100, source_in = 0, source_out = 100,
     rate = { fps_numerator = 24, fps_denominator = 1 },
 }
 local mock_track = {

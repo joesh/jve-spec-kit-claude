@@ -109,6 +109,7 @@ local function make_entry(clip_def, track_idx)
             timeline_start = clip_def.tl_start,
             duration = clip_def.dur,
             source_in = clip_def.src_in,
+            source_out = clip_def.src_in + clip_def.dur,
             rate = { fps_numerator = 25, fps_denominator = 1 },
         },
         track = { id = t.track_id, track_index = track_idx },

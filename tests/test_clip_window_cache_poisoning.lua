@@ -109,7 +109,7 @@ package.loaded["core.signals"] = {
 local clip_A = {
     clip = {
         id = "clip_A", timeline_start = 0, duration = 100,
-        source_in = 0,
+        source_in = 0, source_out = 100,
         rate = { fps_numerator = 25, fps_denominator = 1 },
     },
     track = { id = "track_v1", track_index = 0 },
@@ -120,7 +120,7 @@ local clip_A = {
 local clip_B = {
     clip = {
         id = "clip_B", timeline_start = 5000, duration = 100,
-        source_in = 0,
+        source_in = 0, source_out = 100,
         rate = { fps_numerator = 25, fps_denominator = 1 },
     },
     track = { id = "track_v1", track_index = 0 },

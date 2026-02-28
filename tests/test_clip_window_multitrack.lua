@@ -92,11 +92,11 @@ local mock_track2 = { id = "t2", track_index = 2, track_type = "video",
 
 local clip_a = {
     id = "clip-a", timeline_start = 0, duration = 200,
-    source_in = 0, rate = { fps_numerator = 25, fps_denominator = 1 },
+    source_in = 0, source_out = 200, rate = { fps_numerator = 25, fps_denominator = 1 },
 }
 local clip_b = {
     id = "clip-b", timeline_start = 0, duration = 500,
-    source_in = 0, rate = { fps_numerator = 25, fps_denominator = 1 },
+    source_in = 0, source_out = 500, rate = { fps_numerator = 25, fps_denominator = 1 },
 }
 
 local mock_sequence = {
