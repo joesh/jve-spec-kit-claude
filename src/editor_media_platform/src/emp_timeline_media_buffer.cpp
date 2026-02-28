@@ -1375,12 +1375,18 @@ void TimelineMediaBuffer::ParkReaders() {
         m_pre_buffering.clear();
     }
 
-    // 2b. Reset watermark buffer_ends (cold-start priming on next play)
+    // 2b. Reset watermark buffer_ends and per-clip EOF markers.
+    // EOF markers must be cleared: they're an optimization to avoid repeated
+    // decode attempts WITHIN a play session. Across sessions (stop → seek →
+    // play), the playhead may be at a decodable position — stale EOF markers
+    // would block GetVideoFrame's Play path (source_frame >= eof check).
+    // REFILL re-discovers the actual EOF boundary during the new session.
     {
         std::lock_guard<std::mutex> lock(m_tracks_mutex);
         for (auto& [track, ts] : m_tracks) {
             ts.video_buffer_end = -1;
             ts.audio_buffer_end = -1;
+            ts.clip_eof_frame.clear();
         }
     }
 
@@ -1727,21 +1733,28 @@ void TimelineMediaBuffer::worker_loop() {
                     }
                     frames_decoded++;
                 } else {
-                    // EOF: clip duration overstates decodable range (common with
-                    // DRP retimed clips where in/out are in retimed timebase).
-                    // Hold last frame for remaining timeline frames in clip
-                    // (matches Resolve behavior — no black gap before next clip).
-                    EMP_LOG_WARN("REFILL: EOF at tf=%lld sf=%lld clip=%s — "
-                            "holding last frame for %lld remaining",
+                    // Decode failed. Only record EOF marker for actual EOF —
+                    // transient errors (codec glitch, seek failure) must not
+                    // permanently poison the clip's decodability.
+                    bool is_eof = (result.error().code == ErrorCode::EOFReached);
+                    EMP_LOG_WARN("REFILL: %s at tf=%lld sf=%lld clip=%s — "
+                            "%s for %lld remaining",
+                            is_eof ? "EOF" : "decode error",
                             static_cast<long long>(tf), static_cast<long long>(source_frame),
                             clip_id.c_str(),
+                            is_eof ? "holding last frame" : "stopping batch",
                             static_cast<long long>(timeline_start + clip_duration - tf));
-                    {
+
+                    if (is_eof) {
+                        // EOF: clip duration overstates decodable range (common
+                        // with DRP retimed clips). Hold last frame for remaining
+                        // timeline frames (matches Resolve behavior).
                         std::lock_guard<std::mutex> tlock(m_tracks_mutex);
                         auto tit = m_tracks.find(job.track);
                         if (tit != m_tracks.end()) {
                             int64_t clip_end = timeline_start + clip_duration;
-                            // Record EOF marker
+                            // Record EOF marker (within this play session only —
+                            // ParkReaders clears all markers on stop).
                             auto& eof = tit->second.clip_eof_frame;
                             auto eof_it = eof.find(clip_id);
                             if (eof_it == eof.end() || source_frame < eof_it->second) {
@@ -1764,6 +1777,8 @@ void TimelineMediaBuffer::worker_loop() {
                             tit->second.video_buffer_end = clip_end;
                         }
                     }
+                    // Both EOF and transient errors: stop this REFILL batch.
+                    // For transient errors, the next REFILL cycle will retry.
                     break;
                 }
             }
@@ -1924,12 +1939,14 @@ void TimelineMediaBuffer::worker_loop() {
                     }
                     frames_decoded++;
                 } else {
-                    EMP_LOG_WARN("On-demand: DecodeAt failed at sf=%lld clip=%s: %s",
+                    bool is_eof = (result.error().code == ErrorCode::EOFReached);
+                    EMP_LOG_WARN("On-demand: %s at sf=%lld clip=%s: %s",
+                            is_eof ? "EOF" : "decode error",
                             static_cast<long long>(sf), job.clip_id.c_str(),
                             result.error().message.c_str());
-                    // Record per-clip EOF so GetVideoFrame skips all future
-                    // frames at or beyond this source position (no re-submit).
-                    {
+                    // Only record EOF marker for actual EOF — transient errors
+                    // must not permanently block decodable frames.
+                    if (is_eof) {
                         std::lock_guard<std::mutex> lock(m_tracks_mutex);
                         auto it = m_tracks.find(job.track);
                         if (it != m_tracks.end()) {

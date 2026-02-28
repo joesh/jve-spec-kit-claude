@@ -3148,6 +3148,69 @@ private slots:
         emp::SetDecodeMode(emp::DecodeMode::Play);
     }
 
+    // ── Regression: EOF marker must not survive ParkReaders ──
+
+    void test_eof_marker_cleared_on_park_readers() {
+        // BUG: After REFILL hits EOF, clip_eof_frame persists across play
+        // sessions. GetVideoFrame's Play-mode EOF check (line ~387) returns
+        // gap (frame=nullptr, pending=false) for source_frame >= marker.
+        // This early return SKIPS the watermark check — no further REFILL
+        // is triggered, cache stays empty, display freezes.
+        //
+        // Park mode works because it bypasses the EOF check entirely.
+        //
+        // Reproduction: start play from a position PAST the real EOF
+        // (within the clip's declared range). With the bug, GetVideoFrame
+        // returns gap for every tick → permanent freeze.
+        // Fix: ParkReaders clears clip_eof_frame.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        // Clip whose duration far exceeds file: source_in=60, duration=200
+        // Test file has 72 frames → decodable source 60..71, EOF at source 72
+        // Timeline frames 0-11 decodable, 12-199 past real EOF
+        std::vector<ClipInfo> clips = {
+            {"clipEOF", path, 0, 200, 60, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Phase 1: Play forward → REFILL hits EOF, records clip_eof_frame
+        tmb->SetPlayhead(0, 1, 1.0f);
+        QThread::msleep(600);
+
+        // Phase 2: ParkReaders (simulates user stopping playback)
+        tmb->ParkReaders();
+
+        // Phase 3: Park at frame 100 (source 160, well past real EOF)
+        // Park should still work (sync decode seeks + finds best frame)
+        auto park_r = tmb->GetVideoFrame(V1, 5);
+        QVERIFY2(park_r.frame != nullptr,
+                 "Park decode at frame 5 (source 65) should work after ParkReaders");
+
+        // Phase 4: Play again from frame 150 (past real EOF AND past cache).
+        // REFILL's held-frame fill only covers ~132 entries (MAX_CACHE=144
+        // minus 12 real frames). Frame 150 is NOT in the cache.
+        // BUG: stale clip_eof_frame blocks GetVideoFrame's Play path.
+        // source_frame = 60 + 150*1.0 = 210 ≥ eof_marker (~72) → gap returned
+        // Gap return skips watermark check → no REFILL → cache stays empty
+        tmb->SetPlayhead(150, 1, 1.0f);
+
+        // Call GetVideoFrame in Play mode (direction=1) for frame 150.
+        // With bug: returns gap (frame=nullptr, pending=false)
+        // Fixed: returns pending=true (allows REFILL to fill cache)
+        auto play_r = tmb->GetVideoFrame(V1, 150);
+
+        // The critical assertion: must NOT be a silent gap.
+        // Either cached (from a held frame fill) or pending (async job).
+        // A gap with pending=false means the EOF marker blocked everything.
+        bool is_blocked_gap = (play_r.frame == nullptr && !play_r.pending && !play_r.offline);
+        QVERIFY2(!is_blocked_gap,
+                 "GetVideoFrame in Play mode must not return silent gap due to "
+                 "stale EOF marker — should be pending or cached held frame");
+    }
+
     // ── NSF: Generation counter aborts stale REFILL ──
 
     void test_refill_generation_aborts_stale_job() {
