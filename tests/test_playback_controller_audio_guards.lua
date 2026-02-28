@@ -86,6 +86,7 @@ package.loaded["core.qt_constants"] = {
         end,
         PLAY = function(pc, dir, speed) track_playback("PLAY", pc, dir, speed) end,
         STOP = function(pc) track_playback("STOP", pc) end,
+        PARK = function(pc, frame) track_playback("PARK", pc, frame) end,
         SEEK = function(pc, frame) track_playback("SEEK", pc, frame) end,
         ACTIVATE_AUDIO = function(pc, aop, sse, sr, ch)
             track_playback("ACTIVATE_AUDIO", pc, aop, sse, sr, ch)
@@ -377,9 +378,9 @@ do
     -- But audio_playback.seek must NOT be called for stopped state
     assert(not find_audio_call("seek"),
         "seek() stopped must NOT call audio_playback.seek when controller active")
-    -- Controller should get SEEK call
-    assert(find_call("SEEK"),
-        "seek() must delegate to PLAYBACK.SEEK")
+    -- Controller should get PARK call (seek uses PARK + Lua pull)
+    assert(find_call("PARK"),
+        "seek() must delegate to PLAYBACK.PARK")
     print("  PASS: seek stopped delegates to C++, no audio_playback.seek")
 end
 

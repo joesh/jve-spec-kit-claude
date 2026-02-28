@@ -40,17 +40,8 @@ package.loaded["core.signals"] = {
     emit = function() end,
 }
 
--- Renderer mock
-package.loaded["core.renderer"] = {
-    get_sequence_info = function()
-        return {
-            fps_num = 25, fps_den = 1,
-            kind = "timeline", name = "Anamnesis",
-            audio_sample_rate = 48000,
-        }
-    end,
-    get_video_frame = function() return nil, nil end,
-}
+-- Renderer: use real module — it pulls from TMB via get_video_frame.
+-- Must be loaded AFTER models.sequence mock is set (see below).
 
 --------------------------------------------------------------------------------
 -- Anamnesis V1 clip layout (same as test_tmb_real_timeline.lua)
@@ -150,6 +141,11 @@ end
 -- Mock Sequence model with frame-dependent lookups
 local mock_sequence = {
     id = "anamnesis-test",
+    name = "Anamnesis",
+    kind = "timeline",
+    width = 1920, height = 1080,
+    frame_rate = { fps_numerator = 25, fps_denominator = 1 },
+    audio_sample_rate = 48000,
     compute_content_end = function()
         -- Last V1 clip: v1-18-100-003 at 123172 + 114 = 123286
         return 123286
@@ -165,6 +161,9 @@ local mock_sequence = {
 package.loaded["models.sequence"] = {
     load = function() return mock_sequence end,
 }
+
+-- Load real Renderer AFTER sequence mock (renderer requires models.sequence)
+require("core.renderer")
 
 --------------------------------------------------------------------------------
 -- Load PlaybackEngine (uses real qt_constants, mocked Sequence/Renderer/Signals)
@@ -195,7 +194,11 @@ print("  ✓ Created real GPUVideoSurface")
 --------------------------------------------------------------------------------
 
 local engine = PlaybackEngine.new({
-    on_show_frame = function() end,
+    on_show_frame = function(fh)
+        if fh and surface then
+            EMP.SURFACE_SET_FRAME(surface, fh)
+        end
+    end,
     on_show_gap = function() end,
     on_set_rotation = function() end,
     on_set_par = function() end,

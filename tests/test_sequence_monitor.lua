@@ -105,6 +105,11 @@ package.loaded["core.qt_constants"] = {
         SET_POSITION_CALLBACK = function() end,
         SET_CLIP_TRANSITION_CALLBACK = function() end,
         INVALIDATE_CLIP_WINDOWS = function() end,
+        PARK = function(pc, frame)
+            qt_log[#qt_log + 1] = {
+                type = "park", pc = pc, frame = frame,
+            }
+        end,
         SEEK = function(pc, frame)
             qt_log[#qt_log + 1] = {
                 type = "seek", pc = pc, frame = frame,
@@ -547,15 +552,15 @@ do
     view:seek_to_frame(42)
     assert(view.playhead == 42, "playhead updated after seek")
 
-    -- Should have called PLAYBACK.SEEK (C++ handles frame display)
-    local found_seek = false
+    -- Should have called PLAYBACK.PARK (Lua pulls frame via Renderer)
+    local found_park = false
     for _, entry in ipairs(qt_log) do
-        if entry.type == "seek" and entry.frame == 42 then
-            found_seek = true
+        if entry.type == "park" and entry.frame == 42 then
+            found_park = true
             break
         end
     end
-    assert(found_seek, "PLAYBACK.SEEK called with frame 42")
+    assert(found_park, "PLAYBACK.PARK called with frame 42")
 
     view:destroy()
     print("  ok")

@@ -145,7 +145,7 @@ do
     local eng = make_test_engine()
     -- Must fail: clip_id not a string
     expect_error(function()
-        eng:_on_clip_transition(123, 0, 1, 1, false)
+        eng:_on_clip_transition(123, 0, 1, 1, false, "/test.mov")
     end, "clip_id must be string", "_on_clip_transition rejects non-string clip_id")
 end
 
@@ -153,7 +153,7 @@ do
     local eng = make_test_engine()
     -- Must fail: rotation not a number
     expect_error(function()
-        eng:_on_clip_transition("clip1", "bad", 1, 1, false)
+        eng:_on_clip_transition("clip1", "bad", 1, 1, false, "/test.mov")
     end, "rotation must be number", "_on_clip_transition rejects non-number rotation")
 end
 
@@ -161,7 +161,7 @@ do
     local eng = make_test_engine()
     -- Must fail: par_num < 1
     expect_error(function()
-        eng:_on_clip_transition("clip1", 0, 0, 1, false)
+        eng:_on_clip_transition("clip1", 0, 0, 1, false, "/test.mov")
     end, "par_num must be >= 1", "_on_clip_transition rejects par_num < 1")
 end
 
@@ -169,7 +169,7 @@ do
     local eng = make_test_engine()
     -- Must fail: par_den < 1
     expect_error(function()
-        eng:_on_clip_transition("clip1", 0, 1, 0, false)
+        eng:_on_clip_transition("clip1", 0, 1, 0, false, "/test.mov")
     end, "par_den must be >= 1", "_on_clip_transition rejects par_den < 1")
 end
 
@@ -177,14 +177,14 @@ do
     local eng = make_test_engine()
     -- Must fail: is_offline not a boolean
     expect_error(function()
-        eng:_on_clip_transition("clip1", 0, 1, 1, "false")
+        eng:_on_clip_transition("clip1", 0, 1, 1, "false", "/test.mov")
     end, "is_offline must be boolean", "_on_clip_transition rejects non-boolean is_offline")
 end
 
 do
     local eng, events = make_test_engine()
     -- Valid transition should fire rotation/PAR callbacks
-    eng:_on_clip_transition("clip1", 90, 4, 3, false)
+    eng:_on_clip_transition("clip1", 90, 4, 3, false, "/test.mov")
     check(eng.current_clip_id == "clip1", "_on_clip_transition sets current_clip_id")
     -- Should have rotation and PAR events
     local has_rotation = false
@@ -199,8 +199,16 @@ end
 
 do
     local eng, events = make_test_engine()
+    -- Offline transition calls _display_frame_from_renderer → Renderer.get_video_frame.
+    -- Stub TMB + Renderer for this validation-focused test.
+    eng._tmb = "mock_tmb"
+    eng._video_track_indices = { 0 }
+    local Renderer = require("core.renderer")
+    local orig_gvf = Renderer.get_video_frame
+    Renderer.get_video_frame = function() return nil, nil end
     -- Offline transition should use 0/1/1 for rotation/PAR
-    eng:_on_clip_transition("clip2", 90, 4, 3, true)  -- offline=true
+    eng:_on_clip_transition("clip2", 90, 4, 3, true, "/offline.braw")  -- offline=true
+    Renderer.get_video_frame = orig_gvf
     local has_zero_rotation = false
     local has_square_par = false
     for _, e in ipairs(events) do
@@ -215,7 +223,7 @@ do
     local eng, events = make_test_engine()
     -- Same clip_id should not fire callbacks again
     eng.current_clip_id = "clip1"
-    eng:_on_clip_transition("clip1", 180, 2, 1, false)
+    eng:_on_clip_transition("clip1", 180, 2, 1, false, "/test.mov")
     check(#events == 0, "_on_clip_transition skips callbacks for same clip_id")
 end
 

@@ -1,13 +1,12 @@
 -- Black-box test: PlaybackEngine video display contract.
 --
--- Observable output = the surface. After load_sequence, the surface must
--- have a non-nil, non-black frame. After seek to a different position,
+-- Observable output = the surface. After load_sequence + seek, the surface
+-- must have a non-nil, non-black frame. After seek to a different position,
 -- the surface frame must change.
 --
--- on_show_frame wires through to EMP.SURFACE_SET_FRAME exactly like the
--- real SequenceMonitor does. C++ PLAYBACK mock SEEK models the real
--- PlaybackController::Seek which synchronously delivers a frame to the
--- surface (deliverFrame with synchronous=true).
+-- MVC park-pull: seek() calls PARK (position only) then Lua pulls through
+-- Renderer.get_video_frame → on_show_frame → SURFACE_SET_FRAME. C++ never
+-- touches the surface in park mode.
 --
 -- The test never inspects internal call sequences — only surface state.
 
@@ -82,8 +81,11 @@ qt_constants_mock = {
         DEACTIVATE_AUDIO = function() end,
         HAS_AUDIO = function() return false end,
 
-        -- SEEK: models fixed C++ Seek → deliverFrame(frame, synchronous=true).
-        -- Gets frame from Renderer mock and pushes to surface synchronously.
+        -- PARK: position + TMB prime only — no display. Lua pulls via Renderer.
+        PARK = function() end,
+
+        -- SEEK: Park + deliverFrame. Still exists for C++ callers, but Lua's
+        -- seek() now uses PARK + Renderer pull instead.
         SEEK = function(_pc, frame)
             if not pc_surface then return end
             local renderer = package.loaded["core.renderer"]

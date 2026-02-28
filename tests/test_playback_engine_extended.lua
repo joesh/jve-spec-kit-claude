@@ -66,6 +66,7 @@ package.loaded["core.qt_constants"] = {
         CREATE = function() return "mock_controller" end,
         PLAY = function(pc, dir, speed) track_pb("PLAY", dir, speed) end,
         STOP = function(pc) track_pb("STOP") end,
+        PARK = function(pc, frame) track_pb("PARK", frame) end,
         SEEK = function(pc, frame) track_pb("SEEK", frame) end,
         SET_TMB = function() end,
         SET_BOUNDS = function() end,
@@ -389,8 +390,8 @@ do
     -- Seek to frame 50 while playing
     engine:seek(50)
 
-    -- Verify SEEK delegated to C++
-    assert(find_pb_call("SEEK"), "SEEK must be called on controller")
+    -- Verify PARK delegated to C++ (seek uses PARK + Lua pull)
+    assert(find_pb_call("PARK"), "PARK must be called on controller")
 
     -- Seek to frame outside audio clip range → clip change triggers apply_mix
     engine:seek(150)
@@ -441,27 +442,27 @@ do
 
     playback_calls = {}
     engine:seek(30)
-    local seek_count_1 = 0
+    local park_count_1 = 0
     for _, c in ipairs(playback_calls) do
-        if c.name == "SEEK" then seek_count_1 = seek_count_1 + 1 end
+        if c.name == "PARK" then park_count_1 = park_count_1 + 1 end
     end
-    assert(seek_count_1 == 1, "First seek calls SEEK")
+    assert(park_count_1 == 1, "First seek calls PARK")
 
     -- Second seek to same frame: skipped (dedup)
     engine:seek(30)
-    local seek_count_2 = 0
+    local park_count_2 = 0
     for _, c in ipairs(playback_calls) do
-        if c.name == "SEEK" then seek_count_2 = seek_count_2 + 1 end
+        if c.name == "PARK" then park_count_2 = park_count_2 + 1 end
     end
-    assert(seek_count_2 == 1, "Same-frame seek skipped")
+    assert(park_count_2 == 1, "Same-frame seek skipped")
 
-    -- Different frame: calls SEEK
+    -- Different frame: calls PARK
     engine:seek(31)
-    local seek_count_3 = 0
+    local park_count_3 = 0
     for _, c in ipairs(playback_calls) do
-        if c.name == "SEEK" then seek_count_3 = seek_count_3 + 1 end
+        if c.name == "PARK" then park_count_3 = park_count_3 + 1 end
     end
-    assert(seek_count_3 == 2, "Different frame calls SEEK")
+    assert(park_count_3 == 2, "Different frame calls PARK")
 
     print("  seek deduplication passed")
 end

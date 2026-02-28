@@ -76,6 +76,7 @@ package.loaded["core.qt_constants"] = {
         CREATE = function() return "mock_controller" end,
         PLAY = function(pc, dir, speed) track("PLAY", dir, speed) end,
         STOP = function(pc) track("STOP") end,
+        PARK = function(pc, frame) track("PARK", frame) end,
         SEEK = function(pc, frame) track("SEEK", frame) end,
         SET_TMB = function() end,
         SET_BOUNDS = function() end,
@@ -396,9 +397,9 @@ do
     playback_calls = {}
 
     engine:seek(150)
-    local seek_call = find_call("SEEK")
-    assert(seek_call, "SEEK called")
-    assert(seek_call.args[1] == 150, "seeked to frame 150")
+    local park_call = find_call("PARK")
+    assert(park_call, "PARK called")
+    assert(park_call.args[1] == 150, "parked at frame 150")
     print("  ok")
 end
 
@@ -412,16 +413,16 @@ do
 
     -- Simulate C++ clip transition: clipA with rotation=0
     assert(stored_clip_transition_cb, "clip transition callback must be set")
-    stored_clip_transition_cb("clipA", 0, 1, 1, false)
+    stored_clip_transition_cb("clipA", 0, 1, 1, false, "/test.mov")
     assert(#log.rotations == 1, "first clip → rotation callback")
     assert(log.rotations[1] == 0, "clipA rotation=0")
 
     -- Same clip again → no new callback
-    stored_clip_transition_cb("clipA", 0, 1, 1, false)
+    stored_clip_transition_cb("clipA", 0, 1, 1, false, "/test.mov")
     assert(#log.rotations == 1, "same clip → no rotation callback")
 
     -- Different clip → rotation callback
-    stored_clip_transition_cb("clipB", 90, 1, 1, false)
+    stored_clip_transition_cb("clipB", 90, 1, 1, false, "/test2.mov")
     assert(#log.rotations == 2, "clip switch → rotation callback")
     assert(log.rotations[2] == 90, "clipB rotation=90")
 
@@ -437,19 +438,19 @@ do
     log.pars = {}
 
     -- clipC: square pixels (1:1)
-    stored_clip_transition_cb("clipC", 0, 1, 1, false)
+    stored_clip_transition_cb("clipC", 0, 1, 1, false, "/test3.mov")
     assert(#log.pars == 1, "first clip → PAR callback, got " .. #log.pars)
     assert(log.pars[1][1] == 1 and log.pars[1][2] == 1,
         string.format("clipC PAR should be 1:1, got %d:%d", log.pars[1][1], log.pars[1][2]))
 
     -- clipD: anamorphic HD (4:3)
-    stored_clip_transition_cb("clipD", 0, 4, 3, false)
+    stored_clip_transition_cb("clipD", 0, 4, 3, false, "/test4.mov")
     assert(#log.pars == 2, "clip switch → PAR callback")
     assert(log.pars[2][1] == 4 and log.pars[2][2] == 3,
         string.format("clipD PAR should be 4:3, got %d:%d", log.pars[2][1], log.pars[2][2]))
 
     -- Same clip → no new callback
-    stored_clip_transition_cb("clipD", 0, 4, 3, false)
+    stored_clip_transition_cb("clipD", 0, 4, 3, false, "/test4.mov")
     assert(#log.pars == 2, "same clip → no PAR callback")
 
     print("  ok")
@@ -468,7 +469,7 @@ do
     engine:seek(50)
     assert(engine:is_playing(), "still playing after seek")
     assert(engine:get_position() == 50, "seeked to 50")
-    assert(find_call("SEEK"), "SEEK called")
+    assert(find_call("PARK"), "PARK called")
 
     engine:stop()
     print("  ok")
@@ -484,11 +485,11 @@ do
     playback_calls = {}
     engine:seek(25)
     assert(engine:get_position() == 25, "seeked to 25")
-    assert(count_calls("SEEK") == 1, "SEEK called once")
+    assert(count_calls("PARK") == 1, "PARK called once")
 
     -- Redundant seek to same frame → skip
     engine:seek(25)
-    assert(count_calls("SEEK") == 1, "redundant seek skipped")
+    assert(count_calls("PARK") == 1, "redundant seek skipped")
     print("  ok")
 end
 
@@ -740,8 +741,8 @@ do
     engine:seek(50)
     engine:seek(0)
     assert(engine:get_position() == 0, "at frame 0")
-    -- Both seeks should have called SEEK
-    assert(count_calls("SEEK") >= 2, "SEEK called for both seeks")
+    -- Both seeks should have called PARK
+    assert(count_calls("PARK") >= 2, "PARK called for both seeks")
     print("  ok")
 end
 
@@ -824,12 +825,12 @@ do
     log.pars = {}
 
     -- Online clip with rotation
-    stored_clip_transition_cb("clipA", 90, 4, 3, false)
+    stored_clip_transition_cb("clipA", 90, 4, 3, false, "/online.mov")
     assert(log.rotations[1] == 90, "online: rotation=90")
     assert(log.pars[1][1] == 4 and log.pars[1][2] == 3, "online: PAR=4:3")
 
     -- Offline clip → upright, square pixels
-    stored_clip_transition_cb("clipB", 180, 16, 9, true)
+    stored_clip_transition_cb("clipB", 180, 16, 9, true, "/offline.braw")
     assert(log.rotations[2] == 0, "offline: rotation=0")
     assert(log.pars[2][1] == 1 and log.pars[2][2] == 1, "offline: PAR=1:1")
 

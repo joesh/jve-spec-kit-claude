@@ -62,6 +62,7 @@ package.loaded["core.qt_constants"] = {
         SET_NEED_CLIPS_CALLBACK = function() end,
         SET_POSITION_CALLBACK = function() end,
         SET_CLIP_TRANSITION_CALLBACK = function() end,
+        PARK = function() end,
         SEEK = function() end,
         INVALIDATE_CLIP_WINDOWS = function() end,
     },

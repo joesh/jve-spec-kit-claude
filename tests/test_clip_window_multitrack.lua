@@ -37,6 +37,7 @@ package.loaded["core.qt_constants"] = {
         CREATE = function() return "mock_controller" end,
         PLAY = function() end,
         STOP = function() end,
+        PARK = function() end,
         SEEK = function() end,
         SET_TMB = function() end,
         SET_BOUNDS = function() end,
@@ -79,6 +80,7 @@ package.loaded["core.renderer"] = {
             name = "Test", audio_sample_rate = 48000,
         }
     end,
+    get_video_frame = function() return nil, nil end,  -- gap (display not under test)
 }
 
 -- Multi-track mock Sequence: two video tracks with different coverage
