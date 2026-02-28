@@ -119,6 +119,7 @@ end
 
 do
     local eng, events = make_test_engine()
+    eng.state = "playing"  -- position callbacks only arrive during playback
     -- Valid call should update position and fire callback
     eng:_on_controller_position(42, false)
     check(eng._position == 42, "_on_controller_position updates _position")
@@ -271,6 +272,48 @@ do
     local fake_surface = {}  -- mock surface
     eng:set_surface(fake_surface)
     check(eng._video_surface == fake_surface, "set_surface stores surface reference")
+end
+
+--------------------------------------------------------------------------------
+-- 7. Stale position callback rejected after stop
+--------------------------------------------------------------------------------
+section("7. Stale position callback rejected after stop")
+
+-- Regression: GCD dispatch_async delivers a coalesced position callback from
+-- a PREVIOUS play session AFTER engine:stop() has set state="stopped".
+-- This stale callback must not overwrite self.playhead.
+do
+    local eng, events = make_test_engine()
+    eng.state = "playing"
+
+    -- Normal playback callback at frame 90125 (coalesced report)
+    eng:_on_controller_position(90125, false)
+    check(eng._position == 90125,
+        "during playback: position updated to 90125")
+    check(#events == 1 and events[1].frame == 90125,
+        "during playback: position callback fires")
+
+    -- Simulate engine:stop() — state goes to "stopped" synchronously
+    eng.state = "stopped"
+    eng.direction = 0
+
+    -- Stale callback arrives (dispatched before stop, delivered after)
+    events = {}
+    eng._on_position_changed = function(frame)
+        events[#events + 1] = {type = "position", frame = frame}
+    end
+    eng:_on_controller_position(90125, false)
+    check(eng._position == 90125,  -- unchanged
+        "stale callback: position NOT overwritten")
+    check(#events == 0,
+        "stale callback: position callback NOT fired")
+
+    -- Final stop callback with correct position
+    eng:_on_controller_position(90169, true)
+    check(eng._position == 90169,
+        "final stop callback: position updated to 90169")
+    check(#events == 1 and events[1].frame == 90169,
+        "final stop callback: position callback fires")
 end
 
 --------------------------------------------------------------------------------

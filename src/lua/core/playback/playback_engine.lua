@@ -407,11 +407,22 @@ function PlaybackEngine:_on_need_clips(frame, direction, track_type)
 end
 
 --- Position callback from C++: update UI playhead.
+-- Callbacks arrive via dispatch_async (GCD main queue). After engine:stop()
+-- sets state="stopped", stale coalesced callbacks from the old play session
+-- may still be queued. Filter them: stopped=false + state="stopped" = stale.
 function PlaybackEngine:_on_controller_position(frame, stopped)
     assert(type(frame) == "number", string.format(
         "PlaybackEngine:_on_controller_position: frame must be number, got %s", type(frame)))
     assert(type(stopped) == "boolean", string.format(
         "PlaybackEngine:_on_controller_position: stopped must be boolean, got %s", type(stopped)))
+
+    -- Stale callback from previous play session: dispatched before Stop()
+    -- but delivered after engine:stop() set state="stopped". Ignore.
+    if not stopped and self.state == "stopped" then
+        log.detail("_on_controller_position: stale callback frame=%d (stopped=false, state=stopped) — ignored",
+            frame)
+        return
+    end
 
     self._position = frame
     self._on_position_changed(frame)
