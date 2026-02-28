@@ -808,14 +808,23 @@ end
 -- @return number: speed_ratio > 0
 function PlaybackEngine:_compute_video_speed_ratio(entry)
     local clip = entry.clip
-    if not clip.source_out or not clip.source_in or not clip.duration then
-        return 1.0
-    end
+    assert(clip.source_out ~= nil,
+        "_compute_video_speed_ratio: clip.source_out is nil (clip_id=" .. tostring(clip.id) .. ")")
+    assert(clip.source_in ~= nil,
+        "_compute_video_speed_ratio: clip.source_in is nil (clip_id=" .. tostring(clip.id) .. ")")
+    assert(clip.duration ~= nil,
+        "_compute_video_speed_ratio: clip.duration is nil (clip_id=" .. tostring(clip.id) .. ")")
     local source_range = clip.source_out - clip.source_in
-    if source_range <= 0 or clip.duration <= 0 then
-        return 1.0
-    end
+    assert(source_range > 0, string.format(
+        "_compute_video_speed_ratio: source_range must be positive, got %d (clip_id=%s, source_out=%d, source_in=%d)",
+        source_range, tostring(clip.id), clip.source_out, clip.source_in))
+    assert(clip.duration > 0, string.format(
+        "_compute_video_speed_ratio: clip.duration must be positive, got %d (clip_id=%s)",
+        clip.duration, tostring(clip.id)))
     local ratio = source_range / clip.duration
+    assert(ratio > 0 and ratio < 100, string.format(
+        "_compute_video_speed_ratio: ratio out of sane range: %.4f (clip_id=%s, source_range=%d, duration=%d)",
+        ratio, tostring(clip.id), source_range, clip.duration))
     -- Near 1.0 = no speed change (avoid floating-point noise)
     if math.abs(ratio - 1.0) < 0.001 then
         return 1.0

@@ -933,6 +933,9 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
                     local speed = decode_hex_double_at(hex_part, 0)
                     if speed and speed > 0 and speed < 100 then
                         clip_speed = speed
+                    else
+                        log.warn("DRP retime: clip '%s' hex speed invalid (decoded=%s from '%s')",
+                                 clip_name, tostring(speed), hex_part:sub(1, 16))
                     end
                 end
             end

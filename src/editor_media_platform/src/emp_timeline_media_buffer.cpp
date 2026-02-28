@@ -1689,6 +1689,9 @@ void TimelineMediaBuffer::worker_loop() {
                     held_clip_id = clip_id;
                 }
 
+                assert(rate_num > 0 && "worker_loop VIDEO_REFILL: clip has zero rate_num");
+                assert(rate_den > 0 && "worker_loop VIDEO_REFILL: clip has zero rate_den");
+                assert(speed_ratio > 0.0f && "worker_loop VIDEO_REFILL: clip has non-positive speed_ratio");
                 int64_t source_frame = source_in +
                     static_cast<int64_t>((tf - timeline_start) * speed_ratio);
                 const auto& info = held_reader->media_file()->info();
@@ -1733,12 +1736,16 @@ void TimelineMediaBuffer::worker_loop() {
                             if (eof_it == eof.end() || source_frame < eof_it->second) {
                                 eof[clip_id] = source_frame;
                             }
-                            // Fill remaining frames with last good frame
+                            // Fill remaining frames with last good frame.
+                            // Store each fill_tf's own computed source_frame so
+                            // GetVideoFrame's cache check (source_frame match) hits.
                             if (last_good_frame) {
                                 auto& cache = tit->second.video_cache;
                                 for (int64_t fill_tf = tf; fill_tf < clip_end; ++fill_tf) {
                                     if (cache.size() >= TrackState::MAX_VIDEO_CACHE) break;
-                                    cache[fill_tf] = {clip_id, last_good_source_frame,
+                                    int64_t fill_sf = source_in +
+                                        static_cast<int64_t>((fill_tf - timeline_start) * speed_ratio);
+                                    cache[fill_tf] = {clip_id, fill_sf,
                                                       last_good_frame, info.rotation,
                                                       info.video_par_num, info.video_par_den};
                                 }
@@ -1808,6 +1815,9 @@ void TimelineMediaBuffer::worker_loop() {
                 if (chunk_t1 <= chunk_t0) { cursor = clip_end_us; continue; }
 
                 // Map to source coordinates
+                assert(rate_num > 0 && "worker_loop AUDIO_REFILL: clip has zero rate_num");
+                assert(rate_den > 0 && "worker_loop AUDIO_REFILL: clip has zero rate_den");
+                assert(speed_ratio > 0.0f && "worker_loop AUDIO_REFILL: clip has non-positive speed_ratio");
                 TimeUS src_origin = FrameTime::from_frame(source_in, Rate{rate_num, rate_den}).to_us();
                 double sr = static_cast<double>(speed_ratio);
                 TimeUS src_t0 = src_origin + static_cast<int64_t>((chunk_t0 - clip_start_us) * sr);
