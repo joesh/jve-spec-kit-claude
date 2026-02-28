@@ -1678,7 +1678,9 @@ void TimelineMediaBuffer::worker_loop() {
                     const ClipInfo* clip = find_clip_at(tit->second, tf);
                     if (!clip) {
                         // Gap: advance buffer_end past it, continue to next frame
-                        tit->second.video_buffer_end = tf + 1;
+                        if (tf + 1 > tit->second.video_buffer_end) {
+                            tit->second.video_buffer_end = tf + 1;
+                        }
                         is_gap = true;
                     } else {
                         clip_id = clip->clip_id;
@@ -1729,7 +1731,11 @@ void TimelineMediaBuffer::worker_loop() {
                         }
                         cache[tf] = {clip_id, source_frame, result.value(),
                                      info.rotation, info.video_par_num, info.video_par_den};
-                        tit->second.video_buffer_end = tf + 1;
+                        // Use max() to avoid regressing watermark when on-demand
+                        // has already advanced it past this REFILL's range.
+                        if (tf + 1 > tit->second.video_buffer_end) {
+                            tit->second.video_buffer_end = tf + 1;
+                        }
                     }
                     frames_decoded++;
                 } else {
@@ -1774,7 +1780,9 @@ void TimelineMediaBuffer::worker_loop() {
                                                       info.video_par_num, info.video_par_den};
                                 }
                             }
-                            tit->second.video_buffer_end = clip_end;
+                            if (clip_end > tit->second.video_buffer_end) {
+                                tit->second.video_buffer_end = clip_end;
+                            }
                         }
                     }
                     // Both EOF and transient errors: stop this REFILL batch.
@@ -1936,6 +1944,12 @@ void TimelineMediaBuffer::worker_loop() {
                         }
                         cache[tf] = {job.clip_id, sf, result.value(),
                                      rotation, par_num, par_den};
+                        // Advance watermark so REFILL starts PAST on-demand's range.
+                        // Without this, REFILL overlaps on-demand (same reader lock,
+                        // same frame range → redundant decode + reader contention).
+                        if (tf + 1 > it->second.video_buffer_end) {
+                            it->second.video_buffer_end = tf + 1;
+                        }
                     }
                     frames_decoded++;
                 } else {
@@ -1960,9 +1974,13 @@ void TimelineMediaBuffer::worker_loop() {
                     break;
                 }
             }
-            EMP_LOG_DEBUG("On-demand: %d/%d frames for clip %s on track %c%d",
-                    frames_decoded, n, job.clip_id.c_str(),
-                    job.track.type == TrackType::Video ? 'V' : 'A', job.track.index);
+            // Only log partial completions (EOF, shutdown, error) — full batches
+            // are normal steady-state and generate excessive noise at DEBUG level.
+            if (frames_decoded < n) {
+                EMP_LOG_DEBUG("On-demand: %d/%d frames for clip %s on track %c%d",
+                        frames_decoded, n, job.clip_id.c_str(),
+                        job.track.type == TrackType::Video ? 'V' : 'A', job.track.index);
+            }
         }
         // AUDIO type jobs no longer submitted — watermark AUDIO_REFILL replaces them
     }
