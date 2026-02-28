@@ -86,6 +86,7 @@ struct VideoResult {
     bool offline;
     bool pending = false;   // true = cache miss during Play, async decode submitted
                              // frame is nullptr — caller holds current display
+    std::string error_msg;  // populated when offline=true (from m_offline Error)
 };
 
 // Timeline media buffer — owns readers and clip layout per track,

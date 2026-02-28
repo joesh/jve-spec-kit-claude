@@ -142,7 +142,8 @@ public:
     // Transport (from Lua, main thread)
     void Play(int direction, float speed);
     void Stop();
-    void Seek(int64_t frame);
+    void Park(int64_t frame);   // Position + TMB prime only (no display)
+    void Seek(int64_t frame);   // Park + deliverFrame (C++ push)
 
     // Audio pump control (Phase 3)
     void ActivateAudio(aop::AudioOutput* aop, sse::ScrubStretchEngine* sse,
@@ -166,9 +167,10 @@ public:
     void SetNeedClipsCallback(NeedClipsCallback cb);
 
     // Clip transition callback (fires on main thread when displayed clip changes)
-    // Args: clip_id, rotation, par_num, par_den, is_offline
+    // Args: clip_id, rotation, par_num, par_den, is_offline, media_path
     using ClipTransitionCallback = std::function<void(const std::string& clip_id,
-        int rotation, int par_num, int par_den, bool offline)>;
+        int rotation, int par_num, int par_den, bool offline,
+        const std::string& media_path)>;
     void SetClipTransitionCallback(ClipTransitionCallback cb);
 
     // Clip window management (Lua sets after resolving clips)
@@ -298,6 +300,7 @@ public:
 
     void Play(int, float) {}
     void Stop() {}
+    void Park(int64_t) {}
     void Seek(int64_t) {}
 
     void ActivateAudio(aop::AudioOutput*, sse::ScrubStretchEngine*, int32_t, int32_t) {}
@@ -315,7 +318,8 @@ public:
     void SetNeedClipsCallback(NeedClipsCallback) {}
 
     using ClipTransitionCallback = std::function<void(const std::string& clip_id,
-        int rotation, int par_num, int par_den, bool offline)>;
+        int rotation, int par_num, int par_den, bool offline,
+        const std::string& media_path)>;
     void SetClipTransitionCallback(ClipTransitionCallback) {}
 
     void SetClipWindow(emp::TrackType, int64_t, int64_t) {}

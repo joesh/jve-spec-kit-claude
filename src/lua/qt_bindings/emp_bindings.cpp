@@ -719,6 +719,10 @@ static int lua_emp_tmb_get_video_frame(lua_State* L) {
     lua_setfield(L, -2, "offline");
     lua_pushboolean(L, result.pending);
     lua_setfield(L, -2, "pending");
+    if (!result.error_msg.empty()) {
+        lua_pushstring(L, result.error_msg.c_str());
+        lua_setfield(L, -2, "error_msg");
+    }
 
     return 2;
 }
@@ -1363,7 +1367,15 @@ static int lua_playback_stop(lua_State* L) {
     return 0;
 }
 
-// PLAYBACK.SEEK(controller, frame)
+// PLAYBACK.PARK(controller, frame) — position + TMB prime only, no display
+static int lua_playback_park(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    int64_t frame = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    controller->Park(frame);
+    return 0;
+}
+
+// PLAYBACK.SEEK(controller, frame) — Park + deliverFrame (C++ push)
 static int lua_playback_seek(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
     int64_t frame = static_cast<int64_t>(luaL_checkinteger(L, 2));
@@ -1574,7 +1586,8 @@ static int lua_playback_set_clip_transition_callback(lua_State* L) {
     lua_State* main_L = L;
 
     controller->SetClipTransitionCallback([main_L, ref](
-        const std::string& clip_id, int rotation, int par_num, int par_den, bool offline) {
+        const std::string& clip_id, int rotation, int par_num, int par_den,
+        bool offline, const std::string& media_path) {
         lua_rawgeti(main_L, LUA_REGISTRYINDEX, ref);
         if (lua_isfunction(main_L, -1)) {
             lua_pushstring(main_L, clip_id.c_str());
@@ -1582,8 +1595,9 @@ static int lua_playback_set_clip_transition_callback(lua_State* L) {
             lua_pushinteger(main_L, par_num);
             lua_pushinteger(main_L, par_den);
             lua_pushboolean(main_L, offline ? 1 : 0);
+            lua_pushstring(main_L, media_path.c_str());
             JveLuaStateGuard guard(main_L);
-            if (lua_pcall(main_L, 5, 0, 0) != 0) {
+            if (lua_pcall(main_L, 6, 0, 0) != 0) {
                 lua_error(main_L);
             }
         } else {
@@ -1758,6 +1772,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "PLAY");
     lua_pushcfunction(L, lua_playback_stop);
     lua_setfield(L, -2, "STOP");
+    lua_pushcfunction(L, lua_playback_park);
+    lua_setfield(L, -2, "PARK");
     lua_pushcfunction(L, lua_playback_seek);
     lua_setfield(L, -2, "SEEK");
     lua_pushcfunction(L, lua_playback_tick);

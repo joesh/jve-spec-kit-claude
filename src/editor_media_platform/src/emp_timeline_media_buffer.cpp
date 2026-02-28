@@ -401,6 +401,7 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
             auto offline_it = m_offline.find(job_media_path);
             if (offline_it != m_offline.end()) {
                 result.offline = true;
+                result.error_msg = offline_it->second.message;
                 result.frame = nullptr;
                 return result;
             }
@@ -450,6 +451,7 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         auto offline_it = m_offline.find(media_path);
         if (offline_it != m_offline.end()) {
             result.offline = true;
+            result.error_msg = offline_it->second.message;
             return result;
         }
     }
@@ -458,7 +460,15 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
     m_video_cache_misses.fetch_add(1, std::memory_order_relaxed);
     auto reader = acquire_reader(track, clip_id, media_path);
     if (!reader) {
+        // acquire_reader registered the error in m_offline — fetch it
         result.offline = true;
+        {
+            std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
+            auto err_it = m_offline.find(media_path);
+            if (err_it != m_offline.end()) {
+                result.error_msg = err_it->second.message;
+            }
+        }
         return result;
     }
 
@@ -497,6 +507,7 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         // (corrupt media, unsupported codec, out-of-range seek). Must set offline
         // so the renderer shows the offline graphic, not skip to the next track.
         result.offline = true;
+        result.error_msg = "Decode failed for " + media_path;
     }
 
     return result;

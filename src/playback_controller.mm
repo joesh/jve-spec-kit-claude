@@ -521,22 +521,21 @@ void PlaybackController::Stop() {
                  (long long)m_deliver_count, (long long)underruns);
 }
 
-void PlaybackController::Seek(int64_t frame) {
+void PlaybackController::Park(int64_t frame) {
     JVE_ASSERT(frame >= 0,
-        "PlaybackController::Seek: frame must be >= 0");
+        "PlaybackController::Park: frame must be >= 0");
     JVE_ASSERT(m_total_frames > 0,
-        "PlaybackController::Seek: bounds not set (call SetBounds before Seek)");
+        "PlaybackController::Park: bounds not set (call SetBounds before Park)");
     {
         char buf[128];
         snprintf(buf, sizeof(buf),
-            "PlaybackController::Seek: frame %lld >= total_frames %lld",
+            "PlaybackController::Park: frame %lld >= total_frames %lld",
             (long long)frame, (long long)m_total_frames);
         JVE_ASSERT(frame < m_total_frames, buf);
     }
     JVE_ASSERT(m_tmb,
-        "PlaybackController::Seek: TMB not set (call SetTMB before Seek)");
-    JVE_ASSERT(m_surface,
-        "PlaybackController::Seek: surface not set (call SetSurface before Seek)");
+        "PlaybackController::Park: TMB not set (call SetTMB before Park)");
+    // No surface assert — Lua handles display in park mode
 
     m_position.store(frame, std::memory_order_relaxed);
     m_hit_boundary.store(false, std::memory_order_relaxed);
@@ -545,12 +544,17 @@ void PlaybackController::Seek(int64_t frame) {
 
     // Tell TMB we're parking (direction=0 → synchronous decode)
     m_tmb->SetPlayhead(frame, 0, 1.0f);
-    JVE_LOG_EVENT(Ticks, "Seek: frame=%lld tracks=%zu surface=%p initialized=%d",
+    JVE_LOG_EVENT(Ticks, "Park: frame=%lld", (long long)frame);
+}
+
+void PlaybackController::Seek(int64_t frame) {
+    Park(frame);
+    JVE_ASSERT(m_surface,
+        "PlaybackController::Seek: surface not set (call SetSurface before Seek)");
+    JVE_LOG_EVENT(Ticks, "Seek: frame=%lld tracks=%zu surface=%p",
                  (long long)frame, m_video_track_indices.size(),
-                 (void*)m_surface, m_surface ? 1 : 0);
+                 (void*)m_surface);
     deliverFrame(frame, true);  // synchronous: Seek is on main thread
-    // deliverFrame asserts if TMB returns a clip but no frame data (decode failure).
-    // Gap seeks (no clip at frame) legitimately produce no frame.
 }
 
 // ============================================================================
@@ -1154,12 +1158,13 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
             int par_num = result.par_num;
             int par_den = result.par_den;
             bool offline = result.offline;
+            std::string media_path = result.media_path;
 
             if (synchronous) {
-                cb(clip_id, rotation, par_num, par_den, offline);
+                cb(clip_id, rotation, par_num, par_den, offline, media_path);
             } else {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    cb(clip_id, rotation, par_num, par_den, offline);
+                    cb(clip_id, rotation, par_num, par_den, offline, media_path);
                 });
             }
         }
