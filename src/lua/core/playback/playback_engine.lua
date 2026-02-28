@@ -359,8 +359,8 @@ function PlaybackEngine:_setup_playback_controller()
     end)
 
     -- Wire ClipTransitionCallback: C++ fires when displayed clip changes
-    PLAYBACK.SET_CLIP_TRANSITION_CALLBACK(pc, function(clip_id, rotation, par_num, par_den, is_offline)
-        engine:_on_clip_transition(clip_id, rotation, par_num, par_den, is_offline)
+    PLAYBACK.SET_CLIP_TRANSITION_CALLBACK(pc, function(clip_id, rotation, par_num, par_den, is_offline, media_path)
+        engine:_on_clip_transition(clip_id, rotation, par_num, par_den, is_offline, media_path)
     end)
 
     -- Wire content_changed: invalidate clip windows when timeline edits occur.
@@ -425,7 +425,25 @@ function PlaybackEngine:_on_controller_position(frame, stopped)
 end
 
 --- Clip transition callback from C++: update rotation/PAR.
-function PlaybackEngine:_on_clip_transition(clip_id, rotation, par_num, par_den, is_offline)
+--- Apply rotation and PAR from metadata to the view.
+-- Offline frames are upright with square pixels; online use media metadata.
+function PlaybackEngine:_apply_rotation_par(metadata)
+    local is_offline = metadata.offline
+    local rotation = metadata.rotation or 0
+    local par_num = metadata.par_num or 1
+    local par_den = metadata.par_den or 1
+
+    self._on_set_rotation(is_offline and 0 or rotation)
+    self._on_set_par(
+        is_offline and 1 or par_num,
+        is_offline and 1 or par_den)
+end
+
+--- Callback from C++ deliverFrame: fires during playback when the displayed
+-- clip changes. During playback, online frames are pushed directly by C++
+-- (surface.setFrame). For offline clips, we pull through Renderer so that
+-- offline_frame_cache composes the "Media Offline" frame.
+function PlaybackEngine:_on_clip_transition(clip_id, rotation, par_num, par_den, is_offline, media_path)
     assert(type(clip_id) == "string", string.format(
         "PlaybackEngine:_on_clip_transition: clip_id must be string, got %s", type(clip_id)))
     assert(type(rotation) == "number", string.format(
@@ -436,16 +454,28 @@ function PlaybackEngine:_on_clip_transition(clip_id, rotation, par_num, par_den,
         "PlaybackEngine:_on_clip_transition: par_den must be >= 1, got %s", tostring(par_den)))
     assert(type(is_offline) == "boolean", string.format(
         "PlaybackEngine:_on_clip_transition: is_offline must be boolean, got %s", type(is_offline)))
+    assert(type(media_path) == "string", string.format(
+        "PlaybackEngine:_on_clip_transition: media_path must be string, got %s", type(media_path)))
 
     if clip_id ~= self.current_clip_id then
         log.event("clip_transition: clip=%s rotation=%d par=%d/%d offline=%s",
             clip_id, rotation, par_num, par_den, tostring(is_offline))
         self.current_clip_id = clip_id
-        -- Offline frames are upright with square pixels
-        self._on_set_rotation(is_offline and 0 or rotation)
-        self._on_set_par(
-            is_offline and 1 or par_num,
-            is_offline and 1 or par_den)
+
+        local metadata = {
+            offline = is_offline,
+            rotation = rotation,
+            par_num = par_num,
+            par_den = par_den,
+            clip_id = clip_id,
+            media_path = media_path,
+        }
+        self:_apply_rotation_par(metadata)
+
+        -- Offline during playback: pull through Renderer (same path as park)
+        if is_offline then
+            self:_display_frame_from_renderer(math.floor(self._position))
+        end
     end
 end
 
@@ -1020,6 +1050,23 @@ function PlaybackEngine:stop()
 end
 
 --- Seek to specific frame.
+--- Pull frame from Renderer and display via View callbacks.
+-- Shared by seek (park mode) and _on_clip_transition (playback offline).
+-- Renderer handles online/offline/gap routing through offline_frame_cache.
+function PlaybackEngine:_display_frame_from_renderer(frame)
+    assert(self._tmb, "PlaybackEngine:_display_frame_from_renderer: no TMB")
+
+    local frame_handle, metadata = Renderer.get_video_frame(
+        self._tmb, self._video_track_indices, frame)
+
+    if frame_handle then
+        self:_apply_rotation_par(metadata)
+        self._on_show_frame(frame_handle, metadata)
+    else
+        self._on_show_gap()
+    end
+end
+
 function PlaybackEngine:seek(frame_idx)
     assert(frame_idx, "PlaybackEngine:seek: frame_idx is nil")
     assert(frame_idx >= 0, "PlaybackEngine:seek: frame_idx must be >= 0")
@@ -1048,10 +1095,13 @@ function PlaybackEngine:seek(frame_idx)
         self:_send_clips_to_tmb(frame)
     end
 
-    -- Delegate seek to C++ PlaybackController (handles frame display)
+    -- Park: set position + prime TMB (no display from C++)
     assert(self._playback_controller,
         "PlaybackEngine:seek: _playback_controller required")
-    qt_constants.PLAYBACK.SEEK(self._playback_controller, frame)
+    qt_constants.PLAYBACK.PARK(self._playback_controller, frame)
+
+    -- Pull: Lua queries TMB via Renderer, handles online/offline/gap
+    self:_display_frame_from_renderer(frame)
 
     -- Audio resolve + restart (non-fatal: must not prevent seek)
     self:_try_audio(function(eng)
