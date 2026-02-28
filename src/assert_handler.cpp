@@ -1,9 +1,18 @@
 // Assert handler with stack trace support
+//
+// When a lua_State is registered (via jve_set_lua_state), assert failures
+// throw JveAssertError instead of calling _exit. LuaJIT's DWARF unwinder
+// catches the exception at the lua_pcall boundary, converting it to a Lua
+// error. This lets Lua pcall catch C++ assertion failures gracefully.
+//
+// Without a registered lua_State (startup, background threads), the original
+// _exit(134) behavior is preserved.
 
 #include "assert_handler.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <unistd.h>
 #include <signal.h>
 
@@ -11,6 +20,18 @@
 #include <execinfo.h>
 #include <cxxabi.h>
 #endif
+
+// Thread-local lua_State — set around lua_pcall sites so assert failures
+// can throw instead of _exit when we're inside a Lua-callable context.
+static thread_local lua_State* t_lua_state = nullptr;
+
+void jve_set_lua_state(lua_State* L) {
+    t_lua_state = L;
+}
+
+void jve_clear_lua_state() {
+    t_lua_state = nullptr;
+}
 
 // Flag to prevent recursive abort handling
 static volatile sig_atomic_t g_handling_abort = 0;
@@ -87,7 +108,15 @@ void jve_assert_fail(const char* expr, const char* msg, const char* file, int li
     fprintf(stderr, "\n");
     fflush(stderr);
 
-    // Clean exit instead of abort() - avoids OS crash dialogs
+    // If we're inside a Lua pcall context, throw so the error propagates
+    // as a Lua error instead of killing the process.
+    if (t_lua_state) {
+        std::string error_msg = std::string("JVE_ASSERT failed: ") + msg +
+            " [" + file + ":" + std::to_string(line) + " " + func + "]";
+        throw JveAssertError(error_msg);
+    }
+
+    // No Lua context (startup, background threads): hard exit
     _exit(134);  // 134 = 128 + SIGABRT(6), mimics abort exit code
 }
 

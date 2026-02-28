@@ -4,6 +4,7 @@
 #include "resource_paths.h"
 #include "bug_reporter/qt_bindings_bug_reporter.h"
 #include "jve_log.h"
+#include "assert_handler.h"
 #include <QDir>
 #include <QFileInfo>
 
@@ -97,7 +98,10 @@ bool SimpleLuaEngine::executeFile(const QString& scriptPath)
     int errHandlerIndex = lua_gettop(L) - 1;  // Error handler is below the function
     lua_insert(L, errHandlerIndex);  // Move error handler below function
 
-    result = lua_pcall(L, 0, 0, errHandlerIndex);
+    {
+        JveLuaStateGuard guard(L);
+        result = lua_pcall(L, 0, 0, errHandlerIndex);
+    }
     if (result != LUA_OK) {
         m_lastError = QString("Failed to execute script: %1").arg(lua_tostring(L, -1));
         lua_pop(L, 1);
@@ -105,7 +109,7 @@ bool SimpleLuaEngine::executeFile(const QString& scriptPath)
     }
 
     lua_pop(L, 1);  // Pop error handler
-    
+
     JVE_LOG_EVENT(Ui, "Successfully executed script: %s", qPrintable(scriptPath));
     return true;
 }
@@ -132,7 +136,10 @@ bool SimpleLuaEngine::executeString(const QString& luaCode)
     int errHandlerIndex = lua_gettop(L) - 1;  // Error handler is below the function
     lua_insert(L, errHandlerIndex);  // Move error handler below function
 
-    result = lua_pcall(L, 0, 0, errHandlerIndex);
+    {
+        JveLuaStateGuard guard(L);
+        result = lua_pcall(L, 0, 0, errHandlerIndex);
+    }
     if (result != LUA_OK) {
         m_lastError = QString("Failed to execute Lua code: %1").arg(lua_tostring(L, -1));
         lua_pop(L, 1);

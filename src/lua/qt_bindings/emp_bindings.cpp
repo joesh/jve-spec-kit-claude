@@ -1156,9 +1156,9 @@ static int lua_emp_surface_on_ready(lua_State* L) {
     gpu_surface->setReadyCallback([main_L, ref]() {
         lua_rawgeti(main_L, LUA_REGISTRYINDEX, ref);
         if (lua_isfunction(main_L, -1)) {
+            JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 0, 0, 0) != 0) {
-                const char* err = lua_tostring(main_L, -1);
-                JVE_ASSERT(false, err ? err : "SURFACE_ON_READY callback failed");
+                lua_error(main_L);
             }
         } else {
             lua_pop(main_L, 1);
@@ -1191,9 +1191,9 @@ static int lua_emp_surface_on_error(lua_State* L) {
         lua_rawgeti(main_L, LUA_REGISTRYINDEX, ref);
         if (lua_isfunction(main_L, -1)) {
             lua_pushstring(main_L, error.c_str());
+            JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 1, 0, 0) != 0) {
-                const char* err = lua_tostring(main_L, -1);
-                JVE_ASSERT(false, err ? err : "SURFACE_ON_ERROR callback failed");
+                lua_error(main_L);
             }
         } else {
             lua_pop(main_L, 1);
@@ -1434,10 +1434,9 @@ static int lua_playback_set_position_callback(lua_State* L) {
         if (lua_isfunction(main_L, -1)) {
             lua_pushinteger(main_L, static_cast<lua_Integer>(frame));
             lua_pushboolean(main_L, stopped ? 1 : 0);
+            JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 2, 0, 0) != 0) {
-                // NSF: Callback errors must crash with stack trace, not get buried
-                const char* err = lua_tostring(main_L, -1);
-                JVE_ASSERT(false, err ? err : "PLAYBACK position callback failed");
+                lua_error(main_L);
             }
         } else {
             lua_pop(main_L, 1);
@@ -1469,9 +1468,9 @@ static int lua_playback_set_need_clips_callback(lua_State* L) {
             lua_pushinteger(main_L, static_cast<lua_Integer>(frame));
             lua_pushinteger(main_L, direction);
             lua_pushstring(main_L, type == emp::TrackType::Video ? "video" : "audio");
+            JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 3, 0, 0) != 0) {
-                const char* err = lua_tostring(main_L, -1);
-                JVE_ASSERT(false, err ? err : "PLAYBACK need_clips callback failed");
+                lua_error(main_L);
             }
         } else {
             lua_pop(main_L, 1);
@@ -1583,9 +1582,9 @@ static int lua_playback_set_clip_transition_callback(lua_State* L) {
             lua_pushinteger(main_L, par_num);
             lua_pushinteger(main_L, par_den);
             lua_pushboolean(main_L, offline ? 1 : 0);
+            JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 5, 0, 0) != 0) {
-                const char* err = lua_tostring(main_L, -1);
-                JVE_ASSERT(false, err ? err : "PLAYBACK clip_transition callback failed");
+                lua_error(main_L);
             }
         } else {
             lua_pop(main_L, 1);

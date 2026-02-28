@@ -1,5 +1,6 @@
 #include "binding_macros.h"
 #include "../../jve_log.h"
+#include "assert_handler.h"
 #include <QAbstractButton>
 #include <QCoreApplication>
 #include <QContextMenuEvent>
@@ -111,15 +112,17 @@ protected:
                     lua_settable(lua_state, -3);
                 }
 
-                if (lua_pcall(lua_state, 1, 1, 0) == LUA_OK) {
-                    bool handled = lua_toboolean(lua_state, -1);
-                    lua_pop(lua_state, 1);
-                    if (handled) {
-                        return true;  // Event consumed
+                {
+                    JveLuaStateGuard guard(lua_state);
+                    if (lua_pcall(lua_state, 1, 1, 0) == LUA_OK) {
+                        bool handled = lua_toboolean(lua_state, -1);
+                        lua_pop(lua_state, 1);
+                        if (handled) {
+                            return true;  // Event consumed
+                        }
+                    } else {
+                        lua_error(lua_state);
                     }
-                } else {
-                    JVE_LOG_WARN(Ui, "Error in global key handler: %s", lua_tostring(lua_state, -1));
-                    lua_pop(lua_state, 1);
                 }
             } else {
                 lua_pop(lua_state, 1);
@@ -141,11 +144,13 @@ protected:
                 lua_pushboolean(lua_state, keyEvent->isAutoRepeat());
                 lua_settable(lua_state, -3);
 
-                if (lua_pcall(lua_state, 1, 1, 0) != LUA_OK) {
-                    JVE_LOG_WARN(Ui, "Error in global key release handler: %s", lua_tostring(lua_state, -1));
-                    lua_pop(lua_state, 1);
-                } else {
-                    lua_pop(lua_state, 1);  // Pop return value
+                {
+                    JveLuaStateGuard guard(lua_state);
+                    if (lua_pcall(lua_state, 1, 1, 0) != LUA_OK) {
+                        lua_error(lua_state);
+                    } else {
+                        lua_pop(lua_state, 1);  // Pop return value
+                    }
                 }
             } else {
                 lua_pop(lua_state, 1);
@@ -183,9 +188,11 @@ protected:
                 lua_push_widget(lua_state, tracked_widget);
                 lua_settable(lua_state, -3);
 
-                if (lua_pcall(lua_state, 1, 0, 0) != LUA_OK) {
-                    JVE_LOG_WARN(Ui, "Error in focus event handler: %s", lua_tostring(lua_state, -1));
-                    lua_pop(lua_state, 1); // Fix: Changed from lua_pop(L_ptr, 1) to lua_pop(lua_state, 1)
+                {
+                    JveLuaStateGuard guard(lua_state);
+                    if (lua_pcall(lua_state, 1, 0, 0) != LUA_OK) {
+                        lua_error(lua_state);
+                    }
                 }
             } else {
                 lua_pop(lua_state, 1);
@@ -220,10 +227,11 @@ protected:
                     }
                     lua_pushinteger(lua_state, mouseEvent->pos().y());
 
-                    int result = lua_pcall(lua_state, 2, 0, 0);
-                    if (result != 0) {
-                        JVE_LOG_WARN(Ui, "Error calling Lua click handler: %s", lua_tostring(lua_state, -1));
-                        lua_pop(lua_state, 1);
+                    {
+                        JveLuaStateGuard guard(lua_state);
+                        if (lua_pcall(lua_state, 2, 0, 0) != LUA_OK) {
+                            lua_error(lua_state);
+                        }
                     }
                 } else {
                     JVE_LOG_WARN(Ui, "Lua click handler not found: %s", handler_name.c_str());
@@ -290,9 +298,9 @@ int lua_set_button_click_handler(lua_State* L) {
     QObject::connect(button, &QAbstractButton::clicked, [L, handler_str]() {
         lua_getglobal(L, handler_str.c_str());
         if (lua_isfunction(L, -1)) {
+            JveLuaStateGuard guard(L);
             if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                JVE_LOG_WARN(Ui, "Error calling Lua click handler: %s", lua_tostring(L, -1));
-                lua_pop(L, 1);
+                lua_error(L);
             }
         } else {
             lua_pop(L, 1);
@@ -332,9 +340,11 @@ int lua_set_context_menu_handler(lua_State* L) {
             lua_pushstring(L, "global_x"); lua_pushinteger(L, global_pos.x()); lua_settable(L, -3);
             lua_pushstring(L, "global_y"); lua_pushinteger(L, global_pos.y()); lua_settable(L, -3);
 
-            if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                JVE_LOG_WARN(Ui, "Error calling Lua context menu handler: %s", lua_tostring(L, -1));
-                lua_pop(L, 1);
+            {
+                JveLuaStateGuard guard(L);
+                if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+                    lua_error(L);
+                }
             }
         });
     return 0;
@@ -349,9 +359,9 @@ int lua_set_line_edit_text_changed_handler(lua_State* L) {
     QObject::connect(le, &QLineEdit::textChanged, [L, handler_str](const QString& /*text*/) {
         lua_getglobal(L, handler_str.c_str());
         if (lua_isfunction(L, -1)) {
+            JveLuaStateGuard guard(L);
             if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                JVE_LOG_WARN(Ui, "Error calling %s: %s", handler_str.c_str(), lua_tostring(L, -1));
-                lua_pop(L, 1);
+                lua_error(L);
             }
         } else {
             lua_pop(L, 1);
@@ -369,9 +379,9 @@ int lua_set_line_edit_editing_finished_handler(lua_State* L) {
     QObject::connect(le, &QLineEdit::editingFinished, [L, handler_str]() {
         lua_getglobal(L, handler_str.c_str());
         if (lua_isfunction(L, -1)) {
+            JveLuaStateGuard guard(L);
             if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                JVE_LOG_WARN(Ui, "Error calling %s: %s", handler_str.c_str(), lua_tostring(L, -1));
-                lua_pop(L, 1);
+                lua_error(L);
             }
         } else {
             lua_pop(L, 1);
@@ -416,12 +426,11 @@ int lua_set_splitter_moved_handler(lua_State* L) {
         if (lua_isfunction(L, -1)) {
             lua_pushinteger(L, pos);
             lua_pushinteger(L, index);
-            if (lua_pcall(L, 2, 0, 0) != 0) {
-                JVE_LOG_WARN(Ui, "Error calling Lua splitter moved handler: %s", lua_tostring(L, -1));
-                lua_pop(L, 1);
+            JveLuaStateGuard guard(L);
+            if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+                lua_error(L);
             }
         } else {
-            JVE_LOG_WARN(Ui, "Lua splitter moved handler not found: %s", handler_str.c_str());
             lua_pop(L, 1);
         }
     });
@@ -443,9 +452,14 @@ int lua_create_single_shot_timer(lua_State* L) {
 
     QObject::connect(timer, &QTimer::timeout, [L, callback_ref, timer]() {
         lua_rawgeti(L, LUA_REGISTRYINDEX, callback_ref);
-        if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-            JVE_LOG_WARN(Ui, "Error in timer callback: %s", lua_tostring(L, -1));
-            lua_pop(L, 1);
+        {
+            JveLuaStateGuard guard(L);
+            if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+                // Unref before re-raising so we don't leak
+                luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
+                timer->deleteLater();
+                lua_error(L);
+            }
         }
         luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
         timer->deleteLater();
@@ -468,9 +482,9 @@ int lua_set_scroll_area_scroll_handler(lua_State* L) {
             lua_getglobal(L, handler_str.c_str());
             if (lua_isfunction(L, -1)) {
                 lua_pushinteger(L, value);
+                JveLuaStateGuard guard(L);
                 if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                    JVE_LOG_WARN(Ui, "Error calling %s: %s", handler_str.c_str(), lua_tostring(L, -1));
-                    lua_pop(L, 1);
+                    lua_error(L);
                 }
             } else {
                 lua_pop(L, 1);
@@ -508,9 +522,9 @@ protected:
         if ((event->type() == QEvent::Resize || event->type() == QEvent::Move) && lua_state) {
             lua_getglobal(lua_state, handler_name.c_str());
             if (lua_isfunction(lua_state, -1)) {
+                JveLuaStateGuard guard(lua_state);
                 if (lua_pcall(lua_state, 0, 0, 0) != LUA_OK) {
-                    JVE_LOG_WARN(Ui, "Error in geometry change handler: %s", lua_tostring(lua_state, -1));
-                    lua_pop(lua_state, 1);
+                    lua_error(lua_state);
                 }
             } else {
                 lua_pop(lua_state, 1);

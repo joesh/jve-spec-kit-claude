@@ -2,15 +2,44 @@
 
 // Custom assert with stack trace
 // Usage: JVE_ASSERT(condition, "message with context")
-// On failure: prints stack trace, message, file:line, then aborts
+// On failure: prints stack trace + message, then:
+//   - If inside lua_pcall (lua_State registered): throws JveAssertError → Lua error
+//   - If outside Lua context (startup, background threads): _exit(134)
 
 #include <cstdlib>
 
 #ifdef __cplusplus
+#include <stdexcept>
+
+// Exception thrown by jve_assert_fail when inside a Lua pcall context.
+// LuaJIT 2.1 on macOS ARM64 uses DWARF unwinding, so C++ exceptions thrown
+// inside lua_CFunction calls properly unwind destructors and are caught by
+// lua_pcall, which converts them to Lua errors.
+class JveAssertError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+struct lua_State;
+
+// Register/clear the active lua_State for the current thread.
+// When registered, jve_assert_fail throws JveAssertError instead of _exit.
+void jve_set_lua_state(lua_State* L);
+void jve_clear_lua_state();
+
+// RAII guard: sets lua_State on construction, clears on destruction.
+// Safe with both C++ exceptions and LuaJIT's DWARF-based longjmp.
+struct JveLuaStateGuard {
+    JveLuaStateGuard(lua_State* L) { jve_set_lua_state(L); }
+    ~JveLuaStateGuard() { jve_clear_lua_state(); }
+    JveLuaStateGuard(const JveLuaStateGuard&) = delete;
+    JveLuaStateGuard& operator=(const JveLuaStateGuard&) = delete;
+};
+
 extern "C" {
 #endif
 
-// Called on assert failure - prints stack trace and exits cleanly
+// Called on assert failure - prints stack trace, then throws or exits
 void jve_assert_fail(const char* expr, const char* msg, const char* file, int line, const char* func);
 
 // Install SIGABRT handler to catch standard assert() and abort()
