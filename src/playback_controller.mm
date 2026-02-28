@@ -1218,16 +1218,19 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
         }
     } else if (!result.clip_id.empty()) {
         // TMB has a clip at this frame but returned no decoded frame data.
-        // Sync (seek): assert — must decode or we display stale content.
-        // Async (playback): log — decoder may be catching up. But if this
-        // persists, video will appear frozen while audio continues.
-        if (synchronous) {
+        if (result.offline) {
+            // Offline clip: no frame data expected. The Lua renderer handles
+            // offline frames via offline_frame_cache. Not a decode failure.
+            JVE_LOG_EVENT(Ticks, "deliverFrame: offline clip=%s frame=%lld",
+                         result.clip_id.c_str(), (long long)frame);
+        } else if (synchronous) {
+            // Online clip with no frame on sync seek = real decode failure
             char buf[256];
             snprintf(buf, sizeof(buf),
                 "PlaybackController::deliverFrame: Seek to frame %lld returned no frame "
-                "data but clip_id='%s' (decode failure? offline=%d pending=%d)",
+                "data but clip_id='%s' (decode failure? pending=%d)",
                 (long long)frame, result.clip_id.c_str(),
-                (int)result.offline, (int)result.pending);
+                (int)result.pending);
             JVE_ASSERT(false, buf);
         } else if (m_deliver_count % 30 == 0) {
             JVE_LOG_DETAIL(Ticks, "deliverFrame: NULL FRAME clip=%s frame=%lld pending=%d offline=%d",
