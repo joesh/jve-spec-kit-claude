@@ -99,6 +99,7 @@ if(APPLE)
     find_library(VIDEOTOOLBOX_FRAMEWORK VideoToolbox REQUIRED)
     find_library(COREMEDIA_FRAMEWORK CoreMedia REQUIRED)
     find_library(COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
+    find_library(COREAUDIO_FRAMEWORK CoreAudio REQUIRED)  # For device latency query
     find_library(METAL_FRAMEWORK Metal REQUIRED)
     find_library(QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
     find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)  # vImage for YUV→RGB
@@ -173,12 +174,13 @@ target_link_libraries(JVECore
     EditorMediaPlatform
 )
 
-# Metal video surface dependencies (macOS)
+# Metal video surface + audio latency dependencies (macOS)
 if(APPLE)
     target_link_libraries(JVECore
         ${METAL_FRAMEWORK}
         ${QUARTZCORE_FRAMEWORK}
         ${COREVIDEO_FRAMEWORK}
+        ${COREAUDIO_FRAMEWORK}
     )
     target_compile_definitions(JVECore PRIVATE EMP_HAS_VIDEOTOOLBOX)
 endif()

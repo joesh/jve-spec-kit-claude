@@ -46,17 +46,25 @@ public:
     // Convert media time to frame index
     static int64_t FrameFromTimeUS(int64_t time_us, int32_t fps_num, int32_t fps_den);
 
+    // Measure output latency from CoreAudio device properties.
+    // Call once when audio session is activated. Falls back to DEFAULT_LATENCY_US on failure.
+    void MeasureOutputLatency(uint32_t device_id, int32_t sample_rate);
+
     // Getters for pump loop
     int64_t MediaAnchorUS() const { return m_media_anchor_us.load(std::memory_order_relaxed); }
     float Speed() const { return m_speed.load(std::memory_order_relaxed); }
+    int64_t OutputLatencyUS() const { return m_output_latency_us.load(std::memory_order_relaxed); }
 
 private:
     std::atomic<int64_t> m_media_anchor_us{0};   // Media time at last reanchor
     std::atomic<int64_t> m_aop_epoch_us{0};      // AOP playhead at last reanchor
     std::atomic<float> m_speed{1.0f};            // Signed speed (negative = reverse)
 
-    // Audio output latency compensation (OS mixer + driver + DAC)
-    static constexpr int64_t OUTPUT_LATENCY_US = 150000;  // 150ms
+    // Audio output latency (measured or default)
+    std::atomic<int64_t> m_output_latency_us{DEFAULT_LATENCY_US};
+
+    // Default fallback (conservative estimate: OS mixer + driver + DAC)
+    static constexpr int64_t DEFAULT_LATENCY_US = 150000;  // 150ms
 };
 
 // ============================================================================

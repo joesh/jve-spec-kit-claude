@@ -143,6 +143,7 @@ function PlaybackEngine.new(config)
     self._video_track_indices = {}   -- track indices for Renderer iteration
     self._audio_track_indices = {}   -- audio track indices for TMB audio path
     self._tmb_clip_window = nil      -- {lo, hi, direction} — valid frame range for current clip feed
+    self._content_generation = 0     -- increments on content_changed; prevents stale clip feeds
 
     -- PlaybackController (C++ CVDisplayLink-driven playback)
     self._playback_controller = nil
@@ -299,14 +300,19 @@ end
 --- Public: invalidate clip cache + re-feed TMB after timeline edits.
 -- Called by views (sequence_monitor) on content_changed — encapsulates all
 -- internal cache invalidation so views never touch engine privates.
+-- Uses generation counter to skip stale clip feeds during rapid edit bursts.
+-- Generation counter wraps at 2^30 to avoid Lua float precision loss.
 function PlaybackEngine:notify_content_changed()
+    self._content_generation = (self._content_generation % 0x40000000) + 1
+    local gen = self._content_generation
+
     self:_refresh_content_bounds()
     if self._playback_controller then
         qt_constants.PLAYBACK.INVALIDATE_CLIP_WINDOWS(self._playback_controller)
     end
     self._tmb_clip_window = nil
     if self._tmb then
-        self:_send_clips_to_tmb(math.floor(self:get_position()))
+        self:_send_clips_to_tmb(math.floor(self:get_position()), gen)
     end
 end
 
@@ -605,10 +611,21 @@ end
 -- Builds a small clip window (2-3 clips per track) from sequence queries.
 -- Skips re-query when playhead is still inside the cached clip window.
 -- @param frame integer: current playhead frame
--- @return boolean: true if clips were re-queried (boundary crossing), false if cached
-function PlaybackEngine:_send_clips_to_tmb(frame)
+-- @param gen number|nil: content generation (nil = no staleness check)
+-- @return boolean: true if clips were re-queried (boundary crossing), false if cached/stale
+function PlaybackEngine:_send_clips_to_tmb(frame, gen)
     assert(self._tmb, "PlaybackEngine:_send_clips_to_tmb: no TMB")
     assert(self.sequence, "PlaybackEngine:_send_clips_to_tmb: no sequence")
+    assert(gen == nil or (type(gen) == "number" and gen > 0),
+        "PlaybackEngine:_send_clips_to_tmb: gen must be nil or positive integer")
+
+    -- Staleness check: if generation changed during SQL query, skip this feed.
+    -- A newer notify_content_changed() will handle the update.
+    -- gen=nil means caller doesn't want staleness protection (e.g., seek, NeedClips).
+    if gen and gen ~= self._content_generation then
+        log.detail("Skipping stale clip feed (gen %d vs %d)", gen, self._content_generation)
+        return false
+    end
 
     -- Still inside the clip window TMB already has? Skip re-query.
     local w = self._tmb_clip_window
@@ -635,6 +652,13 @@ function PlaybackEngine:_send_clips_to_tmb(frame)
     -- Lookahead: walk forward per-track to pre-load upcoming clips.
     -- Covers gaps, clip transitions, and rapid-cut sequences.
     self:_extend_video_lookahead(frame, track_clips)
+
+    -- Post-query staleness check: if generation changed during SQL queries, abort.
+    -- We haven't touched TMB yet, so it's safe to bail.
+    if gen and gen ~= self._content_generation then
+        log.detail("Aborting clip feed after query (gen %d vs %d)", gen, self._content_generation)
+        return false
+    end
 
     -- Feed each video track to TMB
     local indices = {}

@@ -19,6 +19,7 @@
 #ifdef __APPLE__
 
 #import <CoreVideo/CoreVideo.h>
+#import <CoreAudio/CoreAudio.h>
 #import <dispatch/dispatch.h>
 #import <mach/mach_time.h>
 #include "jve_log.h"
@@ -77,13 +78,14 @@ int64_t PlaybackClock::CurrentTimeUS(int64_t aop_playhead_us) const {
     int64_t anchor = m_media_anchor_us.load(std::memory_order_relaxed);
     int64_t epoch = m_aop_epoch_us.load(std::memory_order_relaxed);
     float speed = m_speed.load(std::memory_order_relaxed);
+    int64_t output_latency = m_output_latency_us.load(std::memory_order_relaxed);
 
     int64_t elapsed_us = aop_playhead_us - epoch;
 
     // Compensate for audio output latency (OS mixer + driver + DAC)
     // The playhead reports audio consumed by OS, but there's additional delay
     // before it reaches the speakers. Subtract this to sync video with heard audio.
-    int64_t compensated_elapsed_us = std::max<int64_t>(0, elapsed_us - OUTPUT_LATENCY_US);
+    int64_t compensated_elapsed_us = std::max<int64_t>(0, elapsed_us - output_latency);
 
     // Apply speed scaling
     double delta = static_cast<double>(compensated_elapsed_us) * speed;
@@ -97,6 +99,83 @@ int64_t PlaybackClock::CurrentTimeUS(int64_t aop_playhead_us) const {
     }
 
     return result;
+}
+
+void PlaybackClock::MeasureOutputLatency(uint32_t /*device_id*/, int32_t sample_rate) {
+    // Query default output device from CoreAudio. AOP uses Qt's QAudioSink which
+    // typically picks the default output device, so this measurement is accurate
+    // for the common case. Asserts on failure — silent A/V desync is unacceptable.
+    {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "MeasureOutputLatency: sample_rate must be positive, got %d", sample_rate);
+        JVE_ASSERT(sample_rate > 0, buf);
+    }
+
+    // Get default output device
+    AudioObjectPropertyAddress addr = {
+        kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    AudioDeviceID device = kAudioObjectUnknown;
+    UInt32 size = sizeof(AudioDeviceID);
+    OSStatus status = AudioObjectGetPropertyData(
+        kAudioObjectSystemObject, &addr, 0, nullptr, &size, &device);
+
+    {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "MeasureOutputLatency: failed to get default output device (err=%d, device=%u)",
+                 static_cast<int>(status), static_cast<unsigned>(device));
+        JVE_ASSERT(status == noErr && device != kAudioObjectUnknown, buf);
+    }
+
+    UInt32 latency_frames = 0;
+    UInt32 safety_frames = 0;
+
+    // Query device latency (frames between app buffer and hardware output)
+    addr = {
+        kAudioDevicePropertyLatency,
+        kAudioObjectPropertyScopeOutput,
+        kAudioObjectPropertyElementMain
+    };
+    size = sizeof(UInt32);
+    status = AudioObjectGetPropertyData(device, &addr, 0, nullptr, &size, &latency_frames);
+
+    {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "MeasureOutputLatency: kAudioDevicePropertyLatency failed (err=%d, device=%u)",
+                 static_cast<int>(status), static_cast<unsigned>(device));
+        JVE_ASSERT(status == noErr, buf);
+    }
+
+    // Query safety offset (additional buffer for glitch-free playback)
+    // Safety offset is optional on some devices — warn but continue if missing.
+    addr.mSelector = kAudioDevicePropertySafetyOffset;
+    size = sizeof(UInt32);
+    status = AudioObjectGetPropertyData(device, &addr, 0, nullptr, &size, &safety_frames);
+
+    if (status != noErr) {
+        JVE_LOG_WARN(Audio, "MeasureOutputLatency: kAudioDevicePropertySafetyOffset failed (err=%d), using latency only",
+                     static_cast<int>(status));
+        safety_frames = 0;
+    }
+
+    // Convert frames to microseconds
+    UInt32 total_frames = latency_frames + safety_frames;
+    int64_t latency_us = (static_cast<int64_t>(total_frames) * 1000000LL) / sample_rate;
+
+    // Sanity bounds: CoreAudio should report 1-500ms; outside = broken device query
+    {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "MeasureOutputLatency: measured %lldus out of sane range [1ms,500ms]",
+                 static_cast<long long>(latency_us));
+        JVE_ASSERT(latency_us >= 1000 && latency_us <= 500000, buf);
+    }
+
+    m_output_latency_us.store(latency_us, std::memory_order_relaxed);
+    JVE_LOG_EVENT(Audio, "MeasureOutputLatency: device=%u → %lldus (latency=%u + safety=%u frames @ %dHz)",
+                  static_cast<unsigned>(device), static_cast<long long>(latency_us),
+                  latency_frames, safety_frames, sample_rate);
 }
 
 int64_t PlaybackClock::FrameFromTimeUS(int64_t time_us, int32_t fps_num, int32_t fps_den) {
@@ -586,12 +665,16 @@ void PlaybackController::ActivateAudio(aop::AudioOutput* aop, sse::ScrubStretchE
     m_audio_channels = channels;
     m_has_audio.store(true, std::memory_order_relaxed);
 
+    // Measure hardware output latency for A/V sync
+    m_clock.MeasureOutputLatency(0, sample_rate);
+
     // Create audio pump if needed
     if (!m_audio_pump) {
         m_audio_pump = std::make_unique<AudioPump>();
     }
 
-    JVE_LOG_EVENT(Audio, "ActivateAudio %d Hz %d ch", sample_rate, channels);
+    JVE_LOG_EVENT(Audio, "ActivateAudio %d Hz %d ch latency=%lldus",
+                  sample_rate, channels, static_cast<long long>(m_clock.OutputLatencyUS()));
 }
 
 void PlaybackController::DeactivateAudio() {
