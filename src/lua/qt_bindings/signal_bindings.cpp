@@ -58,6 +58,12 @@ public:
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override {
+        // Claim all shortcut overrides so Qt never fires QAction shortcuts.
+        // Menu setShortcut() is display-only; all dispatch goes through Lua.
+        if (event->type() == QEvent::ShortcutOverride) {
+            event->accept();
+            return true;
+        }
         if (event->type() == QEvent::KeyPress && lua_state) {
             QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
 

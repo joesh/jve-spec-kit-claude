@@ -383,6 +383,19 @@ function M.focus_timeline_view()
     return focus_timeline_view()
 end
 
+--- Cancel timecode entry: restore original display text and exit field.
+-- Called by Escape key handler. Restores text BEFORE focus change so the
+-- editingFinished handler sees valid (unchanged) timecode — effectively a no-op.
+function M.cancel_timecode_entry()
+    if not timecode_entry.line_edit then
+        return false
+    end
+    timecode_entry.has_focus = false
+    timecode_entry.last_text = nil  -- invalidate cache so SET_TEXT actually fires
+    refresh_timecode_display()
+    return focus_timeline_view()
+end
+
 local function get_sequence_display_name(sequence_id)
     if not sequence_id or sequence_id == "" then
         return "Untitled Sequence"

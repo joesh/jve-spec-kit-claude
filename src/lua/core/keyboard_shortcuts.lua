@@ -138,8 +138,16 @@ local function handle_key_impl(event)
         return true
     end
 
-    -- Text input bypass: let text fields consume non-modified keys
-    if focus_is_text_input and not modifier_meta then
+    -- Escape: cancel timecode entry and exit text field
+    if key == KEY.Escape and focus_is_text_input and panel_active_timeline then
+        log.detail("  → Escape cancel timecode entry")
+        timeline_panel.cancel_timecode_entry()
+        return true
+    end
+
+    -- Text input bypass: let text fields consume ALL keys
+    -- Tab and Escape are handled above; everything else (including Cmd+A/C/V/X/Z) goes to the widget
+    if focus_is_text_input then
         log.detail("  → text input bypass (returning false)")
         return false
     end

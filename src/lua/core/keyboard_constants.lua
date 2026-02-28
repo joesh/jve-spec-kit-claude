@@ -51,6 +51,7 @@ M.KEY = {
     F12 = 16777275,  -- 0x0100003B
     Return = 16777220,
     Enter = 16777221,
+    Escape = 16777216,
     Tab = 16777217,
     BracketLeft = 91,   -- '[' (Qt::Key_BracketLeft)
     BracketRight = 93,  -- ']' (Qt::Key_BracketRight)
