@@ -3044,6 +3044,205 @@ private slots:
                  qPrintable(QString("GetVideoFrame took %1ms — reader not pre-warmed?").arg(ms)));
         qDebug() << "Reader pre-warm: GetVideoFrame on new clip took" << ms << "ms";
     }
+    // ── NSF: Speed ratio in REFILL worker path ──
+
+    void test_video_refill_speed_ratio() {
+        // REFILL worker must compute source frames using speed_ratio, not 1:1.
+        // speed_ratio=0.5 means half speed: timeline frame 20 → source 10.
+        // If REFILL ignores speed_ratio, source frames would be wrong and
+        // frames would decode at the wrong position.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        // Slow-motion clip: 60 timeline frames, source_in=0, speed_ratio=0.5
+        // Source range = 60 * 0.5 = 30 source frames (within 72-frame test file)
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 60, 0, 24, 1, 0.5f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Cold-start priming: trigger REFILL from frame 0
+        emp::SetDecodeMode(emp::DecodeMode::Park);
+        tmb->SetPlayhead(0, 1, 1.0f);
+        QThread::msleep(600);  // let REFILL decode
+
+        // Verify in Park mode (sync fallback if REFILL missed)
+        tmb->SetPlayhead(0, 0, 1.0f);
+        tmb->ResetVideoCacheMissCount();
+
+        // Check several frames: REFILL should have cached them with correct
+        // source mapping. If speed_ratio was ignored, source_frame would be
+        // wrong (== timeline_frame instead of timeline_frame * 0.5).
+        auto r0 = tmb->GetVideoFrame(V1, 0);
+        QVERIFY(r0.frame != nullptr);
+        QCOMPARE(r0.source_frame, static_cast<int64_t>(0));  // 0 + floor(0 * 0.5) = 0
+
+        auto r20 = tmb->GetVideoFrame(V1, 20);
+        QVERIFY(r20.frame != nullptr);
+        QCOMPARE(r20.source_frame, static_cast<int64_t>(10));  // 0 + floor(20 * 0.5) = 10
+
+        auto r40 = tmb->GetVideoFrame(V1, 40);
+        QVERIFY(r40.frame != nullptr);
+        QCOMPARE(r40.source_frame, static_cast<int64_t>(20));  // 0 + floor(40 * 0.5) = 20
+
+        // At least some of these should be REFILL cache hits (0 TMB misses)
+        int64_t misses = tmb->GetVideoCacheMissCount();
+        QVERIFY2(misses < 3,
+                 qPrintable(QString("Expected REFILL to cache speed_ratio frames, "
+                                    "got %1 misses out of 3 reads").arg(misses)));
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+    }
+
+    // ── NSF: EOF hold-last-frame in REFILL ──
+
+    void test_video_refill_eof_holds_last_frame() {
+        // When a clip's declared duration exceeds the file's actual frame count,
+        // REFILL should hold the last successfully decoded frame for remaining
+        // timeline frames (no black gap before next clip).
+        //
+        // Test file has 72 frames. Clip declares source_in=60, duration=30:
+        // source frames 60..89 requested, but only 60..71 exist (12 decodable).
+        // Frames at timeline 12..29 should hold the frame decoded at source 71.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        // Clip with duration exceeding decodable range
+        // source_in=60, duration=30, speed_ratio=1.0
+        // Decodable: source 60..71 (12 frames), then EOF for source 72..89
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 30, 60, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Trigger REFILL
+        emp::SetDecodeMode(emp::DecodeMode::Park);
+        tmb->SetPlayhead(0, 1, 1.0f);
+        QThread::msleep(600);
+
+        // Check in Park mode
+        tmb->SetPlayhead(0, 0, 1.0f);
+
+        // Frame 0 (source 60) should decode fine
+        auto r0 = tmb->GetVideoFrame(V1, 0);
+        QVERIFY2(r0.frame != nullptr, "Frame 0 (source 60) should decode");
+
+        // Frame 11 (source 71, last real frame) should decode
+        auto r11 = tmb->GetVideoFrame(V1, 11);
+        QVERIFY2(r11.frame != nullptr, "Frame 11 (source 71, last real) should decode");
+
+        // Frame 15 (source 75, beyond EOF) should have held frame
+        auto r15 = tmb->GetVideoFrame(V1, 15);
+        QVERIFY2(r15.frame != nullptr,
+                 "Frame 15 (beyond EOF) should have held last frame, not nullptr/gap");
+
+        // Frame 25 (source 85, well beyond EOF) should also have held frame
+        auto r25 = tmb->GetVideoFrame(V1, 25);
+        QVERIFY2(r25.frame != nullptr,
+                 "Frame 25 (well beyond EOF) should have held last frame");
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+    }
+
+    // ── NSF: Generation counter aborts stale REFILL ──
+
+    void test_refill_generation_aborts_stale_job() {
+        // SetTrackClips increments refill_generation. In-flight REFILL jobs
+        // check generation on each frame and abort on mismatch. This prevents
+        // stale REFILLs from caching frames for a clip list that no longer exists.
+        //
+        // Test: start REFILL, immediately replace clips, verify new clips are cached.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        // Initial clip layout: clipA at [0, 100)
+        std::vector<ClipInfo> clips_v1 = {
+            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips_v1);
+
+        // Start REFILL by simulating play start
+        tmb->SetPlayhead(0, 1, 1.0f);
+        QThread::msleep(50);  // let REFILL start processing
+
+        // Immediately replace with different clip layout: clipB at [0, 50)
+        // This increments generation, stale REFILL should abort
+        std::vector<ClipInfo> clips_v2 = {
+            {"clipB", path, 0, 50, 10, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips_v2);
+
+        // Wait for new REFILL to complete
+        QThread::msleep(600);
+
+        // Verify new clip is properly cached. Park mode for sync read.
+        tmb->SetPlayhead(0, 0, 1.0f);
+        auto r = tmb->GetVideoFrame(V1, 10);
+        QVERIFY(r.frame != nullptr);
+        QCOMPARE(r.clip_id, std::string("clipB"));
+        // source = 10 + (10 - 0) = 20 (clipB has source_in=10)
+        QCOMPARE(r.source_frame, static_cast<int64_t>(20));
+    }
+
+    // ── NSF: Reader pre-warming (READER_WARM job) ──
+
+    void test_reader_warm_no_crash_and_functional() {
+        // READER_WARM is submitted by SetTrackClips when new clips appear
+        // during active playback. The warm reader should be in the pool when
+        // REFILL reaches that clip, avoiding 400ms Reader::Create latency.
+        //
+        // Verify: after warming, GetVideoFrame for the warmed clip succeeds
+        // and doesn't trigger a cold reader open.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        // Start with clipA playing
+        std::vector<ClipInfo> clips_a = {
+            {"clipA", path, 0, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips_a);
+        tmb->SetPlayhead(10, 1, 1.0f);
+
+        // Decode a frame to warm clipA's reader
+        emp::SetDecodeMode(emp::DecodeMode::Park);
+        tmb->SetPlayhead(10, 0, 1.0f);
+        auto rA = tmb->GetVideoFrame(V1, 10);
+        QVERIFY(rA.frame != nullptr);
+
+        // Now add clipB during "playback" — should trigger READER_WARM
+        tmb->SetPlayhead(40, 1, 1.0f);  // resume play direction
+        std::vector<ClipInfo> clips_ab = {
+            {"clipA", path, 0, 50, 0, 24, 1, 1.0f},
+            {"clipB", path, 50, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips_ab);
+
+        // Wait for READER_WARM + REFILL to complete
+        QThread::msleep(600);
+
+        // Park and verify clipB frame — should be fast (reader pre-warmed)
+        tmb->SetPlayhead(50, 0, 1.0f);
+        auto start = std::chrono::steady_clock::now();
+        auto rB = tmb->GetVideoFrame(V1, 50);
+        auto elapsed = std::chrono::steady_clock::now() - start;
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+
+        QVERIFY2(rB.frame != nullptr, "clipB frame should decode after pre-warming");
+        QCOMPARE(rB.clip_id, std::string("clipB"));
+        // Pre-warmed reader: sync decode should be fast (<200ms)
+        QVERIFY2(ms < 200,
+                 qPrintable(QString("clipB decode took %1ms — reader not pre-warmed?").arg(ms)));
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+    }
 };
 
 QTEST_MAIN(TestTimelineMediaBuffer)
