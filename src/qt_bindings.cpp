@@ -185,6 +185,8 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_tree_item_double_click_handler); lua_setfield(L, -2, "SET_TREE_DOUBLE_CLICK_HANDLER");
     lua_pushcfunction(L, lua_set_tree_current_item); lua_setfield(L, -2, "SET_TREE_CURRENT_ITEM");
     lua_pushcfunction(L, lua_get_tree_item_at); lua_setfield(L, -2, "GET_TREE_ITEM_AT");
+    lua_pushcfunction(L, lua_set_tree_header_click_handler); lua_setfield(L, -2, "SET_TREE_HEADER_CLICK_HANDLER");
+    lua_pushcfunction(L, lua_set_tree_expand_collapse_handler); lua_setfield(L, -2, "SET_TREE_EXPAND_COLLAPSE_HANDLER");
     lua_pushcfunction(L, lua_process_events); lua_setfield(L, -2, "PROCESS_EVENTS");
     lua_setfield(L, -2, "CONTROL");
     
@@ -205,6 +207,8 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_tree_item_double_click_handler); lua_setglobal(L, "qt_set_tree_item_double_click_handler");
     lua_pushcfunction(L, lua_set_tree_expands_on_double_click); lua_setglobal(L, "qt_set_tree_expands_on_expands_on_double_click");
     lua_pushcfunction(L, lua_get_tree_item_at); lua_setglobal(L, "qt_get_tree_item_at");
+    lua_pushcfunction(L, lua_set_tree_header_click_handler); lua_setglobal(L, "qt_set_tree_header_click_handler");
+    lua_pushcfunction(L, lua_set_tree_expand_collapse_handler); lua_setglobal(L, "qt_set_tree_expand_collapse_handler");
     lua_pushcfunction(L, lua_hide_splitter_handle); lua_setglobal(L, "qt_hide_splitter_handle");
     lua_pushcfunction(L, lua_set_splitter_moved_handler); lua_setglobal(L, "qt_set_splitter_moved_handler");
     lua_pushcfunction(L, lua_get_splitter_handle); lua_setglobal(L, "qt_get_splitter_handle");

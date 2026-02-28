@@ -34,8 +34,39 @@ local profile_scope = require("core.profile_scope")
 local log = require("core.logger").for_area("ui")
 local uuid = require("uuid")
 local project_gen = require("core.project_generation")
+local path_utils = require("core.path_utils")
+local browser_sort = require("ui.browser_sort")
 
 local handler_seq = 0
+
+-- Icon file paths resolved from repo root
+local icon_dir = path_utils.resolve_repo_root() .. "/resources/icons"
+local ICONS = {
+    bin          = icon_dir .. "/bin.svg",
+    timeline     = icon_dir .. "/timeline.svg",
+    clip         = icon_dir .. "/clip.svg",
+    clip_offline = icon_dir .. "/clip_offline.svg",
+}
+
+-- Column indices (0-based)
+local COL_NAME       = 0
+local COL_DURATION   = 1
+local COL_RESOLUTION = 2
+local COL_FPS        = 3
+local COL_CODEC      = 4
+local COL_DATE       = 5
+
+-- Base header labels (no sort indicators)
+local BASE_HEADERS = {"Clip Name", "Duration", "Resolution", "FPS", "Codec", "Date Modified"}
+
+-- Sort state (module-level, loaded from project settings on first populate)
+local sort_state = {
+    primary_col = COL_NAME,
+    primary_order = "asc",
+    secondary_col = nil,
+    secondary_order = nil,
+    loaded = false,
+}
 
 local function selection_context()
     if M._project_gen then
@@ -559,6 +590,17 @@ local function populate_tree()
     M._project_gen = project_gen.current()
 
     local settings = db.get_project_settings(M.project_id)
+
+    -- Load sort + expanded state from project settings (first populate only)
+    if not sort_state.loaded then
+        sort_state.primary_col = settings.browser_sort_primary_column or COL_NAME
+        sort_state.primary_order = settings.browser_sort_primary_order or "asc"
+        sort_state.secondary_col = settings.browser_sort_secondary_column
+        sort_state.secondary_order = settings.browser_sort_secondary_order
+        sort_state.loaded = true
+    end
+    local saved_expanded_bins = settings.browser_expanded_bins
+
     M.media_bin_map = tag_service.list_master_clip_assignments(M.project_id)
     local seq_bin_map = tag_service.list_sequence_assignments(M.project_id)
 
@@ -644,9 +686,7 @@ local function populate_tree()
             name = bin.name,
             parent_id = bin.parent_id
         })
-        if qt_constants.CONTROL.SET_TREE_ITEM_ICON then
-            qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, "bin")
-        end
+        qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, ICONS.bin)
         bin_tree_map[bin.id] = tree_id
         if M.bin_map[bin.id] then
             M.bin_map[bin.id].tree_id = tree_id
@@ -683,18 +723,44 @@ local function populate_tree()
         }
         store_tree_item(M.tree, tree_id, sequence_info)
         M.sequence_map[sequence.id] = sequence_info
-        if qt_constants.CONTROL.SET_TREE_ITEM_ICON then
-            qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, "timeline")
-        end
+        qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, ICONS.timeline)
     end
 
     -- Collect timeline sequences for bin-aware placement
     local timeline_sequences = {}
     for _, sequence in ipairs(sequences) do
         if not sequence.kind or sequence.kind == "timeline" then
+            -- Enrich with sort-friendly fields
+            sequence.type = sequence.type or "timeline"
+            sequence.fps_float = get_fps_float(sequence.frame_rate)
+            sequence.codec = "Timeline"
             table.insert(timeline_sequences, sequence)
         end
     end
+
+    -- Enrich master clips with sort-friendly fields
+    for _, clip in ipairs(master_clips) do
+        local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
+        clip.type = clip.type or "master_clip"
+        clip.name = clip.name or media.name or clip.clip_id
+        clip.fps_float = get_fps_float(clip.frame_rate or (media and media.frame_rate))
+        clip.codec = clip.codec or media.codec or ""
+        clip.width = clip.width or media.width
+        clip.height = clip.height or media.height
+        clip.duration = clip.duration or media.duration
+        clip.modified_at = clip.modified_at or clip.created_at or media.modified_at or media.created_at
+    end
+
+    -- Sort sequences and master clips by current sort state
+    browser_sort.sort_items(timeline_sequences,
+        sort_state.primary_col, sort_state.primary_order,
+        sort_state.secondary_col, sort_state.secondary_order)
+    browser_sort.sort_items(master_clips,
+        sort_state.primary_col, sort_state.primary_order,
+        sort_state.secondary_col, sort_state.secondary_order)
+
+    -- Sort bins by name
+    table.sort(bins, function(a, b) return (a.name or ""):lower() < (b.name or ""):lower() end)
 
     -- Root sequences (those NOT assigned to a bin)
     for _, sequence in ipairs(timeline_sequences) do
@@ -791,10 +857,8 @@ local function populate_tree()
             metadata = media.metadata,
             offline = clip.offline
         })
-        if qt_constants.CONTROL.SET_TREE_ITEM_ICON then
-            local icon = clip.offline and "clip_offline" or "clip"
-            qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, icon)
-        end
+        local icon = clip.offline and ICONS.clip_offline or ICONS.clip
+        qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, icon)
         clip.tree_id = tree_id
     end
 
@@ -887,7 +951,49 @@ local function populate_tree()
 
     restore_previous_selection_from_cache(previous_selection)
 
+    -- Restore expanded bins from saved state
+    if saved_expanded_bins and type(saved_expanded_bins) == "table" then
+        for _, bin_id in ipairs(saved_expanded_bins) do
+            local tree_id = bin_tree_map[bin_id]
+            if tree_id then
+                qt_constants.CONTROL.SET_TREE_ITEM_EXPANDED(M.tree, tree_id, true)
+            end
+        end
+    end
+
+    -- Update header labels with sort indicators
+    local labels = browser_sort.build_header_labels(BASE_HEADERS, sort_state)
+    qt_constants.CONTROL.SET_TREE_HEADERS(M.tree, labels)
+
     M.bin_tree_map = bin_tree_map
+end
+
+local function save_sort_state()
+    if not M.project_id then return end
+    db.set_project_setting(M.project_id, "browser_sort_primary_column", sort_state.primary_col)
+    db.set_project_setting(M.project_id, "browser_sort_primary_order", sort_state.primary_order)
+    db.set_project_setting(M.project_id, "browser_sort_secondary_column", sort_state.secondary_col)
+    db.set_project_setting(M.project_id, "browser_sort_secondary_order", sort_state.secondary_order)
+end
+
+local function save_expanded_bins()
+    if not M.project_id or not M.tree or not M.bin_tree_map then return end
+    local expanded = {}
+    for bin_id, tree_id in pairs(M.bin_tree_map) do
+        if qt_constants.CONTROL.IS_TREE_ITEM_EXPANDED(M.tree, tree_id) then
+            table.insert(expanded, bin_id)
+        end
+    end
+    db.set_project_setting(M.project_id, "browser_expanded_bins", expanded)
+end
+
+local function apply_column_widths()
+    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(M.tree, 0, 180)
+    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(M.tree, 1, 80)
+    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(M.tree, 2, 80)
+    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(M.tree, 3, 50)
+    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(M.tree, 4, 60)
+    qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(M.tree, 5, 100)
 end
 
 -- Create project browser widget
@@ -941,9 +1047,8 @@ function M.create()
     end
     -- Create tree widget for media library (Resolve style)
     local tree = qt_constants.WIDGET.CREATE_TREE()
-    local disclosure_closed_icon = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path fill='%238c8c8c' d='M3 2l4 3-4 3z'/></svg>"
-    local disclosure_open_icon = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path fill='%238c8c8c' d='M2 3l3 4 3-4z'/></svg>"
 
+    -- CSS: item colors, header — no branch rules (native Qt disclosure triangles)
     local tree_style = string.format([[
         QTreeWidget {
             background: #262626;
@@ -964,56 +1069,6 @@ function M.create()
         QTreeWidget::item:hover {
             background: #333333;
         }
-        QTreeView::branch {
-            background: #262626;
-            border: none;
-            width: 12px;
-        }
-        QTreeView::branch:has-children {
-            background: #262626;
-            border: none;
-        }
-        QTreeView::branch:has-children:!has-siblings:closed,
-        QTreeView::branch:closed:has-children {
-            image: url("%s");
-            width: 12px;
-            height: 12px;
-        }
-        QTreeView::branch:has-children:!has-siblings:open,
-        QTreeView::branch:open:has-children {
-            image: url("%s");
-            width: 12px;
-            height: 12px;
-        }
-        QTreeView::branch:open:has-children:selected,
-        QTreeView::branch:closed:has-children:selected {
-            image: url("%s");
-        }
-        QTreeWidget::branch {
-            background: #262626;
-            border: none;
-            width: 12px;
-        }
-        QTreeWidget::branch:has-children {
-            background: #262626;
-            border: none;
-        }
-        QTreeWidget::branch:has-children:!has-siblings:closed,
-        QTreeWidget::branch:closed:has-children {
-            image: url("%s");
-            width: 12px;
-            height: 12px;
-        }
-        QTreeWidget::branch:has-children:!has-siblings:open,
-        QTreeWidget::branch:open:has-children {
-            image: url("%s");
-            width: 12px;
-            height: 12px;
-        }
-        QTreeWidget::branch:open:has-children:selected,
-        QTreeWidget::branch:closed:has-children:selected {
-            image: url("%s");
-        }
         QHeaderView::section {
             background: #2b2b2b;
             color: #888;
@@ -1024,13 +1079,11 @@ function M.create()
             font-weight: normal;
         }
     ]], ui_constants.FONTS.DEFAULT_FONT_SIZE,
-        disclosure_closed_icon, disclosure_open_icon, disclosure_open_icon,
-        disclosure_closed_icon, disclosure_open_icon, disclosure_open_icon,
         ui_constants.FONTS.DEFAULT_FONT_SIZE)
     qt_constants.PROPERTIES.SET_STYLE(tree, tree_style)
 
     -- Set tree columns (Professional NLE style: Name, Duration, Resolution, FPS, Codec, Date Modified)
-    qt_constants.CONTROL.SET_TREE_HEADERS(tree, {"Clip Name", "Duration", "Resolution", "FPS", "Codec", "Date Modified"})
+    qt_constants.CONTROL.SET_TREE_HEADERS(tree, BASE_HEADERS)
     qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(tree, 0, 180)  -- Clip Name
     qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(tree, 1, 80)   -- Duration
     qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(tree, 2, 80)   -- Resolution
@@ -1052,6 +1105,21 @@ function M.create()
     M.project_id = db.get_current_project_id()
     ensure_command_listener()
     populate_tree()
+
+    -- Header click → sort
+    local header_click_handler = register_handler(function(col, cmd_held)
+        browser_sort.handle_header_click(sort_state, col, cmd_held)
+        save_sort_state()
+        populate_tree()
+        apply_column_widths()
+    end)
+    qt_constants.CONTROL.SET_TREE_HEADER_CLICK_HANDLER(tree, header_click_handler)
+
+    -- Expand/collapse → persist
+    local expand_collapse_handler = register_handler(function(_event)
+        save_expanded_bins()
+    end)
+    qt_constants.CONTROL.SET_TREE_EXPAND_COLLAPSE_HANDLER(tree, expand_collapse_handler)
 
     local selection_handler = register_handler(function(event)
         local collected = {}
@@ -2343,6 +2411,8 @@ function M.on_project_change(project_id)
     M.selected_item = nil
     M.selected_items = {}
     M.pending_rename = nil
+    -- Reset sort state so next populate_tree loads from new project settings
+    sort_state.loaded = false
     -- Set new project (refresh happens separately via open_project)
     M.project_id = project_id
 end

@@ -97,6 +97,8 @@ if qt_constants then
     qt_constants.CONTROL.SET_TREE_KEY_HANDLER = qt_constants.CONTROL.SET_TREE_KEY_HANDLER or require_global_function("qt_set_tree_key_handler")
     qt_constants.CONTROL.IS_TREE_ITEM_EXPANDED = qt_constants.CONTROL.IS_TREE_ITEM_EXPANDED or require_global_function("qt_is_tree_item_expanded")
     qt_constants.CONTROL.GET_TREE_ITEM_AT = qt_constants.CONTROL.GET_TREE_ITEM_AT or require_global_function("qt_get_tree_item_at")
+    qt_constants.CONTROL.SET_TREE_HEADER_CLICK_HANDLER = qt_constants.CONTROL.SET_TREE_HEADER_CLICK_HANDLER or require_global_function("qt_set_tree_header_click_handler")
+    qt_constants.CONTROL.SET_TREE_EXPAND_COLLAPSE_HANDLER = qt_constants.CONTROL.SET_TREE_EXPAND_COLLAPSE_HANDLER or require_global_function("qt_set_tree_expand_collapse_handler")
 
     -- Note: CONTROL section is now provided by the real qt_constants from C++
     -- SET_SCROLL_AREA_WIDGET is implemented as lua_set_scroll_area_widget

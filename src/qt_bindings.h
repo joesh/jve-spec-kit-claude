@@ -120,6 +120,8 @@ int lua_get_tree_item_at(lua_State* L);
 int lua_set_tree_drag_drop_mode(lua_State* L);
 int lua_set_tree_drop_handler(lua_State* L);
 int lua_set_tree_key_handler(lua_State* L);
+int lua_set_tree_header_click_handler(lua_State* L);
+int lua_set_tree_expand_collapse_handler(lua_State* L);
 
 // Signal handling functions
 int lua_set_button_click_handler(lua_State* L);

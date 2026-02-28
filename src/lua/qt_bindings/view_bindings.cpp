@@ -1,5 +1,6 @@
 #include "binding_macros.h"
 #include "../../jve_log.h"
+#include "assert_handler.h"
 #include <QTreeWidget>
 #include <QHeaderView>
 #include <QDropEvent>
@@ -7,6 +8,8 @@
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QMimeData>
+#include <QIcon>
+#include <QApplication>
 
 // Global map to associate QTreeWidgetItems with integer IDs
 static QHash<qulonglong, QTreeWidgetItem*> g_treeItemMap;
@@ -103,10 +106,9 @@ protected:
                 lua_pushstring(lua_state, pos);
                 lua_setfield(lua_state, -2, "position");
 
+                JveLuaStateGuard guard(lua_state);
                 if (lua_pcall(lua_state, 1, 1, 0) != LUA_OK) {
-                    JVE_LOG_WARN(Ui, "Error calling Lua drop handler: %s", lua_tostring(lua_state, -1));
-                    lua_pop(lua_state, 1);
-                    event->ignore();
+                    lua_error(lua_state);
                 } else {
                     bool handled = lua_toboolean(lua_state, -1);
                     lua_pop(lua_state, 1);
@@ -133,16 +135,18 @@ protected:
                 lua_pushinteger(lua_state, event->key());
                 lua_pushstring(lua_state, event->text().toUtf8().constData());
                 
-                if (lua_pcall(lua_state, 2, 1, 0) == LUA_OK) {
-                    bool handled = lua_toboolean(lua_state, -1);
-                    lua_pop(lua_state, 1);
-                    if (handled) {
-                        event->accept();
-                        return;
+                {
+                    JveLuaStateGuard guard(lua_state);
+                    if (lua_pcall(lua_state, 2, 1, 0) == LUA_OK) {
+                        bool handled = lua_toboolean(lua_state, -1);
+                        lua_pop(lua_state, 1);
+                        if (handled) {
+                            event->accept();
+                            return;
+                        }
+                    } else {
+                        lua_error(lua_state);
                     }
-                } else {
-                    JVE_LOG_WARN(Ui, "Error calling Lua tree key handler: %s", lua_tostring(lua_state, -1));
-                    lua_pop(lua_state, 1);
                 }
             } else {
                 lua_pop(lua_state, 1);
@@ -553,10 +557,29 @@ int lua_set_tree_key_handler(lua_State* L) {
     return 1;
 }
 
+static QHash<QString, QIcon> s_iconCache;
+
 int lua_set_tree_item_icon(lua_State* L) {
-    (void)L;
-    // Placeholder
-    return 0;
+    QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
+    lua_Integer item_id = luaL_checkinteger(L, 2);
+    const char* icon_path = luaL_checkstring(L, 3);
+
+    QTreeWidgetItem* item = getTreeItemById(tree, item_id);
+    if (!item) {
+        return luaL_error(L, "set_tree_item_icon: invalid item_id %d", (int)item_id);
+    }
+
+    QString path = QString::fromUtf8(icon_path);
+    if (!s_iconCache.contains(path)) {
+        QIcon icon(path);
+        if (icon.isNull()) {
+            return luaL_error(L, "set_tree_item_icon: failed to load '%s'", icon_path);
+        }
+        s_iconCache.insert(path, icon);
+    }
+    item->setIcon(0, s_iconCache.value(path));
+    lua_pushboolean(L, 1);
+    return 1;
 }
 
 int lua_set_tree_item_double_click_handler(lua_State* L) {
@@ -620,6 +643,76 @@ int lua_set_tree_expands_on_double_click(lua_State* L) {
     bool enable = lua_toboolean(L, 2);
     if (tree) {
         tree->setExpandsOnDoubleClick(enable);
+        lua_pushboolean(L, 1);
+    } else {
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_tree_header_click_handler(lua_State* L) {
+    QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
+    const char* handler_name = luaL_checkstring(L, 2);
+
+    if (tree && handler_name) {
+        std::string handler(handler_name);
+        QHeaderView* header = tree->header();
+        header->setSectionsClickable(true);
+        QObject::connect(header, &QHeaderView::sectionClicked, [L, handler](int logicalIndex) {
+            lua_getglobal(L, handler.c_str());
+            if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return; }
+
+            lua_pushinteger(L, logicalIndex);
+            bool cmd_held = (QApplication::keyboardModifiers() & Qt::ControlModifier) != 0;
+            lua_pushboolean(L, cmd_held);
+            if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+                JVE_LOG_WARN(Ui, "Error in header click handler: %s", lua_tostring(L, -1));
+                lua_pop(L, 1);
+            }
+        });
+        lua_pushboolean(L, 1);
+    } else {
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_tree_expand_collapse_handler(lua_State* L) {
+    QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
+    const char* handler_name = luaL_checkstring(L, 2);
+
+    if (tree && handler_name) {
+        std::string handler(handler_name);
+        QObject::connect(tree, &QTreeWidget::itemExpanded, [L, handler](QTreeWidgetItem* item) {
+            lua_getglobal(L, handler.c_str());
+            if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return; }
+
+            lua_newtable(L);
+            lua_pushinteger(L, makeTreeItemId(item));
+            lua_setfield(L, -2, "item_id");
+            lua_pushboolean(L, 1);
+            lua_setfield(L, -2, "expanded");
+
+            if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+                JVE_LOG_WARN(Ui, "Error in expand handler: %s", lua_tostring(L, -1));
+                lua_pop(L, 1);
+            }
+        });
+        QObject::connect(tree, &QTreeWidget::itemCollapsed, [L, handler](QTreeWidgetItem* item) {
+            lua_getglobal(L, handler.c_str());
+            if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return; }
+
+            lua_newtable(L);
+            lua_pushinteger(L, makeTreeItemId(item));
+            lua_setfield(L, -2, "item_id");
+            lua_pushboolean(L, 0);
+            lua_setfield(L, -2, "expanded");
+
+            if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+                JVE_LOG_WARN(Ui, "Error in collapse handler: %s", lua_tostring(L, -1));
+                lua_pop(L, 1);
+            }
+        });
         lua_pushboolean(L, 1);
     } else {
         lua_pushboolean(L, 0);
