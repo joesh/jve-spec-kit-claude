@@ -36,6 +36,9 @@ function M.get_video_frame(tmb, video_track_indices, playhead_frame)
     for _, track_idx in ipairs(video_track_indices) do
         local frame_handle, metadata = EMP.TMB_GET_VIDEO_FRAME(
             tmb, track_idx, playhead_frame)
+        assert(type(metadata) == "table", string.format(
+            "renderer.get_video_frame: TMB_GET_VIDEO_FRAME returned nil metadata "
+            .. "for track=%d frame=%d", track_idx, playhead_frame))
 
         if metadata.offline then
             -- TMB reports offline: compose offline frame

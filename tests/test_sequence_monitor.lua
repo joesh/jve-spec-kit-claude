@@ -173,6 +173,7 @@ package.loaded["core.renderer"] = {
                 rotation = 0,
                 par_num = 1,
                 par_den = 1,
+                offline = false,
             }
         end
         return nil, nil

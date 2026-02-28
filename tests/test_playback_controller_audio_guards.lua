@@ -120,6 +120,7 @@ package.loaded["core.renderer"] = {
                 clip_id = "clip1", media_path = "/test.mov",
                 source_frame = frame, rotation = 0,
                 par_num = 1, par_den = 1,
+                offline = false,
             }
         end
         return nil, nil

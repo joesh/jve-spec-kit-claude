@@ -428,15 +428,20 @@ end
 --- Apply rotation and PAR from metadata to the view.
 -- Offline frames are upright with square pixels; online use media metadata.
 function PlaybackEngine:_apply_rotation_par(metadata)
-    local is_offline = metadata.offline
-    local rotation = metadata.rotation or 0
-    local par_num = metadata.par_num or 1
-    local par_den = metadata.par_den or 1
+    assert(type(metadata.offline) == "boolean",
+        "PlaybackEngine:_apply_rotation_par: metadata.offline must be boolean")
+    assert(type(metadata.rotation) == "number",
+        "PlaybackEngine:_apply_rotation_par: metadata.rotation required")
+    assert(type(metadata.par_num) == "number" and metadata.par_num >= 1,
+        "PlaybackEngine:_apply_rotation_par: metadata.par_num must be >= 1")
+    assert(type(metadata.par_den) == "number" and metadata.par_den >= 1,
+        "PlaybackEngine:_apply_rotation_par: metadata.par_den must be >= 1")
 
-    self._on_set_rotation(is_offline and 0 or rotation)
+    local is_offline = metadata.offline
+    self._on_set_rotation(is_offline and 0 or metadata.rotation)
     self._on_set_par(
-        is_offline and 1 or par_num,
-        is_offline and 1 or par_den)
+        is_offline and 1 or metadata.par_num,
+        is_offline and 1 or metadata.par_den)
 end
 
 --- Callback from C++ deliverFrame: fires during playback when the displayed

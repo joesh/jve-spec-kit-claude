@@ -665,9 +665,9 @@ int lua_set_tree_header_click_handler(lua_State* L) {
             lua_pushinteger(L, logicalIndex);
             bool cmd_held = (QApplication::keyboardModifiers() & Qt::ControlModifier) != 0;
             lua_pushboolean(L, cmd_held);
+            JveLuaStateGuard guard(L);
             if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
-                JVE_LOG_WARN(Ui, "Error in header click handler: %s", lua_tostring(L, -1));
-                lua_pop(L, 1);
+                lua_error(L);
             }
         });
         lua_pushboolean(L, 1);
@@ -693,9 +693,9 @@ int lua_set_tree_expand_collapse_handler(lua_State* L) {
             lua_pushboolean(L, 1);
             lua_setfield(L, -2, "expanded");
 
+            JveLuaStateGuard guard(L);
             if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                JVE_LOG_WARN(Ui, "Error in expand handler: %s", lua_tostring(L, -1));
-                lua_pop(L, 1);
+                lua_error(L);
             }
         });
         QObject::connect(tree, &QTreeWidget::itemCollapsed, [L, handler](QTreeWidgetItem* item) {
@@ -708,9 +708,9 @@ int lua_set_tree_expand_collapse_handler(lua_State* L) {
             lua_pushboolean(L, 0);
             lua_setfield(L, -2, "expanded");
 
+            JveLuaStateGuard guard(L);
             if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                JVE_LOG_WARN(Ui, "Error in collapse handler: %s", lua_tostring(L, -1));
-                lua_pop(L, 1);
+                lua_error(L);
             }
         });
         lua_pushboolean(L, 1);
