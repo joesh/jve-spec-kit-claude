@@ -20,6 +20,7 @@
 #include <condition_variable>
 #include <atomic>
 #include <functional>
+#include <chrono>
 
 namespace emp {
 
@@ -301,6 +302,9 @@ private:
 
         // Generation counter — REFILL aborts if track's generation has advanced
         int64_t generation = 0;
+
+        // WARM timing: set by submit_pre_buffer, checked by worker_loop
+        std::chrono::steady_clock::time_point submitted_at{};
     };
 
     void start_workers(int count);
@@ -335,6 +339,11 @@ private:
     static constexpr TimeUS AUDIO_HIGH_WATER = 2000000;  // 2s
     static constexpr TimeUS AUDIO_LOW_WATER = 500000;    // 0.5s
     static constexpr TimeUS AUDIO_REFILL_SIZE = 200000;  // 200ms
+
+    // WARM diagnostics: queue wait >200ms = workers starved by REFILL (software)
+    //                   acquire >1000ms = drive I/O or codec init slow (environment)
+    static constexpr int WARM_QUEUE_WARN_MS = 200;
+    static constexpr int WARM_ACQUIRE_WARN_MS = 1000;
 
     // (PRE_BUFFER_THRESHOLD removed — watermark VIDEO_HIGH/LOW_WATER replaces it)
 

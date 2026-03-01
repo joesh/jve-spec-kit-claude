@@ -1617,6 +1617,7 @@ void TimelineMediaBuffer::submit_pre_buffer(const PreBufferJob& job) {
     }
 
     m_jobs.push_back(job);
+    m_jobs.back().submitted_at = std::chrono::steady_clock::now();
     m_jobs_cv.notify_one();
 }
 
@@ -1889,15 +1890,34 @@ void TimelineMediaBuffer::worker_loop() {
             // asynchronously so it's in the pool before REFILL reaches this clip.
             // acquire_reader does the heavy work; we just drop the handle afterward.
             // The reader stays in the pool (keyed by track+clip_id), warm and ready.
-            EMP_LOG_DEBUG("WARM: opening reader for clip %s on track %c%d",
+            auto queue_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - job.submitted_at).count();
+            if (queue_ms > WARM_QUEUE_WARN_MS) {
+                EMP_LOG_WARN("WARM: queue wait %lldms for clip %s (threshold %dms)",
+                        (long long)queue_ms, job.clip_id.c_str(), WARM_QUEUE_WARN_MS);
+            }
+
+            EMP_LOG_DEBUG("WARM: opening reader for clip %s on track %c%d (queued %lldms)",
                     job.clip_id.c_str(),
-                    job.track.type == TrackType::Video ? 'V' : 'A', job.track.index);
+                    job.track.type == TrackType::Video ? 'V' : 'A', job.track.index,
+                    (long long)queue_ms);
+
+            auto t0 = std::chrono::steady_clock::now();
             auto handle = acquire_reader(job.track, job.clip_id, job.media_path);
+            auto acquire_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+
             if (handle) {
-                EMP_LOG_DEBUG("WARM: reader ready for clip %s", job.clip_id.c_str());
+                EMP_LOG_DEBUG("WARM: reader ready for clip %s (queue=%lldms acquire=%lldms)",
+                        job.clip_id.c_str(), (long long)queue_ms, (long long)acquire_ms);
             } else {
-                EMP_LOG_WARN("WARM: failed to open reader for clip %s path=%s",
-                        job.clip_id.c_str(), job.media_path.c_str());
+                EMP_LOG_WARN("WARM: failed for clip %s path=%s (acquire=%lldms)",
+                        job.clip_id.c_str(), job.media_path.c_str(), (long long)acquire_ms);
+            }
+            if (acquire_ms > WARM_ACQUIRE_WARN_MS) {
+                EMP_LOG_WARN("WARM: acquire_reader took %lldms for clip %s (threshold %dms) "
+                        "— check external drive latency or codec init time",
+                        (long long)acquire_ms, job.clip_id.c_str(), WARM_ACQUIRE_WARN_MS);
             }
             // handle destructor releases use_mutex — reader remains in pool
 
