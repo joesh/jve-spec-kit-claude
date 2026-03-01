@@ -242,14 +242,13 @@ private:
 
     // Find clip at timeline_frame in track's clip list
     const ClipInfo* find_clip_at(const TrackState& ts, int64_t timeline_frame) const;
-
-    // (trigger_prebuffer_for_new_clips removed — watermark REFILL replaces it)
+    // Find first clip starting after timeline_frame (gap-skip for video REFILL)
+    const ClipInfo* find_next_clip_after(const TrackState& ts, int64_t timeline_frame) const;
 
     // Find clip at timeline microsecond position (for audio path)
     // Requires m_seq_rate to be set
     const ClipInfo* find_clip_at_us(const TrackState& ts, TimeUS t_us) const;
-
-    // Find first clip starting at or after t_us (for boundary spanning)
+    // Find first clip starting at or after t_us (gap-skip for audio REFILL)
     const ClipInfo* find_next_clip_at_us(const TrackState& ts, TimeUS t_us) const;
 
     // Check audio cache for pre-buffered PCM covering [seg_t0, seg_t1) for clip_id

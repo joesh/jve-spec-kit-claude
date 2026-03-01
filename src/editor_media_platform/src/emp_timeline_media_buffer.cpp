@@ -145,6 +145,20 @@ void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInf
     // when Lua feeds new clips during playback, immediately begin filling
     // the buffer from the current playhead position.
     if (clips_changed) {
+        // Pre-warm readers for newly visible clips unconditionally.
+        // WARM is cheap (~60ms) and having readers in the pool before
+        // playback starts avoids 1000ms+ cold-opens during REFILL.
+        // (Previously gated on dir!=0, which meant clips set before
+        // PLAY never got warmed — REFILL had to cold-open on first access.)
+        for (const auto& c : clips_to_warm) {
+            PreBufferJob warm;
+            warm.type = PreBufferJob::READER_WARM;
+            warm.track = track;
+            warm.clip_id = c.clip_id;
+            warm.media_path = c.media_path;
+            submit_pre_buffer(warm);
+        }
+
         int dir = m_playhead_direction.load(std::memory_order_relaxed);
         if (dir != 0) {
             int64_t ph = m_playhead_frame.load(std::memory_order_relaxed);
@@ -153,17 +167,6 @@ void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInf
             } else if (m_seq_rate.num > 0 && m_audio_fmt.sample_rate > 0) {
                 TimeUS ph_us = FrameTime::from_frame(ph, m_seq_rate).to_us();
                 submit_audio_refill(track, ph_us, dir);
-            }
-            // Pre-warm readers for newly visible clips. NeedClips fires
-            // 50-100 frames before boundary — ample time for async
-            // MediaFile::Open + Reader::Create (~400ms for 4K VideoToolbox).
-            for (const auto& c : clips_to_warm) {
-                PreBufferJob warm;
-                warm.type = PreBufferJob::READER_WARM;
-                warm.track = track;
-                warm.clip_id = c.clip_id;
-                warm.media_path = c.media_path;
-                submit_pre_buffer(warm);
             }
         }
     }
@@ -303,6 +306,20 @@ const ClipInfo* TimelineMediaBuffer::find_clip_at(const TrackState& ts, int64_t 
         }
     }
     return nullptr;
+}
+
+// find_next_clip_after — first clip starting after timeline_frame (gap-skip helper).
+// Parallels find_next_clip_at_us but works in frame coordinates.
+const ClipInfo* TimelineMediaBuffer::find_next_clip_after(const TrackState& ts, int64_t timeline_frame) const {
+    const ClipInfo* best = nullptr;
+    int64_t best_start = std::numeric_limits<int64_t>::max();
+    for (const auto& clip : ts.clips) {
+        if (clip.timeline_start > timeline_frame && clip.timeline_start < best_start) {
+            best = &clip;
+            best_start = clip.timeline_start;
+        }
+    }
+    return best;
 }
 
 // ============================================================================
@@ -1678,9 +1695,26 @@ void TimelineMediaBuffer::worker_loop() {
                     if (tit->second.refill_generation != job.generation) break;
                     const ClipInfo* clip = find_clip_at(tit->second, tf);
                     if (!clip) {
-                        // Gap: advance buffer_end past it, continue to next frame
-                        if (tf + 1 > tit->second.video_buffer_end) {
-                            tit->second.video_buffer_end = tf + 1;
+                        // Gap: skip to the next clip boundary on this track.
+                        // Without this, REFILL crawls through gaps 48 frames at
+                        // a time, each batch advancing buffer_end by REFILL_SIZE.
+                        // A 374-frame gap takes ~8 batches (~16s of playback) to
+                        // cross — by then it's too late for the next clip.
+                        const ClipInfo* next = find_next_clip_after(tit->second, tf);
+                        if (next) {
+                            // Jump buffer_end and loop index to next clip
+                            if (next->timeline_start > tit->second.video_buffer_end) {
+                                tit->second.video_buffer_end = next->timeline_start;
+                            }
+                            int64_t skip = next->timeline_start - tf;
+                            i += static_cast<int>(skip - 1); // for-loop will ++i
+                        } else {
+                            // No more clips ahead — advance to end of refill range
+                            int64_t end = job.refill_from_frame + job.refill_count;
+                            if (end > tit->second.video_buffer_end) {
+                                tit->second.video_buffer_end = end;
+                            }
+                            i = job.refill_count; // break
                         }
                         is_gap = true;
                     } else {
