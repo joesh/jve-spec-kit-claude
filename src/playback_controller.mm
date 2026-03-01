@@ -1210,22 +1210,17 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     }
 
     if (!found_frame) {
-        // All tracks are gaps at this frame.
-        if (synchronous) {
-            // Park/Seek (pull phase): gap IS content — show black.
-            // The surface must reflect the exact state at the playhead.
-            JVE_LOG_EVENT(Ticks, "deliverFrame: gap at frame %lld (no clip on any track)",
-                         (long long)frame);
-            m_surface->clearFrame();
-            m_last_displayed_frame = frame;
-        } else {
-            // Playback (push phase): hold last frame during gaps.
-            // Standard NLE behavior — clearing to black would poison the
-            // pending path: next clip's cache miss returns pending=true,
-            // which holds the surface content. Black + pending = black for
-            // the entire clip transition (~1-3s on external drives).
-            // Holding the last frame is visually preferable.
-            //
+        // All tracks are gaps at this frame — gap IS content, show black.
+        // This applies to both sync (seek/park) and async (playback).
+        // If the next clip's REFILL is slow and the surface stays black
+        // through the transition, that's a WARM latency problem to fix
+        // in the buffering layer — not a reason to show stale frames.
+        JVE_LOG_EVENT(Ticks, "deliverFrame: gap at frame %lld (no clip on any track)",
+                     (long long)frame);
+        m_surface->clearFrame();
+        m_last_displayed_frame = frame;
+
+        if (!synchronous) {
             // Stale-data detection: only invalidate the clip window when the
             // playhead is INSIDE the window but TMB has no clips. This means
             // the window's clip list is stale (Lua told us clips exist here
