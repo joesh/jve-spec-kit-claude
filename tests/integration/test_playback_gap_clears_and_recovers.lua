@@ -131,6 +131,21 @@ local function run_scenario(label, tmb, seek_frame, bounds)
         string.format("%s: surface never recovered after gap (still %dx%d after 3.2s)",
             label, w, h))
 
+    -- Phase 3: verify sustained delivery — frame count must keep increasing
+    -- during clip B, not just show one frame and stall.
+    local count_at_recovery = EMP.SURFACE_FRAME_COUNT(test_surface)
+    local MIN_NEW_FRAMES = 3  -- at least 3 new frames delivered during sustained check
+    for i = 1, 100 do  -- 100 × 16ms = 1.6s
+        poll_sleep(pc, 0.016)
+    end
+    local count_after = EMP.SURFACE_FRAME_COUNT(test_surface)
+    local new_frames = count_after - count_at_recovery
+    assert(new_frames >= MIN_NEW_FRAMES,
+        string.format("%s: playback stalled after recovery — only %d new frames in 1.6s "
+            .. "(count %d → %d, need >= %d)",
+            label, new_frames, count_at_recovery, count_after, MIN_NEW_FRAMES))
+    print(string.format("    PASS: Sustained delivery — %d new frames after recovery", new_frames))
+
     PLAYBACK.STOP(pc)
     PLAYBACK.CLOSE(pc)
 end
