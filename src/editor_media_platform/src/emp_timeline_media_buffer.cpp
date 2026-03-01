@@ -61,6 +61,18 @@ std::unique_ptr<TimelineMediaBuffer> TimelineMediaBuffer::Create(int pool_thread
 // Track clip layout
 // ============================================================================
 
+std::vector<int> TimelineMediaBuffer::GetVideoTrackIds() {
+    std::lock_guard<std::mutex> lock(m_tracks_mutex);
+    std::vector<int> ids;
+    for (const auto& [track_id, ts] : m_tracks) {
+        if (track_id.type == TrackType::Video && !ts.clips.empty()) {
+            ids.push_back(track_id.index);
+        }
+    }
+    std::sort(ids.begin(), ids.end(), std::greater<int>());
+    return ids;
+}
+
 void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInfo>& clips) {
     bool clips_changed = false;
     // Clips not in old list — need reader pre-warming during active playback
@@ -341,6 +353,15 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
 
     const ClipInfo* clip = find_clip_at(ts, timeline_frame);
     if (!clip) {
+        // Gap: still check watermark so REFILL pre-fills upcoming clips.
+        // Without this, gaps starve the watermark — no cache hits or misses
+        // → no check_video_watermark → no REFILL until playhead enters a clip
+        // → cold decode at clip boundary (black frames until REFILL catches up).
+        int dir = m_playhead_direction.load(std::memory_order_relaxed);
+        if (dir != 0) {
+            tracks_lock.unlock();
+            check_video_watermark(track, timeline_frame, dir);
+        }
         return result; // gap — no clip at this position
     }
 

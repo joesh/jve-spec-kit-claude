@@ -107,6 +107,10 @@ public:
     // Constant-time per-track video access
     VideoResult GetVideoFrame(TrackId track, int64_t timeline_frame);
 
+    // Video track IDs with clips loaded, sorted descending (topmost first).
+    // Thread-safe: acquires m_tracks_mutex internally.
+    std::vector<int> GetVideoTrackIds();
+
     // Per-track audio access
     // Returns nullptr for gaps (Lua fills with silence)
     std::shared_ptr<PcmChunk> GetTrackAudio(TrackId track, TimeUS t0, TimeUS t1,

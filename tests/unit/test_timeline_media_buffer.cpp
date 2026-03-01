@@ -587,6 +587,14 @@ private slots:
             tmb->GetVideoFrame(V1, f);
         }
 
+        // Transition to clip_b_only and let REFILL decode frames 50-97.
+        // SetTrackClips resets video_buffer_end and refill_generation, aborting
+        // any in-flight REFILL from the clipA watermark. The new REFILL starts
+        // at the playhead (50) and must complete before the tight play loop.
+        tmb->SetPlayhead(50, 1, 1.0f);
+        tmb->SetTrackClips(V1, clip_b_only);
+        QThread::msleep(500);
+
         // Reset counter — from here, clipB frames must ALL be TMB cache hits
         tmb->ResetVideoCacheMissCount();
 
@@ -3305,6 +3313,62 @@ private slots:
                  qPrintable(QString("clipB decode took %1ms — reader not pre-warmed?").arg(ms)));
 
         emp::SetDecodeMode(emp::DecodeMode::Play);
+    }
+
+    // ── Gap watermark starvation regression ──
+
+    void test_refill_through_gap_prefills_next_clip() {
+        // Regression: GetVideoFrame returned early on gaps without checking the
+        // watermark. REFILL advanced buffer_end past the gap (correctly), but no
+        // subsequent REFILL was triggered to decode the next clip's frames.
+        // Result: cold cache miss when playhead reached the clip → black frames.
+        //
+        // Scenario: [clipA 0-29] [gap 30-79] [clipB 80-129]
+        // SetTrackClips during play at frame 30 (gap). After REFILL + WARM,
+        // clipB's first frames must be in cache before playhead reaches 80.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        // Wide gap (50 frames > VIDEO_REFILL_SIZE=48): first REFILL batch
+        // can't reach clipB. A second REFILL must fire via watermark check
+        // during the gap to actually decode clipB's frames.
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0,  30, 0,  24, 1, 1.0f},
+            {"clipB", path, 80, 50, 0,  24, 1, 1.0f},
+        };
+
+        // Start "playing" at the gap (simulates NeedClips loading new clips
+        // while playhead is inside a gap after a clip transition).
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+        tmb->SetPlayhead(30, 1, 1.0f);
+        tmb->SetTrackClips(V1, clips);
+
+        // Simulate playback through the gap: call GetVideoFrame at each frame.
+        // Each call should check the watermark even though there's no clip,
+        // triggering REFILL when buffer_end approaches playhead.
+        for (int f = 30; f < 80; ++f) {
+            tmb->SetPlayhead(f, 1, 1.0f);
+            auto r = tmb->GetVideoFrame(V1, f);
+            // Gap: no clip, no frame — that's fine
+            QVERIFY(r.frame == nullptr);
+            QVERIFY(r.clip_id.empty());
+            QThread::msleep(2);  // ~16ms/frame at 60Hz, compressed for test speed
+        }
+
+        // Give REFILL worker a moment to finish any in-flight batch
+        QThread::msleep(300);
+
+        // clipB's first frame MUST be in cache (pre-filled during gap traversal).
+        // Without the watermark fix, this is a cold miss → pending → black.
+        tmb->SetPlayhead(80, 1, 1.0f);
+        auto result = tmb->GetVideoFrame(V1, 80);
+        QVERIFY2(result.frame != nullptr,
+                 "clipB frame 80 should be pre-filled during gap traversal "
+                 "(watermark starvation bug: GetVideoFrame gap path didn't "
+                 "trigger check_video_watermark)");
+        QCOMPARE(result.clip_id, std::string("clipB"));
     }
 };
 
