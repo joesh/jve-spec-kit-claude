@@ -31,10 +31,8 @@ if not ok_surf or not surface then
 end
 print("  ✓ Created real GPUVideoSurface")
 
--- 3. Create real TMB with real media (640x360 24000/1001, 8 frames)
--- IMPORTANT: Test media has only 8 video frames. Duration must not exceed
--- actual media frame count or DecodeAt returns "End of file reached".
-local tmb, clip_info = env.create_single_clip_tmb({ pool_threads = 0, duration = 8 })
+-- 3. Create real TMB with real media (640x360 24000/1001)
+local tmb, clip_info = env.create_single_clip_tmb({ pool_threads = 0, duration = 50 })
 print(string.format("  ✓ Created TMB with clip: %s (%d frames)",
     clip_info.clip_id, clip_info.duration))
 

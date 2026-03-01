@@ -11,7 +11,10 @@ M.expect_error = test_env.expect_error
 M.assert_type = test_env.assert_type
 
 -- Standard test media (640x360 24000/1001 fps, has video + audio)
-M.STANDARD_MEDIA = "A001_C037_0921FG_001.mp4"
+-- A005 has 108 frames (~4.5s) — enough for buffering, prefetch, and transition tests.
+-- A001 only has 8 frames — too short for anything beyond trivial smoke tests.
+M.STANDARD_MEDIA = "A005_C052_0925BL_001.mp4"
+M.STANDARD_MEDIA_FRAMES = 108
 
 --- Assert we're running inside JVEEditor with real C++ bindings.
 -- Fails immediately if qt_constants.EMP is missing or TMB_CREATE isn't a function.
