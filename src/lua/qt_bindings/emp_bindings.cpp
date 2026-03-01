@@ -1139,6 +1139,23 @@ static int lua_emp_surface_frame_count(lua_State* L) {
     return 1;
 }
 
+// EMP.SURFACE_FRAME_SIZE(surface_widget) -> width, height
+// Returns current frame dimensions. 0,0 after clearFrame (gap), non-zero after setFrame.
+// Used by integration tests to verify gap rendering.
+static int lua_emp_surface_frame_size(lua_State* L) {
+    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 1, WIDGET_METATABLE));
+    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+
+    GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
+    if (!gpu_surface) {
+        return luaL_error(L, "SURFACE_FRAME_SIZE: widget is not a GPUVideoSurface");
+    }
+
+    lua_pushinteger(L, gpu_surface->frameWidth());
+    lua_pushinteger(L, gpu_surface->frameHeight());
+    return 2;
+}
+
 // EMP.SURFACE_ON_READY(surface_widget, callback_fn)
 // Registers a callback that fires once when the GPUVideoSurface's Metal backend
 // becomes render-ready. If already ready, fires immediately.
@@ -1747,6 +1764,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "SURFACE_SET_PAR");
     lua_pushcfunction(L, lua_emp_surface_frame_count);
     lua_setfield(L, -2, "SURFACE_FRAME_COUNT");
+    lua_pushcfunction(L, lua_emp_surface_frame_size);
+    lua_setfield(L, -2, "SURFACE_FRAME_SIZE");
     lua_pushcfunction(L, lua_emp_surface_on_ready);
     lua_setfield(L, -2, "SURFACE_ON_READY");
     lua_pushcfunction(L, lua_emp_surface_on_error);

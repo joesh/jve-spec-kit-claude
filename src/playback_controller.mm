@@ -840,14 +840,26 @@ void PlaybackController::SetClipWindow(emp::TrackType type, int64_t lo, int64_t 
         "PlaybackController::SetClipWindow: lo must be >= 0");
 
     ClipWindow& window = (type == emp::TrackType::Video) ? m_video_window : m_audio_window;
+
+    bool was_valid = window.valid.load(std::memory_order_relaxed);
+    int64_t old_lo = window.lo.load(std::memory_order_relaxed);
+    int64_t old_hi = window.hi.load(std::memory_order_relaxed);
+
     window.lo.store(lo, std::memory_order_relaxed);
     window.hi.store(hi, std::memory_order_relaxed);
     window.valid.store(true, std::memory_order_relaxed);
-    window.need_clips_pending.store(false, std::memory_order_relaxed);
 
-    JVE_LOG_EVENT(Ticks, "SetClipWindow %s lo=%lld hi=%lld",
+    // Only clear debounce if window is genuinely new/expanded.
+    // If Lua returns the same window (nothing more to load), keep pending=true
+    // so checkClipWindow won't re-fire until InvalidateClipWindows().
+    bool changed = !was_valid || lo != old_lo || hi != old_hi;
+    if (changed) {
+        window.need_clips_pending.store(false, std::memory_order_relaxed);
+    }
+
+    JVE_LOG_EVENT(Ticks, "SetClipWindow %s lo=%lld hi=%lld changed=%d",
                  (type == emp::TrackType::Video ? "video" : "audio"),
-                 (long long)lo, (long long)hi);
+                 (long long)lo, (long long)hi, changed);
 }
 
 void PlaybackController::InvalidateClipWindows() {
@@ -1198,11 +1210,22 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     }
 
     if (!found_frame) {
-        // All tracks are gaps at this frame — nothing to display
+        // All tracks are gaps at this frame.
         if (synchronous) {
+            // Park/Seek (pull phase): gap IS content — show black.
+            // The surface must reflect the exact state at the playhead.
             JVE_LOG_EVENT(Ticks, "deliverFrame: gap at frame %lld (no clip on any track)",
                          (long long)frame);
+            m_surface->clearFrame();
+            m_last_displayed_frame = frame;
         } else {
+            // Playback (push phase): hold last frame during gaps.
+            // Standard NLE behavior — clearing to black would poison the
+            // pending path: next clip's cache miss returns pending=true,
+            // which holds the surface content. Black + pending = black for
+            // the entire clip transition (~1-3s on external drives).
+            // Holding the last frame is visually preferable.
+            //
             // Stale-data detection: only invalidate the clip window when the
             // playhead is INSIDE the window but TMB has no clips. This means
             // the window's clip list is stale (Lua told us clips exist here
