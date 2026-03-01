@@ -168,6 +168,10 @@ public:
     // Reader::PrefetchFramesDecoded() for testing seek-vs-forward-decode.
     std::atomic<int64_t> prefetch_frames_decoded{0};
 
+    // Diagnostics: total EOF hits in prefetch loop since last StartPrefetch.
+    // After EOF fix (cache_max_pts = duration), should stabilize at 1.
+    std::atomic<int64_t> prefetch_eof_hits{0};
+
     // Audio decode state
     impl::FFmpegCodecContext audio_codec_ctx;
     impl::FFmpegResampleContext resample_ctx;
@@ -189,6 +193,11 @@ public:
     // When set, DecodeAtUS uses this instead of global g_decode_mode.
     bool has_mode_override = false;
     DecodeMode mode_override = DecodeMode::Play;
+
+    // Stale session log throttle: log first clear per target, then count.
+    // Prevents 50+/sec spam when prefetch refills cache between clears.
+    TimeUS last_stale_target = INT64_MIN;
+    int stale_clear_count = 0;
 };
 
 Reader::Reader(std::unique_ptr<ReaderImpl> impl, std::shared_ptr<MediaFile> asset)
@@ -383,6 +392,10 @@ int64_t Reader::PrefetchFramesDecoded() const {
     return m_impl->prefetch_frames_decoded.load();
 }
 
+int64_t Reader::PrefetchEOFHits() const {
+    return m_impl->prefetch_eof_hits.load();
+}
+
 // NSF-ACCEPT: Simple setters — no validation needed. TMB is the sole caller
 // and always passes DecodeMode::Play. No concurrent access (called under
 // pool lock or before Reader is shared).
@@ -433,10 +446,22 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
             bool outside = (t_us > m_impl->cache_max_pts + STALE_THRESHOLD_US) ||
                            (t_us < m_impl->cache_min_pts - STALE_THRESHOLD_US);
             if (outside) {
-                EMP_LOG_DEBUG("Stale session cleared: target=%lldus outside [%lld,%lld]+1s",
-                        (long long)t_us,
-                        (long long)m_impl->cache_min_pts,
-                        (long long)m_impl->cache_max_pts);
+                if (t_us != m_impl->last_stale_target) {
+                    // New target — log previous batch count if any, then log this one
+                    if (m_impl->stale_clear_count > 1) {
+                        EMP_LOG_DEBUG("Stale session cleared %d times for target=%lldus (suppressed)",
+                                m_impl->stale_clear_count,
+                                (long long)m_impl->last_stale_target);
+                    }
+                    m_impl->last_stale_target = t_us;
+                    m_impl->stale_clear_count = 1;
+                    EMP_LOG_DEBUG("Stale session cleared: target=%lldus outside [%lld,%lld]+1s",
+                            (long long)t_us,
+                            (long long)m_impl->cache_min_pts,
+                            (long long)m_impl->cache_max_pts);
+                } else {
+                    m_impl->stale_clear_count++;
+                }
                 m_impl->frame_cache.clear();
                 m_impl->cache_min_pts = INT64_MAX;
                 m_impl->cache_max_pts = INT64_MIN;
@@ -915,8 +940,9 @@ void Reader::StartPrefetch(int direction) {
         ? m_impl->mode_override : GetDecodeMode();
     m_impl->last_mode = effective;
 
-    // Reset decode counter for diagnostics/testing.
+    // Reset decode counters for diagnostics/testing.
     m_impl->prefetch_frames_decoded.store(0);
+    m_impl->prefetch_eof_hits.store(0);
 
     // Force prefetch to seek on restart.  Without this, have_prefetch_pos
     // retains the stale prefetch_decode_pts from the previous session.
@@ -1159,7 +1185,20 @@ void Reader::prefetch_worker() {
 
             if (batch_result.is_error()) {
                 if (batch_result.error().code == ErrorCode::EOFReached) {
-                    EMP_LOG_DEBUG("Prefetch: reached EOF");
+                    m_impl->prefetch_eof_hits.fetch_add(1);
+                    EMP_LOG_DEBUG("Prefetch: reached EOF (duration=%lldus)",
+                            (long long)duration);
+                    // Mark cache as covering through EOF so need_decode
+                    // stops firing. The gap between cache_max_pts and
+                    // duration is real (no frame AT duration) but
+                    // unfillable — without this, the loop re-enters
+                    // decode every tick.
+                    std::lock_guard<std::mutex> lock(m_impl->cache_mutex);
+                    if (dir > 0 && m_impl->cache_max_pts < duration) {
+                        m_impl->cache_max_pts = duration;
+                    } else if (dir < 0 && m_impl->cache_min_pts > 0) {
+                        m_impl->cache_min_pts = 0;
+                    }
                 } else {
                     EMP_LOG_WARN("Prefetch decode failed: %s",
                             batch_result.error().message.c_str());

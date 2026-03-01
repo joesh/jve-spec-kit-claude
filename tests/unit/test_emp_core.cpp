@@ -1714,6 +1714,60 @@ private slots:
 
         emp::SetDecodeMode(emp::DecodeMode::Play);
     }
+    void test_prefetch_stops_after_eof() {
+        // NSF output invariant: after prefetch hits EOF, it must stop spinning.
+        // Before fix: cache_max_pts < duration left need_decode=true → decode
+        // attempted every 50ms, hitting EOF each time (log spam, wasted CPU).
+        // After fix: cache_max_pts set to duration → need_decode=false → stops.
+        //
+        // Test strategy: Start prefetch near end of file. Wait for EOF.
+        // Then verify PrefetchEOFHits stabilizes at 1 (initial EOF hit only).
+        // Without the fix, EOF hits keep growing (spin every 50ms).
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto mf = emp::MediaFile::Open(m_testVideoPath.toStdString()).value();
+        auto reader = emp::Reader::Create(mf).value();
+
+        const auto& info = mf->info();
+        emp::Rate rate{info.video_fps_num, info.video_fps_den};
+        int total_frames = static_cast<int>(
+            info.duration_us / 1e6 * info.video_fps_num / info.video_fps_den);
+
+        QVERIFY2(total_frames >= 10, "Test video too short");
+
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+
+        // Position near end of file (last 5 frames)
+        int near_end = std::max(0, total_frames - 5);
+        emp::TimeUS target = emp::FrameTime::from_frame(near_end, rate).to_us();
+        auto r = reader->DecodeAtUS(target);
+        QVERIFY(r.is_ok());
+
+        // Start forward prefetch — will quickly hit EOF
+        reader->StartPrefetch(1);
+        reader->UpdatePrefetchTarget(target);
+
+        // Wait for prefetch to reach EOF + one cycle
+        QThread::msleep(500);
+        int64_t eof_hits_1 = reader->PrefetchEOFHits();
+
+        // EOF must have been hit at least once
+        QVERIFY2(eof_hits_1 >= 1,
+            "Prefetch never hit EOF — test video may be too long or prefetch too slow");
+
+        // Wait another interval — EOF hit count must NOT grow
+        QThread::msleep(500);
+        int64_t eof_hits_2 = reader->PrefetchEOFHits();
+
+        reader->StopPrefetch();
+
+        QVERIFY2(eof_hits_2 == eof_hits_1,
+            qPrintable(QString("Prefetch spinning after EOF: eof_hits %1 → %2 "
+                "(+%3 in 500ms) — cache_max_pts should be set to duration after EOF")
+                .arg(eof_hits_1).arg(eof_hits_2).arg(eof_hits_2 - eof_hits_1)));
+
+        emp::SetDecodeMode(emp::DecodeMode::Park);
+    }
 };
 
 QTEST_MAIN(TestEMPCore)

@@ -104,6 +104,11 @@ public:
     // Used by tests to verify seek-vs-forward-decode behavior.
     int64_t PrefetchFramesDecoded() const;
 
+    // Diagnostics: total EOF hits in prefetch loop since last StartPrefetch.
+    // Each increment = one decode attempt that hit EOF. After the EOF fix,
+    // this should be 1 (initial hit); without the fix it grows unbounded.
+    int64_t PrefetchEOFHits() const;
+
     // Get the underlying media file
     std::shared_ptr<MediaFile> media_file() const;
 
