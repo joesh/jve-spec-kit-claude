@@ -1245,11 +1245,19 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
         return;
     }
 
-    // Hold on ANY pending result. TMB returns {pending: true, frame: nullptr}
-    // on Play-mode cache miss — no stale pixel data, just metadata + pending flag.
-    // GPU surface retains its last frame. Clip transition fires on next tick
-    // when real frame arrives (~8-16ms delay, invisible at display refresh rates).
+    // Pending: TMB has a clip here but no decoded frame yet (cache miss).
+    // Two cases:
+    //   Same clip (intra-clip cache miss): hold last frame. The decode will
+    //   catch up in ~8-16ms — invisible at display refresh rates.
+    //
+    //   Different clip (cross-clip transition): clear to black. Holding the
+    //   previous clip's last frame creates a "latch" where stale content
+    //   persists through gaps and into the next clip's WARM/REFILL period.
     if (result.pending) {
+        if (result.clip_id != m_current_clip_id) {
+            m_surface->clearFrame();
+            m_last_displayed_frame = frame;
+        }
         return;
     }
 
