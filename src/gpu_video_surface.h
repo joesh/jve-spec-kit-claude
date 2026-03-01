@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <QPaintEngine>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -36,11 +37,12 @@ public:
     using ErrorCallback = std::function<void(const std::string& error)>;
     void setErrorCallback(ErrorCallback cb);
 
-    // Set frame to display. Accepts both hw-decoded (native_buffer) and
-    // sw-decoded (CPU BGRA data) frames.
+    // Set frame to display. Thread-safe: if called off the main thread,
+    // dispatches to main queue. Generation counter prevents stale dispatches
+    // from overwriting newer ones.
     void setFrame(const std::shared_ptr<emp::Frame>& frame);
 
-    // Clear display
+    // Clear display to black. Thread-safe (same dispatch + generation logic).
     void clearFrame();
 
     // Set rotation (0, 90, 180, 270 degrees)
@@ -73,6 +75,11 @@ private:
     void renderTexture();
     void rebuildVertexBuffer();
 
+    // Internal impl — MUST be called on main thread only.
+    // Public setFrame/clearFrame handle dispatch + generation.
+    void setFrameImpl(const std::shared_ptr<emp::Frame>& frame);
+    void clearFrameImpl();
+
     // HW path: zero-copy from VideoToolbox CVPixelBuffer → Metal texture
     void setFrameHW(void* pixelBuffer, int w, int h);
     void setFrameHW_YUV(void* pixelBuffer, uint32_t pixelFormat);       // biplanar YUV
@@ -91,6 +98,12 @@ private:
     bool m_initialized = false;
     ReadyCallback m_ready_callback;
     ErrorCallback m_error_callback;
+
+    // Generation counter: monotonically increasing. Each setFrame/clearFrame
+    // call increments before dispatching. The dispatched block only executes
+    // if its captured generation still matches current — stale dispatches
+    // (from earlier ticks) become no-ops.
+    std::atomic<uint64_t> m_generation{0};
 };
 
 #else

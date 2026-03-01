@@ -12,6 +12,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <AppKit/NSView.h>
 #import <mach/mach_time.h>
+#include <dispatch/dispatch.h>
 
 struct Vertex {
     float position[2];
@@ -337,9 +338,28 @@ void GPUVideoSurface::setFrame(const std::shared_ptr<emp::Frame>& frame) {
         return;
     }
 
+    uint64_t gen = m_generation.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    if ([NSThread isMainThread]) {
+        setFrameImpl(frame);
+    } else {
+        GPUVideoSurface* surface = this;
+        std::shared_ptr<emp::Frame> frame_copy = frame;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (surface->m_generation.load(std::memory_order_relaxed) != gen) return;
+            surface->setFrameImpl(frame_copy);
+        });
+    }
+}
+
+void GPUVideoSurface::setFrameImpl(const std::shared_ptr<emp::Frame>& frame) {
+    JVE_ASSERT([NSThread isMainThread],
+        "GPUVideoSurface::setFrameImpl: must be on main thread");
+    JVE_ASSERT(frame, "GPUVideoSurface::setFrameImpl: null frame (use clearFrame)");
+
     if (!m_initialized) initMetal();
     if (!m_initialized) {
-        JVE_LOG_WARN(Video, "GPUVideoSurface::setFrame: Metal not initialized, dropping frame");
+        JVE_LOG_WARN(Video, "GPUVideoSurface::setFrameImpl: Metal not initialized, dropping frame");
         if (m_error_callback) m_error_callback("Metal not initialized");
         return;
     }
@@ -611,6 +631,22 @@ void GPUVideoSurface::setFrameSW(const uint8_t* data, int w, int h, int stride) 
 }
 
 void GPUVideoSurface::clearFrame() {
+    uint64_t gen = m_generation.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    if ([NSThread isMainThread]) {
+        clearFrameImpl();
+    } else {
+        GPUVideoSurface* surface = this;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (surface->m_generation.load(std::memory_order_relaxed) != gen) return;
+            surface->clearFrameImpl();
+        });
+    }
+}
+
+void GPUVideoSurface::clearFrameImpl() {
+    JVE_ASSERT([NSThread isMainThread],
+        "GPUVideoSurface::clearFrameImpl: must be on main thread");
     m_frameWidth = 0;
     m_frameHeight = 0;
     m_impl->releaseTextures();

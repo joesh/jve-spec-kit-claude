@@ -1321,25 +1321,7 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
                           (int)result.pending, (int)result.offline);
         }
 
-        std::shared_ptr<emp::Frame> frame_ptr = result.frame;
-        GPUVideoSurface* surface = m_surface;
-
-        if (synchronous) {
-            surface->setFrame(frame_ptr);
-        } else {
-            uint64_t dispatch_time = mach_absolute_time();
-            int64_t frame_num = frame;
-            int64_t deliver_n = m_deliver_count;
-            dispatch_async(dispatch_get_main_queue(), ^{
-                uint64_t now = mach_absolute_time();
-                double delay_ms = machTimeToSeconds(now - dispatch_time) * 1000.0;
-                if (delay_ms > 8.0 || deliver_n % 30 == 0) {
-                    JVE_LOG_DETAIL(Video, "setFrame: frame=%lld delay=%.1fms",
-                                  (long long)frame_num, delay_ms);
-                }
-                surface->setFrame(frame_ptr);
-            });
-        }
+        m_surface->setFrame(result.frame);
     } else if (!result.clip_id.empty()) {
         // TMB has a clip at this frame but returned no decoded frame data.
         if (result.offline) {
