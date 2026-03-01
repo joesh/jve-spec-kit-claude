@@ -1,6 +1,19 @@
 #include "ffmpeg_context.h"
 #include "ffmpeg_hwaccel.h"
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
+
+static int codec_log_level() {
+    static int level = -1;
+    if (level < 0) {
+        const char* env = getenv("EMP_LOG_LEVEL");
+        level = env ? atoi(env) : 1;  // default: warnings
+    }
+    return level;
+}
+#define EMP_LOG_WARN(...) do { if (codec_log_level() >= 1) { fprintf(stderr, "[EMP WARN] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } } while(0)
+#define EMP_LOG_DEBUG(...) do { if (codec_log_level() >= 2) { fprintf(stderr, "[EMP] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } } while(0)
 
 namespace emp {
 namespace impl {
@@ -122,10 +135,12 @@ FFmpegCodecContext::~FFmpegCodecContext() {
 FFmpegCodecContext::FFmpegCodecContext(FFmpegCodecContext&& other) noexcept
     : m_codec_ctx(other.m_codec_ctx),
       m_hw_device_ctx(other.m_hw_device_ctx),
-      m_hw_pix_fmt(other.m_hw_pix_fmt) {
+      m_hw_pix_fmt(other.m_hw_pix_fmt),
+      m_hw_active(other.m_hw_active) {
     other.m_codec_ctx = nullptr;
     other.m_hw_device_ctx = nullptr;
     other.m_hw_pix_fmt = AV_PIX_FMT_NONE;
+    other.m_hw_active = false;
 }
 
 FFmpegCodecContext& FFmpegCodecContext::operator=(FFmpegCodecContext&& other) noexcept {
@@ -139,9 +154,11 @@ FFmpegCodecContext& FFmpegCodecContext::operator=(FFmpegCodecContext&& other) no
         m_codec_ctx = other.m_codec_ctx;
         m_hw_device_ctx = other.m_hw_device_ctx;
         m_hw_pix_fmt = other.m_hw_pix_fmt;
+        m_hw_active = other.m_hw_active;
         other.m_codec_ctx = nullptr;
         other.m_hw_device_ctx = nullptr;
         other.m_hw_pix_fmt = AV_PIX_FMT_NONE;
+        other.m_hw_active = false;
     }
     return *this;
 }
@@ -152,11 +169,26 @@ static AVPixelFormat get_hw_format(AVCodecContext* ctx, const AVPixelFormat* pix
 
     for (const AVPixelFormat* p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
         if (*p == target_fmt) {
+            EMP_LOG_DEBUG("HW decode: negotiated %s for %s %dx%d profile=%d",
+                          av_get_pix_fmt_name(target_fmt),
+                          avcodec_get_name(ctx->codec_id),
+                          ctx->width, ctx->height, ctx->profile);
             return *p;
         }
     }
 
-    // Hw format not available, let ffmpeg pick software format
+    // Hw format not available — fall back to software decode.
+    // Build offered format list for diagnostic.
+    EMP_LOG_WARN("HW decode UNAVAILABLE for %s %dx%d profile=%d — falling back to software "
+                 "(offered: %s%s%s%s). This will be slow for large frames.",
+                 avcodec_get_name(ctx->codec_id),
+                 ctx->width, ctx->height, ctx->profile,
+                 pix_fmts[0] != AV_PIX_FMT_NONE ? av_get_pix_fmt_name(pix_fmts[0]) : "none",
+                 pix_fmts[0] != AV_PIX_FMT_NONE && pix_fmts[1] != AV_PIX_FMT_NONE ? ", " : "",
+                 pix_fmts[0] != AV_PIX_FMT_NONE && pix_fmts[1] != AV_PIX_FMT_NONE
+                     ? av_get_pix_fmt_name(pix_fmts[1]) : "",
+                 pix_fmts[0] != AV_PIX_FMT_NONE && pix_fmts[1] != AV_PIX_FMT_NONE
+                     && pix_fmts[2] != AV_PIX_FMT_NONE ? ", ..." : "");
     return pix_fmts[0];
 }
 
@@ -202,6 +234,30 @@ Result<void> FFmpegCodecContext::init(AVCodecParameters* params) {
     if (ret < 0) {
         return ffmpeg_error(ret, "avcodec_open2");
     }
+
+    // Confirm HW decode is ACTUALLY active: check if get_format negotiated
+    // the HW pixel format. m_hw_device_ctx being non-null only means a VT
+    // device was created — get_format may have fallen back to software if
+    // VT doesn't support this specific codec profile.
+    if (m_hw_device_ctx && m_codec_ctx->pix_fmt == m_hw_pix_fmt) {
+        m_hw_active = true;
+    } else if (m_hw_device_ctx) {
+        // VT device created but negotiation fell through to software.
+        // Release the unused device context.
+        EMP_LOG_WARN("Codec %s %dx%d profile=%d: VT device created but "
+                     "negotiation fell through to SW (pix_fmt=%s, wanted=%s)",
+                     codec->name, params->width, params->height, params->profile,
+                     av_get_pix_fmt_name(m_codec_ctx->pix_fmt),
+                     av_get_pix_fmt_name(m_hw_pix_fmt));
+        av_buffer_unref(&m_hw_device_ctx);
+        m_hw_device_ctx = nullptr;
+        m_hw_active = false;
+    }
+
+    EMP_LOG_DEBUG("Codec opened: %s %dx%d profile=%d — %s decode (pix_fmt=%s)",
+                  codec->name, params->width, params->height, params->profile,
+                  m_hw_active ? "HW" : "SW",
+                  av_get_pix_fmt_name(m_codec_ctx->pix_fmt));
 
     return Result<void>();
 }

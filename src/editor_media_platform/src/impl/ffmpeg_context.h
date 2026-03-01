@@ -78,8 +78,9 @@ public:
 
     AVCodecContext* get() const { return m_codec_ctx; }
 
-    // True if using hardware-accelerated decoder
-    bool is_hw_accelerated() const { return m_hw_device_ctx != nullptr; }
+    // True if hardware-accelerated decoder is ACTUALLY active.
+    // (Not just "VT device created" — checks negotiated pixel format.)
+    bool is_hw_accelerated() const { return m_hw_active; }
 
     // Hardware pixel format (AV_PIX_FMT_NONE if software decode)
     AVPixelFormat hw_pix_fmt() const { return m_hw_pix_fmt; }
@@ -88,6 +89,7 @@ private:
     AVCodecContext* m_codec_ctx = nullptr;
     AVBufferRef* m_hw_device_ctx = nullptr;
     AVPixelFormat m_hw_pix_fmt = AV_PIX_FMT_NONE;
+    bool m_hw_active = false;  // set after avcodec_open2 confirms negotiation
 };
 
 // SwScale context wrapper (for format conversion)
