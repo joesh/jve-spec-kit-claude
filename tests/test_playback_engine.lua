@@ -80,7 +80,6 @@ package.loaded["core.qt_constants"] = {
         SEEK = function(pc, frame) track("SEEK", frame) end,
         SET_TMB = function() end,
         SET_BOUNDS = function() end,
-        SET_VIDEO_TRACKS = function() end,
         SET_SURFACE = function() end,
         SET_CLIP_WINDOW = function() end,
         SET_SHUTTLE_MODE = function(pc, enabled) track("SET_SHUTTLE_MODE", enabled) end,

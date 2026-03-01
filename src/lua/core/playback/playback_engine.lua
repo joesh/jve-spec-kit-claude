@@ -336,10 +336,9 @@ function PlaybackEngine:_setup_playback_controller()
     assert(pc, "PlaybackEngine:_setup_playback_controller: CREATE returned nil")
     self._playback_controller = pc
 
-    -- Configure: TMB, bounds, video tracks (empty until first seek)
+    -- Configure: TMB, bounds
     PLAYBACK.SET_TMB(pc, self._tmb)
     PLAYBACK.SET_BOUNDS(pc, self.total_frames, self.fps_num, self.fps_den)
-    PLAYBACK.SET_VIDEO_TRACKS(pc, self._video_track_indices)
 
     -- Send initial clip window so C++ doesn't need to wait for NeedClips
     local w = self._tmb_clip_window
@@ -531,11 +530,6 @@ function PlaybackEngine:_send_video_clips_to_tmb(frame)
     table.sort(indices, function(a, b) return a > b end)
     self._video_track_indices = indices
 
-    -- Update PlaybackController video tracks
-    if self._playback_controller then
-        qt_constants.PLAYBACK.SET_VIDEO_TRACKS(self._playback_controller, indices)
-    end
-
     -- Report video clip window to C++
     local has_any, window_lo, window_hi = compute_min_clip_window(track_clips)
     if self._playback_controller and has_any and window_hi > window_lo then
@@ -681,11 +675,6 @@ function PlaybackEngine:_send_clips_to_tmb(frame, gen)
     -- Sort indices descending: highest track_index = topmost = highest priority
     table.sort(indices, function(a, b) return a > b end)
     self._video_track_indices = indices
-
-    -- Propagate video tracks to C++ controller (seek() calls this)
-    if self._playback_controller then
-        qt_constants.PLAYBACK.SET_VIDEO_TRACKS(self._playback_controller, indices)
-    end
 
     -- ── Audio tracks ──
     local audio_track_clips = self:_send_audio_clips_to_tmb(frame, EMP)

@@ -83,7 +83,6 @@ local function run_scenario(label, tmb, seek_frame, bounds)
 
     PLAYBACK.SET_TMB(pc, tmb)
     PLAYBACK.SET_BOUNDS(pc, bounds, RATE_NUM, RATE_DEN)
-    PLAYBACK.SET_VIDEO_TRACKS(pc, {1})
     PLAYBACK.SET_SURFACE(pc, test_surface)
     PLAYBACK.SET_NEED_CLIPS_CALLBACK(pc, function(_, _, track_type)
         PLAYBACK.SET_CLIP_WINDOW(pc, track_type, 0, bounds)

@@ -41,7 +41,6 @@ package.loaded["core.qt_constants"] = {
         SEEK = function() end,
         SET_TMB = function() end,
         SET_BOUNDS = function() end,
-        SET_VIDEO_TRACKS = function() end,
         SET_SURFACE = function() end,
         SET_CLIP_WINDOW = function(pc, track_type, lo, hi)
             clip_window_calls[#clip_window_calls + 1] = {

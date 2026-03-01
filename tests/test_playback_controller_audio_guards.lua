@@ -6,7 +6,6 @@
 --
 -- Also tests:
 -- - Clip window = union of loaded clips (prevents NeedClips spam)
--- - _send_clips_to_tmb propagates SET_VIDEO_TRACKS to C++ controller
 -- - Shuttle unlatch doesn't call audio_playback when controller active
 -- - seek() stopped doesn't call audio_playback.seek when controller active
 
@@ -64,9 +63,6 @@ package.loaded["core.qt_constants"] = {
         SET_TMB = function(pc, tmb) track_playback("SET_TMB", pc, tmb) end,
         SET_BOUNDS = function(pc, tf, fn, fd)
             track_playback("SET_BOUNDS", pc, tf, fn, fd)
-        end,
-        SET_VIDEO_TRACKS = function(pc, indices)
-            track_playback("SET_VIDEO_TRACKS", pc, indices)
         end,
         SET_SURFACE = function(pc, s) track_playback("SET_SURFACE", pc, s) end,
         SET_CLIP_WINDOW = function(pc, type, lo, hi)
@@ -463,36 +459,6 @@ do
 end
 
 --------------------------------------------------------------------------------
--- 7. _send_clips_to_tmb propagates SET_VIDEO_TRACKS to controller
---------------------------------------------------------------------------------
-print("\n--- 7. _send_clips_to_tmb propagates SET_VIDEO_TRACKS ---")
-do
-    local engine = make_engine_with_controller()
-    engine.direction = 1
-
-    -- Set up: video clip on track 0
-    mock_video_entries = {
-        make_video_entry("clip_C", 0, 0, 100, 0),
-    }
-    mock_next_video_entries = {}
-    mock_audio_entries = {}
-    mock_next_audio_entries = {}
-
-    reset_playback_calls()
-    engine:_send_clips_to_tmb(50)
-
-    -- Verify SET_VIDEO_TRACKS was called
-    local vt_call = find_call("SET_VIDEO_TRACKS")
-    assert(vt_call, "_send_clips_to_tmb must call SET_VIDEO_TRACKS on controller")
-    local indices = vt_call.args[2]
-    assert(type(indices) == "table" and #indices == 1,
-        "SET_VIDEO_TRACKS must include track index")
-    assert(indices[1] == 0, string.format(
-        "SET_VIDEO_TRACKS index must be 0, got %s", tostring(indices[1])))
-    print("  PASS: _send_clips_to_tmb propagates video tracks to controller")
-end
-
---------------------------------------------------------------------------------
 -- 8. _send_clips_to_tmb window uses union (not intersection)
 --------------------------------------------------------------------------------
 print("\n--- 8. _send_clips_to_tmb window is union ---")
@@ -604,42 +570,6 @@ do
     assert(w.hi == 200, string.format(
         "_send_clips_to_tmb window hi must be video end 200, got %s", tostring(w.hi)))
     print("  PASS: window bounded by video clips only (audio excluded)")
-end
-
---------------------------------------------------------------------------------
--- 12. load_sequence creates controller with empty tracks (first seek populates)
---------------------------------------------------------------------------------
-print("\n--- 12. load_sequence ordering: tracks before controller ---")
-do
-    -- Reset state
-    mock_video_entries = {
-        make_video_entry("clip_load", 0, 0, 100, 0),
-    }
-    mock_next_video_entries = {}
-    mock_audio_entries = {}
-    mock_next_audio_entries = {}
-    reset_playback_calls()
-
-    local engine = make_engine()
-    engine:load_sequence("seq1", 200)
-
-    -- After load, controller should exist with empty tracks
-    assert(engine._playback_controller, "controller must be created after load")
-    local vt_call = find_call("SET_VIDEO_TRACKS")
-    assert(vt_call, "SET_VIDEO_TRACKS must be called during load_sequence")
-    local indices = vt_call.args[2]
-    assert(#indices == 0,
-        "SET_VIDEO_TRACKS must receive empty indices (populated by first seek, not load)")
-
-    -- First seek should populate tracks
-    reset_playback_calls()
-    engine:seek(50)
-    vt_call = find_call("SET_VIDEO_TRACKS")
-    assert(vt_call, "SET_VIDEO_TRACKS must be called during first seek")
-    indices = vt_call.args[2]
-    assert(#indices > 0,
-        "SET_VIDEO_TRACKS must receive non-empty indices after seek")
-    print("  PASS: load_sequence creates controller, first seek populates tracks")
 end
 
 --------------------------------------------------------------------------------

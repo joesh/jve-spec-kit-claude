@@ -1336,28 +1336,6 @@ static int lua_playback_set_tmb(lua_State* L) {
     return 0;
 }
 
-// PLAYBACK.SET_VIDEO_TRACKS(controller, track_indices_table)
-static int lua_playback_set_video_tracks(lua_State* L) {
-    auto* controller = get_playback_controller(L, 1);
-    luaL_checktype(L, 2, LUA_TTABLE);
-
-    std::vector<int> indices;
-    int n = static_cast<int>(lua_objlen(L, 2));
-    indices.reserve(static_cast<size_t>(n));
-
-    for (int i = 1; i <= n; ++i) {
-        lua_rawgeti(L, 2, i);
-        if (!lua_isnumber(L, -1)) {
-            return luaL_error(L, "PLAYBACK.SET_VIDEO_TRACKS: element %d is not a number", i);
-        }
-        indices.push_back(static_cast<int>(lua_tointeger(L, -1)));
-        lua_pop(L, 1);
-    }
-
-    controller->SetVideoTracks(indices);
-    return 0;
-}
-
 // PLAYBACK.SET_BOUNDS(controller, total_frames, fps_num, fps_den)
 static int lua_playback_set_bounds(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
@@ -1783,8 +1761,6 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "SET_SURFACE");
     lua_pushcfunction(L, lua_playback_set_tmb);
     lua_setfield(L, -2, "SET_TMB");
-    lua_pushcfunction(L, lua_playback_set_video_tracks);
-    lua_setfield(L, -2, "SET_VIDEO_TRACKS");
     lua_pushcfunction(L, lua_playback_set_bounds);
     lua_setfield(L, -2, "SET_BOUNDS");
     lua_pushcfunction(L, lua_playback_play);

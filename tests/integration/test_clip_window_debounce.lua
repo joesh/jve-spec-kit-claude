@@ -49,7 +49,6 @@ assert(pc, "test_clip_window_debounce: CREATE failed")
 
 PLAYBACK.SET_TMB(pc, tmb)
 PLAYBACK.SET_BOUNDS(pc, 100, 24, 1)  -- 100 frames total, clip only covers 0-20
-PLAYBACK.SET_VIDEO_TRACKS(pc, {1})
 PLAYBACK.SET_SURFACE(pc, test_surface)
 
 -- Track NeedClips calls — respond with the same fixed window every time

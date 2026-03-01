@@ -415,10 +415,6 @@ void PlaybackController::SetTMB(emp::TimelineMediaBuffer* tmb) {
     m_tmb = tmb;
 }
 
-void PlaybackController::SetVideoTracks(const std::vector<int>& track_indices) {
-    m_video_track_indices = track_indices;
-}
-
 void PlaybackController::SetBounds(int64_t total_frames, int32_t fps_num, int32_t fps_den) {
     JVE_ASSERT(fps_num > 0 && fps_den > 0,
         "PlaybackController::SetBounds: fps must be positive");
@@ -630,9 +626,8 @@ void PlaybackController::Seek(int64_t frame) {
     Park(frame);
     JVE_ASSERT(m_surface,
         "PlaybackController::Seek: surface not set (call SetSurface before Seek)");
-    JVE_LOG_EVENT(Ticks, "Seek: frame=%lld tracks=%zu surface=%p",
-                 (long long)frame, m_video_track_indices.size(),
-                 (void*)m_surface);
+    JVE_LOG_EVENT(Ticks, "Seek: frame=%lld surface=%p",
+                 (long long)frame, (void*)m_surface);
     deliverFrame(frame, true);  // synchronous: Seek is on main thread
 }
 
@@ -1171,6 +1166,19 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
 // Frame delivery
 // ============================================================================
 
+// Frame number → "HH:MM:SS:FF" timecode string (non-drop-frame).
+static std::string frameToTC(int64_t frame, int fps) {
+    if (fps <= 0) return "??:??:??:??";
+    int ff = static_cast<int>(frame % fps);
+    int64_t total_sec = frame / fps;
+    int ss = static_cast<int>(total_sec % 60);
+    int mm = static_cast<int>((total_sec / 60) % 60);
+    int hh = static_cast<int>(total_sec / 3600);
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%02d:%02d:%02d:%02d", hh, mm, ss, ff);
+    return buf;
+}
+
 void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     // Prerequisites guaranteed by Seek/Play asserts
     JVE_ASSERT(m_tmb, "PlaybackController::deliverFrame: TMB is null");
@@ -1191,8 +1199,10 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     }
     m_repeat_streak = 0;
 
-    // Audio-only sequence: no video tracks to display
-    if (m_video_track_indices.empty()) {
+    // Ask TMB which video tracks have clips (sorted descending = topmost first).
+    // Single source of truth: TMB owns the track list, no mirrored state to race.
+    auto video_tracks = m_tmb->GetVideoTrackIds();
+    if (video_tracks.empty()) {
         return;
     }
 
@@ -1200,7 +1210,7 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     // If the topmost track is a gap at this frame, fall through to the next.
     emp::VideoResult result;
     bool found_frame = false;
-    for (int track_idx : m_video_track_indices) {
+    for (int track_idx : video_tracks) {
         emp::TrackId track{emp::TrackType::Video, track_idx};
         result = m_tmb->GetVideoFrame(track, frame);
         if (result.frame || !result.clip_id.empty()) {
@@ -1215,8 +1225,9 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
         // If the next clip's REFILL is slow and the surface stays black
         // through the transition, that's a WARM latency problem to fix
         // in the buffering layer — not a reason to show stale frames.
-        JVE_LOG_EVENT(Ticks, "deliverFrame: gap at frame %lld (no clip on any track)",
-                     (long long)frame);
+        JVE_LOG_EVENT(Ticks, "deliverFrame: gap at %s frame=%lld (no clip on %zu tracks)",
+                     frameToTC(frame, m_fps_num / m_fps_den).c_str(),
+                     (long long)frame, video_tracks.size());
         m_surface->clearFrame();
         m_last_displayed_frame = frame;
 
@@ -1238,8 +1249,10 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
             if (inside_window) {
                 m_video_window.valid.store(false, std::memory_order_relaxed);
                 m_video_window.need_clips_pending.store(false, std::memory_order_relaxed);
-                JVE_LOG_DETAIL(Ticks, "deliverFrame: GAP inside window [%lld,%lld) at frame=%lld — invalidated",
-                              (long long)lo, (long long)hi, (long long)frame);
+                JVE_LOG_DETAIL(Ticks, "deliverFrame: GAP inside window [%lld,%lld) at %s frame=%lld — invalidated",
+                              (long long)lo, (long long)hi,
+                              frameToTC(frame, m_fps_num / m_fps_den).c_str(),
+                              (long long)frame);
             }
         }
         return;
@@ -1255,8 +1268,15 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     //   persists through gaps and into the next clip's WARM/REFILL period.
     if (result.pending) {
         if (result.clip_id != m_current_clip_id) {
+            JVE_LOG_EVENT(Ticks, "deliverFrame: PENDING cross-clip at %s frame=%lld clip=%s (clearing)",
+                         frameToTC(frame, m_fps_num / m_fps_den).c_str(),
+                         (long long)frame, result.clip_id.c_str());
             m_surface->clearFrame();
             m_last_displayed_frame = frame;
+        } else if (m_deliver_count % 30 == 0) {
+            JVE_LOG_DETAIL(Ticks, "deliverFrame: PENDING intra-clip at %s frame=%lld clip=%s (holding)",
+                          frameToTC(frame, m_fps_num / m_fps_den).c_str(),
+                          (long long)frame, result.clip_id.c_str());
         }
         return;
     }

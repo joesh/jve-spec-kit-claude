@@ -144,7 +144,6 @@ public:
     // Configuration (call from main thread before Play)
     void SetSurface(GPUVideoSurface* surface);
     void SetTMB(emp::TimelineMediaBuffer* tmb);
-    void SetVideoTracks(const std::vector<int>& track_indices);
     void SetBounds(int64_t total_frames, int32_t fps_num, int32_t fps_den);
 
     // Transport (from Lua, main thread)
@@ -264,7 +263,6 @@ private:
     // ---- Dependencies ----
     emp::TimelineMediaBuffer* m_tmb{nullptr};
     GPUVideoSurface* m_surface{nullptr};
-    std::vector<int> m_video_track_indices;
 
     // ---- Audio pump (Phase 3) ----
     PlaybackClock m_clock;
@@ -303,7 +301,6 @@ public:
 
     void SetSurface(GPUVideoSurface*) {}
     void SetTMB(emp::TimelineMediaBuffer*) {}
-    void SetVideoTracks(const std::vector<int>&) {}
     void SetBounds(int64_t, int32_t, int32_t) {}
 
     void Play(int, float) {}

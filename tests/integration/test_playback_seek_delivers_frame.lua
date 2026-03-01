@@ -42,7 +42,6 @@ assert(pc, "Failed to create PlaybackController")
 
 PLAYBACK.SET_TMB(pc, tmb)
 PLAYBACK.SET_BOUNDS(pc, clip_info.duration, clip_info.rate_num, clip_info.rate_den)
-PLAYBACK.SET_VIDEO_TRACKS(pc, { 1 })  -- track_index 1 matches create_single_clip_tmb
 PLAYBACK.SET_SURFACE(pc, surface)
 
 -- Wire callbacks (required by asserts in some paths)

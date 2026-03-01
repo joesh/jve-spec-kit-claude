@@ -59,10 +59,9 @@ do
     local tmb = EMP.TMB_CREATE(2)
     EMP.TMB_SET_SEQUENCE_RATE(tmb, 24, 1)
 
-    -- Proper sequence: TMB → bounds → tracks → surface → play
+    -- Proper sequence: TMB → bounds → surface → play
     PLAYBACK.SET_TMB(pc, tmb)
     PLAYBACK.SET_BOUNDS(pc, 1000, 24, 1)
-    PLAYBACK.SET_VIDEO_TRACKS(pc, {0})
     PLAYBACK.SET_SURFACE(pc, test_surface)
 
     -- Now Play should work

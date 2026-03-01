@@ -17,7 +17,6 @@ assert(qt_constants.PLAYBACK.CREATE, "PLAYBACK.CREATE should exist")
 assert(qt_constants.PLAYBACK.CLOSE, "PLAYBACK.CLOSE should exist")
 assert(qt_constants.PLAYBACK.SET_SURFACE, "PLAYBACK.SET_SURFACE should exist")
 assert(qt_constants.PLAYBACK.SET_TMB, "PLAYBACK.SET_TMB should exist")
-assert(qt_constants.PLAYBACK.SET_VIDEO_TRACKS, "PLAYBACK.SET_VIDEO_TRACKS should exist")
 assert(qt_constants.PLAYBACK.SET_BOUNDS, "PLAYBACK.SET_BOUNDS should exist")
 assert(qt_constants.PLAYBACK.PLAY, "PLAYBACK.PLAY should exist")
 assert(qt_constants.PLAYBACK.STOP, "PLAYBACK.STOP should exist")
@@ -47,11 +46,7 @@ print("  ✓ Initial frame: 0")
 qt_constants.PLAYBACK.SET_BOUNDS(pc, 1000, 24, 1)
 print("  ✓ Set bounds: 1000 frames @ 24fps")
 
--- Test 5: Set video tracks
-qt_constants.PLAYBACK.SET_VIDEO_TRACKS(pc, {0})
-print("  ✓ Set video tracks: {0}")
-
--- Test 6: Seek
+-- Test 5: Seek
 qt_constants.PLAYBACK.SEEK(pc, 100)
 frame = qt_constants.PLAYBACK.CURRENT_FRAME(pc)
 assert(frame == 100, string.format("After seek, frame should be 100, got %d", frame))

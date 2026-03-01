@@ -46,9 +46,8 @@ print("  ✓ Created TMB")
 -- Set up controller
 qt_constants.PLAYBACK.SET_TMB(pc, tmb)
 qt_constants.PLAYBACK.SET_BOUNDS(pc, 1000, 24, 1)
-qt_constants.PLAYBACK.SET_VIDEO_TRACKS(pc, {0})
 qt_constants.PLAYBACK.SET_SURFACE(pc, surface)
-print("  ✓ Configured controller (TMB, bounds, tracks, surface)")
+print("  ✓ Configured controller (TMB, bounds, surface)")
 
 -- Set position callback
 qt_constants.PLAYBACK.SET_POSITION_CALLBACK(pc, function(_, _)

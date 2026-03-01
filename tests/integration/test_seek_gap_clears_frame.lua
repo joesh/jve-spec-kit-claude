@@ -52,7 +52,6 @@ assert(pc, "test_seek_gap_clears_frame: CREATE failed")
 
 PLAYBACK.SET_TMB(pc, tmb)
 PLAYBACK.SET_BOUNDS(pc, 100, 24, 1)
-PLAYBACK.SET_VIDEO_TRACKS(pc, {1})
 PLAYBACK.SET_SURFACE(pc, test_surface)
 PLAYBACK.SET_NEED_CLIPS_CALLBACK(pc, function() end)
 

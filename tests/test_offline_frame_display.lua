@@ -77,7 +77,6 @@ qt_constants_mock = {
         CLOSE = function() pc_surface = nil end,
         SET_TMB = function() end,
         SET_BOUNDS = function() end,
-        SET_VIDEO_TRACKS = function() end,
         SET_SURFACE = function(_pc, surface)
             pc_surface = surface
         end,

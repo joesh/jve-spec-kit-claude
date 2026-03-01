@@ -52,9 +52,6 @@ package.loaded["core.qt_constants"] = {
         CLOSE = function() end,
         SET_TMB = function() end,
         SET_BOUNDS = function() end,
-        SET_VIDEO_TRACKS = function(pc, indices)
-            track_playback("SET_VIDEO_TRACKS", pc, indices)
-        end,
         SET_SURFACE = function() end,
         SET_CLIP_WINDOW = function(pc, mtype, lo, hi)
             track_playback("SET_CLIP_WINDOW", pc, mtype, lo, hi)
