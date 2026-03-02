@@ -5,6 +5,7 @@
 #include <QSlider>
 #include <QGroupBox>
 #include <QTextEdit>
+#include <QLineEdit>
 #include <QProgressBar>
 #include <QApplication>
 
@@ -129,6 +130,13 @@ int lua_set_text_edit_read_only(lua_State* L) {
     QTextEdit* te = get_widget<QTextEdit>(L, 1);
     bool ro = lua_toboolean(L, 2);
     if (te) te->setReadOnly(ro);
+    return 0;
+}
+
+int lua_set_line_edit_read_only(lua_State* L) {
+    QLineEdit* le = get_widget<QLineEdit>(L, 1);
+    bool ro = lua_toboolean(L, 2);
+    if (le) le->setReadOnly(ro);
     return 0;
 }
 

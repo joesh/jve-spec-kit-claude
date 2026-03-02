@@ -78,6 +78,7 @@ int lua_show_confirm_dialog(lua_State* L)
     QString cancelText = QStringLiteral("Cancel");
     QString defaultButton = QStringLiteral("confirm");
     QMessageBox::Icon icon = QMessageBox::Question;
+    bool hasCancelText = false;  // Only add cancel button if explicitly provided
 
     int argCount = lua_gettop(L);
 
@@ -92,7 +93,7 @@ int lua_show_confirm_dialog(lua_State* L)
             lua_getfield(L, 1, "informative_text"); if (lua_isstring(L, -1)) informativeText = QString::fromUtf8(lua_tostring(L, -1)); lua_pop(L, 1);
             lua_getfield(L, 1, "detail_text"); if (lua_isstring(L, -1)) detailText = QString::fromUtf8(lua_tostring(L, -1)); lua_pop(L, 1);
             lua_getfield(L, 1, "confirm_text"); if (lua_isstring(L, -1)) confirmText = QString::fromUtf8(lua_tostring(L, -1)); lua_pop(L, 1);
-            lua_getfield(L, 1, "cancel_text"); if (lua_isstring(L, -1)) cancelText = QString::fromUtf8(lua_tostring(L, -1)); lua_pop(L, 1);
+            lua_getfield(L, 1, "cancel_text"); if (lua_isstring(L, -1)) { cancelText = QString::fromUtf8(lua_tostring(L, -1)); hasCancelText = true; } lua_pop(L, 1);
             lua_getfield(L, 1, "default_button"); if (lua_isstring(L, -1)) defaultButton = QString::fromUtf8(lua_tostring(L, -1)).toLower(); lua_pop(L, 1);
 
             lua_getfield(L, 1, "icon");
@@ -107,7 +108,7 @@ int lua_show_confirm_dialog(lua_State* L)
         } else if (lua_isstring(L, 1)) {
             message = QString::fromUtf8(lua_tostring(L, 1));
             if (argCount >= 2 && lua_isstring(L, 2)) confirmText = QString::fromUtf8(lua_tostring(L, 2));
-            if (argCount >= 3 && lua_isstring(L, 3)) cancelText = QString::fromUtf8(lua_tostring(L, 3));
+            if (argCount >= 3 && lua_isstring(L, 3)) { cancelText = QString::fromUtf8(lua_tostring(L, 3)); hasCancelText = true; }
         }
     }
 
@@ -118,14 +119,23 @@ int lua_show_confirm_dialog(lua_State* L)
     if (!detailText.isEmpty()) msgBox.setDetailedText(detailText);
 
     QAbstractButton* confirmButton = msgBox.addButton(confirmText, QMessageBox::AcceptRole);
-    QAbstractButton* cancelButton = msgBox.addButton(cancelText, QMessageBox::RejectRole);
+    QAbstractButton* cancelButton = nullptr;
 
-    if (defaultButton == "cancel") msgBox.setDefaultButton(qobject_cast<QPushButton*>(cancelButton));
-    else msgBox.setDefaultButton(qobject_cast<QPushButton*>(confirmButton));
+    if (hasCancelText) {
+        cancelButton = msgBox.addButton(cancelText, QMessageBox::RejectRole);
+    }
+
+    if (defaultButton == "cancel" && cancelButton) {
+        msgBox.setDefaultButton(qobject_cast<QPushButton*>(cancelButton));
+    } else {
+        msgBox.setDefaultButton(qobject_cast<QPushButton*>(confirmButton));
+    }
 
     msgBox.exec();
     QAbstractButton* clicked = msgBox.clickedButton();
-    bool accepted = (clicked == confirmButton);
+
+    // No cancel button means only confirm is possible
+    bool accepted = cancelButton ? (clicked == confirmButton) : true;
 
     lua_pushboolean(L, accepted ? 1 : 0);
     lua_pushstring(L, accepted ? "confirm" : "cancel");
