@@ -2,151 +2,56 @@
 
 -- Test playhead position restoration during undo/redo
 -- Ensures playhead returns to position BEFORE undone command
-
-package.path = package.path .. ";../src/lua/?.lua;../src/lua/core/?.lua;../src/lua/models/?.lua;../src/lua/ui/?.lua;../src/lua/ui/timeline/?.lua;../tests/?.lua"
+-- Uses REAL timeline_state — no mock.
 
 require('test_env')
 
--- Mock timeline_state module for testing
-local mock_timeline_state = {
-    playhead_value = 0,
-    clips = {},
-    selected_clips = {},
-    selected_edges = {},
-    viewport_start_value = 0,
-    viewport_duration_frames_value = 300
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Only mock needed: panel_manager (Qt widget management)
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return nil end,
 }
-
-function mock_timeline_state.get_playhead_position()
-    return mock_timeline_state.playhead_position
-end
-
-function mock_timeline_state.set_playhead_position(time)
-    mock_timeline_state.playhead_position = time
-end
-
-function mock_timeline_state.get_selected_clips()
-    return mock_timeline_state.selected_clips
-end
-
-function mock_timeline_state.set_selection(clips)
-    mock_timeline_state.selected_clips = clips
-    mock_timeline_state.selected_edges = {}
-end
-
-function mock_timeline_state.get_selected_edges()
-    return mock_timeline_state.selected_edges
-end
-
-function mock_timeline_state.set_edge_selection(edges)
-    mock_timeline_state.selected_edges = edges
-    mock_timeline_state.selected_clips = {}
-end
-
-function mock_timeline_state.reload_clips()
-    -- Mock implementation - does nothing
-end
-
-function mock_timeline_state.apply_mutations(sequence_id, mutations)
-    if sequence_id and sequence_id ~= "" then
-        mock_timeline_state.sequence_id = sequence_id
-    end
-    return mutations ~= nil
-end
-
-function mock_timeline_state.consume_mutation_failure()
-    return nil
-end
-
-function mock_timeline_state.get_sequence_id()
-    return mock_timeline_state.sequence_id or "default_sequence"
-end
-function mock_timeline_state.get_sequence_frame_rate()
-    return {fps_numerator = 30, fps_denominator = 1}
-end
-
-local viewport_guard = 0
-
-function mock_timeline_state.capture_viewport()
-    return {
-        start_value = mock_timeline_state.viewport_start_value,
-        duration_value = mock_timeline_state.viewport_duration_frames_value,
-    }
-end
-
-function mock_timeline_state.restore_viewport(snapshot)
-    if not snapshot then
-        return
-    end
-
-    if snapshot.duration_value then
-        mock_timeline_state.viewport_duration_frames_value = snapshot.duration_value
-    end
-
-    if snapshot.start_value then
-        mock_timeline_state.viewport_start_value = snapshot.start_value
-    end
-end
-
-function mock_timeline_state.push_viewport_guard()
-    viewport_guard = viewport_guard + 1
-    return viewport_guard
-end
-
-function mock_timeline_state.pop_viewport_guard()
-    if viewport_guard > 0 then
-        viewport_guard = viewport_guard - 1
-    end
-    return viewport_guard
-end
-
--- Register mock before loading command_manager
-package.loaded['ui.timeline.timeline_state'] = mock_timeline_state
 
 local command_manager = require('core.command_manager')
 local Command = require('command')
 local database = require('core.database')
+local timeline_state = require('ui.timeline.timeline_state')
 
 print("=== Playhead Restoration Tests ===\n")
 
 -- Setup test database
 local test_db_path = "/tmp/jve/test_playhead_restoration.db"
 os.remove(test_db_path)
+os.remove(test_db_path .. "-wal")
+os.remove(test_db_path .. "-shm")
 
 database.init(test_db_path)
 local db = database.get_connection()
 
--- Create schema
 db:exec(require('import_schema'))
 
--- Insert test data
-db:exec([[
-    INSERT INTO projects (id, name, created_at, modified_at) VALUES
-        ('test_project', 'Test Project', strftime('%s','now'), strftime('%s','now')),
-        ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+local now = os.time()
+db:exec(string.format([[
+    INSERT INTO projects (id, name, created_at, modified_at)
+    VALUES ('test_project', 'Test Project', %d, %d);
 
     INSERT INTO sequences (
         id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_rate,
         width, height, view_start_frame, view_duration_frames, playhead_frame,
-        created_at, modified_at
-    )
-    VALUES
-        ('test_sequence', 'test_project', 'Test Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 300, 0, strftime('%s','now'), strftime('%s','now')),
-        ('default_sequence', 'default_project', 'Default Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 300, 0, strftime('%s','now'), strftime('%s','now'));
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at
+    ) VALUES (
+        'test_sequence', 'test_project', 'Test Sequence', 'timeline',
+        30, 1, 48000, 1920, 1080, 0, 300, 0,
+        '[]', '[]', '[]', 0, %d, %d
+    );
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-    VALUES
-        ('track_v1', 'test_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0),
-        ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
-]])
-
-do
-    local stmt = db:prepare("SELECT COUNT(*) FROM sequences WHERE project_id = 'test_project'")
-    assert(stmt:exec() and stmt:next())
-    print("DEBUG pre-init sequences", stmt:value(0))
-    stmt:finalize()
-end
+    VALUES ('track_v1', 'test_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+]], now, now, now, now))
 
 command_manager.init('test_sequence', 'test_project')
 
@@ -154,8 +59,7 @@ command_manager.init('test_sequence', 'test_project')
 print("Test 1: Undo restores playhead to pre-command position")
 
 -- Set initial playhead position
-mock_timeline_state.set_playhead_position(5000)
-print("   Initial playhead: 5000ms")
+timeline_state.set_playhead_position(5000)
 
 -- Execute a command (CreateSequence doesn't move playhead)
 local cmd1 = Command.create("CreateSequence", "test_project")
@@ -166,20 +70,11 @@ cmd1:set_parameter("width", 1920)
 cmd1:set_parameter("height", 1080)
 
 local result1 = command_manager.execute(cmd1)
-if not result1.success then
-    print("❌ FAIL: Command 1 execution failed")
-    os.exit(1)
-end
--- Simulate user moving playhead after command 1 by persisting new position
-mock_timeline_state.set_playhead_position(5000)
-local timeline_state = require('ui.timeline.timeline_state')
+assert(result1.success, "Command 1 execution failed: " .. tostring(result1.error_message))
 timeline_state.set_playhead_position(5000)
-print("   After command 1: " .. mock_timeline_state.get_playhead_position() .. "ms")
 
 -- Move playhead
-mock_timeline_state.set_playhead_position(10000)
 timeline_state.set_playhead_position(10000)
-print("   Moved playhead to: 10000ms")
 
 -- Execute second command
 local cmd2 = Command.create("CreateSequence", "test_project")
@@ -190,71 +85,42 @@ cmd2:set_parameter("width", 1920)
 cmd2:set_parameter("height", 1080)
 
 local result2 = command_manager.execute(cmd2)
-if not result2.success then
-    print("❌ FAIL: Command 2 execution failed")
-    os.exit(1)
-end
-print("   After command 2: " .. mock_timeline_state.get_playhead_position() .. "ms")
+assert(result2.success, "Command 2 execution failed: " .. tostring(result2.error_message))
 timeline_state.set_playhead_position(10000)
 
--- Undo should restore playhead to 10000ms (position BEFORE cmd2)
+-- Undo should restore playhead to 10000 (position BEFORE cmd2)
 command_manager.undo()
-local playhead_after_undo = mock_timeline_state.get_playhead_position()
-print("   After undo: " .. playhead_after_undo .. "ms")
+local playhead_after_undo = timeline_state.get_playhead_position()
+assert(playhead_after_undo == 10000,
+    string.format("Expected playhead at 10000 after undo, got %s", tostring(playhead_after_undo)))
 
-if playhead_after_undo == 10000 then
-    print("✅ PASS: Playhead correctly restored to pre-command position\n")
-else
-    print("❌ FAIL: Expected playhead at 10000ms, got " .. playhead_after_undo .. "ms\n")
-    os.exit(1)
-end
-
--- Test 2: Redo does not restore playhead (playhead is user state between commands)
+-- Test 2: Redo preserves current playhead position
 print("Test 2: Redo preserves current playhead position")
 
 -- Move playhead somewhere else
-mock_timeline_state.set_playhead_position(15000)
 timeline_state.set_playhead_position(15000)
-print("   Moved playhead to: 15000ms before redo")
 
 -- Redo command 2
 command_manager.redo()
-local playhead_after_redo = mock_timeline_state.get_playhead_position()
-print("   After redo: " .. playhead_after_redo .. "ms")
+local playhead_after_redo = timeline_state.get_playhead_position()
 
--- Redo should NOT change playhead (it's user state, not command output)
+-- Redo may or may not change playhead — just note behavior
 if playhead_after_redo == 15000 then
-    print("✅ PASS: Redo preserved user's playhead position\n")
+    print("  Redo preserved user's playhead position")
 else
-    print("⚠️  NOTE: Redo changed playhead to " .. playhead_after_redo .. "ms")
-    print("   This may be intentional, but playhead is typically user state\n")
+    print(string.format("  Redo changed playhead to %s (may be intentional)", tostring(playhead_after_redo)))
 end
 
--- We're currently at position after cmd2, playhead at 15000ms
--- Undo to position after cmd1 (should restore to 10000ms)
+-- Undo to position after cmd1 (should restore to 10000)
 command_manager.undo()
-local playhead_after_second_undo = mock_timeline_state.get_playhead_position()
-print("   After second undo: " .. playhead_after_second_undo .. "ms")
+local playhead_after_second_undo = timeline_state.get_playhead_position()
+assert(playhead_after_second_undo == 10000,
+    string.format("Expected playhead at 10000 after second undo, got %s", tostring(playhead_after_second_undo)))
 
-if playhead_after_second_undo == 10000 then
-    print("✅ PASS: Second undo correctly restored to command 1's post-state\n")
-else
-    print("❌ FAIL: Expected playhead at 10000ms, got " .. playhead_after_second_undo .. "ms\n")
-    os.exit(1)
-end
-
--- Undo again to drop command 1 (should restore to original 5000ms)
+-- Undo again to drop command 1 (should restore to original 5000)
 command_manager.undo()
-local playhead_after_third_undo = mock_timeline_state.get_playhead_position()
-print("   After third undo: " .. playhead_after_third_undo .. "ms")
+local playhead_after_third_undo = timeline_state.get_playhead_position()
+assert(playhead_after_third_undo == 5000,
+    string.format("Expected playhead at 5000 after third undo, got %s", tostring(playhead_after_third_undo)))
 
-if playhead_after_third_undo == 5000 then
-    print("✅ PASS: Third undo correctly restored to earlier playhead position\n")
-else
-    print("❌ FAIL: Expected playhead at 5000ms, got " .. playhead_after_third_undo .. "ms\n")
-    os.exit(1)
-end
-
-print("=== All Playhead Restoration Tests Passed ===")
-os.remove(test_db_path)
-os.exit(0)
+print("✅ test_playhead_restoration.lua passed")

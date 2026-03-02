@@ -43,7 +43,15 @@ local function normalize_clip_integers(clip)
     clip.timeline_start = timeline_start
     clip.duration = duration
 
-    -- source_in/source_out must also be integers if present
+    -- source_in/source_out: alias _value variants from mutations
+    if clip.source_in == nil and clip.source_in_value ~= nil then
+        clip.source_in = clip.source_in_value
+    end
+    if clip.source_out == nil and clip.source_out_value ~= nil then
+        clip.source_out = clip.source_out_value
+    end
+
+    -- source_in/source_out must be integers if present
     if clip.source_in ~= nil then
         assert(type(clip.source_in) == "number",
             "clip_state: source_in must be integer, got " .. type(clip.source_in))
@@ -51,6 +59,11 @@ local function normalize_clip_integers(clip)
     if clip.source_out ~= nil then
         assert(type(clip.source_out) == "number",
             "clip_state: source_out must be integer, got " .. type(clip.source_out))
+    end
+
+    -- Build rate table from flat fps fields if missing (mutations send flat fields)
+    if not clip.rate and clip.fps_numerator and clip.fps_denominator then
+        clip.rate = { fps_numerator = clip.fps_numerator, fps_denominator = clip.fps_denominator }
     end
 
     clip._invalid = nil

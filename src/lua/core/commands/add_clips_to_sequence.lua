@@ -117,6 +117,8 @@ local function populate_timeline_mutations(command, sequence_id, mutations)
                 source_out_value = mut.source_out_frame,
                 name = mut.name,
                 media_id = mut.media_id,
+                master_clip_id = mut.master_clip_id,
+                owner_sequence_id = mut.owner_sequence_id,
                 enabled = mut.enabled ~= false,
                 clip_kind = mut.clip_kind,
                 fps_numerator = mut.fps_numerator,

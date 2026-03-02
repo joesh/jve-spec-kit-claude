@@ -1,12 +1,16 @@
 #!/usr/bin/env luajit
 -- Regression: Cmd/Ctrl+B (Blade/Split) should dispatch Blade command via TOML keybindings.
+-- Uses LITERAL Qt key codes to catch wrong-constant bugs.
 
-package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
 
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local timeline_state = require("ui.timeline.timeline_state")
 local data = require("ui.timeline.state.timeline_state_data")
+
+-- ── Literal Qt key codes ──
+local QT_KEY_B = 66
+local QT_MOD_CONTROL = 0x04000000  -- Cmd on macOS
 
 -- Focus panel needs to be "timeline" for the shortcut to be active.
 local focus_manager = require("ui.focus_manager")
@@ -31,7 +35,7 @@ data.state.clips = { clip }
 data.state.selected_clips = { clip }
 timeline_state.set_playhead_position(10)
 
--- Stub command manager with execute_ui + get_executor for TOML dispatch
+-- Stub command manager — dispatch test only (verify routing, not execution)
 local captured_commands = {}
 local mock_command_manager = {
     execute_ui = function(command_name, params)
@@ -42,7 +46,6 @@ local mock_command_manager = {
         return { success = true }
     end,
     get_executor = function(command_name)
-        -- Return a dummy for Blade so TOML dispatch works
         if command_name == "Blade" then return function() end end
         return nil
     end,
@@ -51,17 +54,13 @@ local mock_command_manager = {
     end_command_event = function() end,
 }
 
-local mock_project_browser = {
-    add_selected_to_timeline = function() end,
-}
-local mock_timeline_panel = {
-    is_dragging = function() return false end,
-}
+local mock_project_browser = { add_selected_to_timeline = function() end }
+local mock_timeline_panel = { is_dragging = function() return false end }
 keyboard_shortcuts.init(timeline_state, mock_command_manager, mock_project_browser, mock_timeline_panel)
 
 local event = {
-    key = keyboard_shortcuts.KEY.B,
-    modifiers = keyboard_shortcuts.MOD.Control,  -- Qt: Command key = ControlModifier on macOS
+    key = QT_KEY_B,
+    modifiers = QT_MOD_CONTROL,
     text = "b",
     focus_widget_is_text_input = 0,
 }

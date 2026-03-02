@@ -1,6 +1,21 @@
 #!/usr/bin/env luajit
 
+-- DuplicateMasterClip: execute creates master clip in bin, undo removes it.
+-- Uses REAL timeline_state — no mock.
+
 require('test_env')
+
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Only mocks needed: panel_manager, focus_manager (Qt widget management)
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return nil end,
+}
+package.loaded["ui.focus_manager"] = {
+    get_focused_panel = function() return "project_browser" end,
+    set_focused_panel = function() end,
+}
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
@@ -9,6 +24,8 @@ local Command = require('command')
 
 local TEST_DB = "/tmp/jve/test_duplicate_master_clip.db"
 os.remove(TEST_DB)
+os.remove(TEST_DB .. "-wal")
+os.remove(TEST_DB .. "-shm")
 
 database.init(TEST_DB)
 local db = database.get_connection()
@@ -35,35 +52,13 @@ db:exec([[
     VALUES ('bin_target', 'default_project', 'bin', 'Target Bin', 'Target Bin', 1);
 ]])
 
-local timeline_state_stub = {
-    get_selected_clips = function() return {} end,
-    get_clip_by_id = function() return nil end,
-    get_sequence_id = function() return "default_sequence" end,
-    get_project_id = function() return "default_project" end,
-    get_selected_edges = function() return {} end,
-    set_selection = function() end,
-    reload_clips = function() end,
-    persist_state_to_db = function() end,
-    get_playhead_position = function() return 0 end,
-    set_playhead_position = function() end,
-    get_sequence_frame_rate = function() return 24.0 end,
-    get_clips = function() return {} end,
-    capture_viewport = function() return {start_value = 0, duration_value = 240, timebase_type = "video_frames", timebase_rate = 24.0} end,
-    restore_viewport = function() end,
-    push_viewport_guard = function() return 0 end,
-    pop_viewport_guard = function() return 0 end
-}
-
-package.loaded["ui.timeline.timeline_state"] = timeline_state_stub
-package.loaded["ui.focus_manager"] = {
-    get_focused_panel = function() return "project_browser" end,
-    set_focused_panel = function() end
-}
-
+-- Verify undoer registration
 local executors = {}
 local undoers = {}
 command_impl.register_commands(executors, undoers, db)
 assert(type(undoers["DuplicateMasterClip"]) == "function", "DuplicateMasterClip undoer not registered")
+
+-- Init with REAL timeline_state (reads from DB)
 command_manager.init('default_sequence', 'default_project')
 
 local snapshot = {

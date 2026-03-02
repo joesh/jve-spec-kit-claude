@@ -68,6 +68,13 @@ protected:
         if (event->type() == QEvent::KeyPress && lua_state) {
             QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
 
+            // Skip standalone modifier keys — they don't map to commands
+            int k = keyEvent->key();
+            if (k == Qt::Key_Control || k == Qt::Key_Shift ||
+                k == Qt::Key_Alt || k == Qt::Key_Meta) {
+                return QObject::eventFilter(obj, event);
+            }
+
             lua_getglobal(lua_state, handler_name.c_str());
             if (lua_isfunction(lua_state, -1)) {
                 lua_newtable(lua_state);

@@ -1,15 +1,30 @@
 #!/usr/bin/env luajit
 
+-- Ripple delete selection tests
+-- Verifies: clip deletion with downstream shift, multi-track, undo/redo, edge cases
+-- Uses REAL timeline_state — no mock.
+
 require('test_env')
+
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Only mock needed: panel_manager (Qt widget management)
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return nil end,
+}
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 local _ = require('core.command_implementations') -- load for side effects
 local Command = require('command')
 local Media = require('models.media')
+local timeline_state = require('ui.timeline.timeline_state')
 
 local TEST_DB = "/tmp/jve/test_ripple_delete_selection.db"
 os.remove(TEST_DB)
+os.remove(TEST_DB .. "-wal")
+os.remove(TEST_DB .. "-shm")
 
 database.init(TEST_DB)
 local db = database.get_connection()
@@ -23,9 +38,11 @@ db:exec([[
         id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_rate,
         width, height, view_start_frame, view_duration_frames, playhead_frame,
-        created_at, modified_at
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at
     )
-    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 240, 0, strftime('%s','now'), strftime('%s','now'));
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 10000, 0,
+        '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now'));
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
@@ -44,6 +61,7 @@ local function clips_snapshot()
             duration_value = stmt:value(3)
         }
     end
+    stmt:finalize()
     return clips
 end
 
@@ -58,6 +76,7 @@ end
 
 local function assert_no_overlaps()
     local stmt = db:prepare("SELECT id, track_id, timeline_start_frame, duration_frames FROM clips ORDER BY track_id, timeline_start_frame")
+    assert(stmt:exec())
     local prev = {}
     while stmt:next() do
         local id = stmt:value(0)
@@ -72,62 +91,6 @@ local function assert_no_overlaps()
         prev[track] = {start = start, dur = dur}
     end
     stmt:finalize()
-end
-
-local timeline_state = {
-    clips = {},
-    selected_clips = {},
-    selected_edges = {},
-    selected_gaps = {},
-    playhead_value = 0,
-    playhead_position = 0,
-    viewport_start_value = 0,
-    viewport_duration_frames_value = 10000,
-}
-
-local function reload_state_clips()
-    timeline_state.clips = clips_snapshot()
-end
-
-function timeline_state.get_selected_clips() return timeline_state.selected_clips end
-function timeline_state.get_selected_edges() return timeline_state.selected_edges end
-function timeline_state.clear_edge_selection() timeline_state.selected_edges = {} end
-function timeline_state.clear_gap_selection() timeline_state.selected_gaps = {} end
-function timeline_state.get_selected_gaps() return timeline_state.selected_gaps end
-function timeline_state.set_selection(clips) timeline_state.selected_clips = clips or {} end
-function timeline_state.reload_clips() reload_state_clips() end
-function timeline_state.persist_state_to_db() end
-function timeline_state.apply_mutations(sequence_id, mutations)
-    if mutations and (mutations.updates or mutations.deletes or mutations.inserts) then
-        reload_state_clips()
-        return true
-    end
-    return false
-end
-function timeline_state.consume_mutation_failure() return nil end
-function timeline_state.get_clips()
-    reload_state_clips()
-    return timeline_state.clips
-end
-function timeline_state.get_sequence_id() return "default_sequence" end
-function timeline_state.get_sequence_frame_rate() return {fps_numerator = 30, fps_denominator = 1} end
-function timeline_state.get_playhead_position() return timeline_state.playhead_position end
-function timeline_state.set_playhead_position(time_ms)
-    timeline_state.playhead_position = time_ms
-    timeline_state.playhead_value = time_ms
-end
-function timeline_state.push_viewport_guard() return 1 end
-function timeline_state.pop_viewport_guard() return 0 end
-function timeline_state.capture_viewport()
-    return {
-        start_value = timeline_state.viewport_start_value,
-        duration = timeline_state.viewport_duration_frames_value,
-    }
-end
-function timeline_state.restore_viewport(snapshot)
-    if not snapshot then return end
-    timeline_state.viewport_start_value = snapshot.start_value or timeline_state.viewport_start_value
-    timeline_state.viewport_duration_frames_value = snapshot.duration or timeline_state.viewport_duration_frames_value
 end
 
 local function reset_timeline_state()
@@ -146,15 +109,13 @@ local function reset_timeline_state()
     end
     db:exec("DELETE FROM clips;")
     db:exec("DELETE FROM media;")
-    timeline_state.selected_clips = {}
-    timeline_state.selected_edges = {}
-    timeline_state.selected_gaps = {}
-    timeline_state.playhead_position = 0
+    timeline_state.reload_clips()
+    timeline_state.set_selection({})
+    timeline_state.clear_edge_selection()
+    timeline_state.clear_gap_selection()
+    timeline_state.set_playhead_position(0)
 end
 
-package.loaded['ui.timeline.timeline_state'] = timeline_state
-
--- command_impl.register_commands({}, {}, db)
 command_manager.init('default_sequence', 'default_project')
 
 local function create_clip_command(params)
@@ -231,11 +192,9 @@ for _, spec in ipairs(clip_specs) do
     assert(command_manager.execute(cmd).success)
 end
 
-reload_state_clips()
+timeline_state.reload_clips()
 
-timeline_state.selected_clips = {
-    {id = "clip_b"}
-}
+timeline_state.set_selection({{id = "clip_b"}})
 
 local function execute_ripple_delete(ids)
     local cmd = Command.create("RippleDeleteSelection", "default_project")
@@ -247,7 +206,7 @@ end
 
 -- Test: Ripple delete removes clip and shifts downstream clips
 local original_playhead = 43210
-timeline_state.playhead_position = original_playhead
+timeline_state.set_playhead_position(original_playhead)
 execute_ripple_delete({"clip_b"})
 
 local after_delete = clips_snapshot()
@@ -263,8 +222,8 @@ assert(clip_c.start_value == 1000, string.format("Clip C start_value expected 10
 -- Undo restores original state
 local undo_result = command_manager.undo()
 assert(undo_result.success, undo_result.error_message or "Undo failed for RippleDeleteSelection")
-assert(timeline_state.playhead_position == original_playhead,
-    string.format("Undo should restore playhead to %d, got %d", original_playhead, timeline_state.playhead_position))
+assert(timeline_state.get_playhead_position() == original_playhead,
+    string.format("Undo should restore playhead to %d, got %d", original_playhead, timeline_state.get_playhead_position()))
 assert_no_overlaps()
 
 local after_undo = clips_snapshot()
@@ -293,10 +252,9 @@ assert(clip_c_after_redo.start_value == 1000, string.format("Clip C start_value 
 assert(command_manager.undo().success, "Failed to undo ripple delete before regression setup")
 db:exec("DELETE FROM clips;")
 db:exec("DELETE FROM media;")
-timeline_state.selected_clips = {}
-timeline_state.selected_edges = {}
-timeline_state.selected_gaps = {}
-timeline_state.playhead_position = 0
+timeline_state.reload_clips()
+timeline_state.set_selection({})
+timeline_state.set_playhead_position(0)
 
 local regression_specs = {
     {id = "clip_1", start = 0, duration = 500},   -- selected
@@ -314,12 +272,12 @@ for _, spec in ipairs(regression_specs) do
     assert(command_manager.execute(cmd).success)
 end
 
-reload_state_clips()
+timeline_state.reload_clips()
 
-timeline_state.selected_clips = {
+timeline_state.set_selection({
     {id = "clip_1"},
     {id = "clip_3"},
-}
+})
 
 execute_ripple_delete({"clip_1", "clip_3"})
 
@@ -360,12 +318,12 @@ for _, spec in ipairs(multi_specs) do
     assert(command_manager.execute(cmd).success)
 end
 
-reload_state_clips()
+timeline_state.reload_clips()
 
 local selection_before = {{id = "mt_v1_target"}}
-timeline_state.selected_clips = selection_before
+timeline_state.set_selection(selection_before)
 local selection_playhead = 24680
-timeline_state.playhead_position = selection_playhead
+timeline_state.set_playhead_position(selection_playhead)
 
 execute_ripple_delete({"mt_v1_target"})
 
@@ -377,12 +335,13 @@ assert(shifted_v2.start_value == expected_shift,
 
 local undo_multi = command_manager.undo()
 assert(undo_multi.success, undo_multi.error_message or "Undo failed for multi-track ripple")
-assert(timeline_state.selected_clips and timeline_state.selected_clips[1]
-    and timeline_state.selected_clips[1].id == "mt_v1_target",
+local sel_after_undo = timeline_state.get_selected_clips()
+assert(sel_after_undo and sel_after_undo[1]
+    and sel_after_undo[1].id == "mt_v1_target",
     "Undo should restore original selection for ripple delete")
-assert(timeline_state.playhead_position == selection_playhead,
+assert(timeline_state.get_playhead_position() == selection_playhead,
     string.format("Undo should restore playhead to %d, got %d",
-        selection_playhead, timeline_state.playhead_position))
+        selection_playhead, timeline_state.get_playhead_position()))
 assert_no_overlaps()
 
 local restored_v2 = find_clip("mt_v2_post")
@@ -427,8 +386,8 @@ for _, spec in ipairs({
     cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
-reload_state_clips()
-timeline_state.selected_clips = {{id = "mix_b"}}
+timeline_state.reload_clips()
+timeline_state.set_selection({{id = "mix_b"}})
 
 local cmd_mixed = Command.create("RippleDeleteSelection", "default_project")
 cmd_mixed:set_parameter("clip_ids", {"mix_b", "nonexistent_clip"})
@@ -453,8 +412,8 @@ for _, spec in ipairs({
     cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
-reload_state_clips()
-timeline_state.selected_clips = {{id = "first_a"}}
+timeline_state.reload_clips()
+timeline_state.set_selection({{id = "first_a"}})
 
 local cmd_first = Command.create("RippleDeleteSelection", "default_project")
 cmd_first:set_parameter("clip_ids", {"first_a"})
@@ -484,8 +443,8 @@ for _, spec in ipairs({
     cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
-reload_state_clips()
-timeline_state.selected_clips = {{id = "last_c"}}
+timeline_state.reload_clips()
+timeline_state.set_selection({{id = "last_c"}})
 
 local cmd_last = Command.create("RippleDeleteSelection", "default_project")
 cmd_last:set_parameter("clip_ids", {"last_c"})
@@ -512,8 +471,8 @@ for _, spec in ipairs({
     cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
-reload_state_clips()
-timeline_state.selected_clips = {{id = "all_a"}, {id = "all_b"}}
+timeline_state.reload_clips()
+timeline_state.set_selection({{id = "all_a"}, {id = "all_b"}})
 
 local cmd_all = Command.create("RippleDeleteSelection", "default_project")
 cmd_all:set_parameter("clip_ids", {"all_a", "all_b"})
@@ -542,8 +501,8 @@ for _, spec in ipairs({
     cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
-reload_state_clips()
-timeline_state.selected_clips = {{id = "cycle_b"}}
+timeline_state.reload_clips()
+timeline_state.set_selection({{id = "cycle_b"}})
 
 local cmd_cycle = Command.create("RippleDeleteSelection", "default_project")
 cmd_cycle:set_parameter("clip_ids", {"cycle_b"})
@@ -577,8 +536,8 @@ for _, spec in ipairs({
     cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
-reload_state_clips()
-timeline_state.selected_clips = {{id = "gap_b"}}
+timeline_state.reload_clips()
+timeline_state.set_selection({{id = "gap_b"}})
 
 local cmd_gap = Command.create("RippleDeleteSelection", "default_project")
 cmd_gap:set_parameter("clip_ids", {"gap_b"})

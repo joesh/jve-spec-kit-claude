@@ -545,4 +545,16 @@ log.event("Main window size: %dx%d", window_w, window_h)
 log.event("Timeline panel size: %dx%d", timeline_w, timeline_h)
 log.event("Inspector panel size: %dx%d", inspector_w, inspector_h)
 
-return main_window
+-- Export widget references for UI tests (main.cpp uses s_lastCreatedMainWindow, not this return value)
+return {
+    main_window = main_window,
+    main_splitter = main_splitter,
+    top_splitter = top_splitter,
+    project_browser = project_browser,
+    source_monitor = source_monitor,
+    timeline_monitor = timeline_monitor,
+    inspector_panel = inspector_panel,
+    timeline_panel = timeline_panel,
+    active_project_id = active_project_id,
+    active_sequence_id = active_sequence_id,
+}

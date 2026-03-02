@@ -1,13 +1,70 @@
 #!/usr/bin/env luajit
+-- Tests keyboard shortcut focus routing and text-field bypass.
+-- Uses LITERAL Qt key codes (not keyboard_constants) to catch wrong-constant bugs.
+-- Uses REAL timeline_state — no mock.
+-- command_manager mock is justified: test tracks dispatched command names, not execution.
 
-package.path = package.path .. ";../src/lua/?.lua;../src/lua/?/init.lua;./?.lua;./?/init.lua"
+require('test_env')
+
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Mock panel_manager (Qt dependency)
+package.loaded["ui.panel_manager"] = {
+    toggle_active_panel = function() end,
+    get_active_sequence_monitor = function() return nil end,
+}
+
+-- Set up database for real timeline_state
+local database = require("core.database")
+local command_manager = require("core.command_manager")
+
+local TEST_DB = "/tmp/jve/test_keyboard_focus_routing.db"
+os.remove(TEST_DB)
+os.remove(TEST_DB .. "-wal")
+os.remove(TEST_DB .. "-shm")
+assert(database.init(TEST_DB))
+local db = database.get_connection()
+db:exec(require("import_schema"))
+
+local now = os.time()
+db:exec(string.format([[
+    INSERT INTO projects (id, name, created_at, modified_at)
+    VALUES ('proj1', 'Test', %d, %d);
+    INSERT INTO sequences (
+        id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
+        width, height, view_start_frame, view_duration_frames, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at
+    ) VALUES (
+        'seq1', 'proj1', 'Seq', 'timeline', 24, 1, 48000,
+        1920, 1080, 0, 240, 100, '[]', '[]', '[]', 0, %d, %d
+    );
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
+        enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v1', 'seq1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+]], now, now, now, now))
+
+-- Init real timeline_state from database
+command_manager.init('seq1', 'proj1')
 
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local focus_manager = require("ui.focus_manager")
 local selection_hub = require("ui.selection_hub")
+local timeline_state = require("ui.timeline.timeline_state")
 
-local KEY = keyboard_shortcuts.KEY
-local MOD = keyboard_shortcuts.MOD
+-- ── Literal Qt key codes (ground truth from Qt::Key enum) ──
+local QT_KEY_LEFT      = 16777234   -- 0x01000012
+local QT_KEY_RIGHT     = 16777236   -- 0x01000014
+local QT_KEY_I         = 73
+local QT_KEY_Z         = 90
+local QT_KEY_A         = 65
+local QT_KEY_B         = 66
+local QT_KEY_RETURN    = 16777220   -- 0x01000004
+local QT_KEY_ESCAPE    = 16777216   -- 0x01000000
+
+local QT_MOD_NONE    = 0
+local QT_MOD_CONTROL = 0x04000000  -- Cmd on macOS
 
 local function assert_equal(actual, expected, message)
     if actual ~= expected then
@@ -27,90 +84,7 @@ local function assert_false(value, message)
     end
 end
 
-local timeline_state = {}
-local timeline_moves = {}
-local timeline_marks = { last_in = nil, last_out = nil }
-
-function timeline_state.get_sequence_frame_rate()
-    return 24
-end
-
-function timeline_state.get_playhead_position()
-    return timeline_state.playhead or 0
-end
-
-function timeline_state.set_playhead_position(value)
-    local numeric = value
-    if type(value) == "table" and value.frames then
-        numeric = value.frames
-    end
-    timeline_state.playhead = numeric
-    table.insert(timeline_moves, numeric)
-end
-
-function timeline_state.get_mark_in()
-    return timeline_marks.last_in
-end
-
-function timeline_state.get_mark_out()
-    return timeline_marks.last_out
-end
-
--- Marks now go through commands (SetMarkIn, SetMarkOut, ClearMarks)
--- No mock setters needed — mark dispatch is verified via command_manager_stub.executed_commands
-
-function timeline_state.get_clips()
-    return {}
-end
-
-function timeline_state.get_selected_clips()
-    return {}
-end
-
-function timeline_state.get_selected_edges()
-    return {}
-end
-
-function timeline_state.get_clips_at_time()
-    return {}
-end
-
-function timeline_state.get_track_by_id()
-    return nil
-end
-
-function timeline_state.get_track_index()
-    return nil
-end
-
-function timeline_state.get_sequence_id()
-    return "default_sequence"
-end
-
-function timeline_state.get_project_id()
-    return "default_project"
-end
-
-function timeline_state.get_default_video_track_id()
-    return "video1"
-end
-
-function timeline_state.get_all_tracks()
-    return {}
-end
-
-function timeline_state.set_selection()
-end
-
-function timeline_state.set_mark_range()
-end
-
-function timeline_state.set_viewport_duration_frames_value()
-end
-
-function timeline_state.set_viewport_start_value()
-end
-
+-- Mock command_manager for dispatch tracking (justified: testing routing, not execution)
 local command_manager_stub = {
     undo_calls = 0,
     redo_calls = 0,
@@ -149,13 +123,12 @@ function command_manager_stub.execute(command_arg)
     return {success = true}
 end
 
-function command_manager_stub.execute_ui(command_name, params)
+function command_manager_stub.execute_ui(command_name)
     table.insert(command_manager_stub.executed_commands, command_name)
     return {success = true}
 end
 
-function command_manager_stub.get_executor(command_name)
-    -- Return a dummy executor so TOML dispatch works
+function command_manager_stub.get_executor(command_name) -- luacheck: ignore 212
     return function() end
 end
 
@@ -167,9 +140,7 @@ function command_manager_stub.begin_command_event() end
 function command_manager_stub.end_command_event() end
 
 local timeline_panel_stub = {
-    is_dragging = function()
-        return false
-    end,
+    is_dragging = function() return false end,
     focus_timeline_view = function() return true end,
     focus_timecode_entry = function() return true end,
     cancel_timecode_calls = 0,
@@ -186,9 +157,8 @@ local function reset_environment()
     command_manager_stub.current_sequence_number = 0
     command_manager_stub.executed_commands = {}
     timeline_panel_stub.cancel_timecode_calls = 0
-    timeline_state.playhead = 100
-    timeline_moves = {}
-    timeline_marks = { last_in = nil, last_out = nil }
+    -- Real timeline_state: set playhead to known position for tracking
+    timeline_state.set_playhead_position(100)
     focus_manager.set_focused_panel(nil)
     local project_browser_stub = {
         add_selected_to_timeline = function() end,
@@ -196,74 +166,69 @@ local function reset_environment()
     keyboard_shortcuts.init(timeline_state, command_manager_stub, project_browser_stub, timeline_panel_stub)
 end
 
+local function find_command(name)
+    for _, cmd in ipairs(command_manager_stub.executed_commands) do
+        if cmd == name then return true end
+    end
+    return false
+end
+
 -- Test 1: Arrow keys ignored when timeline does not have focus
 reset_environment()
 focus_manager.set_focused_panel("inspector")
+local playhead_before = timeline_state.get_playhead_position()
 local handled = keyboard_shortcuts.handle_key({
-    key = KEY.Left,
-    modifiers = MOD.NoModifier,
+    key = QT_KEY_LEFT,
+    modifiers = QT_MOD_NONE,
     text = "",
     focus_widget_is_text_input = false,
 })
 assert_false(handled, "Left arrow should not be handled when inspector has focus")
-assert_equal(#timeline_moves, 0, "Playhead must not move without timeline focus")
+assert_equal(timeline_state.get_playhead_position(), playhead_before,
+    "Playhead must not move without timeline focus")
 
 -- Test 2: Arrow keys move playhead when timeline has focus
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
-    key = KEY.Right,
-    modifiers = MOD.NoModifier,
+    key = QT_KEY_RIGHT,
+    modifiers = QT_MOD_NONE,
     text = "",
     focus_widget_is_text_input = false,
 })
 assert_true(handled, "Right arrow should be handled when timeline has focus")
--- Arrow keys dispatch MovePlayhead command via arrow_repeat
-local found_move = false
-for _, cmd in ipairs(command_manager_stub.executed_commands) do
-    if cmd == "MovePlayhead" then found_move = true; break end
-end
-assert_true(found_move, "Right arrow should dispatch MovePlayhead command")
+assert_true(find_command("MovePlayhead"), "Right arrow should dispatch MovePlayhead command")
 
 -- Test 3: Text inputs bypass timeline shortcuts
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
-    key = KEY.I,
-    modifiers = MOD.NoModifier,
+    key = QT_KEY_I,
+    modifiers = QT_MOD_NONE,
     text = "i",
     focus_widget_is_text_input = true,
 })
 assert_false(handled, "Character keys should pass through when typing in a text field")
--- Marks now dispatched via commands — verify no SetMarkIn was executed
-local found_mark_in = false
-for _, cmd in ipairs(command_manager_stub.executed_commands) do
-    if cmd == "SetMarkIn" then found_mark_in = true; break end
-end
-assert_false(found_mark_in, "SetMarkIn should not dispatch while typing in text field")
+assert_false(find_command("SetMarkIn"), "SetMarkIn should not dispatch while typing in text field")
 
 -- Test 4: Undo is still handled as a global shortcut (via TOML dispatch)
 reset_environment()
 focus_manager.set_focused_panel("inspector")
 handled = keyboard_shortcuts.handle_key({
-    key = KEY.Z,
-    modifiers = MOD.Control,  -- Qt: Command key = ControlModifier on macOS
+    key = QT_KEY_Z,
+    modifiers = QT_MOD_CONTROL,
     text = "",
     focus_widget_is_text_input = false,
 })
 assert_true(handled, "Cmd/Ctrl+Z should be treated as a global command")
-local found_undo = false
-for _, cmd in ipairs(command_manager_stub.executed_commands) do
-    if cmd == "Undo" then found_undo = true; break end
-end
-assert_true(found_undo, "Cmd+Z should dispatch Undo command")
+assert_true(find_command("Undo"), "Cmd+Z should dispatch Undo command")
 
 -- Test 5: Return activates browser selection only when browser focused
 reset_environment()
 focus_manager.set_focused_panel("project_browser")
 handled = keyboard_shortcuts.handle_key({
-    key = KEY.Return,
-    modifiers = MOD.NoModifier,
+    key = QT_KEY_RETURN,
+    modifiers = QT_MOD_NONE,
     text = "\n",
     focus_widget_is_text_input = false,
 })
@@ -274,8 +239,8 @@ assert_equal(command_manager_stub.executed_commands[#command_manager_stub.execut
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
-    key = KEY.Return,
-    modifiers = MOD.NoModifier,
+    key = QT_KEY_RETURN,
+    modifiers = QT_MOD_NONE,
     text = "\n",
     focus_widget_is_text_input = false,
 })
@@ -286,104 +251,80 @@ assert_equal(#command_manager_stub.executed_commands, 0, "No commands should exe
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
-    key = KEY.A,
-    modifiers = MOD.Control,  -- Qt: Command key = ControlModifier on macOS
+    key = QT_KEY_A,
+    modifiers = QT_MOD_CONTROL,
     text = "",
     focus_widget_is_text_input = true,
 })
 assert_false(handled, "Cmd+A must pass through to text field, not dispatch SelectAll")
-local found_select_all = false
-for _, cmd in ipairs(command_manager_stub.executed_commands) do
-    if cmd == "SelectAll" then found_select_all = true; break end
-end
-assert_false(found_select_all, "SelectAll must not fire while typing in text field")
+assert_false(find_command("SelectAll"), "SelectAll must not fire while typing in text field")
 
 -- Test 8: Cmd+Z in text field should NOT dispatch Undo command
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
-    key = KEY.Z,
-    modifiers = MOD.Control,
+    key = QT_KEY_Z,
+    modifiers = QT_MOD_CONTROL,
     text = "",
     focus_widget_is_text_input = true,
 })
 assert_false(handled, "Cmd+Z must pass through to text field for inline undo")
-local found_undo_in_text = false
-for _, cmd in ipairs(command_manager_stub.executed_commands) do
-    if cmd == "Undo" then found_undo_in_text = true; break end
-end
-assert_false(found_undo_in_text, "Undo must not fire while typing in text field")
+assert_false(find_command("Undo"), "Undo must not fire while typing in text field")
 
 -- Test 9: Cmd+B in text field should NOT dispatch Blade command
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
-    key = KEY.B,
-    modifiers = MOD.Control,
+    key = QT_KEY_B,
+    modifiers = QT_MOD_CONTROL,
     text = "",
     focus_widget_is_text_input = true,
 })
 assert_false(handled, "Cmd+B must pass through to text field, not dispatch Blade")
-local found_blade = false
-for _, cmd in ipairs(command_manager_stub.executed_commands) do
-    if cmd == "Blade" then found_blade = true; break end
-end
-assert_false(found_blade, "Blade must not fire while typing in text field")
+assert_false(find_command("Blade"), "Blade must not fire while typing in text field")
 
 -- Test 10: focus_widget_is_text_input=0 (C++ false) must NOT bypass
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
-    key = KEY.I,
-    modifiers = MOD.NoModifier,
+    key = QT_KEY_I,
+    modifiers = QT_MOD_NONE,
     text = "i",
     focus_widget_is_text_input = 0,  -- C++ lua_pushboolean(false) = 0
 })
 assert_true(handled, "focus_widget_is_text_input=0 must not trigger text bypass")
-local found_mark_from_zero = false
-for _, cmd in ipairs(command_manager_stub.executed_commands) do
-    if cmd == "SetMark" then found_mark_from_zero = true; break end
-end
-assert_true(found_mark_from_zero, "SetMark must dispatch when focus_widget_is_text_input=0")
+assert_true(find_command("SetMark"), "SetMark must dispatch when focus_widget_is_text_input=0")
 
 -- Test 11: focus_widget_is_text_input=nil (missing field) must NOT bypass
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
-    key = KEY.I,
-    modifiers = MOD.NoModifier,
+    key = QT_KEY_I,
+    modifiers = QT_MOD_NONE,
     text = "i",
     -- focus_widget_is_text_input omitted entirely
 })
 assert_true(handled, "missing focus_widget_is_text_input must not trigger text bypass")
-local found_mark_from_nil = false
-for _, cmd in ipairs(command_manager_stub.executed_commands) do
-    if cmd == "SetMark" then found_mark_from_nil = true; break end
-end
-assert_true(found_mark_from_nil, "SetMark must dispatch when focus_widget_is_text_input is nil")
+assert_true(find_command("SetMark"), "SetMark must dispatch when focus_widget_is_text_input is nil")
 
 -- Test 12: Arrow keys in text field must pass through (not start arrow_repeat)
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
-    key = KEY.Left,
-    modifiers = MOD.NoModifier,
+    key = QT_KEY_LEFT,
+    modifiers = QT_MOD_NONE,
     text = "",
     focus_widget_is_text_input = true,
 })
 assert_false(handled, "Left arrow must pass through to text field for cursor movement")
-local found_move_in_text = false
-for _, cmd in ipairs(command_manager_stub.executed_commands) do
-    if cmd == "MovePlayhead" then found_move_in_text = true; break end
-end
-assert_false(found_move_in_text, "MovePlayhead must not fire while in text field")
+assert_false(find_command("MovePlayhead"), "MovePlayhead must not fire while in text field")
 
 -- Test 13: Escape in text field cancels timecode entry
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
-    key = KEY.Escape,
-    modifiers = MOD.NoModifier,
+    key = QT_KEY_ESCAPE,
+    modifiers = QT_MOD_NONE,
     text = "",
     focus_widget_is_text_input = true,
 })
@@ -397,8 +338,8 @@ assert_equal(#command_manager_stub.executed_commands, 0,
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
-    key = KEY.Escape,
-    modifiers = MOD.NoModifier,
+    key = QT_KEY_ESCAPE,
+    modifiers = QT_MOD_NONE,
     text = "",
     focus_widget_is_text_input = false,
 })

@@ -40,11 +40,11 @@ make clean          # Clean build artifacts
 ./build/bin/JVEEditor      # Launches, shows 3-panel layout, timeline panel
 
 ## Dev Cycle
-After any Lua change: `make -j4` to run luacheck (0 warnings required), then `./tests/run_lua_tests_all.sh`.
+After any Lua change: `make -j4` which will run luacheck (0 warnings required) and all the Lua tests
 
 ## Running Tests
 ```bash
-# Run all Lua tests
+# Run all Lua tests without stopping when one errors
 ./tests/run_lua_tests_all.sh
 
 # Run a single test (from tests/ directory)
@@ -59,6 +59,8 @@ Tests are LuaJIT scripts in `tests/` with `test_*.lua` naming. Each test:
 - Uses `command_manager.execute()`, `command_manager.undo()`, `command_manager.redo()` directly
 - Uses `print()` for test output (tests don't use logger module)
 - Ends with `print("✅ test_name.lua passed")` on success
+
+**IMPORTANT** When writing tests use the ABSOLUTE MINIMUM set of mocks. Mocks are bad. They encode incorrect assumptions about how the real code works. Avoid them if at all possible.
 
 ## Logger Usage
 Use the unified logger (never bare `print`). Each module binds to a functional area once:
@@ -80,9 +82,9 @@ For short-term debug prints that will immediately be removed you may use print.
 
 ## Lua Error Handling in C++ Callbacks
 When C++ code calls Lua callbacks (e.g., via `lua_pcall`), **NEVER silently log errors**. Instead:
-- Use `JVE_ASSERT(false, err_msg)` to crash with stack trace
+- Use `JVE_ASSERT(false, err_msg)` to reset with a loud stack trace
 - Lua's assert/error doesn't crash the app — it generates a stack trace and unwinds to the nearest pcall
-- Stack traces are essential for debugging; silent logs are not
+- Stack traces are essential for debugging; silent logs hide bugs
 
 ## CRITICAL: Architecture — Model-View-Controller
 
@@ -125,6 +127,7 @@ This application is MVC. **Views pull from model state.** They NEVER depend on r
 - **Aspirational documentation** - only document verified reality (Rule 0.1)
 - **Command-specific logic in menu_system.lua** - menu dispatch must route through gather_context then command; no parameter resolution in menu handlers
 - **The word "orchestration"** in code, comments, or commit messages — it substitutes for "algorithm" without claiming algorithmic rigor. Use precise terms: "tick loop", "audio-following", "change detection", etc.
+- **fixing a failing test before being ABSOLUTELY SURE its failure is not surfacing a bug**
 
 ## **✅ SUCCESS PATTERN**
 
@@ -142,6 +145,6 @@ This application is MVC. **Views pull from model state.** They NEVER depend on r
 
 **Before starting any refactor**: Run `git status` and warn the user if there are uncommitted changes. Refactors should start from a clean working tree so changes can be tracked, reviewed, and reverted if needed. Commit or stash existing work first.
 
-**Bug ownership**: Don't distinguish between "your" bugs and "pre-existing" bugs. If you find a bug, it becomes yours to fix. We care about fixing things, not about blame. "You" means Claude (any session), not just this specific context.
+**Bug ownership**: Don't distinguish between "your" bugs and "pre-existing" bugs. If you find a bug, it becomes yours to fix. We care about fixing things, not about blame. "You" means Claude (any session), not just this specific context. Virtually all the code is written by you so you're the one who should fix it.
 
 **When addressing a bug**: First write a regression test that fails. Verify the failure. Only then implement the fix and confirm the test passes.

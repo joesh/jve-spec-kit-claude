@@ -1,6 +1,9 @@
 require('test_env')
 
--- Integration test: verify default.jvekeys parses correctly and populates registry
+-- Integration test: verify default.jvekeys parses correctly and populates registry.
+-- Uses LITERAL Qt key codes (not keyboard_constants.KEY) to catch wrong-constant bugs.
+-- If a constant in keyboard_constants.lua is wrong, the TOML parser stores the binding
+-- under the wrong combo key — this test detects that by looking up with the real Qt values.
 print("=== Test TOML Keybinding Loading ===")
 
 -- We need command_manager mock for the registry
@@ -17,9 +20,31 @@ registry.set_command_manager(mock_cm)
 -- Load keybindings
 registry.load_keybindings("../keymaps/default.jvekeys")
 
-local kb = require("core.keyboard_constants")
-local KEY = kb.KEY
-local MOD = kb.MOD
+-- ── Literal Qt key codes (from Qt::Key enum, NOT from keyboard_constants) ──
+-- These are the ground-truth values. If our keyboard_constants disagree,
+-- the TOML parser will store bindings under wrong combo keys and these asserts fail.
+local QT_KEY_SPACE     = 32
+local QT_KEY_J         = 74
+local QT_KEY_K         = 75
+local QT_KEY_L         = 76
+local QT_KEY_HOME      = 16777232   -- 0x01000010
+local QT_KEY_END       = 16777233   -- 0x01000011
+local QT_KEY_UP        = 16777235   -- 0x01000013
+local QT_KEY_DOWN      = 16777237   -- 0x01000015
+local QT_KEY_I         = 73
+local QT_KEY_O         = 79
+local QT_KEY_X         = 88
+local QT_KEY_DELETE    = 16777223   -- 0x01000007
+local QT_KEY_BACKSPACE = 16777219   -- 0x01000003
+local QT_KEY_B         = 66
+local QT_KEY_Z         = 90
+local QT_KEY_N         = 78
+local QT_KEY_RETURN    = 16777220   -- 0x01000004
+local QT_KEY_F2        = 16777265   -- 0x01000031
+local QT_KEY_2         = 50
+local QT_KEY_3         = 51
+local QT_MOD_SHIFT   = 0x02000000
+local QT_MOD_CONTROL = 0x04000000  -- Qt::ControlModifier (= Cmd on macOS)
 
 local function combo(key, mod_val)
     return string.format("%d_%d", key, mod_val or 0)
@@ -68,76 +93,76 @@ end
 -- Transport
 -- ═════════════════════════════════════════
 print("\n--- Transport ---")
-assert_binding(KEY.Space, 0, "TogglePlay", "Space")
-assert_binding(KEY.J, 0, "ShuttleReverse", "J")
-assert_binding(KEY.K, 0, "ShuttleStop", "K")
-assert_binding(KEY.L, 0, "ShuttleForward", "L")
-assert_contexts(KEY.Space, 0, {"timeline", "source_monitor", "timeline_monitor"}, "Space contexts")
+assert_binding(QT_KEY_SPACE, 0, "TogglePlay", "Space")
+assert_binding(QT_KEY_J, 0, "ShuttleReverse", "J")
+assert_binding(QT_KEY_K, 0, "ShuttleStop", "K")
+assert_binding(QT_KEY_L, 0, "ShuttleForward", "L")
+assert_contexts(QT_KEY_SPACE, 0, {"timeline", "source_monitor", "timeline_monitor"}, "Space contexts")
 print("  ✓ Transport bindings: Space, J, K, L")
 
 -- ═════════════════════════════════════════
 -- Navigation
 -- ═════════════════════════════════════════
 print("\n--- Navigation ---")
-assert_binding(KEY.Home, 0, "GoToStart", "Home")
-assert_binding(KEY.End, 0, "GoToEnd", "End")
-assert_binding(KEY.Up, 0, "GoToPrevEdit", "Up")
-assert_binding(KEY.Down, 0, "GoToNextEdit", "Down")
+assert_binding(QT_KEY_HOME, 0, "GoToStart", "Home")
+assert_binding(QT_KEY_END, 0, "GoToEnd", "End")
+assert_binding(QT_KEY_UP, 0, "GoToPrevEdit", "Up")
+assert_binding(QT_KEY_DOWN, 0, "GoToNextEdit", "Down")
 print("  ✓ Navigation bindings: Home, End, Up, Down")
 
 -- ═════════════════════════════════════════
 -- Marks (positional args)
 -- ═════════════════════════════════════════
 print("\n--- Marks ---")
-assert_binding(KEY.I, 0, "SetMark", "I")
-assert_positional(KEY.I, 0, 1, "in", "I positional")
-assert_binding(KEY.O, 0, "SetMark", "O")
-assert_positional(KEY.O, 0, 1, "out", "O positional")
-assert_binding(KEY.I, MOD.Shift, "GoToMark", "Shift+I")
-assert_positional(KEY.I, MOD.Shift, 1, "in", "Shift+I positional")
-assert_binding(KEY.O, MOD.Shift, "GoToMark", "Shift+O")
-assert_positional(KEY.O, MOD.Shift, 1, "out", "Shift+O positional")
-assert_binding(KEY.X, 0, "MarkClipExtent", "X")
+assert_binding(QT_KEY_I, 0, "SetMark", "I")
+assert_positional(QT_KEY_I, 0, 1, "in", "I positional")
+assert_binding(QT_KEY_O, 0, "SetMark", "O")
+assert_positional(QT_KEY_O, 0, 1, "out", "O positional")
+assert_binding(QT_KEY_I, QT_MOD_SHIFT, "GoToMark", "Shift+I")
+assert_positional(QT_KEY_I, QT_MOD_SHIFT, 1, "in", "Shift+I positional")
+assert_binding(QT_KEY_O, QT_MOD_SHIFT, "GoToMark", "Shift+O")
+assert_positional(QT_KEY_O, QT_MOD_SHIFT, 1, "out", "Shift+O positional")
+assert_binding(QT_KEY_X, 0, "MarkClipExtent", "X")
 print("  ✓ Mark bindings: I, O, Shift+I, Shift+O, X")
 
 -- ═════════════════════════════════════════
 -- Timeline editing
 -- ═════════════════════════════════════════
 print("\n--- Timeline editing ---")
-assert_binding(KEY.Delete, 0, "DeleteSelection", "Delete")
-assert_binding(KEY.Backspace, 0, "DeleteSelection", "Backspace")
-assert_binding(KEY.Delete, MOD.Shift, "DeleteSelection", "Shift+Delete")
-assert_named(KEY.Delete, MOD.Shift, "ripple", true, "Shift+Delete ripple")
-assert_binding(KEY.B, MOD.Control, "Blade", "Cmd+B")
-assert_contexts(KEY.B, MOD.Control, {"timeline"}, "Cmd+B contexts")
+assert_binding(QT_KEY_DELETE, 0, "DeleteSelection", "Delete")
+assert_binding(QT_KEY_BACKSPACE, 0, "DeleteSelection", "Backspace")
+assert_binding(QT_KEY_DELETE, QT_MOD_SHIFT, "DeleteSelection", "Shift+Delete")
+assert_named(QT_KEY_DELETE, QT_MOD_SHIFT, "ripple", true, "Shift+Delete ripple")
+assert_binding(QT_KEY_B, QT_MOD_CONTROL, "Blade", "Cmd+B")
+assert_contexts(QT_KEY_B, QT_MOD_CONTROL, {"timeline"}, "Cmd+B contexts")
 print("  ✓ Editing bindings: Delete, Backspace, Shift+Delete(ripple), Cmd+B")
 
 -- ═════════════════════════════════════════
 -- Zoom
 -- ═════════════════════════════════════════
 print("\n--- Zoom ---")
-assert_binding(KEY.Z, MOD.Shift, "TimelineZoomFit", "Shift+Z")
+assert_binding(QT_KEY_Z, QT_MOD_SHIFT, "TimelineZoomFit", "Shift+Z")
 print("  ✓ Zoom bindings: Shift+Z")
 
 -- ═════════════════════════════════════════
 -- View
 -- ═════════════════════════════════════════
 print("\n--- View ---")
-assert_binding(KEY.Key2, MOD.Control, "SelectPanel", "Cmd+2")
-assert_positional(KEY.Key2, MOD.Control, 1, "inspector", "Cmd+2 positional")
-assert_binding(KEY.Key3, MOD.Control, "SelectPanel", "Cmd+3")
-assert_positional(KEY.Key3, MOD.Control, 1, "timeline", "Cmd+3 positional")
+assert_binding(QT_KEY_2, QT_MOD_CONTROL, "SelectPanel", "Cmd+2")
+assert_positional(QT_KEY_2, QT_MOD_CONTROL, 1, "inspector", "Cmd+2 positional")
+assert_binding(QT_KEY_3, QT_MOD_CONTROL, "SelectPanel", "Cmd+3")
+assert_positional(QT_KEY_3, QT_MOD_CONTROL, 1, "timeline", "Cmd+3 positional")
 print("  ✓ View bindings: Cmd+2, Cmd+3")
 
 -- ═════════════════════════════════════════
 -- Application (global, no context)
 -- ═════════════════════════════════════════
 print("\n--- Application ---")
-assert_binding(KEY.Z, MOD.Control, "Undo", "Cmd+Z")
-assert_binding(KEY.Z, MOD.Control + MOD.Shift, "Redo", "Cmd+Shift+Z")
+assert_binding(QT_KEY_Z, QT_MOD_CONTROL, "Undo", "Cmd+Z")
+assert_binding(QT_KEY_Z, QT_MOD_CONTROL + QT_MOD_SHIFT, "Redo", "Cmd+Shift+Z")
 -- Global commands should have empty contexts
 do
-    local c = combo(KEY.Z, MOD.Control)
+    local c = combo(QT_KEY_Z, QT_MOD_CONTROL)
     local binding = registry.keybindings[c]
     assert(#binding.contexts == 0,
         "Undo should be global (no context restriction), got " .. #binding.contexts .. " contexts")
@@ -148,16 +173,24 @@ print("  ✓ Application bindings: Cmd+Z (global), Cmd+Shift+Z (global)")
 -- Snapping
 -- ═════════════════════════════════════════
 print("\n--- Snapping ---")
-assert_binding(KEY.N, 0, "ToggleSnapping", "N")
-assert_contexts(KEY.N, 0, {"timeline"}, "N contexts")
+assert_binding(QT_KEY_N, 0, "ToggleSnapping", "N")
+assert_contexts(QT_KEY_N, 0, {"timeline"}, "N contexts")
 print("  ✓ Snapping binding: N")
 
 -- ═════════════════════════════════════════
 -- Browser
 -- ═════════════════════════════════════════
 print("\n--- Browser ---")
-assert_binding(KEY.Return, 0, "ActivateBrowserSelection", "Return")
-assert_contexts(KEY.Return, 0, {"project_browser"}, "Return contexts")
+assert_binding(QT_KEY_RETURN, 0, "ActivateBrowserSelection", "Return")
+assert_contexts(QT_KEY_RETURN, 0, {"project_browser"}, "Return contexts")
 print("  ✓ Browser binding: Return")
+
+-- ═════════════════════════════════════════
+-- Rename (F2) — regression test for F2 constant collision with Qt::Key_Control
+-- ═════════════════════════════════════════
+print("\n--- Rename ---")
+assert_binding(QT_KEY_F2, 0, "RenameItem", "F2")
+assert_contexts(QT_KEY_F2, 0, {"project_browser"}, "F2 contexts")
+print("  ✓ F2 → RenameItem (not confused with Control key)")
 
 print("\n✅ test_toml_keybinding_loading.lua passed")

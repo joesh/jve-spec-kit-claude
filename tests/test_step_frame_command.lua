@@ -1,99 +1,53 @@
 #!/usr/bin/env luajit
 
 -- Test StepFrame command: frame-stepping in both timeline and source modes
+-- Uses REAL timeline_state — no mock.
+-- Mock playback_controller and monitor justified: audio playback + engine state
 
 require('test_env')
 
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Forward-declare mock_sv
+local mock_sv
+
+-- Mock panel_manager — justified: monitor requires Qt engine
+package.loaded['ui.panel_manager'] = {
+    get_active_sequence_monitor = function() return mock_sv end,
+}
+
 local database = require('core.database')
 local command_manager = require('core.command_manager')
+local timeline_state = require('ui.timeline.timeline_state')
 
 local TEST_DB = "/tmp/jve/test_step_frame_command.db"
 os.remove(TEST_DB)
+os.remove(TEST_DB .. "-wal")
+os.remove(TEST_DB .. "-shm")
 
 database.init(TEST_DB)
 local db = database.get_connection()
 
 db:exec(require('import_schema'))
 
-db:exec([[
-    INSERT INTO projects (id, name) VALUES ('proj1', 'Test Project');
-    INSERT INTO sequences (id, project_id, name, fps_numerator, fps_denominator, width, height)
-    VALUES ('seq1', 'proj1', 'Sequence', 30, 1, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_v1', 'seq1', 'V1', 'VIDEO', 1, 1);
-]])
+local now = os.time()
+db:exec(string.format([[
+    INSERT INTO projects (id, name, created_at, modified_at)
+    VALUES ('proj1', 'Test Project', %d, %d);
 
--- Mock timeline_state (used by pc in timeline mode)
-local timeline_state = {
-    playhead_position = 10,
-    clips = {},
-}
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+        view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos,
+        selected_gap_infos, current_sequence_number, created_at, modified_at)
+    VALUES ('seq1', 'proj1', 'Sequence', 'timeline',
+        30, 1, 48000, 1920, 1080, 0, 500, 10, '[]', '[]', '[]', 0, %d, %d);
 
-function timeline_state.get_selected_clips() return {} end
-function timeline_state.get_selected_edges() return {} end
-function timeline_state.set_selection(_) end
-function timeline_state.reload_clips() end
-function timeline_state.get_playhead_position() return timeline_state.playhead_position end
-function timeline_state.set_playhead_position(pos) timeline_state.playhead_position = pos end
-function timeline_state.get_clips() return timeline_state.clips end
-function timeline_state.get_sequence_frame_rate() return {fps_numerator = 30, fps_denominator = 1} end
-function timeline_state.capture_viewport() return {start_value = 0, duration_value = 500} end
-function timeline_state.restore_viewport(_) end
-function timeline_state.push_viewport_guard() return 1 end
-function timeline_state.pop_viewport_guard() return 0 end
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
+        enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v1', 'seq1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+]], now, now, now, now))
 
-package.loaded['ui.timeline.timeline_state'] = timeline_state
-
--- Mock playback_controller — mirrors real set_position behavior per mode
-local mock_pc = {
-    state = "stopped",
-    timeline_mode = true,
-    fps_num = 30,
-    fps_den = 1,
-    total_frames = 1000,
-    _position = 10,
-    audio_played = nil,
-    seeked_to = nil,
-    _last_committed_frame = nil,
-}
-function mock_pc.has_source() return mock_pc.total_frames > 0 and mock_pc.fps_num and mock_pc.fps_num > 0 end
-function mock_pc.play_frame_audio(frame_idx) mock_pc.audio_played = frame_idx end
-function mock_pc.is_playing() return mock_pc.state == "playing" end
-function mock_pc.seek(frame_idx)
-    mock_pc.seeked_to = frame_idx
-    mock_pc._position = frame_idx
-    mock_pc._last_committed_frame = math.floor(frame_idx)
-end
-
--- Mirrors the real set_position: timeline mode writes timeline_state,
--- source mode calls seek when parked
-function mock_pc.get_position()
-    if mock_pc.timeline_mode then
-        local pos = timeline_state.playhead_position
-        -- Handle both integer and table with .frames
-        if type(pos) == "table" and pos.frames then
-            return pos.frames
-        end
-        return pos
-    end
-    return mock_pc._position
-end
-function mock_pc.set_position(v)
-    if mock_pc.timeline_mode then
-        -- Store as integer frame
-        timeline_state.set_playhead_position(math.floor(v))
-        mock_pc._position = v
-    else
-        mock_pc._position = v
-        if mock_pc.state ~= "playing" then
-            mock_pc.seek(v)
-        end
-    end
-end
-
-package.loaded['core.playback.playback_controller'] = mock_pc
-
--- Create mock SequenceMonitor with mock engine for panel_manager
+-- Mock engine for the sequence monitor
 local mock_engine = {
     fps_num = 30,
     fps_den = 1,
@@ -106,18 +60,18 @@ function mock_engine:get_position()
 end
 function mock_engine:set_position(v)
     self._position = v
-    -- Also sync timeline_state for timeline tests
     timeline_state.set_playhead_position(math.floor(v))
 end
 function mock_engine:play_frame_audio(frame_idx)
     self.audio_played = frame_idx
-    mock_pc.audio_played = frame_idx
 end
 function mock_engine:is_playing() return false end
 function mock_engine:has_source() return true end
 
-local mock_sv = {
+-- Mock sequence monitor with the mock engine
+mock_sv = {
     sequence_id = "seq1",
+    view_id = "timeline_monitor",
     total_frames = 1000,
     engine = mock_engine,
 }
@@ -127,10 +81,6 @@ function mock_sv:seek_to_frame(frame)
     timeline_state.set_playhead_position(clamped)
 end
 
-local panel_manager = require("ui.panel_manager")
-panel_manager.register_sequence_monitor("source_monitor", mock_sv)
-panel_manager.register_sequence_monitor("timeline_monitor", mock_sv)
-
 command_manager.init('seq1', 'proj1')
 
 print("=== StepFrame Command Tests ===")
@@ -138,67 +88,67 @@ print("=== StepFrame Command Tests ===")
 -- Test 1: Step right 1 frame in timeline mode
 print("Test 1: Step right 1 frame (timeline mode)")
 mock_engine._position = 10
-timeline_state.playhead_position = 10
+timeline_state.set_playhead_position(10)
 mock_engine.audio_played = nil
 local result = command_manager.execute("StepFrame", {
     project_id = "proj1",
     direction = 1,
 })
 assert(result.success, "StepFrame right should succeed: " .. tostring(result.error_message))
-assert(timeline_state.playhead_position == 11,
-    string.format("Expected frame 11, got %d", timeline_state.playhead_position))
+assert(timeline_state.get_playhead_position() == 11,
+    string.format("Expected frame 11, got %d", timeline_state.get_playhead_position()))
 assert(mock_engine.audio_played == 11,
     string.format("Expected audio at frame 11, got %s", tostring(mock_engine.audio_played)))
 
 -- Test 2: Step left 1 frame in timeline mode
 print("Test 2: Step left 1 frame (timeline mode)")
 mock_engine._position = 10
-timeline_state.playhead_position = 10
+timeline_state.set_playhead_position(10)
 result = command_manager.execute("StepFrame", {
     project_id = "proj1",
     direction = -1,
 })
 assert(result.success, "StepFrame left should succeed")
-assert(timeline_state.playhead_position == 9,
-    string.format("Expected frame 9, got %d", timeline_state.playhead_position))
+assert(timeline_state.get_playhead_position() == 9,
+    string.format("Expected frame 9, got %d", timeline_state.get_playhead_position()))
 
 -- Test 3: Step left clamped at 0
 print("Test 3: Step left clamped at frame 0")
 mock_engine._position = 0
-timeline_state.playhead_position = 0
+timeline_state.set_playhead_position(0)
 result = command_manager.execute("StepFrame", {
     project_id = "proj1",
     direction = -1,
 })
 assert(result.success, "StepFrame left at 0 should succeed")
-assert(timeline_state.playhead_position == 0,
-    string.format("Expected frame 0, got %d", timeline_state.playhead_position))
+assert(timeline_state.get_playhead_position() == 0,
+    string.format("Expected frame 0, got %d", timeline_state.get_playhead_position()))
 
 -- Test 4: Shift step = 1 second (30 frames at 30fps)
 print("Test 4: Shift step = 1 second jump")
 mock_engine._position = 10
-timeline_state.playhead_position = 10
+timeline_state.set_playhead_position(10)
 result = command_manager.execute("StepFrame", {
     project_id = "proj1",
     direction = 1,
     shift = true,
 })
 assert(result.success, "StepFrame shift-right should succeed")
-assert(timeline_state.playhead_position == 40,
-    string.format("Expected frame 40, got %d", timeline_state.playhead_position))
+assert(timeline_state.get_playhead_position() == 40,
+    string.format("Expected frame 40, got %d", timeline_state.get_playhead_position()))
 
 -- Test 5: Shift step left clamped at 0
 print("Test 5: Shift step left clamped at 0")
 mock_engine._position = 10
-timeline_state.playhead_position = 10
+timeline_state.set_playhead_position(10)
 result = command_manager.execute("StepFrame", {
     project_id = "proj1",
     direction = -1,
     shift = true,
 })
 assert(result.success, "StepFrame shift-left should succeed")
-assert(timeline_state.playhead_position == 0,
-    string.format("Expected frame 0, got %d", timeline_state.playhead_position))
+assert(timeline_state.get_playhead_position() == 0,
+    string.format("Expected frame 0, got %d", timeline_state.get_playhead_position()))
 
 -- Test 6: Source mode step right
 print("Test 6: Source mode step right")
@@ -241,7 +191,7 @@ assert(mock_engine._position == 40,
 print("Test 9: fps_den=0 asserts (NSF)")
 mock_engine.fps_den = 0
 mock_engine._position = 10
-timeline_state.playhead_position = 10
+timeline_state.set_playhead_position(10)
 local r9 = command_manager.execute("StepFrame", {
     project_id = "proj1",
     direction = 1,
@@ -251,8 +201,8 @@ assert(not r9.success, "StepFrame with fps_den=0 should fail, not silently use f
 assert(r9.error_message and r9.error_message:find("fps_den"),
     "error should mention fps_den, got: " .. tostring(r9.error_message))
 -- Verify playhead unchanged (no fallback math happened)
-assert(timeline_state.playhead_position == 10,
-    "playhead should be unchanged after assert, got " .. timeline_state.playhead_position)
+assert(timeline_state.get_playhead_position() == 10,
+    "playhead should be unchanged after assert, got " .. timeline_state.get_playhead_position())
 mock_engine.fps_den = 1  -- restore
 
 print("✅ test_step_frame_command.lua passed")

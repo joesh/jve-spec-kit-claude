@@ -17,6 +17,7 @@ local M = {}
 local timeline_state = require('ui.timeline.timeline_state')
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
+local clipboard = require("core.clipboard")
 
 
 local SPEC = {
@@ -72,6 +73,47 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             command:set_parameter("sequence_id", sequence_id)
         end
 
+        -- Copy to clipboard BEFORE deleting (Cut = Copy + Delete)
+        local clip_payloads = {}
+        local earliest_start_frame = math.huge
+        for _, clip_id in ipairs(clip_ids) do
+            local clip = Clip.load_optional(clip_id)
+            if clip and clip.master_clip_id then
+                earliest_start_frame = math.min(earliest_start_frame, clip.timeline_start)
+                clip_payloads[#clip_payloads + 1] = {
+                    original_id = clip.id,
+                    track_id = clip.track_id,
+                    media_id = clip.media_id,
+                    fps_numerator = clip.rate and clip.rate.fps_numerator or clip.fps_numerator,
+                    fps_denominator = clip.rate and clip.rate.fps_denominator or clip.fps_denominator,
+                    master_clip_id = clip.master_clip_id,
+                    owner_sequence_id = clip.owner_sequence_id,
+                    clip_kind = clip.clip_kind,
+                    timeline_start = clip.timeline_start,
+                    duration = clip.duration,
+                    source_in = clip.source_in,
+                    source_out = clip.source_out,
+                    name = clip.name,
+                    offline = clip.offline,
+                }
+            end
+        end
+        if #clip_payloads > 0 then
+            for _, entry in ipairs(clip_payloads) do
+                entry.offset_frames = entry.timeline_start - earliest_start_frame
+            end
+            local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
+            clipboard.set({
+                kind = "timeline_clips",
+                project_id = project_id,
+                sequence_id = sequence_id,
+                reference_start_frame = earliest_start_frame,
+                clips = clip_payloads,
+                count = #clip_payloads,
+            })
+        end
+
+        -- Delete clips and capture state for undo
         local deleted_count = 0
         local deleted_states = {}
         local deleted_props = {}

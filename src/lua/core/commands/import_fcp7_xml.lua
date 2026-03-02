@@ -16,7 +16,6 @@
 -- @file import_fcp7_xml.lua
 local M = {}
 local log = require("core.logger").for_area("media")
-local command_helper = require("core.command_helper")
 local file_browser = require("core.file_browser")
 
 --- Calculate and apply zoom-to-fit viewport for a sequence.
@@ -107,6 +106,8 @@ local SPEC = {
         created_sequence_ids = {},
         created_track_ids = {},
         media_id_map = {},
+        pre_import_sequence_id = {},
+        undo_active_sequence_id = {},
         sequence_id_map = {},
         sequence_view_states = {},
         sequence_viewports = {},
@@ -125,6 +126,18 @@ function M.register(executors, undoers, db)
         local project_id = args.project_id
         if not project_id or project_id == "" then
             return { success = false, error_message = "Missing project_id" }
+        end
+
+        -- Capture active sequence before import (only on first execution)
+        -- so undo can restore it if the user switches to the imported sequence.
+        if not args.pre_import_sequence_id then
+            local ts_ok, ts = pcall(require, 'ui.timeline.timeline_state')
+            if ts_ok and ts and ts.get_sequence_id then
+                local active = ts.get_sequence_id()
+                if active and active ~= "" then
+                    command:set_parameter("pre_import_sequence_id", active)
+                end
+            end
         end
 
         local file_path = args.xml_path
@@ -284,18 +297,29 @@ function M.register(executors, undoers, db)
             end
         end
 
-        -- Reload timeline_state if it's viewing one of the recreated sequences.
-        -- After redo, timeline_state has stale cached values from before undo.
-        -- We must call init() to load the fresh values from the database.
+        -- Reload timeline_state after redo.
+        -- If the user was viewing an imported sequence at undo time, switch back to it.
+        -- Otherwise, reload if currently viewing a recreated sequence.
         local timeline_state_ok, timeline_state = pcall(require, 'ui.timeline.timeline_state')
-        if timeline_state_ok and timeline_state then
-            local active_seq = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
-            if active_seq then
+        if timeline_state_ok and timeline_state and timeline_state.init then
+            local undo_active_seq = args.undo_active_sequence_id
+            if undo_active_seq then
                 for _, seq_id in ipairs(create_result.sequence_ids) do
-                    if seq_id == active_seq then
-                        log.event("Reloading timeline_state for recreated sequence %s", seq_id)
+                    if seq_id == undo_active_seq then
+                        log.event("Restoring timeline_state to sequence %s (was active at undo time)", seq_id)
                         timeline_state.init(seq_id, project_id)
                         break
+                    end
+                end
+            else
+                local active_seq = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+                if active_seq then
+                    for _, seq_id in ipairs(create_result.sequence_ids) do
+                        if seq_id == active_seq then
+                            log.event("Reloading timeline_state for recreated sequence %s", seq_id)
+                            timeline_state.init(seq_id, project_id)
+                            break
+                        end
                     end
                 end
             end
@@ -405,6 +429,16 @@ function M.register(executors, undoers, db)
                 sequence_view_states[seq_id] = view_state
             end
         end
+        -- Store which imported sequence was active (so redo can switch back)
+        if active_timeline_seq then
+            for _, seq_id in ipairs(sequence_ids) do
+                if seq_id == active_timeline_seq then
+                    command:set_parameter("undo_active_sequence_id", active_timeline_seq)
+                    break
+                end
+            end
+        end
+
         -- Store captured view states for redo and persist to database
         command:set_parameter("sequence_view_states", sequence_view_states)
         command:save(db)
@@ -443,13 +477,21 @@ function M.register(executors, undoers, db)
             delete_query:finalize()
         end
 
-        local fallback_sequence = nil
-        local active_sequence = command_helper.resolve_active_sequence_id(nil, timeline_state)
+        -- Restore timeline to pre-import sequence if viewing a deleted one
+        if timeline_state then
+            local active_sequence = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+            local deleted_set = {}
+            for _, seq_id in ipairs(sequence_ids) do
+                deleted_set[seq_id] = true
+            end
 
-        if timeline_state and timeline_state.reload_clips then
-            local reload_target = fallback_sequence or active_sequence
-            if reload_target and reload_target ~= "" then
-                timeline_state.reload_clips(reload_target)
+            if active_sequence and deleted_set[active_sequence] then
+                local pre_import_seq = args.pre_import_sequence_id
+                assert(pre_import_seq and pre_import_seq ~= "",
+                    "ImportFCP7XML undo: active sequence was deleted but no pre_import_sequence_id captured")
+                timeline_state.init(pre_import_seq, args.project_id)
+            elseif timeline_state.reload_clips then
+                timeline_state.reload_clips(active_sequence)
             end
         end
 

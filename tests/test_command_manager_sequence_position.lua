@@ -1,53 +1,42 @@
 #!/usr/bin/env luajit
 
+-- Test that command_manager correctly tracks per-sequence undo positions
+-- Uses REAL timeline_state — no mock.
+
 require('test_env')
+
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Only mock needed: panel_manager (Qt widget management)
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return nil end,
+}
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 
 local TEST_DB = "/tmp/jve/test_command_manager_sequence_position.db"
 os.remove(TEST_DB)
+os.remove(TEST_DB .. "-wal")
+os.remove(TEST_DB .. "-shm")
 
 database.init(TEST_DB)
 local db = database.get_connection()
 
 assert(db:exec(require('import_schema')))
 
-local timeline_state = {
-    get_selected_clips = function() return {} end,
-    get_selected_edges = function() return {} end,
-    clear_edge_selection = function() end,
-    clear_gap_selection = function() end,
-    set_selection = function() end,
-    reload_clips = function() end,
-    persist_state_to_db = function() end,
-    get_sequence_id = function() return 'default_sequence' end,
-    get_project_id = function() return 'default_project' end,
-    get_playhead_position = function() return 0 end,
-    set_playhead_position = function() end,
-    push_viewport_guard = function() return 1 end,
-    pop_viewport_guard = function() return 0 end,
-    capture_viewport = function() return {start_value = 0, duration = 1000} end,
-    restore_viewport = function() end,
-    get_viewport_start_time = function() return 0 end,
-    get_viewport_duration_frames_value = function() return 1000 end,
-    set_viewport_start_time = function() end,
-    set_viewport_duration_frames_value = function() end,
-    set_dragging_playhead = function() end,
-    is_dragging_playhead = function() return false end,
-    get_selected_gaps = function() return {} end,
-    get_all_tracks = function()
-        return {
-            {id = "track_v1", track_type = "VIDEO"}
-        }
-    end,
-    get_track_height = function() return 50 end,
-    time_to_pixel = function(value) return value end,
-    pixel_to_time = function(value) return value end,
-    get_sequence_frame_rate = function() return 30 end,
-}
+local now = os.time()
+assert(db:exec(string.format([[
+    INSERT INTO projects (id, name, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', %d, %d);
 
-package.loaded['ui.timeline.timeline_state'] = timeline_state
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+        view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos,
+        selected_gap_infos, current_sequence_number, created_at, modified_at)
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline',
+        30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, %d, %d);
+]], now, now, now, now)))
 
 command_manager.init("default_sequence", "default_project")
 

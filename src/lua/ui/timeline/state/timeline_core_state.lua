@@ -414,6 +414,7 @@ function M.reload_clips(target_sequence_id, opts)
     local adjusted = selection_state.normalize_edge_selection()
     if adjusted then M.persist_state_to_db() end
     data.notify_listeners()
+    Signals.emit("timeline_clips_reloaded", active)
     return true
 end
 

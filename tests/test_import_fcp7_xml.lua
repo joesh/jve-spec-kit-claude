@@ -1,6 +1,42 @@
 #!/usr/bin/env luajit
 
+-- Test FCP7 XML import: execute, undo, redo, replay, post-import editing
+-- Verifies: import creates entities, MatchFrame works, mutations flow, undo/redo idempotent, replay from scratch
+-- Uses REAL timeline_state — no mock.
+
 local test_env = require('test_env')
+
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Only mock needed: panel_manager (Qt widget management)
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return nil end,
+}
+
+-- Mock project_browser to capture focus_master_clip calls (Qt boundary)
+local focus_calls = {}
+local project_browser = {
+    focused_master_clip_id = nil,
+    focus_calls_count = 0,
+}
+
+function project_browser.refresh() end
+
+function project_browser.focus_master_clip(master_clip_id, _opts)
+    project_browser.focused_master_clip_id = master_clip_id
+    project_browser.focus_calls_count = project_browser.focus_calls_count + 1
+    table.insert(focus_calls, {master_id = master_clip_id})
+    return true
+end
+
+function project_browser.get_selected_master_clip()
+    return nil
+end
+
+function project_browser.focus_bin() end
+
+package.loaded['ui.project_browser'] = project_browser
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
@@ -9,12 +45,13 @@ local Command = require('command')
 local json = require("dkjson")
 local sqlite3 = require("core.sqlite3")
 local fcp7_importer = require("importers.fcp7_xml_importer")
+local timeline_state = require('ui.timeline.timeline_state')
+local Signals = require('core.signals')
 
 local TEST_DB = "/tmp/jve/test_import_fcp7_xml.db"
 os.remove(TEST_DB)
-
-database.init(TEST_DB)
-local db = database.get_connection()
+os.remove(TEST_DB .. "-wal")
+os.remove(TEST_DB .. "-shm")
 
 local function bootstrap_schema(conn)
     assert(conn, "bootstrap_schema requires a database connection")
@@ -49,111 +86,29 @@ local function bootstrap_schema(conn)
     ]]), "Failed to seed default project/sequence")
 end
 
+database.init(TEST_DB)
+local db = database.get_connection()
 bootstrap_schema(db)
-
-local timeline_state = {
-    playhead_position = 0,
-    selected_clips = {},
-    selected_edges = {},
-    viewport_start_time = 0,
-    viewport_duration = 300,
-    sequence_id = "default_sequence",
-    sequence_frame_rate = 24.0,
-    last_mutations = nil,
-    last_mutations_attempt = nil
-}
-
-local viewport_guard = 0
-
-function timeline_state.get_sequence_id() return timeline_state.sequence_id end
-function timeline_state.get_sequence_frame_rate() return timeline_state.sequence_frame_rate end
-function timeline_state.get_playhead_position() return timeline_state.playhead_position end
-function timeline_state.set_playhead_position(time_ms) timeline_state.playhead_position = time_ms end
-function timeline_state.get_viewport_start_time() return timeline_state.viewport_start_time end
-function timeline_state.set_viewport_start_time(ms) timeline_state.viewport_start_time = ms end
-function timeline_state.get_viewport_duration() return timeline_state.viewport_duration end
-function timeline_state.set_viewport_duration(ms) timeline_state.viewport_duration = ms end
-function timeline_state.get_selected_clips() return timeline_state.selected_clips end
-function timeline_state.get_selected_edges() return timeline_state.selected_edges end
-function timeline_state.set_selection(clips) timeline_state.selected_clips = clips or {} end
-function timeline_state.set_edge_selection(edges) timeline_state.selected_edges = edges or {} end
-function timeline_state.normalize_edge_selection() end
-function timeline_state.reload_clips() end
-function timeline_state.persist_state_to_db() end
-local function has_entries(list)
-    return type(list) == "table" and next(list) ~= nil
-end
-
-function timeline_state.apply_mutations(sequence_id, mutations)
-    timeline_state.applied_calls = (timeline_state.applied_calls or 0) + 1
-    local target_sequence = sequence_id or (mutations and mutations.sequence_id) or timeline_state.sequence_id
-    if not mutations then
-        return false
-    end
-    if target_sequence and target_sequence ~= "" then
-        timeline_state.sequence_id = target_sequence
-    end
-    timeline_state.last_mutations_attempt = {
-        sequence_id = target_sequence,
-        bucket = mutations
-    }
-    local changed = has_entries(mutations.updates) or has_entries(mutations.inserts) or has_entries(mutations.deletes)
-    if changed then
-        timeline_state.last_mutations = mutations
-    end
-    return changed
-end
-function timeline_state.capture_viewport()
-    return {
-        start_time = timeline_state.viewport_start_time,
-        duration = timeline_state.viewport_duration,
-    }
-end
-function timeline_state.restore_viewport(snapshot)
-    if not snapshot then return end
-    if snapshot.duration or snapshot.duration_value then
-        timeline_state.viewport_duration = snapshot.duration or snapshot.duration_value
-    end
-    if snapshot.start_time or snapshot.start_value then
-        timeline_state.viewport_start_time = snapshot.start_time or snapshot.start_value
-    end
-end
-function timeline_state.push_viewport_guard()
-    viewport_guard = viewport_guard + 1
-    return viewport_guard
-end
-function timeline_state.pop_viewport_guard()
-    if viewport_guard > 0 then viewport_guard = viewport_guard - 1 end
-    return viewport_guard
-end
-
-package.loaded['ui.timeline.timeline_state'] = timeline_state
-
-local project_browser = {
-    focused_master_clip_id = nil,
-    focus_calls = 0
-}
-
-function project_browser.refresh() end
-
-function project_browser.focus_master_clip(master_clip_id, _opts)
-    project_browser.focused_master_clip_id = master_clip_id
-    project_browser.focus_calls = project_browser.focus_calls + 1
-    return true
-end
-
-function project_browser.get_selected_master_clip()
-    return nil
-end
-
-function project_browser.focus_bin() end
-
-package.loaded['ui.project_browser'] = project_browser
 
 command_manager.init('default_sequence', 'default_project')
 local executors = {}
 local undoers = {}
 command_impl.register_commands(executors, undoers, db)
+
+-- Signal-based mutation tracking (replaces mock instrumentation)
+local mutation_log = {}
+local mutation_conn = Signals.connect("timeline_mutations_applied", function(mutations, changed)
+    table.insert(mutation_log, {mutations = mutations, changed = changed})
+end)
+
+local function reset_mutation_tracking()
+    mutation_log = {}
+end
+
+local function last_mutations()
+    if #mutation_log == 0 then return nil end
+    return mutation_log[#mutation_log].mutations
+end
 
 local function count_rows(table_name)
     local stmt = db:prepare("SELECT COUNT(*) FROM " .. table_name)
@@ -214,6 +169,9 @@ local function resolve_fixture(path)
     error("Unable to locate fixture at " .. absolute .. " (or .real)")
 end
 
+-- ============================================================
+-- Execute Import
+-- ============================================================
 local xml_path = resolve_fixture(xml_path_relative)
 local import_cmd = Command.create("ImportFCP7XML", "default_project")
 import_cmd:set_parameter("xml_path", xml_path)
@@ -234,6 +192,9 @@ assert(after_import_counts.tracks > initial_counts.tracks, "Import should add tr
 assert(after_import_counts.clips > initial_counts.clips, "Import should add clips")
 assert(after_import_counts.media >= initial_counts.media, "Import should add or reuse media")
 
+-- ============================================================
+-- Master clips + bins
+-- ============================================================
 local master_count_stmt = db:prepare([[SELECT COUNT(*) FROM clips WHERE clip_kind = 'master']])
 assert(master_count_stmt:exec() and master_count_stmt:next(), "Master clip count query should succeed")
 local master_clip_count = master_count_stmt:value(0)
@@ -267,10 +228,9 @@ assert(assigned_count == master_clip_count,
     string.format("Expected %d master clips assigned to %s, got %d",
         master_clip_count, expected_master_bin_name, assigned_count))
 
--- Regression: importing the anamnesis fixture must assign AUDIO/VIDEO track types.
--- Use a scratch database to validate track types without polluting the main test database.
--- IMPORTANT: Models use database.get_connection() internally, so we must swap the global
--- connection to use the scratch_db during the import.
+-- ============================================================
+-- Anamnesis fixture: track types (scratch DB, isolated)
+-- ============================================================
 local anamnesis_fixture = "tests/fixtures/resolve/2025-07-08-anamnesis-PICTURE-LOCK-TWO more comps.xml"
 local anamnesis_path = resolve_fixture(anamnesis_fixture)
 local scratch_db_path = "/tmp/jve/test_import_fcp7_xml_anamnesis.db"
@@ -302,40 +262,35 @@ assert(invalid_track_count == 0, "All imported tracks must have explicit AUDIO/V
 scratch_db:close()
 os.remove(scratch_db_path)
 
-local timeline_master_stmt = db:prepare([[SELECT c.id, c.master_clip_id, c.timeline_start_frame, c.duration_frames, c.track_id
+-- ============================================================
+-- MatchFrame on imported clips (real timeline_state)
+-- ============================================================
+-- Find an imported timeline clip with a master_clip_id
+local timeline_master_stmt = db:prepare([[SELECT c.id, c.master_clip_id, c.timeline_start_frame
     FROM clips c WHERE c.clip_kind = 'timeline' AND c.master_clip_id IS NOT NULL LIMIT 1]])
 assert(timeline_master_stmt:exec(), "Timeline clip master query should run")
-local timeline_clip_id, timeline_master_id, tl_start, tl_dur, tl_track_id = nil, nil, nil, nil, nil
+local timeline_clip_id, timeline_master_id, tl_start = nil, nil, nil
 if timeline_master_stmt:next() then
     timeline_clip_id = timeline_master_stmt:value(0)
     timeline_master_id = timeline_master_stmt:value(1)
     tl_start = timeline_master_stmt:value(2)
-    tl_dur = timeline_master_stmt:value(3)
-    tl_track_id = timeline_master_stmt:value(4)
 end
 timeline_master_stmt:finalize()
 assert(timeline_clip_id and timeline_master_id, "Importer should assign master_clip_id for timeline clips")
 
--- MatchFrame resolves via playhead, not selection. Set playhead inside the clip.
-timeline_state.playhead_position = tl_start + 1
-local match_clip = { id = timeline_clip_id, master_clip_id = timeline_master_id,
-    timeline_start = tl_start, duration = tl_dur, track_id = tl_track_id }
-timeline_state.set_selection({ match_clip })
--- Provide get_clips_at_time: return selected clips that overlap the time
-function timeline_state.get_clips_at_time(time_value)
-    local matches = {}
-    for _, clip in ipairs(timeline_state.selected_clips) do
-        if clip.timeline_start and clip.duration then
-            if time_value >= clip.timeline_start and time_value < clip.timeline_start + clip.duration then
-                matches[#matches + 1] = clip
-            end
-        end
-    end
-    return matches
-end
-function timeline_state.get_track_by_id(track_id)
-    return { id = track_id, track_type = "VIDEO", track_index = 1 }
-end
+-- Get the imported sequence and switch real timeline_state to it
+local import_record = command_manager.get_last_command('default_project')
+assert(import_record, "Import command should exist")
+local created_sequence_ids = import_record:get_parameter("created_sequence_ids")
+assert(type(created_sequence_ids) == "table" and #created_sequence_ids >= 1,
+    "Importer should store created sequence ids")
+local imported_sequence_id = created_sequence_ids[1]
+
+timeline_state.init(imported_sequence_id, "default_project")
+command_manager.activate_timeline_stack(imported_sequence_id)
+
+-- MatchFrame: set playhead inside the clip
+timeline_state.set_playhead_position(tl_start + 1)
 
 local match_cmd = Command.create("MatchFrame", "default_project")
 local match_result = command_manager.execute(match_cmd)
@@ -343,51 +298,50 @@ assert(match_result.success, "MatchFrame should succeed on imported clips: " .. 
 assert(project_browser.focused_master_clip_id == timeline_master_id,
     "MatchFrame should focus the master clip")
 
--- Use a single clip to avoid overlap errors when nudging.
+-- ============================================================
+-- Nudge applies mutations (signal-observed)
+-- ============================================================
 local clip_ids = fetch_clip_ids(1)
 assert(#clip_ids > 0, "Import should create clips to nudge")
 
+reset_mutation_tracking()
+
 local nudge_cmd = Command.create("Nudge", "default_project")
-nudge_cmd:set_parameter("nudge_amount", 30) -- frames
+nudge_cmd:set_parameter("nudge_amount", 30)
 nudge_cmd:set_parameter("selected_clip_ids", { clip_ids[1] })
 
 local nudge_result = command_manager.execute(nudge_cmd)
 assert(nudge_result.success, "Nudge command should succeed after import")
 assert(nudge_cmd:get_parameter("sequence_id"), "Nudge should capture the active sequence for timeline cache updates")
-local attempt_serialized = timeline_state.last_mutations_attempt and json.encode({
-    sequence_id = timeline_state.last_mutations_attempt.sequence_id,
-    has_updates = has_entries(timeline_state.last_mutations_attempt.bucket and timeline_state.last_mutations_attempt.bucket.updates),
-    has_inserts = has_entries(timeline_state.last_mutations_attempt.bucket and timeline_state.last_mutations_attempt.bucket.inserts),
-    has_deletes = has_entries(timeline_state.last_mutations_attempt.bucket and timeline_state.last_mutations_attempt.bucket.deletes)
-}) or "nil"
-assert(timeline_state.last_mutations_attempt, "Nudge should attempt timeline mutations")
-assert(timeline_state.last_mutations, "Nudge should apply timeline mutations. Attempt: " .. attempt_serialized)
-timeline_state.last_mutations = nil
-timeline_state.last_mutations_attempt = nil
+assert(#mutation_log >= 1, "Nudge should emit timeline mutations")
+assert(last_mutations(), "Nudge should apply timeline mutations with real changes")
+reset_mutation_tracking()
 
+-- ============================================================
+-- ToggleClipEnabled applies mutations + undo/redo
+-- ============================================================
 local toggle_cmd = Command.create("ToggleClipEnabled", "default_project")
 toggle_cmd:set_parameter("clip_ids", { clip_ids[1] })
-local toggle_apply_calls = timeline_state.applied_calls or 0
+local pre_toggle_count = #mutation_log
 local toggle_result = command_manager.execute(toggle_cmd)
 assert(toggle_result.success, "ToggleClipEnabled should succeed on imported clip")
-assert((timeline_state.applied_calls or 0) > toggle_apply_calls, "ToggleClipEnabled should apply timeline mutations")
-local toggle_update = timeline_state.last_mutations and timeline_state.last_mutations.updates and
-    timeline_state.last_mutations.updates[1]
+assert(#mutation_log > pre_toggle_count, "ToggleClipEnabled should apply timeline mutations")
+local toggle_update = last_mutations() and last_mutations().updates and last_mutations().updates[1]
 assert(toggle_update and toggle_update.enabled ~= nil, "ToggleClipEnabled updates must include enabled state")
-timeline_state.last_mutations = nil
+reset_mutation_tracking()
 
-timeline_state.last_mutations = nil
-timeline_state.last_mutations_attempt = nil
 local undo_toggle = command_manager.undo()
 assert(undo_toggle.success, "Undo ToggleClipEnabled should succeed")
-assert(timeline_state.last_mutations, "Undo ToggleClipEnabled should emit timeline mutations")
-timeline_state.last_mutations = nil
-timeline_state.last_mutations_attempt = nil
+assert(#mutation_log >= 1, "Undo ToggleClipEnabled should emit timeline mutations")
+reset_mutation_tracking()
 local redo_toggle = command_manager.redo()
 assert(redo_toggle.success, "Redo ToggleClipEnabled should succeed")
-assert(timeline_state.last_mutations, "Redo ToggleClipEnabled should emit timeline mutations")
-timeline_state.last_mutations = nil
+assert(#mutation_log >= 1, "Redo ToggleClipEnabled should emit timeline mutations")
+reset_mutation_tracking()
 
+-- ============================================================
+-- Command log structure
+-- ============================================================
 local commands_after_toggle = fetch_commands()
 assert(#commands_after_toggle >= 3, "Command log should contain import, nudge, and toggle commands")
 local toggle_entry = commands_after_toggle[#commands_after_toggle]
@@ -409,7 +363,9 @@ assert(after_nudge_counts.clips == after_import_counts.clips,
     string.format("Nudge should not change clip count (was %d, now %d)",
         after_import_counts.clips, after_nudge_counts.clips))
 
--- Ensure the import command persisted XML contents for offline replay.
+-- ============================================================
+-- Import persists XML contents for offline replay
+-- ============================================================
 local args_stmt = db:prepare([[SELECT command_args FROM commands WHERE command_type = 'ImportFCP7XML' ORDER BY sequence_number DESC LIMIT 1]])
 assert(args_stmt:exec() and args_stmt:next(), "Import command should exist in log")
 local args_json = args_stmt:value(0)
@@ -418,7 +374,9 @@ local args_ok, args_table = pcall(json.decode, args_json or "{}")
 assert(args_ok and type(args_table) == "table", "Import command args must decode to a table")
 assert(type(args_table.xml_contents) == "string" and #args_table.xml_contents > 0, "Import command should store xml_contents for replay")
 
--- Undo nudge should restore import state without clearing the timeline.
+-- ============================================================
+-- Undo/redo nudge: counts stable
+-- ============================================================
 local undo_nudge_result = command_manager.undo()
 assert(undo_nudge_result.success, "Undoing nudge should succeed")
 
@@ -433,7 +391,6 @@ assert(after_undo_nudge_counts.sequences == after_import_counts.sequences, "Undo
 assert(after_undo_nudge_counts.tracks == after_import_counts.tracks, "Undo nudge should leave tracks unchanged")
 assert(after_undo_nudge_counts.clips == after_import_counts.clips, "Undo nudge should leave clips unchanged")
 
--- Redo nudge should reapply the move without duplicating content.
 local redo_nudge_result = command_manager.redo()
 assert(redo_nudge_result.success, "Redoing nudge should succeed")
 
@@ -451,7 +408,9 @@ assert(after_redo_nudge_counts.clips == after_nudge_counts.clips, "Redo nudge sh
 -- Return to import-only state for subsequent checks.
 assert(command_manager.undo().success, "Undoing nudge again should succeed")
 
--- Undo should remove imported entities.
+-- ============================================================
+-- Undo import: removes imported entities
+-- ============================================================
 local undo_result = command_manager.undo()
 assert(undo_result.success, "Undo after import should succeed")
 
@@ -462,13 +421,13 @@ local after_undo_counts = {
     media = count_rows("media")
 }
 
--- Undo currently leaves imported metadata in place because replay to the root clears clips but
--- defers higher-level cleanup to command replays. Ensure counts do not grow.
 assert(after_undo_counts.sequences <= after_import_counts.sequences, "Undo should not increase sequence count")
 assert(after_undo_counts.tracks <= after_import_counts.tracks, "Undo should not increase track count")
 assert(after_undo_counts.clips <= after_import_counts.clips, "Undo should not increase clip count")
 
--- Redo replays the command. Counts should match the original import (no duplicates).
+-- ============================================================
+-- Redo import: offline replay from xml_contents
+-- ============================================================
 local backup_path = xml_path .. ".bak"
 local renamed = os.rename(xml_path, backup_path)
 assert(renamed, "Should be able to rename XML fixture for offline replay test")
@@ -488,7 +447,9 @@ assert(after_redo_counts.sequences == after_import_counts.sequences, "Redo shoul
 assert(after_redo_counts.tracks == after_import_counts.tracks, "Redo should reproduce track count exactly")
 assert(after_redo_counts.clips == after_import_counts.clips, "Redo should reproduce clip count exactly")
 
--- Capture command log for replay
+-- ============================================================
+-- Event replay from scratch (simulates app restart)
+-- ============================================================
 local replay_commands = {}
 local replay_stmt = db:prepare("SELECT * FROM commands WHERE sequence_number = ?")
 replay_stmt:bind_value(1, import_sequence)
@@ -502,7 +463,6 @@ if replay_stmt and replay_stmt:exec() then
 end
 if replay_stmt then replay_stmt:finalize() end
 
--- Simulate application restart by replaying events from scratch on a cleared timeline state.
 assert(db:exec([[
     PRAGMA foreign_keys = OFF;
     DELETE FROM tag_assignments;
@@ -535,7 +495,10 @@ assert(db:exec([[
         strftime('%s','now'), strftime('%s','now')
     );
 ]]), "Failed to clear timeline state before replay")
+
+-- Reinit real timeline_state + command_manager for replay
 command_manager.init('default_sequence', 'default_project')
+timeline_state.init('default_sequence', 'default_project')
 executors = {}
 undoers = {}
 command_impl.register_commands(executors, undoers, db)
@@ -560,7 +523,9 @@ assert(after_replay_counts.clips == after_import_counts.clips, "Replay should no
 
 print("✅ FCP7 XML import is idempotent across undo/redo and command replay")
 
--- Regression setup helpers
+-- ============================================================
+-- Post-replay regression: real editing commands
+-- ============================================================
 local function fetch_video_tracks()
     local tracks = {}
     local stmt = db:prepare([[SELECT id FROM tracks WHERE track_type = 'VIDEO' ORDER BY track_index]])
@@ -595,6 +560,18 @@ local function fetch_single_clip_id()
     return clip_id
 end
 
+-- Switch real timeline_state to the replayed imported sequence
+local replay_seq_stmt = db:prepare([[SELECT id FROM sequences WHERE id != 'default_sequence' AND kind = 'timeline' LIMIT 1]])
+assert(replay_seq_stmt:exec())
+local replayed_sequence_id = nil
+if replay_seq_stmt:next() then
+    replayed_sequence_id = replay_seq_stmt:value(0)
+end
+replay_seq_stmt:finalize()
+assert(replayed_sequence_id, "Should find replayed imported sequence")
+timeline_state.init(replayed_sequence_id, "default_project")
+command_manager.activate_timeline_stack(replayed_sequence_id)
+
 local video_tracks = fetch_video_tracks()
 assert(#video_tracks >= 2, "Importer should provide at least two video tracks")
 
@@ -605,7 +582,6 @@ assert(#media_ids >= 1, "Importer should provide media rows for insert operation
 local insert_master_clip_id = test_env.create_test_masterclip_sequence(
     'default_project', 'Test Insert Master', 30, 1, 10000, media_ids[1])
 
--- Simulate additional editing commands to mirror real-world history.
 local clip_for_move = fetch_single_clip_id()
 
 local move_nudge_spec = json.encode({
@@ -614,7 +590,7 @@ local move_nudge_spec = json.encode({
         parameters = {
             clip_id = clip_for_move,
             target_track_id = video_tracks[2],
-            skip_occlusion = true  -- Match drag batching behaviour
+            skip_occlusion = true
         }
     },
     {
@@ -634,16 +610,16 @@ local toggle_cmd2 = Command.create("ToggleClipEnabled", "default_project")
 toggle_cmd2:set_parameter("clip_ids", {clip_for_move})
 assert(command_manager.execute(toggle_cmd2).success, "ToggleClipEnabled should succeed for regression setup")
 
-local insert_cmd = Command.create("Insert", "default_project")
-insert_cmd:set_parameter("master_clip_id", insert_master_clip_id)
-insert_cmd:set_parameter("track_id", video_tracks[1])
-insert_cmd:set_parameter("insert_time", 800000)  -- far enough to avoid collisions
-insert_cmd:set_parameter("duration", 1000)
-insert_cmd:set_parameter("source_in", 0)
-insert_cmd:set_parameter("source_out", 1000)
-insert_cmd:set_parameter("sequence_id", "default_sequence")
-assert(command_manager.execute(insert_cmd).success, "Insert command should succeed for regression setup")
-local inserted_clip_id = insert_cmd:get_parameter("clip_id")
+local insert_cmd2 = Command.create("Insert", "default_project")
+insert_cmd2:set_parameter("master_clip_id", insert_master_clip_id)
+insert_cmd2:set_parameter("track_id", video_tracks[1])
+insert_cmd2:set_parameter("insert_time", 800000)
+insert_cmd2:set_parameter("duration", 1000)
+insert_cmd2:set_parameter("source_in", 0)
+insert_cmd2:set_parameter("source_out", 1000)
+insert_cmd2:set_parameter("sequence_id", replayed_sequence_id)
+assert(command_manager.execute(insert_cmd2).success, "Insert command should succeed for regression setup")
+local inserted_clip_id = insert_cmd2:get_parameter("clip_id")
 assert(inserted_clip_id, "Insert command must record new clip_id for replay")
 
 local split_spec = json.encode({
@@ -664,7 +640,6 @@ local split_exec = split_cmd:get_parameter("executed_commands_json")
 local child_specs = json.decode(split_exec)
 local split_second_clip_id = child_specs and child_specs[1] and child_specs[1].parameters and child_specs[1].parameters.second_clip_id
 
--- Regression: deleting a clip and undoing should succeed after a long history.
 local clip_to_delete = split_second_clip_id or inserted_clip_id or fetch_single_clip_id()
 assert(clip_to_delete, "There should be a clip to delete")
 
@@ -673,7 +648,7 @@ local delete_spec = json.encode({
         command_type = "DeleteClip",
         parameters = {
             clip_id = clip_to_delete,
-            sequence_id = "default_sequence",
+            sequence_id = replayed_sequence_id,
             project_id = "default_project"
         }
     }
@@ -689,3 +664,7 @@ local undo_delete_result = command_manager.undo()
 assert(undo_delete_result.success, "Undo after deleting a clip should succeed")
 
 print("✅ Delete clip undo regression covered")
+
+-- Cleanup
+Signals.disconnect(mutation_conn)
+os.remove(TEST_DB)

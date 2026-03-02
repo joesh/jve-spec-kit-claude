@@ -5,8 +5,17 @@
 -- destination track. This used to happen because the MoveClipToTrack
 -- command ran occlusion resolution before the follow-up nudge supplied
 -- the clip's new time position.
+-- Uses REAL timeline_state — no mock.
 
 require('test_env')
+
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Only mock needed: panel_manager (Qt widget management)
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return nil end,
+}
 
 local dkjson = require('dkjson')
 local database = require('core.database')
@@ -16,20 +25,31 @@ local Command = require('command')
 
 local TEST_DB = "/tmp/jve/test_track_move_nudge.db"
 os.remove(TEST_DB)
+os.remove(TEST_DB .. "-wal")
+os.remove(TEST_DB .. "-shm")
 
 database.init(TEST_DB)
 local db = database.get_connection()
 
 db:exec(require('import_schema'))
 
-db:exec([[
+local now = os.time()
+db:exec(string.format([[
     INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos, current_sequence_number, created_at, modified_at)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now'));
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 2, 1, 0, 0, 0, 1.0, 0.0);
-]])
+    VALUES ('default_project', 'Default Project', %d, %d);
+
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+        view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos,
+        selected_gap_infos, current_sequence_number, created_at, modified_at)
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline',
+        30, 1, 48000, 1920, 1080, 0, 240, 0,
+        '[]', '[]', '[]', 0, %d, %d);
+
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 2, 1, 0, 0, 0, 1.0, 0.0);
+]], now, now, now, now))
 
 -- Existing clips:
 --   track_v2: clip_dest (500-3000)
@@ -39,102 +59,37 @@ local clip_move_duration = 1500
 local nudge_amount_frames = 2000
 
 db:exec(string.format([[
-    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
-    VALUES ('media_dest', 'default_project', 'clip_dest.mov', '/tmp/jve/clip_dest.mov', 2500, 30, 1, 1920, 1080, 0, '', '{}', strftime('%%s','now'), strftime('%%s','now'));
-    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
-    VALUES ('media_keep', 'default_project', 'clip_keep.mov', '/tmp/jve/clip_keep.mov', 2000, 30, 1, 1920, 1080, 0, '', '{}', strftime('%%s','now'), strftime('%%s','now'));
-    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
-    VALUES ('media_move', 'default_project', 'clip_move.mov', '/tmp/jve/clip_move.mov', %d, 30, 1, 1920, 1080, 0, '', '{}', strftime('%%s','now'), strftime('%%s','now'));
-]], clip_move_duration))
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
+        width, height, audio_channels, codec, metadata, created_at, modified_at)
+    VALUES ('media_dest', 'default_project', 'clip_dest.mov', '/tmp/jve/clip_dest.mov',
+        2500, 30, 1, 1920, 1080, 0, '', '{}', %d, %d);
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
+        width, height, audio_channels, codec, metadata, created_at, modified_at)
+    VALUES ('media_keep', 'default_project', 'clip_keep.mov', '/tmp/jve/clip_keep.mov',
+        2000, 30, 1, 1920, 1080, 0, '', '{}', %d, %d);
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
+        width, height, audio_channels, codec, metadata, created_at, modified_at)
+    VALUES ('media_move', 'default_project', 'clip_move.mov', '/tmp/jve/clip_move.mov',
+        %d, 30, 1, 1920, 1080, 0, '', '{}', %d, %d);
+]], now, now, now, now, clip_move_duration, now, now))
 
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, track_id, media_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-    VALUES ('clip_dest', 'default_project', 'timeline', 'track_v2', 'media_dest', 'default_sequence', 500, 2500, 0, 2500, 30, 1, 1, 0, strftime('%%s','now'), strftime('%%s','now'));
-    INSERT INTO clips (id, project_id, clip_kind, track_id, media_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-    VALUES ('clip_keep', 'default_project', 'timeline', 'track_v1', 'media_keep', 'default_sequence', 0, 2000, 0, 2000, 30, 1, 1, 0, strftime('%%s','now'), strftime('%%s','now'));
-    INSERT INTO clips (id, project_id, clip_kind, track_id, media_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-    VALUES ('clip_move', 'default_project', 'timeline', 'track_v1', 'media_move', 'default_sequence', %d, %d, 0, %d, 30, 1, 1, 0, strftime('%%s','now'), strftime('%%s','now'));
-]], clip_move_start, clip_move_duration, clip_move_duration))
-
--- Minimal stub for timeline state used by command_manager internals.
-local timeline_state = {
-    get_sequence_id = function() return "default_sequence" end,
-    get_selected_clips = function() return {} end,
-    get_selected_edges = function() return {} end,
-    normalize_edge_selection = function() end,
-    clear_edge_selection = function() end,
-    set_selection = function() end,
-    reload_clips = function() end,
-    persist_state_to_db = function() end,
-    get_playhead_position = function() return 0 end,
-    set_playhead_position = function() end,
-    get_sequence_frame_rate = function() return {fps_numerator = 30, fps_denominator = 1} end,
-    get_sequence_audio_sample_rate = function() return 48000 end,
-    viewport_start_value = 0,
-    viewport_duration_frames_value = 240,
-    get_clips = function()
-        local clips = {}
-        local stmt = db:prepare("SELECT id, track_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator FROM clips ORDER BY timeline_start_frame")
-        if stmt and stmt:exec() then
-            while stmt:next() do
-                clips[#clips + 1] = {
-                    id = stmt:value(0),
-                    track_id = stmt:value(1),
-                    owner_sequence_id = stmt:value(2),
-                    timeline_start = stmt:value(3),  -- integer frames
-                    duration = stmt:value(4),        -- integer frames
-                    source_in = stmt:value(5),       -- integer frames
-                    source_out = stmt:value(6),      -- integer frames
-                    fps_numerator = stmt:value(7) or 30,
-                    fps_denominator = stmt:value(8) or 1
-                }
-            end
-        end
-        return clips
-    end
-}
-
-local viewport_guard = 0
-
-function timeline_state.capture_viewport()
-    return {
-        start_value = timeline_state.viewport_start_value,
-        duration_value = timeline_state.viewport_duration_frames_value,
-    }
-end
-
-function timeline_state.restore_viewport(snapshot)
-    if not snapshot then
-        return
-    end
-
-    if snapshot.duration_value then
-        timeline_state.viewport_duration_frames_value = snapshot.duration_value
-    end
-
-    if snapshot.start_value then
-        timeline_state.viewport_start_value = snapshot.start_value
-    end
-end
-
-function timeline_state.push_viewport_guard()
-    viewport_guard = viewport_guard + 1
-    return viewport_guard
-end
-
-function timeline_state.pop_viewport_guard()
-    if viewport_guard > 0 then
-        viewport_guard = viewport_guard - 1
-    end
-    return viewport_guard
-end
-
-package.loaded['ui.timeline.timeline_state'] = timeline_state
-
--- luacheck: ignore 211 (unused local variable)
-local executors = {}  -- placeholder for potential future use
-local undoers = {}    -- placeholder for potential future use
--- command_impl.register_commands(executors, undoers, db)
+    INSERT INTO clips (id, project_id, clip_kind, track_id, media_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+    VALUES ('clip_dest', 'default_project', 'timeline', 'track_v2', 'media_dest', 'default_sequence',
+        500, 2500, 0, 2500, 30, 1, 1, 0, %d, %d);
+    INSERT INTO clips (id, project_id, clip_kind, track_id, media_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+    VALUES ('clip_keep', 'default_project', 'timeline', 'track_v1', 'media_keep', 'default_sequence',
+        0, 2000, 0, 2000, 30, 1, 1, 0, %d, %d);
+    INSERT INTO clips (id, project_id, clip_kind, track_id, media_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+    VALUES ('clip_move', 'default_project', 'timeline', 'track_v1', 'media_move', 'default_sequence',
+        %d, %d, 0, %d, 30, 1, 1, 0, %d, %d);
+]], now, now, now, now, clip_move_start, clip_move_duration, clip_move_duration, now, now))
 
 command_manager.init('default_sequence', 'default_project')
 
@@ -145,7 +100,10 @@ local function fetch_clip(id)
     assert(stmt, "failed to prepare clip fetch statement")
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. id)
-    return stmt:value(0), stmt:value(1)
+    local start_val = stmt:value(0)
+    local dur_val = stmt:value(1)
+    stmt:finalize()
+    return start_val, dur_val
 end
 
 local original_start, original_duration = fetch_clip('clip_dest')
@@ -164,7 +122,7 @@ local commands_json = dkjson.encode({
     {
         command_type = "Nudge",
         parameters = {
-            nudge_amount = nudge_amount_frames, -- move to the right, clearing the overlap
+            nudge_amount = nudge_amount_frames,
             selected_clip_ids = {"clip_move"}
         }
     }

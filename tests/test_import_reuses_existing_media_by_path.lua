@@ -2,11 +2,17 @@
 
 -- Regression: importing an FCP7 XML should reuse existing media rows by file_path.
 -- Undo must not delete pre-existing media rows that were merely referenced.
+-- Uses REAL timeline_state — no mock.
 
-package.path = package.path
-    .. ";../src/lua/?.lua"
-    .. ";../src/lua/?/init.lua"
-    .. ";../tests/?.lua"
+require("test_env")
+
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Only mock needed: panel_manager (Qt widget management)
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return nil end,
+}
 
 local test_env = require("test_env")
 
@@ -52,43 +58,10 @@ local function pick_any_media_path(xml_contents)
     error("Fixture contained no media file paths")
 end
 
-local function install_timeline_stub()
-    local timeline_state = {
-        sequence_id = "default_sequence",
-        sequence_frame_rate = 30,
-        playhead_position = 0,
-    }
-
-    function timeline_state.get_project_id() return "default_project" end
-    function timeline_state.get_sequence_id() return timeline_state.sequence_id end
-    function timeline_state.get_playhead_position() return timeline_state.playhead_position end
-    function timeline_state.set_playhead_position(value) timeline_state.playhead_position = value end
-    function timeline_state.reload_clips(sequence_id)
-        if sequence_id and sequence_id ~= "" then
-            timeline_state.sequence_id = sequence_id
-        end
-    end
-    function timeline_state.capture_viewport() return {start_value = 0, duration_value = 300} end
-    function timeline_state.push_viewport_guard() end
-    function timeline_state.pop_viewport_guard() end
-    function timeline_state.restore_viewport() end
-    function timeline_state.set_selection() end
-    function timeline_state.set_edge_selection() end
-    function timeline_state.set_gap_selection() end
-    function timeline_state.get_selected_clips() return {} end
-    function timeline_state.get_selected_edges() return {} end
-    function timeline_state.get_sequence_frame_rate() return timeline_state.sequence_frame_rate end
-    function timeline_state.persist_state_to_db() end
-    function timeline_state.apply_mutations() return true end
-    function timeline_state.consume_mutation_failure() return nil end
-
-    package.loaded["ui.timeline.timeline_state"] = timeline_state
-end
-
-install_timeline_stub()
-
 local TEST_DB = "/tmp/jve/test_import_reuses_existing_media_by_path.db"
 os.remove(TEST_DB)
+os.remove(TEST_DB .. "-wal")
+os.remove(TEST_DB .. "-shm")
 assert(database.init(TEST_DB))
 local db = database.get_connection()
 
@@ -138,6 +111,7 @@ do
     stmt:finalize()
 end
 
+-- Init with REAL timeline_state (reads from DB)
 command_manager.init("default_sequence", "default_project")
 command_manager.activate_timeline_stack("default_sequence")
 

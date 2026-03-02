@@ -908,6 +908,21 @@ function M._execute_body(command_or_name, params)
 
     spec = registry.get_spec(command.type)
     if spec and spec.undoable == false then
+        -- Capture root playhead/selection for nested recording commands to inherit.
+        -- Non-recording wrappers (e.g. DeleteSelection) don't save themselves,
+        -- but they spawn nested recording commands (BatchCommand) that need
+        -- root_playhead_value to persist to command history.
+        if root_playhead_value == nil then
+            timeline_state = require('ui.timeline.timeline_state')
+            root_playhead_value = timeline_state.get_playhead_position()
+            root_playhead_rate = timeline_state.get_sequence_frame_rate()
+            if not command_flag(command, "skip_selection_snapshot", "__skip_selection_snapshot") then
+                capture_pre_selection_for_command(command)
+                root_selected_clips_pre = command.selected_clip_ids_pre
+                root_selected_edges_pre = command.selected_edge_infos_pre
+                root_selected_gaps_pre = command.selected_gap_infos_pre
+            end
+        end
         result = execute_non_recording(command)
         exec_scope:finish("non_recording")
         goto cleanup

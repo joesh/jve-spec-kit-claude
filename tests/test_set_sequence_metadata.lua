@@ -1,8 +1,17 @@
 #!/usr/bin/env luajit
 
 -- Tests for SetSequenceMetadata command
+-- Uses REAL timeline_state — no mock.
 
 require('test_env')
+
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Only mock needed: panel_manager (Qt widget management)
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return nil end,
+}
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
@@ -10,6 +19,8 @@ local Command = require('command')
 
 local TEST_DB = "/tmp/jve/test_set_sequence_metadata.db"
 os.remove(TEST_DB)
+os.remove(TEST_DB .. "-wal")
+os.remove(TEST_DB .. "-shm")
 
 database.init(TEST_DB)
 local db = database.get_connection()
@@ -28,24 +39,7 @@ db:exec(string.format([[
         30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
 ]], now, now, now, now))
 
--- Stub timeline_state
-local timeline_state = {
-    capture_viewport = function() return {start_value = 0, duration_value = 240} end,
-    push_viewport_guard = function() end,
-    pop_viewport_guard = function() end,
-    restore_viewport = function(_) end,
-    set_selection = function(_) end,
-    get_selected_clips = function() return {} end,
-    set_edge_selection = function(_) end,
-    get_selected_edges = function() return {} end,
-    set_playhead_position = function(_) end,
-    get_playhead_position = function() return 0 end,
-    reload_clips = function() end,
-    get_sequence_frame_rate = function() return {fps_numerator = 30, fps_denominator = 1} end,
-    get_sequence_id = function() return "test_seq" end,
-}
-package.loaded['ui.timeline.timeline_state'] = timeline_state
-
+-- Init with REAL timeline_state
 command_manager.init("test_seq", "test_project")
 
 local function get_sequence_field(field)

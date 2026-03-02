@@ -25,6 +25,7 @@ local viewport = require("ui.timeline.state.viewport_state")
 local selection = require("ui.timeline.state.selection_state")
 local tracks = require("ui.timeline.state.track_state")
 local clips = require("ui.timeline.state.clip_state")
+local Signals = require("core.signals")
 
 -- Shared Data & Constants
 M.dimensions = data.dimensions
@@ -140,7 +141,9 @@ local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_c
 
     assert(type(mutations) == "table",
         "timeline_state.apply_mutations: mutations must be a table, got " .. type(mutations))
-    return clips.apply_mutations(mutations, callback)
+    local changed = clips.apply_mutations(mutations, callback)
+    Signals.emit("timeline_mutations_applied", mutations, changed)
+    return changed
 end
 
 M.apply_mutations = apply_mutations
@@ -283,7 +286,6 @@ function M.on_project_change()
 end
 
 -- Register for project_changed signal
-local Signals = require("core.signals")
 Signals.connect("project_changed", M.on_project_change, 40)
 
 return M

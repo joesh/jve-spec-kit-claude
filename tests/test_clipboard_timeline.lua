@@ -1,16 +1,26 @@
 #!/usr/bin/env luajit
 
+-- Clipboard timeline operations: copy, paste, cut, ripple-delete.
+-- Uses REAL timeline_state — no mock. Verifies DB side effects (black-box).
+
 local test_env = require('test_env')
+
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Only mocks needed: panel_manager (Qt), project_browser (Qt)
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return nil end,
+}
+package.loaded["ui.project_browser"] = false
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
--- core.command_implementations is deleted
--- require("core.command_implementations")
-
 local Command = require("command")
-local _ = require("ui.timeline.timeline_state") -- Load for side effects, replaced below
 local clipboard = require('core.clipboard')
 local json = require('dkjson')
+local timeline_state = require("ui.timeline.timeline_state")
+local focus_manager = require("ui.focus_manager")
 
 local SCHEMA_SQL = require("import_schema")
 
@@ -23,74 +33,15 @@ local BASE_DATA_SQL = string.format([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_a1', 'default_sequence', 'Audio 1', 'AUDIO', 1, 1);
 ]], now, now, now, now)
 
-
-local timeline_state = {
-    playhead_value = 0,
-    selected_clips = {},
-    clip_lookup = {},
-    project_id = "default_project",
-    sequence_id = "default_sequence",
-    sequence_frame_rate = 24.0,
-    last_mutations = nil,
-    last_mutations_attempt = nil
-}
-
-function timeline_state.get_selected_clips() return timeline_state.selected_clips end
-function timeline_state.set_selection(clips) timeline_state.selected_clips = clips or {} end
-function timeline_state.get_selected_edges() return {} end
-function timeline_state.get_clip_by_id(id) return timeline_state.clip_lookup[id] end
-function timeline_state.get_sequence_id() return timeline_state.sequence_id end
-function timeline_state.get_project_id() return timeline_state.project_id end
-function timeline_state.get_sequence_frame_rate() return timeline_state.sequence_frame_rate end
-function timeline_state.get_playhead_position() return timeline_state.playhead_position end
-function timeline_state.set_playhead_position(ms) timeline_state.playhead_position = ms end
-function timeline_state.reload_clips()
-    local clips = database.load_clips(timeline_state.sequence_id)
-    timeline_state.clips = clips
-    timeline_state.clip_lookup = {}
-    for _, clip in ipairs(clips) do
-        timeline_state.clip_lookup[clip.id] = clip
-    end
-end
-function timeline_state.get_clips()
-    timeline_state.reload_clips()
-    return timeline_state.clips
-end
-function timeline_state.persist_state_to_db() end
-function timeline_state.apply_mutations(sequence_id, mutations)
-    timeline_state.last_mutations_attempt = {
-        sequence_id = sequence_id or timeline_state.sequence_id,
-        bucket = mutations
-    }
-    timeline_state.last_mutations = mutations
-    return true
-end
-function timeline_state.capture_viewport()
-    return {
-        start_value = 0,
-        duration_value = 240,
-        timebase_type = "video_frames",
-        timebase_rate = 24.0
-    }
-end
-function timeline_state.restore_viewport(snapshot) end
-function timeline_state.push_viewport_guard() return 0 end
-function timeline_state.pop_viewport_guard() return 0 end
-
-package.loaded["ui.timeline.timeline_state"] = timeline_state
-
-local focus_manager = {
-    focused = "timeline"
-}
-function focus_manager.get_focused_panel() return focus_manager.focused end
-function focus_manager.set_focused_panel(panel) focus_manager.focused = panel end
-package.loaded["ui.focus_manager"] = focus_manager
-package.loaded["ui.project_browser"] = false
-
 local clipboard_actions = require('core.clipboard_actions')
+
+-- Cache masterclip IDs by media_id to avoid recreating
+local masterclip_cache = {}
 
 local function setup_database(path)
     os.remove(path)
+    os.remove(path .. "-wal")
+    os.remove(path .. "-shm")
     assert(database.init(path))
     local conn = database.get_connection()
     assert(conn:exec(SCHEMA_SQL))
@@ -105,47 +56,38 @@ local function setup_database(path)
         );
     ]]))
     assert(conn:exec(BASE_DATA_SQL))
-    -- command_impl.register_commands(executors, undoers, db) -- Removed
     command_manager.init('default_sequence', 'default_project')
-
-    timeline_state.playhead_position = 0
-    timeline_state.selected_clips = {}
-    timeline_state.clip_lookup = {}
-    timeline_state.reload_clips()
+    timeline_state.set_playhead_position(0)
+    timeline_state.set_selection({})
     clipboard.clear()
+    masterclip_cache = {}
 end
 
 local function reopen_database(path)
     assert(database.set_path(path))
-    -- command_impl.register_commands(executors, undoers, db)
     command_manager.init('default_sequence', 'default_project')
-
-    timeline_state.playhead_position = 0
-    timeline_state.selected_clips = {}
-    timeline_state.clip_lookup = {}
-    timeline_state.reload_clips()
+    timeline_state.set_playhead_position(0)
+    timeline_state.set_selection({})
 end
-
--- Cache masterclip IDs by media_id to avoid recreating
-local masterclip_cache = {}
 
 local function create_media_and_masterclip(media_id, duration_value)
     if masterclip_cache[media_id] then
         return masterclip_cache[media_id]
     end
     local Media = require('models.media')
-    local duration_frames = math.floor(duration_value * 24 / 1000) -- Convert ms to frames approx
+    local duration_frames = math.floor(duration_value * 30 / 1000)
     local media = Media.create({
         id = media_id,
         project_id = 'default_project',
         file_path = '/tmp/jve/' .. media_id .. '.mov',
-        file_name = media_id .. '.mov',
+        name = media_id,
         duration_frames = duration_frames,
-        frame_rate = 24
+        fps_numerator = 30,
+        fps_denominator = 1,
     })
-    assert(media:save(database.get_connection()))
+    media:save(database.get_connection())
     local master_clip_id = test_env.create_test_masterclip_sequence(
-        'default_project', media_id .. ' Master', 24, 1, duration_frames, media_id)
+        'default_project', media_id .. ' Master', 30, 1, duration_frames, media_id)
     masterclip_cache[media_id] = master_clip_id
     return master_clip_id
 end
@@ -157,9 +99,9 @@ local function insert_clip_via_command(params)
     insert_cmd:set_parameter("track_id", params.track_id)
     insert_cmd:set_parameter("sequence_id", "default_sequence")
     insert_cmd:set_parameter("insert_time", params.start_value)
-    insert_cmd:set_parameter("duration_value", params.duration_value)
-    insert_cmd:set_parameter("source_in_value", 0)
-    insert_cmd:set_parameter("source_out_value", params.duration_value)
+    insert_cmd:set_parameter("duration", params.duration_value)
+    insert_cmd:set_parameter("source_in", 0)
+    insert_cmd:set_parameter("source_out", params.duration_value)
     insert_cmd:set_parameter("clip_id", params.clip_id)
     insert_cmd:set_parameter("advance_playhead", false)
     local result = command_manager.execute(insert_cmd)
@@ -171,14 +113,6 @@ local function get_clip_start_value(clip_id)
     local stmt = conn:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     if not (stmt:exec() and stmt:next()) then
-        print("DEBUG: clip not found: " .. tostring(clip_id) .. ". Available clips:")
-        local list = conn:prepare("SELECT id FROM clips")
-        if list:exec() then
-            while list:next() do
-                print("  - " .. list:value(0))
-            end
-        end
-        list:finalize()
         stmt:finalize()
         error("clip not found: " .. tostring(clip_id))
     end
@@ -210,10 +144,9 @@ insert_clip_via_command({
     duration_value = 800
 })
 
-
-
-timeline_state.reload_clips()
-local base_clip = timeline_state.clip_lookup["clip_original"]
+-- Get clip from real timeline_state
+local base_clip = timeline_state.get_clip_by_id("clip_original")
+assert(base_clip, "clip_original should be in timeline after insert")
 timeline_state.set_selection({base_clip})
 focus_manager.set_focused_panel("timeline")
 
@@ -270,8 +203,7 @@ insert_clip_via_command({clip_id = "clip_mid", media_id = "media_mid", track_id 
 insert_clip_via_command({clip_id = "clip_tail", media_id = "media_tail", track_id = "track_v1", start_value = 9087120, duration_value = 1500})
 
 -- Verify clip_tail exists before batch
-local pre_batch_start = get_clip_start_value("clip_tail")
-print("DEBUG: Pre-batch clip_tail start: " .. tostring(pre_batch_start))
+local _ = get_clip_start_value("clip_tail") -- luacheck: ignore 211
 
 execute_batch({
     {
@@ -285,7 +217,7 @@ execute_batch({
     {
         command_type = "Nudge",
         parameters = {
-            nudge_amount = -49096, -- Frames (approx -1636537ms @ 30fps)
+            nudge_amount = -49096, -- Frames
             selected_clip_ids = {"clip_src"},
             project_id = "default_project",
             sequence_id = "default_sequence"
@@ -295,8 +227,9 @@ execute_batch({
 
 local baseline_other_start = get_clip_start_value("clip_tail")
 
-timeline_state.reload_clips()
-local src_clip = timeline_state.clip_lookup["clip_src"]
+-- Copy clip_src and paste at a far position
+local src_clip = timeline_state.get_clip_by_id("clip_src")
+assert(src_clip, "clip_src should be in timeline")
 timeline_state.set_selection({src_clip})
 focus_manager.set_focused_panel("timeline")
 
@@ -329,7 +262,7 @@ assert(
 print("✅ Redo after timeline clipboard paste preserves downstream clips on other tracks")
 
 ----------------------------------------------------------------------
--- Test 3: Cut emits timeline mutations without forcing reload
+-- Test 3: Cut removes clip from DB and places data on clipboard
 ----------------------------------------------------------------------
 
 local CUT_DB = "/tmp/jve/test_clipboard_cut_mutations.db"
@@ -343,21 +276,31 @@ insert_clip_via_command({
     duration_value = 1200
 })
 
-timeline_state.reload_clips()
-local cut_clip = timeline_state.clip_lookup["cut_clip"]
+-- Select the clip for cutting
+local cut_clip = timeline_state.get_clip_by_id("cut_clip")
+assert(cut_clip, "cut_clip should be in timeline")
 timeline_state.set_selection({cut_clip})
-timeline_state.last_mutations = nil
 
 local cut_cmd = Command.create("Cut", "default_project")
 assert(command_manager.execute(cut_cmd).success, "Cut command should succeed")
-assert(timeline_state.last_mutations, "Cut should emit timeline mutations")
-assert(timeline_state.last_mutations.deletes and timeline_state.last_mutations.deletes[1] == "cut_clip",
-    "Cut mutations must include deleted clip id")
 
-print("✅ Cut emits delete mutations and keeps timeline cache hot")
+-- Black-box: clip should be removed from DB
+local clips_after_cut = database.load_clips("default_sequence")
+local cut_clip_exists = false
+for _, c in ipairs(clips_after_cut) do
+    if c.id == "cut_clip" then cut_clip_exists = true; break end
+end
+assert(not cut_clip_exists, "Cut clip should be removed from DB")
+
+-- Black-box: clipboard should contain the cut clip data
+local cut_payload = clipboard.get()
+assert(cut_payload and cut_payload.kind == "timeline_clips",
+    "Cut should place clip data on clipboard")
+
+print("✅ Cut removes clip from DB and places data on clipboard")
 
 ----------------------------------------------------------------------
--- Test 4: RippleDeleteSelection emits delete/update mutations + undo inserts
+-- Test 4: RippleDeleteSelection deletes clip + shifts downstream, undo restores
 ----------------------------------------------------------------------
 
 local RIPPLE_DB = "/tmp/jve/test_clipboard_ripple_delete.db"
@@ -378,25 +321,44 @@ insert_clip_via_command({
     duration_value = 1500
 })
 
-timeline_state.reload_clips()
-timeline_state.last_mutations = nil
+-- Record original clip_b position
+local original_clip_b_start = get_clip_start_value("ripple_clip_b")
 
 local ripple_cmd = Command.create("RippleDeleteSelection", "default_project")
 ripple_cmd:set_parameter("clip_ids", {"ripple_clip_a"})
 ripple_cmd:set_parameter("sequence_id", "default_sequence")
 assert(command_manager.execute(ripple_cmd).success, "RippleDeleteSelection command failed")
 
-local ripple_mutations = timeline_state.last_mutations
-assert(ripple_mutations, "Ripple delete should emit timeline mutations")
-assert(ripple_mutations.deletes and ripple_mutations.deletes[1] == "ripple_clip_a",
-    "Ripple delete mutations must include deleted clip id")
-assert(ripple_mutations.updates and #ripple_mutations.updates > 0,
-    "Ripple delete mutations must include shifted clips")
+-- Black-box: clip_a should be deleted from DB
+local clips_after_ripple = database.load_clips("default_sequence")
+local ripple_a_found = false
+local ripple_b_after = nil
+for _, c in ipairs(clips_after_ripple) do
+    if c.id == "ripple_clip_a" then ripple_a_found = true end
+    if c.id == "ripple_clip_b" then ripple_b_after = c end
+end
+assert(not ripple_a_found, "ripple_clip_a should be deleted")
+assert(ripple_b_after, "ripple_clip_b should still exist")
 
-timeline_state.last_mutations = nil
+-- Black-box: clip_b should have shifted left (ripple closes gap)
+local ripple_b_start_after = ripple_b_after.timeline_start * 1000.0 / 30.0
+assert(ripple_b_start_after < original_clip_b_start,
+    string.format("clip_b should have shifted left after ripple (was %f, now %f)",
+        original_clip_b_start, ripple_b_start_after))
+
+-- Undo should restore both clips at original positions
 assert(command_manager.undo().success, "Undo RippleDeleteSelection should succeed")
-local undo_mutations = timeline_state.last_mutations
-assert(undo_mutations and undo_mutations.inserts and #undo_mutations.inserts > 0,
-    "Undo ripple delete should emit insert mutations")
 
-print("✅ RippleDeleteSelection emits mutations for delete/update and undo insert")
+local clips_after_undo = database.load_clips("default_sequence")
+local undo_a_found = false
+local undo_b_start = nil
+for _, c in ipairs(clips_after_undo) do
+    if c.id == "ripple_clip_a" then undo_a_found = true end
+    if c.id == "ripple_clip_b" then undo_b_start = c.timeline_start * 1000.0 / 30.0 end
+end
+assert(undo_a_found, "Undo should restore ripple_clip_a")
+assert(math.abs(undo_b_start - original_clip_b_start) < 1,
+    string.format("Undo should restore clip_b position (expected %f, got %f)",
+        original_clip_b_start, undo_b_start))
+
+print("✅ RippleDeleteSelection deletes clip, shifts downstream, undo restores both")

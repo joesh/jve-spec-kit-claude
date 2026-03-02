@@ -3,19 +3,29 @@
 -- Regression: inserting into a non-default sequence must undo cleanly.
 -- The pre-fix bug routed undo/redo through the default sequence, so the
 -- inserted clip persisted after undo.
-
-package.path = package.path .. ";./tests/?.lua;./tests/?/init.lua;./src/lua/?.lua;./src/lua/?/init.lua"
+-- Uses REAL timeline_state — no mock.
 
 require('test_env')
+
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Only mock needed: panel_manager (Qt widget management)
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return nil end,
+}
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 local Command = require('command')
 local Media = require("models.media")
 local Clip = require("models.clip")
+require('ui.timeline.timeline_state')  -- ensure real module loaded before command_manager.init
 
 local TEST_DB = "/tmp/jve/test_insert_undo_imported_sequence.db"
 os.remove(TEST_DB)
+os.remove(TEST_DB .. "-wal")
+os.remove(TEST_DB .. "-shm")
 
 database.init(TEST_DB)
 local db = database.get_connection()
@@ -118,98 +128,6 @@ local base_clip = Clip.create("Existing Clip", "media_existing", {
 })
 assert(base_clip and base_clip:save(db))
 
-local timeline_state = {
-    playhead_value = 111400,
-    playhead_position = 111400,
-    sequence_id = 'imported_sequence',
-    project_id = 'default_project',
-    selected_clips = {},
-    selected_edges = {},
-    viewport_start_value = 0,
-    viewport_duration_frames_value = 240,
-    sequence_frame_rate = nil
-}
-
-function timeline_state.get_project_id() return timeline_state.project_id end
-function timeline_state.get_sequence_id() return timeline_state.sequence_id end
-function timeline_state.set_sequence_id(new_id) timeline_state.sequence_id = new_id end
-function timeline_state.get_default_video_track_id() return 'imported_v1' end
-function timeline_state.get_playhead_position() return timeline_state.playhead_position end
-function timeline_state.set_playhead_position(val) timeline_state.playhead_position = val end
-function timeline_state.get_selected_clips() return timeline_state.selected_clips end
-function timeline_state.get_selected_edges() return timeline_state.selected_edges end
-function timeline_state.set_selection(clips) timeline_state.selected_clips = clips or {} end
-function timeline_state.set_edge_selection(edges) timeline_state.selected_edges = edges or {} end
-function timeline_state.normalize_edge_selection() return false end
-function timeline_state.reload_clips(sequence_id)
-    if sequence_id and sequence_id ~= "" then
-        timeline_state.sequence_id = sequence_id
-        local rate_stmt = db:prepare("SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?")
-        assert(rate_stmt, "timeline_state: failed to prepare frame rate lookup")
-        rate_stmt:bind_value(1, sequence_id)
-        assert(rate_stmt:exec() and rate_stmt:next(), "timeline_state: sequence missing for reload")
-        local num = rate_stmt:value(0) or 0
-        local den = rate_stmt:value(1) or 1
-        rate_stmt:finalize()
-        assert(num > 0 and den > 0, "timeline_state: invalid frame rate during reload")
-        timeline_state.sequence_frame_rate = num / den
-    end
-end
-function timeline_state.persist_state_to_db() end
-function timeline_state.apply_mutations(sequence_id, mutations)
-    if sequence_id and sequence_id ~= "" then
-        timeline_state.sequence_id = sequence_id
-        local rate_stmt = db:prepare("SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?")
-        assert(rate_stmt and rate_stmt:bind_value(1, sequence_id), "timeline_state: failed to bind frame rate lookup")
-        assert(rate_stmt:exec() and rate_stmt:next(), "timeline_state: sequence missing during apply_mutations")
-        local num = rate_stmt:value(0) or 0
-        local den = rate_stmt:value(1) or 1
-        rate_stmt:finalize()
-        assert(num > 0 and den > 0, "timeline_state: invalid frame rate during apply_mutations")
-        timeline_state.sequence_frame_rate = num / den
-    end
-    return mutations ~= nil
-end
-function timeline_state.consume_mutation_failure()
-    return nil
-end
-function timeline_state.capture_viewport()
-    return {
-        start_value = timeline_state.viewport_start_value,
-        duration_value = timeline_state.viewport_duration_frames_value
-    }
-end
-function timeline_state.restore_viewport(snapshot)
-    if not snapshot then return end
-    if snapshot.start_value then timeline_state.viewport_start_value = snapshot.start_value end
-    if snapshot.duration_value then timeline_state.viewport_duration_frames_value = snapshot.duration_value end
-end
-local viewport_guard = 0
-function timeline_state.push_viewport_guard()
-    viewport_guard = viewport_guard + 1
-    return viewport_guard
-end
-function timeline_state.pop_viewport_guard()
-    if viewport_guard > 0 then viewport_guard = viewport_guard - 1 end
-    return viewport_guard
-end
-function timeline_state.get_sequence_frame_rate()
-    if not timeline_state.sequence_frame_rate then
-        local stmt = db:prepare("SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?")
-        assert(stmt, "timeline_state: failed to prepare frame rate lookup")
-        stmt:bind_value(1, timeline_state.sequence_id)
-        assert(stmt:exec() and stmt:next(), "timeline_state: missing sequence for frame rate")
-        local num = stmt:value(0) or 0
-        local den = stmt:value(1) or 1
-        stmt:finalize()
-        assert(num > 0 and den > 0, "timeline_state: invalid frame rate")
-        timeline_state.sequence_frame_rate = num / den
-    end
-    return timeline_state.sequence_frame_rate
-end
-
-package.loaded['ui.timeline.timeline_state'] = timeline_state
-
 command_manager.init('default_sequence', 'default_project')
 
 local function clip_count(sequence_id)
@@ -231,7 +149,7 @@ local baseline = clip_count('imported_sequence')
 assert(baseline == 1, string.format("Expected baseline clip count 1, got %d", baseline))
 
 local insert_cmd = Command.create("Insert", 'default_project')
-insert_cmd:set_parameter("master_clip_id", "masterclip_insert")  -- IS-a: use masterclip sequence ID
+insert_cmd:set_parameter("master_clip_id", "masterclip_insert")
 insert_cmd:set_parameter("sequence_id", "imported_sequence")
 insert_cmd:set_parameter("track_id", "imported_v1")
 insert_cmd:set_parameter("insert_time", 111400)

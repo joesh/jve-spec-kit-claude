@@ -1,16 +1,28 @@
 #!/usr/bin/env luajit
 
+-- Cut command: deletes selected clips, copies to clipboard, undo restores.
+-- Uses REAL timeline_state — no mock.
+
 local test_env = require('test_env')
+
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Only mock needed: panel_manager (Qt widget management)
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return nil end,
+}
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
--- core.command_implementations is deleted
--- local command_impl = require('core.command_implementations')
 local Command = require('command')
 local Media = require('models.media')
+local timeline_state = require('ui.timeline.timeline_state')
 
 local TEST_DB = "/tmp/jve/test_cut_command.db"
 os.remove(TEST_DB)
+os.remove(TEST_DB .. "-wal")
+os.remove(TEST_DB .. "-shm")
 
 database.init(TEST_DB)
 local db = database.get_connection()
@@ -20,112 +32,29 @@ db:exec(require('import_schema'))
 local now = os.time()
 db:exec(string.format([[
     INSERT INTO projects (id, name, created_at, modified_at) VALUES ('default_project', 'Default Project', %d, %d);
-    INSERT INTO sequences (id, project_id, name, fps_numerator, fps_denominator, audio_rate, width, height,
-                           playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 2, 1);
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+                           playhead_frame, view_start_frame, view_duration_frames,
+                           selected_clip_ids, selected_edge_infos, selected_gap_infos,
+                           current_sequence_number, created_at, modified_at)
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline', 30, 1, 48000, 1920, 1080,
+            0, 0, 240, '[]', '[]', '[]', 0, %d, %d);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 2, 1, 0, 0, 0, 1.0, 0.0);
 ]], now, now, now, now))
 
-local function clips_snapshot()
-    local clips = {}
-    local stmt = db:prepare("SELECT id, track_id, timeline_start_frame, duration_frames FROM clips ORDER BY track_id, timeline_start_frame")
-    assert(stmt, "Failed to prepare clips_snapshot query")
-    assert(stmt:exec())
-    while stmt:next() do
-        clips[#clips + 1] = {
-            id = stmt:value(0),
-            track_id = stmt:value(1),
-            timeline_start_frame = stmt:value(2),
-            duration_frames = stmt:value(3)
-        }
-    end
-    stmt:finalize()
-    return clips
-end
+-- Init with REAL timeline_state
+command_manager.init('default_sequence', 'default_project')
 
 local function clip_exists(id)
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE id = ? AND owner_sequence_id = 'default_sequence'")
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next())
-    return stmt:value(0) > 0
+    local count = stmt:value(0)
+    stmt:finalize()
+    return count > 0
 end
-
-local timeline_state = {
-    playhead_position = 0,  -- integer frames
-    selected_clips = {},
-    sequence_frame_rate = 30.0
-}
-
-local function load_clips_into_state()
-    timeline_state.clips = clips_snapshot()
-end
-
-load_clips_into_state()
-
-function timeline_state.get_sequence_id() return 'default_sequence' end
-function timeline_state.get_project_id() return 'default_project' end
-function timeline_state.get_selected_clips() return timeline_state.selected_clips end
-function timeline_state.get_selected_edges() return {} end
-function timeline_state.normalize_edge_selection() end
-function timeline_state.clear_edge_selection() timeline_state.selected_clips = {} end
-function timeline_state.set_selection(clips) timeline_state.selected_clips = clips or {} end
-function timeline_state.reload_clips() load_clips_into_state() end
-function timeline_state.persist_state_to_db() end
-function timeline_state.get_playhead_position() return timeline_state.playhead_position end
-function timeline_state.set_playhead_position(time_ms) timeline_state.playhead_position = time_ms end
-function timeline_state.get_clips()
-    load_clips_into_state()
-    return timeline_state.clips
-end
-function timeline_state.get_sequence_frame_rate() return timeline_state.sequence_frame_rate end
-
-local viewport_guard = 0
-timeline_state.viewport_start_value = timeline_state.viewport_start_value or 0
-timeline_state.viewport_duration_frames_value = timeline_state.viewport_duration_frames_value or 10000
-
-function timeline_state.capture_viewport()
-    return {
-        start_value = timeline_state.viewport_start_value,
-        duration = timeline_state.viewport_duration_frames_value,
-    }
-end
-
-function timeline_state.restore_viewport(snapshot)
-    if not snapshot then
-        return
-    end
-
-    if snapshot.duration then
-        timeline_state.viewport_duration_frames_value = snapshot.duration
-    end
-
-    if snapshot.start_value then
-        timeline_state.viewport_start_value = snapshot.start_value
-    end
-end
-
-function timeline_state.push_viewport_guard()
-    viewport_guard = viewport_guard + 1
-    return viewport_guard
-end
-
-function timeline_state.pop_viewport_guard()
-    if viewport_guard > 0 then
-        viewport_guard = viewport_guard - 1
-    end
-    return viewport_guard
-end
-
-package.loaded['ui.timeline.timeline_state'] = timeline_state
-
-local _executors = {} -- luacheck: ignore 211 (unused, legacy code)
-local _undoers = {} -- luacheck: ignore 211 (unused, legacy code)
--- command_impl.register_commands(_executors, _undoers, db)
-
-command_manager.init('default_sequence', 'default_project')
 
 -- Helper to create clips using Insert command
 local function create_clip_via_insert(spec)
@@ -135,7 +64,7 @@ local function create_clip_via_insert(spec)
         project_id = 'default_project',
         file_path = '/tmp/jve/' .. spec.id .. '.mov',
         name = spec.id .. '.mov',
-        duration = spec.duration,
+        duration_frames = spec.duration,
         fps_numerator = 30,
         fps_denominator = 1,
         width = 1920,
@@ -160,7 +89,6 @@ local function create_clip_via_insert(spec)
 
     local result = command_manager.execute(cmd)
     assert(result and result.success, "Insert command failed for " .. spec.id)
-    return true
 end
 
 -- Create four clips as setup
@@ -175,15 +103,14 @@ for _, spec in ipairs(clip_specs) do
     create_clip_via_insert(spec)
 end
 
-load_clips_into_state()
-
 print("=== Cut Command Tests ===\n")
 
 -- Test 1: Cut deletes selected clips
-timeline_state.set_selection({
-    {id = "clip_a"},
-    {id = "clip_c"},
-})
+local clip_a = timeline_state.get_clip_by_id("clip_a")
+local clip_c = timeline_state.get_clip_by_id("clip_c")
+assert(clip_a, "clip_a should exist in timeline cache")
+assert(clip_c, "clip_c should exist in timeline cache")
+timeline_state.set_selection({clip_a, clip_c})
 
 local result = command_manager.execute("Cut", {project_id = "default_project"})
 assert(result.success, "Cut with selection should succeed")
@@ -199,11 +126,11 @@ assert(clip_exists("clip_c"), "clip_c should be restored after undo")
 
 -- Test 2: Cut with no selection returns false (nothing to do = not undoable)
 timeline_state.set_selection({})
-timeline_state.playhead_position = 1300
-local before = clips_snapshot()
+timeline_state.set_playhead_position(1300)
+local before_count = #database.load_clips("default_sequence")
 result = command_manager.execute("Cut", {project_id = "default_project"})
 assert(not result.success, "Cut with no selection should return false (nothing to do)")
-local after = clips_snapshot()
+local after_count = #database.load_clips("default_sequence")
 
-assert(#before == #after, "No clips should be removed when nothing is selected")
+assert(before_count == after_count, "No clips should be removed when nothing is selected")
 print("✅ Cut removes only selected clips and returns false when nothing is selected")

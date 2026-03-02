@@ -2,152 +2,28 @@
 
 -- Regression coverage for ripple edits on imported FCP7 timelines.
 -- Ensures importer produces structurally sound tracks and ripple shifts downstream clips.
+-- Uses REAL timeline_state — no mock.
 
-package.path = package.path
-    .. ";../src/lua/?.lua"
-    .. ";../src/lua/core/?.lua"
-    .. ";../src/lua/models/?.lua"
-    .. ";../tests/?.lua"
+require('test_env')
+
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Only mock needed: panel_manager (Qt widget management)
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return nil end,
+}
 
 local test_env = require('test_env')
-
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 local Command = require('command')
 
-local function install_timeline_stub()
-    local timeline_state = {
-        playhead_value = 0,
-        playhead_position = 0,
-        selected_clips = {},
-        selected_edges = {},
-        selected_gaps = {},
-        viewport_start_value = 0,
-        viewport_duration_frames_value = 10000,
-        sequence_frame_rate = nil,
-    }
-    local guard_depth = 0
-
-    timeline_state.sequence_id = 'default_sequence'
-
-    local function refresh_sequence_frame_rate(sequence_id)
-        local db = database.get_connection()
-        assert(db, "timeline_state: database not initialized")
-        local stmt = db:prepare("SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?")
-        assert(stmt, "timeline_state: failed to prepare frame rate lookup")
-        stmt:bind_value(1, sequence_id)
-        assert(stmt:exec() and stmt:next(),
-            string.format("timeline_state: missing sequence %s", tostring(sequence_id)))
-        local num = stmt:value(0) or 0
-        local den = stmt:value(1) or 1
-        stmt:finalize()
-        assert(num > 0 and den > 0, "timeline_state: invalid frame rate")
-        timeline_state.sequence_frame_rate = num / den
-    end
-
-    function timeline_state.get_sequence_id()
-        return timeline_state.sequence_id
-    end
-
-    function timeline_state.get_playhead_position()
-        return timeline_state.playhead_position
-    end
-
-    function timeline_state.get_sequence_frame_rate()
-        if not timeline_state.sequence_frame_rate then
-            refresh_sequence_frame_rate(timeline_state.sequence_id)
-        end
-        return timeline_state.sequence_frame_rate
-    end
-
-    function timeline_state.set_playhead_position(ms)
-        timeline_state.playhead_position = ms
-    end
-
-    function timeline_state.get_selected_clips()
-        return timeline_state.selected_clips
-    end
-
-    function timeline_state.get_selected_edges()
-        return timeline_state.selected_edges
-    end
-
-    function timeline_state.set_selection(clips)
-        timeline_state.selected_clips = clips or {}
-    end
-
-    function timeline_state.set_edge_selection(edges)
-        timeline_state.selected_edges = edges or {}
-    end
-
-    function timeline_state.set_gap_selection(gaps)
-        timeline_state.selected_gaps = gaps or {}
-    end
-
-    function timeline_state.normalize_edge_selection() end
-    function timeline_state.reload_clips(sequence_id)
-        if sequence_id and sequence_id ~= '' then
-            timeline_state.sequence_id = sequence_id
-            refresh_sequence_frame_rate(sequence_id)
-        end
-    end
-    function timeline_state.persist_state_to_db() end
-
-    function timeline_state.apply_mutations()
-        return true
-    end
-
-    function timeline_state.consume_mutation_failure()
-        return nil
-    end
-
-    function timeline_state.set_viewport_start_time(ms)
-        timeline_state.viewport_start_time = ms
-    end
-
-    function timeline_state.set_viewport_duration_frames_value(ms)
-        timeline_state.viewport_duration_frames_value = ms
-    end
-
-    function timeline_state.capture_viewport()
-        return {
-            start_time = timeline_state.viewport_start_time,
-            duration_value = timeline_state.viewport_duration_frames_value,
-        }
-    end
-
-    function timeline_state.restore_viewport(snapshot)
-        if not snapshot then
-            return
-        end
-        if snapshot.start_time then
-            timeline_state.viewport_start_time = snapshot.start_time
-        end
-        if snapshot.duration or snapshot.duration_value then
-            timeline_state.viewport_duration_frames_value = snapshot.duration_value or snapshot.duration
-        end
-    end
-
-    function timeline_state.push_viewport_guard()
-        guard_depth = guard_depth + 1
-        return guard_depth
-    end
-
-    function timeline_state.pop_viewport_guard()
-        if guard_depth > 0 then
-            guard_depth = guard_depth - 1
-        end
-        return guard_depth
-    end
-
-    package.loaded['ui.timeline.timeline_state'] = timeline_state
-end
-
-install_timeline_stub()
-
 local SCHEMA_SQL = require('import_schema')
 local function init_database(db_path)
     os.remove(db_path)
+    os.remove(db_path .. "-wal")
+    os.remove(db_path .. "-shm")
     assert(database.init(db_path))
     local db = database.get_connection()
     assert(db:exec(SCHEMA_SQL))
@@ -328,7 +204,7 @@ for _, clip_index in ipairs(CLIP_CASES) do
         string.format("Clip %s start mismatch after ripple: expected %d, got %d",
             downstream.id, downstream.timeline_start + delta_applied, downstream_after.start_value))
 
-    print(string.format("✅ RippleEdit shifted downstream clip for case index %d (applied delta %d)", clip_index, delta_applied))
+    print(string.format("  RippleEdit shifted downstream clip for case index %d (applied delta %d)", clip_index, delta_applied))
 end
 
 print("✅ RippleEdit on imported timeline shifts downstream clips correctly across cases")

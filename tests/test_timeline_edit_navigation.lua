@@ -2,158 +2,141 @@
 
 -- Regression: GoToPrevEdit / GoToNextEdit should move the playhead to the
 -- nearest clip boundary without creating undo entries.
+-- Uses REAL timeline_state — no mock.
 
 require('test_env')
+
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
+
+-- Forward-declare mock_monitor for closure capture
+local mock_monitor
+
+-- Mock panel_manager — justified: GoToPrevEdit/GoToNextEdit require
+-- sv.sequence_id and sv.engine (Qt engine) from the active monitor.
+-- Playhead is set directly via timeline_state, not via seek_to_frame.
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return mock_monitor end,
+}
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 require('core.command_implementations')
+local timeline_state = require('ui.timeline.timeline_state')
 
 local TEST_DB = "/tmp/jve/test_timeline_edit_navigation.db"
 os.remove(TEST_DB)
+os.remove(TEST_DB .. "-wal")
+os.remove(TEST_DB .. "-shm")
 
 database.init(TEST_DB)
 local db = database.get_connection()
 
 db:exec(require('import_schema'))
 
-db:exec([[
-    INSERT INTO projects (id, name) VALUES ('default_project', 'Default Project');
-    INSERT INTO sequences (id, project_id, name, frame_rate, width, height)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 30.0, 1920, 1080);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, timebase_type, timebase_rate, track_index, enabled) VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 'video_frames', 30.0, 2, 1);
-]])
-
--- Timeline layout (in ms):
+-- Timeline layout (in frames):
 -- V1: clip_a [0, 1500), clip_b [3000, 4500)
 -- V2: clip_c [1200, 2400), clip_d [5000, 6200)
-db:exec([[
-    INSERT INTO media (id, project_id, name, file_path, duration_value, frame_rate, created_at, modified_at, metadata)
-    VALUES ('media_clip_a', 'default_project', 'clip_a.mov', '/tmp/jve/clip_a.mov', 1500, 30.0, 0, 0, '{}');
-    INSERT INTO media (id, project_id, name, file_path, duration_value, frame_rate, created_at, modified_at, metadata)
-    VALUES ('media_clip_b', 'default_project', 'clip_b.mov', '/tmp/jve/clip_b.mov', 1500, 30.0, 0, 0, '{}');
-    INSERT INTO media (id, project_id, name, file_path, duration_value, frame_rate, created_at, modified_at, metadata)
-    VALUES ('media_clip_c', 'default_project', 'clip_c.mov', '/tmp/jve/clip_c.mov', 1200, 30.0, 0, 0, '{}');
-    INSERT INTO media (id, project_id, name, file_path, duration_value, frame_rate, created_at, modified_at, metadata)
-    VALUES ('media_clip_d', 'default_project', 'clip_d.mov', '/tmp/jve/clip_d.mov', 1200, 30.0, 0, 0, '{}');
+-- Edit points: 0, 1200, 1500, 2400, 3000, 4500, 5000, 6200
+local now = os.time()
+db:exec(string.format([[
+    INSERT INTO projects (id, name, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', %d, %d);
 
-    INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, enabled)
-    VALUES ('clip_a', 'track_v1', 'media_clip_a', 0, 1500, 0, 1500, 1);
-    INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, enabled)
-    VALUES ('clip_b', 'track_v1', 'media_clip_b', 3000, 1500, 0, 1500, 1);
-    INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, enabled)
-    VALUES ('clip_c', 'track_v2', 'media_clip_c', 1200, 1200, 0, 1200, 1);
-    INSERT INTO clips (id, track_id, media_id, start_value, duration_value, source_in_value, source_out_value, enabled)
-    VALUES ('clip_d', 'track_v2', 'media_clip_d', 5000, 1200, 0, 1200, 1);
-]])
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+        view_start_frame, view_duration_frames, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at)
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'timeline',
+        30, 1, 48000, 1920, 1080, 0, 10000, 2500,
+        '[]', '[]', '[]', 0, %d, %d);
 
-local timeline_state = {
-    playhead_position = 2500,
-    clips = {
-        {id = 'clip_a', start_value = 0, duration_value = 1500, timeline_start = 0, duration = 1500},
-        {id = 'clip_c', start_value = 1200, duration_value = 1200, timeline_start = 1200, duration = 1200},
-        {id = 'clip_b', start_value = 3000, duration_value = 1500, timeline_start = 3000, duration = 1500},
-        {id = 'clip_d', start_value = 5000, duration_value = 1200, timeline_start = 5000, duration = 1200},
-    },
-    viewport_start_value = 0,
-    viewport_duration_frames_value = 10000
-}
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v2', 'default_sequence', 'V2', 'VIDEO', 2, 1, 0, 0, 0, 1.0, 0.0);
 
-function timeline_state.get_selected_clips() return {} end
-function timeline_state.get_selected_edges() return {} end
-function timeline_state.normalize_edge_selection() end
-function timeline_state.clear_edge_selection() end
-function timeline_state.set_selection(_) end
-function timeline_state.reload_clips() end
-function timeline_state.persist_state_to_db() end
-function timeline_state.get_playhead_position() return timeline_state.playhead_position end
-function timeline_state.set_playhead_position(time_ms) timeline_state.playhead_position = time_ms end
-function timeline_state.get_clips() return timeline_state.clips end
-function timeline_state.get_sequence_frame_rate() return {fps_numerator = 1000, fps_denominator = 1} end
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
+        width, height, audio_channels, codec, metadata, created_at, modified_at)
+    VALUES ('media_clip_a', 'default_project', 'clip_a.mov', '/tmp/jve/clip_a.mov', 1500, 30, 1,
+        1920, 1080, 0, '', '{}', %d, %d);
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
+        width, height, audio_channels, codec, metadata, created_at, modified_at)
+    VALUES ('media_clip_b', 'default_project', 'clip_b.mov', '/tmp/jve/clip_b.mov', 1500, 30, 1,
+        1920, 1080, 0, '', '{}', %d, %d);
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
+        width, height, audio_channels, codec, metadata, created_at, modified_at)
+    VALUES ('media_clip_c', 'default_project', 'clip_c.mov', '/tmp/jve/clip_c.mov', 1200, 30, 1,
+        1920, 1080, 0, '', '{}', %d, %d);
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
+        width, height, audio_channels, codec, metadata, created_at, modified_at)
+    VALUES ('media_clip_d', 'default_project', 'clip_d.mov', '/tmp/jve/clip_d.mov', 1200, 30, 1,
+        1920, 1080, 0, '', '{}', %d, %d);
 
-local viewport_guard = 0
+    INSERT INTO clips (id, project_id, clip_kind, track_id, media_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+    VALUES ('clip_a', 'default_project', 'timeline', 'track_v1', 'media_clip_a', 'default_sequence',
+        0, 1500, 0, 1500, 30, 1, 1, 0, %d, %d);
+    INSERT INTO clips (id, project_id, clip_kind, track_id, media_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+    VALUES ('clip_b', 'default_project', 'timeline', 'track_v1', 'media_clip_b', 'default_sequence',
+        3000, 1500, 0, 1500, 30, 1, 1, 0, %d, %d);
+    INSERT INTO clips (id, project_id, clip_kind, track_id, media_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+    VALUES ('clip_c', 'default_project', 'timeline', 'track_v2', 'media_clip_c', 'default_sequence',
+        1200, 1200, 0, 1200, 30, 1, 1, 0, %d, %d);
+    INSERT INTO clips (id, project_id, clip_kind, track_id, media_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+    VALUES ('clip_d', 'default_project', 'timeline', 'track_v2', 'media_clip_d', 'default_sequence',
+        5000, 1200, 0, 1200, 30, 1, 1, 0, %d, %d);
+]], now, now, now, now,
+   now, now, now, now, now, now, now, now,
+   now, now, now, now, now, now, now, now))
 
-function timeline_state.capture_viewport()
-    return {
-        start_value = timeline_state.viewport_start_value,
-        duration_value = timeline_state.viewport_duration_frames_value,
-    }
-end
-
-function timeline_state.restore_viewport(snapshot)
-    if not snapshot then
-        return
-    end
-
-    if snapshot.duration_value then
-        timeline_state.viewport_duration_frames_value = snapshot.duration_value
-    end
-
-    if snapshot.start_value then
-        timeline_state.viewport_start_value = snapshot.start_value
-    end
-end
-
-function timeline_state.push_viewport_guard()
-    viewport_guard = viewport_guard + 1
-    return viewport_guard
-end
-
-function timeline_state.pop_viewport_guard()
-    if viewport_guard > 0 then
-        viewport_guard = viewport_guard - 1
-    end
-    return viewport_guard
-end
-
-package.loaded['ui.timeline.timeline_state'] = timeline_state
-
--- Mock sequence monitor for navigation commands
-local mock_monitor = {
+-- Mock sequence monitor — justified: engine.is_playing/stop require Qt
+mock_monitor = {
     sequence_id = "default_sequence",
     view_id = "timeline_monitor",
-    total_frames = 4500,
-    playhead = 0,
     engine = {
         is_playing = function() return false end,
         stop = function() end,
     },
-}
-function mock_monitor:seek_to_frame(frame)
-    self.playhead = math.max(0, math.floor(frame))
-    timeline_state.playhead_position = self.playhead
-end
-
-package.loaded['ui.panel_manager'] = {
-    get_active_sequence_monitor = function() return mock_monitor end,
 }
 
 command_manager.init('default_sequence', 'default_project')
 
 print("=== Timeline Edit Navigation Tests ===\n")
 
-local function frames(val)
-    if type(val) == "table" and val.frames then return val.frames end
-    return val
-end
+-- Playhead starts at 2500 (set in sequences row)
+assert(timeline_state.get_playhead_position() == 2500,
+    string.format("Initial playhead expected 2500, got %s",
+        tostring(timeline_state.get_playhead_position())))
 
+-- GoToPrevEdit from 2500 → 2400 (end of clip_c on V2)
 local result = command_manager.execute("GoToPrevEdit", { project_id = "default_project" })
 assert(result.success == true, "GoToPrevEdit should succeed")
-assert(frames(timeline_state.playhead_position) == 2400,
-    string.format("GoToPrevEdit expected 2400, got %s", tostring(frames(timeline_state.playhead_position))))
+assert(timeline_state.get_playhead_position() == 2400,
+    string.format("GoToPrevEdit expected 2400, got %s",
+        tostring(timeline_state.get_playhead_position())))
 
-timeline_state.playhead_position = 3200
-
+-- Set playhead to 3200, GoToNextEdit → 4500 (end of clip_b on V1)
+timeline_state.set_playhead_position(3200)
 result = command_manager.execute("GoToNextEdit", { project_id = "default_project" })
 assert(result.success == true, "GoToNextEdit should succeed")
-assert(frames(timeline_state.playhead_position) == 4500,
-    string.format("GoToNextEdit expected 4500, got %s", tostring(frames(timeline_state.playhead_position))))
+assert(timeline_state.get_playhead_position() == 4500,
+    string.format("GoToNextEdit expected 4500, got %s",
+        tostring(timeline_state.get_playhead_position())))
 
-timeline_state.playhead_position = 6200
+-- At timeline end (6200), GoToNextEdit should stay put
+timeline_state.set_playhead_position(6200)
 result = command_manager.execute("GoToNextEdit", { project_id = "default_project" })
 assert(result.success == true, "GoToNextEdit should succeed even at timeline end")
-assert(frames(timeline_state.playhead_position) == 6200,
-    string.format("GoToNextEdit at end should stay at 6200, got %s", tostring(frames(timeline_state.playhead_position))))
+assert(timeline_state.get_playhead_position() == 6200,
+    string.format("GoToNextEdit at end should stay at 6200, got %s",
+        tostring(timeline_state.get_playhead_position())))
 
 print("✅ GoToPrevEdit/GoToNextEdit navigation commands adjust playhead correctly")

@@ -343,7 +343,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         processed = true
                         for _, entry in ipairs(track_clips) do
                             if not deleted_lookup[entry.id] then
-                                local status, err = process_shift_candidate(entry.id, entry.start_value or 0)
+                                local original_start = entry.timeline_start
+                                assert(type(original_start) == "number",
+                                    string.format("FATAL: RippleDeleteSelection: clip %s missing timeline_start in track cache", tostring(entry.id)))
+                                local status, err = process_shift_candidate(entry.id, original_start)
                                 if status == false then
                                     log.error("%s", tostring(err))
                                     return false

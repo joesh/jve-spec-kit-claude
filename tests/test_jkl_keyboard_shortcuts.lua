@@ -1,82 +1,121 @@
 require('test_env')
 
--- This test verifies the JKL keyboard shortcut integration in keyboard_shortcuts.lua
--- Tests the handle_key_release function and K held state tracking
+-- JKL keyboard shortcut dispatch test.
+-- Verifies that literal Qt key codes J/K/L dispatch correct shuttle commands.
+-- Uses LITERAL Qt key codes (not keyboard_constants) to catch wrong-constant bugs.
+-- Uses REAL timeline_state — no mock.
+-- command_manager mock is justified: test tracks dispatched command names, not execution.
 
-print("=== Test JKL Keyboard Shortcuts Integration ===")
+print("=== Test JKL Keyboard Shortcuts ===")
 
--- Mock qt_create_single_shot_timer
-_G.qt_create_single_shot_timer = function(interval, callback)
-    -- No-op for keyboard tests
-end
+-- No-op timer: prevent debounced persistence from firing mid-command
+_G.qt_create_single_shot_timer = function() end
 
--- We need to test handle_key_release, which requires keyboard_shortcuts module
--- First, set up minimal mocks
-
--- Mock panel_manager
+-- Mock panel_manager (Qt dependency)
 package.loaded["ui.panel_manager"] = {
     toggle_active_panel = function() end,
+    get_active_sequence_monitor = function() return nil end,
 }
 
--- Mock keyboard_shortcut_registry
-package.loaded["core.keyboard_shortcut_registry"] = {
-    commands = {},
-    register_command = function() end,
-    assign_shortcut = function() return true end,
-    handle_key_event = function() return false end,
-}
+-- Set up database for real timeline_state
+local database = require("core.database")
+local command_manager = require("core.command_manager")
 
--- Mock focus_manager
-_G.focus_manager = nil
+local TEST_DB = "/tmp/jve/test_jkl_keyboard.db"
+os.remove(TEST_DB)
+os.remove(TEST_DB .. "-wal")
+os.remove(TEST_DB .. "-shm")
+assert(database.init(TEST_DB))
+local db = database.get_connection()
+db:exec(require("import_schema"))
 
--- Load keyboard_shortcuts
-package.loaded["core.keyboard_shortcuts"] = nil
+local now = os.time()
+db:exec(string.format([[
+    INSERT INTO projects (id, name, created_at, modified_at)
+    VALUES ('proj1', 'Test', %d, %d);
+    INSERT INTO sequences (
+        id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
+        width, height, view_start_frame, view_duration_frames, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at
+    ) VALUES (
+        'seq1', 'proj1', 'Seq', 'timeline', 24, 1, 48000,
+        1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, %d, %d
+    );
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
+        enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v1', 'seq1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+]], now, now, now, now))
+
+-- Init real timeline_state from database
+command_manager.init('seq1', 'proj1')
+
+-- Load real modules
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
+local focus_manager = require("ui.focus_manager")
+local timeline_state = require("ui.timeline.timeline_state")
 
--- Get KEY constants
-local KEY = keyboard_shortcuts.KEY
+-- ── Literal Qt key codes ──
+local QT_KEY_J = 74
+local QT_KEY_K = 75
+local QT_KEY_L = 76
 
-print("\n--- Test K key release tracking ---")
+-- Mock command_manager for dispatch tracking (justified: testing routing, not execution)
+local dispatched = {}
+local mock_cm = {
+    execute_ui = function(cmd)
+        dispatched[#dispatched + 1] = cmd
+        return { success = true }
+    end,
+    get_executor = function() return function() end end,
+    peek_command_event_origin = function() return nil end,
+    begin_command_event = function() end,
+    end_command_event = function() end,
+}
 
-print("\nTest 1: handle_key_release exists")
-assert(type(keyboard_shortcuts.handle_key_release) == "function", "handle_key_release should be a function")
-print("  ✓ handle_key_release function exists")
+local function reset()
+    dispatched = {}
+    focus_manager.set_focused_panel("timeline")
+    keyboard_shortcuts.init(timeline_state, mock_cm,
+        { add_selected_to_timeline = function() end },
+        { is_dragging = function() return false end })
+end
 
-print("\nTest 2: handle_key_release with K key")
-local result = keyboard_shortcuts.handle_key_release({key = KEY.K})
-assert(result == false, "handle_key_release should return false (not consume event)")
+local function find_cmd(name)
+    for _, cmd in ipairs(dispatched) do
+        if cmd == name then return true end
+    end
+    return false
+end
+
+print("\nTest 1: J dispatches ShuttleReverse")
+reset()
+keyboard_shortcuts.handle_key({ key = QT_KEY_J, modifiers = 0, text = "j", focus_widget_is_text_input = 0 })
+assert(find_cmd("ShuttleReverse"), "J should dispatch ShuttleReverse, got: " .. table.concat(dispatched, ", "))
+print("  ✓ J → ShuttleReverse")
+
+print("\nTest 2: K dispatches ShuttleStop")
+reset()
+keyboard_shortcuts.handle_key({ key = QT_KEY_K, modifiers = 0, text = "k", focus_widget_is_text_input = 0 })
+assert(find_cmd("ShuttleStop"), "K should dispatch ShuttleStop, got: " .. table.concat(dispatched, ", "))
+print("  ✓ K → ShuttleStop")
+
+print("\nTest 3: L dispatches ShuttleForward")
+reset()
+keyboard_shortcuts.handle_key({ key = QT_KEY_L, modifiers = 0, text = "l", focus_widget_is_text_input = 0 })
+assert(find_cmd("ShuttleForward"), "L should dispatch ShuttleForward, got: " .. table.concat(dispatched, ", "))
+print("  ✓ L → ShuttleForward")
+
+print("\nTest 4: J in text field does not dispatch")
+reset()
+keyboard_shortcuts.handle_key({ key = QT_KEY_J, modifiers = 0, text = "j", focus_widget_is_text_input = true })
+assert(not find_cmd("ShuttleReverse"), "J should not dispatch in text field")
+print("  ✓ J in text field passes through")
+
+print("\nTest 5: handle_key_release exists and returns false")
+assert(type(keyboard_shortcuts.handle_key_release) == "function", "handle_key_release should exist")
+local result = keyboard_shortcuts.handle_key_release({ key = QT_KEY_K })
+assert(result == false, "handle_key_release should return false")
 print("  ✓ handle_key_release(K) returns false")
-
-print("\nTest 3: handle_key_release with non-K key")
-result = keyboard_shortcuts.handle_key_release({key = KEY.J})
-assert(result == false, "handle_key_release should return false for J")
-print("  ✓ handle_key_release(J) returns false")
-
-print("\nTest 4: handle_key_release with L key")
-result = keyboard_shortcuts.handle_key_release({key = KEY.L})
-assert(result == false, "handle_key_release should return false for L")
-print("  ✓ handle_key_release(L) returns false")
-
-print("\nTest 5: handle_key_release with Space key")
-result = keyboard_shortcuts.handle_key_release({key = KEY.Space})
-assert(result == false, "handle_key_release should return false for Space")
-print("  ✓ handle_key_release(Space) returns false")
-
-print("\n--- Test KEY constants for JKL ---")
-
-print("\nTest 6: KEY.J is defined")
-assert(KEY.J ~= nil, "KEY.J should be defined")
-assert(KEY.J == 74, "KEY.J should be Qt key code 74")
-print("  ✓ KEY.J = 74")
-
-print("\nTest 7: KEY.K is defined")
-assert(KEY.K ~= nil, "KEY.K should be defined")
-assert(KEY.K == 75, "KEY.K should be Qt key code 75")
-print("  ✓ KEY.K = 75")
-
-print("\nTest 8: KEY.L is defined")
-assert(KEY.L ~= nil, "KEY.L should be defined")
-assert(KEY.L == 76, "KEY.L should be Qt key code 76")
-print("  ✓ KEY.L = 76")
 
 print("\n✅ test_jkl_keyboard_shortcuts.lua passed")
