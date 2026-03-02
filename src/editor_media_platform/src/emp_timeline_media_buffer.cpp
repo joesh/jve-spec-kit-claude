@@ -36,6 +36,14 @@ inline int tmb_log_level() {
 
 namespace emp {
 
+// Format TrackId as "V1", "A2" etc. for log output
+namespace {
+const char* track_str(const TrackId& t, char* buf, size_t sz) {
+    snprintf(buf, sz, "%c%d", t.type == TrackType::Video ? 'V' : 'A', t.index);
+    return buf;
+}
+} // namespace
+
 // ============================================================================
 // Construction / destruction
 // ============================================================================
@@ -235,76 +243,6 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
         }
     }
 
-    // Restart prefetch on play start (0→nonzero). ParkReaders() stopped all
-    // prefetch threads; re-enable them now that playback is resuming.
-    // Only video-track readers need prefetch (video frame decode-ahead).
-    // Audio-track readers don't benefit from video prefetch threads.
-    if (direction != 0 && prev_direction == 0) {
-        std::vector<std::shared_ptr<Reader>> readers;
-        {
-            std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
-            readers.reserve(m_readers.size());
-            for (auto& [key, entry] : m_readers) {
-                if (key.first.type == TrackType::Video) {
-                    readers.push_back(entry.reader);
-                }
-            }
-        }
-        for (auto& reader : readers) {
-            reader->StartPrefetch(direction);
-        }
-    }
-
-    // Update Reader prefetch targets and manage active/idle readers.
-    // Watermark-driven REFILLs handle pre-buffer; this block only updates
-    // prefetch targets and pauses idle readers.
-    using ReaderKey = std::pair<TrackId, std::string>;
-    std::vector<ReaderKey> active_keys;
-
-    {
-        std::lock_guard<std::mutex> lock(m_tracks_mutex);
-        for (auto& [track, ts] : m_tracks) {
-            const ClipInfo* current = find_clip_at(ts, frame);
-            if (!current) continue;
-
-            active_keys.push_back({track, current->clip_id});
-
-            // Update Reader prefetch target for the current clip so its background
-            // decoder stays ahead of the playhead (prevents main-thread cache stalls).
-            if (track.type == TrackType::Video) {
-                int64_t source_frame = current->source_in +
-                    static_cast<int64_t>((frame - current->timeline_start) * current->speed_ratio);
-                auto key = std::make_pair(track, current->clip_id);
-                std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
-                auto it = m_readers.find(key);
-                if (it != m_readers.end()) {
-                    int64_t file_frame = source_frame - it->second.media_file->info().start_tc;
-                    TimeUS t_us = FrameTime::from_frame(file_frame, current->rate()).to_us();
-                    it->second.reader->UpdatePrefetchTarget(t_us);
-                }
-            }
-        }
-    }
-
-    // Pause prefetch on idle readers, resume on active ones.
-    // Only video readers have prefetch — audio readers skip StartPrefetch.
-    if (direction != 0) {
-        std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
-        for (auto& [key, entry] : m_readers) {
-            if (key.first.type != TrackType::Video) continue;
-
-            bool is_active = false;
-            for (const auto& ak : active_keys) {
-                if (ak == key) { is_active = true; break; }
-            }
-
-            if (is_active) {
-                entry.reader->ResumePrefetch(direction);
-            } else {
-                entry.reader->PausePrefetch();
-            }
-        }
-    }
 }
 
 // ============================================================================
@@ -1428,24 +1366,6 @@ void TimelineMediaBuffer::ParkReaders() {
         }
     }
 
-    // 3. Collect reader shared_ptrs under pool lock
-    std::vector<std::shared_ptr<Reader>> readers;
-    {
-        std::lock_guard<std::mutex> lock(m_pool_mutex);
-        readers.reserve(m_readers.size());
-        for (auto& [key, entry] : m_readers) {
-            readers.push_back(entry.reader);
-        }
-    }
-
-    // 4. Signal all threads first (non-blocking), then join all.
-    //    Parallel exit resolves HW decoder contention → fast join.
-    for (auto& reader : readers) {
-        reader->SignalPrefetchStop();
-    }
-    for (auto& reader : readers) {
-        reader->JoinPrefetch();
-    }
 }
 
 // ============================================================================
@@ -1495,7 +1415,6 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
 
     std::shared_ptr<Reader> reader;
     std::shared_ptr<std::mutex> use_mtx;
-    bool need_prefetch = false;
 
     // Phase 1 (under lock ~1us): pool lookup + offline check
     {
@@ -1535,10 +1454,6 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
     }
 
     auto new_reader = reader_result.value();
-    // TMB manages its own caching and pre-buffer — force Play decode path
-    // so the Reader uses batch decode (maintains codec position, prevents
-    // Park→Play cache clears that cause h264 re-seeks at boundaries).
-    new_reader->SetDecodeModeOverride(DecodeMode::Play);
     auto new_use_mtx = std::make_shared<std::mutex>();
 
     // Phase 3 (under lock ~1us): install into pool or discard if another thread raced
@@ -1549,7 +1464,6 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
         auto it = m_readers.find(key);
         if (it != m_readers.end()) {
             // Race: another thread installed this key — use theirs, discard ours.
-            // ~Reader() calls StopPrefetch() which is no-op (never started).
             it->second.last_used = ++m_pool_clock;
             reader = it->second.reader;
             use_mtx = it->second.use_mutex;
@@ -1563,17 +1477,9 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
             m_readers[key] = PoolEntry{path, mf, new_reader, track, ++m_pool_clock, new_use_mtx};
             reader = new_reader;
             use_mtx = new_use_mtx;
-            need_prefetch = true;
-        }
-    }
 
-    // Phase 4 (NO lock): start prefetch for newly installed video readers.
-    // Audio-track readers don't benefit from video prefetch threads.
-    // ParkReaders() has stopped all decode work — don't restart when parked.
-    if (need_prefetch) {
-        int dir = m_playhead_direction.load(std::memory_order_relaxed);
-        if (dir != 0 && track.type == TrackType::Video) {
-            reader->StartPrefetch(dir);
+            // Log pool state — critical for diagnosing VT session exhaustion
+            log_pool_state("NEW", track, clip_id, new_reader->IsHwAccelerated());
         }
     }
 
@@ -1595,7 +1501,43 @@ void TimelineMediaBuffer::evict_lru_reader() {
             oldest = it;
         }
     }
+    char tbuf[8];
+    EMP_LOG_WARN("POOL EVICT: track=%s clip=%s hw=%s path=%s",
+                 track_str(oldest->first.first, tbuf, sizeof(tbuf)),
+                 oldest->first.second.c_str(),
+                 oldest->second.reader->IsHwAccelerated() ? "VT" : "SW",
+                 oldest->second.path.c_str());
     m_readers.erase(oldest);
+}
+
+void TimelineMediaBuffer::log_pool_state(const char* action, const TrackId& track,
+                                          const std::string& clip_id, bool is_hw) {
+    // Must be called with m_pool_mutex held
+    int hw_count = 0, sw_count = 0;
+    for (const auto& [key, entry] : m_readers) {
+        if (entry.reader->IsHwAccelerated()) ++hw_count; else ++sw_count;
+    }
+    int total = static_cast<int>(m_readers.size());
+
+    char tbuf[8];
+    EMP_LOG_WARN("POOL %s: track=%s clip=%s %s — %d/%d readers (VT=%d SW=%d)",
+                 action, track_str(track, tbuf, sizeof(tbuf)), clip_id.c_str(),
+                 is_hw ? "VT" : "SW",
+                 total, m_max_readers, hw_count, sw_count);
+
+    // Dump all readers when any SW reader exists — shows which ones are slow
+    if (sw_count > 0) {
+        for (const auto& [key, entry] : m_readers) {
+            char tbuf2[8];
+            EMP_LOG_WARN("  [%s] track=%s clip=%s %s lru=%lld path=%s",
+                         entry.reader->IsHwAccelerated() ? "VT" : "SW",
+                         track_str(key.first, tbuf2, sizeof(tbuf2)),
+                         key.second.c_str(),
+                         entry.reader->IsHwAccelerated() ? "" : "*** SLOW ***",
+                         static_cast<long long>(entry.last_used),
+                         entry.path.c_str());
+        }
+    }
 }
 
 // ============================================================================
@@ -1646,11 +1588,30 @@ void TimelineMediaBuffer::submit_pre_buffer(const PreBufferJob& job) {
 
     auto key = job_key(job);
 
-    // De-duplicate: skip if same job is queued OR currently being processed by a worker
-    if (m_pre_buffering.count(key)) return;
+    // De-duplicate against in-flight and queued jobs.
+    //
+    // REFILL jobs use generation-aware dedup: SetTrackClips increments
+    // generation to abort stale REFILLs, but the stale worker lingers in
+    // m_pre_buffering until it notices the mismatch. A new-generation
+    // REFILL must pass through; the stale worker aborts in O(1).
+    bool is_refill = (job.type == PreBufferJob::VIDEO_REFILL ||
+                      job.type == PreBufferJob::AUDIO_REFILL);
+
+    auto in_flight = m_pre_buffering.find(key);
+    if (in_flight != m_pre_buffering.end()) {
+        if (!is_refill) return;
+        // REFILL: skip if same or newer generation already in-flight
+        if (in_flight->second >= job.generation) return;
+        // Stale generation in-flight → allow new REFILL through
+    }
+
     for (const auto& j : m_jobs) {
-        if (j.track == job.track && j.clip_id == job.clip_id && j.type == job.type) {
-            return;
+        if (is_refill) {
+            if (j.track == job.track && j.type == job.type &&
+                j.generation == job.generation) return;
+        } else {
+            if (j.track == job.track && j.clip_id == job.clip_id &&
+                j.type == job.type) return;
         }
     }
 
@@ -1674,7 +1635,7 @@ void TimelineMediaBuffer::worker_loop() {
             job = std::move(m_jobs.back());
             m_jobs.pop_back();
             key = job_key(job);
-            m_pre_buffering.insert(key);
+            m_pre_buffering[key] = job.generation;
         }
 
         // RAII: remove from in-flight set when job processing completes
@@ -1689,7 +1650,7 @@ void TimelineMediaBuffer::worker_loop() {
             // readers per-clip, skip gaps. One batch spans clip boundaries.
             //
             // Hold the reader across consecutive frames in the same clip to
-            // avoid use_mutex contention with Reader's prefetch thread.
+            // avoid repeated use_mutex acquire/release overhead.
             int frames_decoded = 0;
             std::string held_clip_id;
             ReaderHandle held_reader;

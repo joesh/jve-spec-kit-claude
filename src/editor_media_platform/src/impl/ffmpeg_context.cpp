@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 
 static int codec_log_level() {
     static int level = -1;
@@ -192,6 +193,11 @@ static AVPixelFormat get_hw_format(AVCodecContext* ctx, const AVPixelFormat* pix
     return pix_fmts[0];
 }
 
+// Serialize VideoToolbox session creation. Apple's VT is not thread-safe
+// for concurrent av_hwdevice_ctx_create + avcodec_open2 calls — concurrent
+// attempts cause both to fall back to software decode.
+static std::mutex g_vt_init_mutex;
+
 Result<void> FFmpegCodecContext::init(AVCodecParameters* params) {
     // 1. Find standard decoder
     const AVCodec* codec = avcodec_find_decoder(params->codec_id);
@@ -199,9 +205,14 @@ Result<void> FFmpegCodecContext::init(AVCodecParameters* params) {
         return Error::unsupported("No decoder for codec ID " + std::to_string(params->codec_id));
     }
 
+    // Lock scope: VT device creation through codec open + format negotiation.
+    // Audio codecs never enter VT init, so they skip the lock entirely.
+    std::unique_lock<std::mutex> vt_lock(g_vt_init_mutex, std::defer_lock);
+
 #ifdef EMP_HAS_VIDEOTOOLBOX
     // 2. Try to set up VideoToolbox hw acceleration
     if (codec_supports_videotoolbox(params->codec_id)) {
+        vt_lock.lock();
         auto hw_result = init_hw_device_ctx(AV_HWDEVICE_TYPE_VIDEOTOOLBOX);
         if (hw_result.is_ok()) {
             m_hw_device_ctx = hw_result.value();
@@ -229,7 +240,7 @@ Result<void> FFmpegCodecContext::init(AVCodecParameters* params) {
         m_codec_ctx->get_format = get_hw_format;
     }
 
-    // 5. Open codec
+    // 5. Open codec (still under vt_lock if VT-capable)
     ret = avcodec_open2(m_codec_ctx, codec, nullptr);
     if (ret < 0) {
         return ffmpeg_error(ret, "avcodec_open2");
@@ -253,6 +264,8 @@ Result<void> FFmpegCodecContext::init(AVCodecParameters* params) {
         m_hw_device_ctx = nullptr;
         m_hw_active = false;
     }
+
+    // vt_lock released here (auto via unique_lock destructor)
 
     EMP_LOG_DEBUG("Codec opened: %s %dx%d profile=%d — %s decode (pix_fmt=%s)",
                   codec->name, params->width, params->height, params->profile,

@@ -6,14 +6,13 @@
 #include "emp_errors.h"
 #include "emp_time.h"
 #include <memory>
-#include <atomic>
 
 namespace emp {
 
 // Global decode mode — controls how readers handle intermediate frames.
 // Set by the transport layer (playback controller, ruler drag) via Lua bindings.
 //
-// Play:  BGRA-convert ALL intermediates, cache for sequential access, prefetch active
+// Play:  BGRA-convert ALL intermediates, cache for sequential access (batch decode)
 // Scrub: Decode from keyframe through B-frames, only BGRA-convert target frame
 // Park:  Same as Scrub (single frame decode, no expectation of further requests)
 enum class DecodeMode { Play, Scrub, Park };
@@ -57,57 +56,17 @@ public:
     Result<std::shared_ptr<PcmChunk>> DecodeAudioRangeUS(TimeUS t0_us, TimeUS t1_us,
                                                           const AudioFormat& out);
 
-    // =========================================================================
-    // Background Prefetch API - for smooth playback
-    // =========================================================================
-
-    // Start/update background prefetch thread
-    // direction: 1 = forward, -1 = reverse, 0 = stop (same as StopPrefetch)
-    // Prefetch thread will decode ahead in the specified direction
-    void StartPrefetch(int direction);
-
-    // Stop background prefetch (safe to call even if not running)
-    void StopPrefetch();
-
-    // Two-phase stop for parallel teardown (used by TMB::ParkReaders):
-    // SignalPrefetchStop: sets flags, wakes thread — does NOT join
-    // JoinPrefetch: blocks until prefetch thread exits
-    void SignalPrefetchStop();
-    void JoinPrefetch();
-
-    // Lightweight pause/resume — sets direction to 0 (idle) or playback dir
-    // without touching thread lifecycle. Prefetch thread stays alive, just idles.
-    // Use for pausing decode on non-current readers during playback.
-    void PausePrefetch();
-    void ResumePrefetch(int direction);
-
-    // Update prefetch target position (call from playback tick)
-    // Prefetch thread will decode ahead of this position
-    void UpdatePrefetchTarget(TimeUS t_us);
-
-    // Non-blocking cache lookup - returns nullptr on miss
-    // Use this for display path; falls back to DecodeAtUS on miss
+    // Non-blocking cache lookup - returns nullptr on miss.
+    // Diagnostic/test API: verifies cache state after DecodeAtUS calls.
     std::shared_ptr<Frame> GetCachedFrame(TimeUS t_us);
-
-    // Override global decode mode for this reader instance.
-    // TMB sets Play to ensure pre-buffer workers use batch decode path
-    // (maintains codec position, prevents Park→Play cache clears).
-    void SetDecodeModeOverride(DecodeMode mode);
-    void ClearDecodeModeOverride();
 
     // Set maximum cached BGRA frames. Reader evicts down to new limit immediately.
     // Used by Lua to control per-reader cache size based on state
     // (e.g., active+playing=120, active+scrubbing=8, pooled=1).
     void SetMaxCacheFrames(size_t max_frames);
 
-    // Diagnostics: total frames decoded by prefetch since last StartPrefetch.
-    // Used by tests to verify seek-vs-forward-decode behavior.
-    int64_t PrefetchFramesDecoded() const;
-
-    // Diagnostics: total EOF hits in prefetch loop since last StartPrefetch.
-    // Each increment = one decode attempt that hit EOF. After the EOF fix,
-    // this should be 1 (initial hit); without the fix it grows unbounded.
-    int64_t PrefetchEOFHits() const;
+    // True if video decoder is using hardware acceleration (VideoToolbox)
+    bool IsHwAccelerated() const;
 
     // Get the underlying media file
     std::shared_ptr<MediaFile> media_file() const;
@@ -118,9 +77,6 @@ public:
 private:
     std::unique_ptr<ReaderImpl> m_impl;
     std::shared_ptr<MediaFile> m_media_file;
-
-    // Prefetch worker thread function
-    void prefetch_worker();
 };
 
 } // namespace emp

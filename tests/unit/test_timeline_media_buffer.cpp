@@ -1409,58 +1409,6 @@ private slots:
         QVERIFY(r2.frame != nullptr);
         QCOMPARE(tmb->GetVideoCacheMissCount(), (int64_t)0);
     }
-
-    // ── Prefetch integration ──
-
-    void test_reader_prefetch_keeps_cache_warm() {
-        // After acquiring a reader (which starts prefetch), the Reader's cache
-        // should fill ahead of the playhead. This verifies that a long playback
-        // run produces NO cache misses beyond the initial decode, proving the
-        // prefetch thread is active and keeping the cache warm.
-        if (!m_hasTestVideo) QSKIP("No test video");
-
-        auto tmb = TimelineMediaBuffer::Create(0);  // no TMB workers (isolate prefetch)
-        auto path = m_testVideoPath.toStdString();
-
-        std::vector<ClipInfo> clips = {
-            {"clipA", path, 0, 80, 0, 24, 1, 1.0f},
-        };
-        tmb->SetTrackClips(V1, clips);
-
-        // Start play mode to trigger reader creation + prefetch start,
-        // then park for sync decode (Play mode returns pending-null with 0 workers)
-        tmb->SetPlayhead(0, 1, 1.0f);
-        tmb->SetPlayhead(0, 0, 1.0f);
-        auto r0 = tmb->GetVideoFrame(V1, 0);
-        QVERIFY(r0.frame != nullptr);
-
-        // Re-enable play direction to keep prefetch active
-        tmb->SetPlayhead(0, 1, 1.0f);
-
-        // Give prefetch time to fill cache ahead
-        QThread::msleep(500);
-
-        // Read frames in Park mode (sync decode on TMB cache miss → Reader
-        // cache hit). Play mode returns pending-null with 0 TMB workers.
-        tmb->ResetVideoCacheMissCount();
-
-        for (int f = 1; f <= 70; ++f) {
-            tmb->SetPlayhead(f, 0, 1.0f);
-            auto r = tmb->GetVideoFrame(V1, f);
-            QVERIFY2(r.frame != nullptr,
-                     qPrintable(QString("frame %1 null").arg(f)));
-        }
-
-        // With prefetch running, every TMB miss should be a Reader cache hit.
-        // These are still counted as TMB misses (70 frames, all TMB misses since
-        // TMB cache wasn't pre-filled), but the point is they're FAST (no decode
-        // batch on main thread). We can verify the frames were all non-null above.
-        int64_t misses = tmb->GetVideoCacheMissCount();
-        QVERIFY2(misses == 70,
-                 qPrintable(QString("Expected 70 TMB misses (Reader handles via cache), "
-                                    "got %1").arg(misses)));
-    }
-
     // ── Decode mode override ──
 
     void test_decode_mode_override_prevents_cache_clear() {
@@ -1630,54 +1578,6 @@ private slots:
         // m_seq_rate starts as {0, 1} — num=0 triggers the assert.
         QVERIFY(true);
     }
-
-    // ── SetPlayhead UpdatePrefetchTarget ──
-
-    void test_set_playhead_advances_prefetch_target() {
-        // SetPlayhead must call UpdatePrefetchTarget on the current clip's
-        // Reader so its background decoder stays ahead of the playhead.
-        // Without this, the Reader's last_decode_pts goes stale during
-        // cache-hit periods, causing need_seek to trigger 100ms+ re-seeks.
-        if (!m_hasTestVideo) QSKIP("No test video");
-
-        auto tmb = TimelineMediaBuffer::Create(0); // no workers (isolate prefetch)
-        auto path = m_testVideoPath.toStdString();
-
-        std::vector<ClipInfo> clips = {
-            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
-        };
-        tmb->SetTrackClips(V1, clips);
-
-        // Park-mode decode frame 0 to create the Reader (starts prefetch)
-        tmb->SetPlayhead(0, 0, 1.0f);
-        auto r0 = tmb->GetVideoFrame(V1, 0);
-        QVERIFY(r0.frame != nullptr);
-
-        // Start play to keep prefetch active, let it fill ahead
-        tmb->SetPlayhead(0, 1, 1.0f);
-        QThread::msleep(300);
-
-        // Advance playhead to frame 50 — UpdatePrefetchTarget tells the
-        // Reader's prefetch thread to decode ahead from source frame 50.
-        tmb->SetPlayhead(50, 1, 1.0f);
-
-        // Give prefetch time to fill ahead from frame 50
-        QThread::msleep(500);
-
-        // Read in Park mode (Play returns pending-null with 0 TMB workers).
-        // Frames around 60-70 should be in the Reader's cache now.
-        tmb->ResetVideoCacheMissCount();
-        for (int f = 55; f <= 70; ++f) {
-            tmb->SetPlayhead(f, 0, 1.0f);
-            auto r = tmb->GetVideoFrame(V1, f);
-            QVERIFY2(r.frame != nullptr,
-                     qPrintable(QString("frame %1 null after prefetch advance").arg(f)));
-        }
-        // All 16 frames are TMB misses (TMB cache wasn't pre-filled by workers),
-        // but they should decode successfully via the Reader's prefetch cache.
-        QCOMPARE(tmb->GetVideoCacheMissCount(), (int64_t)16);
-    }
-
     // ── Autonomous pre-mixed audio (SetAudioMixParams + GetMixedAudio) ──
 
     void test_set_audio_mix_params_and_get_mixed() {
@@ -1859,114 +1759,6 @@ private slots:
                                     "frame, got %1").arg(misses)));
     }
 
-    // ── ParkReaders stops background decode ──
-
-    void test_park_readers_stops_prefetch() {
-        // ParkReaders must stop all prefetch threads. After ParkReaders,
-        // readers should not be decoding in the background.
-        if (!m_hasTestVideo) QSKIP("No test video");
-
-        auto tmb = TimelineMediaBuffer::Create(2);
-        auto path = m_testVideoPath.toStdString();
-
-        std::vector<ClipInfo> clips = {
-            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
-        };
-        tmb->SetTrackClips(V1, clips);
-
-        // Park-mode decode to acquire reader + start prefetch
-        tmb->SetPlayhead(0, 0, 1.0f);
-        auto r0 = tmb->GetVideoFrame(V1, 0);
-        QVERIFY(r0.frame != nullptr);
-
-        // Enable play to activate prefetch
-        tmb->SetPlayhead(0, 1, 1.0f);
-        QThread::msleep(100); // let prefetch run
-
-        // Park — must stop all background decode
-        tmb->ParkReaders();
-
-        // After park, SetPlayhead with direction=0 should not crash
-        tmb->SetPlayhead(50, 0, 0.0f);
-
-        // Resume playback — prefetch should restart via SetPlayhead(dir=1)
-        tmb->SetPlayhead(50, 1, 1.0f);
-        QThread::msleep(300); // let prefetch restart and fill
-
-        // Verify in Park mode (Play returns pending-null on cache miss)
-        tmb->SetPlayhead(60, 0, 1.0f);
-        auto r1 = tmb->GetVideoFrame(V1, 60);
-        QVERIFY2(r1.frame != nullptr,
-                 "Frame 60 should decode after prefetch restart");
-    }
-
-    // ── Idle reader prefetch management ──
-
-    void test_idle_reader_prefetch_paused() {
-        // After crossing a clip boundary, the old clip's reader should have
-        // its prefetch paused (direction=0). The new clip's reader should
-        // have active prefetch. This limits concurrent VT decode sessions.
-        if (!m_hasTestVideo) QSKIP("No test video");
-
-        auto tmb = TimelineMediaBuffer::Create(2);
-        auto path = m_testVideoPath.toStdString();
-
-        // Two clips on V1, one clip on V2
-        // Test video has 72 frames — keep source ranges within bounds
-        std::vector<ClipInfo> v1_clips = {
-            {"clipA", path, 0, 30, 0, 24, 1, 1.0f},
-            {"clipB", path, 30, 30, 0, 24, 1, 1.0f},
-        };
-        std::vector<ClipInfo> v2_clips = {
-            {"clipC", path, 0, 60, 0, 24, 1, 1.0f},
-        };
-        tmb->SetTrackClips(V1, v1_clips);
-        tmb->SetTrackClips(V2, v2_clips);
-
-        // Park-mode decode to open readers for clipA and clipC
-        tmb->SetPlayhead(0, 0, 1.0f);
-        tmb->GetVideoFrame(V1, 0); // open reader for clipA
-        tmb->GetVideoFrame(V2, 0); // open reader for clipC
-
-        // Enable play to activate prefetch, let it run
-        tmb->SetPlayhead(0, 1, 1.0f);
-        QThread::msleep(100);
-
-        // Cross boundary: playhead at frame 35 (in clipB)
-        // clipA's reader should get paused, clipB and clipC stay active
-        std::vector<ClipInfo> v1_clips_b = {
-            {"clipB", path, 30, 30, 0, 24, 1, 1.0f},
-        };
-        tmb->SetTrackClips(V1, v1_clips_b);
-
-        // Park-mode verify clipB and clipC decode
-        tmb->SetPlayhead(35, 0, 1.0f);
-        auto rb = tmb->GetVideoFrame(V1, 35); // open reader for clipB
-        QVERIFY(rb.frame != nullptr);
-        QCOMPARE(rb.clip_id, std::string("clipB"));
-
-        auto rc = tmb->GetVideoFrame(V2, 35);
-        QVERIFY(rc.frame != nullptr);
-        QCOMPARE(rc.clip_id, std::string("clipC"));
-
-        // We can't directly observe prefetch direction, but we can verify
-        // all readers are functional and no deadlocks occur.
-        // The structural correctness is: SetPlayhead iterates readers,
-        // pauses non-active, resumes active. If this caused issues (e.g.
-        // double-stop, wrong direction), decode would fail.
-        for (int f = 35; f < 55; ++f) {
-            tmb->SetPlayhead(f, 0, 1.0f);
-            auto rv1 = tmb->GetVideoFrame(V1, f);
-            auto rv2 = tmb->GetVideoFrame(V2, f);
-            QVERIFY2(rv1.frame != nullptr,
-                     qPrintable(QString("V1 frame %1 null").arg(f)));
-            QVERIFY2(rv2.frame != nullptr,
-                     qPrintable(QString("V2 frame %1 null").arg(f)));
-        }
-    }
-
-    // ── Pre-buffer dedup: in-flight jobs block re-submission ──
-
     void test_pre_buffer_dedup_multi_track() {
         // Watermark-driven cold-start primes ALL tracks. With 4 workers and
         // 2 tracks, each track gets its own REFILL (keyed by track+type,
@@ -2015,84 +1807,6 @@ private slots:
                  qPrintable(QString("Both next clips should be pre-buffered "
                                     "(0 cache misses), got %1").arg(misses)));
     }
-
-    // ── A1: Audio-track readers must not get video prefetch threads ──
-
-    void test_audio_track_readers_no_video_prefetch() {
-        // Audio-track readers should NOT get video prefetch threads started.
-        // Before fix: SetPlayhead restart block called StartPrefetch on ALL
-        // readers (including audio-track ones). acquire_reader also started
-        // prefetch unconditionally. Audio readers that happened to reference
-        // video+audio media files would spawn wasteful VT decode sessions.
-        //
-        // After fix: only video-track readers get StartPrefetch.
-        //
-        // Observable: audio+video multi-track playback with park/resume cycle
-        // completes without deadlock or decode contention. Video pre-buffer
-        // still works. Audio decode still works.
-        if (!m_hasTestAudio) QSKIP("No test audio");
-
-        auto tmb = TimelineMediaBuffer::Create(2);
-        auto path = m_testVideoPath.toStdString();
-
-        // V1: video clip
-        // A1: audio clip from SAME media file (has both video and audio)
-        std::vector<ClipInfo> v1_clips = {
-            {"v_clipA", path, 0, 30, 0, 24, 1, 1.0f},
-            {"v_clipB", path, 30, 30, 0, 24, 1, 1.0f},
-        };
-        std::vector<ClipInfo> a1_clips = {
-            {"a_clipA", path, 0, 30, 0, 24, 1, 1.0f},
-            {"a_clipB", path, 30, 30, 0, 24, 1, 1.0f},
-        };
-        tmb->SetTrackClips(V1, v1_clips);
-        tmb->SetTrackClips(A1, a1_clips);
-
-        AudioFormat fmt;
-        fmt.sample_rate = 48000;
-        fmt.channels = 2;
-        tmb->SetAudioFormat(fmt);
-        tmb->SetSequenceRate(24, 1);
-
-        // Park-mode decode to open readers for both tracks
-        tmb->SetPlayhead(0, 0, 1.0f);
-        auto vr = tmb->GetVideoFrame(V1, 0);
-        QVERIFY(vr.frame != nullptr);
-        auto ar = tmb->GetTrackAudio(A1, 0, 100000, fmt);
-        QVERIFY(ar != nullptr);
-
-        // Enable play to activate prefetch
-        tmb->SetPlayhead(0, 1, 1.0f);
-        QThread::msleep(100);
-
-        // Park all readers
-        tmb->ParkReaders();
-
-        // Resume playback near boundary (triggers pre-buffer)
-        tmb->SetPlayhead(28, 1, 1.0f);
-        QThread::msleep(200);
-
-        // Verify in Park mode (Play returns pending-null on cache miss)
-        tmb->SetPlayhead(30, 0, 1.0f);
-        auto vb = tmb->GetVideoFrame(V1, 30);
-        QVERIFY2(vb.frame != nullptr,
-                 "Video pre-buffer should work with audio tracks present");
-        QCOMPARE(vb.clip_id, std::string("v_clipB"));
-
-        // Audio decode should still work after park/resume
-        auto ar2 = tmb->GetTrackAudio(A1, 1000000, 1100000, fmt);
-        QVERIFY2(ar2 != nullptr,
-                 "Audio decode should work after park/resume cycle");
-
-        // Full sequence in Park mode without deadlock
-        for (int f = 28; f < 55; ++f) {
-            tmb->SetPlayhead(f, 0, 1.0f);
-            auto rv = tmb->GetVideoFrame(V1, f);
-            QVERIFY2(rv.frame != nullptr,
-                     qPrintable(QString("V1 frame %1 null").arg(f)));
-        }
-    }
-
     void test_pre_buffer_dedup_park_clears_in_flight() {
         // ParkReaders must clear the in-flight tracking set so that
         // the same clips can be re-submitted after resume.
@@ -2967,7 +2681,7 @@ private slots:
 
     void test_setplayhead_minimal_overhead() {
         // SetPlayhead with watermark system should be fast: no gap scanning,
-        // no threshold checks. Just updates atomics, manages prefetch, and
+        // no threshold checks. Just updates atomics and does
         // cold-start priming on first call.
         if (!m_hasTestVideo) QSKIP("No test video");
 

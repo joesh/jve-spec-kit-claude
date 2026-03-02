@@ -143,9 +143,9 @@ public:
     int64_t GetVideoCacheMissCount() const { return m_video_cache_misses.load(); }
     void ResetVideoCacheMissCount() { m_video_cache_misses.store(0); }
 
-    // Stop all background decode work (prefetch threads + pre-buffer jobs).
+    // Stop all background decode work (REFILL workers + pre-buffer jobs).
     // Called on playback stop to release HW decoder sessions immediately.
-    // Prefetch is restarted on next play via SetPlayhead().
+    // REFILL is restarted on next play via SetPlayhead().
     void ParkReaders();
 
     // Lifecycle
@@ -182,6 +182,8 @@ private:
                                 const std::string& path);
     void release_reader(TrackId track, const std::string& clip_id);
     void evict_lru_reader();
+    void log_pool_state(const char* action, const TrackId& track,
+                        const std::string& clip_id, bool is_hw);
 
     std::mutex m_pool_mutex;
     // Key: (track, clip_id) → each clip gets its own reader/decode session
@@ -320,9 +322,10 @@ private:
     std::mutex m_jobs_mutex;
     std::condition_variable m_jobs_cv;
     std::vector<PreBufferJob> m_jobs;
-    // Keys of jobs currently being pre-buffered by workers (in-flight dedup).
-    // Format: "V1:clip_id:0" or "A3:clip_id:1". Protected by m_jobs_mutex.
-    std::unordered_set<std::string> m_pre_buffering;
+    // Keys of jobs currently being processed by workers (in-flight dedup).
+    // Value = REFILL generation (allows new-gen REFILLs past stale in-flight).
+    // Non-REFILL jobs use generation 0. Protected by m_jobs_mutex.
+    std::unordered_map<std::string, int64_t> m_pre_buffering;
     std::atomic<bool> m_shutdown{false};
 
     // ── Sequence rate (for timeline frame → us conversion) ──
