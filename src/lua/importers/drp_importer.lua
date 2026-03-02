@@ -2,7 +2,7 @@
 --
 -- Responsibilities:
 -- - parse_drp_file(): Parse .drp ZIP archive to structured Lua tables
--- - show_conversion_dialog(): Modal dialog to choose save location
+-- - quick_metadata(): Lightweight name extraction (no full parse)
 -- - convert(): Parse .drp and create new .jvp database (Open verb)
 -- - import_into_project(): Import parsed DRP data into existing project (Import verb)
 --
@@ -66,14 +66,10 @@ local function convert_node(node)
     return element
 end
 
-local function parse_xml_file(xml_path)
-    local file = io.open(xml_path, "r")
-    if not file then
-        return nil, "Failed to open XML file: " .. xml_path
+local function parse_xml_string(content)
+    if not content or content == "" then
+        return nil, "Empty XML content"
     end
-
-    local content = file:read("*all")
-    file:close()
 
     local doc, err = xml2.parse(content)
     if not doc then
@@ -86,6 +82,18 @@ local function parse_xml_file(xml_path)
     end
 
     return convert_node(root), nil
+end
+
+local function parse_xml_file(xml_path)
+    local file = io.open(xml_path, "r")
+    if not file then
+        return nil, "Failed to open XML file: " .. xml_path
+    end
+
+    local content = file:read("*all")
+    file:close()
+
+    return parse_xml_string(content)
 end
 
 --- Find direct child element by tag name (non-recursive)
@@ -432,6 +440,27 @@ local function parse_project_metadata(project_elem)
     project.settings.width = numeric_from(width_elem, 1920)
     project.settings.height = numeric_from(height_elem, 1080)
 
+    -- Parse open timeline handles + active index
+    project.open_timeline_ids = {}
+    project.current_timeline_index = 0
+
+    local thv = find_direct_child(project_elem, "TimelineHandleVec")
+    if thv then
+        for _, child in ipairs(thv.children or {}) do
+            if child.tag == "Element" then
+                local id = get_text(child)
+                if id and id ~= "" then
+                    table.insert(project.open_timeline_ids, id)
+                end
+            end
+        end
+    end
+
+    local cti = find_direct_child(project_elem, "CurrentTimelineIndex")
+    if cti then
+        project.current_timeline_index = tonumber(get_text(cti)) or 0
+    end
+
     return project
 end
 
@@ -690,14 +719,15 @@ end
 --
 --- Extract metadata from an Sm2Timeline element into metadata_map.
 -- @param metadata_map table: seq_id → {name, fps, width, height, folder_id}
+-- @param timeline_id_map table: Sm2Timeline DbId → {name, seq_id} (for TimelineHandleVec)
 -- @param timeline_elem table: <Sm2Timeline> XML element
 -- @param folder_id string|nil: parent folder DbId (from Sm2MpTimelineClip)
-local function extract_timeline_metadata(metadata_map, timeline_elem, folder_id)
+local function extract_timeline_metadata(metadata_map, timeline_id_map, timeline_elem, folder_id)
     local name_elem = find_direct_child(timeline_elem, "Name")
     local timeline_name = name_elem and get_text(name_elem) or nil
     if not timeline_name or timeline_name == "" then return end
 
-    -- Structure: <Sm2Timeline><Sequence><Sm2Sequence DbId="..."><FrameRate>hex
+    -- Structure: <Sm2Timeline DbId="..."><Sequence><Sm2Sequence DbId="..."><FrameRate>hex
     local seq_wrapper = find_direct_child(timeline_elem, "Sequence")
     if not seq_wrapper then return end
 
@@ -727,15 +757,25 @@ local function extract_timeline_metadata(metadata_map, timeline_elem, folder_id)
         height = height,
         folder_id = folder_id,
     }
+
+    -- Map Sm2Timeline DbId → name (for resolving TimelineHandleVec)
+    local timeline_db_id = timeline_elem.attrs and timeline_elem.attrs.DbId
+    if timeline_db_id and timeline_id_map then
+        timeline_id_map[timeline_db_id] = {
+            name = timeline_name,
+            seq_id = seq_id,
+        }
+    end
 end
 
 local function build_timeline_metadata_map(tmp_dir)
     local metadata_map = {}
+    local timeline_id_map = {}  -- Sm2Timeline DbId → {name, seq_id}
 
     local find_cmd = string.format('find "%s/MediaPool" -name "MpFolder.xml" 2>/dev/null', tmp_dir)
     local find_handle = io.popen(find_cmd)
     if not find_handle then
-        return metadata_map
+        return metadata_map, timeline_id_map
     end
 
     local mp_files = find_handle:read("*all")
@@ -752,7 +792,7 @@ local function build_timeline_metadata_map(tmp_dir)
 
                 local nested_timeline = find_element(tc_elem, "Sm2Timeline")
                 if nested_timeline then
-                    extract_timeline_metadata(metadata_map, nested_timeline, tc_folder_id)
+                    extract_timeline_metadata(metadata_map, timeline_id_map, nested_timeline, tc_folder_id)
                 end
             end
 
@@ -764,7 +804,7 @@ local function build_timeline_metadata_map(tmp_dir)
                     local sm2_seq = find_direct_child(seq_wrapper, "Sm2Sequence")
                     if sm2_seq and sm2_seq.attrs and sm2_seq.attrs.DbId then
                         if not metadata_map[sm2_seq.attrs.DbId] then
-                            extract_timeline_metadata(metadata_map, timeline_elem, nil)
+                            extract_timeline_metadata(metadata_map, timeline_id_map, timeline_elem, nil)
                         end
                     end
                 end
@@ -772,7 +812,7 @@ local function build_timeline_metadata_map(tmp_dir)
         end
     end
 
-    return metadata_map
+    return metadata_map, timeline_id_map
 end
 
 -- Extract the sequence reference ID from a SeqContainer
@@ -1141,6 +1181,17 @@ parse_clip_item = function(clip_elem, frame_rate)
     local source_in = in_elem and parse_resolve_timecode(get_text(in_elem), frame_rate) or 0
     local source_out = out_elem and parse_resolve_timecode(get_text(out_elem), frame_rate) or 0
 
+    -- DRP freeze frame: Resolve encodes <In> == <Out> for the frozen source position.
+    -- (Not FCP7 convention — FCP7 uses <stillframe> + <stillframeoffset> instead.)
+    -- Single-frame source range → speed_ratio = 1/duration at playback.
+    if source_in >= source_out then
+        local clip_name = name_elem and get_text(name_elem) or "Untitled Clip"
+        local duration = end_time - start_value
+        log.event("DRP freeze frame: '%s' at source frame %d (duration=%d)",
+                  clip_name, source_in, duration)
+        source_out = source_in + 1
+    end
+
     local clip = {
         name = name_elem and get_text(name_elem) or "Untitled Clip",
         start_value = start_value,
@@ -1215,7 +1266,8 @@ function M.parse_drp_file(drp_path)
 
     -- Build timeline metadata map by scanning all MediaPool folders
     -- This maps Sequence IDs to {name, fps} from Sm2Timeline/Sm2Sequence elements
-    local timeline_metadata_map = build_timeline_metadata_map(tmp_dir)
+    -- timeline_id_map maps Sm2Timeline DbId → {name, seq_id} for TimelineHandleVec
+    local timeline_metadata_map, timeline_id_map = build_timeline_metadata_map(tmp_dir)
 
     -- Parse MediaPool folder hierarchy (with blob-decoded original source paths)
     -- Must happen before sequence parsing so we can resolve stale MediaFilePath values
@@ -1358,6 +1410,21 @@ function M.parse_drp_file(drp_path)
         end
     end
 
+    -- Resolve open timeline names from TimelineHandleVec + timeline_id_map
+    local open_timeline_names = {}
+    local active_timeline_name = nil
+    if #project.open_timeline_ids > 0 then
+        for i, tid in ipairs(project.open_timeline_ids) do
+            local tl_info = timeline_id_map[tid]
+            if tl_info then
+                table.insert(open_timeline_names, tl_info.name)
+                if i == (project.current_timeline_index + 1) then
+                    active_timeline_name = tl_info.name
+                end
+            end
+        end
+    end
+
     -- Cleanup temp directory
     os.execute("rm -rf " .. tmp_dir)
 
@@ -1366,15 +1433,57 @@ function M.parse_drp_file(drp_path)
         project = project,
         media_items = media_items,
         timelines = timelines,
-        -- New: folder/bin hierarchy and master clips from MediaPool
+        -- Folder/bin hierarchy and master clips from MediaPool
         folders = media_pool_hierarchy.folders,
         pool_master_clips = media_pool_hierarchy.master_clips,
         folder_map = media_pool_hierarchy.folder_map,
+        -- Open timeline state from Resolve
+        active_timeline_name = active_timeline_name,
+        open_timeline_names = open_timeline_names,
     }
 end
 
 -- Test-only export (underscore-prefixed convention)
 M._parse_resolve_tracks = parse_resolve_tracks
+
+--- Lightweight metadata extraction — project name only, no full parse.
+-- Pipes project.xml from ZIP via unzip -p (no temp directory).
+-- @param drp_path string: Path to .drp file
+-- @return table|nil: { name = "Project Name" }, or nil on error
+-- @return string|nil: error message if failed
+function M.quick_metadata(drp_path)
+    assert(drp_path and drp_path ~= "", "drp_importer.quick_metadata: drp_path required")
+
+    local cmd = string.format('unzip -p "%s" project.xml 2>/dev/null', drp_path)
+    local handle = io.popen(cmd)
+    if not handle then return nil, "Failed to read .drp archive" end
+
+    local xml_content = handle:read("*a")
+    handle:close()
+
+    if not xml_content or xml_content == "" then
+        return nil, "No project.xml in .drp archive"
+    end
+
+    local project_root = parse_xml_string(xml_content)
+    if not project_root then return nil, "Failed to parse project.xml" end
+
+    local project_elem = find_element(project_root, "Project")
+    if not project_elem then
+        if project_root.tag == "SM_Project" or project_root.tag == "Project" then
+            project_elem = project_root
+        else
+            project_elem = find_element(project_root, "SM_Project")
+        end
+    end
+    if not project_elem then return nil, "No <Project> element" end
+
+    local name_elem = find_direct_child(project_elem, "ProjectName")
+        or find_direct_child(project_elem, "Name")
+    local name = name_elem and get_text(name_elem) or "Untitled Project"
+
+    return { name = name }
+end
 
 -- ===========================================================================
 -- Conversion + Import
@@ -1463,40 +1572,6 @@ local function frame_rate_to_rational(frame_rate)
     end
 
     return math.floor(fps + 0.5), 1
-end
-
--- ---------------------------------------------------------------------------
--- Conversion Dialog
--- ---------------------------------------------------------------------------
-
---- Show conversion dialog for .drp file
--- @param drp_path string: Path to source .drp file
--- @param parent widget: Parent window for dialog
--- @return string|nil: Chosen save path, or nil if cancelled
-function M.show_conversion_dialog(drp_path, parent)
-    assert(drp_path and drp_path ~= "", "drp_importer.show_conversion_dialog: drp_path required")
-
-    local file_browser = require("core.file_browser")
-
-    local default_name = "Converted Project.jvp"
-    local parse_result = M.parse_drp_file(drp_path)
-    if parse_result.success and parse_result.project and parse_result.project.name then
-        default_name = parse_result.project.name .. ".jvp"
-    end
-
-    local home = os.getenv("HOME") or ""
-    local default_dir = home ~= "" and (home .. "/Documents/JVE Projects") or ""
-
-    local save_path = file_browser.save_file(
-        "convert_drp_project",
-        parent,
-        "Save Converted Project",
-        "JVE Project Files (*.jvp)",
-        default_dir,
-        default_name
-    )
-
-    return save_path
 end
 
 -- ---------------------------------------------------------------------------
@@ -1646,6 +1721,7 @@ function M.import_into_project(project_id, parse_result, opts)
     assert(parse_result and parse_result.success, "drp_importer.import_into_project: parse_result must be successful")
     opts = opts or {}
     local project_settings = opts.project_settings or parse_result.project.settings
+    local sub_report = opts.progress_cb or function() end
 
     local tag_service = require("core.tag_service")
     local uuid = require("uuid")
@@ -1715,8 +1791,13 @@ function M.import_into_project(project_id, parse_result, opts)
         end
     end
 
+    sub_report(20, "Importing timelines…")
+
     -- Import timelines
-    for _, timeline_data in ipairs(parse_result.timelines) do
+    local timeline_count = #parse_result.timelines
+    for tl_idx, timeline_data in ipairs(parse_result.timelines) do
+        sub_report(20 + math.floor(tl_idx / timeline_count * 70),
+            string.format("Importing: %s", timeline_data.name))
         -- STEP 1: Analyze clip positions for viewport + fps inference
         local min_start_frame = nil
         local max_end_frame = 0
@@ -1856,8 +1937,16 @@ function M.import_into_project(project_id, parse_result, opts)
                         end
 
                         local source_out = clip_data.source_out
-                        if not source_out and clip_data.source_in and clip_data.duration then
-                            source_out = clip_data.source_in + clip_data.duration
+                        if not source_out or source_out <= (clip_data.source_in or 0) then
+                            -- source_out missing or invalid — derive from source_in + duration
+                            source_out = (clip_data.source_in or 0) + (clip_data.duration or 0)
+                        end
+
+                        -- Skip clips with zero source range (degenerate DRP artifacts)
+                        if source_out <= (clip_data.source_in or 0) then
+                            log.warn("Skipping clip '%s' - zero source range (source_in=%s, source_out=%s)",
+                                clip_data.name or "unnamed", tostring(clip_data.source_in), tostring(source_out))
+                            goto continue_clip
                         end
 
                         local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
@@ -1942,9 +2031,12 @@ function M.import_into_project(project_id, parse_result, opts)
         end
     end
 
+    sub_report(90, "Applying marks…")
+
     -- STEP 7: Apply pool master clip marks to JVE master clips
     apply_pool_master_clip_marks(parse_result.pool_master_clips, media_by_path)
 
+    sub_report(95, "Checking offline media…")
     -- STEP 8: Mark clips offline for missing media files
     local offline_count = mark_offline_clips(result.clip_ids)
     if offline_count > 0 then
@@ -1964,18 +2056,23 @@ end
 --- Convert .drp file to .jvp at target path
 -- @param drp_path string: Path to source .drp file
 -- @param jvp_path string: Path for new .jvp file
+-- @param progress_cb function|nil: optional progress(pct, text [, log_line])
 -- @return boolean: success
 -- @return string|nil: error message if failed
-function M.convert(drp_path, jvp_path)
+function M.convert(drp_path, jvp_path, progress_cb)
     assert(drp_path and drp_path ~= "", "drp_importer.convert: drp_path required")
     assert(jvp_path and jvp_path ~= "", "drp_importer.convert: jvp_path required")
+    local report = progress_cb or function() end
 
     log.event("Converting %s -> %s", drp_path, jvp_path)
 
+    report(5, "Parsing archive…")
     local parse_result = M.parse_drp_file(drp_path)
     if not parse_result.success then
         return false, "Failed to parse .drp file: " .. tostring(parse_result.error)
     end
+
+    report(30, "Creating project database…")
 
     -- Remove existing file if present (user confirmed overwrite in save dialog)
     os.remove(jvp_path)
@@ -2009,10 +2106,56 @@ function M.convert(drp_path, jvp_path)
     log.event("Created project: %s (%dx%d @ %sfps)",
         project.name, settings.width, settings.height, tostring(settings.frame_rate))
 
+    report(40, "Importing media…")
     M.import_into_project(project.id, parse_result, {
         project_settings = settings,
+        progress_cb = progress_cb and function(sub_pct, text)
+            -- Map sub_pct 0-100 → overall range 40-90
+            report(40 + math.floor(sub_pct * 0.5), text)
+        end or nil,
     })
 
+    -- Store open timeline state as project settings for layout.lua
+    report(95, "Setting active timeline…")
+    local pid = database.get_current_project_id()
+    if parse_result.active_timeline_name or
+       (parse_result.open_timeline_names and #parse_result.open_timeline_names > 0) then
+        local sequences = database.load_sequences(pid)
+
+        -- Build name → sequence ID lookup
+        local name_to_seq = {}
+        for _, seq in ipairs(sequences) do
+            name_to_seq[seq.name] = seq
+        end
+
+        -- Resolve open timeline names → JVE sequence IDs
+        if parse_result.open_timeline_names and #parse_result.open_timeline_names > 0 then
+            local open_sequence_ids = {}
+            local active_sequence_id = nil
+            for _, tl_name in ipairs(parse_result.open_timeline_names) do
+                local seq = name_to_seq[tl_name]
+                if seq then
+                    table.insert(open_sequence_ids, seq.id)
+                    if tl_name == parse_result.active_timeline_name then
+                        active_sequence_id = seq.id
+                    end
+                end
+            end
+            if #open_sequence_ids > 0 then
+                database.set_project_setting(pid, "open_sequence_ids", open_sequence_ids)
+            end
+            if active_sequence_id then
+                database.set_project_setting(pid, "last_open_sequence_id", active_sequence_id)
+            end
+        elseif parse_result.active_timeline_name then
+            local seq = name_to_seq[parse_result.active_timeline_name]
+            if seq then
+                database.set_project_setting(pid, "last_open_sequence_id", seq.id)
+            end
+        end
+    end
+
+    report(100, "Done")
     return true
 end
 
