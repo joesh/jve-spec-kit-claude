@@ -114,6 +114,24 @@ This application is MVC. **Views pull from model state.** They NEVER depend on r
 - **2.13**: MANDATORY No Fallbacks or Default Values - NEVER use fallback values - they hide errors and mask problems; ALWAYS fail explicitly when required data is missing; NEVER assume defaults - get actual values or error; Surface all errors immediately - no silent failures
 - **2.16**: No Shortcuts - NEVER take shortcuts to avoid thorough implementation; Do the complete work required even if it takes longer; Shortcuts lead to broken implementations that take more time to fix than doing it right initially; Always implement the full solution properly
 
+## Compaction rules (JVE)
+When compaction happens (manual or auto), preserve only:
+
+- Current goal (1 line) + acceptance criteria
+- Decisions made + brief rationale
+- Next actions (3–10 bullets), in priority order
+- Repo state: branch, key commits/hashes if mentioned, build config toggles, platform/tool versions if relevant
+- Changes made: file paths + what changed (bullets per file)
+- Repro + verification: exact commands run, failing tests/log snippets (only the essential lines), and what “green” looks like
+- Invariants/constraints/preferences stated by the user
+
+Drop:
+- brainstorming, dead ends, long quotes, duplicate logs, verbose explanations, chit-chat
+
+Format:
+- bullets, no prose paragraphs
+- end with a **NOW:** section listing the next 3 actions
+
 
 ## **🚫 ABSOLUTE PROHIBITIONS**
 
