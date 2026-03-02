@@ -378,6 +378,99 @@ local function parse_resolve_timecode(timecode_str, frame_rate)
     return 0
 end
 
+--- Parse SequenceTabsData from a Resolve FieldsBlob hex string.
+-- The FieldsBlob stores binary fields; SequenceTabsData contains the ACTUALLY
+-- open timeline tabs (not the full MRU/history in TimelineHandleVec).
+--
+-- Binary layout after the ASCII "SequenceTabsData" field name:
+--   3 padding bytes, then N+2 UUID slots:
+--   [active_uuid] [count as 3-byte BE int] [uuid_1] ... [uuid_N] [active_uuid_again]
+--   Each UUID: 0x00 0x48 (length=72) + 36 chars UTF-16-BE
+--
+-- @param hex_str string|nil: hex-encoded FieldsBlob content
+-- @return table: { tab_ids = {uuid, ...}, active_id = uuid|nil }
+local function parse_fields_blob_tabs(hex_str)
+    local empty = { tab_ids = {}, active_id = nil }
+    if not hex_str or hex_str == "" then return empty end
+
+    -- Convert hex to byte string
+    local bytes = {}
+    for i = 1, #hex_str - 1, 2 do
+        local byte = tonumber(hex_str:sub(i, i + 1), 16)
+        if not byte then return empty end
+        bytes[#bytes + 1] = string.char(byte)
+    end
+    local data = table.concat(bytes)
+
+    -- Find ASCII "SequenceTabsData" (17 bytes, preceded by length byte 0x11)
+    local marker = "SequenceTabsData"
+    local pos = data:find(marker, 1, true)
+    if not pos then return empty end
+
+    -- Helper: scan forward from offset, skip zero padding, read UUID.
+    -- UUID format: 0x48 length byte (=72), then 72 bytes of UTF-16-BE (36 chars).
+    -- Returns uuid_string, next_offset or nil, offset.
+    local function read_uuid(offset)
+        -- Skip zero padding (up to 8 bytes)
+        local skipped = 0
+        while offset <= #data and data:byte(offset) == 0 and skipped < 8 do
+            offset = offset + 1
+            skipped = skipped + 1
+        end
+        -- Expect length byte 0x48 (72)
+        if offset > #data or data:byte(offset) ~= 0x48 then
+            return nil, offset
+        end
+        offset = offset + 1  -- skip length byte
+
+        -- Read 36 UTF-16-BE characters (72 bytes)
+        if offset + 71 > #data then return nil, offset end
+        local chars = {}
+        for i = 0, 35 do
+            local hi = data:byte(offset + i * 2)
+            local lo = data:byte(offset + i * 2 + 1)
+            if not hi or not lo then return nil, offset end
+            if hi ~= 0 then return nil, offset end  -- ASCII range only
+            chars[#chars + 1] = string.char(lo)
+        end
+        local uuid = table.concat(chars)
+        offset = offset + 72
+
+        -- Validate UUID format (8-4-4-4-12 hex)
+        if not uuid:match("^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$") then
+            return nil, offset
+        end
+        return uuid, offset
+    end
+
+    -- Skip past field name (variable padding follows)
+    local offset = pos + #marker
+
+    -- Read active UUID (first UUID after field name, preceded by padding)
+    local active_uuid, next_offset = read_uuid(offset)
+    if not active_uuid then return empty end
+    offset = next_offset
+
+    -- Read 3-byte BE count (preceded by zero padding)
+    while offset <= #data and data:byte(offset) == 0 do offset = offset + 1 end
+    if offset + 2 > #data then return empty end
+    -- The count byte is non-zero (we skipped zeros). Read as single byte.
+    local count = data:byte(offset)
+    offset = offset + 1
+    if count > 100 then return empty end  -- sanity: can't have 100+ tabs
+
+    -- Read tab UUIDs
+    local tab_ids = {}
+    for _ = 1, count do
+        local uuid
+        uuid, offset = read_uuid(offset)
+        if not uuid then break end
+        tab_ids[#tab_ids + 1] = uuid
+    end
+
+    return { tab_ids = tab_ids, active_id = active_uuid }
+end
+
 --- Parse project.xml to extract project metadata
 -- @param project_elem table: XML element for <Project>
 -- @return table: Project metadata
@@ -440,26 +533,13 @@ local function parse_project_metadata(project_elem)
     project.settings.width = numeric_from(width_elem, 1920)
     project.settings.height = numeric_from(height_elem, 1080)
 
-    -- Parse open timeline handles + active index
-    project.open_timeline_ids = {}
-    project.current_timeline_index = 0
-
-    local thv = find_direct_child(project_elem, "TimelineHandleVec")
-    if thv then
-        for _, child in ipairs(thv.children or {}) do
-            if child.tag == "Element" then
-                local id = get_text(child)
-                if id and id ~= "" then
-                    table.insert(project.open_timeline_ids, id)
-                end
-            end
-        end
-    end
-
-    local cti = find_direct_child(project_elem, "CurrentTimelineIndex")
-    if cti then
-        project.current_timeline_index = tonumber(get_text(cti)) or 0
-    end
+    -- Parse open timeline tabs from FieldsBlob > SequenceTabsData.
+    -- NOT from TimelineHandleVec (that's the full MRU history, not open tabs).
+    local fields_blob_elem = find_direct_child(project_elem, "FieldsBlob")
+    local blob_hex = fields_blob_elem and get_text(fields_blob_elem) or nil
+    local tabs_data = parse_fields_blob_tabs(blob_hex)
+    project.open_timeline_ids = tabs_data.tab_ids
+    project.active_timeline_id = tabs_data.active_id
 
     return project
 end
@@ -1266,8 +1346,7 @@ function M.parse_drp_file(drp_path)
 
     -- Build timeline metadata map by scanning all MediaPool folders
     -- This maps Sequence IDs to {name, fps} from Sm2Timeline/Sm2Sequence elements
-    -- timeline_id_map maps Sm2Timeline DbId → {name, seq_id} for TimelineHandleVec
-    local timeline_metadata_map, timeline_id_map = build_timeline_metadata_map(tmp_dir)
+    local timeline_metadata_map = build_timeline_metadata_map(tmp_dir)
 
     -- Parse MediaPool folder hierarchy (with blob-decoded original source paths)
     -- Must happen before sequence parsing so we can resolve stale MediaFilePath values
@@ -1410,17 +1489,23 @@ function M.parse_drp_file(drp_path)
         end
     end
 
-    -- Resolve open timeline names from TimelineHandleVec + timeline_id_map
+    -- Resolve open timeline tab names from SequenceTabsData + timeline_metadata_map
+    -- SequenceTabsData UUIDs are Sm2Sequence.DbId (= BlobOwner in project.xml),
+    -- which is the same key used by timeline_metadata_map
     local open_timeline_names = {}
     local active_timeline_name = nil
     if #project.open_timeline_ids > 0 then
-        for i, tid in ipairs(project.open_timeline_ids) do
-            local tl_info = timeline_id_map[tid]
+        for _, tid in ipairs(project.open_timeline_ids) do
+            local tl_info = timeline_metadata_map[tid]
             if tl_info then
                 table.insert(open_timeline_names, tl_info.name)
-                if i == (project.current_timeline_index + 1) then
-                    active_timeline_name = tl_info.name
-                end
+            end
+        end
+        -- Active tab is identified directly by UUID (not by index)
+        if project.active_timeline_id then
+            local active_info = timeline_metadata_map[project.active_timeline_id]
+            if active_info then
+                active_timeline_name = active_info.name
             end
         end
     end
@@ -1445,6 +1530,7 @@ end
 
 -- Test-only export (underscore-prefixed convention)
 M._parse_resolve_tracks = parse_resolve_tracks
+M._parse_fields_blob_tabs = parse_fields_blob_tabs
 
 --- Lightweight metadata extraction — project name only, no full parse.
 -- Pipes project.xml from ZIP via unzip -p (no temp directory).
