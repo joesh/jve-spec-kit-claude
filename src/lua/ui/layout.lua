@@ -73,70 +73,6 @@ local layout_dir = layout_path:match("(.*/)")
 log.event("Initializing database...")
 local db_module = require("core.database")
 
--- Determine database path: test env → last project → welcome screen
-local db_path = os.getenv("JVE_PROJECT_PATH")
-if db_path then
-    log.event("Using CLI project path: %s", tostring(db_path))
-else
-    local home = os.getenv("HOME")
-
-    -- Try last-opened project first
-    local last_project_file = home .. "/.jve/last_project_path"
-    local f = io.open(last_project_file, "r")
-    if f then
-        local last_path = f:read("*a"):match("^%s*(.-)%s*$")  -- trim
-        f:close()
-        if last_path and last_path ~= "" then
-            local check = io.open(last_path, "rb")
-            if check then
-                check:close()
-                db_path = last_path
-                log.event("Reopening last project: %s", db_path)
-            else
-                log.warn("Last project not found: %s", last_path)
-            end
-        end
-    end
-
-    -- No last project → show welcome screen
-    if not db_path then
-        local welcome_screen = require("ui.welcome_screen")
-        local file_browser = require("core.file_browser")
-        local new_project_cmd = require("core.commands.new_project")
-
-        local action = welcome_screen.show()
-
-        if not action then
-            log.event("User quit from welcome screen")
-            os.exit(0)
-        elseif action.action == "open" then
-            db_path = action.path
-            log.event("Welcome: opening recent project: %s", db_path)
-        elseif action.action == "open_browse" then
-            db_path = file_browser.open_file(
-                "open_project", nil,
-                "Open Project",
-                "JVE Projects (*.jvp);;All Files (*)",
-                home .. "/Documents/JVE Projects")
-            if not db_path or db_path == "" then
-                log.event("User cancelled file browser from welcome screen")
-                os.exit(0)
-            end
-            log.event("Welcome: opening browsed project: %s", db_path)
-        elseif action.action == "new" then
-            local result = new_project_cmd.show_dialog(nil)
-            if not result then
-                log.event("User cancelled new project from welcome screen")
-                os.exit(0)
-            end
-            db_path = result.project_path
-            log.event("Welcome: created new project: %s", db_path)
-        end
-    end
-end
-
-assert(db_path and db_path ~= "", "FATAL: No project path resolved at startup")
-
 local project_display_name = nil
 local active_project_id
 local active_sequence_id
@@ -144,30 +80,23 @@ local active_sequence_id
 -- Initialize command_manager module reference (will be initialized later)
 local command_manager = require("core.command_manager")
 
--- Open database connection (schema is applied automatically by database.init via load_main_schema)
-local db_success = project_open.open_project_database_or_prompt_cleanup(db_module, qt_constants, db_path)
-if not db_success then
-    log.error("Failed to open database connection; exiting")
-    os.exit(1)
-else
+--- Open database, load project + sequence, init command manager.
+-- Throws on any failure (corrupt DB, empty DB, missing project/sequence).
+local function open_and_init_project(path)
+    local db_success = project_open.open_project_database_or_prompt_cleanup(db_module, qt_constants, path)
+    if not db_success then
+        error("Failed to open database: " .. tostring(path))
+    end
     log.event("Database connection established")
 
     -- Guard: detect empty DB (e.g. stale last_project_path, sqlite3 auto-created file)
-    if not db_module.has_projects() then
-        log.warn("Database has no projects: %s", db_path)
-        -- Self-heal: clear stale last_project_path so next launch shows welcome screen
-        local home = os.getenv("HOME")
-        if home then
-            os.remove(home .. "/.jve/last_project_path")
-            log.event("Cleared stale last_project_path; re-launch to see welcome screen")
-        end
-        error("Database at " .. db_path .. " has no projects. Stale reference cleared — please re-launch.")
-    end
+    assert(db_module.has_projects(),
+        "Database has no projects: " .. path)
 
     -- Load existing project (never create silently)
     local pid = db_module.get_current_project_id()
     local project = Project.load(pid)
-    assert(project, "FATAL: Failed to load project " .. tostring(pid) .. " from " .. db_path)
+    assert(project, "Failed to load project " .. tostring(pid) .. " from " .. path)
 
     -- Find best sequence: last-open or most recent
     local sequence
@@ -178,7 +107,7 @@ else
     if not sequence then
         sequence = Sequence.find_most_recent()
     end
-    assert(sequence, "FATAL: No sequences in project " .. db_path)
+    assert(sequence, "No sequences in project " .. path)
 
     active_project_id = project.id
     project_display_name = project.name
@@ -196,14 +125,14 @@ else
         os.execute('mkdir -p "' .. home .. '/.jve"')
         local lf = io.open(home .. "/.jve/last_project_path", "w")
         if lf then
-            lf:write(db_path)
+            lf:write(path)
             lf:close()
         end
     end
 
     -- Add to recent projects
     local recent_projects = require("core.recent_projects")
-    recent_projects.add(project.name, db_path)
+    recent_projects.add(project.name, path)
 
     -- Initialize bug reporter (continuous background capture)
     local bug_reporter = require("bug_reporter.init")
@@ -211,17 +140,172 @@ else
     log.event("Bug reporter initialized (background capture active)")
 end
 
+-- ---------------------------------------------------------------------------
+-- Startup helpers
+-- ---------------------------------------------------------------------------
+
+--- Read ~/.jve/last_project_path; return path if file exists on disk, else nil.
+local function try_last_project_path()
+    local home = os.getenv("HOME")
+    if not home then return nil end
+
+    local f = io.open(home .. "/.jve/last_project_path", "r")
+    if not f then return nil end
+
+    local last_path = f:read("*a"):match("^%s*(.-)%s*$")  -- trim
+    f:close()
+    if not last_path or last_path == "" then return nil end
+
+    local check = io.open(last_path, "rb")
+    if not check then
+        log.warn("Last project not found: %s", last_path)
+        return nil
+    end
+    check:close()
+    log.event("Reopening last project: %s", last_path)
+    return last_path
+end
+
+--- Remove ~/.jve/last_project_path so next launch shows welcome screen.
+local function clear_last_project_path()
+    local home = os.getenv("HOME")
+    if home then os.remove(home .. "/.jve/last_project_path") end
+end
+
+--- Dispatch a welcome screen action to a concrete project path.
+-- @return string|nil: resolved path, or nil if user cancelled (caller re-shows welcome)
+local function resolve_welcome_action(action, parent_dialog)
+    local file_browser = require("core.file_browser")
+    local new_project_cmd = require("core.commands.new_project")
+    local home = os.getenv("HOME") or ""
+
+    if action.action == "open" then
+        return action.path
+
+    elseif action.action == "open_browse" then
+        local path = file_browser.open_file(
+            "open_project", parent_dialog,
+            "Open Project",
+            "All Project Files (*.jvp *.drp);;JVE Projects (*.jvp);;Resolve Archives (*.drp);;All Files (*)",
+            home ~= "" and (home .. "/Documents/JVE Projects") or "")
+        if not path or path == "" then
+            log.event("User cancelled file browser from welcome screen")
+            return nil
+        end
+        return path
+
+    elseif action.action == "new" then
+        local result = new_project_cmd.show_dialog(parent_dialog)
+        if not result then
+            log.event("User cancelled new project from welcome screen")
+            return nil
+        end
+        return result.project_path
+    end
+
+    return nil
+end
+
+--- Resolve format (DRP conversion if needed) then open project.
+-- Throws on failure; returns nil if user cancelled conversion dialog.
+local function resolve_and_open_project(path, parent_dialog)
+    local open_project_cmd = require("core.commands.open_project")
+    local resolved = open_project_cmd.resolve_format(path, parent_dialog)
+    if not resolved then return nil end  -- user cancelled conversion
+    open_and_init_project(resolved)
+    return true
+end
+
+-- ---------------------------------------------------------------------------
+-- Startup: resolve project path with retry loop
+-- ---------------------------------------------------------------------------
+
+-- Welcome screen handle — survives across retry iterations, destroyed after
+-- main window is created and shown (no window gap).
+local ws_handle = nil
+
+local db_path = os.getenv("JVE_PROJECT_PATH")
+if db_path then
+    -- Test/CLI mode: crash on failure (unchanged)
+    log.event("Using CLI project path: %s", tostring(db_path))
+    open_and_init_project(db_path)
+else
+    local tried_last = false
+    local startup_error = nil
+
+    while true do
+        local candidate = nil
+
+        -- 1. Try last project (first iteration only)
+        if not tried_last then
+            tried_last = true
+            candidate = try_last_project_path()
+        end
+
+        -- 2. If no candidate, show welcome screen
+        if not candidate then
+            local welcome_screen = require("ui.welcome_screen")
+            ws_handle = ws_handle or welcome_screen.create()
+
+            -- Show prior error if any
+            if startup_error then
+                qt_constants.DIALOG.SHOW_CONFIRM({
+                    parent = ws_handle.dialog,
+                    title = "Failed to Open Project",
+                    message = startup_error,
+                    icon = "warning",
+                    confirm_text = "OK",
+                })
+                startup_error = nil
+            end
+
+            local action = welcome_screen.show(ws_handle)
+            if not action then
+                log.event("User quit from welcome screen")
+                os.exit(0)
+            end
+
+            candidate = resolve_welcome_action(action, ws_handle.dialog)
+            if not candidate then
+                -- User cancelled sub-dialog (browse/new) — re-show welcome
+                goto continue_loop
+            end
+        end
+
+        -- 3. Re-show welcome screen (non-blocking) so it stays visible during conversion
+        if ws_handle then
+            qt_constants.DIALOG.SHOW(ws_handle.dialog, false)
+        end
+
+        -- 4. Try format resolution + open
+        local open_ok, open_err = pcall(resolve_and_open_project, candidate, ws_handle and ws_handle.dialog)
+        if open_ok and open_err then
+            -- open_err is the return value (true) on success
+            break
+        end
+
+        if open_ok and not open_err then
+            -- resolve_and_open_project returned nil (user cancelled conversion)
+            goto continue_loop
+        end
+
+        -- open failed — format error for next iteration
+        log.error("Failed to open project '%s': %s", candidate, tostring(open_err))
+        startup_error = string.format("Could not open:\n%s\n\n%s", candidate, tostring(open_err))
+        clear_last_project_path()
+
+        ::continue_loop::
+    end
+end
+
+assert(project_display_name, "FATAL: Unable to resolve project display name for window title")
+
 -- Update active_project_id when project changes (prevents stale ID writing to wrong DB)
 Signals.connect("project_changed", function(new_project_id)
     log.event("project_changed: updating active_project_id %s → %s",
         tostring(active_project_id), tostring(new_project_id))
     active_project_id = new_project_id
 end, 50)
-
-
-if not project_display_name then
-    error("FATAL: Unable to resolve project display name for window title")
-end
 
 -- Create main window
 log.event("About to create main window...")
@@ -442,6 +526,20 @@ if not initial_sequence_id and #sequences > 0 then
     initial_sequence_id = sequences[1].id
 end
 
+-- Open DRP-imported timelines as tabs (if present from conversion)
+local open_ids = db_module.get_project_setting(project_id, "open_sequence_ids")
+if open_ids and #open_ids > 0 then
+    for _, seq_id in ipairs(open_ids) do
+        -- Skip the active one — loaded last for focus
+        if seq_id ~= initial_sequence_id then
+            local tab_ok, tab_err = pcall(timeline_panel_mod.load_sequence, seq_id)
+            if not tab_ok then
+                log.error("Failed to load sequence tab %s: %s", seq_id, tostring(tab_err))
+            end
+        end
+    end
+end
+
 if initial_sequence_id and project_browser_mod.focus_sequence then
     project_browser_mod.focus_sequence(initial_sequence_id)
     if focus_manager and focus_manager.focus_panel then
@@ -498,6 +596,13 @@ end
 -- Show window
 qt_constants.DISPLAY.SHOW(main_window)
 log.event("Layout created: 4 panels top (browser, source, timeline viewer, inspector) + timeline bottom")
+
+-- Destroy welcome screen AFTER main window is visible (no window gap)
+if ws_handle then
+    local welcome_screen = require("ui.welcome_screen")
+    welcome_screen.destroy(ws_handle)
+    log.event("Welcome screen destroyed (main window visible)")
+end
 
 -- Restore splitter sizes AFTER window is shown (Qt needs layout to be computed first)
 -- Use a short timer to let the layout settle before applying saved sizes

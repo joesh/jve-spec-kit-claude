@@ -48,6 +48,44 @@ local function detect_project_format(path)
     end
 end
 
+--- Resolve project format: detect .drp/.jvp, convert if needed.
+-- @param path string: path to project file (.jvp or .drp)
+-- @param parent_widget userdata|nil: parent widget for conversion dialog
+-- @return string|nil: resolved .jvp path, or nil if user cancelled
+-- @raises error on unknown format or conversion failure
+function M.resolve_format(path, parent_widget)
+    local format = detect_project_format(path)
+    if format == "jvp" then return path end
+
+    if format == "drp" then
+        local drp_importer = require("importers.drp_importer")
+        local conversion_dialog = require("ui.conversion_dialog")
+
+        -- Quick metadata for dialog (no full parse)
+        local meta, meta_err = drp_importer.quick_metadata(path)
+        if not meta then error("Failed to read DRP metadata: " .. tostring(meta_err)) end
+
+        local dest_path = conversion_dialog.show({
+            source_path = path,
+            format_label = "DaVinci Resolve",
+            project_name = meta.name,
+            default_ext = ".jvp",
+            file_filter = "JVE Project Files (*.jvp)",
+            convert_fn = drp_importer.convert,
+            parent = parent_widget,
+        })
+
+        if not dest_path then return nil end  -- cancelled
+        return dest_path
+    end
+
+    if format == "resolve_db" then
+        error("Resolve database peer mode not yet implemented")
+    end
+
+    error("Unknown project format: " .. tostring(path))
+end
+
 -- Schema for OpenProject command
 local SPEC = {
     args = {
@@ -176,40 +214,19 @@ function M.register(executors, undoers, db, set_last_error)
 
         log.event("Opening project: %s", tostring(project_path))
 
-        -- Detect format and route accordingly
-        local format = detect_project_format(project_path)
-        log.event("Detected format: %s", format)
+        -- Detect format and convert if needed (.drp → .jvp)
+        local ui_state_ok2, ui_state2 = pcall(require, "ui.ui_state")
+        local resolve_parent = ui_state_ok2 and ui_state2.get_main_window() or nil
 
-        if format == "drp" then
-            -- .drp requires conversion to .jvp first
-            local drp_converter = require("importers.drp_importer")
-
-            -- Get main_window for dialog
-            local ui_state_ok2, ui_state2 = pcall(require, "ui.ui_state")
-            local conv_window = ui_state_ok2 and ui_state2.get_main_window() or nil
-
-            local jvp_path = drp_converter.show_conversion_dialog(project_path, conv_window)
-            if not jvp_path then
-                log.event("OpenProject: User cancelled conversion dialog")
-                return { success = true, cancelled = true }
-            end
-
-            local conv_ok, conv_err = drp_converter.convert(project_path, jvp_path)
-            if not conv_ok then
-                return { success = false, error_message = "Conversion failed: " .. tostring(conv_err) }
-            end
-
-            -- Now open the converted .jvp
-            project_path = jvp_path
-            log.event("Converted .drp, now opening: %s", project_path)
-
-        elseif format == "resolve_db" then
-            -- Resolve DB peer mode - not yet implemented
-            return { success = false, error_message = "Resolve database peer mode not yet implemented" }
-
-        elseif format ~= "jvp" then
-            return { success = false, error_message = "Unknown project format: " .. tostring(project_path) }
+        local resolved_ok, resolved_path = pcall(M.resolve_format, project_path, resolve_parent)
+        if not resolved_ok then
+            return { success = false, error_message = tostring(resolved_path) }
         end
+        if not resolved_path then
+            log.event("OpenProject: User cancelled format resolution")
+            return { success = true, cancelled = true }
+        end
+        project_path = resolved_path
 
         -- Get main_window for error dialogs
         local ui_state_ok, ui_state = pcall(require, "ui.ui_state")

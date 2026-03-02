@@ -1687,7 +1687,11 @@ function M.create(opts)
     end)
 
     -- Load initial sequence into timeline_monitor
-    tl_view:load_sequence(initial_sequence_id)
+    -- pcall: bad clip data in a sequence must not crash the app
+    local load_ok, load_err = pcall(tl_view.load_sequence, tl_view, initial_sequence_id)
+    if not load_ok then
+        log.error("Failed to load initial sequence %s: %s", tostring(initial_sequence_id), tostring(load_err))
+    end
 
     -- State → Viewer: when parked, state changes (from commands, ruler clicks, timecode entry)
     -- propagate to the viewer for frame display.

@@ -10,11 +10,12 @@
 -- - File browsing (delegated to file_browser module)
 --
 -- Invariants:
--- - show() is blocking (modal dialog)
--- - Returns action table or nil (Quit)
+-- - create() builds dialog and widgets, returns handle
+-- - show(handle) is blocking (modal dialog), returns action or nil
+-- - destroy(handle) cleans up _G handler refs
 -- - Recent list filters missing files (via recent_projects.load())
 --
--- Size: ~120 LOC
+-- Size: ~140 LOC
 -- Volatility: low
 --
 -- @file welcome_screen.lua
@@ -22,16 +23,20 @@ local M = {}
 local log = require("core.logger").for_area("ui")
 local recent_projects = require("core.recent_projects")
 
---- Show the welcome screen modal dialog.
--- @return table|nil: {action="open", path=...}, {action="new"}, {action="open_browse"}, or nil (Quit)
-function M.show()
+--- Build the welcome screen dialog and all widgets/handlers.
+-- @return table: handle with .dialog, .result, .globals
+function M.create()
     local qt = require("core.qt_constants")
 
-    -- Dialog result captured by button/double-click handlers
-    local result = nil
+    local handle = {
+        dialog = nil,
+        result = nil,
+        globals = {},  -- names of _G entries to clean up
+    }
 
     -- Create dialog
     local dialog = qt.DIALOG.CREATE("JVE Editor", 600, 400)
+    handle.dialog = dialog
 
     -- Main layout: horizontal (left=recent list, right=buttons)
     local main_layout = qt.LAYOUT.CREATE_HBOX()
@@ -49,7 +54,7 @@ function M.show()
 
     -- Populate from recent projects
     local entries = recent_projects.load()
-    local item_paths = {}  -- item_id → path
+    local item_paths = {}  -- item_id -> path
 
     for _, entry in ipairs(entries) do
         local display_name = entry.name or "Untitled"
@@ -66,11 +71,12 @@ function M.show()
     _G[dbl_click_name] = function(item_id, _col)
         local path = item_paths[item_id]
         if path then
-            result = { action = "open", path = path }
+            handle.result = { action = "open", path = path }
             qt.DIALOG.CLOSE(dialog, true)
         end
     end
     qt.CONTROL.SET_TREE_DOUBLE_CLICK_HANDLER(tree, dbl_click_name)
+    handle.globals[#handle.globals + 1] = dbl_click_name
 
     qt.LAYOUT.ADD_WIDGET(left_layout, tree)
 
@@ -86,24 +92,27 @@ function M.show()
 
     local new_handler = "__welcome_screen_new"
     _G[new_handler] = function()
-        result = { action = "new" }
+        handle.result = { action = "new" }
         qt.DIALOG.CLOSE(dialog, true)
     end
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(new_btn, new_handler)
+    handle.globals[#handle.globals + 1] = new_handler
 
     local open_handler = "__welcome_screen_open"
     _G[open_handler] = function()
-        result = { action = "open_browse" }
+        handle.result = { action = "open_browse" }
         qt.DIALOG.CLOSE(dialog, true)
     end
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(open_btn, open_handler)
+    handle.globals[#handle.globals + 1] = open_handler
 
     local quit_handler = "__welcome_screen_quit"
     _G[quit_handler] = function()
-        result = nil
+        handle.result = nil
         qt.DIALOG.CLOSE(dialog, false)
     end
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(quit_btn, quit_handler)
+    handle.globals[#handle.globals + 1] = quit_handler
 
     qt.LAYOUT.ADD_WIDGET(right_layout, new_btn)
     qt.LAYOUT.ADD_SPACING(right_layout, 8)
@@ -119,17 +128,30 @@ function M.show()
     qt.LAYOUT.ADD_LAYOUT(main_layout, right_layout)
     qt.DIALOG.SET_LAYOUT(dialog, main_layout)
 
-    -- Show (blocking)
+    return handle
+end
+
+--- Show the welcome screen (blocking). Can be called multiple times on same handle.
+-- @param handle table: from M.create()
+-- @return table|nil: {action="open", path=...}, {action="new"}, {action="open_browse"}, or nil (Quit)
+function M.show(handle)
+    local qt = require("core.qt_constants")
+
+    -- Reset result before each show (supports retry loops)
+    handle.result = nil
+
     log.event("Showing welcome screen")
-    qt.DIALOG.SHOW(dialog)
+    qt.DIALOG.SHOW(handle.dialog)
 
-    -- Cleanup globals
-    _G[dbl_click_name] = nil
-    _G[new_handler] = nil
-    _G[open_handler] = nil
-    _G[quit_handler] = nil
+    return handle.result
+end
 
-    return result
+--- Clean up _G handler references.
+-- @param handle table: from M.create()
+function M.destroy(handle)
+    for _, name in ipairs(handle.globals) do
+        _G[name] = nil
+    end
 end
 
 return M
