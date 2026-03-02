@@ -2,6 +2,11 @@
 -- NSF: Tests callback parameter validation and clip window flow
 require('test_env')
 
+-- Mock qt_constants before playback_engine require (C++ binding unavailable in test)
+package.loaded["core.qt_constants"] = {
+    EMP = {},
+}
+
 local PlaybackEngine = require("core.playback.playback_engine")
 
 print("Testing PlaybackEngine + PlaybackController integration...")
@@ -242,16 +247,16 @@ do
 end
 
 --------------------------------------------------------------------------------
--- 5. _send_audio_clips_only preconditions
+-- 5. _send_audio_clips_to_tmb preconditions
 --------------------------------------------------------------------------------
-section("5. _send_audio_clips_only preconditions")
+section("5. _send_audio_clips_to_tmb preconditions")
 
 do
     local eng = make_test_engine()
     -- Must fail: no TMB
     expect_error(function()
-        eng:_send_audio_clips_only(0)
-    end, "no TMB", "_send_audio_clips_only asserts without TMB")
+        eng:_send_audio_clips_to_tmb(0, package.loaded["core.qt_constants"].EMP)
+    end, "no TMB", "_send_audio_clips_to_tmb asserts without TMB")
 end
 
 --------------------------------------------------------------------------------

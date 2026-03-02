@@ -401,7 +401,7 @@ function PlaybackEngine:_on_need_clips(frame, direction, track_type)
     if track_type == "video" then
         self:_send_video_clips_to_tmb(frame)
     else
-        self:_send_audio_clips_only(frame)
+        self:_send_audio_clips_to_tmb(frame, qt_constants.EMP)
     end
 end
 
@@ -537,81 +537,6 @@ function PlaybackEngine:_send_video_clips_to_tmb(frame)
     end
 end
 
---- Send only audio clips to TMB (for NeedClips AUDIO callback).
-function PlaybackEngine:_send_audio_clips_only(frame)
-    assert(self._tmb, "PlaybackEngine:_send_audio_clips_only: no TMB (call load_sequence first)")
-    assert(self.sequence, "PlaybackEngine:_send_audio_clips_only: no sequence loaded")
-
-    local EMP = qt_constants.EMP
-    local audio_entries = self.sequence:get_audio_at(frame)
-
-    local audio_track_clips = {}
-    for _, entry in ipairs(audio_entries) do
-        local idx = entry.track.track_index
-        if not audio_track_clips[idx] then
-            audio_track_clips[idx] = {}
-        end
-        local sr = self:_compute_audio_speed_ratio(entry)
-        audio_track_clips[idx][#audio_track_clips[idx] + 1] = self:_build_tmb_clip(entry, sr)
-    end
-
-    -- Direction-aware next/prev
-    for _, entry in ipairs(audio_entries) do
-        local clip_end = entry.clip.timeline_start + entry.clip.duration
-        local nexts
-        if self.direction >= 0 then
-            nexts = self.sequence:get_next_audio(clip_end)
-        else
-            nexts = self.sequence:get_prev_audio(entry.clip.timeline_start)
-        end
-        for _, ne in ipairs(nexts) do
-            local idx = ne.track.track_index
-            if not audio_track_clips[idx] then
-                audio_track_clips[idx] = {}
-            end
-            local dominated = false
-            for _, existing in ipairs(audio_track_clips[idx]) do
-                if existing.clip_id == ne.clip.id then
-                    dominated = true
-                    break
-                end
-            end
-            if not dominated then
-                local sr = self:_compute_audio_speed_ratio(ne)
-                audio_track_clips[idx][#audio_track_clips[idx] + 1] = self:_build_tmb_clip(ne, sr)
-            end
-        end
-    end
-
-    -- Gap: try next audio
-    if #audio_entries == 0 then
-        local next_audio = self.sequence:get_next_audio(frame)
-        for _, ne in ipairs(next_audio or {}) do
-            local idx = ne.track.track_index
-            if not audio_track_clips[idx] then
-                audio_track_clips[idx] = {}
-            end
-            local sr = self:_compute_audio_speed_ratio(ne)
-            audio_track_clips[idx][#audio_track_clips[idx] + 1] = self:_build_tmb_clip(ne, sr)
-        end
-    end
-
-    -- Feed to TMB
-    local audio_indices = {}
-    for idx, clips in pairs(audio_track_clips) do
-        EMP.TMB_SET_TRACK_CLIPS(self._tmb, "audio", idx, clips)
-        audio_indices[#audio_indices + 1] = idx
-    end
-    table.sort(audio_indices)
-    self._audio_track_indices = audio_indices
-
-    -- Report audio clip window to C++
-    local has_audio, audio_lo, audio_hi = compute_min_clip_window(audio_track_clips)
-    if self._playback_controller and has_audio and audio_hi > audio_lo then
-        qt_constants.PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "audio", audio_lo, audio_hi)
-    end
-end
-
 --- Feed TMB with current + next clips for each video and audio track.
 -- Builds a small clip window (2-3 clips per track) from sequence queries.
 -- Skips re-query when playhead is still inside the cached clip window.
@@ -676,10 +601,10 @@ function PlaybackEngine:_send_clips_to_tmb(frame, gen)
     table.sort(indices, function(a, b) return a > b end)
     self._video_track_indices = indices
 
-    -- ── Audio tracks ──
-    local audio_track_clips = self:_send_audio_clips_to_tmb(frame, EMP)
+    -- ── Audio tracks (window reported inside _send_audio_clips_to_tmb) ──
+    self:_send_audio_clips_to_tmb(frame, EMP)
 
-    -- ── Clip windows (video + audio) ──
+    -- ── Video clip window ──
     local has_clips, window_lo, window_hi = compute_min_clip_window(track_clips)
 
     if has_clips and window_hi > window_lo then
@@ -694,21 +619,23 @@ function PlaybackEngine:_send_clips_to_tmb(frame, gen)
         qt_constants.PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "video", window_lo, window_hi)
     end
 
-    local has_audio_clips, audio_lo, audio_hi = compute_min_clip_window(audio_track_clips)
-    if self._playback_controller and has_audio_clips and audio_hi > audio_lo then
-        qt_constants.PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "audio", audio_lo, audio_hi)
-    end
-
     return true  -- boundary crossing: clips were re-queried
 end
 
---- Feed audio clips near the playhead to TMB (same pattern as video).
--- Called from _send_clips_to_tmb at clip boundaries.
--- @return audio_track_clips table {[track_idx] = {clip_data, ...}} for window union
+--- Feed audio clips near the playhead to TMB.
+-- Single audio path: called from both _send_clips_to_tmb (clip boundary)
+-- and _on_need_clips (NeedClips AUDIO callback).
+-- Reports audio clip window to C++ and returns audio_track_clips.
+-- @return audio_track_clips table {[track_idx] = {clip_data, ...}}
+local AUDIO_LOOKAHEAD_FRAMES = 150  -- ~6s at 25fps
+
 function PlaybackEngine:_send_audio_clips_to_tmb(frame, EMP)
+    assert(self._tmb, "PlaybackEngine:_send_audio_clips_to_tmb: no TMB (call load_sequence first)")
+    assert(self.sequence, "PlaybackEngine:_send_audio_clips_to_tmb: no sequence loaded")
+
     local audio_entries = self.sequence:get_audio_at(frame)
 
-    -- Build track_index → clip list mapping
+    -- Build track_index → clip list mapping (current-frame clips always loaded)
     local audio_track_clips = {}
 
     for _, entry in ipairs(audio_entries) do
@@ -721,46 +648,65 @@ function PlaybackEngine:_send_audio_clips_to_tmb(frame, EMP)
             self:_build_tmb_clip(entry, sr)
     end
 
-    -- Direction-aware next/prev for pre-buffer
-    for _, entry in ipairs(audio_entries) do
-        local clip_end = entry.clip.timeline_start + entry.clip.duration
-        local nexts
-        if self.direction >= 0 then
-            nexts = self.sequence:get_next_audio(clip_end)
-        else
-            nexts = self.sequence:get_prev_audio(entry.clip.timeline_start)
-        end
-        for _, ne in ipairs(nexts) do
-            local idx = ne.track.track_index
-            if not audio_track_clips[idx] then
-                audio_track_clips[idx] = {}
+    -- Lookahead: only during play (direction ~= 0)
+    if self.direction ~= 0 then
+        local lookahead_limit = frame + AUDIO_LOOKAHEAD_FRAMES
+        local lookbehind_limit = frame - AUDIO_LOOKAHEAD_FRAMES
+
+        -- Direction-aware next/prev for pre-buffer
+        for _, entry in ipairs(audio_entries) do
+            local clip_end = entry.clip.timeline_start + entry.clip.duration
+            local nexts
+            if self.direction >= 0 then
+                nexts = self.sequence:get_next_audio(clip_end)
+            else
+                nexts = self.sequence:get_prev_audio(entry.clip.timeline_start)
             end
-            local dominated = false
-            for _, existing in ipairs(audio_track_clips[idx]) do
-                if existing.clip_id == ne.clip.id then
+            for _, ne in ipairs(nexts) do
+                -- Frame filter: skip clips beyond lookahead window
+                local dominated = false
+                if self.direction >= 0 and ne.clip.timeline_start >= lookahead_limit then
                     dominated = true
-                    break
+                elseif self.direction < 0
+                    and ne.clip.timeline_start + ne.clip.duration <= lookbehind_limit then
+                    dominated = true
+                end
+                if not dominated then
+                    local idx = ne.track.track_index
+                    if not audio_track_clips[idx] then
+                        audio_track_clips[idx] = {}
+                    end
+                    -- Dedup check
+                    local exists = false
+                    for _, existing in ipairs(audio_track_clips[idx]) do
+                        if existing.clip_id == ne.clip.id then
+                            exists = true
+                            break
+                        end
+                    end
+                    if not exists then
+                        local sr = self:_compute_audio_speed_ratio(ne)
+                        audio_track_clips[idx][#audio_track_clips[idx] + 1] =
+                            self:_build_tmb_clip(ne, sr)
+                    end
                 end
             end
-            if not dominated then
-                local sr = self:_compute_audio_speed_ratio(ne)
-                audio_track_clips[idx][#audio_track_clips[idx] + 1] =
-                    self:_build_tmb_clip(ne, sr)
-            end
         end
-    end
 
-    -- Gap: no current audio entries → try finding next clip ahead
-    if #audio_entries == 0 then
-        local next_audio = self.sequence:get_next_audio(frame)
-        for _, ne in ipairs(next_audio or {}) do
-            local idx = ne.track.track_index
-            if not audio_track_clips[idx] then
-                audio_track_clips[idx] = {}
+        -- Gap: no current audio entries → try finding next clip ahead (bounded)
+        if #audio_entries == 0 then
+            local next_audio = self.sequence:get_next_audio(frame)
+            for _, ne in ipairs(next_audio or {}) do
+                if ne.clip.timeline_start < lookahead_limit then
+                    local idx = ne.track.track_index
+                    if not audio_track_clips[idx] then
+                        audio_track_clips[idx] = {}
+                    end
+                    local sr = self:_compute_audio_speed_ratio(ne)
+                    audio_track_clips[idx][#audio_track_clips[idx] + 1] =
+                        self:_build_tmb_clip(ne, sr)
+                end
             end
-            local sr = self:_compute_audio_speed_ratio(ne)
-            audio_track_clips[idx][#audio_track_clips[idx] + 1] =
-                self:_build_tmb_clip(ne, sr)
         end
     end
 
@@ -772,6 +718,13 @@ function PlaybackEngine:_send_audio_clips_to_tmb(frame, EMP)
     end
     table.sort(audio_indices)
     self._audio_track_indices = audio_indices
+
+    -- Report audio clip window to C++
+    local has_audio, audio_lo, audio_hi = compute_min_clip_window(audio_track_clips)
+    if self._playback_controller and has_audio and audio_hi > audio_lo then
+        qt_constants.PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "audio", audio_lo, audio_hi)
+    end
+
     return audio_track_clips
 end
 
@@ -786,6 +739,10 @@ local VIDEO_LOOKAHEAD_FRAMES = 150  -- ~6s at 25fps
 -- @param frame number: current playhead position
 -- @param track_clips table: {[track_index] = {clip_table, ...}} — modified in-place
 function PlaybackEngine:_extend_video_lookahead(frame, track_clips)
+    -- Park mode: current-frame clips (from get_video_at) are sufficient.
+    -- No reason to pre-load upcoming clips when we're not moving.
+    if self.direction == 0 then return end
+
     local target = frame + VIDEO_LOOKAHEAD_FRAMES
 
     -- Collect all clip_ids already in track_clips (for dedup)
@@ -823,7 +780,8 @@ function PlaybackEngine:_extend_video_lookahead(frame, track_clips)
 
         local any_added = false
         for _, ne in ipairs(nexts) do
-            if not seen[ne.clip.id] then
+            -- Skip clips beyond the lookahead window
+            if not seen[ne.clip.id] and ne.clip.timeline_start < target then
                 local idx = ne.track.track_index
                 if not track_clips[idx] then track_clips[idx] = {} end
                 track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne, self:_compute_video_speed_ratio(ne))
@@ -1071,7 +1029,7 @@ function PlaybackEngine:stop()
     self:_stop_audio()
     -- TMB stays alive across stop/play — no need to re-create
     qt_constants.EMP.SET_DECODE_MODE("park")
-    -- Stop all background decode work (prefetch threads + pre-buffer jobs).
+    -- Stop all background decode work (REFILL workers + pre-buffer jobs).
     -- Prevents zombie HW decoders from competing for GPU decode engine.
     if self._tmb then
         qt_constants.EMP.TMB_PARK_READERS(self._tmb)

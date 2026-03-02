@@ -438,7 +438,7 @@ do
     }
 
     reset_playback_calls()
-    engine:_send_audio_clips_only(100)
+    engine:_send_audio_clips_to_tmb(100, package.loaded["core.qt_constants"].EMP)
 
     local window_call = nil
     for _, c in ipairs(playback_calls) do
