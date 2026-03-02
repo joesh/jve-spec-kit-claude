@@ -915,6 +915,8 @@ function M._execute_body(command_or_name, params)
         if root_playhead_value == nil then
             timeline_state = require('ui.timeline.timeline_state')
             root_playhead_value = timeline_state.get_playhead_position()
+            assert(root_playhead_value ~= nil,
+                "command_manager: get_playhead_position() returned nil — timeline_state not initialized")
             root_playhead_rate = timeline_state.get_sequence_frame_rate()
             if not command_flag(command, "skip_selection_snapshot", "__skip_selection_snapshot") then
                 capture_pre_selection_for_command(command)

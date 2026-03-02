@@ -80,12 +80,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local clip = Clip.load_optional(clip_id)
             if clip and clip.master_clip_id then
                 earliest_start_frame = math.min(earliest_start_frame, clip.timeline_start)
+                local fps_n = clip.rate and clip.rate.fps_numerator or clip.fps_numerator
+                local fps_d = clip.rate and clip.rate.fps_denominator or clip.fps_denominator
+                assert(type(fps_n) == "number" and fps_n > 0,
+                    string.format("Cut: clip %s has no fps_numerator (rate=%s, fps_numerator=%s)",
+                        clip.id, tostring(clip.rate), tostring(clip.fps_numerator)))
+                assert(type(fps_d) == "number" and fps_d > 0,
+                    string.format("Cut: clip %s has no fps_denominator (rate=%s, fps_denominator=%s)",
+                        clip.id, tostring(clip.rate), tostring(clip.fps_denominator)))
                 clip_payloads[#clip_payloads + 1] = {
                     original_id = clip.id,
                     track_id = clip.track_id,
                     media_id = clip.media_id,
-                    fps_numerator = clip.rate and clip.rate.fps_numerator or clip.fps_numerator,
-                    fps_denominator = clip.rate and clip.rate.fps_denominator or clip.fps_denominator,
+                    fps_numerator = fps_n,
+                    fps_denominator = fps_d,
                     master_clip_id = clip.master_clip_id,
                     owner_sequence_id = clip.owner_sequence_id,
                     clip_kind = clip.clip_kind,
@@ -98,20 +106,21 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 }
             end
         end
-        if #clip_payloads > 0 then
-            for _, entry in ipairs(clip_payloads) do
-                entry.offset_frames = entry.timeline_start - earliest_start_frame
-            end
-            local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
-            clipboard.set({
-                kind = "timeline_clips",
-                project_id = project_id,
-                sequence_id = sequence_id,
-                reference_start_frame = earliest_start_frame,
-                clips = clip_payloads,
-                count = #clip_payloads,
-            })
+        assert(#clip_payloads > 0,
+            string.format("Cut: none of %d clip_ids could be loaded for clipboard — "
+                .. "Cut must not silently degrade to Delete", #clip_ids))
+        for _, entry in ipairs(clip_payloads) do
+            entry.offset_frames = entry.timeline_start - earliest_start_frame
         end
+        local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
+        clipboard.set({
+            kind = "timeline_clips",
+            project_id = project_id,
+            sequence_id = sequence_id,
+            reference_start_frame = earliest_start_frame,
+            clips = clip_payloads,
+            count = #clip_payloads,
+        })
 
         -- Delete clips and capture state for undo
         local deleted_count = 0

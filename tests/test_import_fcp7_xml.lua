@@ -549,8 +549,15 @@ local function fetch_media_ids(limit)
     return ids
 end
 
-local function fetch_single_clip_id()
-    local stmt = db:prepare("SELECT id FROM clips LIMIT 1")
+local function fetch_single_clip_id(sequence_id)
+    assert(sequence_id, "fetch_single_clip_id: sequence_id required")
+    local stmt = db:prepare([[
+        SELECT c.id FROM clips c
+        JOIN tracks t ON c.track_id = t.id
+        WHERE t.sequence_id = ? AND c.clip_kind = 'timeline'
+        LIMIT 1
+    ]])
+    stmt:bind_value(1, sequence_id)
     assert(stmt:exec())
     local clip_id = nil
     if stmt:next() then
@@ -582,7 +589,7 @@ assert(#media_ids >= 1, "Importer should provide media rows for insert operation
 local insert_master_clip_id = test_env.create_test_masterclip_sequence(
     'default_project', 'Test Insert Master', 30, 1, 10000, media_ids[1])
 
-local clip_for_move = fetch_single_clip_id()
+local clip_for_move = fetch_single_clip_id(replayed_sequence_id)
 
 local move_nudge_spec = json.encode({
     {
@@ -640,7 +647,7 @@ local split_exec = split_cmd:get_parameter("executed_commands_json")
 local child_specs = json.decode(split_exec)
 local split_second_clip_id = child_specs and child_specs[1] and child_specs[1].parameters and child_specs[1].parameters.second_clip_id
 
-local clip_to_delete = split_second_clip_id or inserted_clip_id or fetch_single_clip_id()
+local clip_to_delete = split_second_clip_id or inserted_clip_id or fetch_single_clip_id(replayed_sequence_id)
 assert(clip_to_delete, "There should be a clip to delete")
 
 local delete_spec = json.encode({

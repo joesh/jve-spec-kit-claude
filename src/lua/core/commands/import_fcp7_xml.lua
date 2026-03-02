@@ -134,9 +134,10 @@ function M.register(executors, undoers, db)
             local ts_ok, ts = pcall(require, 'ui.timeline.timeline_state')
             if ts_ok and ts and ts.get_sequence_id then
                 local active = ts.get_sequence_id()
-                if active and active ~= "" then
-                    command:set_parameter("pre_import_sequence_id", active)
-                end
+                assert(active and active ~= "",
+                    "ImportFCP7XML: timeline_state loaded but has no active sequence — "
+                    .. "cannot capture pre_import_sequence_id for undo safety")
+                command:set_parameter("pre_import_sequence_id", active)
             end
         end
 
@@ -304,13 +305,18 @@ function M.register(executors, undoers, db)
         if timeline_state_ok and timeline_state and timeline_state.init then
             local undo_active_seq = args.undo_active_sequence_id
             if undo_active_seq then
+                local found = false
                 for _, seq_id in ipairs(create_result.sequence_ids) do
                     if seq_id == undo_active_seq then
                         log.event("Restoring timeline_state to sequence %s (was active at undo time)", seq_id)
                         timeline_state.init(seq_id, project_id)
+                        found = true
                         break
                     end
                 end
+                assert(found,
+                    string.format("ImportFCP7XML redo: undo_active_sequence_id %s not found in recreated sequences",
+                        tostring(undo_active_seq)))
             else
                 local active_seq = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
                 if active_seq then
