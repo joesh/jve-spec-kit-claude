@@ -1,6 +1,6 @@
 #include "binding_macros.h"
 #include "../../jve_log.h"
-#include "assert_handler.h"
+#include "../../assert_handler.h"
 #include <QMenu>
 #include <QMenuBar>
 #include <QAction>

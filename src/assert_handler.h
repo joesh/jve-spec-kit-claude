@@ -22,16 +22,18 @@ public:
 
 struct lua_State;
 
-// Register/clear the active lua_State for the current thread.
-// When registered, jve_assert_fail throws JveAssertError instead of _exit.
+// Register the active lua_State for the current thread.
+// Call once at startup after creating the lua_State. When registered,
+// jve_assert_fail throws JveAssertError instead of _exit, allowing
+// Lua pcall to catch C++ assertion failures.
 void jve_set_lua_state(lua_State* L);
-void jve_clear_lua_state();
 
-// RAII guard: sets lua_State on construction, clears on destruction.
-// Safe with both C++ exceptions and LuaJIT's DWARF-based longjmp.
+// Set-only guard: sets lua_State on construction, does NOT clear on destruction.
+// t_lua_state is set once per thread and stays set for the thread's lifetime.
+// Safe to use in existing code — constructor is a redundant set, destructor is no-op.
 struct JveLuaStateGuard {
     JveLuaStateGuard(lua_State* L) { jve_set_lua_state(L); }
-    ~JveLuaStateGuard() { jve_clear_lua_state(); }
+    ~JveLuaStateGuard() {}
     JveLuaStateGuard(const JveLuaStateGuard&) = delete;
     JveLuaStateGuard& operator=(const JveLuaStateGuard&) = delete;
 };

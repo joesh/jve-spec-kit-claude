@@ -1062,4 +1062,49 @@ function Sequence:compute_content_end()
     return max_end
 end
 
+--- Content duration in frames.
+-- For timeline sequences: max(timeline_start + duration) across track clips.
+-- For masterclip sequences: the stream clip's duration_frames.
+-- @return integer  0 if no content
+function Sequence:content_duration()
+    if self:is_masterclip() then
+        local db = resolve_db()
+        local stmt = db:prepare([[
+            SELECT duration_frames FROM clips
+            WHERE owner_sequence_id = ? AND clip_kind = 'master'
+            LIMIT 1
+        ]])
+        assert(stmt, "Sequence:content_duration: failed to prepare query")
+        stmt:bind_value(1, self.id)
+        assert(stmt:exec(), "Sequence:content_duration: query exec failed")
+        local dur = 0
+        if stmt:next() then
+            dur = stmt:value(0) or 0
+        end
+        stmt:finalize()
+        return dur
+    end
+    return self:compute_content_end()
+end
+
+--- Set playhead position with bounds validation.
+-- Asserts frame is within [0, content_duration). Catches out-of-range writes
+-- at the point of introduction rather than at the read boundary.
+-- @param frame integer  playhead position in video frames
+function Sequence:set_playhead(frame)
+    assert(type(frame) == "number",
+        string.format("Sequence:set_playhead(%s): frame must be number, got %s",
+            tostring(self.id), type(frame)))
+    assert(frame >= 0,
+        string.format("Sequence:set_playhead(%s): frame must be >= 0, got %d",
+            tostring(self.id), frame))
+    local duration = self:content_duration()
+    if duration > 0 then
+        assert(frame < duration,
+            string.format("Sequence:set_playhead(%s): frame %d >= content duration %d",
+                tostring(self.id), frame, duration))
+    end
+    self.playhead_position = frame
+end
+
 return Sequence

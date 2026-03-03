@@ -906,7 +906,7 @@ end
 -- ─── Test 30: out-of-bounds saved playhead clamped on load ───
 print("\n--- out-of-bounds saved playhead ---")
 do
-    -- Artificially save a playhead beyond total_frames
+    -- Artificially save a playhead beyond total_frames (bypasses set_playhead validation)
     local Sequence = require("models.sequence")
     local seq = Sequence.load(mc_id)
     seq.playhead_position = 999
@@ -916,9 +916,10 @@ do
     timer_callbacks = {}
     view:load_sequence(mc_id)
 
-    -- Playhead is free — no upper clamp. 999 is valid and should restore.
-    assert(view.playhead == 999,
-        "saved playhead should restore, got " .. view.playhead)
+    -- load_sequence clamps stale DB values to valid range
+    -- mc has 100 total_frames → 999 clamped to 99
+    assert(view.playhead == 99,
+        "stale playhead should clamp to total_frames-1, got " .. view.playhead)
 
     -- Reset for other tests
     view:set_playhead(0)

@@ -99,6 +99,7 @@ int main(int argc, char *argv[])
         qputenv("JVE_TEST_MODE", "1");
 
         SimpleLuaEngine luaEngine;
+        jve_set_lua_state(luaEngine.getLuaState());
 
         // Add tests/ to package.path so integration tests can require("integration.integration_test_env")
         lua_State* L = luaEngine.getLuaState();
@@ -193,6 +194,7 @@ int main(int argc, char *argv[])
 
     // Create Lua engine for pure Lua UI
     SimpleLuaEngine luaEngine;
+    jve_set_lua_state(luaEngine.getLuaState());
 
     // Execute Lua main window creation using ResourcePaths
     QString mainWindowScript = QString::fromStdString(JVE::ResourcePaths::getScriptPath("ui/layout.lua"));

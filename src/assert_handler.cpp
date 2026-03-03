@@ -1,12 +1,9 @@
 // Assert handler with stack trace support
 //
-// When a lua_State is registered (via jve_set_lua_state), assert failures
-// throw JveAssertError instead of calling _exit. LuaJIT's DWARF unwinder
-// catches the exception at the lua_pcall boundary, converting it to a Lua
-// error. This lets Lua pcall catch C++ assertion failures gracefully.
-//
-// Without a registered lua_State (startup, background threads), the original
-// _exit(134) behavior is preserved.
+// jve_set_lua_state() is called once at startup in main.cpp after creating
+// the lua_State. Once set, all JVE_ASSERT failures throw JveAssertError,
+// which LuaJIT's DWARF unwinder catches at lua_pcall boundaries and converts
+// to Lua errors. Before the lua_State is set (early startup), _exit(134).
 
 #include "assert_handler.h"
 #include <cstdio>
@@ -27,10 +24,6 @@ static thread_local lua_State* t_lua_state = nullptr;
 
 void jve_set_lua_state(lua_State* L) {
     t_lua_state = L;
-}
-
-void jve_clear_lua_state() {
-    t_lua_state = nullptr;
 }
 
 // Flag to prevent recursive abort handling

@@ -304,8 +304,15 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     assert(type(saved_playhead) == "number", string.format(
         "SequenceMonitor(%s):load_sequence: playhead_position must be number, got %s (seq=%s)",
         self.view_id, type(saved_playhead), sequence_id:sub(1, 8)))
-    self.playhead = saved_playhead
-    self.engine:seek(saved_playhead)
+    -- Clamp to valid range: DB may contain stale values written before
+    -- set_playhead validation was added (e.g. DRP import duration mismatch).
+    local clamped = math.max(0, math.min(saved_playhead, self.total_frames - 1))
+    if clamped ~= saved_playhead then
+        log.warn("%s: clamped stale playhead %d → %d (total_frames=%d, seq=%s)",
+            self.view_id, saved_playhead, clamped, self.total_frames, sequence_id:sub(1, 8))
+    end
+    self.playhead = clamped
+    self.engine:seek(clamped)
 
     -- Update title
     local title = seq:is_masterclip() and "Source" or "Timeline"
