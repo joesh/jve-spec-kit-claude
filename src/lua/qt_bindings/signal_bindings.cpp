@@ -501,6 +501,30 @@ int lua_set_scroll_area_scroll_handler(lua_State* L) {
     return 0;
 }
 
+int lua_set_scroll_area_h_scroll_handler(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    const char* handler_name = luaL_checkstring(L, 2);
+    if (!sa || !handler_name) return 0;
+
+    std::string handler_str(handler_name);
+    QScrollBar* hScrollBar = sa->horizontalScrollBar();
+    if (hScrollBar) {
+        QObject::connect(hScrollBar, &QScrollBar::valueChanged, [L, handler_str](int value) {
+            lua_getglobal(L, handler_str.c_str());
+            if (lua_isfunction(L, -1)) {
+                lua_pushinteger(L, value);
+                JveLuaStateGuard guard(L);
+                if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+                    lua_error(L);
+                }
+            } else {
+                lua_pop(L, 1);
+            }
+        });
+    }
+    return 0;
+}
+
 int lua_set_scroll_area_anchor_bottom(lua_State* L) {
     QScrollArea* sa = get_widget<QScrollArea>(L, 1);
     bool enable = lua_toboolean(L, 2);

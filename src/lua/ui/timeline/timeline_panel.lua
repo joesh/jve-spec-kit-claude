@@ -32,7 +32,8 @@ local timecode_input = require("core.timecode_input")
 local Track = require("models.track")
 local Signals = require("core.signals")
 
--- luacheck: globals qt_line_edit_select_all
+-- luacheck: globals qt_line_edit_select_all qt_scroll_area_h_scroll_by qt_scroll_area_h_scroll_info
+-- luacheck: globals qt_set_scroll_area_h_scroll_handler
 
 local M = {}
 
@@ -63,6 +64,9 @@ local audio_view_ref = nil
 local tab_order = {}
 local tab_bar_tabs_layout = nil
 local tab_bar_tabs_container = nil
+local tab_bar_scroll = nil
+local tab_bar_left_arrow = nil
+local tab_bar_right_arrow = nil
 local recycle_bin = qt_constants.WIDGET.CREATE()
 if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
     qt_constants.DISPLAY.SET_VISIBLE(recycle_bin, false)
@@ -129,6 +133,14 @@ local function clear_global_handler(name)
     if name and _G[name] ~= nil then
         _G[name] = nil
     end
+end
+
+local function update_tab_scroll_arrows()
+    if not tab_bar_scroll or not tab_bar_left_arrow or not tab_bar_right_arrow then return end
+    local info = qt_scroll_area_h_scroll_info(tab_bar_scroll)
+    local all_fit = (info.max == info.min)
+    qt_constants.DISPLAY.SET_VISIBLE(tab_bar_left_arrow, not all_fit and info.value > info.min)
+    qt_constants.DISPLAY.SET_VISIBLE(tab_bar_right_arrow, not all_fit and info.value < info.max)
 end
 
 local function get_sequence_frame_rate_for_timecode()
@@ -474,6 +486,7 @@ local function close_tab(sequence_id)
     else
         update_tab_styles(current_sequence)
     end
+    update_tab_scroll_arrows()
 end
 
 ensure_tab_for_sequence = function(sequence_id)
@@ -534,6 +547,7 @@ ensure_tab_for_sequence = function(sequence_id)
         close_handler = close_handler_name
     }
     table.insert(tab_order, sequence_id)
+    update_tab_scroll_arrows()
 end
 
 local function handle_tab_command_event(event)
@@ -1270,9 +1284,53 @@ function M.create(opts)
     qt_constants.CONTROL.SET_LAYOUT_SPACING(tab_bar_tabs_layout, 4)
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(tab_bar_tabs_layout, 0, 0, 0, 0)
     qt_constants.LAYOUT.SET_ON_WIDGET(tab_bar_tabs_container, tab_bar_tabs_layout)
-    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tab_bar_tabs_container, "Expanding", "Fixed")
-    qt_constants.LAYOUT.ADD_WIDGET(tab_bar_layout, tab_bar_tabs_container)
-    qt_constants.LAYOUT.ADD_STRETCH(tab_bar_layout, 1)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tab_bar_tabs_container, "Preferred", "Fixed")
+
+    -- Scroll area constrains tab bar width, clips overflow
+    local panel_bg = colors.PANEL_BACKGROUND_COLOR or "#1f1f1f"
+    tab_bar_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
+    qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET_RESIZABLE(tab_bar_scroll, true)
+    qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(tab_bar_scroll, "AlwaysOff")
+    qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(tab_bar_scroll, "AlwaysOff")
+    qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(tab_bar_scroll, tab_bar_tabs_container)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tab_bar_scroll, "Expanding", "Fixed")
+    qt_constants.PROPERTIES.SET_STYLE(tab_bar_scroll, string.format(
+        [[QScrollArea { background: %s; border: none; }
+          QWidget#qt_scrollarea_viewport { background: %s; }]], panel_bg, panel_bg))
+
+    -- Arrow buttons for scrolling overflow tabs
+    local arrow_style = string.format([[
+        QPushButton { background: %s; color: %s; border: none; padding: 2px 4px; font-size: 11px; }
+        QPushButton:hover { color: %s; }
+    ]], panel_bg, inactive_text_color, hover_text_color)
+
+    tab_bar_left_arrow = qt_constants.WIDGET.CREATE_BUTTON("\xe2\x97\x80")  -- ◀
+    qt_constants.PROPERTIES.SET_STYLE(tab_bar_left_arrow, arrow_style)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tab_bar_left_arrow, "Fixed", "Fixed")
+    qt_constants.DISPLAY.SET_VISIBLE(tab_bar_left_arrow, false)
+    local left_arrow_handler = register_global_handler("__jve_tab_scroll_left", function()
+        qt_scroll_area_h_scroll_by(tab_bar_scroll, -200)
+    end)
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(tab_bar_left_arrow, left_arrow_handler)
+
+    tab_bar_right_arrow = qt_constants.WIDGET.CREATE_BUTTON("\xe2\x96\xb6")  -- ▶
+    qt_constants.PROPERTIES.SET_STYLE(tab_bar_right_arrow, arrow_style)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tab_bar_right_arrow, "Fixed", "Fixed")
+    qt_constants.DISPLAY.SET_VISIBLE(tab_bar_right_arrow, false)
+    local right_arrow_handler = register_global_handler("__jve_tab_scroll_right", function()
+        qt_scroll_area_h_scroll_by(tab_bar_scroll, 200)
+    end)
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(tab_bar_right_arrow, right_arrow_handler)
+
+    -- Update arrow visibility on horizontal scroll
+    _G["__jve_tab_scroll_changed"] = function()
+        update_tab_scroll_arrows()
+    end
+    qt_set_scroll_area_h_scroll_handler(tab_bar_scroll, "__jve_tab_scroll_changed")
+
+    qt_constants.LAYOUT.ADD_WIDGET(tab_bar_layout, tab_bar_left_arrow)
+    qt_constants.LAYOUT.ADD_WIDGET(tab_bar_layout, tab_bar_scroll)
+    qt_constants.LAYOUT.ADD_WIDGET(tab_bar_layout, tab_bar_right_arrow)
 
     -- Create main horizontal splitter: Headers Column | Timeline Area Column
     local main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("horizontal")
@@ -1754,6 +1812,16 @@ local function zoom_to_fit_if_first_open(sequence)
     state.set_viewport_duration(content_dur + buffer)
     state.set_viewport_start_time(min_start)
     state.set_playhead_position(min_start)
+end
+
+--- Create a tab button for a sequence without activating it.
+-- Use for batch loading background tabs at startup. The sequence is NOT
+-- loaded into the timeline state, headers, or monitor until the user clicks
+-- the tab (which calls load_sequence).
+function M.open_tab(sequence_id)
+    if not sequence_id or sequence_id == "" then return end
+    if open_tabs[sequence_id] then return end  -- already exists
+    ensure_tab_for_sequence(sequence_id)
 end
 
 function M.load_sequence(sequence_id)

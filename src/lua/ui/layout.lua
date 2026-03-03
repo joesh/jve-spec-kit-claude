@@ -345,6 +345,18 @@ end
 -- Flag to prevent saving during initial layout (before window is fully shown)
 local window_ready_to_save = false
 
+-- Suppress geometry saves during project transitions.
+-- Priority 2 fires before ANY widget-modifying handler (earliest is 10 = playback_controller).
+-- When handlers tear down widgets, Qt recalculates layout → resize events → geometry handler
+-- would persist degenerate splitter sizes (e.g. {1400,0,0,0}). Block that, re-enable after
+-- the Qt event loop settles.
+Signals.connect("project_changed", function()
+    window_ready_to_save = false
+    qt_create_single_shot_timer(50, function()
+        window_ready_to_save = true
+    end)
+end, 2)
+
 -- Main vertical splitter (Top row | Timeline)
 local main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
 
@@ -526,19 +538,9 @@ if not initial_sequence_id and #sequences > 0 then
     initial_sequence_id = sequences[1].id
 end
 
--- Open DRP-imported timelines as tabs (if present from conversion)
+-- Background tabs are created AFTER layout settles (see 50ms timer below).
+-- Creating many tab widgets during initial layout causes Qt splitter state corruption.
 local open_ids = db_module.get_project_setting(project_id, "open_sequence_ids")
-if open_ids and #open_ids > 0 then
-    for _, seq_id in ipairs(open_ids) do
-        -- Skip the active one — loaded last for focus
-        if seq_id ~= initial_sequence_id then
-            local tab_ok, tab_err = pcall(timeline_panel_mod.load_sequence, seq_id)
-            if not tab_ok then
-                log.error("Failed to load sequence tab %s: %s", seq_id, tostring(tab_err))
-            end
-        end
-    end
-end
 
 if initial_sequence_id and project_browser_mod.focus_sequence then
     project_browser_mod.focus_sequence(initial_sequence_id)
@@ -617,27 +619,62 @@ qt_create_single_shot_timer(50, function()
         log.event("Migrated 3-panel splitter to 4-panel")
     end
 
-    if not saved_splitters then
-        -- First launch: set defaults and persist
+    -- Validate saved sizes: discard if structure wrong or any panel collapsed below minimum
+    local MIN_PANEL_PX = 50
+    local usable = saved_splitters
+    if usable then
+        if not usable.top or #usable.top ~= 4 or not usable.main or #usable.main ~= 2 then
+            log.warn("Discarding corrupt splitter sizes: %s", dkjson.encode(usable))
+            usable = nil
+        else
+            for _, sz in ipairs(usable.top) do
+                if sz < MIN_PANEL_PX then
+                    log.warn("Discarding degenerate splitter sizes (top panel < %dpx): %s",
+                        MIN_PANEL_PX, dkjson.encode(usable.top))
+                    usable = nil
+                    break
+                end
+            end
+        end
+        if usable then
+            for _, sz in ipairs(usable.main) do
+                if sz < MIN_PANEL_PX then
+                    log.warn("Discarding degenerate splitter sizes (main panel < %dpx): %s",
+                        MIN_PANEL_PX, dkjson.encode(usable.main))
+                    usable = nil
+                    break
+                end
+            end
+        end
+    end
+
+    if usable then
+        qt_constants.LAYOUT.SET_SPLITTER_SIZES(top_splitter, usable.top)
+        qt_constants.LAYOUT.SET_SPLITTER_SIZES(main_splitter, usable.main)
+        log.event("Splitter sizes restored: top=%s, main=%s",
+            dkjson.encode(usable.top), dkjson.encode(usable.main))
+    else
+        -- First launch or corrupt/degenerate data: apply defaults and persist
         qt_constants.LAYOUT.SET_SPLITTER_SIZES(top_splitter, {350, 350, 350, 350})
         qt_constants.LAYOUT.SET_SPLITTER_SIZES(main_splitter, {450, 450})
         db_module.set_project_setting(active_project_id, SPLITTER_SIZES_KEY, {
             top = {350, 350, 350, 350}, main = {450, 450}
         })
         log.event("Splitter sizes initialized to defaults")
-    else
-        -- Subsequent launches: validate and restore
-        assert(saved_splitters.top and #saved_splitters.top == 4,
-            string.format("layout: splitter_sizes.top corrupt (expected 4), got: %s", dkjson.encode(saved_splitters)))
-        assert(saved_splitters.main and #saved_splitters.main == 2,
-            string.format("layout: splitter_sizes.main corrupt, got: %s", dkjson.encode(saved_splitters)))
-        qt_constants.LAYOUT.SET_SPLITTER_SIZES(top_splitter, saved_splitters.top)
-        qt_constants.LAYOUT.SET_SPLITTER_SIZES(main_splitter, saved_splitters.main)
-        log.event("Splitter sizes restored: top=%s, main=%s",
-            dkjson.encode(saved_splitters.top), dkjson.encode(saved_splitters.main))
     end
 
-    -- Now that layout is settled, enable save-on-change
+    -- Create background tabs (scroll area constrains width — no splitter corruption)
+    if open_ids and #open_ids > 0 then
+        for _, seq_id in ipairs(open_ids) do
+            if seq_id ~= initial_sequence_id then
+                local tab_ok, tab_err = pcall(timeline_panel_mod.open_tab, seq_id)
+                if not tab_ok then
+                    log.error("Failed to create tab for sequence %s: %s", seq_id, tostring(tab_err))
+                end
+            end
+        end
+        log.event("Created %d background tabs", #open_ids)
+    end
     window_ready_to_save = true
     log.event("Window state persistence enabled")
 end)

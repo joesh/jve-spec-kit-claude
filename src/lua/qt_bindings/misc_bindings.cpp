@@ -620,6 +620,40 @@ int qt_set_layout_alignment(lua_State* L) {
     return 1;
 }
 
+int lua_scroll_area_h_scroll_by(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    int delta = luaL_checkinteger(L, 2);
+    if (!sa) return luaL_error(L, "qt_scroll_area_h_scroll_by: scroll area required");
+    QScrollBar* hbar = sa->horizontalScrollBar();
+    if (hbar) {
+        hbar->setValue(hbar->value() + delta);
+    }
+    return 0;
+}
+
+int lua_scroll_area_h_scroll_info(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    if (!sa) return luaL_error(L, "qt_scroll_area_h_scroll_info: scroll area required");
+    QScrollBar* hbar = sa->horizontalScrollBar();
+    lua_newtable(L);
+    if (hbar) {
+        lua_pushinteger(L, hbar->value());
+        lua_setfield(L, -2, "value");
+        lua_pushinteger(L, hbar->minimum());
+        lua_setfield(L, -2, "min");
+        lua_pushinteger(L, hbar->maximum());
+        lua_setfield(L, -2, "max");
+    } else {
+        lua_pushinteger(L, 0);
+        lua_setfield(L, -2, "value");
+        lua_pushinteger(L, 0);
+        lua_setfield(L, -2, "min");
+        lua_pushinteger(L, 0);
+        lua_setfield(L, -2, "max");
+    }
+    return 1;
+}
+
 int lua_set_parent(lua_State* L) {
     QWidget* child = static_cast<QWidget*>(lua_to_widget(L, 1));
     QWidget* parent = nullptr;
