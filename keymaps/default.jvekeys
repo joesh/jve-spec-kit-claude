@@ -8,6 +8,23 @@
 #   Named:       "DeleteSelection ripple=true"
 #   Duration:    1f (1 frame), -1s (minus 1 second), 30f (30 frames)
 
+[Application]
+"Cmd+Q" = "Quit"
+"Cmd+N" = "NewProject"
+"Cmd+O" = "OpenProject"
+"Cmd+S" = "SaveProject"
+"Cmd+Shift+S" = "SaveProjectAs"
+"Cmd+I" = "ImportMedia"
+"Cmd+Z" = "Undo"
+"Cmd+Shift+Z" = "Redo"
+"Cmd+G" = "GoToTimecode @timeline"
+"Cmd+X" = "Cut @timeline"
+"Cmd+C" = "Copy @timeline"
+"Cmd+V" = "Paste @timeline"
+"F1" = "OpenUserManual"
+"F12" = "ReportBug"
+"Shift+F12" = "ToggleProfiler"
+
 [Transport]
 "Space" = "TogglePlay @timeline @source_monitor @timeline_monitor"
 "J" = "ShuttleReverse @timeline @source_monitor @timeline_monitor"
@@ -43,6 +60,12 @@
 "Cmd+B" = "Blade @timeline"
 "Cmd+Shift+BracketLeft" = "TrimHead @timeline"
 "Cmd+Shift+BracketRight" = "TrimTail @timeline"
+"D" = "ToggleClipEnabled @timeline"
+"F" = "MatchFrame @timeline"
+"Shift+F" = "RevealInFilesystem @timeline"
+"Cmd+L" = "LinkClips @timeline"
+"Cmd+Shift+L" = "UnlinkClips @timeline"
+"Cmd+Delete" = "CloseGap @timeline"
 # Comma/Period handled in keyboard_shortcuts.lua (edge vs clip context gathering)
 # E handled in keyboard_shortcuts.lua (edge context gathering)
 # F9/F10 handled in keyboard_shortcuts.lua (project_browser context gathering)
@@ -69,9 +92,4 @@
 [Browser]
 "Return" = "ActivateBrowserSelection @project_browser"
 "F2" = "RenameItem @project_browser"
-
-[Application]
-"Cmd+Z" = "Undo"
-"Cmd+Shift+Z" = "Redo"
-"F12" = "ReportBug"
-"Shift+F12" = "ToggleProfiler"
+"Cmd+Shift+N" = "NewBin @project_browser"

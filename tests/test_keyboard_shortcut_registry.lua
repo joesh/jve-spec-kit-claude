@@ -25,9 +25,10 @@ end
 
 local function reset_registry_state()
     registry.commands = {}
-    registry.active_shortcuts = {}
+    registry.keybindings = {}
     registry.presets = {}
     registry.current_preset = "Default"
+    registry.loaded_toml_path = nil
 end
 
 local function expect_error(label, fn)
@@ -46,7 +47,6 @@ local function test_register_command_contract()
             id = "test.no_category",
             name = "No Category",
             description = "missing category",
-            default_shortcuts = {}
         })
     end)
 
@@ -55,7 +55,6 @@ local function test_register_command_contract()
         category = "Testing",
         name = "Valid Command",
         description = "well formed",
-        default_shortcuts = {"Cmd+Alt+V"}
     })
 
     expect_error("duplicate command id", function()
@@ -64,22 +63,8 @@ local function test_register_command_contract()
             category = "Testing",
             name = "Duplicate Command",
             description = "should fail",
-            default_shortcuts = {}
         })
     end)
-
-    local defaults = {"Cmd+Shift+D"}
-    registry.register_command({
-        id = "test.copy_defaults",
-        category = "Testing",
-        name = "Copy Defaults",
-        description = "",
-        default_shortcuts = defaults
-    })
-
-    defaults[1] = "Modified"
-    local stored = registry.commands["test.copy_defaults"].default_shortcuts[1]
-    assert_equals("default table copied", stored, "Cmd+Shift+D")
 end
 
 local function test_assign_shortcut_conflicts()
@@ -90,7 +75,6 @@ local function test_assign_shortcut_conflicts()
         category = "Testing",
         name = "First",
         description = "",
-        default_shortcuts = {"Cmd+L"}
     })
 
     registry.register_command({
@@ -98,17 +82,25 @@ local function test_assign_shortcut_conflicts()
         category = "Testing",
         name = "Second",
         description = "",
-        default_shortcuts = {}
     })
 
-    registry.reset_to_defaults()
+    -- Assign Cmd+L to first
+    local ok1, err1 = registry.assign_shortcut("test.first", "Cmd+L")
+    assert_true("first assign succeeds", ok1)
+    assert_true("first assign no error", err1 == nil)
 
-    local ok, err = registry.assign_shortcut("test.second", "Cmd+L")
-    assert_true("conflict flagged", not ok)
-    assert_true("conflict message", err:match("already assigned"))
+    -- Conflict: try to assign same key to second
+    local ok2, err2 = registry.assign_shortcut("test.second", "Cmd+L")
+    assert_true("conflict flagged", not ok2)
+    assert_true("conflict message", err2:match("already assigned"))
+
+    -- Verify keybindings has the first command
+    local parsed = registry.parse_shortcut("Cmd+L")
+    local combo_key = string.format("%d_%d", parsed.key, parsed.modifiers)
+    assert_equals("keybindings has first command", registry.keybindings[combo_key].command_name, "test.first")
 end
 
-local function test_reset_to_defaults_assigns_shortcuts()
+local function test_assign_and_remove_shortcut()
     reset_registry_state()
 
     registry.register_command({
@@ -116,42 +108,65 @@ local function test_reset_to_defaults_assigns_shortcuts()
         category = "Testing",
         name = "Alpha",
         description = "",
-        default_shortcuts = {"Cmd+A"}
     })
 
-    registry.register_command({
-        id = "test.bravo",
-        category = "Testing",
-        name = "Bravo",
-        description = "",
-        default_shortcuts = {"Cmd+B"}
-    })
-
-    registry.reset_to_defaults()
+    -- Assign
+    local ok = registry.assign_shortcut("test.alpha", "Cmd+A")
+    assert_true("assign succeeds", ok)
 
     local alpha = registry.commands["test.alpha"]
-    local bravo = registry.commands["test.bravo"]
-
     assert_equals("alpha shortcut assigned", alpha.current_shortcuts[1].string, "Cmd+A")
-    assert_equals("bravo shortcut assigned", bravo.current_shortcuts[1].string, "Cmd+B")
 
-    -- Removing a shortcut should clear active map entries.
-    local parsed, parse_err = registry.parse_shortcut("Cmd+A")
-    assert_true("parse shortcut", parsed ~= nil and parse_err == nil)
-    registry.remove_shortcut("test.alpha", "Cmd+A")
+    -- Verify it's in keybindings
+    local parsed = registry.parse_shortcut("Cmd+A")
     local conflict = registry.find_conflict(parsed.key, parsed.modifiers)
-    assert_equals("alpha shortcut removed", conflict, nil)
+    assert_equals("find_conflict returns alpha", conflict, "test.alpha")
+
+    -- Remove
+    registry.remove_shortcut("test.alpha", "Cmd+A")
+    local conflict2 = registry.find_conflict(parsed.key, parsed.modifiers)
+    assert_equals("alpha shortcut removed from keybindings", conflict2, nil)
+    assert_equals("alpha current_shortcuts empty", #alpha.current_shortcuts, 0)
+end
+
+local function test_reset_to_defaults_reloads_toml()
+    reset_registry_state()
+
+    -- Load from actual TOML file
+    local keymap_path = "../keymaps/default.jvekeys"
+    registry.load_keybindings(keymap_path)
+
+    -- Verify something loaded
+    local count = 0
+    for _ in pairs(registry.keybindings) do count = count + 1 end
+    assert_true("keybindings loaded", count > 0)
+
+    -- Remember the count
+    local original_count = count
+
+    -- Clear keybindings manually
+    registry.keybindings = {}
+
+    -- Reset should reload from stored path
+    registry.reset_to_defaults()
+
+    -- Verify reloaded
+    local count2 = 0
+    for _ in pairs(registry.keybindings) do count2 = count2 + 1 end
+    assert_equals("reset restored keybinding count", count2, original_count)
 end
 
 local tests = {
     test_register_command_contract,
     test_assign_shortcut_conflicts,
-    test_reset_to_defaults_assigns_shortcuts
+    test_assign_and_remove_shortcut,
+    test_reset_to_defaults_reloads_toml,
 }
 
 for index, test in ipairs(tests) do
     test()
-    io.stdout:write(string.format("✅ test %d passed\n", index))
+    io.stdout:write(string.format("  ✅ test %d passed\n", index))
 end
 
+print("✅ test_keyboard_shortcut_registry.lua passed")
 os.exit(0)

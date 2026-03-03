@@ -145,3 +145,11 @@ int lua_set_action_text(lua_State* L) {
     action->setText(QString::fromUtf8(text));
     return 0;
 }
+
+int lua_set_action_shortcut(lua_State* L) {
+    QAction* action = get_widget<QAction>(L, 1);
+    const char* shortcut = luaL_checkstring(L, 2);
+    if (!action) return luaL_error(L, "SET_ACTION_SHORTCUT: argument must be QAction");
+    action->setShortcut(QKeySequence(QString::fromUtf8(shortcut)));
+    return 0;
+}

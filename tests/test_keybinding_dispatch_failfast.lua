@@ -38,7 +38,6 @@ end
 local function reset()
     registry.keybindings = {}
     registry.commands = {}
-    registry.active_shortcuts = {}
 end
 
 -- Inject a binding directly (bypasses TOML file loading)

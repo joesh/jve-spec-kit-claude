@@ -2,19 +2,19 @@
 --
 -- Responsibilities:
 -- - Parse menus.xml and create QMenuBar with nested menus
--- - Map keyboard shortcuts (for display)
+-- - Register command metadata for shortcut editor UI
+-- - Query keyboard_shortcut_registry for shortcut display text
 -- - On click: dispatch to command_manager.execute(command_name, params)
 --
 -- Non-goals:
 -- - Business logic (moved to commands)
 -- - Dialog handling (moved to commands)
+-- - Shortcut definitions (TOML is sole authority)
 --
 -- Invariants:
 -- - All menu items dispatch to commands (except Insert/Overwrite)
 -- - Menu item name = command name (no indirection)
---
--- Size: ~400 LOC
--- Volatility: low
+-- - menus.xml defines structure only; shortcuts come from keybinding registry
 --
 -- @file menu_system.lua
 local M = {}
@@ -26,8 +26,6 @@ local log = require("core.logger").for_area("media")
 local command_manager = nil
 local main_window = nil
 
-local registered_shortcut_commands = {}
-local defaults_initialized = false
 local actions_by_command = {}
 local undo_listener_token = nil
 local update_undo_redo_actions  -- forward declaration
@@ -43,7 +41,8 @@ local qt = {
     ADD_MENU_SEPARATOR = qt_constants.MENU.ADD_MENU_SEPARATOR,
     SET_ACTION_ENABLED = qt_constants.MENU.SET_ACTION_ENABLED,
     SET_ACTION_CHECKED = qt_constants.MENU.SET_ACTION_CHECKED,
-    SET_ACTION_TEXT = qt_constants.MENU.SET_ACTION_TEXT
+    SET_ACTION_TEXT = qt_constants.MENU.SET_ACTION_TEXT,
+    SET_ACTION_SHORTCUT = qt_constants.MENU.SET_ACTION_SHORTCUT
 }
 
 --- Initialize menu system
@@ -154,18 +153,10 @@ local function copy_path(path)
     return result
 end
 
-local function trim_whitespace(value)
-    assert(value ~= nil, "trim_whitespace requires a value")
-    local trimmed = value:match("^%s*(.-)%s*$")
-    if trimmed == nil then
-        return ""
-    end
-    return trimmed
-end
-
-local function register_menu_shortcut(menu_path, attrs)
-    assert(type(menu_path) == "table" and #menu_path > 0, "Menu path required for shortcut registration")
-    assert(type(attrs) == "table", "Menu item attributes required for shortcut registration")
+--- Register command metadata (for shortcut editor UI). No shortcuts — TOML is sole authority.
+local function register_menu_command(menu_path, attrs)
+    assert(type(menu_path) == "table" and #menu_path > 0, "Menu path required for command registration")
+    assert(type(attrs) == "table", "Menu item attributes required for command registration")
 
     local command_id = attrs.command
     local item_name = attrs.name
@@ -173,77 +164,27 @@ local function register_menu_shortcut(menu_path, attrs)
     assert(type(item_name) == "string" and item_name ~= "", "Menu item missing name for command " .. command_id)
 
     local category = table.concat(menu_path, " ▸ ")
-    local description = attrs.description
-    if description == nil then
-        description = ""
-    end
+    local description = attrs.description or ""
 
-    local default_shortcuts = {}
-    if attrs.shortcut ~= nil then
-        local shortcut_value = trim_whitespace(attrs.shortcut)
-        if shortcut_value ~= "" then
-            table.insert(default_shortcuts, shortcut_value)
-        end
-    end
-
-    if not registered_shortcut_commands[command_id] then
+    -- Only register once (idempotent)
+    if not keyboard_shortcut_registry.commands[command_id] then
         keyboard_shortcut_registry.register_command({
             id = command_id,
             category = category,
             name = item_name,
             description = description,
-            default_shortcuts = default_shortcuts
         })
-        registered_shortcut_commands[command_id] = true
-        if defaults_initialized and #default_shortcuts > 0 then
-            for _, shortcut_value in ipairs(default_shortcuts) do
-                local assigned, assign_err = keyboard_shortcut_registry.assign_shortcut(command_id, shortcut_value)
-                if not assigned then
-                    error(string.format("Failed to assign default shortcut '%s' to command '%s': %s", shortcut_value, command_id, tostring(assign_err)))
-                end
-            end
-        end
-        return
-    end
-
-    if #default_shortcuts == 0 then
-        return
-    end
-
-    local command = keyboard_shortcut_registry.commands[command_id]
-    assert(command ~= nil, "Registered command table missing for " .. command_id)
-
-    local shortcut_to_add = default_shortcuts[1]
-    for _, existing in ipairs(command.default_shortcuts) do
-        if existing == shortcut_to_add then
-            shortcut_to_add = nil
-            break
-        end
-    end
-
-    if shortcut_to_add ~= nil then
-        table.insert(command.default_shortcuts, shortcut_to_add)
-        if defaults_initialized then
-            local assigned, assign_err = keyboard_shortcut_registry.assign_shortcut(command_id, shortcut_to_add)
-            if not assigned then
-                error(string.format("Failed to assign default shortcut '%s' to command '%s': %s", shortcut_to_add, command_id, tostring(assign_err)))
-            end
-        end
     end
 end
 
 --- Convert platform-agnostic shortcut to Qt format
--- Cmd -> Meta on macOS, Ctrl on Windows/Linux
+-- Cmd -> Ctrl for Qt (on macOS, Qt maps Ctrl to Command key)
 -- @param shortcut string: Shortcut string (e.g., "Cmd+S")
 -- @return string: Qt-compatible shortcut
 local function convert_shortcut(shortcut)
     if not shortcut or shortcut == "" then
         return ""
     end
-
-    -- Qt on macOS: "Ctrl" in shortcuts automatically maps to Command key
-    -- Qt on Windows/Linux: "Ctrl" maps to Control key
-    -- So "Cmd" -> "Ctrl" works correctly on all platforms!
     return shortcut:gsub("Cmd", "Ctrl")
 end
 
@@ -444,18 +385,18 @@ local function build_menu(menu_elem, parent_menu, menu_path)
     for _, child in ipairs(menu_elem.children) do
         if child.tag == "item" then
             assert(child.attrs ~= nil, string.format("Menu item under '%s' missing attributes", menu_name))
-            register_menu_shortcut(current_path, child.attrs)
+            register_menu_command(current_path, child.attrs)
 
             local item_name = child.attrs.name
             local command_name = child.attrs.command
-            local shortcut = convert_shortcut(child.attrs.shortcut)
             local checkable = child.attrs.checkable == "true"
             local params = {}
             if child.attrs.params ~= nil then
                 params = parse_params(child.attrs.params)
             end
 
-            local action = qt.CREATE_MENU_ACTION(menu, item_name, shortcut, checkable)
+            -- No shortcut passed — display text set later by update_shortcut_display()
+            local action = qt.CREATE_MENU_ACTION(menu, item_name, "", checkable)
 
             if command_name then
                 qt.CONNECT_MENU_ACTION(action, create_action_callback(command_name, params))
@@ -472,6 +413,34 @@ local function build_menu(menu_elem, parent_menu, menu_path)
     end
 
     return menu
+end
+
+--- Update menu shortcut display text from keybinding registry.
+-- Iterates all registered command actions and sets QAction shortcut
+-- from the TOML keybinding registry.
+function M.update_shortcut_display()
+    if not qt.SET_ACTION_SHORTCUT then
+        return
+    end
+
+    local keybindings = keyboard_shortcut_registry.keybindings
+    -- Build reverse map: command_name → first shortcut string
+    local command_shortcuts = {}
+    for _, binding in pairs(keybindings) do
+        if not command_shortcuts[binding.command_name] and binding.shortcut then
+            command_shortcuts[binding.command_name] = binding.shortcut.string
+        end
+    end
+
+    for command_name, actions in pairs(actions_by_command) do
+        local shortcut_str = command_shortcuts[command_name]
+        if shortcut_str then
+            local qt_shortcut = convert_shortcut(shortcut_str)
+            for _, action in ipairs(actions) do
+                qt.SET_ACTION_SHORTCUT(action, qt_shortcut)
+            end
+        end
+    end
 end
 
 --- Load menus from XML file
@@ -503,11 +472,6 @@ function M.load_from_file(xml_path)
             local menu = build_menu(child, menu_bar, {})
             qt.ADD_MENU_TO_BAR(menu_bar, menu)
         end
-    end
-
-    if not defaults_initialized then
-        keyboard_shortcut_registry.reset_to_defaults()
-        defaults_initialized = true
     end
 
     log.event("Loaded %d menus from %s", #menus_elem.children, tostring(xml_path))

@@ -2,11 +2,11 @@
 <menus>
   <!-- File Menu -->
   <menu name="File">
-    <item name="New Project..." command="NewProject" shortcut="Cmd+N"/>
-    <item name="Open Project..." command="OpenProject" shortcut="Cmd+O"/>
+    <item name="New Project..." command="NewProject"/>
+    <item name="Open Project..." command="OpenProject"/>
     <separator/>
     <menu name="Import">
-      <item name="Media Files..." command="ImportMedia" shortcut="Cmd+I"/>
+      <item name="Media Files..." command="ImportMedia"/>
       <item name="Resolve Project (.drp)..." command="ImportResolveProject"/>
       <item name="Resolve Database..." command="ImportResolveDatabase"/>
       <item name="FCP7 XML..." command="ImportFCP7XML"/>
@@ -18,73 +18,73 @@
       <item name="EDL..." command="ExportEDL"/>
     </menu>
     <separator/>
-    <item name="Save Project" command="SaveProject" shortcut="Cmd+S"/>
-    <item name="Save Project As..." command="SaveProjectAs" shortcut="Cmd+Shift+S"/>
+    <item name="Save Project" command="SaveProject"/>
+    <item name="Save Project As..." command="SaveProjectAs"/>
     <separator/>
     <item name="Project Settings..." command="ProjectSettings"/>
     <separator/>
-    <item name="Quit" command="Quit" shortcut="Cmd+Q"/>
+    <item name="Quit" command="Quit"/>
   </menu>
 
   <!-- Edit Menu -->
   <menu name="Edit">
-    <item name="Undo" command="Undo" shortcut="Cmd+Z"/>
-    <item name="Redo" command="Redo" shortcut="Cmd+Shift+Z"/>
+    <item name="Undo" command="Undo"/>
+    <item name="Redo" command="Redo"/>
     <item name="Edit History..." command="EditHistory"/>
     <separator/>
-    <item name="Cut" command="Cut" shortcut="Cmd+X"/>
-    <item name="Copy" command="Copy" shortcut="Cmd+C"/>
-    <item name="Paste" command="Paste" shortcut="Cmd+V"/>
-    <item name="Delete" command="DeleteSelection" shortcut="Delete"/>
+    <item name="Cut" command="Cut"/>
+    <item name="Copy" command="Copy"/>
+    <item name="Paste" command="Paste"/>
+    <item name="Delete" command="DeleteSelection"/>
     <separator/>
-    <item name="Select All" command="SelectAll" shortcut="Cmd+A"/>
-    <item name="Deselect All" command="DeselectAll" shortcut="Cmd+Shift+A"/>
+    <item name="Select All" command="SelectAll"/>
+    <item name="Deselect All" command="DeselectAll"/>
     <separator/>
     <item name="Keyboard Shortcuts..." command="ShowKeyboardCustomization"/>
   </menu>
 
   <!-- Clip Menu -->
   <menu name="Clip">
-    <item name="Split" command="Split" shortcut="Cmd+B"/>
-    <item name="Link Clips" command="LinkClips" shortcut="Cmd+L"/>
-    <item name="Unlink Clips" command="UnlinkClips" shortcut="Cmd+Shift+L"/>
+    <item name="Split" command="Split"/>
+    <item name="Link Clips" command="LinkClips"/>
+    <item name="Unlink Clips" command="UnlinkClips"/>
     <separator/>
     <item name="Nudge Left" command="Nudge" params="{delta_ms=-33}"/>
     <item name="Nudge Right" command="Nudge" params="{delta_ms=33}"/>
     <separator/>
-    <item name="Enable/Disable" command="ToggleClipEnabled" shortcut="D"/>
+    <item name="Enable/Disable" command="ToggleClipEnabled"/>
     <separator/>
-    <item name="Match Frame" command="MatchFrame" shortcut="F"/>
-    <item name="Reveal in Filesystem" command="RevealInFilesystem" shortcut="Shift+F"/>
+    <item name="Match Frame" command="MatchFrame"/>
+    <item name="Reveal in Filesystem" command="RevealInFilesystem"/>
   </menu>
 
   <!-- Timeline Menu -->
   <menu name="Timeline">
-    <item name="Insert" command="Insert" shortcut="F9"/>
-    <item name="Overwrite" command="Overwrite" shortcut="F10"/>
-    <item name="Replace" command="Replace" shortcut="F11"/>
+    <item name="Insert" command="Insert"/>
+    <item name="Overwrite" command="Overwrite"/>
+    <item name="Replace" command="Replace"/>
     <separator/>
-    <item name="Ripple Delete" command="RippleDelete" shortcut="Shift+Delete"/>
-    <item name="Close Gap" command="CloseGap" shortcut="Cmd+Delete"/>
+    <item name="Ripple Delete" command="RippleDelete"/>
+    <item name="Close Gap" command="CloseGap"/>
     <separator/>
-    <item name="Zoom In" command="TimelineZoomIn" shortcut="Cmd+="/>
-    <item name="Zoom Out" command="TimelineZoomOut" shortcut="Cmd+-"/>
-    <item name="Zoom to Fit" command="TimelineZoomFit" shortcut="Shift+Z"/>
+    <item name="Zoom In" command="TimelineZoomIn"/>
+    <item name="Zoom Out" command="TimelineZoomOut"/>
+    <item name="Zoom to Fit" command="TimelineZoomFit"/>
     <separator/>
-    <item name="Go to Start" command="GoToStart" shortcut="Home"/>
-    <item name="Go to End" command="GoToEnd" shortcut="End"/>
-    <item name="Go to Timecode..." command="GoToTimecode" shortcut="Cmd+G"/>
+    <item name="Go to Start" command="GoToStart"/>
+    <item name="Go to End" command="GoToEnd"/>
+    <item name="Go to Timecode..." command="GoToTimecode"/>
   </menu>
 
   <!-- Media Menu -->
   <menu name="Media">
-    <item name="New Bin" command="NewBin" shortcut="Cmd+Shift+N"/>
-    <item name="Rename..." command="RenameItem" shortcut="F2"/>
+    <item name="New Bin" command="NewBin"/>
+    <item name="Rename..." command="RenameItem"/>
     <separator/>
     <item name="Relink Media..." command="ShowRelinkDialog"/>
     <item name="Consolidate Media..." command="ConsolidateMedia"/>
     <separator/>
-    <item name="Tag Media..." command="TagMedia" shortcut="Cmd+T"/>
+    <item name="Tag Media..." command="TagMedia"/>
     <item name="Manage Tags..." command="ManageTags"/>
   </menu>
 
@@ -95,7 +95,7 @@
     <item name="Show Inspector" command="ShowInspector" checkable="true"/>
     <item name="Show Viewer" command="ShowViewer" checkable="true"/>
     <separator/>
-    <item name="Toggle Panel Maximize" command="ToggleMaximizePanel" shortcut="~"/>
+    <item name="Toggle Panel Maximize" command="ToggleMaximizePanel"/>
     <separator/>
     <menu name="Workspace">
       <item name="Editing" command="LoadWorkspace" params="{name='editing'}"/>
@@ -110,7 +110,7 @@
 
   <!-- Help Menu -->
   <menu name="Help">
-    <item name="User Manual" command="OpenUserManual" shortcut="F1"/>
+    <item name="User Manual" command="OpenUserManual"/>
     <item name="Keyboard Shortcuts Reference" command="OpenShortcutsReference"/>
     <separator/>
     <item name="Report Bug..." command="ReportBug"/>

@@ -76,6 +76,13 @@ function keyboard_shortcuts.init(state, cmd_mgr, proj_browser, panel)
     assert(f, "keyboard_shortcuts.init: keybinding file not found at keymaps/default.jvekeys or ../keymaps/default.jvekeys")
     f:close()
     shortcut_registry.load_keybindings(keymap_path)
+
+    -- Update menu shortcut display text from TOML registry
+    -- pcall: menu_system depends on lxp (C library), unavailable in headless tests
+    local ok, menu_system = pcall(require, "core.menu_system")
+    if ok and menu_system.update_shortcut_display then
+        menu_system.update_shortcut_display()
+    end
 end
 
 -------------------------------------------------------------------------------
