@@ -22,8 +22,13 @@
 const char* WIDGET_METATABLE = "JVE.Widget";
 
 // Global registry: maps raw widget pointer → QPointer<QObject> for lifecycle tracking.
-// When Qt destroys a QObject, its QPointer auto-nulls, and lua_to_widget detects it.
-// The registry lives as a normal C++ static — not tied to Lua GC finalization order.
+// When Qt destroys a QObject, its QPointer auto-nulls. lua_to_widget checks this and
+// returns nullptr instead of a dangling pointer. The registry lives as a normal C++
+// static — not tied to Lua GC finalization order.
+//
+// No QObject::destroyed signal handler — QPointer handles nulling automatically.
+// Stale entries (null QPointer) are cleaned up lazily in lua_to_widget, and
+// address-reuse is handled in lua_push_widget by replacing null entries.
 static QHash<void*, QPointer<QObject>> g_widgetRegistry;
 
 // Public helper functions to convert between Lua userdata and C++ QWidget pointers.
@@ -62,14 +67,12 @@ void lua_push_widget(lua_State* L, void* widget)
     luaL_getmetatable(L, WIDGET_METATABLE);
     lua_setmetatable(L, -2);
 
-    // Register for lifecycle tracking (idempotent — same widget may be pushed multiple times)
-    if (!g_widgetRegistry.contains(widget)) {
+    // Register for lifecycle tracking.
+    // If entry exists with null QPointer, the address was reused — replace it.
+    auto it = g_widgetRegistry.find(widget);
+    if (it == g_widgetRegistry.end() || it.value().isNull()) {
         QObject* obj = static_cast<QObject*>(widget);
         g_widgetRegistry.insert(widget, QPointer<QObject>(obj));
-        // Clean up registry entry when destroyed to prevent address-reuse false positives
-        QObject::connect(obj, &QObject::destroyed, [widget]() {
-            g_widgetRegistry.remove(widget);
-        });
     }
 }
 
