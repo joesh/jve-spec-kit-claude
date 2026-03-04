@@ -36,6 +36,8 @@ pgrep -x JVEEditor || rm -f "$HOME/Documents/JVE Projects/Untitled Project.jvp-s
 make -j4            # Builds C++ AND runs luacheck on all Lua files
 make clean          # Clean build artifacts
 
+**NOTE** don't run make|grep. instead send output to a /tmp file and grep that. running make takes real time!
+
 # Run the application
 ./build/bin/JVEEditor      # Launches, shows 3-panel layout, timeline panel
 
