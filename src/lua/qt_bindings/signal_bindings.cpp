@@ -1,5 +1,6 @@
 #include "binding_macros.h"
 #include "../../jve_log.h"
+#include "../../assert_handler.h"
 #include <QAbstractButton>
 #include <QCoreApplication>
 #include <QContextMenuEvent>
@@ -47,6 +48,16 @@ static bool widget_accepts_text_input(QWidget* widget)
         ++guard;
     }
     return false;
+}
+
+// Handle Lua pcall failure from C++ callback context (signal handlers, event filters).
+// lua_error is unsafe here — no Lua protected frame above. JVE_FAIL prints a stack
+// trace and throws JveAssertError, which Qt's event loop catches gracefully.
+static void handle_lua_callback_error(lua_State* L) {
+    const char* err = lua_tostring(L, -1);
+    std::string msg = std::string("Lua callback error: ") + (err ? err : "(unknown)");
+    lua_pop(L, 1);
+    JVE_FAIL(msg.c_str());
 }
 
 // Global key event filter class
@@ -125,7 +136,7 @@ protected:
                         return true;  // Event consumed
                     }
                 } else {
-                    lua_error(lua_state);
+                    handle_lua_callback_error(lua_state);
                 }
             } else {
                 lua_pop(lua_state, 1);
@@ -148,7 +159,7 @@ protected:
                 lua_settable(lua_state, -3);
 
                 if (lua_pcall(lua_state, 1, 1, 0) != LUA_OK) {
-                    lua_error(lua_state);
+                    handle_lua_callback_error(lua_state);
                 } else {
                     lua_pop(lua_state, 1);  // Pop return value
                 }
@@ -189,7 +200,7 @@ protected:
                 lua_settable(lua_state, -3);
 
                 if (lua_pcall(lua_state, 1, 0, 0) != LUA_OK) {
-                    lua_error(lua_state);
+                    handle_lua_callback_error(lua_state);
                 }
             } else {
                 lua_pop(lua_state, 1);
@@ -225,7 +236,7 @@ protected:
                     lua_pushinteger(lua_state, mouseEvent->pos().y());
 
                     if (lua_pcall(lua_state, 2, 0, 0) != LUA_OK) {
-                        lua_error(lua_state);
+                        handle_lua_callback_error(lua_state);
                     }
                 } else {
                     JVE_LOG_WARN(Ui, "Lua click handler not found: %s", handler_name.c_str());
@@ -294,7 +305,7 @@ int lua_set_button_click_handler(lua_State* L) {
         if (lua_isfunction(L, -1)) {
 
             if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                lua_error(L);
+                handle_lua_callback_error(L);
             }
         } else {
             lua_pop(L, 1);
@@ -337,7 +348,7 @@ int lua_set_context_menu_handler(lua_State* L) {
             {
     
                 if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                    lua_error(L);
+                    handle_lua_callback_error(L);
                 }
             }
         });
@@ -355,7 +366,7 @@ int lua_set_line_edit_text_changed_handler(lua_State* L) {
         if (lua_isfunction(L, -1)) {
 
             if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                lua_error(L);
+                handle_lua_callback_error(L);
             }
         } else {
             lua_pop(L, 1);
@@ -375,7 +386,7 @@ int lua_set_line_edit_editing_finished_handler(lua_State* L) {
         if (lua_isfunction(L, -1)) {
 
             if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                lua_error(L);
+                handle_lua_callback_error(L);
             }
         } else {
             lua_pop(L, 1);
@@ -422,7 +433,7 @@ int lua_set_splitter_moved_handler(lua_State* L) {
             lua_pushinteger(L, index);
 
             if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
-                lua_error(L);
+                handle_lua_callback_error(L);
             }
         } else {
             lua_pop(L, 1);
@@ -452,7 +463,7 @@ int lua_create_single_shot_timer(lua_State* L) {
                 // Unref before re-raising so we don't leak
                 luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
                 timer->deleteLater();
-                lua_error(L);
+                handle_lua_callback_error(L);
             }
         }
         luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
@@ -478,7 +489,7 @@ int lua_set_scroll_area_scroll_handler(lua_State* L) {
                 lua_pushinteger(L, value);
     
                 if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                    lua_error(L);
+                    handle_lua_callback_error(L);
                 }
             } else {
                 lua_pop(L, 1);
@@ -502,7 +513,7 @@ int lua_set_scroll_area_h_scroll_handler(lua_State* L) {
                 lua_pushinteger(L, value);
     
                 if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                    lua_error(L);
+                    handle_lua_callback_error(L);
                 }
             } else {
                 lua_pop(L, 1);
@@ -541,7 +552,7 @@ protected:
             lua_getglobal(lua_state, handler_name.c_str());
             if (lua_isfunction(lua_state, -1)) {
                 if (lua_pcall(lua_state, 0, 0, 0) != LUA_OK) {
-                    lua_error(lua_state);
+                    handle_lua_callback_error(lua_state);
                 }
             } else {
                 lua_pop(lua_state, 1);

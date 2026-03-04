@@ -1,5 +1,6 @@
 #include "qt_bindings.h"
 #include "simple_lua_engine.h" // Needed for SimpleLuaEngine::s_lastCreatedMainWindow
+#include <QPointer>
 
 // Include all the newly split binding files. These files contain the implementations
 // of the Lua C functions and are compiled as part of this module.
@@ -20,6 +21,11 @@
 // Define the metatable name (declared extern in qt_bindings.h)
 const char* WIDGET_METATABLE = "JVE.Widget";
 
+// Global registry: maps raw widget pointer → QPointer<QObject> for lifecycle tracking.
+// When Qt destroys a QObject, its QPointer auto-nulls, and lua_to_widget detects it.
+// The registry lives as a normal C++ static — not tied to Lua GC finalization order.
+static QHash<void*, QPointer<QObject>> g_widgetRegistry;
+
 // Public helper functions to convert between Lua userdata and C++ QWidget pointers.
 // These are defined here because they are common to all bindings and rely on WIDGET_METATABLE.
 // Declared in qt_bindings.h.
@@ -29,9 +35,19 @@ void* lua_to_widget(lua_State* L, int index)
         luaL_error(L, "Expected widget userdata at index %d", index);
         return nullptr;
     }
-    
+
     void** widget_ptr = (void**)luaL_checkudata(L, index, WIDGET_METATABLE);
-    return *widget_ptr;
+    void* ptr = *widget_ptr;
+    if (!ptr) return nullptr;
+
+    // Check registry: if QPointer is null, the QObject was destroyed
+    auto it = g_widgetRegistry.find(ptr);
+    if (it != g_widgetRegistry.end() && it.value().isNull()) {
+        *widget_ptr = nullptr;  // Null out userdata for future calls
+        g_widgetRegistry.remove(ptr);
+        return nullptr;
+    }
+    return ptr;
 }
 
 void lua_push_widget(lua_State* L, void* widget)
@@ -40,11 +56,21 @@ void lua_push_widget(lua_State* L, void* widget)
         lua_pushnil(L);
         return;
     }
-    
+
     void** widget_ptr = (void**)lua_newuserdata(L, sizeof(void*));
     *widget_ptr = widget;
     luaL_getmetatable(L, WIDGET_METATABLE);
     lua_setmetatable(L, -2);
+
+    // Register for lifecycle tracking (idempotent — same widget may be pushed multiple times)
+    if (!g_widgetRegistry.contains(widget)) {
+        QObject* obj = static_cast<QObject*>(widget);
+        g_widgetRegistry.insert(widget, QPointer<QObject>(obj));
+        // Clean up registry entry when destroyed to prevent address-reuse false positives
+        QObject::connect(obj, &QObject::destroyed, [widget]() {
+            g_widgetRegistry.remove(widget);
+        });
+    }
 }
 
 
