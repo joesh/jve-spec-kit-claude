@@ -321,6 +321,212 @@ local function decode_bt_clip_path(hex_str)
     return directory .. "/" .. filename
 end
 
+--- Decode hex string to raw byte string.
+-- @param hex_str string: hex-encoded data (whitespace stripped)
+-- @return string|nil: raw bytes, or nil if invalid
+local function hex_to_bytes(hex_str)
+    if not hex_str then return nil end
+    local clean = hex_str:gsub("%s+", "")
+    if #clean < 2 or #clean % 2 ~= 0 then return nil end
+    local parts = {}
+    for i = 1, #clean, 2 do
+        local n = tonumber(clean:sub(i, i + 1), 16)
+        if not n then return nil end
+        parts[#parts + 1] = string.char(n)
+    end
+    return table.concat(parts)
+end
+
+--- Read a big-endian uint32 from a raw byte string at 1-indexed position.
+local function read_be32(bytes, pos)
+    if pos + 3 > #bytes then return nil end
+    local b1, b2, b3, b4 = bytes:byte(pos, pos + 3)
+    return b1 * 16777216 + b2 * 65536 + b3 * 256 + b4
+end
+
+--- Read a big-endian uint64 from a raw byte string at 1-indexed position.
+local function read_be64(bytes, pos)
+    if pos + 7 > #bytes then return nil end
+    local hi = read_be32(bytes, pos)
+    local lo = read_be32(bytes, pos + 4)
+    if not hi or not lo then return nil end
+    return hi * 4294967296 + lo  -- hi * 2^32 + lo
+end
+
+--- Decode TLV fields from a DRP binary blob.
+-- Each field: [BE32 name_byte_len] [UTF-16BE name] [BE16 sep=0] [BE16 type] [value...]
+--
+-- Type encodings:
+--   0x0002: 4-byte aux + 1-byte val → aux*256 + val (small/medium int)
+--   0x0003: 4-byte aux + 1-byte val → aux*256 + val (same encoding)
+--   0x0004: 8-byte aux + 1-byte val → aux*256 + val (large int, e.g. audio samples)
+--   0x0006: 1-byte pad + 8-byte BE double
+--   0x000a: 4-byte aux + 1-byte len → len bytes UTF-16BE string
+--   0x000c: 4-byte aux + 1-byte payload_len → LE double in first 8 bytes of payload
+--
+-- @param bytes string: raw bytes of the blob
+-- @param header_size number: bytes to skip before first field
+-- @param field_count number: number of fields to decode
+-- @return table|nil: {field_name = value, ...} or nil on decode error
+local function decode_tlv_fields(bytes, header_size, field_count)
+    if not bytes or #bytes < header_size + 8 then return nil end
+    if field_count <= 0 or field_count > 20 then return nil end
+
+    local ffi = require("ffi")
+    local fields = {}
+    local pos = header_size + 1  -- 1-indexed
+
+    for _ = 1, field_count do
+        -- Field name: [BE32 name_byte_len] [UTF-16BE name bytes]
+        local name_len = read_be32(bytes, pos)
+        if not name_len then return nil end
+        pos = pos + 4
+
+        if pos + name_len - 1 > #bytes then return nil end
+        -- Decode UTF-16BE name to ASCII (field names are all ASCII)
+        local name_chars = {}
+        for j = 0, name_len - 1, 2 do
+            local lo = bytes:byte(pos + j + 1)
+            if lo then name_chars[#name_chars + 1] = string.char(lo) end
+        end
+        local field_name = table.concat(name_chars)
+        pos = pos + name_len
+
+        -- Separator (BE16, always 0) + type (BE16)
+        if pos + 3 > #bytes then return nil end
+        pos = pos + 2  -- skip separator
+        local b1, b2 = bytes:byte(pos, pos + 1)
+        local field_type = b1 * 256 + b2
+        pos = pos + 2
+
+        -- Value encoding depends on type
+        if field_type == 0x0002 or field_type == 0x0003 then
+            -- 4-byte aux + 1-byte val → aux*256 + val
+            local aux = read_be32(bytes, pos)
+            if not aux then return nil end
+            pos = pos + 4
+            if pos > #bytes then return nil end
+            local val = bytes:byte(pos)
+            pos = pos + 1
+            fields[field_name] = aux * 256 + val
+
+        elseif field_type == 0x0004 then
+            -- 8-byte aux + 1-byte val → aux*256 + val
+            local aux = read_be64(bytes, pos)
+            if not aux then return nil end
+            pos = pos + 8
+            if pos > #bytes then return nil end
+            local val = bytes:byte(pos)
+            pos = pos + 1
+            fields[field_name] = aux * 256 + val
+
+        elseif field_type == 0x0006 then
+            -- 1-byte pad + 8-byte BE double
+            if pos + 8 > #bytes then return nil end
+            pos = pos + 1  -- skip pad
+            -- Read 8 bytes, reverse for LE, cast to double
+            local be_bytes = ffi.new("uint8_t[8]")
+            for j = 0, 7 do
+                be_bytes[7 - j] = bytes:byte(pos + j)
+            end
+            fields[field_name] = ffi.cast("double*", be_bytes)[0]
+            pos = pos + 8
+
+        elseif field_type == 0x000a then
+            -- 4-byte aux + 1-byte string_len → string_len bytes UTF-16BE
+            if pos + 4 > #bytes then return nil end
+            pos = pos + 4  -- skip aux
+            if pos > #bytes then return nil end
+            local str_len = bytes:byte(pos)
+            pos = pos + 1
+            if pos + str_len - 1 > #bytes then return nil end
+            -- Decode UTF-16BE to ASCII
+            local chars = {}
+            for j = 0, str_len - 1, 2 do
+                local lo = bytes:byte(pos + j + 1)
+                if lo then chars[#chars + 1] = string.char(lo) end
+            end
+            fields[field_name] = table.concat(chars)
+            pos = pos + str_len
+
+        elseif field_type == 0x000c then
+            -- 4-byte aux + 1-byte payload_len → LE double in first 8 bytes
+            if pos + 4 > #bytes then return nil end
+            pos = pos + 4  -- skip aux
+            if pos > #bytes then return nil end
+            local payload_len = bytes:byte(pos)
+            pos = pos + 1
+            if payload_len < 8 or pos + payload_len - 1 > #bytes then return nil end
+            -- First 8 bytes of payload = LE double (native x86 order)
+            local le_bytes = ffi.new("uint8_t[8]")
+            for j = 0, 7 do
+                le_bytes[j] = bytes:byte(pos + j)
+            end
+            fields[field_name] = ffi.cast("double*", le_bytes)[0]
+            pos = pos + payload_len
+
+        else
+            -- Unknown type — stop decoding but return what we have
+            log.warn("decode_tlv_fields: unknown type 0x%04x for field '%s'", field_type, field_name)
+            break
+        end
+    end
+
+    return fields
+end
+
+--- Decode BtVideoInfo/Time blob → {num_frames, frame_rate, unique_id}
+-- Header: 8 bytes [BE32 version=1] [BE32 field_count]
+-- Fields: UniqueId, [Timecode], StartFrame, NumFrames, FrameRate, DbType
+-- @param hex_str string: hex-encoded Time blob
+-- @return table|nil: {num_frames=int, frame_rate=number, unique_id=string} or nil
+local function decode_bt_video_time(hex_str)
+    local bytes = hex_to_bytes(hex_str)
+    if not bytes or #bytes < 16 then return nil end
+
+    local field_count = read_be32(bytes, 5)  -- offset 4 (0-indexed) = pos 5 (1-indexed)
+    if not field_count or field_count < 4 or field_count > 8 then return nil end
+
+    local fields = decode_tlv_fields(bytes, 8, field_count)
+    if not fields then return nil end
+
+    local num_frames = fields["NumFrames"]
+    if not num_frames or num_frames <= 0 then return nil end
+
+    return {
+        num_frames = num_frames,
+        frame_rate = fields["FrameRate"],
+        unique_id = fields["UniqueId"],
+    }
+end
+
+--- Decode BtAudioInfo/TracksBA blob → {duration_samples, sample_rate}
+-- Header: 31 bytes (version, track metadata, field_count at byte offset 27)
+-- Fields: UniqueId, StartTime, SampleRate, NumChannels, IdxTrack, Duration, DbType, ...
+-- @param hex_str string: hex-encoded TracksBA blob
+-- @return table|nil: {duration_samples=int, sample_rate=int} or nil
+local function decode_bt_audio_duration(hex_str)
+    local bytes = hex_to_bytes(hex_str)
+    if not bytes or #bytes < 40 then return nil end
+
+    local field_count = read_be32(bytes, 28)  -- offset 27 (0-indexed) = pos 28 (1-indexed)
+    if not field_count or field_count < 5 or field_count > 15 then return nil end
+
+    local fields = decode_tlv_fields(bytes, 31, field_count)
+    if not fields then return nil end
+
+    local duration = fields["Duration"]
+    local sample_rate = fields["SampleRate"]
+    if not duration or not sample_rate then return nil end
+    if sample_rate <= 0 then return nil end
+    if duration <= 0 then return nil end
+
+    return {
+        duration_samples = duration,
+        sample_rate = sample_rate,
+    }
+end
+
 --- Extract original source file path from a MediaPool master clip element.
 -- Searches BtVideoInfo and BtAudioInfo children for Clip binary blobs.
 -- @param clip_elem table: Sm2MpVideoClip or Sm2MpAudioClip XML element
@@ -343,6 +549,47 @@ local function extract_original_path(clip_elem)
         if blob_elem then
             local path = decode_bt_clip_path(get_text(blob_elem))
             if path then return path end
+        end
+    end
+
+    return nil
+end
+
+--- Extract media duration from a MediaPool master clip's binary blobs.
+-- Video master clips: BtVideoInfo > Time → NumFrames (video frame count)
+-- Audio-only clips: BtAudioInfo > TracksBA or EmbeddedAudioVec > ... > TracksBA
+-- Video MCs with embedded audio: Time blob takes priority (already in frames)
+--
+-- For video MCs: returns {num_frames = N} (already in video frames)
+-- For audio-only MCs: returns {audio_duration = {samples=N, sample_rate=N}}
+--   (caller converts to frames using project fps)
+-- @param clip_elem table: Sm2MpVideoClip or Sm2MpAudioClip XML element
+-- @return table|nil: duration info, or nil if no blob found/parseable
+local function extract_media_duration(clip_elem)
+    -- Try video Time blob first (BtVideoInfo > Time)
+    local bt_video = find_element(clip_elem, "BtVideoInfo")
+    if bt_video then
+        local time_elem = find_direct_child(bt_video, "Time")
+        if time_elem then
+            local result = decode_bt_video_time(get_text(time_elem))
+            if result and result.num_frames and result.num_frames > 0 then
+                return { num_frames = result.num_frames }
+            end
+        end
+    end
+
+    -- Fall back to audio TracksBA blob (BtAudioInfo > TracksBA or EmbeddedAudioVec path)
+    local bt_audio = find_element(clip_elem, "BtAudioInfo")
+    if bt_audio then
+        local tracks_elem = find_direct_child(bt_audio, "TracksBA")
+        if tracks_elem then
+            local result = decode_bt_audio_duration(get_text(tracks_elem))
+            if result and result.duration_samples and result.duration_samples > 0 then
+                return { audio_duration = {
+                    samples = result.duration_samples,
+                    sample_rate = result.sample_rate,
+                } }
+            end
         end
     end
 
@@ -619,7 +866,8 @@ local function parse_master_clip_element(clip_elem, folder_id)
     -- Decode original source path from BtVideoInfo/BtAudioInfo binary blob
     local original_path = extract_original_path(clip_elem)
 
-    -- TODO: Parse duration from Video/BtVideoInfo/Time if available
+    -- Parse authoritative media duration from Time/TracksBA blobs
+    local duration_info = extract_media_duration(clip_elem)
 
     local master_clip = {
         id = db_id,
@@ -631,6 +879,15 @@ local function parse_master_clip_element(clip_elem, folder_id)
         clip_type = clip_elem.tag == "Sm2MpVideoClip" and "video" or "audio",
         file_path = original_path,
     }
+
+    -- Store duration info: video frames directly, or raw audio samples for later conversion
+    if duration_info then
+        if duration_info.num_frames then
+            master_clip.num_frames = duration_info.num_frames
+        elseif duration_info.audio_duration then
+            master_clip.audio_duration = duration_info.audio_duration
+        end
+    end
 
     return master_clip
 end
@@ -687,7 +944,8 @@ end
 --- Parse full MediaPool hierarchy recursively
 -- @param tmp_dir string: Extracted .drp temp directory
 -- @return table: { folders = {...}, master_clips = {...}, folder_map = {...} }
-local function parse_media_pool_hierarchy(tmp_dir)
+local function parse_media_pool_hierarchy(tmp_dir, pump)
+    pump = pump or function() end
     local folders = {}
     local master_clips = {}
     local folder_map = {}  -- id -> folder
@@ -699,11 +957,19 @@ local function parse_media_pool_hierarchy(tmp_dir)
         return { folders = folders, master_clips = master_clips, folder_map = folder_map }
     end
 
-    local mp_files = find_handle:read("*all")
+    local mp_files_raw = find_handle:read("*all")
     find_handle:close()
 
+    local mp_file_list = {}
+    for f in mp_files_raw:gmatch("[^\n]+") do
+        mp_file_list[#mp_file_list + 1] = f
+    end
+
     -- Parse each MpFolder.xml
-    for mp_file in mp_files:gmatch("[^\n]+") do
+    for file_idx, mp_file in ipairs(mp_file_list) do
+        if file_idx % 5 == 0 then
+            pump(math.floor(file_idx / #mp_file_list * 100))
+        end
         -- Derive parent path from file location
         local parent_path = mp_file:match("^(.+)/MpFolder%.xml$") or ""
         local relative_path = parent_path:gsub(tmp_dir .. "/MediaPool/Master/?", "")
@@ -848,7 +1114,8 @@ local function extract_timeline_metadata(metadata_map, timeline_id_map, timeline
     end
 end
 
-local function build_timeline_metadata_map(tmp_dir)
+local function build_timeline_metadata_map(tmp_dir, pump)
+    pump = pump or function() end
     local metadata_map = {}
     local timeline_id_map = {}  -- Sm2Timeline DbId → {name, seq_id}
 
@@ -858,10 +1125,18 @@ local function build_timeline_metadata_map(tmp_dir)
         return metadata_map, timeline_id_map
     end
 
-    local mp_files = find_handle:read("*all")
+    local mp_files_raw = find_handle:read("*all")
     find_handle:close()
 
-    for mp_file in mp_files:gmatch("[^\n]+") do
+    local mp_file_list = {}
+    for f in mp_files_raw:gmatch("[^\n]+") do
+        mp_file_list[#mp_file_list + 1] = f
+    end
+
+    for file_idx, mp_file in ipairs(mp_file_list) do
+        if file_idx % 5 == 0 then
+            pump(math.floor(file_idx / #mp_file_list * 100))
+        end
         local mp_root = parse_xml_file(mp_file)
         if mp_root then
             -- Primary: find Sm2MpTimelineClip elements (contain folder ref + nested Sm2Timeline)
@@ -1101,6 +1376,19 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
                 source_duration = duration_raw
             end
 
+            -- Source extent in VIDEO FRAMES (for media duration tracking).
+            -- The file must be at least this many frames long for this clip to exist.
+            local source_extent_frames
+            if track_type == "AUDIO" then
+                -- Audio source_in/duration are in samples after conversion above,
+                -- but in_value and duration_raw are still in timeline frames.
+                -- Extent in frames = in_value + duration_raw (pre-conversion).
+                source_extent_frames = math.floor(in_value) + duration_raw
+            else
+                -- Video (incl. retimed): source_in_native + source_duration
+                source_extent_frames = source_in_native + source_duration
+            end
+
             local clip = {
                 name = clip_name,
                 start_value = start_frames,        -- timeline position (integer frames)
@@ -1125,18 +1413,28 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
                 table.insert(track_info.clips, clip)
                 clip_count = clip_count + 1
 
-                if file_path and file_path ~= "" and not media_lookup[file_path] then
-                    media_lookup[file_path] = {
-                        id = clip.file_id,
-                        name = clip.name or file_path,
-                        path = file_path,
-                        duration = clip.duration,
-                        frame_rate = frame_rate,
-                        width = 1920,
-                        height = 1080,
-                        audio_channels = track_type == "AUDIO" and 2 or 0,
-                        key = file_path
-                    }
+                if file_path and file_path ~= "" then
+                    local entry = media_lookup[file_path]
+                    if not entry then
+                        media_lookup[file_path] = {
+                            id = clip.file_id,
+                            name = clip.name or file_path,
+                            path = file_path,
+                            duration = source_extent_frames,
+                            frame_rate = frame_rate,
+                            width = 1920,
+                            height = 1080,
+                            audio_channels = track_type == "AUDIO" and 2 or 0,
+                            key = file_path
+                        }
+                    else
+                        if source_extent_frames > entry.duration then
+                            entry.duration = source_extent_frames
+                        end
+                        if track_type == "AUDIO" and (entry.audio_channels or 0) < 2 then
+                            entry.audio_channels = 2
+                        end
+                    end
                 end
             end
         end
@@ -1305,7 +1603,9 @@ end
 --     pool_master_clips = { {id, name, folder_id, mark_in, mark_out, playhead}, ... },
 --     folder_map = { [folder_id] = folder, ... },  -- Lookup by ID
 --   }
-function M.parse_drp_file(drp_path)
+function M.parse_drp_file(drp_path, progress_cb)
+    local pump = progress_cb or function() end
+
     -- Extract .drp archive
     local tmp_dir, err = extract_drp(drp_path)
     if not tmp_dir then
@@ -1335,6 +1635,7 @@ function M.parse_drp_file(drp_path)
     end
 
     local project = parse_project_metadata(project_elem)
+    pump(10, "Scanning media pool…")
 
     -- Parse MediaPool XML for master clips
     local media_pool_path = tmp_dir .. "/MediaPool/Master/MpFolder.xml"
@@ -1346,11 +1647,17 @@ function M.parse_drp_file(drp_path)
 
     -- Build timeline metadata map by scanning all MediaPool folders
     -- This maps Sequence IDs to {name, fps} from Sm2Timeline/Sm2Sequence elements
-    local timeline_metadata_map = build_timeline_metadata_map(tmp_dir)
+    local timeline_metadata_map = build_timeline_metadata_map(tmp_dir, function(sub_pct)
+        pump(10 + math.floor(sub_pct * 0.15), "Scanning timeline metadata…")
+    end)
+
+    pump(25, "Parsing media pool hierarchy…")
 
     -- Parse MediaPool folder hierarchy (with blob-decoded original source paths)
     -- Must happen before sequence parsing so we can resolve stale MediaFilePath values
-    local media_pool_hierarchy = parse_media_pool_hierarchy(tmp_dir)
+    local media_pool_hierarchy = parse_media_pool_hierarchy(tmp_dir, function(sub_pct)
+        pump(25 + math.floor(sub_pct * 0.45), "Decoding media pool clips…")
+    end)
 
     -- Build MediaRef DbId → original file path map.
     -- Timeline clips reference pool master clips via <MediaRef>. The pool master clip's
@@ -1363,6 +1670,8 @@ function M.parse_drp_file(drp_path)
         end
     end
 
+    pump(70, "Parsing sequences…")
+
     -- Parse sequence XMLs
     local timelines = {}
     local seq_dir = tmp_dir .. "/SeqContainer"
@@ -1374,8 +1683,18 @@ function M.parse_drp_file(drp_path)
         seq_files_raw:close()
     end
 
-    for seq_file in seq_files:gmatch("[^\n]+") do
+    -- Collect file list for progress counting
+    local seq_file_paths = {}
+    for f in seq_files:gmatch("[^\n]+") do
+        seq_file_paths[#seq_file_paths + 1] = f
+    end
+    local seq_count = #seq_file_paths
+
+    for seq_idx, seq_file in ipairs(seq_file_paths) do
         table.insert(sequence_file_list, seq_file)
+        if seq_count > 0 then
+            pump(70 + math.floor(seq_idx / seq_count * 25))
+        end
         local seq_root = parse_xml_file(seq_file)
         if seq_root then
             local seq_elem = find_element(seq_root, "Sequence")
@@ -1480,6 +1799,28 @@ function M.parse_drp_file(drp_path)
         project.settings.frame_rate = timelines[1].fps
     end
 
+    -- Apply authoritative media durations from MediaPool blob data.
+    -- Pool master clips contain Time/TracksBA blobs with actual media duration,
+    -- which is more accurate than source_extent derived from timeline clips.
+    local project_fps = project.settings.frame_rate
+    for _, pmc in ipairs(media_pool_hierarchy.master_clips) do
+        if pmc.file_path then
+            local entry = media_lookup[pmc.file_path]
+            if entry then
+                if pmc.num_frames and pmc.num_frames > 0 then
+                    entry.duration = pmc.num_frames
+                elseif pmc.audio_duration and project_fps then
+                    local audio_frames = math.floor(
+                        pmc.audio_duration.samples * project_fps
+                        / pmc.audio_duration.sample_rate + 0.5)
+                    if audio_frames > 0 then
+                        entry.duration = audio_frames
+                    end
+                end
+            end
+        end
+    end
+
     -- Nil out timeline folder_ids that referenced the excluded Master root
     if media_pool_hierarchy.excluded_root_id then
         for _, timeline in ipairs(timelines) do
@@ -1531,6 +1872,8 @@ end
 -- Test-only export (underscore-prefixed convention)
 M._parse_resolve_tracks = parse_resolve_tracks
 M._parse_fields_blob_tabs = parse_fields_blob_tabs
+M._decode_bt_video_time = decode_bt_video_time
+M._decode_bt_audio_duration = decode_bt_audio_duration
 
 --- Lightweight metadata extraction — project name only, no full parse.
 -- Pipes project.xml from ZIP via unzip -p (no temp directory).
@@ -2153,7 +2496,12 @@ function M.convert(drp_path, jvp_path, progress_cb)
     log.event("Converting %s -> %s", drp_path, jvp_path)
 
     report(5, "Parsing archive…")
-    local parse_result = M.parse_drp_file(drp_path)
+    -- Thread progress_cb into parse phase so Qt events get pumped.
+    -- parse_drp_file reports 0-100 internally; remap to 5-30 of overall.
+    local parse_progress = progress_cb and function(sub_pct, text)
+        report(5 + math.floor(sub_pct * 0.25), text)
+    end or nil
+    local parse_result = M.parse_drp_file(drp_path, parse_progress)
     if not parse_result.success then
         return false, "Failed to parse .drp file: " .. tostring(parse_result.error)
     end
