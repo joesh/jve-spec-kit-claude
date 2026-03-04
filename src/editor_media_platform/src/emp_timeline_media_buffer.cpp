@@ -337,89 +337,20 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         return result;
     }
 
-    // ── Cache miss: branch on Play vs Scrub/Park ──
+    // ── Cache miss: always sync decode (Play, Scrub, Park) ──
     int direction = m_playhead_direction.load(std::memory_order_relaxed);
 
-    if (direction != 0) {
-        // ── Play mode: non-blocking. Return pending, submit async decode.
-        // The caller (PlaybackController) decides what to display while waiting.
-        // GPU surface retains its last frame — no stale-return needed here.
-
-        // Copy clip locals under tracks_lock for job submission.
-        // Use REMAINING frames (not total clip duration) to prevent the
-        // batch from decoding past clip end into the next clip's region.
-        std::string job_clip_id = clip->clip_id;
-        std::string job_media_path = clip->media_path;
-        Rate job_rate = clip->rate();
-        int64_t remaining_frames = clip->timeline_end() - timeline_frame;
-        float job_speed_ratio = clip->speed_ratio;
-        int64_t job_source_in = clip->source_in;
-        int64_t job_timeline_start = clip->timeline_start;
-
-        // Check per-clip EOF: if a previous decode failed at or before this
-        // source frame, don't submit another on-demand job (it will just fail).
-        // Return gap (nullptr frame, not pending) so playback skips cleanly.
-        auto eof_it = ts.clip_eof_frame.find(clip->clip_id);
-        if (eof_it != ts.clip_eof_frame.end() && source_frame >= eof_it->second) {
-            tracks_lock.unlock();
-            // result.frame already nullptr, result.pending stays false
-            return result;
-        }
-
-        // Release tracks_lock BEFORE acquiring pool_lock (lock ordering:
-        // pool → tracks in worker, so main thread must not reverse it).
-        tracks_lock.unlock();
-
-        // Check offline registry — non-blocking (~1µs hashmap lookup).
-        // Ensures Lua learns about offline clips during playback.
-        {
-            std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
-            auto offline_it = m_offline.find(job_media_path);
-            if (offline_it != m_offline.end()) {
-                result.offline = true;
-                result.error_msg = offline_it->second.message;
-                result.frame = nullptr;
-                return result;
-            }
-        }
-
-        result.pending = true;
-        // result.frame stays nullptr — caller holds current display
-        // result.clip_id already set to CURRENT clip for transition detection
-
-        // Watermark check on cache MISS too: during cold-start, every frame is
-        // a miss. Without this, only cache HITs trigger refill. The 60Hz tick
-        // loop calling GetVideoFrame would never trigger refill if the buffer
-        // starts empty (no hits → no watermark check → no refill).
-        check_video_watermark(track, timeline_frame, direction);
-
-        // Submit async VIDEO decode job to worker pool
-        PreBufferJob job{};
-        job.type = PreBufferJob::VIDEO;
-        job.track = track;
-        job.clip_id = job_clip_id;
-        job.media_path = job_media_path;
-        job.source_frame = source_frame;
-        job.timeline_frame = timeline_frame;
-        job.rate = job_rate;
-        job.direction = direction;
-        job.clip_duration = remaining_frames;
-        job.speed_ratio = job_speed_ratio;
-        job.clip_source_in = job_source_in;
-        job.clip_timeline_start = job_timeline_start;
-        submit_pre_buffer(job);
-
-        m_video_cache_misses.fetch_add(1, std::memory_order_relaxed);
-        return result;
-    }
-
-    // ── Scrub/Park: synchronous decode ──
-
-    // Release tracks lock before acquiring pool lock (avoid deadlock)
+    // Watermark check on cache miss during playback: during cold-start,
+    // every frame is a miss. Without this, only cache HITs trigger refill.
+    // Must copy clip locals and release tracks_lock first (lock ordering).
     std::string media_path = clip->media_path;
     Rate clip_rate = clip->rate();
     std::string clip_id = clip->clip_id;
     tracks_lock.unlock();
+
+    if (direction != 0) {
+        check_video_watermark(track, timeline_frame, direction);
+    }
 
     // Check offline registry
     {
@@ -446,6 +377,25 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
             }
         }
         return result;
+    }
+
+    // Cache re-check: REFILL worker may have populated our frame while we
+    // waited for the reader's use_mutex. Avoid redundant decode.
+    {
+        std::lock_guard<std::mutex> tlock(m_tracks_mutex);
+        auto tit = m_tracks.find(track);
+        if (tit != m_tracks.end()) {
+            auto cache_it2 = tit->second.video_cache.find(timeline_frame);
+            if (cache_it2 != tit->second.video_cache.end() &&
+                cache_it2->second.clip_id == clip_id &&
+                cache_it2->second.source_frame == source_frame) {
+                result.frame = cache_it2->second.frame;
+                result.rotation = cache_it2->second.rotation;
+                result.par_num = cache_it2->second.par_num;
+                result.par_den = cache_it2->second.par_den;
+                return result;
+            }
+        }
     }
 
     // Get media file info for start_tc, rotation, and PAR
@@ -1577,10 +1527,8 @@ std::string TimelineMediaBuffer::job_key(const PreBufferJob& job) {
     if (job.type == PreBufferJob::VIDEO_REFILL || job.type == PreBufferJob::AUDIO_REFILL) {
         return std::string(buf) + "REFILL:" + std::to_string(static_cast<int>(job.type));
     }
-    if (job.type == PreBufferJob::READER_WARM) {
-        return std::string(buf) + "WARM:" + job.clip_id;
-    }
-    return std::string(buf) + job.clip_id + ":" + std::to_string(static_cast<int>(job.type));
+    // READER_WARM
+    return std::string(buf) + "WARM:" + job.clip_id;
 }
 
 void TimelineMediaBuffer::submit_pre_buffer(const PreBufferJob& job) {
@@ -1617,7 +1565,7 @@ void TimelineMediaBuffer::submit_pre_buffer(const PreBufferJob& job) {
 
     m_jobs.push_back(job);
     m_jobs.back().submitted_at = std::chrono::steady_clock::now();
-    m_jobs_cv.notify_one();
+    m_jobs_cv.notify_all();
 }
 
 void TimelineMediaBuffer::worker_loop() {
@@ -1937,88 +1885,9 @@ void TimelineMediaBuffer::worker_loop() {
             }
             // handle destructor releases use_mutex — reader remains in pool
 
-        } else if (job.type == PreBufferJob::VIDEO) {
-            // ── On-demand single-clip video decode (safety net for cache misses
-            // during Play mode — submitted by GetVideoFrame when cache is cold).
-            // Batch size bounded by clip_duration, no cooperative yield needed
-            // (REFILL handles bulk decode; this is a targeted catch-up).
-
-            auto reader = acquire_reader(job.track, job.clip_id, job.media_path);
-            if (!reader) continue;
-
-            int n = static_cast<int>(std::min(
-                static_cast<int64_t>(VIDEO_REFILL_SIZE), job.clip_duration));
-            if (n <= 0) continue;
-
-            const auto& info = reader->media_file()->info();
-            int rotation = info.rotation;
-            int32_t par_num = info.video_par_num;
-            int32_t par_den = info.video_par_den;
-
-            int64_t start_tf = (job.direction >= 0)
-                ? job.timeline_frame
-                : job.timeline_frame - (n - 1);
-
-            int frames_decoded = 0;
-            for (int i = 0; i < n; ++i) {
-                if (m_shutdown.load() || m_playhead_direction.load(std::memory_order_relaxed) == 0) break;
-
-                int64_t tf = start_tf + i;
-                // Per-frame source computation: speed_ratio maps timeline offset → source offset
-                int64_t sf = job.clip_source_in +
-                    static_cast<int64_t>((tf - job.clip_timeline_start) * job.speed_ratio);
-                int64_t file_frame = sf - info.start_tc;
-                FrameTime ft = FrameTime::from_frame(file_frame, job.rate);
-                auto result = reader->DecodeAt(ft);
-                if (result.is_ok()) {
-                    std::lock_guard<std::mutex> lock(m_tracks_mutex);
-                    auto it = m_tracks.find(job.track);
-                    if (it != m_tracks.end()) {
-                        auto& cache = it->second.video_cache;
-                        while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
-                            cache.erase(cache.begin());
-                        }
-                        cache[tf] = {job.clip_id, sf, result.value(),
-                                     rotation, par_num, par_den};
-                        // Advance watermark so REFILL starts PAST on-demand's range.
-                        // Without this, REFILL overlaps on-demand (same reader lock,
-                        // same frame range → redundant decode + reader contention).
-                        if (tf + 1 > it->second.video_buffer_end) {
-                            it->second.video_buffer_end = tf + 1;
-                        }
-                    }
-                    frames_decoded++;
-                } else {
-                    bool is_eof = (result.error().code == ErrorCode::EOFReached);
-                    EMP_LOG_WARN("On-demand: %s at sf=%lld clip=%s: %s",
-                            is_eof ? "EOF" : "decode error",
-                            static_cast<long long>(sf), job.clip_id.c_str(),
-                            result.error().message.c_str());
-                    // Only record EOF marker for actual EOF — transient errors
-                    // must not permanently block decodable frames.
-                    if (is_eof) {
-                        std::lock_guard<std::mutex> lock(m_tracks_mutex);
-                        auto it = m_tracks.find(job.track);
-                        if (it != m_tracks.end()) {
-                            auto& eof = it->second.clip_eof_frame;
-                            auto eof_it = eof.find(job.clip_id);
-                            if (eof_it == eof.end() || sf < eof_it->second) {
-                                eof[job.clip_id] = sf;
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
-            // Only log partial completions (EOF, shutdown, error) — full batches
-            // are normal steady-state and generate excessive noise at DEBUG level.
-            if (frames_decoded < n) {
-                EMP_LOG_DEBUG("On-demand: %d/%d frames for clip %s on track %c%d",
-                        frames_decoded, n, job.clip_id.c_str(),
-                        job.track.type == TrackType::Video ? 'V' : 'A', job.track.index);
-            }
         }
-        // AUDIO type jobs no longer submitted — watermark AUDIO_REFILL replaces them
+        // VIDEO and AUDIO on-demand types no longer submitted — watermark
+        // REFILL handles batch decode, sync fallback handles immediate needs.
     }
 }
 

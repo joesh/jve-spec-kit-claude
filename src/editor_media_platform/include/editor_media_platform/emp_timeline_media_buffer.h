@@ -85,8 +85,6 @@ struct VideoResult {
     int64_t clip_start_frame;     // timeline coords
     int64_t clip_end_frame;       // timeline coords
     bool offline;
-    bool pending = false;   // true = cache miss during Play, async decode submitted
-                             // frame is nullptr — caller holds current display
     std::string error_msg;  // populated when offline=true (from m_offline Error)
 };
 
@@ -272,30 +270,15 @@ private:
 
     // ── Pre-buffer thread pool ──
     struct PreBufferJob {
-        enum Type { VIDEO, AUDIO, VIDEO_REFILL, AUDIO_REFILL, READER_WARM };
-        Type type = VIDEO;
+        enum Type { VIDEO_REFILL, AUDIO_REFILL, READER_WARM };
+        Type type = VIDEO_REFILL;
 
         TrackId track{TrackType::Video, 0};
         std::string clip_id;
         std::string media_path;
 
-        // VIDEO fields (on-demand per-clip pre-buffer)
-        int64_t source_frame = 0;
-        int64_t timeline_frame = 0;
-        Rate rate{0, 1};
         int direction = 1;            // playback direction (+1 forward, -1 reverse)
-        int64_t clip_duration = 0;    // clip length in frames (bounds batch size)
-        int64_t clip_source_in = 0;       // clip source_in (for per-frame speed computation)
-        int64_t clip_timeline_start = 0;  // clip timeline_start
-
-        // Shared: speed_ratio (video: source_range/timeline_duration; audio: seq_fps/media_fps)
-        float speed_ratio = 1.0f;
-
-        // AUDIO fields (per-clip pre-buffer)
-        TimeUS source_t0 = 0;
-        TimeUS source_t1 = 0;
-        TimeUS timeline_t0 = 0;
-        TimeUS timeline_t1 = 0;
+        float speed_ratio = 1.0f;    // video: source_range/timeline_duration; audio: seq_fps/media_fps
 
         // VIDEO_REFILL fields (watermark-driven)
         int64_t refill_from_frame = 0;   // first timeline frame to decode

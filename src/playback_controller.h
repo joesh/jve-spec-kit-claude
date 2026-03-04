@@ -200,6 +200,10 @@ public:
 private:
     PlaybackController();
 
+    // Symmetric prefill at play start (called from Play())
+    void prefillVideo(int64_t pos, int direction);
+    void prefillAudio(int64_t pos, int direction, float speed);
+
     // Frame delivery.
     // synchronous=true: Seek (main thread) — direct setFrame + callback calls.
     // synchronous=false: displayLinkTick (CVDisplayLink thread) — dispatch_async to main.

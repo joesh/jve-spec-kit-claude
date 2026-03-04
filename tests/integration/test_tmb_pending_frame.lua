@@ -1,6 +1,6 @@
--- Integration Test: TMB Pending Frame Resolution
--- Exercises real C++ TMB decode path — catches the freeze bug pattern
--- where pending=true never resolves.
+-- Integration Test: TMB Always-Sync Frame Decode
+-- Exercises real C++ TMB decode path — verifies GetVideoFrame always
+-- returns a frame synchronously (no pending concept).
 --
 -- Must run via: JVEEditor --test tests/integration/test_tmb_pending_frame.lua
 
@@ -27,7 +27,7 @@ local function section(name)
 end
 
 --------------------------------------------------------------------------------
--- 1. Park mode decode: direction=0 should decode synchronously, no pending
+-- 1. Park mode decode: direction=0 always decodes synchronously
 --------------------------------------------------------------------------------
 section("1. Park mode decode")
 do
@@ -38,7 +38,6 @@ do
 
     local frame, info = EMP.TMB_GET_VIDEO_FRAME(tmb, 1, 10)
     check(frame ~= nil, "park mode returns a frame (not nil)")
-    check(info.pending == false, "park mode frame is not pending")
     check(info.clip_id == "test-clip-001", "park mode clip_id matches")
     check(info.offline == false, "park mode frame is not offline")
 
@@ -48,8 +47,6 @@ end
 
 --------------------------------------------------------------------------------
 -- 2. Sequential park decode: direction=0 always decodes synchronously
---    (Play mode uses stale-return + async pre-buffer regardless of pool_threads.
---     Park mode is the only guaranteed-sync path.)
 --------------------------------------------------------------------------------
 section("2. Sequential park decode (direction=0)")
 do
@@ -60,59 +57,44 @@ do
     for f = 0, 4 do
         EMP.TMB_SET_PLAYHEAD(tmb, f, 0, 1.0)
         local frame, info = EMP.TMB_GET_VIDEO_FRAME(tmb, 1, f)
-        if frame == nil or info.pending then
+        if frame == nil then
             all_sync = false
-            print(string.format("    frame %d: frame=%s pending=%s",
-                f, tostring(frame ~= nil), tostring(info.pending)))
+            print(string.format("    frame %d: frame=nil offline=%s",
+                f, tostring(info.offline)))
         end
     end
-    check(all_sync, "park mode: 5 sequential frames decoded without pending")
+    check(all_sync, "park mode: 5 sequential frames decoded")
 
     EMP.TMB_RELEASE_ALL(tmb)
     EMP.TMB_CLOSE(tmb)
 end
 
 --------------------------------------------------------------------------------
--- 3. Async pool play + pending resolution
---    pool_threads=2: if a frame returns pending=true, poll until it resolves.
---    Failure here = the freeze bug.
+-- 3. Play mode also returns frames immediately (sync decode on miss)
 --------------------------------------------------------------------------------
-section("3. Async pool play (pool_threads=2)")
+section("3. Play mode sync decode (pool_threads=2)")
 do
     local tmb = ienv.create_single_clip_tmb({ pool_threads = 2 })
 
     EMP.TMB_SET_PLAYHEAD(tmb, 0, 1, 1.0)
 
-    local MAX_RETRIES = 50
-    local SLEEP_CMD = "sleep 0.01"
-
     local frames_resolved = 0
     local frames_tested = 5
-    local worst_retries = 0
 
     for f = 0, frames_tested - 1 do
         EMP.TMB_SET_PLAYHEAD(tmb, f, 1, 1.0)
-        local frame, info = EMP.TMB_GET_VIDEO_FRAME(tmb, 1, f)
+        local frame = EMP.TMB_GET_VIDEO_FRAME(tmb, 1, f)
 
-        local retries = 0
-        while (frame == nil or info.pending) and retries < MAX_RETRIES do
-            os.execute(SLEEP_CMD)
-            frame, info = EMP.TMB_GET_VIDEO_FRAME(tmb, 1, f)
-            retries = retries + 1
-        end
-
-        if retries > worst_retries then worst_retries = retries end
-
-        if frame ~= nil and not info.pending then
+        if frame ~= nil then
             frames_resolved = frames_resolved + 1
         else
-            print(string.format("    frame %d: STUCK pending after %d retries", f, retries))
+            print(string.format("    frame %d: nil (offline or gap?)", f))
         end
     end
 
     check(frames_resolved == frames_tested,
-        string.format("async pool: all %d frames resolved (worst poll: %d retries)",
-            frames_tested, worst_retries))
+        string.format("play mode: all %d frames decoded immediately",
+            frames_tested))
 
     EMP.TMB_RELEASE_ALL(tmb)
     EMP.TMB_CLOSE(tmb)

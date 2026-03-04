@@ -434,6 +434,98 @@ void PlaybackController::SetBounds(int64_t total_frames, int32_t fps_num, int32_
 // Transport
 // ============================================================================
 
+void PlaybackController::prefillVideo(int64_t pos, int direction) {
+    // Sync-decode the current frame on every video track into TMB's cache.
+    // Mirrors deliverFrame's track iteration. Runs BEFORE CVDisplayLink starts,
+    // so the first tick has an immediate cache hit (no stall).
+    auto video_tracks = m_tmb->GetVideoTrackIds();
+    for (int track_idx : video_tracks) {
+        emp::TrackId track{emp::TrackType::Video, track_idx};
+        m_tmb->GetVideoFrame(track, pos);  // sync decode, populates cache
+    }
+    JVE_LOG_DETAIL(Ticks, "Play: pre-filled %zu video track(s) at frame %lld",
+                   video_tracks.size(), (long long)pos);
+}
+
+void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
+    JVE_ASSERT(m_aop,
+        "PlaybackController::prefillAudio: AOP is null");
+    JVE_ASSERT(m_sse,
+        "PlaybackController::prefillAudio: SSE is null");
+
+    // Compute quality mode from speed
+    float abs_speed = speed;
+    int quality_mode;
+    if (abs_speed > 4.0f) {
+        quality_mode = 3;  // Q3_DECIMATE
+    } else if (abs_speed >= 1.0f) {
+        quality_mode = 1;  // Q1
+    } else if (abs_speed >= 0.25f) {
+        quality_mode = 3;  // Q3_DECIMATE (varispeed)
+    } else {
+        quality_mode = 2;  // Q2
+    }
+
+    // Reanchor clock at current position
+    int64_t time_us = (pos * 1000000LL * m_fps_den) / m_fps_num;
+    float signed_speed = direction * speed;
+
+    JVE_LOG_DETAIL(Audio, "Play: pre-flush buf=%lld aop_playing=%d",
+                  (long long)m_aop->BufferedFrames(),
+                  (int)m_aop->IsPlaying());
+    m_aop->Flush();
+    m_sse->Reset();
+    int64_t aop_playhead = m_aop->PlayheadTimeUS();
+    m_clock.Reanchor(time_us, signed_speed, aop_playhead);
+    m_sse->SetTarget(time_us, signed_speed, static_cast<sse::QualityMode>(quality_mode));
+
+    // Pre-fill: decode audio into the ring buffer BEFORE starting AOP.
+    // Fill the full ring buffer capacity (600ms at 3x target) so the pump
+    // has enough runway to warm the TMB cache without CoreAudio starving.
+    constexpr int64_t PREFILL_LOOKAHEAD_US = 2000000;
+    int64_t ring_capacity = 3 * (m_audio_sample_rate * AudioPump::TARGET_BUFFER_MS) / 1000;
+    int64_t fetch_t0 = time_us;
+    int64_t fetch_t1 = (signed_speed >= 0)
+        ? time_us + PREFILL_LOOKAHEAD_US
+        : time_us - PREFILL_LOOKAHEAD_US;
+    if (fetch_t1 < fetch_t0) std::swap(fetch_t0, fetch_t1);
+
+    auto pcm = m_tmb->GetMixedAudio(fetch_t0, fetch_t1);
+    if (pcm && pcm->frames() > 0) {
+        m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(),
+                             pcm->start_time_us());
+    }
+
+    // Render in chunks until ring buffer is full
+    int64_t total_prefilled = 0;
+    constexpr int64_t CHUNK = 4096;
+    std::vector<float> prefill_buf(CHUNK * m_audio_channels);
+    while (total_prefilled < ring_capacity) {
+        int64_t want = std::min(CHUNK, ring_capacity - total_prefilled);
+        int64_t rendered = m_sse->Render(prefill_buf.data(), want);
+        if (rendered <= 0) break;  // SSE starved
+        int64_t written = m_aop->WriteF32(prefill_buf.data(), rendered);
+        if (written <= 0) break;   // ring buffer full
+        total_prefilled += written;
+    }
+    JVE_LOG_DETAIL(Audio, "Play: pre-filled %lld/%lld frames into ring buffer",
+                  (long long)total_prefilled, (long long)ring_capacity);
+
+    // Start audio output — ring buffer now has ~600ms of decoded audio.
+    m_aop->Start();
+    JVE_LOG_DETAIL(Audio, "Play: post-start aop_ph=%lldus media_anchor=%lldus",
+                  (long long)aop_playhead, (long long)time_us);
+
+    // Start pump thread
+    if (m_audio_pump) {
+        m_audio_pump->SetQualityMode(quality_mode);
+        if (!m_audio_pump->IsRunning()) {
+            m_audio_pump->Start(m_tmb, m_sse, m_aop, &m_clock,
+                                m_audio_sample_rate, m_audio_channels);
+        }
+    }
+}
+
 void PlaybackController::Play(int direction, float speed) {
     // Preconditions: must have bounds set (fps > 0, total_frames > 0)
     JVE_ASSERT(m_fps > 0,
@@ -456,6 +548,7 @@ void PlaybackController::Play(int direction, float speed) {
         InvalidateClipWindows();
     }
 
+    // State setup
     m_direction.store(direction, std::memory_order_relaxed);
     m_speed.store(speed, std::memory_order_relaxed);
     m_hit_boundary.store(false, std::memory_order_relaxed);
@@ -464,97 +557,21 @@ void PlaybackController::Play(int direction, float speed) {
     m_hold_count = 0;
     m_skip_count = 0;
 
-    // Hint TMB for pre-buffer at play start
-    {
-        int64_t pos = m_position.load(std::memory_order_relaxed);
-        m_tmb->SetPlayhead(pos, direction, speed);
-    }
+    int64_t pos = m_position.load(std::memory_order_relaxed);
 
-    // Start audio pump if audio is active
+    // Hint TMB for pre-buffer direction
+    m_tmb->SetPlayhead(pos, direction, speed);
+
+    // Symmetric prefill: decode first frame(s) synchronously for both media
+    // types BEFORE starting outputs. Video prefill mirrors audio prefill —
+    // TMB sync-decodes on cache miss, populating the cache so the first
+    // CVDisplayLink tick gets an immediate hit (no frozen PENDING frames).
+    prefillVideo(pos, direction);
     if (m_has_audio.load(std::memory_order_relaxed)) {
-        JVE_ASSERT(m_aop,
-            "PlaybackController::Play: has_audio but AOP is null");
-        JVE_ASSERT(m_sse,
-            "PlaybackController::Play: has_audio but SSE is null");
-        // Compute quality mode from speed
-        float abs_speed = speed;
-        int quality_mode;
-        if (abs_speed > 4.0f) {
-            quality_mode = 3;  // Q3_DECIMATE
-        } else if (abs_speed >= 1.0f) {
-            quality_mode = 1;  // Q1
-        } else if (abs_speed >= 0.25f) {
-            quality_mode = 3;  // Q3_DECIMATE (varispeed)
-        } else {
-            quality_mode = 2;  // Q2
-        }
-
-        // Reanchor clock at current position
-        int64_t current_pos = m_position.load(std::memory_order_relaxed);
-        int64_t time_us = (current_pos * 1000000LL * m_fps_den) / m_fps_num;
-        float signed_speed = direction * speed;
-
-        JVE_LOG_DETAIL(Audio, "Play: pre-flush buf=%lld aop_playing=%d",
-                      (long long)m_aop->BufferedFrames(),
-                      (int)m_aop->IsPlaying());
-        m_aop->Flush();
-        m_sse->Reset();
-        int64_t aop_playhead = m_aop->PlayheadTimeUS();
-        m_clock.Reanchor(time_us, signed_speed, aop_playhead);
-        m_sse->SetTarget(time_us, signed_speed, static_cast<sse::QualityMode>(quality_mode));
-
-        // Pre-fill: decode audio into the ring buffer BEFORE starting AOP.
-        // Fill the full ring buffer capacity (600ms at 3x target) so the pump
-        // has enough runway to warm the TMB cache without CoreAudio starving.
-        // Without this, buf_before=0 for the first ~8 pump cycles → rapid
-        // periodic dropout → audible flutter/roughness at playback start.
-        {
-            constexpr int64_t PREFILL_LOOKAHEAD_US = 2000000;
-            // Ring buffer capacity = 3 * TARGET_BUFFER_MS * sample_rate / 1000
-            int64_t ring_capacity = 3 * (m_audio_sample_rate * AudioPump::TARGET_BUFFER_MS) / 1000;
-            int64_t fetch_t0 = time_us;
-            int64_t fetch_t1 = (signed_speed >= 0)
-                ? time_us + PREFILL_LOOKAHEAD_US
-                : time_us - PREFILL_LOOKAHEAD_US;
-            if (fetch_t1 < fetch_t0) std::swap(fetch_t0, fetch_t1);
-
-            auto pcm = m_tmb->GetMixedAudio(fetch_t0, fetch_t1);
-            if (pcm && pcm->frames() > 0) {
-                m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(),
-                                     pcm->start_time_us());
-            }
-
-            // Render in chunks until ring buffer is full
-            int64_t total_prefilled = 0;
-            constexpr int64_t CHUNK = 4096;
-            std::vector<float> prefill_buf(CHUNK * m_audio_channels);
-            while (total_prefilled < ring_capacity) {
-                int64_t want = std::min(CHUNK, ring_capacity - total_prefilled);
-                int64_t rendered = m_sse->Render(prefill_buf.data(), want);
-                if (rendered <= 0) break;  // SSE starved
-                int64_t written = m_aop->WriteF32(prefill_buf.data(), rendered);
-                if (written <= 0) break;   // ring buffer full
-                total_prefilled += written;
-            }
-            JVE_LOG_DETAIL(Audio, "Play: pre-filled %lld/%lld frames into ring buffer",
-                          (long long)total_prefilled, (long long)ring_capacity);
-        }
-
-        // Start audio output — ring buffer now has ~600ms of decoded audio.
-        m_aop->Start();
-        JVE_LOG_DETAIL(Audio, "Play: post-start aop_ph=%lldus media_anchor=%lldus",
-                      (long long)aop_playhead, (long long)time_us);
-
-        // Start pump thread
-        if (m_audio_pump) {
-            m_audio_pump->SetQualityMode(quality_mode);
-            if (!m_audio_pump->IsRunning()) {
-                m_audio_pump->Start(m_tmb, m_sse, m_aop, &m_clock,
-                                    m_audio_sample_rate, m_audio_channels);
-            }
-        }
+        prefillAudio(pos, direction, speed);
     }
 
+    // Start display link (video output)
     if (!m_playing.load(std::memory_order_relaxed)) {
         m_playing.store(true, std::memory_order_relaxed);
         // Anchor host time BEFORE starting display link so first tick has valid elapsed.
@@ -1258,29 +1275,6 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
         return;
     }
 
-    // Pending: TMB has a clip here but no decoded frame yet (cache miss).
-    // Two cases:
-    //   Same clip (intra-clip cache miss): hold last frame. The decode will
-    //   catch up in ~8-16ms — invisible at display refresh rates.
-    //
-    //   Different clip (cross-clip transition): clear to black. Holding the
-    //   previous clip's last frame creates a "latch" where stale content
-    //   persists through gaps and into the next clip's WARM/REFILL period.
-    if (result.pending) {
-        if (result.clip_id != m_current_clip_id) {
-            JVE_LOG_EVENT(Ticks, "deliverFrame: PENDING cross-clip at %s frame=%lld clip=%s (clearing)",
-                         frameToTC(frame, m_fps_num / m_fps_den).c_str(),
-                         (long long)frame, result.clip_id.c_str());
-            m_surface->clearFrame();
-            m_last_displayed_frame = frame;
-        } else if (m_deliver_count % 30 == 0) {
-            JVE_LOG_DETAIL(Ticks, "deliverFrame: PENDING intra-clip at %s frame=%lld clip=%s (holding)",
-                          frameToTC(frame, m_fps_num / m_fps_den).c_str(),
-                          (long long)frame, result.clip_id.c_str());
-        }
-        return;
-    }
-
     // Detect clip transition → fire callback with metadata for rotation/PAR
     if (result.clip_id != m_current_clip_id) {
         m_current_clip_id = result.clip_id;
@@ -1314,7 +1308,7 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
 
         // Frame cadence: measure time between consecutive DISPLAYED frames.
         // At 25fps/60Hz, expect ~40ms (2-3 vsyncs). Log outliers.
-        // Measured here (not earlier) so pending-null holds don't corrupt timing.
+        // Measured here (not earlier) so same-frame holds don't corrupt timing.
         {
             uint64_t now = mach_absolute_time();
             if (m_last_new_frame_time > 0) {
@@ -1336,9 +1330,9 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
 
         // Sampled DETAIL log: every 30th new frame delivered
         if (m_deliver_count % 30 == 0) {
-            JVE_LOG_DETAIL(Ticks, "deliverFrame: frame=%lld clip=%s pending=%d offline=%d",
+            JVE_LOG_DETAIL(Ticks, "deliverFrame: frame=%lld clip=%s offline=%d",
                           (long long)frame, result.clip_id.c_str(),
-                          (int)result.pending, (int)result.offline);
+                          (int)result.offline);
         }
 
         m_surface->setFrame(result.frame);
@@ -1354,14 +1348,13 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
             char buf[256];
             snprintf(buf, sizeof(buf),
                 "PlaybackController::deliverFrame: Seek to frame %lld returned no frame "
-                "data but clip_id='%s' (decode failure? pending=%d)",
-                (long long)frame, result.clip_id.c_str(),
-                (int)result.pending);
+                "data but clip_id='%s' (decode failure?)",
+                (long long)frame, result.clip_id.c_str());
             JVE_ASSERT(false, buf);
         } else if (m_deliver_count % 30 == 0) {
-            JVE_LOG_DETAIL(Ticks, "deliverFrame: NULL FRAME clip=%s frame=%lld pending=%d offline=%d",
+            JVE_LOG_DETAIL(Ticks, "deliverFrame: NULL FRAME clip=%s frame=%lld offline=%d",
                           result.clip_id.c_str(), (long long)frame,
-                          (int)result.pending, (int)result.offline);
+                          (int)result.offline);
         }
     }
 }

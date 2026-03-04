@@ -1471,7 +1471,7 @@ private slots:
         tmb->SetPlayhead(52, -1, 1.0f);
         QThread::msleep(400);
 
-        // Verify cache contents in Park mode (Play returns pending-null on miss)
+        // Verify cache contents in Park mode
         tmb->SetPlayhead(49, 0, 1.0f);
 
         // clipA's last frame (49) should be pre-buffered
@@ -1844,10 +1844,9 @@ private slots:
 
     // ── Non-blocking GetVideoFrame during Play mode ──
 
-    void test_play_mode_cache_miss_returns_pending_null() {
-        // During Play (direction != 0), a TMB cache miss must return
-        // pending=true with frame=nullptr. The caller (PlaybackController)
-        // holds the current display — TMB doesn't manage display state.
+    void test_play_mode_cache_miss_returns_sync_frame() {
+        // GetVideoFrame always sync-decodes on cache miss (Play, Scrub, Park).
+        // TMB is a pure data provider — no pending concept.
         if (!m_hasTestVideo) QSKIP("No test video");
 
         auto tmb = TimelineMediaBuffer::Create(2);
@@ -1862,36 +1861,24 @@ private slots:
         tmb->SetPlayhead(0, 0, 0.0f);
         auto r0 = tmb->GetVideoFrame(V1, 0);
         QVERIFY(r0.frame != nullptr);
-        QVERIFY(!r0.pending);
 
         // Switch to Play mode
         tmb->SetPlayhead(0, 1, 1.0f);
 
         // Frame 50 is NOT in the TMB video cache (never decoded).
-        // In Play mode, GetVideoFrame returns pending=true, frame=nullptr.
+        // GetVideoFrame sync-decodes and returns the frame immediately.
         auto r50 = tmb->GetVideoFrame(V1, 50);
-        QVERIFY2(r50.frame == nullptr,
-                 "Play-mode cache miss must return nullptr (caller holds display)");
-        QVERIFY2(r50.pending,
-                 "Play-mode cache miss must set pending=true");
-        // clip_id must reflect the CURRENT clip (for transition detection)
+        QVERIFY2(r50.frame != nullptr,
+                 "Play-mode cache miss must sync-decode and return frame");
         QCOMPARE(r50.clip_id, std::string("clipA"));
 
-        // Give worker time to decode frame 50 asynchronously
-        QThread::msleep(500);
-
-        // Now frame 50 should be in the cache (worker decoded it)
+        // Second call should be a cache hit (no re-decode)
         auto r50b = tmb->GetVideoFrame(V1, 50);
-        QVERIFY2(r50b.frame != nullptr,
-                 "Frame 50 should be available after async decode");
-        QVERIFY2(!r50b.pending,
-                 "Cache hit should not be pending");
+        QVERIFY2(r50b.frame != nullptr, "Cache hit must return frame");
     }
 
     void test_scrub_mode_cache_miss_returns_sync_frame() {
-        // During Scrub/Park (direction == 0), a TMB cache miss must decode
-        // synchronously and return the actual frame with pending=false.
-        // Visual latency matters more than audio pump protection.
+        // All modes sync-decode on cache miss (no pending concept).
         if (!m_hasTestVideo) QSKIP("No test video");
 
         auto tmb = TimelineMediaBuffer::Create(0);
@@ -1902,21 +1889,18 @@ private slots:
         };
         tmb->SetTrackClips(V1, clips);
 
-        // Park mode (direction=0): decode frame 30 — should be synchronous
+        // Park mode (direction=0): decode frame 30 — synchronous
         tmb->SetPlayhead(30, 0, 0.0f);
         auto r = tmb->GetVideoFrame(V1, 30);
         QVERIFY2(r.frame != nullptr,
                  "Scrub-mode decode must return actual frame");
-        QVERIFY2(!r.pending,
-                 "Scrub-mode decode must not be pending");
         QCOMPARE(r.clip_id, std::string("clipA"));
         QCOMPARE(r.source_frame, (int64_t)30);
     }
 
-    void test_play_mode_without_seek_returns_pending_null() {
-        // Play mode always returns pending-null on cache miss, even without
-        // a prior Seek. In the real app, Seek always precedes Play (primes
-        // the cache). This test verifies the contract in isolation.
+    void test_play_mode_without_seek_returns_sync_frame() {
+        // Play mode sync-decodes on cache miss, even without a prior Seek.
+        // (In the real app, prefillVideo in Play() primes the cache.)
         if (!m_hasTestVideo) QSKIP("No test video");
 
         auto tmb = TimelineMediaBuffer::Create(2);
@@ -1930,18 +1914,14 @@ private slots:
         // Jump straight to Play mode without prior decode (cache cold)
         tmb->SetPlayhead(0, 1, 1.0f);
         auto r = tmb->GetVideoFrame(V1, 0);
-        QVERIFY2(r.pending,
-                 "Play-mode cache miss must return pending=true");
-        QVERIFY2(r.frame == nullptr,
-                 "Play-mode cache miss must return nullptr frame");
+        QVERIFY2(r.frame != nullptr,
+                 "Play-mode cache miss must sync-decode and return frame");
         QCOMPARE(r.clip_id, std::string("clipA"));
     }
 
-    void test_play_mode_pending_preserves_current_clip_metadata() {
-        // When returning pending during Play, the result's clip metadata
-        // (clip_fps_num/den, clip_start/end_frame, clip_id) must reflect
-        // the CURRENT clip. Frame is nullptr. This ensures clip-switch
-        // detection fires correctly when the real frame arrives.
+    void test_play_mode_cross_clip_returns_correct_metadata() {
+        // When sync-decoding across clip boundaries, result metadata must
+        // reflect the CURRENT clip (for clip-switch detection in deliverFrame).
         if (!m_hasTestVideo) QSKIP("No test video");
 
         auto tmb = TimelineMediaBuffer::Create(2);
@@ -1954,18 +1934,11 @@ private slots:
         };
         tmb->SetTrackClips(V1, clips);
 
-        // Park-mode: decode frame 0 of clipA (primes cache)
-        tmb->SetPlayhead(0, 0, 0.0f);
-        auto r0 = tmb->GetVideoFrame(V1, 0);
-        QVERIFY(r0.frame != nullptr);
-
         // Play mode, request frame 55 (clipB, rate 30/1).
-        // Returns pending=true, frame=nullptr, metadata from CURRENT clip (clipB).
+        // Sync decode returns frame with clipB's metadata.
         tmb->SetPlayhead(55, 1, 1.0f);
         auto r55 = tmb->GetVideoFrame(V1, 55);
-        QVERIFY(r55.pending);
-        QVERIFY(r55.frame == nullptr);
-        // Current clip metadata must reflect clipB
+        QVERIFY(r55.frame != nullptr);
         QCOMPARE(r55.clip_id, std::string("clipB"));
         QCOMPARE(r55.clip_fps_num, (int32_t)30);
         QCOMPARE(r55.clip_fps_den, (int32_t)1);
@@ -2008,10 +1981,9 @@ private slots:
         tmb->SetPlayhead(55, 1, 1.0f);
         auto r55 = tmb->GetVideoFrame(V1, 55);
 
-        // NSF assertion: offline must be surfaced, not hidden behind pending
+        // NSF assertion: offline must be surfaced
         QVERIFY2(r55.offline,
-                 "Play-mode GetVideoFrame must surface offline for known-offline clips, "
-                 "not silently return pending");
+                 "Play-mode GetVideoFrame must surface offline for known-offline clips");
         QVERIFY2(r55.frame == nullptr,
                  "Offline result must have nullptr frame");
     }
@@ -2057,27 +2029,21 @@ private slots:
                 worst_frame = f;
             }
 
-            // Verify we got either a decoded frame or a pending-null (async decode).
-            // Gap (empty clip_id) is also valid if between clips.
-            QVERIFY2(result.frame != nullptr || result.pending || result.clip_id.empty(),
-                qPrintable(QString("Frame %1: null frame, not pending, clip=%2")
+            // Always returns a frame or gap (empty clip_id between clips).
+            QVERIFY2(result.frame != nullptr || result.clip_id.empty(),
+                qPrintable(QString("Frame %1: null frame, clip=%2")
                     .arg(f).arg(result.clip_id.c_str())));
 
             // Brief yield so worker threads can run
             QThread::usleep(100);
         }
 
-        // 50ms threshold: pending-null return is <1ms. Sync decode for 2K H.264 is >100ms.
-        QVERIFY2(worst_us < 50000,
-            qPrintable(QString("Frame %1 took %2us (%3ms) — sync decode on hot path! "
-                               "Expected <50ms (pending-null return).")
-                .arg(worst_frame).arg(worst_us).arg(worst_us / 1000)));
+        qDebug() << "3-clip playback worst:" << worst_us << "us at frame" << worst_frame;
     }
 
-    void test_clip_list_update_play_returns_pending() {
+    void test_clip_list_update_play_returns_sync_frame() {
         // Mid-playback SetTrackClips with a clip list that EXCLUDES the
-        // previously-displayed clip. No last_displayed to invalidate (removed).
-        // Play mode returns pending-null; worker decodes asynchronously.
+        // previously-displayed clip. GetVideoFrame sync-decodes immediately.
         if (!m_hasTestVideo) QSKIP("No test video");
 
         auto tmb = TimelineMediaBuffer::Create(2);
@@ -2103,35 +2069,20 @@ private slots:
         };
         tmb->SetTrackClips(V1, bc);
 
-        // Play mode: request frame 55 (clipB, not in cache)
+        // Play mode: request frame 55 (clipB, not in cache) — sync decode
         tmb->SetPlayhead(55, 1, 1.0f);
         auto r55 = tmb->GetVideoFrame(V1, 55);
-
-        // Play mode always returns pending-null on cache miss
-        QVERIFY2(r55.pending, "Play-mode cache miss must be pending");
-        QVERIFY2(r55.frame == nullptr, "Play-mode cache miss returns nullptr");
+        QVERIFY2(r55.frame != nullptr,
+                 "Play-mode cache miss must sync-decode after clip list update");
         QCOMPARE(r55.clip_id, std::string("clipB"));
-
-        // Worker decodes asynchronously
-        QThread::msleep(500);
-        auto r55b = tmb->GetVideoFrame(V1, 55);
-        QVERIFY2(r55b.frame != nullptr, "clipB frame available after async decode");
-        QVERIFY2(!r55b.pending, "Cache hit should not be pending");
     }
 
     // ── REGRESSION: multi-track playback must never sync-decode on hot path ──
 
-    void test_multitrack_playback_no_sync_decode_on_track_switch() {
-        // REGRESSION TEST for clip-transition stutter.
-        //
-        // Scenario: 2 video tracks, top track (V2) ends → playback falls through
-        // to lower track (V1). V1 has never been the display track.
-        //
-        // Fixed: Play-mode GetVideoFrame always returns pending-null on cache miss
-        // (never blocks for sync decode). Worker decodes asynchronously.
-        //
-        // Invariant: GetVideoFrame on the Play-mode hot path must NEVER take
-        // longer than 1ms per call, regardless of track switch history.
+    void test_multitrack_playback_returns_correct_frames() {
+        // Multi-track playback: top-to-bottom priority, GetVideoFrame always
+        // returns a frame (sync decode on miss). REFILL pre-populates cache
+        // for most frames; sync decode handles initial cold frames.
         if (!m_hasTestVideo) QSKIP("No test video");
 
         auto tmb = TimelineMediaBuffer::Create(2);
@@ -2150,54 +2101,32 @@ private slots:
         };
         tmb->SetTrackClips(V1, v1_clips);
 
-        // Prime: park-mode decode on V2 (mirrors initial Seek before Play)
+        // Prime: park-mode decode on V2
         tmb->SetPlayhead(0, 0, 1.0f);
         auto r0 = tmb->GetVideoFrame(V2, 0);
         QVERIFY(r0.frame != nullptr);
 
-        // Simulate real playback: top-to-bottom priority per frame
-        // (same loop as PlaybackController::deliverFrame)
-        int64_t worst_us = 0;
-        int64_t worst_frame = -1;
-        std::string worst_track;
-
+        // Simulate playback: top-to-bottom priority per frame
         for (int64_t f = 1; f < 120; ++f) {
             tmb->SetPlayhead(f, 1, 1.0f);
 
             VideoResult result;
-            std::string track_name;
-            auto t0 = std::chrono::steady_clock::now();
-
             result = tmb->GetVideoFrame(V2, f);
-            if (result.frame || !result.clip_id.empty()) {
-                track_name = "V2";
-            } else {
+            if (!result.frame && result.clip_id.empty()) {
                 result = tmb->GetVideoFrame(V1, f);
-                if (result.frame || !result.clip_id.empty()) {
-                    track_name = "V1";
-                }
             }
 
-            auto t1 = std::chrono::steady_clock::now();
-            auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-            if (us > worst_us) {
-                worst_us = us;
-                worst_frame = f;
-                worst_track = track_name;
+            // Every frame in the timeline should be covered by some track
+            if (f < 40 || f >= 80) {
+                QVERIFY2(result.frame != nullptr || !result.clip_id.empty(),
+                    qPrintable(QString("Frame %1: expected V2 clip").arg(f)));
+            } else {
+                QVERIFY2(result.frame != nullptr || !result.clip_id.empty(),
+                    qPrintable(QString("Frame %1: expected V1 clip").arg(f)));
             }
 
             QThread::usleep(100);
         }
-
-        qDebug() << "Multi-track worst:" << worst_us << "us at frame" << worst_frame
-                 << "on" << worst_track.c_str();
-
-        // 5ms threshold: pending-null return is <100us. Anything >5ms is a sync decode.
-        // On 2K H.264 from external drives this shows as 157ms stutter.
-        QVERIFY2(worst_us < 5000,
-            qPrintable(QString("Frame %1 on %2 took %3us — sync decode on hot path! "
-                               "Track switch must use pending-null, not sync decode.")
-                .arg(worst_frame).arg(worst_track.c_str()).arg(worst_us)));
     }
 
     // ── REGRESSION: SetTrackClips must auto-prebuffer new clips during playback ──
@@ -2243,10 +2172,7 @@ private slots:
 
         QVERIFY2(result.frame != nullptr,
             "Clip B entry frame (20) must be pre-buffered after SetTrackClips — "
-            "got nullptr (pending or gap). SetTrackClips did not trigger pre-buffer.");
-        QVERIFY2(!result.pending,
-            "Clip B entry frame (20) returned pending — pre-buffer did not fire "
-            "from SetTrackClips during active playback.");
+            "got nullptr (gap). SetTrackClips did not trigger pre-buffer.");
 
         int64_t misses = tmb->GetVideoCacheMissCount();
         QVERIFY2(misses == 0,
@@ -2269,7 +2195,7 @@ private slots:
         // Bug: SetPlayhead skipped V1 entirely because find_clip_at returned
         // nullptr (gap). V1's clip at frame 40 was never pre-buffered. When
         // V2's clip ended at 40, display fell through to V1 → cache miss →
-        // 200ms+ pending-null hold → visible stutter.
+        // 200ms+ sync decode → visible stutter without pre-buffer.
         //
         // Fix: SetPlayhead checks tracks with gaps for upcoming clips within
         // PRE_BUFFER_THRESHOLD and pre-buffers their entry frames.
@@ -2311,9 +2237,6 @@ private slots:
             "V1 clip entry frame (40) must be pre-buffered from gap-aware "
             "SetPlayhead — got nullptr. Lower-priority track's clip was not "
             "pre-buffered while playhead was in a gap on that track.");
-        QVERIFY2(!r40.pending,
-            "V1 clip entry frame (40) returned pending — gap-aware pre-buffer "
-            "did not fire for the upcoming clip on a track with a gap.");
         QCOMPARE(r40.clip_id, std::string("v1clip"));
 
         qDebug() << "Gap-aware pre-buffer: V1 entry frame cached while playhead was in V1 gap";
@@ -2758,8 +2681,8 @@ private slots:
 
         // Frame may be cached (from REFILL) or decoded sync.
         // Either way, it should be fast because the reader is already warm.
-        QVERIFY2(result.frame != nullptr || result.pending,
-                 "Expected frame or pending result for pre-warmed clip");
+        QVERIFY2(result.frame != nullptr,
+                 "Expected frame for pre-warmed clip (sync decode or cache hit)");
         // Reader creation takes ~400ms. With pre-warming, sync decode is ~20ms.
         // Allow generous 200ms to account for CI variability.
         QVERIFY2(ms < 200,
@@ -2874,16 +2797,8 @@ private slots:
 
     void test_eof_marker_cleared_on_park_readers() {
         // BUG: After REFILL hits EOF, clip_eof_frame persists across play
-        // sessions. GetVideoFrame's Play-mode EOF check (line ~387) returns
-        // gap (frame=nullptr, pending=false) for source_frame >= marker.
-        // This early return SKIPS the watermark check — no further REFILL
-        // is triggered, cache stays empty, display freezes.
-        //
-        // Park mode works because it bypasses the EOF check entirely.
-        //
-        // Reproduction: start play from a position PAST the real EOF
-        // (within the clip's declared range). With the bug, GetVideoFrame
-        // returns gap for every tick → permanent freeze.
+        // sessions. Stale EOF markers can prevent REFILL from pre-filling
+        // frames in subsequent play sessions.
         // Fix: ParkReaders clears clip_eof_frame.
         if (!m_hasTestVideo) QSKIP("No test video");
 
@@ -2914,23 +2829,20 @@ private slots:
         // Phase 4: Play again from frame 150 (past real EOF AND past cache).
         // REFILL's held-frame fill only covers ~132 entries (MAX_CACHE=144
         // minus 12 real frames). Frame 150 is NOT in the cache.
-        // BUG: stale clip_eof_frame blocks GetVideoFrame's Play path.
-        // source_frame = 60 + 150*1.0 = 210 ≥ eof_marker (~72) → gap returned
-        // Gap return skips watermark check → no REFILL → cache stays empty
+        // After ParkReaders, clip_eof_frame should be cleared.
         tmb->SetPlayhead(150, 1, 1.0f);
 
-        // Call GetVideoFrame in Play mode (direction=1) for frame 150.
-        // With bug: returns gap (frame=nullptr, pending=false)
-        // Fixed: returns pending=true (allows REFILL to fill cache)
+        // GetVideoFrame sync-decodes. Past real EOF, the decode may fail
+        // (returning offline) but must not silently return nullptr due
+        // to a stale EOF marker blocking even the sync decode attempt.
         auto play_r = tmb->GetVideoFrame(V1, 150);
 
-        // The critical assertion: must NOT be a silent gap.
-        // Either cached (from a held frame fill) or pending (async job).
-        // A gap with pending=false means the EOF marker blocked everything.
-        bool is_blocked_gap = (play_r.frame == nullptr && !play_r.pending && !play_r.offline);
+        // Must not be a silent gap — either a decoded frame (held), or
+        // offline (legitimate decode failure past EOF).
+        bool is_blocked_gap = (play_r.frame == nullptr && !play_r.offline);
         QVERIFY2(!is_blocked_gap,
-                 "GetVideoFrame in Play mode must not return silent gap due to "
-                 "stale EOF marker — should be pending or cached held frame");
+                 "GetVideoFrame must not return silent gap due to "
+                 "stale EOF marker — should be frame or offline");
     }
 
     // ── NSF: Generation counter aborts stale REFILL ──
@@ -3075,7 +2987,7 @@ private slots:
         QThread::msleep(300);
 
         // clipB's first frame MUST be in cache (pre-filled during gap traversal).
-        // Without the watermark fix, this is a cold miss → pending → black.
+        // Without the watermark fix, this is a cold miss → sync decode → stutter.
         tmb->SetPlayhead(80, 1, 1.0f);
         auto result = tmb->GetVideoFrame(V1, 80);
         QVERIFY2(result.frame != nullptr,
@@ -3083,6 +2995,77 @@ private slots:
                  "(watermark starvation bug: GetVideoFrame gap path didn't "
                  "trigger check_video_watermark)");
         QCOMPARE(result.clip_id, std::string("clipB"));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Symmetric prefill tests (always-sync GetVideoFrame)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    void test_get_video_frame_always_sync() {
+        // GetVideoFrame always returns data, regardless of direction.
+        // No pending concept — sync decode on cache miss in all modes.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Play forward (direction=1) — cache cold
+        tmb->SetPlayhead(0, 1, 1.0f);
+        auto r_play = tmb->GetVideoFrame(V1, 10);
+        QVERIFY2(r_play.frame != nullptr,
+                 "Play-mode GetVideoFrame must sync-decode and return frame");
+        QCOMPARE(r_play.clip_id, std::string("clipA"));
+        QCOMPARE(r_play.source_frame, static_cast<int64_t>(10));
+
+        // Play reverse (direction=-1) — different frame, cache miss
+        tmb->SetPlayhead(50, -1, 1.0f);
+        auto r_rev = tmb->GetVideoFrame(V1, 50);
+        QVERIFY2(r_rev.frame != nullptr,
+                 "Reverse-play GetVideoFrame must sync-decode and return frame");
+        QCOMPARE(r_rev.source_frame, static_cast<int64_t>(50));
+
+        // Park (direction=0) — another frame, cache miss
+        tmb->SetPlayhead(30, 0, 0.0f);
+        auto r_park = tmb->GetVideoFrame(V1, 30);
+        QVERIFY2(r_park.frame != nullptr,
+                 "Park-mode GetVideoFrame must sync-decode and return frame");
+        QCOMPARE(r_park.source_frame, static_cast<int64_t>(30));
+    }
+
+    void test_get_video_frame_cache_recheck_after_reader_wait() {
+        // When REFILL worker populates the cache during reader acquisition,
+        // GetVideoFrame should return the cached frame without re-decoding.
+        // Test: prime cache via REFILL, then verify cache hit on GetVideoFrame.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(4);
+        auto path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Start REFILL from frame 0
+        tmb->SetPlayhead(0, 1, 1.0f);
+        QThread::msleep(500);  // let REFILL pre-fill
+
+        // Reset miss counter, then request a frame that REFILL should have cached
+        tmb->ResetVideoCacheMissCount();
+        auto r = tmb->GetVideoFrame(V1, 5);
+        QVERIFY2(r.frame != nullptr, "Frame 5 should be cached from REFILL");
+        QCOMPARE(r.clip_id, std::string("clipA"));
+
+        // If frame was a cache hit, miss count stays 0
+        int64_t misses = tmb->GetVideoCacheMissCount();
+        QVERIFY2(misses == 0,
+            qPrintable(QString("Expected 0 misses (cache hit from REFILL), got %1")
+                .arg(misses)));
     }
 };
 
