@@ -67,18 +67,16 @@ function M.create(widget, config)
 
     -- Convert frame index to pixel x-coordinate (viewport-aware)
     local function frame_to_x(frame, width)
-        local vp_start = state.viewport_start or 0
-        local vp_dur = state.viewport_duration or state.total_frames
+        local vp_dur = state.viewport_duration
         if vp_dur <= 0 then return 0 end
-        return math.floor(((frame - vp_start) / vp_dur) * width + 0.5)
+        return math.floor(((frame - state.viewport_start) / vp_dur) * width + 0.5)
     end
 
     -- Convert pixel x-coordinate to frame index (viewport-aware)
     local function x_to_frame(x, width)
-        local vp_start = state.viewport_start or 0
-        local vp_dur = state.viewport_duration or state.total_frames
+        local vp_dur = state.viewport_duration
         if vp_dur <= 0 or width <= 0 then return 0 end
-        local frame = math.floor(vp_start + (x / width) * vp_dur + 0.5)
+        local frame = math.floor(state.viewport_start + (x / width) * vp_dur + 0.5)
         return math.max(0, math.min(frame, state.total_frames - 1))
     end
 

@@ -118,7 +118,9 @@ function SequenceMonitor.new(config)
             -- Clamp viewport to new total_frames
             if self.viewport_duration > self.total_frames then
                 self.viewport_duration = self.total_frames
-                self.viewport_start = 0
+            end
+            if self.viewport_start + self.viewport_duration > self.total_frames then
+                self.viewport_start = math.max(0, self.total_frames - self.viewport_duration)
             end
             -- MVC pull: re-display frame at parked playhead (content under us changed)
             self:on_model_changed()
@@ -484,6 +486,13 @@ function SequenceMonitor:set_viewport(start, duration)
 
     self.viewport_start = start
     self.viewport_duration = duration
+
+    -- Postcondition: viewport must be within sequence bounds
+    assert(self.viewport_start >= 0 and self.viewport_start + self.viewport_duration <= total,
+        string.format("SequenceMonitor(%s):set_viewport: postcondition failed: [%d, %d+%d=%d] > total=%d",
+            self.view_id, self.viewport_start, self.viewport_start, self.viewport_duration,
+            self.viewport_start + self.viewport_duration, total))
+
     self:_notify()
 end
 
@@ -504,6 +513,13 @@ function SequenceMonitor:zoom_by(factor)
 
     self.viewport_start = math.floor(new_start)
     self.viewport_duration = new_dur
+
+    -- Postcondition: viewport must be within sequence bounds
+    assert(self.viewport_start >= 0 and self.viewport_start + self.viewport_duration <= self.total_frames,
+        string.format("SequenceMonitor(%s):zoom_by: postcondition failed: [%d, %d+%d=%d] > total=%d",
+            self.view_id, self.viewport_start, self.viewport_start, self.viewport_duration,
+            self.viewport_start + self.viewport_duration, self.total_frames))
+
     self:_notify()
 end
 

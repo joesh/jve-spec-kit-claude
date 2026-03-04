@@ -374,6 +374,93 @@ assert(sm:get_viewport_duration() == 100, "get_viewport_duration")
 print("  ok: accessors work")
 
 --------------------------------------------------------------------------------
+-- NSF: Error paths
+--------------------------------------------------------------------------------
+
+print("\n--- Test 16: zoom_by rejects invalid factor ---")
+local expect_error = test_env.expect_error
+expect_error(function() sm:zoom_by(0) end, "positive number")
+expect_error(function() sm:zoom_by(-1) end, "positive number")
+expect_error(function() sm:zoom_by(nil) end, "positive number")
+expect_error(function() sm:zoom_by("two") end, "positive number")
+print("  ok: zoom_by rejects 0, negative, nil, string")
+
+print("\n--- Test 17: set_viewport rejects non-numbers ---")
+expect_error(function() sm:set_viewport(nil, 100) end, "must be numbers")
+expect_error(function() sm:set_viewport(0, nil) end, "must be numbers")
+expect_error(function() sm:set_viewport("a", 100) end, "must be numbers")
+print("  ok: set_viewport rejects nil and string")
+
+print("\n--- Test 18: zoom_by no-op on unloaded monitor ---")
+local sm2 = SequenceMonitor.new({ view_id = "test_unloaded" })
+-- total_frames = 0, viewport_duration = 0
+sm2:zoom_by(0.8)  -- should silently no-op (total_frames <= 0)
+assert(sm2.viewport_duration == 0, "unloaded monitor: viewport_duration stays 0")
+assert(sm2.viewport_start == 0, "unloaded monitor: viewport_start stays 0")
+sm2:destroy()
+print("  ok: zoom_by no-op on unloaded monitor")
+
+print("\n--- Test 19: zoom_by(1.0) preserves viewport ---")
+sm:load_sequence(mc_id)
+sm:set_viewport(50, 100)
+sm.playhead = 100
+sm:zoom_by(1.0)
+-- factor=1.0: new_dur = floor(100*1.0) = 100 (unchanged)
+-- Center on playhead=100: start = 100 - 50 = 50
+assert(sm.viewport_duration == 100, "zoom_by(1.0) preserves duration, got " .. sm.viewport_duration)
+assert(sm.viewport_start == 50, "zoom_by(1.0) re-centers on playhead, got " .. sm.viewport_start)
+print("  ok: zoom_by(1.0) preserves duration")
+
+--------------------------------------------------------------------------------
+-- NSF: Output invariant — content_changed shrinks total below viewport
+--------------------------------------------------------------------------------
+
+print("\n--- Test 20: content_changed shrinks total below viewport range ---")
+sm:load_sequence(mc_id)
+sm:set_viewport(100, 100)
+-- viewport = [100, 200). Simulate total_frames shrinking to 150 via signal.
+-- viewport_start(100) + viewport_duration(100) = 200 > 150.
+-- The handler must clamp so viewport doesn't extend past total_frames.
+-- Override notify_content_changed so engine.total_frames sticks at 150.
+local orig_notify = sm.engine.notify_content_changed
+sm.engine.notify_content_changed = function() end
+sm.engine.total_frames = 150
+package.loaded["core.signals"].emit("content_changed", sm.sequence_id)
+assert(sm.total_frames == 150, "total_frames should be 150, got " .. sm.total_frames)
+local vp_end = sm.viewport_start + sm.viewport_duration
+assert(vp_end <= sm.total_frames,
+    string.format("viewport must not extend past total: vp_end=%d total=%d",
+        vp_end, sm.total_frames))
+assert(sm.viewport_start >= 0, "viewport_start must be >= 0")
+print("  ok: viewport clamped after content shrink")
+-- Restore
+sm.engine.notify_content_changed = orig_notify
+sm.engine.total_frames = 300
+
+--------------------------------------------------------------------------------
+-- NSF: Output invariant — viewport bounds postcondition
+--------------------------------------------------------------------------------
+
+print("\n--- Test 21: zoom_by postcondition invariants ---")
+sm:load_sequence(mc_id)
+-- Reset to known state
+sm.playhead = 50
+for _, factor in ipairs({0.1, 0.5, 0.8, 1.0, 1.25, 2.0, 10.0}) do
+    sm:zoom_by(factor)
+    assert(sm.viewport_start >= 0,
+        string.format("postcond: viewport_start >= 0 (got %d, factor=%.1f)",
+            sm.viewport_start, factor))
+    assert(sm.viewport_duration >= 30,
+        string.format("postcond: viewport_duration >= MIN (got %d, factor=%.1f)",
+            sm.viewport_duration, factor))
+    assert(sm.viewport_start + sm.viewport_duration <= sm.total_frames,
+        string.format("postcond: viewport end <= total (got %d+%d=%d > %d, factor=%.1f)",
+            sm.viewport_start, sm.viewport_duration,
+            sm.viewport_start + sm.viewport_duration, sm.total_frames, factor))
+end
+print("  ok: all zoom factors maintain viewport invariants")
+
+--------------------------------------------------------------------------------
 -- Cleanup
 --------------------------------------------------------------------------------
 sm:destroy()
