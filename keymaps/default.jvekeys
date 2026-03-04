@@ -82,6 +82,13 @@
 "R" = "RippleTool @timeline"
 "T" = "RollTool @timeline"
 
+[SourceMonitor]
+# Source viewer mark bar zoom (same keys as timeline zoom, different context)
+"Cmd+Equal" = "SourceZoomIn @source_monitor"
+"Cmd+Plus" = "SourceZoomIn @source_monitor"
+"Cmd+Minus" = "SourceZoomOut @source_monitor"
+"Shift+Z" = "SourceZoomFit @source_monitor"
+
 [View]
 "Cmd+2" = "SelectPanel inspector"
 "Cmd+3" = "SelectPanel timeline"

@@ -57,6 +57,10 @@ function SequenceMonitor.new(config)
     self.fps_num = nil
     self.fps_den = nil
 
+    -- Mark bar viewport (ephemeral, resets on load_sequence)
+    self.viewport_start = 0
+    self.viewport_duration = 0
+
     -- Listener pattern (for mark bar redraws)
     self._listeners = {}
 
@@ -111,6 +115,11 @@ function SequenceMonitor.new(config)
         if self.sequence_id == sequence_id then
             self.engine:notify_content_changed()
             self.total_frames = self.engine.total_frames
+            -- Clamp viewport to new total_frames
+            if self.viewport_duration > self.total_frames then
+                self.viewport_duration = self.total_frames
+                self.viewport_start = 0
+            end
             -- MVC pull: re-display frame at parked playhead (content under us changed)
             self:on_model_changed()
             self:_notify()
@@ -302,6 +311,10 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     self.fps_num = self.engine.fps_num
     self.fps_den = self.engine.fps_den
 
+    -- Reset viewport to full extent (zoom-to-fit)
+    self.viewport_start = 0
+    self.viewport_duration = self.total_frames
+
     -- Restore playhead from DB (both masterclips and timelines).
     -- Sequence.load() asserts playhead_position is NOT NULL — no fallback.
     local saved_playhead = seq.playhead_position
@@ -342,6 +355,8 @@ function SequenceMonitor:unload()
     self.playhead = 0
     self.fps_num = nil
     self.fps_den = nil
+    self.viewport_start = 0
+    self.viewport_duration = 0
 
     -- Clear video
     self:_on_show_gap()
@@ -370,6 +385,7 @@ function SequenceMonitor:seek_to_frame(frame)
 
     -- engine:seek uses set_position_silent (no callback), update manually
     self.playhead = math.max(0, math.floor(frame))
+    self:_ensure_playhead_visible()
     if self.sequence and self.sequence:is_masterclip() then
         self:_schedule_persist()
     end
@@ -426,10 +442,92 @@ function SequenceMonitor:set_playhead(frame)
     if pos == self.playhead then return end
 
     self.playhead = pos
+    self:_ensure_playhead_visible()
     self:_notify()
     if self.sequence and self.sequence:is_masterclip() then
         self:_schedule_persist()
     end
+end
+
+--------------------------------------------------------------------------------
+-- Viewport (Mark Bar Zoom)
+--------------------------------------------------------------------------------
+
+-- Minimum viewport size in frames (~1 second at 30fps)
+local MIN_VIEWPORT_FRAMES = 30
+
+--- Get current viewport start frame.
+function SequenceMonitor:get_viewport_start()
+    return self.viewport_start
+end
+
+--- Get current viewport duration in frames.
+function SequenceMonitor:get_viewport_duration()
+    return self.viewport_duration
+end
+
+--- Set viewport with clamping, notify listeners.
+function SequenceMonitor:set_viewport(start, duration)
+    assert(type(start) == "number" and type(duration) == "number",
+        string.format("SequenceMonitor(%s):set_viewport: start/duration must be numbers",
+            self.view_id))
+    local total = self.total_frames
+    if total <= 0 then return end
+
+    -- Clamp duration
+    duration = math.max(MIN_VIEWPORT_FRAMES, math.min(duration, total))
+    duration = math.floor(duration)
+
+    -- Clamp start
+    start = math.max(0, math.min(start, total - duration))
+    start = math.floor(start)
+
+    self.viewport_start = start
+    self.viewport_duration = duration
+    self:_notify()
+end
+
+--- Zoom by factor, centered on playhead.
+-- factor < 1 zooms in (reduce viewport), factor > 1 zooms out (increase viewport).
+function SequenceMonitor:zoom_by(factor)
+    assert(type(factor) == "number" and factor > 0,
+        string.format("SequenceMonitor(%s):zoom_by: factor must be positive number, got %s",
+            self.view_id, tostring(factor)))
+    if self.total_frames <= 0 then return end
+
+    local new_dur = math.floor(self.viewport_duration * factor)
+    new_dur = math.max(MIN_VIEWPORT_FRAMES, math.min(new_dur, self.total_frames))
+
+    -- Center on playhead
+    local new_start = self.playhead - math.floor(new_dur / 2)
+    new_start = math.max(0, math.min(new_start, self.total_frames - new_dur))
+
+    self.viewport_start = math.floor(new_start)
+    self.viewport_duration = new_dur
+    self:_notify()
+end
+
+--- Reset viewport to full extent (zoom-to-fit).
+function SequenceMonitor:zoom_to_fit()
+    self.viewport_start = 0
+    self.viewport_duration = self.total_frames
+    self:_notify()
+end
+
+--- Ensure playhead is visible within viewport. Shifts viewport if needed.
+function SequenceMonitor:_ensure_playhead_visible()
+    if self.total_frames <= 0 or self.viewport_duration >= self.total_frames then
+        return  -- Full extent, playhead always visible
+    end
+    local vp_end = self.viewport_start + self.viewport_duration
+    if self.playhead < self.viewport_start then
+        self.viewport_start = self.playhead
+    elseif self.playhead >= vp_end then
+        self.viewport_start = self.playhead - self.viewport_duration + 1
+    end
+    -- Re-clamp
+    self.viewport_start = math.max(0, math.min(
+        self.viewport_start, self.total_frames - self.viewport_duration))
 end
 
 --------------------------------------------------------------------------------
@@ -536,6 +634,7 @@ end
 --- Called by engine during playback ticks (set_position fires this).
 function SequenceMonitor:_on_position_changed(frame)
     self.playhead = math.floor(frame)
+    self:_ensure_playhead_visible()
     if self.sequence and self.sequence:is_masterclip() then
         self:_schedule_persist()
     end
