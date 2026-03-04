@@ -50,17 +50,30 @@ local function combo(key, mod_val)
     return string.format("%d_%d", key, mod_val or 0)
 end
 
+-- Find binding by command name from array of bindings for a combo key.
+-- If expected_cmd is nil, returns first binding.
+local function find_binding(key, mod_val, expected_cmd)
+    local c = combo(key, mod_val)
+    local bindings = registry.keybindings[c]
+    if not bindings then return nil end
+    if not expected_cmd then return bindings[1] end
+    for _, b in ipairs(bindings) do
+        if b.command_name == expected_cmd then return b end
+    end
+    return nil
+end
+
 local function assert_binding(key, mod_val, expected_cmd, label)
     local c = combo(key, mod_val)
-    local binding = registry.keybindings[c]
-    assert(binding, label .. ": binding missing for combo " .. c)
-    assert(binding.command_name == expected_cmd,
-        string.format("%s: expected %s, got %s", label, expected_cmd, binding.command_name))
+    local bindings = registry.keybindings[c]
+    assert(bindings and #bindings > 0, label .. ": binding missing for combo " .. c)
+    local binding = find_binding(key, mod_val, expected_cmd)
+    assert(binding,
+        string.format("%s: expected %s, not found in bindings for combo %s", label, expected_cmd, c))
 end
 
 local function assert_positional(key, mod_val, idx, expected_val, label)
-    local c = combo(key, mod_val)
-    local binding = registry.keybindings[c]
+    local binding = find_binding(key, mod_val, nil)
     assert(binding, label .. ": binding missing")
     assert(binding.positional_args[idx] == expected_val,
         string.format("%s: positional[%d] expected %s, got %s",
@@ -68,8 +81,7 @@ local function assert_positional(key, mod_val, idx, expected_val, label)
 end
 
 local function assert_named(key, mod_val, param_name, expected_val, label)
-    local c = combo(key, mod_val)
-    local binding = registry.keybindings[c]
+    local binding = find_binding(key, mod_val, nil)
     assert(binding, label .. ": binding missing")
     assert(binding.named_params[param_name] == expected_val,
         string.format("%s: named[%s] expected %s, got %s",
@@ -79,10 +91,13 @@ end
 
 local function assert_contexts(key, mod_val, expected_contexts, label)
     local c = combo(key, mod_val)
-    local binding = registry.keybindings[c]
-    assert(binding, label .. ": binding missing")
+    -- Collect all contexts across all bindings for this combo
     local ctx_set = {}
-    for _, ctx in ipairs(binding.contexts) do ctx_set[ctx] = true end
+    local bindings = registry.keybindings[c]
+    assert(bindings and #bindings > 0, label .. ": binding missing")
+    for _, binding in ipairs(bindings) do
+        for _, ctx in ipairs(binding.contexts) do ctx_set[ctx] = true end
+    end
     for _, ectx in ipairs(expected_contexts) do
         assert(ctx_set[ectx],
             string.format("%s: missing context %s", label, ectx))
@@ -162,8 +177,8 @@ assert_binding(QT_KEY_Z, QT_MOD_CONTROL, "Undo", "Cmd+Z")
 assert_binding(QT_KEY_Z, QT_MOD_CONTROL + QT_MOD_SHIFT, "Redo", "Cmd+Shift+Z")
 -- Global commands should have empty contexts
 do
-    local c = combo(QT_KEY_Z, QT_MOD_CONTROL)
-    local binding = registry.keybindings[c]
+    local binding = find_binding(QT_KEY_Z, QT_MOD_CONTROL, "Undo")
+    assert(binding, "Undo binding missing")
     assert(#binding.contexts == 0,
         "Undo should be global (no context restriction), got " .. #binding.contexts .. " contexts")
 end

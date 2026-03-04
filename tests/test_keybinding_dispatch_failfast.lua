@@ -45,12 +45,14 @@ local function inject_binding(key_combo_str, command_name, positional_args, cont
     local shortcut = assert(registry.parse_shortcut(key_combo_str))
     local combo_key = string.format("%d_%d", shortcut.key, shortcut.modifiers)
     registry.keybindings[combo_key] = {
-        command_name = command_name,
-        positional_args = positional_args or {},
-        named_params = {},
-        contexts = contexts or {},
-        shortcut = shortcut,
-        category = "Test",
+        {
+            command_name = command_name,
+            positional_args = positional_args or {},
+            named_params = {},
+            contexts = contexts or {},
+            shortcut = shortcut,
+            category = "Test",
+        },
     }
     return shortcut
 end

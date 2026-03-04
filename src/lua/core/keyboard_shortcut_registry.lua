@@ -16,7 +16,8 @@ local log = require("core.logger").for_area("ui")
 -- Format: {id, category, name, description, current_shortcuts}
 M.commands = {}
 
--- TOML-based keybindings: {combo_key} -> {command_name, positional_args, named_params, contexts, category, shortcut}
+-- TOML-based keybindings: {combo_key} -> array of {command_name, positional_args, named_params, contexts, category, shortcut}
+-- Multiple bindings per combo key supported — handle_key_event picks first context match.
 -- Single source of truth for all keybindings. Populated by load_keybindings().
 M.keybindings = {}
 
@@ -194,7 +195,10 @@ function M.assign_shortcut(command_id, shortcut_string)
     table.insert(command.current_shortcuts, shortcut)
 
     -- Write to keybindings (the single registry)
-    M.keybindings[combo_key] = {
+    if not M.keybindings[combo_key] then
+        M.keybindings[combo_key] = {}
+    end
+    M.keybindings[combo_key][#M.keybindings[combo_key] + 1] = {
         command_name = command_id,
         named_params = {},
         positional_args = {},
@@ -206,14 +210,21 @@ function M.assign_shortcut(command_id, shortcut_string)
     return true
 end
 
--- Find which command (if any) uses a given key combination
+-- Find which command (if any) uses a given key combination.
+-- Returns first global (no-context) binding's command name, or first binding if all contextual.
 function M.find_conflict(key, modifiers)
     local combo_key = string.format("%d_%d", key, modifiers)
-    local binding = M.keybindings[combo_key]
-    if binding then
-        return binding.command_name
+    local bindings = M.keybindings[combo_key]
+    if not bindings or #bindings == 0 then
+        return nil
     end
-    return nil
+    -- Prefer global binding for conflict detection
+    for _, b in ipairs(bindings) do
+        if not b.contexts or #b.contexts == 0 then
+            return b.command_name
+        end
+    end
+    return bindings[1].command_name
 end
 
 -- Remove a shortcut from a command
@@ -238,7 +249,17 @@ function M.remove_shortcut(command_id, shortcut_string)
 
     -- Remove from keybindings
     local combo_key = string.format("%d_%d", shortcut.key, shortcut.modifiers)
-    M.keybindings[combo_key] = nil
+    local bindings = M.keybindings[combo_key]
+    if bindings then
+        for i = #bindings, 1, -1 do
+            if bindings[i].command_name == command_id then
+                table.remove(bindings, i)
+            end
+        end
+        if #bindings == 0 then
+            M.keybindings[combo_key] = nil
+        end
+    end
 
     return true
 end
@@ -405,7 +426,10 @@ function M.load_keybindings(file_path)
 
             local combo_key = string.format("%d_%d", shortcut.key, shortcut.modifiers)
             binding.shortcut = shortcut
-            M.keybindings[combo_key] = binding
+            if not M.keybindings[combo_key] then
+                M.keybindings[combo_key] = {}
+            end
+            M.keybindings[combo_key][#M.keybindings[combo_key] + 1] = binding
             log.detail("  loaded: '%s' → combo_key=%s → %s", key_combo_str, combo_key, binding.command_name)
             count = count + 1
         end
@@ -427,6 +451,8 @@ local function context_matches(allowed_contexts, active_context)
 end
 
 -- Handle a key event and execute matching command via TOML keybindings.
+-- Iterates all bindings for the combo key; picks first context match.
+-- Context-specific bindings are checked before global (no-context) bindings.
 function M.handle_key_event(key, modifiers, context)
     -- Strip non-significant modifiers (KeypadModifier, GroupSwitchModifier)
     -- that Qt adds to arrow keys, numpad keys, etc.
@@ -434,45 +460,58 @@ function M.handle_key_event(key, modifiers, context)
     modifiers = bit.band(modifiers, kb_constants.SIGNIFICANT_MOD_MASK)
     local combo_key = string.format("%d_%d", key, modifiers)
 
-    local binding = M.keybindings[combo_key]
-    if not binding then
+    local bindings = M.keybindings[combo_key]
+    if not bindings then
         log.detail("  no TOML binding for combo_key=%s", combo_key)
         return false
     end
 
-    log.detail("  found binding: combo_key=%s → command='%s' contexts={%s}",
-        combo_key, binding.command_name,
-        table.concat(binding.contexts or {}, ","))
-
     assert(command_manager,
-        string.format("handle_key_event: command_manager not set (binding '%s' for key %s)",
-            binding.command_name, combo_key))
+        string.format("handle_key_event: command_manager not set (combo %s)", combo_key))
 
-    if not context_matches(binding.contexts, context) then
-        log.detail("  context mismatch: active='%s' required={%s}",
-            tostring(context), table.concat(binding.contexts or {}, ","))
+    -- Two passes: first try context-specific bindings, then global (no-context)
+    local matched = nil
+    for _, binding in ipairs(bindings) do
+        if binding.contexts and #binding.contexts > 0 and context_matches(binding.contexts, context) then
+            matched = binding
+            break
+        end
+    end
+    if not matched then
+        for _, binding in ipairs(bindings) do
+            if not binding.contexts or #binding.contexts == 0 then
+                matched = binding
+                break
+            end
+        end
+    end
+
+    if not matched then
+        log.detail("  no context match for combo_key=%s active='%s'", combo_key, tostring(context))
         return false
     end
 
-    log.detail("  context matched, looking up executor for '%s'", binding.command_name)
+    log.detail("  context matched: combo_key=%s → command='%s' contexts={%s}",
+        combo_key, matched.command_name,
+        table.concat(matched.contexts or {}, ","))
 
-    assert(command_manager.get_executor(binding.command_name),
+    assert(command_manager.get_executor(matched.command_name),
         string.format("handle_key_event: TOML binding '%s' has no registered executor (combo %s)",
-            binding.command_name, binding.shortcut and binding.shortcut.string or combo_key))
+            matched.command_name, matched.shortcut and matched.shortcut.string or combo_key))
 
     local params = {}
-    for k, v in pairs(binding.named_params) do
+    for k, v in pairs(matched.named_params) do
         params[k] = v
     end
-    if #binding.positional_args > 0 then
-        params._positional = binding.positional_args
+    if #matched.positional_args > 0 then
+        params._positional = matched.positional_args
     end
 
-    log.detail("  dispatching %s via execute_ui", binding.command_name)
+    log.detail("  dispatching %s via execute_ui", matched.command_name)
 
-    local result = command_manager.execute_ui(binding.command_name, params)
+    local result = command_manager.execute_ui(matched.command_name, params)
     if result and not result.success and result.error_message then
-        log.warn("%s: %s", binding.command_name, result.error_message)
+        log.warn("%s: %s", matched.command_name, result.error_message)
     end
     return true
 end

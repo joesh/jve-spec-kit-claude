@@ -38,6 +38,16 @@ local QT_KEY_K     = 75
 local QT_KEY_L     = 76
 local QT_KEY_SPACE = 32
 
+-- Helper: find first binding with given command name in array
+local function find_binding(combo, cmd_name)
+    local bindings = registry.keybindings[combo]
+    if not bindings then return nil end
+    for _, b in ipairs(bindings) do
+        if b.command_name == cmd_name then return b end
+    end
+    return nil
+end
+
 print("\n--- Test 1: TOML has JKL bindings loaded ---")
 do
     local j_combo = string.format("%d_%d", QT_KEY_J, 0)
@@ -45,25 +55,27 @@ do
     local l_combo = string.format("%d_%d", QT_KEY_L, 0)
 
     assert(registry.keybindings[j_combo], "J binding should be loaded at combo " .. j_combo)
-    assert(registry.keybindings[j_combo].command_name == "ShuttleReverse",
-        "J should map to ShuttleReverse, got: " .. tostring(registry.keybindings[j_combo].command_name))
+    assert(find_binding(j_combo, "ShuttleReverse"),
+        "J should map to ShuttleReverse")
     print("  ✓ J → ShuttleReverse")
 
     assert(registry.keybindings[k_combo], "K binding should be loaded at combo " .. k_combo)
-    assert(registry.keybindings[k_combo].command_name == "ShuttleStop",
-        "K should map to ShuttleStop, got: " .. tostring(registry.keybindings[k_combo].command_name))
+    assert(find_binding(k_combo, "ShuttleStop"),
+        "K should map to ShuttleStop")
     print("  ✓ K → ShuttleStop")
 
     assert(registry.keybindings[l_combo], "L binding should be loaded at combo " .. l_combo)
-    assert(registry.keybindings[l_combo].command_name == "ShuttleForward",
-        "L should map to ShuttleForward, got: " .. tostring(registry.keybindings[l_combo].command_name))
+    assert(find_binding(l_combo, "ShuttleForward"),
+        "L should map to ShuttleForward")
     print("  ✓ L → ShuttleForward")
 end
 
 print("\n--- Test 2: JKL contexts include timeline + monitors ---")
 do
     local l_combo = string.format("%d_%d", QT_KEY_L, 0)
-    local contexts = registry.keybindings[l_combo].contexts
+    local binding = find_binding(l_combo, "ShuttleForward")
+    assert(binding, "ShuttleForward binding should exist")
+    local contexts = binding.contexts
     assert(type(contexts) == "table", "contexts should be a table")
 
     local has = {}

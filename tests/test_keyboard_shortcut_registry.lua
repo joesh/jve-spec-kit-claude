@@ -97,7 +97,8 @@ local function test_assign_shortcut_conflicts()
     -- Verify keybindings has the first command
     local parsed = registry.parse_shortcut("Cmd+L")
     local combo_key = string.format("%d_%d", parsed.key, parsed.modifiers)
-    assert_equals("keybindings has first command", registry.keybindings[combo_key].command_name, "test.first")
+    assert_true("keybindings array exists", registry.keybindings[combo_key] ~= nil)
+    assert_equals("keybindings has first command", registry.keybindings[combo_key][1].command_name, "test.first")
 end
 
 local function test_assign_and_remove_shortcut()
