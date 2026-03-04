@@ -274,8 +274,12 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
         "SequenceMonitor(%s):load_sequence: sequence_id required, got %s",
         self.view_id, tostring(sequence_id)))
 
-    -- Save current masterclip playhead before switching
-    if self.sequence and self.sequence:is_masterclip() then
+    -- Save current masterclip playhead before switching to a DIFFERENT sequence.
+    -- Skip when reloading the same sequence: external writers (e.g. MatchFrame)
+    -- may have updated marks+playhead in DB — saving stale in-memory state would
+    -- clobber those fresh values.
+    if self.sequence and self.sequence:is_masterclip()
+       and self.sequence_id ~= sequence_id then
         self:save_playhead_to_db()
     end
 

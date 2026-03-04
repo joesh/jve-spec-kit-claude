@@ -1012,4 +1012,59 @@ do
     print("  ok")
 end
 
+-- ─── Test 34: Reload same masterclip preserves externally-written state ───
+-- Regression: MatchFrame writes marks+playhead to DB, then calls load_sequence
+-- on the same sequence already loaded. The save_playhead_to_db() at the top of
+-- load_sequence was clobbering the fresh DB values with stale in-memory state.
+print("\n--- reload same seq preserves external DB writes ---")
+do
+    local Sequence = require("models.sequence")
+    local view = SequenceMonitor.new({ view_id = "test_reload_same" })
+    timer_callbacks = {}
+
+    -- 1. Load masterclip, navigate playhead to 20
+    view:load_sequence(mc_id)
+    view:set_playhead(20)
+    pump_timers()
+
+    -- Verify in-memory state
+    assert(view.playhead == 20, "playhead at 20")
+    assert(view:get_mark_in() == nil, "no mark_in initially")
+    assert(view:get_mark_out() == nil, "no mark_out initially")
+
+    -- 2. Externally write new marks+playhead to DB (simulates MatchFrame executor)
+    local master_seq = Sequence.load(mc_id)
+    master_seq:set_in(10)
+    master_seq:set_out(80)
+    master_seq:set_playhead(55)
+    master_seq:save()
+
+    -- Verify DB has the new values
+    local db_check = Sequence.load(mc_id)
+    assert(db_check.mark_in == 10, "DB mark_in=10")
+    assert(db_check.mark_out == 80, "DB mark_out=80")
+    assert(db_check.playhead_position == 55, "DB playhead=55")
+
+    -- 3. Reload same sequence (this is what activate_item does on second F press)
+    view:load_sequence(mc_id)
+
+    -- 4. Fresh DB values must be used, not the stale in-memory playhead=20
+    assert(view.playhead == 55,
+        "playhead should be 55 (from DB), got " .. tostring(view.playhead))
+    assert(view:get_mark_in() == 10,
+        "mark_in should be 10 (from DB), got " .. tostring(view:get_mark_in()))
+    assert(view:get_mark_out() == 80,
+        "mark_out should be 80 (from DB), got " .. tostring(view:get_mark_out()))
+
+    -- Reset
+    view:set_playhead(0)
+    pump_timers()
+    local seq = Sequence.load(mc_id)
+    seq.mark_in = nil
+    seq.mark_out = nil
+    seq:save()
+    view:destroy()
+    print("  ok")
+end
+
 print("\n✅ test_sequence_monitor.lua passed")
