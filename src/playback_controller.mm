@@ -434,17 +434,22 @@ void PlaybackController::SetBounds(int64_t total_frames, int32_t fps_num, int32_
 // Transport
 // ============================================================================
 
-void PlaybackController::prefillVideo(int64_t pos, int direction) {
+void PlaybackController::prefillVideo(int64_t pos, int /*direction*/) {
     // Sync-decode the current frame on every video track into TMB's cache.
     // Mirrors deliverFrame's track iteration. Runs BEFORE CVDisplayLink starts,
     // so the first tick has an immediate cache hit (no stall).
+    JVE_ASSERT(m_tmb, "PlaybackController::prefillVideo: TMB is null");
+
     auto video_tracks = m_tmb->GetVideoTrackIds();
+    int filled = 0;
     for (int track_idx : video_tracks) {
         emp::TrackId track{emp::TrackType::Video, track_idx};
-        m_tmb->GetVideoFrame(track, pos);  // sync decode, populates cache
+        auto result = m_tmb->GetVideoFrame(track, pos);
+        if (result.frame) ++filled;
+        // offline/gap is expected (no clip on this track at pos) — not an error
     }
-    JVE_LOG_DETAIL(Ticks, "Play: pre-filled %zu video track(s) at frame %lld",
-                   video_tracks.size(), (long long)pos);
+    JVE_LOG_DETAIL(Ticks, "Play: pre-filled %d/%zu video track(s) at frame %lld",
+                   filled, video_tracks.size(), (long long)pos);
 }
 
 void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
@@ -452,6 +457,14 @@ void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
         "PlaybackController::prefillAudio: AOP is null");
     JVE_ASSERT(m_sse,
         "PlaybackController::prefillAudio: SSE is null");
+    JVE_ASSERT(m_tmb,
+        "PlaybackController::prefillAudio: TMB is null");
+    JVE_ASSERT(m_fps_num > 0,
+        "PlaybackController::prefillAudio: fps_num must be positive");
+    JVE_ASSERT(m_audio_sample_rate > 0,
+        "PlaybackController::prefillAudio: audio_sample_rate must be positive");
+    JVE_ASSERT(m_audio_channels > 0,
+        "PlaybackController::prefillAudio: audio_channels must be positive");
 
     // Compute quality mode from speed
     float abs_speed = speed;
@@ -508,10 +521,19 @@ void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
         if (written <= 0) break;   // ring buffer full
         total_prefilled += written;
     }
-    JVE_LOG_DETAIL(Audio, "Play: pre-filled %lld/%lld frames into ring buffer",
-                  (long long)total_prefilled, (long long)ring_capacity);
+    if (total_prefilled == 0) {
+        JVE_LOG_WARN(Audio, "Play: audio pre-fill produced 0 frames "
+                     "(ring_capacity=%lld, pcm=%s, time_us=%lld) — "
+                     "AOP starts with empty ring buffer",
+                     (long long)ring_capacity,
+                     pcm ? "non-null" : "null",
+                     (long long)time_us);
+    } else {
+        JVE_LOG_DETAIL(Audio, "Play: pre-filled %lld/%lld frames into ring buffer",
+                      (long long)total_prefilled, (long long)ring_capacity);
+    }
 
-    // Start audio output — ring buffer now has ~600ms of decoded audio.
+    // Start audio output — ring buffer has decoded audio (or is empty at gaps).
     m_aop->Start();
     JVE_LOG_DETAIL(Audio, "Play: post-start aop_ph=%lldus media_anchor=%lldus",
                   (long long)aop_playhead, (long long)time_us);
