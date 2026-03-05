@@ -80,11 +80,11 @@ qt_constants_mock = {
         SET_SURFACE = function(_pc, surface)
             pc_surface = surface
         end,
-        SET_CLIP_WINDOW = function() end,
-        SET_NEED_CLIPS_CALLBACK = function() end,
+        SET_CLIP_PROVIDER = function() end,
+        RELOAD_ALL_CLIPS = function() end,
         SET_POSITION_CALLBACK = function() end,
         SET_CLIP_TRANSITION_CALLBACK = function(_pc, fn)
-            stored_clip_transition_cb = fn
+            stored_clip_transition_cb = fn  -- args: clip_id, rotation, par_num, par_den, is_offline, media_path, frame
         end,
         SET_SHUTTLE_MODE = function() end,
         STOP = function() end,
@@ -150,6 +150,9 @@ package.loaded["models.sequence"] = {
             get_audio_at = function() return {} end,
             get_next_audio = function() return {} end,
             get_prev_audio = function() return {} end,
+            get_video_in_range = function() return {} end,
+            get_audio_in_range = function() return {} end,
+            get_track_indices = function() return { 0 } end,
         }
     end,
 }
@@ -288,6 +291,7 @@ end
 
 --------------------------------------------------------------------------------
 -- 4. Playback mode: clip transition to offline → offline frame displayed
+--    Key bug fix: uses the exact frame from C++ (7th arg), not self._position
 --------------------------------------------------------------------------------
 print("\n--- 4. playback: clip transition to offline ---")
 do
@@ -309,11 +313,14 @@ do
     local online_frame = surface._frame
     assert(online_frame == "frame_50", "precondition: online frame displayed")
 
-    -- Simulate playback advancing to offline clip
-    -- C++ would fire clip transition callback
-    engine._position = 150  -- simulate playback position
+    -- Simulate playback advancing to offline clip.
+    -- Set _position to a STALE value (still in previous clip) to verify
+    -- the fix: _on_clip_transition must use the 7th arg (frame=150),
+    -- not self._position (which is 80, stale from coalesced reports).
+    engine._position = 80  -- stale: position callback hasn't caught up yet
     assert(stored_clip_transition_cb, "clip transition callback must be set")
-    stored_clip_transition_cb("clip_offline", 0, 1, 1, true, "/offline.braw")
+    -- 7th arg = frame (150), the exact frame from C++ deliverFrame
+    stored_clip_transition_cb("clip_offline", 0, 1, 1, true, "/offline.braw", 150)
 
     -- Surface should now show offline frame (not stale online frame)
     assert(surface._frame ~= online_frame, string.format(
@@ -335,8 +342,8 @@ do
     engine:seek(50)
     local count_before = surface._frame_count
 
-    -- Simulate online clip transition during playback
-    stored_clip_transition_cb("clipNew", 0, 1, 1, false, "/test.mov")
+    -- Simulate online clip transition during playback (frame=60)
+    stored_clip_transition_cb("clipNew", 0, 1, 1, false, "/test.mov", 60)
 
     -- Surface frame_count should NOT increase (C++ push handles online frames)
     assert(surface._frame_count == count_before, string.format(
@@ -368,6 +375,191 @@ do
     -- Verify the offline frame was composed (offline_frame_cache handles error_msg)
     assert(surface._frame ~= nil and surface._frame ~= BLACK_FRAME,
         "error_msg: offline frame must be displayed")
+    print("  PASS")
+end
+
+--------------------------------------------------------------------------------
+-- 7. error_code "Unsupported" → "Codec Unavailable" title in offline frame
+--------------------------------------------------------------------------------
+print("\n--- 7. error_code: Codec Unavailable title ---")
+do
+    -- Intercept COMPOSE_OFFLINE_FRAME to capture the lines table
+    local captured_lines = nil
+    local orig_compose = qt_constants_mock.EMP.COMPOSE_OFFLINE_FRAME
+    qt_constants_mock.EMP.COMPOSE_OFFLINE_FRAME = function(png, lines)
+        captured_lines = lines
+        return orig_compose(png, lines)
+    end
+
+    -- Clear offline_frame_cache to force recompose
+    require("core.media.offline_frame_cache").clear()
+
+    tmb_responses[150] = {
+        frame_handle = nil,
+        metadata = {
+            clip_id = "clip_offline_codec", media_path = "/footage.braw",
+            source_frame = 50, rotation = 0,
+            par_num = 1, par_den = 1,
+            offline = true, pending = false,
+            error_msg = "Unsupported codec",
+            error_code = "Unsupported",
+        },
+    }
+
+    local engine, surface = make_engine()  -- luacheck: no unused
+    engine:load_sequence("seq1", 300)
+    engine:seek(150)
+
+    assert(captured_lines, "COMPOSE_OFFLINE_FRAME must have been called")
+    assert(captured_lines[1].text == "Codec Unavailable", string.format(
+        "title should be 'Codec Unavailable', got '%s'", tostring(captured_lines[1].text)))
+
+    -- Check codec hint line (BRAW from .braw extension)
+    assert(captured_lines[2].text:find("BRAW"), string.format(
+        "second line should contain BRAW codec hint, got '%s'", tostring(captured_lines[2].text)))
+
+    -- Restore
+    qt_constants_mock.EMP.COMPOSE_OFFLINE_FRAME = orig_compose
+    print("  PASS")
+end
+
+--------------------------------------------------------------------------------
+-- 8. error_code "FileNotFound" → "Media Offline" title (not "Codec Unavailable")
+--------------------------------------------------------------------------------
+print("\n--- 8. error_code: FileNotFound → Media Offline ---")
+do
+    local captured_lines = nil
+    local orig_compose = qt_constants_mock.EMP.COMPOSE_OFFLINE_FRAME
+    qt_constants_mock.EMP.COMPOSE_OFFLINE_FRAME = function(png, lines)
+        captured_lines = lines
+        return orig_compose(png, lines)
+    end
+
+    require("core.media.offline_frame_cache").clear()
+
+    tmb_responses[150] = {
+        frame_handle = nil,
+        metadata = {
+            clip_id = "clip_offline_fnf", media_path = "/missing.mov",
+            source_frame = 50, rotation = 0,
+            par_num = 1, par_den = 1,
+            offline = true, pending = false,
+            error_msg = "File not found: /missing.mov",
+            error_code = "FileNotFound",
+        },
+    }
+
+    local engine = make_engine()
+    engine:load_sequence("seq1", 300)
+    engine:seek(150)
+
+    assert(captured_lines, "COMPOSE_OFFLINE_FRAME must have been called")
+    assert(captured_lines[1].text == "Media Offline", string.format(
+        "title should be 'Media Offline', got '%s'", tostring(captured_lines[1].text)))
+
+    qt_constants_mock.EMP.COMPOSE_OFFLINE_FRAME = orig_compose
+    print("  PASS")
+end
+
+--------------------------------------------------------------------------------
+-- 9. NSF Half 1: negative frame → assert (input validation)
+--------------------------------------------------------------------------------
+print("\n--- 9. NSF: negative frame asserts ---")
+do
+    local engine = make_engine()
+    engine:load_sequence("seq1", 300)
+
+    local ok, err = pcall(function()
+        stored_clip_transition_cb("clipX", 0, 1, 1, false, "/test.mov", -1)
+    end)
+    assert(not ok, "negative frame must assert")
+    assert(err:find("frame must be >= 0"), string.format(
+        "error should mention 'frame must be >= 0', got: %s", tostring(err)))
+    print("  PASS")
+end
+
+--------------------------------------------------------------------------------
+-- 10. NSF Half 2: playback offline transition — error_code flows through
+--------------------------------------------------------------------------------
+print("\n--- 10. NSF: playback offline + error_code → Codec Unavailable ---")
+do
+    local captured_lines = nil
+    local orig_compose = qt_constants_mock.EMP.COMPOSE_OFFLINE_FRAME
+    qt_constants_mock.EMP.COMPOSE_OFFLINE_FRAME = function(png, lines)
+        captured_lines = lines
+        return orig_compose(png, lines)
+    end
+
+    require("core.media.offline_frame_cache").clear()
+
+    -- TMB response for the EXACT frame=150 (not self._position)
+    tmb_responses[150] = {
+        frame_handle = nil,
+        metadata = {
+            clip_id = "clip_play_codec", media_path = "/scene.r3d",
+            source_frame = 50, rotation = 0,
+            par_num = 1, par_den = 1,
+            offline = true, pending = false,
+            error_msg = "Unsupported codec",
+            error_code = "Unsupported",
+        },
+    }
+
+    local engine, surface = make_engine()
+    engine:load_sequence("seq1", 300)
+    engine:seek(50)  -- online first
+
+    -- Now simulate playback clip transition to offline
+    engine._position = 80  -- stale
+    stored_clip_transition_cb("clip_play_codec", 0, 1, 1, true, "/scene.r3d", 150)
+
+    -- Postcondition: surface has offline frame
+    assert(surface._frame ~= nil, "surface must not be nil")
+    assert(type(surface._frame) == "string" and surface._frame:find("OFFLINE"),
+        string.format("surface should show offline frame, got %s", tostring(surface._frame)))
+
+    -- Postcondition: title was "Codec Unavailable" (error_code flowed through)
+    assert(captured_lines, "COMPOSE_OFFLINE_FRAME must have been called")
+    assert(captured_lines[1].text == "Codec Unavailable", string.format(
+        "playback offline: title should be 'Codec Unavailable', got '%s'",
+        tostring(captured_lines[1].text)))
+
+    -- Postcondition: codec hint "RED R3D" from .r3d extension
+    assert(captured_lines[2].text:find("RED R3D"), string.format(
+        "playback offline: second line should contain RED R3D, got '%s'",
+        tostring(captured_lines[2].text)))
+
+    qt_constants_mock.EMP.COMPOSE_OFFLINE_FRAME = orig_compose
+    print("  PASS")
+end
+
+--------------------------------------------------------------------------------
+-- 11. NSF Half 2: build_lines always produces at least 1 line
+--------------------------------------------------------------------------------
+print("\n--- 11. NSF: build_lines postcondition ---")
+do
+    -- Test with minimal metadata (no error_code, no error_msg)
+    local offline_frame_cache = require("core.media.offline_frame_cache")
+    offline_frame_cache.clear()
+
+    tmb_responses[150] = {
+        frame_handle = nil,
+        metadata = {
+            clip_id = "clip_bare", media_path = "/bare.mov",
+            source_frame = 50, rotation = 0,
+            par_num = 1, par_den = 1,
+            offline = true, pending = false,
+            -- no error_code, no error_msg
+        },
+    }
+
+    local engine, surface = make_engine()
+    engine:load_sequence("seq1", 300)
+    engine:seek(150)
+
+    -- Must produce a frame (not nil, not black)
+    assert(surface._frame ~= nil and surface._frame ~= BLACK_FRAME, string.format(
+        "bare offline: must show offline frame, got %s", tostring(surface._frame)))
     print("  PASS")
 end
 
