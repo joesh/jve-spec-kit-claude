@@ -1144,6 +1144,8 @@ bool PlaybackController::shouldDecode(int64_t frame) const {
 }
 
 void PlaybackController::updateStrideDetection(double deliver_ms) {
+    JVE_ASSERT(m_fps > 0, "updateStrideDetection: m_fps must be positive (SetBounds not called?)");
+    JVE_ASSERT(deliver_ms >= 0, "updateStrideDetection: deliver_ms is negative");
     double expected_ms = 1000.0 / m_fps;
     int dir = m_direction.load(std::memory_order_relaxed);
 
@@ -1154,7 +1156,9 @@ void PlaybackController::updateStrideDetection(double deliver_ms) {
         if (m_consecutive_slow_decodes >= SLOW_DECODE_CONSECUTIVE && m_frame_stride == 1) {
             int new_stride = static_cast<int>(std::ceil(deliver_ms / expected_ms));
             m_frame_stride = std::clamp(new_stride, 2, MAX_STRIDE);
-            m_next_decode_frame = m_position.load(std::memory_order_relaxed) + dir * m_frame_stride;
+            int64_t pos = m_position.load(std::memory_order_relaxed);
+            m_next_decode_frame = std::clamp(pos + dir * m_frame_stride,
+                                             int64_t(0), m_total_frames - 1);
             m_audio_master_position = m_has_audio.load(std::memory_order_relaxed);
 
             JVE_LOG_EVENT(Ticks, "slow-decode: stride=%d (deliver=%.1fms expected=%.1fms) audio_master=%d",
@@ -1176,7 +1180,9 @@ void PlaybackController::updateStrideDetection(double deliver_ms) {
 
     // Update next decode target after successful decode when striding
     if (m_frame_stride > 1) {
-        m_next_decode_frame = m_position.load(std::memory_order_relaxed) + dir * m_frame_stride;
+        int64_t pos = m_position.load(std::memory_order_relaxed);
+        m_next_decode_frame = std::clamp(pos + dir * m_frame_stride,
+                                         int64_t(0), m_total_frames - 1);
     }
 }
 
@@ -1245,6 +1251,21 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
         if (m_audio_master_position) {
             int64_t new_pos = PlaybackClock::FrameFromTimeUS(audio_time_us, m_fps_num, m_fps_den);
             new_pos = std::max<int64_t>(0, std::min(new_pos, m_total_frames - 1));
+
+            // Postcondition: audio-master must not teleport video.
+            // Clock discontinuity (bad reanchor, overflow) would silently jump.
+            {
+                int64_t delta = std::abs(new_pos - current);
+                if (delta >= 240) {
+                    char buf[256];
+                    snprintf(buf, sizeof(buf),
+                        "advancePosition(audio-master): jumped %lld frames in one tick "
+                        "(current=%lld, new=%lld, audio_time_us=%lld, drift=%.3fs)",
+                        (long long)delta, (long long)current, (long long)new_pos,
+                        (long long)audio_time_us, drift_s);
+                    JVE_ASSERT(false, buf);
+                }
+            }
 
             if (m_current_tick) {
                 m_current_tick->drift_s = drift_s;
