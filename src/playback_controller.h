@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <algorithm>
 #include <vector>
 
 // Forward declarations
@@ -28,6 +29,89 @@ namespace sse {
 class ScrubStretchEngine;
 enum class QualityMode;
 }
+
+// ============================================================================
+// Playback diagnostics — zero-I/O ring buffers for per-tick capture
+// ============================================================================
+
+struct TickMetric {        // ~88 bytes, written per CVDisplayLink tick
+    double elapsed_ms;      // CVDisplayLink interval
+    double advance_ms;      // advancePosition() wall time
+    double setPlayhead_ms;  // TMB SetPlayhead() wall time
+    double deliver_ms;      // deliverFrame() wall time (incl TMB GetVideoFrame)
+    double report_ms;       // reportPosition() wall time
+    double cadence_ms;      // ms since last NEW frame displayed (0 if repeat)
+    double drift_s;         // A/V drift (video - audio)
+    double pll_adjust;      // PLL correction applied
+    int64_t frame;
+    int64_t audio_buf_frames; // AOP BufferedFrames() at tick time
+    uint8_t flags;          // TickFlags bitfield
+    uint8_t padding[7];
+};
+
+struct PumpMetric {        // ~48 bytes, written per pump cycle
+    int64_t media_time_us;
+    int64_t aop_playhead_us;
+    int64_t fetched_frames;
+    int64_t rendered_frames;
+    int64_t buffered_frames;  // AOP level BEFORE render
+    uint8_t flags;            // PumpFlags bitfield
+    uint8_t padding[7];
+};
+
+namespace TickFlags {
+    constexpr uint8_t SKIP       = 1 << 0;
+    constexpr uint8_t HOLD       = 1 << 1;
+    constexpr uint8_t REPEAT     = 1 << 2;
+    constexpr uint8_t PREFETCH   = 1 << 3;
+    constexpr uint8_t GAP        = 1 << 4;
+    constexpr uint8_t TRANSITION = 1 << 5;
+    constexpr uint8_t OFFLINE    = 1 << 6;
+    constexpr uint8_t DROPPED   = 1 << 7;
+}
+
+namespace PumpFlags {
+    constexpr uint8_t UNDERRUN = 1 << 0;
+    constexpr uint8_t STALL    = 1 << 1;
+    constexpr uint8_t DRY      = 1 << 2;
+}
+
+// Fixed-size circular buffer. Single-writer, dump at Stop().
+template<typename T, size_t N>
+class DiagRing {
+public:
+    T& next() {
+        size_t idx = m_write_pos % N;
+        m_buffer[idx] = T{};
+        ++m_write_pos;
+        return m_buffer[idx];
+    }
+
+    template<typename Fn>
+    void for_each(Fn&& fn) const {
+        if (m_write_pos == 0) return;
+        if (m_write_pos <= N) {
+            for (size_t i = 0; i < m_write_pos; ++i)
+                fn(m_buffer[i]);
+        } else {
+            size_t start = m_write_pos % N;
+            for (size_t i = 0; i < N; ++i)
+                fn(m_buffer[(start + i) % N]);
+        }
+    }
+
+    size_t count() const { return m_write_pos; }
+    size_t size() const { return std::min(m_write_pos, N); }
+
+    void reset() { m_write_pos = 0; }
+
+private:
+    T m_buffer[N]{};
+    size_t m_write_pos{0};
+};
+
+static constexpr size_t DIAG_VIDEO_RING_SIZE = 1800;  // ~30s @60Hz, ~154KB
+static constexpr size_t DIAG_AUDIO_RING_SIZE = 3000;  // ~30s @~100Hz, ~140KB
 
 // ============================================================================
 // PlaybackClock - epoch-based A/V sync
@@ -78,7 +162,8 @@ public:
     // Start pump thread with dependencies
     void Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* sse,
                aop::AudioOutput* aop, PlaybackClock* clock,
-               int32_t sample_rate, int32_t channels);
+               int32_t sample_rate, int32_t channels,
+               DiagRing<PumpMetric, DIAG_AUDIO_RING_SIZE>* diag);
     void Stop();
     bool IsRunning() const;
 
@@ -113,12 +198,8 @@ private:
     static constexpr int PUMP_INTERVAL_HUNGRY_MS = 2;
     static constexpr int PUMP_INTERVAL_OK_MS = 15;
 
-    // Sampled logging (every 50th cycle)
-    int64_t m_pump_cycle{0};
-    int64_t m_last_fetch_start{-1};
-    int64_t m_last_fetch_end{-1};
-    int64_t m_last_media_time{-1};
-    int64_t m_stalled_cycles{0};
+    // Diagnostics
+    DiagRing<PumpMetric, DIAG_AUDIO_RING_SIZE>* m_diag{nullptr};
     int64_t m_underrun_count{0};
 };
 
@@ -235,12 +316,33 @@ private:
     double m_fractional_frames{0.0};   // video clock accumulator (CVDisplayLink elapsed → frames)
     std::string m_current_clip_id;
 
-    // Sampled logging counters
-    int64_t m_deliver_count{0};         // deliverFrame call count (sampled every 30th)
-    int64_t m_repeat_streak{0};         // consecutive frame repeats (stall detector)
-    int64_t m_advance_count{0};         // advancePosition call count (sampled every 30th)
-    int64_t m_hold_count{0};            // total HOLD corrections this play session
-    int64_t m_skip_count{0};            // total SKIP corrections this play session
+    int64_t m_repeat_streak{0};         // consecutive frame repeats (deliverFrame early-return logic)
+
+    // ---- Adaptive frame stride for slow-decode codecs ----
+    // When decode takes >2x frame_period, skip video decode on intermediate frames.
+    // Audio continues at full rate; position derived from audio clock (no drift).
+    int m_frame_stride{1};                    // 1 = normal, N = decode every Nth content frame
+    int64_t m_next_decode_frame{-1};          // next content frame to decode
+    int m_consecutive_slow_decodes{0};
+    int m_consecutive_fast_decodes{0};
+    bool m_audio_master_position{false};      // true when PLL should be bypassed
+    int64_t m_stride_dropped_count{0};        // diagnostics
+
+    // Audio stall detection — engage audio-master when AOP buffer empties
+    int m_consecutive_audio_dry{0};
+    int m_consecutive_audio_healthy{0};
+
+    static constexpr int SLOW_DECODE_CONSECUTIVE = 3;
+    static constexpr int FAST_DECODE_CONSECUTIVE = 10;
+    static constexpr double SLOW_DECODE_RATIO = 2.0;     // deliver_ms > 2x frame_period = slow
+    static constexpr int MAX_STRIDE = 8;                  // cap at ~3fps for 24fps content
+    static constexpr int AUDIO_DRY_CONSECUTIVE = 3;       // 3 ticks of buf=0 → audio-master
+    static constexpr int AUDIO_HEALTHY_CONSECUTIVE = 10;  // 10 ticks of buf>0 → back to PLL
+    static constexpr double AUDIO_MASTER_DRIFT_THRESHOLD = 0.1;   // 100ms → engage audio-master
+    static constexpr double AUDIO_MASTER_RECOVER_THRESHOLD = 0.04; // 40ms → safe to return to PLL
+
+    bool shouldDecode(int64_t frame) const;
+    void updateStrideDetection(double deliver_ms);
 
     // ---- A/V sync PLL (phase-locked loop) ----
     // Gently steers video frame accumulator toward audio clock each tick.
@@ -275,6 +377,13 @@ private:
     std::atomic<bool> m_has_audio{false};
     int32_t m_audio_sample_rate{48000};
     int32_t m_audio_channels{2};
+
+    // ---- Playback diagnostics ring buffers ----
+    DiagRing<TickMetric, DIAG_VIDEO_RING_SIZE> m_video_diag;
+    DiagRing<PumpMetric, DIAG_AUDIO_RING_SIZE> m_audio_diag;
+    TickMetric* m_current_tick{nullptr};
+
+    void dumpDiagnostics();
 
     // ---- CVDisplayLink ----
     void* m_displayLink{nullptr};  // CVDisplayLinkRef (opaque for header)

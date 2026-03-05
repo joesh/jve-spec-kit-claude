@@ -62,6 +62,32 @@ CVReturn displayLinkCallback(
     return kCVReturnSuccess;
 }
 
+// Flag-to-string helpers for diagnostics dump
+std::string tickFlagsStr(uint8_t flags) {
+    if (flags == 0) return "";
+    std::string s;
+    if (flags & TickFlags::SKIP) s += "SKIP|";
+    if (flags & TickFlags::HOLD) s += "HOLD|";
+    if (flags & TickFlags::REPEAT) s += "REPEAT|";
+    if (flags & TickFlags::PREFETCH) s += "PREFETCH|";
+    if (flags & TickFlags::GAP) s += "GAP|";
+    if (flags & TickFlags::TRANSITION) s += "TRANSITION|";
+    if (flags & TickFlags::OFFLINE) s += "OFFLINE|";
+    if (flags & TickFlags::DROPPED) s += "DROPPED|";
+    if (!s.empty()) s.pop_back();
+    return s;
+}
+
+std::string pumpFlagsStr(uint8_t flags) {
+    if (flags == 0) return "";
+    std::string s;
+    if (flags & PumpFlags::UNDERRUN) s += "UNDERRUN|";
+    if (flags & PumpFlags::STALL) s += "STALL|";
+    if (flags & PumpFlags::DRY) s += "DRY|";
+    if (!s.empty()) s.pop_back();
+    return s;
+}
+
 } // anonymous namespace
 
 // ============================================================================
@@ -196,7 +222,8 @@ AudioPump::~AudioPump() {
 
 void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* sse,
                       aop::AudioOutput* aop, PlaybackClock* clock,
-                      int32_t sample_rate, int32_t channels) {
+                      int32_t sample_rate, int32_t channels,
+                      DiagRing<PumpMetric, DIAG_AUDIO_RING_SIZE>* diag) {
     JVE_ASSERT(tmb, "AudioPump::Start: tmb is null");
     JVE_ASSERT(sse, "AudioPump::Start: sse is null");
     JVE_ASSERT(aop, "AudioPump::Start: aop is null");
@@ -212,6 +239,7 @@ void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* ss
     m_clock = clock;
     m_sample_rate = sample_rate;
     m_channels = channels;
+    m_diag = diag;
     m_stop_requested.store(false, std::memory_order_relaxed);
     m_running.store(true, std::memory_order_relaxed);
 
@@ -247,13 +275,12 @@ int AudioPump::QualityMode() const {
 }
 
 void AudioPump::pumpLoop() {
-    // Buffer for rendered audio
     std::vector<float> render_buffer(MAX_RENDER_FRAMES * m_channels);
     int consecutive_dry_cycles = 0;
+    int64_t stalled_cycles = 0;
+    int64_t last_media_time = -1;
 
     while (!m_stop_requested.load(std::memory_order_relaxed)) {
-        ++m_pump_cycle;
-
         // 1. Get current media time from clock
         int64_t aop_playhead = m_aop->PlayheadTimeUS();
         int64_t media_time_us = m_clock->CurrentTimeUS(aop_playhead);
@@ -271,33 +298,18 @@ void AudioPump::pumpLoop() {
             fetch_end = media_time_us;
         }
 
-        // Dense startup log: first 10 cycles log every iteration
-        if (m_pump_cycle <= 10) {
-            JVE_LOG_DETAIL(Audio, "pump[%lld]: aop_ph=%lldus media_t=%lldus fetch=[%lld..%lld]us",
-                          (long long)m_pump_cycle, (long long)aop_playhead,
-                          (long long)media_time_us,
-                          (long long)fetch_start, (long long)fetch_end);
-        }
-
         bool pushed_source = false;
         auto pcm = m_tmb->GetMixedAudio(fetch_start, fetch_end);
         if (pcm && pcm->frames() > 0) {
-            // 3. Push to SSE (source data for time-stretching)
+            // Push to SSE (source data for time-stretching).
             // SetTarget is NOT called here — SSE advances naturally via
             // advance_time() inside Render(). Transport events (Play, SetSpeed)
-            // call SetTarget after Reset(). See test_steady_state_render_without_set_target.
+            // call SetTarget after Reset().
             m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(), pcm->start_time_us());
             pushed_source = true;
         }
 
-        // Dense startup log: push details
-        if (m_pump_cycle <= 10 && pcm) {
-            JVE_LOG_DETAIL(Audio, "pump[%lld]: pushed %lld frames at t=%lldus",
-                          (long long)m_pump_cycle, (long long)pcm->frames(),
-                          (long long)pcm->start_time_us());
-        }
-
-        // 5. Render from SSE and write to AOP
+        // 3. Render from SSE and write to AOP
         int64_t buffered = m_aop->BufferedFrames();
         int64_t target_frames = (m_sample_rate * TARGET_BUFFER_MS) / 1000;
         int64_t frames_needed = std::max<int64_t>(0, target_frames - buffered);
@@ -311,41 +323,22 @@ void AudioPump::pumpLoop() {
             }
         }
 
-        // Dense startup log: render details
-        if (m_pump_cycle <= 10) {
-            JVE_LOG_DETAIL(Audio, "pump[%lld]: rendered=%lld needed=%lld buf_before=%lld buf_after=%lld",
-                          (long long)m_pump_cycle, (long long)produced,
-                          (long long)frames_needed, (long long)buffered,
-                          (long long)m_aop->BufferedFrames());
-        }
+        // 4. Diagnostics flags
+        uint8_t flags = 0;
 
-        // Sampled DETAIL log: every 50th cycle
-        if (m_pump_cycle % 50 == 0) {
-            JVE_LOG_DETAIL(Audio, "pump: media_t=%lldus fetched=%lld rendered=%lld buf=%lld",
-                          (long long)media_time_us,
-                          pcm ? (long long)pcm->frames() : 0LL,
-                          (long long)produced, (long long)buffered);
-        }
-
-        // Duplicate fetch detection: only interesting when media_time hasn't
-        // advanced (clock stuck), not when the 2s lookahead window overlaps.
-        if (media_time_us == m_last_media_time && m_pump_cycle > 1) {
-            m_stalled_cycles++;
+        // Stall detection (clock not advancing)
+        if (media_time_us == last_media_time && last_media_time >= 0) {
+            stalled_cycles++;
+            if (stalled_cycles > 5) flags |= PumpFlags::STALL;
         } else {
-            if (m_stalled_cycles > 5) {
-                JVE_LOG_DETAIL(Audio, "pump: clock stalled for %lld cycles at media_t=%lldus",
-                              (long long)m_stalled_cycles, (long long)m_last_media_time);
-            }
-            m_stalled_cycles = 0;
+            stalled_cycles = 0;
         }
-        m_last_media_time = media_time_us;
-        m_last_fetch_start = fetch_start;
-        m_last_fetch_end = fetch_end;
+        last_media_time = media_time_us;
 
-        // Output invariant: if we pushed source data, SSE must eventually produce frames.
-        // Consecutive dry cycles (source pushed but nothing rendered) indicate SSE is broken.
+        // Dry detection + assert
         if (pushed_source && produced == 0 && frames_needed > 0) {
             consecutive_dry_cycles++;
+            flags |= PumpFlags::DRY;
             if (consecutive_dry_cycles >= 50) {
                 char buf[256];
                 snprintf(buf, sizeof(buf),
@@ -358,13 +351,25 @@ void AudioPump::pumpLoop() {
             consecutive_dry_cycles = 0;
         }
 
-        // 6. Detect AOP underruns (ring buffer emptied → audible click/gap)
+        // 5. AOP underrun detection (WARN stays — rare, important)
         if (m_aop->HadUnderrun()) {
             m_aop->ClearUnderrunFlag();
             ++m_underrun_count;
+            flags |= PumpFlags::UNDERRUN;
             JVE_LOG_WARN(Audio, "pump: AOP underrun #%lld at media_t=%lldus buf=%lld",
                         (long long)m_underrun_count, (long long)media_time_us,
                         (long long)m_aop->BufferedFrames());
+        }
+
+        // 6. Write ring entry
+        if (m_diag) {
+            auto& entry = m_diag->next();
+            entry.media_time_us = media_time_us;
+            entry.aop_playhead_us = aop_playhead;
+            entry.fetched_frames = pcm ? pcm->frames() : 0;
+            entry.rendered_frames = produced;
+            entry.buffered_frames = buffered;
+            entry.flags = flags;
         }
 
         // 7. Adaptive sleep based on buffer level
@@ -543,7 +548,8 @@ void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
         m_audio_pump->SetQualityMode(quality_mode);
         if (!m_audio_pump->IsRunning()) {
             m_audio_pump->Start(m_tmb, m_sse, m_aop, &m_clock,
-                                m_audio_sample_rate, m_audio_channels);
+                                m_audio_sample_rate, m_audio_channels,
+                                &m_audio_diag);
         }
     }
 }
@@ -569,8 +575,19 @@ void PlaybackController::Play(int direction, float speed) {
     m_hit_boundary.store(false, std::memory_order_relaxed);
     m_fractional_frames = 0.0;
     m_last_displayed_frame = -1;
-    m_hold_count = 0;
-    m_skip_count = 0;
+    m_video_diag.reset();
+    m_audio_diag.reset();
+    m_current_tick = nullptr;
+
+    // Reset adaptive stride + audio stall state
+    m_frame_stride = 1;
+    m_next_decode_frame = -1;
+    m_consecutive_slow_decodes = 0;
+    m_consecutive_fast_decodes = 0;
+    m_audio_master_position = false;
+    m_stride_dropped_count = 0;
+    m_consecutive_audio_dry = 0;
+    m_consecutive_audio_healthy = 0;
 
     int64_t pos = m_position.load(std::memory_order_relaxed);
 
@@ -604,14 +621,18 @@ void PlaybackController::Play(int direction, float speed) {
 }
 
 void PlaybackController::Stop() {
-    if (!m_playing.load(std::memory_order_relaxed)) {
+    // Atomic exchange: eliminates TOCTOU race between boundary auto-stop
+    // (sets m_playing=false in displayLinkTick) and explicit Stop() call.
+    bool was_playing = m_playing.exchange(false, std::memory_order_relaxed);
+
+    // If not playing AND no diagnostic data → nothing to do
+    if (!was_playing && m_video_diag.size() == 0) {
         return;
     }
 
-    m_playing.store(false, std::memory_order_relaxed);
+    // All cleanup steps are idempotent (check their own state guards)
     stopDisplayLink();
 
-    // Stop audio pump and output
     if (m_audio_pump && m_audio_pump->IsRunning()) {
         m_audio_pump->Stop();
     }
@@ -621,15 +642,13 @@ void PlaybackController::Stop() {
     }
     m_fractional_frames = 0.0;
 
-    // Immediate position report on stop
-    int64_t pos = m_position.load(std::memory_order_relaxed);
-    reportPosition(pos, true);
+    // Position report only when we were playing (avoid double-report on boundary stop)
+    if (was_playing) {
+        int64_t pos = m_position.load(std::memory_order_relaxed);
+        reportPosition(pos, true);
+    }
 
-    int64_t underruns = m_audio_pump ? m_audio_pump->UnderrunCount() : 0;
-    JVE_LOG_EVENT(Ticks, "Stop at frame %lld (ticks=%lld holds=%lld skips=%lld delivers=%lld underruns=%lld)",
-                 (long long)pos, (long long)m_advance_count,
-                 (long long)m_hold_count, (long long)m_skip_count,
-                 (long long)m_deliver_count, (long long)underruns);
+    dumpDiagnostics();
 }
 
 void PlaybackController::Park(int64_t frame) {
@@ -1012,26 +1031,21 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
     double elapsed = machTimeToSeconds(host_time - m_last_host_time);
     m_last_host_time = host_time;
 
-    // Track per-tick timing jitter: log outliers (>25% off nominal vsync)
-    double elapsed_ms = elapsed * 1000.0;
-    if (m_advance_count > 2) {
-        // After first couple of ticks, expect ~16.7ms (60Hz) or ~8.3ms (120Hz)
-        if (elapsed_ms > 22.0 || elapsed_ms < 5.0) {
-            JVE_LOG_DETAIL(Ticks, "displayLinkTick: JITTER elapsed=%.2fms (tick %lld)",
-                          elapsed_ms, (long long)m_advance_count);
-        }
-    }
+    // Ring entry for this tick (zeroed by next())
+    auto& tick = m_video_diag.next();
+    m_current_tick = &tick;
+    tick.elapsed_ms = elapsed * 1000.0;
 
-    // ── Full tick timing breakdown ──
+    // ── Tick timing ──
     uint64_t t0 = mach_absolute_time();
 
-    // Advance position
+    // Advance position (writes drift_s, pll_adjust, frame, SKIP/HOLD flags)
     int64_t new_pos = advancePosition(elapsed);
     m_position.store(new_pos, std::memory_order_relaxed);
     uint64_t t1 = mach_absolute_time();
+    tick.advance_ms = machTimeToSeconds(t1 - t0) * 1000.0;
 
-    // Hint TMB for pre-buffer at current position.
-    // TMB guaranteed non-null: Play() asserts m_tmb before setting m_playing.
+    // Hint TMB for pre-buffer at current position
     JVE_ASSERT(m_tmb, "PlaybackController::displayLinkTick: TMB is null (Play invariant violated)");
     {
         int dir = m_direction.load(std::memory_order_relaxed);
@@ -1039,6 +1053,7 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
         m_tmb->SetPlayhead(new_pos, dir, spd);
     }
     uint64_t t2 = mach_absolute_time();
+    tick.setPlayhead_ms = machTimeToSeconds(t2 - t1) * 1000.0;
 
     // Boundary detection
     int dir = m_direction.load(std::memory_order_relaxed);
@@ -1051,16 +1066,14 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
         m_hit_boundary.store(true, std::memory_order_relaxed);
 
         if (!m_shuttle_mode.load(std::memory_order_relaxed)) {
-            // Play mode: stop at boundary
             m_playing.store(false, std::memory_order_relaxed);
-            // Stop display link on main thread
+            m_current_tick = nullptr;
             dispatch_async(dispatch_get_main_queue(), ^{
                 stopDisplayLink();
                 reportPosition(boundary_frame, true);
             });
             return;
         }
-        // Shuttle mode: keep ticking, latched state handled in Lua
     }
 
     // Prefetch: dispatch clip loading when playhead approaches the frontier
@@ -1072,34 +1085,98 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
             need_prefetch = (new_pos - PREFETCH_MARGIN <= m_prefetched_backward.load(std::memory_order_relaxed));
         }
         if (need_prefetch) {
+            tick.flags |= TickFlags::PREFETCH;
             m_prefetch_pending.store(true, std::memory_order_relaxed);
             dispatch_async(dispatch_get_main_queue(), ^{
                 prefetchClips();
             });
         }
     }
-    uint64_t t3 = mach_absolute_time();
 
-    // Deliver frame (if it changed)
-    deliverFrame(new_pos, false);  // async: displayLinkTick is on CVDisplayLink thread
-    uint64_t t4 = mach_absolute_time();
+    // Deliver frame — stride-gated to skip blocking GetVideoFrame when codec is slow
+    uint64_t t3 = mach_absolute_time();
+    bool is_new_frame = (new_pos != m_last_displayed_frame);
+    if (is_new_frame && shouldDecode(new_pos)) {
+        deliverFrame(new_pos, false);
+        uint64_t t4 = mach_absolute_time();
+        tick.deliver_ms = machTimeToSeconds(t4 - t3) * 1000.0;
+        updateStrideDetection(tick.deliver_ms);
+    } else if (is_new_frame) {
+        // Frame skipped by stride — no decode, no display update
+        tick.flags |= TickFlags::DROPPED;
+        ++m_stride_dropped_count;
+        // tick.deliver_ms stays 0
+    } else {
+        // Same frame as last tick — normal repeat (handled by deliverFrame early return)
+        deliverFrame(new_pos, false);
+        uint64_t t4 = mach_absolute_time();
+        tick.deliver_ms = machTimeToSeconds(t4 - t3) * 1000.0;
+    }
+    uint64_t t4_final = mach_absolute_time();
 
     // Coalesced position report
     reportPosition(new_pos, false);
     uint64_t t5 = mach_absolute_time();
+    tick.report_ms = machTimeToSeconds(t5 - t4_final) * 1000.0;
 
-    // Full tick timing breakdown: log if any section >5ms
-    double total_ms = machTimeToSeconds(t5 - t0) * 1000.0;
-    if (total_ms > 5.0) {
-        double adv_ms = machTimeToSeconds(t1 - t0) * 1000.0;
-        double sph_ms = machTimeToSeconds(t2 - t1) * 1000.0;
-        double chk_ms = machTimeToSeconds(t3 - t2) * 1000.0;
-        double dlv_ms = machTimeToSeconds(t4 - t3) * 1000.0;
-        double rpt_ms = machTimeToSeconds(t5 - t4) * 1000.0;
-        JVE_LOG_WARN(Ticks, "tick SLOW %.1fms: advance=%.1f setPlayhead=%.1f "
-                     "prefetch=%.1f deliver=%.1f report=%.1f frame=%lld",
-                     total_ms, adv_ms, sph_ms, chk_ms, dlv_ms, rpt_ms,
-                     (long long)new_pos);
+    // Audio buffer level
+    if (m_has_audio.load(std::memory_order_relaxed) && m_aop) {
+        tick.audio_buf_frames = m_aop->BufferedFrames();
+    }
+
+    m_current_tick = nullptr;
+}
+
+// ============================================================================
+// Adaptive frame stride — slow-decode detection and recovery
+// ============================================================================
+
+bool PlaybackController::shouldDecode(int64_t frame) const {
+    if (m_frame_stride == 1) return true;
+    if (m_next_decode_frame < 0) return true;  // first frame after stride change
+
+    int dir = m_direction.load(std::memory_order_relaxed);
+    if (dir >= 0) {
+        return frame >= m_next_decode_frame;
+    } else {
+        return frame <= m_next_decode_frame;
+    }
+}
+
+void PlaybackController::updateStrideDetection(double deliver_ms) {
+    double expected_ms = 1000.0 / m_fps;
+    int dir = m_direction.load(std::memory_order_relaxed);
+
+    if (deliver_ms > expected_ms * SLOW_DECODE_RATIO) {
+        ++m_consecutive_slow_decodes;
+        m_consecutive_fast_decodes = 0;
+
+        if (m_consecutive_slow_decodes >= SLOW_DECODE_CONSECUTIVE && m_frame_stride == 1) {
+            int new_stride = static_cast<int>(std::ceil(deliver_ms / expected_ms));
+            m_frame_stride = std::clamp(new_stride, 2, MAX_STRIDE);
+            m_next_decode_frame = m_position.load(std::memory_order_relaxed) + dir * m_frame_stride;
+            m_audio_master_position = m_has_audio.load(std::memory_order_relaxed);
+
+            JVE_LOG_EVENT(Ticks, "slow-decode: stride=%d (deliver=%.1fms expected=%.1fms) audio_master=%d",
+                         m_frame_stride, deliver_ms, expected_ms, (int)m_audio_master_position);
+        }
+    } else {
+        m_consecutive_slow_decodes = 0;
+        ++m_consecutive_fast_decodes;
+
+        if (m_consecutive_fast_decodes >= FAST_DECODE_CONSECUTIVE && m_frame_stride > 1) {
+            m_frame_stride = 1;
+            m_next_decode_frame = -1;
+            m_audio_master_position = false;
+            m_fractional_frames = 0.0;
+
+            JVE_LOG_EVENT(Ticks, "slow-decode: recovered (stride=1)");
+        }
+    }
+
+    // Update next decode target after successful decode when striding
+    if (m_frame_stride > 1) {
+        m_next_decode_frame = m_position.load(std::memory_order_relaxed) + dir * m_frame_stride;
     }
 }
 
@@ -1108,15 +1185,11 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
 // ============================================================================
 
 int64_t PlaybackController::advancePosition(double elapsed_seconds) {
-    ++m_advance_count;
     // Input validation: elapsed must be non-negative and sane.
-    // CVDisplayLink uses uint64_t subtraction (can't underflow), but guard against
-    // stale m_last_host_time from a previous Play session producing a huge elapsed.
     JVE_ASSERT(elapsed_seconds >= 0,
         "advancePosition: elapsed_seconds is negative (clock error)");
     if (elapsed_seconds > 1.0) {
         // First tick after a long pause or stale host_time — discard.
-        // Normal tick at 60Hz is ~0.016s. Anything > 1s is not real elapsed time.
         elapsed_seconds = 0.0;
     }
 
@@ -1124,10 +1197,65 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     int dir = m_direction.load(std::memory_order_relaxed);
     float speed = m_speed.load(std::memory_order_relaxed);
 
-    // Step 1: Compute PLL correction from current A/V drift (before frame advance).
-    // Instead of abrupt skip/hold (which causes visible stutter), gently steer
-    // the fractional accumulator rate toward the audio clock each tick.
-    // At 60Hz, a 3% correction resolves 1-frame drift in ~14 ticks (~230ms).
+    // Audio-master detection: engage when PLL can't maintain sync.
+    // Three triggers: (1) audio stall (buf=0), (2) excessive drift, (3) stride.
+    // When engaged, video position = audio clock position. No PLL, no drift.
+    if (m_has_audio.load(std::memory_order_relaxed) &&
+        m_audio_pump && m_audio_pump->IsRunning() && m_aop) {
+
+        int64_t buf = m_aop->BufferedFrames();
+        int64_t aop_playhead = m_aop->PlayheadTimeUS();
+        int64_t audio_time_us = m_clock.CurrentTimeUS(aop_playhead);
+        int64_t video_time_us = (current * 1000000LL * m_fps_den) / m_fps_num;
+        double drift_s = static_cast<double>(video_time_us - audio_time_us) / 1000000.0;
+
+        // Trigger 1: audio buffer empty (audio clock frozen)
+        if (buf == 0) {
+            ++m_consecutive_audio_dry;
+            m_consecutive_audio_healthy = 0;
+            if (m_consecutive_audio_dry >= AUDIO_DRY_CONSECUTIVE && !m_audio_master_position) {
+                m_audio_master_position = true;
+                JVE_LOG_EVENT(Ticks, "audio-master ON: buf=0 for %d ticks", m_consecutive_audio_dry);
+            }
+        } else {
+            m_consecutive_audio_dry = 0;
+            ++m_consecutive_audio_healthy;
+        }
+
+        // Trigger 2: drift exceeds PLL convergence ability
+        // PLL at 3%/tick corrects ~0.01 frames/tick. If |drift| > 100ms,
+        // PLL can't converge before emergency HOLD — overcorrection oscillation.
+        if (std::abs(drift_s) > AUDIO_MASTER_DRIFT_THRESHOLD && !m_audio_master_position) {
+            m_audio_master_position = true;
+            m_consecutive_audio_healthy = 0;
+            JVE_LOG_EVENT(Ticks, "audio-master ON: drift=%.3fs exceeds threshold", drift_s);
+        }
+
+        // Recovery: drift settled AND audio buffer healthy AND no stride active
+        if (m_audio_master_position &&
+            m_consecutive_audio_healthy >= AUDIO_HEALTHY_CONSECUTIVE &&
+            std::abs(drift_s) < AUDIO_MASTER_RECOVER_THRESHOLD &&
+            m_frame_stride == 1) {
+            m_audio_master_position = false;
+            m_fractional_frames = 0.0;
+            JVE_LOG_EVENT(Ticks, "audio-master OFF: drift=%.3fs buf=%lld", drift_s, (long long)buf);
+        }
+
+        // Audio-master path: derive position directly from audio clock
+        if (m_audio_master_position) {
+            int64_t new_pos = PlaybackClock::FrameFromTimeUS(audio_time_us, m_fps_num, m_fps_den);
+            new_pos = std::max<int64_t>(0, std::min(new_pos, m_total_frames - 1));
+
+            if (m_current_tick) {
+                m_current_tick->drift_s = drift_s;
+                m_current_tick->pll_adjust = 0.0;
+                m_current_tick->frame = new_pos;
+            }
+            return new_pos;
+        }
+    }
+
+    // Step 1: PLL correction from A/V drift.
     double pll_adjust = 0.0;
     double diff_seconds = 0.0;
     bool has_drift_measurement = false;
@@ -1142,47 +1270,33 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
         double drift_frames = diff_seconds * m_fps;
         has_drift_measurement = true;
 
-        // PLL: proportional correction clamped to avoid overshoot.
-        // Positive drift = video ahead → slow down (positive pll_adjust subtracted below).
-        // Negative drift = video behind → speed up (negative pll_adjust adds below).
         pll_adjust = std::clamp(drift_frames * PLL_GAIN, -PLL_MAX_CORRECTION, PLL_MAX_CORRECTION);
     }
 
     // Step 2: Frame-based advancement with PLL-adjusted rate.
-    // CVDisplayLink elapsed time drives the accumulator; PLL nudges it per-tick.
-    // At 60Hz with 24fps content, base adds 0.4 frames/tick. PLL adjusts ±0.15 max.
     m_fractional_frames += elapsed_seconds * m_fps * speed - pll_adjust;
-    m_fractional_frames = std::max(0.0, m_fractional_frames);  // never reverse
+    m_fractional_frames = std::max(0.0, m_fractional_frames);
     auto whole_frames = static_cast<int64_t>(m_fractional_frames);
     m_fractional_frames -= whole_frames;
     int64_t new_pos = current + dir * whole_frames;
 
-    // Step 3: Emergency hard correction (PLL can't recover fast enough).
+    // Step 3: Emergency hard correction + ring writes.
     if (has_drift_measurement) {
-        if (diff_seconds < -PLL_EMERGENCY_THRESHOLD) {
-            new_pos += dir;
-            ++m_skip_count;
-            if (m_advance_count % 30 == 0) {
-                JVE_LOG_DETAIL(Ticks, "advancePosition: SKIP drift=%.4fs frame=%lld (skips=%lld)",
-                              diff_seconds, (long long)new_pos, (long long)m_skip_count);
-            }
-        } else if (diff_seconds > PLL_EMERGENCY_THRESHOLD) {
-            new_pos = current;
-            ++m_hold_count;
-            if (m_advance_count % 30 == 0) {
-                JVE_LOG_DETAIL(Ticks, "advancePosition: HOLD drift=%.4fs frame=%lld (holds=%lld)",
-                              diff_seconds, (long long)current, (long long)m_hold_count);
-            }
+        if (m_current_tick) {
+            m_current_tick->drift_s = diff_seconds;
+            m_current_tick->pll_adjust = pll_adjust;
         }
 
-        // Sampled PLL telemetry
-        if (m_advance_count % 60 == 0) {
-            JVE_LOG_DETAIL(Ticks, "advancePosition: PLL drift=%.4fs adjust=%.4f frac=%.4f",
-                          diff_seconds, pll_adjust, m_fractional_frames);
+        if (diff_seconds < -PLL_EMERGENCY_THRESHOLD) {
+            new_pos += dir;
+            if (m_current_tick) m_current_tick->flags |= TickFlags::SKIP;
+        } else if (diff_seconds > PLL_EMERGENCY_THRESHOLD) {
+            new_pos = current;
+            if (m_current_tick) m_current_tick->flags |= TickFlags::HOLD;
         }
     }
 
-    // Step 3: Teleport assert + clamp.
+    // Step 4: Teleport assert + clamp.
     {
         int64_t delta = std::abs(new_pos - current);
         if (delta >= 240) {
@@ -1197,6 +1311,12 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     }
 
     new_pos = std::max<int64_t>(0, std::min(new_pos, m_total_frames - 1));
+
+    // Write frame to ring
+    if (m_current_tick) {
+        m_current_tick->frame = new_pos;
+    }
+
     return new_pos;
 }
 
@@ -1218,34 +1338,24 @@ static std::string frameToTC(int64_t frame, int fps) {
 }
 
 void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
-    // Prerequisites guaranteed by Seek/Play asserts
     JVE_ASSERT(m_tmb, "PlaybackController::deliverFrame: TMB is null");
     JVE_ASSERT(m_surface, "PlaybackController::deliverFrame: surface is null");
 
-    ++m_deliver_count;
-
     // Frame repeat: only fetch new frame when video time advances
-    // (handles 24fps video on 60Hz display — repeats frames 2-3x)
     if (frame == m_last_displayed_frame) {
         ++m_repeat_streak;
-        // Log every 60th repeat when stalling (>3x is suspicious for 24fps/60Hz)
-        if (m_repeat_streak > 3 && (m_repeat_streak % 60 == 0)) {
-            JVE_LOG_DETAIL(Ticks, "deliverFrame: STUCK repeat=%lld on frame %lld (position not advancing)",
-                          (long long)m_repeat_streak, (long long)frame);
-        }
+        if (m_current_tick) m_current_tick->flags |= TickFlags::REPEAT;
         return;
     }
     m_repeat_streak = 0;
 
-    // Ask TMB which video tracks have clips (sorted descending = topmost first).
-    // Single source of truth: TMB owns the track list, no mirrored state to race.
+    // Ask TMB which video tracks have clips
     auto video_tracks = m_tmb->GetVideoTrackIds();
     if (video_tracks.empty()) {
         return;
     }
 
-    // Query tracks top-to-bottom (highest index = topmost = highest priority).
-    // If the topmost track is a gap at this frame, fall through to the next.
+    // Query tracks top-to-bottom
     emp::VideoResult result;
     bool found_frame = false;
     for (int track_idx : video_tracks) {
@@ -1258,30 +1368,20 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     }
 
     if (!found_frame) {
-        // All tracks are gaps at this frame — gap IS content, show black.
-        // This applies to both sync (seek/park) and async (playback).
-        // If the next clip's REFILL is slow and the surface stays black
-        // through the transition, that's a WARM latency problem to fix
-        // in the buffering layer — not a reason to show stale frames.
+        // Gap — show black
         JVE_LOG_EVENT(Ticks, "deliverFrame: gap at %s frame=%lld (no clip on %zu tracks)",
                      frameToTC(frame, m_fps_num / m_fps_den).c_str(),
                      (long long)frame, video_tracks.size());
         m_surface->clearFrame();
         m_last_displayed_frame = frame;
-
-        if (!synchronous) {
-            // With the prefetch system, a gap here is a genuine gap — prefetch
-            // has already verified this range is empty. Log for diagnostics.
-            JVE_LOG_DETAIL(Ticks, "deliverFrame: GAP at %s frame=%lld",
-                          frameToTC(frame, m_fps_num / m_fps_den).c_str(),
-                          (long long)frame);
-        }
+        if (m_current_tick) m_current_tick->flags |= TickFlags::GAP;
         return;
     }
 
-    // Detect clip transition → fire callback with metadata for rotation/PAR
+    // Clip transition → fire callback with metadata for rotation/PAR
     if (result.clip_id != m_current_clip_id) {
         m_current_clip_id = result.clip_id;
+        if (m_current_tick) m_current_tick->flags |= TickFlags::TRANSITION;
 
         ClipTransitionCallback cb;
         {
@@ -1311,18 +1411,11 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     if (result.frame) {
         m_last_displayed_frame = frame;
 
-        // Frame cadence: measure time between consecutive DISPLAYED frames.
-        // At 25fps/60Hz, expect ~40ms (2-3 vsyncs). Log outliers.
-        // Measured here (not earlier) so same-frame holds don't corrupt timing.
+        // Frame cadence → ring
         {
             uint64_t now = mach_absolute_time();
-            if (m_last_new_frame_time > 0) {
-                double cadence_ms = machTimeToSeconds(now - m_last_new_frame_time) * 1000.0;
-                double expected_ms = 1000.0 / m_fps;  // 40ms at 25fps
-                if (cadence_ms > expected_ms * 1.5 || cadence_ms < expected_ms * 0.5) {
-                    JVE_LOG_DETAIL(Ticks, "deliverFrame: CADENCE %.1fms (expect %.1fms) frame=%lld",
-                                  cadence_ms, expected_ms, (long long)frame);
-                }
+            if (m_last_new_frame_time > 0 && m_current_tick) {
+                m_current_tick->cadence_ms = machTimeToSeconds(now - m_last_new_frame_time) * 1000.0;
             }
             m_last_new_frame_time = now;
         }
@@ -1333,36 +1426,20 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
                          result.frame->width(), result.frame->height());
         }
 
-        // Sampled DETAIL log: every 30th new frame delivered
-        if (m_deliver_count % 30 == 0) {
-            JVE_LOG_DETAIL(Ticks, "deliverFrame: frame=%lld clip=%s offline=%d",
-                          (long long)frame, result.clip_id.c_str(),
-                          (int)result.offline);
-        }
-
         m_surface->setFrame(result.frame);
     } else if (!result.clip_id.empty()) {
-        // TMB has a clip at this frame but returned no decoded frame data.
         if (result.offline) {
-            // Offline/unsupported clip: no frame data expected. The Lua renderer
-            // handles offline frames via offline_frame_cache. Not a decode failure.
-            // Logged once on clip_transition callback; suppress per-tick spam here.
-            // Update last_displayed_frame so frame-repeat detection skips subsequent
-            // ticks — Lua handles the offline frame, no need to re-scan TMB.
             m_last_displayed_frame = frame;
+            if (m_current_tick) m_current_tick->flags |= TickFlags::OFFLINE;
         } else if (synchronous) {
-            // Online clip with no frame on sync seek = real decode failure
             char buf[256];
             snprintf(buf, sizeof(buf),
                 "PlaybackController::deliverFrame: Seek to frame %lld returned no frame "
                 "data but clip_id='%s' (decode failure?)",
                 (long long)frame, result.clip_id.c_str());
             JVE_ASSERT(false, buf);
-        } else if (m_deliver_count % 30 == 0) {
-            JVE_LOG_DETAIL(Ticks, "deliverFrame: NULL FRAME clip=%s frame=%lld offline=%d",
-                          result.clip_id.c_str(), (long long)frame,
-                          (int)result.offline);
         }
+        // Async null frame during playback: captured in ring (no cadence written)
     }
 }
 
@@ -1403,6 +1480,180 @@ void PlaybackController::reportPosition(int64_t frame, bool immediate) {
             cb(frame, stopped);
         });
     }
+}
+
+// ============================================================================
+// Diagnostics dump (writes to /tmp/jve_playback_diag.txt at Stop)
+// ============================================================================
+
+void PlaybackController::dumpDiagnostics() {
+    size_t video_count = m_video_diag.size();
+    if (video_count == 0) {
+        int64_t pos = m_position.load(std::memory_order_relaxed);
+        JVE_LOG_EVENT(Ticks, "Stop at frame %lld (no ticks recorded)", (long long)pos);
+        return;
+    }
+
+    int64_t pos = m_position.load(std::memory_order_relaxed);
+
+    // Compute total duration from elapsed times
+    double total_duration_s = 0.0;
+    m_video_diag.for_each([&](const TickMetric& t) {
+        total_duration_s += t.elapsed_ms / 1000.0;
+    });
+
+    // Collect values for percentile computation
+    std::vector<double> cadences, delivers, drifts;
+    int64_t skip_count = 0, hold_count = 0, repeat_count = 0;
+    int64_t gap_count = 0, transition_count = 0, dropped_count = 0;
+
+    m_video_diag.for_each([&](const TickMetric& t) {
+        if (t.cadence_ms > 0.0) cadences.push_back(t.cadence_ms);
+        delivers.push_back(t.deliver_ms);
+        drifts.push_back(std::abs(t.drift_s));
+        if (t.flags & TickFlags::SKIP) ++skip_count;
+        if (t.flags & TickFlags::HOLD) ++hold_count;
+        if (t.flags & TickFlags::REPEAT) ++repeat_count;
+        if (t.flags & TickFlags::GAP) ++gap_count;
+        if (t.flags & TickFlags::TRANSITION) ++transition_count;
+        if (t.flags & TickFlags::DROPPED) ++dropped_count;
+    });
+
+    std::sort(cadences.begin(), cadences.end());
+    std::sort(delivers.begin(), delivers.end());
+    std::sort(drifts.begin(), drifts.end());
+
+    // Audio pump stats
+    std::vector<int64_t> buf_levels;
+    size_t pump_count = m_audio_diag.size();
+    int64_t stall_count = 0;
+
+    m_audio_diag.for_each([&](const PumpMetric& p) {
+        buf_levels.push_back(p.buffered_frames);
+        if (p.flags & PumpFlags::STALL) ++stall_count;
+    });
+
+    std::sort(buf_levels.begin(), buf_levels.end());
+
+    // Percentile helpers
+    auto pctd = [](const std::vector<double>& sorted, double p) -> double {
+        if (sorted.empty()) return 0.0;
+        size_t idx = static_cast<size_t>(p * static_cast<double>(sorted.size() - 1));
+        return sorted[idx];
+    };
+    auto pcti = [](const std::vector<int64_t>& sorted, double p) -> int64_t {
+        if (sorted.empty()) return 0;
+        size_t idx = static_cast<size_t>(p * static_cast<double>(sorted.size() - 1));
+        return sorted[idx];
+    };
+
+    // Open file
+    FILE* f = fopen("/tmp/jve_playback_diag.txt", "w");
+    if (!f) {
+        JVE_LOG_WARN(Ticks, "dumpDiagnostics: failed to open /tmp/jve_playback_diag.txt");
+        return;
+    }
+
+    // Header
+    fprintf(f, "=== PLAYBACK DIAG (%.1fs, %zu ticks) ===\n", total_duration_s, video_count);
+
+    // Video stats
+    fprintf(f, "VIDEO:\n");
+    if (!cadences.empty()) {
+        fprintf(f, "  cadence: med=%.1fms p95=%.1fms p99=%.1fms max=%.1fms\n",
+                pctd(cadences, 0.50), pctd(cadences, 0.95), pctd(cadences, 0.99),
+                cadences.back());
+    }
+    if (!delivers.empty()) {
+        fprintf(f, "  deliver: med=%.1fms p95=%.1fms max=%.1fms\n",
+                pctd(delivers, 0.50), pctd(delivers, 0.95), delivers.back());
+    }
+    if (!drifts.empty()) {
+        fprintf(f, "  drift:   med=%.3fs p95=%.3fs max=%.3fs\n",
+                pctd(drifts, 0.50), pctd(drifts, 0.95), drifts.back());
+    }
+    fprintf(f, "  flags:   skips=%lld holds=%lld repeats=%lld gaps=%lld transitions=%lld dropped=%lld\n",
+            (long long)skip_count, (long long)hold_count, (long long)repeat_count,
+            (long long)gap_count, (long long)transition_count, (long long)dropped_count);
+    if (dropped_count > 0) {
+        // Compute effective video fps from non-dropped, non-repeat ticks
+        int64_t decoded_ticks = static_cast<int64_t>(video_count) - dropped_count - repeat_count;
+        double effective_fps = (total_duration_s > 0 && decoded_ticks > 0)
+            ? static_cast<double>(decoded_ticks) / total_duration_s : 0.0;
+        fprintf(f, "  SLOW DECODE: dropped %lld frames, effective video fps=%.1f\n",
+                (long long)dropped_count, effective_fps);
+    }
+
+    // Outlier ticks
+    double expected_cadence_ms = 1000.0 / m_fps;
+    double outlier_threshold = expected_cadence_ms * 2.0;
+    fprintf(f, "  OUTLIER TICKS (cadence > %.0fms):\n", outlier_threshold);
+    {
+        size_t idx = 0;
+        m_video_diag.for_each([&](const TickMetric& t) {
+            if (t.cadence_ms > outlier_threshold) {
+                fprintf(f, "    tick[%zu]: elapsed=%.1fms cadence=%.1fms deliver=%.1fms "
+                        "drift=%.3fs flags=%s frame=%lld\n",
+                        idx, t.elapsed_ms, t.cadence_ms, t.deliver_ms,
+                        t.drift_s, tickFlagsStr(t.flags).c_str(), (long long)t.frame);
+            }
+            ++idx;
+        });
+    }
+
+    // Audio pump stats
+    if (pump_count > 0) {
+        int64_t underruns = m_audio_pump ? m_audio_pump->UnderrunCount() : 0;
+        fprintf(f, "AUDIO PUMP (%zu cycles):\n", pump_count);
+        if (!buf_levels.empty()) {
+            fprintf(f, "  buffer: med=%lld p5=%lld min=%lld\n",
+                    (long long)pcti(buf_levels, 0.50),
+                    (long long)pcti(buf_levels, 0.05),
+                    (long long)buf_levels.front());
+        }
+        fprintf(f, "  underruns=%lld stalls=%lld\n",
+                (long long)underruns, (long long)stall_count);
+
+        // Audio outliers (low buffer)
+        fprintf(f, "  OUTLIER CYCLES (buffer < 1000):\n");
+        {
+            size_t idx = 0;
+            m_audio_diag.for_each([&](const PumpMetric& p) {
+                if (p.buffered_frames < 1000) {
+                    fprintf(f, "    pump[%zu]: buf=%lld rendered=%lld media_t=%lldus flags=%s\n",
+                            idx, (long long)p.buffered_frames,
+                            (long long)p.rendered_frames,
+                            (long long)p.media_time_us,
+                            pumpFlagsStr(p.flags).c_str());
+                }
+                ++idx;
+            });
+        }
+    }
+
+    // All ticks chronological
+    fprintf(f, "ALL TICKS (chronological):\n");
+    {
+        size_t idx = 0;
+        m_video_diag.for_each([&](const TickMetric& t) {
+            fprintf(f, "  [%zu] elapsed=%.1f cadence=%.1f deliver=%.1f drift=%.3f "
+                    "buf=%lld flags=%s frame=%lld\n",
+                    idx, t.elapsed_ms, t.cadence_ms, t.deliver_ms,
+                    t.drift_s, (long long)t.audio_buf_frames,
+                    tickFlagsStr(t.flags).c_str(), (long long)t.frame);
+            ++idx;
+        });
+    }
+
+    fclose(f);
+
+    // One-line summary to stderr
+    JVE_LOG_EVENT(Ticks, "Stop at frame %lld — diag written to /tmp/jve_playback_diag.txt",
+                  (long long)pos);
+
+    // Reset rings
+    m_video_diag.reset();
+    m_audio_diag.reset();
 }
 
 #endif // __APPLE__
