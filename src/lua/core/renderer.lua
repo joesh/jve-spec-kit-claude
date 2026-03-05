@@ -14,6 +14,7 @@
 
 local qt_constants = require("core.qt_constants")
 local offline_frame_cache = require("core.media.offline_frame_cache")
+local media_status = require("core.media.media_status")
 local Sequence = require("models.sequence")
 
 local M = {}
@@ -41,6 +42,11 @@ function M.get_video_frame(tmb, video_track_indices, playhead_frame)
             .. "for track=%d frame=%d", track_idx, playhead_frame))
 
         if metadata.offline then
+            -- Feed TMB's error discovery back to media_status for timeline labels
+            if metadata.media_path and metadata.media_path ~= "" then
+                media_status.update_from_tmb(
+                    metadata.media_path, true, metadata.error_code)
+            end
             -- TMB reports offline: compose offline frame
             local frame = offline_frame_cache.get_frame(metadata)
             assert(frame, string.format(

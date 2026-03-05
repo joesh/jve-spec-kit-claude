@@ -278,6 +278,8 @@ function M.init(sequence_id, project_id)
     -- Load Data
     data.state.tracks = db.load_tracks(sequence_id)
     data.state.clips = db.load_clips(sequence_id)
+    -- Media status is lazily evaluated: clips get probed when first displayed
+    -- in the timeline renderer or project browser (ensure_clip_status).
     clip_state.invalidate_indexes()
 
     -- Load Sequence Settings using Sequence model
@@ -395,7 +397,7 @@ function M.reload_clips(target_sequence_id, opts)
 
     data.state.clips = db.load_clips(active)
     clip_state.invalidate_indexes()
-    
+
     -- Refresh selection objects
     if #data.state.selected_clips > 0 then
         local refreshed = {}
@@ -435,6 +437,25 @@ end)
 Signals.connect("playhead_changed", function(sequence_id, frame)
     if data.state.sequence_id == sequence_id and type(frame) == "number" then
         data.state.playhead_position = frame
+        data.notify_listeners()
+    end
+end)
+
+-- Reactive media status: when a media file changes status (online/offline/codec),
+-- update all clips referencing that path and trigger re-render.
+Signals.connect("media_status_changed", function(media_path, status)
+    if not data.state.clips then return end
+    local changed = false
+    for _, clip in ipairs(data.state.clips) do
+        if clip.media_path == media_path then
+            clip.offline = status.offline
+            clip.error_code = status.error_code
+            changed = true
+        end
+    end
+    if changed then
+        clip_state.inc_version()
+        for _, c in ipairs(data.state.clips) do c._version = clip_state.get_version() end
         data.notify_listeners()
     end
 end)

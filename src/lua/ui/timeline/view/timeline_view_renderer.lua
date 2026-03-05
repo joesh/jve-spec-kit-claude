@@ -17,6 +17,7 @@
 -- Timeline View Renderer
 -- Handles drawing logic for tracks, clips, and overlays
 local M = {}
+local media_status = require("core.media.media_status")
 local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
 local color_utils = require("ui.color_utils")
 local Command = require("command")
@@ -663,6 +664,9 @@ function M.render(view)
         local draw_width = math.max(1, visible_width)
         local clip_enabled = clip.enabled ~= false
 
+        -- Lazy media status: file existence + codec probe for visible clips
+        media_status.ensure_clip_status(clip, true)
+
         -- Resolve colors
         local is_audio = (track_layout.track_type == "AUDIO")
         local body_color, text_color
@@ -670,7 +674,8 @@ function M.render(view)
         if clip.offline then
             body_color = is_audio and state_module.colors.clip_audio_offline or state_module.colors.clip_video_offline
             text_color = state_module.colors.clip_offline_text
-            label_prefix = "OFFLINE - "
+            local is_codec = (clip.error_code == "Unsupported" or clip.error_code == "DecodeFailed")
+            label_prefix = is_codec and "CODEC UNAVAIL - " or "OFFLINE - "
         elseif clip_enabled then
             body_color = is_audio and state_module.colors.clip_audio or state_module.colors.clip_video
             text_color = state_module.colors.text

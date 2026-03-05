@@ -857,6 +857,7 @@ local function populate_tree()
             metadata = media.metadata,
             offline = clip.offline
         })
+        -- Icon updated reactively via media_status_changed signal (lazy eval)
         local icon = clip.offline and ICONS.clip_offline or ICONS.clip
         qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, icon)
         clip.tree_id = tree_id
@@ -2420,5 +2421,17 @@ end
 -- Register for project_changed signal
 local Signals = require("core.signals")
 Signals.connect("project_changed", M.on_project_change, 50)
+
+-- Reactive media status: update browser icons when file status changes
+Signals.connect("media_status_changed", function(media_path, status)
+    if not M.tree or not M.item_lookup then return end
+    for _, info in pairs(M.item_lookup) do
+        if info.type == "master_clip" and info.file_path == media_path then
+            info.offline = status.offline
+            local icon = status.offline and ICONS.clip_offline or ICONS.clip
+            qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, info.tree_id, icon)
+        end
+    end
+end)
 
 return M
