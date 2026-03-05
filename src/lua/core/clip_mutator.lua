@@ -138,7 +138,7 @@ local function plan_insert(row)
         fps_numerator = fps_num,
         fps_denominator = fps_den,
         enabled = row.enabled and 1 or 0,
-        offline = row.offline and 1 or 0,
+        offline = 0,  -- transient: always 0 in DB
         created_at = assert(row.created_at, "clip_mutator: insert mutation missing created_at for clip " .. tostring(row.id)),
         modified_at = assert(row.modified_at, "clip_mutator: insert mutation missing modified_at for clip " .. tostring(row.id))
     }
@@ -206,7 +206,7 @@ local function load_track_clips(db, track_id)
             seq_fps_numerator = seq_num,
             seq_fps_denominator = seq_den,
             enabled = stmt:value(16) == 1 or stmt:value(16) == true,
-            offline = stmt:value(17) == 1 or stmt:value(17) == true
+            offline = false  -- transient: recomputed by media_status
         })
     end
     stmt:finalize()
@@ -506,7 +506,7 @@ function ClipMutator.resolve_ripple(db, params)
                 fps_numerator = row_fps_num,
                 fps_denominator = row_fps_den,
                 enabled = row.enabled,
-                offline = original.offline,
+                offline = false,  -- transient
                 created_at = os.time(),
                 modified_at = os.time()
             }
@@ -788,7 +788,7 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         fps_denominator = clip_fps_den,
         rate = {fps_numerator = clip_fps_num, fps_denominator = clip_fps_den},
         enabled = stmt:value(14) == 1 or stmt:value(14) == true,
-        offline = stmt:value(15) == 1 or stmt:value(15) == true,
+        offline = false,  -- transient: recomputed by media_status
         created_at = stmt:value(16),
         modified_at = stmt:value(17),
     }
@@ -970,7 +970,7 @@ function ClipMutator.plan_duplicate_block(db, params)
             fps_numerator = clip.fps_numerator,
             fps_denominator = clip.fps_denominator,
             enabled = clip.enabled,
-            offline = clip.offline,
+            offline = false,  -- transient
             created_at = now,
             modified_at = now,
         }

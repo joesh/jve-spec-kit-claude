@@ -318,7 +318,7 @@ do
             source_out = 310,
             rate = { fps_numerator = 30, fps_denominator = 1 },
             enabled = false,
-            offline = true,
+            offline = true,  -- will be serialized as 0 (transient)
         },
     }
 
@@ -333,7 +333,7 @@ do
     check("30fps clip rate.fps_numerator", c.rate.fps_numerator == 30)
     check("30fps clip rate.fps_denominator", c.rate.fps_denominator == 1)
     check("30fps clip enabled=false", c.enabled == false)
-    check("30fps clip offline=true", c.offline == true)
+    check("30fps clip offline=false (transient)", c.offline == false)
 end
 
 -- ============================================================

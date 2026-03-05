@@ -357,7 +357,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         
                         enabled = query:value(13) == 1,
 
-                        offline = query:value(14) == 1,
+                        offline = false,  -- transient: recomputed by media_status
 
                         media_name = media_name,
 

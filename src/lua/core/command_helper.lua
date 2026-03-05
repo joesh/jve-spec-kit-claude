@@ -183,7 +183,7 @@ function M.clip_insert_payload(source, fallback_sequence_id)
         fps_denominator = rate and rate.fps_denominator or nil,
         
         enabled = source.enabled ~= false,
-        offline = source.offline == true
+        offline = false  -- transient: recomputed by media_status
     }
 end
 
@@ -737,7 +737,7 @@ function M.apply_mutations(db, mutations)
             stmt:bind_value(13, mut.fps_numerator)
             stmt:bind_value(14, mut.fps_denominator)
             stmt:bind_value(15, mut.enabled)
-            stmt:bind_value(16, (mut.offline == 1 or mut.offline == true) and 1 or 0)
+            stmt:bind_value(16, 0)  -- offline is transient, always 0 in DB
             if mut.created_at == nil or mut.modified_at == nil then
                 finalize_stmt(update_stmt)
                 finalize_stmt(delete_stmt)
@@ -1019,7 +1019,7 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         stmt:bind_value(13, fps_num)
         stmt:bind_value(14, fps_den)
         stmt:bind_value(15, prev.enabled and 1 or 0)
-        stmt:bind_value(16, (prev.offline == 1 or prev.offline == true) and 1 or 0)
+        stmt:bind_value(16, 0)  -- offline is transient, always 0 in DB
         stmt:bind_value(17, prev.created_at)
         stmt:bind_value(18, prev.modified_at)
 

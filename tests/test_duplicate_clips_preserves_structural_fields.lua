@@ -79,7 +79,6 @@ local t1 = Clip.create("Timeline", media.id, {
     source_out = 105,
     fps_numerator = 30,
     fps_denominator = 1,
-    offline = true,
 })
 assert(t1:save(db))
 
@@ -107,7 +106,7 @@ assert(duplicated_id, "Expected a duplicated clip on v2")
 local dup_clip = Clip.load_optional(duplicated_id, db)
 assert(dup_clip, "Expected to load duplicated clip")
 assert(dup_clip.owner_sequence_id == "seq", "Duplicated clip should preserve owner_sequence_id")
-assert(dup_clip.offline == true, "Duplicated clip should preserve offline flag")
+assert(dup_clip.offline == false, "offline is transient, always false from DB")
 
 cleanup_db_artifacts(db_path)
 print("✅ DuplicateClips preserves owner_sequence_id/offline via mutation inserts")

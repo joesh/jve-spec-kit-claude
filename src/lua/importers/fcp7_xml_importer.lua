@@ -801,7 +801,6 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             fps_numerator = fps_num,
             fps_denominator = fps_den,
             enabled = clip_info.enabled ~= false,
-            offline = clip_info.offline == true
         })
 
         if not master_clip then
@@ -1015,7 +1014,6 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             fps_numerator = fps_num,
             fps_denominator = fps_den,
             enabled = clip_info.enabled ~= false,
-            offline = clip_info.offline == true
         })
         if not clip then
             return false, "Failed to allocate clip"

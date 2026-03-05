@@ -151,7 +151,7 @@ local function load_internal(clip_id, raise_errors)
         },
 
         enabled = query:value(14) == 1 or query:value(14) == true,
-        offline = query:value(15) == 1 or query:value(15) == true,
+        offline = false,  -- transient: recomputed by media_status registry
 
         -- Source viewer state (nullable marks + playhead)
         mark_in = query:value(18),           -- nil when NULL
@@ -231,7 +231,7 @@ function M.create(name, media_id, opts)
         },
         
         enabled = opts.enabled ~= false,
-        offline = opts.offline or false,
+        offline = false,  -- transient: recomputed by media_status registry
 
         -- Source viewer state (nullable marks + playhead)
         mark_in = opts.mark_in,           -- nil = no mark
@@ -393,7 +393,7 @@ local function save_internal(self, _opts)
 
     ensure_project_context(self, db)
     assert(self.clip_kind, "Clip.save: clip_kind is required for clip " .. tostring(self.id))
-    self.offline = self.offline and true or false
+    self.offline = false  -- transient: never persist to DB
     self.name = derive_display_name(self.id, self.name)
 
     local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()

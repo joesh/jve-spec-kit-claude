@@ -2086,57 +2086,8 @@ local function apply_pool_master_clip_marks(pool_master_clips, media_by_path)
     end
 end
 
---- Mark clips offline whose media files don't exist on disk.
--- Loads each clip, checks its media path, sets offline=true and saves.
--- @param clip_ids table: list of clip IDs to check
--- @return number: count of clips marked offline
-local function mark_offline_clips(clip_ids)
-    local Clip_model = require("models.clip")
-    local Media_model = require("models.media")
-
-    -- Collect unique media paths → file existence
-    local path_exists_cache = {}
-    local offline_count = 0
-
-    for _, clip_id in ipairs(clip_ids) do
-        local clip = Clip_model.load(clip_id)
-        assert(clip, string.format(
-            "mark_offline_clips: Clip.load failed for just-created clip %s", clip_id))
-
-        -- Master clips (clip_kind="master") may not have media_id — skip
-        if not clip.media_id then goto next_clip end
-
-        local media = Media_model.load(clip.media_id)
-        assert(media, string.format(
-            "mark_offline_clips: Media.load failed for clip %s media_id %s",
-            clip_id, tostring(clip.media_id)))
-        assert(media.file_path, string.format(
-            "mark_offline_clips: media %s has nil file_path", media.id))
-
-        local path = media.file_path
-        if path_exists_cache[path] == nil then
-            local f = io.open(path, "r")
-            if f then
-                f:close()
-                path_exists_cache[path] = true
-            else
-                path_exists_cache[path] = false
-                log.warn("Media file not found: %s", path)
-            end
-        end
-
-        if not path_exists_cache[path] and not clip.offline then
-            clip.offline = true
-            assert(clip:save({skip_occlusion = true}), string.format(
-                "mark_offline_clips: save failed for clip %s", clip_id))
-            offline_count = offline_count + 1
-        end
-
-        ::next_clip::
-    end
-
-    return offline_count
-end
+-- mark_offline_clips removed: offline status is now transient,
+-- recomputed reactively by core.media.media_status registry.
 
 --- Import parsed DRP data into an existing project.
 -- Creates: media records, sequences, tracks, clips, A/V link groups.
@@ -2465,15 +2416,10 @@ function M.import_into_project(project_id, parse_result, opts)
     -- STEP 7: Apply pool master clip marks to JVE master clips
     apply_pool_master_clip_marks(parse_result.pool_master_clips, media_by_path)
 
-    sub_report(95, "Checking offline media…")
-    -- STEP 8: Mark clips offline for missing media files
-    local offline_count = mark_offline_clips(result.clip_ids)
-    if offline_count > 0 then
-        log.warn("%d clip(s) marked offline (media files not found)", offline_count)
-    end
+    -- Offline detection removed: handled reactively by media_status registry
 
-    log.event("Import complete: %d media, %d sequences, %d tracks, %d clips (%d offline)",
-        #result.media_ids, #result.sequence_ids, #result.track_ids, #result.clip_ids, offline_count)
+    log.event("Import complete: %d media, %d sequences, %d tracks, %d clips",
+        #result.media_ids, #result.sequence_ids, #result.track_ids, #result.clip_ids)
 
     return result
 end
