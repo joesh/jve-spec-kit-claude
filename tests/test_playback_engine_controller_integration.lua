@@ -73,32 +73,32 @@ local function make_test_engine()
 end
 
 --------------------------------------------------------------------------------
--- 1. _on_need_clips validation
+-- 1. _provide_clips validation
 --------------------------------------------------------------------------------
-section("1. _on_need_clips parameter validation")
+section("1. _provide_clips parameter validation")
 
 do
     local eng = make_test_engine()
-    -- Must fail: frame not a number
+    -- Must fail: from not a number
     expect_error(function()
-        eng:_on_need_clips("bad", 1, "video")
-    end, "frame must be number", "_on_need_clips rejects non-number frame")
+        eng:_provide_clips("bad", 10, "video")
+    end, "from must be number", "_provide_clips rejects non-number from")
 end
 
 do
     local eng = make_test_engine()
-    -- Must fail: invalid direction
+    -- Must fail: to not a number
     expect_error(function()
-        eng:_on_need_clips(100, 99, "video")
-    end, "direction must be", "_on_need_clips rejects invalid direction")
+        eng:_provide_clips(0, "bad", "video")
+    end, "to must be number", "_provide_clips rejects non-number to")
 end
 
 do
     local eng = make_test_engine()
     -- Must fail: invalid track_type
     expect_error(function()
-        eng:_on_need_clips(100, 1, "invalid")
-    end, "track_type must be", "_on_need_clips rejects invalid track_type")
+        eng:_provide_clips(0, 10, "invalid")
+    end, "track_type must be", "_provide_clips rejects invalid track_type")
 end
 
 --------------------------------------------------------------------------------
@@ -151,7 +151,7 @@ do
     local eng = make_test_engine()
     -- Must fail: clip_id not a string
     expect_error(function()
-        eng:_on_clip_transition(123, 0, 1, 1, false, "/test.mov")
+        eng:_on_clip_transition(123, 0, 1, 1, false, "/test.mov", 0)
     end, "clip_id must be string", "_on_clip_transition rejects non-string clip_id")
 end
 
@@ -159,7 +159,7 @@ do
     local eng = make_test_engine()
     -- Must fail: rotation not a number
     expect_error(function()
-        eng:_on_clip_transition("clip1", "bad", 1, 1, false, "/test.mov")
+        eng:_on_clip_transition("clip1", "bad", 1, 1, false, "/test.mov", 0)
     end, "rotation must be number", "_on_clip_transition rejects non-number rotation")
 end
 
@@ -167,7 +167,7 @@ do
     local eng = make_test_engine()
     -- Must fail: par_num < 1
     expect_error(function()
-        eng:_on_clip_transition("clip1", 0, 0, 1, false, "/test.mov")
+        eng:_on_clip_transition("clip1", 0, 0, 1, false, "/test.mov", 0)
     end, "par_num must be >= 1", "_on_clip_transition rejects par_num < 1")
 end
 
@@ -175,7 +175,7 @@ do
     local eng = make_test_engine()
     -- Must fail: par_den < 1
     expect_error(function()
-        eng:_on_clip_transition("clip1", 0, 1, 0, false, "/test.mov")
+        eng:_on_clip_transition("clip1", 0, 1, 0, false, "/test.mov", 0)
     end, "par_den must be >= 1", "_on_clip_transition rejects par_den < 1")
 end
 
@@ -183,14 +183,14 @@ do
     local eng = make_test_engine()
     -- Must fail: is_offline not a boolean
     expect_error(function()
-        eng:_on_clip_transition("clip1", 0, 1, 1, "false", "/test.mov")
+        eng:_on_clip_transition("clip1", 0, 1, 1, "false", "/test.mov", 0)
     end, "is_offline must be boolean", "_on_clip_transition rejects non-boolean is_offline")
 end
 
 do
     local eng, events = make_test_engine()
     -- Valid transition should fire rotation/PAR callbacks
-    eng:_on_clip_transition("clip1", 90, 4, 3, false, "/test.mov")
+    eng:_on_clip_transition("clip1", 90, 4, 3, false, "/test.mov", 0)
     check(eng.current_clip_id == "clip1", "_on_clip_transition sets current_clip_id")
     -- Should have rotation and PAR events
     local has_rotation = false
@@ -213,7 +213,7 @@ do
     local orig_gvf = Renderer.get_video_frame
     Renderer.get_video_frame = function() return nil, nil end
     -- Offline transition should use 0/1/1 for rotation/PAR
-    eng:_on_clip_transition("clip2", 90, 4, 3, true, "/offline.braw")  -- offline=true
+    eng:_on_clip_transition("clip2", 90, 4, 3, true, "/offline.braw", 50)  -- offline=true
     Renderer.get_video_frame = orig_gvf
     local has_zero_rotation = false
     local has_square_par = false
@@ -229,34 +229,37 @@ do
     local eng, events = make_test_engine()
     -- Same clip_id should not fire callbacks again
     eng.current_clip_id = "clip1"
-    eng:_on_clip_transition("clip1", 180, 2, 1, false, "/test.mov")
+    eng:_on_clip_transition("clip1", 180, 2, 1, false, "/test.mov", 0)
     check(#events == 0, "_on_clip_transition skips callbacks for same clip_id")
 end
 
---------------------------------------------------------------------------------
--- 4. _send_video_clips_to_tmb preconditions
---------------------------------------------------------------------------------
-section("4. _send_video_clips_to_tmb preconditions")
+do
+    local eng = make_test_engine()
+    -- Must fail: frame not a number (nil = missing)
+    expect_error(function()
+        eng:_on_clip_transition("clip1", 0, 1, 1, false, "/test.mov", nil)
+    end, "frame must be number", "_on_clip_transition rejects nil frame")
+end
 
 do
     local eng = make_test_engine()
-    -- Must fail: no TMB
+    -- Must fail: frame negative (NSF bounds check)
     expect_error(function()
-        eng:_send_video_clips_to_tmb(0)
-    end, "no TMB", "_send_video_clips_to_tmb asserts without TMB")
+        eng:_on_clip_transition("clip1", 0, 1, 1, false, "/test.mov", -1)
+    end, "frame must be >= 0", "_on_clip_transition rejects negative frame")
 end
 
 --------------------------------------------------------------------------------
--- 5. _send_audio_clips_to_tmb preconditions
+-- 4. _provide_clips preconditions
 --------------------------------------------------------------------------------
-section("5. _send_audio_clips_to_tmb preconditions")
+section("4. _provide_clips preconditions")
 
 do
     local eng = make_test_engine()
-    -- Must fail: no TMB
+    -- Must fail: no sequence
     expect_error(function()
-        eng:_send_audio_clips_to_tmb(0, package.loaded["core.qt_constants"].EMP)
-    end, "no TMB", "_send_audio_clips_to_tmb asserts without TMB")
+        eng:_provide_clips(0, 10, "video")
+    end, "attempt to index", "_provide_clips asserts without sequence")
 end
 
 --------------------------------------------------------------------------------

@@ -70,34 +70,11 @@ do
 end
 
 --------------------------------------------------------------------------------
--- 2. SetClipWindow: valid window
+-- 2. SetClipWindow removed — replaced by C++ prefetch system
 --------------------------------------------------------------------------------
-section("2. SetClipWindow with valid bounds")
+section("2. SetClipWindow (removed)")
 do
-    local pc = PLAYBACK.CREATE()
-    local tmb = EMP.TMB_CREATE(0)
-    EMP.TMB_SET_SEQUENCE_RATE(tmb, 24, 1)
-
-    PLAYBACK.SET_TMB(pc, tmb)
-    PLAYBACK.SET_BOUNDS(pc, 1000, 24, 1)
-
-    -- Valid window: lo < hi
-    PLAYBACK.SET_CLIP_WINDOW(pc, "video", 0, 500)
-    check(true, "SetClipWindow(0, 500) accepted")
-
-    -- Valid window: narrow range
-    PLAYBACK.SET_CLIP_WINDOW(pc, "video", 100, 101)
-    check(true, "SetClipWindow(100, 101) accepted — single frame window")
-
-    -- Valid audio window
-    PLAYBACK.SET_CLIP_WINDOW(pc, "audio", 0, 1000)
-    check(true, "SetClipWindow audio (0, 1000) accepted")
-
-    -- NOTE: SetClipWindow(100, 50) should ASSERT — lo > hi.
-    -- NOTE: SetClipWindow(100, 100) should ASSERT — lo == hi (empty range).
-
-    PLAYBACK.CLOSE(pc)
-    EMP.TMB_CLOSE(tmb)
+    check(true, "SetClipWindow replaced by SET_CLIP_PROVIDER + C++ prefetch")
 end
 
 --------------------------------------------------------------------------------

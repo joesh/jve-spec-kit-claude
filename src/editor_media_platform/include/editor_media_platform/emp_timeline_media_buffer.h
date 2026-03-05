@@ -85,7 +85,8 @@ struct VideoResult {
     int64_t clip_start_frame;     // timeline coords
     int64_t clip_end_frame;       // timeline coords
     bool offline;
-    std::string error_msg;  // populated when offline=true (from m_offline Error)
+    std::string error_msg;   // populated when offline=true (from m_offline Error)
+    std::string error_code;  // structured code: "FileNotFound", "Unsupported", etc.
 };
 
 // Timeline media buffer — owns readers and clip layout per track,
@@ -98,6 +99,14 @@ public:
     // Per-track clip layout (call incrementally as playhead moves).
     // Lua passes current clip + next 1-3 clips per track.
     void SetTrackClips(TrackId track, const std::vector<ClipInfo>& clips);
+
+    // Append clips to a track. Dedup by clip_id, re-sort by timeline_start.
+    // Does NOT invalidate existing readers (unlike SetTrackClips which replaces all).
+    // Pre-warms readers for genuinely new clips only.
+    void AddClips(TrackId track, std::vector<ClipInfo> clips);
+
+    // Remove all clips on all tracks. Invalidates readers, clears caches.
+    void ClearAllClips();
 
     // Transport hint for pre-buffer direction
     void SetPlayhead(int64_t frame, int direction, float speed);

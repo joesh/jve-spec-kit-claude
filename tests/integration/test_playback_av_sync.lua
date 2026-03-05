@@ -116,7 +116,6 @@ end
 --------------------------------------------------------------------------------
 local SEQ_FPS_NUM = 25
 local SEQ_FPS_DEN = 1
-local WINDOW_LO = 122960
 local WINDOW_HI = 123286
 
 local v1_clips = {
@@ -162,12 +161,13 @@ assert(pc, "Failed to create PlaybackController")
 PLAYBACK.SET_TMB(pc, tmb)
 PLAYBACK.SET_BOUNDS(pc, WINDOW_HI, SEQ_FPS_NUM, SEQ_FPS_DEN)
 PLAYBACK.SET_SURFACE(pc, surface)
-PLAYBACK.SET_CLIP_WINDOW(pc, "video", WINDOW_LO, WINDOW_HI)
-PLAYBACK.SET_CLIP_WINDOW(pc, "audio", WINDOW_LO, WINDOW_HI)
+
+-- Clip provider: clips already loaded via TMB_SET_TRACK_CLIPS above.
+-- Provider is a no-op — TMB already has all clips for this test.
+PLAYBACK.SET_CLIP_PROVIDER(pc, function(from, to, track_type) end)
 
 -- Capture frame history via position callback
 local position_history = {}
-PLAYBACK.SET_NEED_CLIPS_CALLBACK(pc, function() end)
 PLAYBACK.SET_POSITION_CALLBACK(pc, function(frame, stopped)
     position_history[#position_history + 1] = {
         frame = frame, stopped = stopped, wall_us = wall_us(),
@@ -176,7 +176,7 @@ end)
 
 -- Capture clip transitions
 local clip_transitions = {}
-PLAYBACK.SET_CLIP_TRANSITION_CALLBACK(pc, function(clip_id, rotation, par_num, par_den, is_offline)
+PLAYBACK.SET_CLIP_TRANSITION_CALLBACK(pc, function(clip_id, rotation, par_num, par_den, is_offline, media_path, frame) -- luacheck: no unused
     clip_transitions[#clip_transitions + 1] = {
         clip_id = clip_id, wall_us = wall_us(),
     }

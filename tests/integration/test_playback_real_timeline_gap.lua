@@ -119,11 +119,10 @@ assert(pc, "PLAYBACK.CREATE failed")
 PLAYBACK.SET_TMB(pc, tmb)
 PLAYBACK.SET_BOUNDS(pc, BOUNDS, RATE_NUM, RATE_DEN)
 PLAYBACK.SET_SURFACE(pc, test_surface)
-PLAYBACK.SET_NEED_CLIPS_CALLBACK(pc, function(_, _, track_type)
-    PLAYBACK.SET_CLIP_WINDOW(pc, track_type, 0, BOUNDS)
-end)
-PLAYBACK.SET_CLIP_WINDOW(pc, "video", 0, BOUNDS)
-PLAYBACK.SET_CLIP_WINDOW(pc, "audio", 0, BOUNDS)
+
+-- Clip provider: clips already loaded via TMB_SET_TRACK_CLIPS above.
+-- Provider is a no-op — TMB already has all clips for this test.
+PLAYBACK.SET_CLIP_PROVIDER(pc, function(from, to, track_type) end)
 
 -- Phase 1: Seek inside CountdownVidevo (near end, past EOF point)
 -- EOF at source 250 = timeline frame 203. Seek to frame 240 (post-EOF, holding last frame).

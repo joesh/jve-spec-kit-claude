@@ -84,11 +84,10 @@ local function run_scenario(label, tmb, seek_frame, bounds)
     PLAYBACK.SET_TMB(pc, tmb)
     PLAYBACK.SET_BOUNDS(pc, bounds, RATE_NUM, RATE_DEN)
     PLAYBACK.SET_SURFACE(pc, test_surface)
-    PLAYBACK.SET_NEED_CLIPS_CALLBACK(pc, function(_, _, track_type)
-        PLAYBACK.SET_CLIP_WINDOW(pc, track_type, 0, bounds)
-    end)
-    PLAYBACK.SET_CLIP_WINDOW(pc, "video", 0, bounds)
-    PLAYBACK.SET_CLIP_WINDOW(pc, "audio", 0, bounds)
+
+    -- Clip provider: clips already loaded via TMB_SET_TRACK_CLIPS in create_gap_tmb.
+    -- Provider is a no-op — TMB already has all clips for this test.
+    PLAYBACK.SET_CLIP_PROVIDER(pc, function(from, to, track_type) end)
 
     -- Seek inside clip A — verify content displayed
     PLAYBACK.SEEK(pc, seek_frame)

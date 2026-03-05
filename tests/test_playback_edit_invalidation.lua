@@ -1,10 +1,10 @@
--- NSF test: Edit command → clip window invalidation.
+-- NSF test: Edit command → clip reload via RELOAD_ALL_CLIPS.
 --
 -- Verifies that when content_changed signal fires for our sequence,
--- the PlaybackController's clip windows are invalidated so C++ re-queries
+-- the PlaybackController reloads all clips so C++ re-queries
 -- clip data after timeline edits (insert/delete/ripple).
 --
--- Black-box observable: INVALIDATE_CLIP_WINDOWS called + _tmb_clip_window cleared.
+-- Black-box observable: RELOAD_ALL_CLIPS called on the controller.
 
 require("test_env")
 
@@ -57,8 +57,7 @@ package.loaded["core.qt_constants"] = {
         SET_TMB = function() end,
         SET_BOUNDS = function() end,
         SET_SURFACE = function() end,
-        SET_CLIP_WINDOW = function() end,
-        SET_NEED_CLIPS_CALLBACK = function() end,
+        SET_CLIP_PROVIDER = function() end,
         SET_POSITION_CALLBACK = function() end,
         SET_CLIP_TRANSITION_CALLBACK = function() end,
         SET_SHUTTLE_MODE = function() end,
@@ -68,8 +67,8 @@ package.loaded["core.qt_constants"] = {
         ACTIVATE_AUDIO = function() end,
         DEACTIVATE_AUDIO = function() end,
         HAS_AUDIO = function() return false end,
-        INVALIDATE_CLIP_WINDOWS = function(pc)
-            track_playback("INVALIDATE_CLIP_WINDOWS", pc)
+        RELOAD_ALL_CLIPS = function(pc)
+            track_playback("RELOAD_ALL_CLIPS", pc)
         end,
     },
 }
@@ -147,6 +146,9 @@ package.loaded["models.sequence"] = {
             get_audio_at = function() return {} end,
             get_next_audio = function() return {} end,
             get_prev_audio = function() return {} end,
+            get_video_in_range = function() return {} end,
+            get_audio_in_range = function() return {} end,
+            get_track_indices = function() return { 0 } end,
         }
     end,
 }
@@ -183,93 +185,71 @@ end
 print("=== test_playback_edit_invalidation.lua ===")
 
 --------------------------------------------------------------------------------
--- 1. content_changed for our sequence → INVALIDATE_CLIP_WINDOWS
+-- 1. content_changed for our sequence → RELOAD_ALL_CLIPS
 --------------------------------------------------------------------------------
-print("\n--- 1. content_changed for our sequence → invalidate ---")
+print("\n--- 1. content_changed for our sequence → reload ---")
 do
     local engine = make_engine()
     engine:load_sequence("seq_test", 100)
     assert(engine._playback_controller, "controller must exist")
-
-    -- Establish a clip window
-    engine._tmb_clip_window = { lo = 0, hi = 100, direction = 1 }
 
     reset_playback_calls()
 
     -- Simulate edit command completing
     Signals.emit("content_changed", "seq_test")
 
-    -- Verify INVALIDATE_CLIP_WINDOWS was called
-    assert(find_call("INVALIDATE_CLIP_WINDOWS"),
-        "content_changed must trigger INVALIDATE_CLIP_WINDOWS")
+    -- Verify RELOAD_ALL_CLIPS was called
+    assert(find_call("RELOAD_ALL_CLIPS"),
+        "content_changed must trigger RELOAD_ALL_CLIPS")
 
-    -- Verify Lua-side clip window was invalidated and re-populated with fresh data
-    -- (notify_content_changed clears cache then immediately re-feeds TMB)
-    -- The important observable: INVALIDATE_CLIP_WINDOWS was called (above) and
-    -- TMB_SET_TRACK_CLIPS was called with fresh clip data.
-    assert(find_call("TMB_SET_TRACK_CLIPS") or engine._tmb_clip_window ~= nil,
-        "clip cache should be re-populated with fresh data after invalidation")
-
-    print("  PASS: edit on our sequence → invalidated + re-fed")
+    print("  PASS: edit on our sequence → RELOAD_ALL_CLIPS called")
 
     engine:destroy()
 end
 
 --------------------------------------------------------------------------------
--- 2. content_changed for DIFFERENT sequence → no invalidation
+-- 2. content_changed for DIFFERENT sequence → no reload
 --------------------------------------------------------------------------------
-print("\n--- 2. content_changed for different sequence → no invalidation ---")
+print("\n--- 2. content_changed for different sequence → no reload ---")
 do
     local engine = make_engine()
     engine:load_sequence("seq_test", 100)
     assert(engine._playback_controller, "controller must exist")
-
-    -- Establish a clip window
-    engine._tmb_clip_window = { lo = 0, hi = 100, direction = 1 }
 
     reset_playback_calls()
 
     -- Simulate edit command on DIFFERENT sequence
     Signals.emit("content_changed", "other_sequence_id")
 
-    -- Should NOT invalidate
-    assert(not find_call("INVALIDATE_CLIP_WINDOWS"),
-        "content_changed for other sequence must NOT invalidate our windows")
+    -- Should NOT reload
+    assert(not find_call("RELOAD_ALL_CLIPS"),
+        "content_changed for other sequence must NOT call RELOAD_ALL_CLIPS")
 
-    -- Lua clip window should remain
-    assert(engine._tmb_clip_window ~= nil,
-        "_tmb_clip_window must NOT be cleared for other sequence")
-
-    print("  PASS: edit on other sequence → no invalidation")
+    print("  PASS: edit on other sequence → no reload")
 
     engine:destroy()
 end
 
 --------------------------------------------------------------------------------
--- 3. Multiple edits → multiple invalidations (not coalesced)
+-- 3. Multiple edits → multiple reloads (not coalesced)
 --------------------------------------------------------------------------------
-print("\n--- 3. multiple edits → multiple invalidations ---")
+print("\n--- 3. multiple edits → multiple reloads ---")
 do
     local engine = make_engine()
     engine:load_sequence("seq_test", 100)
 
     reset_playback_calls()
-    local baseline = count_calls("INVALIDATE_CLIP_WINDOWS")
 
     -- Simulate 3 rapid edits
     Signals.emit("content_changed", "seq_test")
-    engine._tmb_clip_window = { lo = 0, hi = 100, direction = 1 }
     Signals.emit("content_changed", "seq_test")
-    engine._tmb_clip_window = { lo = 0, hi = 100, direction = 1 }
     Signals.emit("content_changed", "seq_test")
 
-    local total = count_calls("INVALIDATE_CLIP_WINDOWS")
-    local delta = total - baseline
-    assert(delta == 3, string.format(
-        "3 edits must produce 3 invalidations, got %d (total=%d, baseline=%d)",
-        delta, total, baseline))
+    local total = count_calls("RELOAD_ALL_CLIPS")
+    assert(total == 3, string.format(
+        "3 edits must produce 3 RELOAD_ALL_CLIPS, got %d", total))
 
-    print("  PASS: each edit triggers invalidation")
+    print("  PASS: each edit triggers reload")
 
     engine:destroy()
 end
@@ -295,7 +275,7 @@ do
     -- Emit after destroy — should be no-op (no crash, no invalidation)
     Signals.emit("content_changed", "seq_test")
 
-    assert(not find_call("INVALIDATE_CLIP_WINDOWS"),
+    assert(not find_call("RELOAD_ALL_CLIPS"),
         "destroyed engine must not respond to content_changed")
 
     print("  PASS: destroy() cleans up signal connection")
@@ -317,9 +297,9 @@ do
     -- Should not crash
     Signals.emit("content_changed", "seq_test")
 
-    -- No INVALIDATE call (no controller)
-    assert(not find_call("INVALIDATE_CLIP_WINDOWS"),
-        "no controller → no INVALIDATE call")
+    -- No RELOAD call (no controller)
+    assert(not find_call("RELOAD_ALL_CLIPS"),
+        "no controller → no RELOAD_ALL_CLIPS call")
 
     print("  PASS: safe no-op without controller")
 end

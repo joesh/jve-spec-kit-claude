@@ -98,12 +98,11 @@ package.loaded["core.qt_constants"] = {
         CLOSE = function() end,
         SET_TMB = function() end,
         SET_BOUNDS = function() end,
-        SET_CLIP_WINDOW = function() end,
+        SET_CLIP_PROVIDER = function() end,
+        RELOAD_ALL_CLIPS = function() end,
         SET_SURFACE = function() end,
-        SET_NEED_CLIPS_CALLBACK = function() end,
         SET_POSITION_CALLBACK = function() end,
         SET_CLIP_TRANSITION_CALLBACK = function() end,
-        INVALIDATE_CLIP_WINDOWS = function() end,
         PARK = function(pc, frame)
             qt_log[#qt_log + 1] = {
                 type = "park", pc = pc, frame = frame,

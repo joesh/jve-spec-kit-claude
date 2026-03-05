@@ -168,21 +168,19 @@ public:
     using PositionCallback = std::function<void(int64_t frame, bool stopped)>;
     void SetPositionCallback(PositionCallback cb);
 
-    // NeedClips callback (fires on main thread when approaching clip window edge)
-    // Args: frame_idx, direction, track_type
-    using NeedClipsCallback = std::function<void(int64_t frame, int direction, emp::TrackType type)>;
-    void SetNeedClipsCallback(NeedClipsCallback cb);
+    // Clip data provider: host (Lua) queries DB for clips in [from, to), adds to TMB.
+    using ClipProviderCallback = std::function<void(int64_t from, int64_t to, emp::TrackType type)>;
+    void SetClipProvider(ClipProviderCallback cb);
 
     // Clip transition callback (fires on main thread when displayed clip changes)
-    // Args: clip_id, rotation, par_num, par_den, is_offline, media_path
+    // Args: clip_id, rotation, par_num, par_den, is_offline, media_path, frame
     using ClipTransitionCallback = std::function<void(const std::string& clip_id,
         int rotation, int par_num, int par_den, bool offline,
-        const std::string& media_path)>;
+        const std::string& media_path, int64_t frame)>;
     void SetClipTransitionCallback(ClipTransitionCallback cb);
 
-    // Clip window management (Lua sets after resolving clips)
-    void SetClipWindow(emp::TrackType type, int64_t lo, int64_t hi);
-    void InvalidateClipWindows();  // marks both windows stale → next tick fires NeedClips
+    // Clip prefetch: clear TMB + reset + re-prefetch after timeline edits.
+    void reloadAllClips();
 
     // State queries (thread-safe)
     int64_t CurrentFrame() const;
@@ -251,18 +249,19 @@ private:
     static constexpr double PLL_MAX_CORRECTION = 0.15;    // max accumulator nudge per tick (in frames)
     static constexpr double PLL_EMERGENCY_THRESHOLD = 0.2; // 200ms — hard skip/hold as last resort
 
-    // ---- Clip windows ----
-    // Track valid frame ranges where TMB has clips loaded.
-    // When playhead approaches edge, fire NeedClips callback.
-    struct ClipWindow {
-        std::atomic<int64_t> lo{0};
-        std::atomic<int64_t> hi{0};
-        std::atomic<bool> valid{false};
-        std::atomic<bool> need_clips_pending{false};  // debounce: request in flight
-    };
-    ClipWindow m_video_window;
-    ClipWindow m_audio_window;
-    static constexpr int64_t PREFETCH_MARGIN_FRAMES = 120;  // ~5s at 24fps — must exceed TMB's PRE_BUFFER_THRESHOLD (96)
+    // ---- Clip prefetch ----
+    // Tracks how far we've supplied TMB with clip data in each direction.
+    // displayLinkTick dispatches prefetchClips() when the playhead approaches
+    // the prefetch frontier.
+    std::atomic<int64_t> m_prefetched_forward{0};   // TMB has clips verified up to here
+    std::atomic<int64_t> m_prefetched_backward{0};  // TMB has clips verified back to here
+    std::atomic<bool> m_prefetch_pending{false};     // true while a prefetch dispatch is queued
+
+    static constexpr int64_t PREFETCH_LOOKAHEAD = 150;  // ~6s at 25fps
+    static constexpr int64_t PREFETCH_MARGIN = 120;      // dispatch this many frames before frontier
+
+    void prefetchClips();            // the prefetch algorithm — runs on main thread
+    void resetPrefetchFrontiers();   // direction changed — restart tracking from current pos
 
     // ---- Dependencies ----
     emp::TimelineMediaBuffer* m_tmb{nullptr};
@@ -285,15 +284,12 @@ private:
     std::atomic<int64_t> m_last_reported_frame{-1};
     std::chrono::steady_clock::time_point m_last_report_time;
     PositionCallback m_position_callback;
-    NeedClipsCallback m_need_clips_callback;
+    ClipProviderCallback m_clip_provider;
     ClipTransitionCallback m_clip_transition_callback;
     std::mutex m_callback_mutex;
 
     // Position report interval (100ms coalescing)
     static constexpr int64_t REPORT_INTERVAL_MS = 100;
-
-    // Check clip window and fire NeedClips if approaching edge
-    void checkClipWindow(ClipWindow& window, emp::TrackType type, int64_t frame);
 };
 
 #else
@@ -323,16 +319,15 @@ public:
     using PositionCallback = std::function<void(int64_t frame, bool stopped)>;
     void SetPositionCallback(PositionCallback) {}
 
-    using NeedClipsCallback = std::function<void(int64_t frame, int direction, emp::TrackType type)>;
-    void SetNeedClipsCallback(NeedClipsCallback) {}
+    using ClipProviderCallback = std::function<void(int64_t from, int64_t to, emp::TrackType type)>;
+    void SetClipProvider(ClipProviderCallback) {}
 
     using ClipTransitionCallback = std::function<void(const std::string& clip_id,
         int rotation, int par_num, int par_den, bool offline,
-        const std::string& media_path)>;
+        const std::string& media_path, int64_t frame)>;
     void SetClipTransitionCallback(ClipTransitionCallback) {}
 
-    void SetClipWindow(emp::TrackType, int64_t, int64_t) {}
-    void InvalidateClipWindows() {}
+    void reloadAllClips() {}
 
     int64_t CurrentFrame() const { return 0; }
     bool IsPlaying() const { return false; }

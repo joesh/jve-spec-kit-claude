@@ -70,8 +70,8 @@ qt_constants_mock = {
         SET_SURFACE = function(_pc, surface)
             pc_surface = surface
         end,
-        SET_CLIP_WINDOW = function() end,
-        SET_NEED_CLIPS_CALLBACK = function() end,
+        SET_CLIP_PROVIDER = function() end,
+        RELOAD_ALL_CLIPS = function() end,
         SET_POSITION_CALLBACK = function() end,
         SET_CLIP_TRANSITION_CALLBACK = function() end,
         SET_SHUTTLE_MODE = function() end,
@@ -155,6 +155,9 @@ package.loaded["models.sequence"] = {
             get_audio_at = function() return {} end,
             get_next_audio = function() return {} end,
             get_prev_audio = function() return {} end,
+            get_video_in_range = function() return {} end,
+            get_audio_in_range = function() return {} end,
+            get_track_indices = function() return { 0 } end,
         }
     end,
 }

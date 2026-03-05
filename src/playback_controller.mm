@@ -563,13 +563,6 @@ void PlaybackController::Play(int direction, float speed) {
     JVE_ASSERT(speed > 0,
         "PlaybackController::Play: speed must be positive");
 
-    // Direction change invalidates clip windows: next/prev clips were resolved
-    // for the OLD direction, need fresh resolution for NEW direction.
-    int old_direction = m_direction.load(std::memory_order_relaxed);
-    if (old_direction != 0 && old_direction != direction) {
-        InvalidateClipWindows();
-    }
-
     // State setup
     m_direction.store(direction, std::memory_order_relaxed);
     m_speed.store(speed, std::memory_order_relaxed);
@@ -583,6 +576,10 @@ void PlaybackController::Play(int direction, float speed) {
 
     // Hint TMB for pre-buffer direction
     m_tmb->SetPlayhead(pos, direction, speed);
+
+    // Prefetch clips before prefill: ensure TMB knows about clips at playhead
+    resetPrefetchFrontiers();
+    prefetchClips();
 
     // Symmetric prefill: decode first frame(s) synchronously for both media
     // types BEFORE starting outputs. Video prefill mirrors audio prefill —
@@ -652,12 +649,18 @@ void PlaybackController::Park(int64_t frame) {
     // No surface assert — Lua handles display in park mode
 
     m_position.store(frame, std::memory_order_relaxed);
+    m_direction.store(0, std::memory_order_relaxed);
     m_hit_boundary.store(false, std::memory_order_relaxed);
     m_fractional_frames = 0.0;
     m_last_displayed_frame = -1;
 
     // Tell TMB we're parking (direction=0 → synchronous decode)
     m_tmb->SetPlayhead(frame, 0, 1.0f);
+
+    // Prefetch clips at parked frame so TMB has clip data for sync decode
+    resetPrefetchFrontiers();
+    prefetchClips();
+
     JVE_LOG_EVENT(Ticks, "Park: frame=%lld", (long long)frame);
 }
 
@@ -848,9 +851,9 @@ void PlaybackController::SetPositionCallback(PositionCallback cb) {
     m_position_callback = std::move(cb);
 }
 
-void PlaybackController::SetNeedClipsCallback(NeedClipsCallback cb) {
+void PlaybackController::SetClipProvider(ClipProviderCallback cb) {
     std::lock_guard<std::mutex> lock(m_callback_mutex);
-    m_need_clips_callback = std::move(cb);
+    m_clip_provider = std::move(cb);
 }
 
 void PlaybackController::SetClipTransitionCallback(ClipTransitionCallback cb) {
@@ -859,95 +862,79 @@ void PlaybackController::SetClipTransitionCallback(ClipTransitionCallback cb) {
 }
 
 // ============================================================================
-// Clip window management
+// Clip prefetch
 // ============================================================================
 
-void PlaybackController::SetClipWindow(emp::TrackType type, int64_t lo, int64_t hi) {
+void PlaybackController::prefetchClips() {
+    ClipProviderCallback provider;
     {
-        char buf[128];
-        snprintf(buf, sizeof(buf),
-            "PlaybackController::SetClipWindow: lo %lld must be < hi %lld",
-            (long long)lo, (long long)hi);
-        JVE_ASSERT(lo < hi, buf);
+        std::lock_guard<std::mutex> lock(m_callback_mutex);
+        provider = m_clip_provider;
     }
-    JVE_ASSERT(lo >= 0,
-        "PlaybackController::SetClipWindow: lo must be >= 0");
-
-    ClipWindow& window = (type == emp::TrackType::Video) ? m_video_window : m_audio_window;
-
-    bool was_valid = window.valid.load(std::memory_order_relaxed);
-    int64_t old_lo = window.lo.load(std::memory_order_relaxed);
-    int64_t old_hi = window.hi.load(std::memory_order_relaxed);
-
-    window.lo.store(lo, std::memory_order_relaxed);
-    window.hi.store(hi, std::memory_order_relaxed);
-    window.valid.store(true, std::memory_order_relaxed);
-
-    // Only clear debounce if window is genuinely new/expanded.
-    // If Lua returns the same window (nothing more to load), keep pending=true
-    // so checkClipWindow won't re-fire until InvalidateClipWindows().
-    bool changed = !was_valid || lo != old_lo || hi != old_hi;
-    if (changed) {
-        window.need_clips_pending.store(false, std::memory_order_relaxed);
-    }
-
-    JVE_LOG_EVENT(Ticks, "SetClipWindow %s lo=%lld hi=%lld changed=%d",
-                 (type == emp::TrackType::Video ? "video" : "audio"),
-                 (long long)lo, (long long)hi, changed);
-}
-
-void PlaybackController::InvalidateClipWindows() {
-    m_video_window.valid.store(false, std::memory_order_relaxed);
-    m_video_window.need_clips_pending.store(false, std::memory_order_relaxed);
-    m_audio_window.valid.store(false, std::memory_order_relaxed);
-    m_audio_window.need_clips_pending.store(false, std::memory_order_relaxed);
-    JVE_LOG_EVENT(Ticks, "InvalidateClipWindows");
-}
-
-void PlaybackController::checkClipWindow(ClipWindow& window, emp::TrackType type, int64_t frame) {
-    // Skip if already have a pending request (debounce)
-    if (window.need_clips_pending.load(std::memory_order_relaxed)) {
+    if (!provider) {
+        // No clip provider set — caller hasn't wired Lua. Skip prefetch.
+        m_prefetch_pending.store(false, std::memory_order_relaxed);
         return;
     }
 
+    int64_t current_position = m_position.load(std::memory_order_relaxed);
     int dir = m_direction.load(std::memory_order_relaxed);
-    bool need_clips = false;
+    JVE_ASSERT(dir >= -1 && dir <= 1,
+        "PlaybackController::prefetchClips: invalid direction");
 
-    if (!window.valid.load(std::memory_order_relaxed)) {
-        // Window invalid (never set or invalidated) → need clips
-        need_clips = true;
-    } else {
-        // Check if approaching window edge
-        int64_t lo = window.lo.load(std::memory_order_relaxed);
-        int64_t hi = window.hi.load(std::memory_order_relaxed);
+    // Helper: ask the clip provider to load clips for both video and audio
+    // tracks in [from, to). The provider (Lua) queries the DB and calls
+    // TMB::AddClips for each clip found in that range.
+    auto load_clips_in_range = [&](int64_t from, int64_t to) {
+        JVE_ASSERT(from < to,
+            "PlaybackController: load_clips_in_range from >= to");
+        provider(from, to, emp::TrackType::Video);
+        provider(from, to, emp::TrackType::Audio);
+    };
 
-        if (dir > 0 && frame >= hi - PREFETCH_MARGIN_FRAMES) {
-            need_clips = true;  // approaching end of window
-        } else if (dir < 0 && frame <= lo + PREFETCH_MARGIN_FRAMES) {
-            need_clips = true;  // approaching start of window
-        } else if (frame < lo || frame >= hi) {
-            need_clips = true;  // outside window entirely
+    // Dispatch: load clips the playhead will need based on direction.
+    switch (dir) {
+    case 0: {
+        // Park: only need clips at the current frame
+        load_clips_in_range(current_position, current_position + 1);
+        break;
+    }
+    case 1: {
+        int64_t prefetch_goal = current_position + PREFETCH_LOOKAHEAD;
+        int64_t already_fetched = m_prefetched_forward.load(std::memory_order_relaxed);
+        if (already_fetched < prefetch_goal) {
+            load_clips_in_range(already_fetched, prefetch_goal);
+            m_prefetched_forward.store(prefetch_goal, std::memory_order_relaxed);
         }
+        break;
+    }
+    case -1: {
+        int64_t prefetch_goal = std::max(int64_t(0), current_position - PREFETCH_LOOKAHEAD);
+        int64_t already_fetched = m_prefetched_backward.load(std::memory_order_relaxed);
+        if (already_fetched > prefetch_goal) {
+            load_clips_in_range(prefetch_goal, already_fetched);
+            m_prefetched_backward.store(prefetch_goal, std::memory_order_relaxed);
+        }
+        break;
+    }
     }
 
-    if (need_clips) {
-        // Mark pending to debounce
-        window.need_clips_pending.store(true, std::memory_order_relaxed);
+    m_prefetch_pending.store(false, std::memory_order_relaxed);
+}
 
-        // Copy callback under lock
-        NeedClipsCallback cb;
-        {
-            std::lock_guard<std::mutex> lock(m_callback_mutex);
-            cb = m_need_clips_callback;
-        }
+void PlaybackController::resetPrefetchFrontiers() {
+    int64_t pos = m_position.load(std::memory_order_relaxed);
+    m_prefetched_forward.store(pos, std::memory_order_relaxed);
+    m_prefetched_backward.store(pos, std::memory_order_relaxed);
+    m_prefetch_pending.store(false, std::memory_order_relaxed);
+}
 
-        JVE_ASSERT(cb,
-            "PlaybackController::checkClipWindow: NeedClips callback not set");
-        // Dispatch to main thread
-        dispatch_async(dispatch_get_main_queue(), ^{
-            cb(frame, dir, type);
-        });
-    }
+void PlaybackController::reloadAllClips() {
+    JVE_ASSERT(m_tmb,
+        "PlaybackController::reloadAllClips: TMB not set");
+    m_tmb->ClearAllClips();
+    resetPrefetchFrontiers();
+    prefetchClips();
 }
 
 // ============================================================================
@@ -1076,9 +1063,21 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
         // Shuttle mode: keep ticking, latched state handled in Lua
     }
 
-    // Check clip windows and fire NeedClips if approaching edge
-    checkClipWindow(m_video_window, emp::TrackType::Video, new_pos);
-    checkClipWindow(m_audio_window, emp::TrackType::Audio, new_pos);
+    // Prefetch: dispatch clip loading when playhead approaches the frontier
+    if (!m_prefetch_pending.load(std::memory_order_relaxed)) {
+        bool need_prefetch = false;
+        if (dir > 0) {
+            need_prefetch = (new_pos + PREFETCH_MARGIN >= m_prefetched_forward.load(std::memory_order_relaxed));
+        } else if (dir < 0) {
+            need_prefetch = (new_pos - PREFETCH_MARGIN <= m_prefetched_backward.load(std::memory_order_relaxed));
+        }
+        if (need_prefetch) {
+            m_prefetch_pending.store(true, std::memory_order_relaxed);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                prefetchClips();
+            });
+        }
+    }
     uint64_t t3 = mach_absolute_time();
 
     // Deliver frame (if it changed)
@@ -1098,7 +1097,7 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
         double dlv_ms = machTimeToSeconds(t4 - t3) * 1000.0;
         double rpt_ms = machTimeToSeconds(t5 - t4) * 1000.0;
         JVE_LOG_WARN(Ticks, "tick SLOW %.1fms: advance=%.1f setPlayhead=%.1f "
-                     "clipWin=%.1f deliver=%.1f report=%.1f frame=%lld",
+                     "prefetch=%.1f deliver=%.1f report=%.1f frame=%lld",
                      total_ms, adv_ms, sph_ms, chk_ms, dlv_ms, rpt_ms,
                      (long long)new_pos);
     }
@@ -1271,28 +1270,11 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
         m_last_displayed_frame = frame;
 
         if (!synchronous) {
-            // Stale-data detection: only invalidate the clip window when the
-            // playhead is INSIDE the window but TMB has no clips. This means
-            // the window's clip list is stale (Lua told us clips exist here
-            // but TMB disagrees).
-            //
-            // When the playhead is OUTSIDE the window (before lo or past hi),
-            // the gap is expected — checkClipWindow already handles refetching.
-            // Invalidating here would create a tight loop: invalidate → NeedClips
-            // → Lua sets same window → next tick invalidates again (every tick
-            // until playhead crosses into the window).
-            int64_t lo = m_video_window.lo.load(std::memory_order_relaxed);
-            int64_t hi = m_video_window.hi.load(std::memory_order_relaxed);
-            bool inside_window = m_video_window.valid.load(std::memory_order_relaxed) &&
-                                frame >= lo && frame < hi;
-            if (inside_window) {
-                m_video_window.valid.store(false, std::memory_order_relaxed);
-                m_video_window.need_clips_pending.store(false, std::memory_order_relaxed);
-                JVE_LOG_DETAIL(Ticks, "deliverFrame: GAP inside window [%lld,%lld) at %s frame=%lld — invalidated",
-                              (long long)lo, (long long)hi,
-                              frameToTC(frame, m_fps_num / m_fps_den).c_str(),
-                              (long long)frame);
-            }
+            // With the prefetch system, a gap here is a genuine gap — prefetch
+            // has already verified this range is empty. Log for diagnostics.
+            JVE_LOG_DETAIL(Ticks, "deliverFrame: GAP at %s frame=%lld",
+                          frameToTC(frame, m_fps_num / m_fps_den).c_str(),
+                          (long long)frame);
         }
         return;
     }
@@ -1314,12 +1296,13 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
             int par_den = result.par_den;
             bool offline = result.offline;
             std::string media_path = result.media_path;
+            int64_t trans_frame = frame;
 
             if (synchronous) {
-                cb(clip_id, rotation, par_num, par_den, offline, media_path);
+                cb(clip_id, rotation, par_num, par_den, offline, media_path, trans_frame);
             } else {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    cb(clip_id, rotation, par_num, par_den, offline, media_path);
+                    cb(clip_id, rotation, par_num, par_den, offline, media_path, trans_frame);
                 });
             }
         }
@@ -1361,10 +1344,12 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     } else if (!result.clip_id.empty()) {
         // TMB has a clip at this frame but returned no decoded frame data.
         if (result.offline) {
-            // Offline clip: no frame data expected. The Lua renderer handles
-            // offline frames via offline_frame_cache. Not a decode failure.
-            JVE_LOG_EVENT(Ticks, "deliverFrame: offline clip=%s frame=%lld",
-                         result.clip_id.c_str(), (long long)frame);
+            // Offline/unsupported clip: no frame data expected. The Lua renderer
+            // handles offline frames via offline_frame_cache. Not a decode failure.
+            // Logged once on clip_transition callback; suppress per-tick spam here.
+            // Update last_displayed_frame so frame-repeat detection skips subsequent
+            // ticks — Lua handles the offline frame, no need to re-scan TMB.
+            m_last_displayed_frame = frame;
         } else if (synchronous) {
             // Online clip with no frame on sync seek = real decode failure
             char buf[256];

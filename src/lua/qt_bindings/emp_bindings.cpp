@@ -618,6 +618,106 @@ static int lua_emp_tmb_set_track_clips(lua_State* L) {
     return 0;
 }
 
+// EMP.TMB_ADD_CLIPS(tmb, type_string, track_index, clips_table)
+// Same clip-table format as TMB_SET_TRACK_CLIPS; calls AddClips (dedup + sort).
+static int lua_emp_tmb_add_clips(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    auto track_type = parse_track_type(L, 2);
+    int track_index = static_cast<int>(luaL_checkinteger(L, 3));
+    emp::TrackId track{track_type, track_index};
+    luaL_checktype(L, 4, LUA_TTABLE);
+
+    int n = static_cast<int>(lua_objlen(L, 4));
+    std::vector<emp::ClipInfo> clips;
+    clips.reserve(static_cast<size_t>(n));
+
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, 4, i);
+        if (!lua_istable(L, -1)) {
+            return luaL_error(L, "TMB_ADD_CLIPS: element %d is not a table", i);
+        }
+
+        emp::ClipInfo ci{};
+
+        lua_getfield(L, -1, "clip_id");
+        if (!lua_isstring(L, -1)) {
+            return luaL_error(L, "TMB_ADD_CLIPS: element %d missing clip_id", i);
+        }
+        ci.clip_id = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "media_path");
+        if (!lua_isstring(L, -1)) {
+            return luaL_error(L, "TMB_ADD_CLIPS: element %d missing media_path", i);
+        }
+        ci.media_path = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "timeline_start");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_ADD_CLIPS: element %d missing timeline_start", i);
+        }
+        ci.timeline_start = static_cast<int64_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "duration");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_ADD_CLIPS: element %d missing duration", i);
+        }
+        ci.duration = static_cast<int64_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "source_in");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_ADD_CLIPS: element %d missing source_in", i);
+        }
+        ci.source_in = static_cast<int64_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "rate_num");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_ADD_CLIPS: element %d missing rate_num", i);
+        }
+        ci.rate_num = static_cast<int32_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "rate_den");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_ADD_CLIPS: element %d missing rate_den", i);
+        }
+        ci.rate_den = static_cast<int32_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "speed_ratio");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L, "TMB_ADD_CLIPS: element %d missing speed_ratio", i);
+        }
+        ci.speed_ratio = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+
+        lua_pop(L, 1); // pop clip table
+
+        if (ci.rate_den <= 0) {
+            return luaL_error(L, "TMB_ADD_CLIPS: element %d rate_den must be > 0, got %d", i, ci.rate_den);
+        }
+        if (ci.speed_ratio <= 0.0f) {
+            return luaL_error(L, "TMB_ADD_CLIPS: element %d speed_ratio must be > 0", i);
+        }
+
+        clips.push_back(std::move(ci));
+    }
+
+    tmb->AddClips(track, std::move(clips));
+    return 0;
+}
+
+// EMP.TMB_CLEAR_ALL_CLIPS(tmb)
+static int lua_emp_tmb_clear_all_clips(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    tmb->ClearAllClips();
+    return 0;
+}
+
 // EMP.TMB_SET_PLAYHEAD(tmb, frame, direction, speed)
 static int lua_emp_tmb_set_playhead(lua_State* L) {
     auto tmb = get_tmb(L, 1);
@@ -673,6 +773,10 @@ static int lua_emp_tmb_get_video_frame(lua_State* L) {
     if (!result.error_msg.empty()) {
         lua_pushstring(L, result.error_msg.c_str());
         lua_setfield(L, -2, "error_msg");
+    }
+    if (!result.error_code.empty()) {
+        lua_pushstring(L, result.error_code.c_str());
+        lua_setfield(L, -2, "error_code");
     }
 
     return 2;
@@ -1404,13 +1508,13 @@ static int lua_playback_set_position_callback(lua_State* L) {
     return 0;
 }
 
-// PLAYBACK.SET_NEED_CLIPS_CALLBACK(controller, callback_function)
-// The callback receives (frame_idx, direction, track_type_string)
-static int lua_playback_set_need_clips_callback(lua_State* L) {
+// PLAYBACK.SET_CLIP_PROVIDER(controller, callback_function)
+// The callback receives (from_frame, to_frame, track_type_string)
+static int lua_playback_set_clip_provider(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
 
     if (lua_isnil(L, 2)) {
-        controller->SetNeedClipsCallback(nullptr);
+        controller->SetClipProvider(nullptr);
         return 0;
     }
 
@@ -1420,11 +1524,11 @@ static int lua_playback_set_need_clips_callback(lua_State* L) {
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     lua_State* main_L = L;
 
-    controller->SetNeedClipsCallback([main_L, ref](int64_t frame, int direction, emp::TrackType type) {
+    controller->SetClipProvider([main_L, ref](int64_t from, int64_t to, emp::TrackType type) {
         lua_rawgeti(main_L, LUA_REGISTRYINDEX, ref);
         if (lua_isfunction(main_L, -1)) {
-            lua_pushinteger(main_L, static_cast<lua_Integer>(frame));
-            lua_pushinteger(main_L, direction);
+            lua_pushinteger(main_L, static_cast<lua_Integer>(from));
+            lua_pushinteger(main_L, static_cast<lua_Integer>(to));
             lua_pushstring(main_L, type == emp::TrackType::Video ? "video" : "audio");
             JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 3, 0, 0) != 0) {
@@ -1438,30 +1542,10 @@ static int lua_playback_set_need_clips_callback(lua_State* L) {
     return 0;
 }
 
-// PLAYBACK.SET_CLIP_WINDOW(controller, track_type_string, lo, hi)
-static int lua_playback_set_clip_window(lua_State* L) {
+// PLAYBACK.RELOAD_ALL_CLIPS(controller)
+static int lua_playback_reload_all_clips(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
-    const char* type_str = luaL_checkstring(L, 2);
-    int64_t lo = static_cast<int64_t>(luaL_checkinteger(L, 3));
-    int64_t hi = static_cast<int64_t>(luaL_checkinteger(L, 4));
-
-    emp::TrackType type;
-    if (strcmp(type_str, "video") == 0) {
-        type = emp::TrackType::Video;
-    } else if (strcmp(type_str, "audio") == 0) {
-        type = emp::TrackType::Audio;
-    } else {
-        return luaL_error(L, "PLAYBACK.SET_CLIP_WINDOW: invalid track type '%s' (expected 'video' or 'audio')", type_str);
-    }
-
-    controller->SetClipWindow(type, lo, hi);
-    return 0;
-}
-
-// PLAYBACK.INVALIDATE_CLIP_WINDOWS(controller)
-static int lua_playback_invalidate_clip_windows(lua_State* L) {
-    auto* controller = get_playback_controller(L, 1);
-    controller->InvalidateClipWindows();
+    controller->reloadAllClips();
     return 0;
 }
 
@@ -1516,7 +1600,7 @@ static int lua_playback_has_audio(lua_State* L) {
 }
 
 // PLAYBACK.SET_CLIP_TRANSITION_CALLBACK(controller, callback_function)
-// The callback receives (clip_id, rotation, par_num, par_den, is_offline)
+// The callback receives (clip_id, rotation, par_num, par_den, is_offline, media_path, frame)
 static int lua_playback_set_clip_transition_callback(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
 
@@ -1533,7 +1617,7 @@ static int lua_playback_set_clip_transition_callback(lua_State* L) {
 
     controller->SetClipTransitionCallback([main_L, ref](
         const std::string& clip_id, int rotation, int par_num, int par_den,
-        bool offline, const std::string& media_path) {
+        bool offline, const std::string& media_path, int64_t frame) {
         lua_rawgeti(main_L, LUA_REGISTRYINDEX, ref);
         if (lua_isfunction(main_L, -1)) {
             lua_pushstring(main_L, clip_id.c_str());
@@ -1542,8 +1626,9 @@ static int lua_playback_set_clip_transition_callback(lua_State* L) {
             lua_pushinteger(main_L, par_den);
             lua_pushboolean(main_L, offline ? 1 : 0);
             lua_pushstring(main_L, media_path.c_str());
+            lua_pushinteger(main_L, static_cast<lua_Integer>(frame));
             JveLuaStateGuard guard(main_L);
-            if (lua_pcall(main_L, 6, 0, 0) != 0) {
+            if (lua_pcall(main_L, 7, 0, 0) != 0) {
                 lua_error(main_L);
             }
         } else {
@@ -1658,6 +1743,10 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "TMB_SET_AUDIO_FORMAT");
     lua_pushcfunction(L, lua_emp_tmb_set_track_clips);
     lua_setfield(L, -2, "TMB_SET_TRACK_CLIPS");
+    lua_pushcfunction(L, lua_emp_tmb_add_clips);
+    lua_setfield(L, -2, "TMB_ADD_CLIPS");
+    lua_pushcfunction(L, lua_emp_tmb_clear_all_clips);
+    lua_setfield(L, -2, "TMB_CLEAR_ALL_CLIPS");
     lua_pushcfunction(L, lua_emp_tmb_set_playhead);
     lua_setfield(L, -2, "TMB_SET_PLAYHEAD");
     lua_pushcfunction(L, lua_emp_tmb_get_video_frame);
@@ -1727,12 +1816,10 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "IS_PLAYING");
     lua_pushcfunction(L, lua_playback_set_position_callback);
     lua_setfield(L, -2, "SET_POSITION_CALLBACK");
-    lua_pushcfunction(L, lua_playback_set_need_clips_callback);
-    lua_setfield(L, -2, "SET_NEED_CLIPS_CALLBACK");
-    lua_pushcfunction(L, lua_playback_set_clip_window);
-    lua_setfield(L, -2, "SET_CLIP_WINDOW");
-    lua_pushcfunction(L, lua_playback_invalidate_clip_windows);
-    lua_setfield(L, -2, "INVALIDATE_CLIP_WINDOWS");
+    lua_pushcfunction(L, lua_playback_set_clip_provider);
+    lua_setfield(L, -2, "SET_CLIP_PROVIDER");
+    lua_pushcfunction(L, lua_playback_reload_all_clips);
+    lua_setfield(L, -2, "RELOAD_ALL_CLIPS");
     lua_pushcfunction(L, lua_playback_set_clip_transition_callback);
     lua_setfield(L, -2, "SET_CLIP_TRANSITION_CALLBACK");
     lua_pushcfunction(L, lua_playback_activate_audio);

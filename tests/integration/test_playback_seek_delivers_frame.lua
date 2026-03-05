@@ -44,13 +44,11 @@ PLAYBACK.SET_TMB(pc, tmb)
 PLAYBACK.SET_BOUNDS(pc, clip_info.duration, clip_info.rate_num, clip_info.rate_den)
 PLAYBACK.SET_SURFACE(pc, surface)
 
--- Wire callbacks (required by asserts in some paths)
-PLAYBACK.SET_NEED_CLIPS_CALLBACK(pc, function() end)
+-- Clip provider: clips already loaded via create_single_clip_tmb above.
+-- Provider is a no-op — TMB already has all clips for this test.
+PLAYBACK.SET_CLIP_PROVIDER(pc, function(from, to, track_type) end)
 PLAYBACK.SET_POSITION_CALLBACK(pc, function() end)
 PLAYBACK.SET_CLIP_TRANSITION_CALLBACK(pc, function() end)
--- Set clip window so C++ knows clips are loaded
-PLAYBACK.SET_CLIP_WINDOW(pc, "video", 0, clip_info.duration)
-PLAYBACK.SET_CLIP_WINDOW(pc, "audio", 0, clip_info.duration)
 
 print("  ✓ Wired PlaybackController (TMB, surface, bounds, tracks, callbacks)")
 

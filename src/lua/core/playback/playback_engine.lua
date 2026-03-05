@@ -6,8 +6,8 @@
 -- identical code paths via Renderer (video) and TMB (audio).
 --
 -- Video path uses TimelineMediaBuffer (TMB) — a C++ class that owns readers,
--- caches frames, and pre-buffers at clip boundaries. Lua feeds clip windows
--- incrementally via _send_clips_to_tmb() and reads decoded frames via Renderer.
+-- caches frames, and pre-buffers at clip boundaries. C++ PlaybackController
+-- owns the prefetch algorithm; Lua provides clips via _provide_clips() callback.
 --
 -- Position advancement and frame display are driven entirely by C++
 -- PlaybackController (CVDisplayLink tick). Lua owns transport state machine,
@@ -34,32 +34,6 @@ local Signals = require("core.signals")
 
 local PlaybackEngine = {}
 PlaybackEngine.__index = PlaybackEngine
-
---- Compute MIN-per-track-end clip window from a track_clips map.
--- Returns the tightest window [lo, hi) that covers all tracks: lo is the
--- earliest clip start across all tracks, hi is the MIN of each track's
--- latest clip end. This ensures NeedClips fires before ANY track's loaded
--- clips run out (not when ALL expire — that was the old MAX-based bug).
--- @param track_clips_map table {[track_index] = {clip_data, ...}}
--- @return has_any boolean, lo number, hi number
-local function compute_min_clip_window(track_clips_map)
-    local lo = math.huge
-    local hi = math.huge
-    local has_any = false
-    for _, clips in pairs(track_clips_map) do
-        if #clips > 0 then
-            has_any = true
-            local track_hi = 0
-            for _, clip_data in ipairs(clips) do
-                lo = math.min(lo, clip_data.timeline_start)
-                track_hi = math.max(track_hi, clip_data.timeline_start + clip_data.duration)
-            end
-            hi = math.min(hi, track_hi)
-        end
-    end
-    if not has_any then hi = 0 end
-    return has_any, lo, hi
-end
 
 -- Class-level audio playback reference (singleton audio device)
 local audio_playback = nil
@@ -142,9 +116,6 @@ function PlaybackEngine.new(config)
     self._tmb = nil
     self._video_track_indices = {}   -- track indices for Renderer iteration
     self._audio_track_indices = {}   -- audio track indices for TMB audio path
-    self._tmb_clip_window = nil      -- {lo, hi, direction} — valid frame range for current clip feed
-    self._content_generation = 0     -- increments on content_changed; prevents stale clip feeds
-
     -- PlaybackController (C++ CVDisplayLink-driven playback)
     self._playback_controller = nil
     self._video_surface = nil
@@ -221,11 +192,11 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames)
     self:_create_tmb()
 
     -- PlaybackController setup.
-    -- Video track indices start empty — populated by caller's first seek()
-    -- via _send_clips_to_tmb(real_frame). Do NOT pre-load clips here:
-    -- hardcoding frame 0 poisons the clip window cache when the saved
-    -- playhead is far from frame 0.
+    -- Track indices populated from DB. Clips loaded by first seek() via
+    -- Park() → prefetchClips() → _provide_clips().
     self:_setup_playback_controller()
+    self._video_track_indices = self.sequence:get_track_indices("VIDEO")
+    self._audio_track_indices = self.sequence:get_track_indices("AUDIO")
 
     -- NOTE: No seek here. Caller (SequenceMonitor) is responsible for initial
     -- positioning via saved_playhead from DB. Hardcoding seek(0) is wrong when
@@ -294,25 +265,17 @@ function PlaybackEngine:_close_tmb()
     end
     self._video_track_indices = {}
     self._audio_track_indices = {}
-    self._tmb_clip_window = nil
 end
 
 --- Public: invalidate clip cache + re-feed TMB after timeline edits.
 -- Called by views (sequence_monitor) on content_changed — encapsulates all
 -- internal cache invalidation so views never touch engine privates.
--- Uses generation counter to skip stale clip feeds during rapid edit bursts.
--- Generation counter wraps at 2^30 to avoid Lua float precision loss.
 function PlaybackEngine:notify_content_changed()
-    self._content_generation = (self._content_generation % 0x40000000) + 1
-    local gen = self._content_generation
-
     self:_refresh_content_bounds()
     if self._playback_controller then
-        qt_constants.PLAYBACK.INVALIDATE_CLIP_WINDOWS(self._playback_controller)
-    end
-    self._tmb_clip_window = nil
-    if self._tmb then
-        self:_send_clips_to_tmb(math.floor(self:get_position()), gen)
+        qt_constants.PLAYBACK.RELOAD_ALL_CLIPS(self._playback_controller)
+        self._video_track_indices = self.sequence:get_track_indices("VIDEO")
+        self._audio_track_indices = self.sequence:get_track_indices("AUDIO")
     end
 end
 
@@ -340,22 +303,16 @@ function PlaybackEngine:_setup_playback_controller()
     PLAYBACK.SET_TMB(pc, self._tmb)
     PLAYBACK.SET_BOUNDS(pc, self.total_frames, self.fps_num, self.fps_den)
 
-    -- Send initial clip window so C++ doesn't need to wait for NeedClips
-    local w = self._tmb_clip_window
-    if w and w.hi > w.lo then
-        PLAYBACK.SET_CLIP_WINDOW(pc, "video", w.lo, w.hi)
-        PLAYBACK.SET_CLIP_WINDOW(pc, "audio", w.lo, w.hi)
-    end
-
     -- Wire surface if already set
     if self._video_surface then
         PLAYBACK.SET_SURFACE(pc, self._video_surface)
     end
 
-    -- Wire NeedClips callback: C++ fires when approaching clip window edge
+    -- Wire clip provider: C++ calls when prefetch frontier advances.
+    -- Lua queries DB for clips in [from, to), adds to TMB via TMB_ADD_CLIPS.
     local engine = self
-    PLAYBACK.SET_NEED_CLIPS_CALLBACK(pc, function(frame, direction, track_type)
-        engine:_on_need_clips(frame, direction, track_type)
+    PLAYBACK.SET_CLIP_PROVIDER(pc, function(from, to, track_type)
+        engine:_provide_clips(from, to, track_type)
     end)
 
     -- Wire PositionCallback: C++ fires coalesced position updates for UI
@@ -364,8 +321,8 @@ function PlaybackEngine:_setup_playback_controller()
     end)
 
     -- Wire ClipTransitionCallback: C++ fires when displayed clip changes
-    PLAYBACK.SET_CLIP_TRANSITION_CALLBACK(pc, function(clip_id, rotation, par_num, par_den, is_offline, media_path)
-        engine:_on_clip_transition(clip_id, rotation, par_num, par_den, is_offline, media_path)
+    PLAYBACK.SET_CLIP_TRANSITION_CALLBACK(pc, function(clip_id, rotation, par_num, par_den, is_offline, media_path, frame)
+        engine:_on_clip_transition(clip_id, rotation, par_num, par_den, is_offline, media_path, frame)
     end)
 
     -- Wire content_changed: invalidate clip windows when timeline edits occur.
@@ -383,25 +340,53 @@ function PlaybackEngine:_setup_playback_controller()
     log.event("PlaybackController created and configured")
 end
 
---- NeedClips callback: C++ requests clips when approaching window edge.
-function PlaybackEngine:_on_need_clips(frame, direction, track_type)
-    assert(type(frame) == "number", string.format(
-        "PlaybackEngine:_on_need_clips: frame must be number, got %s", type(frame)))
-    assert(direction == 1 or direction == -1 or direction == 0, string.format(
-        "PlaybackEngine:_on_need_clips: direction must be -1/0/1, got %s", tostring(direction)))
+--- Clip provider callback: C++ requests clips for a range.
+-- Queries DB for clips in [from, to), converts to TMB format, adds via TMB_ADD_CLIPS.
+function PlaybackEngine:_provide_clips(from, to, track_type)
+    assert(type(from) == "number", string.format(
+        "PlaybackEngine:_provide_clips: from must be number, got %s", type(from)))
+    assert(type(to) == "number", string.format(
+        "PlaybackEngine:_provide_clips: to must be number, got %s", type(to)))
     assert(track_type == "video" or track_type == "audio", string.format(
-        "PlaybackEngine:_on_need_clips: track_type must be 'video' or 'audio', got %s",
+        "PlaybackEngine:_provide_clips: track_type must be 'video' or 'audio', got %s",
         tostring(track_type)))
 
-    log.detail("NeedClips: frame=%d dir=%d type=%s", frame, direction, track_type)
-
-    -- Update direction for clip window tracking
-    self.direction = direction
-
+    local entries
     if track_type == "video" then
-        self:_send_video_clips_to_tmb(frame)
+        entries = self.sequence:get_video_in_range(from, to)
     else
-        self:_send_audio_clips_to_tmb(frame, qt_constants.EMP)
+        entries = self.sequence:get_audio_in_range(from, to)
+    end
+
+    local EMP = qt_constants.EMP
+    for _, entry in ipairs(entries) do
+        local speed = (track_type == "video")
+            and self:_compute_video_speed_ratio(entry)
+            or self:_compute_audio_speed_ratio(entry)
+        local clip = self:_build_tmb_clip(entry, speed)
+        local track_idx = entry.track.track_index
+        EMP.TMB_ADD_CLIPS(self._tmb, track_type, track_idx, {clip})
+
+        -- Track indices: ensure this track is known
+        if track_type == "video" then
+            local found = false
+            for _, idx in ipairs(self._video_track_indices) do
+                if idx == track_idx then found = true; break end
+            end
+            if not found then
+                self._video_track_indices[#self._video_track_indices + 1] = track_idx
+                table.sort(self._video_track_indices, function(a, b) return a > b end)
+            end
+        else
+            local found = false
+            for _, idx in ipairs(self._audio_track_indices) do
+                if idx == track_idx then found = true; break end
+            end
+            if not found then
+                self._audio_track_indices[#self._audio_track_indices + 1] = track_idx
+                table.sort(self._audio_track_indices)
+            end
+        end
     end
 end
 
@@ -463,8 +448,13 @@ end
 --- Callback from C++ deliverFrame: fires during playback when the displayed
 -- clip changes. During playback, online frames are pushed directly by C++
 -- (surface.setFrame). For offline clips, we pull through Renderer so that
--- offline_frame_cache composes the "Media Offline" frame.
-function PlaybackEngine:_on_clip_transition(clip_id, rotation, par_num, par_den, is_offline, media_path)
+-- offline_frame_cache composes the "Media Offline" / "Codec Unavailable" frame.
+--
+-- @param frame int64 — the exact timeline frame from C++ deliverFrame. Using this
+--   instead of self._position avoids the stale-position bug: self._position is
+--   updated via coalesced reports (~4Hz), so at the transition moment it still
+--   points to the PREVIOUS clip → TMB returns that clip's frame → freeze.
+function PlaybackEngine:_on_clip_transition(clip_id, rotation, par_num, par_den, is_offline, media_path, frame)
     assert(type(clip_id) == "string", string.format(
         "PlaybackEngine:_on_clip_transition: clip_id must be string, got %s", type(clip_id)))
     assert(type(rotation) == "number", string.format(
@@ -477,10 +467,14 @@ function PlaybackEngine:_on_clip_transition(clip_id, rotation, par_num, par_den,
         "PlaybackEngine:_on_clip_transition: is_offline must be boolean, got %s", type(is_offline)))
     assert(type(media_path) == "string", string.format(
         "PlaybackEngine:_on_clip_transition: media_path must be string, got %s", type(media_path)))
+    assert(type(frame) == "number", string.format(
+        "PlaybackEngine:_on_clip_transition: frame must be number, got %s", type(frame)))
+    assert(frame >= 0, string.format(
+        "PlaybackEngine:_on_clip_transition: frame must be >= 0, got %d", frame))
 
     if clip_id ~= self.current_clip_id then
-        log.event("clip_transition: clip=%s rotation=%d par=%d/%d offline=%s",
-            clip_id, rotation, par_num, par_den, tostring(is_offline))
+        log.event("clip_transition: clip=%s rotation=%d par=%d/%d offline=%s frame=%d",
+            clip_id, rotation, par_num, par_den, tostring(is_offline), frame)
         self.current_clip_id = clip_id
 
         local metadata = {
@@ -493,306 +487,14 @@ function PlaybackEngine:_on_clip_transition(clip_id, rotation, par_num, par_den,
         }
         self:_apply_rotation_par(metadata)
 
-        -- Offline during playback: pull through Renderer (same path as park)
+        -- Offline during playback: pull through Renderer at the EXACT frame
+        -- from C++ deliverFrame (not self._position which may be stale)
         if is_offline then
-            self:_display_frame_from_renderer(math.floor(self._position))
+            self:_display_frame_from_renderer(frame)
         end
     end
 end
 
---- Send only video clips to TMB (for NeedClips VIDEO callback).
-function PlaybackEngine:_send_video_clips_to_tmb(frame)
-    assert(self._tmb, "PlaybackEngine:_send_video_clips_to_tmb: no TMB (call load_sequence first)")
-    assert(self.sequence, "PlaybackEngine:_send_video_clips_to_tmb: no sequence loaded")
-
-    local EMP = qt_constants.EMP
-    local current_entries = self.sequence:get_video_at(frame)
-
-    local track_clips = {}
-    for _, entry in ipairs(current_entries) do
-        local idx = entry.track.track_index
-        if not track_clips[idx] then
-            track_clips[idx] = {}
-        end
-        track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(entry, self:_compute_video_speed_ratio(entry))
-    end
-
-    -- Lookahead: walk forward per-track to pre-load upcoming clips.
-    -- Covers gaps, clip transitions, and rapid-cut sequences.
-    self:_extend_video_lookahead(frame, track_clips)
-
-    -- Feed to TMB
-    local indices = {}
-    for idx, clips in pairs(track_clips) do
-        EMP.TMB_SET_TRACK_CLIPS(self._tmb, "video", idx, clips)
-        indices[#indices + 1] = idx
-    end
-    table.sort(indices, function(a, b) return a > b end)
-    self._video_track_indices = indices
-
-    -- Report video clip window to C++
-    local has_any, window_lo, window_hi = compute_min_clip_window(track_clips)
-    if self._playback_controller and has_any and window_hi > window_lo then
-        qt_constants.PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "video", window_lo, window_hi)
-    end
-end
-
---- Feed TMB with current + next clips for each video and audio track.
--- Builds a small clip window (2-3 clips per track) from sequence queries.
--- Skips re-query when playhead is still inside the cached clip window.
--- @param frame integer: current playhead frame
--- @param gen number|nil: content generation (nil = no staleness check)
--- @return boolean: true if clips were re-queried (boundary crossing), false if cached/stale
-function PlaybackEngine:_send_clips_to_tmb(frame, gen)
-    assert(self._tmb, "PlaybackEngine:_send_clips_to_tmb: no TMB")
-    assert(self.sequence, "PlaybackEngine:_send_clips_to_tmb: no sequence")
-    assert(gen == nil or (type(gen) == "number" and gen > 0),
-        "PlaybackEngine:_send_clips_to_tmb: gen must be nil or positive integer")
-
-    -- Staleness check: if generation changed during SQL query, skip this feed.
-    -- A newer notify_content_changed() will handle the update.
-    -- gen=nil means caller doesn't want staleness protection (e.g., seek, NeedClips).
-    if gen and gen ~= self._content_generation then
-        log.detail("Skipping stale clip feed (gen %d vs %d)", gen, self._content_generation)
-        return false
-    end
-
-    -- Still inside the clip window TMB already has? Skip re-query.
-    local w = self._tmb_clip_window
-    if w and frame >= w.lo and frame < w.hi and self.direction == w.direction then
-        return false  -- no boundary crossing
-    end
-
-    local EMP = qt_constants.EMP
-
-    -- Get current clips per track
-    local current_entries = self.sequence:get_video_at(frame)
-
-    -- Build track_index → clip list mapping
-    local track_clips = {}   -- {[track_index] = {clip_table, ...}}
-
-    for _, entry in ipairs(current_entries) do
-        local idx = entry.track.track_index
-        if not track_clips[idx] then
-            track_clips[idx] = {}
-        end
-        track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(entry, self:_compute_video_speed_ratio(entry))
-    end
-
-    -- Lookahead: walk forward per-track to pre-load upcoming clips.
-    -- Covers gaps, clip transitions, and rapid-cut sequences.
-    self:_extend_video_lookahead(frame, track_clips)
-
-    -- Post-query staleness check: if generation changed during SQL queries, abort.
-    -- We haven't touched TMB yet, so it's safe to bail.
-    if gen and gen ~= self._content_generation then
-        log.detail("Aborting clip feed after query (gen %d vs %d)", gen, self._content_generation)
-        return false
-    end
-
-    -- Feed each video track to TMB
-    local indices = {}
-    for idx, clips in pairs(track_clips) do
-        EMP.TMB_SET_TRACK_CLIPS(self._tmb, "video", idx, clips)
-        indices[#indices + 1] = idx
-    end
-
-    -- Sort indices descending: highest track_index = topmost = highest priority
-    table.sort(indices, function(a, b) return a > b end)
-    self._video_track_indices = indices
-
-    -- ── Audio tracks (window reported inside _send_audio_clips_to_tmb) ──
-    self:_send_audio_clips_to_tmb(frame, EMP)
-
-    -- ── Video clip window ──
-    local has_clips, window_lo, window_hi = compute_min_clip_window(track_clips)
-
-    if has_clips and window_hi > window_lo then
-        self._tmb_clip_window = {
-            lo = window_lo, hi = window_hi, direction = self.direction,
-        }
-    else
-        self._tmb_clip_window = nil
-    end
-
-    if self._playback_controller and has_clips and window_hi > window_lo then
-        qt_constants.PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "video", window_lo, window_hi)
-    end
-
-    return true  -- boundary crossing: clips were re-queried
-end
-
---- Feed audio clips near the playhead to TMB.
--- Single audio path: called from both _send_clips_to_tmb (clip boundary)
--- and _on_need_clips (NeedClips AUDIO callback).
--- Reports audio clip window to C++ and returns audio_track_clips.
--- @return audio_track_clips table {[track_idx] = {clip_data, ...}}
-local AUDIO_LOOKAHEAD_FRAMES = 150  -- ~6s at 25fps
-
-function PlaybackEngine:_send_audio_clips_to_tmb(frame, EMP)
-    assert(self._tmb, "PlaybackEngine:_send_audio_clips_to_tmb: no TMB (call load_sequence first)")
-    assert(self.sequence, "PlaybackEngine:_send_audio_clips_to_tmb: no sequence loaded")
-
-    local audio_entries = self.sequence:get_audio_at(frame)
-
-    -- Build track_index → clip list mapping (current-frame clips always loaded)
-    local audio_track_clips = {}
-
-    for _, entry in ipairs(audio_entries) do
-        local idx = entry.track.track_index
-        if not audio_track_clips[idx] then
-            audio_track_clips[idx] = {}
-        end
-        local sr = self:_compute_audio_speed_ratio(entry)
-        audio_track_clips[idx][#audio_track_clips[idx] + 1] =
-            self:_build_tmb_clip(entry, sr)
-    end
-
-    -- Lookahead: only during play (direction ~= 0)
-    if self.direction ~= 0 then
-        local lookahead_limit = frame + AUDIO_LOOKAHEAD_FRAMES
-        local lookbehind_limit = frame - AUDIO_LOOKAHEAD_FRAMES
-
-        -- Direction-aware next/prev for pre-buffer
-        for _, entry in ipairs(audio_entries) do
-            local clip_end = entry.clip.timeline_start + entry.clip.duration
-            local nexts
-            if self.direction >= 0 then
-                nexts = self.sequence:get_next_audio(clip_end)
-            else
-                nexts = self.sequence:get_prev_audio(entry.clip.timeline_start)
-            end
-            for _, ne in ipairs(nexts) do
-                -- Frame filter: skip clips beyond lookahead window
-                local dominated = false
-                if self.direction >= 0 and ne.clip.timeline_start >= lookahead_limit then
-                    dominated = true
-                elseif self.direction < 0
-                    and ne.clip.timeline_start + ne.clip.duration <= lookbehind_limit then
-                    dominated = true
-                end
-                if not dominated then
-                    local idx = ne.track.track_index
-                    if not audio_track_clips[idx] then
-                        audio_track_clips[idx] = {}
-                    end
-                    -- Dedup check
-                    local exists = false
-                    for _, existing in ipairs(audio_track_clips[idx]) do
-                        if existing.clip_id == ne.clip.id then
-                            exists = true
-                            break
-                        end
-                    end
-                    if not exists then
-                        local sr = self:_compute_audio_speed_ratio(ne)
-                        audio_track_clips[idx][#audio_track_clips[idx] + 1] =
-                            self:_build_tmb_clip(ne, sr)
-                    end
-                end
-            end
-        end
-
-        -- Gap: no current audio entries → try finding next clip ahead (bounded)
-        if #audio_entries == 0 then
-            local next_audio = self.sequence:get_next_audio(frame)
-            for _, ne in ipairs(next_audio or {}) do
-                if ne.clip.timeline_start < lookahead_limit then
-                    local idx = ne.track.track_index
-                    if not audio_track_clips[idx] then
-                        audio_track_clips[idx] = {}
-                    end
-                    local sr = self:_compute_audio_speed_ratio(ne)
-                    audio_track_clips[idx][#audio_track_clips[idx] + 1] =
-                        self:_build_tmb_clip(ne, sr)
-                end
-            end
-        end
-    end
-
-    -- Feed each audio track to TMB
-    local audio_indices = {}
-    for idx, clips in pairs(audio_track_clips) do
-        EMP.TMB_SET_TRACK_CLIPS(self._tmb, "audio", idx, clips)
-        audio_indices[#audio_indices + 1] = idx
-    end
-    table.sort(audio_indices)
-    self._audio_track_indices = audio_indices
-
-    -- Report audio clip window to C++
-    local has_audio, audio_lo, audio_hi = compute_min_clip_window(audio_track_clips)
-    if self._playback_controller and has_audio and audio_hi > audio_lo then
-        qt_constants.PLAYBACK.SET_CLIP_WINDOW(self._playback_controller, "audio", audio_lo, audio_hi)
-    end
-
-    return audio_track_clips
-end
-
--- Lookahead: walk forward per-track to ensure TMB has enough clips pre-loaded.
--- Without this, clip transitions cause 50-150ms decode stalls on the CVDisplayLink
--- thread when GetVideoFrame encounters a clip TMB hasn't been told about yet.
-local VIDEO_LOOKAHEAD_FRAMES = 150  -- ~6s at 25fps
-
---- Extend track_clips with forward lookahead clips.
--- Walks each video track forward from its current frontier until
--- coverage reaches frame + VIDEO_LOOKAHEAD_FRAMES or no more clips exist.
--- @param frame number: current playhead position
--- @param track_clips table: {[track_index] = {clip_table, ...}} — modified in-place
-function PlaybackEngine:_extend_video_lookahead(frame, track_clips)
-    -- Park mode: current-frame clips (from get_video_at) are sufficient.
-    -- No reason to pre-load upcoming clips when we're not moving.
-    if self.direction == 0 then return end
-
-    local target = frame + VIDEO_LOOKAHEAD_FRAMES
-
-    -- Collect all clip_ids already in track_clips (for dedup)
-    local seen = {}
-    for _, clips in pairs(track_clips) do
-        for _, clip_data in ipairs(clips) do
-            seen[clip_data.clip_id] = true
-        end
-    end
-
-    -- Iteratively walk forward using get_next_video until all tracks
-    -- cover the lookahead window. Each call returns one clip per track.
-    for _ = 1, 20 do  -- safety limit
-        -- Find the minimum per-track frontier (least-covered track)
-        local min_frontier = target
-        if not next(track_clips) then
-            -- No clips loaded yet (pure gap) — start from playhead
-            min_frontier = frame
-        else
-            for _, clips in pairs(track_clips) do
-                local track_frontier = frame
-                for _, clip_data in ipairs(clips) do
-                    local clip_end = clip_data.timeline_start + clip_data.duration
-                    if clip_end > track_frontier then track_frontier = clip_end end
-                end
-                if track_frontier < min_frontier then min_frontier = track_frontier end
-            end
-        end
-
-        if min_frontier >= target then break end
-
-        -- Get next clip per track from the frontier
-        local nexts = self.sequence:get_next_video(min_frontier)
-        if not nexts or #nexts == 0 then break end
-
-        local any_added = false
-        for _, ne in ipairs(nexts) do
-            -- Skip clips beyond the lookahead window
-            if not seen[ne.clip.id] and ne.clip.timeline_start < target then
-                local idx = ne.track.track_index
-                if not track_clips[idx] then track_clips[idx] = {} end
-                track_clips[idx][#track_clips[idx] + 1] = self:_build_tmb_clip(ne, self:_compute_video_speed_ratio(ne))
-                seen[ne.clip.id] = true
-                any_added = true
-            end
-        end
-
-        if not any_added then break end
-    end
-end
 
 --- Build a TMB clip table from a sequence entry (get_video_at/get_audio_at result).
 -- @param entry table: {media_path, clip, track, ...}
@@ -1077,12 +779,8 @@ function PlaybackEngine:seek(frame_idx)
         self:_stop_audio()
     end
 
-    -- Feed TMB clips for seek position
-    if self._tmb then
-        self:_send_clips_to_tmb(frame)
-    end
-
     -- Park: set position + prime TMB (no display from C++)
+    -- Park() internally calls prefetchClips() which loads clips via _provide_clips.
     assert(self._playback_controller,
         "PlaybackEngine:seek: _playback_controller required")
     qt_constants.PLAYBACK.PARK(self._playback_controller, frame)

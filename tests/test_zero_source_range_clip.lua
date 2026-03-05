@@ -40,6 +40,8 @@ package.loaded["core.qt_constants"] = {
         TMB_SET_PLAYHEAD = function() end,
         TMB_GET_VIDEO_FRAME = function() return nil, { offline = false } end,
         TMB_GET_VIDEO_TRACK_IDS = function() return {} end,
+        TMB_ADD_CLIPS = function() end,
+        TMB_CLEAR_ALL_CLIPS = function() end,
     },
     PLAYBACK = {
         CREATE = function() return "mock_controller" end,
@@ -50,12 +52,11 @@ package.loaded["core.qt_constants"] = {
         SET_TMB = function() end,
         SET_BOUNDS = function() end,
         SET_SURFACE = function() end,
-        SET_CLIP_WINDOW = function() end,
+        SET_CLIP_PROVIDER = function() end,
+        RELOAD_ALL_CLIPS = function() end,
         SET_SHUTTLE_MODE = function() end,
-        SET_NEED_CLIPS_CALLBACK = function() end,
         SET_POSITION_CALLBACK = function() end,
         SET_CLIP_TRANSITION_CALLBACK = function() end,
-        INVALIDATE_CLIP_WINDOWS = function() end,
         CLOSE = function() end,
         HAS_AUDIO = function() return false end,
         ACTIVATE_AUDIO = function() end,
@@ -130,6 +131,19 @@ local mock_sequence = {
     get_audio_at = function() return {} end,
     get_next_audio = function() return {} end,
     get_prev_audio = function() return {} end,
+    get_video_in_range = function(self, from, to)
+        if from < 100 and to > 0 then
+            return {{
+                media_path = "/test.mov",
+                clip = bad_clip,
+                track = bad_track,
+                media_fps_num = 25, media_fps_den = 1,
+            }}
+        end
+        return {}
+    end,
+    get_audio_in_range = function() return {} end,
+    get_track_indices = function() return { 0 } end,
 }
 
 package.loaded["models.sequence"] = {
@@ -170,17 +184,17 @@ assert(err:match("source_range must be positive"),
 print("  PASS: assert fires correctly on zero source range")
 
 --------------------------------------------------------------------------------
--- Test 2: seek with bad clip is catchable (pcall boundary works)
+-- Test 2: _provide_clips with bad clip is catchable (pcall boundary works)
 --------------------------------------------------------------------------------
-print("TEST 2: seek with bad clip is catchable via pcall")
+print("TEST 2: _provide_clips with bad clip is catchable via pcall")
 engine:load_sequence("seq_with_bad_clip")
 
-local seek_ok, seek_err = pcall(function()
-    engine:seek(0)
+local provide_ok, provide_err = pcall(function()
+    engine:_provide_clips(0, 1, "video")
 end)
-assert(not seek_ok, "Expected seek to fail on bad clip")
-assert(seek_err:match("source_range must be positive"),
-    "Expected source_range error, got: " .. tostring(seek_err))
-print("  PASS: seek error is catchable, app survives")
+assert(not provide_ok, "Expected _provide_clips to fail on bad clip")
+assert(provide_err:match("source_range must be positive"),
+    "Expected source_range error, got: " .. tostring(provide_err))
+print("  PASS: _provide_clips error is catchable, app survives")
 
 print("✅ test_zero_source_range_clip.lua passed")

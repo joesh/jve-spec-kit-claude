@@ -192,6 +192,61 @@ void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInf
     }
 }
 
+void TimelineMediaBuffer::AddClips(TrackId track, std::vector<ClipInfo> clips) {
+    if (clips.empty()) return;
+
+    std::vector<ClipInfo> clips_to_warm;
+    {
+        std::lock_guard<std::mutex> lock(m_tracks_mutex);
+        auto& ts = m_tracks[track];
+
+        // Build set of existing clip_ids for dedup
+        std::unordered_set<std::string> existing_ids;
+        for (const auto& c : ts.clips) {
+            existing_ids.insert(c.clip_id);
+        }
+
+        // Append genuinely new clips
+        for (auto& c : clips) {
+            if (existing_ids.find(c.clip_id) == existing_ids.end()) {
+                existing_ids.insert(c.clip_id);
+                clips_to_warm.push_back(c);
+                ts.clips.push_back(std::move(c));
+            }
+        }
+
+        if (clips_to_warm.empty()) return;  // all duplicates
+
+        // Re-sort by timeline_start
+        std::sort(ts.clips.begin(), ts.clips.end(),
+            [](const ClipInfo& a, const ClipInfo& b) {
+                return a.timeline_start < b.timeline_start;
+            });
+    }
+    // tracks_lock released — warm readers for new clips
+    for (const auto& c : clips_to_warm) {
+        PreBufferJob warm;
+        warm.type = PreBufferJob::READER_WARM;
+        warm.track = track;
+        warm.clip_id = c.clip_id;
+        warm.media_path = c.media_path;
+        submit_pre_buffer(warm);
+    }
+}
+
+void TimelineMediaBuffer::ClearAllClips() {
+    {
+        std::lock_guard<std::mutex> lock(m_tracks_mutex);
+        m_tracks.clear();
+    }
+    // Invalidate watermarks is implicit — m_tracks is empty.
+    // Mixed audio cache is stale too.
+    {
+        std::lock_guard<std::mutex> lock(m_mix_mutex);
+        m_mixed_cache.clear();
+    }
+}
+
 // ============================================================================
 // Playhead
 // ============================================================================
@@ -295,6 +350,12 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         // Without this, gaps starve the watermark — no cache hits or misses
         // → no check_video_watermark → no REFILL until playhead enters a clip
         // → cold decode at clip boundary (black frames until REFILL catches up).
+        char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
+        EMP_LOG_DEBUG("GetVideoFrame gap: track %s frame %lld, %zu clips [%lld..%lld)",
+            tbuf, (long long)timeline_frame,
+            ts.clips.size(),
+            ts.clips.empty() ? -1LL : (long long)ts.clips.front().timeline_start,
+            ts.clips.empty() ? -1LL : (long long)ts.clips.back().timeline_end());
         int dir = m_playhead_direction.load(std::memory_order_relaxed);
         if (dir != 0) {
             tracks_lock.unlock();
@@ -359,6 +420,7 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         if (offline_it != m_offline.end()) {
             result.offline = true;
             result.error_msg = offline_it->second.message;
+            result.error_code = error_code_to_string(offline_it->second.code);
             return result;
         }
     }
@@ -374,6 +436,7 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
             auto err_it = m_offline.find(media_path);
             if (err_it != m_offline.end()) {
                 result.error_msg = err_it->second.message;
+                result.error_code = error_code_to_string(err_it->second.code);
             }
         }
         return result;
@@ -434,6 +497,7 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         // so the renderer shows the offline graphic, not skip to the next track.
         result.offline = true;
         result.error_msg = "Decode failed for " + media_path;
+        result.error_code = error_code_to_string(ErrorCode::DecodeFailed);
     }
 
     return result;

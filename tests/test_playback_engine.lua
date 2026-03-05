@@ -81,12 +81,11 @@ package.loaded["core.qt_constants"] = {
         SET_TMB = function() end,
         SET_BOUNDS = function() end,
         SET_SURFACE = function() end,
-        SET_CLIP_WINDOW = function() end,
+        SET_CLIP_PROVIDER = function() end,
+        RELOAD_ALL_CLIPS = function() end,
         SET_SHUTTLE_MODE = function(pc, enabled) track("SET_SHUTTLE_MODE", enabled) end,
-        SET_NEED_CLIPS_CALLBACK = function() end,
         SET_POSITION_CALLBACK = function(pc, fn) stored_position_cb = fn end,
         SET_CLIP_TRANSITION_CALLBACK = function(pc, fn) stored_clip_transition_cb = fn end,
-        INVALIDATE_CLIP_WINDOWS = function() end,
         CLOSE = function() end,
         HAS_AUDIO = function() return false end,
         ACTIVATE_AUDIO = function() end,
@@ -151,6 +150,9 @@ local mock_sequence = {
     get_audio_at = function() return {} end,
     get_next_audio = function() return {} end,
     get_prev_audio = function() return {} end,
+    get_video_in_range = function() return {} end,
+    get_audio_in_range = function() return {} end,
+    get_track_indices = function() return { 0 } end,
 }
 package.loaded["models.sequence"] = {
     load = function(id) return mock_sequence end,
@@ -413,16 +415,16 @@ do
 
     -- Simulate C++ clip transition: clipA with rotation=0
     assert(stored_clip_transition_cb, "clip transition callback must be set")
-    stored_clip_transition_cb("clipA", 0, 1, 1, false, "/test.mov")
+    stored_clip_transition_cb("clipA", 0, 1, 1, false, "/test.mov", 0)
     assert(#log.rotations == 1, "first clip → rotation callback")
     assert(log.rotations[1] == 0, "clipA rotation=0")
 
     -- Same clip again → no new callback
-    stored_clip_transition_cb("clipA", 0, 1, 1, false, "/test.mov")
+    stored_clip_transition_cb("clipA", 0, 1, 1, false, "/test.mov", 0)
     assert(#log.rotations == 1, "same clip → no rotation callback")
 
     -- Different clip → rotation callback
-    stored_clip_transition_cb("clipB", 90, 1, 1, false, "/test2.mov")
+    stored_clip_transition_cb("clipB", 90, 1, 1, false, "/test2.mov", 10)
     assert(#log.rotations == 2, "clip switch → rotation callback")
     assert(log.rotations[2] == 90, "clipB rotation=90")
 
@@ -438,19 +440,19 @@ do
     log.pars = {}
 
     -- clipC: square pixels (1:1)
-    stored_clip_transition_cb("clipC", 0, 1, 1, false, "/test3.mov")
+    stored_clip_transition_cb("clipC", 0, 1, 1, false, "/test3.mov", 20)
     assert(#log.pars == 1, "first clip → PAR callback, got " .. #log.pars)
     assert(log.pars[1][1] == 1 and log.pars[1][2] == 1,
         string.format("clipC PAR should be 1:1, got %d:%d", log.pars[1][1], log.pars[1][2]))
 
     -- clipD: anamorphic HD (4:3)
-    stored_clip_transition_cb("clipD", 0, 4, 3, false, "/test4.mov")
+    stored_clip_transition_cb("clipD", 0, 4, 3, false, "/test4.mov", 30)
     assert(#log.pars == 2, "clip switch → PAR callback")
     assert(log.pars[2][1] == 4 and log.pars[2][2] == 3,
         string.format("clipD PAR should be 4:3, got %d:%d", log.pars[2][1], log.pars[2][2]))
 
     -- Same clip → no new callback
-    stored_clip_transition_cb("clipD", 0, 4, 3, false, "/test4.mov")
+    stored_clip_transition_cb("clipD", 0, 4, 3, false, "/test4.mov", 30)
     assert(#log.pars == 2, "same clip → no PAR callback")
 
     print("  ok")
@@ -825,12 +827,12 @@ do
     log.pars = {}
 
     -- Online clip with rotation
-    stored_clip_transition_cb("clipA", 90, 4, 3, false, "/online.mov")
+    stored_clip_transition_cb("clipA", 90, 4, 3, false, "/online.mov", 0)
     assert(log.rotations[1] == 90, "online: rotation=90")
     assert(log.pars[1][1] == 4 and log.pars[1][2] == 3, "online: PAR=4:3")
 
     -- Offline clip → upright, square pixels
-    stored_clip_transition_cb("clipB", 180, 16, 9, true, "/offline.braw")
+    stored_clip_transition_cb("clipB", 180, 16, 9, true, "/offline.braw", 50)
     assert(log.rotations[2] == 0, "offline: rotation=0")
     assert(log.pars[2][1] == 1 and log.pars[2][2] == 1, "offline: PAR=1:1")
 

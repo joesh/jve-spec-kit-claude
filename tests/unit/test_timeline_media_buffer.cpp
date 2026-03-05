@@ -3067,6 +3067,97 @@ private slots:
             qPrintable(QString("Expected 0 misses (cache hit from REFILL), got %1")
                 .arg(misses)));
     }
+
+    // ── AddClips tests ──
+
+    void test_add_clips_dedup() {
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        // Add a clip
+        std::vector<ClipInfo> clips1 = {
+            {"clip1", "/fake.mp4", 0, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->AddClips(V1, clips1);
+
+        // Add the same clip again — should be deduped
+        tmb->AddClips(V1, clips1);
+
+        // Verify only one copy via GetVideoTrackIds (V1 should appear once)
+        auto ids = tmb->GetVideoTrackIds();
+        QCOMPARE(ids.size(), size_t(1));
+        QCOMPARE(ids[0], 1);
+    }
+
+    void test_add_clips_sorts() {
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        // Add clips out of order
+        std::vector<ClipInfo> clips = {
+            {"clip2", "/fake.mp4", 100, 50, 0, 24, 1, 1.0f},
+            {"clip1", "/fake.mp4", 0, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->AddClips(V1, clips);
+
+        // Frame 0 should hit clip1, frame 100 should hit clip2
+        auto r1 = tmb->GetVideoFrame(V1, 0);
+        QCOMPARE(r1.clip_id, std::string("clip1"));
+        auto r2 = tmb->GetVideoFrame(V1, 100);
+        QCOMPARE(r2.clip_id, std::string("clip2"));
+    }
+
+    void test_add_clips_preserves_existing() {
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        // Set initial clip via SetTrackClips
+        std::vector<ClipInfo> clips1 = {
+            {"clipA", m_testVideoPath.toStdString(), 0, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips1);
+
+        // Decode a frame to populate cache
+        auto r1 = tmb->GetVideoFrame(V1, 0);
+        QVERIFY(r1.frame != nullptr);
+
+        // Add new clip — existing clipA should be untouched
+        std::vector<ClipInfo> clips2 = {
+            {"clipB", m_testVideoPath.toStdString(), 50, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->AddClips(V1, clips2);
+
+        // clipA frame should still be in cache (cache hit, no new decode)
+        tmb->ResetVideoCacheMissCount();
+        auto r2 = tmb->GetVideoFrame(V1, 0);
+        QVERIFY(r2.frame != nullptr);
+        QCOMPARE(r2.clip_id, std::string("clipA"));
+        QCOMPARE(tmb->GetVideoCacheMissCount(), int64_t(0));
+    }
+
+    void test_clear_all_clips_empties() {
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        // Add clips on two tracks
+        std::vector<ClipInfo> v_clips = {
+            {"clipV", "/fake.mp4", 0, 50, 0, 24, 1, 1.0f},
+        };
+        std::vector<ClipInfo> a_clips = {
+            {"clipA", "/fake.mp4", 0, 50, 0, 48000, 1, 1.0f},
+        };
+        tmb->AddClips(V1, v_clips);
+        tmb->AddClips(A1, a_clips);
+
+        // Should have tracks
+        QVERIFY(!tmb->GetVideoTrackIds().empty());
+
+        // Clear all
+        tmb->ClearAllClips();
+
+        // All tracks empty
+        QVERIFY(tmb->GetVideoTrackIds().empty());
+        auto result = tmb->GetVideoFrame(V1, 0);
+        QVERIFY(result.frame == nullptr);
+    }
 };
 
 QTEST_MAIN(TestTimelineMediaBuffer)

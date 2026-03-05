@@ -1033,6 +1033,168 @@ function Sequence:get_prev_audio(before_frame)
     return results
 end
 
+--- Get all video clips overlapping a timeline range [from_frame, to_frame).
+-- Returns entries in same format as get_video_at (compatible with _build_tmb_clip).
+-- @param from_frame integer: range start (inclusive)
+-- @param to_frame integer: range end (exclusive)
+-- @return list of {media_path, source_time_us, source_frame, clip, track}
+function Sequence:get_video_in_range(from_frame, to_frame)
+    assert(type(from_frame) == "number",
+        "Sequence:get_video_in_range: from_frame must be integer")
+    assert(type(to_frame) == "number",
+        "Sequence:get_video_in_range: to_frame must be integer")
+    assert(from_frame < to_frame, string.format(
+        "Sequence:get_video_in_range: from_frame %d must be < to_frame %d",
+        from_frame, to_frame))
+
+    local Track = require("models.track")
+    local Clip = require("models.clip")
+    local Media = require("models.media")
+    local database = require("core.database") -- luacheck: ignore 431
+
+    local db = database.get_connection()
+    assert(db, "Sequence:get_video_in_range: no database connection")
+
+    local stmt = db:prepare([[
+        SELECT c.id AS clip_id, t.id AS track_id, t.track_index
+        FROM clips c
+        JOIN tracks t ON c.track_id = t.id
+        WHERE t.sequence_id = ? AND t.track_type = 'VIDEO'
+          AND c.timeline_start_frame < ?
+          AND (c.timeline_start_frame + c.duration_frames) > ?
+          AND c.enabled = 1
+        ORDER BY t.track_index, c.timeline_start_frame
+    ]])
+    assert(stmt, "Sequence:get_video_in_range: failed to prepare query")
+    stmt:bind_value(1, self.id)
+    stmt:bind_value(2, to_frame)
+    stmt:bind_value(3, from_frame)
+    assert(stmt:exec(), "Sequence:get_video_in_range: query exec failed")
+
+    local results = {}
+    while stmt:next() do
+        local clip_id = stmt:value(0)
+        local track_id = stmt:value(1)
+        local _ = stmt:value(2)  -- track_index (used by Track.load below)
+
+        local clip = Clip.load(clip_id)
+        assert(clip, string.format(
+            "Sequence:get_video_in_range: clip %s not found", tostring(clip_id)))
+        local media = Media.load(clip.media_id)
+        assert(media, string.format(
+            "Sequence:get_video_in_range: clip %s references missing media %s",
+            clip.id, tostring(clip.media_id)))
+
+        local track = Track.load(track_id)
+        assert(track, string.format(
+            "Sequence:get_video_in_range: track %s not found", tostring(track_id)))
+
+        local source_time_us, source_frame = calc_source_time_us(clip, clip.timeline_start)
+
+        results[#results + 1] = {
+            media_path = media.file_path,
+            source_time_us = source_time_us,
+            source_frame = source_frame,
+            clip = clip,
+            track = track,
+        }
+    end
+    stmt:finalize()
+
+    return results
+end
+
+--- Get all audio clips overlapping a timeline range [from_frame, to_frame).
+-- Returns entries in same format as get_audio_at (compatible with _build_tmb_clip).
+-- @param from_frame integer: range start (inclusive)
+-- @param to_frame integer: range end (exclusive)
+-- @return list of {media_path, source_time_us, source_frame, clip, track, media_fps_num, media_fps_den}
+function Sequence:get_audio_in_range(from_frame, to_frame)
+    assert(type(from_frame) == "number",
+        "Sequence:get_audio_in_range: from_frame must be integer")
+    assert(type(to_frame) == "number",
+        "Sequence:get_audio_in_range: to_frame must be integer")
+    assert(from_frame < to_frame, string.format(
+        "Sequence:get_audio_in_range: from_frame %d must be < to_frame %d",
+        from_frame, to_frame))
+
+    local Track = require("models.track")
+    local Clip = require("models.clip")
+    local Media = require("models.media")
+    local database = require("core.database") -- luacheck: ignore 431
+
+    local db = database.get_connection()
+    assert(db, "Sequence:get_audio_in_range: no database connection")
+
+    local stmt = db:prepare([[
+        SELECT c.id AS clip_id, t.id AS track_id, t.track_index
+        FROM clips c
+        JOIN tracks t ON c.track_id = t.id
+        WHERE t.sequence_id = ? AND t.track_type = 'AUDIO'
+          AND c.timeline_start_frame < ?
+          AND (c.timeline_start_frame + c.duration_frames) > ?
+          AND c.enabled = 1
+        ORDER BY t.track_index, c.timeline_start_frame
+    ]])
+    assert(stmt, "Sequence:get_audio_in_range: failed to prepare query")
+    stmt:bind_value(1, self.id)
+    stmt:bind_value(2, to_frame)
+    stmt:bind_value(3, from_frame)
+    assert(stmt:exec(), "Sequence:get_audio_in_range: query exec failed")
+
+    local results = {}
+    while stmt:next() do
+        local clip_id = stmt:value(0)
+        local track_id = stmt:value(1)
+        local _ = stmt:value(2)  -- track_index (used by Track.load below)
+
+        local clip = Clip.load(clip_id)
+        assert(clip, string.format(
+            "Sequence:get_audio_in_range: clip %s not found", tostring(clip_id)))
+        local media = Media.load(clip.media_id)
+        assert(media, string.format(
+            "Sequence:get_audio_in_range: clip %s references missing media %s",
+            clip.id, tostring(clip.media_id)))
+
+        local track = Track.load(track_id)
+        assert(track, string.format(
+            "Sequence:get_audio_in_range: track %s not found", tostring(track_id)))
+
+        local source_time_us, source_frame = calc_source_time_us(clip, clip.timeline_start)
+
+        results[#results + 1] = {
+            media_path = media.file_path,
+            source_time_us = source_time_us,
+            source_frame = source_frame,
+            clip = clip,
+            track = track,
+            media_fps_num = media.frame_rate.fps_numerator,
+            media_fps_den = media.frame_rate.fps_denominator,
+        }
+    end
+    stmt:finalize()
+
+    return results
+end
+
+--- Get sorted list of track indices for a given track type.
+-- @param track_type string: "VIDEO" or "AUDIO"
+-- @return list of integers, sorted ascending
+function Sequence:get_track_indices(track_type)
+    assert(track_type == "VIDEO" or track_type == "AUDIO", string.format(
+        "Sequence:get_track_indices: track_type must be 'VIDEO' or 'AUDIO', got '%s'",
+        tostring(track_type)))
+
+    local Track = require("models.track")
+    local tracks = Track.find_by_sequence(self.id, track_type)
+    local indices = {}
+    for _, track in ipairs(tracks or {}) do
+        indices[#indices + 1] = track.track_index
+    end
+    table.sort(indices)
+    return indices
+end
+
 --- Compute the furthest clip end frame in this sequence.
 -- Returns max(timeline_start + duration) across all clips on all tracks.
 -- @return integer  0 if no clips

@@ -53,11 +53,10 @@ assert(pc, "test_seek_gap_clears_frame: CREATE failed")
 PLAYBACK.SET_TMB(pc, tmb)
 PLAYBACK.SET_BOUNDS(pc, 100, 24, 1)
 PLAYBACK.SET_SURFACE(pc, test_surface)
-PLAYBACK.SET_NEED_CLIPS_CALLBACK(pc, function() end)
 
--- Set clip window covering the whole range
-PLAYBACK.SET_CLIP_WINDOW(pc, "video", 0, 100)
-PLAYBACK.SET_CLIP_WINDOW(pc, "audio", 0, 100)
+-- Clip provider: clips already loaded via create_single_clip_tmb above.
+-- Provider is a no-op — TMB already has all clips for this test.
+PLAYBACK.SET_CLIP_PROVIDER(pc, function(from, to, track_type) end)
 
 -- 1. Seek to frame 10 (inside clip) — should display a frame
 PLAYBACK.SEEK(pc, 10)

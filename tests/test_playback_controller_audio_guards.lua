@@ -65,11 +65,11 @@ package.loaded["core.qt_constants"] = {
             track_playback("SET_BOUNDS", pc, tf, fn, fd)
         end,
         SET_SURFACE = function(pc, s) track_playback("SET_SURFACE", pc, s) end,
-        SET_CLIP_WINDOW = function(pc, type, lo, hi)
-            track_playback("SET_CLIP_WINDOW", pc, type, lo, hi)
+        SET_CLIP_PROVIDER = function(pc, fn)
+            track_playback("SET_CLIP_PROVIDER", pc, fn)
         end,
-        SET_NEED_CLIPS_CALLBACK = function(pc, fn)
-            track_playback("SET_NEED_CLIPS_CALLBACK", pc, fn)
+        RELOAD_ALL_CLIPS = function(pc)
+            track_playback("RELOAD_ALL_CLIPS", pc)
         end,
         SET_POSITION_CALLBACK = function(pc, fn)
             track_playback("SET_POSITION_CALLBACK", pc, fn)
@@ -138,6 +138,9 @@ local mock_sequence = {
     get_audio_at = function(self, frame) return mock_audio_entries end,
     get_next_audio = function(self, boundary) return mock_next_audio_entries end,
     get_prev_audio = function() return {} end,
+    get_video_in_range = function() return {} end,
+    get_audio_in_range = function() return {} end,
+    get_track_indices = function() return { 0 } end,
 }
 package.loaded["models.sequence"] = {
     load = function() return mock_sequence end,
@@ -236,34 +239,6 @@ local function make_engine_with_controller()
     reset_tmb_clips()
     timer_callbacks = {}
     return engine
-end
-
---- Build a mock video entry (matches Sequence:get_video_at return format).
-local function make_video_entry(clip_id, track_idx, tl_start, duration, source_in)
-    local si = source_in or 0
-    return {
-        clip = {
-            id = clip_id,
-            timeline_start = tl_start,
-            duration = duration,
-            source_in = si,
-            source_out = si + duration,
-            rate = { fps_numerator = 24, fps_denominator = 1 },
-        },
-        track = { id = "track_" .. track_idx, track_index = track_idx },
-        media_path = "/test.mov",
-        media_fps_num = 24,
-        media_fps_den = 1,
-    }
-end
-
---- Build a mock audio entry.
-local function make_audio_entry(clip_id, track_idx, tl_start, duration, source_in)
-    local entry = make_video_entry(clip_id, track_idx, tl_start, duration, source_in)
-    entry.track.volume = 1.0
-    entry.track.muted = false
-    entry.track.soloed = false
-    return entry
 end
 
 print("=== test_playback_controller_audio_guards.lua ===")
@@ -382,111 +357,18 @@ do
 end
 
 --------------------------------------------------------------------------------
--- 6. Clip window = union of loaded clips (not intersection of current)
+-- 6. notify_content_changed calls RELOAD_ALL_CLIPS
 --------------------------------------------------------------------------------
-print("\n--- 6. clip window is union of all loaded clips ---")
+print("\n--- 6. notify_content_changed calls RELOAD_ALL_CLIPS ---")
 do
     local engine = make_engine_with_controller()
-    engine._audio_owner = true
-    engine.direction = 1
-
-    -- Set up: current clip [100, 200), next clip [200, 500)
-    mock_video_entries = {
-        make_video_entry("clip_A", 0, 100, 100, 0),  -- [100, 200)
-    }
-    mock_next_video_entries = {
-        make_video_entry("clip_B", 0, 200, 300, 0),  -- [200, 500)
-    }
-    mock_audio_entries = {}
-    mock_next_audio_entries = {}
 
     reset_playback_calls()
-    engine:_send_video_clips_to_tmb(150)
+    engine:notify_content_changed()
 
-    -- Find SET_CLIP_WINDOW call for video
-    local window_call = nil
-    for _, c in ipairs(playback_calls) do
-        if c.name == "SET_CLIP_WINDOW" and c.args[2] == "video" then
-            window_call = c
-        end
-    end
-
-    assert(window_call, "SET_CLIP_WINDOW must be called for video")
-    local lo = window_call.args[3]
-    local hi = window_call.args[4]
-
-    -- Union should be [100, 500), NOT intersection [100, 200)
-    assert(lo == 100, string.format(
-        "clip window lo must be 100 (union start), got %s", tostring(lo)))
-    assert(hi == 500, string.format(
-        "clip window hi must be 500 (union end), got %s", tostring(hi)))
-    print("  PASS: video clip window is union [100, 500)")
-end
-
-do
-    -- Same test for audio clips
-    local engine = make_engine_with_controller()
-    engine._audio_owner = true
-    engine.direction = 1
-
-    -- Current audio clip [50, 150), next [150, 400)
-    mock_audio_entries = {
-        make_audio_entry("aclip_A", 0, 50, 100, 0),  -- [50, 150)
-    }
-    mock_next_audio_entries = {
-        make_audio_entry("aclip_B", 0, 150, 250, 0),  -- [150, 400)
-    }
-
-    reset_playback_calls()
-    engine:_send_audio_clips_to_tmb(100, package.loaded["core.qt_constants"].EMP)
-
-    local window_call = nil
-    for _, c in ipairs(playback_calls) do
-        if c.name == "SET_CLIP_WINDOW" and c.args[2] == "audio" then
-            window_call = c
-        end
-    end
-
-    assert(window_call, "SET_CLIP_WINDOW must be called for audio")
-    local lo = window_call.args[3]
-    local hi = window_call.args[4]
-
-    assert(lo == 50, string.format(
-        "audio clip window lo must be 50 (union start), got %s", tostring(lo)))
-    assert(hi == 400, string.format(
-        "audio clip window hi must be 400 (union end), got %s", tostring(hi)))
-    print("  PASS: audio clip window is union [50, 400)")
-end
-
---------------------------------------------------------------------------------
--- 8. _send_clips_to_tmb window uses union (not intersection)
---------------------------------------------------------------------------------
-print("\n--- 8. _send_clips_to_tmb window is union ---")
-do
-    local engine = make_engine_with_controller()
-    engine.direction = 1
-
-    -- Current video clip [100, 200), next [200, 400)
-    mock_video_entries = {
-        make_video_entry("clip_D", 0, 100, 100, 0),
-    }
-    mock_next_video_entries = {
-        make_video_entry("clip_E", 0, 200, 200, 0),
-    }
-    mock_audio_entries = {}
-    mock_next_audio_entries = {}
-
-    engine._tmb_clip_window = nil  -- force re-query
-    engine:_send_clips_to_tmb(150)
-
-    -- _tmb_clip_window should be the union
-    local w = engine._tmb_clip_window
-    assert(w, "_tmb_clip_window must be set")
-    assert(w.lo == 100, string.format(
-        "Lua clip window lo must be 100, got %s", tostring(w.lo)))
-    assert(w.hi == 400, string.format(
-        "Lua clip window hi must be 400, got %s", tostring(w.hi)))
-    print("  PASS: _send_clips_to_tmb window is union [100, 400)")
+    assert(find_call("RELOAD_ALL_CLIPS"),
+        "notify_content_changed must call PLAYBACK.RELOAD_ALL_CLIPS")
+    print("  PASS: notify_content_changed calls RELOAD_ALL_CLIPS")
 end
 
 --------------------------------------------------------------------------------
@@ -514,73 +396,11 @@ do
 end
 
 --------------------------------------------------------------------------------
--- 10. Empty clip window: no SetClipWindow call (not degenerate window)
+-- 10. load_sequence uses SET_CLIP_PROVIDER (not SET_NEED_CLIPS_CALLBACK)
 --------------------------------------------------------------------------------
-print("\n--- 10. empty clips: no SetClipWindow ---")
+print("\n--- 10. load_sequence wires SET_CLIP_PROVIDER ---")
 do
-    local engine = make_engine_with_controller()
-    engine.direction = 1
     mock_video_entries = {}
-    mock_next_video_entries = {}
-
-    reset_playback_calls()
-    engine:_send_video_clips_to_tmb(50)
-
-    -- No clips → no SetClipWindow
-    local window_call = nil
-    for _, c in ipairs(playback_calls) do
-        if c.name == "SET_CLIP_WINDOW" and c.args[2] == "video" then
-            window_call = c
-        end
-    end
-    assert(not window_call,
-        "SET_CLIP_WINDOW must NOT be called when no clips loaded")
-    print("  PASS: no SetClipWindow for empty clip set")
-end
-
---------------------------------------------------------------------------------
--- 11. _send_clips_to_tmb window uses VIDEO clips only (not audio)
--- Audio clips may extend far beyond video, inflating the window and preventing
--- re-query when seeking to positions where TMB has no video data.
---------------------------------------------------------------------------------
-print("\n--- 11. _send_clips_to_tmb window uses video clips only ---")
-do
-    local engine = make_engine_with_controller()
-    engine.direction = 1
-
-    -- Video clip [100, 200), audio clip [50, 300)
-    -- Audio extends BEYOND video in both directions
-    mock_video_entries = {
-        make_video_entry("clip_V", 0, 100, 100, 0),  -- [100, 200)
-    }
-    mock_next_video_entries = {}
-    mock_audio_entries = {
-        make_audio_entry("clip_A", 0, 50, 250, 0),  -- [50, 300)
-    }
-    mock_next_audio_entries = {}
-
-    engine._tmb_clip_window = nil  -- force re-query
-    engine:_send_clips_to_tmb(150)
-
-    -- Window must be VIDEO-only: [100, 200), NOT [50, 300)
-    local w = engine._tmb_clip_window
-    assert(w, "_tmb_clip_window must be set (video clips present)")
-    assert(w.lo == 100, string.format(
-        "_send_clips_to_tmb window lo must be video start 100, got %s", tostring(w.lo)))
-    assert(w.hi == 200, string.format(
-        "_send_clips_to_tmb window hi must be video end 200, got %s", tostring(w.hi)))
-    print("  PASS: window bounded by video clips only (audio excluded)")
-end
-
---------------------------------------------------------------------------------
--- 13. load_sequence does NOT send initial clip window (first seek does)
---------------------------------------------------------------------------------
-print("\n--- 13. load_sequence sends no initial clip window ---")
-do
-    -- Set up clips
-    mock_video_entries = {
-        make_video_entry("clip_init", 0, 0, 100, 0),
-    }
     mock_next_video_entries = {}
     mock_audio_entries = {}
     mock_next_audio_entries = {}
@@ -589,25 +409,9 @@ do
     reset_playback_calls()
     engine:load_sequence("seq1", 200)
 
-    -- No SET_CLIP_WINDOW during load (no _send_clips_to_tmb(0) anymore)
-    local any_clip_window = false
-    for _, c in ipairs(playback_calls) do
-        if c.name == "SET_CLIP_WINDOW" then any_clip_window = true end
-    end
-    assert(not any_clip_window,
-        "load_sequence must NOT send clip window (first seek populates)")
-
-    -- First seek should set clip window
-    reset_playback_calls()
-    engine:seek(50)
-    local video_window = nil
-    for _, c in ipairs(playback_calls) do
-        if c.name == "SET_CLIP_WINDOW" and c.args[2] == "video" then
-            video_window = c
-        end
-    end
-    assert(video_window, "first seek must send video clip window")
-    print("  PASS: no clip window at load, populated by first seek")
+    assert(find_call("SET_CLIP_PROVIDER"),
+        "load_sequence must call SET_CLIP_PROVIDER")
+    print("  PASS: load_sequence wires SET_CLIP_PROVIDER")
 end
 
 --------------------------------------------------------------------------------
@@ -641,55 +445,6 @@ do
     print("  PASS: _start_audio works normally without controller")
 end
 
---------------------------------------------------------------------------------
--- 15. Clip window boundary → gap (no next clips): _tmb_clip_window = nil
---------------------------------------------------------------------------------
-print("\n--- 15. clip window boundary into gap: no crash, window cleared ---")
-do
-    local engine = make_engine_with_controller()
-    engine.direction = 1
-
-    -- First: load a clip [0, 100) → establishes a valid clip window
-    mock_video_entries = {
-        make_video_entry("clip_gap", 0, 0, 100, 0),
-    }
-    mock_next_video_entries = {}
-    mock_audio_entries = {}
-    mock_next_audio_entries = {}
-
-    engine._tmb_clip_window = nil  -- force re-query
-    engine:_send_clips_to_tmb(50)
-    assert(engine._tmb_clip_window, "clip window must be set after loading clip")
-    assert(engine._tmb_clip_window.lo == 0, "window lo=0")
-    assert(engine._tmb_clip_window.hi == 100, "window hi=100")
-
-    -- Now: playhead exits clip window into gap (frame 150, no clips there)
-    mock_video_entries = {}
-    mock_next_video_entries = {}
-    mock_audio_entries = {}
-    mock_next_audio_entries = {}
-
-    engine._tmb_clip_window = nil  -- force re-query
-    engine:_send_clips_to_tmb(150)
-
-    -- Gap: _tmb_clip_window should be nil (no clips found, force re-query next tick)
-    assert(engine._tmb_clip_window == nil,
-        "_tmb_clip_window must be nil when playhead is in gap (no clips loaded)")
-
-    -- No crash, no SET_CLIP_WINDOW call for degenerate window
-    reset_playback_calls()
-    engine._tmb_clip_window = nil
-    engine:_send_clips_to_tmb(150)
-    local gap_window = nil
-    for _, c in ipairs(playback_calls) do
-        if c.name == "SET_CLIP_WINDOW" and c.args[2] == "video" then
-            gap_window = c
-        end
-    end
-    assert(not gap_window,
-        "SET_CLIP_WINDOW must NOT be called when no clips in gap")
-    print("  PASS: gap at sequence end: window cleared, no crash")
-end
 
 --------------------------------------------------------------------------------
 -- Summary
