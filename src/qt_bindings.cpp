@@ -17,6 +17,7 @@
 #include "lua/qt_bindings/emp_bindings.cpp"
 #include "lua/qt_bindings/aop_bindings.cpp"
 #include "lua/qt_bindings/sse_bindings.cpp"
+#include "lua/qt_bindings/fs_watcher_bindings.cpp"
 
 // Define the metatable name (declared extern in qt_bindings.h)
 const char* WIDGET_METATABLE = "JVE.Widget";
@@ -322,6 +323,9 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_file_dialog_directory); lua_setfield(L, -2, "OPEN_DIRECTORY");
     lua_pushcfunction(L, lua_file_dialog_save); lua_setfield(L, -2, "SAVE_FILE");
     lua_setfield(L, -2, "FILE_DIALOG");
+
+    // Populate 'qt_constants.FS' subtable (QFileSystemWatcher)
+    register_fs_watcher_bindings(L);
 
     // Populate 'qt_constants.SIGNAL' subtable for application-level signal handlers
     lua_newtable(L);
