@@ -169,6 +169,18 @@ package.loaded["models.sequence"] = {
     load = function() return mock_sequence end,
 }
 
+-- Mock Track model (for _push_all_audio_mix_params)
+package.loaded["models.track"] = {
+    find_by_sequence = function(seq_id, track_type)
+        if track_type == "AUDIO" then
+            return {
+                { id = "t1", track_index = 0, volume = 1.0, muted = false, soloed = false },
+            }
+        end
+        return {}
+    end,
+}
+
 -- Mock signals (capture registrations for verification)
 local signal_handlers = {}
 package.loaded["core.signals"] = {

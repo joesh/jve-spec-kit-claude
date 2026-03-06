@@ -189,6 +189,18 @@ mock_audio.play_burst = function(t, d) track_audio("play_burst", t, d) end
 mock_audio.init_session = function() end
 mock_audio.shutdown_session = function() end
 
+-- Mock Track model (for _push_all_audio_mix_params)
+package.loaded["models.track"] = {
+    find_by_sequence = function(seq_id, track_type)
+        if track_type == "AUDIO" then
+            return {
+                { id = "t1", track_index = 0, volume = 1.0, muted = false, soloed = false },
+            }
+        end
+        return {}
+    end,
+}
+
 -- Mock signals
 package.loaded["core.signals"] = {
     connect = function() return "conn_id" end,

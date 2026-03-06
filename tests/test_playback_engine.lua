@@ -158,6 +158,18 @@ package.loaded["models.sequence"] = {
     load = function(id) return mock_sequence end,
 }
 
+-- Mock Track model (default: 1 audio track)
+package.loaded["models.track"] = {
+    find_by_sequence = function(seq_id, track_type)
+        if track_type == "AUDIO" then
+            return {
+                { id = "t1", track_index = 0, volume = 1.0, muted = false, soloed = false },
+            }
+        end
+        return {}
+    end,
+}
+
 -- Mock signals
 package.loaded["core.signals"] = {
     connect = function() return "conn_id" end,
@@ -836,6 +848,275 @@ do
     assert(log.rotations[2] == 0, "offline: rotation=0")
     assert(log.pars[2][1] == 1 and log.pars[2][2] == 1, "offline: PAR=1:1")
 
+    print("  ok")
+end
+
+-- ─── Test: _configure_and_start_audio activates C++ audio after late init ───
+-- NSF-F3: If activate_audio() ran before the audio session was lazily
+-- initialized (fps_num not set at focus time), ACTIVATE_AUDIO was skipped.
+-- _configure_and_start_audio must call ACTIVATE_AUDIO if HAS_AUDIO is false.
+print("\n--- _configure_and_start_audio: late ACTIVATE_AUDIO ---")
+do
+    local engine, _ = make_engine()
+    clear_timers()
+    engine:load_sequence("seq1", 100)
+
+    -- Inject a mock audio_playback with session already initialized
+    -- (simulates _init_audio_session having been called by _if_clip_changed)
+    local mock_audio = {
+        session_initialized = true,
+        aop = "mock_aop",
+        sse = "mock_sse",
+        session_sample_rate = 48000,
+        session_channels = 2,
+        is_ready = function() return true end,
+        set_max_time = function() end,
+        apply_mix = function() end,
+        init_session = function() end,
+    }
+    PlaybackEngine.init_audio(mock_audio)
+
+    -- Track ACTIVATE_AUDIO and HAS_AUDIO calls
+    local activate_called = false
+    local has_audio_returns = false  -- simulates race: C++ doesn't know yet
+    local qt = package.loaded["core.qt_constants"]
+    local orig_has = qt.PLAYBACK.HAS_AUDIO
+    local orig_activate = qt.PLAYBACK.ACTIVATE_AUDIO
+    qt.PLAYBACK.HAS_AUDIO = function() return has_audio_returns end
+    qt.PLAYBACK.ACTIVATE_AUDIO = function(pc, aop, sse, sr, ch)
+        activate_called = true
+        track("ACTIVATE_AUDIO", aop, sse, sr, ch)
+    end
+
+    -- Set audio ownership (simulates activate_audio having already run but
+    -- ACTIVATE_AUDIO was skipped because fps_num was nil at the time)
+    engine._audio_owner = true
+    engine.current_audio_clip_ids = {}
+
+    -- Call _configure_and_start_audio (called from play path)
+    engine:_configure_and_start_audio()
+
+    -- Verify ACTIVATE_AUDIO was called since HAS_AUDIO returned false
+    assert(activate_called,
+        "_configure_and_start_audio must call ACTIVATE_AUDIO when HAS_AUDIO=false")
+    local call = find_call("ACTIVATE_AUDIO")
+    assert(call, "ACTIVATE_AUDIO call must be tracked")
+    assert(call.args[1] == "mock_aop", "aop passed correctly")
+    assert(call.args[2] == "mock_sse", "sse passed correctly")
+    assert(call.args[3] == 48000, "sample_rate passed correctly")
+    assert(call.args[4] == 2, "channels passed correctly")
+    print("  _configure_and_start_audio calls ACTIVATE_AUDIO when HAS_AUDIO=false: ok")
+
+    -- Phase 2: When HAS_AUDIO returns true, should NOT call again
+    activate_called = false
+    has_audio_returns = true
+    playback_calls = {}
+    engine:_configure_and_start_audio()
+    assert(not activate_called,
+        "_configure_and_start_audio must NOT call ACTIVATE_AUDIO when HAS_AUDIO=true")
+    print("  _configure_and_start_audio skips ACTIVATE_AUDIO when HAS_AUDIO=true: ok")
+
+    -- Restore mocks
+    qt.PLAYBACK.HAS_AUDIO = orig_has
+    qt.PLAYBACK.ACTIVATE_AUDIO = orig_activate
+    PlaybackEngine.init_audio(nil)
+    print("  ok")
+end
+
+-- ─── Regression: session init when no audio clips at park position ───
+-- BUG: _init_audio_session was only called from _if_clip_changed_update_audio_mix,
+-- gated on clip-change dedup. If park position has no audio clips (empty→empty),
+-- session was never initialized → has_audio=0 forever.
+-- Fix: _configure_and_start_audio and activate_audio init session eagerly.
+print("\n--- session init: no audio clips at park position ---")
+do
+    local engine, _ = make_engine()
+    clear_timers()
+    engine:load_sequence("seq1", 100)
+
+    -- Mock audio_playback with session NOT yet initialized
+    local init_called = false
+    local mock_audio  -- forward declaration for closure
+    mock_audio = {
+        session_initialized = false,
+        aop = nil,
+        sse = nil,
+        session_sample_rate = nil,
+        session_channels = nil,
+        is_ready = function() return false end,
+        set_max_time = function() end,
+        apply_mix = function() end,
+        init_session = function(sr, ch)
+            init_called = true
+            mock_audio.session_initialized = true
+            mock_audio.aop = "mock_aop"
+            mock_audio.sse = "mock_sse"
+            mock_audio.session_sample_rate = sr
+            mock_audio.session_channels = ch
+            mock_audio.is_ready = function() return true end
+        end,
+    }
+    -- Install the mock as the audio_playback module (for _init_audio_session's require)
+    local orig_audio_pb = package.loaded["core.media.audio_playback"]
+    package.loaded["core.media.audio_playback"] = mock_audio
+    PlaybackEngine.init_audio(mock_audio)
+
+    -- Set audio_sample_rate (needed by _init_audio_session assert)
+    engine.audio_sample_rate = 48000
+
+    -- Mock SSE/AOP bindings (needed by _init_audio_session guard)
+    local qt = package.loaded["core.qt_constants"]
+    qt.SSE = { CREATE = function() return "mock_sse_obj" end }
+    qt.AOP = { OPEN = function() return "mock_aop_obj" end }
+
+    -- Track ACTIVATE_AUDIO
+    local activate_called = false
+    local orig_has = qt.PLAYBACK.HAS_AUDIO
+    local orig_activate = qt.PLAYBACK.ACTIVATE_AUDIO
+    qt.PLAYBACK.HAS_AUDIO = function() return false end
+    qt.PLAYBACK.ACTIVATE_AUDIO = function()
+        activate_called = true
+    end
+
+    engine._audio_owner = true
+    engine.current_audio_clip_ids = {}
+
+    -- _configure_and_start_audio must init session even though no clips changed
+    engine:_configure_and_start_audio()
+
+    assert(init_called,
+        "_configure_and_start_audio must call _init_audio_session when session not initialized")
+    assert(mock_audio.session_initialized,
+        "session must be initialized after _configure_and_start_audio")
+    assert(activate_called,
+        "ACTIVATE_AUDIO must be called after session init")
+    print("  session init triggered by _configure_and_start_audio: ok")
+
+    -- Restore
+    qt.PLAYBACK.HAS_AUDIO = orig_has
+    qt.PLAYBACK.ACTIVATE_AUDIO = orig_activate
+    qt.SSE = nil
+    qt.AOP = nil
+    package.loaded["core.media.audio_playback"] = orig_audio_pb
+    PlaybackEngine.init_audio(nil)
+    print("  ok")
+end
+
+-- ─── NSF-F3: _try_audio rethrows errors ───
+print("\n--- NSF-F3: _try_audio rethrows errors ---")
+do
+    local engine, _ = make_engine()
+    engine:load_sequence("seq1", 100)
+    engine._audio_owner = true
+
+    local ok, err = pcall(function()
+        engine:_try_audio(function()
+            error("BOOM")
+        end)
+    end)
+    assert(not ok, "_try_audio must not swallow errors")
+    assert(err:find("BOOM"), "error message preserved")
+    print("  _try_audio rethrows errors passed")
+end
+
+-- ─── Mix params pushed for ALL audio tracks at play start ───
+-- Regression: park at frame with no audio clips → _if_clip_changed_update_audio_mix
+-- dedupes (empty→empty) → SetAudioMixParams never called → TMB has no tracks → silence.
+-- Fix: _configure_and_start_audio pushes ALL audio tracks, not position-dependent entries.
+print("\n--- mix params pushed for ALL audio tracks at play start ---")
+do
+    local qt = package.loaded["core.qt_constants"]
+
+    -- Set up audio mocks
+    qt.SSE = { CREATE = function() return "mock_sse" end, RESET = function() end }
+    qt.AOP = {
+        CREATE = function() return "mock_aop" end,
+        SET_SAMPLE_RATE = function() end,
+        SET_CHANNELS = function() end,
+        STOP = function() end,
+        FLUSH = function() end,
+    }
+
+    -- Ensure we have the REAL audio_playback module (not mock from previous test)
+    local orig_audio_pb = package.loaded["core.media.audio_playback"]
+    package.loaded["core.media.audio_playback"] = nil
+
+    -- Track the resolved params sent to TMB
+    local sent_mix_params = nil
+    local orig_tmb_set = qt.EMP.TMB_SET_AUDIO_MIX_PARAMS
+    qt.EMP.TMB_SET_AUDIO_MIX_PARAMS = function(tmb, resolved, sr, ch)
+        sent_mix_params = resolved
+    end
+
+    -- Mock Track model: 2 audio tracks in the sequence
+    local orig_track = package.loaded["models.track"]
+    package.loaded["models.track"] = {
+        find_by_sequence = function(seq_id, track_type)
+            if track_type == "AUDIO" then
+                return {
+                    { id = "t1", track_index = 0, volume = 1.0, muted = false, soloed = false },
+                    { id = "t2", track_index = 1, volume = 0.8, muted = false, soloed = false },
+                }
+            end
+            return {}
+        end,
+    }
+
+    -- Mock sequence: NO audio clips at frame 0 (the park position)
+    local orig_get_audio_at = mock_sequence.get_audio_at
+    mock_sequence.get_audio_at = function() return {} end
+
+    local engine, _ = make_engine()
+    engine:load_sequence("seq1", 100)
+
+    -- Init audio infrastructure
+    local audio_pb = require("core.media.audio_playback")
+    audio_pb.session_initialized = false
+    audio_pb.aop = nil
+    audio_pb.sse = nil
+    PlaybackEngine.init_audio(audio_pb)
+
+    engine._audio_owner = true
+    engine.current_audio_clip_ids = {}
+    engine.audio_sample_rate = 48000
+
+    -- Simulate session already initialized (bypass real init_session which needs AOP.OPEN)
+    audio_pb.session_initialized = true
+    audio_pb.aop = "mock_aop"
+    audio_pb.sse = "mock_sse"
+    audio_pb.session_sample_rate = 48000
+    audio_pb.session_channels = 2
+
+    -- HAS_AUDIO returns false → late ACTIVATE_AUDIO path
+    local orig_has = qt.PLAYBACK.HAS_AUDIO
+    qt.PLAYBACK.HAS_AUDIO = function() return false end
+    local orig_activate = qt.PLAYBACK.ACTIVATE_AUDIO
+    qt.PLAYBACK.ACTIVATE_AUDIO = function() end
+
+    -- The key test: _configure_and_start_audio at frame 0 with NO audio clips
+    engine:_configure_and_start_audio()
+
+    -- Assert: mix params MUST have been sent to TMB with both tracks
+    assert(sent_mix_params,
+        "SetAudioMixParams must be called even when no audio clips at park position")
+    assert(#sent_mix_params == 2, string.format(
+        "expected 2 track params, got %d", #sent_mix_params))
+    assert(sent_mix_params[1].track_index == 0,
+        "first track must be index 0")
+    assert(sent_mix_params[2].track_index == 1,
+        "second track must be index 1")
+    print("  mix params pushed for all audio tracks: ok")
+
+    -- Restore
+    qt.PLAYBACK.HAS_AUDIO = orig_has
+    qt.PLAYBACK.ACTIVATE_AUDIO = orig_activate
+    qt.EMP.TMB_SET_AUDIO_MIX_PARAMS = orig_tmb_set
+    mock_sequence.get_audio_at = orig_get_audio_at
+    package.loaded["models.track"] = orig_track
+    package.loaded["core.media.audio_playback"] = orig_audio_pb
+    qt.SSE = nil
+    qt.AOP = nil
+    PlaybackEngine.init_audio(nil)
     print("  ok")
 end
 

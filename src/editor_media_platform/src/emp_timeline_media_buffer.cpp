@@ -17,6 +17,23 @@ struct ScopeExit {
 };
 template<typename F>
 ScopeExit<F> make_scope_exit(F fn) { return {std::move(fn)}; }
+
+// ── 2-pop diagnostic window ──
+// Frame 89951 at 25fps = 3,598,040,000 μs (00:59:58:00 in timeline)
+// Fires only when audio requests overlap this region.
+static constexpr int64_t TWOPOP_US = 3598040000LL;
+static constexpr int64_t TWOPOP_MARGIN = 1000000LL; // ±1s
+static inline bool twopop_overlaps(int64_t t0, int64_t t1) {
+    return t0 < (TWOPOP_US + TWOPOP_MARGIN) && t1 > (TWOPOP_US - TWOPOP_MARGIN);
+}
+static inline float peak_of(const float* data, int64_t n) {
+    float pk = 0.0f;
+    for (int64_t i = 0; i < n; ++i) {
+        float v = std::abs(data[i]);
+        if (v > pk) pk = v;
+    }
+    return pk;
+}
 } // namespace
 
 // Logging — same env-var scheme as emp_reader.cpp
@@ -223,6 +240,15 @@ void TimelineMediaBuffer::AddClips(TrackId track, std::vector<ClipInfo> clips) {
                 return a.timeline_start < b.timeline_start;
             });
     }
+    // New audio clips invalidate the mixed cache: the mix thread may have
+    // already cached silence for ranges that now contain audio. Without
+    // this, the pump reads stale silence from cache → beep never heard.
+    if (track.type == TrackType::Audio) {
+        std::lock_guard<std::mutex> lock(m_mix_mutex);
+        m_mixed_cache.clear();
+        m_mix_cv.notify_one();
+    }
+
     // tracks_lock released — warm readers for new clips
     for (const auto& c : clips_to_warm) {
         PreBufferJob warm;
@@ -279,6 +305,14 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
                 ts.video_buffer_end = -1;
                 ts.audio_buffer_end = -1;
             }
+        }
+        // Clear stale mixed cache from previous play session.
+        // Without this, mix thread sees old cache_end >= target_end and
+        // skips filling for the new position (dedup may have skipped
+        // SetAudioMixParams, so no explicit clear happened).
+        {
+            std::lock_guard<std::mutex> lock(m_mix_mutex);
+            m_mixed_cache.clear();
         }
         // Submit initial refills (no locks held — methods lock internally)
         std::vector<TrackId> tracks_to_prime;
@@ -706,15 +740,39 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     assert(t1 > t0 && "GetTrackAudio: t1 must be greater than t0");
     assert(m_seq_rate.num > 0 && "GetTrackAudio: SetSequenceRate not called");
 
+    // Temporary diagnostic: trace first N audio queries per track
+    static std::atomic<int> diag_count{0};
+    bool do_diag = (diag_count.load(std::memory_order_relaxed) < 20);
+
     // Find track
     std::unique_lock<std::mutex> tracks_lock(m_tracks_mutex);
     auto track_it = m_tracks.find(track);
-    if (track_it == m_tracks.end()) return nullptr;
+    if (track_it == m_tracks.end()) {
+        if (do_diag) {
+            diag_count.fetch_add(1, std::memory_order_relaxed);
+            fprintf(stderr, "[GTA DIAG] A%d t0=%lld: track not found in m_tracks\n",
+                    track.index, (long long)t0);
+        }
+        return nullptr;
+    }
     auto& ts = track_it->second;
 
     // Find clip at t0
     const ClipInfo* clip = find_clip_at_us(ts, t0);
-    if (!clip) return nullptr;
+    if (!clip) {
+        if (do_diag && !ts.clips.empty()) {
+            diag_count.fetch_add(1, std::memory_order_relaxed);
+            fprintf(stderr, "[GTA DIAG] A%d t0=%lld: no clip covers t0. "
+                    "%d clips, first=[%lld..%lld] last=[%lld..%lld]\n",
+                    track.index, (long long)t0,
+                    (int)ts.clips.size(),
+                    (long long)FrameTime::from_frame(ts.clips.front().timeline_start, m_seq_rate).to_us(),
+                    (long long)FrameTime::from_frame(ts.clips.front().timeline_end(), m_seq_rate).to_us(),
+                    (long long)FrameTime::from_frame(ts.clips.back().timeline_start, m_seq_rate).to_us(),
+                    (long long)FrameTime::from_frame(ts.clips.back().timeline_end(), m_seq_rate).to_us());
+        }
+        return nullptr;
+    }
 
     assert(clip->rate_den > 0 && "GetTrackAudio: clip has zero rate_den");
     assert(clip->speed_ratio > 0.0f && "GetTrackAudio: clip has non-positive speed_ratio");
@@ -726,7 +784,16 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     // Clamp request to first clip
     TimeUS clamped_t0 = std::max(t0, clip_start_us);
     TimeUS clamped_t1 = std::min(t1, clip_end_us);
-    if (clamped_t1 <= clamped_t0) return nullptr;
+    if (clamped_t1 <= clamped_t0) {
+        if (do_diag) {
+            diag_count.fetch_add(1, std::memory_order_relaxed);
+            fprintf(stderr, "[GTA DIAG] A%d t0=%lld: clamp empty. clip=[%lld..%lld] req=[%lld..%lld]\n",
+                    track.index, (long long)t0,
+                    (long long)clip_start_us, (long long)clip_end_us,
+                    (long long)t0, (long long)t1);
+        }
+        return nullptr;
+    }
 
     // Map timeline us → source us
     TimeUS source_origin_us = FrameTime::from_frame(clip->source_in, clip->rate()).to_us();
@@ -744,6 +811,18 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     TimeUS first_clip_end_us = clip_end_us;
     tracks_lock.unlock();
 
+    // [2POP] diagnostic: log when request overlaps the 2-pop region
+    bool twopop = twopop_overlaps(clamped_t0, clamped_t1);
+    if (twopop) {
+        fprintf(stderr, "[2POP] GTA A%d req=[%lld..%lld] clip=[%lld..%lld] src=[%lld..%lld] cached=%d\n",
+                track.index,
+                (long long)clamped_t0, (long long)clamped_t1,
+                (long long)clip_start_us, (long long)clip_end_us,
+                (long long)source_t0, (long long)source_t1,
+                cached ? 1 : 0);
+        fflush(stderr);
+    }
+
     // Watermark check: trigger audio refill if buffer is running low.
     // Fires on both cache-hit and cache-miss (we want to stay ahead).
     int dir = m_playhead_direction.load(std::memory_order_relaxed);
@@ -754,22 +833,64 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     std::shared_ptr<PcmChunk> first_chunk;
     if (cached) {
         first_chunk = cached;
+        if (twopop) {
+            float pk = peak_of(cached->data_f32(), std::min(cached->frames() * fmt.channels, (int64_t)4096));
+            fprintf(stderr, "[2POP] GTA A%d CACHE HIT: frames=%lld peak=%.6f\n",
+                    track.index, (long long)cached->frames(), pk);
+            fflush(stderr);
+        }
     } else {
         // Offline check
         {
             std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
-            if (m_offline.count(media_path)) return nullptr;
+            if (m_offline.count(media_path)) {
+                if (twopop) {
+                    fprintf(stderr, "[2POP] GTA A%d OFFLINE — media_path=%s\n",
+                            track.index, media_path.c_str());
+                    fflush(stderr);
+                }
+                return nullptr;
+            }
         }
 
         // Acquire reader and decode first clip
         auto reader = acquire_reader(track, clip_id, media_path);
-        if (!reader) return nullptr;
+        if (!reader) {
+            if (twopop) {
+                fprintf(stderr, "[2POP] GTA A%d NO READER for %s\n",
+                        track.index, media_path.c_str());
+                fflush(stderr);
+            }
+            return nullptr;
+        }
 
         auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt);
-        if (decode_result.is_error()) return nullptr;
+        if (decode_result.is_error()) {
+            if (twopop) {
+                fprintf(stderr, "[2POP] GTA A%d DECODE ERROR src=[%lld..%lld]\n",
+                        track.index, (long long)source_t0, (long long)source_t1);
+                fflush(stderr);
+            }
+            return nullptr;
+        }
 
         auto chunk = decode_result.value();
-        if (!chunk || chunk->frames() == 0) return nullptr;
+        if (!chunk || chunk->frames() == 0) {
+            if (twopop) {
+                fprintf(stderr, "[2POP] GTA A%d DECODE EMPTY src=[%lld..%lld]\n",
+                        track.index, (long long)source_t0, (long long)source_t1);
+                fflush(stderr);
+            }
+            return nullptr;
+        }
+
+        if (twopop) {
+            float pk = peak_of(chunk->data_f32(), std::min(chunk->frames() * fmt.channels, (int64_t)4096));
+            fprintf(stderr, "[2POP] GTA A%d DECODED: frames=%lld peak=%.6f src=[%lld..%lld]\n",
+                    track.index, (long long)chunk->frames(), pk,
+                    (long long)source_t0, (long long)source_t1);
+            fflush(stderr);
+        }
 
         first_chunk = build_audio_output(chunk, source_t0, source_t1,
                                          clamped_t0, clamped_t1, speed_ratio, fmt);
@@ -1142,20 +1263,54 @@ void TimelineMediaBuffer::SetAudioMixParams(
 std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetMixedAudio(TimeUS t0, TimeUS t1) {
     assert(t1 > t0 && "GetMixedAudio: t1 must be greater than t0");
 
+    bool twopop = twopop_overlaps(t0, t1);
+
     std::unique_lock<std::mutex> lock(m_mix_mutex);
-    if (m_audio_mix_params.empty()) return nullptr;
+    if (m_audio_mix_params.empty()) {
+        if (twopop) {
+            fprintf(stderr, "[2POP] GMA: no mix params! req=[%lld..%lld]\n",
+                    (long long)t0, (long long)t1);
+            fflush(stderr);
+        }
+        return nullptr;
+    }
 
     // Cache hit
     if (m_mixed_cache.covers(t0, t1)) {
-        return m_mixed_cache.extract(t0, t1);
+        auto result = m_mixed_cache.extract(t0, t1);
+        if (twopop) {
+            float pk = result ? peak_of(result->data_f32(),
+                std::min(result->frames() * m_audio_mix_fmt.channels, (int64_t)4096)) : 0.0f;
+            fprintf(stderr, "[2POP] GMA CACHE HIT: req=[%lld..%lld] cache=[%lld..%lld] frames=%lld peak=%.6f\n",
+                    (long long)t0, (long long)t1,
+                    (long long)m_mixed_cache.start_us, (long long)m_mixed_cache.end_us,
+                    result ? (long long)result->frames() : 0LL, pk);
+            fflush(stderr);
+        }
+        return result;
     }
 
     // Sync fallback (startup/seek — cache cold)
+    if (twopop) {
+        fprintf(stderr, "[2POP] GMA SYNC FALLBACK: req=[%lld..%lld] cache=[%lld..%lld] empty=%d\n",
+                (long long)t0, (long long)t1,
+                (long long)m_mixed_cache.start_us, (long long)m_mixed_cache.end_us,
+                m_mixed_cache.data.empty() ? 1 : 0);
+        fflush(stderr);
+    }
     auto params = m_audio_mix_params;
     auto fmt = m_audio_mix_fmt;
     lock.unlock();
 
-    return execute_mix_range(params, fmt, t0, t1);
+    auto result = execute_mix_range(params, fmt, t0, t1);
+    if (twopop) {
+        float pk = result ? peak_of(result->data_f32(),
+            std::min(result->frames() * fmt.channels, (int64_t)4096)) : 0.0f;
+        fprintf(stderr, "[2POP] GMA SYNC RESULT: frames=%lld peak=%.6f\n",
+                result ? (long long)result->frames() : 0LL, pk);
+        fflush(stderr);
+    }
+    return result;
 }
 
 // ============================================================================
@@ -1178,12 +1333,21 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::execute_mix_range(
     bool has_audio = false;
     TimeUS actual_start = t0;
 
+    bool twopop = twopop_overlaps(t0, t1);
+
     for (const auto& param : params) {
         if (param.volume <= 0.0f) continue;
 
         TrackId track{TrackType::Audio, param.track_index};
         auto pcm = GetTrackAudio(track, t0, t1, fmt);
-        if (!pcm || pcm->frames() == 0) continue;
+        if (!pcm || pcm->frames() == 0) {
+            if (twopop) {
+                fprintf(stderr, "[2POP] MIX A%d: null/empty for [%lld..%lld]\n",
+                        param.track_index, (long long)t0, (long long)t1);
+                fflush(stderr);
+            }
+            continue;
+        }
 
         const float* src = pcm->data_f32();
         int64_t src_frames = pcm->frames();
@@ -1203,6 +1367,17 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::execute_mix_range(
                 }
             }
             has_audio = true;
+
+            // TEMP DIAG: log first time execute_mix_range finds audio
+            {
+                static std::atomic<int> mix_found{0};
+                int mf = mix_found.fetch_add(1, std::memory_order_relaxed);
+                if (mf < 3) {
+                    fprintf(stderr, "[MIX] found audio: A%d t0=%lld frames=%lld vol=%.2f\n",
+                            param.track_index, (long long)t0,
+                            (long long)src_frames, vol);
+                }
+            }
         } else {
             // Subsequent tracks: accumulate
             int64_t n = std::min(src_frames, out_frames) * ch;
@@ -1212,7 +1387,21 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::execute_mix_range(
         }
     }
 
-    if (!has_audio) return nullptr;
+    if (!has_audio) {
+        if (twopop) {
+            fprintf(stderr, "[2POP] MIX RESULT: no audio from any track for [%lld..%lld]\n",
+                    (long long)t0, (long long)t1);
+            fflush(stderr);
+        }
+        return nullptr;
+    }
+
+    if (twopop) {
+        float pk = peak_of(mix_buf.data(), std::min((int64_t)mix_buf.size(), (int64_t)4096));
+        fprintf(stderr, "[2POP] MIX RESULT: frames=%lld peak=%.6f [%lld..%lld]\n",
+                (long long)out_frames, pk, (long long)t0, (long long)t1);
+        fflush(stderr);
+    }
 
     auto impl = std::make_unique<PcmChunkImpl>(
         sr, ch, fmt.fmt, actual_start, std::move(mix_buf));
@@ -1314,6 +1503,13 @@ void TimelineMediaBuffer::mix_thread_loop() {
 
         if (chunk_t1 <= chunk_t0) continue;
 
+        bool twopop = twopop_overlaps(chunk_t0, chunk_t1);
+        if (twopop) {
+            fprintf(stderr, "[2POP] MIX_THREAD: mixing chunk [%lld..%lld] ph=%lld\n",
+                    (long long)chunk_t0, (long long)chunk_t1, (long long)playhead_us);
+            fflush(stderr);
+        }
+
         // Mix this chunk (no locks held — calls GetTrackAudio internally)
         auto pcm = execute_mix_range(params, fmt, chunk_t0, chunk_t1);
 
@@ -1321,6 +1517,14 @@ void TimelineMediaBuffer::mix_thread_loop() {
             std::lock_guard<std::mutex> lock(m_mix_mutex);
             m_mixed_cache.append(pcm, direction);
             m_mixed_cache.evict_behind(playhead_us, direction);
+            if (twopop) {
+                fprintf(stderr, "[2POP] MIX_THREAD: appended, cache now [%lld..%lld]\n",
+                        (long long)m_mixed_cache.start_us, (long long)m_mixed_cache.end_us);
+                fflush(stderr);
+            }
+        } else if (twopop) {
+            fprintf(stderr, "[2POP] MIX_THREAD: chunk returned null/empty!\n");
+            fflush(stderr);
         }
     }
 }
@@ -1377,6 +1581,7 @@ void TimelineMediaBuffer::ParkReaders() {
             ts.video_buffer_end = -1;
             ts.audio_buffer_end = -1;
             ts.clip_eof_frame.clear();
+            ts.audio_cache.clear();
         }
     }
 
@@ -1644,8 +1849,21 @@ void TimelineMediaBuffer::worker_loop() {
             if (m_shutdown.load()) break;
             if (m_jobs.empty()) continue;
 
-            job = std::move(m_jobs.back());
-            m_jobs.pop_back();
+            // Audio-priority: prefer AUDIO_REFILL over VIDEO_REFILL/WARM.
+            // Scan backward (newest first) for any audio job. Without this,
+            // LIFO lets video REFILL jobs (6+ seconds each for slow codecs)
+            // starve audio REFILL indefinitely.
+            int pick = static_cast<int>(m_jobs.size()) - 1;
+            for (int i = static_cast<int>(m_jobs.size()) - 1; i >= 0; --i) {
+                if (m_jobs[i].type == PreBufferJob::AUDIO_REFILL) {
+                    pick = i;
+                    break;
+                }
+            }
+            assert(pick >= 0 && pick < static_cast<int>(m_jobs.size())
+                && "worker_loop: pick index out of range");
+            job = std::move(m_jobs[pick]);
+            m_jobs.erase(m_jobs.begin() + pick);
             key = job_key(job);
             m_pre_buffering[key] = job.generation;
         }

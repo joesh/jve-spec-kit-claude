@@ -3158,6 +3158,218 @@ private slots:
         auto result = tmb->GetVideoFrame(V1, 0);
         QVERIFY(result.frame == nullptr);
     }
+
+    // ── NSF: Stale mixed cache cleared on cold-start (Fix 1) ──
+
+    void test_mixed_cache_cleared_on_stop_seek_play() {
+        // BUG: After stop→seek→play, m_mixed_cache retained data from the
+        // PREVIOUS position. Mix thread saw cache_end >= target_end and skipped
+        // filling. Audio was forced into sync-fallback-every-cycle mode.
+        // Fix: SetPlayhead cold-start (0→nonzero) clears m_mixed_cache.
+        //
+        // Test: play at position A (frame 0) → stop → play at position B
+        // (frame 30, ~1.25s) → GetMixedAudio at B must return valid audio.
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        tmb->SetSequenceRate(24, 1);
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        tmb->SetAudioFormat(fmt);
+
+        auto path = m_testVideoPath.toStdString();
+
+        // Clip covers [0, 60) — within 72-frame test file
+        std::vector<ClipInfo> clips = {
+            {"clip1", path, 0, 60, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(TrackId{TrackType::Audio, 1}, clips);
+
+        std::vector<MixTrackParam> params = {{1, 1.0f}};
+        tmb->SetAudioMixParams(params, fmt);
+
+        // Phase 1: Play at position A (frame 0), let mix thread fill cache
+        tmb->SetPlayhead(0, 1, 1.0f);
+        QThread::msleep(500);
+
+        // Get audio near position A — establishes cache at position 0
+        auto r1 = tmb->GetMixedAudio(0, 100000);
+        QVERIFY2(r1 != nullptr, "Audio at position A must work");
+        QVERIFY(r1->frames() > 0);
+
+        // Phase 2: Stop (park readers)
+        tmb->ParkReaders();
+
+        // Phase 3: Play at position B (frame 30 = 1.25s into 72-frame file)
+        tmb->SetPlayhead(30, 1, 1.0f);
+        QThread::msleep(500);
+
+        // GetMixedAudio at position B. Without the fix, stale cache from
+        // position A made mix thread skip filling for position B.
+        TimeUS pos_b_us = 1250000; // 30 frames @ 24fps
+        auto r2 = tmb->GetMixedAudio(pos_b_us, pos_b_us + 100000);
+        QVERIFY2(r2 != nullptr,
+                 "Audio at position B after stop→seek→play must return data "
+                 "(stale cache must be cleared)");
+        QVERIFY2(r2->frames() > 0,
+                 "Audio at position B must have actual samples");
+    }
+
+    // ── NSF: ParkReaders clears per-track audio_cache (Fix 2) ──
+
+    void test_park_readers_clears_audio_cache() {
+        // BUG: ParkReaders didn't clear per-track audio_cache. Stale entries
+        // wasted MAX_AUDIO_CACHE slots and could evict fresh entries faster.
+        // Fix: ParkReaders clears ts.audio_cache alongside buffer_end reset.
+        //
+        // Test: play and fill audio cache → park → play at new position →
+        // audio at new position works without underrun.
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        tmb->SetSequenceRate(24, 1);
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        tmb->SetAudioFormat(fmt);
+
+        auto path = m_testVideoPath.toStdString();
+
+        // Clip covers [0, 60) — within 72-frame test file
+        std::vector<ClipInfo> clips = {
+            {"clip1", path, 0, 60, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(TrackId{TrackType::Audio, 1}, clips);
+
+        std::vector<MixTrackParam> params = {{1, 1.0f}};
+        tmb->SetAudioMixParams(params, fmt);
+
+        // Phase 1: Play from 0, fill audio cache
+        tmb->SetPlayhead(0, 1, 1.0f);
+        QThread::msleep(500);
+
+        // Consume some audio to populate per-track cache
+        for (int i = 0; i < 10; ++i) {
+            TimeUS t0 = i * 20000;
+            tmb->GetMixedAudio(t0, t0 + 20000);
+        }
+
+        // Phase 2: Park
+        tmb->ParkReaders();
+
+        // Phase 3: Play from frame 30 (~1.25s), within 72-frame file
+        tmb->SetPlayhead(30, 1, 1.0f);
+        QThread::msleep(500);
+
+        TimeUS pos_us = 1250000; // 30/24 * 1e6
+        auto result = tmb->GetMixedAudio(pos_us, pos_us + 100000);
+        QVERIFY2(result != nullptr,
+                 "Audio after park→seek→play must work (stale audio_cache cleared)");
+        QVERIFY(result->frames() > 0);
+    }
+
+    // ── NSF: Audio-priority worker pop (Fix 4) ──
+
+    void test_audio_refill_not_starved_by_video() {
+        // BUG: LIFO worker pop let VIDEO_REFILL jobs stack on top of
+        // AUDIO_REFILL jobs. With slow video decode, audio REFILL waited
+        // behind multiple video batches.
+        // Fix: worker_loop scans for AUDIO_REFILL before LIFO fallback.
+        //
+        // Test: setup 3 video tracks + 1 audio track. Start playback.
+        // After settling, consume audio continuously. With audio-priority,
+        // audio must not underrun even when video workers are busy.
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(2); // only 2 workers
+        tmb->SetSequenceRate(24, 1);
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        tmb->SetAudioFormat(fmt);
+
+        auto path = m_testVideoPath.toStdString();
+
+        // 3 video tracks to generate VIDEO_REFILL pressure
+        for (int i = 1; i <= 3; ++i) {
+            TrackId t{TrackType::Video, i};
+            std::vector<ClipInfo> clips = {
+                {"vclip" + std::to_string(i), path, 0, 60, 0, 24, 1, 1.0f},
+            };
+            tmb->SetTrackClips(t, clips);
+        }
+
+        // 1 audio track (within 72-frame test file)
+        std::vector<ClipInfo> a_clips = {
+            {"aclip1", path, 0, 60, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(TrackId{TrackType::Audio, 1}, a_clips);
+
+        std::vector<MixTrackParam> params = {{1, 1.0f}};
+        tmb->SetAudioMixParams(params, fmt);
+
+        // Start playback — generates both VIDEO_REFILL and AUDIO_REFILL jobs
+        tmb->SetPlayhead(0, 1, 1.0f);
+        QThread::msleep(800);
+
+        // Consume 20 chunks of 20ms audio (~400ms total)
+        int underruns = 0;
+        TimeUS cursor = 0;
+        for (int i = 0; i < 20; ++i) {
+            auto mixed = tmb->GetMixedAudio(cursor, cursor + 20000);
+            if (!mixed || mixed->frames() == 0) underruns++;
+            cursor += 20000;
+            int64_t ph = static_cast<int64_t>(cursor * 24.0 / 1000000.0);
+            tmb->SetPlayhead(ph, 1, 1.0f);
+        }
+
+        QVERIFY2(underruns == 0,
+                 qPrintable(QString("Audio must not underrun with 3 video tracks "
+                     "competing for 2 workers, got %1 underruns").arg(underruns)));
+    }
+    // ── AddClips invalidates mixed cache for audio tracks ──
+
+    void test_add_audio_clips_invalidates_mixed_cache() {
+        // BUG: Mix thread races clip loading. It fills cache ahead of playhead.
+        // If it caches silence for a range BEFORE prefetch loads audio clips via
+        // AddClips, the cache retains stale silence. Pump reads from cache → no
+        // audio even though clips now exist.
+        // Fix: AddClips clears m_mixed_cache when adding audio clips.
+        //
+        // Test: set mix params + play (no clips yet) → GetMixedAudio returns null.
+        // Then AddClips with audio → GetMixedAudio must return non-null.
+        if (!m_hasTestAudio) QSKIP("No test audio");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        tmb->SetSequenceRate(24, 1);
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        tmb->SetAudioFormat(fmt);
+
+        auto path = m_testVideoPath.toStdString();
+
+        // Set mix params BEFORE adding clips (simulates _push_all_audio_mix_params)
+        std::vector<MixTrackParam> params = {{1, 1.0f}};
+        tmb->SetAudioMixParams(params, fmt);
+
+        // Start playback — mix thread fills cache with silence (no clips)
+        tmb->SetPlayhead(0, 1, 1.0f);
+        QThread::msleep(200);
+
+        // GetMixedAudio should return null (no clips → no audio)
+        auto r1 = tmb->GetMixedAudio(0, 100000);
+        // null is expected — no clips loaded
+
+        // Now add audio clips (simulates prefetch loading clips later)
+        std::vector<ClipInfo> clips = {
+            {"clip1", path, 0, 60, 0, 24, 1, 1.0f},
+        };
+        tmb->AddClips(TrackId{TrackType::Audio, 1}, clips);
+
+        // Let the WARM job and mix thread catch up
+        QThread::msleep(500);
+
+        // GetMixedAudio must now return audio (cache was invalidated by AddClips)
+        auto r2 = tmb->GetMixedAudio(0, 100000);
+        QVERIFY2(r2 != nullptr,
+                 "Audio must be available after AddClips invalidates cache");
+        QVERIFY2(r2->frames() > 0,
+                 "Audio must have actual samples after AddClips");
+    }
 };
 
 QTEST_MAIN(TestTimelineMediaBuffer)

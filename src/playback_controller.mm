@@ -300,6 +300,55 @@ void AudioPump::pumpLoop() {
 
         bool pushed_source = false;
         auto pcm = m_tmb->GetMixedAudio(fetch_start, fetch_end);
+
+        // [2POP] diagnostic: frame 89951 @ 25fps = 3,598,040,000 μs
+        {
+            constexpr int64_t TWOPOP_US = 3598040000LL;
+            constexpr int64_t TWOPOP_MARGIN = 1000000LL;
+            bool twopop = fetch_start < (TWOPOP_US + TWOPOP_MARGIN) &&
+                          fetch_end > (TWOPOP_US - TWOPOP_MARGIN);
+            if (twopop) {
+                float pk = 0.0f;
+                if (pcm && pcm->frames() > 0) {
+                    const float* d = pcm->data_f32();
+                    int64_t n = std::min(pcm->frames() * m_channels, (int64_t)8192);
+                    for (int64_t i = 0; i < n; ++i) {
+                        float v = std::abs(d[i]);
+                        if (v > pk) pk = v;
+                    }
+                }
+                fprintf(stderr, "[2POP] PUMP: media_t=%lld fetch=[%lld..%lld] sse_t=%lld pcm=%s frames=%lld peak=%.6f\n",
+                        (long long)media_time_us,
+                        (long long)fetch_start, (long long)fetch_end,
+                        (long long)m_sse->CurrentTimeUS(),
+                        pcm ? "yes" : "NULL",
+                        pcm ? (long long)pcm->frames() : 0LL, pk);
+                fflush(stderr);
+            }
+        }
+
+        // TEMP DIAG: trace pump fetch results (fflush to avoid buffering on bg thread)
+        {
+            static std::atomic<int> pump_got{0};
+            static std::atomic<int> pump_null{0};
+            if (pcm && pcm->frames() > 0) {
+                int c = pump_got.fetch_add(1, std::memory_order_relaxed);
+                if (c < 3) {
+                    fprintf(stderr, "[PUMP] GOT AUDIO: media_t=%lld src_t=%lld frames=%lld sse_t=%lld\n",
+                            (long long)media_time_us, (long long)pcm->start_time_us(),
+                            (long long)pcm->frames(), (long long)m_sse->CurrentTimeUS());
+                    fflush(stderr);
+                }
+            } else {
+                int c = pump_null.fetch_add(1, std::memory_order_relaxed);
+                if (c < 3 || (c % 50 == 0)) {
+                    fprintf(stderr, "[PUMP] null: cycle=%d media_t=%lld aop_ph=%lld\n",
+                            c, (long long)media_time_us, (long long)aop_playhead);
+                    fflush(stderr);
+                }
+            }
+        }
+
         if (pcm && pcm->frames() > 0) {
             // Push to SSE (source data for time-stretching).
             // SetTarget is NOT called here — SSE advances naturally via
@@ -319,7 +368,33 @@ void AudioPump::pumpLoop() {
         if (frames_needed > 0) {
             produced = m_sse->Render(render_buffer.data(), frames_needed);
             if (produced > 0) {
-                m_aop->WriteF32(render_buffer.data(), produced);
+                int64_t written = m_aop->WriteF32(render_buffer.data(), produced);
+
+                // [2POP] verify WriteF32 success
+                if (written != produced) {
+                    fprintf(stderr, "[2POP] AOP PARTIAL WRITE: wrote=%lld/%lld buffered=%lld\n",
+                            (long long)written, (long long)produced, (long long)buffered);
+                    fflush(stderr);
+                }
+
+                // TEMP DIAG: check if SSE produced non-silent audio
+                {
+                    static std::atomic<int> loud_count{0};
+                    float peak = 0.0f;
+                    for (int64_t i = 0; i < std::min(produced * m_channels, (int64_t)256); ++i) {
+                        float v = std::abs(render_buffer[i]);
+                        if (v > peak) peak = v;
+                    }
+                    if (peak > 0.001f) {
+                        int c = loud_count.fetch_add(1, std::memory_order_relaxed);
+                        if (c < 5) {
+                            fprintf(stderr, "[PUMP] LOUD: peak=%.6f frames=%lld media_t=%lld sse_t=%lld\n",
+                                    peak, (long long)produced, (long long)media_time_us,
+                                    (long long)m_sse->CurrentTimeUS());
+                            fflush(stderr);
+                        }
+                    }
+                }
             }
         }
 
@@ -616,6 +691,10 @@ void PlaybackController::Play(int direction, float speed) {
         startDisplayLink();
     }
 
+    JVE_LOG_EVENT(Audio, "Play: has_audio=%d pump_running=%d aop=%p sse=%p",
+        (int)m_has_audio.load(std::memory_order_relaxed),
+        m_audio_pump ? (int)m_audio_pump->IsRunning() : -1,
+        (void*)m_aop, (void*)m_sse);
     JVE_LOG_EVENT(Ticks, "Play dir=%d speed=%.1f audio=%d",
                  direction, speed, (int)m_has_audio.load(std::memory_order_relaxed));
 }
@@ -1625,6 +1704,30 @@ void PlaybackController::dumpDiagnostics() {
     // Audio pump stats
     if (pump_count > 0) {
         int64_t underruns = m_audio_pump ? m_audio_pump->UnderrunCount() : 0;
+
+        // Compute fetch statistics
+        int64_t total_fetched = 0;
+        int64_t fetch_hit_count = 0;
+        int64_t first_fetch_cycle = -1;
+        int64_t first_fetch_media_t = 0;
+        int64_t min_media_t = INT64_MAX, max_media_t = INT64_MIN;
+        {
+            size_t idx = 0;
+            m_audio_diag.for_each([&](const PumpMetric& p) {
+                total_fetched += p.fetched_frames;
+                if (p.media_time_us < min_media_t) min_media_t = p.media_time_us;
+                if (p.media_time_us > max_media_t) max_media_t = p.media_time_us;
+                if (p.fetched_frames > 0) {
+                    ++fetch_hit_count;
+                    if (first_fetch_cycle < 0) {
+                        first_fetch_cycle = static_cast<int64_t>(idx);
+                        first_fetch_media_t = p.media_time_us;
+                    }
+                }
+                ++idx;
+            });
+        }
+
         fprintf(f, "AUDIO PUMP (%zu cycles):\n", pump_count);
         if (!buf_levels.empty()) {
             fprintf(f, "  buffer: med=%lld p5=%lld min=%lld\n",
@@ -1634,6 +1737,12 @@ void PlaybackController::dumpDiagnostics() {
         }
         fprintf(f, "  underruns=%lld stalls=%lld\n",
                 (long long)underruns, (long long)stall_count);
+        fprintf(f, "  fetch: total=%lld hits=%lld first_hit_cycle=%lld first_hit_t=%lldus\n",
+                (long long)total_fetched, (long long)fetch_hit_count,
+                (long long)first_fetch_cycle, (long long)first_fetch_media_t);
+        fprintf(f, "  media_time: min=%lldus max=%lldus range=%.3fs\n",
+                (long long)min_media_t, (long long)max_media_t,
+                static_cast<double>(max_media_t - min_media_t) / 1000000.0);
 
         // Audio outliers (low buffer)
         fprintf(f, "  OUTLIER CYCLES (buffer < 1000):\n");

@@ -850,14 +850,21 @@ end
 function PlaybackEngine:activate_audio()
     self._audio_owner = true
     self.current_audio_clip_ids = {}
+
+    -- Ensure audio session is initialized eagerly on ownership gain.
+    -- Previously gated on clip-change dedup inside _if_clip_changed_update_audio_mix,
+    -- which returned early when no audio clips at park position (empty→empty).
     if self.sequence and self.fps_num then
+        if audio_playback and not audio_playback.session_initialized then
+            self:_init_audio_session()
+        end
         if audio_playback and audio_playback.session_initialized then
             audio_playback.set_max_time(self.max_media_time_us)
         end
-        self:_if_clip_changed_update_audio_mix(math.floor(self._position))
+        self:_push_all_audio_mix_params()
     end
 
-    -- Wire C++ PlaybackController to audio devices (Phase 3)
+    -- Wire C++ PlaybackController to audio devices
     if self._playback_controller and audio_playback
        and audio_playback.session_initialized
        and audio_playback.aop and audio_playback.sse then
@@ -939,7 +946,48 @@ end
 --- Configure audio sources and start playback (transport start).
 function PlaybackEngine:_configure_and_start_audio()
     if not self._audio_owner then return end
-    self:_if_clip_changed_update_audio_mix(math.floor(self:get_position()))
+
+    -- Ensure audio session is initialized before anything else.
+    -- Session init was previously only reachable via _if_clip_changed_update_audio_mix,
+    -- which gates on clip-change dedup. If no audio clips at the park position
+    -- (empty→empty), init was never reached. Session init is a one-time setup
+    -- that must happen on play start, not be gated on clip changes.
+    if audio_playback and not audio_playback.session_initialized then
+        self:_init_audio_session()
+    end
+
+    -- Push mix params for ALL audio tracks in the sequence to TMB.
+    -- TMB's execute_mix_range iterates tracks and calls GetTrackAudio(track, t0, t1)
+    -- which autonomously looks up clips at each position. TMB just needs track-level
+    -- info (which tracks exist + volumes). Position-dependent filtering via
+    -- _if_clip_changed_update_audio_mix would skip this entirely when no audio clips
+    -- exist at the park position (empty→empty dedup → silence).
+    self:_push_all_audio_mix_params()
+
+    -- Ensure C++ knows about audio. activate_audio() may have run before the
+    -- session was initialized, so ACTIVATE_AUDIO was skipped. Without this,
+    -- m_has_audio stays false → prefillAudio skipped → pump never starts.
+    if self._playback_controller and audio_playback
+       and audio_playback.session_initialized
+       and audio_playback.aop and audio_playback.sse then
+        if not qt_constants.PLAYBACK.HAS_AUDIO(self._playback_controller) then
+            log.event("_configure_and_start_audio: late ACTIVATE_AUDIO")
+            qt_constants.PLAYBACK.ACTIVATE_AUDIO(
+                self._playback_controller,
+                audio_playback.aop,
+                audio_playback.sse,
+                audio_playback.session_sample_rate,
+                audio_playback.session_channels)
+        end
+    else
+        log.event("_configure_and_start_audio: cannot activate (pc=%s ap=%s init=%s aop=%s sse=%s)",
+            tostring(self._playback_controller ~= nil),
+            tostring(audio_playback ~= nil),
+            tostring(audio_playback and audio_playback.session_initialized),
+            tostring(audio_playback and audio_playback.aop ~= nil),
+            tostring(audio_playback and audio_playback.sse ~= nil))
+    end
+
     self:_start_audio()
 end
 
@@ -1044,9 +1092,44 @@ function PlaybackEngine:_build_audio_mix_params(entries)
     return params
 end
 
+--- Push mix params for ALL audio tracks in the sequence to TMB.
+-- Unlike _if_clip_changed_update_audio_mix (which builds params from clips at a
+-- specific frame), this builds params from the track list itself. TMB handles
+-- position-dependent clip lookup autonomously via GetTrackAudio.
+function PlaybackEngine:_push_all_audio_mix_params()
+    if not (audio_playback and audio_playback.session_initialized) then return end
+    if not self._tmb then return end
+    assert(self.sequence,
+        "PlaybackEngine:_push_all_audio_mix_params: no sequence loaded")
+
+    local Track = require("models.track")
+    local tracks = Track.find_by_sequence(self.sequence.id, "AUDIO")
+    local mix_params = {}
+    for _, track in ipairs(tracks) do
+        assert(type(track.volume) == "number", string.format(
+            "PlaybackEngine:_push_all_audio_mix_params: track %s missing volume",
+            tostring(track.id)))
+        mix_params[#mix_params + 1] = {
+            track_index = track.track_index,
+            volume = track.volume,
+            muted = track.muted,
+            soloed = track.soloed,
+        }
+    end
+
+    local edit_time_us = helpers.calc_time_us_from_frame(
+        math.floor(self:get_position()), self.fps_num, self.fps_den)
+    audio_playback.apply_mix(self._tmb, mix_params, edit_time_us)
+    log.event("_push_all_audio_mix_params: %d tracks", #mix_params)
+end
+
 --- Init audio session using stored sample rate (no media_cache dependency).
 function PlaybackEngine:_init_audio_session()
-    if not (qt_constants.SSE and qt_constants.AOP) then return end
+    if not (qt_constants.SSE and qt_constants.AOP) then
+        log.event("_init_audio_session: SSE/AOP not available (SSE=%s AOP=%s)",
+            tostring(qt_constants.SSE ~= nil), tostring(qt_constants.AOP ~= nil))
+        return
+    end
 
     local audio_pb = require("core.media.audio_playback")
     if audio_pb.session_initialized then

@@ -11,6 +11,8 @@
 #include <atomic>
 #include <cassert>
 #include <cstring>
+#include <cstdio>
+#include <cmath>
 
 namespace aop {
 
@@ -135,6 +137,27 @@ public:
         }
 
         m_frames_read.fetch_add(frames_read, std::memory_order_relaxed);
+
+        // [2POP] diagnostic: detect non-silent audio reaching Core Audio
+        if (frames_read > 0) {
+            static std::atomic<int> read_loud_count{0};
+            float pk = 0.0f;
+            const float* fdata = reinterpret_cast<const float*>(data);
+            int64_t n = std::min(frames_read * m_channels, (int64_t)512);
+            for (int64_t i = 0; i < n; ++i) {
+                float v = std::abs(fdata[i]);
+                if (v > pk) pk = v;
+            }
+            if (pk > 0.01f) {
+                int c = read_loud_count.fetch_add(1, std::memory_order_relaxed);
+                if (c < 10) {
+                    int64_t ph_us = (m_frames_read.load(std::memory_order_relaxed) * 1000000LL) / m_sample_rate;
+                    fprintf(stderr, "[2POP] AOP READ LOUD #%d: peak=%.6f frames=%lld ph_us=%lld\n",
+                            c, pk, (long long)frames_read, (long long)ph_us);
+                    fflush(stderr);
+                }
+            }
+        }
 
         return frames * bytes_per_frame;  // Always return requested amount (silence-padded)
     }
@@ -262,7 +285,29 @@ public:
     }
 
     int64_t write_f32(const float* data, int64_t frames) {
-        return m_ring_buffer.write(data, frames);
+        int64_t written = m_ring_buffer.write(data, frames);
+
+        // [2POP] diagnostic: detect non-silent audio being written to ring buffer
+        if (written > 0) {
+            static std::atomic<int> write_loud_count{0};
+            float pk = 0.0f;
+            int64_t n = std::min(written * static_cast<int64_t>(m_channels), (int64_t)512);
+            for (int64_t i = 0; i < n; ++i) {
+                float v = std::abs(data[i]);
+                if (v > pk) pk = v;
+            }
+            if (pk > 0.01f) {
+                int c = write_loud_count.fetch_add(1, std::memory_order_relaxed);
+                if (c < 10) {
+                    fprintf(stderr, "[2POP] AOP WRITE LOUD #%d: peak=%.6f frames=%lld/%lld buffered=%lld\n",
+                            c, pk, (long long)written, (long long)frames,
+                            (long long)m_ring_buffer.available_frames());
+                    fflush(stderr);
+                }
+            }
+        }
+
+        return written;
     }
 
     int64_t buffered_frames() const {
