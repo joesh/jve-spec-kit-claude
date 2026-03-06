@@ -58,26 +58,45 @@ public:
         m_total_frames = 0;
     }
 
-    // Get samples at a specific media time
-    // Returns false if time is not in buffer
+    // Get samples at a specific media time.
+    // Handles reads that span two adjacent chunks (common with incremental push).
+    // Returns false if time is not covered by buffered data.
     bool get_samples(int64_t time_us, int sample_rate, float* out, int64_t frames) const {
         if (m_chunks.empty()) return false;
 
         // Find chunk containing start time
-        for (const auto& chunk : m_chunks) {
-            int64_t chunk_duration_us = (chunk.frames * 1000000LL) / sample_rate;
-            int64_t chunk_end_us = chunk.start_time_us + chunk_duration_us;
+        for (size_t ci = 0; ci < m_chunks.size(); ci++) {
+            const auto& chunk = m_chunks[ci];
+            int64_t chunk_end_us = chunk.start_time_us + (chunk.frames * 1000000LL) / sample_rate;
 
             if (time_us >= chunk.start_time_us && time_us < chunk_end_us) {
-                // Calculate offset into chunk
                 int64_t offset_us = time_us - chunk.start_time_us;
                 int64_t offset_samples = (offset_us * sample_rate) / 1000000LL;
+                int64_t avail = chunk.frames - offset_samples;
 
-                if (offset_samples + frames <= chunk.frames) {
+                if (avail >= frames) {
+                    // Fast path: entire read within single chunk
                     std::memcpy(out, chunk.data.data() + offset_samples * m_channels,
                                 frames * m_channels * sizeof(float));
                     return true;
                 }
+
+                // Partial: copy what we have, try next chunk for remainder
+                if (avail > 0) {
+                    std::memcpy(out, chunk.data.data() + offset_samples * m_channels,
+                                avail * m_channels * sizeof(float));
+                }
+                int64_t remaining = frames - avail;
+
+                if (ci + 1 < m_chunks.size()) {
+                    const auto& next = m_chunks[ci + 1];
+                    if (remaining <= next.frames) {
+                        std::memcpy(out + avail * m_channels, next.data.data(),
+                                    remaining * m_channels * sizeof(float));
+                        return true;
+                    }
+                }
+                return false;  // Not enough data across chunks
             }
         }
         return false;
@@ -174,6 +193,7 @@ public:
     void reset() {
         m_source_buffer.clear();
         m_current_time_us = 0;
+        m_time_accum = 0;
         m_starved = false;
         m_last_direction = 0;
         m_xfade_remaining = 0;
@@ -494,12 +514,17 @@ private:
 
     // ── Time advancement ──
 
+    // Advance media time by output_frames worth of μs.
+    // Uses accumulator to eliminate truncation drift from integer division.
+    // At 48kHz, 512 frames = 10666.667μs; without accumulator, 0.667μs lost
+    // per render → ~37ms drift over 10 minutes.
     void advance_time(int64_t output_frames) {
         assert(output_frames >= 0 && output_frames <= MAX_OUTPUT_FRAMES &&
             "advance_time: output_frames out of range");
-        int64_t time_advance_us = (output_frames * 1000000LL) / m_config.sample_rate;
-        time_advance_us = static_cast<int64_t>(time_advance_us * m_speed);
-        m_current_time_us += time_advance_us;
+        m_time_accum += output_frames * 1000000LL;
+        int64_t advance_us = m_time_accum / m_config.sample_rate;
+        m_time_accum %= m_config.sample_rate;
+        m_current_time_us += static_cast<int64_t>(advance_us * m_speed);
     }
 
     static constexpr int64_t MAX_OUTPUT_FRAMES = 65536;  // >1s at 48kHz — sane upper bound
@@ -534,6 +559,7 @@ private:
 
     // Current state
     int64_t m_current_time_us;
+    int64_t m_time_accum{0};  // Sub-μs remainder for drift-free advance_time
     float m_speed;
     QualityMode m_quality;
     bool m_starved;

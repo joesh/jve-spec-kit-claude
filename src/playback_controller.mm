@@ -264,6 +264,7 @@ void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* ss
     m_diag = diag;
     m_stop_requested.store(false, std::memory_order_relaxed);
     m_running.store(true, std::memory_order_relaxed);
+    ResetPushState();
 
     m_thread = std::thread(&AudioPump::pumpLoop, this);
     JVE_LOG_EVENT(Audio, "AudioPump: started");
@@ -288,6 +289,10 @@ bool AudioPump::IsRunning() const {
     return m_running.load(std::memory_order_relaxed);
 }
 
+void AudioPump::ResetPushState() {
+    m_last_push_end_us.store(-1, std::memory_order_relaxed);
+}
+
 void AudioPump::SetQualityMode(int mode) {
     m_quality_mode.store(mode, std::memory_order_relaxed);
 }
@@ -309,75 +314,98 @@ void AudioPump::pumpLoop() {
         float speed = m_clock->Speed();
         int mode = m_quality_mode.load(std::memory_order_relaxed);
 
-        // 2. Fetch mixed audio from TMB (2s lookahead)
+        // 2. Incremental push: extract each time range ONCE, no re-extraction.
+        //
+        // Two concerns must be addressed simultaneously:
+        // (a) Never re-push overlapping audio (causes ±1 sample pops from
+        //     integer truncation in μs→sample conversion)
+        // (b) Always call GetMixedAudio every cycle (keeps TMB audio cache
+        //     warm — skipping causes cache misses → decode stalls → stutters)
+        //
+        // Solution: always fetch from SSE's current position (cache warming),
+        // but only push to SSE when we need new data (from last_end onwards).
         constexpr int64_t MIX_LOOKAHEAD_US = 2000000;
-        int64_t fetch_start, fetch_end;
+        constexpr int64_t REFILL_THRESHOLD_US = 1000000;  // push when < 1s ahead
+
+        int64_t last_end = m_last_push_end_us.load(std::memory_order_relaxed);
+        int64_t sse_time = m_sse->CurrentTimeUS();
+
+        // Always fetch from SSE position to keep TMB cache warm.
+        // This ensures that when we DO push, the data is already decoded.
+        int64_t warm_start, warm_end;
         if (speed >= 0) {
-            fetch_start = media_time_us;
-            fetch_end = media_time_us + MIX_LOOKAHEAD_US;
+            warm_start = sse_time;
+            warm_end = sse_time + MIX_LOOKAHEAD_US;
         } else {
-            fetch_start = media_time_us - MIX_LOOKAHEAD_US;
-            fetch_end = media_time_us;
+            warm_start = sse_time - MIX_LOOKAHEAD_US;
+            warm_end = sse_time;
+        }
+        m_tmb->GetMixedAudio(warm_start, warm_end);  // result discarded — cache warming
+
+        // Decide whether SSE needs more source data
+        bool need_push = false;
+        int64_t push_start = 0;
+        if (last_end < 0) {
+            // First push after reset — full window from SSE position
+            need_push = true;
+            push_start = sse_time;
+        } else if (speed >= 0) {
+            if (last_end - sse_time < REFILL_THRESHOLD_US) {
+                need_push = true;
+                push_start = last_end;
+            }
+        } else {
+            if (sse_time - last_end < REFILL_THRESHOLD_US) {
+                need_push = true;
+                push_start = last_end;
+            }
         }
 
         bool pushed_source = false;
-        auto pcm = m_tmb->GetMixedAudio(fetch_start, fetch_end);
 
-        // [2POP] diagnostic: frame 89951 @ 25fps = 3,598,040,000 μs
-        {
-            constexpr int64_t TWOPOP_US = 3598040000LL;
-            constexpr int64_t TWOPOP_MARGIN = 1000000LL;
-            bool twopop = fetch_start < (TWOPOP_US + TWOPOP_MARGIN) &&
-                          fetch_end > (TWOPOP_US - TWOPOP_MARGIN);
-            if (twopop) {
-                float pk = 0.0f;
-                if (pcm && pcm->frames() > 0) {
-                    const float* d = pcm->data_f32();
-                    int64_t n = std::min(pcm->frames() * m_channels, (int64_t)8192);
-                    for (int64_t i = 0; i < n; ++i) {
-                        float v = std::abs(d[i]);
-                        if (v > pk) pk = v;
-                    }
-                }
-                fprintf(stderr, "[2POP] PUMP: media_t=%lld fetch=[%lld..%lld] sse_t=%lld pcm=%s frames=%lld peak=%.6f\n",
-                        (long long)media_time_us,
-                        (long long)fetch_start, (long long)fetch_end,
-                        (long long)m_sse->CurrentTimeUS(),
-                        pcm ? "yes" : "NULL",
-                        pcm ? (long long)pcm->frames() : 0LL, pk);
-                fflush(stderr);
-            }
-        }
+        if (need_push) {
+            // Align push_start to a sample boundary to prevent ±1 sample
+            // discontinuity at chunk joins. Without alignment:
+            //   chunk A end = start + (frames * 1e6) / sr  (truncated)
+            //   chunk B start = that truncated value
+            //   TMB extract: sample_idx = (offset * sr) / 1e6  (truncated again)
+            // Double truncation can skip or repeat 1 sample at the boundary.
+            // With alignment: boundaries fall on exact sample positions.
+            int64_t aligned_start = (push_start / 1000000LL * 1000000LL);  // floor to second
+            int64_t offset_us = push_start - aligned_start;
+            int64_t offset_samples = (offset_us * m_sample_rate) / 1000000LL;
+            int64_t aligned_push = aligned_start + (offset_samples * 1000000LL) / m_sample_rate;
 
-        // TEMP DIAG: trace pump fetch results (fflush to avoid buffering on bg thread)
-        {
-            static std::atomic<int> pump_got{0};
-            static std::atomic<int> pump_null{0};
-            if (pcm && pcm->frames() > 0) {
-                int c = pump_got.fetch_add(1, std::memory_order_relaxed);
-                if (c < 3) {
-                    fprintf(stderr, "[PUMP] GOT AUDIO: media_t=%lld src_t=%lld frames=%lld sse_t=%lld\n",
-                            (long long)media_time_us, (long long)pcm->start_time_us(),
-                            (long long)pcm->frames(), (long long)m_sse->CurrentTimeUS());
-                    fflush(stderr);
-                }
+            int64_t fetch_start, fetch_end;
+            if (speed >= 0) {
+                fetch_start = aligned_push;
+                fetch_end = aligned_push + MIX_LOOKAHEAD_US;
             } else {
-                int c = pump_null.fetch_add(1, std::memory_order_relaxed);
-                if (c < 3 || (c % 50 == 0)) {
-                    fprintf(stderr, "[PUMP] null: cycle=%d media_t=%lld aop_ph=%lld\n",
-                            c, (long long)media_time_us, (long long)aop_playhead);
-                    fflush(stderr);
+                fetch_end = aligned_push;
+                fetch_start = aligned_push - MIX_LOOKAHEAD_US;
+            }
+
+            auto pcm = m_tmb->GetMixedAudio(fetch_start, fetch_end);
+
+            if (pcm && pcm->frames() > 0) {
+                // Push to SSE (source data for time-stretching).
+                // SetTarget is NOT called here — SSE advances naturally via
+                // advance_time() inside Render(). Transport events (Play, SetSpeed)
+                // call SetTarget after Reset().
+                m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(), pcm->start_time_us());
+                pushed_source = true;
+
+                // Track end of pushed data using sample-aligned arithmetic.
+                // Convert frames to μs via the same round-trip to ensure the
+                // next push_start aligns to the same sample grid.
+                int64_t end_samples = offset_samples + pcm->frames();
+                int64_t pcm_end_us = aligned_start + (end_samples * 1000000LL) / m_sample_rate;
+                if (speed >= 0) {
+                    m_last_push_end_us.store(pcm_end_us, std::memory_order_relaxed);
+                } else {
+                    m_last_push_end_us.store(pcm->start_time_us(), std::memory_order_relaxed);
                 }
             }
-        }
-
-        if (pcm && pcm->frames() > 0) {
-            // Push to SSE (source data for time-stretching).
-            // SetTarget is NOT called here — SSE advances naturally via
-            // advance_time() inside Render(). Transport events (Play, SetSpeed)
-            // call SetTarget after Reset().
-            m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(), pcm->start_time_us());
-            pushed_source = true;
         }
 
         // 3. Render from SSE and write to AOP
@@ -390,33 +418,7 @@ void AudioPump::pumpLoop() {
         if (frames_needed > 0) {
             produced = m_sse->Render(render_buffer.data(), frames_needed);
             if (produced > 0) {
-                int64_t written = m_aop->WriteF32(render_buffer.data(), produced);
-
-                // [2POP] verify WriteF32 success
-                if (written != produced) {
-                    fprintf(stderr, "[2POP] AOP PARTIAL WRITE: wrote=%lld/%lld buffered=%lld\n",
-                            (long long)written, (long long)produced, (long long)buffered);
-                    fflush(stderr);
-                }
-
-                // TEMP DIAG: check if SSE produced non-silent audio
-                {
-                    static std::atomic<int> loud_count{0};
-                    float peak = 0.0f;
-                    for (int64_t i = 0; i < std::min(produced * m_channels, (int64_t)256); ++i) {
-                        float v = std::abs(render_buffer[i]);
-                        if (v > peak) peak = v;
-                    }
-                    if (peak > 0.001f) {
-                        int c = loud_count.fetch_add(1, std::memory_order_relaxed);
-                        if (c < 5) {
-                            fprintf(stderr, "[PUMP] LOUD: peak=%.6f frames=%lld media_t=%lld sse_t=%lld\n",
-                                    peak, (long long)produced, (long long)media_time_us,
-                                    (long long)m_sse->CurrentTimeUS());
-                            fflush(stderr);
-                        }
-                    }
-                }
+                m_aop->WriteF32(render_buffer.data(), produced);
             }
         }
 
@@ -463,7 +465,7 @@ void AudioPump::pumpLoop() {
             auto& entry = m_diag->next();
             entry.media_time_us = media_time_us;
             entry.aop_playhead_us = aop_playhead;
-            entry.fetched_frames = pcm ? pcm->frames() : 0;
+            entry.fetched_frames = pushed_source ? 1 : 0;  // simplified: was pcm->frames()
             entry.rendered_frames = produced;
             entry.buffered_frames = buffered;
             entry.flags = flags;
@@ -590,6 +592,7 @@ void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
                   (int)m_aop->IsPlaying());
     m_aop->Flush();
     m_sse->Reset();
+    if (m_audio_pump) m_audio_pump->ResetPushState();
     int64_t aop_playhead = m_aop->PlayheadTimeUS();
     m_clock.Reanchor(time_us, signed_speed, aop_playhead);
     m_sse->SetTarget(time_us, signed_speed, static_cast<sse::QualityMode>(quality_mode));
@@ -895,6 +898,7 @@ void PlaybackController::SetSpeed(float signed_speed) {
         // Flush SSE for speed change
         m_aop->Flush();
         m_sse->Reset();
+        if (m_audio_pump) m_audio_pump->ResetPushState();
         m_fractional_frames = 0.0;
 
         // Reanchor at new speed

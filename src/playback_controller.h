@@ -180,6 +180,9 @@ public:
     // Diagnostics (read after Stop)
     int64_t UnderrunCount() const { return m_underrun_count; }
 
+    // Reset incremental push tracking (call at every transport change)
+    void ResetPushState();
+
     // Pump timing constants (match Lua CFG) — public for pre-fill sizing
     static constexpr int TARGET_BUFFER_MS = 200;
     static constexpr int MAX_RENDER_FRAMES = 4096;
@@ -191,6 +194,12 @@ private:
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_stop_requested{false};
     std::atomic<int> m_quality_mode{1};  // Q1=1, Q2=2, Q3=3
+
+    // Incremental push tracking: end-time of last pushed audio (μs).
+    // -1 = no push yet (next push is full window from SSE time).
+    // Each time range is extracted and pushed ONCE — eliminates quantization drift
+    // from redundant μs→sample conversions on overlapping windows.
+    std::atomic<int64_t> m_last_push_end_us{-1};
 
     // Dependencies (set by Start, read by pumpLoop)
     emp::TimelineMediaBuffer* m_tmb{nullptr};

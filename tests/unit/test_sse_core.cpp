@@ -1160,6 +1160,166 @@ private slots:
         }
         QVERIFY(engine != nullptr);
     }
+
+    // ========================================================================
+    // CROSS-CHUNK READ TESTS — incremental push creates adjacent chunks
+    // ========================================================================
+
+    void test_cross_chunk_read_spans_two_chunks() {
+        // With incremental push, SSE accumulates multiple adjacent chunks.
+        // Reads that span the boundary between two chunks must succeed.
+        sse::SseConfig cfg = sse::default_config();
+        auto engine = sse::ScrubStretchEngine::Create(cfg);
+
+        int sr = cfg.sample_rate;  // 48000
+        int ch = cfg.channels;     // 2
+
+        // Push chunk A: 24000 frames at time 0 (500ms)
+        int64_t frames_a = 24000;
+        int64_t start_a = 0;
+        std::vector<float> pcm_a(static_cast<size_t>(frames_a * ch), 0.25f);
+        engine->PushSourcePcm(pcm_a.data(), frames_a, start_a);
+
+        // Push chunk B: 24000 frames starting at 500000μs (contiguous)
+        int64_t frames_b = 24000;
+        int64_t start_b = (frames_a * 1000000LL) / sr;  // 500000μs
+        std::vector<float> pcm_b(static_cast<size_t>(frames_b * ch), 0.75f);
+        engine->PushSourcePcm(pcm_b.data(), frames_b, start_b);
+
+        // Seek to just before the boundary: 490000μs = 23520 samples into chunk A
+        // Read 1024 frames — last ~480 from A, first ~544 from B
+        int64_t read_time = 490000;  // 490ms
+        engine->SetTarget(read_time, 1.0f, sse::QualityMode::Q1);
+
+        std::vector<float> output(static_cast<size_t>(1024 * ch));
+        int64_t rendered = engine->Render(output.data(), 1024);
+
+        QCOMPARE(rendered, static_cast<int64_t>(1024));
+        QVERIFY(!engine->Starved());
+
+        // The output should contain samples from BOTH chunks.
+        // Early samples should be ~0.25 (from A), later samples ~0.75 (from B).
+        float early_avg = 0.0f;
+        for (int i = 0; i < 100 * ch; ++i) early_avg += output[i];
+        early_avg /= (100 * ch);
+
+        float late_avg = 0.0f;
+        int late_start = 900 * ch;
+        for (int i = late_start; i < late_start + 100 * ch; ++i) late_avg += output[i];
+        late_avg /= (100 * ch);
+
+        QVERIFY2(early_avg < 0.5f,
+                 qPrintable(QString("Early samples should be from chunk A (~0.25), got %1").arg(early_avg)));
+        QVERIFY2(late_avg > 0.5f,
+                 qPrintable(QString("Late samples should be from chunk B (~0.75), got %1").arg(late_avg)));
+    }
+
+    void test_cross_chunk_many_small_pushes() {
+        // Simulate incremental pump: many small adjacent pushes, verify continuous render
+        sse::SseConfig cfg = sse::default_config();
+        auto engine = sse::ScrubStretchEngine::Create(cfg);
+
+        int ch = cfg.channels;
+
+        // Push 10 chunks of 4800 frames each (100ms each, 1s total)
+        for (int i = 0; i < 10; ++i) {
+            int64_t frames = 4800;
+            int64_t start_us = static_cast<int64_t>(i) * 100000;  // 100ms steps
+            float value = 0.1f * (i + 1);  // 0.1, 0.2, ..., 1.0
+            std::vector<float> pcm(static_cast<size_t>(frames * ch), value);
+            engine->PushSourcePcm(pcm.data(), frames, start_us);
+        }
+
+        engine->SetTarget(0, 1.0f, sse::QualityMode::Q1);
+
+        // Render the full second in 512-frame blocks
+        int total_rendered = 0;
+        int starve_count = 0;
+        std::vector<float> output(512 * ch);
+        for (int i = 0; i < 93; ++i) {  // 93 * 512 = 47616 < 48000
+            int64_t rendered = engine->Render(output.data(), 512);
+            total_rendered += rendered;
+            if (engine->Starved()) starve_count++;
+        }
+
+        QVERIFY2(starve_count == 0,
+                 qPrintable(QString("Starved %1 times during continuous render across chunks").arg(starve_count)));
+        QVERIFY(total_rendered > 40000);  // Should have rendered most of the 1s
+    }
+
+    // ========================================================================
+    // ADVANCE_TIME PRECISION TESTS — truncation drift fix
+    // ========================================================================
+
+    void test_advance_time_no_drift_over_10000_renders() {
+        // Before fix: (512 * 1e6) / 48000 = 10666.667 truncated to 10666
+        // → 0.667μs lost per render → 37.5ms drift over 56250 renders (10 min)
+        // After fix: accumulator preserves remainder → zero drift
+        sse::SseConfig cfg = sse::default_config();
+        auto engine = sse::ScrubStretchEngine::Create(cfg);
+
+        int sr = cfg.sample_rate;  // 48000
+        int ch = cfg.channels;
+
+        // Push enough source data for the test (need ~107s at 48kHz)
+        // Push in 10s chunks to cover the range
+        for (int i = 0; i < 11; ++i) {
+            int64_t chunk_frames = sr * 10;  // 10s
+            int64_t start_us = static_cast<int64_t>(i) * 10000000LL;
+            std::vector<float> pcm(static_cast<size_t>(chunk_frames * ch), 0.5f);
+            engine->PushSourcePcm(pcm.data(), chunk_frames, start_us);
+        }
+
+        engine->SetTarget(0, 1.0f, sse::QualityMode::Q1);
+
+        // Render 10000 blocks of 512 frames
+        constexpr int RENDERS = 10000;
+        constexpr int64_t BLOCK = 512;
+        std::vector<float> output(static_cast<size_t>(BLOCK * ch));
+
+        for (int i = 0; i < RENDERS; ++i) {
+            engine->Render(output.data(), BLOCK);
+        }
+
+        // Expected: exactly (10000 * 512 * 1e6) / 48000 = 106,666,666.667μs
+        // With accumulator: should be 106666666 or 106666667 (±1μs)
+        // Without accumulator: would be 10000 * 10666 = 106,660,000 → 6667μs drift
+        int64_t expected_us = (RENDERS * BLOCK * 1000000LL) / sr;
+        int64_t actual_us = engine->CurrentTimeUS();
+        int64_t drift_us = std::abs(actual_us - expected_us);
+
+        QVERIFY2(drift_us <= 1,
+                 qPrintable(QString("advance_time drift: expected %1μs, got %2μs (drift=%3μs)")
+                     .arg(expected_us).arg(actual_us).arg(drift_us)));
+    }
+
+    void test_advance_time_exact_division_no_drift() {
+        // When output_frames divides evenly into sample_rate, there should
+        // be exactly zero drift (no remainder accumulation needed)
+        sse::SseConfig cfg = sse::default_config();
+        cfg.sample_rate = 48000;
+        auto engine = sse::ScrubStretchEngine::Create(cfg);
+
+        int ch = cfg.channels;
+
+        // Push enough data
+        int64_t total_frames = 48000 * 10;
+        std::vector<float> pcm(static_cast<size_t>(total_frames * ch), 0.5f);
+        engine->PushSourcePcm(pcm.data(), total_frames, 0);
+        engine->SetTarget(0, 1.0f, sse::QualityMode::Q1);
+
+        // 48000 / 480 = 100 (exact division)
+        constexpr int64_t BLOCK = 480;
+        std::vector<float> output(static_cast<size_t>(BLOCK * ch));
+
+        for (int i = 0; i < 1000; ++i) {
+            engine->Render(output.data(), BLOCK);
+        }
+
+        // 1000 * 480 / 48000 * 1e6 = 10,000,000μs exactly
+        int64_t expected = 10000000LL;
+        QCOMPARE(engine->CurrentTimeUS(), expected);
+    }
 };
 
 QTEST_MAIN(TestSSECore)
