@@ -718,6 +718,14 @@ static int lua_emp_tmb_clear_all_clips(lua_State* L) {
     return 0;
 }
 
+// EMP.TMB_CLEAR_OFFLINE(tmb, path)
+static int lua_emp_tmb_clear_offline(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    const char* path = luaL_checkstring(L, 2);
+    tmb->ClearOffline(path);
+    return 0;
+}
+
 // EMP.TMB_SET_PLAYHEAD(tmb, frame, direction, speed)
 static int lua_emp_tmb_set_playhead(lua_State* L) {
     auto tmb = get_tmb(L, 1);
@@ -1747,6 +1755,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "TMB_ADD_CLIPS");
     lua_pushcfunction(L, lua_emp_tmb_clear_all_clips);
     lua_setfield(L, -2, "TMB_CLEAR_ALL_CLIPS");
+    lua_pushcfunction(L, lua_emp_tmb_clear_offline);
+    lua_setfield(L, -2, "TMB_CLEAR_OFFLINE");
     lua_pushcfunction(L, lua_emp_tmb_set_playhead);
     lua_setfield(L, -2, "TMB_SET_PLAYHEAD");
     lua_pushcfunction(L, lua_emp_tmb_get_video_frame);

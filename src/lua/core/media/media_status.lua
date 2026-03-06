@@ -39,6 +39,9 @@ local watched_files = {}
 local fs_available = false
 local FS = nil
 
+-- TMB handle for ClearOffline (set by playback engine init)
+local tmb_handle = nil
+
 local function init_fs()
     if fs_available then return true end
     local ok, qt = pcall(function() return qt_constants end)
@@ -285,6 +288,13 @@ function M.update_from_tmb(media_path, offline, error_code)
     end
 end
 
+--- Set TMB handle for ClearOffline integration.
+-- Called by playback engine init when TMB is created.
+-- @param tmb userdata TMB handle (or nil to clear)
+function M.set_tmb(tmb)
+    tmb_handle = tmb
+end
+
 --- Clear all watches and cache. Called on project_changed.
 function M.clear()
     if fs_available then
@@ -314,6 +324,13 @@ local function reprobe_and_notify(media_path)
         or old.error_code ~= new_status.error_code
 
     if changed then
+        -- File reappeared: purge TMB's offline blacklist so it retries the reader
+        if old and old.offline and not new_status.offline and tmb_handle then
+            local emp_ok, qt = pcall(function() return qt_constants end)
+            if emp_ok and qt and qt.EMP and qt.EMP.TMB_CLEAR_OFFLINE then
+                qt.EMP.TMB_CLEAR_OFFLINE(tmb_handle, media_path)
+            end
+        end
         log.event("media_status changed: %s offline=%s error=%s",
             media_path, tostring(new_status.offline), tostring(new_status.error_code))
         Signals.emit("media_status_changed", media_path, new_status)

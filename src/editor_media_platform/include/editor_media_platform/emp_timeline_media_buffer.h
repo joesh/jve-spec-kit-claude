@@ -111,8 +111,11 @@ public:
     // Transport hint for pre-buffer direction
     void SetPlayhead(int64_t frame, int direction, float speed);
 
-    // Constant-time per-track video access
-    VideoResult GetVideoFrame(TrackId track, int64_t timeline_frame);
+    // Constant-time per-track video access.
+    // cache_only=true: return cached frame or nullptr (no sync decode).
+    // Play path uses cache_only=true — all decode on REFILL workers.
+    // Park/Seek uses cache_only=false — sync decode on caller's thread.
+    VideoResult GetVideoFrame(TrackId track, int64_t timeline_frame, bool cache_only = false);
 
     // Video track IDs with clips loaded, sorted descending (topmost first).
     // Thread-safe: acquires m_tracks_mutex internally.
@@ -149,6 +152,10 @@ public:
     // (TMB cache miss). Reset with ResetVideoCacheMissCount().
     int64_t GetVideoCacheMissCount() const { return m_video_cache_misses.load(); }
     void ResetVideoCacheMissCount() { m_video_cache_misses.store(0); }
+
+    // Remove a path from the offline blacklist (called when FS watcher
+    // detects a previously-missing file has reappeared).
+    void ClearOffline(const std::string& path);
 
     // Stop all background decode work (REFILL workers + pre-buffer jobs).
     // Called on playback stop to release HW decoder sessions immediately.
@@ -397,6 +404,12 @@ private:
     AudioFormat m_audio_mix_fmt{SampleFormat::F32, 0, 0};
     bool m_mix_params_changed = false;
     MixedAudioCache m_mixed_cache;
+
+    // ── Decode speed probing ──
+    // Measured ms-per-frame keyed by media path. Populated by gap-probe
+    // (single decode during gap-skip) and REFILL adaptive stride. Protected
+    // by m_pool_mutex (colocated with reader pool — probing acquires a reader).
+    std::unordered_map<std::string, float> m_decode_ms;
 
     // ── Diagnostics ──
     std::atomic<int64_t> m_video_cache_misses{0};

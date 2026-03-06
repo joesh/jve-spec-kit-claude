@@ -42,12 +42,12 @@ function M.get_video_frame(tmb, video_track_indices, playhead_frame)
             .. "for track=%d frame=%d", track_idx, playhead_frame))
 
         if metadata.offline then
-            -- Feed TMB's error discovery back to media_status for timeline labels
+            -- TMB offline = FileNotFound only. Persist to media_status for timeline labels.
             if metadata.media_path and metadata.media_path ~= "" then
                 media_status.update_from_tmb(
                     metadata.media_path, true, metadata.error_code)
             end
-            -- TMB reports offline: compose offline frame
+            -- Compose offline frame
             local frame = offline_frame_cache.get_frame(metadata)
             assert(frame, string.format(
                 "renderer.get_video_frame: offline_frame_cache.get_frame returned nil "
@@ -58,6 +58,13 @@ function M.get_video_frame(tmb, video_track_indices, playhead_frame)
         end
 
         if frame_handle then
+            -- Clear stale TMB error if one was previously recorded
+            if metadata.media_path and metadata.media_path ~= "" then
+                local cached = media_status.get(metadata.media_path)
+                if cached and cached.offline then
+                    media_status.update_from_tmb(metadata.media_path, false, nil)
+                end
+            end
             return frame_handle, metadata
         end
         -- nil frame + not offline = gap on this track, try next

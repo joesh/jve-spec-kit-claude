@@ -365,7 +365,7 @@ const ClipInfo* TimelineMediaBuffer::find_next_clip_after(const TrackState& ts, 
 // GetVideoFrame
 // ============================================================================
 
-VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_frame) {
+VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_frame, bool cache_only) {
     VideoResult result{};
     result.frame = nullptr;
     result.offline = false;
@@ -432,7 +432,45 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         return result;
     }
 
-    // ── Cache miss: always sync decode (Play, Scrub, Park) ──
+    // ── Cache miss: nearest-frame fallback (cache_only) or sync decode ──
+
+    // During playback (cache_only), REFILL's adaptive stride may have decoded
+    // a nearby frame but not this exact one. Search for the nearest cached
+    // frame from the same clip. O(log n) on ordered map.
+    if (cache_only) {
+        const std::string& cid = clip->clip_id;
+        auto lo = ts.video_cache.lower_bound(timeline_frame);
+        const TrackState::CachedFrame* best = nullptr;
+        int64_t best_dist = INT64_MAX;
+
+        // Check entry at or after timeline_frame
+        if (lo != ts.video_cache.end() && lo->second.clip_id == cid) {
+            int64_t d = lo->first - timeline_frame;
+            if (d < best_dist) { best = &lo->second; best_dist = d; }
+        }
+        // Check entry before timeline_frame
+        if (lo != ts.video_cache.begin()) {
+            auto prev = std::prev(lo);
+            if (prev->second.clip_id == cid) {
+                int64_t d = timeline_frame - prev->first;
+                if (d < best_dist) { best = &prev->second; best_dist = d; }
+            }
+        }
+        if (best) {
+            result.frame = best->frame;
+            result.rotation = best->rotation;
+            result.par_num = best->par_num;
+            result.par_den = best->par_den;
+
+            int dir = m_playhead_direction.load(std::memory_order_relaxed);
+            if (dir != 0) {
+                tracks_lock.unlock();
+                check_video_watermark(track, timeline_frame, dir);
+            }
+            return result;
+        }
+    }
+
     int direction = m_playhead_direction.load(std::memory_order_relaxed);
 
     // Watermark check on cache miss during playback: during cold-start,
@@ -459,20 +497,28 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         }
     }
 
-    // Acquire reader and decode (TMB cache miss → Reader fallback)
+    // Diagnostics: count every cache miss regardless of cache_only
     m_video_cache_misses.fetch_add(1, std::memory_order_relaxed);
+
+    // Play mode: cache-only. All decode on REFILL workers.
+    // Metadata + offline already populated. Skip sync decode.
+    if (cache_only) {
+        return result;
+    }
+
+    // Acquire reader and decode (TMB cache miss → Reader fallback)
     auto reader = acquire_reader(track, clip_id, media_path);
     if (!reader) {
-        // acquire_reader registered the error in m_offline — fetch it
-        result.offline = true;
-        {
-            std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
-            auto err_it = m_offline.find(media_path);
-            if (err_it != m_offline.end()) {
-                result.error_msg = err_it->second.message;
-                result.error_code = error_code_to_string(err_it->second.code);
-            }
+        // Empty ReaderHandle: FileNotFound (in m_offline), codec error (transient),
+        // or reader busy (try_lock failed during Play). Check m_offline to distinguish.
+        std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
+        auto err_it = m_offline.find(media_path);
+        if (err_it != m_offline.end()) {
+            result.offline = true;
+            result.error_msg = err_it->second.message;
+            result.error_code = error_code_to_string(err_it->second.code);
         }
+        // else: transient error or reader busy — frame=nullptr, not offline
         return result;
     }
 
@@ -526,12 +572,12 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
                                      result.rotation, result.par_num, result.par_den};
         }
     } else {
-        // Decode failure: clip exists, reader opened, but frame can't be decoded
-        // (corrupt media, unsupported codec, out-of-range seek). Must set offline
-        // so the renderer shows the offline graphic, not skip to the next track.
-        result.offline = true;
-        result.error_msg = "Decode failed for " + media_path;
-        result.error_code = error_code_to_string(ErrorCode::DecodeFailed);
+        // Decode failure: file exists, reader works, but this frame couldn't be
+        // decoded (corrupt frame, seek failure, codec glitch, slow SW decode).
+        // NOT offline — return frame=nullptr so caller holds last frame or shows
+        // gap. Transient: next frame or next seek may succeed.
+        result.error_msg = decode_result.error().message;
+        result.error_code = error_code_to_string(decode_result.error().code);
     }
 
     return result;
@@ -1048,10 +1094,20 @@ void TimelineMediaBuffer::submit_video_refill(TrackId track, int64_t playhead, i
         gen = ts.refill_generation;
     }
 
-    // Compute refill range: [buffer_end, buffer_end + REFILL_SIZE], clamped to HIGH_WATER
+    // Compute refill range: [refill_from, refill_from + REFILL_SIZE], clamped to HIGH_WATER.
+    // When playhead outruns buffer_end (slow codec), skip ahead to playhead —
+    // frames behind the playhead are already consumed, decoding them is waste.
     int64_t refill_from, max_end;
     if (direction > 0) {
-        refill_from = buffer_end;
+        refill_from = std::max(buffer_end, playhead);
+        if (refill_from > buffer_end) {
+            // Advance buffer_end so watermark doesn't re-trigger every tick
+            std::lock_guard<std::mutex> lock(m_tracks_mutex);
+            auto it = m_tracks.find(track);
+            if (it != m_tracks.end() && refill_from > it->second.video_buffer_end) {
+                it->second.video_buffer_end = refill_from;
+            }
+        }
         max_end = playhead + VIDEO_HIGH_WATER;
     } else {
         // Reverse: fill backwards from buffer_end
@@ -1625,6 +1681,11 @@ void TimelineMediaBuffer::ReleaseAll() {
     }
 }
 
+void TimelineMediaBuffer::ClearOffline(const std::string& path) {
+    std::lock_guard<std::mutex> lock(m_pool_mutex);
+    m_offline.erase(path);
+}
+
 // ============================================================================
 // Reader pool — LRU with per-(track, path) isolation
 // ============================================================================
@@ -1654,21 +1715,24 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
     }
 
     // Phase 2 (NO lock ~86ms on external drives): MediaFile::Open + Reader::Create
-    // NSF-ACCEPT: Failed opens register in m_offline to prevent repeated
-    // open attempts on the same path. Callers (GetVideoFrame, GetTrackAudio)
-    // check the empty ReaderHandle and return offline/nullptr to Lua.
+    // Only FileNotFound errors register in m_offline (permanent blacklist until
+    // ClearOffline). Other errors (Unsupported, Internal) are per-attempt — the
+    // path is NOT blacklisted so TMB retries on next access (codec install, etc.).
     auto mf_result = MediaFile::Open(path);
     if (mf_result.is_error()) {
-        std::lock_guard<std::mutex> lock(m_pool_mutex);
-        m_offline[path] = mf_result.error();
+        if (mf_result.error().code == ErrorCode::FileNotFound) {
+            std::lock_guard<std::mutex> lock(m_pool_mutex);
+            m_offline[path] = mf_result.error();
+        }
         return ReaderHandle{};
     }
     auto mf = mf_result.value();
 
     auto reader_result = Reader::Create(mf);
     if (reader_result.is_error()) {
-        std::lock_guard<std::mutex> lock(m_pool_mutex);
-        m_offline[path] = reader_result.error();
+        // Reader creation failure (unsupported codec, decoder init error) is NOT
+        // permanent — don't blacklist. Caller gets empty ReaderHandle; next access
+        // retries. Cost: avcodec_find_decoder = microseconds.
         return ReaderHandle{};
     }
 
@@ -1822,10 +1886,17 @@ void TimelineMediaBuffer::submit_pre_buffer(const PreBufferJob& job) {
         // Stale generation in-flight → allow new REFILL through
     }
 
-    for (const auto& j : m_jobs) {
+    for (auto& j : m_jobs) {
         if (is_refill) {
             if (j.track == job.track && j.type == job.type &&
-                j.generation == job.generation) return;
+                j.generation == job.generation) {
+                // Update queued REFILL with latest start position (playhead chase).
+                // The old start may be behind the playhead; decoding those frames
+                // would be wasted work.
+                j.refill_from_frame = job.refill_from_frame;
+                j.refill_count = job.refill_count;
+                return;
+            }
         } else {
             if (j.track == job.track && j.clip_id == job.clip_id &&
                 j.type == job.type) return;
@@ -1849,15 +1920,24 @@ void TimelineMediaBuffer::worker_loop() {
             if (m_shutdown.load()) break;
             if (m_jobs.empty()) continue;
 
-            // Audio-priority: prefer AUDIO_REFILL over VIDEO_REFILL/WARM.
-            // Scan backward (newest first) for any audio job. Without this,
-            // LIFO lets video REFILL jobs (6+ seconds each for slow codecs)
-            // starve audio REFILL indefinitely.
+            // Priority pick: AUDIO_REFILL > VIDEO_REFILL > WARM/other.
+            // Within each tier, newest-first (scan backward). Without priority,
+            // LIFO lets WARM jobs starve REFILL when many clips trigger warmup.
             int pick = static_cast<int>(m_jobs.size()) - 1;
+            bool found_priority = false;
             for (int i = static_cast<int>(m_jobs.size()) - 1; i >= 0; --i) {
                 if (m_jobs[i].type == PreBufferJob::AUDIO_REFILL) {
                     pick = i;
+                    found_priority = true;
                     break;
+                }
+            }
+            if (!found_priority) {
+                for (int i = static_cast<int>(m_jobs.size()) - 1; i >= 0; --i) {
+                    if (m_jobs[i].type == PreBufferJob::VIDEO_REFILL) {
+                        pick = i;
+                        break;
+                    }
                 }
             }
             assert(pick >= 0 && pick < static_cast<int>(m_jobs.size())
@@ -1898,6 +1978,11 @@ void TimelineMediaBuffer::worker_loop() {
                 int32_t rate_num = 0, rate_den = 1;
                 float speed_ratio = 1.0f;
                 bool is_gap = false;
+                // Gap probe: populated under tracks_lock, decoded after release
+                bool do_probe = false;
+                std::string probe_path, probe_clip_id;
+                int64_t probe_tf = 0, probe_src = 0;
+                int32_t probe_rn = 0, probe_rd = 1;
                 {
                     std::lock_guard<std::mutex> tlock(m_tracks_mutex);
                     auto tit = m_tracks.find(job.track);
@@ -1919,6 +2004,18 @@ void TimelineMediaBuffer::worker_loop() {
                                 tit->second.video_buffer_end = next->timeline_start;
                             }
                             int64_t skip = next->timeline_start - tf;
+
+                            // Prepare probe: decode ONE frame of the upcoming clip
+                            // after releasing tracks_lock. Seeds the cache and
+                            // records decode speed per media path.
+                            do_probe = true;
+                            probe_path = next->media_path;
+                            probe_clip_id = next->clip_id;
+                            probe_tf = next->timeline_start;
+                            probe_src = next->source_in;
+                            probe_rn = next->rate_num;
+                            probe_rd = next->rate_den;
+
                             i += static_cast<int>(skip - 1); // for-loop will ++i
                         } else {
                             // No more clips ahead — advance to end of refill range
@@ -1944,6 +2041,48 @@ void TimelineMediaBuffer::worker_loop() {
                     // Release held reader on gap (clip boundary)
                     held_reader = {};
                     held_clip_id.clear();
+
+                    // Gap probe: decode one frame of the upcoming clip to seed the
+                    // cache and learn decode speed. Done outside tracks_lock.
+                    if (do_probe) {
+                        auto probe_reader = acquire_reader(job.track, probe_clip_id, probe_path);
+                        if (probe_reader) {
+                            const auto& pinfo = probe_reader->media_file()->info();
+                            int64_t file_frame = probe_src - pinfo.start_tc;
+                            Rate probe_rate{probe_rn, probe_rd};
+                            FrameTime pft = FrameTime::from_frame(file_frame, probe_rate);
+
+                            auto pt0 = std::chrono::steady_clock::now();
+                            auto presult = probe_reader->DecodeAt(pft);
+                            float probe_ms = std::chrono::duration<float, std::milli>(
+                                std::chrono::steady_clock::now() - pt0).count();
+
+                            // Record decode speed per media path
+                            {
+                                std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
+                                m_decode_ms[probe_path] = probe_ms;
+                            }
+
+                            if (presult.is_ok()) {
+                                std::lock_guard<std::mutex> tlock(m_tracks_mutex);
+                                auto tit2 = m_tracks.find(job.track);
+                                if (tit2 != m_tracks.end() &&
+                                    tit2->second.refill_generation == job.generation) {
+                                    auto& cache = tit2->second.video_cache;
+                                    while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
+                                        cache.erase(cache.begin());
+                                    }
+                                    cache[probe_tf] = {probe_clip_id, probe_src, presult.value(),
+                                                       pinfo.rotation, pinfo.video_par_num, pinfo.video_par_den};
+                                }
+                            }
+
+                            char tbuf[8]; track_str(job.track, tbuf, sizeof(tbuf));
+                            EMP_LOG_WARN("GAP PROBE: %s clip=%.8s decode=%.1fms",
+                                tbuf, probe_clip_id.c_str(), probe_ms);
+                        }
+                    }
+
                     continue;
                 }
 
@@ -1965,7 +2104,11 @@ void TimelineMediaBuffer::worker_loop() {
                 Rate clip_rate{rate_num, rate_den};
                 FrameTime ft = FrameTime::from_frame(file_frame, clip_rate);
 
+                auto decode_t0 = std::chrono::steady_clock::now();
                 auto result = held_reader->DecodeAt(ft);
+                float decode_ms = std::chrono::duration<float, std::milli>(
+                    std::chrono::steady_clock::now() - decode_t0).count();
+
                 if (result.is_ok()) {
                     last_good_frame = result.value();
                     last_good_source_frame = source_frame;
@@ -1976,12 +2119,43 @@ void TimelineMediaBuffer::worker_loop() {
                         while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
                             cache.erase(cache.begin());
                         }
-                        cache[tf] = {clip_id, source_frame, result.value(),
-                                     info.rotation, info.video_par_num, info.video_par_den};
+                        TrackState::CachedFrame cf{clip_id, source_frame, result.value(),
+                                       info.rotation, info.video_par_num, info.video_par_den};
+                        cache[tf] = cf;
                         // Use max() to avoid regressing watermark when on-demand
                         // has already advanced it past this REFILL's range.
                         if (tf + 1 > tit->second.video_buffer_end) {
                             tit->second.video_buffer_end = tf + 1;
+                        }
+
+                        // Adaptive stride: when decode is slower than real-time,
+                        // skip frames so REFILL buffer advances ahead of playhead.
+                        // Self-correcting: fast codec → skip=0, slow → proportional skip.
+                        // Populate cache at ALL skipped positions so deliverFrame
+                        // (cache_only) hits on any frame in the stride interval.
+                        double frame_period_ms = 1000.0 * rate_den / rate_num;
+                        if (decode_ms > frame_period_ms * 1.5) {
+                            int skip = std::min(
+                                static_cast<int>(std::ceil(decode_ms / frame_period_ms)) - 1, 7);
+                            assert(skip >= 1 && "adaptive stride: skip must be >= 1 when decode > 1.5x frame period");
+
+                            // Fill skipped positions with same decoded frame.
+                            // AVFrame is ref-counted — shared_ptr copies are cheap.
+                            for (int s = 1; s <= skip; ++s) {
+                                int64_t fill_tf = tf + s;
+                                // Stop at clip boundary
+                                if (fill_tf >= timeline_start + clip_duration) break;
+                                while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
+                                    cache.erase(cache.begin());
+                                }
+                                cache[fill_tf] = cf;
+                            }
+
+                            int64_t skip_end = tf + skip + 1;
+                            if (skip_end > tit->second.video_buffer_end) {
+                                tit->second.video_buffer_end = skip_end;
+                            }
+                            i += skip;  // for-loop will ++i
                         }
                     }
                     frames_decoded++;

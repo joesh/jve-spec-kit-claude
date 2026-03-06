@@ -3370,6 +3370,187 @@ private slots:
         QVERIFY2(r2->frames() > 0,
                  "Audio must have actual samples after AddClips");
     }
+
+    // ── cache_only parameter (NSF audit) ──
+
+    void test_cache_only_miss_returns_metadata_no_frame() {
+        // cache_only=true on uncached frame: must return clip metadata
+        // (clip_id, media_path, source_frame, fps, timeline range) but
+        // frame=nullptr. Postcondition: caller can detect clip presence
+        // without blocking on decode.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        auto path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Play mode (cache cold, no prior decode)
+        tmb->SetPlayhead(0, 1, 1.0f);
+        auto r = tmb->GetVideoFrame(V1, 50, /*cache_only=*/true);
+
+        // Half 2 postconditions: metadata populated, frame absent
+        QVERIFY2(r.frame == nullptr,
+                 "cache_only=true must not sync-decode on miss");
+        QCOMPARE(r.clip_id, std::string("clipA"));
+        QCOMPARE(r.media_path, path);
+        QCOMPARE(r.source_frame, (int64_t)50);
+        QCOMPARE(r.clip_fps_num, (int32_t)24);
+        QCOMPARE(r.clip_fps_den, (int32_t)1);
+        QCOMPARE(r.clip_start_frame, (int64_t)0);
+        QCOMPARE(r.clip_end_frame, (int64_t)100);
+        QVERIFY2(!r.offline,
+                 "cache_only miss must not report offline for valid path");
+    }
+
+    void test_cache_only_hit_returns_frame() {
+        // cache_only=true on cached frame: must return the cached frame.
+        // Prime cache with cache_only=false (park), then hit with true.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        auto path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Park: sync-decode frame 10 (primes cache)
+        tmb->SetPlayhead(10, 0, 0.0f);
+        auto r_park = tmb->GetVideoFrame(V1, 10, /*cache_only=*/false);
+        QVERIFY(r_park.frame != nullptr);
+
+        // cache_only=true on the same frame: cache hit
+        auto r_hit = tmb->GetVideoFrame(V1, 10, /*cache_only=*/true);
+        QVERIFY2(r_hit.frame != nullptr,
+                 "cache_only=true must return cached frame on hit");
+        QCOMPARE(r_hit.clip_id, std::string("clipA"));
+        QCOMPARE(r_hit.source_frame, (int64_t)10);
+    }
+
+    void test_cache_only_miss_surfaces_offline() {
+        // cache_only=true on offline clip: must still report offline=true.
+        // This is critical — the MEDIA OFFLINE overlay depends on it.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        auto valid_path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", valid_path, 0, 50, 0, 24, 1, 1.0f},
+            {"clipB", "/nonexistent/offline.mp4", 50, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Park-decode clipA to register clipB's path as offline
+        tmb->SetPlayhead(0, 0, 0.0f);
+        tmb->GetVideoFrame(V1, 0, false);
+
+        // Force offline registration by probing clipB in park mode
+        tmb->SetPlayhead(50, 0, 0.0f);
+        auto r_park = tmb->GetVideoFrame(V1, 55, false);
+        QVERIFY(r_park.offline);
+
+        // cache_only=true must still surface offline
+        auto r = tmb->GetVideoFrame(V1, 55, /*cache_only=*/true);
+        QVERIFY2(r.offline,
+                 "cache_only=true must surface offline for known-offline clips");
+        QVERIFY2(!r.error_msg.empty(),
+                 "offline result must include error message");
+        QVERIFY2(!r.error_code.empty(),
+                 "offline result must include error code");
+    }
+
+    void test_cache_only_miss_increments_counter() {
+        // Diagnostics: cache miss count must increment even in cache_only mode.
+        // Without this, monitoring tools can't detect decode backlog.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        auto path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+        tmb->SetPlayhead(0, 1, 1.0f);
+
+        tmb->ResetVideoCacheMissCount();
+        QCOMPARE(tmb->GetVideoCacheMissCount(), (int64_t)0);
+
+        // cache_only=true miss
+        tmb->GetVideoFrame(V1, 50, /*cache_only=*/true);
+        QVERIFY2(tmb->GetVideoCacheMissCount() >= 1,
+                 "cache_only miss must increment video cache miss counter");
+    }
+
+    void test_cache_only_gap_returns_empty() {
+        // cache_only=true at a gap (no clip): must return empty result
+        // (same as cache_only=false at gap).
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        std::vector<ClipInfo> clips = {};
+        tmb->SetTrackClips(V1, clips);
+        tmb->SetPlayhead(0, 1, 1.0f);
+
+        auto r = tmb->GetVideoFrame(V1, 50, /*cache_only=*/true);
+        QVERIFY(r.frame == nullptr);
+        QVERIFY(r.clip_id.empty());
+        QVERIFY(!r.offline);
+    }
+
+    void test_cache_only_false_still_sync_decodes() {
+        // Regression: cache_only=false (default) must still sync-decode.
+        // Ensures the parameter didn't break park/seek path.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        auto path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Play mode, cache cold, cache_only=false → must sync-decode
+        tmb->SetPlayhead(0, 1, 1.0f);
+        auto r = tmb->GetVideoFrame(V1, 30, /*cache_only=*/false);
+        QVERIFY2(r.frame != nullptr,
+                 "cache_only=false must sync-decode on cache miss (regression)");
+    }
+
+    void test_cache_only_timing_no_blocking() {
+        // BLACK-BOX TIMING: cache_only=true must return in <1ms (no decode).
+        // If it blocks (sync decode leak), this test catches it.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        auto path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+        tmb->SetPlayhead(0, 1, 1.0f);
+
+        // Measure 10 consecutive cache_only=true calls (all misses)
+        auto t0 = std::chrono::steady_clock::now();
+        for (int64_t f = 0; f < 10; ++f) {
+            tmb->GetVideoFrame(V1, f, /*cache_only=*/true);
+        }
+        float total_ms = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+
+        // 10 cache-only calls should complete in under 50ms total.
+        // A single sync decode takes 5-150ms. If any leaked, this fails.
+        QVERIFY2(total_ms < 50.0f,
+                 qPrintable(QString("cache_only=true took %1ms for 10 calls — "
+                                    "sync decode leak?").arg(total_ms)));
+    }
 };
 
 QTEST_MAIN(TestTimelineMediaBuffer)

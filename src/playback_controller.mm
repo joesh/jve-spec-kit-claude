@@ -546,7 +546,7 @@ void PlaybackController::prefillVideo(int64_t pos, int /*direction*/) {
     int filled = 0;
     for (int track_idx : video_tracks) {
         emp::TrackId track{emp::TrackType::Video, track_idx};
-        auto result = m_tmb->GetVideoFrame(track, pos);
+        auto result = m_tmb->GetVideoFrame(track, pos, /*cache_only=*/false);
         if (result.frame) ++filled;
         // offline/gap is expected (no clip on this track at pos) — not an error
     }
@@ -1485,13 +1485,16 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
         return;
     }
 
-    // Query tracks top-to-bottom
+    // Query tracks top-to-bottom. Topmost clip always occludes — if V2 has a
+    // clip at this frame, V1 is never visible regardless of cache state.
+    // Cache miss during playback → hold last frame (no new setFrame call).
     emp::VideoResult result;
     bool found_frame = false;
     for (int track_idx : video_tracks) {
         emp::TrackId track{emp::TrackType::Video, track_idx};
-        result = m_tmb->GetVideoFrame(track, frame);
-        if (result.frame || !result.clip_id.empty()) {
+        auto r = m_tmb->GetVideoFrame(track, frame, /*cache_only=*/!synchronous);
+        if (r.frame || r.offline || !r.clip_id.empty()) {
+            result = r;
             found_frame = true;
             break;
         }
@@ -1508,8 +1511,12 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
         return;
     }
 
-    // Clip transition → fire callback with metadata for rotation/PAR
-    if (result.clip_id != m_current_clip_id) {
+    // Clip transition → fire callback with metadata for rotation/PAR.
+    // Defer when async cache miss (frame=nullptr, not offline): rotation/PAR
+    // aren't populated on cache_only path. Callback fires when REFILL delivers
+    // the first cached frame of the new clip.
+    bool has_clip_data = result.frame || result.offline || synchronous;
+    if (result.clip_id != m_current_clip_id && has_clip_data) {
         m_current_clip_id = result.clip_id;
         if (m_current_tick) m_current_tick->flags |= TickFlags::TRANSITION;
 
