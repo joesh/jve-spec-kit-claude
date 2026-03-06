@@ -267,8 +267,11 @@ public:
         // QIODevice::readData and CoreAudio submission — audio sits here before
         // the OS mixer/driver receives it.
         qsizetype buf_bytes = m_sink->bufferSize();
+        assert(buf_bytes > 0 && "AOP::start: QAudioSink::bufferSize() returned 0 after start()");
         int64_t buf_frames = buf_bytes / (m_channels * static_cast<int>(sizeof(float)));
         m_sink_buffer_us = (buf_frames * 1000000LL) / m_sample_rate;
+        assert(m_sink_buffer_us > 0 && m_sink_buffer_us <= 500000 &&
+            "AOP::start: sink buffer latency out of sane range [>0, 500ms]");
     }
 
     void stop() {

@@ -206,7 +206,21 @@ void PlaybackClock::MeasureOutputLatency(uint32_t /*device_id*/, int32_t sample_
 }
 
 void PlaybackClock::SetSinkBufferLatency(int64_t sink_us) {
+    {
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+            "SetSinkBufferLatency: sink_us=%lld out of sane range [0, 500ms]",
+            (long long)sink_us);
+        JVE_ASSERT(sink_us >= 0 && sink_us <= 500000, buf);
+    }
     int64_t total = m_device_latency_us + sink_us;
+    {
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+            "SetSinkBufferLatency: total=%lldus (device=%lld + sink=%lld) out of sane range [1ms, 1s]",
+            (long long)total, (long long)m_device_latency_us, (long long)sink_us);
+        JVE_ASSERT(total >= 1000 && total <= 1000000, buf);
+    }
     m_output_latency_us.store(total, std::memory_order_relaxed);
     JVE_LOG_EVENT(Audio, "SetSinkBufferLatency: sink=%lldus device=%lldus total=%lldus",
                   (long long)sink_us, (long long)m_device_latency_us, (long long)total);

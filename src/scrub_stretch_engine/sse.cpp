@@ -495,10 +495,14 @@ private:
     // ── Time advancement ──
 
     void advance_time(int64_t output_frames) {
+        assert(output_frames >= 0 && output_frames <= MAX_OUTPUT_FRAMES &&
+            "advance_time: output_frames out of range");
         int64_t time_advance_us = (output_frames * 1000000LL) / m_config.sample_rate;
         time_advance_us = static_cast<int64_t>(time_advance_us * m_speed);
         m_current_time_us += time_advance_us;
     }
+
+    static constexpr int64_t MAX_OUTPUT_FRAMES = 65536;  // >1s at 48kHz — sane upper bound
 
     // ── Utilities ──
 

@@ -980,12 +980,29 @@ function PlaybackEngine:_configure_and_start_audio()
                 audio_playback.session_channels)
         end
     else
-        log.event("_configure_and_start_audio: cannot activate (pc=%s ap=%s init=%s aop=%s sse=%s)",
-            tostring(self._playback_controller ~= nil),
-            tostring(audio_playback ~= nil),
-            tostring(audio_playback and audio_playback.session_initialized),
-            tostring(audio_playback and audio_playback.aop ~= nil),
-            tostring(audio_playback and audio_playback.sse ~= nil))
+        -- If C++ PlaybackController exists AND audio session fully initialized
+        -- (aop+sse present) but we still couldn't ACTIVATE_AUDIO, that's a
+        -- broken invariant — C++ won't know about audio, pump never starts.
+        local has_full_audio = audio_playback
+            and audio_playback.session_initialized
+            and audio_playback.aop
+            and audio_playback.sse
+        if self._playback_controller and has_full_audio then
+            assert(false, string.format(
+                "PlaybackEngine:_configure_and_start_audio: "
+                .. "audio fully initialized but ACTIVATE_AUDIO unreachable "
+                .. "(pc=%s aop=%s sse=%s)",
+                tostring(self._playback_controller),
+                tostring(audio_playback.aop),
+                tostring(audio_playback.sse)))
+        else
+            log.event("_configure_and_start_audio: cannot activate (pc=%s ap=%s init=%s aop=%s sse=%s)",
+                tostring(self._playback_controller ~= nil),
+                tostring(audio_playback ~= nil),
+                tostring(audio_playback and audio_playback.session_initialized),
+                tostring(audio_playback and audio_playback.aop ~= nil),
+                tostring(audio_playback and audio_playback.sse ~= nil))
+        end
     end
 
     self:_start_audio()
@@ -1098,7 +1115,8 @@ end
 -- position-dependent clip lookup autonomously via GetTrackAudio.
 function PlaybackEngine:_push_all_audio_mix_params()
     if not (audio_playback and audio_playback.session_initialized) then return end
-    if not self._tmb then return end
+    assert(self._tmb,
+        "PlaybackEngine:_push_all_audio_mix_params: TMB is nil (session initialized but TMB not set)")
     assert(self.sequence,
         "PlaybackEngine:_push_all_audio_mix_params: no sequence loaded")
 
