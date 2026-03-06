@@ -73,6 +73,10 @@ public:
     void SetVolume(float volume);
     float Volume() const;
 
+    // QAudioSink internal buffer latency in microseconds.
+    // Valid after Start(); returns 0 before first Start().
+    int64_t SinkBufferUS() const;
+
     // Internal constructor (public but impl is opaque)
     explicit AudioOutput(std::unique_ptr<AudioOutputImpl> impl);
 

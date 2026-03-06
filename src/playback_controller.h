@@ -139,13 +139,19 @@ public:
     float Speed() const { return m_speed.load(std::memory_order_relaxed); }
     int64_t OutputLatencyUS() const { return m_output_latency_us.load(std::memory_order_relaxed); }
 
+    // Set the QAudioSink buffer latency (call after each AOP Start).
+    // Total output latency = CoreAudio device latency + sink buffer.
+    void SetSinkBufferLatency(int64_t sink_us);
+
 private:
     std::atomic<int64_t> m_media_anchor_us{0};   // Media time at last reanchor
     std::atomic<int64_t> m_aop_epoch_us{0};      // AOP playhead at last reanchor
     std::atomic<float> m_speed{1.0f};            // Signed speed (negative = reverse)
 
-    // Audio output latency (measured or default)
+    // Total audio output latency = device_latency + sink_buffer
     std::atomic<int64_t> m_output_latency_us{DEFAULT_LATENCY_US};
+    // CoreAudio device latency (measured once in MeasureOutputLatency)
+    int64_t m_device_latency_us{DEFAULT_LATENCY_US};
 
     // Default fallback (conservative estimate: OS mixer + driver + DAC)
     static constexpr int64_t DEFAULT_LATENCY_US = 150000;  // 150ms

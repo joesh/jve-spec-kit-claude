@@ -198,10 +198,18 @@ void PlaybackClock::MeasureOutputLatency(uint32_t /*device_id*/, int32_t sample_
         JVE_ASSERT(latency_us >= 1000 && latency_us <= 500000, buf);
     }
 
+    m_device_latency_us = latency_us;
     m_output_latency_us.store(latency_us, std::memory_order_relaxed);
     JVE_LOG_EVENT(Audio, "MeasureOutputLatency: device=%u → %lldus (latency=%u + safety=%u frames @ %dHz)",
                   static_cast<unsigned>(device), static_cast<long long>(latency_us),
                   latency_frames, safety_frames, sample_rate);
+}
+
+void PlaybackClock::SetSinkBufferLatency(int64_t sink_us) {
+    int64_t total = m_device_latency_us + sink_us;
+    m_output_latency_us.store(total, std::memory_order_relaxed);
+    JVE_LOG_EVENT(Audio, "SetSinkBufferLatency: sink=%lldus device=%lldus total=%lldus",
+                  (long long)sink_us, (long long)m_device_latency_us, (long long)total);
 }
 
 int64_t PlaybackClock::FrameFromTimeUS(int64_t time_us, int32_t fps_num, int32_t fps_den) {
@@ -615,6 +623,14 @@ void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
 
     // Start audio output — ring buffer has decoded audio (or is empty at gaps).
     m_aop->Start();
+
+    // Add QAudioSink's internal buffer to output latency. MeasureOutputLatency
+    // (called in ActivateAudio) measured CoreAudio device + safety offset, but
+    // missed the Qt-level buffer between QIODevice::readData and CoreAudio
+    // submission. Without this, video runs ahead by sink_buffer_us → audio
+    // sounds late by ~2-4 frames.
+    m_clock.SetSinkBufferLatency(m_aop->SinkBufferUS());
+
     JVE_LOG_DETAIL(Audio, "Play: post-start aop_ph=%lldus media_anchor=%lldus",
                   (long long)aop_playhead, (long long)time_us);
 

@@ -261,6 +261,14 @@ public:
         m_io_device.open(QIODevice::ReadOnly);
         m_sink->start(&m_io_device);
         m_playing = true;
+
+        // Measure QAudioSink's internal buffer latency. bufferSize() returns
+        // the actual buffer after start(). This is the pipeline between our
+        // QIODevice::readData and CoreAudio submission — audio sits here before
+        // the OS mixer/driver receives it.
+        qsizetype buf_bytes = m_sink->bufferSize();
+        int64_t buf_frames = buf_bytes / (m_channels * static_cast<int>(sizeof(float)));
+        m_sink_buffer_us = (buf_frames * 1000000LL) / m_sample_rate;
     }
 
     void stop() {
@@ -319,10 +327,9 @@ public:
     }
 
     int64_t latency_frames() const {
-        // Ring buffer frames + estimated device buffer
-        int64_t device_latency_us = m_sink ? m_sink->elapsedUSecs() : 0;
-        int64_t device_frames = (device_latency_us * m_sample_rate) / 1000000;
-        return m_ring_buffer.available_frames() + device_frames;
+        // Ring buffer frames + QAudioSink internal buffer
+        int64_t sink_frames = (m_sink_buffer_us * m_sample_rate) / 1000000;
+        return m_ring_buffer.available_frames() + sink_frames;
     }
 
     bool had_underrun() const {
@@ -341,6 +348,8 @@ public:
         return m_sink ? static_cast<float>(m_sink->volume()) : 1.0f;
     }
 
+    int64_t sink_buffer_us() const { return m_sink_buffer_us; }
+
     int sample_rate() const { return m_sample_rate; }
     int channels() const { return m_channels; }
 
@@ -353,6 +362,7 @@ private:
     QAudioFormat m_format;
     std::unique_ptr<QAudioSink> m_sink;
     bool m_playing;
+    int64_t m_sink_buffer_us{0};
 };
 
 // AudioOutput implementation
@@ -445,6 +455,10 @@ void AudioOutput::SetVolume(float volume) {
 
 float AudioOutput::Volume() const {
     return m_impl->volume();
+}
+
+int64_t AudioOutput::SinkBufferUS() const {
+    return m_impl->sink_buffer_us();
 }
 
 } // namespace aop
