@@ -1,10 +1,10 @@
-require("test_env")
+local test_env = require("test_env")
 
 -- Test that DRP importer parses folders and master clips from MediaPool
 
 local drp_importer = require("importers.drp_importer")
 
-local DRP_PATH = "fixtures/resolve/sample_project.drp"
+local DRP_PATH = test_env.resolve_repo_path("tests/fixtures/resolve/sample_project.drp")
 
 -- Check fixture exists
 local f = io.open(DRP_PATH, "r")

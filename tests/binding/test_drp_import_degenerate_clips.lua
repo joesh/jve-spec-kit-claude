@@ -1,4 +1,4 @@
-require("test_env")
+local test_env = require("test_env")
 
 -- Regression tests: DRP import must handle degenerate data from real Resolve projects.
 --
@@ -10,7 +10,7 @@ require("test_env")
 
 local drp_importer = require("importers.drp_importer")
 
-local DRP_PATH = "fixtures/resolve/sample_project_zero_duration.drp"
+local DRP_PATH = test_env.resolve_repo_path("tests/fixtures/resolve/sample_project_zero_duration.drp")
 
 -- Check fixture exists
 local f = io.open(DRP_PATH, "r")

@@ -47,37 +47,13 @@ local function parse_time_frames(time_str, frame_rate)
     return 0
 end
 
-local function collect_children(node)
-    local result = {}
-    if not node then
-        return result
-    end
-    for child in node:children() do
-        table.insert(result, child)
-    end
-    return result
-end
-
 local function get_attr(node, name)
     if not node or not name then
         return nil
     end
-
-    local ok, value = pcall(function()
-        return node:attr(name)
-    end)
-    if ok and value and value ~= "" then
-        return value
+    if node.attrs and node.attrs[name] and node.attrs[name] ~= "" then
+        return node.attrs[name]
     end
-
-    local attrs = node.attr or node.attrs
-    if type(attrs) == "table" then
-        local attr_value = attrs[name]
-        if attr_value and attr_value ~= "" then
-            return attr_value
-        end
-    end
-
     return nil
 end
 
@@ -104,11 +80,11 @@ local function extract_frame_rate(timebase_node)
     local ntsc = false
     local base_rate = 30.0
 
-    for child in timebase_node:children() do
-        if child:name() == "ntsc" then
-            ntsc = (child:text():upper() == "TRUE")
-        elseif child:name() == "timebase" then
-            base_rate = tonumber(child:text()) or 30.0
+    for _, child in ipairs(timebase_node.children or {}) do
+        if child.tag == "ntsc" then
+            ntsc = (child.text:upper() == "TRUE")
+        elseif child.tag == "timebase" then
+            base_rate = tonumber(child.text) or 30.0
         end
     end
 
@@ -136,46 +112,39 @@ local function parse_file(file_node, frame_rate)
         is_compound = false,  -- True if contains nested sequence (compound clip)
     }
 
-    local children = collect_children(file_node)
-    for _, child in ipairs(children) do
-        local name = child:name()
+    for _, child in ipairs(file_node.children or {}) do
+        local name = child.tag
 
         if name == "id" then
-            media_info.id = child:text()
+            media_info.id = child.text
         elseif name == "name" then
-            media_info.name = child:text()
+            media_info.name = child.text
         elseif name == "pathurl" then
-            media_info.path = decode_url(child:text())
+            media_info.path = decode_url(child.text)
         elseif name == "duration" then
-            media_info.duration = parse_time_frames(child:text(), frame_rate)
+            media_info.duration = parse_time_frames(child.text, frame_rate)
         elseif name == "rate" then
             media_info.frame_rate = extract_frame_rate(child)
         elseif name == "media" then
-            -- Parse video/audio characteristics and detect compound clips
-            local media_children = collect_children(child)
-            for _, media_child in ipairs(media_children) do
-                if media_child:name() == "sequence" then
-                    -- Nested sequence = compound clip
+            for _, media_child in ipairs(child.children or {}) do
+                if media_child.tag == "sequence" then
                     media_info.is_compound = true
-                elseif media_child:name() == "video" then
-                    local video_children = collect_children(media_child)
-                    for _, video_child in ipairs(video_children) do
-                        if video_child:name() == "samplecharacteristics" then
-                            local char_children = collect_children(video_child)
-                            for _, char_child in ipairs(char_children) do
-                                if char_child:name() == "width" then
-                                    media_info.width = tonumber(char_child:text()) or 1920
-                                elseif char_child:name() == "height" then
-                                    media_info.height = tonumber(char_child:text()) or 1080
+                elseif media_child.tag == "video" then
+                    for _, video_child in ipairs(media_child.children or {}) do
+                        if video_child.tag == "samplecharacteristics" then
+                            for _, char_child in ipairs(video_child.children or {}) do
+                                if char_child.tag == "width" then
+                                    media_info.width = tonumber(char_child.text) or 1920
+                                elseif char_child.tag == "height" then
+                                    media_info.height = tonumber(char_child.text) or 1080
                                 end
                             end
                         end
                     end
-                elseif media_child:name() == "audio" then
-                    local audio_children = collect_children(media_child)
-                    for _, audio_child in ipairs(audio_children) do
-                        if audio_child:name() == "channelcount" then
-                            media_info.audio_channels = tonumber(audio_child:text()) or 0
+                elseif media_child.tag == "audio" then
+                    for _, audio_child in ipairs(media_child.children or {}) do
+                        if audio_child.tag == "channelcount" then
+                            media_info.audio_channels = tonumber(audio_child.text) or 0
                         end
                     end
                 end
@@ -214,10 +183,10 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
         raw_duration = nil
     }
 
-    local children = collect_children(clipitem_node)
+    local children = clipitem_node.children or {}
 
     for _, child in ipairs(children) do
-        if child:name() == "rate" then
+        if child.tag == "rate" then
             local clip_rate = extract_frame_rate(child)
             if clip_rate and clip_rate > 0 then
                 clip_info.frame_rate = clip_rate
@@ -226,10 +195,10 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
     end
 
     for _, child in ipairs(children) do
-        local name = child:name()
+        local name = child.tag
 
         if name == "name" then
-            clip_info.name = child:text()
+            clip_info.name = child.text
         elseif name == "file" then
             local media_info = parse_file(child, clip_info.frame_rate)
             if media_info then
@@ -267,20 +236,20 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
                 clip_info.media = media_info
             end
         elseif name == "duration" then
-            local raw_duration = parse_time_frames(child:text(), clip_info.frame_rate)
+            local raw_duration = parse_time_frames(child.text, clip_info.frame_rate)
             if raw_duration and raw_duration > 0 then
                 clip_info.raw_duration = raw_duration
             end
         elseif name == "start" then
-            clip_info.timeline_start = parse_time_frames(child:text(), clip_info.frame_rate)
+            clip_info.timeline_start = parse_time_frames(child.text, clip_info.frame_rate)
         elseif name == "end" then
-            clip_info.timeline_end = parse_time_frames(child:text(), clip_info.frame_rate)
+            clip_info.timeline_end = parse_time_frames(child.text, clip_info.frame_rate)
         elseif name == "in" then
-            clip_info.source_in = parse_time_frames(child:text(), clip_info.frame_rate)
+            clip_info.source_in = parse_time_frames(child.text, clip_info.frame_rate)
         elseif name == "out" then
-            clip_info.source_out = parse_time_frames(child:text(), clip_info.frame_rate)
+            clip_info.source_out = parse_time_frames(child.text, clip_info.frame_rate)
         elseif name == "enabled" then
-            clip_info.enabled = (child:text():upper() == "TRUE")
+            clip_info.enabled = (child.text:upper() == "TRUE")
         end
     end
 
@@ -372,18 +341,17 @@ local function parse_track(track_node, frame_rate, track_type, track_index, sequ
         prev_end_time = finish
     end
 
-    local children = collect_children(track_node)
-    for _, child in ipairs(children) do
-        if child:name() == "clipitem" then
+    for _, child in ipairs(track_node.children or {}) do
+        if child.tag == "clipitem" then
             -- Generate track ID (will be created in database)
             local track_id = string.format("%s%d", track_type:sub(1,1):lower(), track_index)
             local clip = parse_clipitem(child, frame_rate, track_id, sequence_info)
             finalize_clip_timing(clip)
             table.insert(track_info.clips, clip)
-        elseif child:name() == "enabled" then
-            track_info.enabled = (child:text():upper() == "TRUE")
-        elseif child:name() == "locked" then
-            track_info.locked = (child:text():upper() == "TRUE")
+        elseif child.tag == "enabled" then
+            track_info.enabled = (child.text:upper() == "TRUE")
+        elseif child.tag == "locked" then
+            track_info.locked = (child.text:upper() == "TRUE")
         end
     end
 
@@ -403,18 +371,18 @@ local function parse_sequence(sequence_node)
         media_files = {}  -- Map of file_id -> media_info
     }
 
-    local children = collect_children(sequence_node)
+    local children = sequence_node.children or {}
 
     -- First pass: Extract basic info and timebase
     for _, child in ipairs(children) do
-        local name = child:name()
+        local name = child.tag
 
         if name == "name" then
-            sequence_info.name = child:text()
+            sequence_info.name = child.text
         elseif name == "rate" then
-            for rate_child in child:children() do
-                if rate_child:name() == "timebase" then
-                    sequence_info.frame_rate = tonumber(rate_child:text()) or 30.0
+            for _, rate_child in ipairs(child.children or {}) do
+                if rate_child.tag == "timebase" then
+                    sequence_info.frame_rate = tonumber(rate_child.text) or 30.0
                 end
             end
         end
@@ -422,30 +390,22 @@ local function parse_sequence(sequence_node)
 
     -- Second pass: Parse media and tracks
     for _, child in ipairs(children) do
-        local name = child:name()
-
-        if name == "media" then
-            -- Media contains video and audio track groups
+        if child.tag == "media" then
             local video_track_index = 1
             local audio_track_index = 1
 
-            local media_children = collect_children(child)
-            for _, media_child in ipairs(media_children) do
-                if media_child:name() == "video" then
-                    -- Video tracks
-                    local video_children = collect_children(media_child)
-                    for _, video_child in ipairs(video_children) do
-                        if video_child:name() == "track" then
+            for _, media_child in ipairs(child.children or {}) do
+                if media_child.tag == "video" then
+                    for _, video_child in ipairs(media_child.children or {}) do
+                        if video_child.tag == "track" then
                             local track = parse_track(video_child, sequence_info.frame_rate, "VIDEO", video_track_index, sequence_info)
                             table.insert(sequence_info.video_tracks, track)
                             video_track_index = video_track_index + 1
                         end
                     end
-                elseif media_child:name() == "audio" then
-                    -- Audio tracks
-                    local audio_children = collect_children(media_child)
-                    for _, audio_child in ipairs(audio_children) do
-                        if audio_child:name() == "track" then
+                elseif media_child.tag == "audio" then
+                    for _, audio_child in ipairs(media_child.children or {}) do
+                        if audio_child.tag == "track" then
                             local track = parse_track(audio_child, sequence_info.frame_rate, "AUDIO", audio_track_index, sequence_info)
                             table.insert(sequence_info.audio_tracks, track)
                             audio_track_index = audio_track_index + 1
@@ -467,7 +427,6 @@ function M.import_xml(xml_path, project_id, options)
     options = options or {}
     local xml_content = options.xml_content
     local source_label = xml_path or options.source_label or "<memory>"
-    local xml2 = require('xml2')
     local result = {
         success = false,
         sequences = {},
@@ -475,48 +434,47 @@ function M.import_xml(xml_path, project_id, options)
         errors = {}
     }
 
-    -- Read and parse XML
-    if not xml_content or xml_content == "" then
-        if not xml_path or xml_path == "" then
-            table.insert(result.errors, "No XML content or file path provided")
-            return result
-        end
-
+    -- Parse XML — use C++ QXmlStreamReader via qt_xml_parse / qt_xml_parse_string
+    local root, parse_err
+    if xml_content and xml_content ~= "" then
+        root, parse_err = qt_xml_parse_string(xml_content)
+    elseif xml_path and xml_path ~= "" then
+        -- Read file content for result.xml_content, parse via C++
         local file = io.open(xml_path, "r")
         if not file then
             table.insert(result.errors, string.format("Failed to open file: %s", xml_path))
             return result
         end
-
         xml_content = file:read("*all")
         file:close()
+        root, parse_err = qt_xml_parse_string(xml_content)
+    else
+        table.insert(result.errors, "No XML content or file path provided")
+        return result
     end
 
-    local doc, err = xml2.parse(xml_content)
-    if not doc then
-        table.insert(result.errors, string.format("Failed to parse XML (%s): %s", source_label, err or "unknown error"))
+    if not root then
+        table.insert(result.errors, string.format("Failed to parse XML (%s): %s", source_label, parse_err or "unknown error"))
         return result
     end
     result.xml_content = xml_content
 
     -- Verify root element
-    local root = doc:root()
-    if root:name() ~= "xmeml" then
+    if root.tag ~= "xmeml" then
         table.insert(result.errors, "Not a valid FCP7 XML file (missing <xmeml> root)")
         return result
     end
 
     -- Find sequences
-    for child in root:children() do
-        if child:name() == "sequence" then
+    for _, child in ipairs(root.children or {}) do
+        if child.tag == "sequence" then
             local sequence = parse_sequence(child)
             table.insert(result.sequences, sequence)
-        elseif child:name() == "project" then
-            -- Projects contain sequences
-            for project_child in child:children() do
-                if project_child:name() == "children" then
-                    for children_child in project_child:children() do
-                        if children_child:name() == "sequence" then
+        elseif child.tag == "project" then
+            for _, project_child in ipairs(child.children or {}) do
+                if project_child.tag == "children" then
+                    for _, children_child in ipairs(project_child.children or {}) do
+                        if children_child.tag == "sequence" then
                             local sequence = parse_sequence(children_child)
                             table.insert(result.sequences, sequence)
                         end

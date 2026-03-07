@@ -32,6 +32,8 @@ globals = {
     "qt_is_key_pressed",
     "qt_json_encode",
     "qt_json_decode",
+    "qt_xml_parse",
+    "qt_xml_parse_string",
     "qt_set_widget_attribute",
     "qt_update_widget",
     "qt_set_widget_stylesheet",

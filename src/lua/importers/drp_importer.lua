@@ -18,7 +18,6 @@
 -- @file drp_importer.lua
 local M = {}
 
-local xml2 = require("xml2")
 local log = require("core.logger").for_area("media")
 
 --- Unzip .drp file to temporary directory
@@ -40,60 +39,26 @@ local function extract_drp(drp_path)
     return tmp_dir, nil
 end
 
---- Parse XML file using LuaExpat
+--- Parse XML file using C++ QXmlStreamReader.
+-- Returns {tag, text, attrs, children} table tree.
 -- @param xml_path string: Path to XML file
--- @return table|nil: Parsed XML structure, or nil on error
+-- @return table|nil: Root element table, or nil on error
 -- @return string|nil: Error message if failed
-local function convert_node(node)
-    if not node then
-        return nil
-    end
-
-    local element = {
-        tag = node:name(),
-        attrs = node:attributes(),
-        children = {},
-        text = node:text()
-    }
-
-    for child in node:children() do
-        local converted = convert_node(child)
-        if converted then
-            table.insert(element.children, converted)
-        end
-    end
-
-    return element
+local function parse_xml_file(xml_path)
+    assert(qt_xml_parse, "qt_xml_parse not available (requires C++ bindings)")
+    return qt_xml_parse(xml_path)
 end
 
+--- Parse XML from string using C++ QXmlStreamReader.
+-- @param content string: XML content
+-- @return table|nil: Root element table, or nil on error
+-- @return string|nil: Error message if failed
 local function parse_xml_string(content)
+    assert(qt_xml_parse_string, "qt_xml_parse_string not available (requires C++ bindings)")
     if not content or content == "" then
         return nil, "Empty XML content"
     end
-
-    local doc, err = xml2.parse(content)
-    if not doc then
-        return nil, "XML parse error: " .. tostring(err)
-    end
-
-    local root = doc:root()
-    if not root then
-        return nil, "XML document has no root element"
-    end
-
-    return convert_node(root), nil
-end
-
-local function parse_xml_file(xml_path)
-    local file = io.open(xml_path, "r")
-    if not file then
-        return nil, "Failed to open XML file: " .. xml_path
-    end
-
-    local content = file:read("*all")
-    file:close()
-
-    return parse_xml_string(content)
+    return qt_xml_parse_string(content)
 end
 
 --- Find direct child element by tag name (non-recursive)
@@ -1192,40 +1157,6 @@ end
 -- @param seq_elem table: XML sequence element
 -- @param frame_rate number: Frame rate from DRP metadata (required)
 -- @return video_tracks, audio_tracks, media_lookup
--- Probe cache: file_path → frame count (or false if probe failed).
--- Persists across parse_resolve_tracks calls within a single import.
-local probe_frame_count_cache = {}
-
---- Probe a media file to get its actual video frame count.
--- Uses ffprobe via media_reader. Returns nil if file is offline or has no video.
--- Results are cached per file path.
-local function probe_video_frame_count(file_path)
-    if not file_path or file_path == "" then return nil end
-    local cached = probe_frame_count_cache[file_path]
-    if cached ~= nil then
-        return cached or nil  -- false → nil (probe failed earlier)
-    end
-    local media_reader_ok, media_reader = pcall(require, "media.media_reader")
-    if not media_reader_ok then
-        probe_frame_count_cache[file_path] = false
-        return nil
-    end
-    local probe, err = media_reader.probe_file(file_path)
-    if not probe or not probe.has_video or not probe.video then
-        log.event("DRP retime: cannot probe '%s': %s", file_path, err or "no video")
-        probe_frame_count_cache[file_path] = false
-        return nil
-    end
-    local fps = probe.video.frame_rate
-    if not fps or fps <= 0 then
-        probe_frame_count_cache[file_path] = false
-        return nil
-    end
-    local frames = math.floor(probe.duration_ms * fps / 1000 + 0.5)
-    probe_frame_count_cache[file_path] = frames
-    return frames
-end
-
 local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
     -- NSF: frame_rate is required, no fallbacks
     assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
@@ -1326,7 +1257,9 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
                 -- Hex part encodes speed ratio as LE IEEE 754 double
                 if hex_part and #hex_part >= 16 then
                     local speed = decode_hex_double_at(hex_part, 0)
-                    if speed and speed > 0 and speed < 100 then
+                    if speed and speed ~= 0 and math.abs(speed) < 100 then
+                        -- Preserve signed speed: negative = reverse playback.
+                        -- Direction is encoded via source_in > source_out swap below.
                         clip_speed = speed
                     else
                         log.warn("DRP retime: clip '%s' hex speed invalid (decoded=%s from '%s')",
@@ -1336,40 +1269,20 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
             end
 
             local duration_timeline_frames = duration_raw
+            local abs_speed = math.abs(clip_speed)
             local source_in_native
             local source_duration
             if track_type == "AUDIO" then
                 -- Audio: convert <In> from timeline frames to samples (48kHz)
-                source_in_native = math.floor(in_value * 48000 / frame_rate + 0.5)
-                source_duration = math.floor(duration_raw * 48000 / frame_rate + 0.5)
-            elseif clip_speed ~= 1.0 then
+                -- Use abs_speed for magnitude; direction handled via coord swap below.
+                local audio_speed = (abs_speed ~= 1.0) and abs_speed or 1.0
+                source_in_native = math.floor(in_value * 48000 / frame_rate * audio_speed + 0.5)
+                source_duration = math.floor(duration_raw * 48000 / frame_rate * audio_speed + 0.5)
+            elseif abs_speed ~= 1.0 then
                 -- Retimed video: in_value and duration_raw are in RETIMED timebase
-                -- (not actual source frames). The hex-encoded speed from <In> is
-                -- unreliable (empirically ≠ actual speed for some clips).
-                -- Probe media file to derive actual speed from frame count.
-                local actual_speed = clip_speed  -- fallback: hex speed
-                local file_frames = probe_video_frame_count(file_path)
-                if file_frames then
-                    local retimed_end = in_value + duration_raw
-                    if retimed_end > 0 then
-                        local probed_speed = file_frames / retimed_end
-                        -- Sanity: probed and hex speeds should agree on direction
-                        -- (both < 1 for slow-mo, both > 1 for fast-forward).
-                        -- If they disagree, clip is heavily trimmed and probe-derived
-                        -- speed is unreliable — fall back to hex speed.
-                        if (probed_speed < 1.0) == (clip_speed < 1.0) then
-                            actual_speed = probed_speed
-                            log.event("DRP retime: '%s' speed=%.4f (probed %d frames / %d retimed)",
-                                      clip_name, actual_speed, file_frames, retimed_end)
-                        else
-                            log.warn("DRP retime: '%s' probe/hex disagree (%.4f vs %.4f), using hex",
-                                     clip_name, probed_speed, clip_speed)
-                        end
-                    end
-                end
-                -- Apply speed to BOTH in_value and duration_raw
-                source_in_native = math.floor(in_value * actual_speed + 0.5)
-                source_duration = math.floor(duration_raw * actual_speed + 0.5)
+                -- (not actual source frames). Apply speed magnitude to convert.
+                source_in_native = math.floor(in_value * abs_speed + 0.5)
+                source_duration = math.floor(duration_raw * abs_speed + 0.5)
             else
                 -- Non-retimed video: in_value IS the source frame directly
                 source_in_native = math.floor(in_value)
@@ -1389,6 +1302,13 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
                 source_extent_frames = source_in_native + source_duration
             end
 
+            -- Compute source_out, then swap for reverse clips.
+            -- Reverse: source_in = high frame (playback start), source_out = low frame.
+            local source_out_native = source_in_native + source_duration
+            if clip_speed < 0 then
+                source_in_native, source_out_native = source_out_native, source_in_native
+            end
+
             local clip = {
                 name = clip_name,
                 start_value = start_frames,        -- timeline position (integer frames)
@@ -1396,9 +1316,9 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
                 -- Absolute timecode addressing for source selection:
                 source_in_tc = source_in_native,   -- native units (samples for audio, frames for video)
                 source_length = source_duration,   -- duration in source units
-                -- Legacy aliases (deprecated - use source_in_tc/source_length)
                 source_in = source_in_native,
-                source_out = source_in_native + source_duration,
+                source_out = source_out_native,
+                clip_speed = clip_speed,            -- signed speed for downstream validation
                 enabled = get_text(find_element(clip_elem, "WasDisbanded")) ~= "true",
                 file_path = file_path,
                 media_key = file_path,
@@ -1408,7 +1328,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
 
             -- Skip degenerate zero-duration clips (Resolve artifacts: speed changes, disabled items)
             if clip.duration <= 0 then
-                log.warn("Skipping zero-duration clip '%s' (duration=%d)", clip_name, clip.duration)
+                log.detail("Skipping zero-duration clip '%s' (duration=%d)", clip_name, clip.duration)
             else
                 table.insert(track_info.clips, clip)
                 clip_count = clip_count + 1
@@ -1894,8 +1814,8 @@ function M.quick_metadata(drp_path)
         return nil, "No project.xml in .drp archive"
     end
 
-    local project_root = parse_xml_string(xml_content)
-    if not project_root then return nil, "Failed to parse project.xml" end
+    local project_root, parse_err = parse_xml_string(xml_content)
+    if not project_root then return nil, "Failed to parse project.xml: " .. tostring(parse_err) end
 
     local project_elem = find_element(project_root, "Project")
     if not project_elem then
@@ -2317,16 +2237,28 @@ function M.import_into_project(project_id, parse_result, opts)
                         end
 
                         local source_out = clip_data.source_out
-                        if not source_out or source_out <= (clip_data.source_in or 0) then
-                            -- source_out missing or invalid — derive from source_in + duration
-                            source_out = (clip_data.source_in or 0) + (clip_data.duration or 0)
-                        end
+                        local is_reverse = (clip_data.clip_speed or 1) < 0
 
-                        -- Skip clips with zero source range (degenerate DRP artifacts)
-                        if source_out <= (clip_data.source_in or 0) then
-                            log.warn("Skipping clip '%s' - zero source range (source_in=%s, source_out=%s)",
-                                clip_data.name or "unnamed", tostring(clip_data.source_in), tostring(source_out))
-                            goto continue_clip
+                        if not is_reverse then
+                            -- Forward clip: source_out must exceed source_in
+                            if not source_out or source_out <= (clip_data.source_in or 0) then
+                                source_out = (clip_data.source_in or 0) + (clip_data.duration or 0)
+                            end
+                            if source_out <= (clip_data.source_in or 0) then
+                                log.warn("Skipping clip '%s' - zero source range (source_in=%s, source_out=%s)",
+                                    clip_data.name or "unnamed", tostring(clip_data.source_in), tostring(source_out))
+                                goto continue_clip
+                            end
+                        else
+                            -- Reverse clip: source_in > source_out is intentional
+                            if not source_out then
+                                source_out = (clip_data.source_in or 0) - (clip_data.duration or 0)
+                            end
+                            if source_out == (clip_data.source_in or 0) then
+                                log.warn("Skipping reverse clip '%s' - zero source range (source_in=%s, source_out=%s)",
+                                    clip_data.name or "unnamed", tostring(clip_data.source_in), tostring(source_out))
+                                goto continue_clip
+                            end
                         end
 
                         local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {

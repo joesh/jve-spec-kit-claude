@@ -18,6 +18,7 @@
 #include "lua/qt_bindings/aop_bindings.cpp"
 #include "lua/qt_bindings/sse_bindings.cpp"
 #include "lua/qt_bindings/fs_watcher_bindings.cpp"
+#include "lua/qt_bindings/xml_bindings.cpp"
 
 // Define the metatable name (declared extern in qt_bindings.h)
 const char* WIDGET_METATABLE = "JVE.Widget";
@@ -326,6 +327,9 @@ void registerQtBindings(lua_State* L)
 
     // Populate 'qt_constants.FS' subtable (QFileSystemWatcher)
     register_fs_watcher_bindings(L);
+
+    // Register XML parsing functions globally
+    register_xml_bindings(L);
 
     // Populate 'qt_constants.SIGNAL' subtable for application-level signal handlers
     lua_newtable(L);

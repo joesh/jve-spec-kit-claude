@@ -6,7 +6,7 @@
 -- 2. Asserts on missing fps metadata (no `or 30` fallbacks)
 -- 3. Uses explicit fps from DRP metadata, not inference heuristics
 
-require("test_env")
+local test_env = require("test_env")
 
 print("=== test_nsf_drp_importer.lua ===")
 
@@ -23,7 +23,7 @@ print("\n--- Test 1: Assert on missing fps in timeline metadata ---")
 -- We can't easily create a malformed DRP fixture, so we test the code path
 -- by checking that valid DRP files have fps metadata.
 
-local DRP_PATH = "fixtures/resolve/sample_project.drp"
+local DRP_PATH = test_env.resolve_repo_path("tests/fixtures/resolve/sample_project.drp")
 local f = io.open(DRP_PATH, "r")
 if f then
     f:close()
@@ -94,7 +94,7 @@ end
 print("\n--- Test 3: Code must not contain fps fallback patterns ---")
 
 -- Read the drp_importer source and verify no `or 30` fps fallbacks exist
-local importer_path = "../src/lua/importers/drp_importer.lua"
+local importer_path = test_env.resolve_repo_path("src/lua/importers/drp_importer.lua")
 local handle = io.open(importer_path, "r")
 assert(handle, "Could not open drp_importer.lua")
 local content = handle:read("*a")
@@ -154,7 +154,7 @@ print("✓ Required clip fields (Start, Duration) use assert")
 print("\n--- Test 5: Pipe-delimited <In> values parsed ---")
 -- The second DRP fixture has clips with <In>23294|hexdata format.
 -- These must parse as source_in=23294, not 0 (the old or-0 fallback).
-local drp2_path = "../tests/fixtures/resolve/2025-06-14 NO KINGS SEATTLE.drp"
+local drp2_path = test_env.resolve_repo_path("tests/fixtures/resolve/2025-06-14 NO KINGS SEATTLE.drp")
 local handle2 = io.open(drp2_path, "r")
 if handle2 then
     handle2:close()

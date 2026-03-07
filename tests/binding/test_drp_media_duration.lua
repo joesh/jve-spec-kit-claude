@@ -14,7 +14,7 @@
 -- source_extent = source_in + source_duration (in video frames, regardless of
 -- track type).
 
-require("test_env")
+local test_env = require("test_env")
 
 print("=== test_drp_media_duration.lua ===")
 
@@ -226,7 +226,7 @@ print("  ✓ MatchFrame: media duration = 1253 (set_playhead(1203) safe)")
 
 print("\n--- Test 5: End-to-end DRP parse → blob duration override ---")
 
-local fixture_path = "fixtures/resolve/sample_project.drp"
+local fixture_path = test_env.resolve_repo_path("tests/fixtures/resolve/sample_project.drp")
 local f = io.open(fixture_path)
 assert(f, "fixture not found: " .. fixture_path)
 f:close()
