@@ -18,22 +18,6 @@ struct ScopeExit {
 template<typename F>
 ScopeExit<F> make_scope_exit(F fn) { return {std::move(fn)}; }
 
-// ── 2-pop diagnostic window ──
-// Frame 89951 at 25fps = 3,598,040,000 μs (00:59:58:00 in timeline)
-// Fires only when audio requests overlap this region.
-static constexpr int64_t TWOPOP_US = 3598040000LL;
-static constexpr int64_t TWOPOP_MARGIN = 1000000LL; // ±1s
-static inline bool twopop_overlaps(int64_t t0, int64_t t1) {
-    return t0 < (TWOPOP_US + TWOPOP_MARGIN) && t1 > (TWOPOP_US - TWOPOP_MARGIN);
-}
-static inline float peak_of(const float* data, int64_t n) {
-    float pk = 0.0f;
-    for (int64_t i = 0; i < n; ++i) {
-        float v = std::abs(data[i]);
-        if (v > pk) pk = v;
-    }
-    return pk;
-}
 } // namespace
 
 // Logging — same env-var scheme as emp_reader.cpp
@@ -50,6 +34,20 @@ inline int tmb_log_level() {
 
 #define EMP_LOG_WARN(...) do { if (tmb_log_level() >= 1) { fprintf(stderr, "[TMB WARN] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } } while(0)
 #define EMP_LOG_DEBUG(...) do { if (tmb_log_level() >= 2) { fprintf(stderr, "[TMB] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } } while(0)
+
+namespace {
+
+// Reverse interleaved PCM samples in-place.
+// For reverse clips: we decode the forward source range, then flip the audio.
+static void reverse_interleaved(float* data, int64_t frames, int channels) {
+    for (int64_t i = 0; i < frames / 2; ++i) {
+        int64_t j = frames - 1 - i;
+        for (int ch = 0; ch < channels; ++ch)
+            std::swap(data[i * channels + ch], data[j * channels + ch]);
+    }
+}
+
+} // namespace
 
 namespace emp {
 
@@ -458,6 +456,7 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         }
         if (best) {
             result.frame = best->frame;
+            result.source_frame = best->source_frame;
             result.rotation = best->rotation;
             result.par_num = best->par_num;
             result.par_den = best->par_den;
@@ -653,7 +652,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::build_audio_output(
     assert(timeline_t1 > timeline_t0 && "build_audio_output: inverted timeline range");
     assert(fmt.sample_rate > 0 && "build_audio_output: sample_rate must be positive");
     assert(fmt.channels > 0 && "build_audio_output: channels must be positive");
-    assert(speed_ratio > 0.0f && "build_audio_output: speed_ratio must be positive");
+    assert(speed_ratio != 0.0f && "build_audio_output: speed_ratio must be non-zero");
 
     const int32_t sr = fmt.sample_rate;
     const int32_t ch = fmt.channels;
@@ -786,19 +785,10 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     assert(t1 > t0 && "GetTrackAudio: t1 must be greater than t0");
     assert(m_seq_rate.num > 0 && "GetTrackAudio: SetSequenceRate not called");
 
-    // Temporary diagnostic: trace first N audio queries per track
-    static std::atomic<int> diag_count{0};
-    bool do_diag = (diag_count.load(std::memory_order_relaxed) < 20);
-
     // Find track
     std::unique_lock<std::mutex> tracks_lock(m_tracks_mutex);
     auto track_it = m_tracks.find(track);
     if (track_it == m_tracks.end()) {
-        if (do_diag) {
-            diag_count.fetch_add(1, std::memory_order_relaxed);
-            fprintf(stderr, "[GTA DIAG] A%d t0=%lld: track not found in m_tracks\n",
-                    track.index, (long long)t0);
-        }
         return nullptr;
     }
     auto& ts = track_it->second;
@@ -806,22 +796,11 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     // Find clip at t0
     const ClipInfo* clip = find_clip_at_us(ts, t0);
     if (!clip) {
-        if (do_diag && !ts.clips.empty()) {
-            diag_count.fetch_add(1, std::memory_order_relaxed);
-            fprintf(stderr, "[GTA DIAG] A%d t0=%lld: no clip covers t0. "
-                    "%d clips, first=[%lld..%lld] last=[%lld..%lld]\n",
-                    track.index, (long long)t0,
-                    (int)ts.clips.size(),
-                    (long long)FrameTime::from_frame(ts.clips.front().timeline_start, m_seq_rate).to_us(),
-                    (long long)FrameTime::from_frame(ts.clips.front().timeline_end(), m_seq_rate).to_us(),
-                    (long long)FrameTime::from_frame(ts.clips.back().timeline_start, m_seq_rate).to_us(),
-                    (long long)FrameTime::from_frame(ts.clips.back().timeline_end(), m_seq_rate).to_us());
-        }
         return nullptr;
     }
 
     assert(clip->rate_den > 0 && "GetTrackAudio: clip has zero rate_den");
-    assert(clip->speed_ratio > 0.0f && "GetTrackAudio: clip has non-positive speed_ratio");
+    assert(clip->speed_ratio != 0.0f && "GetTrackAudio: clip has zero speed_ratio");
 
     // Clip boundaries in timeline microseconds
     TimeUS clip_start_us = FrameTime::from_frame(clip->timeline_start, m_seq_rate).to_us();
@@ -831,21 +810,18 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     TimeUS clamped_t0 = std::max(t0, clip_start_us);
     TimeUS clamped_t1 = std::min(t1, clip_end_us);
     if (clamped_t1 <= clamped_t0) {
-        if (do_diag) {
-            diag_count.fetch_add(1, std::memory_order_relaxed);
-            fprintf(stderr, "[GTA DIAG] A%d t0=%lld: clamp empty. clip=[%lld..%lld] req=[%lld..%lld]\n",
-                    track.index, (long long)t0,
-                    (long long)clip_start_us, (long long)clip_end_us,
-                    (long long)t0, (long long)t1);
-        }
         return nullptr;
     }
 
     // Map timeline us → source us
+    // For reverse clips (speed_ratio < 0), source_t0 > source_t1 after this formula.
+    // We swap for forward-order decoding, then reverse PCM afterward.
     TimeUS source_origin_us = FrameTime::from_frame(clip->source_in, clip->rate()).to_us();
     double sr = static_cast<double>(clip->speed_ratio);
     TimeUS source_t0 = source_origin_us + static_cast<int64_t>((clamped_t0 - clip_start_us) * sr);
     TimeUS source_t1 = source_origin_us + static_cast<int64_t>((clamped_t1 - clip_start_us) * sr);
+    bool reversed = (source_t0 > source_t1);
+    if (reversed) std::swap(source_t0, source_t1);
 
     // Check audio cache before decode
     std::string clip_id = clip->clip_id;
@@ -857,18 +833,6 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     TimeUS first_clip_end_us = clip_end_us;
     tracks_lock.unlock();
 
-    // [2POP] diagnostic: log when request overlaps the 2-pop region
-    bool twopop = twopop_overlaps(clamped_t0, clamped_t1);
-    if (twopop) {
-        fprintf(stderr, "[2POP] GTA A%d req=[%lld..%lld] clip=[%lld..%lld] src=[%lld..%lld] cached=%d\n",
-                track.index,
-                (long long)clamped_t0, (long long)clamped_t1,
-                (long long)clip_start_us, (long long)clip_end_us,
-                (long long)source_t0, (long long)source_t1,
-                cached ? 1 : 0);
-        fflush(stderr);
-    }
-
     // Watermark check: trigger audio refill if buffer is running low.
     // Fires on both cache-hit and cache-miss (we want to stay ahead).
     int dir = m_playhead_direction.load(std::memory_order_relaxed);
@@ -879,22 +843,11 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     std::shared_ptr<PcmChunk> first_chunk;
     if (cached) {
         first_chunk = cached;
-        if (twopop) {
-            float pk = peak_of(cached->data_f32(), std::min(cached->frames() * fmt.channels, (int64_t)4096));
-            fprintf(stderr, "[2POP] GTA A%d CACHE HIT: frames=%lld peak=%.6f\n",
-                    track.index, (long long)cached->frames(), pk);
-            fflush(stderr);
-        }
     } else {
         // Offline check
         {
             std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
             if (m_offline.count(media_path)) {
-                if (twopop) {
-                    fprintf(stderr, "[2POP] GTA A%d OFFLINE — media_path=%s\n",
-                            track.index, media_path.c_str());
-                    fflush(stderr);
-                }
                 return nullptr;
             }
         }
@@ -902,44 +855,26 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         // Acquire reader and decode first clip
         auto reader = acquire_reader(track, clip_id, media_path);
         if (!reader) {
-            if (twopop) {
-                fprintf(stderr, "[2POP] GTA A%d NO READER for %s\n",
-                        track.index, media_path.c_str());
-                fflush(stderr);
-            }
             return nullptr;
         }
 
         auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt);
         if (decode_result.is_error()) {
-            if (twopop) {
-                fprintf(stderr, "[2POP] GTA A%d DECODE ERROR src=[%lld..%lld]\n",
-                        track.index, (long long)source_t0, (long long)source_t1);
-                fflush(stderr);
-            }
             return nullptr;
         }
 
         auto chunk = decode_result.value();
         if (!chunk || chunk->frames() == 0) {
-            if (twopop) {
-                fprintf(stderr, "[2POP] GTA A%d DECODE EMPTY src=[%lld..%lld]\n",
-                        track.index, (long long)source_t0, (long long)source_t1);
-                fflush(stderr);
-            }
             return nullptr;
         }
 
-        if (twopop) {
-            float pk = peak_of(chunk->data_f32(), std::min(chunk->frames() * fmt.channels, (int64_t)4096));
-            fprintf(stderr, "[2POP] GTA A%d DECODED: frames=%lld peak=%.6f src=[%lld..%lld]\n",
-                    track.index, (long long)chunk->frames(), pk,
-                    (long long)source_t0, (long long)source_t1);
-            fflush(stderr);
-        }
-
         first_chunk = build_audio_output(chunk, source_t0, source_t1,
-                                         clamped_t0, clamped_t1, speed_ratio, fmt);
+                                         clamped_t0, clamped_t1, std::abs(speed_ratio), fmt);
+        // Reverse PCM for reverse clips: audio was decoded forward, now flip it
+        if (reversed && first_chunk && first_chunk->frames() > 0) {
+            reverse_interleaved(first_chunk->mutable_data_f32(),
+                                first_chunk->frames(), fmt.channels);
+        }
     }
 
     // ── Fast path: request fully within first clip ──
@@ -970,7 +905,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         if (next_start_us >= t1) break;
 
         assert(next->rate_den > 0 && "GetTrackAudio: next clip has zero rate_den");
-        assert(next->speed_ratio > 0.0f && "GetTrackAudio: next clip has non-positive speed_ratio");
+        assert(next->speed_ratio != 0.0f && "GetTrackAudio: next clip has zero speed_ratio");
 
         TimeUS next_end_us = FrameTime::from_frame(next->timeline_end(), m_seq_rate).to_us();
         TimeUS seg_t0 = std::max(cursor, next_start_us);
@@ -988,11 +923,13 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
             continue;
         }
 
-        // Map to source coordinates
+        // Map to source coordinates (may be inverted for reverse clips)
         TimeUS next_src_origin = FrameTime::from_frame(next->source_in, next->rate()).to_us();
         double next_sr = static_cast<double>(next->speed_ratio);
         TimeUS next_src_t0 = next_src_origin + static_cast<int64_t>((seg_t0 - next_start_us) * next_sr);
         TimeUS next_src_t1 = next_src_origin + static_cast<int64_t>((seg_t1 - next_start_us) * next_sr);
+        bool next_reversed = (next_src_t0 > next_src_t1);
+        if (next_reversed) std::swap(next_src_t0, next_src_t1);
 
         std::string next_path = next->media_path;
         float next_speed = next->speed_ratio;
@@ -1012,7 +949,10 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         auto next_decoded = next_reader->DecodeAudioRangeUS(next_src_t0, next_src_t1, fmt);
         if (next_decoded.is_ok() && next_decoded.value() && next_decoded.value()->frames() > 0) {
             auto seg = build_audio_output(next_decoded.value(), next_src_t0, next_src_t1,
-                                          seg_t0, seg_t1, next_speed, fmt);
+                                          seg_t0, seg_t1, std::abs(next_speed), fmt);
+            if (next_reversed && seg && seg->frames() > 0) {
+                reverse_interleaved(seg->mutable_data_f32(), seg->frames(), fmt.channels);
+            }
             if (seg && seg->frames() > 0) {
                 segments.push_back({seg, seg_t0});
                 if (seg_t1 > output_end) output_end = seg_t1;
@@ -1319,54 +1259,22 @@ void TimelineMediaBuffer::SetAudioMixParams(
 std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetMixedAudio(TimeUS t0, TimeUS t1) {
     assert(t1 > t0 && "GetMixedAudio: t1 must be greater than t0");
 
-    bool twopop = twopop_overlaps(t0, t1);
-
     std::unique_lock<std::mutex> lock(m_mix_mutex);
     if (m_audio_mix_params.empty()) {
-        if (twopop) {
-            fprintf(stderr, "[2POP] GMA: no mix params! req=[%lld..%lld]\n",
-                    (long long)t0, (long long)t1);
-            fflush(stderr);
-        }
         return nullptr;
     }
 
     // Cache hit
     if (m_mixed_cache.covers(t0, t1)) {
-        auto result = m_mixed_cache.extract(t0, t1);
-        if (twopop) {
-            float pk = result ? peak_of(result->data_f32(),
-                std::min(result->frames() * m_audio_mix_fmt.channels, (int64_t)4096)) : 0.0f;
-            fprintf(stderr, "[2POP] GMA CACHE HIT: req=[%lld..%lld] cache=[%lld..%lld] frames=%lld peak=%.6f\n",
-                    (long long)t0, (long long)t1,
-                    (long long)m_mixed_cache.start_us, (long long)m_mixed_cache.end_us,
-                    result ? (long long)result->frames() : 0LL, pk);
-            fflush(stderr);
-        }
-        return result;
+        return m_mixed_cache.extract(t0, t1);
     }
 
     // Sync fallback (startup/seek — cache cold)
-    if (twopop) {
-        fprintf(stderr, "[2POP] GMA SYNC FALLBACK: req=[%lld..%lld] cache=[%lld..%lld] empty=%d\n",
-                (long long)t0, (long long)t1,
-                (long long)m_mixed_cache.start_us, (long long)m_mixed_cache.end_us,
-                m_mixed_cache.data.empty() ? 1 : 0);
-        fflush(stderr);
-    }
     auto params = m_audio_mix_params;
     auto fmt = m_audio_mix_fmt;
     lock.unlock();
 
-    auto result = execute_mix_range(params, fmt, t0, t1);
-    if (twopop) {
-        float pk = result ? peak_of(result->data_f32(),
-            std::min(result->frames() * fmt.channels, (int64_t)4096)) : 0.0f;
-        fprintf(stderr, "[2POP] GMA SYNC RESULT: frames=%lld peak=%.6f\n",
-                result ? (long long)result->frames() : 0LL, pk);
-        fflush(stderr);
-    }
-    return result;
+    return execute_mix_range(params, fmt, t0, t1);
 }
 
 // ============================================================================
@@ -1389,19 +1297,12 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::execute_mix_range(
     bool has_audio = false;
     TimeUS actual_start = t0;
 
-    bool twopop = twopop_overlaps(t0, t1);
-
     for (const auto& param : params) {
         if (param.volume <= 0.0f) continue;
 
         TrackId track{TrackType::Audio, param.track_index};
         auto pcm = GetTrackAudio(track, t0, t1, fmt);
         if (!pcm || pcm->frames() == 0) {
-            if (twopop) {
-                fprintf(stderr, "[2POP] MIX A%d: null/empty for [%lld..%lld]\n",
-                        param.track_index, (long long)t0, (long long)t1);
-                fflush(stderr);
-            }
             continue;
         }
 
@@ -1423,17 +1324,6 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::execute_mix_range(
                 }
             }
             has_audio = true;
-
-            // TEMP DIAG: log first time execute_mix_range finds audio
-            {
-                static std::atomic<int> mix_found{0};
-                int mf = mix_found.fetch_add(1, std::memory_order_relaxed);
-                if (mf < 3) {
-                    fprintf(stderr, "[MIX] found audio: A%d t0=%lld frames=%lld vol=%.2f\n",
-                            param.track_index, (long long)t0,
-                            (long long)src_frames, vol);
-                }
-            }
         } else {
             // Subsequent tracks: accumulate
             int64_t n = std::min(src_frames, out_frames) * ch;
@@ -1444,19 +1334,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::execute_mix_range(
     }
 
     if (!has_audio) {
-        if (twopop) {
-            fprintf(stderr, "[2POP] MIX RESULT: no audio from any track for [%lld..%lld]\n",
-                    (long long)t0, (long long)t1);
-            fflush(stderr);
-        }
         return nullptr;
-    }
-
-    if (twopop) {
-        float pk = peak_of(mix_buf.data(), std::min((int64_t)mix_buf.size(), (int64_t)4096));
-        fprintf(stderr, "[2POP] MIX RESULT: frames=%lld peak=%.6f [%lld..%lld]\n",
-                (long long)out_frames, pk, (long long)t0, (long long)t1);
-        fflush(stderr);
     }
 
     auto impl = std::make_unique<PcmChunkImpl>(
@@ -1559,13 +1437,6 @@ void TimelineMediaBuffer::mix_thread_loop() {
 
         if (chunk_t1 <= chunk_t0) continue;
 
-        bool twopop = twopop_overlaps(chunk_t0, chunk_t1);
-        if (twopop) {
-            fprintf(stderr, "[2POP] MIX_THREAD: mixing chunk [%lld..%lld] ph=%lld\n",
-                    (long long)chunk_t0, (long long)chunk_t1, (long long)playhead_us);
-            fflush(stderr);
-        }
-
         // Mix this chunk (no locks held — calls GetTrackAudio internally)
         auto pcm = execute_mix_range(params, fmt, chunk_t0, chunk_t1);
 
@@ -1573,14 +1444,6 @@ void TimelineMediaBuffer::mix_thread_loop() {
             std::lock_guard<std::mutex> lock(m_mix_mutex);
             m_mixed_cache.append(pcm, direction);
             m_mixed_cache.evict_behind(playhead_us, direction);
-            if (twopop) {
-                fprintf(stderr, "[2POP] MIX_THREAD: appended, cache now [%lld..%lld]\n",
-                        (long long)m_mixed_cache.start_us, (long long)m_mixed_cache.end_us);
-                fflush(stderr);
-            }
-        } else if (twopop) {
-            fprintf(stderr, "[2POP] MIX_THREAD: chunk returned null/empty!\n");
-            fflush(stderr);
         }
     }
 }
@@ -2096,7 +1959,7 @@ void TimelineMediaBuffer::worker_loop() {
 
                 assert(rate_num > 0 && "worker_loop VIDEO_REFILL: clip has zero rate_num");
                 assert(rate_den > 0 && "worker_loop VIDEO_REFILL: clip has zero rate_den");
-                assert(speed_ratio > 0.0f && "worker_loop VIDEO_REFILL: clip has non-positive speed_ratio");
+                assert(speed_ratio != 0.0f && "worker_loop VIDEO_REFILL: clip has zero speed_ratio");
                 int64_t source_frame = source_in +
                     static_cast<int64_t>((tf - timeline_start) * speed_ratio);
                 const auto& info = held_reader->media_file()->info();
@@ -2211,9 +2074,38 @@ void TimelineMediaBuffer::worker_loop() {
                     break;
                 }
             }
-            EMP_LOG_DEBUG("REFILL: %d/%d video frames on track %c%d",
-                    frames_decoded, job.refill_count,
-                    job.track.type == TrackType::Video ? 'V' : 'A', job.track.index);
+            if (frames_decoded == 0 && job.refill_count > 0) {
+                // Diagnostic: why did REFILL decode nothing? Log clip state.
+                std::lock_guard<std::mutex> tlock(m_tracks_mutex);
+                auto tit = m_tracks.find(job.track);
+                if (tit == m_tracks.end()) {
+                    EMP_LOG_WARN("REFILL: 0/%d on %c%d — track not found in m_tracks",
+                            job.refill_count,
+                            job.track.type == TrackType::Video ? 'V' : 'A', job.track.index);
+                } else {
+                    auto& ts = tit->second;
+                    EMP_LOG_WARN("REFILL: 0/%d on %c%d — gen job=%lld cur=%lld, "
+                            "%zu clips, range [%lld..%lld), buffer_end=%lld",
+                            job.refill_count,
+                            job.track.type == TrackType::Video ? 'V' : 'A', job.track.index,
+                            (long long)job.generation, (long long)ts.refill_generation,
+                            ts.clips.size(),
+                            (long long)job.refill_from_frame,
+                            (long long)(job.refill_from_frame + job.refill_count),
+                            (long long)ts.video_buffer_end);
+                    if (!ts.clips.empty()) {
+                        EMP_LOG_WARN("  clips: first=[%lld..%lld) last=[%lld..%lld)",
+                                (long long)ts.clips.front().timeline_start,
+                                (long long)ts.clips.front().timeline_end(),
+                                (long long)ts.clips.back().timeline_start,
+                                (long long)ts.clips.back().timeline_end());
+                    }
+                }
+            } else {
+                EMP_LOG_DEBUG("REFILL: %d/%d video frames on track %c%d",
+                        frames_decoded, job.refill_count,
+                        job.track.type == TrackType::Video ? 'V' : 'A', job.track.index);
+            }
 
         } else if (job.type == PreBufferJob::AUDIO_REFILL) {
             // ── Watermark-driven audio refill: decode chunks spanning clip boundaries.
@@ -2272,11 +2164,13 @@ void TimelineMediaBuffer::worker_loop() {
                 // Map to source coordinates
                 assert(rate_num > 0 && "worker_loop AUDIO_REFILL: clip has zero rate_num");
                 assert(rate_den > 0 && "worker_loop AUDIO_REFILL: clip has zero rate_den");
-                assert(speed_ratio > 0.0f && "worker_loop AUDIO_REFILL: clip has non-positive speed_ratio");
+                assert(speed_ratio != 0.0f && "worker_loop AUDIO_REFILL: clip has zero speed_ratio");
                 TimeUS src_origin = FrameTime::from_frame(source_in, Rate{rate_num, rate_den}).to_us();
-                double sr = static_cast<double>(speed_ratio);
-                TimeUS src_t0 = src_origin + static_cast<int64_t>((chunk_t0 - clip_start_us) * sr);
-                TimeUS src_t1 = src_origin + static_cast<int64_t>((chunk_t1 - clip_start_us) * sr);
+                double sr_d = static_cast<double>(speed_ratio);
+                TimeUS src_t0 = src_origin + static_cast<int64_t>((chunk_t0 - clip_start_us) * sr_d);
+                TimeUS src_t1 = src_origin + static_cast<int64_t>((chunk_t1 - clip_start_us) * sr_d);
+                bool chunk_reversed = (src_t0 > src_t1);
+                if (chunk_reversed) std::swap(src_t0, src_t1);
 
                 // Acquire reader and decode (no locks held)
                 auto reader = acquire_reader(job.track, clip_id, media_path);
@@ -2289,7 +2183,11 @@ void TimelineMediaBuffer::worker_loop() {
                 }
 
                 auto pcm = build_audio_output(decode_result.value(), src_t0, src_t1,
-                                              chunk_t0, chunk_t1, speed_ratio, m_audio_fmt);
+                                              chunk_t0, chunk_t1, std::abs(speed_ratio), m_audio_fmt);
+                if (chunk_reversed && pcm && pcm->frames() > 0) {
+                    reverse_interleaved(pcm->mutable_data_f32(),
+                                        pcm->frames(), m_audio_fmt.channels);
+                }
                 if (pcm && pcm->frames() > 0) {
                     std::lock_guard<std::mutex> tlock(m_tracks_mutex);
                     auto tit = m_tracks.find(job.track);

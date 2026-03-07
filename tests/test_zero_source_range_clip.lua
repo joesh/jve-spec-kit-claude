@@ -179,8 +179,8 @@ local ok, err = pcall(function()
     engine:_compute_video_speed_ratio(entry)
 end)
 assert(not ok, "Expected assert on zero source range, but call succeeded")
-assert(err:match("source_range must be positive"),
-    "Expected 'source_range must be positive' in error, got: " .. tostring(err))
+assert(err:match("source_range must be non%-zero"),
+    "Expected 'source_range must be non-zero' in error, got: " .. tostring(err))
 print("  PASS: assert fires correctly on zero source range")
 
 --------------------------------------------------------------------------------
@@ -193,7 +193,7 @@ local provide_ok, provide_err = pcall(function()
     engine:_provide_clips(0, 1, "video")
 end)
 assert(not provide_ok, "Expected _provide_clips to fail on bad clip")
-assert(provide_err:match("source_range must be positive"),
+assert(provide_err:match("source_range must be non%-zero"),
     "Expected source_range error, got: " .. tostring(provide_err))
 print("  PASS: _provide_clips error is catchable, app survives")
 

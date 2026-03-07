@@ -47,4 +47,8 @@ const float* PcmChunk::data_f32() const {
     return m_impl->data.data();
 }
 
+float* PcmChunk::mutable_data_f32() {
+    return m_impl->data.data();
+}
+
 } // namespace emp

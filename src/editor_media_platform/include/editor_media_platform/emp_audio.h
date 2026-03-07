@@ -47,6 +47,7 @@ public:
     // Interleaved float32 data
     // Size: frames() * channels() floats
     const float* data_f32() const;
+    float* mutable_data_f32();
 
     // Internal: Constructor is public but PcmChunkImpl is opaque
     explicit PcmChunk(std::unique_ptr<PcmChunkImpl> impl);

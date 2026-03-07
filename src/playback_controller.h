@@ -294,9 +294,13 @@ public:
 private:
     PlaybackController();
 
-    // Symmetric prefill at play start (called from Play())
-    void prefillVideo(int64_t pos, int direction);
+    // Pre-roll: wait for REFILL workers to populate video cache (called from Play())
+    void waitForVideoCache(int64_t pos, int timeout_ms);
     void prefillAudio(int64_t pos, int direction, float speed);
+
+    // Pre-roll timing constants
+    static constexpr int PREROLL_POLL_MS = 5;        // cache poll interval
+    static constexpr int PREROLL_TIMEOUT_MS = 3000;  // give up after 3s
 
     // Frame delivery.
     // synchronous=true: Seek (main thread) — direct setFrame + callback calls.

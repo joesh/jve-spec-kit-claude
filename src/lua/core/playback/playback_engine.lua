@@ -360,9 +360,18 @@ function PlaybackEngine:_provide_clips(from, to, track_type)
 
     local EMP = qt_constants.EMP
     for _, entry in ipairs(entries) do
-        local speed = (track_type == "video")
-            and self:_compute_video_speed_ratio(entry)
-            or self:_compute_audio_speed_ratio(entry)
+        local speed
+        if track_type == "video" then
+            speed = self:_compute_video_speed_ratio(entry)
+        else
+            -- Audio conform ratio is always positive (seq_fps / media_fps).
+            -- Multiply by retime direction: -1 for reverse clips (source_in > source_out).
+            speed = self:_compute_audio_speed_ratio(entry)
+            local c = entry.clip
+            if c.source_in and c.source_out and c.source_out < c.source_in then
+                speed = -speed
+            end
+        end
         local clip = self:_build_tmb_clip(entry, speed)
         local track_idx = entry.track.track_index
         EMP.TMB_ADD_CLIPS(self._tmb, track_type, track_idx, {clip})
@@ -504,8 +513,8 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
     local clip = entry.clip
     assert(clip.rate, string.format(
         "PlaybackEngine:_build_tmb_clip: clip %s missing rate", clip.id))
-    assert(type(speed_ratio) == "number" and speed_ratio > 0, string.format(
-        "PlaybackEngine:_build_tmb_clip: clip %s speed_ratio must be > 0, got %s",
+    assert(type(speed_ratio) == "number" and speed_ratio ~= 0 and math.abs(speed_ratio) < 100, string.format(
+        "PlaybackEngine:_build_tmb_clip: clip %s speed_ratio must be non-zero (|sr|<100), got %s",
         clip.id, tostring(speed_ratio)))
 
     return {
@@ -533,20 +542,25 @@ function PlaybackEngine:_compute_video_speed_ratio(entry)
         "_compute_video_speed_ratio: clip.source_in is nil (clip_id=" .. tostring(clip.id) .. ")")
     assert(clip.duration ~= nil,
         "_compute_video_speed_ratio: clip.duration is nil (clip_id=" .. tostring(clip.id) .. ")")
+    -- source_range is signed: positive = forward, negative = reverse
     local source_range = clip.source_out - clip.source_in
-    assert(source_range > 0, string.format(
-        "_compute_video_speed_ratio: source_range must be positive, got %d (clip_id=%s, source_out=%d, source_in=%d)",
+    assert(source_range ~= 0, string.format(
+        "_compute_video_speed_ratio: source_range must be non-zero, got %d (clip_id=%s, source_out=%d, source_in=%d)",
         source_range, tostring(clip.id), clip.source_out, clip.source_in))
     assert(clip.duration > 0, string.format(
         "_compute_video_speed_ratio: clip.duration must be positive, got %d (clip_id=%s)",
         clip.duration, tostring(clip.id)))
     local ratio = source_range / clip.duration
-    assert(ratio > 0 and ratio < 100, string.format(
+    assert(math.abs(ratio) > 0 and math.abs(ratio) < 100, string.format(
         "_compute_video_speed_ratio: ratio out of sane range: %.4f (clip_id=%s, source_range=%d, duration=%d)",
         ratio, tostring(clip.id), source_range, clip.duration))
     -- Near 1.0 = no speed change (avoid floating-point noise)
     if math.abs(ratio - 1.0) < 0.001 then
         return 1.0
+    end
+    -- Near -1.0 = reverse at normal speed
+    if math.abs(ratio + 1.0) < 0.001 then
+        return -1.0
     end
     return ratio
 end

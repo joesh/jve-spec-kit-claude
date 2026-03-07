@@ -371,7 +371,18 @@ void AudioPump::pumpLoop() {
             //   TMB extract: sample_idx = (offset * sr) / 1e6  (truncated again)
             // Double truncation can skip or repeat 1 sample at the boundary.
             // With alignment: boundaries fall on exact sample positions.
-            int64_t aligned_start = (push_start / 1000000LL * 1000000LL);  // floor to second
+            // NSF: push_start must be non-negative. Playhead is clamped to [0, total_frames)
+            // and sse_time starts at 0, so this should always hold. If reverse playback
+            // ever crosses time 0, the floor division below handles it correctly.
+            JVE_ASSERT(push_start >= 0,
+                "AudioPump: push_start is negative — unexpected reverse past time 0");
+            // Floor to second boundary. Integer division truncates toward zero, which
+            // equals floor for non-negative values. For negative values (defensive):
+            // subtract (denominator-1) before dividing to get true floor.
+            int64_t denom = 1000000LL;
+            int64_t aligned_start = (push_start >= 0)
+                ? (push_start / denom) * denom
+                : ((push_start - denom + 1) / denom) * denom;
             int64_t offset_us = push_start - aligned_start;
             int64_t offset_samples = (offset_us * m_sample_rate) / 1000000LL;
             int64_t aligned_push = aligned_start + (offset_samples * 1000000LL) / m_sample_rate;
@@ -538,22 +549,59 @@ void PlaybackController::SetBounds(int64_t total_frames, int32_t fps_num, int32_
 // Transport
 // ============================================================================
 
-void PlaybackController::prefillVideo(int64_t pos, int /*direction*/) {
-    // Sync-decode the current frame on every video track into TMB's cache.
-    // Mirrors deliverFrame's track iteration. Runs BEFORE CVDisplayLink starts,
-    // so the first tick has an immediate cache hit (no stall).
-    JVE_ASSERT(m_tmb, "PlaybackController::prefillVideo: TMB is null");
+void PlaybackController::waitForVideoCache(int64_t pos, int timeout_ms) {
+    // Poll TMB's video cache until REFILL workers have decoded the playhead frame
+    // on every video track. Uses cache_only=true to avoid acquiring reader locks —
+    // only reads the video_cache map under m_tracks_mutex (microsecond hold),
+    // so there's zero contention with REFILL workers.
+    JVE_ASSERT(m_tmb, "PlaybackController::waitForVideoCache: TMB is null");
+    JVE_ASSERT(timeout_ms > 0,
+        "PlaybackController::waitForVideoCache: timeout_ms must be positive");
 
     auto video_tracks = m_tmb->GetVideoTrackIds();
-    int filled = 0;
+    if (video_tracks.empty()) return;
+
+    using clock = std::chrono::steady_clock;
+    auto start = clock::now();
+    auto deadline = start + std::chrono::milliseconds(timeout_ms);
+    int ready = 0;
+    int timed_out = 0;
+
     for (int track_idx : video_tracks) {
         emp::TrackId track{emp::TrackType::Video, track_idx};
-        auto result = m_tmb->GetVideoFrame(track, pos, /*cache_only=*/false);
-        if (result.frame) ++filled;
-        // offline/gap is expected (no clip on this track at pos) — not an error
+        bool got_it = false;
+        while (clock::now() < deadline) {
+            auto r = m_tmb->GetVideoFrame(track, pos, /*cache_only=*/true);
+            // Only state worth polling: clip exists (!clip_id.empty) but
+            // decode pending (!frame && !offline). All others are terminal:
+            //   frame != null  → cached, ready
+            //   offline        → media unavailable, nothing to wait for
+            //   clip_id empty  → gap (no clip at this position)
+            bool pending = !r.clip_id.empty() && !r.frame && !r.offline;
+            if (!pending) {
+                ++ready;
+                got_it = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(PREROLL_POLL_MS));
+        }
+        if (!got_it) ++timed_out;
     }
-    JVE_LOG_DETAIL(Ticks, "Play: pre-filled %d/%zu video track(s) at frame %lld",
-                   filled, video_tracks.size(), (long long)pos);
+
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        clock::now() - start).count();
+
+    if (timed_out > 0) {
+        JVE_LOG_WARN(Ticks,
+            "waitForVideoCache: %d/%zu track(s) timed out after %lldms at frame %lld "
+            "— starting anyway (adaptive stride will compensate)",
+            timed_out, video_tracks.size(), (long long)elapsed_ms, (long long)pos);
+    } else {
+        JVE_LOG_DETAIL(Ticks, "Play: video cache ready %d/%zu track(s) at frame %lld in %lldms",
+                       ready, video_tracks.size(), (long long)pos, (long long)elapsed_ms);
+    }
+    // Always proceed — adaptive stride + audio-master handle slow codecs at runtime.
+    // Timeout is not fatal: it means REFILL workers are slow, not that playback can't start.
 }
 
 void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
@@ -699,20 +747,50 @@ void PlaybackController::Play(int direction, float speed) {
 
     int64_t pos = m_position.load(std::memory_order_relaxed);
 
-    // Hint TMB for pre-buffer direction
-    m_tmb->SetPlayhead(pos, direction, speed);
+    auto play_t0 = std::chrono::steady_clock::now();
 
-    // Prefetch clips before prefill: ensure TMB knows about clips at playhead
+    // Load clips BEFORE SetPlayhead: cold-start priming (0→1 direction) submits
+    // REFILLs for all existing tracks. Clips must be in the TMB at that point,
+    // otherwise REFILL finds empty clip lists → 0/48 decoded → 3s timeout.
+    // AddClips deduplicates, so re-adding existing clips is a no-op.
     resetPrefetchFrontiers();
     prefetchClips();
 
-    // Symmetric prefill: decode first frame(s) synchronously for both media
-    // types BEFORE starting outputs. Video prefill mirrors audio prefill —
-    // TMB sync-decodes on cache miss, populating the cache so the first
-    // CVDisplayLink tick gets an immediate hit (no frozen PENDING frames).
-    prefillVideo(pos, direction);
+    auto t_after_prefetch = std::chrono::steady_clock::now();
+
+    // Set direction (0→1) — triggers cold-start REFILL for all tracks.
+    // Clips are now present from prefetchClips() above.
+    m_tmb->SetPlayhead(pos, direction, speed);
+
+    auto t_after_setplayhead = std::chrono::steady_clock::now();
+
+    // Pre-roll: wait for REFILL workers to cache the playhead frame on all
+    // video tracks. Polls cache_only=true (no reader lock) so there's zero
+    // contention with the async REFILL jobs that SetPlayhead() just submitted.
+    waitForVideoCache(pos, PREROLL_TIMEOUT_MS);
+
+    auto t_after_videocache = std::chrono::steady_clock::now();
+
     if (m_has_audio.load(std::memory_order_relaxed)) {
         prefillAudio(pos, direction, speed);
+    }
+
+    auto t_after_audio = std::chrono::steady_clock::now();
+    auto total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        t_after_audio - play_t0).count();
+    if (total_ms > 50) {
+        JVE_LOG_WARN(Ticks,
+            "Play: SLOW START %lldms at frame %lld — "
+            "prefetch=%lldms SetPlayhead=%lldms videoCache=%lldms audio=%lldms",
+            (long long)total_ms, (long long)pos,
+            (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                t_after_prefetch - play_t0).count(),
+            (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                t_after_setplayhead - t_after_prefetch).count(),
+            (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                t_after_videocache - t_after_setplayhead).count(),
+            (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                t_after_audio - t_after_videocache).count());
     }
 
     // Start display link (video output)
