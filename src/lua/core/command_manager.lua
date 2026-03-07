@@ -29,7 +29,6 @@ local Signals = require("core.signals")
 local last_error_message = ""
 
 -- Forward declarations for modules used in helper functions
-local asserts_module
 
 
 -- Command event context (UI vs script).
@@ -90,9 +89,12 @@ local function bug_result(message)
     assert(message, "command_manager.bug_result: message is required")
     last_error_message = message
     local result = { success = false, error_message = last_error_message, result_data = "", is_bug = true }
-    if asserts_module.enabled() then
-        assert(false, last_error_message)
-    end
+    -- Log with traceback but DON'T assert — let the error result flow through
+    -- the return-value chain. Asserting here converts a returned error into a
+    -- thrown exception that bounces through 3 xpcall/error re-raise layers,
+    -- stacking tracebacks and producing ~8 lines of output for 1 error.
+    local _log = require("core.logger").for_area("commands")
+    _log.error("BUG: %s\n%s", last_error_message, debug.traceback("", 2))
     return result
 end
 
@@ -100,8 +102,12 @@ local function dev_assert(condition, message)
     if condition then
         return true
     end
-    bug_result(message)
-    return false
+    -- Invariant violation — must throw (not return) so pcall callers see failure.
+    -- bug_result logs+returns which is correct for command execution results,
+    -- but dev_assert guards structural invariants that must halt the caller.
+    local _log = require("core.logger").for_area("commands")
+    _log.error("BUG: %s\n%s", message, debug.traceback("", 2))
+    error(message, 2)
 end
 
 local function get_command_event_origin()
@@ -148,7 +154,6 @@ local log = require("core.logger").for_area("commands")
 
 -- Sub-modules
 local registry = require("core.command_registry")
-asserts_module         = require("core.asserts")
 local command_schema_module = require("core.command_schema")
 local history = require("core.command_history")
 local state_mgr = require("core.command_state")

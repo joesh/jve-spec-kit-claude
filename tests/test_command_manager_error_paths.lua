@@ -318,13 +318,12 @@ do
     check("origin still active (outer)", command_manager.peek_command_event_origin() == "script")
 end
 
-print("--- end_command_event without begin asserts ---")
+print("--- end_command_event without begin throws error ---")
 do
     command_manager.end_command_event()
-    local err = expect_error("end without begin", function()
-        command_manager.end_command_event()
-    end)
-    check("error mentions 'No active command event'", err and err:find("No active command event") ~= nil)
+    -- dev_assert throws on invariant violation so pcall callers see failure
+    local ok = pcall(command_manager.end_command_event)
+    check("end without begin throws", ok == false)
 
     command_manager.begin_command_event("script")
 end

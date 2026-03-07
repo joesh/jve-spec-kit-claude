@@ -300,7 +300,10 @@ function keyboard_shortcuts.handle_key(event)
         command_manager.end_command_event()
     end
 
-    if not success then error(result) end
+    if not success then
+        log.error("handle_key: %s", tostring(result))
+        return false
+    end
     return result
 end
 
