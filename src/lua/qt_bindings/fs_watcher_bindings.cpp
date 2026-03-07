@@ -4,7 +4,7 @@
 
 #include <QFileSystemWatcher>
 #include <lua.hpp>
-#include "assert_handler.h"
+#include "../../jve_log.h"
 
 namespace {
 
@@ -24,9 +24,8 @@ static void ensure_watcher() {
                     lua_pushstring(s_L, path.toUtf8().constData());
                     if (lua_pcall(s_L, 1, 0, 0) != 0) {
                         const char* err = lua_tostring(s_L, -1);
-                        std::string msg = std::string("FS file_changed callback error: ") + (err ? err : "(unknown)");
+                        JVE_LOG_ERROR(Ui, "FS file_changed callback error: %s", err ? err : "(unknown)");
                         lua_pop(s_L, 1);
-                        JVE_FAIL(msg.c_str());
                     }
                 }
             });
@@ -38,9 +37,8 @@ static void ensure_watcher() {
                     lua_pushstring(s_L, path.toUtf8().constData());
                     if (lua_pcall(s_L, 1, 0, 0) != 0) {
                         const char* err = lua_tostring(s_L, -1);
-                        std::string msg = std::string("FS dir_changed callback error: ") + (err ? err : "(unknown)");
+                        JVE_LOG_ERROR(Ui, "FS dir_changed callback error: %s", err ? err : "(unknown)");
                         lua_pop(s_L, 1);
-                        JVE_FAIL(msg.c_str());
                     }
                 }
             });

@@ -1,6 +1,5 @@
 #include "binding_macros.h"
 #include "../../jve_log.h"
-#include "../../assert_handler.h"
 #include <QAbstractButton>
 #include <QCoreApplication>
 #include <QContextMenuEvent>
@@ -51,13 +50,12 @@ static bool widget_accepts_text_input(QWidget* widget)
 }
 
 // Handle Lua pcall failure from C++ callback context (signal handlers, event filters).
-// lua_error is unsafe here — no Lua protected frame above. JVE_FAIL prints a stack
-// trace and throws JveAssertError, which Qt's event loop catches gracefully.
+// lua_pcall already caught the error — we log it and continue dispatch.
+// Throwing or calling lua_error here would crash (no protected frame above).
 static void handle_lua_callback_error(lua_State* L) {
     const char* err = lua_tostring(L, -1);
-    std::string msg = std::string("Lua callback error: ") + (err ? err : "(unknown)");
+    JVE_LOG_ERROR(Ui, "Lua callback error: %s", err ? err : "(unknown)");
     lua_pop(L, 1);
-    JVE_FAIL(msg.c_str());
 }
 
 // Global key event filter class
