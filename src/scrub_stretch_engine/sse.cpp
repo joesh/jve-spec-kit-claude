@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cstring>
 #include <deque>
-#include <atomic>
 
 namespace sse {
 
@@ -262,17 +261,6 @@ public:
             return render_passthrough(out, out_frames);
         }
 
-        // TEMP DIAG: log if render_scrub is used unexpectedly at speed ~1.0
-        {
-            static std::atomic<int> scrub_at_1x{0};
-            int c = scrub_at_1x.fetch_add(1, std::memory_order_relaxed);
-            if (c < 3) {
-                fprintf(stderr, "[SSE] SCRUB path: speed=%.4f time=%lld\n",
-                        (double)m_speed, (long long)m_current_time_us);
-                fflush(stderr);
-            }
-        }
-
         return render_scrub(out, out_frames);
     }
 
@@ -358,56 +346,6 @@ private:
 
         bool have_source = m_source_buffer.get_samples(
             fetch_time, m_config.sample_rate, out, out_frames);
-
-        // [2POP] diagnostic: frame 89951 @ 25fps = 3,598,040,000 μs
-        {
-            constexpr int64_t TWOPOP_US = 3598040000LL;
-            constexpr int64_t TWOPOP_MARGIN = 1000000LL;
-            int64_t dur_us = (out_frames * 1000000LL) / m_config.sample_rate;
-            bool twopop = fetch_time < (TWOPOP_US + TWOPOP_MARGIN) &&
-                          (fetch_time + dur_us) > (TWOPOP_US - TWOPOP_MARGIN);
-            if (twopop) {
-                float pk = 0.0f;
-                if (have_source) {
-                    for (int64_t i = 0; i < std::min(out_frames * ch, (int64_t)4096); ++i) {
-                        float v = std::abs(out[i]);
-                        if (v > pk) pk = v;
-                    }
-                }
-                int64_t src_min = 0, src_max = 0;
-                m_source_buffer.get_time_range(&src_min, &src_max, m_config.sample_rate);
-                fprintf(stderr, "[2POP] SSE: time=%lld hit=%d peak=%.6f src=[%lld..%lld] frames=%lld\n",
-                        (long long)fetch_time, have_source ? 1 : 0, pk,
-                        (long long)src_min, (long long)src_max,
-                        (long long)out_frames);
-                fflush(stderr);
-            }
-        }
-
-        // TEMP DIAG: track SSE source lookup results
-        {
-            static std::atomic<int> sse_hit{0};
-            static std::atomic<int> sse_miss{0};
-            if (have_source) {
-                int c = sse_hit.fetch_add(1, std::memory_order_relaxed);
-                if (c < 5) {
-                    fprintf(stderr, "[SSE] HIT: time=%lld frames=%lld\n",
-                            (long long)fetch_time, (long long)out_frames);
-                    fflush(stderr);
-                }
-            } else {
-                int c = sse_miss.fetch_add(1, std::memory_order_relaxed);
-                if (c < 3 || c == 100 || c == 500) {
-                    int64_t src_min = 0, src_max = 0;
-                    bool has_range = m_source_buffer.get_time_range(
-                        &src_min, &src_max, m_config.sample_rate);
-                    fprintf(stderr, "[SSE] MISS #%d: time=%lld src=[%lld..%lld] has=%d\n",
-                            c, (long long)fetch_time,
-                            (long long)src_min, (long long)src_max, has_range);
-                    fflush(stderr);
-                }
-            }
-        }
 
         if (!have_source) {
             m_starved = true;
