@@ -24,7 +24,8 @@ struct AudioFormat {
 class PcmChunkImpl;
 
 // PCM audio chunk (decoded audio data)
-// Immutable, refcounted via shared_ptr
+// Shared via shared_ptr. Logically immutable after construction except for
+// mutable_data_f32() which is used internally for in-place PCM reversal.
 class PcmChunk {
 public:
     ~PcmChunk();

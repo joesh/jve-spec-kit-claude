@@ -12,6 +12,10 @@ PcmChunkImpl::PcmChunkImpl(int32_t sample_rate_, int32_t channels_, SampleFormat
     , format(format_)
     , start_time_us(start_time_us_)
     , data(std::move(data_)) {
+    assert(sample_rate > 0 && "PcmChunkImpl: sample_rate must be positive");
+    assert(channels > 0 && "PcmChunkImpl: channels must be positive");
+    assert(data.size() % static_cast<size_t>(channels) == 0 &&
+           "PcmChunkImpl: data size must be a multiple of channels");
 }
 
 // PcmChunk implementation
@@ -39,7 +43,6 @@ int64_t PcmChunk::start_time_us() const {
 }
 
 int64_t PcmChunk::frames() const {
-    if (m_impl->channels == 0) return 0;
     return static_cast<int64_t>(m_impl->data.size()) / m_impl->channels;
 }
 
