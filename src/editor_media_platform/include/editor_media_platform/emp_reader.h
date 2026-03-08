@@ -68,6 +68,11 @@ public:
     // True if video decoder is using hardware acceleration (VideoToolbox)
     bool IsHwAccelerated() const;
 
+    // Per-frame decode time from the last batch decode (play path).
+    // Returns ms/frame averaged over the batch, or -1.0f if no batch yet.
+    // Retained across cache-hit calls — reflects codec throughput, not per-call latency.
+    float LastBatchMsPerFrame() const;
+
     // Get the underlying media file
     std::shared_ptr<MediaFile> media_file() const;
 

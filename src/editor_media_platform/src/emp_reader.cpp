@@ -148,6 +148,12 @@ public:
     // Stale session log throttle: log first clear per target, then count.
     TimeUS last_stale_target = INT64_MIN;
     int stale_clear_count = 0;
+
+    // Per-frame decode time from the last batch decode (play path).
+    // batch_total_ms / batch_frame_count. Set on each batch decode,
+    // retained across cache-hit calls so callers always see the codec's
+    // true per-frame cost rather than 0 (cache hit) or N*frame (batch).
+    float last_batch_ms_per_frame = -1.0f;
 };
 
 Reader::Reader(std::unique_ptr<ReaderImpl> impl, std::shared_ptr<MediaFile> asset)
@@ -159,6 +165,10 @@ Reader::~Reader() = default;
 
 bool Reader::IsHwAccelerated() const {
     return m_impl->codec_ctx.is_hw_accelerated();
+}
+
+float Reader::LastBatchMsPerFrame() const {
+    return m_impl->last_batch_ms_per_frame;
 }
 
 std::shared_ptr<MediaFile> Reader::media_file() const {
@@ -586,11 +596,20 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
         }
 
         auto decode_end = std::chrono::steady_clock::now();
-        auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        auto decode_us = std::chrono::duration_cast<std::chrono::microseconds>(
             decode_end - decode_start).count();
+        float decode_ms = static_cast<float>(decode_us) / 1000.0f;
+        // Record per-frame decode cost (batch_ms / count).
+        // Retained across cache-hit calls so callers see codec throughput.
+        // Uses microsecond timer to preserve sub-ms precision for fast codecs.
+        if (!decoded_frames.empty()) {
+            m_impl->last_batch_ms_per_frame =
+                decode_ms / static_cast<float>(decoded_frames.size());
+        }
+
         if (decode_ms > 10) {
-            EMP_LOG_DEBUG("Decode batch: %zu frames in %lldms (%.1fms/frame) mode=play",
-                    decoded_frames.size(), static_cast<long long>(decode_ms),
+            EMP_LOG_DEBUG("Decode batch: %zu frames in %.1fms (%.1fms/frame) mode=play",
+                    decoded_frames.size(), decode_ms,
                     decoded_frames.size() > 0 ? (double)decode_ms / decoded_frames.size() : 0);
         }
 

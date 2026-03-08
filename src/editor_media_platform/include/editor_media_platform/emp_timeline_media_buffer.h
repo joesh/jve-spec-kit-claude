@@ -153,6 +153,14 @@ public:
     int64_t GetVideoCacheMissCount() const { return m_video_cache_misses.load(); }
     void ResetVideoCacheMissCount() { m_video_cache_misses.store(0); }
 
+    // Probe decode speed: returns measured ms-per-frame for a media path,
+    // or -1.0f if that path has not been probed yet. Thread-safe.
+    float GetProbeDecodeMs(const std::string& media_path) const;
+
+    // Next clip after timeline_frame on a track. Returns true + populates out
+    // if found. Thread-safe (locks internally).
+    bool GetNextClipOnTrack(TrackId track, int64_t timeline_frame, ClipInfo& out) const;
+
     // Remove a path from the offline blacklist (called when FS watcher
     // detects a previously-missing file has reappeared).
     void ClearOffline(const std::string& path);
@@ -199,7 +207,7 @@ private:
     void log_pool_state(const char* action, const TrackId& track,
                         const std::string& clip_id, bool is_hw);
 
-    std::mutex m_pool_mutex;
+    mutable std::mutex m_pool_mutex;
     // Key: (track, clip_id) → each clip gets its own reader/decode session
     // (avoids cache thrashing when two clips from the same file have different source positions)
     std::map<std::pair<TrackId, std::string>, PoolEntry> m_readers;
@@ -257,7 +265,7 @@ private:
         std::unordered_map<std::string, int64_t> clip_eof_frame;
     };
 
-    std::mutex m_tracks_mutex;
+    mutable std::mutex m_tracks_mutex;
     std::unordered_map<TrackId, TrackState, TrackIdHash> m_tracks;
 
     // Find clip at timeline_frame in track's clip list
@@ -286,7 +294,7 @@ private:
 
     // ── Pre-buffer thread pool ──
     struct PreBufferJob {
-        enum Type { VIDEO_REFILL, AUDIO_REFILL, READER_WARM };
+        enum Type { DECODE_PROBE, VIDEO_REFILL, AUDIO_REFILL, READER_WARM };
         Type type = VIDEO_REFILL;
 
         TrackId track{TrackType::Video, 0};
@@ -303,6 +311,12 @@ private:
         // AUDIO_REFILL fields (watermark-driven)
         TimeUS refill_from_us = 0;       // start of refill range (timeline us)
         TimeUS refill_to_us = 0;         // end of refill range (timeline us)
+
+        // DECODE_PROBE fields — single-frame decode to measure codec speed.
+        // Highest priority: one frame, seeds m_decode_ms for predictive stride.
+        int64_t probe_source_in = 0;
+        int32_t probe_rate_num = 0;
+        int32_t probe_rate_den = 1;
 
         // Generation counter — REFILL aborts if track's generation has advanced
         int64_t generation = 0;
@@ -344,6 +358,10 @@ private:
     static constexpr TimeUS AUDIO_HIGH_WATER = 2000000;  // 2s
     static constexpr TimeUS AUDIO_LOW_WATER = 500000;    // 0.5s
     static constexpr TimeUS AUDIO_REFILL_SIZE = 200000;  // 200ms
+
+    // Probe window: scan this far ahead of playhead for unprobed media paths.
+    // Must be >> HIGH_WATER so probes complete well before REFILL reaches the clip.
+    static constexpr int64_t PROBE_WINDOW = 288;      // ~12s @24fps
 
     // WARM diagnostics: queue wait >200ms = workers starved by REFILL (software)
     //                   acquire >1000ms = drive I/O or codec init slow (environment)
