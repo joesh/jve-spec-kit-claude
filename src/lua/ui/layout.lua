@@ -380,11 +380,8 @@ menu_system.init(main_window, command_manager, project_browser_mod)
 -- Load menus from XML
 local menu_path = layout_dir .. "../../../menus.xml"
 local menu_success, menu_error = menu_system.load_from_file(menu_path)
-if menu_success then
-    log.event("Menu system loaded successfully")
-else
-    log.error("Failed to load menu system: %s", tostring(menu_error))
-end
+assert(menu_success, string.format(
+    "layout: failed to load menu system from %s: %s", menu_path, tostring(menu_error)))
 
 -- 2. Source + Timeline Monitors (center)
 local SequenceMonitor = require("ui.sequence_monitor")

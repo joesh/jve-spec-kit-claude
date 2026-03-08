@@ -89,6 +89,10 @@ function M.parse_shortcut(shortcut_string)
             modifiers = modifiers + MOD.Alt
         elseif mod == "shift" then
             modifiers = modifiers + MOD.Shift
+        else
+            assert(false, string.format(
+                "parse_shortcut: unknown modifier '%s' in '%s'",
+                parts[i], shortcut_string))
         end
     end
 

@@ -323,15 +323,21 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     assert(type(saved_playhead) == "number", string.format(
         "SequenceMonitor(%s):load_sequence: playhead_position must be number, got %s (seq=%s)",
         self.view_id, type(saved_playhead), sequence_id:sub(1, 8)))
-    -- Clamp to valid range: DB may contain stale values written before
-    -- set_playhead validation was added (e.g. DRP import duration mismatch).
-    local clamped = math.max(0, math.min(saved_playhead, self.total_frames - 1))
-    if clamped ~= saved_playhead then
-        log.warn("%s: clamped stale playhead %d → %d (total_frames=%d, seq=%s)",
-            self.view_id, saved_playhead, clamped, self.total_frames, sequence_id:sub(1, 8))
+    -- Validate playhead is in [0, total_frames). Stale DB values are a data
+    -- integrity bug — set_playhead validation prevents new bad writes, so
+    -- reading a bad value means the DB was corrupted or import was broken.
+    -- Empty sequence (total_frames=0): only playhead=0 is valid.
+    if self.total_frames > 0 then
+        assert(saved_playhead >= 0 and saved_playhead < self.total_frames, string.format(
+            "SequenceMonitor(%s):load_sequence: playhead %d out of range [0, %d) (seq=%s)",
+            self.view_id, saved_playhead, self.total_frames, sequence_id:sub(1, 8)))
+    else
+        assert(saved_playhead == 0, string.format(
+            "SequenceMonitor(%s):load_sequence: empty sequence playhead must be 0, got %d (seq=%s)",
+            self.view_id, saved_playhead, sequence_id:sub(1, 8)))
     end
-    self.playhead = clamped
-    self.engine:seek(clamped)
+    self.playhead = saved_playhead
+    self.engine:seek(saved_playhead)
 
     -- Update title
     local title = seq:is_masterclip() and "Source" or "Timeline"
@@ -579,6 +585,13 @@ function SequenceMonitor:save_playhead_to_db()
     if not self.sequence:is_masterclip() then return end
     if not database.has_connection() then return end
 
+    -- Validate before writing — catch view-level playhead drift.
+    -- total_frames=0 means unloaded; skip save in that case.
+    if self.total_frames > 0 then
+        assert(self.playhead >= 0 and self.playhead < self.total_frames, string.format(
+            "save_playhead_to_db(%s): playhead %d out of range [0, %d)",
+            self.view_id, self.playhead, self.total_frames))
+    end
     self.sequence.playhead_position = self.playhead
     self.sequence:save()
 end

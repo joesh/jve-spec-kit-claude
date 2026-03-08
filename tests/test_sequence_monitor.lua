@@ -822,6 +822,8 @@ do
     expect_assert(function() view:seek_to_frame(-5) end,
         "seek negative frame")
 
+    -- Reset playhead to valid range before destroy (save_playhead_to_db validates)
+    view:seek_to_frame(0)
     view:destroy()
     print("  ok")
 end
@@ -902,7 +904,7 @@ do
     print("  ok")
 end
 
--- ─── Test 30: out-of-bounds saved playhead clamped on load ───
+-- ─── Test 30: out-of-bounds saved playhead asserts on load ───
 print("\n--- out-of-bounds saved playhead ---")
 do
     -- Artificially save a playhead beyond total_frames (bypasses set_playhead validation)
@@ -913,16 +915,15 @@ do
 
     local view = SequenceMonitor.new({ view_id = "test_oob_ph" })
     timer_callbacks = {}
-    view:load_sequence(mc_id)
 
-    -- load_sequence clamps stale DB values to valid range
-    -- mc has 100 total_frames → 999 clamped to 99
-    assert(view.playhead == 99,
-        "stale playhead should clamp to total_frames-1, got " .. view.playhead)
+    -- load_sequence must assert on stale DB playhead — not silently clamp
+    expect_assert(function() view:load_sequence(mc_id) end,
+        "out-of-bounds playhead must assert on load")
 
-    -- Reset for other tests
-    view:set_playhead(0)
-    pump_timers()
+    -- Reset DB to valid state for subsequent tests
+    seq.playhead_position = 0
+    seq:save()
+
     view:destroy()
     print("  ok")
 end

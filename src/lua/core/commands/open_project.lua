@@ -116,10 +116,10 @@ function M.post_open_init(sequence, project_path)
     command_manager.init(sequence.id, sequence.project_id)
 
     -- Get UI references
-    local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
-    local main_window = ui_state_ok and ui_state.get_main_window() or nil
-    local project_browser = ui_state_ok and ui_state.get_project_browser() or nil
-    local timeline_panel = ui_state_ok and ui_state.get_timeline_panel() or nil
+    local ui_state = require("ui.ui_state")
+    local main_window = ui_state.get_main_window()
+    local project_browser = ui_state.get_project_browser()
+    local timeline_panel = ui_state.get_timeline_panel()
 
     -- Load timeline
     if timeline_panel and timeline_panel.load_sequence then
@@ -143,7 +143,10 @@ function M.post_open_init(sequence, project_path)
     -- Set window title
     local Project = require("models.project")
     local project = Project.load(sequence.project_id)
-    if project and project.name and project.name ~= "" then
+    assert(project, string.format(
+        "post_open_init: Project.load(%s) returned nil after successful open",
+        tostring(sequence.project_id)))
+    if project.name and project.name ~= "" then
         if main_window and qt_constants and qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TITLE then
             qt_constants.PROPERTIES.SET_TITLE(main_window, project.name)
         end

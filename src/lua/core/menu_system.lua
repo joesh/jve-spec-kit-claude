@@ -324,10 +324,8 @@ end
 -- @return function: Callback function
 local function create_action_callback(command_name, params)
     return function()
-        if not command_manager then
-            log.error("Menu system not initialized with command manager")
-            return
-        end
+        assert(command_manager,
+            "create_action_callback: menu system not initialized with command manager")
 
         log.event("Menu clicked: %s", tostring(command_name))
 

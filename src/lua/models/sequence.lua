@@ -1239,10 +1239,13 @@ function Sequence:content_duration()
         assert(stmt, "Sequence:content_duration: failed to prepare query")
         stmt:bind_value(1, self.id)
         assert(stmt:exec(), "Sequence:content_duration: query exec failed")
-        local dur = 0
-        if stmt:next() then
-            dur = stmt:value(0) or 0
-        end
+        assert(stmt:next(), string.format(
+            "Sequence:content_duration(%s): masterclip has no clip_kind='master' row",
+            tostring(self.id)))
+        local dur = stmt:value(0)
+        assert(dur and dur > 0, string.format(
+            "Sequence:content_duration(%s): duration_frames is %s (expected > 0)",
+            tostring(self.id), tostring(dur)))
         stmt:finalize()
         return dur
     end
@@ -1257,6 +1260,9 @@ function Sequence:set_playhead(frame)
     assert(type(frame) == "number",
         string.format("Sequence:set_playhead(%s): frame must be number, got %s",
             tostring(self.id), type(frame)))
+    assert(frame == math.floor(frame),
+        string.format("Sequence:set_playhead(%s): frame must be integer, got %s",
+            tostring(self.id), tostring(frame)))
     assert(frame >= 0,
         string.format("Sequence:set_playhead(%s): frame must be >= 0, got %d",
             tostring(self.id), frame))

@@ -196,6 +196,7 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames)
     -- Park() → prefetchClips() → _provide_clips().
     self:_setup_playback_controller()
     self._video_track_indices = self.sequence:get_track_indices("VIDEO")
+    table.sort(self._video_track_indices, function(a, b) return a > b end)
     self._audio_track_indices = self.sequence:get_track_indices("AUDIO")
 
     -- NOTE: No seek here. Caller (SequenceMonitor) is responsible for initial
@@ -275,6 +276,7 @@ function PlaybackEngine:notify_content_changed()
     if self._playback_controller then
         qt_constants.PLAYBACK.RELOAD_ALL_CLIPS(self._playback_controller)
         self._video_track_indices = self.sequence:get_track_indices("VIDEO")
+        table.sort(self._video_track_indices, function(a, b) return a > b end)
         self._audio_track_indices = self.sequence:get_track_indices("AUDIO")
     end
 end
@@ -1201,13 +1203,16 @@ end
 
 --- Apply latch effects at boundary frame.
 function PlaybackEngine:_apply_latch(boundary_frame)
+    assert(boundary_frame >= 0, string.format(
+        "_apply_latch: boundary_frame=%d must be >= 0", boundary_frame))
     local t_us = helpers.calc_time_us_from_frame(
         boundary_frame, self.fps_num, self.fps_den)
+    assert(t_us >= 0, string.format(
+        "_apply_latch: calc_time_us returned %d for boundary_frame=%d — math bug",
+        t_us, boundary_frame))
 
     if audio_playback and audio_playback.max_media_time_us then
-        t_us = math.max(0, math.min(t_us, audio_playback.max_media_time_us))
-    else
-        t_us = math.max(0, t_us)
+        t_us = math.min(t_us, audio_playback.max_media_time_us)
     end
 
     if audio_playback and audio_playback.is_ready()

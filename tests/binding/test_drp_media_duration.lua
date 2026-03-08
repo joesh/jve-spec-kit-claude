@@ -277,4 +277,85 @@ for _, pmc in ipairs(result.pool_master_clips) do
 end
 assert(found_audio_pmc, "Should find a pool master clip with audio_duration blob data")
 
+--------------------------------------------------------------------------------
+-- Test 7: Zero-duration clip does NOT pollute media_lookup
+-- Resolve creates degenerate zero-duration clips as artifacts. These are
+-- skipped (clip.duration <= 0 check) and should not contribute to media_lookup.
+--------------------------------------------------------------------------------
+
+print("\n--- Test 7: Zero-duration clip excluded from media_lookup ---")
+
+local seq_zero = elem("Sequence", "", {
+    elem("Sm2TiTrack", "", {
+        elem("Type", "0"),
+        wrap_clips(
+            elem("Sm2TiVideoClip", "", {
+                elem("Name", "degenerate_clip"),
+                elem("Start", "0"),
+                elem("Duration", "0"),           -- zero duration → skipped
+                elem("In", "500"),
+                elem("MediaFilePath", "/vol/media/degenerate.mov"),
+            })
+        ),
+    }),
+})
+
+local v7, _, ml7 = drp_importer._parse_resolve_tracks(seq_zero, 24)
+
+assert(#v7 == 0, "Zero-duration clip track should be empty (no valid clips)")
+assert(ml7["/vol/media/degenerate.mov"] == nil,
+    "Zero-duration clip should NOT create a media_lookup entry")
+print("  ✓ Zero-duration clip excluded from media_lookup")
+
+--------------------------------------------------------------------------------
+-- Test 8: Retimed clip source_extent uses speed-adjusted values
+-- A clip with retime: <In> = "100|003e804026204040" (speed encoded in hex)
+-- For non-retimed: source_extent = source_in + source_duration
+-- For retimed: source_in_native and source_duration are speed-adjusted
+-- The hex encodes speed = 2.0 via LE IEEE 754 double
+-- source_in_native = floor(100 * 2.0 + 0.5) = 200
+-- source_duration = floor(50 * 2.0 + 0.5) = 100
+-- source_extent = 200 + 100 = 300
+--------------------------------------------------------------------------------
+
+print("\n--- Test 8: Retimed clip → speed-adjusted source_extent ---")
+
+-- Encode speed=2.0 as LE IEEE 754 double hex string
+-- 2.0 in IEEE 754 double = 0x4000000000000000
+-- Little-endian bytes: 00 00 00 00 00 00 00 40
+local hex_speed_2x = "0000000000000040"
+
+local seq_retime = elem("Sequence", "", {
+    elem("Sm2TiTrack", "", {
+        elem("Type", "0"),
+        wrap_clips(
+            elem("Sm2TiVideoClip", "", {
+                elem("Name", "fast_clip"),
+                elem("Start", "0"),
+                elem("Duration", "50"),           -- timeline edit = 50 frames
+                elem("In", "100|" .. hex_speed_2x),  -- retimed: in=100, speed=2x
+                elem("MediaFilePath", "/vol/media/fast.mov"),
+            })
+        ),
+    }),
+})
+
+local v8, _, ml8 = drp_importer._parse_resolve_tracks(seq_retime, 24)
+
+assert(#v8 == 1, "Expected 1 video track")
+assert(#v8[1].clips == 1, "Expected 1 clip")
+
+local fast_media = ml8["/vol/media/fast.mov"]
+assert(fast_media, "media_lookup should have entry for fast.mov")
+
+-- Speed=2.0: source_in_native = floor(100 * 2.0 + 0.5) = 200
+-- source_duration = floor(50 * 2.0 + 0.5) = 100
+-- source_extent = 200 + 100 = 300
+-- Note: actual speed may be probe-adjusted, but without file to probe,
+-- hex speed is used as-is
+assert(fast_media.duration == 300, string.format(
+    "Retimed media duration should be 300 (speed-adjusted extent), got %d",
+    fast_media.duration))
+print("  ✓ Retimed clip: media duration = 300 (speed-adjusted source_extent)")
+
 print("\n✅ test_drp_media_duration.lua passed")

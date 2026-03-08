@@ -1301,6 +1301,9 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
                 -- Video (incl. retimed): source_in_native + source_duration
                 source_extent_frames = source_in_native + source_duration
             end
+            assert(source_extent_frames >= 0, string.format(
+                "parse_resolve_tracks: clip '%s' has negative source_extent_frames=%d",
+                clip_name, source_extent_frames))
 
             -- Compute source_out, then swap for reverse clips.
             -- Reverse: source_in = high frame (playback start), source_out = low frame.
@@ -1351,7 +1354,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
                         if source_extent_frames > entry.duration then
                             entry.duration = source_extent_frames
                         end
-                        if track_type == "AUDIO" and (entry.audio_channels or 0) < 2 then
+                        if track_type == "AUDIO" and entry.audio_channels < 2 then
                             entry.audio_channels = 2
                         end
                     end
@@ -2081,13 +2084,12 @@ function M.import_into_project(project_id, parse_result, opts)
                 height = project_settings.height,
             })
 
-            if media:save() then
-                media_by_path[media_item.file_path] = media
-                table.insert(result.media_ids, media.id)
-                log.event("  Imported media: %s", media.name)
-            else
-                log.warn("Failed to import media: %s", media_item.name)
-            end
+            assert(media:save(), string.format(
+                "drp_importer: failed to save media '%s' (path=%s)",
+                media_item.name, media_item.file_path))
+            media_by_path[media_item.file_path] = media
+            table.insert(result.media_ids, media.id)
+            log.event("  Imported media: %s", media.name)
         end
     end
 
@@ -2169,9 +2171,9 @@ function M.import_into_project(project_id, parse_result, opts)
             }
         )
 
-        if not sequence:save() then
-            log.warn("Failed to create timeline: %s", timeline_data.name)
-        else
+        assert(sequence:save(), string.format(
+            "drp_importer: failed to save timeline '%s'", timeline_data.name))
+        do
             table.insert(result.sequence_ids, sequence.id)
             log.event("  Created timeline: %s @ %d/%d fps, %dx%d, viewport [%d..%d]",
                     timeline_data.name, fps_num, fps_den, seq_width, seq_height, view_start, view_start + view_duration)
@@ -2211,9 +2213,10 @@ function M.import_into_project(project_id, parse_result, opts)
                     track = Track.create_audio(track_name, sequence.id, { index = track_data.index })
                 end
 
-                if not track:save() then
-                    log.warn("Failed to create track: %s", track_name)
-                else
+                assert(track:save(), string.format(
+                    "drp_importer: failed to save track '%s' in timeline '%s'",
+                    track_name, timeline_data.name))
+                do
                     table.insert(result.track_ids, track.id)
 
                     for _, clip_data in ipairs(track_data.clips) do
@@ -2274,7 +2277,10 @@ function M.import_into_project(project_id, parse_result, opts)
                             bin_id = master_bin_id,
                         })
 
-                        if clip:save() then
+                        assert(clip:save(), string.format(
+                            "drp_importer: failed to save clip '%s' in track '%s'",
+                            clip_data.name, track_name))
+                        do
                             table.insert(result.clip_ids, clip.id)
 
                             -- Assign masterclip sequence to DRP folder bin (many-to-many safe)
@@ -2300,8 +2306,6 @@ function M.import_into_project(project_id, parse_result, opts)
                                     role = track_data.type == "VIDEO" and "video" or "audio",
                                 })
                             end
-                        else
-                            log.warn("Failed to import clip: %s", clip_data.name)
                         end
                         ::continue_clip::
                     end

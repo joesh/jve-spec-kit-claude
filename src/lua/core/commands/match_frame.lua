@@ -9,6 +9,7 @@
 --
 -- @file match_frame.lua
 local M = {}
+local log = require("core.logger").for_area("commands")
 local timeline_state = require('ui.timeline.timeline_state')
 local project_browser = require('ui.project_browser')
 local Sequence = require('models.sequence')
@@ -114,6 +115,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             master_seq:set_out(target_clip.source_out)
             master_seq:set_playhead(target_clip.source_in + (playhead - target_clip.timeline_start))
             master_seq:save()
+        else
+            -- FCP7 import doesn't create masterclip sequences (IS-a gap).
+            -- Marks can't be written but focus_master_clip can still work.
+            -- TODO: FCP7 import should create masterclip sequences.
+            log.warn("MatchFrame: no masterclip sequence for %s — marks skipped (FCP7 import gap)",
+                tostring(target_master_id))
         end
 
         -- Load master clip into source viewer (skip_focus: don't focus browser)
