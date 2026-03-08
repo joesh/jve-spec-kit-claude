@@ -291,6 +291,25 @@ public:
     // GCD main queue afterwards (CONTROL.PROCESS_EVENTS) for frame delivery.
     void Tick();
 
+    // Diagnostic summary — read after Stop() returns (rings preserved until next Play).
+    struct DiagSummary {
+        size_t tick_count;
+        double cadence_p50_ms;
+        double cadence_p95_ms;
+        double cadence_p99_ms;
+        double drift_p50_s;
+        double drift_p95_s;
+        double drift_p99_s;
+        int64_t skip_count;
+        int64_t hold_count;
+        int64_t repeat_count;
+        int64_t gap_count;
+        int64_t dropped_count;
+        int64_t backward_jumps;       // frame[i] < frame[i-1] for non-REPEAT forward ticks
+        bool audio_master_engaged;    // true if audio-master was active at Stop()
+    };
+    DiagSummary GetDiagSummary() const;
+
 private:
     PlaybackController();
 
@@ -351,14 +370,22 @@ private:
     int m_consecutive_audio_dry{0};
     int m_consecutive_audio_healthy{0};
 
+    // ---- Predictive stride: deferred until clip transition ----
+    // When approaching a clip boundary, query TMB for the next clip's decode
+    // speed. If it's slow, record the stride but DON'T apply yet — the current
+    // clip is fast and shouldn't stutter. Apply at actual transition.
+    int64_t m_current_clip_end_frame{-1};         // timeline end of current clip
+    std::string m_current_clip_media_path;         // media path of current clip
+    bool m_stride_pre_engaged{false};              // true when stride was set predictively
+    int m_pending_stride{0};                       // deferred stride, applied at transition
+    static constexpr int64_t STRIDE_LOOKAHEAD = 72;  // ~3s at 25fps (needs margin for prefetch latency)
+
     static constexpr int SLOW_DECODE_CONSECUTIVE = 3;
     static constexpr int FAST_DECODE_CONSECUTIVE = 10;
     static constexpr double SLOW_DECODE_RATIO = 2.0;     // deliver_ms > 2x frame_period = slow
     static constexpr int MAX_STRIDE = 8;                  // cap at ~3fps for 24fps content
     static constexpr int AUDIO_DRY_CONSECUTIVE = 3;       // 3 ticks of buf=0 → audio-master
     static constexpr int AUDIO_HEALTHY_CONSECUTIVE = 10;  // 10 ticks of buf>0 → back to PLL
-    static constexpr double AUDIO_MASTER_DRIFT_THRESHOLD = 0.1;   // 100ms → engage audio-master
-    static constexpr double AUDIO_MASTER_RECOVER_THRESHOLD = 0.04; // 40ms → safe to return to PLL
 
     bool shouldDecode(int64_t frame) const;
     void updateStrideDetection(double deliver_ms);
@@ -401,6 +428,17 @@ private:
     DiagRing<TickMetric, DIAG_VIDEO_RING_SIZE> m_video_diag;
     DiagRing<PumpMetric, DIAG_AUDIO_RING_SIZE> m_audio_diag;
     TickMetric* m_current_tick{nullptr};
+
+    // Clip transition log — recorded during playback, dumped in diagnostics.
+    // Small vector (typically <10 transitions per play session).
+    struct ClipTransition {
+        size_t tick_index;           // index into m_video_diag
+        int64_t frame;               // timeline frame of transition
+        std::string clip_id;
+        std::string media_path;
+    };
+    std::vector<ClipTransition> m_clip_transitions;
+    size_t m_diag_tick_index{0};     // running tick counter for transition log
 
     void dumpDiagnostics();
 
@@ -459,5 +497,15 @@ public:
 
     int64_t CurrentFrame() const { return 0; }
     bool IsPlaying() const { return false; }
+
+    struct DiagSummary {
+        size_t tick_count{0};
+        double cadence_p50_ms{0}; double cadence_p95_ms{0}; double cadence_p99_ms{0};
+        double drift_p50_s{0}; double drift_p95_s{0}; double drift_p99_s{0};
+        int64_t skip_count{0}; int64_t hold_count{0}; int64_t repeat_count{0};
+        int64_t gap_count{0}; int64_t dropped_count{0}; int64_t backward_jumps{0};
+        bool audio_master_engaged{false};
+    };
+    DiagSummary GetDiagSummary() const { return {}; }
 };
 #endif

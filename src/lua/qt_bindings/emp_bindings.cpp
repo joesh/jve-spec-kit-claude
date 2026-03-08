@@ -1647,6 +1647,50 @@ static int lua_playback_set_clip_transition_callback(lua_State* L) {
     return 0;
 }
 
+// PLAYBACK.GET_DIAG_SUMMARY(controller) -> table
+// Returns diagnostic ring buffer summary after Stop(). Rings survive until next Play().
+static int lua_playback_get_diag_summary(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    auto s = controller->GetDiagSummary();
+
+    lua_createtable(L, 0, 14);
+
+    lua_pushinteger(L, static_cast<lua_Integer>(s.tick_count));
+    lua_setfield(L, -2, "tick_count");
+
+    lua_pushnumber(L, s.cadence_p50_ms);
+    lua_setfield(L, -2, "cadence_p50_ms");
+    lua_pushnumber(L, s.cadence_p95_ms);
+    lua_setfield(L, -2, "cadence_p95_ms");
+    lua_pushnumber(L, s.cadence_p99_ms);
+    lua_setfield(L, -2, "cadence_p99_ms");
+
+    lua_pushnumber(L, s.drift_p50_s);
+    lua_setfield(L, -2, "drift_p50_s");
+    lua_pushnumber(L, s.drift_p95_s);
+    lua_setfield(L, -2, "drift_p95_s");
+    lua_pushnumber(L, s.drift_p99_s);
+    lua_setfield(L, -2, "drift_p99_s");
+
+    lua_pushinteger(L, static_cast<lua_Integer>(s.skip_count));
+    lua_setfield(L, -2, "skip_count");
+    lua_pushinteger(L, static_cast<lua_Integer>(s.hold_count));
+    lua_setfield(L, -2, "hold_count");
+    lua_pushinteger(L, static_cast<lua_Integer>(s.repeat_count));
+    lua_setfield(L, -2, "repeat_count");
+    lua_pushinteger(L, static_cast<lua_Integer>(s.gap_count));
+    lua_setfield(L, -2, "gap_count");
+    lua_pushinteger(L, static_cast<lua_Integer>(s.dropped_count));
+    lua_setfield(L, -2, "dropped_count");
+    lua_pushinteger(L, static_cast<lua_Integer>(s.backward_jumps));
+    lua_setfield(L, -2, "backward_jumps");
+
+    lua_pushboolean(L, s.audio_master_engaged ? 1 : 0);
+    lua_setfield(L, -2, "audio_master_engaged");
+
+    return 1;
+}
+
 } // anonymous namespace
 
 // ============================================================================
@@ -1842,6 +1886,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "PLAY_BURST");
     lua_pushcfunction(L, lua_playback_has_audio);
     lua_setfield(L, -2, "HAS_AUDIO");
+    lua_pushcfunction(L, lua_playback_get_diag_summary);
+    lua_setfield(L, -2, "GET_DIAG_SUMMARY");
     lua_setfield(L, -2, "PLAYBACK");
 
     // Add video surface creators to qt_constants.WIDGET
