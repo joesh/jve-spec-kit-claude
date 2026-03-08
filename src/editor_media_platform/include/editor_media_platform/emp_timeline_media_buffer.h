@@ -294,7 +294,7 @@ private:
 
     // ── Pre-buffer thread pool ──
     struct PreBufferJob {
-        enum Type { DECODE_PROBE, VIDEO_REFILL, AUDIO_REFILL, READER_WARM };
+        enum Type { SPEED_DETECT, VIDEO_REFILL, AUDIO_REFILL, READER_WARM };
         Type type = VIDEO_REFILL;
 
         TrackId track{TrackType::Video, 0};
@@ -312,8 +312,8 @@ private:
         TimeUS refill_from_us = 0;       // start of refill range (timeline us)
         TimeUS refill_to_us = 0;         // end of refill range (timeline us)
 
-        // DECODE_PROBE fields — single-frame decode to measure codec speed.
-        // Highest priority: one frame, seeds m_decode_ms for predictive stride.
+        // SPEED_DETECT fields — single-frame decode to measure codec speed.
+        // Highest priority: one frame, seeds decode_speed_cache for adaptive stride.
         int64_t probe_source_in = 0;
         int32_t probe_rate_num = 0;
         int32_t probe_rate_den = 1;
@@ -327,7 +327,7 @@ private:
 
     void start_workers(int count);
     void stop_workers();
-    void worker_loop();
+    void worker_loop(bool audio_only);
     void submit_pre_buffer(const PreBufferJob& job);
     static std::string job_key(const PreBufferJob& job);
 
@@ -423,11 +423,11 @@ private:
     bool m_mix_params_changed = false;
     MixedAudioCache m_mixed_cache;
 
-    // ── Decode speed probing ──
-    // Measured ms-per-frame keyed by media path. Populated by gap-probe
-    // (single decode during gap-skip) and REFILL adaptive stride. Protected
-    // by m_pool_mutex (colocated with reader pool — probing acquires a reader).
-    std::unordered_map<std::string, float> m_decode_ms;
+    // ── Decode speed cache ──
+    // Measured ms-per-frame keyed by media path. Write-once per path.
+    // Populated by SPEED_DETECT jobs (single-frame decode, wall-clock timed).
+    // Protected by m_pool_mutex (colocated with reader pool).
+    std::unordered_map<std::string, float> m_decode_speed_cache;
 
     // ── Diagnostics ──
     std::atomic<int64_t> m_video_cache_misses{0};

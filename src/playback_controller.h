@@ -356,46 +356,20 @@ private:
 
     int64_t m_repeat_streak{0};         // consecutive frame repeats (deliverFrame early-return logic)
 
-    // ---- Adaptive frame stride for slow-decode codecs ----
-    // When decode takes >2x frame_period, skip video decode on intermediate frames.
-    // Audio continues at full rate; position derived from audio clock (no drift).
-    int m_frame_stride{1};                    // 1 = normal, N = decode every Nth content frame
-    int64_t m_next_decode_frame{-1};          // next content frame to decode
-    int m_consecutive_slow_decodes{0};
-    int m_consecutive_fast_decodes{0};
+    // ---- Audio-master: bypass PLL when audio clock stalls ----
     bool m_audio_master_position{false};      // true when PLL should be bypassed
-    int64_t m_stride_dropped_count{0};        // diagnostics
 
     // Audio stall detection — engage audio-master when AOP buffer empties
     int m_consecutive_audio_dry{0};
     int m_consecutive_audio_healthy{0};
-
-    // ---- Predictive stride: deferred until clip transition ----
-    // When approaching a clip boundary, query TMB for the next clip's decode
-    // speed. If it's slow, record the stride but DON'T apply yet — the current
-    // clip is fast and shouldn't stutter. Apply at actual transition.
-    int64_t m_current_clip_end_frame{-1};         // timeline end of current clip
-    std::string m_current_clip_media_path;         // media path of current clip
-    bool m_stride_pre_engaged{false};              // true when stride was set predictively
-    int m_pending_stride{0};                       // deferred stride, applied at transition
-    static constexpr int64_t STRIDE_LOOKAHEAD = 72;  // ~3s at 25fps (needs margin for prefetch latency)
-
-    static constexpr int SLOW_DECODE_CONSECUTIVE = 3;
-    static constexpr int FAST_DECODE_CONSECUTIVE = 10;
-    static constexpr double SLOW_DECODE_RATIO = 2.0;     // deliver_ms > 2x frame_period = slow
-    static constexpr int MAX_STRIDE = 8;                  // cap at ~3fps for 24fps content
     static constexpr int AUDIO_DRY_CONSECUTIVE = 3;       // 3 ticks of buf=0 → audio-master
     static constexpr int AUDIO_HEALTHY_CONSECUTIVE = 10;  // 10 ticks of buf>0 → back to PLL
-
-    bool shouldDecode(int64_t frame) const;
-    void updateStrideDetection(double deliver_ms);
 
     // ---- A/V sync PLL (phase-locked loop) ----
     // Gently steers video frame accumulator toward audio clock each tick.
     // Eliminates visible skip/hold artifacts while maintaining tight sync.
     static constexpr double PLL_GAIN = 0.03;              // 3% of drift corrected per tick
     static constexpr double PLL_MAX_CORRECTION = 0.15;    // max accumulator nudge per tick (in frames)
-    static constexpr double PLL_EMERGENCY_THRESHOLD = 0.2; // 200ms — hard skip/hold as last resort
 
     // ---- Clip prefetch ----
     // Tracks how far we've supplied TMB with clip data in each direction.
