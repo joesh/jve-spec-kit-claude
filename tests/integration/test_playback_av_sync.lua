@@ -91,6 +91,52 @@ local function section(name)
     print("\n-- " .. name .. " --")
 end
 
+--- Assert playback cadence quality from diag ring summary.
+-- Call after PLAYBACK.STOP — rings survive until next Play().
+-- @param fps_num, fps_den: sequence frame rate (needed for cadence threshold)
+local function assert_diag_quality(pc_handle, label, has_audio_flag, fps_num, fps_den)
+    local diag = PLAYBACK.GET_DIAG_SUMMARY(pc_handle)
+    if diag.tick_count == 0 then
+        print("    [diag] " .. label .. ": no ticks recorded (skip assertions)")
+        return
+    end
+
+    local frame_period_ms = 1000.0 / (fps_num / fps_den)
+
+    -- Allow ≤2 under CI/headless: manual TICK under heavy CPU load can briefly
+    -- starve the audio pump (buf=0 → audio-master), causing transient backward
+    -- steps when audio clock lags video. The pathological drift false-trigger
+    -- caused dozens per second — this threshold catches that while tolerating
+    -- transient stalls from CPU contention.
+    check(diag.backward_jumps <= 2,
+        string.format("%s: backward jumps ≤ 2 (got %d)", label, diag.backward_jumps))
+
+    check(diag.skip_count == 0,
+        string.format("%s: no emergency skips (got %d)", label, diag.skip_count))
+
+    check(diag.hold_count == 0,
+        string.format("%s: no emergency holds (got %d)", label, diag.hold_count))
+
+    check(diag.cadence_p95_ms < 2 * frame_period_ms,
+        string.format("%s: cadence p95 %.1fms < %.0fms (2x frame period)",
+            label, diag.cadence_p95_ms, 2 * frame_period_ms))
+
+    if has_audio_flag then
+        check(diag.drift_p95_s < 0.15,
+            string.format("%s: drift p95 %.3fs < 0.15s", label, diag.drift_p95_s))
+    end
+
+    check(not diag.audio_master_engaged,
+        string.format("%s: audio-master not engaged at stop", label))
+
+    print(string.format("    [diag] %s: %d ticks, cadence p50/p95=%.1f/%.1fms, "
+        .. "drift p50/p95=%.3f/%.3fs, skips=%d holds=%d backward=%d",
+        label, diag.tick_count,
+        diag.cadence_p50_ms, diag.cadence_p95_ms,
+        diag.drift_p50_s, diag.drift_p95_s,
+        diag.skip_count, diag.hold_count, diag.backward_jumps))
+end
+
 --------------------------------------------------------------------------------
 -- Media paths (Anamnesis fixtures — same as test_tmb_real_timeline.lua)
 --------------------------------------------------------------------------------
@@ -308,8 +354,11 @@ do
             end
         end
 
-        -- Max drift < 300ms (150ms output latency + 150ms tolerance)
-        local MAX_DRIFT_US = 300000
+        -- Max drift < 350ms (150ms output latency + 200ms tolerance).
+        -- Tolerance raised: drift-triggered audio-master was removed (caused
+        -- backward jump oscillation), so transient peaks can be slightly higher.
+        -- The slope test below catches sustained divergence.
+        local MAX_DRIFT_US = 350000
         check(max_drift_us < MAX_DRIFT_US,
             string.format("A/V drift max %.1fms (limit %.0fms)",
                 max_drift_us / 1000.0, MAX_DRIFT_US / 1000.0))
@@ -346,6 +395,9 @@ do
         #clip_transitions, #position_history))
     print(string.format("    [info] %d frames in %.1fs = %.1f fps",
         frames_advanced, wall_seconds, measured_fps))
+
+    -- Diag ring quality assertions (the exact symptom this fix addresses)
+    assert_diag_quality(pc, "Test 1 forward", has_audio, SEQ_FPS_NUM, SEQ_FPS_DEN)
 end
 
 --------------------------------------------------------------------------------
@@ -432,6 +484,9 @@ do
 
     print(string.format("    [info] resumed from %d, advanced to %d (%d frames)",
         RESUME_START, last_frame, last_frame - RESUME_START))
+
+    -- Diag ring quality assertions
+    assert_diag_quality(pc, "Test 3 seek+resume", has_audio, SEQ_FPS_NUM, SEQ_FPS_DEN)
 end
 
 --------------------------------------------------------------------------------

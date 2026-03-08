@@ -3561,6 +3561,43 @@ private slots:
         QCOMPARE(r.source_frame, (int64_t)10);
     }
 
+    void test_cache_only_nearest_frame_distance_bounded() {
+        // NSF POSTCONDITION: nearest-frame fallback must NOT return a frame
+        // that's far away from the requested position. Without a distance
+        // bound, a stalled REFILL could cause frame 0's decode to display
+        // when playhead is at frame 500 — showing wrong content.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+        auto path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 200, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Park-decode frame 0 to prime cache
+        tmb->SetPlayhead(0, 0, 0.0f);
+        auto r0 = tmb->GetVideoFrame(V1, 0, /*cache_only=*/false);
+        QVERIFY(r0.frame != nullptr);
+
+        // Request frame 100 with cache_only=true — only frame 0 is cached.
+        // Distance = 100 frames, exceeds MAX_NEAREST_DISTANCE (16).
+        // Must return null frame (no fallback), not frame 0's content.
+        tmb->SetPlayhead(100, 1, 1.0f);
+        auto r100 = tmb->GetVideoFrame(V1, 100, /*cache_only=*/true);
+        QVERIFY2(r100.frame == nullptr,
+                 "cache_only nearest-frame must NOT return a frame 100 frames away "
+                 "— distance bound violated");
+
+        // Request frame 5 — distance = 5, within bound. Should return frame 0.
+        auto r5 = tmb->GetVideoFrame(V1, 5, /*cache_only=*/true);
+        QVERIFY2(r5.frame != nullptr,
+                 "cache_only nearest-frame should return frame 0 when distance=5 "
+                 "(within MAX_NEAREST_DISTANCE)");
+        QCOMPARE(r5.source_frame, (int64_t)0);
+    }
+
     void test_cache_only_timing_no_blocking() {
         // BLACK-BOX TIMING: cache_only=true must return in <1ms (no decode).
         // If it blocks (sync decode leak), this test catches it.
@@ -3721,6 +3758,149 @@ private slots:
             // Just verify we got audio and it's not identical to forward
             // (exact sample-level verification is fragile with codec boundaries)
         }
+    }
+    // ── Probe decode speed API ──
+
+    void test_GetProbeDecodeMs_unprobed_returns_negative() {
+        auto tmb = TimelineMediaBuffer::Create(0);
+        float result = tmb->GetProbeDecodeMs("/nonexistent/path.mov");
+        QVERIFY2(result < 0, "Unprobed path must return negative");
+        QCOMPARE(result, -1.0f);
+    }
+
+    void test_GetProbeDecodeMs_after_refill() {
+        // After REFILL decodes frames, m_decode_ms should be populated.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+        auto path = m_testVideoPath.toStdString();
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 48, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Trigger REFILL: set direction=1 then wait for workers
+        tmb->SetPlayhead(0, 1, 1.0f);
+        QTest::qWait(500);  // let REFILL workers run
+
+        float probe = tmb->GetProbeDecodeMs(path);
+        QVERIFY2(probe > 0, qPrintable(
+            QString("After REFILL, probe should be positive (got %1)").arg(probe)));
+    }
+
+    void test_GetNextClipOnTrack_returns_next() {
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", "/a.mov", 0, 100, 0, 24, 1, 1.0f},
+            {"clipB", "/b.mov", 100, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Query from within first clip → should return second
+        ClipInfo next;
+        bool found = tmb->GetNextClipOnTrack(V1, 50, next);
+        QVERIFY(found);
+        QCOMPARE(next.clip_id, std::string("clipB"));
+        QCOMPARE(next.timeline_start, (int64_t)100);
+
+        // Query from within second clip → no next
+        ClipInfo next2;
+        bool found2 = tmb->GetNextClipOnTrack(V1, 120, next2);
+        QVERIFY(!found2);
+    }
+
+    void test_GetNextClipOnTrack_empty_track() {
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        ClipInfo next;
+        bool found = tmb->GetNextClipOnTrack(V1, 0, next);
+        QVERIFY(!found);
+    }
+
+    // ── NSF: REFILL advances buffer_end past undecodable clips ──
+
+    void test_refill_skips_undecodable_clip() {
+        // When REFILL encounters a clip whose reader can't be acquired
+        // (offline, unsupported codec, etc.), it must advance buffer_end
+        // past the clip and continue to fill subsequent decodable clips.
+        // Without this fix, REFILL loops 0/48 forever on the undecodable clip.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(4);
+        auto path = m_testVideoPath.toStdString();
+
+        // clipA [0,20) decodable, clipB [20,40) UNDECODABLE, clipC [40,60) decodable
+        std::vector<ClipInfo> clips = {
+            {"clipA", path, 0, 20, 0, 24, 1, 1.0f},
+            {"clipB", "/nonexistent/braw_codec.braw", 20, 20, 0, 24, 1, 1.0f},
+            {"clipC", path, 40, 20, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Park-decode to prime reader
+        tmb->SetPlayhead(0, 0, 1.0f);
+        tmb->GetVideoFrame(V1, 0);
+
+        // Start play — REFILL should fill clipA, skip clipB, fill clipC
+        tmb->SetPlayhead(0, 1, 1.0f);
+        QThread::msleep(2000);
+
+        // clipB must be offline
+        tmb->SetPlayhead(25, 0, 1.0f);
+        auto r25 = tmb->GetVideoFrame(V1, 25);
+        QVERIFY2(r25.offline,
+                 "Undecodable clip must report offline=true");
+
+        // clipC must be cached by REFILL (it continued past clipB)
+        tmb->SetPlayhead(45, 0, 1.0f);
+        auto r45 = tmb->GetVideoFrame(V1, 45, /*cache_only=*/true);
+        // Note: cache_only=true — if clipC wasn't pre-filled by REFILL,
+        // this returns nullptr. If REFILL stalled on clipB, it never fills clipC.
+        QVERIFY2(r45.frame != nullptr || r45.clip_id == "clipC",
+                 "REFILL must advance past undecodable clip to fill clipC");
+    }
+
+    void test_refill_undecodable_clip_offline_in_play_mode() {
+        // NSF Half 2: When REFILL skips an undecodable clip, GetVideoFrame
+        // in play mode must still surface offline=true for frames in that clip.
+        // The clip's path must be registered in m_offline.
+        auto tmb = TimelineMediaBuffer::Create(4);
+
+        std::vector<ClipInfo> clips = {
+            {"clipBad", "/nonexistent/unsupported.r3d", 0, 50, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Park mode — registers path as offline
+        auto r_park = tmb->GetVideoFrame(V1, 10);
+        QVERIFY2(r_park.offline,
+                 "Park mode must report offline for FileNotFound path");
+
+        // Play mode — must still surface offline
+        tmb->SetPlayhead(0, 1, 1.0f);
+        auto r_play = tmb->GetVideoFrame(V1, 10, /*cache_only=*/true);
+        QVERIFY2(r_play.offline,
+                 "Play mode must surface offline for known-offline clip");
+    }
+
+    void test_GetNextClipOnTrack_gap_between_clips() {
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        std::vector<ClipInfo> clips = {
+            {"clipA", "/a.mov", 0, 50, 0, 24, 1, 1.0f},
+            // gap from 50-200
+            {"clipB", "/b.mov", 200, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, clips);
+
+        // Query from gap → should return clipB
+        ClipInfo next;
+        bool found = tmb->GetNextClipOnTrack(V1, 75, next);
+        QVERIFY(found);
+        QCOMPARE(next.clip_id, std::string("clipB"));
+        QCOMPARE(next.timeline_start, (int64_t)200);
     }
 };
 

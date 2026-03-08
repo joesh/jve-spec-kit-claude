@@ -50,11 +50,15 @@ end
 assert(file_exists(SEAGULL_ANIM), "SEAGULL_ANIM missing: " .. SEAGULL_ANIM)
 assert(file_exists(CLIP_40_393), "CLIP_40_393 missing: " .. CLIP_40_393)
 
---- Poll without TICK — let CVDisplayLink drive the real async path.
--- TICK() runs deliverFrame on the main thread (sync), which hides
--- threading bugs. Real playback uses CVDisplayLink on a private thread.
-local function poll_sleep(seconds)
+--- Poll with TICK fallback for headless mode.
+-- CVDisplayLink drives real async playback on a private thread, but
+-- fails in headless/CI (no display). TICK advances position on main
+-- thread so the test still validates gap clear/recovery logic.
+local function poll_sleep(pc_handle, seconds)
     os.execute(string.format("sleep %.3f", seconds))
+    if pc_handle then
+        PLAYBACK.TICK(pc_handle)
+    end
     CONTROL.PROCESS_EVENTS()
 end
 
@@ -138,7 +142,7 @@ PLAYBACK.PLAY(pc, 1, 1.0)
 -- Wait for gap 1 (frames 250-275)
 local gap1_detected = false
 for i = 1, 200 do
-    poll_sleep(0.016)
+    poll_sleep(pc, 0.016)
     w, h = EMP.SURFACE_FRAME_SIZE(test_surface)
     if w == 0 and h == 0 then
         gap1_detected = true
@@ -152,7 +156,7 @@ assert(gap1_detected,
 -- Wait for LITTLE_SEAGULL recovery (frames 275-375)
 local seagull_recovered = false
 for i = 1, 200 do
-    poll_sleep(0.016)
+    poll_sleep(pc, 0.016)
     w, h = EMP.SURFACE_FRAME_SIZE(test_surface)
     if w > 0 and h > 0 then
         seagull_recovered = true
@@ -166,7 +170,7 @@ assert(seagull_recovered,
 -- Wait for gap 2 (frames 375-450)
 local gap2_detected = false
 for i = 1, 200 do
-    poll_sleep(0.016)
+    poll_sleep(pc, 0.016)
     w, h = EMP.SURFACE_FRAME_SIZE(test_surface)
     if w == 0 and h == 0 then
         gap2_detected = true
@@ -180,7 +184,7 @@ assert(gap2_detected,
 -- Wait for 40-393-3 recovery (frames 450+)
 local clip3_recovered = false
 for i = 1, 200 do
-    poll_sleep(0.016)
+    poll_sleep(pc, 0.016)
     w, h = EMP.SURFACE_FRAME_SIZE(test_surface)
     if w > 0 and h > 0 then
         clip3_recovered = true
@@ -195,7 +199,7 @@ assert(clip3_recovered,
 local count_at_recovery = EMP.SURFACE_FRAME_COUNT(test_surface)
 local MIN_NEW_FRAMES = 3
 for i = 1, 100 do
-    poll_sleep(0.016)
+    poll_sleep(pc, 0.016)
 end
 local count_after = EMP.SURFACE_FRAME_COUNT(test_surface)
 local new_frames = count_after - count_at_recovery
