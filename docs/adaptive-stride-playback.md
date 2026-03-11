@@ -58,10 +58,15 @@ Segment:
 
 Gaps are explicit. There is no null-check-means-gap pattern.
 
-## Prefetcher — Unified Audio/Video
+## Prefetcher — Parallel Audio/Video Paths
 
-The prefetcher loop is one function for both audio and video.
-Leaf helpers branch on track type. `if (track.type == Video)` at leaves.
+Video and audio prefetchers share the same algorithmic structure (watermark-driven,
+segment-aware gap skip, generation-guarded) but are implemented as separate worker
+paths. Merging them would require templates/callbacks across 4 fundamental divergences:
+unit mismatch (frames vs microseconds), cache structure (map vs vector), stride
+(video-only adaptive skip), and EOF handling (hold-last vs silent skip). The shared
+structure is ~30 lines across ~430 lines of divergent logic — the abstraction cost
+exceeds the duplication cost.
 
 ### Key Concept: already_fetched
 
@@ -303,8 +308,10 @@ PROBE_WINDOW          = 288        // ~12s @24fps
   REFILL writes only if path not already in map.
 - **known_stride** (line 2026): Recompute at each clip boundary within a
   REFILL batch (reset when clip_id changes), not once per batch.
-- **Unified prefetcher**: Merge VIDEO_REFILL and AUDIO_REFILL worker blocks
-  into one `fill_prefetch()` loop with leaf branching on track type.
+- **Segment model**: `find_segment_at()` / `find_segment_at_us()` replace
+  `find_clip_at` + `find_next_clip_after` pairs. Gaps are explicit (Segment::GAP
+  with bounds), no null-means-gap pattern. VIDEO_REFILL and AUDIO_REFILL remain
+  separate worker paths (see Prefetcher section).
 - **Dedicated audio worker**: Reserve 1 thread that only picks AUDIO_REFILL.
 - **Gap handling**: Use explicit Segment type (CLIP|GAP) instead of null checks.
 - **Rename**: probe_cache → decode_speed_cache, DECODE_PROBE → SPEED_DETECT
