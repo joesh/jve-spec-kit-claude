@@ -263,31 +263,6 @@ static int lua_emp_reader_decode_frame(lua_State* L) {
     return 1;
 }
 
-// EMP.READER_GET_CACHED_FRAME(reader, frame_idx, rate_num, rate_den) -> frame | nil
-static int lua_emp_reader_get_cached_frame(lua_State* L) {
-    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
-    auto it = g_readers.find(key);
-    if (it == g_readers.end()) {
-        return luaL_error(L, "READER_GET_CACHED_FRAME: invalid reader handle");
-    }
-
-    int64_t frame_idx = static_cast<int64_t>(luaL_checkinteger(L, 2));
-    int32_t rate_num = static_cast<int32_t>(luaL_checkinteger(L, 3));
-    int32_t rate_den = static_cast<int32_t>(luaL_checkinteger(L, 4));
-
-    emp::FrameTime ft = emp::FrameTime::from_frame(frame_idx, {rate_num, rate_den});
-    auto frame = it->second->GetCachedFrame(ft.to_us());
-
-    if (!frame) {
-        lua_pushnil(L);
-        return 1;
-    }
-
-    void* frame_key = push_userdata(L, frame, EMP_FRAME_METATABLE);
-    g_frames[frame_key] = frame;
-    return 1;
-}
-
 // Reader __gc metamethod
 static int lua_emp_reader_gc(lua_State* L) {
     void* key = get_map_key(L, 1, EMP_READER_METATABLE);
@@ -444,8 +419,8 @@ static int lua_emp_pcm_gc(lua_State* L) {
 // EMP.TMB_CREATE(pool_threads) -> tmb | nil, err
 static int lua_emp_tmb_create(lua_State* L) {
     int pool_threads = static_cast<int>(luaL_optinteger(L, 1, 2));
-    if (pool_threads < 0) {
-        return luaL_error(L, "TMB_CREATE: pool_threads must be >= 0, got %d", pool_threads);
+    if (pool_threads == 1 || pool_threads < 0) {
+        return luaL_error(L, "TMB_CREATE: pool_threads must be 0 (no workers) or >= 2 (video + audio), got %d", pool_threads);
     }
 
     auto tmb = emp::TimelineMediaBuffer::Create(pool_threads);
@@ -1127,23 +1102,6 @@ static int lua_emp_set_decode_mode(lua_State* L) {
     return 0;
 }
 
-// EMP.READER_SET_MAX_CACHE(reader, max_frames)
-static int lua_emp_reader_set_max_cache(lua_State* L) {
-    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
-    auto it = g_readers.find(key);
-    if (it == g_readers.end()) {
-        return luaL_error(L, "READER_SET_MAX_CACHE: invalid reader handle");
-    }
-
-    int max_frames = static_cast<int>(luaL_checkinteger(L, 2));
-    if (max_frames < 0) {
-        return luaL_error(L, "READER_SET_MAX_CACHE: max_frames must be >= 0, got %d", max_frames);
-    }
-
-    it->second->SetMaxCacheFrames(static_cast<size_t>(max_frames));
-    return 0;
-}
-
 // EMP.SURFACE_SET_ROTATION(surface_widget, degrees)
 // Set rotation for video surface (0, 90, 180, 270)
 // Currently only CPUVideoSurface supports rotation
@@ -1751,14 +1709,9 @@ void register_emp_bindings(lua_State* L) {
     lua_pushcfunction(L, lua_emp_reader_decode_frame);
     lua_setfield(L, -2, "READER_DECODE_FRAME");
 
-    lua_pushcfunction(L, lua_emp_reader_get_cached_frame);
-    lua_setfield(L, -2, "READER_GET_CACHED_FRAME");
-
-    // Decode mode and cache control
+    // Decode mode
     lua_pushcfunction(L, lua_emp_set_decode_mode);
     lua_setfield(L, -2, "SET_DECODE_MODE");
-    lua_pushcfunction(L, lua_emp_reader_set_max_cache);
-    lua_setfield(L, -2, "READER_SET_MAX_CACHE");
 
     // Frame functions
     lua_pushcfunction(L, lua_emp_frame_info);
