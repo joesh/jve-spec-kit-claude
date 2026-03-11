@@ -72,6 +72,25 @@ struct ClipInfo {
     }
 };
 
+// Segment: a contiguous region of the timeline, either a clip or a gap.
+// Every timeline position belongs to exactly one segment.
+struct Segment {
+    enum Type { CLIP, GAP };
+    Type type;
+    int64_t start;            // timeline frame (inclusive)
+    int64_t end;              // timeline frame (exclusive)
+    const ClipInfo* clip;     // non-null iff type == CLIP
+};
+
+// Microsecond variant (audio path)
+struct SegmentUS {
+    enum Type { CLIP, GAP };
+    Type type;
+    TimeUS start_us;          // timeline microseconds (inclusive)
+    TimeUS end_us;            // timeline microseconds (exclusive)
+    const ClipInfo* clip;     // non-null iff type == CLIP
+};
+
 // Video decode result (returned to Lua per track)
 struct VideoResult {
     std::shared_ptr<Frame> frame; // nullptr = gap or offline
@@ -113,7 +132,7 @@ public:
 
     // Constant-time per-track video access.
     // cache_only=true: return cached frame or nullptr (no sync decode).
-    // Play path uses cache_only=true — all decode on REFILL workers.
+    // Play path uses cache_only=true — all decode on prefetch workers.
     // Park/Seek uses cache_only=false — sync decode on caller's thread.
     VideoResult GetVideoFrame(TrackId track, int64_t timeline_frame, bool cache_only = false);
 
@@ -153,21 +172,13 @@ public:
     int64_t GetVideoCacheMissCount() const { return m_video_cache_misses.load(); }
     void ResetVideoCacheMissCount() { m_video_cache_misses.store(0); }
 
-    // Probe decode speed: returns measured ms-per-frame for a media path,
-    // or -1.0f if that path has not been probed yet. Thread-safe.
-    float GetProbeDecodeMs(const std::string& media_path) const;
-
-    // Next clip after timeline_frame on a track. Returns true + populates out
-    // if found. Thread-safe (locks internally).
-    bool GetNextClipOnTrack(TrackId track, int64_t timeline_frame, ClipInfo& out) const;
-
     // Remove a path from the offline blacklist (called when FS watcher
     // detects a previously-missing file has reappeared).
     void ClearOffline(const std::string& path);
 
-    // Stop all background decode work (REFILL workers + pre-buffer jobs).
+    // Stop all background decode work (prefetch workers + decode-prep jobs).
     // Called on playback stop to release HW decoder sessions immediately.
-    // REFILL is restarted on next play via SetPlayhead().
+    // Prefetch restarts on next play via SetPlayhead().
     void ParkReaders();
 
     // Lifecycle
@@ -230,8 +241,8 @@ private:
             int32_t par_den = 1;
         };
         std::map<int64_t, CachedFrame> video_cache; // key = timeline_frame
-        // Must hold at least 2 × VIDEO_HIGH_WATER (96) so current clip + next
-        // clip pre-buffer don't thrash each other via eviction.
+        // Must hold at least 2 × VIDEO_PREFETCH_MAX (96) so current clip + next
+        // clip prefetch don't thrash each other via eviction.
         static constexpr size_t MAX_VIDEO_CACHE = 144;
 
         // Audio PCM cache (pre-buffered at clip boundaries)
@@ -246,16 +257,15 @@ private:
         // 12 gives headroom for boundary overlaps.
         static constexpr size_t MAX_AUDIO_CACHE = 12;
 
-        // Watermark buffer tracking: furthest timeline position with submitted decode.
-        // -1 = cold (no refill submitted yet). Updated by REFILL worker, reset by
+        // Prefetch watermark: furthest timeline position already fetched.
+        // -1 = cold (no prefetch yet). Written by prefetch workers, reset by
         // SetTrackClips (clip change), ParkReaders (stop), direction change.
         int64_t video_buffer_end = -1;    // timeline frame
         TimeUS audio_buffer_end = -1;     // microseconds
 
         // Generation counter: incremented by SetTrackClips on clip list change.
-        // REFILL jobs capture the generation at submission; worker aborts early
-        // on mismatch (stale REFILL from pre-SetTrackClips clip list).
-        int64_t refill_generation = 0;
+        // Prefetch workers check generation each iteration — mismatch = abandon.
+        int64_t prefetch_generation = 0;
 
         // Per-clip EOF: first undecodeble source frame. When DecodeAt fails
         // (EOF, codec error), record clip_id → source_frame. GetVideoFrame
@@ -268,16 +278,24 @@ private:
     mutable std::mutex m_tracks_mutex;
     std::unordered_map<TrackId, TrackState, TrackIdHash> m_tracks;
 
-    // Find clip at timeline_frame in track's clip list
-    const ClipInfo* find_clip_at(const TrackState& ts, int64_t timeline_frame) const;
-    // Find first clip starting after timeline_frame (gap-skip for video REFILL)
-    const ClipInfo* find_next_clip_after(const TrackState& ts, int64_t timeline_frame) const;
+    // Find segment (CLIP or GAP) at timeline frame. Never returns null-equivalent —
+    // gaps are explicit with bounds. Caller must hold m_tracks_mutex.
+    Segment find_segment_at(const TrackState& ts, int64_t timeline_frame) const;
 
-    // Find clip at timeline microsecond position (for audio path)
-    // Requires m_seq_rate to be set
-    const ClipInfo* find_clip_at_us(const TrackState& ts, TimeUS t_us) const;
-    // Find first clip starting at or after t_us (gap-skip for audio REFILL)
-    const ClipInfo* find_next_clip_at_us(const TrackState& ts, TimeUS t_us) const;
+    // Compositing-aware obscured check: returns true if any video track with
+    // index > track.index has a clip at timeline_frame. Opaque compositing only —
+    // higher tracks completely obscure lower ones. Caller must hold m_tracks_mutex.
+    bool is_video_obscured(const TrackId& track, int64_t timeline_frame) const;
+
+    // Evict one entry from video cache: pick the entry furthest from playhead.
+    // Playhead-aware eviction prevents backwards-seek cache thrashing where
+    // old high-key entries cause freshly-decoded low-key entries to be
+    // immediately evicted by a naive lowest-key-first policy.
+    // Caller must hold m_tracks_mutex. O(n) on cache size (~144 entries).
+    void evict_video_cache_entry(TrackState& ts) const;
+
+    // Microsecond variant for audio path. Requires m_seq_rate to be set.
+    SegmentUS find_segment_at_us(const TrackState& ts, TimeUS t_us) const;
 
     // Check audio cache for pre-buffered PCM covering [seg_t0, seg_t1) for clip_id
     // Returns sub-range PcmChunk on hit (full coverage required), nullptr on miss
@@ -293,53 +311,103 @@ private:
         float speed_ratio, const AudioFormat& fmt) const;
 
     // ── Pre-buffer thread pool ──
+    // Decode-preparation jobs: submitted externally (SetPlayhead probe scan,
+    // SetTrackClips reader warming). Processed with priority by prefetch_worker.
     struct PreBufferJob {
-        enum Type { SPEED_DETECT, VIDEO_REFILL, AUDIO_REFILL, READER_WARM };
-        Type type = VIDEO_REFILL;
+        enum Type { SPEED_DETECT, READER_WARM };
+        Type type = SPEED_DETECT;
 
         TrackId track{TrackType::Video, 0};
         std::string clip_id;
         std::string media_path;
 
-        int direction = 1;            // playback direction (+1 forward, -1 reverse)
-        float speed_ratio = 1.0f;    // video: source_range/timeline_duration; audio: seq_fps/media_fps
-
-        // VIDEO_REFILL fields (watermark-driven)
-        int64_t refill_from_frame = 0;   // first timeline frame to decode
-        int refill_count = 0;             // number of frames to decode
-
-        // AUDIO_REFILL fields (watermark-driven)
-        TimeUS refill_from_us = 0;       // start of refill range (timeline us)
-        TimeUS refill_to_us = 0;         // end of refill range (timeline us)
-
         // SPEED_DETECT fields — single-frame decode to measure codec speed.
-        // Highest priority: one frame, seeds decode_speed_cache for adaptive stride.
         int64_t probe_source_in = 0;
         int32_t probe_rate_num = 0;
         int32_t probe_rate_den = 1;
 
-        // Generation counter — REFILL aborts if track's generation has advanced
-        int64_t generation = 0;
-
-        // WARM timing: set by submit_pre_buffer, checked by worker_loop
+        // WARM timing: set by submit_pre_buffer, checked by prefetch_worker
         std::chrono::steady_clock::time_point submitted_at{};
     };
 
     void start_workers(int count);
     void stop_workers();
-    void worker_loop(bool audio_only);
+
+    // Self-directed prefetch loops (replace batch REFILL system).
+    // Each worker autonomously picks tracks and fills one frame at a time.
+    void prefetch_worker();        // SPEED_DETECT > READER_WARM > video prefetch
+    void audio_prefetch_worker();  // audio prefetch only
+
+    // Decode-prep job processing (SPEED_DETECT, READER_WARM)
+    bool process_next_decode_prep_job();
     void submit_pre_buffer(const PreBufferJob& job);
     static std::string job_key(const PreBufferJob& job);
+
+    // Track selection for prefetch — find most urgent track needing work
+    bool pick_video_track(TrackId& out);
+    bool pick_audio_track(TrackId& out);
+
+    // Core prefetch algorithm (unified A/V, one frame per iteration)
+    void fill_prefetch(const TrackId& track);
+    void discard_already_played_prefetch(const TrackId& track);
+
+    // Leaf helpers for fill_prefetch
+    int stride_for_clip(const TrackId& track, const ClipInfo& clip) const;
+    void decode_into_cache(const TrackId& track, const Segment& seg,
+                           int64_t position, int stride,
+                           ReaderHandle& held_reader, std::string& held_clip_id,
+                           std::shared_ptr<Frame>& last_good_frame);
+    void decode_audio_into_cache(const TrackId& track, const SegmentUS& seg,
+                                 TimeUS position, TimeUS chunk_end);
+    bool frame_needed_for_composite(const TrackId& track, int64_t timeline_frame) const;
+
+    // Monotonic watermark setters (never regress — max(current, pos))
+    void set_already_fetched_video(const TrackId& track, int64_t pos);
+    void set_already_fetched_audio(const TrackId& track, TimeUS pos);
+
+    // Wake signal for prefetch workers
+    void wake_prefetch_workers();
+    bool is_video_buffer_low(const TrackState& ts, int64_t playhead, int dir) const;
+    bool is_audio_buffer_low(const TrackState& ts, TimeUS playhead_us, int dir) const;
+
+    // Track claim sets — prevent two workers from filling the same track
+    // RAII guard: inserts track into set on construction, erases on destruction
+    struct PrefetchClaimGuard {
+        std::unordered_set<TrackId, TrackIdHash>* set = nullptr;
+        std::mutex* mutex = nullptr;
+        TrackId track;
+
+        PrefetchClaimGuard(std::unordered_set<TrackId, TrackIdHash>* s,
+                           std::mutex* m, TrackId t)
+            : set(s), mutex(m), track(t) {}
+
+        // Move-only: moved-from guard is inert (set==nullptr → no unlock)
+        PrefetchClaimGuard(PrefetchClaimGuard&& o) noexcept
+            : set(o.set), mutex(o.mutex), track(o.track) { o.set = nullptr; }
+        PrefetchClaimGuard(const PrefetchClaimGuard&) = delete;
+        PrefetchClaimGuard& operator=(const PrefetchClaimGuard&) = delete;
+        PrefetchClaimGuard& operator=(PrefetchClaimGuard&&) = delete;
+
+        ~PrefetchClaimGuard() {
+            if (set) {
+                std::lock_guard<std::mutex> lock(*mutex);
+                set->erase(track);
+            }
+        }
+    };
+    std::unique_ptr<PrefetchClaimGuard> claim_track_for_prefetch(
+        const TrackId& track, std::unordered_set<TrackId, TrackIdHash>& set);
 
     std::vector<std::thread> m_workers;
     std::mutex m_jobs_mutex;
     std::condition_variable m_jobs_cv;
-    std::vector<PreBufferJob> m_jobs;
-    // Keys of jobs currently being processed by workers (in-flight dedup).
-    // Value = REFILL generation (allows new-gen REFILLs past stale in-flight).
-    // Non-REFILL jobs use generation 0. Protected by m_jobs_mutex.
-    std::unordered_map<std::string, int64_t> m_pre_buffering;
+    std::vector<PreBufferJob> m_jobs;            // decode-prep queue only
+    std::unordered_map<std::string, int64_t> m_pre_buffering;  // in-flight dedup
     std::atomic<bool> m_shutdown{false};
+
+    // Active prefetch sets: tracks currently being filled by a worker
+    std::unordered_set<TrackId, TrackIdHash> m_video_prefetching;  // protected by m_jobs_mutex
+    std::unordered_set<TrackId, TrackIdHash> m_audio_prefetching;  // protected by m_jobs_mutex
 
     // ── Sequence rate (for timeline frame → us conversion) ──
     Rate m_seq_rate{0, 1};
@@ -347,36 +415,27 @@ private:
     // ── Audio format (for pre-buffer — set once before playback) ──
     AudioFormat m_audio_fmt{SampleFormat::F32, 0, 0};
 
-    // ── Watermark-driven buffer constants ──
-    // High water: stop filling when buffer_end is this far ahead of playhead
-    static constexpr int64_t VIDEO_HIGH_WATER = 96;     // ~4s @24fps
-    // Low water: trigger refill when buffer_end is only this far ahead
-    static constexpr int64_t VIDEO_LOW_WATER = 48;      // ~2s @24fps
-    // Max frames per REFILL worker job (bounds batch size)
-    static constexpr int VIDEO_REFILL_SIZE = 48;
+    // ── Prefetch buffer constants ──
+    // Max: stop filling when already_fetched is this far ahead of playhead
+    static constexpr int64_t VIDEO_PREFETCH_MAX = 96;     // ~4s @24fps
+    // Min: wake prefetch when already_fetched is only this far ahead
+    static constexpr int64_t VIDEO_PREFETCH_MIN = 48;     // ~2s @24fps
 
-    static constexpr TimeUS AUDIO_HIGH_WATER = 2000000;  // 2s
-    static constexpr TimeUS AUDIO_LOW_WATER = 500000;    // 0.5s
-    static constexpr TimeUS AUDIO_REFILL_SIZE = 200000;  // 200ms
+    static constexpr TimeUS AUDIO_PREFETCH_MAX = 2000000;  // 2s
+    static constexpr TimeUS AUDIO_PREFETCH_MIN = 500000;   // 0.5s
+    static constexpr TimeUS AUDIO_REFILL_SIZE = 200000;    // 200ms per audio chunk
+
+    // Max adaptive stride: ceil(decode_ms / frame_period_ms), clamped
+    static constexpr int MAX_STRIDE = 8;
 
     // Probe window: scan this far ahead of playhead for unprobed media paths.
-    // Must be >> HIGH_WATER so probes complete well before REFILL reaches the clip.
+    // Must be >> PREFETCH_MAX so probes complete well before prefetch reaches the clip.
     static constexpr int64_t PROBE_WINDOW = 288;      // ~12s @24fps
 
-    // WARM diagnostics: queue wait >200ms = workers starved by REFILL (software)
+    // WARM diagnostics: queue wait >200ms = workers starved (software)
     //                   acquire >1000ms = drive I/O or codec init slow (environment)
     static constexpr int WARM_QUEUE_WARN_MS = 200;
     static constexpr int WARM_ACQUIRE_WARN_MS = 1000;
-
-    // (PRE_BUFFER_THRESHOLD removed — watermark VIDEO_HIGH/LOW_WATER replaces it)
-
-    // ── Watermark check + submit methods ──
-    // Called from GetVideoFrame/GetTrackAudio cache-hit paths during playback.
-    // Caller must NOT hold m_tracks_mutex (methods lock internally).
-    void check_video_watermark(TrackId track, int64_t playhead, int direction);
-    void submit_video_refill(TrackId track, int64_t playhead, int direction);
-    void check_audio_watermark(TrackId track, TimeUS playhead_us, int direction);
-    void submit_audio_refill(TrackId track, TimeUS playhead_us, int direction);
 
     // ── Playhead state ──
     std::atomic<int64_t> m_playhead_frame{0};

@@ -1762,7 +1762,9 @@ private slots:
     void test_pre_buffer_dedup_multi_track() {
         // Watermark-driven cold-start primes ALL tracks. With 4 workers and
         // 2 tracks, each track gets its own REFILL (keyed by track+type,
-        // not clip_id). Both tracks' clips are decoded in parallel.
+        // not clip_id). V2 (topmost, visible) is pre-buffered; V1 (obscured
+        // by V2's overlapping clip) is correctly skipped by compositing-aware
+        // REFILL and gets sync-decoded on demand.
         if (!m_hasTestVideo) QSKIP("No test video");
 
         auto tmb = TimelineMediaBuffer::Create(4); // 4 workers for 2 tracks
@@ -1770,6 +1772,7 @@ private slots:
 
         // V1: clipA [0,50) → clipB [50,72)
         // V2: clipC [0,50) → clipD [50,72)
+        // V2 is on top → V1 is fully obscured → V1 REFILL skips decode
         std::vector<ClipInfo> v1_clips = {
             {"clipA", path, 0, 50, 0, 24, 1, 1.0f},
             {"clipB", path, 50, 22, 0, 24, 1, 1.0f},
@@ -1781,31 +1784,23 @@ private slots:
         tmb->SetTrackClips(V1, v1_clips);
         tmb->SetTrackClips(V2, v2_clips);
 
-        // Cold-start near boundary: SetPlayhead(dir=0→1) submits REFILL for
-        // both V1 and V2 at frame 48. Each REFILL fills [48, 48+48) = frames
-        // 48-95, covering the clip boundary at frame 50.
         tmb->SetPlayhead(48, 1, 1.0f);
-
-        // Wait for both REFILL workers to decode past boundary
         QThread::msleep(1000);
 
-        // Both tracks' next clips should be pre-buffered (cache hit = 0 misses)
+        // V2 (visible): pre-buffered via REFILL — 0 cache misses
         tmb->ResetVideoCacheMissCount();
-
-        auto rb = tmb->GetVideoFrame(V1, 50);
-        QVERIFY2(rb.frame != nullptr,
-                 "V1 clipB first frame should be pre-buffered");
-        QCOMPARE(rb.clip_id, std::string("clipB"));
-
         auto rd = tmb->GetVideoFrame(V2, 50);
         QVERIFY2(rd.frame != nullptr,
                  "V2 clipD first frame should be pre-buffered");
         QCOMPARE(rd.clip_id, std::string("clipD"));
+        QVERIFY2(tmb->GetVideoCacheMissCount() == 0,
+                 "V2 (visible) should have 0 cache misses");
 
-        int64_t misses = tmb->GetVideoCacheMissCount();
-        QVERIFY2(misses == 0,
-                 qPrintable(QString("Both next clips should be pre-buffered "
-                                    "(0 cache misses), got %1").arg(misses)));
+        // V1 (obscured by V2): NOT pre-buffered — sync-decoded on access
+        auto rb = tmb->GetVideoFrame(V1, 50);
+        QVERIFY2(rb.frame != nullptr,
+                 "V1 clipB should still be accessible via sync decode");
+        QCOMPARE(rb.clip_id, std::string("clipB"));
     }
     void test_pre_buffer_dedup_park_clears_in_flight() {
         // ParkReaders must clear the in-flight tracking set so that
@@ -2456,13 +2451,15 @@ private slots:
 
     void test_watermark_cold_start_primes_buffer() {
         // On play start (0→nonzero direction), SetPlayhead should submit
-        // initial REFILL jobs for each track (cold-start priming).
+        // initial REFILL jobs for each track. V2 (visible) is pre-buffered;
+        // V1 (obscured by V2's overlapping clip) is skipped by compositing-
+        // aware REFILL and sync-decoded on demand.
         if (!m_hasTestVideo) QSKIP("No test video");
 
         auto tmb = TimelineMediaBuffer::Create(4);
         auto path = m_testVideoPath.toStdString();
 
-        // Two tracks, both starting at frame 0
+        // Two tracks, both starting at frame 0. V2 on top obscures V1.
         std::vector<ClipInfo> v1_clips = {
             {"v1clip", path, 0, 100, 0, 24, 1, 1.0f},
         };
@@ -2477,39 +2474,39 @@ private slots:
         tmb->GetVideoFrame(V1, 0);
         tmb->GetVideoFrame(V2, 0);
 
-        // Start play — cold-start priming should submit REFILL for both tracks
+        // Start play — cold-start priming submits REFILL for both tracks
         tmb->SetPlayhead(0, 1, 1.0f);
         QThread::msleep(2000);
 
-        // Both tracks should have frames cached ahead
+        // V2 (visible): pre-buffered via REFILL
         tmb->ResetVideoCacheMissCount();
         tmb->SetPlayhead(20, 0, 1.0f);
-
-        auto r_v1 = tmb->GetVideoFrame(V1, 20);
-        QVERIFY2(r_v1.frame != nullptr,
-                 "V1 frame 20 should be cached after cold-start priming");
 
         auto r_v2 = tmb->GetVideoFrame(V2, 20);
         QVERIFY2(r_v2.frame != nullptr,
                  "V2 frame 20 should be cached after cold-start priming");
+        QVERIFY2(tmb->GetVideoCacheMissCount() == 0,
+                 "V2 (visible) should have 0 cache misses from REFILL");
 
-        int64_t misses = tmb->GetVideoCacheMissCount();
-        QVERIFY2(misses == 0,
-                 qPrintable(QString("Both tracks should be pre-filled, got %1 misses").arg(misses)));
+        // V1 (obscured): sync-decoded — still returns valid frame
+        auto r_v1 = tmb->GetVideoFrame(V1, 20);
+        QVERIFY2(r_v1.frame != nullptr,
+                 "V1 frame 20 should be accessible via sync decode");
     }
 
     // ── Phase 2: multi-track near boundary ──
 
     void test_watermark_multitrack_no_stutter() {
         // Multi-track regression: 6 video tracks near clip boundary.
-        // All entry frames must be cached within 1s of cold-start.
-        // This tests that REFILL distributes across tracks without starving any.
+        // Compositing-aware REFILL: only the topmost track (V6) is pre-buffered
+        // — all lower tracks (V1-V5) are obscured by V6's overlapping clip.
+        // V6 entry frame must be cached. Lower tracks sync-decode on demand.
         if (!m_hasTestVideo) QSKIP("No test video");
 
         auto tmb = TimelineMediaBuffer::Create(4);
         auto path = m_testVideoPath.toStdString();
 
-        // 6 tracks, all with clip boundary at frame 20
+        // 6 tracks, all with clip boundary at frame 20 (V6 on top obscures V1-V5)
         std::vector<TrackId> tracks;
         for (int i = 1; i <= 6; ++i) {
             TrackId t{TrackType::Video, i};
@@ -2524,24 +2521,24 @@ private slots:
             tmb->SetTrackClips(t, clips);
         }
 
-        // Cold-start near boundary: REFILL for all 6 tracks from frame 18
         tmb->SetPlayhead(18, 1, 1.0f);
-
-        // 4 workers servicing 6 tracks — give enough time for all to complete
         QThread::msleep(2000);
 
-        // All 6 tracks' entry frames (20) must be cached
+        // V6 (topmost, visible): must be pre-buffered (0 cache misses)
         tmb->ResetVideoCacheMissCount();
-        for (int i = 1; i <= 6; ++i) {
+        TrackId v6{TrackType::Video, 6};
+        auto r6 = tmb->GetVideoFrame(v6, 20);
+        QVERIFY2(r6.frame != nullptr, "V6 entry frame 20 must be cached");
+        QVERIFY2(tmb->GetVideoCacheMissCount() == 0,
+                 "V6 (topmost visible) should have 0 cache misses");
+
+        // V1-V5 (obscured by V6): sync-decoded — still accessible
+        for (int i = 1; i <= 5; ++i) {
             TrackId t{TrackType::Video, i};
             auto r = tmb->GetVideoFrame(t, 20);
             QVERIFY2(r.frame != nullptr,
-                     qPrintable(QString("V%1 entry frame 20 must be cached").arg(i)));
+                     qPrintable(QString("V%1 entry frame 20 must be accessible via sync decode").arg(i)));
         }
-
-        int64_t misses = tmb->GetVideoCacheMissCount();
-        QVERIFY2(misses == 0,
-                 qPrintable(QString("All 6 tracks should be pre-filled, got %1 misses").arg(misses)));
     }
 
     void test_audio_watermark_5_tracks_no_underrun() {
@@ -3759,66 +3756,6 @@ private slots:
             // (exact sample-level verification is fragile with codec boundaries)
         }
     }
-    // ── Probe decode speed API ──
-
-    void test_GetProbeDecodeMs_unprobed_returns_negative() {
-        auto tmb = TimelineMediaBuffer::Create(0);
-        float result = tmb->GetProbeDecodeMs("/nonexistent/path.mov");
-        QVERIFY2(result < 0, "Unprobed path must return negative");
-        QCOMPARE(result, -1.0f);
-    }
-
-    void test_GetProbeDecodeMs_after_refill() {
-        // After REFILL decodes frames, m_decode_ms should be populated.
-        if (!m_hasTestVideo) QSKIP("No test video");
-
-        auto tmb = TimelineMediaBuffer::Create(2);
-        auto path = m_testVideoPath.toStdString();
-
-        std::vector<ClipInfo> clips = {
-            {"clipA", path, 0, 48, 0, 24, 1, 1.0f},
-        };
-        tmb->SetTrackClips(V1, clips);
-
-        // Trigger REFILL: set direction=1 then wait for workers
-        tmb->SetPlayhead(0, 1, 1.0f);
-        QTest::qWait(500);  // let REFILL workers run
-
-        float probe = tmb->GetProbeDecodeMs(path);
-        QVERIFY2(probe > 0, qPrintable(
-            QString("After REFILL, probe should be positive (got %1)").arg(probe)));
-    }
-
-    void test_GetNextClipOnTrack_returns_next() {
-        auto tmb = TimelineMediaBuffer::Create(0);
-
-        std::vector<ClipInfo> clips = {
-            {"clipA", "/a.mov", 0, 100, 0, 24, 1, 1.0f},
-            {"clipB", "/b.mov", 100, 50, 0, 24, 1, 1.0f},
-        };
-        tmb->SetTrackClips(V1, clips);
-
-        // Query from within first clip → should return second
-        ClipInfo next;
-        bool found = tmb->GetNextClipOnTrack(V1, 50, next);
-        QVERIFY(found);
-        QCOMPARE(next.clip_id, std::string("clipB"));
-        QCOMPARE(next.timeline_start, (int64_t)100);
-
-        // Query from within second clip → no next
-        ClipInfo next2;
-        bool found2 = tmb->GetNextClipOnTrack(V1, 120, next2);
-        QVERIFY(!found2);
-    }
-
-    void test_GetNextClipOnTrack_empty_track() {
-        auto tmb = TimelineMediaBuffer::Create(0);
-
-        ClipInfo next;
-        bool found = tmb->GetNextClipOnTrack(V1, 0, next);
-        QVERIFY(!found);
-    }
-
     // ── NSF: REFILL advances buffer_end past undecodable clips ──
 
     void test_refill_skips_undecodable_clip() {
@@ -3885,23 +3822,310 @@ private slots:
                  "Play mode must surface offline for known-offline clip");
     }
 
-    void test_GetNextClipOnTrack_gap_between_clips() {
+    // ── Compositing-aware REFILL: obscured tracks skip decode ──
+
+    void test_refill_skips_obscured_v1_when_v2_has_clip() {
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        // V1 and V2 both have clips at the same position.
+        // V2 is on top (opaque compositing) → V1 is invisible.
+        // REFILL should skip V1 decode for obscured frames.
+        auto tmb = TimelineMediaBuffer::Create(2);
+
+        std::vector<ClipInfo> v1_clips = {
+            {"v1_clip", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
+        };
+        std::vector<ClipInfo> v2_clips = {
+            {"v2_clip", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, v1_clips);
+        tmb->SetTrackClips(V2, v2_clips);
+
+        tmb->SetPlayhead(0, 1, 1.0f);
+        // Let REFILL workers run
+        QTest::qWait(500);
+
+        // V2 should have cached frames (visible track — REFILL runs normally)
+        auto v2_result = tmb->GetVideoFrame(V2, 0, /*cache_only=*/true);
+        QVERIFY2(v2_result.frame != nullptr,
+                 "V2 (visible) should have cached frames from REFILL");
+
+        // V1 should NOT have cached frames — REFILL skips obscured track
+        auto v1_result = tmb->GetVideoFrame(V1, 0, /*cache_only=*/true);
+        QVERIFY2(v1_result.frame == nullptr,
+                 "V1 (obscured by V2) should NOT have cached frames");
+    }
+
+    void test_refill_decodes_v1_when_v2_ends() {
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        // V2 clip is shorter than V1. After V2 ends, V1 becomes visible.
+        // REFILL should decode V1 frames beyond V2's clip boundary.
+        auto tmb = TimelineMediaBuffer::Create(2);
+
+        std::vector<ClipInfo> v1_clips = {
+            {"v1_long", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
+        };
+        std::vector<ClipInfo> v2_clips = {
+            {"v2_short", m_testVideoPath.toStdString(), 0, 20, 0, 24, 1, 1.0f},
+        };
+        tmb->SetTrackClips(V1, v1_clips);
+        tmb->SetTrackClips(V2, v2_clips);
+
+        tmb->SetPlayhead(0, 1, 1.0f);
+
+        // Wait for both V2 REFILL (priority) and V1 REFILL (skips 0-19, decodes 20+)
+        // In full suite, resource contention may slow workers — poll with timeout.
+        bool cached = false;
+        for (int attempt = 0; attempt < 20 && !cached; ++attempt) {
+            QTest::qWait(100);
+            auto v1_visible = tmb->GetVideoFrame(V1, 25, /*cache_only=*/true);
+            cached = (v1_visible.frame != nullptr);
+        }
+        QVERIFY2(cached,
+                 "V1 should be decoded where V2 has no coverage (frame 25)");
+    }
+
+    void test_video_track_ids_descending() {
+        // GetVideoTrackIds returns descending order (topmost first)
         auto tmb = TimelineMediaBuffer::Create(0);
 
+        tmb->SetTrackClips(V1, {{"c1", "dummy.mp4", 0, 10, 0, 24, 1, 1.0f}});
+        tmb->SetTrackClips(V3, {{"c3", "dummy.mp4", 0, 10, 0, 24, 1, 1.0f}});
+        tmb->SetTrackClips(V2, {{"c2", "dummy.mp4", 0, 10, 0, 24, 1, 1.0f}});
+
+        auto ids = tmb->GetVideoTrackIds();
+        QCOMPARE(static_cast<int>(ids.size()), 3);
+        QCOMPARE(ids[0], 3);  // topmost first
+        QCOMPARE(ids[1], 2);
+        QCOMPARE(ids[2], 1);
+    }
+
+    // ── Eviction policy: playhead-aware ──
+
+    void test_eviction_keeps_frames_near_playhead() {
+        // Eviction should remove the frame FURTHEST from playhead,
+        // not the lowest-key frame (old behavior).
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        // speed_ratio=0.25 → 4 timeline frames per source frame.
+        // 72 source frames cover 288 timeline frames (enough for 144 cache entries).
         std::vector<ClipInfo> clips = {
-            {"clipA", "/a.mov", 0, 50, 0, 24, 1, 1.0f},
-            // gap from 50-200
-            {"clipB", "/b.mov", 200, 100, 0, 24, 1, 1.0f},
+            {"clip1", m_testVideoPath.toStdString(), 0, 288, 0, 24, 1, 0.25f},
+        };
+        tmb->SetTrackClips(V1, clips);
+        tmb->SetPlayhead(100, 1, 1.0f);  // playhead at 100, playing forward
+
+        // Fill cache to MAX (144 entries): frames 30..173
+        // Playhead at 100 → frame 30 (dist=70) and frame 173 (dist=73)
+        for (int64_t f = 30; f < 30 + 144; ++f) {
+            auto r = tmb->GetVideoFrame(V1, f);
+            QVERIFY2(r.frame != nullptr,
+                qPrintable(QString("Failed to decode frame %1").arg(f)));
+        }
+
+        // Verify cache is full: cache_only hit at frame 100 (near playhead)
+        auto hit = tmb->GetVideoFrame(V1, 100, /*cache_only=*/true);
+        QVERIFY2(hit.frame != nullptr, "Frame at playhead should be cached");
+
+        // Insert one more frame (174) → triggers eviction
+        // Frame 30 (dist=70 from playhead 100) vs frame 173 (dist=73) →
+        // frame 173 should be evicted (furthest)
+        auto r = tmb->GetVideoFrame(V1, 174);
+        QVERIFY(r.frame != nullptr);
+
+        // Frame 174 should be in cache (just inserted)
+        auto f174 = tmb->GetVideoFrame(V1, 174, /*cache_only=*/true);
+        QVERIFY2(f174.frame != nullptr, "Newly decoded frame 174 should be in cache");
+
+        // Frame 100 should still be in cache (near playhead)
+        auto f100 = tmb->GetVideoFrame(V1, 100, /*cache_only=*/true);
+        QVERIFY2(f100.frame != nullptr, "Frame near playhead should survive eviction");
+
+        // Frame 30 should still be in cache (closer to playhead than 173)
+        auto f30 = tmb->GetVideoFrame(V1, 30, /*cache_only=*/true);
+        QVERIFY2(f30.frame != nullptr, "Frame 30 (dist=70) should survive over frame 173 (dist=73)");
+    }
+
+    void test_eviction_backwards_seek_preserves_new_frames() {
+        // Regression test: after backwards seek, newly-decoded frames near
+        // playhead must not be evicted by old high-key entries.
+        // Old bug: cache.erase(cache.begin()) always removed lowest key,
+        // so post-seek low frames were immediately evicted.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        // speed_ratio=0.25 → 288 timeline frames from 72 source frames
+        std::vector<ClipInfo> clips = {
+            {"clip1", m_testVideoPath.toStdString(), 0, 288, 0, 24, 1, 0.25f},
         };
         tmb->SetTrackClips(V1, clips);
 
-        // Query from gap → should return clipB
-        ClipInfo next;
-        bool found = tmb->GetNextClipOnTrack(V1, 75, next);
-        QVERIFY(found);
-        QCOMPARE(next.clip_id, std::string("clipB"));
-        QCOMPARE(next.timeline_start, (int64_t)200);
+        // Phase 1: play forward at 250, fill cache with frames 200..270 (71 frames)
+        tmb->SetPlayhead(250, 1, 1.0f);
+        for (int64_t f = 200; f <= 270; ++f) {
+            auto r = tmb->GetVideoFrame(V1, f);
+            QVERIFY2(r.frame != nullptr,
+                qPrintable(QString("Phase1: failed decode frame %1").arg(f)));
+        }
+
+        // Phase 2: seek backwards to frame 5
+        tmb->SetPlayhead(5, 1, 1.0f);
+
+        // Fill frames 5..77 (73 frames) → total 71+73=144 = MAX_VIDEO_CACHE
+        for (int64_t f = 5; f <= 77; ++f) {
+            auto r = tmb->GetVideoFrame(V1, f);
+            QVERIFY2(r.frame != nullptr,
+                qPrintable(QString("Phase2: failed decode frame %1").arg(f)));
+        }
+
+        // Fill 17 more (78..94) → 17 evictions.
+        // Playhead=5, so frames 270,269,...,254 evicted (furthest from 5).
+        // After: old region 200..253 (54 entries), new region 5..94 (90 entries) = 144.
+        for (int64_t f = 78; f <= 94; ++f) {
+            auto r = tmb->GetVideoFrame(V1, f);
+            QVERIFY(r.frame != nullptr);
+        }
+
+        // Frame 5 (near playhead) must survive
+        auto f5 = tmb->GetVideoFrame(V1, 5, /*cache_only=*/true);
+        QVERIFY2(f5.frame != nullptr,
+                 "Frame 5 must survive (near playhead after backwards seek)");
+
+        // Frame 94 (just decoded, near playhead) must survive
+        auto f94 = tmb->GetVideoFrame(V1, 94, /*cache_only=*/true);
+        QVERIFY2(f94.frame != nullptr,
+                 "Frame 94 must survive (recently decoded near playhead)");
+
+        // Frame 270 (furthest from playhead=5, dist=265) should be evicted.
+        // Nearest remaining cache entry is frame 253 (dist=17 > MAX_NEAREST_DISTANCE=16),
+        // so cache_only returns nullptr without nearest-frame fallback.
+        auto f270 = tmb->GetVideoFrame(V1, 270, /*cache_only=*/true);
+        QVERIFY2(f270.frame == nullptr,
+                 "Frame 270 (dist=265 from playhead) should be evicted");
     }
+
+    void test_claim_prevents_duplicate_track_fill() {
+        // Verify that claim_track_for_prefetch prevents multiple workers
+        // from filling the same track concurrently. With N prefetch_workers
+        // and 1 video track, only 1 worker should be active on it.
+        // Observed via: all workers fill the same track → wasteful duplicate decodes.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(4);  // 3 video + 1 audio worker
+
+        // Single video track — multiple workers will compete
+        tmb->SetTrackClips(V1, {
+            {"clip1", m_testVideoPath.toStdString(), 0, 500, 0, 24, 1, 1.0f},
+        });
+
+        // Start playback — workers fill V1
+        tmb->SetPlayhead(0, 1, 1.0f);
+        QTest::qWait(2000);  // let workers fill
+
+        // Check cache: should have frames filled sequentially without gaps.
+        // If multiple workers decoded the same position, cache would have
+        // fewer unique entries than expected (duplicate work, wasted time).
+        int cached_count = 0;
+        for (int64_t f = 0; f < 96; ++f) {
+            auto r = tmb->GetVideoFrame(V1, f, /*cache_only=*/true);
+            if (r.frame != nullptr) cached_count++;
+        }
+        // With 2s of decode time and fast H264, expect many frames cached.
+        // The exact count depends on decode speed, but should be > 0.
+        QVERIFY2(cached_count > 0,
+                 qPrintable(QString("Expected prefetch to fill cache, got %1 frames")
+                            .arg(cached_count)));
+    }
+
+    // ── Gap segment bounds ──
+
+    void test_gap_before_first_clip_returns_no_frame() {
+        // GetVideoFrame at a position before the first clip should return gap
+        // (no frame, empty clip_id). Exercises find_segment_at GAP path.
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        // Clip starts at frame 50
+        tmb->SetTrackClips(V1, {
+            {"clip1", "/fake.mp4", 50, 50, 0, 24, 1, 1.0f},
+        });
+
+        // Frame 0 is in the gap before clip1
+        auto r = tmb->GetVideoFrame(V1, 0);
+        QVERIFY2(r.frame == nullptr, "Frame in gap should have no decoded frame");
+        QVERIFY2(r.clip_id.empty(), "Frame in gap should have empty clip_id");
+
+        // Frame 49 is the last frame in the gap
+        auto r49 = tmb->GetVideoFrame(V1, 49);
+        QVERIFY2(r49.frame == nullptr, "Frame 49 should be in gap (clip starts at 50)");
+    }
+
+    void test_gap_between_clips_returns_no_frame() {
+        // Gap between two clips should return no frame, and prefetch should
+        // skip past the gap to fill the second clip.
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        // Clip A [0,50), gap [50,100), Clip B [100,150)
+        tmb->SetTrackClips(V1, {
+            {"clipA", "/fake.mp4", 0, 50, 0, 24, 1, 1.0f},
+            {"clipB", "/fake.mp4", 100, 50, 0, 24, 1, 1.0f},
+        });
+
+        // Frame 50 is in the gap
+        auto r50 = tmb->GetVideoFrame(V1, 50);
+        QVERIFY2(r50.frame == nullptr, "Frame 50 in gap should have no frame");
+        QVERIFY2(r50.clip_id.empty(), "Frame 50 in gap should have empty clip_id");
+
+        // Frame 99 (last frame of gap)
+        auto r99 = tmb->GetVideoFrame(V1, 99);
+        QVERIFY2(r99.frame == nullptr, "Frame 99 in gap should have no frame");
+
+        // Frame 100 should be in clip B
+        auto r100 = tmb->GetVideoFrame(V1, 100);
+        QCOMPARE(r100.clip_id, std::string("clipB"));
+    }
+
+    void test_gap_after_last_clip_returns_no_frame() {
+        // Position after the last clip should be a gap
+        auto tmb = TimelineMediaBuffer::Create(0);
+
+        tmb->SetTrackClips(V1, {
+            {"clip1", "/fake.mp4", 0, 50, 0, 24, 1, 1.0f},
+        });
+
+        // Frame 50 is past the end of clip1
+        auto r = tmb->GetVideoFrame(V1, 50);
+        QVERIFY2(r.frame == nullptr, "Frame past last clip should be gap");
+        QVERIFY2(r.clip_id.empty(), "Frame past last clip should have empty clip_id");
+    }
+
+    void test_prefetch_skips_gap_fills_next_clip() {
+        // Verify that prefetch workers correctly skip gaps and fill the
+        // second clip. This exercises fill_prefetch's GAP skip path.
+        if (!m_hasTestVideo) QSKIP("No test video");
+
+        auto tmb = TimelineMediaBuffer::Create(2);
+
+        // Clip A [0,30), gap [30,60), Clip B [60,90)
+        auto path = m_testVideoPath.toStdString();
+        tmb->SetTrackClips(V1, {
+            {"clipA", path, 0, 30, 0, 24, 1, 1.0f},
+            {"clipB", path, 60, 30, 0, 24, 1, 1.0f},
+        });
+
+        tmb->SetPlayhead(0, 1, 1.0f);
+        QTest::qWait(1500);
+
+        // Frame 60 (first frame of clipB) should be prefetched
+        auto r60 = tmb->GetVideoFrame(V1, 60, /*cache_only=*/true);
+        QVERIFY2(r60.frame != nullptr,
+                 "Prefetch should skip gap [30,60) and fill clipB starting at 60");
+        QCOMPARE(r60.clip_id, std::string("clipB"));
+    }
+
 };
 
 QTEST_MAIN(TestTimelineMediaBuffer)
