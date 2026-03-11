@@ -1120,4 +1120,187 @@ do
     print("  ok")
 end
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- NSF /et: on_model_changed, calc_frame_from_time_us, seek_to_frame,
+--          _compute_video_speed_ratio
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- ─── Test: on_model_changed clears dedup and re-seeks ───
+print("\n--- on_model_changed ---")
+do
+    local engine = make_engine()
+    clear_timers()
+    engine:load_sequence("seq1", 100)
+
+    -- Seek to 50 — sets _last_committed_frame = 50
+    engine:seek(50)
+    reset_playback()
+
+    -- seek(50) again → dedup skip (same frame)
+    engine:seek(50)
+    assert(count_calls("PARK") == 0,
+        "seek(50) after seek(50) should be deduped (no PARK call)")
+
+    -- on_model_changed(50) → clears dedup, re-seeks to 50
+    reset_playback()
+    engine:on_model_changed(50)
+    assert(count_calls("PARK") == 1,
+        "on_model_changed should clear dedup and re-seek (PARK called)")
+    print("  clears dedup and re-seeks: ok")
+end
+
+do
+    local engine = make_engine()
+    clear_timers()
+    engine:load_sequence("seq1", 100)
+
+    -- on_model_changed re-seeks → PARK called, position updated internally
+    engine:on_model_changed(25)
+    assert(find_call("PARK"), "on_model_changed should call PARK (via seek)")
+    assert(engine:get_position() == 25,
+        "on_model_changed should update position to 25, got " .. tostring(engine:get_position()))
+    print("  updates position and calls PARK: ok")
+end
+
+-- ─── Test: calc_frame_from_time_us ───
+print("\n--- calc_frame_from_time_us ---")
+do
+    local engine, _ = make_engine()
+    clear_timers()
+
+    -- Before load_sequence → fps not set → assert
+    expect_assert(function() engine:calc_frame_from_time_us(1000000) end,
+        "calc_frame_from_time_us without fps")
+    print("  fps not set asserts: ok")
+end
+
+do
+    local engine, _ = make_engine()
+    clear_timers()
+    engine:load_sequence("seq1", 100)
+
+    -- 24fps: 1 frame = 1/24 s = 41666.67 us
+    -- t_us = 0 → frame 0
+    local f0 = engine:calc_frame_from_time_us(0)
+    assert(f0 == 0, "calc_frame_from_time_us(0) should be 0, got " .. tostring(f0))
+
+    -- t_us = 1000000 (1 second) → frame 24 at 24fps
+    local f24 = engine:calc_frame_from_time_us(1000000)
+    assert(f24 == 24, "calc_frame_from_time_us(1s) should be 24, got " .. tostring(f24))
+    print("  correct frame calculation: ok")
+end
+
+-- ─── Test: seek_to_frame asserts ───
+print("\n--- seek_to_frame ---")
+do
+    local engine, _ = make_engine()
+    clear_timers()
+
+    -- Before load → fps not set → assert
+    expect_assert(function() engine:seek_to_frame(10) end,
+        "seek_to_frame without fps")
+    print("  fps not set asserts: ok")
+end
+
+do
+    local engine, _ = make_engine()
+    clear_timers()
+
+    -- Non-number → assert
+    expect_assert(function() engine:seek_to_frame("ten") end,
+        "seek_to_frame with string")
+    print("  non-number asserts: ok")
+end
+
+do
+    local engine, _ = make_engine()
+    clear_timers()
+    engine:load_sequence("seq1", 100)
+
+    -- Happy path: seek_to_frame floors and delegates to seek
+    engine:seek_to_frame(10.7)
+    assert(find_call("PARK"), "seek_to_frame should call PARK")
+    local park = find_call("PARK")
+    assert(park.args[1] == 10,
+        "seek_to_frame(10.7) should floor to 10, got " .. tostring(park.args[1]))
+    print("  floors and delegates to seek: ok")
+end
+
+-- ─── Test: _compute_video_speed_ratio ───
+print("\n--- _compute_video_speed_ratio ---")
+do
+    local engine, _ = make_engine()
+    clear_timers()
+    engine:load_sequence("seq1", 100)
+
+    -- Normal speed: source_out - source_in = duration
+    local entry = { clip = { id = "c1", source_in = 0, source_out = 100, duration = 100 } }
+    local ratio = engine:_compute_video_speed_ratio(entry)
+    assert(ratio == 1.0,
+        "normal speed should snap to 1.0, got " .. tostring(ratio))
+    print("  normal speed (1.0): ok")
+end
+
+do
+    local engine, _ = make_engine()
+    clear_timers()
+    engine:load_sequence("seq1", 100)
+
+    -- Reverse clip: source_out < source_in → negative ratio
+    local entry = { clip = { id = "c2", source_in = 100, source_out = 0, duration = 100 } }
+    local ratio = engine:_compute_video_speed_ratio(entry)
+    assert(ratio == -1.0,
+        "reverse normal speed should snap to -1.0, got " .. tostring(ratio))
+    print("  reverse speed (-1.0): ok")
+end
+
+do
+    local engine, _ = make_engine()
+    clear_timers()
+    engine:load_sequence("seq1", 100)
+
+    -- Slow motion: 50 source frames over 100 timeline frames
+    local entry = { clip = { id = "c3", source_in = 0, source_out = 50, duration = 100 } }
+    local ratio = engine:_compute_video_speed_ratio(entry)
+    assert(ratio == 0.5,
+        "slow motion should be 0.5, got " .. tostring(ratio))
+    print("  slow motion (0.5): ok")
+end
+
+do
+    local engine, _ = make_engine()
+    clear_timers()
+    engine:load_sequence("seq1", 100)
+
+    -- Error: nil source_out → assert
+    expect_assert(function()
+        engine:_compute_video_speed_ratio({ clip = { id = "bad", source_in = 0, source_out = nil, duration = 100 } })
+    end, "_compute_video_speed_ratio nil source_out")
+    print("  nil source_out asserts: ok")
+
+    -- Error: nil source_in → assert
+    expect_assert(function()
+        engine:_compute_video_speed_ratio({ clip = { id = "bad", source_in = nil, source_out = 100, duration = 100 } })
+    end, "_compute_video_speed_ratio nil source_in")
+    print("  nil source_in asserts: ok")
+
+    -- Error: nil duration → assert
+    expect_assert(function()
+        engine:_compute_video_speed_ratio({ clip = { id = "bad", source_in = 0, source_out = 100, duration = nil } })
+    end, "_compute_video_speed_ratio nil duration")
+    print("  nil duration asserts: ok")
+
+    -- Error: zero source_range → assert
+    expect_assert(function()
+        engine:_compute_video_speed_ratio({ clip = { id = "bad", source_in = 50, source_out = 50, duration = 100 } })
+    end, "_compute_video_speed_ratio zero source_range")
+    print("  zero source_range asserts: ok")
+
+    -- Error: zero duration → assert
+    expect_assert(function()
+        engine:_compute_video_speed_ratio({ clip = { id = "bad", source_in = 0, source_out = 100, duration = 0 } })
+    end, "_compute_video_speed_ratio zero duration")
+    print("  zero duration asserts: ok")
+end
+
 print("\n✅ test_playback_engine.lua passed")

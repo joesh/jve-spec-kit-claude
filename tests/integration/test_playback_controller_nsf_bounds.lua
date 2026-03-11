@@ -91,6 +91,40 @@ do
 end
 
 --------------------------------------------------------------------------------
+-- 4. TMB_CREATE validation: pool_threads must be 0 or >= 2
+--------------------------------------------------------------------------------
+section("4. TMB_CREATE rejects pool_threads=1")
+do
+    -- pool_threads=1 would create 0 video workers + 1 audio worker = broken.
+    -- Binding returns luaL_error (catchable with pcall).
+    local ok, err = pcall(EMP.TMB_CREATE, 1)
+    check(not ok, "TMB_CREATE(1) should error")
+    check(type(err) == "string" and err:match("pool_threads"),
+        "TMB_CREATE(1) error mentions pool_threads")
+end
+
+section("4b. TMB_CREATE rejects negative pool_threads")
+do
+    local ok, err = pcall(EMP.TMB_CREATE, -1)
+    check(not ok, "TMB_CREATE(-1) should error")
+    check(type(err) == "string" and err:match("pool_threads"),
+        "TMB_CREATE(-1) error mentions pool_threads")
+end
+
+section("4c. TMB_CREATE accepts valid values")
+do
+    -- 0 = no workers (sync mode for tests)
+    local tmb0 = EMP.TMB_CREATE(0)
+    check(tmb0 ~= nil, "TMB_CREATE(0) should succeed")
+    EMP.TMB_CLOSE(tmb0)
+
+    -- 2 = minimum valid worker count (1 video + 1 audio)
+    local tmb2 = EMP.TMB_CREATE(2)
+    check(tmb2 ~= nil, "TMB_CREATE(2) should succeed")
+    EMP.TMB_CLOSE(tmb2)
+end
+
+--------------------------------------------------------------------------------
 -- Summary
 --------------------------------------------------------------------------------
 print(string.format("\n=== Results: %d/%d passed ===", passed, total))
