@@ -44,8 +44,9 @@ extern "C" {
 // Called on assert failure - prints stack trace, then throws or exits
 void jve_assert_fail(const char* expr, const char* msg, const char* file, int line, const char* func);
 
-// Install SIGABRT handler to catch standard assert() and abort()
-// Call this early in main()
+// Install signal handlers (SIGABRT, SIGSEGV, SIGBUS) for crash diagnostics.
+// Prints stack trace on crash instead of silent macOS crash report.
+// Call this early in main().
 void jve_install_abort_handler();
 
 #ifdef __cplusplus

@@ -6,6 +6,7 @@
 // to Lua errors. Before the lua_State is set (early startup), _exit(134).
 
 #include "assert_handler.h"
+#include <lua.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -160,11 +161,65 @@ static void sigabrt_handler(int sig) {
     _exit(134);
 }
 
-// Install the SIGABRT handler - call early in main()
+// Flag to prevent recursive signal handling (SIGSEGV/SIGBUS)
+static volatile sig_atomic_t g_handling_crash = 0;
+
+// SIGSEGV/SIGBUS handler — catches null dereferences, use-after-free, etc.
+// If inside a Lua pcall context, routes to Lua error (longjmp) so the app
+// survives. Otherwise prints stack trace and exits.
+static void crash_signal_handler(int sig) {
+    // Prevent recursive handling (crash inside the handler)
+    if (g_handling_crash) {
+        _exit(128 + sig);
+    }
+    g_handling_crash = 1;
+
+    const char* sig_name = (sig == SIGSEGV) ? "SIGSEGV" :
+                           (sig == SIGBUS)  ? "SIGBUS"  : "SIGNAL";
+
+    fprintf(stderr, "\n");
+    fprintf(stderr, "╔══════════════════════════════════════════════════════════════╗\n");
+    fprintf(stderr, "║                    CRASH: %-8s                           ║\n", sig_name);
+    fprintf(stderr, "╚══════════════════════════════════════════════════════════════╝\n");
+    fprintf(stderr, "\n");
+    fprintf(stderr, "  Signal %d (%s): memory access violation\n", sig, sig_name);
+    fprintf(stderr, "  Likely cause: use-after-free, null deref, or dangling pointer\n");
+    fprintf(stderr, "\n");
+
+    print_stack_trace();
+
+    fprintf(stderr, "\n");
+    fflush(stderr);
+
+    // If we have a Lua state, route through Lua's error system (longjmp to
+    // nearest pcall). The app survives — Lua surfaces the error as a stack trace.
+    // SA_RESETHAND ensures if luaL_error itself crashes, the OS default handler
+    // takes over (core dump) instead of infinite recursion.
+    if (t_lua_state) {
+        g_handling_crash = 0;  // allow future signals after longjmp recovery
+        luaL_error(t_lua_state, "CRASH: %s (signal %d) — memory access violation", sig_name, sig);
+        // luaL_error never returns (longjmp)
+    }
+
+    _exit(128 + sig);
+}
+
+// Install signal handlers - call early in main()
 void jve_install_abort_handler() {
     struct sigaction sa;
-    sa.sa_handler = sigabrt_handler;
+    memset(&sa, 0, sizeof(sa));
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
+
+    // SIGABRT: standard assert() and abort()
+    sa.sa_handler = sigabrt_handler;
     sigaction(SIGABRT, &sa, nullptr);
+
+    // SIGSEGV + SIGBUS: null deref, use-after-free, alignment faults
+    // SA_RESETHAND: reset to default after first delivery so a crash inside
+    // the handler produces a normal core dump instead of infinite recursion.
+    sa.sa_handler = crash_signal_handler;
+    sa.sa_flags = SA_RESETHAND;
+    sigaction(SIGSEGV, &sa, nullptr);
+    sigaction(SIGBUS, &sa, nullptr);
 }
