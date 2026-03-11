@@ -287,10 +287,11 @@ private:
     // higher tracks completely obscure lower ones. Caller must hold m_tracks_mutex.
     bool is_video_obscured(const TrackId& track, int64_t timeline_frame) const;
 
-    // Evict one entry from video cache: pick the entry furthest from playhead.
-    // Playhead-aware eviction prevents backwards-seek cache thrashing where
-    // old high-key entries cause freshly-decoded low-key entries to be
-    // immediately evicted by a naive lowest-key-first policy.
+    // Evict one entry from video cache: prefer behind-playhead (already played).
+    // If all entries ahead (e.g. after backward seek), evict furthest ahead.
+    // Prevents prefetch buffer self-eviction during forward play — without
+    // this, freshly-prefetched frames are "furthest from playhead" and get
+    // evicted immediately, creating a systematic cache hole.
     // Caller must hold m_tracks_mutex. O(n) on cache size (~144 entries).
     void evict_video_cache_entry(TrackState& ts) const;
 

@@ -3903,9 +3903,11 @@ private slots:
 
     // ── Eviction policy: playhead-aware ──
 
-    void test_eviction_keeps_frames_near_playhead() {
-        // Eviction should remove the frame FURTHEST from playhead,
-        // not the lowest-key frame (old behavior).
+    void test_eviction_prefers_behind_playhead() {
+        // Eviction should prefer removing behind-playhead (already-played) frames.
+        // This prevents prefetch buffer self-eviction: without this, freshly-
+        // prefetched frames (~95 ahead) are "furthest from playhead" and get
+        // evicted immediately, creating a systematic cache hole.
         if (!m_hasTestVideo) QSKIP("No test video");
 
         auto tmb = TimelineMediaBuffer::Create(0);
@@ -3919,34 +3921,38 @@ private slots:
         tmb->SetPlayhead(100, 1, 1.0f);  // playhead at 100, playing forward
 
         // Fill cache to MAX (144 entries): frames 30..173
-        // Playhead at 100 → frame 30 (dist=70) and frame 173 (dist=73)
+        // Behind playhead: 30..99 (70 entries). Ahead: 100..173 (74 entries).
         for (int64_t f = 30; f < 30 + 144; ++f) {
             auto r = tmb->GetVideoFrame(V1, f);
             QVERIFY2(r.frame != nullptr,
                 qPrintable(QString("Failed to decode frame %1").arg(f)));
         }
 
-        // Verify cache is full: cache_only hit at frame 100 (near playhead)
-        auto hit = tmb->GetVideoFrame(V1, 100, /*cache_only=*/true);
-        QVERIFY2(hit.frame != nullptr, "Frame at playhead should be cached");
+        // Insert 17 more frames (174..190) → 17 evictions, all from behind.
+        // Evicts 30,31,...,46 (furthest behind, one per insert).
+        // Need 17 evictions because MAX_NEAREST_DISTANCE=16: frame 30 must be
+        // >16 from any surviving entry (first survivor = 47, dist=17).
+        for (int64_t f = 174; f <= 190; ++f) {
+            auto r = tmb->GetVideoFrame(V1, f);
+            QVERIFY(r.frame != nullptr);
+        }
 
-        // Insert one more frame (174) → triggers eviction
-        // Frame 30 (dist=70 from playhead 100) vs frame 173 (dist=73) →
-        // frame 173 should be evicted (furthest)
-        auto r = tmb->GetVideoFrame(V1, 174);
-        QVERIFY(r.frame != nullptr);
+        // Frame 190 should be in cache (just inserted, ahead)
+        auto f190 = tmb->GetVideoFrame(V1, 190, /*cache_only=*/true);
+        QVERIFY2(f190.frame != nullptr, "Newly decoded ahead frame should be in cache");
 
-        // Frame 174 should be in cache (just inserted)
-        auto f174 = tmb->GetVideoFrame(V1, 174, /*cache_only=*/true);
-        QVERIFY2(f174.frame != nullptr, "Newly decoded frame 174 should be in cache");
-
-        // Frame 100 should still be in cache (near playhead)
+        // Frame 100 should still be in cache (at playhead)
         auto f100 = tmb->GetVideoFrame(V1, 100, /*cache_only=*/true);
-        QVERIFY2(f100.frame != nullptr, "Frame near playhead should survive eviction");
+        QVERIFY2(f100.frame != nullptr, "Frame at playhead should survive eviction");
 
-        // Frame 30 should still be in cache (closer to playhead than 173)
+        // Frame 173 should survive (ahead, not evicted — behind entries went first)
+        auto f173 = tmb->GetVideoFrame(V1, 173, /*cache_only=*/true);
+        QVERIFY2(f173.frame != nullptr, "Frame 173 (ahead) should survive — behind entries evict first");
+
+        // Frame 30 should be evicted (furthest behind, dist=17 from nearest survivor 47)
         auto f30 = tmb->GetVideoFrame(V1, 30, /*cache_only=*/true);
-        QVERIFY2(f30.frame != nullptr, "Frame 30 (dist=70) should survive over frame 173 (dist=73)");
+        QVERIFY2(f30.frame == nullptr,
+                 "Frame 30 (evicted behind) should be gone (dist=17 > MAX_NEAREST_DISTANCE=16)");
     }
 
     void test_eviction_backwards_seek_preserves_new_frames() {

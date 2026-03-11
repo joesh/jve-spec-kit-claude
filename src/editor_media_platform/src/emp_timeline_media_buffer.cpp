@@ -435,24 +435,44 @@ bool TimelineMediaBuffer::is_video_obscured(const TrackId& track, int64_t timeli
 }
 
 // ============================================================================
-// evict_video_cache_entry — playhead-aware eviction
+// evict_video_cache_entry — prefer already-played frames
 // ============================================================================
 
 void TimelineMediaBuffer::evict_video_cache_entry(TrackState& ts) const {
     assert(!ts.video_cache.empty() && "evict_video_cache_entry: cache is empty");
     int64_t playhead = m_playhead_frame.load(std::memory_order_relaxed);
 
-    // Find entry furthest from playhead. O(n) on ~144 entries = ~microseconds.
-    auto worst = ts.video_cache.begin();
-    int64_t worst_dist = std::abs(worst->first - playhead);
-    for (auto it = std::next(worst); it != ts.video_cache.end(); ++it) {
-        int64_t dist = std::abs(it->first - playhead);
-        if (dist > worst_dist) {
-            worst = it;
-            worst_dist = dist;
+    // Two-phase eviction: O(n) on ~144 entries = ~microseconds.
+    //
+    // Phase 1: Evict behind-playhead frames (already displayed).
+    //   Among behind frames, pick the one furthest behind (oldest played).
+    // Phase 2: If ALL frames are ahead (e.g. after backward seek), evict
+    //   the one furthest ahead (least likely to be needed soon).
+    //
+    // This prevents the prefetch buffer from eating itself: without phase 1,
+    // freshly-prefetched frames (~95 ahead) are always "furthest from playhead"
+    // and get evicted immediately, creating a systematic cache hole.
+    auto behind_victim = ts.video_cache.end();
+    int64_t behind_dist = -1;
+    auto ahead_victim = ts.video_cache.end();
+    int64_t ahead_dist = -1;
+
+    for (auto it = ts.video_cache.begin(); it != ts.video_cache.end(); ++it) {
+        if (it->first < playhead) {
+            int64_t d = playhead - it->first;
+            if (d > behind_dist) { behind_victim = it; behind_dist = d; }
+        } else {
+            int64_t d = it->first - playhead;
+            if (d > ahead_dist) { ahead_victim = it; ahead_dist = d; }
         }
     }
-    ts.video_cache.erase(worst);
+
+    if (behind_victim != ts.video_cache.end()) {
+        ts.video_cache.erase(behind_victim);
+    } else {
+        assert(ahead_victim != ts.video_cache.end());
+        ts.video_cache.erase(ahead_victim);
+    }
 }
 
 // ============================================================================
