@@ -525,6 +525,15 @@ PlaybackController::PlaybackController() {
 }
 
 PlaybackController::~PlaybackController() {
+    // Non-owning pointers (m_aop, m_sse, m_tmb, m_surface) may be dangling
+    // during Lua GC or static destruction — AudioOutput, SSE, TMB, and Surface
+    // are owned by separate static maps whose destruction order is undefined.
+    // Null them so Stop() skips the audio-device path. The audio pump (owned
+    // by this object) is stopped by Stop() via its own IsRunning() guard.
+    m_aop = nullptr;
+    m_sse = nullptr;
+    m_tmb = nullptr;
+    m_surface = nullptr;
     Stop();
     JVE_LOG_EVENT(Ticks, "PlaybackController: destroyed");
 }
