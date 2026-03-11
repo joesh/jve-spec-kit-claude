@@ -9,12 +9,12 @@
 
 namespace emp {
 
-// Global decode mode — controls how readers handle intermediate frames.
+// Global decode mode — controls seek behavior.
 // Set by the transport layer (playback controller, ruler drag) via Lua bindings.
 //
-// Play:  BGRA-convert ALL intermediates, cache for sequential access (batch decode)
-// Scrub: Decode from keyframe through B-frames, only BGRA-convert target frame
-// Park:  Same as Scrub (single frame decode, no expectation of further requests)
+// Play:  Sequential decode with seek avoidance (need_seek check)
+// Scrub: Always seek to keyframe before target
+// Park:  Same as Scrub
 enum class DecodeMode { Play, Scrub, Park };
 
 // Global decode mode accessors (thread-safe)
@@ -55,15 +55,6 @@ public:
     // Debug/tooling: decode audio by microseconds directly
     Result<std::shared_ptr<PcmChunk>> DecodeAudioRangeUS(TimeUS t0_us, TimeUS t1_us,
                                                           const AudioFormat& out);
-
-    // Non-blocking cache lookup - returns nullptr on miss.
-    // Diagnostic/test API: verifies cache state after DecodeAtUS calls.
-    std::shared_ptr<Frame> GetCachedFrame(TimeUS t_us);
-
-    // Set maximum cached BGRA frames. Reader evicts down to new limit immediately.
-    // Used by Lua to control per-reader cache size based on state
-    // (e.g., active+playing=120, active+scrubbing=8, pooled=1).
-    void SetMaxCacheFrames(size_t max_frames);
 
     // True if video decoder is using hardware acceleration (VideoToolbox)
     bool IsHwAccelerated() const;

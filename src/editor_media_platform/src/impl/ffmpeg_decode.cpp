@@ -77,17 +77,10 @@ Result<AVFrame*> decode_until_target(AVCodecContext* codec_ctx, AVFormatContext*
     bool have_best = false;
     TimeUS best_pts_us = INT64_MIN;
 
-    // B-frame depth: keep decoding this many frames after seeing one past target
-    // H.264 GOP can have long chains; VideoToolbox may have additional buffering
-    // Use generous lookahead to ensure we don't miss buffered B-frames
-    constexpr int BFRAME_LOOKAHEAD = 10;
-    int frames_past_target = 0;
-
     while (true) {
         auto result = decode_next_frame(codec_ctx, fmt_ctx, stream_idx, pkt, frame);
         if (result.is_error()) {
             if (result.error().code == ErrorCode::EOFReached && have_best) {
-                // At EOF, return best frame we have
                 av_frame_unref(frame);
                 return best_frame;
             }
@@ -97,9 +90,7 @@ Result<AVFrame*> decode_until_target(AVCodecContext* codec_ctx, AVFormatContext*
         TimeUS frame_pts_us = stream_pts_to_us(frame->pts, stream);
 
         if (frame_pts_us <= target_us) {
-            // This frame is a candidate (pts <= target)
             if (!have_best || frame_pts_us > best_pts_us) {
-                // Swap into best_frame
                 av_frame_unref(best_frame);
                 av_frame_move_ref(best_frame, frame);
                 best_pts_us = frame_pts_us;
@@ -107,25 +98,13 @@ Result<AVFrame*> decode_until_target(AVCodecContext* codec_ctx, AVFormatContext*
             } else {
                 av_frame_unref(frame);
             }
-            // Reset counter - we found a frame we want
-            frames_past_target = 0;
         } else {
-            // This frame is past target
+            // Past target — floor frame (if any) is confirmed
             av_frame_unref(frame);
-            frames_past_target++;
-
-            // Keep decoding to drain B-frame buffer
-            if (frames_past_target >= BFRAME_LOOKAHEAD && have_best) {
+            if (have_best) {
                 return best_frame;
             }
-            // If we don't have a best yet, keep looking
-            if (frames_past_target >= BFRAME_LOOKAHEAD * 2) {
-                // Give up - return best or error
-                if (have_best) {
-                    return best_frame;
-                }
-                return Error::internal("No frame found at target time");
-            }
+            return Error::internal("No frame found at target time");
         }
     }
 }
@@ -139,38 +118,26 @@ Result<std::vector<DecodedFrame>> decode_frames_batch(
     TimeUS target_us, AVPacket* pkt, AVFrame* temp_frame)
 {
     std::vector<DecodedFrame> frames;
-    bool found_target_or_past = false;
-
-    // Count frames with PTS >= target. Once we have BFRAME_LOOKAHEAD such
-    // frames, the cache has contiguous PTS coverage past the target.
-    // CRITICAL: do NOT reset this counter when late B-frames (PTS < target)
-    // arrive from the decoder pipeline — they are expected reorder output,
-    // not a signal to restart counting. Resetting caused premature batch
-    // return with PTS holes → stale-cache rejection → stutter.
-    constexpr int BFRAME_LOOKAHEAD = 8;
-    int frames_past_target = 0;
+    bool found_target = false;
 
     while (true) {
-        // Try to receive frames from decoder (may have buffered B-frames)
+        // Receive frames from decoder
         while (true) {
             int ret = avcodec_receive_frame(codec_ctx, temp_frame);
             if (ret == AVERROR(EAGAIN)) {
                 break;  // Need more packets
             } else if (ret == AVERROR_EOF) {
-                // Decoder drained - return what we have
                 if (frames.empty()) {
                     return Error::eof();
                 }
                 return frames;
             } else if (ret < 0) {
-                // Free any frames we've collected
                 for (auto& df : frames) {
                     av_frame_free(&df.frame);
                 }
                 return ffmpeg_error(ret, "avcodec_receive_frame");
             }
 
-            // Got a frame - allocate new AVFrame and move data to it
             AVFrame* new_frame = av_frame_alloc();
             assert(new_frame && "av_frame_alloc failed");
             av_frame_move_ref(new_frame, temp_frame);
@@ -178,19 +145,13 @@ Result<std::vector<DecodedFrame>> decode_frames_batch(
             TimeUS pts_us = stream_pts_to_us(new_frame->pts, stream);
             frames.push_back({new_frame, pts_us});
 
-            // Count only frames with PTS >= target toward completion.
-            // Late B-frames (PTS < target) are collected but don't advance
-            // or reset the counter — they're normal reorder pipeline output.
             if (pts_us >= target_us) {
-                frames_past_target++;
-                if (frames_past_target >= BFRAME_LOOKAHEAD) {
-                    found_target_or_past = true;
-                }
+                found_target = true;
             }
         }
 
-        // If we've seen enough frames past target, we're done
-        if (found_target_or_past && !frames.empty()) {
+        // Got the target frame — done
+        if (found_target) {
             return frames;
         }
 
