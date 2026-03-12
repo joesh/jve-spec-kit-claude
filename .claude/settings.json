@@ -53,5 +53,10 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "WebFetch"
+    ]
   }
 }
