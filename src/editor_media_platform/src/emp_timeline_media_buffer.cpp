@@ -531,7 +531,9 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
 
     // During playback (cache_only), prefetch adaptive stride may have decoded
     // a nearby frame but not this exact one. Search for the nearest cached
-    // frame from the same clip. O(log n) on ordered map.
+    // frame from the same clip in the playback direction.
+    // Direction-aware: forward play only looks ahead, reverse only looks behind.
+    // This prevents showing a frame the viewer already passed (visual reversal).
     // MAX_NEAREST_DISTANCE bounds the fallback: never show a frame from
     // hundreds of frames away (would display wrong content during stalls).
     static constexpr int64_t MAX_NEAREST_DISTANCE = 16;  // adaptive stride max (8) * 2
@@ -540,14 +542,15 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         auto lo = ts.video_cache.lower_bound(timeline_frame);
         const TrackState::CachedFrame* best = nullptr;
         int64_t best_dist = INT64_MAX;
+        int dir = m_playhead_direction.load(std::memory_order_relaxed);
 
-        // Check entry at or after timeline_frame
-        if (lo != ts.video_cache.end() && lo->second.clip_id == cid) {
+        // Check entry at or after timeline_frame (preferred for forward play)
+        if (dir >= 0 && lo != ts.video_cache.end() && lo->second.clip_id == cid) {
             int64_t d = lo->first - timeline_frame;
             if (d < best_dist && d <= MAX_NEAREST_DISTANCE) { best = &lo->second; best_dist = d; }
         }
-        // Check entry before timeline_frame
-        if (lo != ts.video_cache.begin()) {
+        // Check entry before timeline_frame (preferred for reverse play)
+        if (dir <= 0 && lo != ts.video_cache.begin()) {
             auto prev = std::prev(lo);
             if (prev->second.clip_id == cid) {
                 int64_t d = timeline_frame - prev->first;
@@ -561,7 +564,6 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
             result.par_num = best->par_num;
             result.par_den = best->par_den;
 
-            int dir = m_playhead_direction.load(std::memory_order_relaxed);
             if (dir != 0 && is_video_buffer_low(ts, timeline_frame, dir)) {
                 tracks_lock.unlock();
                 wake_prefetch_workers();
@@ -2054,6 +2056,56 @@ void TimelineMediaBuffer::decode_into_cache(
 
     int64_t source_frame = clip->source_in +
         static_cast<int64_t>((position - clip->timeline_start) * clip->speed_ratio);
+
+    // Retime duplicate: consecutive timeline frames can map to the same source
+    // frame at slow speeds. Check if the previous timeline position already
+    // cached this exact source frame + clip. Reuse it instead of re-decoding —
+    // the decoder has already advanced past this PTS, so decode_frames_batch
+    // would overshoot to the next frame, causing a 1-frame-ahead shift and
+    // periodic backwards visual jumps at every duplicate-sf boundary.
+    {
+        std::lock_guard<std::mutex> tlock(m_tracks_mutex);
+        auto tit = m_tracks.find(track);
+        if (tit != m_tracks.end()) {
+            auto& cache = tit->second.video_cache;
+            auto prev_it = cache.find(position - 1);
+            if (prev_it != cache.end() &&
+                prev_it->second.clip_id == clip->clip_id &&
+                prev_it->second.source_frame == source_frame &&
+                prev_it->second.frame) {
+                // Reuse previous frame
+                while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
+                    evict_video_cache_entry(tit->second);
+                }
+                const auto& info = held_reader->media_file()->info();
+                TrackState::CachedFrame cf{clip->clip_id, source_frame,
+                               prev_it->second.frame,
+                               info.rotation, info.video_par_num, info.video_par_den,
+                               tit->second.video_cache_seq++};
+                cache[position] = cf;
+                int fill_count = 1;
+                for (int s = 1; s < stride; ++s) {
+                    int64_t fill_tf = position + s;
+                    if (fill_tf >= clip->timeline_end()) break;
+                    while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
+                        evict_video_cache_entry(tit->second);
+                    }
+                    cf.insert_seq = tit->second.video_cache_seq++;
+                    cache[fill_tf] = cf;
+                    fill_count++;
+                }
+                {
+                    char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
+                    EMP_LOG_DEBUG("DECODE DUP: %s tf=%lld sf=%lld stride=%d filled=%d cache=%zu buf_end=%lld",
+                        tbuf, (long long)position, (long long)source_frame,
+                        stride, fill_count, cache.size(),
+                        (long long)tit->second.video_buffer_end);
+                }
+                return;
+            }
+        }
+    }
+
     const auto& info = held_reader->media_file()->info();
     int64_t file_frame = source_frame - info.start_tc;
     Rate clip_rate = clip->rate();
