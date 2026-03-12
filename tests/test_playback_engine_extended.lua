@@ -227,7 +227,7 @@ local function make_tracked_audio()
         track_a("play_burst", time, dur)
     end
     audio.init_session = function() end
-    audio.shutdown_session = function() end
+    audio.shutdown_session = function() audio.session_initialized = false end
     audio.refresh_mix_volumes = function() end
 
     return audio
@@ -706,8 +706,11 @@ do
     assert(found_handler,
         "project_changed must have a function handler from playback_engine")
 
-    assert(PlaybackEngine.get_audio() == nil,
-        "audio must be nil after project_changed (prevents stale sources)")
+    -- Module ref preserved (allows re-init on next play) but session shut down
+    assert(PlaybackEngine.get_audio() ~= nil,
+        "audio module ref must survive project_changed (for re-init)")
+    assert(not PlaybackEngine.get_audio().session_initialized,
+        "audio session must be de-initialized after project_changed")
 
     print("  project_changed shuts down audio session passed")
 end

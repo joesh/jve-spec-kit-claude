@@ -411,11 +411,14 @@ function PlaybackEngine:_on_controller_position(frame, stopped)
     assert(type(stopped) == "boolean", string.format(
         "PlaybackEngine:_on_controller_position: stopped must be boolean, got %s", type(stopped)))
 
-    -- Stale callback from previous play session: dispatched before Stop()
-    -- but delivered after engine:stop() set state="stopped". Ignore.
-    if not stopped and self.state == "stopped" then
-        log.detail("_on_controller_position: stale callback frame=%d (stopped=false, state=stopped) — ignored",
-            frame)
+    -- Stale callback: C++ reportPosition uses dispatch_async, so callbacks
+    -- arrive after Lua has already transitioned to stopped (via engine:stop()).
+    -- Both play-tick callbacks (stopped=false) and the final Stop callback
+    -- (stopped=true) can arrive after seek() has set _position to a new value.
+    -- Overwriting _position here would cause stepping to jump backwards.
+    if self.state == "stopped" then
+        log.detail("_on_controller_position: stale callback frame=%d stopped=%s (state=stopped) — ignored",
+            frame, tostring(stopped))
         return
     end
 
@@ -916,7 +919,9 @@ end
 function PlaybackEngine.shutdown_audio_session()
     if audio_playback and audio_playback.session_initialized then
         audio_playback.shutdown_session()
-        audio_playback = nil
+        -- Keep module reference — guards check session_initialized and
+        -- call _init_audio_session to re-init on next play.
+        -- Nil'ing audio_playback here prevents recovery after project_changed.
     end
 end
 

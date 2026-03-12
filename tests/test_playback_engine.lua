@@ -1303,4 +1303,47 @@ do
     print("  zero duration asserts: ok")
 end
 
+-- ─── Test: shutdown_audio_session preserves module ref for re-init ───
+-- REGRESSION: shutdown_audio_session (called on project_changed) used to
+-- nil out audio_playback, preventing _init_audio_session from re-initing
+-- on next play. Audio was permanently dead after any project change.
+print("\n--- shutdown_audio_session preserves module ref ---")
+do
+    local mock_audio = {
+        session_initialized = true,
+        aop = "mock_aop",
+        sse = "mock_sse",
+        session_sample_rate = 48000,
+        session_channels = 2,
+        is_ready = function() return true end,
+        set_max_time = function() end,
+        apply_mix = function() end,
+        shutdown_called = false,
+        init_session = function() end,
+    }
+    mock_audio.shutdown_session = function()
+        mock_audio.shutdown_called = true
+        mock_audio.session_initialized = false
+    end
+    PlaybackEngine.init_audio(mock_audio)
+    assert(PlaybackEngine.get_audio() == mock_audio, "audio module should be set")
+
+    -- Simulate project_changed → shutdown_audio_session
+    PlaybackEngine.shutdown_audio_session()
+
+    -- Session should be shut down
+    assert(mock_audio.shutdown_called, "shutdown_session must be called")
+    assert(not mock_audio.session_initialized, "session must be de-initialized")
+
+    -- Module reference must survive (this was the bug — it was nil'd)
+    assert(PlaybackEngine.get_audio() ~= nil,
+        "REGRESSION: audio_playback must not be nil after shutdown_audio_session")
+    assert(PlaybackEngine.get_audio() == mock_audio,
+        "audio_playback module ref must be preserved for re-init")
+
+    -- Cleanup
+    PlaybackEngine.init_audio(nil)
+    print("  ok")
+end
+
 print("\n✅ test_playback_engine.lua passed")
