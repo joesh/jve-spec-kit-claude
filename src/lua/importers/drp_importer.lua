@@ -327,18 +327,20 @@ end
 --   0x0004: 8-byte aux + 1-byte val → aux*256 + val (large int, e.g. audio samples)
 --   0x0006: 1-byte pad + 8-byte BE double
 --   0x000a: 4-byte aux + 1-byte len → len bytes UTF-16BE string
---   0x000c: 4-byte aux + 1-byte payload_len → LE double in first 8 bytes of payload
+--   0x000c: 4-byte aux + 1-byte val → aux*256+val bytes payload; LE double from first 8
 --
 -- @param bytes string: raw bytes of the blob
 -- @param header_size number: bytes to skip before first field
 -- @param field_count number: number of fields to decode
 -- @return table|nil: {field_name = value, ...} or nil on decode error
+-- @return table|nil: {field_name = raw_bytes, ...} for 0x000c blob payloads
 local function decode_tlv_fields(bytes, header_size, field_count)
     if not bytes or #bytes < header_size + 8 then return nil end
     if field_count <= 0 or field_count > 20 then return nil end
 
     local ffi = require("ffi")
     local fields = {}
+    local raw_payloads = {}
     local pos = header_size + 1  -- 1-indexed
 
     for _ = 1, field_count do
@@ -415,12 +417,15 @@ local function decode_tlv_fields(bytes, header_size, field_count)
             pos = pos + str_len
 
         elseif field_type == 0x000c then
-            -- 4-byte aux + 1-byte payload_len → LE double in first 8 bytes
-            if pos + 4 > #bytes then return nil end
-            pos = pos + 4  -- skip aux
+            -- 4-byte aux + 1-byte val → payload_len = aux*256 + val (consistent
+            -- with types 0x0002/0x0003). Handles payloads > 255 bytes (e.g. KeyframesBA).
+            local aux = read_be32(bytes, pos)
+            if not aux then return nil end
+            pos = pos + 4
             if pos > #bytes then return nil end
-            local payload_len = bytes:byte(pos)
+            local val = bytes:byte(pos)
             pos = pos + 1
+            local payload_len = aux * 256 + val
             if payload_len < 8 or pos + payload_len - 1 > #bytes then return nil end
             -- First 8 bytes of payload = LE double (native x86 order)
             local le_bytes = ffi.new("uint8_t[8]")
@@ -428,6 +433,8 @@ local function decode_tlv_fields(bytes, header_size, field_count)
                 le_bytes[j] = bytes:byte(pos + j)
             end
             fields[field_name] = ffi.cast("double*", le_bytes)[0]
+            -- Store raw payload bytes for nested blob parsing (e.g. KeyframesBA)
+            raw_payloads[field_name] = bytes:sub(pos, pos + payload_len - 1)
             pos = pos + payload_len
 
         else
@@ -437,7 +444,7 @@ local function decode_tlv_fields(bytes, header_size, field_count)
         end
     end
 
-    return fields
+    return fields, raw_payloads
 end
 
 --- Decode BtVideoInfo/Time blob → {num_frames, frame_rate, unique_id}
@@ -489,6 +496,163 @@ local function decode_bt_audio_duration(hex_str)
     return {
         duration_samples = duration,
         sample_rate = sample_rate,
+    }
+end
+
+--- Detect reverse playback from KeyframesBA raw payload.
+-- KeyframesBA contains nested keyframe data where each keyframe has:
+--   {interp, YOut, YIn, Y, XOut, XIn, X}
+-- Y = source time (seconds), X = retimed time (seconds).
+-- If last keyframe's Y < first keyframe's Y → reverse playback (negative slope).
+--
+-- The nested structure uses the same TLV encoding as the parent blob.
+-- We extract Y values from the first and last keyframes.
+--
+-- @param kf_bytes string: raw bytes of KeyframesBA payload
+-- @return boolean: true if reverse playback detected
+local function detect_reverse_from_keyframes(kf_bytes)
+    if not kf_bytes or #kf_bytes < 16 then return false end
+
+    -- KeyframesBA header: [BE32 version] [BE32 keyframe_count]
+    local version = read_be32(kf_bytes, 1)
+    if not version then return false end
+    local kf_count = read_be32(kf_bytes, 5)
+    if not kf_count or kf_count < 2 then return false end
+
+    -- Each keyframe is a nested TLV block with its own field_count header.
+    -- Parse first keyframe to get its Y value, then skip to last.
+    local ffi = require("ffi")
+    local pos = 9  -- after 8-byte header
+
+    local first_y, last_y
+
+    for kf_idx = 1, kf_count do
+        -- Each keyframe: [BE32 field_count] [TLV fields...]
+        local fc = read_be32(kf_bytes, pos)
+        if not fc or fc < 1 or fc > 10 then return false end
+        pos = pos + 4
+
+        -- Parse this keyframe's TLV fields to find Y
+        local kf_y = nil
+        for _ = 1, fc do
+            -- Field name: [BE32 name_byte_len] [UTF-16BE name]
+            local name_len = read_be32(kf_bytes, pos)
+            if not name_len then return false end
+            pos = pos + 4
+            if pos + name_len - 1 > #kf_bytes then return false end
+            -- Decode name
+            local name_chars = {}
+            for j = 0, name_len - 1, 2 do
+                local lo = kf_bytes:byte(pos + j + 1)
+                if lo then name_chars[#name_chars + 1] = string.char(lo) end
+            end
+            local field_name = table.concat(name_chars)
+            pos = pos + name_len
+
+            -- Separator (BE16) + type (BE16)
+            if pos + 3 > #kf_bytes then return false end
+            pos = pos + 2
+            local b1, b2 = kf_bytes:byte(pos, pos + 1)
+            local field_type = b1 * 256 + b2
+            pos = pos + 2
+
+            -- Read value and advance pos
+            if field_type == 0x0002 or field_type == 0x0003 then
+                pos = pos + 5  -- 4-byte aux + 1-byte val
+            elseif field_type == 0x0004 then
+                pos = pos + 9  -- 8-byte aux + 1-byte val
+            elseif field_type == 0x0006 then
+                -- 1-byte pad + 8-byte BE double
+                if pos + 8 > #kf_bytes then return false end
+                if field_name == "Y" then
+                    pos = pos + 1  -- skip pad
+                    local be_bytes = ffi.new("uint8_t[8]")
+                    for j = 0, 7 do
+                        be_bytes[7 - j] = kf_bytes:byte(pos + j)
+                    end
+                    kf_y = ffi.cast("double*", be_bytes)[0]
+                    pos = pos + 8
+                else
+                    pos = pos + 9  -- pad + 8 bytes
+                end
+            elseif field_type == 0x000a then
+                if pos + 4 > #kf_bytes then return false end
+                pos = pos + 4  -- skip aux
+                if pos > #kf_bytes then return false end
+                local str_len = kf_bytes:byte(pos)
+                pos = pos + 1 + str_len
+            elseif field_type == 0x000c then
+                local aux = read_be32(kf_bytes, pos)
+                if not aux then return false end
+                pos = pos + 4
+                if pos > #kf_bytes then return false end
+                local val = kf_bytes:byte(pos)
+                pos = pos + 1
+                local payload_len = aux * 256 + val
+                pos = pos + payload_len
+            else
+                return false  -- unknown type, bail
+            end
+
+            if pos > #kf_bytes + 1 then return false end
+        end
+
+        if kf_idx == 1 then
+            first_y = kf_y
+        end
+        if kf_idx == kf_count then
+            last_y = kf_y
+        end
+    end
+
+    if not first_y or not last_y then return false end
+    return last_y < first_y
+end
+
+--- Decode MediaTimemapBA blob → {speed_ratio, is_reverse, y_max, x_max}
+--
+-- Two MTBA formats exist:
+--   Header 0x02 (9 bytes): [1-byte header] [8-byte BE double = media duration]
+--     → No speed/direction info, return nil.
+--   Header 0x01 (large): [BE32 version=1] [BE32 field_count] [TLV fields]
+--     → YMax (source duration sec), XMax (retimed duration sec), KeyframesBA
+--     → speed_ratio = YMax / XMax, direction from keyframe slope.
+--
+-- @param hex_str string: hex-encoded MediaTimemapBA blob
+-- @return table|nil: {speed_ratio=number, is_reverse=boolean, y_max=number, x_max=number}
+local function decode_media_timemap(hex_str)
+    local bytes = hex_to_bytes(hex_str)
+    if not bytes or #bytes <= 9 then return nil end
+
+    -- Large MTBA: [BE32 version=1] [BE32 field_count] + TLV fields
+    local version = read_be32(bytes, 1)
+    if version ~= 1 then return nil end
+
+    local field_count = read_be32(bytes, 5)
+    if not field_count or field_count < 2 or field_count > 10 then return nil end
+
+    local fields, raw_payloads = decode_tlv_fields(bytes, 8, field_count)
+    if not fields then return nil end
+
+    local y_max = fields["YMax"]
+    local x_max = fields["XMax"]
+    if not y_max or not x_max then return nil end
+    if x_max <= 0 or y_max <= 0 then return nil end
+
+    local speed_ratio = y_max / x_max
+
+    -- Direction detection from KeyframesBA nested blob
+    local is_reverse = false
+    local kf_raw = raw_payloads and raw_payloads["KeyframesBA"]
+    if kf_raw then
+        is_reverse = detect_reverse_from_keyframes(kf_raw)
+    end
+
+    return {
+        speed_ratio = speed_ratio,
+        is_reverse = is_reverse,
+        y_max = y_max,
+        x_max = x_max,
     }
 end
 
@@ -1257,13 +1421,41 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
                 -- Hex part encodes speed ratio as LE IEEE 754 double
                 if hex_part and #hex_part >= 16 then
                     local speed = decode_hex_double_at(hex_part, 0)
-                    if speed and speed ~= 0 and math.abs(speed) < 100 then
+                    if speed and math.abs(speed) > 0.001 and math.abs(speed) < 100 then
                         -- Preserve signed speed: negative = reverse playback.
                         -- Direction is encoded via source_in > source_out swap below.
                         clip_speed = speed
                     else
                         log.warn("DRP retime: clip '%s' hex speed invalid (decoded=%s from '%s')",
                                  clip_name, tostring(speed), hex_part:sub(1, 16))
+                    end
+                end
+            end
+
+            -- Try MediaTimemapBA for authoritative speed/direction on retimed clips.
+            -- MTBA is present on all retimed clips; hex speed is unreliable for
+            -- variable-speed clips (encodes garbage near-zero values).
+            local mtba_elem = find_element(clip_elem, "MediaTimemapBA")
+            if mtba_elem then
+                local mtba_hex = get_text(mtba_elem)
+                -- 9-byte blobs (18 hex chars) = just media duration, no speed data.
+                -- Larger blobs = version 1 with YMax/XMax/KeyframesBA.
+                if #mtba_hex > 18 then
+                    local mtba = decode_media_timemap(mtba_hex)
+                    if mtba then
+                        local mtba_speed = mtba.is_reverse and -mtba.speed_ratio or mtba.speed_ratio
+                        -- MTBA is authoritative — hex speed is unreliable
+                        -- (encodes internal Resolve values that don't match user-visible speed)
+                        if clip_speed ~= 1.0 then
+                            local hex_abs = math.abs(clip_speed)
+                            if math.abs(hex_abs - mtba.speed_ratio) / mtba.speed_ratio > 0.05 then
+                                log.warn("DRP retime: clip '%s' hex speed %.4f overridden by MTBA %.4f (YMax/XMax=%.2f/%.2f)",
+                                         clip_name, clip_speed, mtba_speed, mtba.y_max, mtba.x_max)
+                            end
+                        end
+                        clip_speed = mtba_speed
+                        log.event("DRP retime: clip '%s' speed from MTBA: %.4f (YMax=%.2f XMax=%.2f reverse=%s)",
+                                  clip_name, clip_speed, mtba.y_max, mtba.x_max, tostring(mtba.is_reverse))
                     end
                 end
             end
@@ -1797,6 +1989,7 @@ M._parse_resolve_tracks = parse_resolve_tracks
 M._parse_fields_blob_tabs = parse_fields_blob_tabs
 M._decode_bt_video_time = decode_bt_video_time
 M._decode_bt_audio_duration = decode_bt_audio_duration
+M._decode_media_timemap = decode_media_timemap
 
 --- Lightweight metadata extraction — project name only, no full parse.
 -- Pipes project.xml from ZIP via unzip -p (no temp directory).
