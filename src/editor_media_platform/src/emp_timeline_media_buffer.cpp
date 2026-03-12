@@ -435,44 +435,26 @@ bool TimelineMediaBuffer::is_video_obscured(const TrackId& track, int64_t timeli
 }
 
 // ============================================================================
-// evict_video_cache_entry — prefer already-played frames
+// evict_video_cache_entry — LRU via insertion sequence number
 // ============================================================================
 
 void TimelineMediaBuffer::evict_video_cache_entry(TrackState& ts) const {
     assert(!ts.video_cache.empty() && "evict_video_cache_entry: cache is empty");
-    int64_t playhead = m_playhead_frame.load(std::memory_order_relaxed);
 
-    // Two-phase eviction: O(n) on ~144 entries = ~microseconds.
+    // Each CachedFrame carries a monotonic insert_seq assigned at insertion.
+    // Evict the entry with the lowest insert_seq (= oldest = least recently used).
     //
-    // Phase 1: Evict behind-playhead frames (already displayed).
-    //   Among behind frames, pick the one furthest behind (oldest played).
-    // Phase 2: If ALL frames are ahead (e.g. after backward seek), evict
-    //   the one furthest ahead (least likely to be needed soon).
-    //
-    // This prevents the prefetch buffer from eating itself: without phase 1,
-    // freshly-prefetched frames (~95 ahead) are always "furthest from playhead"
-    // and get evicted immediately, creating a systematic cache hole.
-    auto behind_victim = ts.video_cache.end();
-    int64_t behind_dist = -1;
-    auto ahead_victim = ts.video_cache.end();
-    int64_t ahead_dist = -1;
-
-    for (auto it = ts.video_cache.begin(); it != ts.video_cache.end(); ++it) {
-        if (it->first < playhead) {
-            int64_t d = playhead - it->first;
-            if (d > behind_dist) { behind_victim = it; behind_dist = d; }
-        } else {
-            int64_t d = it->first - playhead;
-            if (d > ahead_dist) { ahead_victim = it; ahead_dist = d; }
+    // This is correct across seek boundaries: after a backward seek, old frames
+    // from the previous position have lower insert_seq than newly-prefetched
+    // frames, so they're evicted first regardless of their timeline_frame key.
+    // O(n) on ~144 entries = ~microseconds.
+    auto victim = ts.video_cache.begin();
+    for (auto it = std::next(victim); it != ts.video_cache.end(); ++it) {
+        if (it->second.insert_seq < victim->second.insert_seq) {
+            victim = it;
         }
     }
-
-    if (behind_victim != ts.video_cache.end()) {
-        ts.video_cache.erase(behind_victim);
-    } else {
-        assert(ahead_victim != ts.video_cache.end());
-        ts.video_cache.erase(ahead_victim);
-    }
+    ts.video_cache.erase(victim);
 }
 
 // ============================================================================
@@ -685,13 +667,13 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         if (tit != m_tracks.end()) {
             auto& cache = tit->second.video_cache;
 
-            // Evict furthest-from-playhead if at capacity
             while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
                 evict_video_cache_entry(tit->second);
             }
 
             cache[timeline_frame] = {clip_id, source_frame, result.frame,
-                                     result.rotation, result.par_num, result.par_den};
+                                     result.rotation, result.par_num, result.par_den,
+                                     tit->second.video_cache_seq++};
         }
     } else {
         // Decode failure: file exists, reader works, but this frame couldn't be
@@ -2098,7 +2080,8 @@ void TimelineMediaBuffer::decode_into_cache(
                 evict_video_cache_entry(tit->second);
             }
             TrackState::CachedFrame cf{clip->clip_id, source_frame, result.value(),
-                           info.rotation, info.video_par_num, info.video_par_den};
+                           info.rotation, info.video_par_num, info.video_par_den,
+                           tit->second.video_cache_seq++};
             cache[position] = cf;
 
             // Stride fill: populate cache at skipped positions with same frame
@@ -2109,6 +2092,7 @@ void TimelineMediaBuffer::decode_into_cache(
                 while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
                     evict_video_cache_entry(tit->second);
                 }
+                cf.insert_seq = tit->second.video_cache_seq++;
                 cache[fill_tf] = cf;
                 fill_count++;
             }
@@ -2146,7 +2130,8 @@ void TimelineMediaBuffer::decode_into_cache(
                             static_cast<int64_t>((fill_tf - clip->timeline_start) * clip->speed_ratio);
                         cache[fill_tf] = {clip->clip_id, fill_sf,
                                           last_good_frame, info.rotation,
-                                          info.video_par_num, info.video_par_den};
+                                          info.video_par_num, info.video_par_den,
+                                          tit->second.video_cache_seq++};
                     }
                 }
                 if (clip->timeline_end() > tit->second.video_buffer_end) {

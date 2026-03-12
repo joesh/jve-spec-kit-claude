@@ -239,8 +239,10 @@ private:
             int rotation = 0;
             int32_t par_num = 1;
             int32_t par_den = 1;
+            uint64_t insert_seq = 0;  // monotonic insertion order for LRU eviction
         };
         std::map<int64_t, CachedFrame> video_cache; // key = timeline_frame
+        uint64_t video_cache_seq = 0;               // next insert_seq to assign
         // Must hold at least 2 × VIDEO_PREFETCH_MAX (96) so current clip + next
         // clip prefetch don't thrash each other via eviction.
         static constexpr size_t MAX_VIDEO_CACHE = 144;
@@ -287,12 +289,10 @@ private:
     // higher tracks completely obscure lower ones. Caller must hold m_tracks_mutex.
     bool is_video_obscured(const TrackId& track, int64_t timeline_frame) const;
 
-    // Evict one entry from video cache: prefer behind-playhead (already played).
-    // If all entries ahead (e.g. after backward seek), evict furthest ahead.
-    // Prevents prefetch buffer self-eviction during forward play — without
-    // this, freshly-prefetched frames are "furthest from playhead" and get
-    // evicted immediately, creating a systematic cache hole.
-    // Caller must hold m_tracks_mutex. O(n) on cache size (~144 entries).
+    // Evict one entry from video cache: LRU via insert_seq.
+    // Lowest insert_seq = oldest insertion = least recently used.
+    // Correct for both directions and across seek boundaries.
+    // O(n) on cache size (~144 entries). Caller must hold m_tracks_mutex.
     void evict_video_cache_entry(TrackState& ts) const;
 
     // Microsecond variant for audio path. Requires m_seq_rate to be set.
