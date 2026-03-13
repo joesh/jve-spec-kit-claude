@@ -214,10 +214,9 @@ if #audio_clips > 0 then
     check("audio clip duration = 240 (timeline frames)", ac.duration == 240,
         "got: " .. tostring(ac.duration))
     check("audio clip source_in = 0", ac.source_in == 0)
-    -- Audio source_out should be duration in samples: 240 * 48000 / 24 = 480000
-    local expected_samples = math.floor(240 * 48000 * 1 / 24 + 0.5)
-    check("audio clip source_out = 480000 (samples)", ac.source_out == expected_samples,
-        string.format("expected %d, got %s", expected_samples, tostring(ac.source_out)))
+    -- Domain: 240 frames at 24fps = 10 seconds → 10s × 48000Hz = 480,000 samples
+    check("audio clip source_out = 480000 (samples)", ac.source_out == 480000,
+        string.format("expected 480000, got %s", tostring(ac.source_out)))
     check("audio clip fps = 48000/1", ac.fps_numerator == 48000 and ac.fps_denominator == 1)
 end
 
@@ -553,9 +552,10 @@ assert(ntsc_stmt:exec() and ntsc_stmt:next())
 local ntsc_source_out = ntsc_stmt:value(0)
 ntsc_stmt:finalize()
 
-local expected_ntsc = math.floor(300 * 48000 * 1001 / 30000 + 0.5)
-check("NTSC: audio source_out correct", ntsc_source_out == expected_ntsc,
-    string.format("expected %d, got %s", expected_ntsc, tostring(ntsc_source_out)))
+-- Domain: 300 frames at 29.97fps (30000/1001) = 300×1001/30000 = 10.01s
+-- 10.01s × 48000Hz = 480,480 samples
+check("NTSC: audio source_out correct", ntsc_source_out == 480480,
+    string.format("expected 480480, got %s", tostring(ntsc_source_out)))
 
 --------------------------------------------------------------------------------
 -- Edge case: zero-duration media

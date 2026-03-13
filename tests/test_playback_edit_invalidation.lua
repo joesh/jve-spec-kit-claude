@@ -64,6 +64,7 @@ package.loaded["core.qt_constants"] = {
         PLAY = function() end,
         STOP = function() end,
         SEEK = function() end,
+        PARK = function(pc, frame) track_playback("PARK", pc, frame) end,
         ACTIVATE_AUDIO = function() end,
         DEACTIVATE_AUDIO = function() end,
         HAS_AUDIO = function() return false end,
@@ -191,7 +192,9 @@ print("\n--- 1. content_changed for our sequence → reload ---")
 do
     local engine = make_engine()
     engine:load_sequence("seq_test", 100)
-    assert(engine._playback_controller, "controller must exist")
+    -- Verify controller is operational by checking seek works
+    engine:seek(0)
+    assert(find_call("PARK"), "controller must be operational (PARK callable)")
 
     reset_playback_calls()
 
@@ -214,7 +217,9 @@ print("\n--- 2. content_changed for different sequence → no reload ---")
 do
     local engine = make_engine()
     engine:load_sequence("seq_test", 100)
-    assert(engine._playback_controller, "controller must exist")
+    -- Verify controller is operational by checking seek works
+    engine:seek(0)
+    assert(find_call("PARK"), "controller must be operational (PARK callable)")
 
     reset_playback_calls()
 
@@ -261,14 +266,7 @@ print("\n--- 4. destroy() disconnects content_changed signal ---")
 do
     local engine = make_engine()
     engine:load_sequence("seq_test", 100)
-    local had_conn = engine._content_changed_conn ~= nil
-    assert(had_conn, "content_changed connection must exist after load")
-
     engine:destroy()
-
-    -- Connection should be cleared
-    assert(engine._content_changed_conn == nil,
-        "content_changed connection must be nil after destroy")
 
     reset_playback_calls()
 
@@ -289,8 +287,9 @@ do
     local engine = make_engine()
     engine:load_sequence("seq_test", 100)
 
-    -- Simulate no controller (test environment)
-    engine._playback_controller = nil
+    -- WHITE-BOX: Simulate no controller (test environment) — need to nil private
+    -- field because there's no public API to remove the controller
+    engine._playback_controller = nil  -- luacheck: ignore
 
     reset_playback_calls()
 

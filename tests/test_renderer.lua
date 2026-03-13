@@ -123,11 +123,12 @@ end
 
 local function test_get_video_at_source_time()
     -- Frame 30, clip V1: source_in=10, offset=30-24=6, source_frame=16
-    -- source_time_us = 16 * 1000000 * 1 / 24 = 666666
+    -- Domain: frame 16 at 24fps = 16/24 seconds = 0.6667s = 666,666 μs
     local results = seq:get_video_at(30)
-    local expected_us = math.floor(16 * 1000000 / 24)
+    local expected_us = 666666
     assert(math.abs(results[1].source_time_us - expected_us) < 2,
-        string.format("Expected source_time_us~%d, got %d", expected_us, results[1].source_time_us))
+        string.format("Expected source_time_us~%d (frame 16 at 24fps), got %d",
+            expected_us, results[1].source_time_us))
     print("  test_get_video_at_source_time passed")
 end
 

@@ -63,7 +63,7 @@ local seq_elem = elem("Sequence", "", {
     }),
 })
 
-local video_tracks, _ = drp_importer._parse_resolve_tracks(seq_elem, 24)
+local video_tracks, _ = drp_importer.parse_resolve_tracks(seq_elem, 24)
 
 assert(#video_tracks == 1, "Expected 1 video track, got " .. #video_tracks)
 assert(#video_tracks[1].clips == 1, "Expected 1 video clip")
@@ -103,7 +103,7 @@ local seq_trim = elem("Sequence", "", {
     }),
 })
 
-local v_trim = drp_importer._parse_resolve_tracks(seq_trim, 24)
+local v_trim = drp_importer.parse_resolve_tracks(seq_trim, 24)
 local trim_clip = v_trim[1].clips[1]
 
 assert(trim_clip.source_in == 100, string.format(
@@ -136,7 +136,7 @@ local seq_audio = elem("Sequence", "", {
     }),
 })
 
-local _, a_tracks = drp_importer._parse_resolve_tracks(seq_audio, 24)
+local _, a_tracks = drp_importer.parse_resolve_tracks(seq_audio, 24)
 
 assert(#a_tracks == 1, "Expected 1 audio track, got " .. #a_tracks)
 local audio_clip = a_tracks[1].clips[1]
@@ -146,10 +146,12 @@ assert(audio_clip.source_in == 0, string.format(
     "Untrimmed audio source_in should be 0, got %d", audio_clip.source_in))
 print("  ✓ Audio source_in = 0 (untrimmed)")
 
--- Audio source_duration = duration_timeline_frames * 48000 / fps
-local expected_source_dur = math.floor(73794 * 48000 / 24 + 0.5)
+-- Domain: 73794 timeline frames at 24fps = 3074.75 seconds
+-- At 48000Hz: 3074.75 × 48000 = 147,588,000 audio samples
+local expected_source_dur = 147588000
 assert(audio_clip.source_out == expected_source_dur, string.format(
-    "Audio source_out should be %d, got %d", expected_source_dur, audio_clip.source_out))
+    "Audio source_out should be %d (73794 frames × 48000/24), got %d",
+    expected_source_dur, audio_clip.source_out))
 print("  ✓ Audio source_out = " .. expected_source_dur)
 
 --------------------------------------------------------------------------------
@@ -174,13 +176,13 @@ local seq_audio_trim = elem("Sequence", "", {
     }),
 })
 
-local _, a_trim = drp_importer._parse_resolve_tracks(seq_audio_trim, 24)
+local _, a_trim = drp_importer.parse_resolve_tracks(seq_audio_trim, 24)
 local audio_trim_clip = a_trim[1].clips[1]
 
--- In=73794 timeline frames. Convert to samples: 73794 * 48000 / 24 = 147,588,000
-local expected_audio_in = math.floor(73794 * 48000 / 24 + 0.5)
+-- Domain: In=73794 timeline frames at 24fps = 3074.75s → 147,588,000 samples at 48kHz
+local expected_audio_in = 147588000
 assert(audio_trim_clip.source_in == expected_audio_in, string.format(
-    "Trimmed audio source_in should be %d samples, got %d",
+    "Trimmed audio source_in should be %d samples (73794 × 48000/24), got %d",
     expected_audio_in, audio_trim_clip.source_in))
 print("  ✓ Audio source_in = " .. expected_audio_in .. " samples")
 
@@ -215,7 +217,7 @@ local seq_regression = elem("Sequence", "", {
     }),
 })
 
-local v_reg = drp_importer._parse_resolve_tracks(seq_regression, 24)
+local v_reg = drp_importer.parse_resolve_tracks(seq_regression, 24)
 assert(v_reg[1].clips[1].source_in == 0, "clip_a source_in should be 0")
 assert(v_reg[1].clips[2].source_in == 0, "clip_b source_in should be 0")
 print("  ✓ Different MediaStartTime → both source_in=0 (MediaStartTime not used)")

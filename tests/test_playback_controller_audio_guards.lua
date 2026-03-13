@@ -1,11 +1,10 @@
--- NSF test: PlaybackEngine audio transport guards when C++ controller active.
+-- WHITE-BOX: NSF test — PlaybackEngine audio transport guards when C++ controller active.
 --
--- Verifies that Lua-side audio transport (_start_audio, _stop_audio, _sync_audio)
--- becomes a no-op when self._playback_controller exists, since C++ owns audio
--- transport (Flush/Reset/SetTarget/Start/Stop) via Play/Stop/SetSpeed.
+-- Tests private methods (_start_audio, _stop_audio, _sync_audio) directly because
+-- these guards protect against Lua/C++ audio ownership conflicts. No public API
+-- path to selectively invoke these methods.
 --
 -- Also tests:
--- - Clip window = union of loaded clips (prevents NeedClips spam)
 -- - Shuttle unlatch doesn't call audio_playback when controller active
 -- - seek() stopped doesn't call audio_playback.seek when controller active
 
@@ -242,10 +241,9 @@ local function make_engine_with_controller()
     timer_callbacks = {}
 
     engine:load_sequence("seq1", 200)
-    -- _setup_playback_controller creates the C++ controller via PLAYBACK.CREATE
-    assert(engine._playback_controller, "controller should be created")
+    engine:activate_audio()  -- claim audio ownership via public API
 
-    -- Reset tracking AFTER load (load_sequence sets up infrastructure)
+    -- Reset tracking AFTER load + audio activation
     reset_playback_calls()
     reset_audio_calls()
     reset_tmb_clips()
@@ -261,7 +259,6 @@ print("=== test_playback_controller_audio_guards.lua ===")
 print("\n--- 1. _start_audio no-op when controller active ---")
 do
     local engine = make_engine_with_controller()
-    engine._audio_owner = true
     engine.direction = 1
     engine.speed = 1
     reset_audio_calls()
@@ -281,7 +278,6 @@ end
 print("\n--- 2. _stop_audio no-op when controller active ---")
 do
     local engine = make_engine_with_controller()
-    engine._audio_owner = true
     mock_audio.playing = true
     reset_audio_calls()
 
@@ -299,7 +295,6 @@ end
 print("\n--- 3. _sync_audio no-op when controller active ---")
 do
     local engine = make_engine_with_controller()
-    engine._audio_owner = true
     engine.direction = 1
     engine.speed = 2
     reset_audio_calls()
@@ -317,7 +312,6 @@ end
 print("\n--- 4. shuttle unlatch skips audio when controller active ---")
 do
     local engine = make_engine_with_controller()
-    engine._audio_owner = true
     engine.state = "playing"
     engine.transport_mode = "shuttle"
     engine.direction = 1
@@ -351,7 +345,6 @@ end
 print("\n--- 5. seek() stopped skips audio_playback.seek when controller active ---")
 do
     local engine = make_engine_with_controller()
-    engine._audio_owner = true
     engine.state = "stopped"
     engine.direction = 0
     reset_audio_calls()
@@ -389,7 +382,6 @@ end
 print("\n--- 9. play() delegates to controller, no audio_playback.start ---")
 do
     local engine = make_engine_with_controller()
-    engine._audio_owner = true
     reset_audio_calls()
     reset_playback_calls()
 
@@ -438,13 +430,12 @@ do
     mock_audio_entries = {}
     mock_next_audio_entries = {}
     engine:load_sequence("seq1", 200)
+    -- WHITE-BOX: no public API to remove controller after load_sequence
     engine._playback_controller = nil  -- simulate no C++ controller
 
-    engine._audio_owner = true
+    engine:activate_audio()
     engine.direction = 1
     engine.speed = 1
-    engine.fps_num = 24
-    engine.fps_den = 1
     reset_audio_calls()
 
     engine:_start_audio()

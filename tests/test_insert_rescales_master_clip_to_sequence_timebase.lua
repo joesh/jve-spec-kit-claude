@@ -111,7 +111,8 @@ q:finalize()
 -- clip.duration is in TIMELINE frames (sequence timebase), not source frames
 -- Source is 2500 frames at 25fps = 100 seconds
 -- Timeline is 24fps, so 100 seconds = 2400 timeline frames
-local expected_timeline_duration = math.floor(2500 * 24 / 25 + 0.5)  -- 2400
+-- Domain: 2500 frames at 25fps = 100 seconds → 100s × 24fps = 2400 timeline frames
+local expected_timeline_duration = 2400
 assert(duration_frames == expected_timeline_duration, string.format(
     "Expected timeline duration %d (source 2500@25fps on 24fps timeline), got %s",
     expected_timeline_duration, tostring(duration_frames)))

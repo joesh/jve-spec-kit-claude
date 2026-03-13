@@ -44,7 +44,9 @@ assert_equal(sum.fps_numerator, 24, "Sum should use lhs fps_numerator")
 -- (2 * 24 / 30) = 1.6, rounded to 2.
 -- So, 5 + 2 = 7
 -- The Rational class handles rounding in rescale.
-local expected_frames_for_sum = 5 + math.floor((2 * 24 / 30) + 0.5)
+-- Domain: 2 frames at 30fps = 2/30 = 0.0667s → at 24fps = 0.0667 × 24 = 1.6 → rounds to 2
+-- So 5 + 2 = 7
+local expected_frames_for_sum = 7
 assert_equal(sum.frames, expected_frames_for_sum, "Cross-rate add should round into target rate")
 
 -- Milliseconds conversion round trip

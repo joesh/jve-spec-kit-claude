@@ -1,5 +1,8 @@
 -- Test: PlaybackEngine + PlaybackController integration (Phase 2)
--- NSF: Tests callback parameter validation and clip window flow
+-- WHITE-BOX: NSF compliance — tests parameter validation on private callback
+-- methods (_provide_clips, _on_controller_position, _on_clip_transition).
+-- These methods are called by C++ and must reject bad parameters immediately.
+-- No public API path to inject malformed C++ callback arguments.
 require('test_env')
 
 -- Mock qt_constants before playback_engine require (C++ binding unavailable in test)
@@ -127,7 +130,7 @@ do
     eng.state = "playing"  -- position callbacks only arrive during playback
     -- Valid call should update position and fire callback
     eng:_on_controller_position(42, false)
-    check(eng._position == 42, "_on_controller_position updates _position")
+    check(eng:get_position() == 42, "_on_controller_position updates position")
     check(#events == 1, "_on_controller_position fires position callback")
     check(events[1].type == "position" and events[1].frame == 42,
         "_on_controller_position callback has correct frame")
@@ -279,7 +282,7 @@ do
     local eng = make_test_engine()
     local fake_surface = {}  -- mock surface
     eng:set_surface(fake_surface)
-    check(eng._video_surface == fake_surface, "set_surface stores surface reference")
+    check(eng:get_surface() == fake_surface, "set_surface stores surface reference")
 end
 
 --------------------------------------------------------------------------------
@@ -296,7 +299,7 @@ do
 
     -- Normal playback callback at frame 90125 (coalesced report)
     eng:_on_controller_position(90125, false)
-    check(eng._position == 90125,
+    check(eng:get_position() == 90125,
         "during playback: position updated to 90125")
     check(#events == 1 and events[1].frame == 90125,
         "during playback: position callback fires")
@@ -311,17 +314,20 @@ do
         events[#events + 1] = {type = "position", frame = frame}
     end
     eng:_on_controller_position(90125, false)
-    check(eng._position == 90125,  -- unchanged
+    check(eng:get_position() == 90125,  -- unchanged
         "stale callback: position NOT overwritten")
     check(#events == 0,
         "stale callback: position callback NOT fired")
 
-    -- Final stop callback with correct position
+    -- Final stop callback also rejected when already stopped.
+    -- _on_controller_position intentionally rejects ALL callbacks (including
+    -- stopped=true) when state="stopped" — seek() may have set _position
+    -- to a new value, and overwriting it would cause stepping to jump backwards.
     eng:_on_controller_position(90169, true)
-    check(eng._position == 90169,
-        "final stop callback: position updated to 90169")
-    check(#events == 1 and events[1].frame == 90169,
-        "final stop callback: position callback fires")
+    check(eng:get_position() == 90125,
+        "final stop callback: position NOT overwritten (already stopped)")
+    check(#events == 0,
+        "final stop callback: position callback NOT fired (already stopped)")
 end
 
 --------------------------------------------------------------------------------

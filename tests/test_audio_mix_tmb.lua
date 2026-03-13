@@ -512,9 +512,10 @@ do
     assert(#mix_params_calls > initial_params_calls,
         "Hot swap should call TMB_SET_AUDIO_MIX_PARAMS")
 
-    -- Verify new volume is stored
-    assert(audio_playback._mix_params[1].volume == 0.5,
-        "Volume should be updated to 0.5")
+    -- Verify TMB received the new volume (observable via mock capture)
+    local last_call = mix_params_calls[#mix_params_calls]
+    assert(last_call.params[1].volume == 0.5,
+        "TMB should receive updated volume 0.5")
 
     print("  hot swap (volume) → no reset passed")
 end
@@ -538,8 +539,11 @@ do
 
     assert(sse_reset_calls == 0,
         "Mute toggle should NOT reset SSE")
-    assert(audio_playback._mix_params[1].muted == true,
-        "Muted should be updated to true")
+    -- Verify TMB received resolved volume=0 (muted track → volume 0)
+    local last_call = mix_params_calls[#mix_params_calls]
+    assert(last_call.params[1].volume == 0,
+        string.format("Muted track should resolve to volume 0, got %s",
+            tostring(last_call.params[1].volume)))
 
     print("  hot swap (mute) → no reset passed")
 end

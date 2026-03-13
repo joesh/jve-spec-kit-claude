@@ -54,8 +54,8 @@ with_db(function(db)
     local sequence = Sequence.load("seq_ntsc")
     assert(sequence, "Failed to load sequence")
 
-    -- This is what zoom_to_fit_if_first_open computes as "factory default"
-    local expected_default_dur = math.floor(10.0 * fps_num / fps_den)  -- 239
+    -- Domain: 10 seconds × 24000/1001 fps = 239.76... → floor = 239
+    local expected_default_dur = 239
 
     -- Core assertion: viewport_duration from DB must match expected factory default
     assert(sequence.viewport_duration == expected_default_dur, string.format(
@@ -95,7 +95,8 @@ with_db(function(db)
     assert(db:exec(sql))
 
     local seq = Sequence.load("seq_pal")
-    local expected_dur = default_view_dur  -- 250
+    -- Domain: 10 seconds × 25 fps = 250
+    local expected_dur = 250
 
     assert(seq.viewport_duration == expected_dur, string.format(
         "PAL sequence has viewport_duration=%d but zoom-to-fit expects %d",
@@ -125,7 +126,8 @@ with_db(function(db)
     assert(db:exec(sql))
 
     local seq = Sequence.load("seq_30ntsc")
-    local expected_dur = default_view_dur  -- 299
+    -- Domain: 10 seconds × 30000/1001 fps = 299.7... → floor = 299
+    local expected_dur = 299
 
     assert(seq.viewport_duration == expected_dur, string.format(
         "30 NTSC sequence has viewport_duration=%d but zoom-to-fit expects %d",

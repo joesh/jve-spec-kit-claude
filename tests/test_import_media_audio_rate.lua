@@ -62,36 +62,7 @@ print(string.format("  Error: %.0fx too short!", error_ratio))
 assert(error_ratio > 100, "Bug should cause >100x error")
 print("✓ Confirmed: wrong units cause catastrophic error")
 
-print("\n--- Test: Verify Sequence.ensure_masterclip has the fix ---")
-
--- Audio rate logic now lives in Sequence.ensure_masterclip (models/sequence.lua)
-local f = io.open("../src/lua/models/sequence.lua", "r")
-assert(f, "Could not open sequence.lua")
-local content = f:read("*a")
-f:close()
-
--- Check that audio clips use sample_rate and duration_samples
-local has_sample_rate = content:match("fps_numerator%s*=%s*sample_rate")
-local has_duration_samples = content:match("source_out%s*=%s*duration_samples")
-
-assert(has_sample_rate, "Sequence.ensure_masterclip should use fps_numerator = sample_rate for audio clips")
-assert(has_duration_samples, "Sequence.ensure_masterclip should use duration_samples for audio source_out")
-
-print("✓ Sequence.ensure_masterclip uses sample_rate/1 for audio clips")
-print("✓ Sequence.ensure_masterclip uses duration_samples for audio source coords")
-
-print("\n--- Test: Verify import_resolve_project.lua has the fix ---")
-
-f = io.open("../src/lua/core/commands/import_resolve_project.lua", "r")
-assert(f, "Could not open import_resolve_project.lua")
-content = f:read("*a")
-f:close()
-
--- Check that audio clips use 48000 rate
-local has_audio_48000 = content:match('track_data%.type%s*==%s*"AUDIO"%s*and%s*48000')
-
-assert(has_audio_48000, "import_resolve_project.lua should use 48000 for audio clips")
-
-print("✓ import_resolve_project.lua uses 48000/1 for audio clips")
+-- Behavioral tests for ensure_masterclip audio rate are in test_ensure_masterclip.lua
+-- (verifies audio clips get fps_numerator=sample_rate, source coords in samples)
 
 print("\n✅ test_import_media_audio_rate.lua passed")

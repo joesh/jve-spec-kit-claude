@@ -1,7 +1,9 @@
 --- Test: reverse clip playback (source_in > source_out encodes direction)
 --
--- Speed is derived from (source_out - source_in) / duration.
--- For reverse clips, source_in > source_out → negative speed.
+-- WHITE-BOX: Tests private methods (_compute_video_speed_ratio, _build_tmb_clip,
+-- _provide_clips) directly because speed ratio computation is internal to
+-- the playback engine. Expected values derived from NLE domain knowledge:
+--   speed = (source_out - source_in) / duration
 -- No schema change — direction encoded in source coordinate ordering.
 
 require("test_env")
@@ -191,7 +193,7 @@ do
     local engine = make_engine()
     engine:load_sequence("seq1", 100)
 
-    -- Forward clip: source_in=0, source_out=50, duration=50 → speed=1.0
+    -- Domain: 50 source frames forward over 50 timeline frames = real-time (1.0x)
     local entry_fwd = {
         clip = {
             id = "fwd1",
@@ -207,7 +209,7 @@ do
     assert(ratio_fwd == 1.0, string.format("forward clip: expected 1.0, got %.4f", ratio_fwd))
     print("  forward clip: ratio = " .. ratio_fwd .. " ok")
 
-    -- Reverse clip: source_in=50, source_out=0, duration=50 → speed=-1.0
+    -- Domain: playing source backwards (50→0) over 50 timeline frames = -1.0x
     local entry_rev = {
         clip = {
             id = "rev1",
@@ -223,7 +225,7 @@ do
     assert(ratio_rev == -1.0, string.format("reverse clip: expected -1.0, got %.4f", ratio_rev))
     print("  reverse clip: ratio = " .. ratio_rev .. " ok")
 
-    -- Reverse slow-mo: source_in=50, source_out=0, duration=100 → speed=-0.5
+    -- Domain: 50 source frames backwards over 100 timeline frames = -0.5x (half-speed reverse)
     local entry_rev_slow = {
         clip = {
             id = "rev_slow1",

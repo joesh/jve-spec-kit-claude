@@ -254,7 +254,8 @@ assert(#initial_clips == 2, string.format("expected two clips before ripple, got
 local first_initial = initial_clips[1]
 local second_initial = initial_clips[2]
 
-local extend_delta_frames = math.floor((1900329 * 30 / 1000) + 0.5) -- convert ms to frames at 30fps
+-- Domain: 1900329ms × 30fps / 1000 = 57009.87 → rounds to 57010 frames
+local extend_delta_frames = 57010
 local extend_cmd = Command.create("RippleEdit", "default_project")
 extend_cmd:set_parameter("edge_info", {clip_id = first_initial.id, edge_type = "out", track_id = "track_default_v1"})
 extend_cmd:set_parameter("delta_frames", extend_delta_frames)
@@ -266,14 +267,17 @@ assert(#post_clips == 2, string.format("expected two clips after ripple, got %d"
 
 local first_after = post_clips[1]
 local second_after = post_clips[2]
-local actual_extension = first_after.duration_value - first_initial.duration_value
+-- First clip should grow by exactly extend_delta_frames (57010)
+assert(first_after.duration_value == first_initial.duration_value + extend_delta_frames,
+    string.format("first clip should grow by %d frames (expected %d, got %d)",
+        extend_delta_frames, first_initial.duration_value + extend_delta_frames,
+        first_after.duration_value))
 
-assert(actual_extension > 0, "expected first clip duration to increase")
-
-local expected_second_start = second_initial.start_value + actual_extension
+-- Downstream clip should shift by exactly the same delta
+local expected_second_start = second_initial.start_value + extend_delta_frames
 assert(second_after.start_value == expected_second_start,
-    string.format("downstream clip should shift by actual extension (expected %d, got %d)",
-        expected_second_start, second_after.start_value))
+    string.format("downstream clip should shift by %d (expected %d, got %d)",
+        extend_delta_frames, expected_second_start, second_after.start_value))
 
 local first_end = first_after.start_value + first_after.duration_value
 assert(first_end == second_after.start_value,

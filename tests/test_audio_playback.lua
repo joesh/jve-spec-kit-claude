@@ -33,7 +33,9 @@ local function expect_assert(fn, pattern, desc)
         desc .. " error should match '" .. pattern .. "', got: " .. tostring(err))
 end
 
--- Helper: reset module state between tests
+-- Helper: reset module state between tests.
+-- WHITE-BOX: Direct field reset because shutdown_session() requires Qt bindings
+-- (AOP.CLOSE/SSE.CLOSE) which aren't available in this standalone test.
 local function reset_module_state()
     audio_playback.session_initialized = false
     audio_playback.playing = false

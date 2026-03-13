@@ -65,25 +65,23 @@ local seq = elem("Sequence", "", {
     }),
 })
 
-local video_tracks = drp_importer._parse_resolve_tracks(seq, 25)
+local video_tracks = drp_importer.parse_resolve_tracks(seq, 25)
 local clip = video_tracks[1].clips[1]
 
--- source_in must NOT be raw 34 — it must be scaled by speed
--- With hex speed 0.9048: source_in = floor(34 * 0.9048 + 0.5) = 31
--- (Correct value from probe would be ~29, but hex is fallback)
+-- source_in must NOT be raw 34 — it must be scaled by hex speed.
+-- Domain: hex speed = 19/21 ≈ 0.9048 (from DRP "In" field "34|hex").
+-- 34 raw DRP frames × 0.9048 speed → 31 source frames (rounded).
 assert(clip.source_in ~= 34, string.format(
-    "REGRESSION: retimed source_in must not be raw in_value (got %d, expected ~31 not 34)",
+    "REGRESSION: retimed source_in must not be raw in_value (got %d, expected 31 not 34)",
     clip.source_in))
-local expected_in = math.floor(34 * (19/21) + 0.5)
-assert(clip.source_in == expected_in, string.format(
-    "Retimed source_in should be %d (hex fallback), got %d", expected_in, clip.source_in))
+assert(clip.source_in == 31, string.format(
+    "Retimed source_in: 34 DRP × hex speed 19/21 = 31 source frames, got %d", clip.source_in))
 print(string.format("  ✓ source_in = %d (scaled by hex speed, not raw 34)", clip.source_in))
 
--- source_duration must also be scaled
-local expected_dur = math.floor(181 * (19/21) + 0.5)
+-- source_duration must also be scaled: 181 DRP × 19/21 ≈ 164 source frames
 local actual_dur = clip.source_out - clip.source_in
-assert(actual_dur == expected_dur, string.format(
-    "Retimed source_duration should be %d, got %d", expected_dur, actual_dur))
+assert(actual_dur == 164, string.format(
+    "Retimed source_duration: 181 DRP × hex speed 19/21 = 164, got %d", actual_dur))
 print(string.format("  ✓ source_duration = %d (scaled)", actual_dur))
 
 -- Timeline duration unchanged
@@ -112,7 +110,7 @@ local seq_normal = elem("Sequence", "", {
     }),
 })
 
-local v_normal = drp_importer._parse_resolve_tracks(seq_normal, 25)
+local v_normal = drp_importer.parse_resolve_tracks(seq_normal, 25)
 local normal = v_normal[1].clips[1]
 
 assert(normal.source_in == 50, "Non-retimed source_in should be 50, got " .. normal.source_in)
@@ -160,7 +158,7 @@ local seq_fast = elem("Sequence", "", {
     }),
 })
 
-local v_fast = drp_importer._parse_resolve_tracks(seq_fast, 25)
+local v_fast = drp_importer.parse_resolve_tracks(seq_fast, 25)
 local fast = v_fast[1].clips[1]
 
 -- source_in = floor(20 * 2.0 + 0.5) = 40
@@ -206,7 +204,7 @@ local seq_real = elem("Sequence", "", {
     }),
 })
 
-local v_real = drp_importer._parse_resolve_tracks(seq_real, 25)
+local v_real = drp_importer.parse_resolve_tracks(seq_real, 25)
 local real_clip = v_real[1].clips[1]
 
 -- Before fix: garbage speed 1.27e-11 accepted → source_in = floor(2327 * 1.27e-11) = 0
@@ -229,7 +227,7 @@ print(string.format("  ✓ source_in=%d source_out=%d duration=%d speed=%.1f",
 
 print("\n--- Test 6: Real MTBA blob decode → YMax=XMax=118.64, speed=1.0 ---")
 
-local result_real = drp_importer._decode_media_timemap(real_mtba_hex)
+local result_real = drp_importer.decode_media_timemap(real_mtba_hex)
 assert(result_real, "decode_media_timemap must succeed on real MTBA blob")
 assert(math.abs(result_real.y_max - 118.64) < 0.01, string.format(
     "YMax should be ~118.64, got %.4f", result_real.y_max))
@@ -267,7 +265,7 @@ local seq_nohex = elem("Sequence", "", {
     }),
 })
 
-local v_nohex = drp_importer._parse_resolve_tracks(seq_nohex, 25)
+local v_nohex = drp_importer.parse_resolve_tracks(seq_nohex, 25)
 local nohex_clip = v_nohex[1].clips[1]
 
 assert(nohex_clip.source_in == 1163, string.format(
@@ -316,31 +314,29 @@ local seq_333 = elem("Sequence", "", {
     }),
 })
 
-local v_333 = drp_importer._parse_resolve_tracks(seq_333, 25)
+local v_333 = drp_importer.parse_resolve_tracks(seq_333, 25)
 local clip_333 = v_333[1].clips[1]
 
--- MTBA speed = YMax/XMax = 73.28/83.28 ≈ 0.8799 (88%)
--- source_in = floor(447 * 0.8799 + 0.5) = 393
--- Resolve source TC 01:14:36:16 = media_start(01:14:20:22) + 394 frames (≈393-394 depending on rounding)
-local mtba_speed = 73.28 / 83.28  -- ≈ 0.8799
-local expected_in_333 = math.floor(447 * mtba_speed + 0.5)
-assert(clip_333.source_in == expected_in_333, string.format(
-    "REGRESSION: clip 01-333-2 source_in must use MTBA speed (expected %d, got %d). "..
-    "Hex speed 0.7273 is wrong; MTBA 0.88 is correct.",
-    expected_in_333, clip_333.source_in))
-print(string.format("  ✓ source_in = %d (MTBA speed, not hex 0.7273 → %d)",
-    clip_333.source_in, math.floor(447 * 0.7273 + 0.5)))
+-- Domain: MTBA speed = YMax/XMax = 73.28/83.28 ≈ 0.88 (88% speed).
+-- source_in: 447 DRP × 0.88 ≈ 393 source frames.
+-- Resolve shows source TC 01:14:36:16, media start 01:14:20:22 → 394 frames at 25fps.
+-- (Known 1-frame discrepancy: DRP rounding vs Resolve display — see MEMORY.md)
+assert(clip_333.source_in == 393, string.format(
+    "REGRESSION: clip 01-333-2 source_in must use MTBA speed 0.88, not hex 0.7273. "..
+    "Expected 393 (MTBA), got %d.", clip_333.source_in))
+print(string.format("  ✓ source_in = %d (MTBA speed, not hex 0.7273 → 325)",
+    clip_333.source_in))
 
--- source_duration must also use MTBA speed
-local expected_dur_333 = math.floor(132 * mtba_speed + 0.5)
+-- source_duration: 132 DRP × 0.88 ≈ 116 source frames
 local actual_dur_333 = clip_333.source_out - clip_333.source_in
-assert(actual_dur_333 == expected_dur_333, string.format(
-    "source_duration should be %d (MTBA), got %d", expected_dur_333, actual_dur_333))
+assert(actual_dur_333 == 116, string.format(
+    "source_duration: 132 DRP × MTBA 0.88 = 116, got %d", actual_dur_333))
 print(string.format("  ✓ source_duration = %d (MTBA speed)", actual_dur_333))
 
--- clip_speed must reflect MTBA magnitude
+-- clip_speed must reflect MTBA magnitude ≈ 0.88 (not hex 0.7273)
+local mtba_speed = 73.28 / 83.28  -- from fixture YMax/XMax
 assert(math.abs(clip_333.clip_speed - mtba_speed) < 0.01, string.format(
-    "clip_speed should be ~%.4f (MTBA), got %.4f", mtba_speed, clip_333.clip_speed))
+    "clip_speed should be ~0.88 (MTBA), got %.4f", clip_333.clip_speed))
 print(string.format("  ✓ clip_speed = %.4f (matches MTBA, not hex 0.7273)", clip_333.clip_speed))
 
 -- Timeline duration unchanged

@@ -159,8 +159,8 @@ result = command_manager.execute("StepFrame", {
     direction = 1,
 })
 assert(result.success, "StepFrame source-right should succeed: " .. tostring(result.error_message))
-assert(mock_engine._position == 51,
-    string.format("Expected source position 51, got %d", mock_engine._position))
+assert(mock_engine:get_position() == 51,
+    string.format("Expected source position 51, got %d", mock_engine:get_position()))
 assert(mock_engine.audio_played == 51,
     string.format("Expected audio at frame 51, got %s", tostring(mock_engine.audio_played)))
 
@@ -172,8 +172,8 @@ result = command_manager.execute("StepFrame", {
     direction = -1,
 })
 assert(result.success, "StepFrame source-left at 0 should succeed")
-assert(mock_engine._position == 0,
-    string.format("Expected source position 0, got %d", mock_engine._position))
+assert(mock_engine:get_position() == 0,
+    string.format("Expected source position 0, got %d", mock_engine:get_position()))
 
 -- Test 8: Source mode shift step
 print("Test 8: Source mode shift step right")
@@ -184,8 +184,8 @@ result = command_manager.execute("StepFrame", {
     shift = true,
 })
 assert(result.success, "StepFrame source shift-right should succeed")
-assert(mock_engine._position == 40,
-    string.format("Expected source position 40, got %d", mock_engine._position))
+assert(mock_engine:get_position() == 40,
+    string.format("Expected source position 40, got %d", mock_engine:get_position()))
 
 -- Test 9: fps_den=0 should assert, not fall back to 30fps
 print("Test 9: fps_den=0 asserts (NSF)")

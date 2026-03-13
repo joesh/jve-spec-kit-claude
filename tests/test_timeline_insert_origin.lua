@@ -112,10 +112,9 @@ assert(px >= -1 and px <= 1, string.format("clip should render at viewport origi
 
 -- Playhead should advance to the end of the inserted clip when requested
 local final_playhead = timeline_state.get_playhead_position()
--- clip.duration is now in TIMELINE frames (not source frames)
--- Source: 114567 frames at 25fps = 4582.68 seconds
--- Timeline: 24fps → 4582.68 * 24 = 109984 frames
-local expected_timeline_duration = math.floor(media.duration * 24 / 25 + 0.5)
+-- Domain: 114567 source frames at 25fps = 4582.68 seconds
+-- On 24fps timeline: 4582.68s × 24 = 109,984 frames
+local expected_timeline_duration = 109984
 assert(final_playhead == expected_timeline_duration,
     string.format("playhead should advance to timeline end (%d), got %s",
         expected_timeline_duration, tostring(final_playhead)))
