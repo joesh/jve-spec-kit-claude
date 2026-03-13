@@ -622,4 +622,123 @@ assert(sw_set[1].engine == src_monitor.engine,
 
 fullscreen_viewer.exit()  -- cleanup
 
+--------------------------------------------------------------------------------
+-- Test 20: enter() asserts on nil view_id
+--------------------------------------------------------------------------------
+
+print("  test: enter() asserts on nil view_id")
+local ok3, err3 = pcall(fullscreen_viewer.enter, nil)
+assert(not ok3, "enter(nil) should assert")
+assert(err3:find("view_id required"), "error should mention view_id, got: " .. tostring(err3))
+
+--------------------------------------------------------------------------------
+-- Test 21: enter() asserts on empty view_id
+--------------------------------------------------------------------------------
+
+print("  test: enter() asserts on empty view_id")
+local ok4, err4 = pcall(fullscreen_viewer.enter, "")
+assert(not ok4, "enter('') should assert")
+assert(err4:find("view_id required"), "error should mention view_id, got: " .. tostring(err4))
+
+--------------------------------------------------------------------------------
+-- Test 22: switch_viewer() asserts on nil view_id
+--------------------------------------------------------------------------------
+
+print("  test: switch_viewer() asserts on nil view_id")
+fullscreen_viewer.enter("timeline_monitor")
+local ok5, err5 = pcall(fullscreen_viewer.switch_viewer, nil)
+assert(not ok5, "switch_viewer(nil) should assert")
+assert(err5:find("view_id required"), "error should mention view_id, got: " .. tostring(err5))
+fullscreen_viewer.exit()
+
+--------------------------------------------------------------------------------
+-- Test 23: switch_viewer() asserts on empty view_id
+--------------------------------------------------------------------------------
+
+print("  test: switch_viewer() asserts on empty view_id")
+fullscreen_viewer.enter("timeline_monitor")
+local ok6, err6 = pcall(fullscreen_viewer.switch_viewer, "")
+assert(not ok6, "switch_viewer('') should assert")
+assert(err6:find("view_id required"), "error should mention view_id, got: " .. tostring(err6))
+fullscreen_viewer.exit()
+
+--------------------------------------------------------------------------------
+-- Test 24: SURFACE_ON_READY fires after exit (race condition → safe no-op)
+--------------------------------------------------------------------------------
+
+print("  test: SURFACE_ON_READY after exit is safe no-op")
+fullscreen_viewer.enter("timeline_monitor")
+local race_surface = tl_monitor._frame_mirror
+assert(race_surface, "mirror should be set")
+fullscreen_viewer.exit()
+-- Now fire ready on the orphaned surface — should not error
+fire_surface_ready(race_surface)
+assert(fullscreen_viewer.is_active() == false, "should still be inactive")
+
+--------------------------------------------------------------------------------
+-- Test 25: clear_frame_mirror when no mirror is safe no-op
+--------------------------------------------------------------------------------
+
+print("  test: clear_frame_mirror when no mirror is no-op")
+assert(tl_monitor._frame_mirror == nil, "precondition: no mirror")
+tl_monitor:clear_frame_mirror()  -- should not error
+assert(tl_monitor._frame_mirror == nil)
+
+--------------------------------------------------------------------------------
+-- Test 26: set_frame_mirror(nil) asserts
+--------------------------------------------------------------------------------
+
+print("  test: set_frame_mirror(nil) asserts")
+local ok7, err7 = pcall(function()
+    tl_monitor:set_frame_mirror(nil)
+end)
+assert(not ok7, "set_frame_mirror(nil) should assert")
+assert(err7:find("surface required"), "error should mention surface, got: " .. tostring(err7))
+
+--------------------------------------------------------------------------------
+-- Test 27: ToggleFullscreenView command (enter with focus)
+--------------------------------------------------------------------------------
+
+print("  test: ToggleFullscreenView command enters for focused viewer")
+-- Load the command module
+local toggle_cmd = require("core.commands.toggle_fullscreen_view")
+local reg = toggle_cmd.register({}, {}, nil)
+assert(reg.executor, "command should have executor")
+assert(reg.spec.undoable == false, "command should be non-undoable")
+
+-- Focus is on timeline_monitor (set at top of file)
+_focused_panel = "timeline_monitor"
+reg.executor({})
+assert(fullscreen_viewer.is_active() == true, "command should enter fullscreen")
+assert(fullscreen_viewer.get_current_view_id() == "timeline_monitor",
+    "should fullscreen timeline_monitor when focused")
+
+-- Toggle again exits
+reg.executor({})
+assert(fullscreen_viewer.is_active() == false, "command should exit fullscreen")
+
+--------------------------------------------------------------------------------
+-- Test 28: ToggleFullscreenView defaults to timeline_monitor for non-viewer panels
+--------------------------------------------------------------------------------
+
+print("  test: ToggleFullscreenView defaults to timeline_monitor for non-viewer focus")
+_focused_panel = "project_browser"
+reg.executor({})
+assert(fullscreen_viewer.is_active() == true)
+assert(fullscreen_viewer.get_current_view_id() == "timeline_monitor",
+    "non-viewer focus should default to timeline_monitor")
+fullscreen_viewer.exit()
+
+--------------------------------------------------------------------------------
+-- Test 29: ToggleFullscreenView enters source_monitor when focused
+--------------------------------------------------------------------------------
+
+print("  test: ToggleFullscreenView enters source_monitor when focused")
+_focused_panel = "source_monitor"
+reg.executor({})
+assert(fullscreen_viewer.is_active() == true)
+assert(fullscreen_viewer.get_current_view_id() == "source_monitor",
+    "should fullscreen source_monitor when focused")
+fullscreen_viewer.exit()
+
 print("✅ test_fullscreen_viewer.lua passed")
