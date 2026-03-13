@@ -198,6 +198,15 @@ static AVPixelFormat get_hw_format(AVCodecContext* ctx, const AVPixelFormat* pix
 // attempts cause both to fall back to software decode.
 static std::mutex g_vt_init_mutex;
 
+// Maximum VT negotiation retry attempts. FFmpeg's VideoToolbox hwaccel
+// intermittently fails format negotiation (get_hw_format not offered
+// AV_PIX_FMT_VIDEOTOOLBOX) when multiple codec contexts open in quick
+// succession. Retrying after tearing down the failed context typically
+// succeeds on the next attempt. Device creation failure (as opposed to
+// negotiation failure) means VT genuinely can't handle this codec —
+// no retries needed.
+static constexpr int VT_MAX_ATTEMPTS = 3;
+
 Result<void> FFmpegCodecContext::init(AVCodecParameters* params) {
     // 1. Find standard decoder
     const AVCodec* codec = avcodec_find_decoder(params->codec_id);
@@ -209,63 +218,109 @@ Result<void> FFmpegCodecContext::init(AVCodecParameters* params) {
     // Audio codecs never enter VT init, so they skip the lock entirely.
     std::unique_lock<std::mutex> vt_lock(g_vt_init_mutex, std::defer_lock);
 
+    bool vt_capable = false;
 #ifdef EMP_HAS_VIDEOTOOLBOX
-    // 2. Try to set up VideoToolbox hw acceleration
-    if (codec_supports_videotoolbox(params->codec_id)) {
+    vt_capable = codec_supports_videotoolbox(params->codec_id);
+    if (vt_capable) {
         vt_lock.lock();
-        auto hw_result = init_hw_device_ctx(AV_HWDEVICE_TYPE_VIDEOTOOLBOX);
-        if (hw_result.is_ok()) {
-            m_hw_device_ctx = hw_result.value();
-            m_hw_pix_fmt = AV_PIX_FMT_VIDEOTOOLBOX;
-        }
     }
 #endif
 
-    // 3. Allocate codec context
-    m_codec_ctx = avcodec_alloc_context3(codec);
-    if (!m_codec_ctx) {
-        if (m_hw_device_ctx) av_buffer_unref(&m_hw_device_ctx);
-        return Error::internal("Failed to allocate codec context");
-    }
+    int attempts = vt_capable ? VT_MAX_ATTEMPTS : 1;
 
-    int ret = avcodec_parameters_to_context(m_codec_ctx, params);
-    if (ret < 0) {
-        return ffmpeg_error(ret, "avcodec_parameters_to_context");
-    }
-
-    // 4. Configure hw acceleration if available
-    if (m_hw_device_ctx) {
-        m_codec_ctx->hw_device_ctx = av_buffer_ref(m_hw_device_ctx);
-        m_codec_ctx->opaque = &m_hw_pix_fmt;
-        m_codec_ctx->get_format = get_hw_format;
-    }
-
-    // 5. Open codec (still under vt_lock if VT-capable)
-    ret = avcodec_open2(m_codec_ctx, codec, nullptr);
-    if (ret < 0) {
-        return ffmpeg_error(ret, "avcodec_open2");
-    }
-
-    // Confirm HW decode is ACTUALLY active: check if get_format negotiated
-    // the HW pixel format. m_hw_device_ctx being non-null only means a VT
-    // device was created — get_format may have fallen back to software if
-    // VT doesn't support this specific codec profile.
-    if (m_hw_device_ctx && m_codec_ctx->pix_fmt == m_hw_pix_fmt) {
-        m_hw_active = true;
-    } else if (m_hw_device_ctx) {
-        // VT device created but negotiation fell through to software.
-        // Release the unused device context.
-        EMP_LOG_WARN("Codec %s %dx%d profile=%d: VT device created but "
-                     "negotiation fell through to SW (pix_fmt=%s, wanted=%s)",
-                     codec->name, params->width, params->height, params->profile,
-                     av_get_pix_fmt_name(m_codec_ctx->pix_fmt),
-                     av_get_pix_fmt_name(m_hw_pix_fmt));
-        av_buffer_unref(&m_hw_device_ctx);
-        m_hw_device_ctx = nullptr;
+    for (int attempt = 1; attempt <= attempts; ++attempt) {
+        // Clean up any prior failed attempt
+        if (m_codec_ctx) {
+            avcodec_free_context(&m_codec_ctx);
+            m_codec_ctx = nullptr;
+        }
+        if (m_hw_device_ctx) {
+            av_buffer_unref(&m_hw_device_ctx);
+            m_hw_device_ctx = nullptr;
+        }
         m_hw_active = false;
-    }
+        m_hw_pix_fmt = AV_PIX_FMT_NONE;
 
-    // vt_lock released here (auto via unique_lock destructor)
+#ifdef EMP_HAS_VIDEOTOOLBOX
+        // 2. Try to set up VideoToolbox hw acceleration.
+        // Device creation failure = VT genuinely can't handle this codec.
+        // Skip straight to SW decode — no retries needed.
+        if (vt_capable) {
+            auto hw_result = init_hw_device_ctx(AV_HWDEVICE_TYPE_VIDEOTOOLBOX);
+            if (hw_result.is_ok()) {
+                m_hw_device_ctx = hw_result.value();
+                m_hw_pix_fmt = AV_PIX_FMT_VIDEOTOOLBOX;
+            } else {
+                EMP_LOG_WARN("Codec %s %dx%d profile=%d: VT device creation failed "
+                             "— codec not VT-capable, using SW decode",
+                             codec->name, params->width, params->height, params->profile);
+                vt_capable = false;
+                attempts = 1;  // no point retrying
+                vt_lock.unlock();  // release — SW open doesn't need VT serialization
+            }
+        }
+#endif
+
+        // 3. Allocate codec context
+        m_codec_ctx = avcodec_alloc_context3(codec);
+        if (!m_codec_ctx) {
+            if (m_hw_device_ctx) av_buffer_unref(&m_hw_device_ctx);
+            return Error::internal("Failed to allocate codec context");
+        }
+
+        int ret = avcodec_parameters_to_context(m_codec_ctx, params);
+        if (ret < 0) {
+            return ffmpeg_error(ret, "avcodec_parameters_to_context");
+        }
+
+        // 4. Configure hw acceleration if available
+        if (m_hw_device_ctx) {
+            m_codec_ctx->hw_device_ctx = av_buffer_ref(m_hw_device_ctx);
+            m_codec_ctx->opaque = &m_hw_pix_fmt;
+            m_codec_ctx->get_format = get_hw_format;
+        }
+
+        // 5. Open codec (still under vt_lock if VT-capable)
+        ret = avcodec_open2(m_codec_ctx, codec, nullptr);
+        if (ret < 0) {
+            return ffmpeg_error(ret, "avcodec_open2");
+        }
+
+        // Confirm HW decode is ACTUALLY active: check if get_format negotiated
+        // the HW pixel format. m_hw_device_ctx being non-null only means a VT
+        // device was created — get_format may have fallen back to software if
+        // VT didn't offer the HW format for this session.
+        if (m_hw_device_ctx && m_codec_ctx->pix_fmt == m_hw_pix_fmt) {
+            m_hw_active = true;
+            break;  // VT negotiation succeeded
+        }
+
+        if (m_hw_device_ctx) {
+            // VT device created but negotiation fell through to software.
+            // This is transient (session race) — retry.
+            if (attempt < attempts) {
+                EMP_LOG_WARN("Codec %s %dx%d profile=%d: VT negotiation failed "
+                             "(attempt %d/%d, pix_fmt=%s) — retrying",
+                             codec->name, params->width, params->height, params->profile,
+                             attempt, attempts,
+                             av_get_pix_fmt_name(m_codec_ctx->pix_fmt));
+                continue;
+            }
+
+            // All retries exhausted — accept SW decode for this open.
+            // No cooldown: device creation succeeded, so VT supports this codec.
+            // Next open will retry fresh (transient failures don't persist).
+            EMP_LOG_WARN("Codec %s %dx%d profile=%d: VT negotiation failed after "
+                         "%d attempts (pix_fmt=%s, wanted=%s) — SW decode",
+                         codec->name, params->width, params->height, params->profile,
+                         attempts, av_get_pix_fmt_name(m_codec_ctx->pix_fmt),
+                         av_get_pix_fmt_name(m_hw_pix_fmt));
+            av_buffer_unref(&m_hw_device_ctx);
+            m_hw_device_ctx = nullptr;
+            m_hw_active = false;
+        }
+        break;  // no VT device or not VT-capable — done
+    }
 
     EMP_LOG_DEBUG("Codec opened: %s %dx%d profile=%d — %s decode (pix_fmt=%s)",
                   codec->name, params->width, params->height, params->profile,
