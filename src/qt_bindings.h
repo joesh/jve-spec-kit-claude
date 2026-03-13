@@ -84,6 +84,12 @@ int lua_show_widget(lua_State* L);
 int lua_set_visible(lua_State* L);
 int lua_raise_widget(lua_State* L);
 int lua_activate_window(lua_State* L);
+int lua_show_fullscreen(lua_State* L);
+int lua_show_normal(lua_State* L);
+int lua_screen_geometry(lua_State* L);
+
+// Window flag functions
+int lua_set_window_flags(lua_State* L);
 
 // Dialog functions
 int lua_show_confirm_dialog(lua_State* L);

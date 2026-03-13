@@ -117,6 +117,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_map_to_global); lua_setfield(L, -2, "MAP_TO_GLOBAL");
     lua_pushcfunction(L, lua_map_from_global); lua_setfield(L, -2, "MAP_FROM_GLOBAL");
     lua_pushcfunction(L, lua_set_parent); lua_setfield(L, -2, "SET_PARENT");
+    lua_pushcfunction(L, lua_set_window_flags); lua_setfield(L, -2, "SET_WINDOW_FLAGS");
     lua_setfield(L, -2, "WIDGET");
     
     // Populate 'qt_constants.LAYOUT' subtable with layout management functions
@@ -171,6 +172,9 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_visible); lua_setfield(L, -2, "SET_VISIBLE");
     lua_pushcfunction(L, lua_raise_widget); lua_setfield(L, -2, "RAISE");
     lua_pushcfunction(L, lua_activate_window); lua_setfield(L, -2, "ACTIVATE");
+    lua_pushcfunction(L, lua_show_fullscreen); lua_setfield(L, -2, "SHOW_FULLSCREEN");
+    lua_pushcfunction(L, lua_show_normal); lua_setfield(L, -2, "SHOW_NORMAL");
+    lua_pushcfunction(L, lua_screen_geometry); lua_setfield(L, -2, "SCREEN_GEOMETRY");
     lua_setfield(L, -2, "DISPLAY");
     
     // Populate 'qt_constants.CONTROL' subtable with various control functions

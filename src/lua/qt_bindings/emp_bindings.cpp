@@ -1349,6 +1349,28 @@ static int lua_playback_set_surface(lua_State* L) {
     return 0;
 }
 
+// PLAYBACK.SET_MIRROR_SURFACE(controller, surface_widget)
+static int lua_playback_set_mirror_surface(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+
+    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 2, WIDGET_METATABLE));
+    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+    GPUVideoSurface* surface = qobject_cast<GPUVideoSurface*>(qwidget);
+    if (!surface) {
+        return luaL_error(L, "PLAYBACK.SET_MIRROR_SURFACE: widget is not a GPUVideoSurface");
+    }
+
+    controller->SetMirrorSurface(surface);
+    return 0;
+}
+
+// PLAYBACK.CLEAR_MIRROR_SURFACE(controller)
+static int lua_playback_clear_mirror_surface(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    controller->ClearMirrorSurface();
+    return 0;
+}
+
 // PLAYBACK.SET_TMB(controller, tmb)
 static int lua_playback_set_tmb(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
@@ -1799,6 +1821,10 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "CLOSE");
     lua_pushcfunction(L, lua_playback_set_surface);
     lua_setfield(L, -2, "SET_SURFACE");
+    lua_pushcfunction(L, lua_playback_set_mirror_surface);
+    lua_setfield(L, -2, "SET_MIRROR_SURFACE");
+    lua_pushcfunction(L, lua_playback_clear_mirror_surface);
+    lua_setfield(L, -2, "CLEAR_MIRROR_SURFACE");
     lua_pushcfunction(L, lua_playback_set_tmb);
     lua_setfield(L, -2, "SET_TMB");
     lua_pushcfunction(L, lua_playback_set_bounds);

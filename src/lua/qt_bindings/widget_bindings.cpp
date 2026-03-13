@@ -4,6 +4,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QScrollArea>
+#include <QGuiApplication>
+#include <QScreen>
 
 
 int lua_create_main_window(lua_State* L) {
@@ -179,4 +181,38 @@ int lua_activate_window(lua_State* L) {
     QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
     if (w) w->activateWindow();
     return 0;
+}
+
+int lua_show_fullscreen(lua_State* L) {
+    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!w) return luaL_error(L, "show_fullscreen: widget required");
+    w->showFullScreen();
+    return 0;
+}
+
+int lua_show_normal(lua_State* L) {
+    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!w) return luaL_error(L, "show_normal: widget required");
+    w->showNormal();
+    return 0;
+}
+
+int lua_set_window_flags(lua_State* L) {
+    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!w) return luaL_error(L, "set_window_flags: widget required");
+    int flags = luaL_checkinteger(L, 2);
+    w->setWindowFlags(Qt::WindowFlags(flags));
+    return 0;
+}
+
+// DISPLAY.SCREEN_GEOMETRY() → x, y, w, h  (primary screen full geometry)
+int lua_screen_geometry(lua_State* L) {
+    QScreen* screen = QGuiApplication::primaryScreen();
+    if (!screen) return luaL_error(L, "screen_geometry: no primary screen");
+    QRect geo = screen->geometry();
+    lua_pushinteger(L, geo.x());
+    lua_pushinteger(L, geo.y());
+    lua_pushinteger(L, geo.width());
+    lua_pushinteger(L, geo.height());
+    return 4;
 }
