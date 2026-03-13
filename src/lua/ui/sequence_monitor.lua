@@ -68,6 +68,9 @@ function SequenceMonitor.new(config)
     self._persist_generation = 0
     self._project_gen = project_gen.current()
 
+    -- Frame mirror: secondary GPUVideoSurface that receives the same frames
+    self._frame_mirror = nil
+
     -- Create PlaybackEngine
     self.engine = PlaybackEngine.new({
         on_show_frame = function(fh, meta)
@@ -131,6 +134,9 @@ function SequenceMonitor.new(config)
     -- Clear stale frame on project switch
     self._project_changed_id = Signals.connect("project_changed", function(_new_project_id)
         qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, nil)
+        if self._frame_mirror then
+            qt_constants.EMP.SURFACE_SET_FRAME(self._frame_mirror, nil)
+        end
     end, 50)
 
     return self
@@ -419,6 +425,22 @@ function SequenceMonitor:get_video_surface()
     return self._video_surface
 end
 
+--- Set a secondary GPUVideoSurface that receives mirrored frames.
+-- Used by fullscreen viewer to display the same content on a second surface.
+function SequenceMonitor:set_frame_mirror(surface)
+    assert(surface, string.format(
+        "SequenceMonitor(%s):set_frame_mirror: surface required", self.view_id))
+    self._frame_mirror = surface
+end
+
+--- Clear the frame mirror and blank the mirror surface.
+function SequenceMonitor:clear_frame_mirror()
+    if self._frame_mirror then
+        qt_constants.EMP.SURFACE_SET_FRAME(self._frame_mirror, nil)
+    end
+    self._frame_mirror = nil
+end
+
 --------------------------------------------------------------------------------
 -- State Provider Interface (for mark bar)
 --------------------------------------------------------------------------------
@@ -645,19 +667,31 @@ function SequenceMonitor:_on_show_frame(frame_handle, _metadata)
         self:_notify()
     end
     qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, frame_handle)
+    if self._frame_mirror then
+        qt_constants.EMP.SURFACE_SET_FRAME(self._frame_mirror, frame_handle)
+    end
 end
 
 function SequenceMonitor:_on_show_gap()
     log.event("show_gap: view=%s", self.view_id)
     qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, nil)
+    if self._frame_mirror then
+        qt_constants.EMP.SURFACE_SET_FRAME(self._frame_mirror, nil)
+    end
 end
 
 function SequenceMonitor:_on_set_rotation(degrees)
     qt_constants.EMP.SURFACE_SET_ROTATION(self._video_surface, degrees)
+    if self._frame_mirror then
+        qt_constants.EMP.SURFACE_SET_ROTATION(self._frame_mirror, degrees)
+    end
 end
 
 function SequenceMonitor:_on_set_par(num, den)
     qt_constants.EMP.SURFACE_SET_PAR(self._video_surface, num, den)
+    if self._frame_mirror then
+        qt_constants.EMP.SURFACE_SET_PAR(self._frame_mirror, num, den)
+    end
 end
 
 --- Called by engine during playback ticks (set_position fires this).
@@ -689,6 +723,7 @@ function SequenceMonitor:destroy()
     if self.sequence and self.sequence:is_masterclip() then
         self:save_playhead_to_db()
     end
+    self:clear_frame_mirror()
     self.engine:destroy()
     self._listeners = {}
     if self._marks_changed_id then

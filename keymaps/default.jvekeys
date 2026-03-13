@@ -94,6 +94,7 @@
 "Cmd+3" = "SelectPanel timeline"
 "Cmd+4" = "SelectPanel project_browser"
 "Tilde" = "ToggleMaximizePanel"
+"Shift+Cmd+F" = "ToggleFullscreenView"
 
 [Browser]
 "Return" = "ActivateBrowserSelection @project_browser"

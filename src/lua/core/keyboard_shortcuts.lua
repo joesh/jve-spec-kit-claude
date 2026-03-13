@@ -145,6 +145,16 @@ local function handle_key_impl(event)
         return true
     end
 
+    -- Escape: exit fullscreen viewer (highest priority)
+    if key == KEY.Escape then
+        local fv = require("ui.fullscreen_viewer")
+        if fv.is_active() then
+            log.detail("  → Escape exit fullscreen")
+            fv.exit()
+            return true
+        end
+    end
+
     -- Escape: cancel timecode entry and exit text field
     if key == KEY.Escape and focus_is_text_input and panel_active_timeline then
         log.detail("  → Escape cancel timecode entry")

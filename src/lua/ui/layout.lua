@@ -432,6 +432,13 @@ focus_manager.on_focus_change(function(old_id, new_id)
     source_monitor.engine:deactivate_audio()
     timeline_monitor.engine:deactivate_audio()
     new_mon.engine:activate_audio()
+
+    -- Fullscreen follows viewer focus
+    local fv = require("ui.fullscreen_viewer")
+    if fv.is_active() then
+        local view_id = (new_id == "timeline") and "timeline_monitor" or new_id
+        fv.switch_viewer(view_id)
+    end
 end)
 
 -- Initialize the Lua inspector content following working reference pattern

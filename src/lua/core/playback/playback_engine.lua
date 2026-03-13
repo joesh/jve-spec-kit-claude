@@ -143,6 +143,27 @@ function PlaybackEngine:get_surface()
     return self._video_surface
 end
 
+--- Set mirror surface for fullscreen display (C++ hot path forwarding).
+function PlaybackEngine:set_mirror_surface(surface)
+    assert(surface, "PlaybackEngine:set_mirror_surface: surface is nil")
+    assert(self._playback_controller,
+        "PlaybackEngine:set_mirror_surface: no _playback_controller")
+    assert(qt_constants.PLAYBACK.SET_MIRROR_SURFACE,
+        "PlaybackEngine:set_mirror_surface: SET_MIRROR_SURFACE binding missing")
+    log.event("set_mirror_surface: controller=%s surface=%s",
+        tostring(self._playback_controller), tostring(surface))
+    qt_constants.PLAYBACK.SET_MIRROR_SURFACE(self._playback_controller, surface)
+end
+
+--- Clear mirror surface.
+function PlaybackEngine:clear_mirror_surface()
+    assert(self._playback_controller,
+        "PlaybackEngine:clear_mirror_surface: no _playback_controller")
+    assert(qt_constants.PLAYBACK.CLEAR_MIRROR_SURFACE,
+        "PlaybackEngine:clear_mirror_surface: CLEAR_MIRROR_SURFACE binding missing")
+    qt_constants.PLAYBACK.CLEAR_MIRROR_SURFACE(self._playback_controller)
+end
+
 --------------------------------------------------------------------------------
 -- Sequence Loading
 --------------------------------------------------------------------------------
