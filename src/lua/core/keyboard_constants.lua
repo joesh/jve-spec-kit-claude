@@ -57,6 +57,8 @@ M.KEY = {
     Tab = 16777217,
     BracketLeft = 91,   -- '[' (Qt::Key_BracketLeft)
     BracketRight = 93,  -- ']' (Qt::Key_BracketRight)
+    BraceLeft = 123,    -- '{' (Qt::Key_BraceLeft) — Shift+[
+    BraceRight = 125,   -- '}' (Qt::Key_BraceRight) — Shift+]
 }
 
 -- Qt modifier constants (from Qt::KeyboardModifier enum)
@@ -73,5 +75,64 @@ M.MOD = {
 -- Strips KeypadModifier (0x20000000) and GroupSwitchModifier (0x40000000)
 -- which Qt adds to arrow keys, numpad keys, etc.
 M.SIGNIFICANT_MOD_MASK = 0x1E000000  -- Shift | Control | Alt | Meta
+
+-- Qt6 shifted-symbol normalization (US keyboard layout).
+--
+-- Canonical form: shifted key code, NO Shift modifier.
+-- All three notations normalize to the same combo_key:
+--   "Tilde"        → key=126, mod=0        (already canonical)
+--   "Shift+Grave"  → key=126, mod=0        (parse_shortcut promotes key, strips Shift)
+--   "Shift+Tilde"  → key=126, mod=0        (parse_shortcut strips redundant Shift)
+-- At runtime Qt sends key=126+Shift; handle_key_event strips Shift.
+
+-- shifted_key_code → true: strip Shift at runtime and parse time
+M.SHIFTED_SYMBOL_KEYS = {
+    [43]  = true,  -- Plus (+)
+    [126] = true,  -- Tilde (~)
+    [33]  = true,  -- Exclam (!)
+    [64]  = true,  -- At (@)
+    [35]  = true,  -- NumberSign (#)
+    [36]  = true,  -- Dollar ($)
+    [37]  = true,  -- Percent (%)
+    [94]  = true,  -- AsciiCircum (^)
+    [38]  = true,  -- Ampersand (&)
+    [42]  = true,  -- Asterisk (*)
+    [40]  = true,  -- ParenLeft (()
+    [41]  = true,  -- ParenRight ())
+    [95]  = true,  -- Underscore (_)
+    [123] = true,  -- BraceLeft ({)
+    [125] = true,  -- BraceRight (})
+    [124] = true,  -- Bar (|)
+    [58]  = true,  -- Colon (:)
+    [34]  = true,  -- QuoteDbl (")
+    [60]  = true,  -- Less (<)
+    [62]  = true,  -- Greater (>)
+    [63]  = true,  -- Question (?)
+}
+
+-- unshifted_key_code → shifted_key_code: promote Shift+unshifted at parse time
+M.UNSHIFTED_TO_SHIFTED = {
+    [96]  = 126,   -- Grave (`)    → Tilde (~)
+    [91]  = 123,   -- BracketLeft  → BraceLeft
+    [93]  = 125,   -- BracketRight → BraceRight
+    [44]  = 60,    -- Comma        → Less
+    [46]  = 62,    -- Period       → Greater
+    [45]  = 95,    -- Minus        → Underscore
+    [61]  = 43,    -- Equal        → Plus
+    [47]  = 63,    -- Slash        → Question
+    [59]  = 58,    -- Semicolon    → Colon
+    [39]  = 34,    -- Apostrophe   → QuoteDbl
+    [92]  = 124,   -- Backslash    → Bar
+    [48]  = 41,    -- 0            → ParenRight
+    [49]  = 33,    -- 1            → Exclam
+    [50]  = 64,    -- 2            → At
+    [51]  = 35,    -- 3            → NumberSign
+    [52]  = 36,    -- 4            → Dollar
+    [53]  = 37,    -- 5            → Percent
+    [54]  = 94,    -- 6            → AsciiCircum
+    [55]  = 38,    -- 7            → Ampersand
+    [56]  = 42,    -- 8            → Asterisk
+    [57]  = 40,    -- 9            → ParenLeft
+}
 
 return M

@@ -109,6 +109,19 @@ function M.parse_shortcut(shortcut_string)
         return nil, string.format("Unknown key: %s", key_name)
     end
 
+    -- Normalize shifted symbols: "Shift+Grave" → Tilde (no Shift),
+    -- "Shift+Tilde" → Tilde (no Shift). Canonical = shifted key, no Shift.
+    local bit = require("bit")
+    if bit.band(modifiers, MOD.Shift) ~= 0 then
+        local promoted = kb_constants.UNSHIFTED_TO_SHIFTED[key_code]
+        if promoted then
+            key_code = promoted
+            modifiers = bit.band(modifiers, bit.bnot(MOD.Shift))
+        elseif kb_constants.SHIFTED_SYMBOL_KEYS[key_code] then
+            modifiers = bit.band(modifiers, bit.bnot(MOD.Shift))
+        end
+    end
+
     return {
         key = key_code,
         modifiers = modifiers,
@@ -462,6 +475,15 @@ function M.handle_key_event(key, modifiers, context)
     -- that Qt adds to arrow keys, numpad keys, etc.
     local bit = require("bit")
     modifiers = bit.band(modifiers, kb_constants.SIGNIFICANT_MOD_MASK)
+
+    -- Qt6 shifted-symbol normalization: Qt reports Shift+` as key=Tilde+Shift.
+    -- The Shift is redundant — Tilde IS the shifted Grave. Strip it so TOML
+    -- bindings can use "Tilde" without requiring "Shift+Tilde".
+    if kb_constants.SHIFTED_SYMBOL_KEYS[key]
+        and bit.band(modifiers, kb_constants.MOD.Shift) ~= 0 then
+        modifiers = bit.band(modifiers, bit.bnot(kb_constants.MOD.Shift))
+    end
+
     local combo_key = string.format("%d_%d", key, modifiers)
 
     local bindings = M.keybindings[combo_key]
