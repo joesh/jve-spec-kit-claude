@@ -440,8 +440,13 @@ private:
 
     // ── Playhead state ──
     std::atomic<int64_t> m_playhead_frame{0};
+    std::atomic<int64_t> m_prev_playhead_frame{-1};  // for discontinuity detection
     std::atomic<int> m_playhead_direction{0};
     std::atomic<float> m_playhead_speed{1.0f};
+
+    // Audio worker wake flag — set by SetPlayhead on discontinuity or low buffer,
+    // consumed by audio_prefetch_worker CV predicate. Eliminates 100ms polling gap.
+    std::atomic<bool> m_audio_work_pending{false};
 
     // ── Autonomous pre-mixed audio ──
 

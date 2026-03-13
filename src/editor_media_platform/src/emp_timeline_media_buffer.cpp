@@ -300,9 +300,11 @@ void TimelineMediaBuffer::ClearAllClips() {
 
 void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed) {
     int prev_direction = m_playhead_direction.load(std::memory_order_relaxed);
+    int64_t prev_frame = m_prev_playhead_frame.load(std::memory_order_relaxed);
     m_playhead_frame.store(frame, std::memory_order_relaxed);
     m_playhead_direction.store(direction, std::memory_order_relaxed);
     m_playhead_speed.store(speed, std::memory_order_relaxed);
+    m_prev_playhead_frame.store(frame, std::memory_order_relaxed);
 
     // Wake mix thread on play start (0→nonzero) or direction flip
     if (direction != 0 && (prev_direction == 0 || prev_direction != direction)) {
@@ -335,7 +337,52 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
             m_mixed_cache.clear();
         }
         // Wake prefetch workers — they self-direct what to fill
+        m_audio_work_pending.store(true, std::memory_order_relaxed);
         wake_prefetch_workers();
+    }
+
+    // ── Playhead discontinuity detection ──
+    // When audio-master engages (or any other correction), the playhead can jump
+    // forward past the audio prefetch buffer. Detect jumps that exceed the
+    // expected per-tick advance and reset audio buffers so the audio worker
+    // re-fills from the new position immediately.
+    if (direction != 0 && prev_frame >= 0) {
+        int64_t delta = std::abs(frame - prev_frame);
+        // Expected advance: speed * 1 frame/tick, with margin for jitter.
+        // At 1x: threshold=3, at 4x: threshold=9, at 8x: threshold=17.
+        float spd = std::max(1.0f, std::abs(speed));
+        int64_t discontinuity_threshold = static_cast<int64_t>(spd * 2.0f) + 1;
+        if (delta > discontinuity_threshold) {
+            bool any_reset = false;
+            {
+                std::lock_guard<std::mutex> lock(m_tracks_mutex);
+                for (auto& [tid, ts] : m_tracks) {
+                    if (tid.type != TrackType::Audio) continue;
+                    ts.audio_buffer_end = -1;
+                    any_reset = true;
+                }
+            }
+            if (any_reset) {
+                m_audio_work_pending.store(true, std::memory_order_relaxed);
+                wake_prefetch_workers();
+            }
+        }
+    }
+
+    // ── Steady-state audio buffer check ──
+    // Even without discontinuity, wake the audio worker if any audio track
+    // buffer is getting thin. Prevents underruns from slow cumulative drift.
+    if (direction != 0 && m_seq_rate.num > 0) {
+        TimeUS playhead_us = FrameTime::from_frame(frame, m_seq_rate).to_us();
+        std::lock_guard<std::mutex> lock(m_tracks_mutex);
+        for (const auto& [tid, ts] : m_tracks) {
+            if (tid.type != TrackType::Audio) continue;
+            if (is_audio_buffer_low(ts, playhead_us, direction)) {
+                m_audio_work_pending.store(true, std::memory_order_relaxed);
+                m_jobs_cv.notify_all();
+                break;
+            }
+        }
     }
 
     // ── Probe scheduling: scan PROBE_WINDOW ahead for unprobed media paths ──
@@ -2463,16 +2510,20 @@ void TimelineMediaBuffer::audio_prefetch_worker() {
     while (!m_shutdown.load()) {
         TrackId target{TrackType::Audio, 0};
         if (pick_audio_track(target)) {
+            m_audio_work_pending.store(false, std::memory_order_relaxed);
             discard_already_played_prefetch(target);
             fill_prefetch(target);
             continue;
         }
 
-        // Nothing to do — sleep on CV with 100ms timeout
+        // Nothing to do — sleep on CV until woken by SetPlayhead (discontinuity,
+        // low buffer, or cold start) or shutdown. 50ms timeout as safety net.
+        m_audio_work_pending.store(false, std::memory_order_relaxed);
         {
             std::unique_lock<std::mutex> lock(m_jobs_mutex);
-            m_jobs_cv.wait_for(lock, std::chrono::milliseconds(100), [this] {
-                return m_shutdown.load();
+            m_jobs_cv.wait_for(lock, std::chrono::milliseconds(50), [this] {
+                return m_shutdown.load() ||
+                       m_audio_work_pending.load(std::memory_order_relaxed);
             });
         }
     }
