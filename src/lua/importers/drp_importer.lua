@@ -283,6 +283,19 @@ local function decode_bt_clip_path(hex_str)
     -- Both components must be non-empty to form a valid path
     if #directory == 0 or #filename == 0 then return nil end
 
+    -- Reject garbled paths: protobuf field data sometimes leaks into filename/directory
+    -- (e.g., "file.mp4\x1a\x18Sun Aug 21"). Valid paths never contain control chars.
+    if directory:find("[%z\1-\31]") then
+        log.warn("decode_bt_clip_path: garbled directory in blob (raw=%s), skipping",
+            directory:sub(1, 30))
+        return nil
+    end
+    if filename:find("[%z\1-\31]") then
+        log.warn("decode_bt_clip_path: garbled filename in blob (dir=%s, raw=%s), skipping",
+            directory, filename:sub(1, 30))
+        return nil
+    end
+
     return directory .. "/" .. filename
 end
 
@@ -983,6 +996,11 @@ end
 -- @param clip_elem table: XML element for master clip
 -- @param folder_id string: Parent folder ID
 -- @return table: Master clip data
+--- Parse a single master clip element from MediaPool XML.
+-- NOTE on <Name>: Always contains the original filename, NOT the user's display rename.
+-- Resolve stores MC renames in FieldsBlob, which is encrypted when grading data is present
+-- (format flag fd60 = encrypted, fd20 = plaintext without grading). Renames don't survive
+-- DRP import. Reversing FieldsBlob encryption would be needed to support this.
 local function parse_master_clip_element(clip_elem, folder_id)
     local db_id = clip_elem.attrs and clip_elem.attrs.DbId
     if not db_id then return nil end
@@ -1321,7 +1339,7 @@ end
 -- @param seq_elem table: XML sequence element
 -- @param frame_rate number: Frame rate from DRP metadata (required)
 -- @return video_tracks, audio_tracks, media_lookup
-local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
+local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, media_ref_name_map)
     -- NSF: frame_rate is required, no fallbacks
     assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
         "parse_resolve_tracks: frame_rate is required (got %s) - DRP must provide fps metadata",
@@ -1358,10 +1376,11 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
         for _, clip_elem in ipairs(clip_elements) do
             local file_path = get_text(find_element(clip_elem, "MediaFilePath"))
 
-            -- Prefer original source path from MediaPool blob over stale MediaFilePath.
-            -- DaVinci rewrites MediaFilePath when toggling proxy mode or relinking,
-            -- but the pool master clip's binary blob preserves the original path.
-            if media_ref_path_map then
+            -- MediaFilePath is authoritative — it always contains the correct full path.
+            -- Proxy paths live in proxy.dat, not in MediaFilePath. The blob path is a
+            -- fallback only: blob filenames can be garbled (protobuf field data leaking
+            -- into filename bytes).
+            if (not file_path or file_path == "") and media_ref_path_map then
                 local media_ref = get_text(find_element(clip_elem, "MediaRef"))
                 if media_ref ~= "" and media_ref_path_map[media_ref] then
                     file_path = media_ref_path_map[media_ref]
@@ -1531,9 +1550,12 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
                 if file_path and file_path ~= "" then
                     local entry = media_lookup[file_path]
                     if not entry then
+                        -- Use master clip name (original filename) for media name,
+                        -- not timeline clip name (user's custom label)
+                        local mc_name = media_ref_name_map and media_ref_name_map[clip.file_id]
                         media_lookup[file_path] = {
                             id = clip.file_id,
-                            name = clip.name or file_path,
+                            name = mc_name or clip.name or file_path,
                             path = file_path,
                             duration = source_extent_frames,
                             frame_rate = frame_rate,
@@ -1577,7 +1599,7 @@ local parse_clip_item
 -- @param frame_rate number: Frame rate from DRP metadata (required)
 -- @param media_ref_path_map table|nil: MediaRef DbId → original file path (for stale-path resolution)
 -- @return table: Timeline data
-local function parse_sequence(seq_elem, frame_rate, media_ref_path_map)
+local function parse_sequence(seq_elem, frame_rate, media_ref_path_map, media_ref_name_map)
     -- NSF: frame_rate is required
     assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
         "parse_sequence: frame_rate is required (got %s) - DRP must provide fps metadata",
@@ -1635,7 +1657,7 @@ local function parse_sequence(seq_elem, frame_rate, media_ref_path_map)
     end
 
     if #timeline.tracks == 0 then
-        local resolve_video_tracks, resolve_audio_tracks, media_map = parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map)
+        local resolve_video_tracks, resolve_audio_tracks, media_map = parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, media_ref_name_map)
         timeline.media_files = media_map
 
         for _, track in ipairs(resolve_video_tracks) do
@@ -1779,9 +1801,13 @@ function M.parse_drp_file(drp_path, progress_cb)
     -- binary blob encodes the original source path, while the timeline clip's <MediaFilePath>
     -- may be stale (e.g., proxy path or old volume name from a prior relink).
     local media_ref_path_map = {}
+    local media_ref_name_map = {}
     for _, pmc in ipairs(media_pool_hierarchy.master_clips) do
         if pmc.id and pmc.file_path then
             media_ref_path_map[pmc.id] = pmc.file_path
+        end
+        if pmc.id and pmc.name then
+            media_ref_name_map[pmc.id] = pmc.name
         end
     end
 
@@ -1835,7 +1861,7 @@ function M.parse_drp_file(drp_path, progress_cb)
                         tostring(seq_ref_id))
                     goto continue_seq
                 end
-                local timeline = parse_sequence(seq_elem, fps_for_parsing, media_ref_path_map)
+                local timeline = parse_sequence(seq_elem, fps_for_parsing, media_ref_path_map, media_ref_name_map)
 
                 -- Apply timeline name from metadata
                 if metadata and metadata.name then
@@ -1984,12 +2010,12 @@ function M.parse_drp_file(drp_path, progress_cb)
     }
 end
 
--- Test-only export (underscore-prefixed convention)
-M._parse_resolve_tracks = parse_resolve_tracks
-M._parse_fields_blob_tabs = parse_fields_blob_tabs
-M._decode_bt_video_time = decode_bt_video_time
-M._decode_bt_audio_duration = decode_bt_audio_duration
-M._decode_media_timemap = decode_media_timemap
+-- Parsing kernel exports (stable public API for testing + extension)
+M.parse_resolve_tracks = parse_resolve_tracks
+M.parse_fields_blob_tabs = parse_fields_blob_tabs
+M.decode_bt_video_time = decode_bt_video_time
+M.decode_bt_audio_duration = decode_bt_audio_duration
+M.decode_media_timemap = decode_media_timemap
 
 --- Lightweight metadata extraction — project name only, no full parse.
 -- Pipes project.xml from ZIP via unzip -p (no temp directory).
@@ -2668,8 +2694,7 @@ function M.convert(drp_path, jvp_path, progress_cb)
     return true
 end
 
--- Test-only exports
-M._frame_rate_to_rational = frame_rate_to_rational
-M._decode_bt_clip_path = decode_bt_clip_path
+M.frame_rate_to_rational = frame_rate_to_rational
+M.decode_bt_clip_path = decode_bt_clip_path
 
 return M
