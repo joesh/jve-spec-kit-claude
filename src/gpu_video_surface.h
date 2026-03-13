@@ -72,6 +72,7 @@ protected:
 private:
     void initMetal();
     void cleanupMetal();
+    void tryFireReady();
     void renderTexture();
     void rebuildVertexBuffer();
 
@@ -96,6 +97,7 @@ private:
     int m_par_den = 1;
     int m_frame_count = 0;
     bool m_initialized = false;
+    bool m_ready_fired = false;  // ready_callback fires once: Metal init + non-zero geometry
     ReadyCallback m_ready_callback;
     ErrorCallback m_error_callback;
 

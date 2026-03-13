@@ -178,9 +178,20 @@ GPUVideoSurface::~GPUVideoSurface() {
 
 void GPUVideoSurface::setReadyCallback(ReadyCallback cb) {
     m_ready_callback = std::move(cb);
-    // If Metal is already initialized (race: Show fired before callback was set),
-    // fire immediately so the View can pull its first frame.
-    if (m_initialized && m_ready_callback) m_ready_callback();
+    m_ready_fired = false;
+    tryFireReady();
+}
+
+/// Fire ready callback once when Metal is initialized AND widget has non-zero geometry.
+/// Called from initMetal, resizeEvent, and setReadyCallback.
+void GPUVideoSurface::tryFireReady() {
+    if (m_ready_fired) return;
+    if (!m_initialized) return;
+    if (!m_ready_callback) return;
+    if (width() <= 0 || height() <= 0) return;
+    m_ready_fired = true;
+    JVE_LOG_EVENT(Video, "GPUVideoSurface: ready (Metal + geometry %dx%d)", width(), height());
+    m_ready_callback();
 }
 
 void GPUVideoSurface::setErrorCallback(ErrorCallback cb) {
@@ -271,7 +282,12 @@ void GPUVideoSurface::initMetal() {
         m_initialized = true;
         JVE_LOG_EVENT(Video, "GPUVideoSurface: Metal initialized");
 
-        if (m_ready_callback) m_ready_callback();
+        // Render black immediately so the surface isn't showing uninitialized
+        // memory. renderTexture() guards against 0x0 size internally.
+        renderTexture();
+
+        // Fire ready callback if geometry is also available (may defer to resizeEvent).
+        tryFireReady();
     }
 }
 
@@ -365,6 +381,12 @@ void GPUVideoSurface::setFrameImpl(const std::shared_ptr<emp::Frame>& frame) {
     }
 
     ++m_frame_count;
+
+    // Log first frame on each surface (confirms render pipeline works)
+    if (m_frame_count == 1) {
+        JVE_LOG_EVENT(Video, "setFrameImpl: FIRST FRAME on surface=%p %dx%d widget=%dx%d",
+                     (void*)this, frame->width(), frame->height(), width(), height());
+    }
 
     // Sampled DETAIL log: every 30th frame
     if (m_frame_count % 30 == 0) {
@@ -656,13 +678,28 @@ void GPUVideoSurface::clearFrameImpl() {
 
 void GPUVideoSurface::renderTexture() {
     if (!m_initialized) return;
+    // Guard against 0x0 drawable size (widget not yet laid out by window manager).
+    // CAMetalLayer rejects setDrawableSize with 0 — just skip until resize arrives.
+    if (width() <= 0 || height() <= 0) {
+        JVE_LOG_WARN(Video, "renderTexture: DROPPED — widget size %dx%d (not yet laid out)",
+                    width(), height());
+        return;
+    }
 
     @autoreleasepool {
         uint64_t t0 = mach_absolute_time();
 
         CGFloat scale = devicePixelRatioF();
-        m_impl->metalLayer.contentsScale = scale;
-        m_impl->metalLayer.drawableSize = CGSizeMake(width() * scale, height() * scale);
+        CGSize newSize = CGSizeMake(width() * scale, height() * scale);
+        CGSize curSize = m_impl->metalLayer.drawableSize;
+        // Only set drawableSize when it actually changes.
+        // Apple docs: "Changing the drawable size invalidates the current
+        // content and causes a new set of drawables to be created."
+        // Redundant sets on every render would invalidate the drawable pool.
+        if (newSize.width != curSize.width || newSize.height != curSize.height) {
+            m_impl->metalLayer.contentsScale = scale;
+            m_impl->metalLayer.drawableSize = newSize;
+        }
 
         uint64_t t1 = mach_absolute_time();
         id<CAMetalDrawable> drawable = [m_impl->metalLayer nextDrawable];
@@ -671,10 +708,8 @@ void GPUVideoSurface::renderTexture() {
             // Metal drawable pool exhausted (triple-buffered). Transient during
             // playback (next frame retries), but during seek this means the user
             // sees stale content until the next render.
-            if (m_frame_count % 30 == 0) {
-                JVE_LOG_WARN(Video, "renderTexture: no drawable (pool exhausted) count=%lld",
-                            (long long)m_frame_count);
-            }
+            JVE_LOG_WARN(Video, "renderTexture: no drawable (pool exhausted) surface=%p count=%lld",
+                        (void*)this, (long long)m_frame_count);
             return;
         }
 
@@ -750,11 +785,10 @@ void GPUVideoSurface::renderTexture() {
 
 void GPUVideoSurface::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
-    if (m_initialized && m_impl->metalLayer) {
-        CGFloat scale = devicePixelRatioF();
-        m_impl->metalLayer.drawableSize = CGSizeMake(width() * scale, height() * scale);
-    }
-    if (m_impl->frameMode != FrameMode::None) renderTexture();
+    // renderTexture() handles drawableSize update and guards against 0x0.
+    if (m_initialized) renderTexture();
+    // Metal may have initialized before geometry was available — check now.
+    tryFireReady();
 }
 
 bool GPUVideoSurface::event(QEvent* event) {

@@ -239,6 +239,8 @@ public:
 
     // Configuration (call from main thread before Play)
     void SetSurface(GPUVideoSurface* surface);
+    void SetMirrorSurface(GPUVideoSurface* surface);  // fullscreen mirror (nullable)
+    void ClearMirrorSurface();
     void SetTMB(emp::TimelineMediaBuffer* tmb);
     void SetBounds(int64_t total_frames, int32_t fps_num, int32_t fps_den);
 
@@ -388,6 +390,7 @@ private:
     // ---- Dependencies ----
     emp::TimelineMediaBuffer* m_tmb{nullptr};
     GPUVideoSurface* m_surface{nullptr};
+    GPUVideoSurface* m_mirror_surface{nullptr};  // fullscreen mirror (non-owning, nullable)
 
     // ---- Audio pump (Phase 3) ----
     PlaybackClock m_clock;

@@ -547,6 +547,16 @@ void PlaybackController::SetSurface(GPUVideoSurface* surface) {
     m_surface = surface;
 }
 
+void PlaybackController::SetMirrorSurface(GPUVideoSurface* surface) {
+    JVE_ASSERT(surface, "PlaybackController::SetMirrorSurface: surface is null (use ClearMirrorSurface)");
+    JVE_LOG_EVENT(Video, "SetMirrorSurface: surface=%p (was %p)", (void*)surface, (void*)m_mirror_surface);
+    m_mirror_surface = surface;
+}
+
+void PlaybackController::ClearMirrorSurface() {
+    m_mirror_surface = nullptr;
+}
+
 void PlaybackController::SetTMB(emp::TimelineMediaBuffer* tmb) {
     JVE_ASSERT(tmb, "PlaybackController::SetTMB: tmb is null");
     m_tmb = tmb;
@@ -1521,6 +1531,7 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
                      frameToTC(frame, m_fps_num / m_fps_den).c_str(),
                      (long long)frame, video_tracks.size());
         m_surface->clearFrame();
+        if (m_mirror_surface) m_mirror_surface->clearFrame();
         if (!m_current_clip_id.empty()) {
             // Entering gap from a clip — record transition
             m_current_clip_id.clear();
@@ -1588,6 +1599,7 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
         }
 
         m_surface->setFrame(result.frame);
+        if (m_mirror_surface) m_mirror_surface->setFrame(result.frame);
     } else if (!result.clip_id.empty()) {
         if (result.offline) {
             m_last_displayed_frame = frame;
