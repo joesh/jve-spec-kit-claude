@@ -138,6 +138,11 @@ function PlaybackEngine:set_surface(surface)
     end
 end
 
+--- Get video surface reference (for test verification).
+function PlaybackEngine:get_surface()
+    return self._video_surface
+end
+
 --------------------------------------------------------------------------------
 -- Sequence Loading
 --------------------------------------------------------------------------------
