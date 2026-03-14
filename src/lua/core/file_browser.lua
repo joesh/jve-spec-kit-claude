@@ -167,6 +167,14 @@ function M.save_file(name, parent, title, filter, fallback_dir, default_name)
     return result
 end
 
+--- Get the last-used directory for a named dialog (or nil).
+-- @param name string unique dialog identifier
+-- @return string|nil persisted directory path
+function M.get_last_directory(name)
+    assert(name and name ~= "", "file_browser.get_last_directory: name is required")
+    return get_dir(name)
+end
+
 -- ---------------------------------------------------------------------------
 -- Test helpers (prefixed with _ to signal internal use)
 -- ---------------------------------------------------------------------------

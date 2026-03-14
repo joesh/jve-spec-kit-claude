@@ -19,8 +19,9 @@
 -- Supports three strategies: path-based, filename-based, metadata-based
 --
 -- Architecture: Command-based relinking for full undo/redo support
--- All relinking operations create ReinkMedia commands that can be undone
+-- All relinking operations create RelinkMedia commands that can be undone
 local M = {}
+local log = require("core.logger").for_area("media")
 
 --- Check if file exists at given path
 -- @param file_path string Absolute path to check
@@ -65,21 +66,20 @@ end
 --- Search directory recursively for media files
 -- @param root_dir string Directory to search
 -- @param extensions table Set of extensions to include (e.g., {mov=true, mp4=true})
--- @param max_depth number Maximum recursion depth (default 10)
 -- @return table Array of absolute file paths
-local function scan_directory(root_dir, extensions, max_depth)
-    max_depth = max_depth or 10
+local function scan_directory(root_dir, extensions)
     local results = {}
 
     -- Use find command for efficiency (Lua's directory traversal is slow)
     local ext_list = {}
     for ext, _ in pairs(extensions) do
-        table.insert(ext_list, string.format("-name '*.%s'", ext))
+        table.insert(ext_list, string.format("-iname '*.%s'", ext))
     end
     local ext_pattern = table.concat(ext_list, " -o ")
 
-    local cmd = string.format('find "%s" -maxdepth %d -type f \\( %s \\) 2>/dev/null',
-        root_dir, max_depth, ext_pattern)
+    local cmd = string.format('find "%s" -type f \\( %s \\) 2>/dev/null',
+        root_dir, ext_pattern)
+    log.event("scan_directory: %s", cmd)
 
     local handle = io.popen(cmd)
     if handle then
@@ -91,10 +91,11 @@ local function scan_directory(root_dir, extensions, max_depth)
         handle:close()
     end
 
+    log.event("scan_directory: found %d files", #results)
     return results
 end
 
-local function build_candidate_cache(search_paths, extensions, max_depth)
+local function build_candidate_cache(search_paths, extensions)
     local candidate_files = {}
     local candidate_index = {}
 
@@ -103,7 +104,7 @@ local function build_candidate_cache(search_paths, extensions, max_depth)
     end
 
     for _, search_path in ipairs(search_paths) do
-        local files = scan_directory(search_path, extensions, max_depth)
+        local files = scan_directory(search_path, extensions)
         for _, file_path in ipairs(files) do
             table.insert(candidate_files, file_path)
             local filename = get_filename(file_path)
@@ -146,7 +147,7 @@ local function ensure_candidate_cache(options, extensions)
         return
     end
 
-    local files, index = build_candidate_cache(options.search_paths, pending, options.max_scan_depth or 5)
+    local files, index = build_candidate_cache(options.search_paths, pending)
     options.candidate_files = options.candidate_files or {}
     options.candidate_index = options.candidate_index or {}
 
@@ -238,6 +239,10 @@ local function relink_by_filename(media, search_paths, candidate_files, candidat
     local old_filename = get_filename(media.file_path)
     local old_ext = get_extension(media.file_path)
     local lookup_key = old_filename and old_filename:lower() or nil
+    log.event("relink_by_filename: looking for '%s' (ext=%s, candidates=%d, index_hit=%s)",
+        old_filename or "?", old_ext or "?",
+        candidate_files and #candidate_files or 0,
+        tostring(candidate_index and lookup_key and candidate_index[lookup_key] ~= nil))
 
     if candidate_index and lookup_key and candidate_index[lookup_key] then
         for _, file_path in ipairs(candidate_index[lookup_key]) do
@@ -265,7 +270,7 @@ local function relink_by_filename(media, search_paths, candidate_files, candidat
         local extensions = {[old_ext] = true}
 
         for _, search_path in ipairs(search_paths) do
-            local files = scan_directory(search_path, extensions, 5)
+            local files = scan_directory(search_path, extensions)
             for _, file_path in ipairs(files) do
                 local filename = get_filename(file_path)
                 if filename == old_filename then
@@ -422,7 +427,7 @@ local function relink_by_metadata(media, search_paths, candidate_files, media_re
     if not candidate_files then
         local extensions = {[old_ext] = true}
         for _, search_path in ipairs(search_paths) do
-            local files = scan_directory(search_path, extensions, 5)
+            local files = scan_directory(search_path, extensions)
             for _, file_path in ipairs(files) do
                 table.insert(files_to_check, file_path)
             end
@@ -575,6 +580,8 @@ end
 -- @return number|nil Confidence score (for metadata strategy)
 function M.relink_media(media, options)
     options = options or {}
+    log.event("relink_media: trying '%s' (file_path=%s)",
+        media.name or media.id or "?", media.file_path or "?")
 
     -- Strategy 1: Path-based (fastest, most reliable)
     if options.new_root then

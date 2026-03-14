@@ -1,177 +1,84 @@
---- TODO: one-line summary (human review required)
+--- RelinkMedia command: relink one or more offline media files (with undo)
 --
 -- Responsibilities:
--- - TODO
+-- - Update media file_path(s) from relink_map {media_id → new_path}
+-- - Store old paths for undo
 --
 -- Non-goals:
--- - TODO
+-- - UI (handled by ShowRelinkDialog command)
+-- - Scanning for offline media (handled by media_relinker)
 --
 -- Invariants:
--- - TODO
---
--- Size: ~102 LOC
--- Volatility: unknown
+-- - Requires relink_map (table {media_id → new_path})
+-- - Asserts if any media_id not found or save fails
 --
 -- @file relink_media.lua
--- Original intent (unreviewed):
--- RelinkMedia and BatchRelinkMedia commands
 local M = {}
-
+local log = require("core.logger").for_area("media")
 
 local SPEC = {
     args = {
-        media_id = { required = true },
-        new_file_path = {},
-        old_file_path = {},
-        old_paths = { required = true },
-        project_id = { required = true },
         relink_map = { required = true },
+        project_id = { required = true },
     }
 }
 
-function M.register(executors, undoers, db)
-    
-    local function executor(command)
+function M.register(executors, undoers, _db)
+
+    executors["RelinkMedia"] = function(command)
         local args = command:get_all_parameters()
-
-
-
-        if not args.media_id or not args.new_file_path then
-            return {success = false, error_message = "RelinkMedia requires args.media_id and args.new_file_path"}
-        end
-
-        -- Load media record
-        local Media = require("models.media")
-        local media = Media.load(args.media_id)
-
-        if not media then
-            return {success = false, error_message = "Media not found: " .. args.media_id}
-        end
-
-        -- Store old path for undo
-        local old_file_path = media.file_path
-        command:set_parameter("old_file_path", old_file_path)
-
-        -- Update file path
-        media.file_path = args.new_file_path
-
-        -- Save to database
-        if not media:save() then
-            return {success = false, error_message = "Failed to save relinked media"}
-        end
-
-        print(string.format("Relinked media '%s': %s → %s", media.name, old_file_path, args.new_file_path))
-
-        return {
-            success = true
-        }
-    end
-
-    local function undoer(command)
-        local args = command:get_all_parameters()
-
-
-
-        if not args.media_id or not args.old_file_path then
-            print("ERROR: Cannot undo RelinkMedia - missing stored state")
-            return false
-        end
-
-        -- Load media and restore old path
-        local Media = require("models.media")
-        local media = Media.load(args.media_id)
-
-        if not media then
-            print("ERROR: Cannot undo RelinkMedia - media not found: " .. args.media_id)
-            return false
-        end
-
-        media.file_path = args.old_file_path
-
-        if not media:save() then
-            print("ERROR: Failed to restore old media path")
-            return false
-        end
-
-        print(string.format("Restored media '%s' to original path: %s", media.name, args.old_file_path))
-        return true
-    end
-
-    executors["BatchRelinkMedia"] = function(command)
-        local args = command:get_all_parameters()
-
-
-        if not args.relink_map or type(args.relink_map) ~= "table" then
-            return {success = false, error_message = "BatchRelinkMedia requires args.relink_map table"}
-        end
+        assert(args.relink_map and type(args.relink_map) == "table",
+            "RelinkMedia: relink_map table required")
 
         local Media = require("models.media")
         local old_paths = {}
         local relinked_count = 0
 
-        -- Relink each media file
         for media_id, new_file_path in pairs(args.relink_map) do
             local media = Media.load(media_id)
+            assert(media, string.format("RelinkMedia: media not found: %s", media_id))
 
-            assert(media, string.format("BatchRelinkMedia: media not found: %s", media_id))
-
-            -- Store old path for undo
             old_paths[media_id] = media.file_path
-
-            -- Update path
             media.file_path = new_file_path
-
-            assert(media:save(), string.format("BatchRelinkMedia: failed to save relinked media %s", media_id))
+            assert(media:save(), string.format("RelinkMedia: failed to save media %s", media_id))
             relinked_count = relinked_count + 1
         end
 
-        command:set_parameters({
-            ["old_paths"] = old_paths,
-            ["relinked_count"] = relinked_count,
-        })
-        print(string.format("Batch relinked %d media file(s)", relinked_count))
+        command:set_parameter("old_paths", old_paths)
+        command:set_parameter("relinked_count", relinked_count)
+        log.event("Relinked %d media file(s)", relinked_count)
 
-        return {
-            success = true,
-            spec = SPEC,
-        }
+        return { success = true }
     end
 
-    undoers["BatchRelinkMedia"] = function(command)
+    undoers["RelinkMedia"] = function(command)
         local args = command:get_all_parameters()
-
-
-
-        if not args.old_paths then
-            print("ERROR: Cannot undo BatchRelinkMedia - missing stored state")
-            return false
-        end
+        assert(args.old_paths, "RelinkMedia undo: old_paths missing (command never executed?)")
 
         local Media = require("models.media")
         local restored_count = 0
 
-        -- Restore each media file to old path
         for media_id, old_file_path in pairs(args.old_paths) do
             local media = Media.load(media_id)
+            assert(media, string.format("RelinkMedia undo: media not found: %s", media_id))
 
-            if media then
-                media.file_path = old_file_path
-
-                if media:save() then
-                    restored_count = restored_count + 1
-                else
-                    print(string.format("WARNING: Failed to restore media %s", media_id))
-                end
-            else
-                print(string.format("WARNING: Media not found during undo: %s", media_id))
-            end
+            media.file_path = old_file_path
+            assert(media:save(),
+                string.format("RelinkMedia undo: failed to save media %s", media_id))
+            restored_count = restored_count + 1
         end
 
-        print(string.format("Batch undo: restored %d media file path(s)", restored_count))
+        log.event("Undo relink: restored %d media file path(s)", restored_count)
         return true
     end
 
-    return {executor = executor, undoer = undoer}
+    return {
+        ["RelinkMedia"] = {
+            executor = executors["RelinkMedia"],
+            undoer = undoers["RelinkMedia"],
+            spec = SPEC,
+        },
+    }
 end
 
 return M

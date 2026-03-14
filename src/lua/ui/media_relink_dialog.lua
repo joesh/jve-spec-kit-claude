@@ -1,282 +1,211 @@
---- TODO: one-line summary (human review required)
+--- media_relink_dialog: blocking modal for reconnecting offline media
 --
 -- Responsibilities:
--- - TODO
+-- - Show offline media list, let user pick search directory
+-- - Run batch relink (path + filename strategies) with progress
+-- - Display results, return relink_map on confirm
 --
 -- Non-goals:
--- - TODO
+-- - Metadata-based matching UI (advanced weights/sliders) — deferred until
+--   slider-change-handler exists in Qt bindings
+-- - Undo/redo (handled by RelinkMedia command)
 --
 -- Invariants:
--- - TODO
---
--- Size: ~167 LOC
--- Volatility: unknown
+-- - Requires qt_constants from C++ (asserts if missing)
+-- - Returns relink_map table {media_id → new_path} on success, nil on cancel
+-- - Uses file_browser for directory picker (auto-persists last dir)
 --
 -- @file media_relink_dialog.lua
--- Original intent (unreviewed):
--- Media Relinking Configuration Dialog
--- Pure Lua UI for customizing metadata matching algorithm
--- Architecture: Uses Qt bindings, fully customizable without recompilation
 local M = {}
+local log = require("core.logger").for_area("media")
 
--- Qt bindings (set externally)
-local qt = nil
+--- Show the reconnect media dialog (blocking modal).
+-- @param offline_media table Array of offline media records from media_relinker.find_offline_media
+-- @param parent_window widget|nil Qt parent widget
+-- @return table|nil relink_map {media_id → new_path} on success, nil on cancel
+function M.show(offline_media, parent_window)
+    assert(offline_media and #offline_media > 0,
+        "media_relink_dialog.show: offline_media must be non-empty")
 
---- Initialize dialog with Qt bindings
--- @param qt_bindings table Qt bindings module
-function M.init(qt_bindings)
-    qt = qt_bindings
-end
+    local qt = require("core.qt_constants")
+    local file_browser = require("core.file_browser")
+    local media_relinker = require("core.media_relinker")
 
---- Create relinking configuration dialog
--- @param offline_count number Count of offline media files
--- @param callback function(config) Called when user clicks "Relink" with configuration
--- @return table Dialog widget
-function M.create_dialog(offline_count, callback)
-    if not qt then
-        error("Media relink dialog not initialized - call init(qt_bindings) first")
+    -- State — restore last-used search dir if available
+    local last_dir = file_browser.get_last_directory("relink_media")
+    local search_dir = (last_dir and last_dir ~= "") and last_dir or nil
+    local relink_map = nil   -- set on successful relink
+    local globals = {}       -- _G handler names for cleanup
+
+    -- Create dialog
+    local dialog = qt.DIALOG.CREATE("Reconnect Media", 600, 420)
+    local main_layout = qt.LAYOUT.CREATE_VBOX()
+
+    -- -----------------------------------------------------------------------
+    -- Header
+    -- -----------------------------------------------------------------------
+    local header = qt.WIDGET.CREATE_LABEL(
+        string.format("Found %d offline media file(s)", #offline_media))
+    qt.PROPERTIES.SET_STYLE(header, "font-weight: bold; font-size: 14px;")
+    qt.LAYOUT.ADD_WIDGET(main_layout, header)
+    qt.LAYOUT.ADD_SPACING(main_layout, 4)
+
+    -- Offline file list (read-only text area showing names + old paths)
+    local offline_lines = {}
+    for _, m in ipairs(offline_media) do
+        local name = m.name or m.media_id or "?"
+        local path = m.file_path or "?"
+        table.insert(offline_lines, string.format("%s  —  %s", name, path))
     end
+    local offline_area = qt.WIDGET.CREATE_TEXT_EDIT(table.concat(offline_lines, "\n"))
+    qt.CONTROL.SET_TEXT_EDIT_READ_ONLY(offline_area, true)
+    qt.PROPERTIES.SET_SIZE(offline_area, 580, 100)
+    qt.LAYOUT.ADD_WIDGET(main_layout, offline_area)
+    qt.LAYOUT.ADD_SPACING(main_layout, 8)
 
-    -- Create dialog window
-    local dialog = qt.CREATE_DIALOG("Media Relinking", 600, 500)
+    -- -----------------------------------------------------------------------
+    -- Search directory row
+    -- -----------------------------------------------------------------------
+    local dir_row = qt.LAYOUT.CREATE_HBOX()
+    qt.LAYOUT.ADD_WIDGET(dir_row, qt.WIDGET.CREATE_LABEL("Search in:"))
+    local dir_edit = qt.WIDGET.CREATE_LINE_EDIT(search_dir or "")
+    qt.CONTROL.SET_LINE_EDIT_READ_ONLY(dir_edit, true)
+    qt.LAYOUT.ADD_WIDGET(dir_row, dir_edit)
+    local browse_btn = qt.WIDGET.CREATE_BUTTON("Browse...")
+    qt.LAYOUT.ADD_WIDGET(dir_row, browse_btn)
+    qt.LAYOUT.ADD_LAYOUT(main_layout, dir_row)
+    qt.LAYOUT.ADD_SPACING(main_layout, 8)
 
-    -- Main layout
-    local main_layout = qt.CREATE_LAYOUT("vertical")
-
-    -- Header section
-    local header_label = qt.CREATE_LABEL(string.format(
-        "Found %d offline media file(s). Configure matching criteria:", offline_count))
-    qt.SET_LABEL_STYLE(header_label, "font-weight: bold; font-size: 14px; margin-bottom: 10px;")
-    qt.ADD_WIDGET(main_layout, header_label)
-
-    -- Separator
-    qt.ADD_WIDGET(main_layout, qt.CREATE_SEPARATOR())
-
-    -- Matching criteria section
-    local criteria_group = qt.CREATE_GROUP_BOX("Matching Criteria")
-    local criteria_layout = qt.CREATE_LAYOUT("vertical")
-
-    -- Checkboxes for each criterion with weight sliders
-    local criteria_widgets = {}
-
-    local function add_criterion(key, label, default_enabled, default_weight, description)
-        local criterion_layout = qt.CREATE_LAYOUT("horizontal")
-
-        -- Checkbox
-        local checkbox = qt.CREATE_CHECKBOX(label)
-        qt.SET_CHECKED(checkbox, default_enabled)
-        qt.ADD_WIDGET(criterion_layout, checkbox)
-
-        -- Weight slider (0-100 for display, converted to 0-1.0)
-        local slider_label = qt.CREATE_LABEL(string.format("Weight: %d%%", default_weight * 100))
-        qt.SET_FIXED_WIDTH(slider_label, 100)
-        qt.ADD_WIDGET(criterion_layout, slider_label)
-
-        local slider = qt.CREATE_SLIDER(0, 100, default_weight * 100)
-        qt.SET_FIXED_WIDTH(slider, 150)
-
-        -- Update label when slider moves
-        qt.CONNECT_SLIDER(slider, function(value)
-            qt.SET_LABEL_TEXT(slider_label, string.format("Weight: %d%%", value))
-        end)
-
-        qt.ADD_WIDGET(criterion_layout, slider)
-
-        -- Add spacer
-        qt.ADD_STRETCH(criterion_layout)
-
-        qt.ADD_WIDGET(criteria_layout, criterion_layout)
-
-        -- Description label
-        local desc_label = qt.CREATE_LABEL(description)
-        qt.SET_LABEL_STYLE(desc_label, "color: #888; font-size: 11px; margin-left: 20px; margin-bottom: 8px;")
-        qt.ADD_WIDGET(criteria_layout, desc_label)
-
-        criteria_widgets[key] = {
-            checkbox = checkbox,
-            slider = slider,
-            slider_label = slider_label
-        }
-    end
-
-    -- Add criteria
-    add_criterion("duration", "Duration", true, 0.3,
-        "Match files with similar duration (±5% tolerance)")
-
-    add_criterion("resolution", "Resolution", true, 0.4,
-        "Match files with exact width × height (critical for video quality)")
-
-    add_criterion("timecode", "Timecode", false, 0.2,
-        "Match files by embedded timecode (ideal for multi-cam and dual-system sound)")
-
-    add_criterion("reel_name", "Reel Name", false, 0.1,
-        "Match files by camera reel/card name (A001, REEL_B, MAG_C, etc.)")
-
-    add_criterion("filename", "Filename Similarity", false, 0.0,
-        "Match files by filename similarity (handles minor renames)")
-
-    qt.SET_LAYOUT(criteria_group, criteria_layout)
-    qt.ADD_WIDGET(main_layout, criteria_group)
-
-    -- Advanced settings section
-    local advanced_group = qt.CREATE_GROUP_BOX("Advanced Settings")
-    local advanced_layout = qt.CREATE_LAYOUT("vertical")
-
-    -- Duration tolerance
-    local tolerance_layout = qt.CREATE_LAYOUT("horizontal")
-    qt.ADD_WIDGET(tolerance_layout, qt.CREATE_LABEL("Duration Tolerance:"))
-
-    local tolerance_label = qt.CREATE_LABEL("±5%")
-    qt.SET_FIXED_WIDTH(tolerance_label, 60)
-    qt.ADD_WIDGET(tolerance_layout, tolerance_label)
-
-    local tolerance_slider = qt.CREATE_SLIDER(1, 20, 5)  -- 1-20%
-    qt.SET_FIXED_WIDTH(tolerance_slider, 200)
-    qt.CONNECT_SLIDER(tolerance_slider, function(value)
-        qt.SET_LABEL_TEXT(tolerance_label, string.format("±%d%%", value))
-    end)
-    qt.ADD_WIDGET(tolerance_layout, tolerance_slider)
-    qt.ADD_STRETCH(tolerance_layout)
-    qt.ADD_WIDGET(advanced_layout, tolerance_layout)
-
-    -- Minimum confidence threshold
-    local confidence_layout = qt.CREATE_LAYOUT("horizontal")
-    qt.ADD_WIDGET(confidence_layout, qt.CREATE_LABEL("Minimum Confidence:"))
-
-    local confidence_label = qt.CREATE_LABEL("85%")
-    qt.SET_FIXED_WIDTH(confidence_label, 60)
-    qt.ADD_WIDGET(confidence_layout, confidence_label)
-
-    local confidence_slider = qt.CREATE_SLIDER(50, 100, 85)
-    qt.SET_FIXED_WIDTH(confidence_slider, 200)
-    qt.CONNECT_SLIDER(confidence_slider, function(value)
-        qt.SET_LABEL_TEXT(confidence_label, string.format("%d%%", value))
-    end)
-    qt.ADD_WIDGET(confidence_layout, confidence_slider)
-    qt.ADD_STRETCH(confidence_layout)
-    qt.ADD_WIDGET(advanced_layout, confidence_layout)
-
-    qt.SET_LAYOUT(advanced_group, advanced_layout)
-    qt.ADD_WIDGET(main_layout, advanced_group)
-
-    -- Search paths section
-    local paths_group = qt.CREATE_GROUP_BOX("Search Locations")
-    local paths_layout = qt.CREATE_LAYOUT("vertical")
-
-    -- Path list
-    local path_list = qt.CREATE_LIST_WIDGET()
-    qt.SET_FIXED_HEIGHT(path_list, 100)
-    qt.ADD_WIDGET(paths_layout, path_list)
-
-    -- Path buttons
-    local path_buttons_layout = qt.CREATE_LAYOUT("horizontal")
-    local add_path_button = qt.CREATE_BUTTON("Add Directory...")
-    local remove_path_button = qt.CREATE_BUTTON("Remove")
-
-    qt.CONNECT_BUTTON(add_path_button, function()
-        local dir = qt.SELECT_DIRECTORY("Select Search Directory")
+    -- Browse handler
+    local browse_name = "__relink_dialog_browse"
+    _G[browse_name] = function()
+        local dir = file_browser.open_directory(
+            "relink_media", parent_window or dialog,
+            "Select Search Directory")
         if dir and dir ~= "" then
-            qt.LIST_ADD_ITEM(path_list, dir)
+            search_dir = dir
+            qt.PROPERTIES.SET_TEXT(dir_edit, dir)
         end
-    end)
+    end
+    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(browse_btn, browse_name)
+    globals[#globals + 1] = browse_name
 
-    qt.CONNECT_BUTTON(remove_path_button, function()
-        local selected = qt.LIST_GET_SELECTED(path_list)
-        if selected then
-            qt.LIST_REMOVE_ITEM(path_list, selected)
-        end
-    end)
+    -- -----------------------------------------------------------------------
+    -- Results area (hidden initially)
+    -- -----------------------------------------------------------------------
+    local results_label = qt.WIDGET.CREATE_LABEL("")
+    qt.DISPLAY.SET_VISIBLE(results_label, false)
+    qt.LAYOUT.ADD_WIDGET(main_layout, results_label)
 
-    qt.ADD_WIDGET(path_buttons_layout, add_path_button)
-    qt.ADD_WIDGET(path_buttons_layout, remove_path_button)
-    qt.ADD_STRETCH(path_buttons_layout)
-    qt.ADD_WIDGET(paths_layout, path_buttons_layout)
+    local results_area = qt.WIDGET.CREATE_TEXT_EDIT("")
+    qt.CONTROL.SET_TEXT_EDIT_READ_ONLY(results_area, true)
+    qt.PROPERTIES.SET_SIZE(results_area, 580, 120)
+    qt.DISPLAY.SET_VISIBLE(results_area, false)
+    qt.LAYOUT.ADD_WIDGET(main_layout, results_area)
 
-    qt.SET_LAYOUT(paths_group, paths_layout)
-    qt.ADD_WIDGET(main_layout, paths_group)
+    -- -----------------------------------------------------------------------
+    -- Error label (hidden initially)
+    -- -----------------------------------------------------------------------
+    local error_label = qt.WIDGET.CREATE_LABEL("")
+    qt.PROPERTIES.SET_STYLE(error_label, "color: #ff6666;")
+    qt.DISPLAY.SET_VISIBLE(error_label, false)
+    qt.LAYOUT.ADD_WIDGET(main_layout, error_label)
 
-    -- Spacer before buttons
-    qt.ADD_STRETCH(main_layout)
+    qt.LAYOUT.ADD_STRETCH(main_layout)
 
-    -- Button bar
-    local button_layout = qt.CREATE_LAYOUT("horizontal")
-    qt.ADD_STRETCH(button_layout)
+    -- -----------------------------------------------------------------------
+    -- Button row
+    -- -----------------------------------------------------------------------
+    local btn_row = qt.LAYOUT.CREATE_HBOX()
+    qt.LAYOUT.ADD_STRETCH(btn_row)
 
-    local cancel_button = qt.CREATE_BUTTON("Cancel")
-    local relink_button = qt.CREATE_BUTTON("Relink Media")
-    qt.SET_BUTTON_STYLE(relink_button, "primary")  -- Highlight as primary action
+    local reconnect_btn = qt.WIDGET.CREATE_BUTTON("Reconnect")
+    local cancel_btn = qt.WIDGET.CREATE_BUTTON("Cancel")
 
-    qt.CONNECT_BUTTON(cancel_button, function()
-        qt.CLOSE_DIALOG(dialog)
-    end)
+    -- Cancel handler
+    local cancel_name = "__relink_dialog_cancel"
+    _G[cancel_name] = function()
+        qt.DIALOG.CLOSE(dialog, false)
+    end
+    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(cancel_btn, cancel_name)
+    globals[#globals + 1] = cancel_name
 
-    qt.CONNECT_BUTTON(relink_button, function()
-        -- Gather configuration from UI
-        local config = {
-            -- Criteria flags
-            use_duration = qt.IS_CHECKED(criteria_widgets.duration.checkbox),
-            use_resolution = qt.IS_CHECKED(criteria_widgets.resolution.checkbox),
-            use_timecode = qt.IS_CHECKED(criteria_widgets.timecode.checkbox),
-            use_reel_name = qt.IS_CHECKED(criteria_widgets.reel_name.checkbox),
-            use_filename = qt.IS_CHECKED(criteria_widgets.filename.checkbox),
-
-            -- Weights (convert from 0-100 to 0-1.0)
-            weight_duration = qt.GET_SLIDER_VALUE(criteria_widgets.duration.slider) / 100.0,
-            weight_resolution = qt.GET_SLIDER_VALUE(criteria_widgets.resolution.slider) / 100.0,
-            weight_timecode = qt.GET_SLIDER_VALUE(criteria_widgets.timecode.slider) / 100.0,
-            weight_reel_name = qt.GET_SLIDER_VALUE(criteria_widgets.reel_name.slider) / 100.0,
-            weight_filename = qt.GET_SLIDER_VALUE(criteria_widgets.filename.slider) / 100.0,
-
-            -- Advanced settings
-            duration_tolerance = qt.GET_SLIDER_VALUE(tolerance_slider) / 100.0,  -- Convert % to decimal
-            min_score = qt.GET_SLIDER_VALUE(confidence_slider) / 100.0,
-
-            -- Search paths
-            search_paths = qt.LIST_GET_ALL_ITEMS(path_list)
-        }
-
-        -- Validate configuration
-        local total_weight = 0
-        if config.use_duration then total_weight = total_weight + config.weight_duration end
-        if config.use_resolution then total_weight = total_weight + config.weight_resolution end
-        if config.use_timecode then total_weight = total_weight + config.weight_timecode end
-        if config.use_reel_name then total_weight = total_weight + config.weight_reel_name end
-        if config.use_filename then total_weight = total_weight + config.weight_filename end
-
-        if total_weight == 0 then
-            qt.SHOW_ERROR("No Criteria Selected", "Please enable at least one matching criterion")
+    -- Reconnect handler
+    local reconnect_name = "__relink_dialog_reconnect"
+    _G[reconnect_name] = function()
+        -- Validate search dir
+        if not search_dir or search_dir == "" then
+            qt.PROPERTIES.SET_TEXT(error_label, "Select a search directory first")
+            qt.DISPLAY.SET_VISIBLE(error_label, true)
             return
         end
 
-        if #config.search_paths == 0 then
-            qt.SHOW_ERROR("No Search Paths", "Please add at least one directory to search")
+        qt.DISPLAY.SET_VISIBLE(error_label, false)
+
+        -- Run batch relink with path + filename strategies
+        local options = { search_paths = { search_dir } }
+        local results = media_relinker.batch_relink(offline_media, options)
+
+        -- Build results display
+        local result_lines = {}
+        local map = {}
+
+        for _, entry in ipairs(results.relinked) do
+            local name = entry.media.name or entry.media.media_id or "?"
+            table.insert(result_lines,
+                string.format("[OK] %s → %s (%s)", name, entry.new_path, entry.strategy))
+            map[entry.media.media_id or entry.media.id] = entry.new_path
+        end
+        for _, media in ipairs(results.failed) do
+            local name = media.name or media.media_id or "?"
+            table.insert(result_lines, string.format("[FAILED] %s", name))
+        end
+
+        -- Show results
+        local summary = string.format("Reconnected %d of %d",
+            #results.relinked, #offline_media)
+        qt.PROPERTIES.SET_TEXT(results_label, summary)
+        qt.DISPLAY.SET_VISIBLE(results_label, true)
+        qt.PROPERTIES.SET_TEXT(results_area, table.concat(result_lines, "\n"))
+        qt.DISPLAY.SET_VISIBLE(results_area, true)
+
+        if #results.relinked == 0 then
+            qt.PROPERTIES.SET_TEXT(error_label,
+                "No media found. Try a different search directory.")
+            qt.DISPLAY.SET_VISIBLE(error_label, true)
             return
         end
 
-        -- Close dialog and execute callback
-        qt.CLOSE_DIALOG(dialog)
-        if callback then
-            callback(config)
+        -- Store map and rebind button to apply
+        relink_map = map
+        qt.PROPERTIES.SET_TEXT(reconnect_btn, "Apply")
+
+        -- Rebind to close-on-apply
+        _G[reconnect_name] = function()
+            qt.DIALOG.CLOSE(dialog, true)
         end
-    end)
+    end
+    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(reconnect_btn, reconnect_name)
+    globals[#globals + 1] = reconnect_name
 
-    qt.ADD_WIDGET(button_layout, cancel_button)
-    qt.ADD_WIDGET(button_layout, relink_button)
+    qt.LAYOUT.ADD_WIDGET(btn_row, reconnect_btn)
+    qt.LAYOUT.ADD_SPACING(btn_row, 8)
+    qt.LAYOUT.ADD_WIDGET(btn_row, cancel_btn)
+    qt.LAYOUT.ADD_LAYOUT(main_layout, btn_row)
 
-    qt.ADD_WIDGET(main_layout, button_layout)
+    -- -----------------------------------------------------------------------
+    -- Show (blocking)
+    -- -----------------------------------------------------------------------
+    qt.DIALOG.SET_LAYOUT(dialog, main_layout)
+    log.event("Showing Reconnect Media dialog (%d offline)", #offline_media)
+    qt.DIALOG.SHOW(dialog)
 
-    -- Set dialog layout
-    qt.SET_LAYOUT(dialog, main_layout)
+    -- Cleanup _G handlers
+    for _, name in ipairs(globals) do
+        _G[name] = nil
+    end
 
-    return dialog
-end
-
---- Show the relinking dialog (convenience function)
--- @param offline_count number Count of offline media files
--- @param callback function(config) Called with configuration when user clicks "Relink"
-function M.show(offline_count, callback)
-    local dialog = M.create_dialog(offline_count, callback)
-    qt.SHOW_DIALOG(dialog)
+    return relink_map
 end
 
 return M
