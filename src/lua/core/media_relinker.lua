@@ -1089,4 +1089,218 @@ function M.find_candidates_for_clip(clip_info, candidate_index, matching_rules, 
     return results
 end
 
+-- =============================================================================
+-- RelinkClips: Batch Relink (T008)
+-- =============================================================================
+
+--- Batch relink clips to candidate files using matching rules.
+-- Scans search directories, builds candidate index, matches each clip.
+-- @param clips table Array of clip_info structs (see contract)
+-- @param options table {search_paths, matching_rules}
+-- @param progress_cb function|nil progress_cb(pct, status, log_line)
+-- @return table {relinked, failed, ambiguous, new_media}
+function M.relink_clips_batch(clips, options, progress_cb)
+    assert(type(clips) == "table", "relink_clips_batch: clips required")
+    assert(type(options) == "table", "relink_clips_batch: options required")
+    assert(options.search_paths, "relink_clips_batch: search_paths required")
+
+    local matching_rules = options.matching_rules or {
+        match_filename = true, match_timecode = true,
+        match_resolution = false, match_frame_rate = false,
+        accept_trimmed_media = false, accept_filename_suffixes = false,
+    }
+
+    local results = {
+        relinked = {},
+        failed = {},
+        ambiguous = {},
+        new_media = {},
+    }
+
+    local total = #clips
+    if total == 0 then return results end
+
+    -- Step 1: Scan search directories and build candidate index
+    if progress_cb then progress_cb(0, "Scanning search directory...") end
+
+    -- Collect all extensions from clips
+    local extensions = {}
+    for _, clip_info in ipairs(clips) do
+        local ext = clip_info.media_path and clip_info.media_path:match("%.([^%.]+)$")
+        if ext then extensions[ext:lower()] = true end
+    end
+
+    local _candidate_files, candidate_index = build_candidate_cache(options.search_paths, extensions)
+
+    -- Build segment index if enabled
+    local segment_index
+    if matching_rules.accept_filename_suffixes then
+        segment_index = M.build_segment_index(candidate_index)
+    end
+
+    -- Step 2: Process each clip
+    for i, clip_info in ipairs(clips) do
+        local clip_name = clip_info.clip_name or clip_info.clip_id:sub(1, 8)
+
+        -- Find candidates using the pure algorithm function
+        local candidates = M.find_candidates_for_clip(
+            clip_info, candidate_index, matching_rules,
+            probe_start_tc,  -- real ffprobe function
+            function(path)   -- probe_media_fn wrapping ffprobe
+                local escaped = string.format('"%s"', path:gsub('"', '\\"'))
+                local cmd = string.format(
+                    'ffprobe -v error -print_format json -show_streams %s 2>/dev/null', escaped)
+                local handle = io.popen(cmd)
+                if not handle then return nil end
+                local output = handle:read("*a")
+                handle:close()
+                if not output or output == "" then return nil end
+                local json = require("dkjson")
+                local data = json.decode(output)
+                if not data or not data.streams then return nil end
+                local info = {}
+                for _, stream in ipairs(data.streams) do
+                    if stream.codec_type == "video" then
+                        info.width = tonumber(stream.width)
+                        info.height = tonumber(stream.height)
+                        if stream.r_frame_rate then
+                            local num, den = stream.r_frame_rate:match("(%d+)/(%d+)")
+                            if num and den then
+                                info.fps_num = tonumber(num)
+                                info.fps_den = tonumber(den)
+                            end
+                        end
+                        if stream.nb_frames then
+                            info.duration_frames = tonumber(stream.nb_frames)
+                        elseif stream.duration and info.fps_num and info.fps_den then
+                            info.duration_frames = math.floor(
+                                tonumber(stream.duration) * info.fps_num / info.fps_den + 0.5)
+                        end
+                    end
+                end
+                return info.width and info or nil
+            end
+        )
+
+        -- Also check segment files if enabled
+        if matching_rules.accept_filename_suffixes and segment_index then
+            local basename = get_filename(clip_info.media_path)
+            local seg_key = basename and basename:lower() or nil
+            if seg_key and segment_index[seg_key] then
+                for _, seg_path in ipairs(segment_index[seg_key]) do
+                    -- Check if this segment is already in candidates
+                    local already = false
+                    for _, c in ipairs(candidates) do
+                        if c.path == seg_path then already = true; break end
+                    end
+                    if not already then
+                        local seg_tc_val, seg_tc_rate = probe_start_tc(seg_path)
+                        candidates[#candidates + 1] = {
+                            path = seg_path,
+                            start_tc_value = seg_tc_val,
+                            start_tc_rate = seg_tc_rate,
+                            is_segment = true,
+                        }
+                    end
+                end
+            end
+        end
+
+        -- Evaluate results
+        if #candidates == 0 then
+            results.failed[#results.failed + 1] = {
+                clip_id = clip_info.clip_id,
+                reason = "no matching candidate found",
+            }
+            if progress_cb then
+                progress_cb(math.floor(i / total * 100), nil,
+                    string.format("[--] %s", clip_name))
+            end
+        elseif #candidates == 1 then
+            local cand = candidates[1]
+            local new_source_in = clip_info.source_in
+            local new_source_out = clip_info.source_out
+
+            -- Compute TC offset if candidate has different TC
+            if cand.start_tc_value and clip_info.media_start_tc_value then
+                local offset = M.compute_tc_offset(
+                    clip_info.media_start_tc_value, clip_info.media_start_tc_rate,
+                    cand.start_tc_value, cand.start_tc_rate)
+
+                if math.abs(offset) > 1 then
+                    -- Rescale offset to clip rate
+                    local offset_at_clip_rate = offset
+                    if clip_info.media_start_tc_rate ~= clip_info.fps_num / clip_info.fps_den then
+                        offset_at_clip_rate = math.floor(
+                            offset * (clip_info.fps_num / clip_info.fps_den) /
+                            clip_info.media_start_tc_rate + 0.5)
+                    end
+
+                    local adj_in, adj_out = M.adjust_source_range(
+                        clip_info.source_in, clip_info.source_out, offset_at_clip_rate, clip_info.fps_num)
+
+                    if adj_in then
+                        new_source_in = adj_in
+                        new_source_out = adj_out
+                    else
+                        -- Clip falls outside candidate range
+                        results.failed[#results.failed + 1] = {
+                            clip_id = clip_info.clip_id,
+                            reason = "clip source range falls outside candidate after TC offset",
+                        }
+                        if progress_cb then
+                            progress_cb(math.floor(i / total * 100), nil,
+                                string.format("[--] %s (out of range after TC offset)", clip_name))
+                        end
+                        goto continue
+                    end
+                end
+            end
+
+            results.relinked[#results.relinked + 1] = {
+                clip_id = clip_info.clip_id,
+                original_media_id = clip_info.media_id,
+                new_media_id = nil,  -- reuse existing unless segment
+                new_source_in = new_source_in,
+                new_source_out = new_source_out,
+                new_path = cand.path,
+                strategy = cand.is_segment and "segment" or "filename",
+            }
+
+            if progress_cb then
+                progress_cb(math.floor(i / total * 100),
+                    string.format("Processing %d of %d...", i, total),
+                    string.format("[OK] %s → %s", clip_name, get_filename(cand.path)))
+            end
+        else
+            -- Multiple candidates — mark ambiguous
+            local cand_info = {}
+            for _, c in ipairs(candidates) do
+                cand_info[#cand_info + 1] = {
+                    path = c.path,
+                    start_tc = c.start_tc_value,
+                    start_tc_rate = c.start_tc_rate,
+                }
+            end
+            results.ambiguous[#results.ambiguous + 1] = {
+                clip_id = clip_info.clip_id,
+                candidates = cand_info,
+            }
+            if progress_cb then
+                progress_cb(math.floor(i / total * 100), nil,
+                    string.format("[??] %s (%d candidates)", clip_name, #candidates))
+            end
+        end
+
+        ::continue::
+    end
+
+    if progress_cb then
+        progress_cb(100, string.format("Done: %d relinked, %d failed, %d ambiguous",
+            #results.relinked, #results.failed, #results.ambiguous))
+    end
+
+    return results
+end
+
 return M
