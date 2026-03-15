@@ -777,4 +777,40 @@ function M.find_master_clip_for_media(media_id)
     return M.load(clip_id)
 end
 
+--- Find all clips (master + timeline) referencing a given media_id.
+-- @param media_id string
+-- @return table Array of Clip objects
+function M.find_clips_for_media(media_id)
+    assert(media_id and media_id ~= "", "Clip.find_clips_for_media: media_id required")
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Clip.find_clips_for_media: no database connection")
+
+    local stmt = assert(db:prepare([[
+        SELECT id FROM clips WHERE media_id = ?
+    ]]), "Clip.find_clips_for_media: failed to prepare query")
+
+    stmt:bind_value(1, media_id)
+    assert(stmt:exec(), "Clip.find_clips_for_media: query exec failed")
+
+    local clips = {}
+    while stmt:next() do
+        local clip = M.load(stmt:value(0))
+        if clip then clips[#clips + 1] = clip end
+    end
+    stmt:finalize()
+    return clips
+end
+
+--- Update source_in and source_out and persist.
+-- @param source_in number New source_in (native units)
+-- @param source_out number New source_out (native units)
+function M:set_source_range(source_in, source_out)
+    assert(type(source_in) == "number", "Clip:set_source_range: source_in must be a number")
+    assert(type(source_out) == "number", "Clip:set_source_range: source_out must be a number")
+    self.source_in = source_in
+    self.source_out = source_out
+    self:save()
+end
+
 return M

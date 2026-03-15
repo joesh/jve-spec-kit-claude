@@ -82,6 +82,24 @@ function M:set_file_path(path)
     mark_dirty(self.id)
 end
 
+--- Get stored start timecode as (frames, rate).
+-- Parses metadata JSON for start_tc_value and start_tc_rate.
+-- @return number|nil frames, number|nil rate
+function M:get_start_tc()
+    local meta = self.metadata
+    if not meta or meta == "" or meta == "{}" then
+        return nil, nil
+    end
+    if type(meta) == "string" then
+        local json = require("dkjson")
+        meta = json.decode(meta)
+    end
+    if type(meta) == "table" and meta.start_tc_value then
+        return meta.start_tc_value, meta.start_tc_rate
+    end
+    return nil, nil
+end
+
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
