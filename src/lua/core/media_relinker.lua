@@ -689,7 +689,15 @@ local function relink_by_metadata(media, search_paths, candidate_files, media_re
     return best_match, best_score, best_details
 end
 
---- Find offline media in project
+--- Check if a media path is a proxy (Resolve ProxyMedia directory).
+-- Proxy media should not be relinked — they're derivative copies.
+-- @param path string File path
+-- @return boolean True if path is a proxy
+local function is_proxy_path(path)
+    return path:find("/ProxyMedia/") ~= nil
+end
+
+--- Find offline media in project (excludes proxy media).
 -- @param db table Database connection
 -- @param project_id string Project ID to check
 -- @return table Array of offline media records
@@ -706,18 +714,28 @@ function M.find_offline_media(db, project_id)
     end
 
     local offline = {}
+    local proxy_count = 0
     stmt:bind_value(1, project_id)
     if stmt:exec() then
         while stmt:next() do
             local media_id = stmt:value(0)
             local media = Media.load(media_id)
             if media and not file_exists(media.file_path) then
-                table.insert(offline, media)
+                if is_proxy_path(media.file_path) then
+                    proxy_count = proxy_count + 1
+                else
+                    table.insert(offline, media)
+                end
             end
         end
     end
 
     stmt:finalize()
+
+    if proxy_count > 0 then
+        log.event("find_offline_media: skipped %d proxy media (ProxyMedia/)", proxy_count)
+    end
+
     return offline
 end
 
