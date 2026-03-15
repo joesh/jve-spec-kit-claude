@@ -73,7 +73,7 @@ function M.show(config)
     -- State
     local dest_path = default_dir .. "/" .. default_name
     local result_path = nil  -- set on successful conversion
-    local log_lines = {}     -- accumulated log text
+    -- log_lines now managed by progress_panel
     local globals = {}       -- _G handler names for cleanup
 
     -- Create dialog
@@ -116,22 +116,9 @@ function M.show(config)
     qt.LAYOUT.ADD_LAYOUT(main_layout, save_row)
     qt.LAYOUT.ADD_SPACING(main_layout, 8)
 
-    -- Progress bar (hidden initially)
-    local progress_bar = qt.WIDGET.CREATE_PROGRESS_BAR()
-    qt.DISPLAY.SET_VISIBLE(progress_bar, false)
-    qt.LAYOUT.ADD_WIDGET(main_layout, progress_bar)
-
-    -- Status label (hidden initially)
-    local status_label = qt.WIDGET.CREATE_LABEL("")
-    qt.DISPLAY.SET_VISIBLE(status_label, false)
-    qt.LAYOUT.ADD_WIDGET(main_layout, status_label)
-
-    -- Log area (hidden initially, read-only)
-    local log_area = qt.WIDGET.CREATE_TEXT_EDIT("")
-    qt.CONTROL.SET_TEXT_EDIT_READ_ONLY(log_area, true)
-    qt.DISPLAY.SET_VISIBLE(log_area, false)
-    qt.PROPERTIES.SET_SIZE(log_area, 500, 100)
-    qt.LAYOUT.ADD_WIDGET(main_layout, log_area)
+    -- Progress panel (shared component)
+    local progress_panel = require("ui.progress_panel")
+    local progress = progress_panel.create(main_layout, {log_height = 100, width = 500})
 
     -- Error label (hidden initially)
     local error_label = qt.WIDGET.CREATE_LABEL("")
@@ -163,8 +150,7 @@ function M.show(config)
     local function set_converting(active)
         qt.CONTROL.SET_ENABLED(browse_btn, not active)
         qt.CONTROL.SET_ENABLED(convert_btn, not active)
-        qt.DISPLAY.SET_VISIBLE(progress_bar, active)
-        qt.DISPLAY.SET_VISIBLE(status_label, active)
+        if active then progress.show() else progress.hide() end
     end
 
     -- -----------------------------------------------------------------------
@@ -197,29 +183,15 @@ function M.show(config)
         qt.DISPLAY.SET_VISIBLE(error_label, false)
         set_converting(true)
 
-        -- Progress callback: updates UI + pumps events
-        local function progress_cb(pct, text, log_line)
-            qt.CONTROL.SET_PROGRESS_BAR_VALUE(progress_bar, pct or 0)
-            if text then qt.PROPERTIES.SET_TEXT(status_label, text) end
-            if log_line then
-                table.insert(log_lines, log_line)
-                qt.PROPERTIES.SET_TEXT(log_area, table.concat(log_lines, "\n"))
-                qt.DISPLAY.SET_VISIBLE(log_area, true)
-            end
-            qt.CONTROL.PROCESS_EVENTS()
-        end
-
-        local ok, err = config.convert_fn(config.source_path, dest_path, progress_cb)
+        local ok, err = config.convert_fn(config.source_path, dest_path, progress.update)
 
         if ok then
-            -- Check if there are log warnings — stay open to let user review
-            if #log_lines > 0 then
+            local has_warnings = #progress.get_log_lines() > 0
+            if has_warnings then
                 set_converting(false)
-                qt.PROPERTIES.SET_TEXT(status_label, "Conversion complete with warnings")
-                qt.DISPLAY.SET_VISIBLE(status_label, true)
+                progress.update(100, "Conversion complete with warnings")
                 qt.DISPLAY.SET_VISIBLE(save_log_btn, true)
                 qt.PROPERTIES.SET_TEXT(convert_btn, "Done")
-                -- Re-bind convert button to close on next click
                 _G[convert_name] = function()
                     result_path = dest_path
                     qt.DIALOG.CLOSE(dialog, true)
@@ -229,7 +201,6 @@ function M.show(config)
                 qt.DIALOG.CLOSE(dialog, true)
             end
         else
-            -- Error — show message, re-enable for retry
             set_converting(false)
             qt.PROPERTIES.SET_TEXT(error_label, "Error: " .. tostring(err))
             qt.DISPLAY.SET_VISIBLE(error_label, true)
@@ -259,7 +230,7 @@ function M.show(config)
         if log_path then
             local f = io.open(log_path, "w")
             if f then
-                f:write(table.concat(log_lines, "\n"))
+                f:write(table.concat(progress.get_log_lines(), "\n"))
                 f:close()
             end
         end

@@ -2434,4 +2434,11 @@ Signals.connect("media_status_changed", function(media_path, status)
     end
 end)
 
+-- Reactive media change: when media records are modified (e.g. relink),
+-- refresh browser to update file paths and offline icons.
+Signals.connect("media_changed", function(_changed_media_ids)
+    if not M.tree then return end
+    M.refresh()
+end)
+
 return M

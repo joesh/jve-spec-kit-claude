@@ -229,6 +229,18 @@ local function relink_by_path(media, new_root)
     return nil
 end
 
+-- TODO: TC verification — blocked on DRP importer storing <MediaStartTime>
+-- Without the original file's start TC on the media/master clip record, we can't
+-- verify that a candidate file contains the right TC range. Relinking to a
+-- media-managed file (different start TC) without source_in adjustment would
+-- silently destroy the edit.
+--
+-- Required before enabling TC verify:
+-- 1. DRP import: extract <MediaStartTime> → store as start_timecode on media + master clip
+-- 2. Native import: probe file start TC via ffprobe → store on media + master clip
+-- 3. Relinker: compare candidate start TC against stored start_timecode
+-- 4. If TC differs: compute offset, adjust source_in/source_out on all referencing clips
+
 --- Strategy 2: Filename-based relinking
 -- Searches directory tree for matching filename
 -- @param media table Media record with old file_path
@@ -244,42 +256,44 @@ local function relink_by_filename(media, search_paths, candidate_files, candidat
         candidate_files and #candidate_files or 0,
         tostring(candidate_index and lookup_key and candidate_index[lookup_key] ~= nil))
 
+    -- Collect filename matches, then verify
+    local matches = {}
+
     if candidate_index and lookup_key and candidate_index[lookup_key] then
         for _, file_path in ipairs(candidate_index[lookup_key]) do
             local ext = get_extension(file_path)
             if ext == old_ext and file_exists(file_path) then
-                return file_path
+                matches[#matches + 1] = file_path
             end
         end
     end
 
-    -- If candidate files provided, search them
-    if candidate_files then
+    if #matches == 0 and candidate_files then
         for _, file_path in ipairs(candidate_files) do
             local filename = get_filename(file_path)
             local ext = get_extension(file_path)
-
-            if filename == old_filename and ext == old_ext then
-                if file_exists(file_path) then
-                    return file_path
-                end
+            if filename == old_filename and ext == old_ext and file_exists(file_path) then
+                matches[#matches + 1] = file_path
             end
         end
-    else
-        -- Scan directories
-        local extensions = {[old_ext] = true}
+    end
 
+    if #matches == 0 and not candidate_files then
+        local extensions = {[old_ext] = true}
         for _, search_path in ipairs(search_paths) do
             local files = scan_directory(search_path, extensions)
             for _, file_path in ipairs(files) do
-                local filename = get_filename(file_path)
-                if filename == old_filename then
-                    if file_exists(file_path) then
-                        return file_path
-                    end
+                if get_filename(file_path) == old_filename and file_exists(file_path) then
+                    matches[#matches + 1] = file_path
                 end
             end
         end
+    end
+
+    -- Return first filename match
+    -- TODO: once start_timecode is stored on media records, verify TC containment here
+    if #matches > 0 then
+        return matches[1]
     end
 
     return nil
@@ -616,15 +630,18 @@ end
 --- Batch relink multiple media files
 -- @param media_list table Array of media records
 -- @param options table Relinking options (see relink_media)
+-- @param progress_cb function|nil: progress_cb(pct, status_text, log_line)
 -- @return table Results {relinked = {{media, new_path, strategy, confidence}}, failed = {media}}
-function M.batch_relink(media_list, options)
+function M.batch_relink(media_list, options, progress_cb)
     local results = {
         relinked = {},
         failed = {}
     }
+    local total = #media_list
 
     -- Pre-scan directories once per extension set
-    if options.search_paths and #media_list > 0 then
+    if options.search_paths and total > 0 then
+        if progress_cb then progress_cb(0, "Scanning search directory...") end
         local extensions = {}
         for _, media in ipairs(media_list) do
             local ext = get_extension(media.file_path)
@@ -635,20 +652,50 @@ function M.batch_relink(media_list, options)
         ensure_candidate_cache(options, extensions)
     end
 
+    -- Track claimed paths to prevent two media records mapping to the same file
+    local claimed_paths = {}
+
     -- Attempt relinking for each media file
-    for _, media in ipairs(media_list) do
+    for i, media in ipairs(media_list) do
+        local name = media.name or media.id or "?"
         local new_path, strategy, confidence = M.relink_media(media, options)
 
-        if new_path then
+        if new_path and not claimed_paths[new_path] then
+            claimed_paths[new_path] = media.id
             table.insert(results.relinked, {
                 media = media,
                 new_path = new_path,
                 strategy = strategy,
                 confidence = confidence
             })
+            if progress_cb then
+                local pct = math.floor(i / total * 100)
+                progress_cb(pct,
+                    string.format("Verifying %d of %d...", i, total),
+                    string.format("[OK] %s → %s", name, get_filename(new_path)))
+            end
+        elseif new_path then
+            log.warn("batch_relink: path already claimed by %s, skipping %s → %s",
+                claimed_paths[new_path], name, new_path)
+            table.insert(results.failed, media)
+            if progress_cb then
+                local pct = math.floor(i / total * 100)
+                progress_cb(pct, nil,
+                    string.format("[DUP] %s (already claimed)", name))
+            end
         else
             table.insert(results.failed, media)
+            if progress_cb then
+                local pct = math.floor(i / total * 100)
+                progress_cb(pct, nil,
+                    string.format("[--] %s", name))
+            end
         end
+    end
+
+    if progress_cb then
+        progress_cb(100, string.format("Done: %d of %d reconnected",
+            #results.relinked, total))
     end
 
     return results

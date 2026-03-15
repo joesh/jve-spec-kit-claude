@@ -749,4 +749,32 @@ function M:set_out(pos)
     self:save()
 end
 
+--- Find the master clip for a given media_id.
+-- @param media_id string
+-- @return Clip|nil master clip, or nil if none
+function M.find_master_clip_for_media(media_id)
+    assert(media_id and media_id ~= "", "Clip.find_master_clip_for_media: media_id required")
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Clip.find_master_for_media: no database connection")
+
+    local stmt = assert(db:prepare([[
+        SELECT id FROM clips
+        WHERE media_id = ? AND clip_kind = 'master'
+        LIMIT 1
+    ]]), "Clip.find_master_for_media: failed to prepare query")
+
+    stmt:bind_value(1, media_id)
+    assert(stmt:exec(), "Clip.find_master_for_media: query exec failed")
+
+    if not stmt:next() then
+        stmt:finalize()
+        return nil
+    end
+
+    local clip_id = stmt:value(0)
+    stmt:finalize()
+    return M.load(clip_id)
+end
+
 return M

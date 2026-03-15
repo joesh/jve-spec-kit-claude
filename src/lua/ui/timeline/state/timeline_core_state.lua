@@ -460,4 +460,12 @@ Signals.connect("media_status_changed", function(media_path, status)
     end
 end)
 
+-- Reactive media change: when media records are modified (e.g. relink),
+-- reload clips from DB so cached file_path/offline state is refreshed.
+Signals.connect("media_changed", function(_changed_media_ids)
+    local active = data.state.sequence_id
+    if not active or active == "" then return end
+    M.reload_clips(active)
+end)
+
 return M

@@ -34,15 +34,17 @@ function M.register(executors, undoers, _db)
         local old_paths = {}
         local relinked_count = 0
 
+        Media.begin_batch()
         for media_id, new_file_path in pairs(args.relink_map) do
             local media = Media.load(media_id)
             assert(media, string.format("RelinkMedia: media not found: %s", media_id))
 
-            old_paths[media_id] = media.file_path
-            media.file_path = new_file_path
+            old_paths[media_id] = media:get_file_path()
+            media:set_file_path(new_file_path)
             assert(media:save(), string.format("RelinkMedia: failed to save media %s", media_id))
             relinked_count = relinked_count + 1
         end
+        Media.end_batch()
 
         command:set_parameter("old_paths", old_paths)
         command:set_parameter("relinked_count", relinked_count)
@@ -58,15 +60,17 @@ function M.register(executors, undoers, _db)
         local Media = require("models.media")
         local restored_count = 0
 
+        Media.begin_batch()
         for media_id, old_file_path in pairs(args.old_paths) do
             local media = Media.load(media_id)
             assert(media, string.format("RelinkMedia undo: media not found: %s", media_id))
 
-            media.file_path = old_file_path
+            media:set_file_path(old_file_path)
             assert(media:save(),
                 string.format("RelinkMedia undo: failed to save media %s", media_id))
             restored_count = restored_count + 1
         end
+        Media.end_batch()
 
         log.event("Undo relink: restored %d media file path(s)", restored_count)
         return true

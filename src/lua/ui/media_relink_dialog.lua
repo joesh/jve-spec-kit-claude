@@ -2,12 +2,11 @@
 --
 -- Responsibilities:
 -- - Show offline media list, let user pick search directory
--- - Run batch relink (path + filename strategies) with progress
--- - Display results, return relink_map on confirm
+-- - Run batch relink with live progress via progress_panel
+-- - Display per-item results as they happen, return relink_map on confirm
 --
 -- Non-goals:
--- - Metadata-based matching UI (advanced weights/sliders) — deferred until
---   slider-change-handler exists in Qt bindings
+-- - Metadata-based matching UI (deferred until slider-change-handler in Qt bindings)
 -- - Undo/redo (handled by RelinkMedia command)
 --
 -- Invariants:
@@ -30,6 +29,7 @@ function M.show(offline_media, parent_window)
     local qt = require("core.qt_constants")
     local file_browser = require("core.file_browser")
     local media_relinker = require("core.media_relinker")
+    local progress_panel = require("ui.progress_panel")
 
     -- State — restore last-used search dir if available
     local last_dir = file_browser.get_last_directory("relink_media")
@@ -38,7 +38,7 @@ function M.show(offline_media, parent_window)
     local globals = {}       -- _G handler names for cleanup
 
     -- Create dialog
-    local dialog = qt.DIALOG.CREATE("Reconnect Media", 600, 420)
+    local dialog = qt.DIALOG.CREATE("Reconnect Media", 650, 600)
     local main_layout = qt.LAYOUT.CREATE_VBOX()
 
     -- -----------------------------------------------------------------------
@@ -50,18 +50,18 @@ function M.show(offline_media, parent_window)
     qt.LAYOUT.ADD_WIDGET(main_layout, header)
     qt.LAYOUT.ADD_SPACING(main_layout, 4)
 
-    -- Offline file list (read-only text area showing names + old paths)
+    -- Offline file list (read-only, showing names + old paths)
     local offline_lines = {}
     for _, m in ipairs(offline_media) do
-        local name = m.name or m.media_id or "?"
+        local name = m.name or m.id or "?"
         local path = m.file_path or "?"
-        table.insert(offline_lines, string.format("%s  —  %s", name, path))
+        offline_lines[#offline_lines + 1] = string.format("%s  —  %s", name, path)
     end
     local offline_area = qt.WIDGET.CREATE_TEXT_EDIT(table.concat(offline_lines, "\n"))
     qt.CONTROL.SET_TEXT_EDIT_READ_ONLY(offline_area, true)
-    qt.PROPERTIES.SET_SIZE(offline_area, 580, 100)
+    qt.PROPERTIES.SET_SIZE(offline_area, 600, 80)
     qt.LAYOUT.ADD_WIDGET(main_layout, offline_area)
-    qt.LAYOUT.ADD_SPACING(main_layout, 8)
+    qt.LAYOUT.ADD_SPACING(main_layout, 4)
 
     -- -----------------------------------------------------------------------
     -- Search directory row
@@ -91,17 +91,9 @@ function M.show(offline_media, parent_window)
     globals[#globals + 1] = browse_name
 
     -- -----------------------------------------------------------------------
-    -- Results area (hidden initially)
+    -- Progress panel (progress bar + status + live results log)
     -- -----------------------------------------------------------------------
-    local results_label = qt.WIDGET.CREATE_LABEL("")
-    qt.DISPLAY.SET_VISIBLE(results_label, false)
-    qt.LAYOUT.ADD_WIDGET(main_layout, results_label)
-
-    local results_area = qt.WIDGET.CREATE_TEXT_EDIT("")
-    qt.CONTROL.SET_TEXT_EDIT_READ_ONLY(results_area, true)
-    qt.PROPERTIES.SET_SIZE(results_area, 580, 120)
-    qt.DISPLAY.SET_VISIBLE(results_area, false)
-    qt.LAYOUT.ADD_WIDGET(main_layout, results_area)
+    local progress = progress_panel.create(main_layout, {log_height = 200, width = 600})
 
     -- -----------------------------------------------------------------------
     -- Error label (hidden initially)
@@ -141,35 +133,26 @@ function M.show(offline_media, parent_window)
         end
 
         qt.DISPLAY.SET_VISIBLE(error_label, false)
+        qt.CONTROL.SET_ENABLED(reconnect_btn, false)
+        qt.CONTROL.SET_ENABLED(browse_btn, false)
+        progress.reset()
+        progress.show()
 
-        -- Run batch relink with path + filename strategies
+        -- Run batch relink with live progress
         local options = { search_paths = { search_dir } }
-        local results = media_relinker.batch_relink(offline_media, options)
+        local results = media_relinker.batch_relink(offline_media, options, progress.update)
 
-        -- Build results display
-        local result_lines = {}
+        -- Re-enable controls
+        qt.CONTROL.SET_ENABLED(browse_btn, true)
+
+        -- Build relink map from results
         local map = {}
-
         for _, entry in ipairs(results.relinked) do
-            local name = entry.media.name or entry.media.media_id or "?"
-            table.insert(result_lines,
-                string.format("[OK] %s → %s (%s)", name, entry.new_path, entry.strategy))
             map[entry.media.media_id or entry.media.id] = entry.new_path
         end
-        for _, media in ipairs(results.failed) do
-            local name = media.name or media.media_id or "?"
-            table.insert(result_lines, string.format("[FAILED] %s", name))
-        end
-
-        -- Show results
-        local summary = string.format("Reconnected %d of %d",
-            #results.relinked, #offline_media)
-        qt.PROPERTIES.SET_TEXT(results_label, summary)
-        qt.DISPLAY.SET_VISIBLE(results_label, true)
-        qt.PROPERTIES.SET_TEXT(results_area, table.concat(result_lines, "\n"))
-        qt.DISPLAY.SET_VISIBLE(results_area, true)
 
         if #results.relinked == 0 then
+            qt.CONTROL.SET_ENABLED(reconnect_btn, true)
             qt.PROPERTIES.SET_TEXT(error_label,
                 "No media found. Try a different search directory.")
             qt.DISPLAY.SET_VISIBLE(error_label, true)
@@ -179,6 +162,7 @@ function M.show(offline_media, parent_window)
         -- Store map and rebind button to apply
         relink_map = map
         qt.PROPERTIES.SET_TEXT(reconnect_btn, "Apply")
+        qt.CONTROL.SET_ENABLED(reconnect_btn, true)
 
         -- Rebind to close-on-apply
         _G[reconnect_name] = function()
