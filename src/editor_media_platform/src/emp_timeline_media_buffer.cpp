@@ -50,6 +50,37 @@ static void reverse_interleaved(float* data, int64_t frames, int channels) {
     }
 }
 
+// Direction-aware prefetch cursor.
+// Encapsulates all "ahead of playhead" arithmetic so call sites never
+// branch on direction. Works for both video (frames) and audio (microseconds).
+class PrefetchCursor {
+    int m_dir;
+public:
+    int64_t pos;
+
+    PrefetchCursor(int64_t p, int dir) : m_dir(dir), pos(p) {
+        assert((dir == 1 || dir == -1) && "PrefetchCursor: direction must be +1 or -1");
+    }
+
+    // How far pos is ahead of ref (positive = ahead, negative = behind)
+    int64_t ahead_of(int64_t ref) const { return (pos - ref) * m_dir; }
+
+    // Advance pos by stride in the current direction
+    void advance(int64_t stride) {
+        assert(stride > 0 && "PrefetchCursor::advance: stride must be positive");
+        pos += stride * m_dir;
+    }
+
+    // Skip a gap: land at the far edge in the direction of travel.
+    // Forward: pos = gap.end (first frame after gap)
+    // Reverse: pos = gap.start - 1 (last frame before gap)
+    void skip_gap(int64_t gap_start, int64_t gap_end) {
+        pos = (m_dir > 0) ? gap_end : gap_start - 1;
+    }
+
+    int dir() const { return m_dir; }
+};
+
 } // namespace
 
 namespace emp {
@@ -1163,14 +1194,12 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
 
 bool TimelineMediaBuffer::is_video_buffer_low(const TrackState& ts, int64_t playhead, int dir) const {
     if (ts.video_buffer_end < 0) return true;
-    int64_t ahead = (dir > 0) ? (ts.video_buffer_end - playhead) : (playhead - ts.video_buffer_end);
-    return ahead < VIDEO_PREFETCH_MIN;
+    return PrefetchCursor(ts.video_buffer_end, dir).ahead_of(playhead) < VIDEO_PREFETCH_MIN;
 }
 
 bool TimelineMediaBuffer::is_audio_buffer_low(const TrackState& ts, TimeUS playhead_us, int dir) const {
     if (ts.audio_buffer_end < 0) return true;
-    TimeUS ahead = (dir > 0) ? (ts.audio_buffer_end - playhead_us) : (playhead_us - ts.audio_buffer_end);
-    return ahead < AUDIO_PREFETCH_MIN;
+    return PrefetchCursor(ts.audio_buffer_end, dir).ahead_of(playhead_us) < AUDIO_PREFETCH_MIN;
 }
 
 void TimelineMediaBuffer::wake_prefetch_workers() {
@@ -1183,16 +1212,19 @@ void TimelineMediaBuffer::discard_already_played_prefetch(const TrackId& track) 
     if (it == m_tracks.end()) return;
     auto& ts = it->second;
 
+    int dir = m_playhead_direction.load(std::memory_order_relaxed);
+    if (dir == 0) return;
     int64_t playhead = m_playhead_frame.load(std::memory_order_relaxed);
 
     if (track.type == TrackType::Video) {
-        if (ts.video_buffer_end < playhead) {
+        // Snap buffer_end to playhead if playhead has passed it in direction of travel
+        if (ts.video_buffer_end >= 0 && (playhead - ts.video_buffer_end) * dir > 0) {
             ts.video_buffer_end = playhead;
         }
     } else {
         if (m_seq_rate.num > 0) {
             TimeUS playhead_us = FrameTime::from_frame(playhead, m_seq_rate).to_us();
-            if (ts.audio_buffer_end < playhead_us) {
+            if (ts.audio_buffer_end >= 0 && (playhead_us - ts.audio_buffer_end) * dir > 0) {
                 ts.audio_buffer_end = playhead_us;
             }
         }
@@ -1227,33 +1259,51 @@ int TimelineMediaBuffer::stride_for_clip(const TrackId& track, const ClipInfo& c
     auto dit = m_decode_speed_cache.find(clip.media_path);
     if (dit == m_decode_speed_cache.end()) return 1;
 
+    // At higher playback speeds, frames pass faster → need wider stride.
+    // speed=2.0 means frame_period_ms is effectively halved.
+    float speed = std::max(1.0f, std::abs(m_playhead_speed.load(std::memory_order_relaxed)));
     double frame_period_ms = 1000.0 * clip.rate_den / clip.rate_num;
-    if (dit->second <= frame_period_ms * 1.5) return 1;
+    double effective_period = frame_period_ms / speed;
+    assert(effective_period > 0 && "stride_for_clip: effective_period must be positive");
+    if (dit->second <= effective_period * 1.5) return 1;
 
     // +1 padding: ceil gives the minimum stride to break even with decode cost.
     // Without padding, margin is ~20ms — any jitter causes permanent behind-ness.
     // With +1, margin is ~1 frame period (~40ms at 25fps), enough to absorb
     // I/O stalls, thread scheduling, and recover from brief deficits.
-    int stride = static_cast<int>(std::ceil(dit->second / frame_period_ms)) + 1;
+    int stride = static_cast<int>(std::ceil(dit->second / effective_period)) + 1;
     return std::min(stride, MAX_STRIDE);
 }
 
-void TimelineMediaBuffer::set_already_fetched_video(const TrackId& track, int64_t pos) {
+void TimelineMediaBuffer::set_already_fetched_video(const TrackId& track, int64_t pos, int direction) {
+    assert((direction == 1 || direction == -1) &&
+           "set_already_fetched_video: direction must be +1 or -1");
     std::lock_guard<std::mutex> lock(m_tracks_mutex);
     auto it = m_tracks.find(track);
     if (it != m_tracks.end()) {
-        // Use max() to never regress the watermark
-        if (pos > it->second.video_buffer_end) {
+        // Direction-aware monotonic advance: never regress in direction of travel
+        if (it->second.video_buffer_end < 0 ||
+            (pos - it->second.video_buffer_end) * direction > 0) {
             it->second.video_buffer_end = pos;
         }
     }
 }
 
-void TimelineMediaBuffer::set_already_fetched_audio(const TrackId& track, TimeUS pos) {
+int64_t TimelineMediaBuffer::GetVideoBufferEnd(TrackId track) const {
+    std::lock_guard<std::mutex> lock(m_tracks_mutex);
+    auto it = m_tracks.find(track);
+    if (it == m_tracks.end()) return -1;
+    return it->second.video_buffer_end;
+}
+
+void TimelineMediaBuffer::set_already_fetched_audio(const TrackId& track, TimeUS pos, int direction) {
+    assert((direction == 1 || direction == -1) &&
+           "set_already_fetched_audio: direction must be +1 or -1");
     std::lock_guard<std::mutex> lock(m_tracks_mutex);
     auto it = m_tracks.find(track);
     if (it != m_tracks.end()) {
-        if (pos > it->second.audio_buffer_end) {
+        if (it->second.audio_buffer_end < 0 ||
+            (pos - it->second.audio_buffer_end) * direction > 0) {
             it->second.audio_buffer_end = pos;
         }
     }
@@ -2010,7 +2060,7 @@ bool TimelineMediaBuffer::pick_video_track(TrackId& out) {
 
         int64_t buffer_end = ts.video_buffer_end;
         if (buffer_end < 0) buffer_end = playhead;
-        int64_t ahead = (direction > 0) ? (buffer_end - playhead) : (playhead - buffer_end);
+        int64_t ahead = PrefetchCursor(buffer_end, direction).ahead_of(playhead);
         if (ahead >= VIDEO_PREFETCH_MAX) continue;  // this track is full
 
         if (ahead < worst_buffer) {
@@ -2054,7 +2104,7 @@ bool TimelineMediaBuffer::pick_audio_track(TrackId& out) {
 
         TimeUS buffer_end = ts.audio_buffer_end;
         if (buffer_end < 0) buffer_end = playhead_us;
-        TimeUS ahead = (direction > 0) ? (buffer_end - playhead_us) : (playhead_us - buffer_end);
+        TimeUS ahead = PrefetchCursor(buffer_end, direction).ahead_of(playhead_us);
         if (ahead >= AUDIO_PREFETCH_MAX) continue;  // this track is full
 
         if (ahead < worst_buffer) {
@@ -2074,8 +2124,11 @@ bool TimelineMediaBuffer::pick_audio_track(TrackId& out) {
 
 void TimelineMediaBuffer::decode_into_cache(
         const TrackId& track, const Segment& seg, int64_t position, int stride,
-        ReaderHandle& held_reader, std::string& held_clip_id,
+        int direction, ReaderHandle& held_reader, std::string& held_clip_id,
         std::shared_ptr<Frame>& last_good_frame) {
+
+    assert((direction == 1 || direction == -1) &&
+           "decode_into_cache: direction must be +1 or -1");
 
     const ClipInfo* clip = seg.clip;
     assert(clip && "decode_into_cache: CLIP segment has null clip pointer");
@@ -2086,11 +2139,13 @@ void TimelineMediaBuffer::decode_into_cache(
         held_reader = acquire_reader(track, clip->clip_id, clip->media_path);
 
         if (!held_reader) {
-            // Undecodable clip — skip to clip end
+            // Undecodable clip — skip past clip in direction of travel
+            int64_t skip_to = (direction > 0) ? clip->timeline_end()
+                                               : clip->timeline_start - 1;
             char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
             EMP_LOG_WARN("PREFETCH SKIP: %s clip=%.8s undecodable, advancing to %lld",
-                tbuf, clip->clip_id.c_str(), (long long)clip->timeline_end());
-            set_already_fetched_video(track, clip->timeline_end());
+                tbuf, clip->clip_id.c_str(), (long long)skip_to);
+            set_already_fetched_video(track, skip_to, direction);
             held_clip_id.clear();
             return;
         }
@@ -2104,6 +2159,46 @@ void TimelineMediaBuffer::decode_into_cache(
     int64_t source_frame = clip->source_in +
         static_cast<int64_t>((position - clip->timeline_start) * clip->speed_ratio);
 
+    // ── Early EOF check: skip decoder if past recorded EOF for this clip ──
+    // On first EOF, we record the hold frame in clip_eof_frame. Subsequent
+    // iterations fill hold frames directly (stride at a time), bounded by
+    // fill_prefetch's window check — no redundant decode attempts.
+    {
+        std::lock_guard<std::mutex> tlock(m_tracks_mutex);
+        auto tit = m_tracks.find(track);
+        if (tit != m_tracks.end()) {
+            auto& eof_map = tit->second.clip_eof_frame;
+            auto eof_it = eof_map.find(clip->clip_id);
+            if (eof_it != eof_map.end() && source_frame >= eof_it->second.source_frame) {
+                auto& ei = eof_it->second;
+                if (ei.hold_frame) {
+                    last_good_frame = ei.hold_frame;
+                    auto& cache = tit->second.video_cache;
+                    for (int s = 0; s < stride; ++s) {
+                        int64_t fill_tf = position + s * direction;
+                        if (fill_tf < clip->timeline_start || fill_tf >= clip->timeline_end()) break;
+                        while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
+                            evict_video_cache_entry(tit->second);
+                        }
+                        int64_t fill_sf = clip->source_in +
+                            static_cast<int64_t>((fill_tf - clip->timeline_start) * clip->speed_ratio);
+                        cache[fill_tf] = {clip->clip_id, fill_sf,
+                                          ei.hold_frame, ei.rotation,
+                                          ei.par_num, ei.par_den,
+                                          tit->second.video_cache_seq++};
+                    }
+                } else {
+                    char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
+                    EMP_LOG_WARN("EOF early check: %s clip=%.8s has null hold_frame "
+                                 "(EOF at sf=%lld, request sf=%lld) — frame gap",
+                                 tbuf, clip->clip_id.c_str(),
+                                 (long long)ei.source_frame, (long long)source_frame);
+                }
+                return;
+            }
+        }
+    }
+
     // Retime duplicate: consecutive timeline frames can map to the same source
     // frame at slow speeds. Check if the previous timeline position already
     // cached this exact source frame + clip. Reuse it instead of re-decoding —
@@ -2115,7 +2210,7 @@ void TimelineMediaBuffer::decode_into_cache(
         auto tit = m_tracks.find(track);
         if (tit != m_tracks.end()) {
             auto& cache = tit->second.video_cache;
-            auto prev_it = cache.find(position - 1);
+            auto prev_it = cache.find(position - direction);
             if (prev_it != cache.end() &&
                 prev_it->second.clip_id == clip->clip_id &&
                 prev_it->second.source_frame == source_frame &&
@@ -2132,8 +2227,8 @@ void TimelineMediaBuffer::decode_into_cache(
                 cache[position] = cf;
                 int fill_count = 1;
                 for (int s = 1; s < stride; ++s) {
-                    int64_t fill_tf = position + s;
-                    if (fill_tf >= clip->timeline_end()) break;
+                    int64_t fill_tf = position + s * direction;
+                    if (fill_tf < clip->timeline_start || fill_tf >= clip->timeline_end()) break;
                     while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
                         evict_video_cache_entry(tit->second);
                     }
@@ -2186,8 +2281,8 @@ void TimelineMediaBuffer::decode_into_cache(
             // Stride fill: populate cache at skipped positions with same frame
             int fill_count = 1;
             for (int s = 1; s < stride; ++s) {
-                int64_t fill_tf = position + s;
-                if (fill_tf >= clip->timeline_end()) break;
+                int64_t fill_tf = position + s * direction;
+                if (fill_tf < clip->timeline_start || fill_tf >= clip->timeline_end()) break;
                 while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
                     evict_video_cache_entry(tit->second);
                 }
@@ -2214,17 +2309,49 @@ void TimelineMediaBuffer::decode_into_cache(
             std::lock_guard<std::mutex> tlock(m_tracks_mutex);
             auto tit = m_tracks.find(track);
             if (tit != m_tracks.end()) {
-                auto& eof = tit->second.clip_eof_frame;
-                auto eof_it = eof.find(clip->clip_id);
-                if (eof_it == eof.end() || source_frame < eof_it->second) {
-                    eof[clip->clip_id] = source_frame;
+                // Recover hold frame from cache if not available (fill_prefetch
+                // resets last_good_frame on each yield, so EOF on first frame
+                // of a re-entry has nullptr). Search backwards from current pos.
+                auto& cache = tit->second.video_cache;
+                if (!last_good_frame) {
+                    auto prev = cache.find(position - direction);
+                    if (prev != cache.end() && prev->second.clip_id == clip->clip_id) {
+                        last_good_frame = prev->second.frame;
+                    }
                 }
-                // Hold last good frame for remaining timeline frames
+                if (!last_good_frame) {
+                    char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
+                    EMP_LOG_WARN("EOF: %s clip=%.8s no hold frame recoverable "
+                                 "at tf=%lld sf=%lld — hold frames will be gaps",
+                                 tbuf, clip->clip_id.c_str(),
+                                 (long long)position, (long long)source_frame);
+                }
+
+                // Record EOF with hold frame — subsequent iterations use early
+                // EOF check (no decoder interaction), fill stride at a time.
+                auto& eof_map = tit->second.clip_eof_frame;
+                auto eof_it = eof_map.find(clip->clip_id);
+                if (eof_it == eof_map.end() || source_frame < eof_it->second.source_frame) {
+                    TrackState::ClipEofInfo ei;
+                    ei.source_frame = source_frame;
+                    ei.hold_frame = last_good_frame;
+                    if (last_good_frame) {
+                        ei.rotation = info.rotation;
+                        ei.par_num = info.video_par_num;
+                        ei.par_den = info.video_par_den;
+                    }
+                    eof_map[clip->clip_id] = std::move(ei);
+                }
+
+                // Fill hold frame for current stride only — fill_prefetch's
+                // window check handles bounding. No unbounded fill to clip_end.
                 if (last_good_frame) {
-                    auto& cache = tit->second.video_cache;
-                    int64_t clip_end = clip->timeline_end();
-                    for (int64_t fill_tf = position; fill_tf < clip_end; ++fill_tf) {
-                        if (cache.size() >= TrackState::MAX_VIDEO_CACHE) break;
+                    for (int s = 0; s < stride; ++s) {
+                        int64_t fill_tf = position + s * direction;
+                        if (fill_tf < clip->timeline_start || fill_tf >= clip->timeline_end()) break;
+                        while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
+                            evict_video_cache_entry(tit->second);
+                        }
                         int64_t fill_sf = clip->source_in +
                             static_cast<int64_t>((fill_tf - clip->timeline_start) * clip->speed_ratio);
                         cache[fill_tf] = {clip->clip_id, fill_sf,
@@ -2233,9 +2360,9 @@ void TimelineMediaBuffer::decode_into_cache(
                                           tit->second.video_cache_seq++};
                     }
                 }
-                if (clip->timeline_end() > tit->second.video_buffer_end) {
-                    tit->second.video_buffer_end = clip->timeline_end();
-                }
+                // No buf_end advance — fill_prefetch advances cursor naturally.
+                // Each iteration fills one stride of hold frames until
+                // fill_prefetch's window check (VIDEO_PREFETCH_MAX) stops it.
             }
         }
     }
@@ -2319,45 +2446,52 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
     std::string held_clip_id;
     std::shared_ptr<Frame> last_good_frame;
 
+    int direction = m_playhead_direction.load(std::memory_order_relaxed);
+    if (direction == 0) return;
+
     if (track.type == TrackType::Video) {
         // ── Video prefetch: decode ONE frame then return ──
         // The worker loop re-picks the most urgent track each iteration,
         // so returning after each decode gives fair interleaving between
         // tracks with different decode speeds (e.g. V2 ProRes 4444 at
         // 136ms/frame vs V1 H264 at 12ms/frame).
+
+        // Read buf_end ONCE — create cursor before the loop.
+        // buf_end reflects cached content distance (not scan position).
+        // Gaps and obscured frames advance the cursor without advancing
+        // buf_end, so pick_video_track sees accurate urgency.
+        int64_t buffer_end;
         {
-            int64_t diag_be;
-            {
-                std::lock_guard<std::mutex> lock(m_tracks_mutex);
-                auto it = m_tracks.find(track);
-                diag_be = (it != m_tracks.end()) ? it->second.video_buffer_end : -999;
-            }
-            char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
-            int64_t ph = m_playhead_frame.load(std::memory_order_relaxed);
-            EMP_LOG_DEBUG("fill_prefetch ENTER: %s buf_end=%lld playhead=%lld gen=%lld",
-                tbuf, (long long)diag_be, (long long)ph, (long long)entry_gen);
+            std::lock_guard<std::mutex> lock(m_tracks_mutex);
+            auto it = m_tracks.find(track);
+            if (it == m_tracks.end()) return;
+            buffer_end = it->second.video_buffer_end;
         }
+        int64_t playhead = m_playhead_frame.load(std::memory_order_relaxed);
+        PrefetchCursor cursor(buffer_end >= 0 ? buffer_end : playhead, direction);
+        {
+            char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
+            EMP_LOG_DEBUG("fill_prefetch ENTER: %s buf_end=%lld playhead=%lld dir=%d gen=%lld",
+                tbuf, (long long)buffer_end, (long long)playhead, direction, (long long)entry_gen);
+        }
+
         while (true) {
             if (m_shutdown.load() || m_playhead_direction.load(std::memory_order_relaxed) == 0)
                 return;
 
-            // Check generation
-            int64_t current_gen;
-            int64_t buffer_end;
+            // Check generation (clips changed → abandon)
             {
                 std::lock_guard<std::mutex> lock(m_tracks_mutex);
                 auto it = m_tracks.find(track);
                 if (it == m_tracks.end()) return;
-                current_gen = it->second.prefetch_generation;
-                buffer_end = it->second.video_buffer_end;
+                if (it->second.prefetch_generation != entry_gen) return;
             }
-            if (current_gen != entry_gen) return;
 
-            int64_t playhead = m_playhead_frame.load(std::memory_order_relaxed);
-            if (buffer_end < 0) buffer_end = playhead;
-            if (buffer_end >= playhead + VIDEO_PREFETCH_MAX) return;  // full
+            // Re-read playhead for window check (cursor persists across iterations)
+            playhead = m_playhead_frame.load(std::memory_order_relaxed);
+            if (cursor.ahead_of(playhead) >= VIDEO_PREFETCH_MAX) return;  // full
 
-            // Find segment at buffer_end
+            // Find segment at cursor position
             // Deep-copy ClipInfo under lock — seg.clip points into ts.clips vector
             // which can be reallocated by concurrent SetTrackClips after lock release.
             Segment seg;
@@ -2367,44 +2501,46 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
                 std::lock_guard<std::mutex> lock(m_tracks_mutex);
                 auto it = m_tracks.find(track);
                 if (it == m_tracks.end()) return;
-                seg = find_segment_at(it->second, buffer_end);
+                seg = find_segment_at(it->second, cursor.pos);
                 if (seg.type == Segment::CLIP) {
                     assert(seg.clip && "fill_prefetch: CLIP segment has null clip pointer");
                     clip_copy = *seg.clip;
                     seg.clip = &clip_copy;
-                    obscured = !frame_needed_for_composite(track, buffer_end);
+                    obscured = !frame_needed_for_composite(track, cursor.pos);
                 }
             }
 
             if (seg.type == Segment::GAP) {
-                // Advance past gap
-                if (seg.end < std::numeric_limits<int64_t>::max()) {
-                    set_already_fetched_video(track, seg.end);
-                } else {
-                    set_already_fetched_video(track, playhead + VIDEO_PREFETCH_MAX);
-                    return;
-                }
+                // Advance cursor past gap — no content to cache, so
+                // buf_end stays put. pick_video_track sees accurate
+                // urgency (distance to actual cached content, not gap end).
+                bool unbounded = (direction > 0)
+                    ? (seg.end >= std::numeric_limits<int64_t>::max())
+                    : (seg.start <= std::numeric_limits<int64_t>::min());
+                if (unbounded) return;  // past all content
+                cursor.skip_gap(seg.start, seg.end);
                 held_reader = {};
                 held_clip_id.clear();
-                continue;  // skip gaps without yielding (O(1), no decode)
+                continue;  // window check bounds the cursor naturally
             }
 
             if (obscured) {
-                set_already_fetched_video(track, buffer_end + 1);
-                continue;  // skip obscured without yielding (O(1), no decode)
+                cursor.advance(1);
+                continue;  // no content cached, buf_end stays put
             }
 
             // Decode one frame, then return to let worker re-pick most urgent track
             int stride = stride_for_clip(track, *seg.clip);
             {
                 char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
-                EMP_LOG_DEBUG("PREFETCH: %s tf=%lld stride=%d playhead=%lld clip=%.8s",
-                    tbuf, (long long)buffer_end, stride, (long long)playhead,
-                    seg.clip->clip_id.c_str());
+                EMP_LOG_DEBUG("PREFETCH: %s tf=%lld stride=%d playhead=%lld dir=%d clip=%.8s",
+                    tbuf, (long long)cursor.pos, stride, (long long)playhead,
+                    direction, seg.clip->clip_id.c_str());
             }
-            decode_into_cache(track, seg, buffer_end, stride,
+            decode_into_cache(track, seg, cursor.pos, stride, direction,
                               held_reader, held_clip_id, last_good_frame);
-            set_already_fetched_video(track, buffer_end + stride);
+            cursor.advance(stride);
+            set_already_fetched_video(track, cursor.pos, direction);
             return;  // yield — worker re-picks
         }
     } else {
@@ -2429,10 +2565,10 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
 
             int64_t playhead = m_playhead_frame.load(std::memory_order_relaxed);
             TimeUS playhead_us = FrameTime::from_frame(playhead, m_seq_rate).to_us();
-            if (buffer_end < 0) buffer_end = playhead_us;
-            if (buffer_end >= playhead_us + AUDIO_PREFETCH_MAX) break;  // full
+            PrefetchCursor cursor(buffer_end >= 0 ? buffer_end : playhead_us, direction);
+            if (cursor.ahead_of(playhead_us) >= AUDIO_PREFETCH_MAX) break;  // full
 
-            // Find segment at buffer_end
+            // Find segment at cursor position
             // Deep-copy ClipInfo under lock — seg.clip points into ts.clips vector
             // which can be reallocated by concurrent SetTrackClips after lock release.
             SegmentUS seg;
@@ -2441,7 +2577,7 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
                 std::lock_guard<std::mutex> lock(m_tracks_mutex);
                 auto it = m_tracks.find(track);
                 if (it == m_tracks.end()) break;
-                seg = find_segment_at_us(it->second, buffer_end);
+                seg = find_segment_at_us(it->second, cursor.pos);
                 if (seg.type == SegmentUS::CLIP) {
                     assert(seg.clip && "fill_prefetch: audio CLIP segment has null clip pointer");
                     clip_copy = *seg.clip;
@@ -2450,24 +2586,40 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
             }
 
             if (seg.type == SegmentUS::GAP) {
-                if (seg.end_us < std::numeric_limits<TimeUS>::max()) {
-                    set_already_fetched_audio(track, seg.end_us);
+                bool unbounded = (direction > 0)
+                    ? (seg.end_us >= std::numeric_limits<TimeUS>::max())
+                    : (seg.start_us <= std::numeric_limits<TimeUS>::min());
+                if (!unbounded) {
+                    cursor.skip_gap(seg.start_us, seg.end_us);
+                    set_already_fetched_audio(track, cursor.pos, direction);
                 } else {
-                    set_already_fetched_audio(track, playhead_us + AUDIO_PREFETCH_MAX);
+                    set_already_fetched_audio(track,
+                        playhead_us + AUDIO_PREFETCH_MAX * direction, direction);
                     break;
                 }
                 continue;
             }
 
-            // Compute chunk range clamped to clip boundary
-            TimeUS chunk_end = std::min(seg.end_us, buffer_end + AUDIO_REFILL_SIZE);
-            if (chunk_end <= buffer_end) {
-                set_already_fetched_audio(track, seg.end_us);
+            // Compute chunk range clamped to clip boundary.
+            // decode_audio_into_cache always expects position < chunk_end.
+            TimeUS chunk_start, chunk_end;
+            if (direction > 0) {
+                chunk_start = cursor.pos;
+                chunk_end = std::min(seg.end_us, cursor.pos + AUDIO_REFILL_SIZE);
+            } else {
+                chunk_end = cursor.pos;
+                chunk_start = std::max(seg.start_us, cursor.pos - AUDIO_REFILL_SIZE);
+            }
+            if (chunk_end <= chunk_start) {
+                // Clip boundary reached — skip past it
+                cursor.skip_gap(seg.start_us, seg.end_us);
+                set_already_fetched_audio(track, cursor.pos, direction);
                 continue;
             }
 
-            decode_audio_into_cache(track, seg, buffer_end, chunk_end);
-            set_already_fetched_audio(track, chunk_end);
+            decode_audio_into_cache(track, seg, chunk_start, chunk_end);
+            cursor.advance(AUDIO_REFILL_SIZE);
+            set_already_fetched_audio(track, cursor.pos, direction);
         }
     }
 }

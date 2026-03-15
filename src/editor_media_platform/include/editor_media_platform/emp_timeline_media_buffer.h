@@ -185,6 +185,9 @@ public:
     void ReleaseTrack(TrackId track);
     void ReleaseAll();
 
+    // Test accessor: return video_buffer_end for a track (-1 if unset/missing)
+    int64_t GetVideoBufferEnd(TrackId track) const;
+
 private:
     TimelineMediaBuffer();
 
@@ -269,12 +272,18 @@ private:
         // Prefetch workers check generation each iteration — mismatch = abandon.
         int64_t prefetch_generation = 0;
 
-        // Per-clip EOF: first undecodeble source frame. When DecodeAt fails
-        // (EOF, codec error), record clip_id → source_frame. GetVideoFrame
-        // checks this before submitting on-demand jobs — avoids repeated
-        // decode attempts for frames beyond the file's actual frame count.
-        // Cleared on SetTrackClips (clip list may change).
-        std::unordered_map<std::string, int64_t> clip_eof_frame;
+        // Per-clip EOF: first undecodable source frame + last good hold frame.
+        // When DecodeAt fails with EOF, record clip_id → EofInfo. Subsequent
+        // prefetch iterations skip the decoder and fill hold frames directly,
+        // bounded by the prefetch window (not clip boundary).
+        // Cleared on SetTrackClips (clip list may change) and ParkReaders.
+        struct ClipEofInfo {
+            int64_t source_frame;              // first undecodable source frame
+            std::shared_ptr<Frame> hold_frame; // last successfully decoded frame
+            int rotation = 0;
+            int32_t par_num = 1, par_den = 1;
+        };
+        std::unordered_map<std::string, ClipEofInfo> clip_eof_frame;
     };
 
     mutable std::mutex m_tracks_mutex;
@@ -355,16 +364,16 @@ private:
     // Leaf helpers for fill_prefetch
     int stride_for_clip(const TrackId& track, const ClipInfo& clip) const;
     void decode_into_cache(const TrackId& track, const Segment& seg,
-                           int64_t position, int stride,
+                           int64_t position, int stride, int direction,
                            ReaderHandle& held_reader, std::string& held_clip_id,
                            std::shared_ptr<Frame>& last_good_frame);
     void decode_audio_into_cache(const TrackId& track, const SegmentUS& seg,
                                  TimeUS position, TimeUS chunk_end);
     bool frame_needed_for_composite(const TrackId& track, int64_t timeline_frame) const;
 
-    // Monotonic watermark setters (never regress — max(current, pos))
-    void set_already_fetched_video(const TrackId& track, int64_t pos);
-    void set_already_fetched_audio(const TrackId& track, TimeUS pos);
+    // Direction-aware watermark setters (never regress in direction of travel)
+    void set_already_fetched_video(const TrackId& track, int64_t pos, int direction);
+    void set_already_fetched_audio(const TrackId& track, TimeUS pos, int direction);
 
     // Wake signal for prefetch workers
     void wake_prefetch_workers();
