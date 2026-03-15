@@ -69,9 +69,13 @@ local sort_state = {
 }
 
 local function selection_context()
-    if M._project_gen then
-        project_gen.check(M._project_gen, "project_browser.selection_context")
+    -- nil _project_gen = browser is between projects (on_project_change cleared
+    -- state but populate_tree hasn't run yet). Selection events during this
+    -- window are Qt noise from tree clearing — return nil to signal "no valid context."
+    if not M._project_gen then
+        return nil
     end
+    project_gen.check(M._project_gen, "project_browser.selection_context")
     return {
         master_lookup = M.master_clip_map,
         media_lookup = M.media_map,
@@ -84,6 +88,7 @@ end
 -- Route browser selection through SelectBrowserItems command
 local function select_browser_items(items, context, modifiers)
     context = context or selection_context()
+    if not context then return end  -- browser between projects, ignore
 
     command_manager.execute("SelectBrowserItems", {
         project_id = M.project_id or context.project_id or "unknown",
@@ -2414,6 +2419,8 @@ function M.on_project_change(project_id)
     M.pending_rename = nil
     -- Reset sort state so next populate_tree loads from new project settings
     sort_state.loaded = false
+    -- Invalidate generation — no valid browser data until populate_tree runs
+    M._project_gen = nil
     -- Set new project (refresh happens separately via open_project)
     M.project_id = project_id
 end
