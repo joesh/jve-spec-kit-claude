@@ -222,4 +222,69 @@ assert(v_reg[1].clips[1].source_in == 0, "clip_a source_in should be 0")
 assert(v_reg[1].clips[2].source_in == 0, "clip_b source_in should be 0")
 print("  ✓ Different MediaStartTime → both source_in=0 (MediaStartTime not used)")
 
+---------------------------------------------------------------------------------
+-- Test 6: MediaStartTime flows to clip struct + media_lookup
+---------------------------------------------------------------------------------
+
+print("\n--- Test 6: MediaStartTime stored on clip and media_lookup ---")
+
+local seq_mst = elem("Sequence", "", {
+    elem("Sm2TiTrack", "", {
+        elem("Type", "0"),
+        wrap_clips(
+            elem("Sm2TiVideoClip", "", {
+                elem("Name", "clip_with_mst"),
+                elem("Start", "86400"),
+                elem("Duration", "200"),
+                elem("MediaStartTime", "45274.12"),  -- 12:34:34 + fractional
+                elem("In", ""),
+                elem("MediaFilePath", "/test/mst_test.mov"),
+            })
+        ),
+    })
+})
+
+local v_mst, _, media_map = drp_importer.parse_resolve_tracks(seq_mst, 25)
+local clip_mst = v_mst[1].clips[1]
+
+-- Clip struct should have media_start_time
+assert(clip_mst.media_start_time, "clip should have media_start_time")
+assert(math.abs(clip_mst.media_start_time - 45274.12) < 0.01,
+    string.format("clip media_start_time should be 45274.12, got %s",
+    tostring(clip_mst.media_start_time)))
+print("  ✓ Clip struct has media_start_time=45274.12")
+
+-- media_lookup entry should have media_start_time
+local media_entry = media_map["/test/mst_test.mov"]
+assert(media_entry, "media_lookup should have entry for /test/mst_test.mov")
+assert(media_entry.media_start_time, "media_lookup entry should have media_start_time")
+assert(math.abs(media_entry.media_start_time - 45274.12) < 0.01,
+    string.format("media_lookup media_start_time should be 45274.12, got %s",
+    tostring(media_entry.media_start_time)))
+print("  ✓ media_lookup entry has media_start_time=45274.12")
+
+-- Zero MediaStartTime should also be stored (not nil)
+local seq_zero_mst = elem("Sequence", "", {
+    elem("Sm2TiTrack", "", {
+        elem("Type", "0"),
+        wrap_clips(
+            elem("Sm2TiVideoClip", "", {
+                elem("Name", "clip_zero_mst"),
+                elem("Start", "0"),
+                elem("Duration", "100"),
+                elem("MediaStartTime", "0"),
+                elem("In", ""),
+                elem("MediaFilePath", "/test/zero_mst.mov"),
+            })
+        ),
+    })
+})
+
+local v_zmst, _, media_map_z = drp_importer.parse_resolve_tracks(seq_zero_mst, 25)
+assert(v_zmst[1].clips[1].media_start_time == 0,
+    "zero MediaStartTime should be stored as 0, not nil")
+assert(media_map_z["/test/zero_mst.mov"].media_start_time == 0,
+    "zero MediaStartTime in media_lookup should be 0")
+print("  ✓ Zero MediaStartTime stored as 0 (not nil)")
+
 print("\n✅ test_drp_video_source_units.lua passed")

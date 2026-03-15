@@ -1417,6 +1417,12 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             start_frames = math.floor(start_frames)
             duration_raw = math.floor(duration_raw)
 
+            -- Extract <MediaStartTime> — file's TC origin in seconds since midnight.
+            -- This is a per-file property (not per-clip). All clips from the same file
+            -- share the same MediaStartTime. Stored on media + master clip for relink TC verify.
+            local mst_elem = find_element(clip_elem, "MediaStartTime")
+            local media_start_time = mst_elem and tonumber(get_text(mst_elem))
+
             -- DRP field meanings (confirmed from real DRP XML analysis):
             --   <MediaStartTime> = file's TC origin in SECONDS since midnight (not per-clip)
             --   <In>             = source mark-in offset in TIMELINE FRAMES
@@ -1537,7 +1543,8 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 file_path = file_path,
                 media_key = file_path,
                 file_id = get_text(find_element(clip_elem, "MediaRef")),
-                frame_rate = frame_rate
+                frame_rate = frame_rate,
+                media_start_time = media_start_time  -- seconds since midnight (file TC origin)
             }
 
             -- Skip degenerate zero-duration clips (Resolve artifacts: speed changes, disabled items)
@@ -1562,7 +1569,8 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                             width = 1920,
                             height = 1080,
                             audio_channels = track_type == "AUDIO" and 2 or 0,
-                            key = file_path
+                            key = file_path,
+                            media_start_time = media_start_time
                         }
                     else
                         if source_extent_frames > entry.duration then
@@ -1903,7 +1911,8 @@ function M.parse_drp_file(drp_path, progress_cb)
                         name = info.name or path,
                         file_path = path,
                         duration = info.duration or 0,
-                        resolve_id = info.id
+                        resolve_id = info.id,
+                        media_start_time = info.media_start_time
                     }
                     table.insert(media_items, entry)
                     media_lookup[path] = entry
@@ -2292,6 +2301,15 @@ function M.import_into_project(project_id, parse_result, opts)
         if dur <= 0 then
             log.warn("Skipping zero-duration media: %s", media_item.name)
         else
+            -- Build metadata JSON with start_timecode if available
+            local media_metadata = '{}'
+            if media_item.media_start_time then
+                local json = require("dkjson")
+                media_metadata = json.encode({
+                    start_timecode_seconds = media_item.media_start_time
+                })
+            end
+
             local media = Media.create({
                 project_id = project_id,
                 name = media_item.name,
@@ -2301,6 +2319,7 @@ function M.import_into_project(project_id, parse_result, opts)
                     string.format("drp_importer: no frame_rate for media '%s'", media_item.name)),
                 width = project_settings.width,
                 height = project_settings.height,
+                metadata = media_metadata,
             })
 
             assert(media:save(), string.format(
