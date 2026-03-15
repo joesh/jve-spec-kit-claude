@@ -35,7 +35,7 @@ local command_modules = {
     "import_fcp7_xml", "import_media", "import_resolve_project", "insert",
     "link_clips", "load_project", "match_frame",
     "modify_property", "move_clip_to_track", "move_to_bin", "new_bin", "nudge", "overwrite",
-    "relink_clips", "relink_media", "rename_item", "ripple_delete", "ripple_delete_selection",
+    "relink_clips", "rename_item", "ripple_delete", "ripple_delete_selection",
     "show_relink_dialog",
     "ripple_edit", "select_all", "select_browser_items", "select_clips", "set_clip_property", "set_project_setting", "set_property",
     "set_sequence_metadata", "set_track_heights", "set_track_property", "setup_project", "split_clip", "step_frame", "toggle_clip_enabled",

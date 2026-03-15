@@ -19,7 +19,7 @@
 -- Supports three strategies: path-based, filename-based, metadata-based
 --
 -- Architecture: Command-based relinking for full undo/redo support
--- All relinking operations create RelinkMedia commands that can be undone
+-- All relinking operations create RelinkClips commands that can be undone
 local M = {}
 local log = require("core.logger").for_area("media")
 
