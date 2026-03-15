@@ -396,6 +396,30 @@ set_target_properties(test_sse_decimate PROPERTIES
 )
 add_test(NAME test_sse_decimate COMMAND test_sse_decimate)
 
+# PlaybackClock (A/V sync clock) test
+add_executable(test_playback_clock
+    tests/unit/test_playback_clock.cpp
+)
+target_link_libraries(test_playback_clock
+    JVECore
+    Qt6::Test
+    Qt6::Core
+    ${LUAJIT_LIBRARIES}
+)
+target_include_directories(test_playback_clock PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+    ${LUAJIT_INCLUDE_DIRS}
+)
+target_link_directories(test_playback_clock PRIVATE
+    ${LUAJIT_LIBRARY_DIRS}
+)
+set_target_properties(test_playback_clock PROPERTIES
+    AUTOMOC ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+add_test(NAME test_playback_clock COMMAND test_playback_clock)
+
 # TMB (TimelineMediaBuffer) test
 add_executable(test_tmb
     tests/unit/test_timeline_media_buffer.cpp

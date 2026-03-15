@@ -227,6 +227,10 @@ void PlaybackClock::SetSinkBufferLatency(int64_t sink_us) {
 }
 
 int64_t PlaybackClock::FrameFromTimeUS(int64_t time_us, int32_t fps_num, int32_t fps_den) {
+    // NSF: fps_num and fps_den must be positive (division by zero, nonsense frame rates)
+    JVE_ASSERT(fps_num > 0, "FrameFromTimeUS: fps_num must be positive");
+    JVE_ASSERT(fps_den > 0, "FrameFromTimeUS: fps_den must be positive");
+
     // frame = time_us * fps_num / (1000000 * fps_den)
     // Use integer math to avoid floating point precision issues
     return (time_us * fps_num) / (1000000LL * fps_den);
@@ -1343,6 +1347,10 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
         "advancePosition: elapsed_seconds is negative (clock error)");
     if (elapsed_seconds > 1.0) {
         // First tick after a long pause or stale host_time — discard.
+        // NSF: log before discarding so we know it happened.
+        JVE_LOG_WARN(Ticks,
+            "advancePosition: elapsed %.3fs > 1.0s (stale tick?), discarding",
+            elapsed_seconds);
         elapsed_seconds = 0.0;
     }
 
@@ -1433,7 +1441,16 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
 
     // Step 2: Frame-based advancement with PLL-adjusted rate.
     m_fractional_frames += elapsed_seconds * m_fps * speed - pll_adjust;
-    m_fractional_frames = std::max(0.0, m_fractional_frames);
+    // NSF Half 2: clamp-before-warn — negative accumulator means PLL overcorrected
+    // or speed/elapsed produced a bogus delta. Log before clamping so the signal
+    // isn't silently eaten.
+    if (m_fractional_frames < 0.0) {
+        JVE_LOG_WARN(Ticks,
+            "advancePosition: fractional_frames went negative (%.4f) — "
+            "PLL overcorrection? (elapsed=%.4fs speed=%.2f pll=%.4f)",
+            m_fractional_frames, elapsed_seconds, speed, pll_adjust);
+        m_fractional_frames = 0.0;
+    }
     auto whole_frames = static_cast<int64_t>(m_fractional_frames);
     m_fractional_frames -= whole_frames;
     int64_t new_pos = current + dir * whole_frames;
