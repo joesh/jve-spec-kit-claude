@@ -1056,23 +1056,21 @@ function M.find_candidates_for_clip(clip_info, candidate_index, matching_rules, 
             -- If stored TC is nil → can't verify, accept on other criteria
         end
 
-        -- Resolution matching
-        if passed and matching_rules.match_resolution then
+        -- Resolution + frame rate matching (single probe call)
+        if passed and (matching_rules.match_resolution or matching_rules.match_frame_rate) then
             local media_info = probe_media_fn(cand_path)
             if media_info then
-                if media_info.width ~= clip_info.width or media_info.height ~= clip_info.height then
-                    passed = false
+                if matching_rules.match_resolution then
+                    if media_info.width ~= clip_info.width or media_info.height ~= clip_info.height then
+                        passed = false
+                    end
                 end
-            end
-            -- If no media_info available, can't verify → skip this check
-        end
-
-        -- Frame rate matching
-        if passed and matching_rules.match_frame_rate then
-            local media_info = probe_media_fn(cand_path)
-            if media_info and media_info.fps_num and media_info.fps_den then
-                if media_info.fps_num ~= clip_info.fps_num or media_info.fps_den ~= clip_info.fps_den then
-                    passed = false
+                if passed and matching_rules.match_frame_rate then
+                    if media_info.fps_num and media_info.fps_den then
+                        if media_info.fps_num ~= clip_info.fps_num or media_info.fps_den ~= clip_info.fps_den then
+                            passed = false
+                        end
+                    end
                 end
             end
         end
@@ -1138,6 +1136,61 @@ function M.relink_clips_batch(clips, options, progress_cb)
         segment_index = M.build_segment_index(candidate_index)
     end
 
+    -- Probe caches: each file probed at most once across all clips
+    local tc_cache = {}    -- path → {value, rate} or {nil, nil}
+    local media_cache = {} -- path → info table or false
+
+    local function cached_probe_tc(path)
+        local cached = tc_cache[path]
+        if cached ~= nil then
+            return cached[1], cached[2]
+        end
+        local val, rate = probe_start_tc(path)
+        tc_cache[path] = {val, rate}
+        return val, rate
+    end
+
+    local function cached_probe_media(path)
+        local cached = media_cache[path]
+        if cached ~= nil then
+            return cached ~= false and cached or nil
+        end
+        local escaped = string.format('"%s"', path:gsub('"', '\\"'))
+        local cmd = string.format(
+            'ffprobe -v error -print_format json -show_streams %s 2>/dev/null', escaped)
+        local handle = io.popen(cmd)
+        if not handle then media_cache[path] = false; return nil end
+        local output = handle:read("*a")
+        handle:close()
+        if not output or output == "" then media_cache[path] = false; return nil end
+        local json_mod = require("dkjson")
+        local data = json_mod.decode(output)
+        if not data or not data.streams then media_cache[path] = false; return nil end
+        local info = {}
+        for _, stream in ipairs(data.streams) do
+            if stream.codec_type == "video" then
+                info.width = tonumber(stream.width)
+                info.height = tonumber(stream.height)
+                if stream.r_frame_rate then
+                    local num, den = stream.r_frame_rate:match("(%d+)/(%d+)")
+                    if num and den then
+                        info.fps_num = tonumber(num)
+                        info.fps_den = tonumber(den)
+                    end
+                end
+                if stream.nb_frames then
+                    info.duration_frames = tonumber(stream.nb_frames)
+                elseif stream.duration and info.fps_num and info.fps_den then
+                    info.duration_frames = math.floor(
+                        tonumber(stream.duration) * info.fps_num / info.fps_den + 0.5)
+                end
+            end
+        end
+        local result = info.width and info or nil
+        media_cache[path] = result or false
+        return result
+    end
+
     -- Step 2: Process each clip
     for i, clip_info in ipairs(clips) do
         local clip_name = clip_info.clip_name or clip_info.clip_id:sub(1, 8)
@@ -1145,41 +1198,8 @@ function M.relink_clips_batch(clips, options, progress_cb)
         -- Find candidates using the pure algorithm function
         local candidates = M.find_candidates_for_clip(
             clip_info, candidate_index, matching_rules,
-            probe_start_tc,  -- real ffprobe function
-            function(path)   -- probe_media_fn wrapping ffprobe
-                local escaped = string.format('"%s"', path:gsub('"', '\\"'))
-                local cmd = string.format(
-                    'ffprobe -v error -print_format json -show_streams %s 2>/dev/null', escaped)
-                local handle = io.popen(cmd)
-                if not handle then return nil end
-                local output = handle:read("*a")
-                handle:close()
-                if not output or output == "" then return nil end
-                local json = require("dkjson")
-                local data = json.decode(output)
-                if not data or not data.streams then return nil end
-                local info = {}
-                for _, stream in ipairs(data.streams) do
-                    if stream.codec_type == "video" then
-                        info.width = tonumber(stream.width)
-                        info.height = tonumber(stream.height)
-                        if stream.r_frame_rate then
-                            local num, den = stream.r_frame_rate:match("(%d+)/(%d+)")
-                            if num and den then
-                                info.fps_num = tonumber(num)
-                                info.fps_den = tonumber(den)
-                            end
-                        end
-                        if stream.nb_frames then
-                            info.duration_frames = tonumber(stream.nb_frames)
-                        elseif stream.duration and info.fps_num and info.fps_den then
-                            info.duration_frames = math.floor(
-                                tonumber(stream.duration) * info.fps_num / info.fps_den + 0.5)
-                        end
-                    end
-                end
-                return info.width and info or nil
-            end
+            cached_probe_tc,
+            cached_probe_media
         )
 
         -- Also check segment files if enabled
