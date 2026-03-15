@@ -38,6 +38,9 @@ PlaybackEngine.__index = PlaybackEngine
 -- Class-level audio playback reference (singleton audio device)
 local audio_playback = nil
 
+-- Weak set of all live engine instances (for project_changed cleanup)
+local active_engines = setmetatable({}, {__mode = "k"})
+
 --- Set class-level audio module reference.
 -- @param ap audio_playback module
 function PlaybackEngine.init_audio(ap)
@@ -120,6 +123,7 @@ function PlaybackEngine.new(config)
     self._playback_controller = nil
     self._video_surface = nil
 
+    active_engines[self] = true
     return self
 end
 
@@ -1312,6 +1316,24 @@ end
 -- Project change: tear down audio session (prevents stale sources from
 -- previous project being used after media_cache clears its pool).
 --------------------------------------------------------------------------------
-Signals.connect("project_changed", PlaybackEngine.shutdown_audio_session, 5)
+--- Project change: stop playback + tear down PlaybackController + audio session.
+-- Must run before media_cache cleanup (priority 20) since the PlaybackController
+-- holds references to TMB which may reference media readers.
+-- Uses priority 5 to be the first handler after project_generation (priority 1).
+Signals.connect("project_changed", function()
+    -- Stop and close all engine instances' playback controllers
+    for engine in pairs(active_engines) do
+        if engine._playback_controller then
+            pcall(qt_constants.PLAYBACK.STOP, engine._playback_controller)
+            pcall(qt_constants.PLAYBACK.CLOSE, engine._playback_controller)
+            engine._playback_controller = nil
+        end
+        engine.state = "stopped"
+        engine.direction = 0
+        engine.speed = 1
+        engine._last_committed_frame = nil
+    end
+    PlaybackEngine.shutdown_audio_session()
+end, 5)
 
 return PlaybackEngine
