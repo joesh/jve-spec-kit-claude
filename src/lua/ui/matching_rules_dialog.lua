@@ -33,22 +33,22 @@ function M.show(current_rules, parent_window)
 
     local cb_filename = qt.WIDGET.CREATE_CHECKBOX()
     qt.PROPERTIES.SET_TEXT(cb_filename, "Filename")
-    qt.CONTROL.SET_CHECKED(cb_filename, current_rules.match_filename ~= false)
+    qt.PROPERTIES.SET_CHECKED(cb_filename, current_rules.match_filename ~= false)
     qt.LAYOUT.ADD_WIDGET(main_layout, cb_filename)
 
     local cb_timecode = qt.WIDGET.CREATE_CHECKBOX()
     qt.PROPERTIES.SET_TEXT(cb_timecode, "Timecode")
-    qt.CONTROL.SET_CHECKED(cb_timecode, current_rules.match_timecode ~= false)
+    qt.PROPERTIES.SET_CHECKED(cb_timecode, current_rules.match_timecode ~= false)
     qt.LAYOUT.ADD_WIDGET(main_layout, cb_timecode)
 
     local cb_resolution = qt.WIDGET.CREATE_CHECKBOX()
     qt.PROPERTIES.SET_TEXT(cb_resolution, "Resolution")
-    qt.CONTROL.SET_CHECKED(cb_resolution, current_rules.match_resolution == true)
+    qt.PROPERTIES.SET_CHECKED(cb_resolution, current_rules.match_resolution == true)
     qt.LAYOUT.ADD_WIDGET(main_layout, cb_resolution)
 
     local cb_framerate = qt.WIDGET.CREATE_CHECKBOX()
     qt.PROPERTIES.SET_TEXT(cb_framerate, "Frame Rate")
-    qt.CONTROL.SET_CHECKED(cb_framerate, current_rules.match_frame_rate == true)
+    qt.PROPERTIES.SET_CHECKED(cb_framerate, current_rules.match_frame_rate == true)
     qt.LAYOUT.ADD_WIDGET(main_layout, cb_framerate)
 
     qt.LAYOUT.ADD_SPACING(main_layout, 12)
@@ -63,12 +63,12 @@ function M.show(current_rules, parent_window)
 
     local cb_trimmed = qt.WIDGET.CREATE_CHECKBOX()
     qt.PROPERTIES.SET_TEXT(cb_trimmed, "Accept Trimmed Media")
-    qt.CONTROL.SET_CHECKED(cb_trimmed, current_rules.accept_trimmed_media == true)
+    qt.PROPERTIES.SET_CHECKED(cb_trimmed, current_rules.accept_trimmed_media == true)
     qt.LAYOUT.ADD_WIDGET(main_layout, cb_trimmed)
 
     local cb_suffixes = qt.WIDGET.CREATE_CHECKBOX()
     qt.PROPERTIES.SET_TEXT(cb_suffixes, "Accept Filename Suffixes")
-    qt.CONTROL.SET_CHECKED(cb_suffixes, current_rules.accept_filename_suffixes == true)
+    qt.PROPERTIES.SET_CHECKED(cb_suffixes, current_rules.accept_filename_suffixes == true)
     qt.LAYOUT.ADD_WIDGET(main_layout, cb_suffixes)
 
     qt.LAYOUT.ADD_SPACING(main_layout, 8)
@@ -101,8 +101,8 @@ function M.show(current_rules, parent_window)
 
     local ok_name = "__matching_rules_ok"
     _G[ok_name] = function()
-        local fn_checked = qt.CONTROL.GET_CHECKED(cb_filename)
-        local tc_checked = qt.CONTROL.GET_CHECKED(cb_timecode)
+        local fn_checked = qt.PROPERTIES.GET_CHECKED(cb_filename)
+        local tc_checked = qt.PROPERTIES.GET_CHECKED(cb_timecode)
 
         -- Validate: at least one of Filename or Timecode
         if not fn_checked and not tc_checked then
@@ -115,10 +115,10 @@ function M.show(current_rules, parent_window)
         result_rules = {
             match_filename = fn_checked,
             match_timecode = tc_checked,
-            match_resolution = qt.CONTROL.GET_CHECKED(cb_resolution),
-            match_frame_rate = qt.CONTROL.GET_CHECKED(cb_framerate),
-            accept_trimmed_media = qt.CONTROL.GET_CHECKED(cb_trimmed),
-            accept_filename_suffixes = qt.CONTROL.GET_CHECKED(cb_suffixes),
+            match_resolution = qt.PROPERTIES.GET_CHECKED(cb_resolution),
+            match_frame_rate = qt.PROPERTIES.GET_CHECKED(cb_framerate),
+            accept_trimmed_media = qt.PROPERTIES.GET_CHECKED(cb_trimmed),
+            accept_filename_suffixes = qt.PROPERTIES.GET_CHECKED(cb_suffixes),
         }
         qt.DIALOG.CLOSE(dialog, true)
     end
