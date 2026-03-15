@@ -240,56 +240,85 @@ local function tc_to_frames(tc, fps)
     return tonumber(h) * 3600 * fps + tonumber(m) * 60 * fps + tonumber(s) * fps + tonumber(f)
 end
 
---- Extract start TC from a candidate file via ffprobe.
+--- Probe a candidate file's start TC via ffprobe.
+-- Returns (start_frames, rate) — same representation as stored start_tc.
+-- For video: reads timecode tag, converts to frames at video fps.
+-- For audio (BWF): reads time_reference (samples), returns at sample_rate.
 -- @param file_path string
--- @return string|nil TC string "HH:MM:SS:FF"
--- @return number|nil fps (integer)
+-- @return number|nil start_frames
+-- @return number|nil rate
 local function probe_start_tc(file_path)
     local escaped = string.format('"%s"', file_path:gsub('"', '\\"'))
     local cmd = string.format(
         'ffprobe -v error -print_format json -show_format -show_streams %s 2>/dev/null',
         escaped)
     local handle = io.popen(cmd)
-    if not handle then return nil end
+    if not handle then return nil, nil end
     local output = handle:read("*a")
     handle:close()
-    if not output or output == "" then return nil end
+    if not output or output == "" then return nil, nil end
 
     local json = require("dkjson")
     local data = json.decode(output)
-    if not data then return nil end
+    if not data then return nil, nil end
 
-    -- Find TC in format tags or stream tags
-    local tc = nil
+    -- Strategy 1: Video TC tag — "HH:MM:SS:FF" in format or stream tags
+    local tc_str = nil
     if data.format and data.format.tags then
-        tc = data.format.tags.timecode or data.format.tags.TIMECODE
+        tc_str = data.format.tags.timecode or data.format.tags.TIMECODE
     end
-    if not tc and data.streams then
+    if not tc_str and data.streams then
         for _, stream in ipairs(data.streams) do
             if stream.tags then
-                tc = stream.tags.timecode or stream.tags.TIMECODE
-                if tc then break end
+                tc_str = stream.tags.timecode or stream.tags.TIMECODE
+                if tc_str then break end
             end
         end
     end
 
-    -- Get fps from video stream
-    local fps = nil
-    if data.streams then
-        for _, stream in ipairs(data.streams) do
-            if stream.codec_type == "video" then
-                if stream.r_frame_rate then
-                    local num, den = stream.r_frame_rate:match("(%d+)/(%d+)")
-                    if num and den then
-                        fps = math.floor(tonumber(num) / tonumber(den) + 0.5)
+    if tc_str then
+        -- Get fps from video stream to convert TC string to frames
+        local fps = nil
+        if data.streams then
+            for _, stream in ipairs(data.streams) do
+                if stream.codec_type == "video" then
+                    if stream.r_frame_rate then
+                        local num, den = stream.r_frame_rate:match("(%d+)/(%d+)")
+                        if num and den then
+                            fps = math.floor(tonumber(num) / tonumber(den) + 0.5)
+                        end
+                    end
+                    break
+                end
+            end
+        end
+        if fps and fps > 0 then
+            local frames = tc_to_frames(tc_str, fps)
+            if frames then return frames, fps end
+        end
+    end
+
+    -- Strategy 2: BWF time_reference — sample offset since midnight (audio files)
+    if data.format and data.format.tags then
+        local time_ref = tonumber(data.format.tags.time_reference)
+        if time_ref then
+            -- Find audio sample rate
+            local sample_rate = nil
+            if data.streams then
+                for _, stream in ipairs(data.streams) do
+                    if stream.codec_type == "audio" then
+                        sample_rate = tonumber(stream.sample_rate)
+                        break
                     end
                 end
-                break
+            end
+            if sample_rate and sample_rate > 0 then
+                return time_ref, sample_rate
             end
         end
     end
 
-    return tc, fps
+    return nil, nil
 end
 
 --- Get the media record's stored start TC as (frames, rate).
@@ -323,31 +352,26 @@ local function verify_candidate_tc(media, candidate_path)
         return true  -- no stored TC (pre-fix import or native import)
     end
 
-    local cand_tc_str, cand_fps = probe_start_tc(candidate_path)
-    if not cand_tc_str or not cand_fps then
-        return true  -- no TC in candidate (audio, still) or no fps
+    local cand_frames, cand_rate = probe_start_tc(candidate_path)
+    if not cand_frames or not cand_rate then
+        return true  -- no TC in candidate (still image, no BWF)
     end
 
-    local cand_frames = tc_to_frames(cand_tc_str, cand_fps)
-    if not cand_frames then
-        return true  -- can't parse TC string
+    -- Rescale to common rate for comparison (convert stored to candidate's rate)
+    local stored_rescaled = stored_frames
+    if stored_rate ~= cand_rate then
+        stored_rescaled = math.floor(stored_frames * cand_rate / stored_rate + 0.5)
     end
 
-    -- Rescale to common rate for comparison
-    local stored_at_cand_rate = stored_frames
-    if stored_rate ~= cand_fps then
-        stored_at_cand_rate = math.floor(stored_frames * cand_fps / stored_rate + 0.5)
-    end
-
-    -- ±1 frame tolerance (rounding between float seconds and integer frames)
-    if math.abs(cand_frames - stored_at_cand_rate) <= 1 then
-        log.event("verify_tc: match %s TC=%s (%d frames @ %dfps)",
-            get_filename(candidate_path), cand_tc_str, cand_frames, cand_fps)
+    -- ±1 unit tolerance (1 frame for video, 1 sample for audio — effectively sub-frame)
+    if math.abs(cand_frames - stored_rescaled) <= 1 then
+        log.event("verify_tc: match %s (%d @ %d)",
+            get_filename(candidate_path), cand_frames, cand_rate)
         return true
     end
 
-    log.warn("verify_tc: REJECTED %s — TC=%s (%d frames) != stored %d frames (media-managed copy?)",
-        get_filename(candidate_path), cand_tc_str, cand_frames, stored_at_cand_rate)
+    log.warn("verify_tc: REJECTED %s — probed %d @ %d != stored %d @ %d (media-managed copy?)",
+        get_filename(candidate_path), cand_frames, cand_rate, stored_frames, stored_rate)
     return false
 end
 
