@@ -311,4 +311,33 @@ function M:save()
     return true
 end
 
+--- Delete this media record and all clips referencing it.
+-- @return boolean success
+function M:delete()
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Media:delete: no database connection")
+    assert(self.id and self.id ~= "", "Media:delete: id required")
+
+    -- Delete clips referencing this media first (FK constraint)
+    local del_clips = assert(db:prepare("DELETE FROM clips WHERE media_id = ?"),
+        "Media:delete: failed to prepare clip delete")
+    del_clips:bind_value(1, self.id)
+    del_clips:exec()
+    del_clips:finalize()
+
+    -- Delete the media record
+    local del_media = assert(db:prepare("DELETE FROM media WHERE id = ?"),
+        "Media:delete: failed to prepare media delete")
+    del_media:bind_value(1, self.id)
+    if not del_media:exec() then
+        local err = del_media:last_error()
+        del_media:finalize()
+        error(string.format("Media:delete: failed to delete media %s: %s", self.id, err))
+    end
+    del_media:finalize()
+
+    log.event("Media:delete: deleted media %s", self.id)
+    return true
+end
+
 return M
