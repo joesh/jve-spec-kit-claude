@@ -62,22 +62,26 @@ local function build_clip_infos(offline_media, qt, status_label)
     return clip_infos
 end
 
---- Extract unique source folder roots from media paths.
+--- Extract unique source volume/location roots from media paths.
+-- Groups at the volume level: /Volumes/Name, D:\, /Users/name, etc.
 local function extract_folder_roots(offline_media)
     local root_counts = {}
 
     for _, media in ipairs(offline_media) do
         local path = media:get_file_path()
         local root
-        if path:sub(1, 1) == "/" then
-            local parts = {}
-            for part in path:gmatch("[^/]+") do
-                parts[#parts + 1] = part
-                if #parts >= 3 then break end
-            end
-            root = "/" .. table.concat(parts, "/")
+        if path:match("^/Volumes/") then
+            -- /Volumes/DriveName
+            root = path:match("^(/Volumes/[^/]+)")
+        elseif path:match("^/Users/") then
+            -- /Users/username
+            root = path:match("^(/Users/[^/]+)")
         elseif path:match("^%a:\\") then
-            root = path:match("^(%a:\\[^\\]*)")
+            -- Windows: D:\
+            root = path:match("^(%a:\\)")
+        elseif path:sub(1, 1) == "/" then
+            -- Other unix: first two components
+            root = path:match("^(/[^/]+/[^/]+)")
         else
             root = path:match("^([^/\\]+)")
         end
