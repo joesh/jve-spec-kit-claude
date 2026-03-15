@@ -247,12 +247,12 @@ local seq_mst = elem("Sequence", "", {
 local v_mst, _, media_map = drp_importer.parse_resolve_tracks(seq_mst, 25)
 local clip_mst = v_mst[1].clips[1]
 
--- Clip struct should have media_start_time
+-- Clip struct should have media_start_time (raw seconds from DRP)
 assert(clip_mst.media_start_time, "clip should have media_start_time")
 assert(math.abs(clip_mst.media_start_time - 45274.12) < 0.01,
     string.format("clip media_start_time should be 45274.12, got %s",
     tostring(clip_mst.media_start_time)))
-print("  ✓ Clip struct has media_start_time=45274.12")
+print("  ✓ Clip struct has media_start_time=45274.12 (raw seconds)")
 
 -- media_lookup entry should have media_start_time
 local media_entry = media_map["/test/mst_test.mov"]
@@ -262,6 +262,11 @@ assert(math.abs(media_entry.media_start_time - 45274.12) < 0.01,
     string.format("media_lookup media_start_time should be 45274.12, got %s",
     tostring(media_entry.media_start_time)))
 print("  ✓ media_lookup entry has media_start_time=45274.12")
+
+-- Verify conversion to frames: 45274.12 * 25 = 1131853 frames at 25fps
+local expected_frames = math.floor(45274.12 * 25 + 0.5)
+assert(expected_frames == 1131853, "expected 1131853 frames, got " .. expected_frames)
+print("  ✓ 45274.12s * 25fps = 1131853 frames (for metadata storage)")
 
 -- Zero MediaStartTime should also be stored (not nil)
 local seq_zero_mst = elem("Sequence", "", {

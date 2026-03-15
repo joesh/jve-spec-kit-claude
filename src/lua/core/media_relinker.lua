@@ -229,15 +229,15 @@ local function relink_by_path(media, new_root)
     return nil
 end
 
---- Convert TC string "HH:MM:SS:FF" to seconds since midnight.
+--- Convert TC string "HH:MM:SS:FF" to total frames.
 -- @param tc string Timecode like "00:40:33:02"
 -- @param fps number Frames per second (integer)
--- @return number|nil Seconds since midnight
-local function tc_to_seconds(tc, fps)
+-- @return number|nil Total frames
+local function tc_to_frames(tc, fps)
     if not tc or not fps or fps <= 0 then return nil end
     local h, m, s, f = tc:match("(%d+):(%d+):(%d+):(%d+)")
     if not h then return nil end
-    return tonumber(h) * 3600 + tonumber(m) * 60 + tonumber(s) + tonumber(f) / fps
+    return tonumber(h) * 3600 * fps + tonumber(m) * 60 * fps + tonumber(s) * fps + tonumber(f)
 end
 
 --- Extract start TC from a candidate file via ffprobe.
@@ -292,61 +292,62 @@ local function probe_start_tc(file_path)
     return tc, fps
 end
 
---- Get the media record's stored start TC (seconds since midnight).
+--- Get the media record's stored start TC as (frames, rate).
 -- @param media table Media record
--- @return number|nil seconds since midnight, or nil if not stored
+-- @return number|nil frames, number|nil rate
 local function get_stored_start_tc(media)
     if not media.metadata or media.metadata == "" or media.metadata == "{}" then
-        return nil
+        return nil, nil
     end
     local meta = media.metadata
     if type(meta) == "string" then
         local json = require("dkjson")
         meta = json.decode(meta)
     end
-    if type(meta) == "table" then
-        return meta.start_tc
+    if type(meta) == "table" and meta.start_tc_value then
+        return meta.start_tc_value, meta.start_tc_rate
     end
-    return nil
+    return nil, nil
 end
 
 --- Verify candidate file's start TC matches the media record's stored TC.
+-- Both values compared as integer frames (rescaled to common rate if needed).
 -- Rejects media-managed copies with different TC origins (would destroy the edit).
 -- Files without TC (audio, stills) or media without stored TC accepted on filename.
--- @param media table Media record (with metadata.start_tc)
+-- @param media table Media record (with metadata.start_tc_value/start_tc_rate)
 -- @param candidate_path string
 -- @return boolean true if TC matches or check not applicable
 local function verify_candidate_tc(media, candidate_path)
-    local stored_tc = get_stored_start_tc(media)
-    if not stored_tc then
-        -- No stored TC (pre-fix import or native import) — accept on filename
-        return true
+    local stored_frames, stored_rate = get_stored_start_tc(media)
+    if not stored_frames or not stored_rate then
+        return true  -- no stored TC (pre-fix import or native import)
     end
 
     local cand_tc_str, cand_fps = probe_start_tc(candidate_path)
-    if not cand_tc_str then
-        -- No TC in candidate (audio, still) — accept on filename
-        return true
-    end
-    if not cand_fps then
-        return true  -- can't convert TC without fps
+    if not cand_tc_str or not cand_fps then
+        return true  -- no TC in candidate (audio, still) or no fps
     end
 
-    local cand_tc = tc_to_seconds(cand_tc_str, cand_fps)
-    if not cand_tc then
+    local cand_frames = tc_to_frames(cand_tc_str, cand_fps)
+    if not cand_frames then
         return true  -- can't parse TC string
     end
 
-    -- Compare: allow ±1 frame tolerance (rounding between float seconds and TC)
-    local tolerance = 1.0 / cand_fps
-    if math.abs(cand_tc - stored_tc) <= tolerance then
-        log.event("verify_tc: match %s TC=%s (%.2fs ≈ stored %.2fs)",
-            get_filename(candidate_path), cand_tc_str, cand_tc, stored_tc)
+    -- Rescale to common rate for comparison
+    local stored_at_cand_rate = stored_frames
+    if stored_rate ~= cand_fps then
+        stored_at_cand_rate = math.floor(stored_frames * cand_fps / stored_rate + 0.5)
+    end
+
+    -- ±1 frame tolerance (rounding between float seconds and integer frames)
+    if math.abs(cand_frames - stored_at_cand_rate) <= 1 then
+        log.event("verify_tc: match %s TC=%s (%d frames @ %dfps)",
+            get_filename(candidate_path), cand_tc_str, cand_frames, cand_fps)
         return true
     end
 
-    log.warn("verify_tc: REJECTED %s — TC=%s (%.2fs) != stored %.2fs (media-managed copy?)",
-        get_filename(candidate_path), cand_tc_str, cand_tc, stored_tc)
+    log.warn("verify_tc: REJECTED %s — TC=%s (%d frames) != stored %d frames (media-managed copy?)",
+        get_filename(candidate_path), cand_tc_str, cand_frames, stored_at_cand_rate)
     return false
 end
 

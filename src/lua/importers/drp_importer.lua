@@ -2301,12 +2301,17 @@ function M.import_into_project(project_id, parse_result, opts)
         if dur <= 0 then
             log.warn("Skipping zero-duration media: %s", media_item.name)
         else
-            -- Build metadata JSON with start_timecode if available
+            local fps = assert(media_item.frame_rate or project_settings.frame_rate,
+                string.format("drp_importer: no frame_rate for media '%s'", media_item.name))
+
+            -- Convert MediaStartTime (seconds since midnight) to frames at media's rate
             local media_metadata = '{}'
             if media_item.media_start_time then
                 local json = require("dkjson")
+                local fps_int = math.floor(fps + 0.5)
                 media_metadata = json.encode({
-                    start_tc = media_item.media_start_time  -- seconds since midnight
+                    start_tc_value = math.floor(media_item.media_start_time * fps_int + 0.5),
+                    start_tc_rate = fps_int,
                 })
             end
 
@@ -2315,8 +2320,7 @@ function M.import_into_project(project_id, parse_result, opts)
                 name = media_item.name,
                 file_path = media_item.file_path,
                 duration_frames = dur,
-                frame_rate = assert(media_item.frame_rate or project_settings.frame_rate,
-                    string.format("drp_importer: no frame_rate for media '%s'", media_item.name)),
+                frame_rate = fps,
                 width = project_settings.width,
                 height = project_settings.height,
                 metadata = media_metadata,
