@@ -1118,8 +1118,15 @@ function M.relink_clips_batch(clips, options, progress_cb)
     local total = #clips
     if total == 0 then return results end
 
+    log.event("relink_clips_batch: %d clips, search=%s, rules: fn=%s tc=%s res=%s fps=%s trim=%s seg=%s",
+        total, table.concat(options.search_paths, ","),
+        tostring(matching_rules.match_filename), tostring(matching_rules.match_timecode),
+        tostring(matching_rules.match_resolution), tostring(matching_rules.match_frame_rate),
+        tostring(matching_rules.accept_trimmed_media), tostring(matching_rules.accept_filename_suffixes))
+
     -- Step 1: Scan search directories and build candidate index
     if progress_cb then progress_cb(0, "Scanning search directory...") end
+    local t_scan = os.clock()
 
     -- Collect all extensions from clips
     local extensions = {}
@@ -1128,7 +1135,16 @@ function M.relink_clips_batch(clips, options, progress_cb)
         if ext then extensions[ext:lower()] = true end
     end
 
+    local ext_list = {}
+    for ext in pairs(extensions) do ext_list[#ext_list+1] = ext end
+    log.detail("relink_clips_batch: scanning for extensions: %s", table.concat(ext_list, ", "))
+
     local _candidate_files, candidate_index = build_candidate_cache(options.search_paths, extensions)
+
+    local cand_count = 0
+    for _, paths in pairs(candidate_index) do cand_count = cand_count + #paths end
+    log.event("relink_clips_batch: scan complete — %d candidate files in %.1fs",
+        cand_count, os.clock() - t_scan)
 
     -- Build segment index if enabled
     local segment_index
@@ -1140,13 +1156,19 @@ function M.relink_clips_batch(clips, options, progress_cb)
     local tc_cache = {}    -- path → {value, rate} or {nil, nil}
     local media_cache = {} -- path → info table or false
 
+    local tc_probe_count = 0
+    local media_probe_count = 0
+
     local function cached_probe_tc(path)
         local cached = tc_cache[path]
         if cached ~= nil then
             return cached[1], cached[2]
         end
+        tc_probe_count = tc_probe_count + 1
+        log.detail("probe_tc[%d]: %s", tc_probe_count, get_filename(path))
         local val, rate = probe_start_tc(path)
         tc_cache[path] = {val, rate}
+        log.detail("  → tc=%s @ %s", tostring(val), tostring(rate))
         return val, rate
     end
 
@@ -1155,6 +1177,8 @@ function M.relink_clips_batch(clips, options, progress_cb)
         if cached ~= nil then
             return cached ~= false and cached or nil
         end
+        media_probe_count = media_probe_count + 1
+        log.detail("probe_media[%d]: %s", media_probe_count, get_filename(path))
         local escaped = string.format('"%s"', path:gsub('"', '\\"'))
         local cmd = string.format(
             'ffprobe -v error -print_format json -show_streams %s 2>/dev/null', escaped)
@@ -1192,8 +1216,13 @@ function M.relink_clips_batch(clips, options, progress_cb)
     end
 
     -- Step 2: Process each clip
+    local t_match = os.clock()
     for i, clip_info in ipairs(clips) do
         local clip_name = clip_info.clip_name or clip_info.clip_id:sub(1, 8)
+
+        log.detail("clip %d/%d: %s (media=%s src=%d..%d)",
+            i, total, clip_name, clip_info.media_name,
+            clip_info.source_in, clip_info.source_out)
 
         -- Find candidates using the pure algorithm function
         local candidates = M.find_candidates_for_clip(
@@ -1201,6 +1230,11 @@ function M.relink_clips_batch(clips, options, progress_cb)
             cached_probe_tc,
             cached_probe_media
         )
+
+        log.detail("  → %d candidate(s)", #candidates)
+        for ci, c in ipairs(candidates) do
+            log.detail("    [%d] %s (tc=%s@%s)", ci, c.path, tostring(c.start_tc_value), tostring(c.start_tc_rate))
+        end
 
         -- Also check segment files if enabled
         if matching_rules.accept_filename_suffixes and segment_index then
@@ -1319,6 +1353,10 @@ function M.relink_clips_batch(clips, options, progress_cb)
         progress_cb(100, string.format("Done: %d relinked, %d failed, %d ambiguous",
             #results.relinked, #results.failed, #results.ambiguous))
     end
+
+    log.event("relink_clips_batch: done in %.1fs — %d relinked, %d failed, %d ambiguous (probes: %d tc, %d media)",
+        os.clock() - t_match, #results.relinked, #results.failed, #results.ambiguous,
+        tc_probe_count, media_probe_count)
 
     return results
 end

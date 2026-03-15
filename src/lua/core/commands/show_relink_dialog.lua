@@ -58,32 +58,49 @@ function M.register(executors, _undoers, db)
         -- Build RelinkClips command args from relink_clips_batch results
         local clip_relink_map = {}
         local media_path_changes = {}
-        local seen_media_paths = {}
+        local path_to_media_id = {}  -- new_path → first media_id that claims it
+
+        -- Build a lookup from media_id → original path for logging
+        local Media = require("models.media")
+        local media_orig_paths = {}
 
         for _, entry in ipairs(results.relinked) do
+            local orig_media_id = entry.original_media_id
+
+            if entry.new_path and not entry.new_media_id and orig_media_id then
+                -- Cache original path for logging
+                if not media_orig_paths[orig_media_id] then
+                    local m = Media.load(orig_media_id)
+                    media_orig_paths[orig_media_id] = m and m:get_file_path() or "?"
+                end
+
+                local owner = path_to_media_id[entry.new_path]
+                if not owner then
+                    path_to_media_id[entry.new_path] = orig_media_id
+                    media_path_changes[orig_media_id] = entry.new_path
+                elseif owner ~= orig_media_id then
+                    log.warn("path collision: media %s (%s) and media %s (%s) both → %s — reassigning clips to %s",
+                        orig_media_id:sub(1, 8), media_orig_paths[orig_media_id] or "?",
+                        owner:sub(1, 8), media_orig_paths[owner] or "?",
+                        entry.new_path, owner:sub(1, 8))
+                    entry.new_media_id = owner
+                end
+            end
+
             clip_relink_map[entry.clip_id] = {
                 new_media_id = entry.new_media_id,
                 new_source_in = entry.new_source_in,
                 new_source_out = entry.new_source_out,
             }
-
-            -- Track media path changes (deduplicate — one path change per media_id)
-            if entry.new_path and not entry.new_media_id then
-                -- Reusing existing media with new path
-                -- Find original media_id from clip_infos
-                local original_media_id = nil
-                for _, info in ipairs(results.relinked) do
-                    if info.clip_id == entry.clip_id then
-                        original_media_id = entry.original_media_id or info.clip_id
-                        break
-                    end
-                end
-                if original_media_id and not seen_media_paths[original_media_id] then
-                    media_path_changes[original_media_id] = entry.new_path
-                    seen_media_paths[original_media_id] = true
-                end
-            end
         end
+
+        -- Count path changes and collisions
+        local path_change_count = 0
+        for _ in pairs(media_path_changes) do path_change_count = path_change_count + 1 end
+        local clip_change_count = 0
+        for _ in pairs(clip_relink_map) do clip_change_count = clip_change_count + 1 end
+        log.event("ShowRelinkDialog: dispatching RelinkClips — %d clip changes, %d media path changes, %d new media",
+            clip_change_count, path_change_count, #(results.new_media or {}))
 
         -- Dispatch RelinkClips (undoable)
         local command_manager = require("core.command_manager")

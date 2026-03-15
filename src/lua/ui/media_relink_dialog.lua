@@ -27,9 +27,16 @@ local function build_clip_infos(offline_media)
     local Clip = require("models.clip")
     local clip_infos = {}
 
-    for _, media in ipairs(offline_media) do
+    log.detail("build_clip_infos: gathering clips for %d offline media", #offline_media)
+    local t0 = os.clock()
+
+    for mi, media in ipairs(offline_media) do
         local tc_value, tc_rate = media:get_start_tc()
         local clips = Clip.find_clips_for_media(media.id)
+
+        log.detail("  media %d/%d: %s — %d clips (tc=%s@%s)",
+            mi, #offline_media, media.name or media.id:sub(1,8),
+            #clips, tostring(tc_value), tostring(tc_rate))
 
         for _, clip in ipairs(clips) do
             clip_infos[#clip_infos + 1] = {
@@ -51,6 +58,8 @@ local function build_clip_infos(offline_media)
         end
     end
 
+    log.event("build_clip_infos: %d clips from %d media in %.1fs",
+        #clip_infos, #offline_media, os.clock() - t0)
     return clip_infos
 end
 
