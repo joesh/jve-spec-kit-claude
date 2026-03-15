@@ -841,4 +841,252 @@ function M.batch_relink(media_list, options, progress_cb)
     return results
 end
 
+-- =============================================================================
+-- RelinkClips: Pure Algorithm Functions (T006-T008)
+-- =============================================================================
+
+--- Compute TC offset between stored and candidate start timecodes.
+-- Returns offset in frames at stored_rate.
+-- Offset = candidate_tc - stored_tc (both rescaled to stored_rate).
+-- @param stored_value number Stored start TC (frames at stored_rate)
+-- @param stored_rate number Rate of stored value
+-- @param candidate_value number Candidate start TC (frames at candidate_rate)
+-- @param candidate_rate number Rate of candidate value
+-- @return number Offset in frames at stored_rate
+function M.compute_tc_offset(stored_value, stored_rate, candidate_value, candidate_rate)
+    assert(type(stored_value) == "number", "compute_tc_offset: stored_value required")
+    assert(type(stored_rate) == "number" and stored_rate > 0, "compute_tc_offset: stored_rate must be positive")
+    assert(type(candidate_value) == "number", "compute_tc_offset: candidate_value required")
+    assert(type(candidate_rate) == "number" and candidate_rate > 0, "compute_tc_offset: candidate_rate must be positive")
+
+    -- Rescale candidate to stored_rate for comparison
+    local candidate_rescaled
+    if stored_rate == candidate_rate then
+        candidate_rescaled = candidate_value
+    else
+        -- Convert via seconds: candidate_seconds = candidate_value / candidate_rate
+        -- Then: candidate_at_stored_rate = candidate_seconds * stored_rate
+        candidate_rescaled = math.floor(candidate_value * stored_rate / candidate_rate + 0.5)
+    end
+
+    return candidate_rescaled - stored_value
+end
+
+--- Adjust source_in/source_out by a TC offset.
+-- Offset is in the same rate as source_in/source_out (caller must rescale).
+-- If the adjusted source_in would be negative, returns nil, nil.
+-- @param source_in number Current source_in
+-- @param source_out number Current source_out
+-- @param offset number TC offset (positive = candidate starts later)
+-- @param clip_rate number Clip's native rate (for documentation, not used in math)
+-- @return number|nil new_source_in, number|nil new_source_out
+function M.adjust_source_range(source_in, source_out, offset, _clip_rate)
+    assert(type(source_in) == "number", "adjust_source_range: source_in required")
+    assert(type(source_out) == "number", "adjust_source_range: source_out required")
+    assert(type(offset) == "number", "adjust_source_range: offset required")
+
+    local new_in = source_in - offset
+    local new_out = source_out - offset
+
+    if new_in < 0 then
+        return nil, nil
+    end
+
+    return new_in, new_out
+end
+
+--- Check if a candidate filename is a segment variant of an original filename.
+-- Segments have a numeric suffix after an underscore (e.g., _001, _002).
+-- Case-insensitive. Extensions must match.
+-- @param original_basename string Original filename (e.g., "A026_C007.mov")
+-- @param candidate_basename string Candidate filename (e.g., "A026_C007_001.mov")
+-- @return boolean True if candidate is a segment of original
+function M.match_segment_filename(original_basename, candidate_basename)
+    assert(type(original_basename) == "string", "match_segment_filename: original_basename required")
+    assert(type(candidate_basename) == "string", "match_segment_filename: candidate_basename required")
+
+    local orig_lower = original_basename:lower()
+    local cand_lower = candidate_basename:lower()
+
+    -- Must not be exact match (segments have suffixes)
+    if orig_lower == cand_lower then
+        return false
+    end
+
+    -- Split into name and extension
+    local orig_name, orig_ext = orig_lower:match("^(.+)%.([^%.]+)$")
+    local cand_name, cand_ext = cand_lower:match("^(.+)%.([^%.]+)$")
+
+    if not orig_name or not cand_name then return false end
+    if orig_ext ~= cand_ext then return false end
+
+    -- Candidate name must be original name + underscore + digits
+    local expected_prefix = orig_name .. "_"
+    if cand_name:sub(1, #expected_prefix) ~= expected_prefix then
+        return false
+    end
+
+    local suffix = cand_name:sub(#expected_prefix + 1)
+    -- Suffix must be all digits (at least one)
+    if not suffix:match("^%d+$") then
+        return false
+    end
+
+    return true
+end
+
+--- Build a segment index from a candidate index.
+-- Groups segment files under their original basename.
+-- @param candidate_index table {basename_lower → [paths]}
+-- @return table {original_basename → [segment_paths]}
+function M.build_segment_index(candidate_index)
+    assert(type(candidate_index) == "table", "build_segment_index: candidate_index required")
+
+    local seg_index = {}
+
+    -- Collect all basenames
+    local all_basenames = {}
+    for basename in pairs(candidate_index) do
+        all_basenames[#all_basenames + 1] = basename
+    end
+
+    -- For each candidate basename, check if it's a segment of any other basename
+    for _, cand_basename in ipairs(all_basenames) do
+        for _, orig_basename in ipairs(all_basenames) do
+            if cand_basename ~= orig_basename and M.match_segment_filename(orig_basename, cand_basename) then
+                seg_index[orig_basename] = seg_index[orig_basename] or {}
+                -- Add all paths from the candidate's bucket
+                for _, path in ipairs(candidate_index[cand_basename]) do
+                    seg_index[orig_basename][#seg_index[orig_basename] + 1] = path
+                end
+            end
+        end
+    end
+
+    return seg_index
+end
+
+--- Find candidate files for a clip based on matching rules.
+-- Pure function: uses injectable probe functions instead of real ffprobe.
+-- @param clip_info table Clip info struct (see contract)
+-- @param candidate_index table {basename_lower → [paths]}
+-- @param matching_rules table Matching criteria
+-- @param probe_tc_fn function(path) → (value, rate) or (nil, nil)
+-- @param probe_media_fn function(path) → {width, height, fps_num, fps_den, duration_frames} or nil
+-- @return table Array of {path, start_tc_value, start_tc_rate}
+function M.find_candidates_for_clip(clip_info, candidate_index, matching_rules, probe_tc_fn, probe_media_fn)
+    assert(type(clip_info) == "table", "find_candidates_for_clip: clip_info required")
+    assert(type(candidate_index) == "table", "find_candidates_for_clip: candidate_index required")
+    assert(type(matching_rules) == "table", "find_candidates_for_clip: matching_rules required")
+
+    local results = {}
+
+    -- Step 1: Collect initial candidate paths
+    local paths_to_check = {}
+
+    if matching_rules.match_filename then
+        -- Match by basename from the index
+        local basename = get_filename(clip_info.media_path)
+        local lookup_key = basename and basename:lower() or nil
+        if lookup_key and candidate_index[lookup_key] then
+            for _, path in ipairs(candidate_index[lookup_key]) do
+                paths_to_check[#paths_to_check + 1] = path
+            end
+        end
+    else
+        -- No filename matching — check ALL candidates in the index
+        for _, paths in pairs(candidate_index) do
+            for _, path in ipairs(paths) do
+                paths_to_check[#paths_to_check + 1] = path
+            end
+        end
+    end
+
+    -- Step 2: Filter each candidate through enabled criteria
+    for _, cand_path in ipairs(paths_to_check) do
+        local passed = true
+        local cand_tc_value, cand_tc_rate
+
+        -- TC matching
+        if passed and matching_rules.match_timecode then
+            local stored_value = clip_info.media_start_tc_value
+            local stored_rate = clip_info.media_start_tc_rate
+
+            if stored_value and stored_rate then
+                cand_tc_value, cand_tc_rate = probe_tc_fn(cand_path)
+
+                if cand_tc_value and cand_tc_rate then
+                    -- Check if TC matches (±1 frame tolerance)
+                    local offset = M.compute_tc_offset(stored_value, stored_rate, cand_tc_value, cand_tc_rate)
+
+                    if math.abs(offset) > 1 then
+                        -- TC doesn't match exactly
+                        if matching_rules.accept_trimmed_media then
+                            -- Check containment: clip's absolute TC range must fit in candidate
+                            local abs_start = stored_value + clip_info.source_in
+                            local abs_end = stored_value + clip_info.source_out
+
+                            -- Candidate range at stored_rate
+                            local cand_start_rescaled = cand_tc_value
+                            if stored_rate ~= cand_tc_rate then
+                                cand_start_rescaled = math.floor(cand_tc_value * stored_rate / cand_tc_rate + 0.5)
+                            end
+
+                            local media_info = probe_media_fn(cand_path)
+                            if media_info and media_info.duration_frames then
+                                local cand_dur_rescaled = media_info.duration_frames
+                                if media_info.fps_num and media_info.fps_den and stored_rate ~= media_info.fps_num / media_info.fps_den then
+                                    cand_dur_rescaled = math.floor(media_info.duration_frames * stored_rate * media_info.fps_den / media_info.fps_num + 0.5)
+                                end
+                                local cand_end = cand_start_rescaled + cand_dur_rescaled
+
+                                if abs_start < cand_start_rescaled or abs_end > cand_end then
+                                    passed = false  -- clip range not contained
+                                end
+                            else
+                                passed = false  -- can't verify containment without duration
+                            end
+                        else
+                            passed = false  -- TC mismatch and trimmed not accepted
+                        end
+                    end
+                end
+                -- If candidate has no TC → accept on other criteria (TC check not applicable)
+            end
+            -- If stored TC is nil → can't verify, accept on other criteria
+        end
+
+        -- Resolution matching
+        if passed and matching_rules.match_resolution then
+            local media_info = probe_media_fn(cand_path)
+            if media_info then
+                if media_info.width ~= clip_info.width or media_info.height ~= clip_info.height then
+                    passed = false
+                end
+            end
+            -- If no media_info available, can't verify → skip this check
+        end
+
+        -- Frame rate matching
+        if passed and matching_rules.match_frame_rate then
+            local media_info = probe_media_fn(cand_path)
+            if media_info and media_info.fps_num and media_info.fps_den then
+                if media_info.fps_num ~= clip_info.fps_num or media_info.fps_den ~= clip_info.fps_den then
+                    passed = false
+                end
+            end
+        end
+
+        if passed then
+            results[#results + 1] = {
+                path = cand_path,
+                start_tc_value = cand_tc_value,
+                start_tc_rate = cand_tc_rate,
+            }
+        end
+    end
+
+    return results
+end
+
 return M
