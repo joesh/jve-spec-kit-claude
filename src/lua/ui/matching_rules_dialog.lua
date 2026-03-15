@@ -20,7 +20,7 @@ function M.show(current_rules, parent_window)
     local result_rules = nil
     local globals = {}
 
-    local dialog = qt.DIALOG.CREATE("Matching Rules", 400, 320)
+    local dialog = qt.DIALOG.CREATE("Matching Rules", 400, 320, parent_window)
     local main_layout = qt.LAYOUT.CREATE_VBOX()
 
     -- -----------------------------------------------------------------------
@@ -134,9 +134,6 @@ function M.show(current_rules, parent_window)
     -- Show (blocking)
     -- -----------------------------------------------------------------------
     qt.DIALOG.SET_LAYOUT(dialog, main_layout)
-    if qt.PROPERTIES.SET_WINDOW_APPEARANCE then
-        pcall(qt.PROPERTIES.SET_WINDOW_APPEARANCE, dialog, "NSAppearanceNameDarkAqua")
-    end
     qt.DIALOG.SHOW(dialog)
 
     -- Cleanup

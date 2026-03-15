@@ -89,7 +89,7 @@ function M.show(offline_media, parent_window, project_id)
     end
 
     -- Create dialog
-    local dialog = qt.DIALOG.CREATE("Reconnect Media", 700, 650)
+    local dialog = qt.DIALOG.CREATE("Reconnect Media", 700, 650, parent_window)
     local main_layout = qt.LAYOUT.CREATE_VBOX()
 
     -- -----------------------------------------------------------------------
