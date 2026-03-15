@@ -2306,7 +2306,7 @@ function M.import_into_project(project_id, parse_result, opts)
             if media_item.media_start_time then
                 local json = require("dkjson")
                 media_metadata = json.encode({
-                    start_timecode_seconds = media_item.media_start_time
+                    start_tc = media_item.media_start_time  -- seconds since midnight
                 })
             end
 

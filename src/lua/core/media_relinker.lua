@@ -229,20 +229,129 @@ local function relink_by_path(media, new_root)
     return nil
 end
 
--- TODO: TC verification — blocked on DRP importer storing <MediaStartTime>
--- Without the original file's start TC on the media/master clip record, we can't
--- verify that a candidate file contains the right TC range. Relinking to a
--- media-managed file (different start TC) without source_in adjustment would
--- silently destroy the edit.
---
--- Required before enabling TC verify:
--- 1. DRP import: extract <MediaStartTime> → store as start_timecode on media + master clip
--- 2. Native import: probe file start TC via ffprobe → store on media + master clip
--- 3. Relinker: compare candidate start TC against stored start_timecode
--- 4. If TC differs: compute offset, adjust source_in/source_out on all referencing clips
+--- Convert TC string "HH:MM:SS:FF" to seconds since midnight.
+-- @param tc string Timecode like "00:40:33:02"
+-- @param fps number Frames per second (integer)
+-- @return number|nil Seconds since midnight
+local function tc_to_seconds(tc, fps)
+    if not tc or not fps or fps <= 0 then return nil end
+    local h, m, s, f = tc:match("(%d+):(%d+):(%d+):(%d+)")
+    if not h then return nil end
+    return tonumber(h) * 3600 + tonumber(m) * 60 + tonumber(s) + tonumber(f) / fps
+end
+
+--- Extract start TC from a candidate file via ffprobe.
+-- @param file_path string
+-- @return string|nil TC string "HH:MM:SS:FF"
+-- @return number|nil fps (integer)
+local function probe_start_tc(file_path)
+    local escaped = string.format('"%s"', file_path:gsub('"', '\\"'))
+    local cmd = string.format(
+        'ffprobe -v error -print_format json -show_format -show_streams %s 2>/dev/null',
+        escaped)
+    local handle = io.popen(cmd)
+    if not handle then return nil end
+    local output = handle:read("*a")
+    handle:close()
+    if not output or output == "" then return nil end
+
+    local json = require("dkjson")
+    local data = json.decode(output)
+    if not data then return nil end
+
+    -- Find TC in format tags or stream tags
+    local tc = nil
+    if data.format and data.format.tags then
+        tc = data.format.tags.timecode or data.format.tags.TIMECODE
+    end
+    if not tc and data.streams then
+        for _, stream in ipairs(data.streams) do
+            if stream.tags then
+                tc = stream.tags.timecode or stream.tags.TIMECODE
+                if tc then break end
+            end
+        end
+    end
+
+    -- Get fps from video stream
+    local fps = nil
+    if data.streams then
+        for _, stream in ipairs(data.streams) do
+            if stream.codec_type == "video" then
+                if stream.r_frame_rate then
+                    local num, den = stream.r_frame_rate:match("(%d+)/(%d+)")
+                    if num and den then
+                        fps = math.floor(tonumber(num) / tonumber(den) + 0.5)
+                    end
+                end
+                break
+            end
+        end
+    end
+
+    return tc, fps
+end
+
+--- Get the media record's stored start TC (seconds since midnight).
+-- @param media table Media record
+-- @return number|nil seconds since midnight, or nil if not stored
+local function get_stored_start_tc(media)
+    if not media.metadata or media.metadata == "" or media.metadata == "{}" then
+        return nil
+    end
+    local meta = media.metadata
+    if type(meta) == "string" then
+        local json = require("dkjson")
+        meta = json.decode(meta)
+    end
+    if type(meta) == "table" then
+        return meta.start_tc
+    end
+    return nil
+end
+
+--- Verify candidate file's start TC matches the media record's stored TC.
+-- Rejects media-managed copies with different TC origins (would destroy the edit).
+-- Files without TC (audio, stills) or media without stored TC accepted on filename.
+-- @param media table Media record (with metadata.start_tc)
+-- @param candidate_path string
+-- @return boolean true if TC matches or check not applicable
+local function verify_candidate_tc(media, candidate_path)
+    local stored_tc = get_stored_start_tc(media)
+    if not stored_tc then
+        -- No stored TC (pre-fix import or native import) — accept on filename
+        return true
+    end
+
+    local cand_tc_str, cand_fps = probe_start_tc(candidate_path)
+    if not cand_tc_str then
+        -- No TC in candidate (audio, still) — accept on filename
+        return true
+    end
+    if not cand_fps then
+        return true  -- can't convert TC without fps
+    end
+
+    local cand_tc = tc_to_seconds(cand_tc_str, cand_fps)
+    if not cand_tc then
+        return true  -- can't parse TC string
+    end
+
+    -- Compare: allow ±1 frame tolerance (rounding between float seconds and TC)
+    local tolerance = 1.0 / cand_fps
+    if math.abs(cand_tc - stored_tc) <= tolerance then
+        log.event("verify_tc: match %s TC=%s (%.2fs ≈ stored %.2fs)",
+            get_filename(candidate_path), cand_tc_str, cand_tc, stored_tc)
+        return true
+    end
+
+    log.warn("verify_tc: REJECTED %s — TC=%s (%.2fs) != stored %.2fs (media-managed copy?)",
+        get_filename(candidate_path), cand_tc_str, cand_tc, stored_tc)
+    return false
+end
 
 --- Strategy 2: Filename-based relinking
--- Searches directory tree for matching filename
+-- Searches directory tree for matching filename, verifies TC match
 -- @param media table Media record with old file_path
 -- @param search_paths table Array of directories to search
 -- @param candidate_files table Pre-scanned file list (optional)
@@ -290,10 +399,16 @@ local function relink_by_filename(media, search_paths, candidate_files, candidat
         end
     end
 
-    -- Return first filename match
-    -- TODO: once start_timecode is stored on media records, verify TC containment here
+    -- Verify TC on each filename match
+    for _, match_path in ipairs(matches) do
+        if verify_candidate_tc(media, match_path) then
+            return match_path
+        end
+    end
+
     if #matches > 0 then
-        return matches[1]
+        log.event("relink_by_filename: %d filename match(es) for '%s' but none passed TC verify",
+            #matches, old_filename or "?")
     end
 
     return nil
