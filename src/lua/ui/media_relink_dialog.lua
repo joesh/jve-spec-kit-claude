@@ -12,9 +12,12 @@ local M = {}
 local log = require("core.logger").for_area("media")
 
 --- Build clip_info structs from offline media, pumping Qt events to stay responsive.
-local function build_clip_infos(offline_media, qt, status_label)
+-- @param widgets table {qt, status_label, clip_area, header} for live UI updates
+local function build_clip_infos(offline_media, widgets)
     local Clip = require("models.clip")
+    local qt = widgets.qt
     local clip_infos = {}
+    local clip_lines = {}
 
     log.detail("build_clip_infos: gathering clips for %d offline media", #offline_media)
     local t0 = os.clock()
@@ -44,17 +47,43 @@ local function build_clip_infos(offline_media, qt, status_label)
                 clip_kind = clip.clip_kind,
                 clip_name = clip.name,
             }
+            clip_lines[#clip_lines + 1] = string.format(
+                "  %s  —  %s  (%s)",
+                clip.name or clip.id:sub(1, 8),
+                media.name or media.id:sub(1, 8),
+                media:get_file_path())
         end
 
-        -- Pump Qt events every 50 media to stay responsive
+        -- Update UI every 50 media
         if mi % 50 == 0 then
-            if status_label then
-                qt.PROPERTIES.SET_TEXT(status_label,
+            if widgets.status_label then
+                qt.PROPERTIES.SET_TEXT(widgets.status_label,
                     string.format("Loading clips... %d/%d media (%d clips)",
                         mi, #offline_media, #clip_infos))
             end
+            if widgets.clip_area then
+                qt.PROPERTIES.SET_TEXT(widgets.clip_area, table.concat(clip_lines, "\n"))
+            end
+            if widgets.header then
+                qt.PROPERTIES.SET_TEXT(widgets.header,
+                    string.format("Loading... %d clip(s) from %d/%d media",
+                        #clip_infos, mi, #offline_media))
+            end
             qt.CONTROL.PROCESS_EVENTS()
         end
+    end
+
+    -- Final update
+    if widgets.clip_area then
+        qt.PROPERTIES.SET_TEXT(widgets.clip_area, table.concat(clip_lines, "\n"))
+    end
+    if widgets.header then
+        qt.PROPERTIES.SET_TEXT(widgets.header,
+            string.format("Found %d offline clip(s) across %d media file(s)",
+                #clip_infos, #offline_media))
+    end
+    if widgets.status_label then
+        qt.DISPLAY.SET_VISIBLE(widgets.status_label, false)
     end
 
     log.event("build_clip_infos: %d clips from %d media in %.1fs",
@@ -387,23 +416,13 @@ function M.show(offline_media, parent_window, project_id)
 
     qt.DIALOG.SHOW(dialog, false)  -- non-blocking: dialog appears now
 
-    -- Build clip_infos while dialog is visible (with PROCESS_EVENTS)
-    clip_infos = build_clip_infos(offline_media, qt, loading_label)
-
-    -- Populate clip list
-    local clip_lines = {}
-    for _, info in ipairs(clip_infos) do
-        clip_lines[#clip_lines + 1] = string.format(
-            "  %s  —  %s  (%s)",
-            info.clip_name or info.clip_id:sub(1, 8),
-            info.media_name,
-            info.media_path)
-    end
-    qt.PROPERTIES.SET_TEXT(clip_area, table.concat(clip_lines, "\n"))
-    qt.PROPERTIES.SET_TEXT(header,
-        string.format("Found %d offline clip(s) across %d media file(s)",
-            #clip_infos, #offline_media))
-    qt.DISPLAY.SET_VISIBLE(loading_label, false)
+    -- Build clip_infos while dialog is visible (updates UI incrementally)
+    clip_infos = build_clip_infos(offline_media, {
+        qt = qt,
+        status_label = loading_label,
+        clip_area = clip_area,
+        header = header,
+    })
     qt.CONTROL.SET_ENABLED(relink_btn, true)
 
     -- Now block waiting for user interaction
