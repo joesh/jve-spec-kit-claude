@@ -27,7 +27,7 @@ local SPEC = {
     }
 }
 
-function M.register(executors, undoers, _db)
+function M.register(executors, undoers, db)
 
     executors["RelinkClips"] = function(command)
         local args = command:get_all_parameters()
@@ -36,7 +36,6 @@ function M.register(executors, undoers, _db)
         assert(args.project_id and args.project_id ~= "",
             "RelinkClips: project_id required")
 
-        local Clip = require("models.clip")
         local Media = require("models.media")
 
         local old_clip_state = {}
@@ -82,27 +81,44 @@ function M.register(executors, undoers, _db)
         end
         Media.end_batch()
 
-        -- Phase 3: Update clips
-        for clip_id, relink in pairs(args.clip_relink_map) do
-            local clip = Clip.load(clip_id)
-            assert(clip, string.format("RelinkClips: clip not found: %s", clip_id))
+        -- Phase 3: Update clips (batch: read old state + write new state via prepared stmts)
+        assert(db, "RelinkClips: no database connection")
 
-            -- Save old state for undo
+        -- Read old state in bulk
+        local read_stmt = assert(db:prepare(
+            "SELECT media_id, source_in_frame, source_out_frame FROM clips WHERE id = ?"),
+            "RelinkClips: failed to prepare read query")
+
+        for clip_id, _ in pairs(args.clip_relink_map) do
+            read_stmt:bind_value(1, clip_id)
+            assert(read_stmt:exec(), "RelinkClips: read exec failed for " .. clip_id)
+            assert(read_stmt:next(), "RelinkClips: clip not found: " .. clip_id)
             old_clip_state[clip_id] = {
-                old_media_id = clip.media_id,
-                old_source_in = clip.source_in,
-                old_source_out = clip.source_out,
+                old_media_id = read_stmt:value(0),
+                old_source_in = read_stmt:value(1),
+                old_source_out = read_stmt:value(2),
             }
+            read_stmt:reset()
+        end
+        read_stmt:finalize()
 
-            -- Apply new state
-            if relink.new_media_id then
-                clip.media_id = relink.new_media_id
-            end
-            clip.source_in = relink.new_source_in
-            clip.source_out = relink.new_source_out
-            assert(clip:save(), string.format("RelinkClips: failed to save clip %s", clip_id))
+        -- Write new state in bulk
+        local write_stmt = assert(db:prepare([[
+            UPDATE clips SET media_id = ?, source_in_frame = ?, source_out_frame = ?,
+                modified_at = strftime('%s','now') WHERE id = ?
+        ]]), "RelinkClips: failed to prepare write query")
+
+        for clip_id, relink in pairs(args.clip_relink_map) do
+            local new_media = relink.new_media_id or old_clip_state[clip_id].old_media_id
+            write_stmt:bind_value(1, new_media)
+            write_stmt:bind_value(2, relink.new_source_in)
+            write_stmt:bind_value(3, relink.new_source_out)
+            write_stmt:bind_value(4, clip_id)
+            assert(write_stmt:exec(), "RelinkClips: write exec failed for " .. clip_id)
+            write_stmt:reset()
             clip_count = clip_count + 1
         end
+        write_stmt:finalize()
 
         -- Persist undo state
         command:set_parameter("old_clip_state", old_clip_state)
@@ -116,19 +132,25 @@ function M.register(executors, undoers, _db)
         local args = command:get_all_parameters()
         assert(args.old_clip_state, "RelinkClips undo: old_clip_state missing")
 
-        local Clip = require("models.clip")
         local Media = require("models.media")
 
-        -- Phase 1: Restore clips
-        for clip_id, old_state in pairs(args.old_clip_state) do
-            local clip = Clip.load(clip_id)
-            assert(clip, string.format("RelinkClips undo: clip not found: %s", clip_id))
+        -- Phase 1: Restore clips (batch via prepared statement)
+        local undo_stmt = assert(db:prepare([[
+            UPDATE clips SET media_id = ?, source_in_frame = ?, source_out_frame = ?,
+                modified_at = strftime('%s','now') WHERE id = ?
+        ]]), "RelinkClips undo: failed to prepare query")
 
-            clip.media_id = old_state.old_media_id
-            clip.source_in = old_state.old_source_in
-            clip.source_out = old_state.old_source_out
-            assert(clip:save(), string.format("RelinkClips undo: failed to save clip %s", clip_id))
+        local restored_count = 0
+        for clip_id, old_state in pairs(args.old_clip_state) do
+            undo_stmt:bind_value(1, old_state.old_media_id)
+            undo_stmt:bind_value(2, old_state.old_source_in)
+            undo_stmt:bind_value(3, old_state.old_source_out)
+            undo_stmt:bind_value(4, clip_id)
+            assert(undo_stmt:exec(), "RelinkClips undo: exec failed for " .. clip_id)
+            undo_stmt:reset()
+            restored_count = restored_count + 1
         end
+        undo_stmt:finalize()
 
         -- Phase 2: Restore media paths
         local old_media_paths = args.old_media_paths or {}
@@ -150,7 +172,7 @@ function M.register(executors, undoers, _db)
             end
         end
 
-        log.event("RelinkClips undo: restored %d clip(s)", #(args.old_clip_state or {}))
+        log.event("RelinkClips undo: restored %d clip(s)", restored_count)
         return true
     end
 

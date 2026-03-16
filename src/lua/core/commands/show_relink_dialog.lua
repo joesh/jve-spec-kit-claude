@@ -74,10 +74,7 @@ function M.register(executors, _undoers, db)
             if db_path_cache[path] ~= nil then
                 return db_path_cache[path] ~= false and db_path_cache[path] or nil
             end
-            local database = require("core.database")
-            local conn = database.get_connection()
-            if not conn then db_path_cache[path] = false; return nil end
-            local stmt = conn:prepare("SELECT id FROM media WHERE file_path = ? LIMIT 1")
+            local stmt = db:prepare("SELECT id FROM media WHERE file_path = ? LIMIT 1")
             if not stmt then db_path_cache[path] = false; return nil end
             stmt:bind_value(1, path)
             local found_id = nil
@@ -95,7 +92,8 @@ function M.register(executors, _undoers, db)
             if entry.new_path and not entry.new_media_id and mid then
                 if not media_orig_paths[mid] then
                     local m = Media.load(mid)
-                    media_orig_paths[mid] = m and m:get_file_path() or "?"
+                    assert(m, string.format("ShowRelinkDialog: media not found: %s", mid))
+                    media_orig_paths[mid] = m:get_file_path()
                 end
 
                 -- Check if path already belongs to an existing media record
