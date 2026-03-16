@@ -11,6 +11,10 @@
 #include <cstring>
 #include <cstdio>
 
+#ifdef __APPLE__
+#include <objc/objc-runtime.h>
+#endif
+
 #include "simple_lua_engine.h"
 #include "resource_paths.h"
 #include "assert_handler.h"
@@ -86,6 +90,25 @@ int main(int argc, char *argv[])
     // Qt::AA_EnableHighDpiScaling and Qt::AA_UseHighDpiPixmaps are deprecated
 
     QApplication app(argc, argv);
+
+    // Force dark mode on macOS — set on NSApp so all windows (including dialogs) inherit
+#ifdef Q_OS_MAC
+    {
+        id nsApp = ((id (*)(Class, SEL))objc_msgSend)(objc_getClass("NSApplication"), sel_getUid("sharedApplication"));
+        if (nsApp) {
+            Class NSAppearanceClass = objc_getClass("NSAppearance");
+            id darkName = ((id (*)(Class, SEL, const char*))objc_msgSend)(
+                objc_getClass("NSString"), sel_getUid("stringWithUTF8String:"), "NSAppearanceNameDarkAqua");
+            if (NSAppearanceClass && darkName) {
+                id appearance = ((id (*)(Class, SEL, id))objc_msgSend)(
+                    NSAppearanceClass, sel_getUid("appearanceNamed:"), darkName);
+                if (appearance) {
+                    ((void (*)(id, SEL, id))objc_msgSend)(nsApp, sel_getUid("setAppearance:"), appearance);
+                }
+            }
+        }
+    }
+#endif
 
     // Application metadata
     app.setApplicationName("JVE Editor");

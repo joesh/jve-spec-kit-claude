@@ -161,17 +161,7 @@ int lua_create_dialog(lua_State* L) {
     dialog->resize(width, height);
     dialog->setWindowModality(Qt::ApplicationModal);
 
-    // Force dark appearance on macOS — all JVE dialogs are dark.
-    // Push widget, call lua_set_window_appearance, leave widget on stack.
     lua_push_widget(L, dialog);
-#ifdef Q_OS_MAC
-    lua_pushvalue(L, -1);  // dup widget for the call
-    lua_pushstring(L, "NSAppearanceNameDarkAqua");
-    extern int lua_set_window_appearance(lua_State*);
-    lua_set_window_appearance(L);
-    lua_pop(L, 1);  // pop return value
-#endif
-
     return 1;
 }
 
