@@ -134,6 +134,9 @@ function M.show(current_rules, parent_window)
     -- Show (blocking)
     -- -----------------------------------------------------------------------
     qt.DIALOG.SET_LAYOUT(dialog, main_layout)
+    if qt.PROPERTIES.SET_WINDOW_APPEARANCE then
+        pcall(qt.PROPERTIES.SET_WINDOW_APPEARANCE, dialog, "NSAppearanceNameDarkAqua")
+    end
     qt.DIALOG.SHOW(dialog)
 
     -- Cleanup

@@ -198,6 +198,9 @@ local function show_folder_priority_dialog(folder_roots, parent_window)
     qt.LAYOUT.ADD_LAYOUT(layout, btn_row)
 
     qt.DIALOG.SET_LAYOUT(dialog, layout)
+    if qt.PROPERTIES.SET_WINDOW_APPEARANCE then
+        pcall(qt.PROPERTIES.SET_WINDOW_APPEARANCE, dialog, "NSAppearanceNameDarkAqua")
+    end
     qt.DIALOG.SHOW(dialog)
 
     _G[ok_name] = nil
