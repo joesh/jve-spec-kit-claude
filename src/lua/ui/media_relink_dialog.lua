@@ -12,12 +12,13 @@ local M = {}
 local log = require("core.logger").for_area("media")
 
 --- Build clip_info structs from offline media, pumping Qt events to stay responsive.
--- @param widgets table {qt, status_label, clip_area, header} for live UI updates
+-- Updates the media list (not per-clip — too many) and header incrementally.
+-- @param widgets table {qt, status_label, media_area, header} for live UI updates
 local function build_clip_infos(offline_media, widgets)
     local Clip = require("models.clip")
     local qt = widgets.qt
     local clip_infos = {}
-    local clip_lines = {}
+    local media_lines = {}
 
     log.detail("build_clip_infos: gathering clips for %d offline media", #offline_media)
     local t0 = os.clock()
@@ -29,6 +30,10 @@ local function build_clip_infos(offline_media, widgets)
         log.detail("  media %d/%d: %s — %d clips (tc=%s@%s)",
             mi, #offline_media, media.name or media.id:sub(1,8),
             #clips, tostring(tc_value), tostring(tc_rate))
+
+        -- Add media-level line (shown in the list)
+        media_lines[#media_lines + 1] = string.format("  %s  —  %d clip(s)  (%s)",
+            media.name or media.id:sub(1, 8), #clips, media:get_file_path())
 
         for _, clip in ipairs(clips) do
             clip_infos[#clip_infos + 1] = {
@@ -47,22 +52,17 @@ local function build_clip_infos(offline_media, widgets)
                 clip_kind = clip.clip_kind,
                 clip_name = clip.name,
             }
-            clip_lines[#clip_lines + 1] = string.format(
-                "  %s  —  %s  (%s)",
-                clip.name or clip.id:sub(1, 8),
-                media.name or media.id:sub(1, 8),
-                media:get_file_path())
         end
 
-        -- Update UI every 50 media
-        if mi % 50 == 0 then
+        -- Update UI every 20 media
+        if mi % 20 == 0 then
             if widgets.status_label then
                 qt.PROPERTIES.SET_TEXT(widgets.status_label,
-                    string.format("Loading clips... %d/%d media (%d clips)",
+                    string.format("Loading... %d/%d media (%d clips)",
                         mi, #offline_media, #clip_infos))
             end
-            if widgets.clip_area then
-                qt.PROPERTIES.SET_TEXT(widgets.clip_area, table.concat(clip_lines, "\n"))
+            if widgets.media_area then
+                qt.PROPERTIES.SET_TEXT(widgets.media_area, table.concat(media_lines, "\n"))
             end
             if widgets.header then
                 qt.PROPERTIES.SET_TEXT(widgets.header,
@@ -74,8 +74,8 @@ local function build_clip_infos(offline_media, widgets)
     end
 
     -- Final update
-    if widgets.clip_area then
-        qt.PROPERTIES.SET_TEXT(widgets.clip_area, table.concat(clip_lines, "\n"))
+    if widgets.media_area then
+        qt.PROPERTIES.SET_TEXT(widgets.media_area, table.concat(media_lines, "\n"))
     end
     if widgets.header then
         qt.PROPERTIES.SET_TEXT(widgets.header,
@@ -252,10 +252,10 @@ function M.show(offline_media, parent_window, project_id)
     qt.LAYOUT.ADD_SPACING(main_layout, 4)
 
     -- Clip list (initially shows loading message)
-    local clip_area = qt.WIDGET.CREATE_TEXT_EDIT("Loading clips...")
-    qt.CONTROL.SET_TEXT_EDIT_READ_ONLY(clip_area, true)
-    qt.PROPERTIES.SET_SIZE(clip_area, 660, 100)
-    qt.LAYOUT.ADD_WIDGET(main_layout, clip_area)
+    local media_area = qt.WIDGET.CREATE_TEXT_EDIT("Loading...")
+    qt.CONTROL.SET_TEXT_EDIT_READ_ONLY(media_area, true)
+    qt.PROPERTIES.SET_SIZE(media_area, 660, 100)
+    qt.LAYOUT.ADD_WIDGET(main_layout, media_area)
     qt.LAYOUT.ADD_SPACING(main_layout, 4)
 
     -- Loading status label (visible during clip loading)
@@ -420,7 +420,7 @@ function M.show(offline_media, parent_window, project_id)
     clip_infos = build_clip_infos(offline_media, {
         qt = qt,
         status_label = loading_label,
-        clip_area = clip_area,
+        media_area = media_area,
         header = header,
     })
     qt.CONTROL.SET_ENABLED(relink_btn, true)
