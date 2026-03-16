@@ -51,15 +51,30 @@ function M.create(layout, opts)
     -- @param pct number: 0-100 progress percentage
     -- @param text string|nil: status text (e.g. "Processing 42 of 100")
     -- @param log_line string|nil: append a line to the log/results area
+    local log_dirty = false
+
     function panel.update(pct, text, log_line)
         qt.CONTROL.SET_PROGRESS_BAR_VALUE(progress_bar, pct or 0)
         if text then qt.PROPERTIES.SET_TEXT(status_label, text) end
         if log_line then
             log_lines[#log_lines + 1] = log_line
-            qt.PROPERTIES.SET_TEXT(log_area, table.concat(log_lines, "\n"))
+            log_dirty = true
             qt.DISPLAY.SET_VISIBLE(log_area, true)
         end
+        -- Flush log text to widget every 100 lines (avoid O(n²) concat+render)
+        if log_dirty and #log_lines % 100 == 0 then
+            qt.PROPERTIES.SET_TEXT(log_area, table.concat(log_lines, "\n"))
+            log_dirty = false
+        end
         qt.CONTROL.PROCESS_EVENTS()
+    end
+
+    --- Flush any pending log lines to the widget.
+    function panel.flush()
+        if log_dirty then
+            qt.PROPERTIES.SET_TEXT(log_area, table.concat(log_lines, "\n"))
+            log_dirty = false
+        end
     end
 
     --- Show the progress panel (progress bar + status label).

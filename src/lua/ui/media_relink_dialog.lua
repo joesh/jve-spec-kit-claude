@@ -381,6 +381,7 @@ function M.show(offline_media, parent_window, project_id)
             matching_rules = matching_rules,
         }
         local results = media_relinker.relink_clips_batch(clip_infos, options, progress.update)
+        progress.flush()
         results.folder_priority = folder_priority
 
         qt.CONTROL.SET_ENABLED(browse_btn, true)
