@@ -65,8 +65,29 @@ function M.register(executors, _undoers, db)
         local folder_priority = results.folder_priority or {}
         local clip_relink_map = {}
         local media_path_changes = {}
-        local path_to_media = {}     -- new_path → {media_id, orig_path, priority}
+        local path_to_media = {}     -- new_path → {media_id, priority}
         local media_orig_paths = {}  -- media_id → original file_path
+
+        -- Helper: check if a path is already owned by an existing media record in the DB
+        local db_path_cache = {}  -- path → media_id or false
+        local function find_existing_media_by_path(path)
+            if db_path_cache[path] ~= nil then
+                return db_path_cache[path] ~= false and db_path_cache[path] or nil
+            end
+            local database = require("core.database")
+            local conn = database.get_connection()
+            if not conn then db_path_cache[path] = false; return nil end
+            local stmt = conn:prepare("SELECT id FROM media WHERE file_path = ? LIMIT 1")
+            if not stmt then db_path_cache[path] = false; return nil end
+            stmt:bind_value(1, path)
+            local found_id = nil
+            if stmt:exec() and stmt:next() then
+                found_id = stmt:value(0)
+            end
+            stmt:finalize()
+            db_path_cache[path] = found_id or false
+            return found_id
+        end
 
         for _, entry in ipairs(results.relinked) do
             local mid = entry.original_media_id
@@ -77,11 +98,27 @@ function M.register(executors, _undoers, db)
                     media_orig_paths[mid] = m and m:get_file_path() or "?"
                 end
 
+                -- Check if path already belongs to an existing media record
+                local db_owner = find_existing_media_by_path(entry.new_path)
+                if db_owner and db_owner ~= mid then
+                    -- Path already taken by existing media — reassign clip to it
+                    log.event("path exists in DB: media %s already at %s — reassigning clip %s",
+                        db_owner:sub(1, 8),
+                        entry.new_path:match("([^/]+)$") or entry.new_path,
+                        entry.clip_id:sub(1, 8))
+                    entry.new_media_id = db_owner
+                    clip_relink_map[entry.clip_id] = {
+                        new_media_id = db_owner,
+                        new_source_in = entry.new_source_in,
+                        new_source_out = entry.new_source_out,
+                    }
+                    goto continue
+                end
+
                 local my_priority = get_folder_priority(media_orig_paths[mid], folder_priority)
                 local existing = path_to_media[entry.new_path]
 
                 if not existing or existing.media_id == mid then
-                    -- First claim or same media (multiple clips)
                     if not existing then
                         path_to_media[entry.new_path] = {
                             media_id = mid, priority = my_priority
@@ -89,7 +126,6 @@ function M.register(executors, _undoers, db)
                         media_path_changes[mid] = entry.new_path
                     end
                 elseif my_priority < existing.priority then
-                    -- Higher priority folder — take over
                     log.event("folder priority: %s (%s, pri=%d) beats %s (%s, pri=%d) for %s",
                         mid:sub(1, 8), media_orig_paths[mid], my_priority,
                         existing.media_id:sub(1, 8), media_orig_paths[existing.media_id], existing.priority,
@@ -100,7 +136,6 @@ function M.register(executors, _undoers, db)
                         media_id = mid, priority = my_priority
                     }
                 else
-                    -- Lower priority — skip, leave offline
                     log.detail("skip: media %s (%s, pri=%d) lost to %s (pri=%d) for %s",
                         mid:sub(1, 8), media_orig_paths[mid], my_priority,
                         existing.media_id:sub(1, 8), existing.priority,
