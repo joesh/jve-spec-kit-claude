@@ -2440,20 +2440,26 @@ void TimelineMediaBuffer::decode_audio_into_cache(
     if (chunk_reversed) std::swap(src_t0, src_t1);
 
     auto reader = acquire_reader(track, clip->clip_id, clip->media_path);
-    if (!reader) return;
+    std::shared_ptr<PcmChunk> pcm;
 
-    auto decode_result = reader->DecodeAudioRangeUS(src_t0, src_t1, m_audio_fmt);
-    if (decode_result.is_error() || !decode_result.value() || decode_result.value()->frames() == 0) {
-        if (decode_result.is_error()) {
-            char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
-            EMP_LOG_WARN("AUDIO PREFETCH: decode error on %s clip=%.8s src=[%lld..%lld]",
-                         tbuf, clip->clip_id.c_str(), (long long)src_t0, (long long)src_t1);
+    if (!reader) {
+        // Offline — generate beep and cache it
+        pcm = generate_offline_beep(position, chunk_end - position, seg.start_us);
+    } else {
+        auto decode_result = reader->DecodeAudioRangeUS(src_t0, src_t1, m_audio_fmt);
+        if (decode_result.is_error() || !decode_result.value() || decode_result.value()->frames() == 0) {
+            if (decode_result.is_error()) {
+                char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
+                EMP_LOG_WARN("AUDIO PREFETCH: decode error on %s clip=%.8s src=[%lld..%lld]",
+                             tbuf, clip->clip_id.c_str(), (long long)src_t0, (long long)src_t1);
+            }
+            // Decode failed — generate beep
+            pcm = generate_offline_beep(position, chunk_end - position, seg.start_us);
+        } else {
+            pcm = build_audio_output(decode_result.value(), src_t0, src_t1,
+                                      position, chunk_end, std::abs(clip->speed_ratio), m_audio_fmt);
         }
-        return;
     }
-
-    auto pcm = build_audio_output(decode_result.value(), src_t0, src_t1,
-                                  position, chunk_end, std::abs(clip->speed_ratio), m_audio_fmt);
     if (chunk_reversed && pcm && pcm->frames() > 0) {
         reverse_interleaved(pcm->mutable_data_f32(), pcm->frames(), m_audio_fmt.channels);
     }
