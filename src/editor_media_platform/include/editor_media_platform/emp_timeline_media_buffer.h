@@ -63,6 +63,7 @@ struct ClipInfo {
     int64_t source_in;            // source frames (absolute TC space)
     int32_t rate_num, rate_den;   // clip rate (for frame→us conversion)
     float speed_ratio;            // conform: seq_fps / media_fps (1.0 = none)
+    bool offline = false;         // true = media file not found, generate beep
 
     int64_t timeline_end() const { return timeline_start + duration; }
     Rate rate() const {

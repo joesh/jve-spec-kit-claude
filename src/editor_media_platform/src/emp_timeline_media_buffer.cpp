@@ -1,5 +1,6 @@
 #include <editor_media_platform/emp_timeline_media_buffer.h>
 #include "impl/pcm_chunk_impl.h"
+#include "../../assert_handler.h"
 #include <cassert>
 #include <algorithm>
 #include <chrono>
@@ -996,6 +997,11 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     TimeUS clip_start_us = seg.start_us;
     TimeUS clip_end_us = seg.end_us;
 
+    // Offline clip — generate beep immediately, no decode attempt
+    if (clip->offline) {
+        return generate_offline_beep(t0, t1 - t0, clip_start_us);
+    }
+
     // Clamp request to first clip
     TimeUS clamped_t0 = std::max(t0, clip_start_us);
     TimeUS clamped_t1 = std::min(t1, clip_end_us);
@@ -1038,30 +1044,13 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     if (cached) {
         first_chunk = cached;
     } else {
-        // Offline check
-        {
-            std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
-            if (m_offline.count(media_path)) {
-                EMP_LOG_WARN("GetTrackAudio: BEEP (offline) clip=%.8s path=%s",
-                    clip_id.c_str(), media_path.c_str());
-                return generate_offline_beep(t0, t1 - t0, clip_start_us);
-            }
-        }
-
-        // Acquire reader and decode first clip
+        // Clip was marked online by Lua — file must exist
         auto reader = acquire_reader(track, clip_id, media_path);
-        if (!reader) {
-            EMP_LOG_WARN("GetTrackAudio: BEEP (no reader) clip=%.8s path=%s",
-                clip_id.c_str(), media_path.c_str());
-            return generate_offline_beep(t0, t1 - t0, clip_start_us);
-        }
+        JVE_ASSERT(reader, ("GetTrackAudio: online clip failed to open: " + media_path).c_str());
 
         auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt);
-        if (decode_result.is_error()) {
-            EMP_LOG_WARN("GetTrackAudio: BEEP (decode error) clip=%.8s",
-                clip_id.c_str());
-            return generate_offline_beep(t0, t1 - t0, clip_start_us);
-        }
+        JVE_ASSERT(!decode_result.is_error(),
+            ("GetTrackAudio: online clip decode failed: " + clip_id).c_str());
 
         auto chunk = decode_result.value();
         if (!chunk || chunk->frames() == 0) {
@@ -2443,6 +2432,9 @@ void TimelineMediaBuffer::decode_audio_into_cache(
     assert(clip->rate_num > 0 && "decode_audio_into_cache: clip has zero rate_num");
     assert(clip->rate_den > 0 && "decode_audio_into_cache: clip has zero rate_den");
     assert(clip->speed_ratio != 0.0f && "decode_audio_into_cache: clip has zero speed_ratio");
+
+    // Offline clip — skip decode entirely (beep generated in GetTrackAudio)
+    if (clip->offline) return;
 
     TimeUS src_origin = FrameTime::from_frame(clip->source_in, clip->rate()).to_us();
     double sr_d = static_cast<double>(clip->speed_ratio);

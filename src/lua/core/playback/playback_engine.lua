@@ -552,6 +552,11 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
         "PlaybackEngine:_build_tmb_clip: clip %s speed_ratio must be non-zero (|sr|<100), got %s",
         clip.id, tostring(speed_ratio)))
 
+    -- Check if media file exists — TMB uses this to generate beep for offline clips
+    local f = io.open(entry.media_path, "r")
+    local is_offline = (f == nil)
+    if f then f:close() end
+
     return {
         clip_id = clip.id,
         media_path = entry.media_path,
@@ -561,6 +566,7 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
         rate_num = clip.rate.fps_numerator,
         rate_den = clip.rate.fps_denominator,
         speed_ratio = speed_ratio,
+        offline = is_offline,
     }
 end
 
