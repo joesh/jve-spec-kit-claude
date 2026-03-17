@@ -813,4 +813,56 @@ function M:set_source_range(source_in, source_out)
     self:save()
 end
 
+--- Read lightweight source state for multiple clips (no JOINs).
+-- @param clip_ids table Array or set of clip IDs
+-- @return table {clip_id → {media_id, source_in, source_out}}
+function M.batch_read_source(clip_ids)
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Clip.batch_read_source: no database connection")
+
+    local stmt = assert(db:prepare(
+        "SELECT media_id, source_in_frame, source_out_frame FROM clips WHERE id = ?"),
+        "Clip.batch_read_source: failed to prepare query")
+
+    local result = {}
+    for clip_id in pairs(clip_ids) do
+        stmt:bind_value(1, clip_id)
+        assert(stmt:exec(), "Clip.batch_read_source: exec failed for " .. clip_id)
+        assert(stmt:next(), "Clip.batch_read_source: clip not found: " .. clip_id)
+        result[clip_id] = {
+            media_id = stmt:value(0),
+            source_in = stmt:value(1),
+            source_out = stmt:value(2),
+        }
+        stmt:reset()
+    end
+    stmt:finalize()
+    return result
+end
+
+--- Batch update media_id + source range for multiple clips.
+-- @param updates table {clip_id → {media_id, source_in, source_out}}
+function M.batch_update_source(updates)
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Clip.batch_update_source: no database connection")
+
+    local stmt = assert(db:prepare([[
+        UPDATE clips SET media_id = ?, source_in_frame = ?, source_out_frame = ?,
+            modified_at = strftime('%s','now') WHERE id = ?
+    ]]), "Clip.batch_update_source: failed to prepare query")
+
+    for clip_id, vals in pairs(updates) do
+        assert(vals.media_id, "Clip.batch_update_source: media_id required for " .. clip_id)
+        assert(vals.source_in, "Clip.batch_update_source: source_in required for " .. clip_id)
+        assert(vals.source_out, "Clip.batch_update_source: source_out required for " .. clip_id)
+        stmt:bind_value(1, vals.media_id)
+        stmt:bind_value(2, vals.source_in)
+        stmt:bind_value(3, vals.source_out)
+        stmt:bind_value(4, clip_id)
+        assert(stmt:exec(), "Clip.batch_update_source: exec failed for " .. clip_id)
+        stmt:reset()
+    end
+    stmt:finalize()
+end
+
 return M

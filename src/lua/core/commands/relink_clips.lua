@@ -27,7 +27,7 @@ local SPEC = {
     }
 }
 
-function M.register(executors, undoers, db)
+function M.register(executors, undoers, _db)
 
     executors["RelinkClips"] = function(command)
         local args = command:get_all_parameters()
@@ -36,13 +36,13 @@ function M.register(executors, undoers, db)
         assert(args.project_id and args.project_id ~= "",
             "RelinkClips: project_id required")
 
+        local Clip = require("models.clip")
         local Media = require("models.media")
 
-        local old_clip_state = {}
+        local old_clip_state  -- set in Phase 3
         local old_media_paths = {}
         local media_path_changes = args.media_path_changes or {}
         local new_media_records = args.new_media_records or {}
-        local clip_count = 0
         local media_count = 0
 
         -- Phase 1: Create new media records (for segment files)
@@ -81,44 +81,18 @@ function M.register(executors, undoers, db)
         end
         Media.end_batch()
 
-        -- Phase 3: Update clips (batch: read old state + write new state via prepared stmts)
-        assert(db, "RelinkClips: no database connection")
+        -- Phase 3: Read old clip state, write new state (via model batch methods)
+        old_clip_state = Clip.batch_read_source(args.clip_relink_map)
 
-        -- Read old state in bulk
-        local read_stmt = assert(db:prepare(
-            "SELECT media_id, source_in_frame, source_out_frame FROM clips WHERE id = ?"),
-            "RelinkClips: failed to prepare read query")
-
-        for clip_id, _ in pairs(args.clip_relink_map) do
-            read_stmt:bind_value(1, clip_id)
-            assert(read_stmt:exec(), "RelinkClips: read exec failed for " .. clip_id)
-            assert(read_stmt:next(), "RelinkClips: clip not found: " .. clip_id)
-            old_clip_state[clip_id] = {
-                old_media_id = read_stmt:value(0),
-                old_source_in = read_stmt:value(1),
-                old_source_out = read_stmt:value(2),
-            }
-            read_stmt:reset()
-        end
-        read_stmt:finalize()
-
-        -- Write new state in bulk
-        local write_stmt = assert(db:prepare([[
-            UPDATE clips SET media_id = ?, source_in_frame = ?, source_out_frame = ?,
-                modified_at = strftime('%s','now') WHERE id = ?
-        ]]), "RelinkClips: failed to prepare write query")
-
+        local updates = {}
         for clip_id, relink in pairs(args.clip_relink_map) do
-            local new_media = relink.new_media_id or old_clip_state[clip_id].old_media_id
-            write_stmt:bind_value(1, new_media)
-            write_stmt:bind_value(2, relink.new_source_in)
-            write_stmt:bind_value(3, relink.new_source_out)
-            write_stmt:bind_value(4, clip_id)
-            assert(write_stmt:exec(), "RelinkClips: write exec failed for " .. clip_id)
-            write_stmt:reset()
-            clip_count = clip_count + 1
+            updates[clip_id] = {
+                media_id = relink.new_media_id or old_clip_state[clip_id].media_id,
+                source_in = relink.new_source_in,
+                source_out = relink.new_source_out,
+            }
         end
-        write_stmt:finalize()
+        Clip.batch_update_source(updates)
 
         -- Persist undo state
         command:set_parameter("old_clip_state", old_clip_state)
@@ -127,7 +101,7 @@ function M.register(executors, undoers, db)
         -- Emit media_changed for all affected media_ids so viewers refresh
         local changed_media = {}
         for clip_id, relink in pairs(args.clip_relink_map) do
-            local mid = relink.new_media_id or old_clip_state[clip_id].old_media_id
+            local mid = relink.new_media_id or old_clip_state[clip_id].media_id
             changed_media[mid] = true
         end
         for mid in pairs(old_media_paths) do
@@ -136,7 +110,9 @@ function M.register(executors, undoers, db)
         local Signals = require("core.signals")
         Signals.emit("media_changed", changed_media)
 
-        log.event("RelinkClips: relinked %d clip(s), %d media path(s)", clip_count, media_count)
+        log.event("RelinkClips: relinked %d clip(s), %d media path(s)",
+            (function() local n=0; for _ in pairs(args.clip_relink_map) do n=n+1 end; return n end)(),
+            media_count)
         return { success = true }
     end
 
@@ -144,25 +120,11 @@ function M.register(executors, undoers, db)
         local args = command:get_all_parameters()
         assert(args.old_clip_state, "RelinkClips undo: old_clip_state missing")
 
+        local Clip = require("models.clip")
         local Media = require("models.media")
 
-        -- Phase 1: Restore clips (batch via prepared statement)
-        local undo_stmt = assert(db:prepare([[
-            UPDATE clips SET media_id = ?, source_in_frame = ?, source_out_frame = ?,
-                modified_at = strftime('%s','now') WHERE id = ?
-        ]]), "RelinkClips undo: failed to prepare query")
-
-        local restored_count = 0
-        for clip_id, old_state in pairs(args.old_clip_state) do
-            undo_stmt:bind_value(1, old_state.old_media_id)
-            undo_stmt:bind_value(2, old_state.old_source_in)
-            undo_stmt:bind_value(3, old_state.old_source_out)
-            undo_stmt:bind_value(4, clip_id)
-            assert(undo_stmt:exec(), "RelinkClips undo: exec failed for " .. clip_id)
-            undo_stmt:reset()
-            restored_count = restored_count + 1
-        end
-        undo_stmt:finalize()
+        -- Phase 1: Restore clips via model batch method
+        Clip.batch_update_source(args.old_clip_state)
 
         -- Phase 2: Restore media paths
         local old_media_paths = args.old_media_paths or {}
@@ -187,7 +149,7 @@ function M.register(executors, undoers, db)
         -- Emit media_changed so viewers refresh offline status
         local changed_media = {}
         for _, old_state in pairs(args.old_clip_state) do
-            changed_media[old_state.old_media_id] = true
+            changed_media[old_state.media_id] = true
         end
         for mid in pairs(old_media_paths) do
             changed_media[mid] = true
@@ -195,7 +157,8 @@ function M.register(executors, undoers, db)
         local Signals = require("core.signals")
         Signals.emit("media_changed", changed_media)
 
-        log.event("RelinkClips undo: restored %d clip(s)", restored_count)
+        local n = 0; for _ in pairs(args.old_clip_state) do n = n + 1 end
+        log.event("RelinkClips undo: restored %d clip(s)", n)
         return true
     end
 
