@@ -616,9 +616,23 @@ function M.relink_clips_batch(clips, options, progress_cb)
                     info.duration_frames = math.floor(
                         tonumber(stream.duration) * info.fps_num / info.fps_den + 0.5)
                 end
+            elseif stream.codec_type == "audio" and not info.width then
+                -- Audio-only file: extract duration in samples at sample_rate
+                local sample_rate = tonumber(stream.sample_rate)
+                if sample_rate and sample_rate > 0 then
+                    info.fps_num = sample_rate
+                    info.fps_den = 1
+                    if stream.duration then
+                        info.duration_frames = math.floor(
+                            tonumber(stream.duration) * sample_rate + 0.5)
+                    elseif stream.nb_frames then
+                        info.duration_frames = tonumber(stream.nb_frames)
+                    end
+                end
             end
         end
-        local result = info.width and info or nil
+        -- Valid if we got either video dimensions or audio duration
+        local result = (info.width or info.duration_frames) and info or nil
         media_cache[path] = result or false
         return result
     end
