@@ -1668,7 +1668,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::generate_offline_beep(
     constexpr double TONE_HZ = 1000.0;
     constexpr int64_t BEEP_ON_US  = 100000;  // 100ms
     constexpr int64_t CYCLE_US    = 1000000;  // 1 second
-    constexpr double AMPLITUDE    = 0.25;     // -12 dBFS
+    constexpr double AMPLITUDE    = 0.05;     // -26 dBFS
 
     std::vector<float> data(frames * ch, 0.0f);
 
