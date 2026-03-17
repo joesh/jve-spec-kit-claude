@@ -6,6 +6,8 @@ This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Re
 - C++ for performance-critical: rendering, timeline manipulation, complex diffs
 - Lua for UI logic, layout, interaction, extensibility
 - SQLite for persistence
+- Lua (LuaJIT) + C++ (Qt6) + Qt6 (dialogs), ffprobe (TC probing), dkjson (JSON) (002-relink-clips)
+- SQLite (.jvp project files), `~/.jve/` for app prefs (002-relink-clips)
 
 READ ENGINEERING.md
 
