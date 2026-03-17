@@ -466,6 +466,8 @@ Signals.connect("media_changed", function(_changed_media_ids)
     local active = data.state.sequence_id
     if not active or active == "" then return end
     M.reload_clips(active)
+    -- Propagate to playback engine so TMB re-fetches clips with updated media paths
+    Signals.emit("content_changed", active)
 end)
 
 return M
