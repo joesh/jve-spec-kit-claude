@@ -975,14 +975,16 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     std::unique_lock<std::mutex> tracks_lock(m_tracks_mutex);
     auto track_it = m_tracks.find(track);
     if (track_it == m_tracks.end()) {
-        return nullptr;
+        // Track not in TMB — clip provider never fed clips for this track.
+        // If we're being asked to mix it (volume > 0), generate beep.
+        return generate_offline_beep(t0, t1 - t0, t0);
     }
     auto& ts = track_it->second;
 
     // Find segment at t0
     SegmentUS seg = find_segment_at_us(ts, t0);
     if (seg.type == SegmentUS::GAP) {
-        return nullptr;
+        return nullptr;  // legitimate gap — silence is correct
     }
 
     const ClipInfo* clip = seg.clip;
@@ -1424,6 +1426,16 @@ void TimelineMediaBuffer::SetAudioMixParams(
         m_mix_params_changed = true;
     }
     m_mix_cv.notify_one();
+
+    // Log mix params (fires each time params change — low frequency)
+    for (const auto& p : params) {
+        TrackId tid{TrackType::Audio, p.track_index};
+        std::lock_guard<std::mutex> tlock(m_tracks_mutex);
+        auto it = m_tracks.find(tid);
+        int clip_count = (it != m_tracks.end()) ? static_cast<int>(it->second.clips.size()) : -1;
+        EMP_LOG_WARN("SetAudioMixParams: A%d vol=%.2f clips_in_tmb=%d",
+            p.track_index, p.volume, clip_count);
+    }
 }
 
 // ============================================================================
