@@ -124,6 +124,18 @@ function M.register(executors, undoers, db)
         command:set_parameter("old_clip_state", old_clip_state)
         command:set_parameter("old_media_paths", old_media_paths)
 
+        -- Emit media_changed for all affected media_ids so viewers refresh
+        local changed_media = {}
+        for clip_id, relink in pairs(args.clip_relink_map) do
+            local mid = relink.new_media_id or old_clip_state[clip_id].old_media_id
+            changed_media[mid] = true
+        end
+        for mid in pairs(old_media_paths) do
+            changed_media[mid] = true
+        end
+        local Signals = require("core.signals")
+        Signals.emit("media_changed", changed_media)
+
         log.event("RelinkClips: relinked %d clip(s), %d media path(s)", clip_count, media_count)
         return { success = true }
     end
@@ -171,6 +183,17 @@ function M.register(executors, undoers, db)
                 media:delete()
             end
         end
+
+        -- Emit media_changed so viewers refresh offline status
+        local changed_media = {}
+        for _, old_state in pairs(args.old_clip_state) do
+            changed_media[old_state.old_media_id] = true
+        end
+        for mid in pairs(old_media_paths) do
+            changed_media[mid] = true
+        end
+        local Signals = require("core.signals")
+        Signals.emit("media_changed", changed_media)
 
         log.event("RelinkClips undo: restored %d clip(s)", restored_count)
         return true
