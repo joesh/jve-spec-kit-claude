@@ -223,7 +223,8 @@ private:
     // 1kHz sine, 100ms on / 900ms off (once per second).
     // position_us: absolute timeline position (determines beep phase).
     // duration_us: requested chunk duration.
-    std::shared_ptr<PcmChunk> generate_offline_beep(int64_t position_us, int64_t duration_us);
+    // clip_start_us: clip's timeline start (beep phase relative to clip, not timeline)
+    std::shared_ptr<PcmChunk> generate_offline_beep(int64_t position_us, int64_t duration_us, int64_t clip_start_us);
     void log_pool_state(const char* action, const TrackId& track,
                         const std::string& clip_id, bool is_hw);
 

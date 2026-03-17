@@ -1040,19 +1040,25 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         {
             std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
             if (m_offline.count(media_path)) {
-                return generate_offline_beep(t0, t1 - t0);
+                EMP_LOG_WARN("GetTrackAudio: BEEP (offline) clip=%.8s path=%s",
+                    clip_id.c_str(), media_path.c_str());
+                return generate_offline_beep(t0, t1 - t0, clip_start_us);
             }
         }
 
         // Acquire reader and decode first clip
         auto reader = acquire_reader(track, clip_id, media_path);
         if (!reader) {
-            return generate_offline_beep(t0, t1 - t0);
+            EMP_LOG_WARN("GetTrackAudio: BEEP (no reader) clip=%.8s path=%s",
+                clip_id.c_str(), media_path.c_str());
+            return generate_offline_beep(t0, t1 - t0, clip_start_us);
         }
 
         auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt);
         if (decode_result.is_error()) {
-            return generate_offline_beep(t0, t1 - t0);
+            EMP_LOG_WARN("GetTrackAudio: BEEP (decode error) clip=%.8s",
+                clip_id.c_str());
+            return generate_offline_beep(t0, t1 - t0, clip_start_us);
         }
 
         auto chunk = decode_result.value();
@@ -1646,7 +1652,7 @@ void TimelineMediaBuffer::SetMaxReaders(int max) {
 // ============================================================================
 
 std::shared_ptr<PcmChunk> TimelineMediaBuffer::generate_offline_beep(
-    int64_t position_us, int64_t duration_us)
+    int64_t position_us, int64_t duration_us, int64_t clip_start_us)
 {
     if (m_audio_fmt.sample_rate <= 0 || m_audio_fmt.channels <= 0)
         return nullptr;
@@ -1657,6 +1663,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::generate_offline_beep(
     if (frames <= 0) return nullptr;
 
     // Beep parameters: 1kHz tone, 100ms on / 900ms off (1 Hz repetition)
+    // Phase relative to clip start so every offline clip begins with a beep.
     constexpr double TONE_HZ = 1000.0;
     constexpr int64_t BEEP_ON_US  = 100000;  // 100ms
     constexpr int64_t CYCLE_US    = 1000000;  // 1 second
@@ -1665,8 +1672,10 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::generate_offline_beep(
     std::vector<float> data(frames * ch, 0.0f);
 
     for (int64_t i = 0; i < frames; ++i) {
+        // Time since clip start (not absolute timeline) drives beep phase
         int64_t sample_us = position_us + (i * 1000000) / sr;
-        int64_t phase_in_cycle = ((sample_us % CYCLE_US) + CYCLE_US) % CYCLE_US;
+        int64_t since_clip_start = sample_us - clip_start_us;
+        int64_t phase_in_cycle = ((since_clip_start % CYCLE_US) + CYCLE_US) % CYCLE_US;
 
         if (phase_in_cycle < BEEP_ON_US) {
             double t = static_cast<double>(i) / sr;
@@ -1675,7 +1684,6 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::generate_offline_beep(
                 data[i * ch + c] = sample;
             }
         }
-        // else: already zero-filled (silence between beeps)
     }
 
     auto impl = std::make_unique<PcmChunkImpl>(
