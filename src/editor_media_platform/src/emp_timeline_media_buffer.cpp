@@ -1040,19 +1040,19 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         {
             std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
             if (m_offline.count(media_path)) {
-                return nullptr;
+                return generate_offline_beep(t0, t1 - t0);
             }
         }
 
         // Acquire reader and decode first clip
         auto reader = acquire_reader(track, clip_id, media_path);
         if (!reader) {
-            return nullptr;
+            return generate_offline_beep(t0, t1 - t0);
         }
 
         auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt);
         if (decode_result.is_error()) {
-            return nullptr;
+            return generate_offline_beep(t0, t1 - t0);
         }
 
         auto chunk = decode_result.value();
@@ -1639,6 +1639,48 @@ void TimelineMediaBuffer::SetMaxReaders(int max) {
     while (static_cast<int>(m_readers.size()) > m_max_readers) {
         evict_lru_reader();
     }
+}
+
+// ============================================================================
+// Offline beep tone generator
+// ============================================================================
+
+std::shared_ptr<PcmChunk> TimelineMediaBuffer::generate_offline_beep(
+    int64_t position_us, int64_t duration_us)
+{
+    if (m_audio_fmt.sample_rate <= 0 || m_audio_fmt.channels <= 0)
+        return nullptr;
+
+    const int32_t sr = m_audio_fmt.sample_rate;
+    const int32_t ch = m_audio_fmt.channels;
+    const int64_t frames = (duration_us * sr) / 1000000;
+    if (frames <= 0) return nullptr;
+
+    // Beep parameters: 1kHz tone, 100ms on / 900ms off (1 Hz repetition)
+    constexpr double TONE_HZ = 1000.0;
+    constexpr int64_t BEEP_ON_US  = 100000;  // 100ms
+    constexpr int64_t CYCLE_US    = 1000000;  // 1 second
+    constexpr double AMPLITUDE    = 0.25;     // -12 dBFS
+
+    std::vector<float> data(frames * ch, 0.0f);
+
+    for (int64_t i = 0; i < frames; ++i) {
+        int64_t sample_us = position_us + (i * 1000000) / sr;
+        int64_t phase_in_cycle = ((sample_us % CYCLE_US) + CYCLE_US) % CYCLE_US;
+
+        if (phase_in_cycle < BEEP_ON_US) {
+            double t = static_cast<double>(i) / sr;
+            float sample = static_cast<float>(AMPLITUDE * std::sin(2.0 * M_PI * TONE_HZ * t));
+            for (int32_t c = 0; c < ch; ++c) {
+                data[i * ch + c] = sample;
+            }
+        }
+        // else: already zero-filled (silence between beeps)
+    }
+
+    auto impl = std::make_unique<PcmChunkImpl>(
+        sr, ch, SampleFormat::F32, position_us, std::move(data));
+    return std::make_shared<PcmChunk>(std::move(impl));
 }
 
 // ============================================================================

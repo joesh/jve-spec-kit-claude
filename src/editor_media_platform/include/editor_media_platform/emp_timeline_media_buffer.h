@@ -218,6 +218,12 @@ private:
                                 const std::string& path);
     void release_reader(TrackId track, const std::string& clip_id);
     void evict_lru_reader();
+
+    // Generate a beep tone for offline/unplayable audio clips.
+    // 1kHz sine, 100ms on / 900ms off (once per second).
+    // position_us: absolute timeline position (determines beep phase).
+    // duration_us: requested chunk duration.
+    std::shared_ptr<PcmChunk> generate_offline_beep(int64_t position_us, int64_t duration_us);
     void log_pool_state(const char* action, const TrackId& track,
                         const std::string& clip_id, bool is_hw);
 
