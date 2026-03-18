@@ -1952,20 +1952,17 @@ function M.parse_drp_file(drp_path, progress_cb)
     -- Apply authoritative media durations from MediaPool blob data.
     -- Pool master clips contain Time/TracksBA blobs with actual media duration,
     -- which is more accurate than source_extent derived from timeline clips.
-    local project_fps = project.settings.frame_rate
     for _, pmc in ipairs(media_pool_hierarchy.master_clips) do
         if pmc.file_path then
             local entry = media_lookup[pmc.file_path]
             if entry then
                 if pmc.num_frames and pmc.num_frames > 0 then
                     entry.duration = pmc.num_frames
-                elseif pmc.audio_duration and project_fps then
-                    local audio_frames = math.floor(
-                        pmc.audio_duration.samples * project_fps
-                        / pmc.audio_duration.sample_rate + 0.5)
-                    if audio_frames > 0 then
-                        entry.duration = audio_frames
-                    end
+                elseif pmc.audio_duration then
+                    -- Audio-only media: duration in samples, rate = sample_rate
+                    entry.duration = pmc.audio_duration.samples
+                    entry.audio_sample_rate = pmc.audio_duration.sample_rate
+                    entry.frame_rate = pmc.audio_duration.sample_rate
                 end
             end
         end
@@ -2301,17 +2298,21 @@ function M.import_into_project(project_id, parse_result, opts)
         if dur <= 0 then
             log.warn("Skipping zero-duration media: %s", media_item.name)
         else
-            local fps = assert(media_item.frame_rate or project_settings.frame_rate,
-                string.format("drp_importer: no frame_rate for media '%s'", media_item.name))
+            -- Audio media: frame_rate set from sample_rate by master clip propagation above.
+            -- Video media: DRP doesn't store per-media fps; uses project timeline rate.
+            local fps = media_item.frame_rate
+                or project_settings.frame_rate -- NSF-OK: DRP video media inherits timeline fps
+            assert(fps, string.format("drp_importer: no frame_rate for media '%s' (path=%s)",
+                media_item.name, media_item.file_path))
 
-            -- Convert MediaStartTime (seconds since midnight) to frames at media's rate
+            -- Convert MediaStartTime (seconds since midnight) to native units at media's rate
             local media_metadata = '{}'
+            local native_rate = math.floor(fps + 0.5)
             if media_item.media_start_time then
                 local json = require("dkjson")
-                local fps_int = math.floor(fps + 0.5)
                 media_metadata = json.encode({
-                    start_tc_value = math.floor(media_item.media_start_time * fps_int + 0.5),
-                    start_tc_rate = fps_int,
+                    start_tc_value = math.floor(media_item.media_start_time * native_rate + 0.5),
+                    start_tc_rate = native_rate,
                 })
             end
 
@@ -2321,6 +2322,7 @@ function M.import_into_project(project_id, parse_result, opts)
                 file_path = media_item.file_path,
                 duration_frames = dur,
                 frame_rate = fps,
+                audio_sample_rate = media_item.audio_sample_rate,
                 width = project_settings.width,
                 height = project_settings.height,
                 metadata = media_metadata,

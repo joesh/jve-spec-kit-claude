@@ -976,9 +976,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     std::unique_lock<std::mutex> tracks_lock(m_tracks_mutex);
     auto track_it = m_tracks.find(track);
     if (track_it == m_tracks.end()) {
-        // Track not in TMB — clip provider never fed clips for this track.
-        // If we're being asked to mix it (volume > 0), generate beep.
-        return generate_offline_beep(t0, t1 - t0, t0);
+        return nullptr;  // Track not yet populated — silence (not offline)
     }
     auto& ts = track_it->second;
 
@@ -1655,8 +1653,8 @@ void TimelineMediaBuffer::SetMaxReaders(int max) {
 std::shared_ptr<PcmChunk> TimelineMediaBuffer::generate_offline_beep(
     int64_t position_us, int64_t duration_us, int64_t clip_start_us)
 {
-    if (m_audio_fmt.sample_rate <= 0 || m_audio_fmt.channels <= 0)
-        return nullptr;
+    JVE_ASSERT(m_audio_fmt.sample_rate > 0 && m_audio_fmt.channels > 0,
+        "generate_offline_beep: audio format not set (SetAudioFormat not called?)");
 
     const int32_t sr = m_audio_fmt.sample_rate;
     const int32_t ch = m_audio_fmt.channels;

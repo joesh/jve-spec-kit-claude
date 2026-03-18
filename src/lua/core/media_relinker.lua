@@ -219,9 +219,7 @@ function M.find_offline_media(db, project_id)
         WHERE project_id = ?
     ]])
 
-    if not stmt then
-        return {}
-    end
+    assert(stmt, "find_offline_media: failed to prepare query")
 
     local offline = {}
     local proxy_count = 0
@@ -519,11 +517,8 @@ function M.relink_clips_batch(clips, options, progress_cb)
     assert(type(options) == "table", "relink_clips_batch: options required")
     assert(options.search_paths, "relink_clips_batch: search_paths required")
 
-    local matching_rules = options.matching_rules or {
-        match_filename = true, match_timecode = true,
-        match_resolution = false, match_frame_rate = false,
-        accept_trimmed_media = false, accept_filename_suffixes = false,
-    }
+    assert(options.matching_rules, "relink_clips_batch: matching_rules required")
+    local matching_rules = options.matching_rules
 
     local results = {
         relinked = {},

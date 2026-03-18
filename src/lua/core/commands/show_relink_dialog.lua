@@ -46,11 +46,8 @@ function M.register(executors, _undoers, db)
 
         log.event("ShowRelinkDialog: found %d offline media file(s)", #offline)
 
-        local parent_window = nil
-        local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
-        if ui_state_ok and ui_state.get_main_window then
-            parent_window = ui_state.get_main_window()
-        end
+        local ui_state = require("ui.ui_state")
+        local parent_window = ui_state.get_main_window and ui_state.get_main_window() or nil
 
         local media_relink_dialog = require("ui.media_relink_dialog")
         local results = media_relink_dialog.show(offline, parent_window, project_id)
@@ -62,7 +59,8 @@ function M.register(executors, _undoers, db)
 
         -- Build RelinkClips args with folder-priority collision resolution
         local Media = require("models.media")
-        local folder_priority = results.folder_priority or {}
+        assert(results.folder_priority, "ShowRelinkDialog: results missing folder_priority")
+        local folder_priority = results.folder_priority
         local clip_relink_map = {}
         local media_path_changes = {}
         local path_to_media = {}     -- new_path → {media_id, priority}
@@ -156,13 +154,13 @@ function M.register(executors, _undoers, db)
         local clip_change_count = 0
         for _ in pairs(clip_relink_map) do clip_change_count = clip_change_count + 1 end
         log.event("ShowRelinkDialog: dispatching RelinkClips — %d clip changes, %d media path changes, %d new media",
-            clip_change_count, path_change_count, #(results.new_media or {}))
+            clip_change_count, path_change_count, #(results.new_media))
 
         local command_manager = require("core.command_manager")
         local result = command_manager.execute("RelinkClips", {
             clip_relink_map = clip_relink_map,
             media_path_changes = media_path_changes,
-            new_media_records = results.new_media or {},
+            new_media_records = results.new_media,
             project_id = project_id,
         })
 

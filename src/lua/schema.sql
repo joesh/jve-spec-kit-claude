@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS media (
     fps_numerator INTEGER NOT NULL CHECK(fps_numerator > 0),
     fps_denominator INTEGER NOT NULL CHECK(fps_denominator > 0),
     
+    -- Audio sample rate (e.g. 48000, 44100). 0 = no audio or unknown.
+    audio_sample_rate INTEGER DEFAULT 0,
+
     -- Metadata
     width INTEGER DEFAULT 0,
     height INTEGER DEFAULT 0,

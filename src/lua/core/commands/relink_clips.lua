@@ -41,8 +41,8 @@ function M.register(executors, undoers, db)
 
         local old_clip_state  -- set in Phase 3
         local old_media_paths = {}
-        local media_path_changes = args.media_path_changes or {}
-        local new_media_records = args.new_media_records or {}
+        local media_path_changes = args.media_path_changes or {} -- NSF-OK: optional param, empty = no path changes
+        local new_media_records = args.new_media_records or {} -- NSF-OK: optional param, empty = no new media
         local media_count = 0
 
         -- Wrap all DB changes in a transaction — partial failures roll back
@@ -54,16 +54,19 @@ function M.register(executors, undoers, db)
         for _, rec in ipairs(new_media_records) do
             assert(rec.id and rec.path and rec.name,
                 "RelinkClips: new_media_record requires id, path, name")
+            assert(rec.duration_frames, "RelinkClips: new_media_record requires duration_frames")
+            assert(rec.fps_num, "RelinkClips: new_media_record requires fps_num")
+            assert(rec.fps_den, "RelinkClips: new_media_record requires fps_den")
             local media = Media.create({
                 id = rec.id,
                 project_id = args.project_id,
                 file_path = rec.path,
                 name = rec.name,
-                duration_frames = rec.duration_frames or 0,
-                fps_numerator = rec.fps_num or 25,
-                fps_denominator = rec.fps_den or 1,
-                width = rec.width or 0,
-                height = rec.height or 0,
+                duration_frames = rec.duration_frames,
+                fps_numerator = rec.fps_num,
+                fps_denominator = rec.fps_den,
+                width = rec.width,     -- nil OK for audio-only (Media.create handles)
+                height = rec.height,   -- nil OK for audio-only
                 metadata = rec.start_tc_value and
                     require("dkjson").encode({
                         start_tc_value = rec.start_tc_value,
@@ -132,11 +135,12 @@ function M.register(executors, undoers, db)
     undoers["RelinkClips"] = function(command)
         local args = command:get_all_parameters()
         assert(args.old_clip_state, "RelinkClips undo: old_clip_state missing")
+        assert(type(args.old_media_paths) == "table", "RelinkClips undo: old_media_paths missing")
 
         local Clip = require("models.clip")
         local Media = require("models.media")
 
-        local old_media_paths = args.old_media_paths or {}
+        local old_media_paths = args.old_media_paths
 
         -- Wrap all DB changes in a transaction — partial failures roll back
         local txn_started = db:begin_transaction()
@@ -157,12 +161,11 @@ function M.register(executors, undoers, db)
         Media.end_batch()
 
         -- Phase 3: Delete new media records (and their clips)
-        local new_media_records = args.new_media_records or {}
+        local new_media_records = args.new_media_records or {} -- NSF-OK: optional, empty = none
         for _, rec in ipairs(new_media_records) do
             local media = Media.load(rec.id)
-            if media then
-                media:delete()
-            end
+            assert(media, string.format("RelinkClips undo: new media %s not found for deletion", rec.id))
+            media:delete()
         end
 
         end) -- end pcall
