@@ -27,7 +27,7 @@ local SPEC = {
     }
 }
 
-function M.register(executors, undoers, _db)
+function M.register(executors, undoers, db)
 
     executors["RelinkClips"] = function(command)
         local args = command:get_all_parameters()
@@ -44,6 +44,11 @@ function M.register(executors, undoers, _db)
         local media_path_changes = args.media_path_changes or {}
         local new_media_records = args.new_media_records or {}
         local media_count = 0
+
+        -- Wrap all DB changes in a transaction — partial failures roll back
+        local txn_started = db:begin_transaction()
+
+        local ok, err = pcall(function()
 
         -- Phase 1: Create new media records (for segment files)
         for _, rec in ipairs(new_media_records) do
@@ -98,6 +103,14 @@ function M.register(executors, undoers, _db)
         command:set_parameter("old_clip_state", old_clip_state)
         command:set_parameter("old_media_paths", old_media_paths)
 
+        end) -- end pcall
+
+        if not ok then
+            if txn_started then db:rollback_transaction(txn_started) end
+            error(err)
+        end
+        if txn_started then db:commit_transaction(txn_started) end
+
         -- Emit media_changed for all affected media_ids so viewers refresh
         local changed_media = {}
         for clip_id, relink in pairs(args.clip_relink_map) do
@@ -123,11 +136,17 @@ function M.register(executors, undoers, _db)
         local Clip = require("models.clip")
         local Media = require("models.media")
 
+        local old_media_paths = args.old_media_paths or {}
+
+        -- Wrap all DB changes in a transaction — partial failures roll back
+        local txn_started = db:begin_transaction()
+
+        local ok, err = pcall(function()
+
         -- Phase 1: Restore clips via model batch method
         Clip.batch_update_source(args.old_clip_state)
 
         -- Phase 2: Restore media paths
-        local old_media_paths = args.old_media_paths or {}
         Media.begin_batch()
         for media_id, old_path in pairs(old_media_paths) do
             local media = Media.load(media_id)
@@ -145,6 +164,14 @@ function M.register(executors, undoers, _db)
                 media:delete()
             end
         end
+
+        end) -- end pcall
+
+        if not ok then
+            if txn_started then db:rollback_transaction(txn_started) end
+            error(err)
+        end
+        if txn_started then db:commit_transaction(txn_started) end
 
         -- Emit media_changed so viewers refresh offline status
         local changed_media = {}

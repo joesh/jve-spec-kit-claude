@@ -829,8 +829,11 @@ function M.batch_read_source(clip_ids)
         stmt:bind_value(1, clip_id)
         assert(stmt:exec(), "Clip.batch_read_source: exec failed for " .. clip_id)
         assert(stmt:next(), "Clip.batch_read_source: clip not found: " .. clip_id)
+        local mid = stmt:value(0)
+        assert(mid, string.format(
+            "Clip.batch_read_source: clip %s has NULL media_id", clip_id))
         result[clip_id] = {
-            media_id = stmt:value(0),
+            media_id = mid,
             source_in = stmt:value(1),
             source_out = stmt:value(2),
         }
