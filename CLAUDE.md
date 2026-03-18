@@ -150,6 +150,7 @@ Format:
 - **Command-specific logic in menu_system.lua** - menu dispatch must route through gather_context then command; no parameter resolution in menu handlers
 - **The word "orchestration"** in code, comments, or commit messages — it substitutes for "algorithm" without claiming algorithmic rigor. Use precise terms: "tick loop", "audio-following", "change detection", etc.
 - **fixing a failing test before being ABSOLUTELY SURE its failure is not surfacing a bug**
+- **Choosing expedience over architectural correctness** — Before every decision, ask: "Is this the architecturally correct thing to do?" If the answer is no, don't do it. Don't add workarounds, caches that mask bugs, fallback values, or "temporary" hacks. Do the right thing the first time. If unsure, ask.
 
 ## **✅ SUCCESS PATTERN**
 
