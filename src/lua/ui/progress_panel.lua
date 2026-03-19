@@ -52,23 +52,25 @@ function M.create(layout, opts)
     -- @param text string|nil: status text (e.g. "Processing 42 of 100")
     -- @param log_line string|nil: append a line to the log/results area
     local log_dirty = false
-    local update_count = 0
+    local last_pump_time = 0
+    local PUMP_INTERVAL_S = 0.05  -- 50ms — responsive without excessive overhead
     -- Only show last N log lines in the widget to avoid O(n) render on large logs
     local MAX_DISPLAY_LINES = 500
 
     function panel.update(pct, text, log_line)
-        update_count = update_count + 1
         if log_line then
             log_lines[#log_lines + 1] = log_line
             log_dirty = true
         end
-        -- Throttle UI updates: every 200 calls, update widgets + pump events
-        if update_count % 200 == 0 then
+        -- Throttle by wall-clock time: pump Qt events every 50ms.
+        -- Works for both high-frequency (120K clips) and low-frequency (parse milestones).
+        local now = os.clock()
+        if now - last_pump_time >= PUMP_INTERVAL_S then
+            last_pump_time = now
             qt.CONTROL.SET_PROGRESS_BAR_VALUE(progress_bar, pct or 0)
             if text then qt.PROPERTIES.SET_TEXT(status_label, text) end
             if log_dirty then
                 qt.DISPLAY.SET_VISIBLE(log_area, true)
-                -- Show only last MAX_DISPLAY_LINES to keep widget responsive
                 local start = math.max(1, #log_lines - MAX_DISPLAY_LINES + 1)
                 local display = {}
                 for i = start, #log_lines do
