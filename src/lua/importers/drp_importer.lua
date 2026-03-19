@@ -1084,17 +1084,26 @@ local function parse_mp_folder_file(mp_file_path, parent_folder_path)
         -- Find master clips in MediaVec
         local media_vec = find_direct_child(folder_elem, "MediaVec")
         if media_vec then
+            local elem_count = 0
+            local clip_count = 0
             for _, element in ipairs(media_vec.children or {}) do
                 if element.tag == "Element" then
+                    elem_count = elem_count + 1
                     for _, child in ipairs(element.children or {}) do
                         if child.tag == "Sm2MpVideoClip" or child.tag == "Sm2MpAudioClip" then
                             local master_clip = parse_master_clip_element(child, db_id)
                             if master_clip then
+                                clip_count = clip_count + 1
                                 table.insert(result.master_clips, master_clip)
                             end
                         end
                     end
                 end
+            end
+            if elem_count > 0 then
+                log.detail("parse_mp_folder: %s — %d elements, %d clips parsed",
+                    mp_file_path:match("([^/]+/MpFolder%.xml)$") or mp_file_path,
+                    elem_count, clip_count)
             end
         end
     end
@@ -1990,10 +1999,18 @@ function M.parse_drp_file(drp_path, progress_cb)
         end
     end
 
+    local ref_count = 0
+    for _ in pairs(ref_to_path) do ref_count = ref_count + 1 end
+    log.event("ref_to_path: %d entries from %d sequence files", ref_count, #sequence_file_list)
+
     for _, pmc in ipairs(media_pool_hierarchy.master_clips) do
-        -- Resolve file_path: blob-decoded path, or timeline <MediaFilePath> via DbId
+        -- Resolve file_path that matches media_lookup.
+        -- Blob path and timeline <MediaFilePath> can differ (media-managed vs original).
+        -- Try both: blob path first, then timeline path via DbId.
         local file_path = pmc.file_path
-        if not file_path and pmc.id then
+        if file_path and not media_lookup[file_path] and pmc.id and ref_to_path[pmc.id] then
+            file_path = ref_to_path[pmc.id]
+        elseif not file_path and pmc.id then
             file_path = ref_to_path[pmc.id]
             if file_path then
                 log.detail("pmc %s: encrypted blob, resolved via ref_to_path → %s",
