@@ -177,6 +177,10 @@ int main(int argc, char *argv[])
     darkPalette.setColor(QPalette::Link, QColor(42, 130, 218));
     darkPalette.setColor(QPalette::Highlight, QColor(42, 130, 218));
     darkPalette.setColor(QPalette::HighlightedText, Qt::black);
+    // Disabled state must be visually distinct on dark backgrounds
+    darkPalette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(90, 90, 90));
+    darkPalette.setColor(QPalette::Disabled, QPalette::WindowText, QColor(90, 90, 90));
+    darkPalette.setColor(QPalette::Disabled, QPalette::Text, QColor(90, 90, 90));
     app.setPalette(darkPalette);
 
     // Set up application data directory
