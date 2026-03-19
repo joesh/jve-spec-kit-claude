@@ -1579,9 +1579,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                             name = mc_name or clip.name or file_path,
                             path = file_path,
                             duration = source_extent_frames,
-                            frame_rate = frame_rate,
-                            width = 1920,
-                            height = 1080,
+                            -- frame_rate set by blob propagation in parse_drp_file
                             audio_channels = track_type == "AUDIO" and 2 or 0,
                             key = file_path,
                             media_start_time = media_start_time
@@ -1926,7 +1924,8 @@ function M.parse_drp_file(drp_path, progress_cb)
                         file_path = path,
                         duration = info.duration or 0,
                         resolve_id = info.id,
-                        media_start_time = info.media_start_time
+                        media_start_time = info.media_start_time,
+                        -- frame_rate set by blob propagation below
                     }
                     table.insert(media_items, entry)
                     media_lookup[path] = entry
@@ -1966,9 +1965,30 @@ function M.parse_drp_file(drp_path, progress_cb)
     -- Apply authoritative media durations from MediaPool blob data.
     -- Pool master clips contain Time/TracksBA blobs with actual media duration,
     -- which is more accurate than source_extent derived from timeline clips.
+    -- Build a name→entry index for fallback matching when blob path differs from timeline path
+    local media_name_lookup = {}
+    local media_name_ambiguous = {}  -- names that appear more than once
+    for _, item in ipairs(media_items) do
+        if item.name then
+            if media_name_lookup[item.name] then
+                media_name_ambiguous[item.name] = true
+            else
+                media_name_lookup[item.name] = item
+            end
+        end
+    end
+
     for _, pmc in ipairs(media_pool_hierarchy.master_clips) do
         if pmc.file_path then
             local entry = media_lookup[pmc.file_path]
+
+            -- Fallback: blob path may differ from timeline path (media-managed copies).
+            -- Match by filename if unique.
+            if not entry and pmc.name and media_name_lookup[pmc.name]
+                    and not media_name_ambiguous[pmc.name] then
+                entry = media_name_lookup[pmc.name]
+            end
+
             if entry then
                 if pmc.num_frames and pmc.num_frames > 0 then
                     entry.duration = pmc.num_frames
