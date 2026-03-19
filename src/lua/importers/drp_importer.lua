@@ -2368,6 +2368,8 @@ function M.import_into_project(project_id, parse_result, opts)
         local dur = media_item.duration or 0
         if dur <= 0 then
             log.warn("Skipping zero-duration media: %s", media_item.name)
+        elseif media_item.file_path and media_item.file_path:find("/ProxyMedia/") then
+            log.event("Skipping proxy media: %s", media_item.name)
         else
             local fps = assert(media_item.frame_rate,
                 string.format("drp_importer: no frame_rate for media '%s' (path=%s)",
