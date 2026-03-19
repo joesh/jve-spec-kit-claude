@@ -10,6 +10,41 @@
 -- @file media_relink_dialog.lua
 local M = {}
 local log = require("core.logger").for_area("media")
+local json = require("dkjson")
+
+--- Path to app-level matching rules preferences.
+local function matching_rules_path()
+    local home = os.getenv("HOME")
+    assert(home, "matching_rules_path: HOME not set")
+    return home .. "/.jve/relink_matching_rules.json"
+end
+
+--- Load matching rules from ~/.jve/ (app-level, persists across projects).
+local function load_matching_rules()
+    local matching_rules_dialog = require("ui.matching_rules_dialog")
+    local path = matching_rules_path()
+    local f = io.open(path, "r")
+    if not f then
+        return matching_rules_dialog.default_rules()
+    end
+    local content = f:read("*a")
+    f:close()
+    local decoded = json.decode(content)
+    if type(decoded) ~= "table" then
+        return matching_rules_dialog.default_rules()
+    end
+    return decoded
+end
+
+--- Save matching rules to ~/.jve/.
+local function save_matching_rules(rules)
+    local path = matching_rules_path()
+    local encoded = json.encode(rules, {indent = true})
+    local f = io.open(path, "w")
+    assert(f, "save_matching_rules: failed to open " .. path)
+    f:write(encoded)
+    f:close()
+end
 
 --- Build clip_info structs from offline media, pumping Qt events to stay responsive.
 -- Updates the media list (not per-clip — too many) and header incrementally.
@@ -217,7 +252,7 @@ function M.show(offline_media, parent_window, project_id)
     local media_relinker = require("core.media_relinker")
     local progress_panel = require("ui.progress_panel")
     local matching_rules_dialog = require("ui.matching_rules_dialog")
-    local database = require("core.database")
+
 
     -- Extract folder roots immediately (cheap — just path parsing)
     local folder_roots = extract_folder_roots(offline_media)
@@ -230,13 +265,7 @@ function M.show(offline_media, parent_window, project_id)
     local clip_infos = nil  -- built after dialog appears
     local globals = {}
 
-    local matching_rules
-    if project_id then
-        matching_rules = database.get_project_setting(project_id, "relink_matching_rules")
-    end
-    if not matching_rules then
-        matching_rules = matching_rules_dialog.default_rules()
-    end
+    local matching_rules = load_matching_rules()
 
     -- Create dialog
     local dialog = qt.DIALOG.CREATE("Reconnect Media", 700, 650, parent_window)
@@ -319,9 +348,7 @@ function M.show(offline_media, parent_window, project_id)
         local updated = matching_rules_dialog.show(matching_rules, dialog)
         if updated then
             matching_rules = updated
-            if project_id then
-                database.set_project_setting(project_id, "relink_matching_rules", matching_rules)
-            end
+            save_matching_rules(matching_rules)
         end
     end
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(rules_btn, rules_name)
