@@ -152,7 +152,6 @@ function M.show(config)
     local function set_converting(active)
         qt.CONTROL.SET_ENABLED(browse_btn, not active)
         qt.CONTROL.SET_ENABLED(convert_btn, not active)
-        qt.CONTROL.SET_ENABLED(cancel_btn, not active)
         if active then
             progress.show()
             qt.PROPERTIES.SET_TEXT(convert_btn, "Converting…")
