@@ -153,6 +153,7 @@ function M.show(config)
         qt.CONTROL.SET_ENABLED(browse_btn, not active)
         qt.CONTROL.SET_ENABLED(convert_btn, not active)
         if active then progress.show() else progress.hide() end
+        qt.CONTROL.PROCESS_EVENTS()  -- flush so button state is visible immediately
     end
 
     -- -----------------------------------------------------------------------
