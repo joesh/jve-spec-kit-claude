@@ -1965,14 +1965,26 @@ function M.parse_drp_file(drp_path, progress_cb)
     -- Apply authoritative media durations from MediaPool blob data.
     -- Pool master clips contain Time/TracksBA blobs with actual media duration,
     -- which is more accurate than source_extent derived from timeline clips.
-    -- Build DbId → file_path map from timeline data for master clips with encrypted blobs.
-    -- timeline.media_files entries have .id (MediaRef DbId) and .path (from <MediaFilePath>).
+    -- Build DbId → file_path map from parsed sequence XMLs for
+    -- <MediaRef> + <MediaFilePath> pairs. This catches every master clip
+    -- referenced by any timeline, even when the Clip blob is encrypted.
     local ref_to_path = {}
-    for _, timeline in ipairs(timelines) do
-        if timeline.media_files then
-            for _, info in pairs(timeline.media_files) do
-                if info.id and info.path and info.path ~= "" and not ref_to_path[info.id] then
-                    ref_to_path[info.id] = info.path
+    for _, seq_file in ipairs(sequence_file_list) do
+        local seq_root = parse_xml_file(seq_file)
+        if seq_root then
+            -- Find all clip elements (video + audio) that have MediaRef + MediaFilePath
+            local clip_tags = {"Sm2TiVideoClip", "Sm2TiAudioClip"}
+            for _, tag in ipairs(clip_tags) do
+                for _, clip_elem in ipairs(find_all_elements(seq_root, tag)) do
+                    local ref_elem = find_element(clip_elem, "MediaRef")
+                    local path_elem = find_element(clip_elem, "MediaFilePath")
+                    if ref_elem and path_elem then
+                        local ref_id = get_text(ref_elem)
+                        local mfp = get_text(path_elem)
+                        if ref_id ~= "" and mfp ~= "" and not ref_to_path[ref_id] then
+                            ref_to_path[ref_id] = mfp
+                        end
+                    end
                 end
             end
         end
@@ -1983,6 +1995,13 @@ function M.parse_drp_file(drp_path, progress_cb)
         local file_path = pmc.file_path
         if not file_path and pmc.id then
             file_path = ref_to_path[pmc.id]
+            if file_path then
+                log.detail("pmc %s: encrypted blob, resolved via ref_to_path → %s",
+                    pmc.name or pmc.id, file_path)
+            else
+                log.warn("pmc %s (id=%s): encrypted blob, NOT in ref_to_path",
+                    pmc.name or "?", pmc.id)
+            end
         end
 
         if file_path then
