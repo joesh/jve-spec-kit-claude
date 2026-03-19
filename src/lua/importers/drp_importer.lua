@@ -281,22 +281,26 @@ local function decode_bt_clip_path(hex_str)
     local filename = bytes:sub(fname_data_pos, fname_data_pos + fname_len - 1)
 
     -- Both components must be non-empty to form a valid path
-    if #directory == 0 or #filename == 0 then return nil end
+    if #directory == 0 or #filename == 0 then return nil, nil end
 
-    -- Reject garbled paths: protobuf field data sometimes leaks into filename/directory
-    -- (e.g., "file.mp4\x1a\x18Sun Aug 21"). Valid paths never contain control chars.
+    -- Reject garbled directories (protobuf field data leak). Valid paths never contain control chars.
     if directory:find("[%z\1-\31]") then
         log.warn("decode_bt_clip_path: garbled directory in blob (raw=%s), skipping",
             directory:sub(1, 30))
-        return nil
-    end
-    if filename:find("[%z\1-\31]") then
-        log.warn("decode_bt_clip_path: garbled filename in blob (dir=%s, raw=%s), skipping",
-            directory, filename:sub(1, 30))
-        return nil
+        return nil, nil
     end
 
-    return directory .. "/" .. filename
+    -- Filename may contain control chars (protobuf date fields leaking into
+    -- the filename field — common in audio clip blobs). When this happens,
+    -- the full path is unreliable. Return nil for path but provide the
+    -- directory so the caller can construct the path using the XML <Name>.
+    if filename:find("[%z\1-\31]") then
+        log.detail("decode_bt_clip_path: garbled filename in blob (dir=%s, raw=%s), returning dir only",
+            directory, filename:sub(1, 30))
+        return nil, directory
+    end
+
+    return directory .. "/" .. filename, directory
 end
 
 --- Decode hex string to raw byte string.
@@ -674,23 +678,29 @@ end
 -- @param clip_elem table: Sm2MpVideoClip or Sm2MpAudioClip XML element
 -- @return string|nil: decoded original path, or nil if no blob found/parseable
 local function extract_original_path(clip_elem)
-    -- Try BtVideoInfo first (video master clips)
+    -- Get XML name for fallback (blob filename can be garbled for audio clips)
+    local name_elem = find_element(clip_elem, "Name")
+    local xml_name = name_elem and get_text(name_elem)
+
+    -- Try BtVideoInfo first (video master clips — blob filename is reliable)
     local bt_video = find_element(clip_elem, "BtVideoInfo")
     if bt_video then
         local blob_elem = find_direct_child(bt_video, "Clip")
         if blob_elem then
-            local path = decode_bt_clip_path(get_text(blob_elem))
+            local path, directory = decode_bt_clip_path(get_text(blob_elem))
             if path then return path end
+            if directory and xml_name then return directory .. "/" .. xml_name end
         end
     end
 
-    -- Try BtAudioInfo (audio master clips or embedded audio)
+    -- Try BtAudioInfo (audio master clips — blob filename is unreliable,
+    -- use blob directory + XML <Name> which has the correct filename)
     local bt_audio = find_element(clip_elem, "BtAudioInfo")
     if bt_audio then
         local blob_elem = find_direct_child(bt_audio, "Clip")
         if blob_elem then
-            local path = decode_bt_clip_path(get_text(blob_elem))
-            if path then return path end
+            local _, directory = decode_bt_clip_path(get_text(blob_elem))
+            if directory and xml_name then return directory .. "/" .. xml_name end
         end
     end
 
