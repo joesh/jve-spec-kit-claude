@@ -98,6 +98,7 @@ local function build_clip_infos(offline_media, widgets)
             end
             if widgets.media_area then
                 qt.PROPERTIES.SET_TEXT(widgets.media_area, table.concat(media_lines, "\n"))
+                qt.CONTROL.SCROLL_TEXT_EDIT_TO_END(widgets.media_area)
             end
             if widgets.header then
                 qt.PROPERTIES.SET_TEXT(widgets.header,
@@ -306,9 +307,10 @@ function M.show(offline_media, parent_window, project_id)
     qt.LAYOUT.ADD_LAYOUT(main_layout, dir_row)
 
     -- Folder priority button (only if multiple source folders)
+    local priority_btn = nil
     if #folder_roots > 1 then
         local priority_row = qt.LAYOUT.CREATE_HBOX()
-        local priority_btn = qt.WIDGET.CREATE_BUTTON(
+        priority_btn = qt.WIDGET.CREATE_BUTTON(
             string.format("Folder Priority... (%d source folders)", #folder_roots))
         qt.LAYOUT.ADD_WIDGET(priority_row, priority_btn)
         qt.LAYOUT.ADD_STRETCH(priority_row)
@@ -376,6 +378,8 @@ function M.show(offline_media, parent_window, project_id)
     local relink_btn = qt.WIDGET.CREATE_BUTTON("Relink")
     qt.CONTROL.SET_ENABLED(relink_btn, false)  -- disabled until clips loaded
     local cancel_btn = qt.WIDGET.CREATE_BUTTON("Cancel")
+    -- Cancel must NOT be default — accidental Enter would lose work/time
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(cancel_btn, false)
 
     local cancel_name = "__relink_dialog_cancel"
     _G[cancel_name] = function()
@@ -394,9 +398,12 @@ function M.show(offline_media, parent_window, project_id)
         end
 
         qt.DISPLAY.SET_VISIBLE(error_label, false)
+
+        -- Disable all controls during relink operation
         qt.CONTROL.SET_ENABLED(relink_btn, false)
         qt.CONTROL.SET_ENABLED(browse_btn, false)
         qt.CONTROL.SET_ENABLED(rules_btn, false)
+        if priority_btn then qt.CONTROL.SET_ENABLED(priority_btn, false) end
         progress.reset()
         progress.show()
 
@@ -408,17 +415,19 @@ function M.show(offline_media, parent_window, project_id)
         progress.flush()
         results.folder_priority = folder_priority
 
-        qt.CONTROL.SET_ENABLED(browse_btn, true)
-        qt.CONTROL.SET_ENABLED(rules_btn, true)
-
         if #results.relinked == 0 then
+            -- No matches — re-enable everything so user can retry
             qt.CONTROL.SET_ENABLED(relink_btn, true)
+            qt.CONTROL.SET_ENABLED(browse_btn, true)
+            qt.CONTROL.SET_ENABLED(rules_btn, true)
+            if priority_btn then qt.CONTROL.SET_ENABLED(priority_btn, true) end
             qt.PROPERTIES.SET_TEXT(error_label,
                 "No clips matched. Try a different directory or matching rules.")
             qt.DISPLAY.SET_VISIBLE(error_label, true)
             return
         end
 
+        -- Success — show Apply button, keep other controls disabled
         relink_results = results
         qt.PROPERTIES.SET_TEXT(relink_btn, "Apply")
         qt.CONTROL.SET_ENABLED(relink_btn, true)

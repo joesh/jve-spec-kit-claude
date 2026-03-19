@@ -190,6 +190,8 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_progress_bar_value); lua_setfield(L, -2, "SET_PROGRESS_BAR_VALUE");
     lua_pushcfunction(L, lua_set_progress_bar_range); lua_setfield(L, -2, "SET_PROGRESS_BAR_RANGE");
     lua_pushcfunction(L, lua_set_text_edit_read_only); lua_setfield(L, -2, "SET_TEXT_EDIT_READ_ONLY");
+    lua_pushcfunction(L, lua_scroll_text_edit_to_end); lua_setfield(L, -2, "SCROLL_TEXT_EDIT_TO_END");
+    lua_pushcfunction(L, lua_set_button_auto_default); lua_setfield(L, -2, "SET_BUTTON_AUTO_DEFAULT");
     lua_pushcfunction(L, lua_set_line_edit_read_only); lua_setfield(L, -2, "SET_LINE_EDIT_READ_ONLY");
     lua_pushcfunction(L, lua_set_widget_size_policy); lua_setfield(L, -2, "SET_WIDGET_SIZE_POLICY");
     lua_pushcfunction(L, lua_set_button_click_handler); lua_setfield(L, -2, "SET_BUTTON_CLICK_HANDLER");

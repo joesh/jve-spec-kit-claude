@@ -133,6 +133,27 @@ int lua_set_text_edit_read_only(lua_State* L) {
     return 0;
 }
 
+// CONTROL.SCROLL_TEXT_EDIT_TO_END(text_edit)
+int lua_scroll_text_edit_to_end(lua_State* L) {
+    QTextEdit* te = get_widget<QTextEdit>(L, 1);
+    if (te) {
+        te->moveCursor(QTextCursor::End);
+        te->ensureCursorVisible();
+    }
+    return 0;
+}
+
+// CONTROL.SET_BUTTON_AUTO_DEFAULT(button, bool)
+int lua_set_button_auto_default(lua_State* L) {
+    QPushButton* btn = get_widget<QPushButton>(L, 1);
+    bool ad = lua_toboolean(L, 2);
+    if (btn) {
+        btn->setAutoDefault(ad);
+        btn->setDefault(ad);
+    }
+    return 0;
+}
+
 int lua_set_line_edit_read_only(lua_State* L) {
     QLineEdit* le = get_widget<QLineEdit>(L, 1);
     bool ro = lua_toboolean(L, 2);
