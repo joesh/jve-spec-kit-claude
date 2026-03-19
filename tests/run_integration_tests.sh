@@ -32,8 +32,18 @@ fi
 
 echo "[integration] Running $TOTAL integration test(s)..."
 
+RUN_SLOW="${RUN_SLOW_TESTS:-0}"
+SKIP=0
+
 for t in "${TESTS[@]}"; do
   base="$(basename "$t")"
+
+  # Skip tests marked -- SLOW unless RUN_SLOW_TESTS=1
+  if [[ "$RUN_SLOW" != "1" ]] && head -3 "$t" | grep -q SLOW_TEST; then
+    SKIP=$((SKIP+1))
+    continue
+  fi
+
   echo "[integration] → $base"
 
   tmp_out="$(mktemp -t integ_test_out.XXXXXX)"
@@ -49,7 +59,11 @@ for t in "${TESTS[@]}"; do
 done
 
 echo "------------------------------------"
-echo "Integration: PASSED=$PASS FAILED=$FAIL"
+if [[ $SKIP -gt 0 ]]; then
+  echo "Integration: PASSED=$PASS FAILED=$FAIL SKIPPED=$SKIP (set RUN_SLOW_TESTS=1 to include)"
+else
+  echo "Integration: PASSED=$PASS FAILED=$FAIL"
+fi
 echo "------------------------------------"
 
 if [[ $FAIL -ne 0 ]]; then

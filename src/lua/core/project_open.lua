@@ -53,13 +53,15 @@ function M.open_project_database_or_prompt_cleanup(db_module, qt_constants, proj
     end
 
     -- Now try to open the database (SQLite will recover WAL if present)
+    -- set_path checks schema_version BEFORE applying schema — incompatible
+    -- versions error() with a user-facing message (caught by layout.lua pcall).
     local ok = db_module.set_path(project_path)
-    if ok then
-        return true
+    if not ok then
+        log.error("Failed to open project database: %s", tostring(project_path))
+        return false
     end
 
-    log.error("Failed to open project database: %s", tostring(project_path))
-    return false
+    return true
 end
 
 return M

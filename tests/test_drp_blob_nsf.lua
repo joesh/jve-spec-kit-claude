@@ -171,11 +171,12 @@ assert(#vt5 == 1 and #vt5[1].clips == 1, "should have 1 track with 1 clip")
 assert(vt5[1].clips[1].file_path == "/correct/path/video.mov",
     string.format("file_path should be MediaFilePath, got '%s'",
         tostring(vt5[1].clips[1].file_path)))
--- media_lookup should be keyed by the correct path
-assert(ml5["/correct/path/video.mov"],
-    "media_lookup should have entry for MediaFilePath path")
-assert(not ml5["/garbled/path/vide\x1ao.mov"],
-    "media_lookup should NOT have entry for garbled blob path")
+-- media_lookup is now keyed by UUID (MediaRef DbId), not path.
+-- The entry's file_path field holds the correct path.
+assert(ml5["ref_001"],
+    "media_lookup should have entry keyed by MediaRef UUID")
+assert(ml5["ref_001"].file_path == "/correct/path/video.mov",
+    "entry.file_path should be MediaFilePath, not garbled blob")
 print("  ✓ MediaFilePath wins when present")
 
 -- Test 5b: When MediaFilePath is empty, blob path is used as fallback
@@ -231,8 +232,9 @@ local mc_name_map = { ref_mc1 = "A001_C001.mov" }
 
 local vt6, _, ml6 = drp_importer.parse_resolve_tracks(seq_name, 24, nil, mc_name_map)
 assert(#vt6 == 1)
-local media6 = ml6["/vol/media/A001_C001.mov"]
-assert(media6, "media_lookup should have entry")
+-- media_lookup keyed by UUID (ref_mc1) now
+local media6 = ml6["ref_mc1"]
+assert(media6, "media_lookup should have entry keyed by UUID")
 assert(media6.name == "A001_C001.mov",
     string.format("media name should be MC name 'A001_C001.mov', got '%s'",
         tostring(media6.name)))
@@ -244,7 +246,8 @@ print("  ✓ media_lookup.name = MC name, clip.name = timeline label")
 
 -- Test 6b: Without MC name map, falls through to clip.name
 local _, _, ml6b = drp_importer.parse_resolve_tracks(seq_name, 24)
-local media6b = ml6b["/vol/media/A001_C001.mov"]
+-- Without name map, key is still UUID (ref_mc1 from MediaRef)
+local media6b = ml6b["ref_mc1"]
 assert(media6b, "media_lookup should have entry without name map")
 assert(media6b.name == "My Custom Label",
     string.format("without MC name map, should use clip.name, got '%s'",

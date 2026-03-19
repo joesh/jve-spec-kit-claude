@@ -58,12 +58,26 @@ if [[ ${#LUA_TESTS[@]} -eq 0 ]]; then
   exit 0
 fi
 
+RUN_SLOW="${RUN_SLOW_TESTS:-0}"
+SKIP=0
+
 echo "[lua-tests] Running ${#LUA_TESTS[@]} Lua test(s)..."
 
 for test_file in "${LUA_TESTS[@]}"; do
   test_name="$(basename "${test_file}")"
+
+  # Skip tests marked -- SLOW unless RUN_SLOW_TESTS=1
+  if [[ "$RUN_SLOW" != "1" ]] && head -3 "${test_file}" | grep -q SLOW_TEST; then
+    SKIP=$((SKIP+1))
+    continue
+  fi
+
   echo "[lua-tests] → ${test_name}"
   (cd "${TEST_DIR}" && luajit test_harness.lua "${test_name}")
 done
 
-echo "[lua-tests] All Lua tests passed."
+if [[ $SKIP -gt 0 ]]; then
+  echo "[lua-tests] All Lua tests passed ($SKIP slow tests skipped; set RUN_SLOW_TESTS=1 to include)."
+else
+  echo "[lua-tests] All Lua tests passed."
+fi

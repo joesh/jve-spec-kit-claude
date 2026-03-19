@@ -1564,7 +1564,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 clip_speed = clip_speed,            -- signed speed for downstream validation
                 enabled = get_text(find_element(clip_elem, "WasDisbanded")) ~= "true",
                 file_path = file_path,
-                media_key = file_path,
+                file_uuid = get_text(find_element(clip_elem, "MediaRef")),
                 file_id = get_text(find_element(clip_elem, "MediaRef")),
                 frame_rate = frame_rate,
                 media_start_time = media_start_time  -- seconds since midnight (file TC origin)
@@ -1578,22 +1578,30 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 clip_count = clip_count + 1
 
                 if file_path and file_path ~= "" then
-                    local entry = media_lookup[file_path]
+                    -- Key by UUID (file_id) for dedup across volumes.
+                    -- Fall back to path key for clips without MediaRef.
+                    local lookup_key = (clip.file_id and clip.file_id ~= "") and clip.file_id or file_path
+                    local entry = media_lookup[lookup_key]
                     if not entry then
                         -- Use master clip name (original filename) for media name,
                         -- not timeline clip name (user's custom label)
                         local mc_name = media_ref_name_map and media_ref_name_map[clip.file_id]
-                        media_lookup[file_path] = {
-                            id = clip.file_id,
+                        entry = {
+                            file_uuid = (clip.file_id and clip.file_id ~= "") and clip.file_id or nil,
                             name = mc_name or clip.name or file_path,
-                            path = file_path,
+                            file_path = file_path,
                             duration = source_extent_frames,
                             -- frame_rate set by blob propagation in parse_drp_file
                             audio_channels = track_type == "AUDIO" and 2 or 0,
-                            key = file_path,
-                            media_start_time = media_start_time
+                            media_start_time = media_start_time,
+                            alt_paths = {},
                         }
+                        media_lookup[lookup_key] = entry
                     else
+                        -- Same UUID, maybe different path — track alt_paths
+                        if file_path ~= entry.file_path then
+                            entry.alt_paths[file_path] = true
+                        end
                         if source_extent_frames > entry.duration then
                             entry.duration = source_extent_frames
                         end
@@ -1803,12 +1811,12 @@ function M.parse_drp_file(drp_path, progress_cb)
     local project = parse_project_metadata(project_elem)
     pump(10, "Scanning media pool…")
 
-    -- Parse MediaPool XML for master clips
+    -- Parse MediaPool XML for master clips (Pass 1: basic path-only entries)
     local media_pool_path = tmp_dir .. "/MediaPool/Master/MpFolder.xml"
-    local media_items = {}
+    local media_pool_items = {}
     local media_pool_root = parse_xml_file(media_pool_path)
     if media_pool_root then
-        media_items = parse_media_pool(media_pool_root)
+        media_pool_items = parse_media_pool(media_pool_root)
     end
 
     -- Build timeline metadata map by scanning all MediaPool folders
@@ -1916,33 +1924,86 @@ function M.parse_drp_file(drp_path, progress_cb)
         end
     end
 
-    local media_lookup = {}
-    for _, item in ipairs(media_items) do
-        if item.file_path and item.file_path ~= "" then
-            media_lookup[item.file_path] = item
+    -- media_items: UUID → entry (one entry per master clip).
+    -- For entries without UUID, key is file_path.
+    -- Secondary path→entry index for path-based lookups.
+    local media_items = {}     -- uuid_or_path → entry
+    local path_to_key = {}     -- file_path → key in media_items (for path lookups)
+
+    local function media_put(entry)
+        local key = (entry.file_uuid and entry.file_uuid ~= "") and entry.file_uuid or entry.file_path
+        if not key or key == "" then return end
+        media_items[key] = entry
+        if entry.file_path and entry.file_path ~= "" then
+            path_to_key[entry.file_path] = key
+        end
+        for alt in pairs(entry.alt_paths or {}) do
+            path_to_key[alt] = key
         end
     end
 
+    local function media_get(file_uuid, file_path)
+        if file_uuid and file_uuid ~= "" and media_items[file_uuid] then
+            return media_items[file_uuid]
+        end
+        if file_path and file_path ~= "" then
+            local key = path_to_key[file_path]
+            if key then return media_items[key] end
+        end
+        return nil
+    end
+
+    -- Seed from parse_media_pool (Pass 1: path-only, no UUIDs)
+    for _, item in ipairs(media_pool_items) do
+        if item.file_path and item.file_path ~= "" then
+            if not item.alt_paths then item.alt_paths = {} end
+            media_put(item)
+        end
+    end
+
+    -- Merge per-timeline media_files (from parse_resolve_tracks, UUID-keyed)
     for _, timeline in ipairs(timelines) do
         if timeline.media_files then
-            for key, info in pairs(timeline.media_files) do
-                local path = info.path or key
-                if path and path ~= "" and not media_lookup[path] then
+            for _, info in pairs(timeline.media_files) do
+                local existing = media_get(info.file_uuid, info.file_path)
+                if existing then
+                    -- Same master clip — merge
+                    if info.file_path and info.file_path ~= existing.file_path then
+                        existing.alt_paths[info.file_path] = true
+                        path_to_key[info.file_path] = (existing.file_uuid and existing.file_uuid ~= "") and existing.file_uuid or existing.file_path
+                    end
+                    if (info.duration or 0) > (existing.duration or 0) then
+                        existing.duration = info.duration
+                    end
+                    if (info.audio_channels or 0) > (existing.audio_channels or 0) then
+                        existing.audio_channels = info.audio_channels
+                    end
+                    if info.media_start_time and not existing.media_start_time then
+                        existing.media_start_time = info.media_start_time
+                    end
+                    -- If existing was path-keyed but info has UUID, upgrade the key
+                    if info.file_uuid and info.file_uuid ~= "" and not existing.file_uuid then
+                        -- Remove old path-based key, re-insert under UUID
+                        media_items[existing.file_path] = nil
+                        existing.file_uuid = info.file_uuid
+                        media_put(existing)
+                    end
+                else
                     local entry = {
-                        name = info.name or path,
-                        file_path = path,
+                        file_uuid = info.file_uuid,
+                        name = info.name or info.file_path,
+                        file_path = info.file_path,
                         duration = info.duration or 0,
-                        resolve_id = info.id,
                         media_start_time = info.media_start_time,
-                        -- frame_rate set by blob propagation below
+                        alt_paths = info.alt_paths or {},
                     }
-                    table.insert(media_items, entry)
-                    media_lookup[path] = entry
+                    media_put(entry)
                 end
             end
         end
     end
 
+    -- Pass 4: raw XML grep for orphaned paths not found in structured parse
     for _, seq_file in ipairs(sequence_file_list) do
         local handle = io.open(seq_file, "r")
         if handle then
@@ -1950,14 +2011,13 @@ function M.parse_drp_file(drp_path, progress_cb)
             handle:close()
             for raw_path in content:gmatch("<MediaFilePath>(.-)</MediaFilePath>") do
                 local cleaned = raw_path:match("^%s*(.-)%s*$")
-                if cleaned ~= "" and not media_lookup[cleaned] then
-                    local entry = {
+                if cleaned ~= "" and not media_get(nil, cleaned) then
+                    media_put({
                         name = cleaned:match("([^/\\]+)$") or cleaned,
                         file_path = cleaned,
-                        duration = 0
-                    }
-                    table.insert(media_items, entry)
-                    media_lookup[cleaned] = entry
+                        duration = 0,
+                        alt_paths = {},
+                    })
                 end
             end
         end
@@ -1971,70 +2031,99 @@ function M.parse_drp_file(drp_path, progress_cb)
         project.settings.frame_rate = timelines[1].fps
     end
 
-    -- Apply authoritative media durations from MediaPool blob data.
-    -- Pool master clips contain Time/TracksBA blobs with actual media duration,
-    -- which is more accurate than source_extent derived from timeline clips.
-    -- Build DbId → file_path map from parsed sequence XMLs for
-    -- <MediaRef> + <MediaFilePath> pairs. This catches every master clip
-    -- referenced by any timeline, even when the Clip blob is encrypted.
-    local ref_to_path = {}
+    -- UUID enrichment: Scan sequence XMLs for <MediaRef> + <MediaFilePath> pairs.
+    -- Entries from Pass 1 (media pool) or Pass 4 (raw XML grep) may lack UUIDs.
+    -- When a timeline clip references the same path with a MediaRef, attach the UUID
+    -- so blob propagation can find the entry.
+    local enriched_count = 0
     for _, seq_file in ipairs(sequence_file_list) do
         local seq_root = parse_xml_file(seq_file)
         if seq_root then
-            -- Find all clip elements (video + audio) that have MediaRef + MediaFilePath
             local clip_tags = {"Sm2TiVideoClip", "Sm2TiAudioClip"}
             for _, tag in ipairs(clip_tags) do
                 for _, clip_elem in ipairs(find_all_elements(seq_root, tag)) do
-                    local ref_elem = find_element(clip_elem, "MediaRef")
-                    local path_elem = find_element(clip_elem, "MediaFilePath")
-                    if ref_elem and path_elem then
-                        local ref_id = get_text(ref_elem)
-                        local mfp = get_text(path_elem)
-                        if ref_id ~= "" and mfp ~= "" and not ref_to_path[ref_id] then
-                            ref_to_path[ref_id] = mfp
+                    local ref_id = get_text(find_element(clip_elem, "MediaRef"))
+                    local mfp = get_text(find_element(clip_elem, "MediaFilePath"))
+                    if ref_id ~= "" and mfp ~= "" then
+                        local path_entry = media_get(nil, mfp)
+                        local uuid_entry = media_get(ref_id, nil)
+
+                        if path_entry and uuid_entry and path_entry ~= uuid_entry then
+                            -- Two entries for same media. Merge path_entry into uuid_entry.
+                            if mfp ~= uuid_entry.file_path then
+                                uuid_entry.alt_paths[mfp] = true
+                            end
+                            if (path_entry.duration or 0) > (uuid_entry.duration or 0) then
+                                uuid_entry.duration = path_entry.duration
+                            end
+                            if path_entry.media_start_time and not uuid_entry.media_start_time then
+                                uuid_entry.media_start_time = path_entry.media_start_time
+                            end
+                            -- Remove old path-keyed entry, redirect path to UUID entry
+                            media_items[path_entry.file_path] = nil
+                            path_to_key[mfp] = ref_id
+                            enriched_count = enriched_count + 1
+                        elseif path_entry and not path_entry.file_uuid then
+                            -- Path-only entry gets a UUID — re-key it
+                            media_items[path_entry.file_path] = nil
+                            path_entry.file_uuid = ref_id
+                            media_put(path_entry)
+                            enriched_count = enriched_count + 1
+                        elseif path_entry and path_entry.file_uuid and path_entry.file_uuid ~= ref_id then
+                            log.warn("UUID conflict for path %s: existing=%s, new=%s",
+                                mfp, path_entry.file_uuid, ref_id)
+                        elseif not path_entry and uuid_entry then
+                            -- UUID entry exists but not at this path — register alt_path
+                            uuid_entry.alt_paths[mfp] = true
+                            path_to_key[mfp] = ref_id
+                        elseif not path_entry and not uuid_entry then
+                            media_put({
+                                file_uuid = ref_id,
+                                name = mfp:match("([^/\\]+)$") or mfp,
+                                file_path = mfp,
+                                duration = 0,
+                                alt_paths = {},
+                            })
+                            enriched_count = enriched_count + 1
                         end
                     end
                 end
             end
         end
     end
+    if enriched_count > 0 then
+        log.event("UUID enrichment: %d entries updated from %d sequence files",
+            enriched_count, #sequence_file_list)
+    end
 
-    local ref_count = 0
-    for _ in pairs(ref_to_path) do ref_count = ref_count + 1 end
-    log.event("ref_to_path: %d entries from %d sequence files", ref_count, #sequence_file_list)
-
+    -- Apply authoritative media durations from MediaPool blob data.
+    -- Pool master clips have Time/TracksBA blobs with actual media duration.
+    -- UUID lookup finds entries even when blob path ≠ timeline path.
     for _, pmc in ipairs(media_pool_hierarchy.master_clips) do
-        -- Resolve file_path that matches media_lookup.
-        -- Blob path and timeline <MediaFilePath> can differ (media-managed vs original).
-        -- Try both: blob path first, then timeline path via DbId.
-        local file_path = pmc.file_path
-        if file_path and not media_lookup[file_path] and pmc.id and ref_to_path[pmc.id] then
-            file_path = ref_to_path[pmc.id]
-        elseif not file_path and pmc.id then
-            file_path = ref_to_path[pmc.id]
-            if file_path then
-                log.detail("pmc %s: encrypted blob, resolved via ref_to_path → %s",
-                    pmc.name or pmc.id, file_path)
-            else
-                log.warn("pmc %s (id=%s): encrypted blob, NOT in ref_to_path",
-                    pmc.name or "?", pmc.id)
-            end
+        local entry = media_get(pmc.id, pmc.file_path)
+
+        if not entry and pmc.id then
+            log.warn("pmc %s (id=%s): no media entry (encrypted blob, unreferenced)",
+                pmc.name or "?", pmc.id)
         end
 
-        if file_path then
-            local entry = media_lookup[file_path]
-            if entry then
-                if pmc.num_frames and pmc.num_frames > 0 then
-                    entry.duration = pmc.num_frames
-                    if pmc.frame_rate then
-                        entry.frame_rate = pmc.frame_rate
-                    end
-                elseif pmc.audio_duration then
-                    -- Audio-only media: duration in samples, rate = sample_rate
-                    entry.duration = pmc.audio_duration.samples
-                    entry.audio_sample_rate = pmc.audio_duration.sample_rate
-                    entry.frame_rate = pmc.audio_duration.sample_rate
+        if entry then
+            -- Update canonical path from blob if blob has a decodable path
+            if pmc.file_path and pmc.file_path ~= entry.file_path then
+                entry.alt_paths[entry.file_path] = true
+                entry.file_path = pmc.file_path
+                path_to_key[pmc.file_path] = (entry.file_uuid and entry.file_uuid ~= "") and entry.file_uuid or entry.file_path
+            end
+
+            if pmc.num_frames and pmc.num_frames > 0 then
+                entry.duration = pmc.num_frames
+                if pmc.frame_rate then
+                    entry.frame_rate = pmc.frame_rate
                 end
+            elseif pmc.audio_duration then
+                entry.duration = pmc.audio_duration.samples
+                entry.audio_sample_rate = pmc.audio_duration.sample_rate
+                entry.frame_rate = pmc.audio_duration.sample_rate
             end
         end
     end
@@ -2069,7 +2158,6 @@ function M.parse_drp_file(drp_path, progress_cb)
         end
     end
 
-    -- Cleanup temp directory
     os.execute("rm -rf " .. tmp_dir)
 
     return {
@@ -2362,18 +2450,32 @@ function M.import_into_project(project_id, parse_result, opts)
         end
     end
 
-    -- Import media items
-    local media_by_path = {}
-    for _, media_item in ipairs(parse_result.media_items) do
+    -- Import media items (hash table keyed by uuid or path)
+    local media_by_uuid = {}  -- file_uuid → Media record (primary, for dedup)
+    local media_by_path = {}  -- file_path → Media record (secondary, for path-only lookups)
+    for _, media_item in pairs(parse_result.media_items) do
         local dur = media_item.duration or 0
         if dur <= 0 then
             log.warn("Skipping zero-duration media: %s", media_item.name)
         elseif media_item.file_path and media_item.file_path:find("/ProxyMedia/") then
             log.event("Skipping proxy media: %s", media_item.name)
         else
-            local fps = assert(media_item.frame_rate,
-                string.format("drp_importer: no frame_rate for media '%s' (path=%s)",
-                    media_item.name, media_item.file_path))
+            local fps = media_item.frame_rate
+            if not fps then
+                log.warn("Skipping media without frame_rate: %s (path=%s, uuid=%s)",
+                    media_item.name, tostring(media_item.file_path), tostring(media_item.file_uuid))
+                goto continue_media
+            end
+
+            -- Skip if we already created a record for this file_path
+            -- (multiple master clips can reference the same file)
+            if media_item.file_path and media_by_path[media_item.file_path] then
+                local existing = media_by_path[media_item.file_path]
+                if media_item.file_uuid then
+                    media_by_uuid[media_item.file_uuid] = existing
+                end
+                goto continue_media
+            end
 
             -- Convert MediaStartTime (seconds since midnight) to native units at media's rate
             local media_metadata = '{}'
@@ -2390,6 +2492,7 @@ function M.import_into_project(project_id, parse_result, opts)
                 project_id = project_id,
                 name = media_item.name,
                 file_path = media_item.file_path,
+                file_uuid = media_item.file_uuid,
                 duration_frames = dur,
                 frame_rate = fps,
                 audio_sample_rate = media_item.audio_sample_rate,
@@ -2401,10 +2504,20 @@ function M.import_into_project(project_id, parse_result, opts)
             assert(media:save(), string.format(
                 "drp_importer: failed to save media '%s' (path=%s)",
                 media_item.name, media_item.file_path))
+
+            -- Register in both lookup maps
+            if media_item.file_uuid then
+                media_by_uuid[media_item.file_uuid] = media
+            end
             media_by_path[media_item.file_path] = media
+            for alt in pairs(media_item.alt_paths or {}) do
+                media_by_path[alt] = media
+            end
+
             table.insert(result.media_ids, media.id)
             log.event("  Imported media: %s", media.name)
         end
+        ::continue_media::
     end
 
     sub_report(20, "Importing timelines…")
@@ -2534,8 +2647,12 @@ function M.import_into_project(project_id, parse_result, opts)
                     table.insert(result.track_ids, track.id)
 
                     for _, clip_data in ipairs(track_data.clips) do
+                        -- Prefer UUID lookup (handles cross-volume dedup),
+                        -- fall back to path for clips without MediaRef
                         local media_id = nil
-                        if clip_data.file_path and media_by_path[clip_data.file_path] then
+                        if clip_data.file_uuid and media_by_uuid[clip_data.file_uuid] then
+                            media_id = media_by_uuid[clip_data.file_uuid].id
+                        elseif clip_data.file_path and media_by_path[clip_data.file_path] then
                             media_id = media_by_path[clip_data.file_path].id
                         end
 
@@ -2600,8 +2717,9 @@ function M.import_into_project(project_id, parse_result, opts)
                             -- Assign masterclip sequence to DRP folder bin (many-to-many safe)
                             -- Match by media name first, then by file path basename
                             -- (audio-from-video clips have different names than pool master clips)
-                            if clip.master_clip_id and clip_data.file_path then
-                                local media = media_by_path[clip_data.file_path]
+                            if clip.master_clip_id and (clip_data.file_uuid or clip_data.file_path) then
+                                local media = (clip_data.file_uuid and media_by_uuid[clip_data.file_uuid])
+                                    or (clip_data.file_path and media_by_path[clip_data.file_path])
                                 local drp_bin = media and pool_name_to_drp_bin[media.name]
                                 if not drp_bin then
                                     local basename = clip_data.file_path:match("([^/\\]+)$")
@@ -2612,10 +2730,12 @@ function M.import_into_project(project_id, parse_result, opts)
                                 end
                             end
 
-                            if clip_data.file_path then
+                            if clip_data.file_uuid or clip_data.file_path then
                                 table.insert(clips_for_linking, {
                                     clip_id = clip.id,
-                                    file_path = clip_data.file_path,
+                                    -- Use UUID as link key when available (same master clip
+                                    -- at different volume paths should still link A/V)
+                                    link_key = clip_data.file_uuid or clip_data.file_path,
                                     timeline_start = clip_data.start_value,
                                     role = track_data.type == "VIDEO" and "video" or "audio",
                                 })
@@ -2629,7 +2749,7 @@ function M.import_into_project(project_id, parse_result, opts)
             -- STEP 6: Create A/V link groups
             local link_groups_by_key = {}
             for _, clip_info in ipairs(clips_for_linking) do
-                local key = clip_info.file_path .. ":" .. tostring(clip_info.timeline_start)
+                local key = clip_info.link_key .. ":" .. tostring(clip_info.timeline_start)
                 link_groups_by_key[key] = link_groups_by_key[key] or {}
                 table.insert(link_groups_by_key[key], clip_info)
             end

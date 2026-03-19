@@ -37,7 +37,8 @@ end
 
 -- Check media items still work
 assert(result.media_items, "Missing media_items array")
-print("  Media items: " .. #result.media_items)
+local mi_count = 0; for _ in pairs(result.media_items) do mi_count = mi_count + 1 end
+print("  Media items: " .. mi_count)
 
 -- Check timelines still work
 assert(result.timelines, "Missing timelines array")

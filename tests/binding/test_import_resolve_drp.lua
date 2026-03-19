@@ -43,7 +43,7 @@ assert_true("project name", (parse_result.project.name or ""):len() > 0)
 assert_true("project frame rate", type(parse_result.project.settings.frame_rate) == "number" and parse_result.project.settings.frame_rate > 0)
 assert_true("project settings present", parse_result.project.settings ~= nil)
 assert_true("media items parsed", type(parse_result.media_items) == "table")
-assert_true("has media items", #parse_result.media_items > 0)
+assert_true("has media items", next(parse_result.media_items) ~= nil)
 assert_true("timelines parsed", type(parse_result.timelines) == "table")
 assert_true("at least one timeline", #parse_result.timelines > 0)
 

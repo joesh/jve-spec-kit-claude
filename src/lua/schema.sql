@@ -1,4 +1,4 @@
--- JVE Database Schema V5.0
+-- JVE Database Schema V6.0
 -- "Scorched Earth" - Frame-Accurate, Rational Timebase
 -- No backward compatibility with legacy schemas.
 
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (5);
+INSERT OR IGNORE INTO schema_version (version) VALUES (6);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS media (
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     file_path TEXT NOT NULL UNIQUE,
-    
+    file_uuid TEXT,  -- DRP master clip UUID (MediaRef DbId) for cross-volume dedup
+
     -- Duration in its native timebase
     duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),
     

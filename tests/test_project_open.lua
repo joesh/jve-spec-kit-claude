@@ -74,7 +74,7 @@ do
         set_path = function(path)
             set_path_called_with = path
             return true
-        end
+        end,
     }
 
     -- Use a path where no SHM file exists
@@ -136,7 +136,7 @@ do
                     return "shm_not_removed"
                 end
                 return true
-            end
+            end,
         }
 
         local result = project_open.open_project_database_or_prompt_cleanup(mock_db, nil, test_path, nil)

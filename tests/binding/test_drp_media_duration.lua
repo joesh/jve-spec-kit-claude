@@ -237,7 +237,7 @@ assert(result.success, "parse_drp_file failed: " .. tostring(result.error))
 -- Find A001_07232330_C004.mp4 in media_items
 local target_name = "A001_07232330_C004.mp4"
 local target_media = nil
-for _, item in ipairs(result.media_items) do
+for _, item in pairs(result.media_items) do
     if item.file_path and item.file_path:find(target_name, 1, true) then
         target_media = item
         break
