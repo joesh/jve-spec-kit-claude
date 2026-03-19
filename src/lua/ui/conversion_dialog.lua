@@ -139,6 +139,7 @@ function M.show(config)
     qt.LAYOUT.ADD_WIDGET(btn_row, convert_btn)
 
     local cancel_btn = qt.WIDGET.CREATE_BUTTON("Cancel")
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(cancel_btn, false)
     qt.LAYOUT.ADD_WIDGET(btn_row, cancel_btn)
 
     qt.LAYOUT.ADD_LAYOUT(main_layout, btn_row)
