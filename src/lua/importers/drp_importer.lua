@@ -2693,10 +2693,16 @@ function M.import_into_project(project_id, parse_result, opts)
                             media_id = media_by_path[clip_data.file_path].id
                         end
 
-                        -- Skip clips with no resolvable media (generated clips, titles, removed media)
+                        -- Skip clips with no resolvable media
                         if not media_id then
-                            log.warn("Skipping clip '%s' - no media record for path: %s",
-                                clip_data.name or "unnamed", tostring(clip_data.file_path))
+                            if not clip_data.file_path or clip_data.file_path == "" then
+                                -- No path = nested timeline, compound clip, or adjustment layer
+                                log.detail("Skipping nested/generated clip '%s' (no media path)",
+                                    clip_data.name or "unnamed")
+                            else
+                                log.warn("Skipping clip '%s' - no media record for path: %s",
+                                    clip_data.name or "unnamed", clip_data.file_path)
+                            end
                             goto continue_clip
                         end
 
