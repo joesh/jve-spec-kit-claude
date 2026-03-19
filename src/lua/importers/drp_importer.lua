@@ -1985,10 +1985,17 @@ function M.parse_drp_file(drp_path, progress_cb)
             for _, info in pairs(timeline.media_files) do
                 local existing = media_get(info.file_uuid, info.file_path)
                 if existing then
-                    -- Same master clip — merge
+                    -- Same master clip — merge all paths
+                    local ekey = (existing.file_uuid and existing.file_uuid ~= "") and existing.file_uuid or existing.file_path
                     if info.file_path and info.file_path ~= existing.file_path then
                         existing.alt_paths[info.file_path] = true
-                        path_to_key[info.file_path] = (existing.file_uuid and existing.file_uuid ~= "") and existing.file_uuid or existing.file_path
+                        path_to_key[info.file_path] = ekey
+                    end
+                    for alt in pairs(info.alt_paths or {}) do
+                        if alt ~= existing.file_path then
+                            existing.alt_paths[alt] = true
+                            path_to_key[alt] = ekey
+                        end
                     end
                     if (info.duration or 0) > (existing.duration or 0) then
                         existing.duration = info.duration
@@ -1998,6 +2005,9 @@ function M.parse_drp_file(drp_path, progress_cb)
                     end
                     if info.media_start_time and not existing.media_start_time then
                         existing.media_start_time = info.media_start_time
+                    end
+                    if info.frame_rate and not existing.frame_rate then
+                        existing.frame_rate = info.frame_rate
                     end
                     -- If existing was path-keyed but info has UUID, upgrade the key
                     if info.file_uuid and info.file_uuid ~= "" and not existing.file_uuid then
@@ -2012,6 +2022,8 @@ function M.parse_drp_file(drp_path, progress_cb)
                         name = info.name or info.file_path,
                         file_path = info.file_path,
                         duration = info.duration or 0,
+                        frame_rate = info.frame_rate,
+                        audio_channels = info.audio_channels,
                         media_start_time = info.media_start_time,
                         alt_paths = info.alt_paths or {},
                     }
