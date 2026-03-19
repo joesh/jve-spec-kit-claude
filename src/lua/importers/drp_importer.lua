@@ -1474,7 +1474,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                         -- Direction is encoded via source_in > source_out swap below.
                         clip_speed = speed
                     else
-                        log.warn("DRP retime: clip '%s' hex speed invalid (decoded=%s from '%s')",
+                        log.detail("DRP retime: clip '%s' hex speed unusable (decoded=%s from '%s'), will use MTBA",
                                  clip_name, tostring(speed), hex_part:sub(1, 16))
                     end
                 end
@@ -1497,7 +1497,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                         if clip_speed ~= 1.0 then
                             local hex_abs = math.abs(clip_speed)
                             if math.abs(hex_abs - mtba.speed_ratio) / mtba.speed_ratio > 0.05 then
-                                log.warn("DRP retime: clip '%s' hex speed %.4f overridden by MTBA %.4f (YMax/XMax=%.2f/%.2f)",
+                                log.detail("DRP retime: clip '%s' hex speed %.4f → MTBA %.4f (YMax/XMax=%.2f/%.2f)",
                                          clip_name, clip_speed, mtba_speed, mtba.y_max, mtba.x_max)
                             end
                         end
@@ -2104,7 +2104,7 @@ function M.parse_drp_file(drp_path, progress_cb)
         local entry = media_get(pmc.id, pmc.file_path)
 
         if not entry and pmc.id then
-            log.warn("pmc %s (id=%s): no media entry (encrypted blob, unreferenced)",
+            log.detail("pmc %s (id=%s): no media entry (encrypted blob, unreferenced)",
                 pmc.name or "?", pmc.id)
         end
 
