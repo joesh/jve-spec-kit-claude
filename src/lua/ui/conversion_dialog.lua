@@ -136,6 +136,7 @@ function M.show(config)
     qt.LAYOUT.ADD_WIDGET(btn_row, save_log_btn)
 
     local convert_btn = qt.WIDGET.CREATE_BUTTON("Convert")
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(convert_btn, true)
     qt.LAYOUT.ADD_WIDGET(btn_row, convert_btn)
 
     local cancel_btn = qt.WIDGET.CREATE_BUTTON("Cancel")
