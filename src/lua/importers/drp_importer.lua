@@ -1965,30 +1965,28 @@ function M.parse_drp_file(drp_path, progress_cb)
     -- Apply authoritative media durations from MediaPool blob data.
     -- Pool master clips contain Time/TracksBA blobs with actual media duration,
     -- which is more accurate than source_extent derived from timeline clips.
-    -- Build a name→entry index for fallback matching when blob path differs from timeline path
-    local media_name_lookup = {}
-    local media_name_ambiguous = {}  -- names that appear more than once
-    for _, item in ipairs(media_items) do
-        if item.name then
-            if media_name_lookup[item.name] then
-                media_name_ambiguous[item.name] = true
-            else
-                media_name_lookup[item.name] = item
+    -- Build DbId → file_path map from timeline data for master clips with encrypted blobs.
+    -- timeline.media_files entries have .id (MediaRef DbId) and .path (from <MediaFilePath>).
+    local ref_to_path = {}
+    for _, timeline in ipairs(timelines) do
+        if timeline.media_files then
+            for _, info in pairs(timeline.media_files) do
+                if info.id and info.path and info.path ~= "" and not ref_to_path[info.id] then
+                    ref_to_path[info.id] = info.path
+                end
             end
         end
     end
 
     for _, pmc in ipairs(media_pool_hierarchy.master_clips) do
-        if pmc.file_path then
-            local entry = media_lookup[pmc.file_path]
+        -- Resolve file_path: blob-decoded path, or timeline <MediaFilePath> via DbId
+        local file_path = pmc.file_path
+        if not file_path and pmc.id then
+            file_path = ref_to_path[pmc.id]
+        end
 
-            -- Fallback: blob path may differ from timeline path (media-managed copies).
-            -- Match by filename if unique.
-            if not entry and pmc.name and media_name_lookup[pmc.name]
-                    and not media_name_ambiguous[pmc.name] then
-                entry = media_name_lookup[pmc.name]
-            end
-
+        if file_path then
+            local entry = media_lookup[file_path]
             if entry then
                 if pmc.num_frames and pmc.num_frames > 0 then
                     entry.duration = pmc.num_frames
