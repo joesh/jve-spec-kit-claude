@@ -1420,7 +1420,7 @@ void TimelineMediaBuffer::SetAudioMixParams(
         std::lock_guard<std::mutex> tlock(m_tracks_mutex);
         auto it = m_tracks.find(tid);
         int clip_count = (it != m_tracks.end()) ? static_cast<int>(it->second.clips.size()) : -1;
-        EMP_LOG_WARN("SetAudioMixParams: A%d vol=%.2f clips_in_tmb=%d",
+        EMP_LOG_EVENT("SetAudioMixParams: A%d vol=%.2f clips_in_tmb=%d",
             p.track_index, p.volume, clip_count);
     }
 }
