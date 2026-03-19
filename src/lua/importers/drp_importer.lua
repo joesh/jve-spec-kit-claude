@@ -2031,75 +2031,76 @@ function M.parse_drp_file(drp_path, progress_cb)
         project.settings.frame_rate = timelines[1].fps
     end
 
-    -- UUID enrichment: Scan sequence XMLs for <MediaRef> + <MediaFilePath> pairs.
-    -- Entries from Pass 1 (media pool) or Pass 4 (raw XML grep) may lack UUIDs.
-    -- When a timeline clip references the same path with a MediaRef, attach the UUID
-    -- so blob propagation can find the entry.
+    -- UUID enrichment: fast regex scan of sequence XMLs for <MediaRef>+<MediaFilePath>
+    -- pairs. Entries from Pass 1/4 may lack UUIDs (e.g., from skipped sequences).
+    -- Text scan is much faster than full XML parse (~100x for large DRPs).
+    pump(96, "Enriching media UUIDs…")
     local enriched_count = 0
-    for _, seq_file in ipairs(sequence_file_list) do
-        local seq_root = parse_xml_file(seq_file)
-        if seq_root then
-            local clip_tags = {"Sm2TiVideoClip", "Sm2TiAudioClip"}
-            for _, tag in ipairs(clip_tags) do
-                for _, clip_elem in ipairs(find_all_elements(seq_root, tag)) do
-                    local ref_id = get_text(find_element(clip_elem, "MediaRef"))
-                    local mfp = get_text(find_element(clip_elem, "MediaFilePath"))
-                    if ref_id ~= "" and mfp ~= "" then
-                        local path_entry = media_get(nil, mfp)
-                        local uuid_entry = media_get(ref_id, nil)
+    for seq_idx, seq_file in ipairs(sequence_file_list) do
+        local handle = io.open(seq_file, "r")
+        if handle then
+            local content = handle:read("*all")
+            handle:close()
+            -- Extract all <MediaRef>...<MediaFilePath> pairs from clip elements.
+            -- Pattern matches the two adjacent elements within a clip block.
+            for ref_id, mfp in content:gmatch("<MediaRef>([^<]+)</MediaRef>.-<MediaFilePath>([^<]+)</MediaFilePath>") do
+                ref_id = ref_id:match("^%s*(.-)%s*$")
+                mfp = mfp:match("^%s*(.-)%s*$")
+                if ref_id ~= "" and mfp ~= "" then
+                    local path_entry = media_get(nil, mfp)
+                    local uuid_entry = media_get(ref_id, nil)
 
-                        if path_entry and uuid_entry and path_entry ~= uuid_entry then
-                            -- Two entries for same media. Merge path_entry into uuid_entry.
-                            if mfp ~= uuid_entry.file_path then
-                                uuid_entry.alt_paths[mfp] = true
-                            end
-                            if (path_entry.duration or 0) > (uuid_entry.duration or 0) then
-                                uuid_entry.duration = path_entry.duration
-                            end
-                            if path_entry.media_start_time and not uuid_entry.media_start_time then
-                                uuid_entry.media_start_time = path_entry.media_start_time
-                            end
-                            -- Remove old path-keyed entry, redirect path to UUID entry
-                            media_items[path_entry.file_path] = nil
-                            path_to_key[mfp] = ref_id
-                            enriched_count = enriched_count + 1
-                        elseif path_entry and not path_entry.file_uuid then
-                            -- Path-only entry gets a UUID — re-key it
-                            media_items[path_entry.file_path] = nil
-                            path_entry.file_uuid = ref_id
-                            media_put(path_entry)
-                            enriched_count = enriched_count + 1
-                        elseif path_entry and path_entry.file_uuid and path_entry.file_uuid ~= ref_id then
-                            log.warn("UUID conflict for path %s: existing=%s, new=%s",
-                                mfp, path_entry.file_uuid, ref_id)
-                        elseif not path_entry and uuid_entry then
-                            -- UUID entry exists but not at this path — register alt_path
+                    if path_entry and uuid_entry and path_entry ~= uuid_entry then
+                        -- Merge path_entry into uuid_entry
+                        if mfp ~= uuid_entry.file_path then
                             uuid_entry.alt_paths[mfp] = true
-                            path_to_key[mfp] = ref_id
-                        elseif not path_entry and not uuid_entry then
-                            media_put({
-                                file_uuid = ref_id,
-                                name = mfp:match("([^/\\]+)$") or mfp,
-                                file_path = mfp,
-                                duration = 0,
-                                alt_paths = {},
-                            })
-                            enriched_count = enriched_count + 1
                         end
+                        if (path_entry.duration or 0) > (uuid_entry.duration or 0) then
+                            uuid_entry.duration = path_entry.duration
+                        end
+                        if path_entry.media_start_time and not uuid_entry.media_start_time then
+                            uuid_entry.media_start_time = path_entry.media_start_time
+                        end
+                        media_items[path_entry.file_path] = nil
+                        path_to_key[mfp] = ref_id
+                        enriched_count = enriched_count + 1
+                    elseif path_entry and not path_entry.file_uuid then
+                        media_items[path_entry.file_path] = nil
+                        path_entry.file_uuid = ref_id
+                        media_put(path_entry)
+                        enriched_count = enriched_count + 1
+                    elseif not path_entry and uuid_entry then
+                        uuid_entry.alt_paths[mfp] = true
+                        path_to_key[mfp] = ref_id
+                    elseif not path_entry and not uuid_entry then
+                        media_put({
+                            file_uuid = ref_id,
+                            name = mfp:match("([^/\\]+)$") or mfp,
+                            file_path = mfp,
+                            duration = 0,
+                            alt_paths = {},
+                        })
+                        enriched_count = enriched_count + 1
                     end
                 end
             end
         end
+        if seq_idx % 10 == 0 then
+            pump(96 + math.floor(seq_idx / #sequence_file_list * 2))
+        end
     end
     if enriched_count > 0 then
-        log.event("UUID enrichment: %d entries updated from %d sequence files",
+        log.event("UUID enrichment: %d entries from %d files",
             enriched_count, #sequence_file_list)
     end
 
     -- Apply authoritative media durations from MediaPool blob data.
-    -- Pool master clips have Time/TracksBA blobs with actual media duration.
-    -- UUID lookup finds entries even when blob path ≠ timeline path.
-    for _, pmc in ipairs(media_pool_hierarchy.master_clips) do
+    pump(98, "Applying media durations…")
+    local pmc_count = #media_pool_hierarchy.master_clips
+    for pmc_idx, pmc in ipairs(media_pool_hierarchy.master_clips) do
+        if pmc_idx % 50 == 0 then
+            pump(98 + math.floor(pmc_idx / pmc_count))
+        end
         local entry = media_get(pmc.id, pmc.file_path)
 
         if not entry and pmc.id then

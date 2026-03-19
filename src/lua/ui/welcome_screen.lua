@@ -149,6 +149,11 @@ end
 --- Clean up _G handler references.
 -- @param handle table: from M.create()
 function M.destroy(handle)
+    -- Close the dialog widget first, then clean up _G handlers
+    if handle.dialog then
+        local qt = require("core.qt_constants")
+        qt.DIALOG.CLOSE(handle.dialog)
+    end
     for _, name in ipairs(handle.globals) do
         _G[name] = nil
     end
