@@ -66,6 +66,28 @@ Tests are LuaJIT scripts in `tests/` with `test_*.lua` naming. Each test:
 
 **IMPORTANT** When writing tests use the ABSOLUTE MINIMUM set of mocks. Mocks are bad. They encode incorrect assumptions about how the real code works. Avoid them if at all possible.
 
+## Integration Testing with --test Mode
+For features that need real C++ bindings (Qt widgets, XML parser, EMP/TMB, audio pipeline), use `--test` to run a Lua script inside the full JVEEditor process:
+
+```bash
+# Run a test script with full C++ bindings available
+./build/bin/JVEEditor --test /tmp/my_test.lua
+
+# With logging enabled
+JVE_LOG=media:detail ./build/bin/JVEEditor --test /tmp/my_test.lua
+
+# Save output for analysis (don't re-run the editor for each grep)
+JVE_LOG=media:detail ./build/bin/JVEEditor --test /tmp/my_test.lua > /tmp/test_output.txt 2>&1
+```
+
+This is essential for:
+- DRP import testing (needs `qt_xml_parse` C++ binding)
+- Binding tests that exercise Qt widget creation
+- Playback/audio pipeline tests that need TMB/SSE/AOP
+- Any test that would otherwise require the user to manually operate the UI
+
+**Always save output to a file** — don't pipe to grep directly, as re-running the editor for each query is wasteful. For Lua-only changes, `--test` doesn't require `make` (no C++ recompile needed).
+
 ## Logger Usage
 Use the unified logger (never bare `print`). Each module binds to a functional area once:
 
