@@ -1446,6 +1446,21 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             local mst_elem = find_element(clip_elem, "MediaStartTime")
             local media_start_time = mst_elem and tonumber(get_text(mst_elem))
 
+            -- Extract <MediaFrameRate> — LE hex-encoded double (first 16 chars).
+            -- Available on all clips, even those without <MediaRef>.
+            -- Provides frame_rate independent of blob propagation.
+            local mfr_elem = find_element(clip_elem, "MediaFrameRate")
+            local media_frame_rate = nil
+            if mfr_elem then
+                local mfr_hex = get_text(mfr_elem)
+                if mfr_hex ~= "" and #mfr_hex >= 16 then
+                    local decoded = decode_hex_double_at(mfr_hex, 0)
+                    if decoded and decoded > 0 and decoded < 1000 then
+                        media_frame_rate = decoded
+                    end
+                end
+            end
+
             -- DRP field meanings (confirmed from real DRP XML analysis):
             --   <MediaStartTime> = file's TC origin in SECONDS since midnight (not per-clip)
             --   <In>             = source mark-in offset in TIMELINE FRAMES
@@ -1591,7 +1606,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                             name = mc_name or clip.name or file_path,
                             file_path = file_path,
                             duration = source_extent_frames,
-                            -- frame_rate set by blob propagation in parse_drp_file
+                            frame_rate = media_frame_rate,  -- from <MediaFrameRate>; blob propagation may override
                             audio_channels = track_type == "AUDIO" and 2 or 0,
                             media_start_time = media_start_time,
                             alt_paths = {},
@@ -1607,6 +1622,9 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                         end
                         if track_type == "AUDIO" and entry.audio_channels < 2 then
                             entry.audio_channels = 2
+                        end
+                        if media_frame_rate and not entry.frame_rate then
+                            entry.frame_rate = media_frame_rate
                         end
                     end
                 end
@@ -2041,8 +2059,10 @@ function M.parse_drp_file(drp_path, progress_cb)
         if handle then
             local content = handle:read("*all")
             handle:close()
-            -- Extract all <MediaRef>...<MediaFilePath> pairs from clip elements.
-            -- Pattern matches the two adjacent elements within a clip block.
+            -- Collapse whitespace so patterns can span XML elements on separate lines.
+            -- Lua's . doesn't match \n, so multi-line XML breaks .- patterns.
+            content = content:gsub("%s+", " ")
+            -- Extract <MediaRef>+<MediaFilePath> pairs (UUID enrichment)
             for ref_id, mfp in content:gmatch("<MediaRef>([^<]+)</MediaRef>.-<MediaFilePath>([^<]+)</MediaFilePath>") do
                 ref_id = ref_id:match("^%s*(.-)%s*$")
                 mfp = mfp:match("^%s*(.-)%s*$")
@@ -2081,6 +2101,22 @@ function M.parse_drp_file(drp_path, progress_cb)
                             alt_paths = {},
                         })
                         enriched_count = enriched_count + 1
+                    end
+                end
+            end
+
+            -- Extract <MediaFilePath>+<MediaFrameRate> for entries missing frame_rate.
+            -- Catches clips in skipped sequences (no MediaRef, no blob propagation).
+            for mfp, mfr_hex in content:gmatch("<MediaFilePath>([^<]+)</MediaFilePath>.-<MediaFrameRate>([^<]+)</MediaFrameRate>") do
+                mfp = mfp:match("^%s*(.-)%s*$")
+                if mfp ~= "" and #mfr_hex >= 16 then
+                    local entry = media_get(nil, mfp)
+                    if entry and not entry.frame_rate then
+                        local fps = decode_hex_double_at(mfr_hex, 0)
+                        if fps and fps > 0 and fps < 1000 then
+                            entry.frame_rate = fps
+                            enriched_count = enriched_count + 1
+                        end
                     end
                 end
             end
