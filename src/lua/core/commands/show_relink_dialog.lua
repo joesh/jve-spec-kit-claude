@@ -50,15 +50,10 @@ function M.register(executors, _undoers, db)
         local parent_window = ui_state.get_main_window and ui_state.get_main_window() or nil
 
         local media_relink_dialog = require("ui.media_relink_dialog")
-        local results = media_relink_dialog.show(offline, parent_window, project_id)
+        local apply_result = nil
 
-        if not results then
-            log.event("ShowRelinkDialog: user cancelled")
-            return { success = true, cancelled = true }
-        end
-
-        -- Build RelinkClips args with folder-priority collision resolution
-        local Media = require("models.media")
+        local function do_apply(results)
+            local Media = require("models.media")
         assert(results.folder_priority, "ShowRelinkDialog: results missing folder_priority")
         local folder_priority = results.folder_priority
         local clip_relink_map = {}
@@ -156,15 +151,24 @@ function M.register(executors, _undoers, db)
         log.event("ShowRelinkDialog: dispatching RelinkClips — %d clip changes, %d media path changes, %d new media",
             clip_change_count, path_change_count, #(results.new_media))
 
-        local command_manager = require("core.command_manager")
-        local result = command_manager.execute("RelinkClips", {
-            clip_relink_map = clip_relink_map,
-            media_path_changes = media_path_changes,
-            new_media_records = results.new_media,
-            project_id = project_id,
-        })
+            local command_manager = require("core.command_manager")
+            apply_result = command_manager.execute("RelinkClips", {
+                clip_relink_map = clip_relink_map,
+                media_path_changes = media_path_changes,
+                new_media_records = results.new_media,
+                project_id = project_id,
+            })
+        end
 
-        return result
+        local results = media_relink_dialog.show(offline, parent_window, project_id,
+            { on_apply = do_apply })
+
+        if not results then
+            log.event("ShowRelinkDialog: user cancelled")
+            return { success = true, cancelled = true }
+        end
+
+        return apply_result or { success = true }
     end
 
     return {

@@ -244,9 +244,11 @@ end
 
 --- Show the reconnect media dialog (blocking modal).
 -- Shows dialog immediately, populates clip list asynchronously.
-function M.show(offline_media, parent_window, project_id)
+-- @param opts table|nil: {on_apply = function(results)} called before dialog closes
+function M.show(offline_media, parent_window, project_id, opts)
     assert(offline_media and #offline_media > 0,
         "media_relink_dialog.show: offline_media must be non-empty")
+    opts = opts or {}
 
     local qt = require("core.qt_constants")
     local file_browser = require("core.file_browser")
@@ -433,6 +435,13 @@ function M.show(offline_media, parent_window, project_id)
         qt.CONTROL.SET_ENABLED(relink_btn, true)
 
         _G[relink_name] = function()
+            qt.PROPERTIES.SET_TEXT(relink_btn, "Applying…")
+            qt.CONTROL.SET_ENABLED(relink_btn, false)
+            qt.CONTROL.SET_ENABLED(cancel_btn, false)
+            qt.CONTROL.PROCESS_EVENTS()
+            if opts.on_apply then
+                opts.on_apply(relink_results)
+            end
             qt.DIALOG.CLOSE(dialog, true)
         end
     end
