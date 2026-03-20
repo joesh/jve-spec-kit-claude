@@ -167,6 +167,20 @@ int lua_create_tree_widget(lua_State* L) {
     return 1;
 }
 
+// CONTROL.SORT_TREE(tree, column, order)
+// column: 0-based column index
+// order: "asc" or "desc" (default "asc")
+// Sorts all levels of the tree.
+int lua_sort_tree(lua_State* L) {
+    QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
+    if (!tree) return luaL_error(L, "SORT_TREE: first argument must be QTreeWidget");
+    int column = luaL_checkinteger(L, 2);
+    const char* order = lua_isstring(L, 3) ? lua_tostring(L, 3) : "asc";
+    Qt::SortOrder qt_order = (strcmp(order, "desc") == 0) ? Qt::DescendingOrder : Qt::AscendingOrder;
+    tree->sortItems(column, qt_order);
+    return 0;
+}
+
 int lua_set_tree_headers(lua_State* L) {
     QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
     if (tree && lua_istable(L, 2)) {

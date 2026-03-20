@@ -93,7 +93,7 @@ function M.sort_items(items, primary_col, primary_order, secondary_col, secondar
     local name_ext = EXTRACTORS[M.COL_NAME]
 
     table.sort(items, function(a, b)
-        -- 1. Type grouping (always first)
+        -- 1. Type grouping (always first): bins < timelines < clips
         local ra, rb = type_rank(a), type_rank(b)
         if ra ~= rb then return ra < rb end
 

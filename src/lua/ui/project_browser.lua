@@ -756,16 +756,8 @@ local function populate_tree()
         clip.modified_at = clip.modified_at or clip.created_at or media.modified_at or media.created_at
     end
 
-    -- Sort sequences and master clips by current sort state
-    browser_sort.sort_items(timeline_sequences,
-        sort_state.primary_col, sort_state.primary_order,
-        sort_state.secondary_col, sort_state.secondary_order)
-    browser_sort.sort_items(master_clips,
-        sort_state.primary_col, sort_state.primary_order,
-        sort_state.secondary_col, sort_state.secondary_order)
-
-    -- Sort bins by name
-    table.sort(bins, function(a, b) return (a.name or ""):lower() < (b.name or ""):lower() end)
+    -- Bins must be added in depth order (parents before children).
+    -- Final sort is done by Qt's SORT_TREE after all items are added.
 
     -- Root sequences (those NOT assigned to a bin)
     for _, sequence in ipairs(timeline_sequences) do
@@ -891,6 +883,11 @@ local function populate_tree()
             add_master_clip_item(nil, clip)
         end
     end
+
+    -- Sort the tree in-place by current sort column.
+    -- Qt handles sorting within each level (root items + within each bin).
+    qt_constants.CONTROL.SORT_TREE(M.tree, sort_state.primary_col,
+        sort_state.primary_order or "asc")
 
     local function restore_previous_selection_from_cache(previous)
         if not previous or #previous == 0 then

@@ -208,6 +208,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_add_tree_child_item); lua_setfield(L, -2, "ADD_TREE_CHILD_ITEM");
     lua_pushcfunction(L, lua_get_tree_selected_index); lua_setfield(L, -2, "GET_TREE_SELECTED_INDEX");
     lua_pushcfunction(L, lua_clear_tree); lua_setfield(L, -2, "CLEAR_TREE");
+    lua_pushcfunction(L, lua_sort_tree); lua_setfield(L, -2, "SORT_TREE");
     lua_pushcfunction(L, lua_set_tree_item_expanded); lua_setfield(L, -2, "SET_TREE_ITEM_EXPANDED");
     lua_pushcfunction(L, lua_is_tree_item_expanded); lua_setfield(L, -2, "IS_TREE_ITEM_EXPANDED");
     lua_pushcfunction(L, lua_set_tree_item_data); lua_setfield(L, -2, "SET_TREE_ITEM_DATA");
