@@ -183,6 +183,22 @@ function M.show(config)
     _G[convert_name] = function()
         if not dest_path or dest_path == "" then return end
 
+        -- Check if destination already exists
+        local check = io.open(dest_path, "rb")
+        if check then
+            check:close()
+            local overwrite = qt.DIALOG.SHOW_CONFIRM({
+                parent = dialog,
+                title = "File Exists",
+                message = "A project already exists at this location.",
+                informative_text = dest_path,
+                confirm_text = "Overwrite",
+                cancel_text = "Cancel",
+                icon = "warning",
+            })
+            if not overwrite then return end
+        end
+
         -- Hide previous error, show progress
         qt.DISPLAY.SET_VISIBLE(error_label, false)
         set_converting(true)
