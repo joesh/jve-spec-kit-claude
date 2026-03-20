@@ -2471,22 +2471,46 @@ function M.import_into_project(project_id, parse_result, opts)
     }
 
     -- Import DRP folder hierarchy as bins
+    -- Create bins from DRP folder hierarchy. Process iteratively so parents
+    -- are created before children (folders may arrive in arbitrary order).
     local drp_folder_to_bin = {}  -- DRP folder DbId → JVE bin_id
+    local pending = {}
     for _, folder in ipairs(parse_result.folders or {}) do
-        -- Map DRP parent_ref to JVE parent_id (already-created bin)
-        local parent_bin_id = folder.parent_id and drp_folder_to_bin[folder.parent_id] or nil
-        local bin_id = uuid.generate_with_prefix("bin")
-        local ok, def = tag_service.create_bin(project_id, {
-            id = bin_id,
-            name = folder.name,
-            parent_id = parent_bin_id,
-        })
-        if ok and def then
-            drp_folder_to_bin[folder.id] = def.id
-            log.event("  Created bin: %s (parent=%s)", folder.name, tostring(parent_bin_id))
-        else
-            log.warn("Failed to create bin: %s", folder.name)
+        pending[#pending + 1] = folder
+    end
+
+    local max_passes = 20
+    for pass = 1, max_passes do
+        local remaining = {}
+        for _, folder in ipairs(pending) do
+            local parent_bin_id = nil
+            if folder.parent_id then
+                parent_bin_id = drp_folder_to_bin[folder.parent_id]
+                if not parent_bin_id then
+                    -- Parent not created yet — defer to next pass
+                    remaining[#remaining + 1] = folder
+                    goto next_folder
+                end
+            end
+
+            local bin_id = uuid.generate_with_prefix("bin")
+            local ok, def = tag_service.create_bin(project_id, {
+                id = bin_id,
+                name = folder.name,
+                parent_id = parent_bin_id,
+            })
+            if ok and def then
+                drp_folder_to_bin[folder.id] = def.id
+            else
+                log.warn("Failed to create bin: %s", folder.name)
+            end
+            ::next_folder::
         end
+        pending = remaining
+        if #pending == 0 then break end
+    end
+    if #pending > 0 then
+        log.warn("Could not resolve parent for %d folders", #pending)
     end
 
     -- Build pool master clip name → DRP folder bin mapping
