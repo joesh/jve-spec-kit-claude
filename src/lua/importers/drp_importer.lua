@@ -2526,6 +2526,19 @@ function M.import_into_project(project_id, parse_result, opts)
         end
     end
 
+    -- Create "Unorganized" bin for orphaned media not in any DRP pool folder
+    local unorganized_bin_id = nil
+    do
+        local bin_id = uuid.generate_with_prefix("bin")
+        local ok, def = tag_service.create_bin(project_id, {
+            id = bin_id,
+            name = "Unorganized",
+        })
+        if ok and def then
+            unorganized_bin_id = def.id
+        end
+    end
+
     -- Import media items (hash table keyed by uuid or path)
     local media_by_uuid = {}  -- file_uuid → Media record (primary, for dedup)
     local media_by_path = {}  -- file_path → Media record (secondary, for path-only lookups)
@@ -2821,6 +2834,9 @@ function M.import_into_project(project_id, parse_result, opts)
                                 if not drp_bin and clip_data.file_path then
                                     local basename = clip_data.file_path:match("([^/\\]+)$")
                                     drp_bin = basename and pool_name_to_drp_bin[basename]
+                                end
+                                if not drp_bin then
+                                    drp_bin = unorganized_bin_id
                                 end
                                 if drp_bin then
                                     tag_service.add_to_bin(project_id, {clip.master_clip_id}, drp_bin, "master_clip")
