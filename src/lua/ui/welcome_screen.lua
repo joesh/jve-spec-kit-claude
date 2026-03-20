@@ -87,8 +87,11 @@ function M.create()
     qt.LAYOUT.ADD_STRETCH(right_layout)
 
     local new_btn = qt.WIDGET.CREATE_BUTTON("New Project...")
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(new_btn, false)
     local open_btn = qt.WIDGET.CREATE_BUTTON("Open Project...")
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(open_btn, false)
     local quit_btn = qt.WIDGET.CREATE_BUTTON("Quit")
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(quit_btn, false)
 
     local new_handler = "__welcome_screen_new"
     _G[new_handler] = function()

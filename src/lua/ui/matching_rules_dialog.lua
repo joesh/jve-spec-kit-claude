@@ -84,19 +84,18 @@ function M.show(current_rules, parent_window)
     qt.LAYOUT.ADD_STRETCH(main_layout)
 
     -- -----------------------------------------------------------------------
-    -- Button row
+    -- Button box: OK (accept/default) + Cancel (reject)
     -- -----------------------------------------------------------------------
-    local btn_row = qt.LAYOUT.CREATE_HBOX()
-    qt.LAYOUT.ADD_STRETCH(btn_row)
-
-    local ok_btn = qt.WIDGET.CREATE_BUTTON("OK")
-    local cancel_btn = qt.WIDGET.CREATE_BUTTON("Cancel")
+    local button_box = qt.CONTROL.CREATE_BUTTON_BOX()
+    qt.CONTROL.BUTTON_BOX_ADD(button_box, "OK", "accept")
+    qt.CONTROL.BUTTON_BOX_ADD(button_box, "Cancel", "reject")
+    qt.LAYOUT.ADD_WIDGET(main_layout, button_box)
 
     local cancel_name = "__matching_rules_cancel"
     _G[cancel_name] = function()
         qt.DIALOG.CLOSE(dialog, false)
     end
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(cancel_btn, cancel_name)
+    qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "rejected", cancel_name)
     globals[#globals + 1] = cancel_name
 
     local ok_name = "__matching_rules_ok"
@@ -104,7 +103,6 @@ function M.show(current_rules, parent_window)
         local fn_checked = qt.PROPERTIES.GET_CHECKED(cb_filename)
         local tc_checked = qt.PROPERTIES.GET_CHECKED(cb_timecode)
 
-        -- Validate: at least one of Filename or Timecode
         if not fn_checked and not tc_checked then
             qt.PROPERTIES.SET_TEXT(error_label,
                 "At least one of Filename or Timecode must be checked")
@@ -122,13 +120,8 @@ function M.show(current_rules, parent_window)
         }
         qt.DIALOG.CLOSE(dialog, true)
     end
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(ok_btn, ok_name)
+    qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "accepted", ok_name)
     globals[#globals + 1] = ok_name
-
-    qt.LAYOUT.ADD_WIDGET(btn_row, ok_btn)
-    qt.LAYOUT.ADD_SPACING(btn_row, 8)
-    qt.LAYOUT.ADD_WIDGET(btn_row, cancel_btn)
-    qt.LAYOUT.ADD_LAYOUT(main_layout, btn_row)
 
     -- -----------------------------------------------------------------------
     -- Show (blocking)
