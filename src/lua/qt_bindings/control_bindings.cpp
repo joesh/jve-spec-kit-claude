@@ -11,10 +11,17 @@
 #include <QApplication>
 
 // CONTROL.PROCESS_EVENTS() — drain Qt event queue (also drains GCD main queue on macOS).
+// Also forces pending repaints so widget state changes (disable, text) are visible
+// even when called from within a signal handler.
 // Essential for integration tests: PlaybackController dispatches frame delivery
 // and callbacks via dispatch_async(dispatch_get_main_queue()), which requires
 // the main run loop to be pumped.
 static int lua_process_events(lua_State*) {
+    // sendPostedEvents first to flush deferred layout/paint events,
+    // then processEvents to drain the full queue including repaints.
+    // Without sendPostedEvents, widget changes (setText, setEnabled)
+    // made inside a signal handler aren't visible until the handler returns.
+    QApplication::sendPostedEvents();
     QApplication::processEvents();
     return 0;
 }
