@@ -202,6 +202,20 @@ Result<std::shared_ptr<MediaFile>> MediaFile::Open(const std::string& path) {
         info.start_tc = (start_us * info.video_fps_num) / (1000000LL * info.video_fps_den);
     }
 
+    // BWF time_reference: timecode origin for Broadcast Wave files.
+    // Stored in format metadata as "time_reference" (samples since midnight).
+    // Critical for audio-only WAV files from sound post (Pro Tools, etc.)
+    // where the file's TC origin differs from DRP's MediaStartTime.
+    info.bwf_time_reference = -1;
+    AVDictionaryEntry* tr = av_dict_get(fmt->metadata, "time_reference", nullptr, 0);
+    if (tr && tr->value) {
+        char* endptr = nullptr;
+        int64_t val = strtoll(tr->value, &endptr, 10);
+        if (endptr != tr->value && val >= 0) {
+            info.bwf_time_reference = val;
+        }
+    }
+
     return std::make_shared<MediaFile>(std::move(impl), std::move(info));
 }
 

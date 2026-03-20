@@ -1528,8 +1528,8 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             local source_in_native
             local source_duration
             if track_type == "AUDIO" then
-                -- Audio: convert <In> from timeline frames to samples (48kHz)
-                -- Use abs_speed for magnitude; direction handled via coord swap below.
+                -- Audio: convert <In> from timeline frames to samples (48kHz).
+                -- <In> is file-relative, same coordinate space as video <In>.
                 local audio_speed = (abs_speed ~= 1.0) and abs_speed or 1.0
                 source_in_native = math.floor(in_value * 48000 / frame_rate * audio_speed + 0.5)
                 source_duration = math.floor(duration_raw * 48000 / frame_rate * audio_speed + 0.5)
@@ -1577,7 +1577,8 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 source_in = source_in_native,
                 source_out = source_out_native,
                 clip_speed = clip_speed,            -- signed speed for downstream validation
-                enabled = get_text(find_element(clip_elem, "WasDisbanded")) ~= "true",
+                enabled = get_text(find_element(clip_elem, "WasDisbanded")) ~= "true"
+                    and (tonumber(get_text(find_element(clip_elem, "Flags"))) or 0) % 4 < 2,  -- bit 1 = muted
                 file_path = file_path,
                 file_uuid = get_text(find_element(clip_elem, "MediaRef")),
                 file_id = get_text(find_element(clip_elem, "MediaRef")),
@@ -2539,9 +2540,28 @@ function M.import_into_project(project_id, parse_result, opts)
         local dur = media_item.duration or 0
         if dur <= 0 then
             log.warn("Skipping zero-duration media: %s", media_item.name)
-        elseif media_item.file_path and media_item.file_path:find("/ProxyMedia/") then
-            log.event("Skipping proxy media: %s", media_item.name)
-        else
+            goto continue_media
+        end
+
+        -- Proxy path from blob — check alt_paths for a non-proxy original path
+        if media_item.file_path and media_item.file_path:find("/ProxyMedia/") then
+            local original_path = nil
+            for alt_path in pairs(media_item.alt_paths or {}) do
+                if not alt_path:find("/ProxyMedia/") then
+                    original_path = alt_path
+                    break
+                end
+            end
+            if original_path then
+                media_item.file_path = original_path
+                log.event("Proxy media '%s' — using original path: %s", media_item.name, original_path)
+            else
+                log.event("Skipping proxy-only media: %s", media_item.name)
+                goto continue_media
+            end
+        end
+
+        do
             local fps = media_item.frame_rate
             if not fps then
                 log.warn("Skipping media without frame_rate: %s (path=%s, uuid=%s)",

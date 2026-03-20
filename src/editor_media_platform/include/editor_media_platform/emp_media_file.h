@@ -47,6 +47,11 @@ struct MediaFileInfo {
     int32_t audio_sample_rate;  // Source sample rate (e.g., 48000)
     int32_t audio_channels;     // Source channel count
 
+    // BWF (Broadcast Wave Format) timecode origin in audio samples since midnight.
+    // From format tag "time_reference". -1 = not present (plain WAV, non-BWF).
+    // Example: 172508160 at 48kHz = TC 00:59:53:23.
+    int64_t bwf_time_reference = -1;
+
     // Original file path
     std::string path;
 

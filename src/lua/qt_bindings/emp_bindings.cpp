@@ -929,6 +929,10 @@ static int lua_emp_media_file_probe(lua_State* L) {
     lua_pushinteger(L, info.audio_channels);
     lua_setfield(L, -2, "audio_channels");
 
+    // BWF time_reference: -1 = not present, else samples since midnight
+    lua_pushinteger(L, static_cast<lua_Integer>(info.bwf_time_reference));
+    lua_setfield(L, -2, "bwf_time_reference");
+
     return 1;
 }
 
