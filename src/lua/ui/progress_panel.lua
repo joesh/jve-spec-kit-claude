@@ -46,8 +46,20 @@ function M.create(layout, opts)
     local log_lines = {}
 
     local panel = {}
+    local cancelled = false
+
+    --- Request cancellation. Next update() will return "cancel".
+    function panel.cancel()
+        cancelled = true
+    end
+
+    --- Check if cancellation was requested.
+    function panel.is_cancelled()
+        return cancelled
+    end
 
     --- Update progress. Pumps Qt events to keep UI responsive.
+    -- @return "cancel" if cancellation was requested, nil otherwise
     -- @param pct number: 0-100 progress percentage
     -- @param text string|nil: status text (e.g. "Processing 42 of 100")
     -- @param log_line string|nil: append a line to the log/results area
@@ -80,7 +92,9 @@ function M.create(layout, opts)
                 log_dirty = false
             end
             qt.CONTROL.PROCESS_EVENTS()
+            if cancelled then return "cancel" end
         end
+        if cancelled then return "cancel" end
     end
 
     --- Flush any pending log lines to the widget.
@@ -115,6 +129,7 @@ function M.create(layout, opts)
     --- Reset state for a new run.
     function panel.reset()
         log_lines = {}
+        cancelled = false
         qt.CONTROL.SET_PROGRESS_BAR_VALUE(progress_bar, 0)
         qt.PROPERTIES.SET_TEXT(status_label, "")
         qt.PROPERTIES.SET_TEXT(log_area, "")

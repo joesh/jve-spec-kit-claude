@@ -189,7 +189,14 @@ function M.show(config)
 
         local ok, err = config.convert_fn(config.source_path, dest_path, progress.update)
 
-        if ok then
+        if progress.is_cancelled() then
+            -- User cancelled during conversion — clean up partial output
+            set_converting(false)
+            os.remove(dest_path)
+            os.remove(dest_path .. "-wal")
+            os.remove(dest_path .. "-shm")
+            qt.DIALOG.CLOSE(dialog, false)
+        elseif ok then
             local has_warnings = #progress.get_log_lines() > 0
             if has_warnings then
                 set_converting(false)
@@ -217,7 +224,12 @@ function M.show(config)
     -- Cancel (rejected signal from button box)
     local cancel_name = "__conversion_dialog_cancel"
     _G[cancel_name] = function()
-        qt.DIALOG.CLOSE(dialog, false)
+        if progress.is_cancelled() then return end
+        progress.cancel()  -- next progress.update() returns "cancel"
+        qt.PROPERTIES.SET_TEXT(error_label, "Cancelling…")
+        qt.DISPLAY.SET_VISIBLE(error_label, true)
+        -- Don't close — convert_fn will return at next progress pump,
+        -- then the convert handler checks is_cancelled() and cleans up.
     end
     qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "rejected", cancel_name)
     globals[#globals + 1] = cancel_name

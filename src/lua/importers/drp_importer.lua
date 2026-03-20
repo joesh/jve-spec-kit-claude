@@ -2862,9 +2862,16 @@ end
 function M.convert(drp_path, jvp_path, progress_cb)
     assert(drp_path and drp_path ~= "", "drp_importer.convert: drp_path required")
     assert(jvp_path and jvp_path ~= "", "drp_importer.convert: jvp_path required")
-    local report = progress_cb or function() end
+    local raw_report = progress_cb or function() end
+    local function report(pct, text)
+        if raw_report(pct, text) == "cancel" then
+            error({cancelled = true}, 0)
+        end
+    end
 
     log.event("Converting %s -> %s", drp_path, jvp_path)
+
+    local convert_ok, convert_err = pcall(function()
 
     report(5, "Parsing archive…")
     -- Thread progress_cb into parse phase so Qt events get pumped.
@@ -2961,6 +2968,15 @@ function M.convert(drp_path, jvp_path, progress_cb)
     end
 
     report(100, "Done")
+
+    end) -- pcall wrapping convert body
+
+    if not convert_ok then
+        if type(convert_err) == "table" and convert_err.cancelled then
+            return false, "Cancelled"
+        end
+        error(convert_err)  -- re-throw real errors
+    end
     return true
 end
 
