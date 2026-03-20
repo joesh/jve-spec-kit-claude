@@ -2471,46 +2471,39 @@ function M.import_into_project(project_id, parse_result, opts)
     }
 
     -- Import DRP folder hierarchy as bins
-    -- Create bins from DRP folder hierarchy. Process iteratively so parents
-    -- are created before children (folders may arrive in arbitrary order).
-    local drp_folder_to_bin = {}  -- DRP folder DbId → JVE bin_id
-    local pending = {}
-    for _, folder in ipairs(parse_result.folders or {}) do
-        pending[#pending + 1] = folder
-    end
+    -- Create bins from DRP folder hierarchy.
+    -- Sort by depth (parents before children) so each folder's parent bin
+    -- exists when we create it. DRP folders arrive in filesystem scan order
+    -- which doesn't guarantee parent-first.
+    local folders = parse_result.folders or {}
+    local folder_lookup = {}
+    for _, f in ipairs(folders) do folder_lookup[f.id] = f end
 
-    local max_passes = 20
-    for pass = 1, max_passes do
-        local remaining = {}
-        for _, folder in ipairs(pending) do
-            local parent_bin_id = nil
-            if folder.parent_id then
-                parent_bin_id = drp_folder_to_bin[folder.parent_id]
-                if not parent_bin_id then
-                    -- Parent not created yet — defer to next pass
-                    remaining[#remaining + 1] = folder
-                    goto next_folder
-                end
-            end
-
-            local bin_id = uuid.generate_with_prefix("bin")
-            local ok, def = tag_service.create_bin(project_id, {
-                id = bin_id,
-                name = folder.name,
-                parent_id = parent_bin_id,
-            })
-            if ok and def then
-                drp_folder_to_bin[folder.id] = def.id
-            else
-                log.warn("Failed to create bin: %s", folder.name)
-            end
-            ::next_folder::
+    local function folder_depth(f)
+        local d = 0
+        local cur = f
+        while cur and cur.parent_id do
+            d = d + 1
+            cur = folder_lookup[cur.parent_id]
         end
-        pending = remaining
-        if #pending == 0 then break end
+        return d
     end
-    if #pending > 0 then
-        log.warn("Could not resolve parent for %d folders", #pending)
+    table.sort(folders, function(a, b) return folder_depth(a) < folder_depth(b) end)
+
+    local drp_folder_to_bin = {}  -- DRP folder DbId → JVE bin_id
+    for _, folder in ipairs(folders) do
+        local parent_bin_id = folder.parent_id and drp_folder_to_bin[folder.parent_id] or nil
+        local bin_id = uuid.generate_with_prefix("bin")
+        local ok, def = tag_service.create_bin(project_id, {
+            id = bin_id,
+            name = folder.name,
+            parent_id = parent_bin_id,
+        })
+        if ok and def then
+            drp_folder_to_bin[folder.id] = def.id
+        else
+            log.warn("Failed to create bin: %s", folder.name)
+        end
     end
 
     -- Build pool master clip → DRP folder bin mappings.

@@ -774,18 +774,24 @@ local function populate_tree()
         end
     end
 
-    -- Root bins
-    for _, bin in ipairs(bins) do
-        if not bin.parent_id then
-            add_bin(bin, nil)
+    -- Sort bins parent-before-child (by depth), then add to tree
+    local function bin_depth(bin)
+        local d = 0
+        local cur = bin
+        while cur and cur.parent_id do
+            d = d + 1
+            cur = bin_lookup[cur.parent_id]
         end
+        return d
     end
-
-    -- Nested bins
+    table.sort(bins, function(a, b)
+        local da, db = bin_depth(a), bin_depth(b)
+        if da ~= db then return da < db end
+        return (a.name or ""):lower() < (b.name or ""):lower()
+    end)
     for _, bin in ipairs(bins) do
-        if bin.parent_id and bin_tree_map[bin.parent_id] then
-            add_bin(bin, bin_tree_map[bin.parent_id])
-        end
+        local parent_tree = bin.parent_id and bin_tree_map[bin.parent_id] or nil
+        add_bin(bin, parent_tree)
     end
 
     -- Sequences inside bins
