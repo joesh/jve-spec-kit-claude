@@ -2772,11 +2772,16 @@ function M.import_into_project(project_id, parse_result, opts)
                             -- Assign masterclip sequence to DRP folder bin (many-to-many safe)
                             -- Match by media name first, then by file path basename
                             -- (audio-from-video clips have different names than pool master clips)
-                            if clip.master_clip_id and (clip_data.file_uuid or clip_data.file_path) then
-                                local media = (clip_data.file_uuid and media_by_uuid[clip_data.file_uuid])
-                                    or (clip_data.file_path and media_by_path[clip_data.file_path])
+                            if clip.master_clip_id then
+                                local media = nil
+                                if clip_data.file_uuid and clip_data.file_uuid ~= "" then
+                                    media = media_by_uuid[clip_data.file_uuid]
+                                end
+                                if not media and clip_data.file_path and clip_data.file_path ~= "" then
+                                    media = media_by_path[clip_data.file_path]
+                                end
                                 local drp_bin = media and pool_name_to_drp_bin[media.name]
-                                if not drp_bin then
+                                if not drp_bin and clip_data.file_path then
                                     local basename = clip_data.file_path:match("([^/\\]+)$")
                                     drp_bin = basename and pool_name_to_drp_bin[basename]
                                 end
