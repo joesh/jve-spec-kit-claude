@@ -2865,6 +2865,7 @@ function M.convert(drp_path, jvp_path, progress_cb)
     local raw_report = progress_cb or function() end
     local function report(pct, text)
         if raw_report(pct, text) == "cancel" then
+            -- level 0: suppress stack trace from error() override
             error({cancelled = true}, 0)
         end
     end
