@@ -1892,7 +1892,7 @@ void TimelineMediaBuffer::evict_lru_reader() {
         }
     }
     char tbuf[8];
-    EMP_LOG_WARN("POOL EVICT: track=%s clip=%s hw=%s path=%s",
+    EMP_LOG_DEBUG("POOL EVICT: track=%s clip=%s hw=%s path=%s",
                  track_str(oldest->first.first, tbuf, sizeof(tbuf)),
                  oldest->first.second.c_str(),
                  oldest->second.reader->IsHwAccelerated() ? "VT" : "SW",
@@ -1910,7 +1910,7 @@ void TimelineMediaBuffer::log_pool_state(const char* action, const TrackId& trac
     int total = static_cast<int>(m_readers.size());
 
     char tbuf[8];
-    EMP_LOG_WARN("POOL %s: track=%s clip=%s %s — %d/%d readers (VT=%d SW=%d)",
+    EMP_LOG_DEBUG("POOL %s: track=%s clip=%s %s — %d/%d readers (VT=%d SW=%d)",
                  action, track_str(track, tbuf, sizeof(tbuf)), clip_id.c_str(),
                  is_hw ? "VT" : "SW",
                  total, m_max_readers, hw_count, sw_count);
@@ -1919,7 +1919,7 @@ void TimelineMediaBuffer::log_pool_state(const char* action, const TrackId& trac
     if (sw_count > 0) {
         for (const auto& [key, entry] : m_readers) {
             char tbuf2[8];
-            EMP_LOG_WARN("  [%s] track=%s clip=%s %s lru=%lld path=%s",
+            EMP_LOG_DEBUG("  [%s] track=%s clip=%s %s lru=%lld path=%s",
                          entry.reader->IsHwAccelerated() ? "VT" : "SW",
                          track_str(key.first, tbuf2, sizeof(tbuf2)),
                          key.second.c_str(),

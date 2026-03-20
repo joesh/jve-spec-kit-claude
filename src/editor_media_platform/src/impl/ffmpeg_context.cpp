@@ -299,21 +299,17 @@ Result<void> FFmpegCodecContext::init(AVCodecParameters* params) {
             // VT device created but negotiation fell through to software.
             // This is transient (session race) — retry.
             if (attempt < attempts) {
-                EMP_LOG_WARN("Codec %s %dx%d profile=%d: VT negotiation failed "
-                             "(attempt %d/%d, pix_fmt=%s) — retrying",
+                EMP_LOG_DEBUG("Codec %s %dx%d profile=%d: VT attempt %d/%d failed — retrying",
                              codec->name, params->width, params->height, params->profile,
-                             attempt, attempts,
-                             av_get_pix_fmt_name(m_codec_ctx->pix_fmt));
+                             attempt, attempts);
                 continue;
             }
 
             // All retries exhausted — accept SW decode for this open.
-            // No cooldown: device creation succeeded, so VT supports this codec.
-            // Next open will retry fresh (transient failures don't persist).
-            EMP_LOG_WARN("Codec %s %dx%d profile=%d: VT negotiation failed after "
-                         "%d attempts (pix_fmt=%s, wanted=%s) — SW decode",
+            EMP_LOG_WARN("Codec %s %dx%d profile=%d: VT unsupported, SW decode "
+                         "(pix_fmt=%s, wanted=%s)",
                          codec->name, params->width, params->height, params->profile,
-                         attempts, av_get_pix_fmt_name(m_codec_ctx->pix_fmt),
+                         av_get_pix_fmt_name(m_codec_ctx->pix_fmt),
                          av_get_pix_fmt_name(m_hw_pix_fmt));
             av_buffer_unref(&m_hw_device_ctx);
             m_hw_device_ctx = nullptr;

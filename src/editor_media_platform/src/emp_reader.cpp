@@ -171,8 +171,7 @@ Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset)
                     params->codec_id, params->width, params->height,
                     asset->info().path.c_str());
         } else if (impl::codec_supports_videotoolbox(params->codec_id)) {
-            EMP_LOG_WARN("*** SW DECODE FALLBACK *** codec=%d %dx%d — "
-                    "VT session likely exhausted, expect ~140ms/frame. path=%s",
+            EMP_LOG_WARN("SW decode: codec=%d %dx%d — VT unsupported for this file. path=%s",
                     params->codec_id, params->width, params->height,
                     asset->info().path.c_str());
         } else {
