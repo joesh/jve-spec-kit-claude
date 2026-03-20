@@ -65,23 +65,20 @@ seq_stmt:finalize()
 check("has timeline sequences", #seq_names > 0)
 print(string.format("  Found %d timeline(s)", #seq_names))
 
--- Each timeline should have a "{name} Master Clips" bin
+-- Master clips are assigned to DRP folder bins (not per-timeline bins)
 local bins = tag_service.list(project_id)
-local bins_by_name = {}
-for _, bin in ipairs(bins) do
-    bins_by_name[bin.name] = bin
-end
+check("has bins", #bins > 0)
+print(string.format("  Found %d bin(s)", #bins))
 
-for _, seq_name in ipairs(seq_names) do
-    local expected_bin = seq_name .. " Master Clips"
-    check(string.format("bin '%s' exists", expected_bin), bins_by_name[expected_bin] ~= nil)
-    if bins_by_name[expected_bin] then
-        print(string.format("  ✓ %s (id=%s, parent=%s)",
-            expected_bin,
-            bins_by_name[expected_bin].id,
-            tostring(bins_by_name[expected_bin].parent_id)))
+-- Verify at least some DRP folder bins exist (not "Master Clips" bins)
+local folder_bins = 0
+for _, bin in ipairs(bins) do
+    if not bin.name:find("Master Clips") then
+        folder_bins = folder_bins + 1
     end
 end
+check("has DRP folder bins", folder_bins > 0)
+print(string.format("  %d DRP folder bin(s)", folder_bins))
 
 -- ═══════════════════════════════════════════════════════════════
 -- 2. Master clips assigned to bins

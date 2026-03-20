@@ -1115,11 +1115,15 @@ function M.create()
     ensure_command_listener()
     populate_tree()
 
-    -- Header click → sort
+    -- Header click → sort in-place (no rebuild)
     local header_click_handler = register_handler(function(col, cmd_held)
         browser_sort.handle_header_click(sort_state, col, cmd_held)
         save_sort_state()
-        populate_tree()
+        qt_constants.CONTROL.SORT_TREE(tree, sort_state.primary_col,
+            sort_state.primary_order or "asc")
+        -- Update header labels to show sort indicators
+        local labels = browser_sort.build_header_labels(BASE_HEADERS, sort_state)
+        qt_constants.CONTROL.SET_TREE_HEADERS(tree, labels)
         apply_column_widths()
     end)
     qt_constants.CONTROL.SET_TREE_HEADER_CLICK_HANDLER(tree, header_click_handler)
