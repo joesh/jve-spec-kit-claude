@@ -303,8 +303,10 @@ function M.show(offline_media, parent_window, project_id, opts)
     qt.CONTROL.SET_LINE_EDIT_READ_ONLY(dir_edit, true)
     qt.LAYOUT.ADD_WIDGET(dir_row, dir_edit)
     local browse_btn = qt.WIDGET.CREATE_BUTTON("Browse...")
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(browse_btn, false)
     qt.LAYOUT.ADD_WIDGET(dir_row, browse_btn)
     local rules_btn = qt.WIDGET.CREATE_BUTTON("Matching Rules...")
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(rules_btn, false)
     qt.LAYOUT.ADD_WIDGET(dir_row, rules_btn)
     qt.LAYOUT.ADD_LAYOUT(main_layout, dir_row)
 
@@ -314,6 +316,7 @@ function M.show(offline_media, parent_window, project_id, opts)
         local priority_row = qt.LAYOUT.CREATE_HBOX()
         priority_btn = qt.WIDGET.CREATE_BUTTON(
             string.format("Folder Priority... (%d source folders)", #folder_roots))
+        qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(priority_btn, false)
         qt.LAYOUT.ADD_WIDGET(priority_row, priority_btn)
         qt.LAYOUT.ADD_STRETCH(priority_row)
         qt.LAYOUT.ADD_LAYOUT(main_layout, priority_row)
@@ -372,25 +375,23 @@ function M.show(offline_media, parent_window, project_id, opts)
     qt.LAYOUT.ADD_STRETCH(main_layout)
 
     -- -----------------------------------------------------------------------
-    -- Button row
+    -- Button box: Relink (accept/default) + Cancel (reject)
     -- -----------------------------------------------------------------------
-    local btn_row = qt.LAYOUT.CREATE_HBOX()
-    qt.LAYOUT.ADD_STRETCH(btn_row)
-
-    local relink_btn = qt.WIDGET.CREATE_BUTTON("Relink")
+    local button_box = qt.CONTROL.CREATE_BUTTON_BOX()
+    local relink_btn = qt.CONTROL.BUTTON_BOX_ADD(button_box, "Relink", "accept")
+    local cancel_btn = qt.CONTROL.BUTTON_BOX_ADD(button_box, "Cancel", "reject")
     qt.CONTROL.SET_ENABLED(relink_btn, false)  -- disabled until clips loaded
-    local cancel_btn = qt.WIDGET.CREATE_BUTTON("Cancel")
-    -- Cancel must NOT be default — accidental Enter would lose work/time
-    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(cancel_btn, false)
+    qt.LAYOUT.ADD_WIDGET(main_layout, button_box)
 
+    -- Cancel (rejected signal)
     local cancel_name = "__relink_dialog_cancel"
     _G[cancel_name] = function()
         qt.DIALOG.CLOSE(dialog, false)
     end
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(cancel_btn, cancel_name)
+    qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "rejected", cancel_name)
     globals[#globals + 1] = cancel_name
 
-    -- Relink handler
+    -- Relink/Apply handler (accepted signal)
     local relink_name = "__relink_dialog_relink"
     _G[relink_name] = function()
         if not search_dir or search_dir == "" then
@@ -406,8 +407,10 @@ function M.show(offline_media, parent_window, project_id, opts)
         qt.CONTROL.SET_ENABLED(browse_btn, false)
         qt.CONTROL.SET_ENABLED(rules_btn, false)
         if priority_btn then qt.CONTROL.SET_ENABLED(priority_btn, false) end
+        qt.PROPERTIES.SET_TEXT(relink_btn, "Relinking…")
         progress.reset()
         progress.show()
+        qt.CONTROL.PROCESS_EVENTS()
 
         local options = {
             search_paths = { search_dir },
@@ -423,6 +426,7 @@ function M.show(offline_media, parent_window, project_id, opts)
             qt.CONTROL.SET_ENABLED(browse_btn, true)
             qt.CONTROL.SET_ENABLED(rules_btn, true)
             if priority_btn then qt.CONTROL.SET_ENABLED(priority_btn, true) end
+            qt.PROPERTIES.SET_TEXT(relink_btn, "Relink")
             qt.PROPERTIES.SET_TEXT(error_label,
                 "No clips matched. Try a different directory or matching rules.")
             qt.DISPLAY.SET_VISIBLE(error_label, true)
@@ -435,9 +439,10 @@ function M.show(offline_media, parent_window, project_id, opts)
         qt.CONTROL.SET_ENABLED(relink_btn, true)
 
         _G[relink_name] = function()
-            qt.PROPERTIES.SET_TEXT(relink_btn, "Applying…")
             qt.CONTROL.SET_ENABLED(relink_btn, false)
             qt.CONTROL.SET_ENABLED(cancel_btn, false)
+            qt.PROPERTIES.SET_TEXT(relink_btn, "Applying…")
+            qt.PROPERTIES.SET_TEXT(header, "Applying relink changes…")
             qt.CONTROL.PROCESS_EVENTS()
             if opts.on_apply then
                 opts.on_apply(relink_results)
@@ -445,13 +450,8 @@ function M.show(offline_media, parent_window, project_id, opts)
             qt.DIALOG.CLOSE(dialog, true)
         end
     end
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(relink_btn, relink_name)
+    qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "accepted", relink_name)
     globals[#globals + 1] = relink_name
-
-    qt.LAYOUT.ADD_WIDGET(btn_row, relink_btn)
-    qt.LAYOUT.ADD_SPACING(btn_row, 8)
-    qt.LAYOUT.ADD_WIDGET(btn_row, cancel_btn)
-    qt.LAYOUT.ADD_LAYOUT(main_layout, btn_row)
 
     -- -----------------------------------------------------------------------
     -- Show dialog immediately (non-blocking), then populate

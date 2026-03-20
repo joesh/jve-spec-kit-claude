@@ -127,23 +127,17 @@ function M.show(config)
 
     qt.LAYOUT.ADD_STRETCH(main_layout)
 
-    -- Button row
-    local btn_row = qt.LAYOUT.CREATE_HBOX()
-    qt.LAYOUT.ADD_STRETCH(btn_row)
-
+    -- Save Log button (hidden initially, shown after warnings)
     local save_log_btn = qt.WIDGET.CREATE_BUTTON("Save Log…")
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(save_log_btn, false)
     qt.DISPLAY.SET_VISIBLE(save_log_btn, false)
-    qt.LAYOUT.ADD_WIDGET(btn_row, save_log_btn)
+    qt.LAYOUT.ADD_WIDGET(main_layout, save_log_btn)
 
-    local convert_btn = qt.WIDGET.CREATE_BUTTON("Convert")
-    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(convert_btn, true)
-    qt.LAYOUT.ADD_WIDGET(btn_row, convert_btn)
-
-    local cancel_btn = qt.WIDGET.CREATE_BUTTON("Cancel")
-    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(cancel_btn, false)
-    qt.LAYOUT.ADD_WIDGET(btn_row, cancel_btn)
-
-    qt.LAYOUT.ADD_LAYOUT(main_layout, btn_row)
+    -- Button box: Convert (accept/default) + Cancel (reject)
+    local button_box = qt.CONTROL.CREATE_BUTTON_BOX()
+    local convert_btn = qt.CONTROL.BUTTON_BOX_ADD(button_box, "Convert", "accept")
+    qt.CONTROL.BUTTON_BOX_ADD(button_box, "Cancel", "reject")  -- handled via rejected signal
+    qt.LAYOUT.ADD_WIDGET(main_layout, button_box)
 
     -- -----------------------------------------------------------------------
     -- Helpers
@@ -183,7 +177,7 @@ function M.show(config)
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(browse_btn, browse_name)
     globals[#globals + 1] = browse_name
 
-    -- Convert
+    -- Convert (accepted signal from button box)
     local convert_name = "__conversion_dialog_convert"
     _G[convert_name] = function()
         if not dest_path or dest_path == "" then return end
@@ -216,15 +210,15 @@ function M.show(config)
             log.error("Conversion failed: %s", tostring(err))
         end
     end
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(convert_btn, convert_name)
+    qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "accepted", convert_name)
     globals[#globals + 1] = convert_name
 
-    -- Cancel
+    -- Cancel (rejected signal from button box)
     local cancel_name = "__conversion_dialog_cancel"
     _G[cancel_name] = function()
         qt.DIALOG.CLOSE(dialog, false)
     end
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(cancel_btn, cancel_name)
+    qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "rejected", cancel_name)
     globals[#globals + 1] = cancel_name
 
     -- Save Log
