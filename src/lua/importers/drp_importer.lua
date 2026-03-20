@@ -2693,20 +2693,8 @@ function M.import_into_project(project_id, parse_result, opts)
                 tag_service.add_to_bin(project_id, {sequence.id}, timeline_folder_bin, "sequence")
             end
 
-            -- Create per-sequence master clip bin: "{seq_name} Master Clips"
-            -- Parent = timeline's folder bin (from DRP hierarchy), or nil (root)
-            local parent_bin_id = timeline_folder_bin
-            local mc_bin_label = string.format("%s Master Clips", timeline_data.name)
-            local mc_bin_id = uuid.generate_with_prefix("bin")
-            local mc_ok, mc_def = tag_service.create_bin(project_id, {
-                id = mc_bin_id,
-                name = mc_bin_label,
-                parent_id = parent_bin_id,
-            })
-            local master_bin_id = (mc_ok and mc_def) and mc_def.id or nil
-            if master_bin_id then
-                log.event("  Created master clip bin: %s", mc_bin_label)
-            end
+            -- Master clips are assigned to DRP folder bins (from pool hierarchy)
+            -- after clip creation. No per-timeline "Master Clips" bin needed.
 
             local clips_for_linking = {}
 
@@ -2793,7 +2781,7 @@ function M.import_into_project(project_id, parse_result, opts)
                             source_out = source_out,
                             fps_numerator = clip_rate_num,
                             fps_denominator = clip_rate_den,
-                            bin_id = master_bin_id,
+                            -- bin assigned after clip creation via DRP folder lookup
                         })
 
                         assert(clip:save(), string.format(
