@@ -1,4 +1,5 @@
 #include "binding_macros.h"
+#include <QApplication>
 #include <QDialog>
 #include <QFileDialog>
 #include <QMessageBox>
@@ -160,6 +161,13 @@ int lua_create_dialog(lua_State* L) {
     dialog->setWindowTitle(QString::fromUtf8(title));
     dialog->resize(width, height);
     dialog->setWindowModality(Qt::ApplicationModal);
+
+    // Propagate app stylesheet to parented dialogs (macOS parented dialogs
+    // don't always inherit the application-level stylesheet)
+    auto* app = qobject_cast<QApplication*>(QApplication::instance());
+    if (app && !app->styleSheet().isEmpty()) {
+        dialog->setStyleSheet(app->styleSheet());
+    }
 
     lua_push_widget(L, dialog);
     return 1;

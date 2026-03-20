@@ -178,10 +178,18 @@ int main(int argc, char *argv[])
     darkPalette.setColor(QPalette::Highlight, QColor(42, 130, 218));
     darkPalette.setColor(QPalette::HighlightedText, Qt::black);
     // Disabled state must be visually distinct on dark backgrounds
-    darkPalette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(90, 90, 90));
-    darkPalette.setColor(QPalette::Disabled, QPalette::WindowText, QColor(90, 90, 90));
-    darkPalette.setColor(QPalette::Disabled, QPalette::Text, QColor(90, 90, 90));
+    darkPalette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(70, 70, 70));
+    darkPalette.setColor(QPalette::Disabled, QPalette::WindowText, QColor(70, 70, 70));
+    darkPalette.setColor(QPalette::Disabled, QPalette::Text, QColor(70, 70, 70));
+    darkPalette.setColor(QPalette::Disabled, QPalette::Button, QColor(28, 28, 28));
     app.setPalette(darkPalette);
+
+    // Stylesheet reinforces disabled button appearance (Fusion palette alone
+    // doesn't always render disabled buttons distinctly on dark backgrounds).
+    // Target both standalone buttons and buttons inside QDialogButtonBox.
+    app.setStyleSheet(
+        "QPushButton:disabled { color: #666666; background-color: #1e1e1e; }"
+    );
 
     // Set up application data directory
     QString appDataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
