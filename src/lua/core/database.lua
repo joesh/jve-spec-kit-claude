@@ -664,23 +664,6 @@ function M.ensure_commands_table_columns()
     end
 end
 
---- Check if the open database has the expected schema version.
--- @return boolean ok, number|nil db_version
-function M.check_schema_version()
-    assert(db_connection, "database.check_schema_version: no connection")
-    local stmt = db_connection:prepare("SELECT MAX(version) FROM schema_version")
-    if not stmt then
-        return false, nil  -- no schema_version table
-    end
-    if not stmt:exec() or not stmt:next() then
-        stmt:finalize()
-        return false, nil
-    end
-    local db_version = stmt:value(0)
-    stmt:finalize()
-    if not db_version then return false, nil end
-    return db_version == M.SCHEMA_VERSION, db_version
-end
 
 function M.shutdown(opts)
     if not db_connection then
