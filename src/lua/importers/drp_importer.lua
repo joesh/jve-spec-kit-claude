@@ -2513,12 +2513,15 @@ function M.import_into_project(project_id, parse_result, opts)
         log.warn("Could not resolve parent for %d folders", #pending)
     end
 
-    -- Build pool master clip name → DRP folder bin mapping
-    -- pool_master_clips have {name, folder_id} from MediaPool hierarchy
-    -- Two indexes: by exact name and by filename (for audio-from-video matching)
-    local pool_name_to_drp_bin = {}
+    -- Build pool master clip → DRP folder bin mappings.
+    -- Primary: UUID → bin (reliable, handles renames). Fallback: name → bin.
+    local pool_uuid_to_drp_bin = {}  -- pmc.id → JVE bin_id
+    local pool_name_to_drp_bin = {}  -- pmc.name → JVE bin_id (for non-UUID media)
     for _, pmc in ipairs(parse_result.pool_master_clips or {}) do
         if pmc.folder_id and drp_folder_to_bin[pmc.folder_id] then
+            if pmc.id then
+                pool_uuid_to_drp_bin[pmc.id] = drp_folder_to_bin[pmc.folder_id]
+            end
             pool_name_to_drp_bin[pmc.name] = drp_folder_to_bin[pmc.folder_id]
         end
     end
@@ -2797,14 +2800,24 @@ function M.import_into_project(project_id, parse_result, opts)
                             -- Match by media name first, then by file path basename
                             -- (audio-from-video clips have different names than pool master clips)
                             if clip.master_clip_id then
-                                local media = nil
+                                -- Assign master clip to its DRP pool folder bin.
+                                -- UUID→bin is most reliable, then name, then basename.
+                                local drp_bin = nil
                                 if clip_data.file_uuid and clip_data.file_uuid ~= "" then
-                                    media = media_by_uuid[clip_data.file_uuid]
+                                    drp_bin = pool_uuid_to_drp_bin[clip_data.file_uuid]
                                 end
-                                if not media and clip_data.file_path and clip_data.file_path ~= "" then
-                                    media = media_by_path[clip_data.file_path]
+                                if not drp_bin then
+                                    local media = nil
+                                    if clip_data.file_uuid and clip_data.file_uuid ~= "" then
+                                        media = media_by_uuid[clip_data.file_uuid]
+                                    end
+                                    if not media and clip_data.file_path and clip_data.file_path ~= "" then
+                                        media = media_by_path[clip_data.file_path]
+                                    end
+                                    if media then
+                                        drp_bin = pool_name_to_drp_bin[media.name]
+                                    end
                                 end
-                                local drp_bin = media and pool_name_to_drp_bin[media.name]
                                 if not drp_bin and clip_data.file_path then
                                     local basename = clip_data.file_path:match("([^/\\]+)$")
                                     drp_bin = basename and pool_name_to_drp_bin[basename]
