@@ -1484,12 +1484,14 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 -- Hex part encodes speed ratio as LE IEEE 754 double
                 if hex_part and #hex_part >= 16 then
                     local speed = decode_hex_double_at(hex_part, 0)
-                    if speed and math.abs(speed) > 0.001 and math.abs(speed) < 100 then
-                        -- Preserve signed speed: negative = reverse playback.
-                        -- Direction is encoded via source_in > source_out swap below.
+                    if speed and math.abs(speed) >= 0.05 and math.abs(speed) < 100 then
+                        -- Accept hex speed if it's in a plausible range (5%-10000%).
+                        -- Below 0.05 (5%) is almost certainly garbage — Resolve's hex
+                        -- field encodes internal values that don't match user-visible
+                        -- speed for variable-speed and some constant-speed clips.
                         clip_speed = speed
                     else
-                        log.detail("DRP retime: clip '%s' hex speed unusable (decoded=%s from '%s'), will use MTBA",
+                        log.detail("DRP retime: clip '%s' hex speed unusable (decoded=%s from '%s'), will use MTBA or 1.0",
                                  clip_name, tostring(speed), hex_part:sub(1, 16))
                     end
                 end
@@ -1521,6 +1523,15 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                                   clip_name, clip_speed, mtba.y_max, mtba.x_max, tostring(mtba.is_reverse))
                     end
                 end
+            end
+
+            -- Final guard: if clip_speed is still implausibly low after hex + MTBA,
+            -- it's garbage. Reset to 1.0 (non-retimed). This catches clips where
+            -- hex speed was garbage AND MTBA was absent or had no speed data.
+            if math.abs(clip_speed) > 0 and math.abs(clip_speed) < 0.05 then
+                log.warn("DRP retime: clip '%s' final speed %.6f implausibly low — treating as non-retimed",
+                    clip_name, clip_speed)
+                clip_speed = 1.0
             end
 
             local duration_timeline_frames = duration_raw

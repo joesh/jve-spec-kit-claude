@@ -164,11 +164,19 @@ local SEQ_FPS_NUM = 25
 local SEQ_FPS_DEN = 1
 local WINDOW_HI = 123286
 
+-- Probe file's TC origin (first_frame_tc) via EMP binding.
+-- source_in must be absolute TC = first_frame_tc + file_offset.
+local function tc_origin(path)
+    local probe = EMP.MEDIA_FILE_PROBE(path)
+    assert(probe, "MEDIA_FILE_PROBE failed: " .. path)
+    return probe.first_frame_tc or 0
+end
+
 local v1_clips = {
-    { clip_id = "v1-18-097-002", media_path = media.day4_c002, timeline_start = 122960, duration = 43,  source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-100-001", media_path = media.day4_c008, timeline_start = 123003, duration = 40,  source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-098-003", media_path = media.day4_c005, timeline_start = 123043, duration = 129, source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-100-003", media_path = media.day4_c010, timeline_start = 123172, duration = 114, source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-097-002", media_path = media.day4_c002, timeline_start = 122960, duration = 43,  source_in = tc_origin(media.day4_c002), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-100-001", media_path = media.day4_c008, timeline_start = 123003, duration = 40,  source_in = tc_origin(media.day4_c008), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-098-003", media_path = media.day4_c005, timeline_start = 123043, duration = 129, source_in = tc_origin(media.day4_c005), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-100-003", media_path = media.day4_c010, timeline_start = 123172, duration = 114, source_in = tc_origin(media.day4_c010), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
 }
 
 -- Audio track: same clips, same layout (AAC 48kHz stereo in all Anamnesis MOVs)

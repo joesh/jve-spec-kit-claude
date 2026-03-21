@@ -81,13 +81,20 @@ local tmb = EMP.TMB_CREATE(2)
 assert(tmb, "TMB_CREATE failed")
 EMP.TMB_SET_SEQUENCE_RATE(tmb, RATE_NUM, RATE_DEN)
 
+-- Probe file TC origin for absolute TC source_in
+local function tc_origin(path)
+    local probe = EMP.MEDIA_FILE_PROBE(path)
+    assert(probe, "MEDIA_FILE_PROBE failed: " .. path)
+    return probe.first_frame_tc or 0
+end
+
 local clips = {
     {
         clip_id = "countdown",
         media_path = COUNTDOWN,
         timeline_start = 0,
         duration = 250,
-        source_in = 47,
+        source_in = tc_origin(COUNTDOWN) + 47,
         rate_num = RATE_NUM,
         rate_den = RATE_DEN,
         speed_ratio = 1.0,
@@ -97,7 +104,7 @@ local clips = {
         media_path = SEAGULL_ANIM,
         timeline_start = 275,
         duration = 100,
-        source_in = 0,
+        source_in = tc_origin(SEAGULL_ANIM),
         rate_num = RATE_NUM,
         rate_den = RATE_DEN,
         speed_ratio = 1.0,
@@ -107,7 +114,7 @@ local clips = {
         media_path = CLIP_40_393,
         timeline_start = 450,
         duration = 251,
-        source_in = 3513,
+        source_in = tc_origin(CLIP_40_393) + 3513,
         rate_num = RATE_NUM,
         rate_den = RATE_DEN,
         speed_ratio = 1.0,

@@ -63,24 +63,31 @@ end
 --------------------------------------------------------------------------------
 local MEDIA_DIR = ienv.resolve_repo_path("tests/fixtures/media/anamnesis")
 
--- Source_in values: 10, 15, 5, 20 frames into each clip.
--- These are small but non-zero — enough to expose conversion bugs.
+-- Source_in values: absolute TC = file's first_frame_tc + small offset.
+-- The offsets (10, 15, 5, 20) exercise the source_in→seek conversion.
 local SEQ_FPS_NUM = 25
 local SEQ_FPS_DEN = 1
 local TL_START = 1000  -- non-zero timeline start (not 0!)
 
+-- Probe file TC origin so source_in is absolute TC
+local function tc_origin(path)
+    local probe = EMP.MEDIA_FILE_PROBE(path)
+    assert(probe, "MEDIA_FILE_PROBE failed: " .. path)
+    return probe.first_frame_tc or 0
+end
+
 local v1_clips = {
     { clip_id = "v1-offset-c002", media_path = MEDIA_DIR .. "/A012_C002.mov",
-      timeline_start = TL_START,       duration = 30,  source_in = 10,
+      timeline_start = TL_START,       duration = 30,  source_in = tc_origin(MEDIA_DIR .. "/A012_C002.mov") + 10,
       rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
     { clip_id = "v1-offset-c008", media_path = MEDIA_DIR .. "/A012_C008.mov",
-      timeline_start = TL_START + 30,  duration = 25,  source_in = 15,
+      timeline_start = TL_START + 30,  duration = 25,  source_in = tc_origin(MEDIA_DIR .. "/A012_C008.mov") + 15,
       rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
     { clip_id = "v1-offset-c005", media_path = MEDIA_DIR .. "/A012_C005.mov",
-      timeline_start = TL_START + 55,  duration = 80,  source_in = 5,
+      timeline_start = TL_START + 55,  duration = 80,  source_in = tc_origin(MEDIA_DIR .. "/A012_C005.mov") + 5,
       rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
     { clip_id = "v1-offset-c010", media_path = MEDIA_DIR .. "/A012_C010.mov",
-      timeline_start = TL_START + 135, duration = 50,  source_in = 20,
+      timeline_start = TL_START + 135, duration = 50,  source_in = tc_origin(MEDIA_DIR .. "/A012_C010.mov") + 20,
       rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
 }
 

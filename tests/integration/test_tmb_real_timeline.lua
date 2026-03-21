@@ -32,7 +32,7 @@ local function section(name)
 end
 
 --------------------------------------------------------------------------------
--- Media paths (extracted fixtures — source_in is zero-based)
+-- Media paths — source_in uses absolute TC (first_frame_tc + file offset)
 --------------------------------------------------------------------------------
 local MEDIA_DIR = ienv.resolve_repo_path("tests/fixtures/media/anamnesis")
 
@@ -55,31 +55,38 @@ end
 
 --------------------------------------------------------------------------------
 -- Timeline layout: V1 clips around playhead 122965
--- Original source_in values adjusted to zero-based (fixtures start at original src_in)
+-- source_in = absolute TC (first_frame_tc from file probe)
 --------------------------------------------------------------------------------
 local SEQ_FPS_NUM = 25
 local SEQ_FPS_DEN = 1
 
+-- Probe file TC origin for absolute TC source_in
+local function tc_origin(path)
+    local probe = EMP.MEDIA_FILE_PROBE(path)
+    assert(probe, "MEDIA_FILE_PROBE failed: " .. path)
+    return probe.first_frame_tc or 0
+end
+
 -- V1: rapid cut sequence — Helen VHS → 30-124-001 → 18-097-002 → 18-100-001 → 18-098-003 → 18-100-003
 local v1_clips = {
-    { clip_id = "v1-helen-vhs",  media_path = media.vfx_01,    timeline_start = 122097, duration = 831, source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-30-124-001", media_path = media.day5_c003,  timeline_start = 122928, duration = 32,  source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-097-002", media_path = media.day4_c002,  timeline_start = 122960, duration = 43,  source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-100-001", media_path = media.day4_c008,  timeline_start = 123003, duration = 40,  source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-098-003", media_path = media.day4_c005,  timeline_start = 123043, duration = 129, source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-100-003", media_path = media.day4_c010,  timeline_start = 123172, duration = 114, source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-helen-vhs",  media_path = media.vfx_01,    timeline_start = 122097, duration = 831, source_in = tc_origin(media.vfx_01),    rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-30-124-001", media_path = media.day5_c003,  timeline_start = 122928, duration = 32,  source_in = tc_origin(media.day5_c003), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-097-002", media_path = media.day4_c002,  timeline_start = 122960, duration = 43,  source_in = tc_origin(media.day4_c002), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-100-001", media_path = media.day4_c008,  timeline_start = 123003, duration = 40,  source_in = tc_origin(media.day4_c008), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-098-003", media_path = media.day4_c005,  timeline_start = 123043, duration = 129, source_in = tc_origin(media.day4_c005), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-100-003", media_path = media.day4_c010,  timeline_start = 123172, duration = 114, source_in = tc_origin(media.day4_c010), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
 }
 
 -- V3: parallel coverage clips (same source ranges, different camera files)
 local v3_clips = {
-    { clip_id = "v3-18-097-002", media_path = media.day4_c002,  timeline_start = 122960, duration = 43,  source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v3-18-100-001", media_path = media.day4_c008,  timeline_start = 123003, duration = 40,  source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v3-18-100-003", media_path = media.day4_c010,  timeline_start = 123172, duration = 114, source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v3-18-097-002", media_path = media.day4_c002,  timeline_start = 122960, duration = 43,  source_in = tc_origin(media.day4_c002), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v3-18-100-001", media_path = media.day4_c008,  timeline_start = 123003, duration = 40,  source_in = tc_origin(media.day4_c008), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v3-18-100-003", media_path = media.day4_c010,  timeline_start = 123172, duration = 114, source_in = tc_origin(media.day4_c010), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
 }
 
 -- V6: previous gold master export (reference layer)
 local v6_clips = {
-    { clip_id = "v6-gold-ref",   media_path = media.gold,       timeline_start = 122097, duration = 863, source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v6-gold-ref",   media_path = media.gold,       timeline_start = 122097, duration = 863, source_in = tc_origin(media.gold),      rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
 }
 
 --------------------------------------------------------------------------------
