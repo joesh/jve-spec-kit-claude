@@ -91,17 +91,27 @@ local v1_clips = {
       rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
 }
 
--- Audio: same clips, same offsets
+-- Audio: same clips, but source_in in audio sample space (not video frames).
+-- Audio clips use rate=48000/1 and first_sample_tc for TC origin.
+local function audio_tc_origin(path)
+    local probe = EMP.MEDIA_FILE_PROBE(path)
+    assert(probe, "MEDIA_FILE_PROBE failed: " .. path)
+    return probe.first_sample_tc or 0
+end
+
+local audio_offsets = {10, 15, 5, 20}  -- same offsets as video, in timeline frames
 local a1_clips = {}
 for i, vc in ipairs(v1_clips) do
+    -- Convert timeline-frame offset to samples: offset * 48000 / 25
+    local offset_samples = math.floor(audio_offsets[i] * 48000 / 25 + 0.5)
     a1_clips[i] = {
         clip_id = "a1-offset-" .. vc.clip_id:sub(4),
         media_path = vc.media_path,
         timeline_start = vc.timeline_start,
         duration = vc.duration,
-        source_in = vc.source_in,
-        rate_num = vc.rate_num,
-        rate_den = vc.rate_den,
+        source_in = audio_tc_origin(vc.media_path) + offset_samples,
+        rate_num = 48000,
+        rate_den = 1,
         speed_ratio = vc.speed_ratio,
     }
 end
@@ -196,6 +206,9 @@ for _ = 1, 120 do
     samples[#samples + 1] = entry
 end
 
+-- Capture audio playhead BEFORE stop (stop resets AOP playhead to 0)
+local pre_stop_audio = has_audio and qt_constants.AOP.PLAYHEAD_US(aop) or 0
+
 PLAYBACK.STOP(pc)
 
 -- Video advanced
@@ -218,9 +231,8 @@ check(monotonic, "video frames monotonically non-decreasing")
 
 -- A/V drift (if audio available)
 if has_audio then
-    local audio_end = qt_constants.AOP.PLAYHEAD_US(aop)
-    check(audio_end > baseline_audio,
-        string.format("audio advanced: %d → %d us", baseline_audio, audio_end))
+    check(pre_stop_audio > baseline_audio,
+        string.format("audio advanced: %d → %d us", baseline_audio, pre_stop_audio))
 
     local had_underrun = qt_constants.AOP.HAD_UNDERRUN(aop)
     check(not had_underrun, "no audio underruns during playback")

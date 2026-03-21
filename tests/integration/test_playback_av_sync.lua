@@ -180,6 +180,13 @@ local v1_clips = {
 }
 
 -- Audio track: same clips, same layout (AAC 48kHz stereo in all Anamnesis MOVs)
+-- Audio clips: use sample rate and first_sample_tc for TC origin
+local function audio_tc_origin(path)
+    local probe = EMP.MEDIA_FILE_PROBE(path)
+    assert(probe, "MEDIA_FILE_PROBE failed: " .. path)
+    return probe.first_sample_tc or 0
+end
+
 local a1_clips = {}
 for i, vc in ipairs(v1_clips) do
     a1_clips[i] = {
@@ -187,9 +194,9 @@ for i, vc in ipairs(v1_clips) do
         media_path = vc.media_path,
         timeline_start = vc.timeline_start,
         duration = vc.duration,
-        source_in = vc.source_in,
-        rate_num = vc.rate_num,
-        rate_den = vc.rate_den,
+        source_in = audio_tc_origin(vc.media_path),
+        rate_num = 48000,
+        rate_den = 1,
         speed_ratio = vc.speed_ratio,
     }
 end
