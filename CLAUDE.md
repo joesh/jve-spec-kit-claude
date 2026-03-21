@@ -64,7 +64,11 @@ Tests are LuaJIT scripts in `tests/` with `test_*.lua` naming. Each test:
 - Uses `print()` for test output (tests don't use logger module)
 - Ends with `print("✅ test_name.lua passed")` on success
 
-**IMPORTANT** When writing tests use the ABSOLUTE MINIMUM set of mocks. Mocks are bad. They encode incorrect assumptions about how the real code works. Avoid them if at all possible.
+**IMPORTANT** Tests must be **black-box**: test outputs and side effects, not internals.
+- **ZERO mocks** that encode assumptions about data or code paths. If a test builds data structures manually to simulate what code produces, it's testing assumptions, not code. Delete it.
+- **Non-trivial values**: parameters that happen to be zero (source_in=0, offset=0) don't catch real bugs. Use values that exercise unit conversion, coordinate spaces, boundary conditions.
+- **Interesting configurations**: muted clips, reversed clips, non-unity speed, BWF offsets, boundary-spanning segments. These are what break.
+- A test that can't catch a real bug is **worse than no test** — it gives false confidence.
 
 ## Integration Testing with --test Mode
 For features that need real C++ bindings (Qt widgets, XML parser, EMP/TMB, audio pipeline), use `--test` to run a Lua script inside the full JVEEditor process:

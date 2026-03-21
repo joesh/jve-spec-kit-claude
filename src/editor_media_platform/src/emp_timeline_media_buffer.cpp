@@ -964,6 +964,29 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::check_audio_cache(
 }
 
 // ============================================================================
+// BWF audio source offset: convert MST-relative source_in to file-relative.
+// ============================================================================
+
+// When bwf_offset_us != 0, source_in is MST-relative (DRP import stores <In>
+// relative to MediaStartTime). Subtracting (BWF_us - MST_us) gives file-relative.
+// Precomputed by Lua at clip-add time — no file I/O or locking here.
+static TimeUS compute_audio_source_origin_us(
+        const ClipInfo* clip) {
+    TimeUS source_in_us = FrameTime::from_frame(clip->source_in, clip->rate()).to_us();
+    if (clip->bwf_offset_us != 0) {
+        TimeUS adjusted = source_in_us - clip->bwf_offset_us;
+        if (adjusted < 0) {
+            EMP_LOG_WARN("BWF adjust: negative origin=%lldus (src=%lldus offset=%lldus) — clamping",
+                         (long long)adjusted, (long long)source_in_us,
+                         (long long)clip->bwf_offset_us);
+            adjusted = 0;
+        }
+        return adjusted;
+    }
+    return source_in_us;
+}
+
+// ============================================================================
 // GetTrackAudio
 // ============================================================================
 
@@ -1007,10 +1030,10 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         return nullptr;
     }
 
-    // Map timeline us → source us
+    // Map timeline us → source us (file-relative, with BWF adjustment if present)
     // For reverse clips (speed_ratio < 0), source_t0 > source_t1 after this formula.
     // We swap for forward-order decoding, then reverse PCM afterward.
-    TimeUS source_origin_us = FrameTime::from_frame(clip->source_in, clip->rate()).to_us();
+    TimeUS source_origin_us = compute_audio_source_origin_us(clip);
     double sr = static_cast<double>(clip->speed_ratio);
     TimeUS source_t0 = source_origin_us + static_cast<int64_t>((clamped_t0 - clip_start_us) * sr);
     TimeUS source_t1 = source_origin_us + static_cast<int64_t>((clamped_t1 - clip_start_us) * sr);
@@ -1119,7 +1142,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         }
 
         // Map to source coordinates (may be inverted for reverse clips)
-        TimeUS next_src_origin = FrameTime::from_frame(next->source_in, next->rate()).to_us();
+        TimeUS next_src_origin = compute_audio_source_origin_us(next);
         double next_sr = static_cast<double>(next->speed_ratio);
         TimeUS next_src_t0 = next_src_origin + static_cast<int64_t>((seg_t0 - next_start_us) * next_sr);
         TimeUS next_src_t1 = next_src_origin + static_cast<int64_t>((seg_t1 - next_start_us) * next_sr);
@@ -2434,7 +2457,7 @@ void TimelineMediaBuffer::decode_audio_into_cache(
     // Offline clip — skip decode entirely (beep generated in GetTrackAudio)
     if (clip->offline) return;
 
-    TimeUS src_origin = FrameTime::from_frame(clip->source_in, clip->rate()).to_us();
+    TimeUS src_origin = compute_audio_source_origin_us(clip);
     double sr_d = static_cast<double>(clip->speed_ratio);
     TimeUS src_t0 = src_origin + static_cast<int64_t>((position - seg.start_us) * sr_d);
     TimeUS src_t1 = src_origin + static_cast<int64_t>((chunk_end - seg.start_us) * sr_d);

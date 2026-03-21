@@ -557,6 +557,32 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
     local is_offline = (f == nil)
     if f then f:close() end
 
+    -- BWF sync: compute bwf_offset_us for audio clips with MST metadata.
+    -- bwf_offset = BWF_time_reference_us - MediaStartTime_us
+    -- Precomputed here; TMB applies it to source_in at decode time.
+    local bwf_offset_us = 0
+    local mst_us = entry.media_start_tc_us or 0
+    if mst_us > 0 and not is_offline then
+        -- Look up cached BWF offset, or probe file and cache
+        if not self._bwf_cache then self._bwf_cache = {} end
+        local cached = self._bwf_cache[entry.media_path]
+        if cached ~= nil then
+            bwf_offset_us = cached
+        else
+            local EMP = qt_constants and qt_constants.EMP
+            if EMP and EMP.MEDIA_FILE_PROBE then
+                local probe = EMP.MEDIA_FILE_PROBE(entry.media_path)
+                if probe and probe.bwf_time_reference and probe.bwf_time_reference >= 0
+                   and probe.audio_sample_rate and probe.audio_sample_rate > 0 then
+                    local bwf_us = math.floor(probe.bwf_time_reference * 1000000
+                                              / probe.audio_sample_rate)
+                    bwf_offset_us = bwf_us - mst_us
+                end
+            end
+            self._bwf_cache[entry.media_path] = bwf_offset_us
+        end
+    end
+
     return {
         clip_id = clip.id,
         media_path = entry.media_path,
@@ -567,6 +593,7 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
         rate_den = clip.rate.fps_denominator,
         speed_ratio = speed_ratio,
         offline = is_offline,
+        bwf_offset_us = bwf_offset_us,
     }
 end
 

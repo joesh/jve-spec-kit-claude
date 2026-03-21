@@ -2801,6 +2801,7 @@ function M.import_into_project(project_id, parse_result, opts)
                             source_out = source_out,
                             fps_numerator = clip_rate_num,
                             fps_denominator = clip_rate_den,
+                            enabled = clip_data.enabled,
                             -- bin assigned after clip creation via DRP folder lookup
                         })
 

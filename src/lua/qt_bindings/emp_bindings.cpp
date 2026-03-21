@@ -581,6 +581,11 @@ static int lua_emp_tmb_set_track_clips(lua_State* L) {
         ci.offline = lua_isboolean(L, -1) ? lua_toboolean(L, -1) : false;
         lua_pop(L, 1);
 
+        // BWF sync: precomputed offset for audio source position adjustment.
+        lua_getfield(L, -1, "bwf_offset_us");
+        ci.bwf_offset_us = lua_isnumber(L, -1) ? static_cast<int64_t>(lua_tonumber(L, -1)) : 0;
+        lua_pop(L, 1);
+
         lua_pop(L, 1); // pop clip table
 
         if (ci.rate_den <= 0) {
@@ -676,6 +681,10 @@ static int lua_emp_tmb_add_clips(lua_State* L) {
 
         lua_getfield(L, -1, "offline");
         ci.offline = lua_isboolean(L, -1) ? lua_toboolean(L, -1) : false;
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "bwf_offset_us");
+        ci.bwf_offset_us = lua_isnumber(L, -1) ? static_cast<int64_t>(lua_tonumber(L, -1)) : 0;
         lua_pop(L, 1);
 
         lua_pop(L, 1); // pop clip table
