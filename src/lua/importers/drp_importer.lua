@@ -1525,36 +1525,58 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
 
             local duration_timeline_frames = duration_raw
             local abs_speed = math.abs(clip_speed)
-            local source_in_native
+
+            -- Compute media TC origin: <MediaStartTime> converted to clip-rate units.
+            -- MST is seconds since midnight. When MST=0 or nil, media_tc_origin=0
+            -- (file starts at 00:00:00:00 = file-relative = absolute TC).
+            local media_tc_origin = 0
+            local in_offset  -- <In> converted to native units (file-relative)
             local source_duration
+
             if track_type == "AUDIO" then
-                -- Audio: convert <In> from timeline frames to samples (48kHz).
-                -- <In> is file-relative, same coordinate space as video <In>.
+                -- Audio: convert to samples (48kHz)
                 local audio_speed = (abs_speed ~= 1.0) and abs_speed or 1.0
-                source_in_native = math.floor(in_value * 48000 / frame_rate * audio_speed + 0.5)
+                if media_start_time and media_start_time > 0 then
+                    media_tc_origin = math.floor(media_start_time * 48000 + 0.5)
+                end
+                in_offset = math.floor(in_value * 48000 / frame_rate * audio_speed + 0.5)
                 source_duration = math.floor(duration_raw * 48000 / frame_rate * audio_speed + 0.5)
             elseif abs_speed ~= 1.0 then
                 -- Retimed video: in_value and duration_raw are in RETIMED timebase
-                -- (not actual source frames). Apply speed magnitude to convert.
-                source_in_native = math.floor(in_value * abs_speed + 0.5)
+                if media_start_time and media_start_time > 0 then
+                    media_tc_origin = math.floor(media_start_time * frame_rate + 0.5)
+                end
+                in_offset = math.floor(in_value * abs_speed + 0.5)
                 source_duration = math.floor(duration_raw * abs_speed + 0.5)
             else
                 -- Non-retimed video: in_value IS the source frame directly
-                source_in_native = math.floor(in_value)
+                if media_start_time and media_start_time > 0 then
+                    media_tc_origin = math.floor(media_start_time * frame_rate + 0.5)
+                end
+                in_offset = math.floor(in_value)
                 source_duration = duration_raw
             end
 
+            -- Sanity: MST max = 86400s (midnight). At 48kHz = ~4.1B samples.
+            assert(media_tc_origin >= 0 and media_tc_origin < 5e9, string.format(
+                "parse_resolve_tracks: clip '%s' media_tc_origin=%d out of range (MST=%s)",
+                clip_name, media_tc_origin, tostring(media_start_time)))
+            assert(in_offset >= 0, string.format(
+                "parse_resolve_tracks: clip '%s' in_offset=%d < 0 (in_value=%s speed=%s)",
+                clip_name, in_offset, tostring(in_value), tostring(abs_speed)))
+
+            -- source_in is ABSOLUTE TC = media_tc_origin + file-relative offset
+            local source_in_native = media_tc_origin + in_offset
+
             -- Source extent in VIDEO FRAMES (for media duration tracking).
-            -- The file must be at least this many frames long for this clip to exist.
+            -- File-relative (excludes media_tc_origin — file length, not TC space).
             local source_extent_frames
             if track_type == "AUDIO" then
-                -- Audio source_in/duration are in samples after conversion above,
-                -- but in_value and duration_raw are still in timeline frames.
-                -- Extent in frames = in_value + duration_raw (pre-conversion).
+                -- Audio in_offset/duration are in samples; use pre-conversion frame values
                 source_extent_frames = math.floor(in_value) + duration_raw
             else
-                -- Video (incl. retimed): source_in_native + source_duration
-                source_extent_frames = source_in_native + source_duration
+                -- Video: file-relative in_offset + source_duration
+                source_extent_frames = in_offset + source_duration
             end
             assert(source_extent_frames >= 0, string.format(
                 "parse_resolve_tracks: clip '%s' has negative source_extent_frames=%d",

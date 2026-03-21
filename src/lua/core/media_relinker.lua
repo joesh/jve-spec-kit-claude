@@ -428,18 +428,16 @@ function M.find_candidates_for_clip(clip_info, candidate_index, matching_rules, 
                     if math.abs(offset) > 1 then
                         -- TC doesn't match exactly
                         if matching_rules.accept_trimmed_media then
-                            -- Check containment: clip's absolute TC range must fit in candidate
-                            -- source_in/source_out are in clip rate; stored_value is in stored_rate
-                            -- Must rescale source coords to stored_rate for addition
+                            -- Check containment: clip's absolute TC range must fit in candidate.
+                            -- source_in/source_out are ABSOLUTE TC in clip-rate units.
+                            -- Rescale to stored_rate for comparison with candidate TC.
                             local clip_rate = clip_info.fps_num / clip_info.fps_den
-                            local src_in_rescaled = clip_info.source_in
-                            local src_out_rescaled = clip_info.source_out
+                            local abs_start = clip_info.source_in
+                            local abs_end = clip_info.source_out
                             if math.abs(clip_rate - stored_rate) > 0.01 then
-                                src_in_rescaled = math.floor(clip_info.source_in * stored_rate / clip_rate + 0.5)
-                                src_out_rescaled = math.floor(clip_info.source_out * stored_rate / clip_rate + 0.5)
+                                abs_start = math.floor(clip_info.source_in * stored_rate / clip_rate + 0.5)
+                                abs_end = math.floor(clip_info.source_out * stored_rate / clip_rate + 0.5)
                             end
-                            local abs_start = stored_value + src_in_rescaled
-                            local abs_end = stored_value + src_out_rescaled
 
                             -- Candidate range at stored_rate
                             local cand_start_rescaled = cand_tc_value

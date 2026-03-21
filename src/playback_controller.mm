@@ -45,15 +45,23 @@ CVReturn displayLinkCallback(
     CVOptionFlags* /*flagsOut*/,
     void* displayLinkContext)
 {
+    // Register lua_State on this OS-managed thread (once per thread lifetime)
+    // so JVE_ASSERT throws JveAssertError instead of _exit.
+    static thread_local bool s_lua_inited = false;
+    if (!s_lua_inited) { jve_init_thread_lua_state(); s_lua_inited = true; }
+
     auto* controller = static_cast<PlaybackController*>(displayLinkContext);
     uint64_t cb_start = mach_absolute_time();
-    // Use inNow->hostTime (vsync-locked) instead of mach_absolute_time()
-    // (callback execution time). Vsync timestamps are perfectly periodic;
-    // mach_absolute_time() has scheduling jitter → irregular frame timing.
-    controller->displayLinkTick(
-        inNow->hostTime,
-        inOutputTime->hostTime
-    );
+    try {
+        controller->displayLinkTick(
+            inNow->hostTime,
+            inOutputTime->hostTime
+        );
+    } catch (const JveAssertError& e) {
+        JVE_LOG_ERROR(Ticks, "CVDisplayLink assert: %s — stopping playback", e.what());
+        controller->Stop();
+        return kCVReturnSuccess;
+    }
     uint64_t cb_end = mach_absolute_time();
     double cb_ms = machTimeToSeconds(cb_end - cb_start) * 1000.0;
     if (cb_ms > 10.0) {
@@ -270,7 +278,15 @@ void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* ss
     m_running.store(true, std::memory_order_relaxed);
     ResetPushState();
 
-    m_thread = std::thread(&AudioPump::pumpLoop, this);
+    m_thread = std::thread([this]() {
+        jve_init_thread_lua_state();
+        try {
+            pumpLoop();
+        } catch (const JveAssertError& e) {
+            JVE_LOG_ERROR(Audio, "AudioPump terminated by assert: %s", e.what());
+            m_running.store(false, std::memory_order_relaxed);
+        }
+    });
     JVE_LOG_EVENT(Audio, "AudioPump: started");
 }
 

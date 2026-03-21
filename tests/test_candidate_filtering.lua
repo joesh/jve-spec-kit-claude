@@ -12,8 +12,11 @@ local function make_clip_info(overrides)
     local defaults = {
         clip_id = "clip-001",
         media_id = "media-001",
-        source_in = 100,
-        source_out = 200,
+        -- source_in/source_out are ABSOLUTE TC (media_tc_origin + file_offset).
+        -- media_tc_origin=89750 + file_offset_in=100 = 89850
+        -- media_tc_origin=89750 + file_offset_out=200 = 89950
+        source_in = 89850,
+        source_out = 89950,
         fps_num = 25,
         fps_den = 1,
         media_start_tc_value = 89750, -- 00:59:50:00 @ 25fps

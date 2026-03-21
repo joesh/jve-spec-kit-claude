@@ -1,14 +1,12 @@
 -- SLOW_TEST
--- Integration test: TMB applies BWF offset to audio seek position.
+-- Integration test: TMB subtracts first_sample_tc from absolute TC source_in.
 --
--- TDD: This test verifies the BWF precompute feature. It WILL FAIL until
--- the bwf_offset_us field is implemented on ClipInfo and TMB adjusts
--- source_in at clip-add time.
+-- Verifies that source_in (absolute TC in samples) is correctly mapped to
+-- file-relative position by subtracting the file's first_sample_tc
+-- (from BWF time_reference or stream start_time).
 --
--- The test constructs two TMB clips pointing to the same BWF WAV file:
--- one with media_start_tc_us=0 (no adjustment) and one with a non-zero
--- media_start_tc_us. If BWF offset is correctly applied, the adjusted
--- clip should seek to a different file position and produce different PCM.
+-- When source_in = first_sample_tc + N, TMB should decode from file position N.
+-- When source_in = first_sample_tc (no offset), TMB decodes from file start.
 --
 -- Requires a BWF WAV file (Anamnesis Stereo Mix). Skips gracefully if absent.
 
@@ -42,8 +40,13 @@ assert(probe.bwf_time_reference >= 0,
     "WAV missing BWF time_reference — not a Broadcast Wave file")
 assert(probe.audio_sample_rate == 48000, "expected 48kHz")
 
+-- first_sample_tc should equal bwf_time_reference for BWF files
+assert(probe.first_sample_tc == probe.bwf_time_reference,
+    string.format("first_sample_tc=%d should equal bwf_time_reference=%d",
+        probe.first_sample_tc, probe.bwf_time_reference))
+
 local bwf_samples = probe.bwf_time_reference
-print(string.format("  BWF: %d samples = %.4fs (%s)",
+print(string.format("  BWF: first_sample_tc=%d samples = %.4fs (%s)",
     bwf_samples, bwf_samples / probe.audio_sample_rate,
     string.format("%02d:%02d:%02d",
         math.floor(bwf_samples / probe.audio_sample_rate / 3600),
@@ -90,15 +93,8 @@ local function check(cond, label)
     end
 end
 
--- ═══════════════════════════════════════════════════════════════
--- 1. Clip WITHOUT media_start_tc_us (baseline — no BWF adjustment)
--- ═══════════════════════════════════════════════════════════════
-print("\n--- 1: Baseline (no BWF adjustment) ---")
-
--- Precompute bwf_offset_us (same formula as PlaybackEngine._build_tmb_clip):
--- bwf_offset_us = BWF_time_reference_us - MediaStartTime_us
--- TMB subtracts this from source_in_us to get file-relative seek position.
-local function decode_with_bwf_offset(bwf_offset, source_in, label)
+-- Helper: decode audio with source_in as absolute TC (samples)
+local function decode_with_source_in(source_in_samples, label)
     local tmb = EMP.TMB_CREATE(0)
     EMP.TMB_SET_SEQUENCE_RATE(tmb, FPS_NUM, FPS_DEN)
     EMP.TMB_SET_AUDIO_FORMAT(tmb, SR, CHANNELS)
@@ -108,11 +104,10 @@ local function decode_with_bwf_offset(bwf_offset, source_in, label)
         media_path = BWF_WAV,
         timeline_start = 0,
         duration = 200,
-        source_in = source_in,
-        rate_num = FPS_NUM,
-        rate_den = FPS_DEN,
+        source_in = source_in_samples,
+        rate_num = SR,    -- audio clip rate = sample rate
+        rate_den = 1,
         speed_ratio = 1.0,
-        bwf_offset_us = bwf_offset,
     }
     EMP.TMB_SET_TRACK_CLIPS(tmb, "audio", 1, { clip })
 
@@ -121,67 +116,55 @@ local function decode_with_bwf_offset(bwf_offset, source_in, label)
     return pcm
 end
 
--- source_in=750 frames = 30 seconds at 25fps (well into the mix, past any silent intro)
--- Without BWF adjustment (offset=0), this seeks to file position 30s
-local pcm_no_bwf = decode_with_bwf_offset(0, 750, "no-bwf")
-assert(pcm_no_bwf, "baseline decode returned nil")
-local rms_no_bwf = pcm_rms(pcm_no_bwf)
-check(rms_no_bwf > 0.001, string.format("baseline RMS=%.4f (non-silent)", rms_no_bwf))
+-- ═══════════════════════════════════════════════════════════════
+-- 1. source_in = first_sample_tc (file start — 0s into file)
+-- ═══════════════════════════════════════════════════════════════
+print("\n--- 1: source_in = first_sample_tc (file start) ---")
+
+local pcm_at_start = decode_with_source_in(bwf_samples, "at-start")
+assert(pcm_at_start, "decode at file start returned nil")
+local rms_start = pcm_rms(pcm_at_start)
+check(rms_start >= 0, string.format("file start RMS=%.4f", rms_start))
 
 -- ═══════════════════════════════════════════════════════════════
--- 2. Clip WITH bwf_offset_us (BWF adjustment expected)
+-- 2. source_in = first_sample_tc + 30s (30s into file)
 -- ═══════════════════════════════════════════════════════════════
-print("\n--- 2: With bwf_offset_us (BWF adjustment) ---")
+print("\n--- 2: source_in = first_sample_tc + 30s ---")
 
--- Simulate: MST is 10 seconds BEFORE BWF origin (typical Pro Tools scenario).
--- bwf_offset = BWF_us - MST_us = bwf_us - (bwf_us - 10000000) = 10000000
--- TMB: file_seek = source_in_us - bwf_offset = 30s - 10s = 20s
--- Baseline seeks to 30s, adjusted seeks to 20s → different audio section.
-local fake_bwf_offset = 10000000  -- BWF_us - MST_us where MST is 10s before BWF
-
-local pcm_with_bwf = decode_with_bwf_offset(fake_bwf_offset, 750, "with-bwf")
-assert(pcm_with_bwf, "BWF-adjusted decode returned nil")
-local rms_with_bwf = pcm_rms(pcm_with_bwf)
-check(rms_with_bwf > 0.001, string.format("adjusted RMS=%.4f (non-silent)", rms_with_bwf))
+local offset_30s = 30 * SR  -- 30 seconds in samples
+local pcm_at_30s = decode_with_source_in(bwf_samples + offset_30s, "at-30s")
+assert(pcm_at_30s, "decode at 30s returned nil")
+local rms_30s = pcm_rms(pcm_at_30s)
+check(rms_30s > 0.001, string.format("30s RMS=%.4f (non-silent)", rms_30s))
 
 -- ═══════════════════════════════════════════════════════════════
 -- 3. The two decodes MUST produce different audio
---    (proving BWF offset was applied)
+--    (proving first_sample_tc subtraction works)
 -- ═══════════════════════════════════════════════════════════════
-print("\n--- 3: BWF adjustment produces different audio ---")
+print("\n--- 3: Different source_in produces different audio ---")
 
-local s_no = pcm_first_samples(pcm_no_bwf, 128)
-local s_with = pcm_first_samples(pcm_with_bwf, 128)
+local s_start = pcm_first_samples(pcm_at_start, 128)
+local s_30s = pcm_first_samples(pcm_at_30s, 128)
 
 local match_count = 0
-for i = 1, math.min(#s_no, #s_with) do
-    if math.abs(s_no[i] - s_with[i]) < 1e-6 then match_count = match_count + 1 end
+for i = 1, math.min(#s_start, #s_30s) do
+    if math.abs(s_start[i] - s_30s[i]) < 1e-6 then match_count = match_count + 1 end
 end
 
--- If BWF offset is applied, audio should differ (2 second shift in a stereo mix)
--- If NOT applied (current state), both decodes produce identical audio → FAIL
-check(match_count < #s_no * 0.5,
-    string.format("BWF-adjusted vs baseline: %d/%d identical (should differ)",
-        match_count, #s_no))
+check(match_count < #s_start * 0.5,
+    string.format("start vs 30s: %d/%d identical (should differ)",
+        match_count, #s_start))
 
 -- ═══════════════════════════════════════════════════════════════
--- 4. TC alignment: adjusted audio should correspond to correct timeline TC
+-- 4. Verify probe reports correct TC origin fields
 -- ═══════════════════════════════════════════════════════════════
-print("\n--- 4: TC alignment verification ---")
+print("\n--- 4: Probe TC origin fields ---")
 
--- source_in=750 at 25fps = 30.0 seconds of source offset
--- With bwf_offset=10000000: file_seek = 30s - 10s = 20.0s
--- Without adjustment: file_seek = 30.0s
--- Difference: 10 seconds apart in file position
-local info_no = EMP.PCM_INFO(pcm_no_bwf)
-local info_with = EMP.PCM_INFO(pcm_with_bwf)
-check(info_no.frames > 0 and info_with.frames > 0,
-    string.format("both decodes have frames (%d, %d)", info_no.frames, info_with.frames))
+check(probe.first_frame_tc ~= nil, "probe.first_frame_tc exists")
+check(probe.first_sample_tc ~= nil, "probe.first_sample_tc exists")
+check(probe.first_sample_tc > 0,
+    string.format("first_sample_tc=%d > 0 (BWF file)", probe.first_sample_tc))
 
 print(string.format("\n%d passed, %d failed", passed, failed))
-if failed > 0 then
-    print("\n  NOTE: Failures expected until BWF precompute is implemented.")
-    print("  TMB must read bwf_offset_us from ClipInfo and adjust source seek.")
-end
-assert(failed == 0, string.format("FAILED: %d check(s) — BWF offset not applied", failed))
+assert(failed == 0, string.format("FAILED: %d check(s)", failed))
 print("✅ test_tmb_bwf_offset.lua passed")

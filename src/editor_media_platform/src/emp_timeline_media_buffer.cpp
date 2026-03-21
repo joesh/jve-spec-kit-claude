@@ -702,8 +702,10 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
             result.offline = true;
             result.error_msg = err_it->second.message;
             result.error_code = error_code_to_string(err_it->second.code);
+        } else {
+            EMP_LOG_WARN("GetVideoFrame: acquire_reader FAILED (not offline) clip=%.8s frame=%lld path=%s",
+                clip_id.c_str(), (long long)timeline_frame, media_path.c_str());
         }
-        // else: transient error or reader busy — frame=nullptr, not offline
         return result;
     }
 
@@ -726,17 +728,25 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         }
     }
 
-    // Get media file info for start_tc, rotation, and PAR
+    // Get media file info for TC origin, rotation, and PAR
     const auto& info = reader->media_file()->info();
     result.rotation = info.rotation;
     result.par_num = info.video_par_num;
     result.par_den = info.video_par_den;
 
-    // Subtract start_tc to get file-relative frame
-    int64_t file_frame = source_frame - info.start_tc;
+    // source_frame is absolute TC; subtract file's TC origin for file-relative position
+    int64_t file_frame = source_frame - info.first_frame_tc;
+    JVE_ASSERT(file_frame >= 0,
+        ("GetVideoFrame: negative file_frame=" + std::to_string(file_frame)
+         + " source=" + std::to_string(source_frame)
+         + " first_frame_tc=" + std::to_string(info.first_frame_tc)).c_str());
 
-    // Decode at file-relative frame using clip rate
-    FrameTime ft = FrameTime::from_frame(file_frame, clip_rate);
+    // Decode at file-relative frame using the file's actual video rate.
+    // clip_rate may differ from the file's native rate (e.g., 25fps timeline
+    // clip from a 24fps file). Using the file's rate ensures seek times land
+    // exactly on file frame boundaries.
+    Rate file_rate = info.video_rate();
+    FrameTime ft = FrameTime::from_frame(file_frame, file_rate);
     auto decode_result = reader->DecodeAt(ft);
 
     if (decode_result.is_ok()) {
@@ -759,10 +769,11 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
     } else {
         // Decode failure: file exists, reader works, but this frame couldn't be
         // decoded (corrupt frame, seek failure, codec glitch, slow SW decode).
-        // NOT offline — return frame=nullptr so caller holds last frame or shows
-        // gap. Transient: next frame or next seek may succeed.
         result.error_msg = decode_result.error().message;
         result.error_code = error_code_to_string(decode_result.error().code);
+        EMP_LOG_WARN("GetVideoFrame: DecodeAt FAILED clip=%.8s frame=%lld file_frame=%lld err=%s",
+            clip_id.c_str(), (long long)timeline_frame, (long long)file_frame,
+            result.error_msg.c_str());
     }
 
     return result;
@@ -964,29 +975,6 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::check_audio_cache(
 }
 
 // ============================================================================
-// BWF audio source offset: convert MST-relative source_in to file-relative.
-// ============================================================================
-
-// When bwf_offset_us != 0, source_in is MST-relative (DRP import stores <In>
-// relative to MediaStartTime). Subtracting (BWF_us - MST_us) gives file-relative.
-// Precomputed by Lua at clip-add time — no file I/O or locking here.
-static TimeUS compute_audio_source_origin_us(
-        const ClipInfo* clip) {
-    TimeUS source_in_us = FrameTime::from_frame(clip->source_in, clip->rate()).to_us();
-    if (clip->bwf_offset_us != 0) {
-        TimeUS adjusted = source_in_us - clip->bwf_offset_us;
-        if (adjusted < 0) {
-            EMP_LOG_WARN("BWF adjust: negative origin=%lldus (src=%lldus offset=%lldus) — clamping",
-                         (long long)adjusted, (long long)source_in_us,
-                         (long long)clip->bwf_offset_us);
-            adjusted = 0;
-        }
-        return adjusted;
-    }
-    return source_in_us;
-}
-
-// ============================================================================
 // GetTrackAudio
 // ============================================================================
 
@@ -1030,17 +1018,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         return nullptr;
     }
 
-    // Map timeline us → source us (file-relative, with BWF adjustment if present)
-    // For reverse clips (speed_ratio < 0), source_t0 > source_t1 after this formula.
-    // We swap for forward-order decoding, then reverse PCM afterward.
-    TimeUS source_origin_us = compute_audio_source_origin_us(clip);
-    double sr = static_cast<double>(clip->speed_ratio);
-    TimeUS source_t0 = source_origin_us + static_cast<int64_t>((clamped_t0 - clip_start_us) * sr);
-    TimeUS source_t1 = source_origin_us + static_cast<int64_t>((clamped_t1 - clip_start_us) * sr);
-    bool reversed = (source_t0 > source_t1);
-    if (reversed) std::swap(source_t0, source_t1);
-
-    // Check audio cache before decode
+    // Check audio cache before decode (uses timeline coords, not source coords)
     std::string clip_id = clip->clip_id;
     auto cached = check_audio_cache(ts, clip_id, clamped_t0, clamped_t1, fmt);
 
@@ -1054,12 +1032,19 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     // Copy locals before releasing lock
     std::string media_path = clip->media_path;
     float speed_ratio = clip->speed_ratio;
+    int64_t source_in = clip->source_in;
+    Rate clip_rate = clip->rate();
     TimeUS first_clip_end_us = clip_end_us;
     tracks_lock.unlock();
 
     if (wake_needed) {
         wake_prefetch_workers();
     }
+
+    // Source coordinate computation deferred until reader is available
+    // (need MediaFileInfo.first_sample_tc from the reader's media file)
+    TimeUS source_t0 = 0, source_t1 = 0;
+    bool reversed = false;
 
     std::shared_ptr<PcmChunk> first_chunk;
     if (cached) {
@@ -1068,6 +1053,21 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         // Clip was marked online by Lua — file must exist
         auto reader = acquire_reader(track, clip_id, media_path);
         JVE_ASSERT(reader, ("GetTrackAudio: online clip failed to open: " + media_path).c_str());
+
+        // Map timeline us → source us (file-relative via first_sample_tc)
+        const auto& file_info = reader->media_file()->info();
+        int64_t file_pos = source_in - file_info.first_sample_tc;
+        JVE_ASSERT(file_pos >= 0,
+            ("GetTrackAudio: negative file_pos=" + std::to_string(file_pos)
+             + " source_in=" + std::to_string(source_in)
+             + " first_sample_tc=" + std::to_string(file_info.first_sample_tc)
+             + " clip=" + clip_id.substr(0, 8)).c_str());
+        TimeUS source_origin_us = FrameTime::from_frame(file_pos, clip_rate).to_us();
+        double sr = static_cast<double>(speed_ratio);
+        source_t0 = source_origin_us + static_cast<int64_t>((clamped_t0 - clip_start_us) * sr);
+        source_t1 = source_origin_us + static_cast<int64_t>((clamped_t1 - clip_start_us) * sr);
+        reversed = (source_t0 > source_t1);
+        if (reversed) std::swap(source_t0, source_t1);
 
         auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt);
         JVE_ASSERT(!decode_result.is_error(),
@@ -1141,14 +1141,9 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
             continue;
         }
 
-        // Map to source coordinates (may be inverted for reverse clips)
-        TimeUS next_src_origin = compute_audio_source_origin_us(next);
-        double next_sr = static_cast<double>(next->speed_ratio);
-        TimeUS next_src_t0 = next_src_origin + static_cast<int64_t>((seg_t0 - next_start_us) * next_sr);
-        TimeUS next_src_t1 = next_src_origin + static_cast<int64_t>((seg_t1 - next_start_us) * next_sr);
-        bool next_reversed = (next_src_t0 > next_src_t1);
-        if (next_reversed) std::swap(next_src_t0, next_src_t1);
-
+        // Copy clip fields before releasing lock
+        int64_t next_source_in = next->source_in;
+        Rate next_clip_rate = next->rate();
         std::string next_path = next->media_path;
         float next_speed = next->speed_ratio;
         tlock.unlock();
@@ -1163,6 +1158,21 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
 
         auto next_reader = acquire_reader(track, next_clip_id, next_path);
         if (!next_reader) { cursor = next_end_us; continue; }
+
+        // Map to source coordinates using first_sample_tc from reader
+        const auto& next_info = next_reader->media_file()->info();
+        int64_t next_file_pos = next_source_in - next_info.first_sample_tc;
+        JVE_ASSERT(next_file_pos >= 0,
+            ("GetTrackAudio(boundary): negative file_pos=" + std::to_string(next_file_pos)
+             + " source_in=" + std::to_string(next_source_in)
+             + " first_sample_tc=" + std::to_string(next_info.first_sample_tc)
+             + " clip=" + next_clip_id.substr(0, 8)).c_str());
+        TimeUS next_src_origin = FrameTime::from_frame(next_file_pos, next_clip_rate).to_us();
+        double next_sr = static_cast<double>(next_speed);
+        TimeUS next_src_t0 = next_src_origin + static_cast<int64_t>((seg_t0 - next_start_us) * next_sr);
+        TimeUS next_src_t1 = next_src_origin + static_cast<int64_t>((seg_t1 - next_start_us) * next_sr);
+        bool next_reversed = (next_src_t0 > next_src_t1);
+        if (next_reversed) std::swap(next_src_t0, next_src_t1);
 
         auto next_decoded = next_reader->DecodeAudioRangeUS(next_src_t0, next_src_t1, fmt);
         if (next_decoded.is_ok() && next_decoded.value() && next_decoded.value()->frames() > 0) {
@@ -1559,7 +1569,9 @@ void TimelineMediaBuffer::stop_mix_thread() {
 }
 
 void TimelineMediaBuffer::mix_thread_loop() {
+    jve_init_thread_lua_state();
     while (true) {
+      try {
         // Wait for work: params change, direction change, or 50ms poll
         {
             std::unique_lock<std::mutex> lock(m_mix_mutex);
@@ -1641,6 +1653,9 @@ void TimelineMediaBuffer::mix_thread_loop() {
             m_mixed_cache.append(pcm, direction);
             m_mixed_cache.evict_behind(playhead_us, direction);
         }
+      } catch (const JveAssertError& e) {
+        EMP_LOG_WARN("mix_thread_loop: assert caught (continuing): %s", e.what());
+      }
     }
 }
 
@@ -1960,8 +1975,10 @@ void TimelineMediaBuffer::log_pool_state(const char* action, const TrackId& trac
 void TimelineMediaBuffer::start_workers(int count) {
     m_shutdown.store(false);
     assert(count >= 2 && "start_workers: need >= 2 (at least 1 video + 1 audio worker)");
+
     // N-1 general workers (decode-prep + video prefetch) + 1 audio worker.
-    // Audio can never be starved by a long video decode.
+    // Each worker calls jve_init_thread_lua_state() and has per-iteration
+    // try/catch so a single bad clip doesn't kill the worker.
     for (int i = 0; i < count - 1; ++i) {
         m_workers.emplace_back(&TimelineMediaBuffer::prefetch_worker, this);
     }
@@ -2053,9 +2070,14 @@ bool TimelineMediaBuffer::process_next_decode_prep_job() {
         auto probe_reader = acquire_reader(job.track, job.clip_id, job.media_path);
         if (probe_reader) {
             const auto& pinfo = probe_reader->media_file()->info();
-            int64_t file_frame = job.probe_source_in - pinfo.start_tc;
-            Rate probe_rate{job.probe_rate_num, job.probe_rate_den};
-            FrameTime pft = FrameTime::from_frame(file_frame, probe_rate);
+            int64_t file_frame = job.probe_source_in - pinfo.first_frame_tc;
+            JVE_ASSERT(file_frame >= 0,
+                ("SPEED_DETECT: negative file_frame=" + std::to_string(file_frame)
+                 + " source=" + std::to_string(job.probe_source_in)
+                 + " first_frame_tc=" + std::to_string(pinfo.first_frame_tc)).c_str());
+            // Use file's native rate for seek (clip rate may differ)
+            Rate file_rate = pinfo.video_rate();
+            FrameTime pft = FrameTime::from_frame(file_frame, file_rate);
 
             auto pt0 = std::chrono::steady_clock::now();
             auto presult = probe_reader->DecodeAt(pft);
@@ -2320,10 +2342,17 @@ void TimelineMediaBuffer::decode_into_cache(
         }
     }
 
+    assert(held_reader && "decode_into_cache: held_reader is null");
     const auto& info = held_reader->media_file()->info();
-    int64_t file_frame = source_frame - info.start_tc;
-    Rate clip_rate = clip->rate();
-    FrameTime ft = FrameTime::from_frame(file_frame, clip_rate);
+    int64_t file_frame = source_frame - info.first_frame_tc;
+    JVE_ASSERT(file_frame >= 0,
+        ("decode_into_cache: negative file_frame=" + std::to_string(file_frame)
+         + " source=" + std::to_string(source_frame)
+         + " first_frame_tc=" + std::to_string(info.first_frame_tc)
+         + " clip=" + clip->clip_id.substr(0, 8)).c_str());
+    // Use file's native rate for seek (clip rate may differ from file rate)
+    Rate file_rate = info.video_rate();
+    FrameTime ft = FrameTime::from_frame(file_frame, file_rate);
 
     auto result = held_reader->DecodeAt(ft);
 
@@ -2457,15 +2486,23 @@ void TimelineMediaBuffer::decode_audio_into_cache(
     // Offline clip — skip decode entirely (beep generated in GetTrackAudio)
     if (clip->offline) return;
 
-    TimeUS src_origin = compute_audio_source_origin_us(clip);
+    auto reader = acquire_reader(track, clip->clip_id, clip->media_path);
+    if (!reader) return;
+
+    // source_in is absolute TC; subtract file's TC origin for file-relative position
+    const auto& file_info = reader->media_file()->info();
+    int64_t file_pos = clip->source_in - file_info.first_sample_tc;
+    JVE_ASSERT(file_pos >= 0,
+        ("decode_audio_into_cache: negative file_pos=" + std::to_string(file_pos)
+         + " source_in=" + std::to_string(clip->source_in)
+         + " first_sample_tc=" + std::to_string(file_info.first_sample_tc)
+         + " clip=" + clip->clip_id.substr(0, 8)).c_str());
+    TimeUS src_origin = FrameTime::from_frame(file_pos, clip->rate()).to_us();
     double sr_d = static_cast<double>(clip->speed_ratio);
     TimeUS src_t0 = src_origin + static_cast<int64_t>((position - seg.start_us) * sr_d);
     TimeUS src_t1 = src_origin + static_cast<int64_t>((chunk_end - seg.start_us) * sr_d);
     bool chunk_reversed = (src_t0 > src_t1);
     if (chunk_reversed) std::swap(src_t0, src_t1);
-
-    auto reader = acquire_reader(track, clip->clip_id, clip->media_path);
-    if (!reader) return;
 
     auto decode_result = reader->DecodeAudioRangeUS(src_t0, src_t1, m_audio_fmt);
     if (decode_result.is_error() || !decode_result.value() || decode_result.value()->frames() == 0) {
@@ -2704,7 +2741,9 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
 // ============================================================================
 
 void TimelineMediaBuffer::prefetch_worker() {
+    jve_init_thread_lua_state();
     while (!m_shutdown.load()) {
+      try {
         // Priority 1: decode-prep jobs (SPEED_DETECT, READER_WARM)
         if (process_next_decode_prep_job()) continue;
 
@@ -2726,6 +2765,10 @@ void TimelineMediaBuffer::prefetch_worker() {
                 return m_shutdown.load() || !m_jobs.empty();
             });
         }
+      } catch (const JveAssertError& e) {
+        // Log and continue — one bad clip shouldn't kill the worker
+        EMP_LOG_WARN("prefetch_worker: assert caught (continuing): %s", e.what());
+      }
     }
 }
 
@@ -2734,7 +2777,9 @@ void TimelineMediaBuffer::prefetch_worker() {
 // ============================================================================
 
 void TimelineMediaBuffer::audio_prefetch_worker() {
+    jve_init_thread_lua_state();
     while (!m_shutdown.load()) {
+      try {
         TrackId target{TrackType::Audio, 0};
         if (pick_audio_track(target)) {
             m_audio_work_pending.store(false, std::memory_order_relaxed);
@@ -2753,6 +2798,9 @@ void TimelineMediaBuffer::audio_prefetch_worker() {
                        m_audio_work_pending.load(std::memory_order_relaxed);
             });
         }
+      } catch (const JveAssertError& e) {
+        EMP_LOG_WARN("audio_prefetch_worker: assert caught (continuing): %s", e.what());
+      }
     }
 }
 

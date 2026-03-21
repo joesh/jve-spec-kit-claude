@@ -771,20 +771,6 @@ end
 -- PLAYHEAD RESOLUTION (used by Renderer and Mixer)
 -- =============================================================================
 
---- Extract media start TC in microseconds from media metadata.
--- Returns 0 if no start TC metadata (source_in is already file-relative).
--- Used for BWF sync: combined with BWF time_reference to compute bwf_offset_us.
--- @param media Media object (must have .metadata field)
--- @return integer: start TC in microseconds
-local function get_media_start_tc_us(media)
-    if not media.metadata or media.metadata == "" or media.metadata == "{}" then return 0 end
-    local json = require("dkjson")
-    local meta = type(media.metadata) == "string" and json.decode(media.metadata) or media.metadata
-    if not meta or not meta.start_tc_value or not meta.start_tc_rate then return 0 end
-    if meta.start_tc_rate <= 0 then return 0 end
-    return math.floor(meta.start_tc_value * 1000000 / meta.start_tc_rate)
-end
-
 --- Internal: Calculate source frame and time for a clip at a given playhead.
 -- "Frames are frames": source_frame = source_in + timeline_offset (1:1 mapping).
 -- A 24fps clip on a 30fps timeline plays each source frame at 1/30s — the clip
@@ -890,7 +876,6 @@ function Sequence:get_audio_at(playhead_frame)
                 -- Media's video fps for "frames are frames" audio conform.
                 media_fps_num = media.frame_rate.fps_numerator,
                 media_fps_den = media.frame_rate.fps_denominator,
-                media_start_tc_us = get_media_start_tc_us(media),
             }
         end
     end
@@ -1003,7 +988,6 @@ function Sequence:get_next_audio(after_frame)
                 track = track,
                 media_fps_num = media.frame_rate.fps_numerator,
                 media_fps_den = media.frame_rate.fps_denominator,
-                media_start_tc_us = get_media_start_tc_us(media),
             }
         end
     end
@@ -1043,7 +1027,6 @@ function Sequence:get_prev_audio(before_frame)
                 track = track,
                 media_fps_num = media.frame_rate.fps_numerator,
                 media_fps_den = media.frame_rate.fps_denominator,
-                media_start_tc_us = get_media_start_tc_us(media),
             }
         end
     end
@@ -1187,7 +1170,6 @@ function Sequence:get_audio_in_range(from_frame, to_frame)
             track = track,
             media_fps_num = media.frame_rate.fps_numerator,
             media_fps_den = media.frame_rate.fps_denominator,
-            media_start_tc_us = get_media_start_tc_us(media),
         }
     end
     stmt:finalize()

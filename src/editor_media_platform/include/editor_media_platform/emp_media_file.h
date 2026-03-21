@@ -29,9 +29,15 @@ struct MediaFileInfo {
     // Conservative: may be true even for CFR files
     bool is_vfr;
 
-    // Start timecode in frames at media's native rate
-    // Extracted from stream start_time (e.g., 86400 for 01:00:00:00 @ 24fps)
-    int64_t start_tc;
+    // TC of frame 0: start timecode in frames at media's native rate.
+    // Extracted from stream start_time (e.g., 86400 for 01:00:00:00 @ 24fps).
+    // Video path: file_pos = source_frame_tc - first_frame_tc
+    int64_t first_frame_tc = 0;
+
+    // TC of sample 0: start timecode in audio samples.
+    // From BWF time_reference (samples since midnight) or stream start_time.
+    // Audio path: file_pos = source_sample_tc - first_sample_tc
+    int64_t first_sample_tc = 0;
 
     // Rotation in degrees (0, 90, 180, 270) from display matrix metadata
     // Applies to phone footage recorded in portrait/landscape modes

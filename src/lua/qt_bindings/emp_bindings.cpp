@@ -147,8 +147,13 @@ static int lua_emp_media_file_info(lua_State* L) {
     lua_pushboolean(L, info.is_vfr);
     lua_setfield(L, -2, "is_vfr");
 
-    // Start timecode in frames at media's native rate
-    lua_pushinteger(L, static_cast<lua_Integer>(info.start_tc));
+    // TC origins
+    lua_pushinteger(L, static_cast<lua_Integer>(info.first_frame_tc));
+    lua_setfield(L, -2, "first_frame_tc");
+    lua_pushinteger(L, static_cast<lua_Integer>(info.first_sample_tc));
+    lua_setfield(L, -2, "first_sample_tc");
+    // Legacy alias
+    lua_pushinteger(L, static_cast<lua_Integer>(info.first_frame_tc));
     lua_setfield(L, -2, "start_tc");
 
     // Rotation in degrees (0, 90, 180, 270) from display matrix
@@ -581,11 +586,6 @@ static int lua_emp_tmb_set_track_clips(lua_State* L) {
         ci.offline = lua_isboolean(L, -1) ? lua_toboolean(L, -1) : false;
         lua_pop(L, 1);
 
-        // BWF sync: precomputed offset for audio source position adjustment.
-        lua_getfield(L, -1, "bwf_offset_us");
-        ci.bwf_offset_us = lua_isnumber(L, -1) ? static_cast<int64_t>(lua_tonumber(L, -1)) : 0;
-        lua_pop(L, 1);
-
         lua_pop(L, 1); // pop clip table
 
         if (ci.rate_den <= 0) {
@@ -681,10 +681,6 @@ static int lua_emp_tmb_add_clips(lua_State* L) {
 
         lua_getfield(L, -1, "offline");
         ci.offline = lua_isboolean(L, -1) ? lua_toboolean(L, -1) : false;
-        lua_pop(L, 1);
-
-        lua_getfield(L, -1, "bwf_offset_us");
-        ci.bwf_offset_us = lua_isnumber(L, -1) ? static_cast<int64_t>(lua_tonumber(L, -1)) : 0;
         lua_pop(L, 1);
 
         lua_pop(L, 1); // pop clip table
@@ -923,8 +919,15 @@ static int lua_emp_media_file_probe(lua_State* L) {
     lua_setfield(L, -2, "duration_us");
     lua_pushboolean(L, info.is_vfr);
     lua_setfield(L, -2, "is_vfr");
-    lua_pushinteger(L, static_cast<lua_Integer>(info.start_tc));
+    // TC origins
+    lua_pushinteger(L, static_cast<lua_Integer>(info.first_frame_tc));
+    lua_setfield(L, -2, "first_frame_tc");
+    lua_pushinteger(L, static_cast<lua_Integer>(info.first_sample_tc));
+    lua_setfield(L, -2, "first_sample_tc");
+    // Legacy alias (read by existing Lua code until fully migrated)
+    lua_pushinteger(L, static_cast<lua_Integer>(info.first_frame_tc));
     lua_setfield(L, -2, "start_tc");
+
     lua_pushinteger(L, info.rotation);
     lua_setfield(L, -2, "rotation");
     lua_pushinteger(L, info.video_par_num);

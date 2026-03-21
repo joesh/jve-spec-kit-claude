@@ -70,6 +70,87 @@ static Rate select_nominal_rate(AVStream* stream, bool* is_vfr_out) {
     return RateUtils::snap_to_canonical(result);
 }
 
+// Parse timecode string "HH:MM:SS:FF" (or "HH:MM:SS;FF" for drop-frame)
+// into a frame count at the given rate. Returns 0 on parse failure.
+static int64_t parse_timecode_tag(const char* tc_str, int32_t fps_num, int32_t fps_den) {
+    if (!tc_str || fps_num <= 0 || fps_den <= 0) return 0;
+    int hh = 0, mm = 0, ss = 0, ff = 0;
+    // %*c matches either ':' (non-drop) or ';' (drop-frame)
+    if (sscanf(tc_str, "%d:%d:%d%*c%d", &hh, &mm, &ss, &ff) != 4) return 0;
+    double fps = static_cast<double>(fps_num) / fps_den;
+    return static_cast<int64_t>(((hh * 3600) + (mm * 60) + ss) * fps + ff);
+}
+
+// Find the first non-null "timecode" tag across metadata dictionaries.
+static const char* find_timecode_tag(AVFormatContext* fmt, AVStream* video_stream) {
+    if (video_stream) {
+        AVDictionaryEntry* e = av_dict_get(video_stream->metadata, "timecode", nullptr, 0);
+        if (e && e->value) return e->value;
+    }
+    AVDictionaryEntry* e = av_dict_get(fmt->metadata, "timecode", nullptr, 0);
+    return (e && e->value) ? e->value : nullptr;
+}
+
+// Extract video TC origin in frames at video rate.
+// Camera files: from "timecode" metadata tag.
+// Broadcast files: from stream start_time (PTS origin).
+static int64_t extract_video_tc_origin(AVFormatContext* fmt, AVStream* video_stream,
+                                        const MediaFileInfo& info) {
+    // Timecode metadata tag (camera MOV/MP4, ProRes, BRAW)
+    const char* tc_str = find_timecode_tag(fmt, video_stream);
+    int64_t tc = parse_timecode_tag(tc_str, info.video_fps_num, info.video_fps_den);
+    if (tc > 0) return tc;
+
+    // Stream start_time (broadcast MXF, some professional formats)
+    if (video_stream && video_stream->start_time != AV_NOPTS_VALUE
+        && video_stream->start_time > 0) {
+        TimeUS start_us = impl::stream_pts_to_us(video_stream->start_time, video_stream);
+        tc = (start_us * info.video_fps_num) / (1000000LL * info.video_fps_den);
+        if (tc > 0) return tc;
+    }
+
+    return 0;
+}
+
+// Extract audio TC origin in samples at sample rate.
+// BWF WAV: from "time_reference" format tag (already in samples).
+// Other: from stream start_time converted to samples.
+static int64_t extract_audio_tc_origin(AVFormatContext* fmt, AVStream* audio_stream,
+                                        const MediaFileInfo& info) {
+    // BWF time_reference (Pro Tools, sound post WAV files)
+    AVDictionaryEntry* tr = av_dict_get(fmt->metadata, "time_reference", nullptr, 0);
+    if (tr && tr->value) {
+        char* endptr = nullptr;
+        int64_t val = strtoll(tr->value, &endptr, 10);
+        if (endptr != tr->value && val >= 0) return val;
+    }
+
+    // Stream start_time — only if it represents a real TC origin, not codec
+    // priming delay. Video files commonly have audio start_time of a few ms
+    // (encoder padding) which is not a TC origin. Threshold: 1 second.
+    if (audio_stream && audio_stream->start_time != AV_NOPTS_VALUE
+        && audio_stream->start_time > 0) {
+        TimeUS start_us = impl::stream_pts_to_us(audio_stream->start_time, audio_stream);
+        if (start_us >= 1000000LL) {  // >= 1 second = real TC, not priming
+            return (start_us * info.audio_sample_rate) / 1000000LL;
+        }
+    }
+
+    return 0;
+}
+
+// Extract BWF time_reference (raw, for diagnostic/relink use).
+// Returns -1 if not a BWF file.
+static int64_t extract_bwf_time_reference(AVFormatContext* fmt) {
+    AVDictionaryEntry* tr = av_dict_get(fmt->metadata, "time_reference", nullptr, 0);
+    if (tr && tr->value) {
+        char* endptr = nullptr;
+        int64_t val = strtoll(tr->value, &endptr, 10);
+        if (endptr != tr->value && val >= 0) return val;
+    }
+    return -1;
+}
+
 Result<std::shared_ptr<MediaFile>> MediaFile::Open(const std::string& path) {
     // Suppress FFmpeg's h264 decoder warnings (e.g. "co located POCs unavailable"
     // after seeks). These are normal and harmless but noisy on stderr.
@@ -189,32 +270,31 @@ Result<std::shared_ptr<MediaFile>> MediaFile::Open(const std::string& path) {
         info.duration_us = 0;
     }
 
-    // Start timecode in frames at media's native rate
-    // Use video stream start_time if available, else audio stream, else 0
-    info.start_tc = 0;
-    if (video_stream && video_stream->start_time != AV_NOPTS_VALUE) {
-        TimeUS start_us = impl::stream_pts_to_us(video_stream->start_time, video_stream);
-        // frames = (us / 1000000) * (fps_num / fps_den)
-        //        = us * fps_num / (1000000 * fps_den)
-        info.start_tc = (start_us * info.video_fps_num) / (1000000LL * info.video_fps_den);
-    } else if (audio_stream && audio_stream->start_time != AV_NOPTS_VALUE) {
-        TimeUS start_us = impl::stream_pts_to_us(audio_stream->start_time, audio_stream);
-        info.start_tc = (start_us * info.video_fps_num) / (1000000LL * info.video_fps_den);
-    }
+    // ── TC origins ──
+    // Each media type stores its TC origin in a different place:
+    //   Camera video (MOV/MP4):  timecode metadata tag "HH:MM:SS:FF"
+    //   Broadcast video (MXF):   stream start_time (PTS origin)
+    //   Post audio (BWF WAV):    format tag "time_reference" (samples)
+    //   Other audio:             stream start_time (PTS origin)
+    //
+    // first_frame_tc: frame number of the first video frame (at video rate)
+    // first_sample_tc: sample number of the first audio sample (at sample rate)
+    // Both default to 0 (file starts at TC 00:00:00:00).
 
-    // BWF time_reference: timecode origin for Broadcast Wave files.
-    // Stored in format metadata as "time_reference" (samples since midnight).
-    // Critical for audio-only WAV files from sound post (Pro Tools, etc.)
-    // where the file's TC origin differs from DRP's MediaStartTime.
-    info.bwf_time_reference = -1;
-    AVDictionaryEntry* tr = av_dict_get(fmt->metadata, "time_reference", nullptr, 0);
-    if (tr && tr->value) {
-        char* endptr = nullptr;
-        int64_t val = strtoll(tr->value, &endptr, 10);
-        if (endptr != tr->value && val >= 0) {
-            info.bwf_time_reference = val;
-        }
-    }
+    info.first_frame_tc = extract_video_tc_origin(fmt, video_stream, info);
+    info.first_sample_tc = extract_audio_tc_origin(fmt, audio_stream, info);
+    info.bwf_time_reference = extract_bwf_time_reference(fmt);
+
+    // Sanity check TC origins — negative values are invalid, unreasonably large
+    // values indicate parsing errors. Max: 24 hours at 96kHz = 8,294,400,000 samples.
+    assert(info.first_frame_tc >= 0 && "MediaFile::Open: first_frame_tc must be >= 0");
+    assert(info.first_sample_tc >= 0 && "MediaFile::Open: first_sample_tc must be >= 0");
+    constexpr int64_t MAX_TC_SAMPLES = 24LL * 3600 * 96000;  // 24h @ 96kHz
+    constexpr int64_t MAX_TC_FRAMES = 24LL * 3600 * 120;     // 24h @ 120fps
+    assert(info.first_frame_tc <= MAX_TC_FRAMES &&
+        "MediaFile::Open: first_frame_tc exceeds 24h — corrupt stream start_time?");
+    assert(info.first_sample_tc <= MAX_TC_SAMPLES &&
+        "MediaFile::Open: first_sample_tc exceeds 24h — corrupt BWF/stream start_time?");
 
     return std::make_shared<MediaFile>(std::move(impl), std::move(info));
 }

@@ -65,12 +65,6 @@ struct ClipInfo {
     float speed_ratio;            // conform: seq_fps / media_fps (1.0 = none)
     bool offline = false;         // true = media file not found, generate beep
 
-    // BWF audio sync: precomputed offset = BWF_time_reference_us - MediaStartTime_us.
-    // Subtracted from source_in_us to convert MST-relative → file-relative.
-    // 0 = no BWF or MST matches BWF (no adjustment needed).
-    // Computed by Lua at clip-add time (no runtime file probing).
-    int64_t bwf_offset_us = 0;
-
     int64_t timeline_end() const { return timeline_start + duration; }
     Rate rate() const {
         assert(rate_num > 0 && "ClipInfo::rate: rate_num must be positive");

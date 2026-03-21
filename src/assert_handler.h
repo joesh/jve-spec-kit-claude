@@ -28,6 +28,17 @@ struct lua_State;
 // Lua pcall to catch C++ assertion failures.
 void jve_set_lua_state(lua_State* L);
 
+// Register the lua_State globally (for background threads).
+// Called once at startup. Background threads call jve_init_thread_lua_state()
+// at entry to copy the global state into their thread-local slot.
+void jve_set_global_lua_state(lua_State* L);
+
+// Copy global lua_State into the calling thread's thread-local slot.
+// Call at the top of every background thread entry point (worker loops,
+// CVDisplayLink callback, audio pump, mix thread). Enables JVE_ASSERT to
+// throw JveAssertError instead of _exit on background threads.
+void jve_init_thread_lua_state();
+
 // Set-only guard: sets lua_State on construction, does NOT clear on destruction.
 // t_lua_state is set once per thread and stays set for the thread's lifetime.
 // Safe to use in existing code — constructor is a redundant set, destructor is no-op.
