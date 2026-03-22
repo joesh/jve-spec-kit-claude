@@ -1357,6 +1357,23 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
 // Position advancement
 // ============================================================================
 
+void PlaybackController::assertNoTeleport(int64_t current, int64_t new_pos,
+                                            double speed, const char* context) {
+    double abs_speed = std::abs(speed);
+    if (abs_speed < 0.01) abs_speed = 1.0;
+    double delta_seconds = std::abs(new_pos - current) * static_cast<double>(m_fps_den) / m_fps_num;
+    double wall_seconds = delta_seconds / abs_speed;
+    if (wall_seconds > 2.0) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "%s: jumped %.3fs (wall=%.3fs) in one tick "
+            "(current=%lld, new=%lld, speed=%.2f)",
+            context, delta_seconds, wall_seconds,
+            (long long)current, (long long)new_pos, speed);
+        JVE_ASSERT(false, buf);
+    }
+}
+
 int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     // Input validation: elapsed must be non-negative and sane.
     JVE_ASSERT(elapsed_seconds >= 0,
@@ -1413,20 +1430,7 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
             int64_t new_pos = PlaybackClock::FrameFromTimeUS(audio_time_us, m_fps_num, m_fps_den);
             new_pos = std::max<int64_t>(0, std::min(new_pos, m_total_frames - 1));
 
-            // Postcondition: audio-master must not teleport video.
-            // Clock discontinuity (bad reanchor, overflow) would silently jump.
-            {
-                int64_t delta = std::abs(new_pos - current);
-                if (delta >= 240) {
-                    char buf[256];
-                    snprintf(buf, sizeof(buf),
-                        "advancePosition(audio-master): jumped %lld frames in one tick "
-                        "(current=%lld, new=%lld, audio_time_us=%lld, drift=%.3fs)",
-                        (long long)delta, (long long)current, (long long)new_pos,
-                        (long long)audio_time_us, drift_s);
-                    JVE_ASSERT(false, buf);
-                }
-            }
+            assertNoTeleport(current, new_pos, speed, "advancePosition(audio-master)");
 
             if (m_current_tick) {
                 m_current_tick->drift_s = drift_s;
@@ -1480,23 +1484,7 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     }
 
     // Step 4: Teleport assert + clamp.
-    // Threshold in wall-clock seconds (not frames) — works for video (25fps) and audio (44100Hz).
-    // Divided by speed so fast-forward/shuttle don't trigger it.
-    {
-        double abs_speed = std::abs(speed);
-        if (abs_speed < 0.01) abs_speed = 1.0;  // safety: avoid division by zero
-        double delta_seconds = std::abs(new_pos - current) * static_cast<double>(m_fps_den) / m_fps_num;
-        double wall_seconds = delta_seconds / abs_speed;
-        if (wall_seconds > 2.0) {
-            char buf[256];
-            snprintf(buf, sizeof(buf),
-                "advancePosition: jumped %.3fs (wall=%.3fs) in one tick "
-                "(current=%lld, new=%lld, elapsed=%.4fs, speed=%.2f)",
-                delta_seconds, wall_seconds, (long long)current, (long long)new_pos,
-                elapsed_seconds, speed);
-            JVE_ASSERT(false, buf);
-        }
-    }
+    assertNoTeleport(current, new_pos, speed, "advancePosition");
 
     new_pos = std::max<int64_t>(0, std::min(new_pos, m_total_frames - 1));
 

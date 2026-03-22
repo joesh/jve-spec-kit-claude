@@ -2746,6 +2746,11 @@ function M.import_into_project(project_id, parse_result, opts)
                 })
             end
 
+            -- DRP track type is authoritative: media only on audio tracks → no video.
+            -- Width/height 0 prevents ensure_masterclip from creating a video track.
+            local media_width = media_item.has_video and project_settings.width or 0
+            local media_height = media_item.has_video and project_settings.height or 0
+
             local media = Media.create({
                 project_id = project_id,
                 name = media_item.name,
@@ -2755,8 +2760,8 @@ function M.import_into_project(project_id, parse_result, opts)
                 frame_rate = fps,
                 audio_sample_rate = media_item.audio_sample_rate,
                 audio_channels = media_item.audio_channels,
-                width = project_settings.width,
-                height = project_settings.height,
+                width = media_width,
+                height = media_height,
                 metadata = media_metadata,
             })
 

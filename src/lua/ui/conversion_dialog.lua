@@ -201,10 +201,12 @@ function M.show(config)
 
         -- Hide previous error, show progress
         qt.DISPLAY.SET_VISIBLE(error_label, false)
+        converting = true
         set_converting(true)
 
         local ok, err = config.convert_fn(config.source_path, dest_path, progress.update)
 
+        converting = false
         if progress.is_cancelled() then
             -- User cancelled during conversion — clean up partial output
             set_converting(false)
@@ -238,8 +240,14 @@ function M.show(config)
     globals[#globals + 1] = convert_name
 
     -- Cancel (rejected signal from button box)
+    local converting = false
     local cancel_name = "__conversion_dialog_cancel"
     _G[cancel_name] = function()
+        if not converting then
+            -- Not converting yet — just close the dialog
+            qt.DIALOG.CLOSE(dialog, false)
+            return
+        end
         if progress.is_cancelled() then return end
         progress.cancel()  -- next progress.update() returns "cancel"
         qt.PROPERTIES.SET_TEXT(error_label, "Cancelling…")

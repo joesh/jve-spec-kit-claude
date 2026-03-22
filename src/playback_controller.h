@@ -333,6 +333,7 @@ private:
 
     // Advance position based on elapsed time or audio
     int64_t advancePosition(double elapsed_seconds);
+    void assertNoTeleport(int64_t current, int64_t new_pos, double speed, const char* context);
 
     // CVDisplayLink setup/teardown
     bool startDisplayLink();  // returns false if display unavailable (headless)

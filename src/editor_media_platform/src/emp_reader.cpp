@@ -455,22 +455,42 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
     std::vector<float> pcm_buffer;
     pcm_buffer.reserve(static_cast<size_t>(max_samples * RESAMPLER_OUTPUT_CHANNELS));
 
-    // Seek to start position in audio stream
-    int64_t seek_pts = impl::us_to_stream_pts(t0_us, audio_stream);
-    int ret = av_seek_frame(fmt_ctx, audio_stream_idx, seek_pts, AVSEEK_FLAG_BACKWARD);
-    if (ret < 0) {
-        // Seek failed - try from beginning
-        ret = av_seek_frame(fmt_ctx, audio_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
-        if (ret < 0) {
-            return impl::ffmpeg_error(ret, "Audio seek failed");
+    // Sequential decode optimization: skip seek if the decoder is already
+    // positioned near the start of the requested range. For compressed formats
+    // (MP3, AAC), seeking destroys the bit reservoir and is imprecise — causing
+    // gaps and artifacts. Sequential decode produces gapless audio.
+    constexpr TimeUS CONTIGUOUS_THRESHOLD_US = 100000;  // 100ms tolerance
+    bool need_seek = true;
+    if (m_impl->have_audio_pts) {
+        int64_t gap = t0_us - m_impl->audio_pts_us;
+        // Decoder is behind t0 but close enough — sequential decode will catch up
+        if (gap >= 0 && gap < CONTIGUOUS_THRESHOLD_US) {
+            need_seek = false;
+        }
+        // Decoder is slightly ahead of t0 — data is already decoded, just trim
+        if (gap < 0 && gap > -CONTIGUOUS_THRESHOLD_US) {
+            need_seek = false;
         }
     }
-    avcodec_flush_buffers(audio_codec);
-    m_impl->resample_ctx.reset();  // Clear resampler FIFO after discontinuous seek
+
+    if (need_seek) {
+        int64_t seek_pts = impl::us_to_stream_pts(t0_us, audio_stream);
+        int ret = av_seek_frame(fmt_ctx, audio_stream_idx, seek_pts, AVSEEK_FLAG_BACKWARD);
+        if (ret < 0) {
+            // Seek failed - try from beginning
+            ret = av_seek_frame(fmt_ctx, audio_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
+            if (ret < 0) {
+                return impl::ffmpeg_error(ret, "Audio seek failed");
+            }
+        }
+        avcodec_flush_buffers(audio_codec);
+        m_impl->resample_ctx.reset();  // Clear resampler FIFO after discontinuous seek
+    }
 
     // Decode audio packets until we've covered [t0_us, t1_us)
     TimeUS decoded_start_us = -1;
     int64_t total_output_samples = 0;
+    int ret;
 
     while (true) {
         ret = av_read_frame(fmt_ctx, m_impl->m_audio_pkt);
@@ -577,6 +597,11 @@ done:
     // Create PcmChunk
     // Note: Resampler always outputs stereo (2 channels) regardless of source
     // See ffmpeg_resample.h - "Converts any input format to float32 stereo"
+    // Track decoder position for sequential decode optimization
+    TimeUS decoded_end_us = decoded_start_us + (total_output_samples * 1000000LL) / out.sample_rate;
+    m_impl->have_audio_pts = true;
+    m_impl->audio_pts_us = decoded_end_us;
+
     auto chunk_impl = std::make_unique<PcmChunkImpl>(
         out.sample_rate,
         2,  // Resampler always outputs stereo
