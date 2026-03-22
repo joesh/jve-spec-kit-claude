@@ -291,11 +291,11 @@ void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* ss
 }
 
 void AudioPump::Stop() {
+    m_stop_requested.store(true, std::memory_order_relaxed);
+
     if (!m_running.load(std::memory_order_relaxed)) {
         return;
     }
-
-    m_stop_requested.store(true, std::memory_order_relaxed);
 
     if (m_thread.joinable()) {
         m_thread.join();
@@ -1309,7 +1309,7 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
             m_playing.store(false, std::memory_order_relaxed);
             m_current_tick = nullptr;
             dispatch_async(dispatch_get_main_queue(), ^{
-                stopDisplayLink();
+                Stop();
                 reportPosition(boundary_frame, true);
             });
             return;
