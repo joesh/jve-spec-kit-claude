@@ -85,6 +85,9 @@ CREATE TABLE IF NOT EXISTS sequences (
     view_start_frame INTEGER NOT NULL DEFAULT 0,
     view_duration_frames INTEGER NOT NULL DEFAULT 240,
     playhead_frame INTEGER NOT NULL DEFAULT 0,
+    video_scroll_offset INTEGER NOT NULL DEFAULT 0,
+    audio_scroll_offset INTEGER NOT NULL DEFAULT 0,
+    video_audio_split_ratio REAL NOT NULL DEFAULT 0.5,  -- 0.0–1.0, fraction of height for video
     
     -- Marks (Optional, Nullable)
     mark_in_frame INTEGER,

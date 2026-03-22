@@ -440,6 +440,30 @@ int lua_set_splitter_moved_handler(lua_State* L) {
     return 0;
 }
 
+// Scroll area vertical scroll changed handler
+int lua_set_scroll_area_v_scroll_handler(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    const char* handler_name = lua_tostring(L, 2);
+    if (!sa || !handler_name) return 0;
+
+    QScrollBar* sb = sa->verticalScrollBar();
+    if (!sb) return 0;
+
+    std::string handler_str = std::string(handler_name);
+    QObject::connect(sb, &QScrollBar::valueChanged, [L, handler_str](int value) {
+        lua_getglobal(L, handler_str.c_str());
+        if (lua_isfunction(L, -1)) {
+            lua_pushinteger(L, value);
+            if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+                handle_lua_callback_error(L);
+            }
+        } else {
+            lua_pop(L, 1);
+        }
+    });
+    return 0;
+}
+
 // Timer functions
 int lua_create_single_shot_timer(lua_State* L) {
     int interval_ms = luaL_checkint(L, 1);

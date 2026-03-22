@@ -8,6 +8,7 @@
 #include <QTextEdit>
 #include <QLineEdit>
 #include <QProgressBar>
+#include <QScrollBar>
 #include <QApplication>
 
 // CONTROL.PROCESS_EVENTS() — drain Qt event queue (also drains GCD main queue on macOS).
@@ -88,6 +89,25 @@ int lua_get_combobox_current_text(lua_State* L) {
         lua_pushnil(L);
     }
     return 1;
+}
+
+int lua_get_scroll_area_v_scroll(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    if (sa && sa->verticalScrollBar()) {
+        lua_pushinteger(L, sa->verticalScrollBar()->value());
+    } else {
+        lua_pushinteger(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_scroll_area_v_scroll(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    int value = luaL_checkinteger(L, 2);
+    if (sa && sa->verticalScrollBar()) {
+        sa->verticalScrollBar()->setValue(value);
+    }
+    return 0;
 }
 
 int lua_set_scroll_area_viewport_margins(lua_State* L) {

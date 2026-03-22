@@ -219,6 +219,33 @@ M.get_project_id = function() return data.state.project_id end
 M.get_sequence_id = function() return data.state.sequence_id end
 M.get_sequence_frame_rate = function() return data.state.sequence_frame_rate end
 M.get_start_timecode_frame = function() return data.state.sequence_timecode_start_frame or 0 end
+M.get_video_scroll_offset = function() return data.state.video_scroll_offset or 0 end
+M.get_audio_scroll_offset = function() return data.state.audio_scroll_offset or 0 end
+M.set_video_scroll_offset = function(offset)
+    local val = math.floor(offset)
+    if data.state.video_scroll_offset == val then return end
+    data.state.video_scroll_offset = val
+    local seq_id = data.state.sequence_id
+    if seq_id then
+        local Sequence = require("models.sequence")
+        Sequence.update_scroll_offsets(seq_id, val, nil)
+    end
+end
+M.set_audio_scroll_offset = function(offset)
+    local val = math.floor(offset)
+    if data.state.audio_scroll_offset == val then return end
+    data.state.audio_scroll_offset = val
+    local seq_id = data.state.sequence_id
+    if seq_id then
+        local Sequence = require("models.sequence")
+        Sequence.update_scroll_offsets(seq_id, nil, val)
+    end
+end
+M.get_video_audio_split_ratio = function() return data.state.video_audio_split_ratio or 0.5 end
+M.set_video_audio_split_ratio = function(ratio)
+    data.state.video_audio_split_ratio = math.max(0.05, math.min(0.95, ratio))
+    core.persist_state_to_db()
+end
 M.get_sequence_fps_numerator = function()
     assert(data.state.sequence_frame_rate, "timeline_state.get_sequence_fps_numerator: sequence_frame_rate not initialized")
     return data.state.sequence_frame_rate.fps_numerator

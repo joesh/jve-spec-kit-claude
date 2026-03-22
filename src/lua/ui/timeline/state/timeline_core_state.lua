@@ -161,6 +161,9 @@ local function flush_state_to_db()
         sequence_id = sequence_id,
         viewport_start_time = data.state.viewport_start_time,
         viewport_duration = data.state.viewport_duration,
+        video_scroll_offset = data.state.video_scroll_offset,
+        audio_scroll_offset = data.state.audio_scroll_offset,
+        video_audio_split_ratio = data.state.video_audio_split_ratio,
     })
     command_manager.execute(viewport_cmd)
 
@@ -306,6 +309,11 @@ function M.init(sequence_id, project_id)
 
     -- Restore Playhead from sequence model
     data.state.playhead_position = sequence.playhead_position
+
+    -- Restore vertical scroll offsets and splitter ratio
+    data.state.video_scroll_offset = sequence.video_scroll_offset or 0
+    data.state.audio_scroll_offset = sequence.audio_scroll_offset or 0
+    data.state.video_audio_split_ratio = sequence.video_audio_split_ratio or 0.5
 
     -- Restore Selection from sequence model (JSON strings)
     if sequence.selected_clip_ids_json and sequence.selected_clip_ids_json ~= "" then

@@ -98,6 +98,9 @@ int lua_show_dialog(lua_State* L);
 // Control functions
 int lua_set_scroll_area_widget(lua_State* L);
 int lua_set_scroll_area_viewport_margins(lua_State* L);
+int lua_get_scroll_area_v_scroll(lua_State* L);
+int lua_set_scroll_area_v_scroll(lua_State* L);
+int lua_set_scroll_area_v_scroll_handler(lua_State* L);
 int lua_set_context_menu_handler(lua_State* L);
 
 // Tree widget functions

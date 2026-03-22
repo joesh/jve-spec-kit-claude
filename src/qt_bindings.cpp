@@ -184,6 +184,8 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_scroll_area_widget_resizable); lua_setfield(L, -2, "SET_SCROLL_AREA_WIDGET_RESIZABLE");
     lua_pushcfunction(L, lua_set_scroll_area_h_scrollbar_policy); lua_setfield(L, -2, "SET_SCROLL_AREA_H_SCROLLBAR_POLICY");
     lua_pushcfunction(L, lua_set_scroll_area_v_scrollbar_policy); lua_setfield(L, -2, "SET_SCROLL_AREA_V_SCROLLBAR_POLICY");
+    lua_pushcfunction(L, lua_get_scroll_area_v_scroll); lua_setfield(L, -2, "GET_SCROLL_AREA_V_SCROLL");
+    lua_pushcfunction(L, lua_set_scroll_area_v_scroll); lua_setfield(L, -2, "SET_SCROLL_AREA_V_SCROLL");
     lua_pushcfunction(L, lua_set_layout_spacing); lua_setfield(L, -2, "SET_LAYOUT_SPACING");
     lua_pushcfunction(L, lua_set_layout_margins); lua_setfield(L, -2, "SET_LAYOUT_MARGINS");
     lua_pushcfunction(L, lua_set_enabled); lua_setfield(L, -2, "SET_ENABLED");
@@ -253,6 +255,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_tree_expand_collapse_handler); lua_setglobal(L, "qt_set_tree_expand_collapse_handler");
     lua_pushcfunction(L, lua_hide_splitter_handle); lua_setglobal(L, "qt_hide_splitter_handle");
     lua_pushcfunction(L, lua_set_splitter_moved_handler); lua_setglobal(L, "qt_set_splitter_moved_handler");
+    lua_pushcfunction(L, lua_set_scroll_area_v_scroll_handler); lua_setglobal(L, "qt_set_scroll_area_v_scroll_handler");
     lua_pushcfunction(L, lua_get_splitter_handle); lua_setglobal(L, "qt_get_splitter_handle");
     lua_pushcfunction(L, lua_update_widget); lua_setglobal(L, "qt_update_widget");
 

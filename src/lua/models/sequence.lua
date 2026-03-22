@@ -93,6 +93,9 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
         playhead_position = playhead_pos,
         viewport_start_time = viewport_start,
         viewport_duration = viewport_dur,
+        video_scroll_offset = opts.video_scroll_offset or 0,
+        audio_scroll_offset = opts.audio_scroll_offset or 0,
+        video_audio_split_ratio = opts.video_audio_split_ratio or 0.5,
 
         mark_in = opts.mark_in_frame,   -- nil or integer
         mark_out = opts.mark_out_frame, -- nil or integer
@@ -120,7 +123,8 @@ function Sequence.load(id)
                 SELECT id, project_id, name, kind, fps_numerator, fps_denominator, width, height,
                        playhead_frame, view_start_frame,
                        view_duration_frames, mark_in_frame, mark_out_frame, audio_rate,
-                       selected_clip_ids, selected_edge_infos, start_timecode_frame
+                       selected_clip_ids, selected_edge_infos, start_timecode_frame,
+                       video_scroll_offset, audio_scroll_offset, video_audio_split_ratio
                 FROM sequences WHERE id = ?
             ]])
     
@@ -168,6 +172,11 @@ function Sequence.load(id)
                 -- Timeline start timecode (display offset)
                 start_timecode_frame = stmt:value(16) or 0,  -- schema evolution: 0 = midnight
 
+                -- Vertical scroll offsets (per-widget)
+                video_scroll_offset = stmt:value(17) or 0,
+                audio_scroll_offset = stmt:value(18) or 0,
+                video_audio_split_ratio = stmt:value(19) or 0.5,
+
                 created_at = os.time(),
                 modified_at = os.time()
             }
@@ -210,10 +219,12 @@ function Sequence:save()
         INSERT INTO sequences
         (id, project_id, name, kind, fps_numerator, fps_denominator, width, height,
          start_timecode_frame,
-         playhead_frame, view_start_frame, view_duration_frames, mark_in_frame, mark_out_frame, audio_rate,
+         playhead_frame, view_start_frame, view_duration_frames,
+         video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
+         mark_in_frame, mark_out_frame, audio_rate,
          selected_clip_ids, selected_edge_infos,
          created_at, modified_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             project_id = excluded.project_id,
             name = excluded.name,
@@ -226,6 +237,9 @@ function Sequence:save()
             playhead_frame = excluded.playhead_frame,
             view_start_frame = excluded.view_start_frame,
             view_duration_frames = excluded.view_duration_frames,
+            video_scroll_offset = excluded.video_scroll_offset,
+            audio_scroll_offset = excluded.audio_scroll_offset,
+            video_audio_split_ratio = excluded.video_audio_split_ratio,
             mark_in_frame = excluded.mark_in_frame,
             mark_out_frame = excluded.mark_out_frame,
             audio_rate = excluded.audio_rate,
@@ -251,32 +265,35 @@ function Sequence:save()
     stmt:bind_value(10, db_playhead)
     stmt:bind_value(11, db_view_start)
     stmt:bind_value(12, db_view_dur)
+    stmt:bind_value(13, self.video_scroll_offset or 0)
+    stmt:bind_value(14, self.audio_scroll_offset or 0)
+    stmt:bind_value(15, self.video_audio_split_ratio or 0.5)
 
     if db_mark_in then
-        stmt:bind_value(13, db_mark_in)
+        stmt:bind_value(16, db_mark_in)
     else
         if stmt.bind_null then
-            stmt:bind_null(13)
+            stmt:bind_null(16)
         else
-            stmt:bind_value(13, nil)
+            stmt:bind_value(16, nil)
         end
     end
 
     if db_mark_out then
-        stmt:bind_value(14, db_mark_out)
+        stmt:bind_value(17, db_mark_out)
     else
         if stmt.bind_null then
-            stmt:bind_null(14)
+            stmt:bind_null(17)
         else
-            stmt:bind_value(14, nil)
+            stmt:bind_value(17, nil)
         end
     end
 
-    stmt:bind_value(15, db_audio_rate)
-    stmt:bind_value(16, self.selected_clip_ids_json or "")
-    stmt:bind_value(17, self.selected_edge_infos_json or "")
-    stmt:bind_value(18, self.created_at or os.time())
-    stmt:bind_value(19, self.modified_at)
+    stmt:bind_value(18, db_audio_rate)
+    stmt:bind_value(19, self.selected_clip_ids_json or "")
+    stmt:bind_value(20, self.selected_edge_infos_json or "")
+    stmt:bind_value(21, self.created_at or os.time())
+    stmt:bind_value(22, self.modified_at)
 
     local ok = stmt:exec()
     if not ok then
@@ -287,6 +304,27 @@ function Sequence:save()
 
     stmt:finalize()
     return ok
+end
+
+--- Lightweight scroll offset update — avoids full save overhead.
+-- Pass nil for either offset to leave it unchanged.
+function Sequence.update_scroll_offsets(seq_id, video_offset, audio_offset)
+    local db = require("core.database")
+    local conn = assert(db.get_connection(), "Sequence.update_scroll_offsets: no database connection")
+    if video_offset then
+        local stmt = assert(conn:prepare("UPDATE sequences SET video_scroll_offset = ? WHERE id = ?"))
+        stmt:bind_value(1, video_offset)
+        stmt:bind_value(2, seq_id)
+        stmt:exec()
+        stmt:finalize()
+    end
+    if audio_offset then
+        local stmt = assert(conn:prepare("UPDATE sequences SET audio_scroll_offset = ? WHERE id = ?"))
+        stmt:bind_value(1, audio_offset)
+        stmt:bind_value(2, seq_id)
+        stmt:exec()
+        stmt:finalize()
+    end
 end
 
 -- Count all sequences in the database
