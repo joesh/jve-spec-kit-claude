@@ -1480,14 +1480,19 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     }
 
     // Step 4: Teleport assert + clamp.
+    // Threshold in wall-clock seconds (not frames) — works for video (25fps) and audio (44100Hz).
+    // Divided by speed so fast-forward/shuttle don't trigger it.
     {
-        int64_t delta = std::abs(new_pos - current);
-        if (delta >= 240) {
+        double abs_speed = std::abs(speed);
+        if (abs_speed < 0.01) abs_speed = 1.0;  // safety: avoid division by zero
+        double delta_seconds = std::abs(new_pos - current) * static_cast<double>(m_fps_den) / m_fps_num;
+        double wall_seconds = delta_seconds / abs_speed;
+        if (wall_seconds > 2.0) {
             char buf[256];
             snprintf(buf, sizeof(buf),
-                "advancePosition: jumped %lld frames in one tick "
+                "advancePosition: jumped %.3fs (wall=%.3fs) in one tick "
                 "(current=%lld, new=%lld, elapsed=%.4fs, speed=%.2f)",
-                (long long)delta, (long long)current, (long long)new_pos,
+                delta_seconds, wall_seconds, (long long)current, (long long)new_pos,
                 elapsed_seconds, speed);
             JVE_ASSERT(false, buf);
         }

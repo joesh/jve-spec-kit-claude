@@ -57,6 +57,7 @@ local function fresh_state()
 
         -- Playhead (integer frame)
         playhead_position = 0,
+        is_playing = false,
 
         -- Selection
         selected_clips = {},

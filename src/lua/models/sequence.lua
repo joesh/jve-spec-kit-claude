@@ -475,6 +475,13 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
     local width = has_video and media.width or 1920
     local height = has_video and media.height or 1080
 
+    -- TC origin from media metadata (set at import time, e.g. DRP MediaStartTime)
+    local start_tc_frame = 0
+    local tc_value = media:get_start_tc()
+    if tc_value and tc_value > 0 then
+        start_tc_frame = tc_value
+    end
+
     assert(media.name and media.name ~= "",
         string.format("Sequence.ensure_masterclip: media has no name for media_id=%s", tostring(media_id)))
     local seq = Sequence.create(media.name, project_id,
@@ -483,6 +490,7 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
             id = opts.id,
             kind = "masterclip",
             audio_rate = sample_rate,
+            start_timecode_frame = start_tc_frame,
         })
     assert(seq:save(), string.format(
         "Sequence.ensure_masterclip: failed to save masterclip sequence for media_id=%s",

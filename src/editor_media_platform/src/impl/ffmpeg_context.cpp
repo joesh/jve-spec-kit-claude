@@ -92,6 +92,12 @@ Result<int> FFmpegFormatContext::find_video_stream() {
     if (m_video_stream_idx < 0) {
         return Error::unsupported("No video stream found");
     }
+    // Album art (cover images in MP3/AAC/etc.) is not video
+    AVStream* vs = m_fmt_ctx->streams[m_video_stream_idx];
+    if (vs->disposition & AV_DISPOSITION_ATTACHED_PIC) {
+        m_video_stream_idx = -1;
+        return Error::unsupported("No video stream found (attached pic only)");
+    }
     return m_video_stream_idx;
 }
 

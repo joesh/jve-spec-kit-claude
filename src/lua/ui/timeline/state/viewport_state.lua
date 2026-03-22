@@ -83,6 +83,8 @@ end
 
 local function ensure_playhead_visible()
     if viewport_guard_count > 0 then return false end
+    -- Only auto-scroll during playback; when parked, user must be free to scroll
+    if not data.state.is_playing then return false end
     local state = data.state
 
     local duration = state.viewport_duration

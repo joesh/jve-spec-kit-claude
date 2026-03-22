@@ -1748,6 +1748,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                             duration = source_extent_frames,
                             frame_rate = media_frame_rate,  -- from <MediaFrameRate>; blob propagation may override
                             audio_channels = track_type == "AUDIO" and 2 or 0,
+                            has_video = track_type == "VIDEO",
                             media_start_time = media_start_time,
                             alt_paths = {},
                         }
@@ -1762,6 +1763,9 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                         end
                         if track_type == "AUDIO" and entry.audio_channels < 2 then
                             entry.audio_channels = 2
+                        end
+                        if track_type == "VIDEO" then
+                            entry.has_video = true
                         end
                         if media_frame_rate and not entry.frame_rate then
                             entry.frame_rate = media_frame_rate
@@ -2141,6 +2145,9 @@ function M.parse_drp_file(drp_path, progress_cb)
                     if (info.audio_channels or 0) > (existing.audio_channels or 0) then
                         existing.audio_channels = info.audio_channels
                     end
+                    if info.has_video then
+                        existing.has_video = true
+                    end
                     if info.media_start_time and not existing.media_start_time then
                         existing.media_start_time = info.media_start_time
                     end
@@ -2162,6 +2169,7 @@ function M.parse_drp_file(drp_path, progress_cb)
                         duration = info.duration or 0,
                         frame_rate = info.frame_rate,
                         audio_channels = info.audio_channels,
+                        has_video = info.has_video,
                         media_start_time = info.media_start_time,
                         alt_paths = info.alt_paths or {},
                     }
@@ -2746,6 +2754,7 @@ function M.import_into_project(project_id, parse_result, opts)
                 duration_frames = dur,
                 frame_rate = fps,
                 audio_sample_rate = media_item.audio_sample_rate,
+                audio_channels = media_item.audio_channels,
                 width = project_settings.width,
                 height = project_settings.height,
                 metadata = media_metadata,

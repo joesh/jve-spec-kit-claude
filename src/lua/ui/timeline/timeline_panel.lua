@@ -1924,6 +1924,54 @@ function M.restore_scroll_and_splitter()
     end
 end
 
+--- Snapshot current layout state for inheritance by new projects.
+function M.snapshot_layout()
+    local snapshot = {}
+    if M.vertical_splitter then
+        local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(M.vertical_splitter)
+        local total = sizes[1] + sizes[2]
+        if total > 0 then
+            snapshot.split_ratio = sizes[1] / total
+        end
+    end
+    if M.timeline_video_scroll then
+        snapshot.video_scroll = qt_constants.CONTROL.GET_SCROLL_AREA_V_SCROLL(M.timeline_video_scroll)
+    end
+    if M.timeline_audio_scroll then
+        snapshot.audio_scroll = qt_constants.CONTROL.GET_SCROLL_AREA_V_SCROLL(M.timeline_audio_scroll)
+    end
+    return snapshot
+end
+
+--- Apply inherited layout from a previous project.
+-- Writes values to state AND to the Qt widgets, then persists to DB.
+function M.apply_layout_if_default(snapshot)
+    if not snapshot then return end
+
+    -- Apply splitter ratio
+    if snapshot.split_ratio and M.vertical_splitter and M.headers_main_splitter then
+        local total = qt_constants.LAYOUT.GET_SPLITTER_SIZES(M.vertical_splitter)
+        local total_height = total[1] + total[2]
+        if total_height > 0 then
+            local video_h = math.floor(total_height * snapshot.split_ratio + 0.5)
+            local audio_h = total_height - video_h
+            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.vertical_splitter, {video_h, audio_h})
+            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {video_h, audio_h})
+            state.set_video_audio_split_ratio(snapshot.split_ratio)
+        end
+    end
+
+    -- Apply scroll offsets
+    if snapshot.video_scroll and M.timeline_video_scroll then
+        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_video_scroll, snapshot.video_scroll)
+        state.set_video_scroll_offset(snapshot.video_scroll)
+    end
+    if snapshot.audio_scroll and M.timeline_audio_scroll then
+        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_audio_scroll, snapshot.audio_scroll)
+        state.set_audio_scroll_offset(snapshot.audio_scroll)
+    end
+end
+
 -- Check if timeline is currently dragging clips or edges
 function M.is_dragging()
     local video_dragging = video_view_ref and video_view_ref.drag_state ~= nil
