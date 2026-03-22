@@ -38,8 +38,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local dur = timeline_state.get_viewport_duration()
         assert(type(dur) == "number", "TimelineZoomIn: viewport_duration must be integer frames")
 
-        -- Reduce by 20%, enforce minimum 30 frames (~1 second at 30fps)
-        local new_dur = math.floor(dur * 0.8)
+        -- Reduce by 50%, enforce minimum 30 frames (~1 second at 30fps)
+        local new_dur = math.floor(dur * 0.5)
         new_dur = math.max(30, new_dur)
 
         timeline_state.set_viewport_duration(new_dur)
