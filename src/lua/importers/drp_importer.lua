@@ -20,6 +20,46 @@ local M = {}
 
 local log = require("core.logger").for_area("media")
 
+--- Run a shell command, capture output to a temp file, read that file.
+-- Avoids io.popen pipes entirely — LuaJIT's pipe reads are susceptible to
+-- EINTR from Qt signals/timers, and there's no portable way to mask signals
+-- in Lua. Writing to a temp file and reading it back sidesteps the issue.
+-- @param cmd string: shell command to execute
+-- @param context string: caller name for assert message
+-- @return string: command output (asserts on failure)
+local function shell_capture(cmd, context)
+    local tmp = os.tmpname()
+    local ok, err = pcall(function()
+        local exit_code = os.execute(cmd .. " > " .. tmp .. " 2>/dev/null")
+        assert(exit_code == 0,
+            string.format("%s: command failed (exit %s): %s", context, tostring(exit_code), cmd))
+    end)
+    if not ok then
+        os.remove(tmp)
+        error(err, 2)
+    end
+    local handle, open_err = io.open(tmp, "r")
+    if not handle then
+        os.remove(tmp)
+        error(string.format("%s: failed to open temp file %s: %s", context, tmp, tostring(open_err)), 2)
+    end
+    local data, read_err = handle:read("*all")
+    handle:close()
+    os.remove(tmp)
+    assert(data, string.format("%s: failed to read temp file %s: %s", context, tmp, tostring(read_err)))
+    return data
+end
+
+--- Read all data from a local file handle (io.open), asserting on failure.
+-- @param handle file: open file handle from io.open
+-- @param context string: caller name for assert message
+-- @return string: file contents
+local function file_read_all(handle, context)
+    local data, err = handle:read("*all")
+    assert(data, string.format("%s: read(*all) failed: %s", context, tostring(err)))
+    return data
+end
+
 --- Unzip .drp file to temporary directory
 -- @param drp_path string: Path to .drp file
 -- @return string|nil: Temp directory path, or nil on error
@@ -514,6 +554,63 @@ local function decode_bt_audio_duration(hex_str)
         duration_samples = duration,
         sample_rate = sample_rate,
     }
+end
+
+--- Decode a LE IEEE 754 double from 16 hex chars without FFI.
+-- Pure Lua implementation safe for high-frequency calls (125K+ clips in large DRPs).
+-- decode_hex_double_at uses ffi.new/ffi.cast which corrupts LuaJIT state at scale.
+-- @param hex16 string: 16 hex characters representing 8 LE bytes
+-- @return number|nil: decoded double, or nil if invalid
+local function decode_le_double_pure(hex16)
+    if #hex16 ~= 16 then return nil end
+    -- Parse 8 bytes (LE order)
+    local b = {}
+    for i = 1, 8 do
+        local byte = tonumber(hex16:sub(i * 2 - 1, i * 2), 16)
+        if not byte then return nil end
+        b[i] = byte
+    end
+    -- IEEE 754 double: sign(1) exponent(11) mantissa(52), big-endian bit layout
+    -- LE bytes: b[1]=LSB .. b[8]=MSB
+    local sign = (b[8] >= 128) and -1 or 1
+    local exp = ((b[8] % 128) * 16) + math.floor(b[7] / 16)
+    -- Mantissa: 52 bits from b[7](low 4 bits) .. b[1]
+    local mantissa = (b[7] % 16) * 2^48
+                   + b[6] * 2^40 + b[5] * 2^32
+                   + b[4] * 2^24 + b[3] * 2^16
+                   + b[2] * 2^8  + b[1]
+    if exp == 0 and mantissa == 0 then return 0.0 end
+    if exp == 0x7FF then return nil end  -- Inf/NaN
+    if exp == 0 then
+        -- Subnormal
+        return sign * 2^(-1022) * (mantissa / 2^52)
+    end
+    return sign * 2^(exp - 1023) * (1 + mantissa / 2^52)
+end
+
+--- Decode clip volume from EffectFiltersBA hex blob.
+-- EffectFiltersBA contains per-clip audio effects (volume, EQ, reverb, etc.) in a
+-- variable-length TLV binary. The volume double (LE IEEE 754, dB) always follows
+-- the marker "0f085f1a0b0a0911" — a TLV field ID that precedes the volume value
+-- in both short (40-byte, volume-only) and long (92+ byte, multi-effect) blobs.
+-- @param hex_str string|nil: hex-encoded EffectFiltersBA content
+-- @return number|nil: volume in dB (0.0 = unity, negative = quieter), nil if no volume found
+local function decode_effect_filters_volume_db(hex_str)
+    if not hex_str or hex_str == "" then return nil end
+    -- Find the volume marker in the hex string
+    local marker = "0f085f1a0b0a0911"
+    local marker_pos = hex_str:find(marker, 1, true)
+    if not marker_pos then return nil end
+    -- Volume double starts immediately after the 8-byte (16 hex char) marker
+    local vol_start = marker_pos + #marker
+    if vol_start + 15 > #hex_str then return nil end  -- need 16 hex chars for the double
+    local hex16 = hex_str:sub(vol_start, vol_start + 15)
+    local db_val = decode_le_double_pure(hex16)
+    if not db_val then return nil end
+    -- Sanity: Resolve volume range is -inf..+12dB fader.
+    -- Anything outside [-100, +24] is corrupt blob data, not volume.
+    if db_val < -100 or db_val > 24 then return nil end
+    return db_val
 end
 
 --- Detect reverse playback from KeyframesBA raw payload.
@@ -1122,13 +1219,7 @@ local function parse_media_pool_hierarchy(tmp_dir, pump)
 
     -- Find all MpFolder.xml files recursively
     local find_cmd = string.format('find "%s/MediaPool" -name "MpFolder.xml" 2>/dev/null', tmp_dir)
-    local find_handle = io.popen(find_cmd)
-    if not find_handle then
-        return { folders = folders, master_clips = master_clips, folder_map = folder_map }
-    end
-
-    local mp_files_raw = find_handle:read("*all")
-    find_handle:close()
+    local mp_files_raw = shell_capture(find_cmd, "parse_media_pool_hierarchy")
 
     local mp_file_list = {}
     for f in mp_files_raw:gmatch("[^\n]+") do
@@ -1290,13 +1381,7 @@ local function build_timeline_metadata_map(tmp_dir, pump)
     local timeline_id_map = {}  -- Sm2Timeline DbId → {name, seq_id}
 
     local find_cmd = string.format('find "%s/MediaPool" -name "MpFolder.xml" 2>/dev/null', tmp_dir)
-    local find_handle = io.popen(find_cmd)
-    if not find_handle then
-        return metadata_map, timeline_id_map
-    end
-
-    local mp_files_raw = find_handle:read("*all")
-    find_handle:close()
+    local mp_files_raw = shell_capture(find_cmd, "build_timeline_metadata_map")
 
     local mp_file_list = {}
     for f in mp_files_raw:gmatch("[^\n]+") do
@@ -1600,6 +1685,18 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 source_in_native, source_out_native = source_out_native, source_in_native
             end
 
+            -- Extract per-clip volume from EffectFiltersBA (direct child of clip element)
+            local efba_elem = find_direct_child(clip_elem, "EffectFiltersBA")
+            local efba_hex = efba_elem and get_text(efba_elem)
+            local volume_linear = 1.0
+            if efba_hex and efba_hex ~= "" then
+                local volume_db = decode_effect_filters_volume_db(efba_hex)
+                if volume_db then
+                    volume_linear = 10 ^ (volume_db / 20)
+                end
+                -- nil = not a volume blob (different effect type, wrong size, etc.) → unity
+            end
+
             local clip = {
                 name = clip_name,
                 start_value = start_frames,        -- timeline position (integer frames)
@@ -1612,6 +1709,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 clip_speed = clip_speed,            -- signed speed for downstream validation
                 enabled = get_text(find_element(clip_elem, "WasDisbanded")) ~= "true"
                     and (tonumber(get_text(find_element(clip_elem, "Flags"))) or 0) % 4 < 2,  -- bit 1 = muted
+                volume = volume_linear,            -- linear gain from EffectFiltersBA (1.0 = 0dB)
                 file_path = file_path,
                 file_uuid = get_text(find_element(clip_elem, "MediaRef")),
                 file_id = get_text(find_element(clip_elem, "MediaRef")),
@@ -1905,13 +2003,8 @@ function M.parse_drp_file(drp_path, progress_cb)
     -- Parse sequence XMLs
     local timelines = {}
     local seq_dir = tmp_dir .. "/SeqContainer"
-    local seq_files_raw = io.popen("ls " .. seq_dir .. "/*.xml 2>/dev/null")
+    local seq_files = shell_capture("ls " .. seq_dir .. "/*.xml 2>/dev/null", "parse_drp_file:ls_seq")
     local sequence_file_list = {}
-    local seq_files = ""
-    if seq_files_raw then
-        seq_files = seq_files_raw:read("*all")
-        seq_files_raw:close()
-    end
 
     -- Collect file list for progress counting
     local seq_file_paths = {}
@@ -2069,20 +2162,19 @@ function M.parse_drp_file(drp_path, progress_cb)
 
     -- Pass 4: raw XML grep for orphaned paths not found in structured parse
     for _, seq_file in ipairs(sequence_file_list) do
-        local handle = io.open(seq_file, "r")
-        if handle then
-            local content = handle:read("*all")
-            handle:close()
-            for raw_path in content:gmatch("<MediaFilePath>(.-)</MediaFilePath>") do
-                local cleaned = raw_path:match("^%s*(.-)%s*$")
-                if cleaned ~= "" and not media_get(nil, cleaned) then
-                    media_put({
-                        name = cleaned:match("([^/\\]+)$") or cleaned,
-                        file_path = cleaned,
-                        duration = 0,
-                        alt_paths = {},
-                    })
-                end
+        local handle = assert(io.open(seq_file, "r"),
+            string.format("parse_drp_file: failed to open %s", seq_file))
+        local content = file_read_all(handle, "drp_importer:seq_xml:" .. seq_file)
+        handle:close()
+        for raw_path in content:gmatch("<MediaFilePath>(.-)</MediaFilePath>") do
+            local cleaned = raw_path:match("^%s*(.-)%s*$")
+            if cleaned ~= "" and not media_get(nil, cleaned) then
+                media_put({
+                    name = cleaned:match("([^/\\]+)$") or cleaned,
+                    file_path = cleaned,
+                    duration = 0,
+                    alt_paths = {},
+                })
             end
         end
     end
@@ -2101,10 +2193,11 @@ function M.parse_drp_file(drp_path, progress_cb)
     pump(96, "Enriching media UUIDs…")
     local enriched_count = 0
     for seq_idx, seq_file in ipairs(sequence_file_list) do
-        local handle = io.open(seq_file, "r")
-        if handle then
-            local content = handle:read("*all")
-            handle:close()
+        local handle = assert(io.open(seq_file, "r"),
+            string.format("parse_drp_file: failed to open %s for UUID enrichment", seq_file))
+        local content = file_read_all(handle, "drp_importer:seq_xml:" .. seq_file)
+        handle:close()
+        do
             -- Collapse whitespace so patterns can span XML elements on separate lines.
             -- Lua's . doesn't match \n, so multi-line XML breaks .- patterns.
             content = content:gsub("%s+", " ")
@@ -2263,22 +2356,33 @@ M.parse_resolve_tracks = parse_resolve_tracks
 M.parse_fields_blob_tabs = parse_fields_blob_tabs
 M.decode_bt_video_time = decode_bt_video_time
 M.decode_bt_audio_duration = decode_bt_audio_duration
+M.decode_effect_filters_volume_db = decode_effect_filters_volume_db
 M.decode_media_timemap = decode_media_timemap
 
 --- Lightweight metadata extraction — project name only, no full parse.
--- Pipes project.xml from ZIP via unzip -p (no temp directory).
+-- Extracts project.xml from ZIP via unzip -p to temp file (EINTR-safe).
 -- @param drp_path string: Path to .drp file
 -- @return table|nil: { name = "Project Name" }, or nil on error
 -- @return string|nil: error message if failed
 function M.quick_metadata(drp_path)
     assert(drp_path and drp_path ~= "", "drp_importer.quick_metadata: drp_path required")
 
-    local cmd = string.format('unzip -p "%s" project.xml 2>/dev/null', drp_path)
-    local handle = io.popen(cmd)
-    if not handle then return nil, "Failed to read .drp archive" end
+    local tmp = os.tmpname()
+    local cmd = string.format('unzip -p "%s" project.xml > "%s" 2>/dev/null', drp_path, tmp)
+    local exit_code = os.execute(cmd)
+    if exit_code ~= 0 then
+        os.remove(tmp)
+        return nil, "Failed to read .drp archive"
+    end
 
+    local handle = io.open(tmp, "r")
+    if not handle then
+        os.remove(tmp)
+        return nil, "Failed to open temp file for project.xml"
+    end
     local xml_content = handle:read("*a")
     handle:close()
+    os.remove(tmp)
 
     if not xml_content or xml_content == "" then
         return nil, "No project.xml in .drp archive"
@@ -2835,6 +2939,7 @@ function M.import_into_project(project_id, parse_result, opts)
                             fps_numerator = clip_rate_num,
                             fps_denominator = clip_rate_den,
                             enabled = clip_data.enabled,
+                            volume = clip_data.volume,
                             -- bin assigned after clip creation via DRP folder lookup
                         })
 

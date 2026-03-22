@@ -1032,6 +1032,8 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     // Copy locals before releasing lock
     std::string media_path = clip->media_path;
     float speed_ratio = clip->speed_ratio;
+    float clip_volume = clip->volume;
+    assert(clip_volume >= 0.0f && "GetTrackAudio: clip_volume must be non-negative");
     int64_t source_in = clip->source_in;
     Rate clip_rate = clip->rate();
     TimeUS first_clip_end_us = clip_end_us;
@@ -1084,6 +1086,16 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         if (reversed && first_chunk && first_chunk->frames() > 0) {
             reverse_interleaved(first_chunk->mutable_data_f32(),
                                 first_chunk->frames(), fmt.channels);
+        }
+
+        // Apply per-clip volume (clip gain, before track fader)
+        if (first_chunk && first_chunk->frames() > 0
+                && std::abs(clip_volume - 1.0f) > 0.001f) {
+            float* data = first_chunk->mutable_data_f32();
+            int64_t n = first_chunk->frames() * fmt.channels;
+            for (int64_t i = 0; i < n; ++i) {
+                data[i] *= clip_volume;
+            }
         }
     }
 
@@ -1146,6 +1158,8 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         Rate next_clip_rate = next->rate();
         std::string next_path = next->media_path;
         float next_speed = next->speed_ratio;
+        float next_volume = next->volume;
+        assert(next_volume >= 0.0f && "GetTrackAudio: next clip volume must be non-negative");
         tlock.unlock();
 
         // NSF-ACCEPT: Offline/decode failures in boundary spanning produce silence
@@ -1180,6 +1194,15 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
                                           seg_t0, seg_t1, std::abs(next_speed), fmt);
             if (next_reversed && seg && seg->frames() > 0) {
                 reverse_interleaved(seg->mutable_data_f32(), seg->frames(), fmt.channels);
+            }
+            // Apply per-clip volume (clip gain, before track fader)
+            if (seg && seg->frames() > 0
+                    && std::abs(next_volume - 1.0f) > 0.001f) {
+                float* data = seg->mutable_data_f32();
+                int64_t n = seg->frames() * fmt.channels;
+                for (int64_t i = 0; i < n; ++i) {
+                    data[i] *= next_volume;
+                }
             }
             if (seg && seg->frames() > 0) {
                 segments.push_back({seg, seg_t0});

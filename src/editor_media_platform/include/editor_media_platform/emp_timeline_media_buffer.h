@@ -64,6 +64,7 @@ struct ClipInfo {
     int32_t rate_num, rate_den;   // clip rate (for frame→us conversion)
     float speed_ratio;            // conform: seq_fps / media_fps (1.0 = none)
     bool offline = false;         // true = media file not found, generate beep
+    float volume = 1.0f;         // clip gain (linear): applied before track fader
 
     int64_t timeline_end() const { return timeline_start + duration; }
     Rate rate() const {

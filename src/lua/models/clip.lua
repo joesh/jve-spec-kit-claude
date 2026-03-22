@@ -67,7 +67,8 @@ local function load_internal(clip_id, raise_errors)
                c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
                c.fps_numerator, c.fps_denominator, c.enabled, c.offline,
                s.fps_numerator, s.fps_denominator,
-               c.mark_in_frame, c.mark_out_frame, c.playhead_frame
+               c.mark_in_frame, c.mark_out_frame, c.playhead_frame,
+               c.volume
         FROM clips c
         LEFT JOIN tracks t ON c.track_id = t.id
         LEFT JOIN sequences s ON t.sequence_id = s.id
@@ -159,6 +160,11 @@ local function load_internal(clip_id, raise_errors)
         playhead_frame = assert(query:value(20) ~= nil and query:value(20),
             string.format("Clip.load: playhead_frame is NULL for clip %s (NOT NULL column)",
                 tostring(query:value(0)))),
+
+        -- Audio mixer state (clip gain, applied before track fader)
+        volume = assert(query:value(21) ~= nil and query:value(21),
+            string.format("Clip.load: volume is NULL for clip %s (NOT NULL DEFAULT 1.0 column)",
+                tostring(query:value(0)))),
     }
     
     query:finalize()
@@ -232,6 +238,9 @@ function M.create(name, media_id, opts)
         
         enabled = opts.enabled ~= false,
         offline = false,  -- transient: recomputed by media_status registry
+
+        -- Audio mixer state (clip gain, applied before track fader)
+        volume = opts.volume or 1.0,  -- domain default: unity gain (0dB)
 
         -- Source viewer state (nullable marks + playhead)
         mark_in = opts.mark_in,           -- nil = no mark
@@ -376,6 +385,11 @@ local function save_internal(self, _opts)
     assert(type(self.source_in) == "number", "Clip.save: source_in must be integer (got " .. type(self.source_in) .. ")")
     assert(type(self.source_out) == "number", "Clip.save: source_out must be integer (got " .. type(self.source_out) .. ")")
 
+    -- Verify volume
+    assert(type(self.volume) == "number" and self.volume >= 0,
+        string.format("Clip.save: volume must be non-negative number (got %s=%s) for clip %s",
+            type(self.volume), tostring(self.volume), tostring(self.id)))
+
     -- Verify mark field types (nullable marks must be number or nil)
     if self.mark_in ~= nil then
         assert(type(self.mark_in) == "number",
@@ -430,6 +444,7 @@ local function save_internal(self, _opts)
                 master_clip_id = ?, owner_sequence_id = ?,
                 timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?,
                 fps_numerator = ?, fps_denominator = ?, enabled = ?, offline = ?,
+                volume = ?,
                 mark_in_frame = ?, mark_out_frame = ?, playhead_frame = ?,
                 modified_at = strftime('%s','now')
             WHERE id = ?
@@ -441,10 +456,11 @@ local function save_internal(self, _opts)
                 master_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                 fps_numerator, fps_denominator, enabled, offline,
+                volume,
                 mark_in_frame, mark_out_frame, playhead_frame,
                 created_at, modified_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
         ]])
     end
 
@@ -477,10 +493,11 @@ local function save_internal(self, _opts)
         query:bind_value(13, db_fps_den)
         query:bind_value(14, self.enabled and 1 or 0)
         query:bind_value(15, self.offline and 1 or 0)
-        bind_nullable(query, 16, self.mark_in)
-        bind_nullable(query, 17, self.mark_out)
-        query:bind_value(18, self.playhead_frame)
-        query:bind_value(19, self.id)
+        query:bind_value(16, self.volume)
+        bind_nullable(query, 17, self.mark_in)
+        bind_nullable(query, 18, self.mark_out)
+        query:bind_value(19, self.playhead_frame)
+        query:bind_value(20, self.id)
     else
         query:bind_value(1, self.id)
         query:bind_value(2, self.project_id)
@@ -498,9 +515,10 @@ local function save_internal(self, _opts)
         query:bind_value(14, db_fps_den)
         query:bind_value(15, self.enabled and 1 or 0)
         query:bind_value(16, self.offline and 1 or 0)
-        bind_nullable(query, 17, self.mark_in)
-        bind_nullable(query, 18, self.mark_out)
-        query:bind_value(19, self.playhead_frame)
+        query:bind_value(17, self.volume)
+        bind_nullable(query, 18, self.mark_in)
+        bind_nullable(query, 19, self.mark_out)
+        query:bind_value(20, self.playhead_frame)
     end
 
     local krono_exec = (krono_enabled and krono_exists and krono.now and krono.now()) or nil

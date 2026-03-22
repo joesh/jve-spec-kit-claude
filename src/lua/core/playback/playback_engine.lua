@@ -567,6 +567,7 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
         rate_den = clip.rate.fps_denominator,
         speed_ratio = speed_ratio,
         offline = is_offline,
+        volume = clip.volume,
     }
 end
 

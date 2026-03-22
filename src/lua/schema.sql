@@ -156,6 +156,9 @@ CREATE TABLE IF NOT EXISTS clips (
     enabled BOOLEAN NOT NULL DEFAULT 1,
     offline BOOLEAN NOT NULL DEFAULT 0,
 
+    -- Audio Mixer State (clip gain, applied before track fader)
+    volume REAL NOT NULL DEFAULT 1.0,  -- linear: 1.0 = unity (0dB)
+
     -- Per-clip source viewer state (marks + playhead)
     mark_in_frame INTEGER,       -- nullable (no mark set)
     mark_out_frame INTEGER,      -- nullable (no mark set)
