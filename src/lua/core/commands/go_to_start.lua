@@ -30,10 +30,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             sv.engine:stop()
         end
 
-        -- Respect timeline start TC — don't seek into dead space before content
-        local timeline_state = require('ui.timeline.timeline_state')
-        local start_frame = timeline_state.get_start_timecode_frame
-            and timeline_state.get_start_timecode_frame() or 0
+        -- Each sequence knows its own start TC (0 for master clips, DRP value for timelines)
+        local start_frame = sv.sequence and sv.sequence.start_timecode_frame or 0
         sv:seek_to_frame(start_frame)
         return true
     end

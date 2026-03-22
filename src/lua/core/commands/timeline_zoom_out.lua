@@ -23,6 +23,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true
         end
 
+        -- If source monitor is focused, zoom it instead
+        local pm = require('ui.panel_manager')
+        local active = pm.get_active_sequence_monitor()
+        if active and active.view_id == "source_monitor" then
+            active:zoom_by(2.0)
+            return true
+        end
+
         local timeline_state
         do
             local ok, mod = pcall(require, 'ui.timeline.timeline_state')
