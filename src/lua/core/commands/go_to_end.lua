@@ -24,8 +24,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local sv = pm.get_active_sequence_monitor()
         assert(sv and sv.sequence_id, "GoToEnd: no sequence loaded in active view")
 
-        -- End = total frames in the monitor's loaded sequence
-        local end_frame = sv.total_frames
+        -- End = last valid frame (total_frames - 1, zero-indexed)
+        assert(sv.total_frames > 0, "GoToEnd: total_frames must be > 0")
+        local end_frame = sv.total_frames - 1
 
         if args.dry_run then
             return true, { end_frame = end_frame }

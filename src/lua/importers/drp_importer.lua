@@ -1357,12 +1357,20 @@ local function extract_timeline_metadata(metadata_map, timeline_id_map, timeline
         if height then height = math.floor(height) end
     end
 
+    -- MediaExtents: two LE doubles [start_tc_seconds, end_tc_seconds]
+    local start_tc_seconds = nil
+    local media_extents_elem = find_direct_child(sm2_seq, "MediaExtents")
+    if media_extents_elem then
+        start_tc_seconds = decode_hex_double(get_text(media_extents_elem))
+    end
+
     metadata_map[seq_id] = {
         name = timeline_name,
         fps = fps,
         width = width,
         height = height,
         folder_id = folder_id,
+        start_tc_seconds = start_tc_seconds,
     }
 
     -- Map Sm2Timeline DbId → name (for resolving TimelineHandleVec)
@@ -2062,6 +2070,9 @@ function M.parse_drp_file(drp_path, progress_cb)
 
                 -- Store folder_id for bin hierarchy import
                 timeline.folder_id = metadata and metadata.folder_id or nil
+
+                -- Store start timecode from MediaExtents (seconds → frames)
+                timeline.start_tc_seconds = metadata and metadata.start_tc_seconds or nil
 
                 table.insert(timelines, timeline)
                 ::continue_seq::
@@ -2803,6 +2814,17 @@ function M.import_into_project(project_id, parse_result, opts)
             end
         end
 
+        -- STEP 2b: Timeline start timecode from MediaExtents (authoritative).
+        -- MediaExtents[0] on Sm2Sequence is the start TC in seconds.
+        -- Convert to frames; clamps viewport/playhead to prevent dead space.
+        local start_timecode_frame = 0
+        if timeline_data.start_tc_seconds and timeline_data.start_tc_seconds > 0 then
+            local effective_fps = fps_num / fps_den
+            start_timecode_frame = math.floor(timeline_data.start_tc_seconds * effective_fps + 0.5)
+            log.event("Timeline start TC: %.2fs → %d frames (%d/%d fps)",
+                timeline_data.start_tc_seconds, start_timecode_frame, fps_num, fps_den)
+        end
+
         -- STEP 3: Zoom-to-fit viewport
         local view_start = min_start_frame or 0
         local content_duration = max_end_frame - view_start
@@ -2831,6 +2853,7 @@ function M.import_into_project(project_id, parse_result, opts)
             seq_height,
             {
                 audio_rate = 48000,
+                start_timecode_frame = start_timecode_frame,
                 view_start_frame = view_start,
                 view_duration_frames = view_duration,
                 playhead_frame = min_start_frame or 0,

@@ -298,6 +298,7 @@ function M.init(sequence_id, project_id)
 
     data.state.project_id = sequence.project_id
     data.state.sequence_frame_rate = sequence.frame_rate
+    data.state.sequence_timecode_start_frame = sequence.start_timecode_frame or 0
     data.sequence = sequence  -- Model reference for mark getters
 
     assert(sequence.frame_rate.fps_numerator and sequence.frame_rate.fps_denominator,

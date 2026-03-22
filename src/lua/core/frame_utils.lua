@@ -127,10 +127,15 @@ function M.format_timecode(time_obj, frame_rate, opts)
 
     local drop_frame = false
     local separator = ":"
+    local tc_start = 0
     if type(opts) == "table" then
         drop_frame = opts.drop_frame or false
         separator = opts.separator or separator
+        tc_start = opts.tc_start or 0
     end
+
+    -- Apply timeline start timecode offset (display-only)
+    total_frames = total_frames + tc_start
 
     -- Standard NLE Timecode math (Non-Drop for now)
     -- Rate calculation:

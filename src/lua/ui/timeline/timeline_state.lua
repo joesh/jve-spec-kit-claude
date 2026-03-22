@@ -218,6 +218,7 @@ M.normalize_edge_selection = selection.normalize_edge_selection
 M.get_project_id = function() return data.state.project_id end
 M.get_sequence_id = function() return data.state.sequence_id end
 M.get_sequence_frame_rate = function() return data.state.sequence_frame_rate end
+M.get_start_timecode_frame = function() return data.state.sequence_timecode_start_frame or 0 end
 M.get_sequence_fps_numerator = function()
     assert(data.state.sequence_frame_rate, "timeline_state.get_sequence_fps_numerator: sequence_frame_rate not initialized")
     return data.state.sequence_frame_rate.fps_numerator

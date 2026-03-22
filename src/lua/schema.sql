@@ -78,6 +78,9 @@ CREATE TABLE IF NOT EXISTS sequences (
     width INTEGER NOT NULL,
     height INTEGER NOT NULL,
     
+    -- Timeline Start Timecode (display offset, does not affect internal coordinates)
+    start_timecode_frame INTEGER NOT NULL DEFAULT 0,
+
     -- State (Rational Frames)
     view_start_frame INTEGER NOT NULL DEFAULT 0,
     view_duration_frames INTEGER NOT NULL DEFAULT 240,

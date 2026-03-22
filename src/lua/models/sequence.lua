@@ -70,6 +70,12 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
     local viewport_start = opts.view_start_frame or 0
     local viewport_dur = opts.view_duration_frames or Sequence.default_viewport_duration(fr.fps_numerator, fr.fps_denominator)
 
+    local start_tc = opts.start_timecode_frame or 0
+    assert(type(start_tc) == "number" and start_tc >= 0,
+        string.format("Sequence.create: start_timecode_frame must be non-negative integer, got %s",
+            tostring(start_tc)))
+    start_tc = math.floor(start_tc)
+
     local sequence = {
         id = opts.id or uuid.generate(),
         project_id = project_id,
@@ -79,6 +85,9 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
         width = w,
         height = h,
         audio_sample_rate = opts.audio_rate or 48000,
+
+        -- Timeline start timecode (display offset only)
+        start_timecode_frame = start_tc,
 
         -- Integer frame coordinates (fps is metadata in frame_rate)
         playhead_position = playhead_pos,
@@ -111,7 +120,7 @@ function Sequence.load(id)
                 SELECT id, project_id, name, kind, fps_numerator, fps_denominator, width, height,
                        playhead_frame, view_start_frame,
                        view_duration_frames, mark_in_frame, mark_out_frame, audio_rate,
-                       selected_clip_ids, selected_edge_infos
+                       selected_clip_ids, selected_edge_infos, start_timecode_frame
                 FROM sequences WHERE id = ?
             ]])
     
@@ -156,6 +165,9 @@ function Sequence.load(id)
                 selected_clip_ids_json = selected_clip_ids,  -- Let caller parse JSON
                 selected_edge_infos_json = selected_edge_infos,
 
+                -- Timeline start timecode (display offset)
+                start_timecode_frame = stmt:value(16) or 0,  -- schema evolution: 0 = midnight
+
                 created_at = os.time(),
                 modified_at = os.time()
             }
@@ -197,10 +209,11 @@ function Sequence:save()
     local stmt = conn:prepare([[
         INSERT INTO sequences
         (id, project_id, name, kind, fps_numerator, fps_denominator, width, height,
+         start_timecode_frame,
          playhead_frame, view_start_frame, view_duration_frames, mark_in_frame, mark_out_frame, audio_rate,
          selected_clip_ids, selected_edge_infos,
          created_at, modified_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             project_id = excluded.project_id,
             name = excluded.name,
@@ -209,6 +222,7 @@ function Sequence:save()
             fps_denominator = excluded.fps_denominator,
             width = excluded.width,
             height = excluded.height,
+            start_timecode_frame = excluded.start_timecode_frame,
             playhead_frame = excluded.playhead_frame,
             view_start_frame = excluded.view_start_frame,
             view_duration_frames = excluded.view_duration_frames,
@@ -233,35 +247,36 @@ function Sequence:save()
     stmt:bind_value(6, db_fps_den)
     stmt:bind_value(7, self.width)
     stmt:bind_value(8, self.height)
-    stmt:bind_value(9, db_playhead)
-    stmt:bind_value(10, db_view_start)
-    stmt:bind_value(11, db_view_dur)
-    
-    if db_mark_in then 
-        stmt:bind_value(12, db_mark_in) 
-    else 
-        if stmt.bind_null then
-            stmt:bind_null(12) 
-        else
-            stmt:bind_value(12, nil)
-        end
-    end
-    
-    if db_mark_out then 
-        stmt:bind_value(13, db_mark_out) 
-    else 
+    stmt:bind_value(9, self.start_timecode_frame or 0)
+    stmt:bind_value(10, db_playhead)
+    stmt:bind_value(11, db_view_start)
+    stmt:bind_value(12, db_view_dur)
+
+    if db_mark_in then
+        stmt:bind_value(13, db_mark_in)
+    else
         if stmt.bind_null then
             stmt:bind_null(13)
         else
             stmt:bind_value(13, nil)
         end
     end
-    
-    stmt:bind_value(14, db_audio_rate)
-    stmt:bind_value(15, self.selected_clip_ids_json or "")
-    stmt:bind_value(16, self.selected_edge_infos_json or "")
-    stmt:bind_value(17, self.created_at or os.time())
-    stmt:bind_value(18, self.modified_at)
+
+    if db_mark_out then
+        stmt:bind_value(14, db_mark_out)
+    else
+        if stmt.bind_null then
+            stmt:bind_null(14)
+        else
+            stmt:bind_value(14, nil)
+        end
+    end
+
+    stmt:bind_value(15, db_audio_rate)
+    stmt:bind_value(16, self.selected_clip_ids_json or "")
+    stmt:bind_value(17, self.selected_edge_infos_json or "")
+    stmt:bind_value(18, self.created_at or os.time())
+    stmt:bind_value(19, self.modified_at)
 
     local ok = stmt:exec()
     if not ok then

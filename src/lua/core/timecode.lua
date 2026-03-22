@@ -33,8 +33,8 @@ function M.to_time(frames, frame_rate)
 end
 
 -- Format time object to timecode string
-function M.to_string(time_obj, frame_rate, drop_frame)
-    return frame_utils.format_timecode(time_obj, frame_rate, {drop_frame=drop_frame})
+function M.to_string(time_obj, frame_rate, drop_frame, tc_start)
+    return frame_utils.format_timecode(time_obj, frame_rate, {drop_frame=drop_frame, tc_start=tc_start})
 end
 
 -- Parse timecode string to Rational
@@ -83,7 +83,7 @@ function M.get_ruler_interval(viewport_duration_frames, frame_rate, target_pixel
 end
 
 -- Format ruler label
-function M.format_ruler_label(time_obj, frame_rate)
+function M.format_ruler_label(time_obj, frame_rate, tc_start)
     -- Accept Rational or frame count; convert to Rational time.
     local rate = frame_utils.normalize_rate(frame_rate)
     local tc_obj
@@ -96,7 +96,8 @@ function M.format_ruler_label(time_obj, frame_rate)
     end
 
     -- Always emit full timecode (HH:MM:SS:FF) for ruler labels to avoid ambiguous MM:SS displays.
-    return frame_utils.format_timecode(tc_obj, frame_rate)
+    local opts = tc_start and tc_start ~= 0 and { tc_start = tc_start } or nil
+    return frame_utils.format_timecode(tc_obj, frame_rate, opts)
 end
 
 return M

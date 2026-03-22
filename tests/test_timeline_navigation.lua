@@ -85,8 +85,8 @@ timeline_state.set_playhead_position(321)
 
 result = command_manager.execute("GoToEnd", { project_id = "default_project" })
 assert(result.success == true, "GoToEnd should succeed")
-assert(timeline_state.get_playhead_position() == 3500,
-    string.format("GoToEnd must set playhead to timeline end (expected 3500, got %s)",
+assert(timeline_state.get_playhead_position() == 3499,
+    string.format("GoToEnd must set playhead to last valid frame (expected 3499, got %s)",
         tostring(timeline_state.get_playhead_position())))
 
 print("✅ GoToStart/GoToEnd navigation commands adjust playhead correctly")
