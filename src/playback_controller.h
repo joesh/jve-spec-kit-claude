@@ -183,6 +183,9 @@ public:
     // Reset incremental push tracking (call at every transport change)
     void ResetPushState();
 
+    // Set push end after prefill so pump starts after prefilled range
+    void SetLastPushEnd(int64_t us);
+
     // Pump timing constants (match Lua CFG) — public for pre-fill sizing
     static constexpr int TARGET_BUFFER_MS = 200;
     static constexpr int MAX_RENDER_FRAMES = 4096;

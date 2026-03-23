@@ -285,6 +285,12 @@ void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* ss
         } catch (const JveAssertError& e) {
             JVE_LOG_ERROR(Audio, "AudioPump terminated by assert: %s", e.what());
             m_running.store(false, std::memory_order_relaxed);
+        } catch (const std::exception& e) {
+            fprintf(stderr, "[audio] ERROR: AudioPump thread exception: %s\n", e.what());
+            m_running.store(false, std::memory_order_relaxed);
+        } catch (...) {
+            fprintf(stderr, "[audio] ERROR: AudioPump thread unknown exception\n");
+            m_running.store(false, std::memory_order_relaxed);
         }
     });
     JVE_LOG_EVENT(Audio, "AudioPump: started");
@@ -313,6 +319,10 @@ void AudioPump::ResetPushState() {
     m_last_push_end_us.store(-1, std::memory_order_relaxed);
 }
 
+void AudioPump::SetLastPushEnd(int64_t us) {
+    m_last_push_end_us.store(us, std::memory_order_relaxed);
+}
+
 void AudioPump::SetQualityMode(int mode) {
     m_quality_mode.store(mode, std::memory_order_relaxed);
 }
@@ -327,7 +337,9 @@ void AudioPump::pumpLoop() {
     int64_t stalled_cycles = 0;
     int64_t last_media_time = -1;
 
+    int cycle_count = 0;
     while (!m_stop_requested.load(std::memory_order_relaxed)) {
+        cycle_count++;
         // 1. Get current media time from clock
         int64_t aop_playhead = m_aop->PlayheadTimeUS();
         int64_t media_time_us = m_clock->CurrentTimeUS(aop_playhead);
@@ -345,24 +357,22 @@ void AudioPump::pumpLoop() {
         // Solution: always fetch from SSE's current position (cache warming),
         // but only push to SSE when we need new data (from last_end onwards).
         constexpr int64_t MIX_LOOKAHEAD_US = 2000000;
-        constexpr int64_t REFILL_THRESHOLD_US = 1000000;  // push when < 1s ahead
+        constexpr int64_t REFILL_THRESHOLD_US = 1500000;  // push when < 1.5s ahead
 
         int64_t last_end = m_last_push_end_us.load(std::memory_order_relaxed);
         int64_t sse_time = m_sse->CurrentTimeUS();
 
-        // Always fetch from SSE position to keep TMB cache warm.
-        // This ensures that when we DO push, the data is already decoded.
-        int64_t warm_start, warm_end;
-        if (speed >= 0) {
-            warm_start = sse_time;
-            warm_end = sse_time + MIX_LOOKAHEAD_US;
-        } else {
-            warm_start = sse_time - MIX_LOOKAHEAD_US;
-            warm_end = sse_time;
-        }
-        m_tmb->GetMixedAudio(warm_start, warm_end);  // result discarded — cache warming
+        // NOTE: Cache warming removed — it triggered backward seeks on every pump
+        // cycle (SSE position lags behind decoder position), destroying sequential
+        // decode state for compressed formats (MP3/AAC). The push path below
+        // decodes on demand when the buffer needs refilling.
 
         // Decide whether SSE needs more source data
+        if (cycle_count <= 3) {
+            JVE_LOG_EVENT(Audio,
+                "pump cycle %d: sse_time=%.3fs last_end=%.3fs speed=%.1f",
+                cycle_count, sse_time / 1e6, last_end / 1e6, speed);
+        }
         bool need_push = false;
         int64_t push_start = 0;
         if (last_end < 0) {
@@ -419,16 +429,17 @@ void AudioPump::pumpLoop() {
             auto pcm = m_tmb->GetMixedAudio(fetch_start, fetch_end);
 
             if (pcm && pcm->frames() > 0) {
-                // Push to SSE (source data for time-stretching).
-                // SetTarget is NOT called here — SSE advances naturally via
-                // advance_time() inside Render(). Transport events (Play, SetSpeed)
-                // call SetTarget after Reset().
+                int64_t expected_frames = ((fetch_end - fetch_start) * m_sample_rate) / 1000000;
+                JVE_LOG_EVENT(Audio,
+                    "pump: push [%.3f..%.3f)s pcm_start=%.3fs frames=%lld (expected=%lld, ratio=%.1f%%)",
+                    fetch_start / 1e6, fetch_end / 1e6,
+                    pcm->start_time_us() / 1e6,
+                    (long long)pcm->frames(), (long long)expected_frames,
+                    pcm->frames() * 100.0 / std::max<int64_t>(1, expected_frames));
                 m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(), pcm->start_time_us());
                 pushed_source = true;
 
                 // Track end of pushed data using sample-aligned arithmetic.
-                // Convert frames to μs via the same round-trip to ensure the
-                // next push_start aligns to the same sample grid.
                 int64_t end_samples = offset_samples + pcm->frames();
                 int64_t pcm_end_us = aligned_start + (end_samples * 1000000LL) / m_sample_rate;
                 if (speed >= 0) {
@@ -712,6 +723,18 @@ void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
     if (pcm && pcm->frames() > 0) {
         m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(),
                              pcm->start_time_us());
+
+        // Tell the pump where prefill data ends so its first push starts
+        // AFTER the prefilled range (no overlap → no chunk eviction in SSE).
+        if (m_audio_pump) {
+            int64_t prefill_end_us = pcm->start_time_us()
+                + (pcm->frames() * 1000000LL) / m_audio_sample_rate;
+            if (signed_speed >= 0) {
+                m_audio_pump->SetLastPushEnd(prefill_end_us);
+            } else {
+                m_audio_pump->SetLastPushEnd(pcm->start_time_us());
+            }
+        }
     }
 
     // Render in chunks until ring buffer is full

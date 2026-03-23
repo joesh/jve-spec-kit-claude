@@ -1099,6 +1099,21 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         }
     }
 
+    // Cache the decode result so subsequent requests (from other callers or
+    // the same caller after a backward seek) hit the cache instead of re-decoding.
+    // This prevents the Reader from being asked to go backwards.
+    if (first_chunk && first_chunk->frames() > 0) {
+        std::lock_guard<std::mutex> tlock(m_tracks_mutex);
+        auto tit = m_tracks.find(track);
+        if (tit != m_tracks.end()) {
+            auto& cache = tit->second.audio_cache;
+            while (cache.size() >= TrackState::MAX_AUDIO_CACHE) {
+                cache.erase(cache.begin());
+            }
+            cache.push_back({clip_id, clamped_t0, clamped_t1, first_chunk});
+        }
+    }
+
     // ── Fast path: request fully within first clip ──
     if (clamped_t1 >= t1 || !first_chunk) return first_chunk;
 
@@ -1495,10 +1510,11 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetMixedAudio(TimeUS t0, TimeUS t
 
     // Cache hit
     if (m_mixed_cache.covers(t0, t1)) {
-        return m_mixed_cache.extract(t0, t1);
+        auto result = m_mixed_cache.extract(t0, t1);
+        return result;
     }
 
-    // Sync fallback (startup/seek — cache cold)
+    // Sync fallback: break into 200ms sub-chunks for cache-friendly decode
     auto params = m_audio_mix_params;
     auto fmt = m_audio_mix_fmt;
     lock.unlock();

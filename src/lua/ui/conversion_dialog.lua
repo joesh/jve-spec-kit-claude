@@ -179,6 +179,7 @@ function M.show(config)
     globals[#globals + 1] = browse_name
 
     -- Convert (accepted signal from button box)
+    local converting = false
     local convert_name = "__conversion_dialog_convert"
     _G[convert_name] = function()
         if not dest_path or dest_path == "" then return end
@@ -240,7 +241,6 @@ function M.show(config)
     globals[#globals + 1] = convert_name
 
     -- Cancel (rejected signal from button box)
-    local converting = false
     local cancel_name = "__conversion_dialog_cancel"
     _G[cancel_name] = function()
         if not converting then
