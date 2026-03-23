@@ -177,6 +177,7 @@ Format:
 - **The word "orchestration"** in code, comments, or commit messages — it substitutes for "algorithm" without claiming algorithmic rigor. Use precise terms: "tick loop", "audio-following", "change detection", etc.
 - **fixing a failing test before being ABSOLUTELY SURE its failure is not surfacing a bug**
 - **Choosing expedience over architectural correctness** — Before every decision, ask: "Is this the architecturally correct thing to do?" If the answer is no, don't do it. Don't add workarounds, caches that mask bugs, fallback values, or "temporary" hacks. Do the right thing the first time. If unsure, ask.
+- **Lazy implementations that skip understanding** — Before modifying ANY subsystem, read 2+ working examples of the same pattern and trace the FULL execution path (execute → mutations → UI refresh → undo → mutations → UI refresh). Use the SAME mechanisms as existing code. Never write a no-op undoer or a `reload_timeline` fallback without understanding why the proper mutation path doesn't work. If you don't understand how something works, READ THE CODE — don't guess.
 
 ## **✅ SUCCESS PATTERN**
 
