@@ -323,6 +323,10 @@ void AudioPump::SetLastPushEnd(int64_t us) {
     m_last_push_end_us.store(us, std::memory_order_relaxed);
 }
 
+void AudioPump::SetEndTimeUS(int64_t us) {
+    m_end_time_us.store(us, std::memory_order_relaxed);
+}
+
 void AudioPump::SetQualityMode(int mode) {
     m_quality_mode.store(mode, std::memory_order_relaxed);
 }
@@ -357,7 +361,7 @@ void AudioPump::pumpLoop() {
         // Solution: always fetch from SSE's current position (cache warming),
         // but only push to SSE when we need new data (from last_end onwards).
         constexpr int64_t MIX_LOOKAHEAD_US = 2000000;
-        constexpr int64_t REFILL_THRESHOLD_US = 1500000;  // push when < 1.5s ahead
+        constexpr int64_t REFILL_THRESHOLD_US = 1500000;
 
         int64_t last_end = m_last_push_end_us.load(std::memory_order_relaxed);
         int64_t sse_time = m_sse->CurrentTimeUS();
@@ -418,12 +422,28 @@ void AudioPump::pumpLoop() {
             int64_t aligned_push = aligned_start + (offset_samples * 1000000LL) / m_sample_rate;
 
             int64_t fetch_start, fetch_end;
+            int64_t end_us = m_end_time_us.load(std::memory_order_relaxed);
             if (speed >= 0) {
                 fetch_start = aligned_push;
-                fetch_end = aligned_push + MIX_LOOKAHEAD_US;
+                // Push all remaining audio when near the end — prevents
+                // starvation pop from a partial last chunk.
+                int64_t remaining = end_us - aligned_push;
+                fetch_end = (remaining <= MIX_LOOKAHEAD_US * 5)
+                    ? end_us
+                    : aligned_push + MIX_LOOKAHEAD_US;
             } else {
                 fetch_end = aligned_push;
-                fetch_start = aligned_push - MIX_LOOKAHEAD_US;
+                int64_t remaining = aligned_push;
+                fetch_start = (remaining <= MIX_LOOKAHEAD_US * 5)
+                    ? 0
+                    : aligned_push - MIX_LOOKAHEAD_US;
+            }
+            // Don't fetch past the end or before the start
+            if (fetch_start < 0) fetch_start = 0;
+            if (fetch_end <= fetch_start) {
+                // Nothing left to push — advance past the end so we don't retry
+                m_last_push_end_us.store(end_us + 1, std::memory_order_relaxed);
+                continue;
             }
 
             auto pcm = m_tmb->GetMixedAudio(fetch_start, fetch_end);
@@ -777,6 +797,10 @@ void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
     // Start pump thread
     if (m_audio_pump) {
         m_audio_pump->SetQualityMode(quality_mode);
+        // Tell pump where the sequence ends so it pushes all remaining
+        // audio near the end (prevents starvation pop at final boundary)
+        int64_t seq_end_us = (m_total_frames * 1000000LL * m_fps_den) / m_fps_num;
+        m_audio_pump->SetEndTimeUS(seq_end_us);
         if (!m_audio_pump->IsRunning()) {
             m_audio_pump->Start(m_tmb, m_sse, m_aop, &m_clock,
                                 m_audio_sample_rate, m_audio_channels,

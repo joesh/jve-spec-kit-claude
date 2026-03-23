@@ -186,6 +186,9 @@ public:
     // Set push end after prefill so pump starts after prefilled range
     void SetLastPushEnd(int64_t us);
 
+    // Set sequence end time so pump can push remaining audio near the end
+    void SetEndTimeUS(int64_t us);
+
     // Pump timing constants (match Lua CFG) — public for pre-fill sizing
     static constexpr int TARGET_BUFFER_MS = 200;
     static constexpr int MAX_RENDER_FRAMES = 4096;
@@ -203,6 +206,7 @@ private:
     // Each time range is extracted and pushed ONCE — eliminates quantization drift
     // from redundant μs→sample conversions on overlapping windows.
     std::atomic<int64_t> m_last_push_end_us{-1};
+    std::atomic<int64_t> m_end_time_us{INT64_MAX};
 
     // Dependencies (set by Start, read by pumpLoop)
     emp::TimelineMediaBuffer* m_tmb{nullptr};
