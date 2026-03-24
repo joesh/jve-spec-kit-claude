@@ -401,6 +401,7 @@ local function paste_browser(payload)
                 name = item.duplicate_name,
                 copied_properties = item.copied_properties,
             })
+            assert(type(result) == "table", "paste_browser: execute returned non-table")
             if result.success then
                 pasted = pasted + 1
             else

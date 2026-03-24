@@ -196,19 +196,32 @@ local function notify_command_event(event)
 end
 
 --- Apply __timeline_mutations from a command to the UI cache.
+-- Returns true if mutations were applied, false if not (caller should reload).
 local function apply_command_mutations(cmd)
     local mutations = cmd:get_parameter("__timeline_mutations")
     if not mutations then return false end
     local ts = require('ui.timeline.timeline_state')
     if not ts.apply_mutations then return false end
-    local seq_id = extract_sequence_id(cmd)
+    local fallback_seq = extract_sequence_id(cmd)
+
     if mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
-        return ts.apply_mutations(mutations.sequence_id or seq_id, mutations)
+        -- Single-bucket format
+        local target_seq = mutations.sequence_id or fallback_seq
+        assert(target_seq and target_seq ~= "",
+            string.format("apply_command_mutations: no sequence_id for %s mutations", cmd.type or "unknown"))
+        return ts.apply_mutations(target_seq, mutations)
     end
+
+    -- Multi-bucket format (keyed by sequence_id)
     local applied = false
     for _, bucket in pairs(mutations) do
-        if ts.apply_mutations(bucket.sequence_id or seq_id, bucket) then
-            applied = true
+        if type(bucket) == "table" then
+            local target_seq = bucket.sequence_id or fallback_seq
+            assert(target_seq and target_seq ~= "",
+                string.format("apply_command_mutations: no sequence_id in bucket for %s", cmd.type or "unknown"))
+            if ts.apply_mutations(target_seq, bucket) then
+                applied = true
+            end
         end
     end
     return applied
@@ -957,10 +970,8 @@ function M._execute_body(command_or_name, params)
         -- commands will participate in (they skip BEGIN when a group is active).
         local _wrapper_group_id = M.begin_undo_group(command.type) -- luacheck: ignore 211
         result = execute_non_recording(command)
+        assert(type(result) == "table", "execute_non_recording returned non-table for " .. tostring(command.type))
         M.end_undo_group()
-
-        -- Mutations are applied by each nested child as it saves (see nested
-        -- recording path above). No reload needed here.
 
         exec_scope:finish("non_recording")
         goto cleanup
