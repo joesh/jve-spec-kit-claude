@@ -114,17 +114,6 @@ function M.format_timecode(time_obj, frame_rate, opts)
     local total_frames
     local sign = ""
     
-    if r then
-        local rescaled = r:rescale(rate.fps_numerator, rate.fps_denominator)
-        total_frames = rescaled.frames
-        if total_frames < 0 then
-            sign = "-"
-            total_frames = -total_frames
-        end
-    else
-        total_frames = 0
-    end
-
     local drop_frame = false
     local separator = ":"
     local tc_start = 0
@@ -134,8 +123,18 @@ function M.format_timecode(time_obj, frame_rate, opts)
         tc_start = opts.tc_start or 0
     end
 
-    -- Apply timeline start timecode offset (display-only)
-    total_frames = total_frames + tc_start
+    if r then
+        local rescaled = r:rescale(rate.fps_numerator, rate.fps_denominator)
+        -- Apply tc_start offset BEFORE sign extraction so negative inputs
+        -- are relative to the timecode origin, not absolute zero.
+        total_frames = rescaled.frames + tc_start
+        if total_frames < 0 then
+            sign = "-"
+            total_frames = -total_frames
+        end
+    else
+        total_frames = 0
+    end
 
     -- Standard NLE Timecode math (Non-Drop for now)
     -- Rate calculation:

@@ -240,7 +240,9 @@ function M.create(name, media_id, opts)
         offline = false,  -- transient: recomputed by media_status registry
 
         -- Audio mixer state (clip gain, applied before track fader)
-        volume = opts.volume or 1.0,  -- domain default: unity gain (0dB)
+        -- Domain default, not a fallback: new clips start at unity gain (0dB).
+        -- DRP import passes explicit volume from parsed data.
+        volume = opts.volume or 1.0,
 
         -- Source viewer state (nullable marks + playhead)
         mark_in = opts.mark_in,           -- nil = no mark

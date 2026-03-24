@@ -86,6 +86,7 @@ function M.register(executors, undoers, db)
             end
 
             local deleted = 0
+            local failed = 0
             for _, clip_id in ipairs(clip_ids_to_delete) do
                 local result = command_manager.execute("DeleteClip", {
                     clip_id = clip_id,
@@ -95,6 +96,7 @@ function M.register(executors, undoers, db)
                 if result.success then
                     deleted = deleted + 1
                 else
+                    failed = failed + 1
                     log.error("DeleteSelection: DeleteClip failed for %s: %s",
                         clip_id, result.error_message or "unknown")
                 end
@@ -106,7 +108,10 @@ function M.register(executors, undoers, db)
                 end
                 log.event("Deleted %d clips (single undo)", deleted)
             end
-            return true
+            if failed > 0 then
+                log.warn("DeleteSelection: %d of %d delete(s) failed", failed, deleted + failed)
+            end
+            return failed == 0 or deleted > 0
         end
 
         -- Ripple delete selected gaps

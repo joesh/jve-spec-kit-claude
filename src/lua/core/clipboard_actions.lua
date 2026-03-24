@@ -391,6 +391,7 @@ local function paste_browser(payload)
     local target_bin_override = resolve_target_bin(nil)
 
     local pasted = 0
+    local failed = 0
     for _, item in ipairs(items) do
         if item.snapshot and item.snapshot.media_id then
             local result = command_manager.execute("DuplicateMasterClip", {
@@ -405,12 +406,16 @@ local function paste_browser(payload)
             if result.success then
                 pasted = pasted + 1
             else
+                failed = failed + 1
                 log.error("paste_browser: DuplicateMasterClip failed: %s",
                     result.error_message or "unknown")
             end
         end
     end
 
+    if failed > 0 then
+        log.warn("paste_browser: %d of %d paste(s) failed", failed, pasted + failed)
+    end
     if pasted == 0 then
         return false, "Clipboard snapshot missing media references"
     end

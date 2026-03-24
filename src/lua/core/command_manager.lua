@@ -970,7 +970,6 @@ function M._execute_body(command_or_name, params)
         -- commands will participate in (they skip BEGIN when a group is active).
         local _wrapper_group_id = M.begin_undo_group(command.type) -- luacheck: ignore 211
         result = execute_non_recording(command)
-        assert(type(result) == "table", "execute_non_recording returned non-table for " .. tostring(command.type))
         M.end_undo_group()
 
         exec_scope:finish("non_recording")

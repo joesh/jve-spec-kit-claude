@@ -403,7 +403,7 @@ function M.find_group_members(group_id, up_to_seq, after_seq)
         bind_count = 1
     end
     local query = db:prepare(sql)
-    if not query then return {} end
+    assert(query, "find_group_members: failed to prepare SQL (schema mismatch?)")
     query:bind_value(1, group_id)
     if bind_count == 3 then
         query:bind_value(2, up_to_seq)

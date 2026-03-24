@@ -45,6 +45,7 @@ function M.register(executors)
         assert(project_id and project_id ~= "", "Blade: missing active project_id")
 
         local split_count = 0
+        local fail_count = 0
         for _, clip in ipairs(target_clips) do
             local start_value = clip.timeline_start
             local duration_value = clip.duration
@@ -63,6 +64,7 @@ function M.register(executors)
                     if result.success then
                         split_count = split_count + 1
                     else
+                        fail_count = fail_count + 1
                         log.error("Blade: SplitClip failed for %s: %s",
                             clip.id, result.error_message or "unknown")
                     end
@@ -72,11 +74,12 @@ function M.register(executors)
 
         if split_count > 0 then
             log.event("Blade: split %d clip(s) at %s", split_count, tostring(playhead_value))
-        else
-            log.event("Blade: no valid clips to split at current playhead position")
+        end
+        if fail_count > 0 then
+            log.warn("Blade: %d of %d split(s) failed", fail_count, split_count + fail_count)
         end
 
-        return true
+        return fail_count == 0
     end
 
     return {

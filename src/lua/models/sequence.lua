@@ -169,13 +169,15 @@ function Sequence.load(id)
                 selected_clip_ids_json = selected_clip_ids,  -- Let caller parse JSON
                 selected_edge_infos_json = selected_edge_infos,
 
-                -- Timeline start timecode (display offset)
-                start_timecode_frame = stmt:value(16) or 0,  -- schema evolution: 0 = midnight
-
-                -- Vertical scroll offsets (per-widget)
-                video_scroll_offset = stmt:value(17) or 0,
-                audio_scroll_offset = stmt:value(18) or 0,
-                video_audio_split_ratio = stmt:value(19) or 0.5,
+                -- These columns are NOT NULL DEFAULT in schema; nil means DB corruption
+                start_timecode_frame = assert(stmt:value(16) ~= nil and stmt:value(16),
+                    "Sequence.load: start_timecode_frame is NULL"),
+                video_scroll_offset = assert(stmt:value(17) ~= nil and stmt:value(17),
+                    "Sequence.load: video_scroll_offset is NULL"),
+                audio_scroll_offset = assert(stmt:value(18) ~= nil and stmt:value(18),
+                    "Sequence.load: audio_scroll_offset is NULL"),
+                video_audio_split_ratio = assert(stmt:value(19) ~= nil and stmt:value(19),
+                    "Sequence.load: video_audio_split_ratio is NULL"),
 
                 created_at = os.time(),
                 modified_at = os.time()

@@ -212,6 +212,7 @@ function M.handle_release(view, drag_state, modifiers)
             end
         else
             command_manager.begin_undo_group("drag_move")
+            local drag_failed = 0
             for _, spec in ipairs(command_specs) do
                 local params = { project_id = active_proj }
                 for k, v in pairs(spec.parameters) do
@@ -222,8 +223,12 @@ function M.handle_release(view, drag_state, modifiers)
                 end
                 local result = command_manager.execute(spec.command_type, params)
                 if not result.success then
+                    drag_failed = drag_failed + 1
                     log.error("%s failed: %s", spec.command_type, result.error_message or "unknown")
                 end
+            end
+            if drag_failed > 0 then
+                log.warn("drag_move: %d of %d command(s) failed", drag_failed, #command_specs)
             end
             command_manager.end_undo_group()
         end
