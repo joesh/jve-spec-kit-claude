@@ -591,27 +591,17 @@ local insert_master_clip_id = test_env.create_test_masterclip_sequence(
 
 local clip_for_move = fetch_single_clip_id(replayed_sequence_id)
 
-local move_nudge_spec = json.encode({
-    {
-        command_type = "MoveClipToTrack",
-        parameters = {
-            clip_id = clip_for_move,
-            target_track_id = video_tracks[2],
-            skip_occlusion = true
-        }
-    },
-    {
-        command_type = "Nudge",
-        parameters = {
-            nudge_amount = -10,
-            selected_clip_ids = {clip_for_move}
-        }
-    }
-})
-
-local move_nudge_cmd = Command.create("BatchCommand", "default_project")
-move_nudge_cmd:set_parameter("commands_json", move_nudge_spec)
-assert(command_manager.execute(move_nudge_cmd).success, "MoveClipToTrack + Nudge batch should succeed")
+command_manager.begin_undo_group("move_nudge")
+local move_cmd = Command.create("MoveClipToTrack", "default_project")
+move_cmd:set_parameter("clip_id", clip_for_move)
+move_cmd:set_parameter("target_track_id", video_tracks[2])
+move_cmd:set_parameter("skip_occlusion", true)
+assert(command_manager.execute(move_cmd).success, "MoveClipToTrack should succeed")
+local nudge_cmd2 = Command.create("Nudge", "default_project")
+nudge_cmd2:set_parameter("nudge_amount", -10)
+nudge_cmd2:set_parameter("selected_clip_ids", {clip_for_move})
+assert(command_manager.execute(nudge_cmd2).success, "Nudge should succeed")
+command_manager.end_undo_group()
 
 local toggle_cmd2 = Command.create("ToggleClipEnabled", "default_project")
 toggle_cmd2:set_parameter("clip_ids", {clip_for_move})
@@ -629,43 +619,24 @@ assert(command_manager.execute(insert_cmd2).success, "Insert command should succ
 local inserted_clip_id = insert_cmd2:get_parameter("clip_id")
 assert(inserted_clip_id, "Insert command must record new clip_id for replay")
 
-local split_spec = json.encode({
-    {
-        command_type = "SplitClip",
-        parameters = {
-            clip_id = inserted_clip_id,
-            split_value = 800500
-        }
-    }
-})
+local split_cmd = Command.create("SplitClip", "default_project")
+split_cmd:set_parameter("clip_id", inserted_clip_id)
+split_cmd:set_parameter("split_value", 800500)
+split_cmd:set_parameter("sequence_id", replayed_sequence_id)
+assert(command_manager.execute(split_cmd).success, "SplitClip should succeed for regression setup")
 
-local split_cmd = Command.create("BatchCommand", "default_project")
-split_cmd:set_parameter("commands_json", split_spec)
-assert(command_manager.execute(split_cmd).success, "SplitClip batch should succeed for regression setup")
-
-local split_exec = split_cmd:get_parameter("executed_commands_json")
-local child_specs = json.decode(split_exec)
-local split_second_clip_id = child_specs and child_specs[1] and child_specs[1].parameters and child_specs[1].parameters.second_clip_id
+local split_second_clip_id = split_cmd:get_parameter("second_clip_id")
 
 local clip_to_delete = split_second_clip_id or inserted_clip_id or fetch_single_clip_id(replayed_sequence_id)
 assert(clip_to_delete, "There should be a clip to delete")
 
-local delete_spec = json.encode({
-    {
-        command_type = "DeleteClip",
-        parameters = {
-            clip_id = clip_to_delete,
-            sequence_id = replayed_sequence_id,
-            project_id = "default_project"
-        }
-    }
-})
-
-local delete_cmd = Command.create("BatchCommand", "default_project")
-delete_cmd:set_parameter("commands_json", delete_spec)
+local delete_cmd = Command.create("DeleteClip", "default_project")
+delete_cmd:set_parameter("clip_id", clip_to_delete)
+delete_cmd:set_parameter("sequence_id", replayed_sequence_id)
+delete_cmd:set_parameter("project_id", "default_project")
 
 local delete_result = command_manager.execute(delete_cmd)
-assert(delete_result.success, "Deleting a clip via BatchCommand should succeed")
+assert(delete_result.success, "Deleting a clip should succeed")
 
 local undo_delete_result = command_manager.undo()
 assert(undo_delete_result.success, "Undo after deleting a clip should succeed")

@@ -10,7 +10,6 @@ local database = require("core.database")
 local command_manager = require("core.command_manager")
 local import_schema = require("import_schema")
 local Command = require("command")
-local json = require("dkjson")
 
 local DB_PATH = "/tmp/jve/test_batch_move_clip_undo.db"
 os.remove(DB_PATH)
@@ -66,18 +65,22 @@ end
 
 command_manager.init("seq", "proj")
 
--- Build batch payload similar to drag handler
-local command_specs = {
-    {command_type = "MoveClipToTrack", parameters = {clip_id = "c1", target_track_id = "v2"}},
-    {command_type = "MoveClipToTrack", parameters = {clip_id = "c2", target_track_id = "v2"}},
-}
+-- Execute moves in an undo group (replaces BatchCommand)
+command_manager.begin_undo_group("batch_move")
 
-local batch = Command.create("BatchCommand", "proj")
-batch:set_parameter("commands_json", json.encode(command_specs))
-batch:set_parameter("sequence_id", "seq")
+local move1 = Command.create("MoveClipToTrack", "proj")
+move1:set_parameter("clip_id", "c1")
+move1:set_parameter("target_track_id", "v2")
+local exec1 = command_manager.execute(move1)
+assert(exec1 and exec1.success, "move c1 failed")
 
-local exec = command_manager.execute(batch)
-assert(exec and exec.success, "batch move execution failed")
+local move2 = Command.create("MoveClipToTrack", "proj")
+move2:set_parameter("clip_id", "c2")
+move2:set_parameter("target_track_id", "v2")
+local exec = command_manager.execute(move2)
+assert(exec and exec.success, "move c2 failed")
+
+command_manager.end_undo_group()
 
 local t1 = fetch_clip("c1")
 local t2 = fetch_clip("c2")

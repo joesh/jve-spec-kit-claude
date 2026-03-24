@@ -28,7 +28,7 @@ local M = {}
 -- tests that expect core.command_implementations.register_commands to populate
 -- executor/undoer tables.
 local command_modules = {
-    "add_clips_to_sequence", "add_track", "batch_command", "batch_ripple_edit",
+    "add_clips_to_sequence", "add_track", "batch_ripple_edit",
     "create_project", "create_sequence", "cut", "delete_bin", "delete_clip",
     "delete_master_clip", "delete_sequence", "deselect_all", "duplicate_master_clip",
     "edit_history", "go_to_end", "go_to_next_edit", "go_to_prev_edit", "go_to_start",

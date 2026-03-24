@@ -6,8 +6,6 @@ package.path = "tests/?.lua;src/lua/?.lua;src/lua/?/init.lua;" .. package.path
 
 local test_env = require("test_env")
 
-local json = require("dkjson")
-
 _G.timeline = {
     get_dimensions = function() return 1000, 1000 end
 }
@@ -55,17 +53,13 @@ local drag_state = {
 
 drag_handler.handle_release(view, drag_state, {})
 
-assert(#executed == 1, "Expected BatchCommand to be executed")
-local batch = executed[1]
-assert(batch.type == "BatchCommand", "Expected BatchCommand, got " .. tostring(batch.type))
-local specs = json.decode(batch:get_parameter("commands_json"))
-assert(#specs == 2, "Expected two move commands in batch")
+assert(#executed == 2, "Expected 2 MoveClipToTrack commands")
 local seen = {}
-for _, spec in ipairs(specs) do
-    assert(spec.command_type == "MoveClipToTrack", "Expected MoveClipToTrack in batch")
-    assert(spec.parameters.target_track_id == "v2", "Target track must be v2")
-    seen[spec.parameters.clip_id] = true
+for _, cmd in ipairs(executed) do
+    assert(cmd.type == "MoveClipToTrack", "Expected MoveClipToTrack, got " .. tostring(cmd.type))
+    assert(cmd.params.target_track_id == "v2", "Target track must be v2")
+    seen[cmd.params.clip_id] = true
 end
 assert(seen["c1"] and seen["c2"], "Both clips should be moved")
 
-print("✅ Multi-clip cross-track drag emits MoveClipToTrack BatchCommand")
+print("✅ Multi-clip cross-track drag emits MoveClipToTrack commands")

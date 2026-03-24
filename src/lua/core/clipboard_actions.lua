@@ -24,7 +24,7 @@ local database = require("core.database")
 local Command = require("command")
 local uuid = require("uuid")
 local Clip = require("models.clip")
-local json = require("dkjson")
+
 
 local project_browser = nil
 do
@@ -73,7 +73,7 @@ local function load_clip_properties(clip_id)
 end
 
 local function resolve_clip_entry(entry)
-    if type(entry) == "table" and entry.start_value and entry.track_id then
+    if type(entry) == "table" and entry.timeline_start and entry.track_id then
         return entry
     end
     if type(entry) == "table" and entry.id and timeline_state.get_clip_by_id then
@@ -334,8 +334,8 @@ local function copy_browser_selection()
                         source_out = assert(clip.source_out,
                             "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing source_out"),
                         master_clip_id = clip.master_clip_id,
-                        start_value = assert(clip.start_value,
-                            "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing start_value"),
+                        timeline_start = assert(clip.timeline_start,
+                            "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing timeline_start"),
                         enabled = clip.enabled,
                         offline = clip.offline,
                         project_id = assert(clip.project_id or entry.project_id,
@@ -390,44 +390,35 @@ local function paste_browser(payload)
     local project_id = assert(payload.project_id, "clipboard_actions.paste_browser: payload missing project_id")
     local target_bin_override = resolve_target_bin(nil)
 
-    local specs = {}
+    local pasted = 0
     for _, item in ipairs(items) do
         if item.snapshot and item.snapshot.media_id then
-            local params = {
+            local result = command_manager.execute("DuplicateMasterClip", {
                 project_id = project_id,
                 clip_snapshot = item.snapshot,
                 bin_id = target_bin_override or item.bin_id,
                 new_clip_id = uuid.generate(),
                 name = item.duplicate_name,
-                copied_properties = item.copied_properties
-            }
-            specs[#specs + 1] = {
-                command_type = "DuplicateMasterClip",
-                parameters = params
-            }
+                copied_properties = item.copied_properties,
+            })
+            if result.success then
+                pasted = pasted + 1
+            else
+                log.error("paste_browser: DuplicateMasterClip failed: %s",
+                    result.error_message or "unknown")
+            end
         end
     end
 
-    if #specs == 0 then
+    if pasted == 0 then
         return false, "Clipboard snapshot missing media references"
-    end
-
-    local commands_json = json.encode(specs)
-    local result = command_manager.execute("BatchCommand", {
-        commands_json = commands_json,
-        project_id = project_id,
-    })
-
-    if not result or not result.success then
-        local message = (result and result.error_message) or "Paste failed"
-        return false, message
     end
 
     if project_browser and project_browser.refresh then
         project_browser.refresh()
     end
 
-    log.event("Pasted %d browser clip(s)", #specs)
+    log.event("Pasted %d browser clip(s)", pasted)
     return true
 end
 

@@ -2,7 +2,6 @@
 
 require('test_env')
 
-local dkjson = require('dkjson')
 local database = require("core.database")
 local command_manager = require("core.command_manager")
 local Command = require("command")
@@ -139,25 +138,19 @@ local function reset_clips()
 end
 
 local function execute_batch_split(split_value_ms, clip_ids)
-    local json = dkjson
-    local specs = {}
     -- Convert MS to Frames (approx 30fps)
     local frames = math.floor(split_value_ms * 30.0 / 1000.0 + 0.5)
-    
-    for _, clip in ipairs(clip_ids) do
-        table.insert(specs, {
-            command_type = "SplitClip",
-            parameters = {
-                clip_id = clip.id or clip,
-                split_value = frames  -- integer frames
-            }
-        })
-    end
 
-    local batch_cmd = Command.create("BatchCommand", "default_project")
-    batch_cmd:set_parameter("commands_json", json.encode(specs))
-    local ok = command_manager.execute(batch_cmd)
-    assert(ok.success, ok.error_message or "Batch split failed")
+    command_manager.begin_undo_group("split")
+    for _, clip in ipairs(clip_ids) do
+        local cmd = Command.create("SplitClip", "default_project")
+        cmd:set_parameter("clip_id", clip.id or clip)
+        cmd:set_parameter("split_value", frames)
+        cmd:set_parameter("sequence_id", "default_sequence")
+        local ok = command_manager.execute(cmd)
+        assert(ok.success, ok.error_message or "SplitClip failed")
+    end
+    command_manager.end_undo_group()
 end
 
 print("=== Blade Command Tests ===\n")

@@ -53,7 +53,9 @@ end
 
 local function create_window()
     local window = qt_constants.WIDGET.CREATE_MAIN_WINDOW()
-    qt_constants.PROPERTIES.SET_TITLE(window, "Edit History")
+    -- Qt::Tool floats above app windows, goes behind when switching apps
+    qt_constants.WIDGET.SET_WINDOW_FLAGS(window, 0x0000000B)  -- Qt::Tool
+    qt_constants.PROPERTIES.SET_TITLE(window, "History")
 
     -- Restore saved geometry or use defaults
     local project_id = db_module.get_current_project_id()
@@ -99,36 +101,28 @@ local function clear_tree()
     window_state.entry_by_item_id = {}
 end
 
-local function format_seq(value)
-    if value == nil then
-        return ""
-    end
-    return tostring(value)
-end
-
 local function refresh_tree()
     if not window_state.tree or not window_state.command_manager then
         return
     end
 
     local command_manager = window_state.command_manager
-    local ok, entries_or_err = pcall(command_manager.list_history_entries, command_manager)
+    local ok, entries_or_err, visible_current = pcall(command_manager.list_history_entries, command_manager)
     if not ok then
         log.error("Failed to load history: %s", tostring(entries_or_err))
         return
     end
 
     local entries = entries_or_err or {}
-    local current = command_manager.get_current_sequence_number and command_manager.get_current_sequence_number() or nil
-    local current_number = current or 0
+    local current_number = visible_current or 0
 
     clear_tree()
 
-    for _, entry in ipairs(entries) do
+    for ordinal, entry in ipairs(entries) do
         local seq = entry.sequence_number or 0
         local marker = (seq == current_number) and "▶" or ""
         local action_label = entry.label or command_labels.label_for_type(entry.command_type or "")
-        local item_id = qt_constants.CONTROL.ADD_TREE_ITEM(window_state.tree, {marker, format_seq(seq), action_label})
+        local item_id = qt_constants.CONTROL.ADD_TREE_ITEM(window_state.tree, {marker, tostring(ordinal), action_label})
         if item_id and item_id ~= -1 then
             qt_constants.CONTROL.SET_TREE_ITEM_DATA(window_state.tree, item_id, "sequence_number", tostring(seq))
             window_state.item_ids_by_sequence[seq] = item_id
@@ -153,10 +147,10 @@ local function jump_to_item(item_id)
     end
 
     local entry = window_state.entry_by_item_id[item_id]
-    local seq = entry and entry.sequence_number or nil
-    if not seq then
-        return
-    end
+    if not entry then return end
+    -- For group representatives, jump to the last member (the actual cursor position)
+    local seq = entry.group_last or entry.sequence_number
+    if not seq then return end
 
     local ok, success, err = pcall(window_state.command_manager.jump_to_sequence_number, window_state.command_manager, seq)
     if not ok then
@@ -230,9 +224,6 @@ function M.show(command_manager, parent_window)
 
     window_state.command_manager = command_manager
 
-    if qt_constants.WIDGET and qt_constants.WIDGET.SET_PARENT then
-        qt_constants.WIDGET.SET_PARENT(window_state.window, nil)
-    end
 
     if window_state.listener_token and command_manager.remove_listener then
         command_manager.remove_listener(window_state.listener_token)

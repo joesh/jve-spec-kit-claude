@@ -4,10 +4,11 @@
 -- (3) batch delete selected clips, (4) ripple delete selected gaps.
 -- Named param: ripple=true triggers ripple delete.
 --
--- Non-undoable wrapper — delegates to BatchCommand/RippleDeleteSelection/RippleDelete.
+-- Non-undoable wrapper — delegates to DeleteClip/RippleDeleteSelection/RippleDelete.
 --
 -- @file delete_selection.lua
 local M = {}
+local log = require("core.logger").for_area("commands")
 
 local SPEC = {
     undoable = false,
@@ -71,37 +72,39 @@ function M.register(executors, undoers, db)
             end
         end
 
-        -- Batch delete selected clips
+        -- Delete selected clips
         if selected_clips and #selected_clips > 0 then
-            local json = require("dkjson")
             local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
             local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
             assert(project_id and project_id ~= "", "DeleteSelection: missing active project_id")
 
-            local command_specs = {}
+            -- Snapshot IDs before the loop — apply_mutations modifies the
+            -- live selected_clips array as each child deletes.
+            local clip_ids_to_delete = {}
             for _, clip in ipairs(selected_clips) do
-                command_specs[#command_specs + 1] = {
-                    command_type = "DeleteClip",
-                    parameters = { clip_id = clip.id }
-                }
+                clip_ids_to_delete[#clip_ids_to_delete + 1] = clip.id
             end
 
-            local batch_params = {
-                project_id = project_id,
-                commands_json = json.encode(command_specs),
-            }
-            if active_sequence_id and active_sequence_id ~= "" then
-                batch_params.sequence_id = active_sequence_id
+            local deleted = 0
+            for _, clip_id in ipairs(clip_ids_to_delete) do
+                local result = command_manager.execute("DeleteClip", {
+                    clip_id = clip_id,
+                    project_id = project_id,
+                    sequence_id = active_sequence_id,
+                })
+                if result.success then
+                    deleted = deleted + 1
+                else
+                    log.error("DeleteSelection: DeleteClip failed for %s: %s",
+                        clip_id, result.error_message or "unknown")
+                end
             end
 
-            local result = command_manager.execute("BatchCommand", batch_params)
-            if result.success then
+            if deleted > 0 then
                 if timeline_state.set_selection then
                     timeline_state.set_selection({})
                 end
-                print(string.format("Deleted %d clips (single undo)", #selected_clips))
-            else
-                print(string.format("Failed to delete clips: %s", result.error_message or "unknown error"))
+                log.event("Deleted %d clips (single undo)", deleted)
             end
             return true
         end

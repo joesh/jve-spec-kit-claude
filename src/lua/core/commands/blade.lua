@@ -2,23 +2,24 @@
 --
 -- If clips are selected, only splits selected clips intersecting the playhead.
 -- Otherwise splits all clips at the playhead.
--- Creates a BatchCommand of SplitClip sub-commands.
+-- Executes SplitClip sub-commands via nested command_manager.execute().
 --
 -- @file blade.lua
 local M = {}
+local log = require("core.logger").for_area("commands")
 
 local SPEC = {
-    undoable = false,  -- delegates to BatchCommand which IS undoable
+    undoable = false,
     args = {
         project_id = { required = true },
         sequence_id = {},
     }
 }
 
-function M.register(executors, undoers, db)
+function M.register(executors)
     local function executor(command)
         local timeline_state = require('ui.timeline.timeline_state')
-        local json = require("dkjson")
+        local command_manager = require("core.command_manager")
 
         local selected_clips = timeline_state.get_selected_clips()
         local playhead_value = timeline_state.get_playhead_position()
@@ -32,37 +33,10 @@ function M.register(executors, undoers, db)
 
         if #target_clips == 0 then
             if selected_clips and #selected_clips > 0 then
-                print("Blade: Playhead does not intersect selected clips")
+                log.event("Blade: playhead does not intersect selected clips")
             else
-                print("Blade: No clips under playhead")
+                log.event("Blade: no clips under playhead")
             end
-            return true
-        end
-
-        local specs = {}
-        for _, clip in ipairs(target_clips) do
-            local start_value = clip.timeline_start or clip.start_value
-            local duration_value = clip.duration or clip.duration_value
-            assert(type(start_value) == "number", "Blade: clip timeline_start must be integer")
-            assert(type(duration_value) == "number", "Blade: clip duration must be integer")
-            assert(type(playhead_value) == "number", "Blade: playhead must be integer")
-
-            if duration_value > 0 then
-                local end_time = start_value + duration_value
-                if playhead_value > start_value and playhead_value < end_time then
-                    specs[#specs + 1] = {
-                        command_type = "SplitClip",
-                        parameters = {
-                            clip_id = clip.id,
-                            split_value = playhead_value,
-                        }
-                    }
-                end
-            end
-        end
-
-        if #specs == 0 then
-            print("Blade: No valid clips to split at current playhead position")
             return true
         end
 
@@ -70,21 +44,36 @@ function M.register(executors, undoers, db)
         local project_id = args.project_id
         assert(project_id and project_id ~= "", "Blade: missing active project_id")
 
-        local batch_params = {
-            project_id = project_id,
-            commands_json = json.encode(specs),
-        }
-        local sequence_id = args.sequence_id
-        if sequence_id and sequence_id ~= "" then
-            batch_params.sequence_id = sequence_id
+        local split_count = 0
+        for _, clip in ipairs(target_clips) do
+            local start_value = clip.timeline_start
+            local duration_value = clip.duration
+            assert(type(start_value) == "number", "Blade: clip timeline_start must be integer")
+            assert(type(duration_value) == "number", "Blade: clip duration must be integer")
+
+            if duration_value > 0 then
+                local end_time = start_value + duration_value
+                if playhead_value > start_value and playhead_value < end_time then
+                    local result = command_manager.execute("SplitClip", {
+                        clip_id = clip.id,
+                        split_value = playhead_value,
+                        project_id = project_id,
+                        sequence_id = args.sequence_id,
+                    })
+                    if result.success then
+                        split_count = split_count + 1
+                    else
+                        log.error("Blade: SplitClip failed for %s: %s",
+                            clip.id, result.error_message or "unknown")
+                    end
+                end
+            end
         end
 
-        local command_manager = require("core.command_manager")
-        local result = command_manager.execute("BatchCommand", batch_params)
-        if result.success then
-            print(string.format("Blade: Split %d clip(s) at %s", #specs, tostring(playhead_value)))
+        if split_count > 0 then
+            log.event("Blade: split %d clip(s) at %s", split_count, tostring(playhead_value))
         else
-            print(string.format("Blade: Failed to split clips: %s", result.error_message or "unknown error"))
+            log.event("Blade: no valid clips to split at current playhead position")
         end
 
         return true

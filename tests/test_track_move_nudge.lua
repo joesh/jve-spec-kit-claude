@@ -17,7 +17,6 @@ package.loaded["ui.panel_manager"] = {
     get_active_sequence_monitor = function() return nil end,
 }
 
-local dkjson = require('dkjson')
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 require('core.command_implementations')
@@ -108,31 +107,24 @@ end
 
 local original_start, original_duration = fetch_clip('clip_dest')
 
-local commands_json = dkjson.encode({
-    {
-        command_type = "MoveClipToTrack",
-        parameters = {
-            clip_id = "clip_move",
-            target_track_id = "track_v2",
-            skip_occlusion = true,
-            pending_new_start = clip_move_start + nudge_amount_frames,
-            pending_duration = clip_move_duration
-        }
-    },
-    {
-        command_type = "Nudge",
-        parameters = {
-            nudge_amount = nudge_amount_frames,
-            selected_clip_ids = {"clip_move"}
-        }
-    }
-})
+command_manager.begin_undo_group("move_nudge")
 
-local batch_cmd = Command.create("BatchCommand", "default_project")
-batch_cmd:set_parameter("commands_json", commands_json)
+local move_cmd = Command.create("MoveClipToTrack", "default_project")
+move_cmd:set_parameter("clip_id", "clip_move")
+move_cmd:set_parameter("target_track_id", "track_v2")
+move_cmd:set_parameter("skip_occlusion", true)
+move_cmd:set_parameter("pending_new_start", clip_move_start + nudge_amount_frames)
+move_cmd:set_parameter("pending_duration", clip_move_duration)
+local move_result = command_manager.execute(move_cmd)
+assert(move_result.success, "MoveClipToTrack failed: " .. tostring(move_result.error_message))
 
-local result = command_manager.execute(batch_cmd)
-assert(result.success, "BatchCommand execution failed: " .. tostring(result.error_message))
+local nudge_cmd = Command.create("Nudge", "default_project")
+nudge_cmd:set_parameter("nudge_amount", nudge_amount_frames)
+nudge_cmd:set_parameter("selected_clip_ids", {"clip_move"})
+local nudge_result = command_manager.execute(nudge_cmd)
+assert(nudge_result.success, "Nudge failed: " .. tostring(nudge_result.error_message))
+
+command_manager.end_undo_group()
 
 local new_start, new_duration = fetch_clip('clip_dest')
 

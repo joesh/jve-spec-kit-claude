@@ -18,7 +18,7 @@
 -- Handles completion of drag operations (executing commands)
 local M = {}
 local core_command_manager = require("core.command_manager")
-local json = require("dkjson")
+
 local log = require("core.logger").for_area("timeline")
 
 function M.handle_release(view, drag_state, modifiers)
@@ -211,17 +211,21 @@ function M.handle_release(view, drag_state, modifiers)
                 log.error("%s failed: %s", spec.command_type, result.error_message or "unknown")
             end
         else
-            local params = {
-                project_id = active_proj,
-                commands_json = json.encode(command_specs),
-            }
-            if active_seq and active_seq ~= "" then
-                params.sequence_id = active_seq
+            command_manager.begin_undo_group("drag_move")
+            for _, spec in ipairs(command_specs) do
+                local params = { project_id = active_proj }
+                for k, v in pairs(spec.parameters) do
+                    params[k] = v
+                end
+                if active_seq and not params.sequence_id then
+                    params.sequence_id = active_seq
+                end
+                local result = command_manager.execute(spec.command_type, params)
+                if not result.success then
+                    log.error("%s failed: %s", spec.command_type, result.error_message or "unknown")
+                end
             end
-            local result = command_manager.execute("BatchCommand", params)
-            if not result.success then
-                log.error("Batch drag failed: %s", result.error_message or "unknown")
-            end
+            command_manager.end_undo_group()
         end
 
     elseif drag_type == "edges" then

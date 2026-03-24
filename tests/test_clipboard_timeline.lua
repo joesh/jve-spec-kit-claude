@@ -18,7 +18,6 @@ local database = require("core.database")
 local command_manager = require("core.command_manager")
 local Command = require("command")
 local clipboard = require('core.clipboard')
-local json = require('dkjson')
 local timeline_state = require("ui.timeline.timeline_state")
 local focus_manager = require("ui.focus_manager")
 
@@ -122,11 +121,17 @@ local function get_clip_start_value(clip_id)
 end
 
 local function execute_batch(specs)
-    local batch_cmd = Command.create("BatchCommand", "default_project")
-    batch_cmd:set_parameter("commands_json", json.encode(specs))
-    batch_cmd:set_parameter("sequence_id", "default_sequence")
-    local result = command_manager.execute(batch_cmd)
-    assert(result.success, result.error_message or "BatchCommand failed")
+    command_manager.begin_undo_group("batch")
+    for _, spec in ipairs(specs) do
+        local cmd = Command.create(spec.command_type, "default_project")
+        for k, v in pairs(spec.parameters) do
+            cmd:set_parameter(k, v)
+        end
+        cmd:set_parameter("sequence_id", "default_sequence")
+        local result = command_manager.execute(cmd)
+        assert(result.success, result.error_message or (spec.command_type .. " failed"))
+    end
+    command_manager.end_undo_group()
 end
 
 ----------------------------------------------------------------------

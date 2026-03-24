@@ -30,7 +30,7 @@
   <menu name="Edit">
     <item name="Undo" command="Undo"/>
     <item name="Redo" command="Redo"/>
-    <item name="Edit History..." command="EditHistory"/>
+    <item name="History..." command="EditHistory"/>
     <separator/>
     <item name="Cut" command="Cut"/>
     <item name="Copy" command="Copy"/>

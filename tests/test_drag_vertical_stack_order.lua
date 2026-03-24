@@ -7,7 +7,6 @@ package.path = "tests/?.lua;src/lua/?.lua;src/lua/?/init.lua;" .. package.path
 
 local test_env = require("test_env")
 
-local json = require("dkjson")
 
 _G.timeline = {
     get_dimensions = function() return 1000, 1000 end
@@ -59,21 +58,19 @@ local drag_state = {
 
 drag_handler.handle_release(view, drag_state, {})
 
-assert(#executed == 1, "Expected BatchCommand execution")
-local batch = executed[1]
-assert(batch.type == "BatchCommand", "Drag should execute BatchCommand")
-local specs = json.decode(batch:get_parameter("commands_json"))
-assert(#specs == 2, "Expected two MoveClipToTrack commands")
+assert(#executed == 2, "Expected 2 MoveClipToTrack commands")
 
-local first = specs[1]
-local second = specs[2]
-assert(first.parameters.clip_id == "clip_high",
-    string.format("Clip on higher track should move first; got %s", tostring(first.parameters.clip_id)))
-assert(first.parameters.target_track_id == "v3",
-    string.format("clip_high should move to v3; got %s", tostring(first.parameters.target_track_id)))
-assert(second.parameters.clip_id == "clip_low",
-    string.format("clip_low should move second; got %s", tostring(second.parameters.clip_id)))
-assert(second.parameters.target_track_id == "v2",
-    string.format("clip_low should move into v2; got %s", tostring(second.parameters.target_track_id)))
+local first = executed[1]
+local second = executed[2]
+assert(first.type == "MoveClipToTrack", "First should be MoveClipToTrack")
+assert(second.type == "MoveClipToTrack", "Second should be MoveClipToTrack")
+assert(first.params.clip_id == "clip_high",
+    string.format("Clip on higher track should move first; got %s", tostring(first.params.clip_id)))
+assert(first.params.target_track_id == "v3",
+    string.format("clip_high should move to v3; got %s", tostring(first.params.target_track_id)))
+assert(second.params.clip_id == "clip_low",
+    string.format("clip_low should move second; got %s", tostring(second.params.clip_id)))
+assert(second.params.target_track_id == "v2",
+    string.format("clip_low should move into v2; got %s", tostring(second.params.target_track_id)))
 
 print("✅ Vertical stack drag orders MoveClipToTrack commands by track index")

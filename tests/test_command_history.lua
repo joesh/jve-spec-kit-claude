@@ -279,7 +279,7 @@ do
     command_history.init(db, sequence_id, project_id)
 
     local gid = command_history.begin_undo_group("Auto group")
-    check("auto id starts with explicit_group_", gid:find("^explicit_group_") ~= nil)
+    check("auto id is integer", type(gid) == "number")
 
     local gid2 = command_history.begin_undo_group("Second auto")
     check("second auto id different", gid2 ~= gid)

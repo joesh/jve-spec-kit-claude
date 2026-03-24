@@ -29,10 +29,10 @@ local SPEC = {
                 media_id = { required = true, kind = "string" },
                 fps_numerator = { required = true, kind = "number" },
                 fps_denominator = { required = true, kind = "number" },
-                start_value = { kind = "number", default = 0 },
-                duration_value = { kind = "number" },
-                source_in_value = { kind = "number", default = 0 },
-                source_out_value = { kind = "number" },
+                timeline_start = { kind = "number", default = 0 },
+                duration = { kind = "number" },
+                source_in = { kind = "number", default = 0 },
+                source_out = { kind = "number" },
             },
         },
         copied_properties = { kind = "table" },
@@ -52,14 +52,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local clip_name = args.name or args.clip_snapshot.name or "Master Clip Copy"
 
         -- All coordinates are integer frames
-        local timeline_start = args.clip_snapshot.start_value or 0
-        local source_in_value = args.clip_snapshot.source_in_value or 0
-        local source_out_value = args.clip_snapshot.source_out_value
-        local duration_value = args.clip_snapshot.duration_value
-        if duration_value == nil and source_out_value ~= nil then
-            duration_value = source_out_value - source_in_value
+        local timeline_start = args.clip_snapshot.timeline_start or 0
+        local source_in = args.clip_snapshot.source_in or 0
+        local source_out = args.clip_snapshot.source_out
+        local duration = args.clip_snapshot.duration
+        if duration == nil and source_out ~= nil then
+            duration = source_out - source_in
         end
-        assert(duration_value, "DuplicateMasterClip: missing duration_value (no duration_value and no source_out_value)")
+        assert(duration, "DuplicateMasterClip: missing duration (no duration and no source_out)")
 
         local clip_opts = {
             id = new_clip_id,
@@ -67,9 +67,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             clip_kind = "master",
             master_clip_id = args.clip_snapshot.master_clip_id,
             timeline_start = timeline_start,
-            duration = duration_value,
-            source_in = source_in_value,
-            source_out = source_out_value or (source_in_value + duration_value),
+            duration = duration,
+            source_in = source_in,
+            source_out = source_out or (source_in + duration),
             fps_numerator = args.clip_snapshot.fps_numerator,
             fps_denominator = args.clip_snapshot.fps_denominator,
             enabled = args.clip_snapshot.enabled ~= false,
