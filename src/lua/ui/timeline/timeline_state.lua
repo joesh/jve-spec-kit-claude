@@ -222,25 +222,38 @@ M.get_sequence_frame_rate = function() return data.state.sequence_frame_rate end
 M.get_start_timecode_frame = function() return data.state.sequence_timecode_start_frame or 0 end
 M.get_video_scroll_offset = function() return data.state.video_scroll_offset or 0 end
 M.get_audio_scroll_offset = function() return data.state.audio_scroll_offset or 0 end
+-- Scroll setters: update in-memory only. DB persistence happens at save points
+-- (sequence switch-away, project close) via persist_scroll_offsets().
+-- Reason: Qt fires async scroll events (0) during widget rebuild/layout that
+-- would clobber the incoming sequence's saved offsets if persisted eagerly.
 M.set_video_scroll_offset = function(offset)
-    local val = math.floor(offset)
-    if data.state.video_scroll_offset == val then return end
-    data.state.video_scroll_offset = val
-    local seq_id = data.state.sequence_id
-    if seq_id then
-        local Sequence = require("models.sequence")
-        Sequence.update_scroll_offsets(seq_id, val, nil)
-    end
+    data.state.video_scroll_offset = math.floor(offset)
 end
 M.set_audio_scroll_offset = function(offset)
-    local val = math.floor(offset)
-    if data.state.audio_scroll_offset == val then return end
-    data.state.audio_scroll_offset = val
+    data.state.audio_scroll_offset = math.floor(offset)
+end
+
+--- Persist current scroll offsets to DB. Call at save points only.
+-- Reads the ACTUAL Qt scroll bar values (not in-memory state, which can be
+-- clobbered by async events). Falls back to in-memory if widgets unavailable.
+M.persist_scroll_offsets = function()
     local seq_id = data.state.sequence_id
-    if seq_id then
-        local Sequence = require("models.sequence")
-        Sequence.update_scroll_offsets(seq_id, nil, val)
+    if not seq_id then return end
+    -- Read from Qt widgets (ground truth) if available
+    local v_off = data.state.video_scroll_offset or 0
+    local a_off = data.state.audio_scroll_offset or 0
+    local ok, panel = pcall(require, "ui.timeline.timeline_panel")
+    if ok and panel then
+        local qt = require("core.qt_constants")
+        if panel.timeline_video_scroll and qt.CONTROL.GET_SCROLL_AREA_V_SCROLL then
+            v_off = qt.CONTROL.GET_SCROLL_AREA_V_SCROLL(panel.timeline_video_scroll) or v_off
+        end
+        if panel.timeline_audio_scroll and qt.CONTROL.GET_SCROLL_AREA_V_SCROLL then
+            a_off = qt.CONTROL.GET_SCROLL_AREA_V_SCROLL(panel.timeline_audio_scroll) or a_off
+        end
     end
+    local Sequence = require("models.sequence")
+    Sequence.update_scroll_offsets(seq_id, v_off, a_off)
 end
 M.get_video_audio_split_ratio = function() return data.state.video_audio_split_ratio or 0.5 end
 M.set_video_audio_split_ratio = function(ratio)

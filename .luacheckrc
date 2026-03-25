@@ -46,6 +46,7 @@ globals = {
     "qt_set_scroll_area_v_scroll_handler",
     "qt_hide_splitter_handle",
     "qt_set_scroll_area_anchor_bottom",
+    "qt_suspend_scroll_area_anchor",
     "qt_get_splitter_handle",
     "qt_set_scroll_position",
     "qt_set_scroll_area_scroll_handler",

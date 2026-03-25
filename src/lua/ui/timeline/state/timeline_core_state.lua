@@ -154,15 +154,13 @@ local function flush_state_to_db()
     })
     command_manager.execute(playhead_cmd)
 
-    -- Persist viewport
+    -- Persist viewport (scroll offsets handled separately by persist_scroll_offsets)
     local viewport_cmd = Command.create("SetViewport", project_id)
     viewport_cmd:set_parameters({
         project_id = project_id,
         sequence_id = sequence_id,
         viewport_start_time = data.state.viewport_start_time,
         viewport_duration = data.state.viewport_duration,
-        video_scroll_offset = data.state.video_scroll_offset,
-        audio_scroll_offset = data.state.audio_scroll_offset,
         video_audio_split_ratio = data.state.video_audio_split_ratio,
     })
     command_manager.execute(viewport_cmd)
@@ -268,8 +266,12 @@ function M.init(sequence_id, project_id)
     -- Skip persist if re-initializing the SAME sequence - our cached values may be stale
     -- (e.g., after undo deleted the sequence and redo recreated it with fresh values).
     local is_same_sequence = data.state.sequence_id == sequence_id
-    if persist_dirty and not is_same_sequence then
-        M.persist_state_to_db(true)
+    if not is_same_sequence then
+        -- Scroll offsets are persisted by load_sequence BEFORE init (while Qt
+        -- scroll areas still have correct content/range for the outgoing sequence)
+        if persist_dirty then
+            M.persist_state_to_db(true)
+        end
     end
     -- Clear dirty flag when switching or re-initializing - we're about to load fresh data
     persist_dirty = false

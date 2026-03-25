@@ -251,33 +251,41 @@ private:
     lua_State* lua_state;
 };
 
-// Event filter class to maintain bottom-anchored scrolling
+// Event filter class to maintain bottom-anchored scrolling.
+// Suspended during programmatic scroll restoration (sequence tab switch)
+// to prevent async singleShot callbacks from clobbering the restored position.
 class BottomAnchorFilter : public QObject
 {
 public:
-    BottomAnchorFilter(QScrollArea* sa) : QObject(sa), scrollArea(sa), distanceFromBottom(0) {}
+    BottomAnchorFilter(QScrollArea* sa) : QObject(sa), scrollArea(sa), distanceFromBottom(0), suspended(false) {}
+
+    void setSuspended(bool s) { suspended = s; }
+    bool isSuspended() const { return suspended; }
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override
     {
-        if (scrollArea && scrollArea->widget()) {
-            QScrollBar* vbar = scrollArea->verticalScrollBar();
-            if (vbar) {
-                if (event->type() == QEvent::Resize) {
-                    int oldMax = vbar->maximum();
-                    int oldValue = vbar->value();
-                    distanceFromBottom = oldMax - oldValue;
+        if (suspended || !scrollArea || !scrollArea->widget()) {
+            return QObject::eventFilter(obj, event);
+        }
+        QScrollBar* vbar = scrollArea->verticalScrollBar();
+        if (vbar) {
+            if (event->type() == QEvent::Resize) {
+                int oldMax = vbar->maximum();
+                int oldValue = vbar->value();
+                distanceFromBottom = oldMax - oldValue;
 
-                    QTimer::singleShot(0, [this, vbar]() {
-                        int newMax = vbar->maximum();
-                        int newValue = newMax - distanceFromBottom;
-                        vbar->setValue(qMax(0, newValue));
-                    });
-                } else if (event->type() == QEvent::Wheel || event->type() == QEvent::MouseButtonPress) {
-                    QTimer::singleShot(0, [this, vbar]() {
-                        distanceFromBottom = vbar->maximum() - vbar->value();
-                    });
-                }
+                QTimer::singleShot(0, [this, vbar]() {
+                    if (suspended) return;
+                    int newMax = vbar->maximum();
+                    int newValue = newMax - distanceFromBottom;
+                    vbar->setValue(qMax(0, newValue));
+                });
+            } else if (event->type() == QEvent::Wheel || event->type() == QEvent::MouseButtonPress) {
+                QTimer::singleShot(0, [this, vbar]() {
+                    if (suspended) return;
+                    distanceFromBottom = vbar->maximum() - vbar->value();
+                });
             }
         }
         return QObject::eventFilter(obj, event);
@@ -286,6 +294,7 @@ protected:
 private:
     QScrollArea* scrollArea;
     int distanceFromBottom;
+    bool suspended;
 };
 
 // ============================================================================
@@ -556,6 +565,22 @@ int lua_set_scroll_area_anchor_bottom(lua_State* L) {
         QScrollBar* vbar = sa->verticalScrollBar();
         if (vbar) {
             vbar->setValue(vbar->maximum());
+        }
+    }
+    return 0;
+}
+
+int lua_suspend_scroll_area_anchor(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    bool suspend = lua_toboolean(L, 2);
+    if (!sa || !sa->viewport()) return 0;
+
+    // Find the BottomAnchorFilter installed on this scroll area's viewport
+    for (QObject* child : sa->viewport()->children()) {
+        BottomAnchorFilter* filter = dynamic_cast<BottomAnchorFilter*>(child);
+        if (filter) {
+            filter->setSuspended(suspend);
+            break;
         }
     }
     return 0;

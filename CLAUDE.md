@@ -178,6 +178,7 @@ Format:
 - **fixing a failing test before being ABSOLUTELY SURE its failure is not surfacing a bug**
 - **Choosing expedience over architectural correctness** — Before every decision, ask: "Is this the architecturally correct thing to do?" If the answer is no, don't do it. Don't add workarounds, caches that mask bugs, fallback values, or "temporary" hacks. Do the right thing the first time. If unsure, ask.
 - **Lazy implementations that skip understanding** — Before modifying ANY subsystem, read 2+ working examples of the same pattern and trace the FULL execution path (execute → mutations → UI refresh → undo → mutations → UI refresh). Use the SAME mechanisms as existing code. Never write a no-op undoer or a `reload_timeline` fallback without understanding why the proper mutation path doesn't work. If you don't understand how something works, READ THE CODE — don't guess.
+- **Blaming data instead of code** — When observed data doesn't match expectations (wrong IDs, missing records, unexpected values), the code that produced or consumed that data has a bug. NEVER theorize "stale data," "previous session," "test data issue," or "user error." Trace the code path that wrote the data. The unexpected data IS the bug symptom — investigate the implementation, not the data.
 
 ## **✅ SUCCESS PATTERN**
 

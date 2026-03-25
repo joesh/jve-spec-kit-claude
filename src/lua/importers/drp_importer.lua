@@ -230,6 +230,49 @@ local function decode_hex_double(hex_str)
     return decode_hex_double_at(hex_str, 0)
 end
 
+--- Decode a big-endian IEEE 754 double from hex at a BYTE offset.
+-- UIElementsState uses BE encoding (unlike FieldsBlob which is LE).
+local function decode_hex_double_be_at(hex_str, byte_offset)
+    if not hex_str or #hex_str < byte_offset * 2 + 16 then return nil end
+    local ffi = require("ffi")
+    local bytes = ffi.new("uint8_t[8]")
+    for i = 0, 7 do
+        local hex_byte = hex_str:sub(byte_offset * 2 + i * 2 + 1, byte_offset * 2 + i * 2 + 2)
+        local byte_val = tonumber(hex_byte, 16)
+        if not byte_val then return nil end
+        bytes[7 - i] = byte_val  -- reverse for BE→LE
+    end
+    return ffi.cast("double*", bytes)[0]
+end
+
+--- Extract a named double from a UIElementsState hex blob.
+-- UIElementsState TLV format: 4B version, 4B count, then entries:
+--   4B name_byte_count, N bytes UTF-16BE name, 4B type_tag, 1B pad, value
+-- @param hex_str string: Full UIElementsState hex
+-- @param key_name string: ASCII key name (e.g. "UI_SEQUENCE_SCALE")
+-- @return number|nil: The double value, or nil if not found
+local function extract_ui_state_double(hex_str, key_name)
+    if not hex_str or hex_str == "" then return nil end
+    -- Build UTF-16 BE search pattern for the key name
+    local pattern_parts = {}
+    for i = 1, #key_name do
+        pattern_parts[#pattern_parts + 1] = string.format("00%02x", key_name:byte(i))
+    end
+    local pattern = table.concat(pattern_parts)
+    local pos = hex_str:find(pattern, 1, true)
+    if not pos then return nil end
+    -- All offsets in hex char positions (1-based Lua string indices)
+    -- After name pattern: type tag (8 hex) + pad (2 hex) + double (16 hex)
+    local type_hex_start = pos + #pattern
+    local type_hex = hex_str:sub(type_hex_start, type_hex_start + 7)
+    if type_hex ~= "00000026" then return nil end
+    -- Double value starts after type (8 hex) + pad (2 hex) = 10 hex chars
+    local double_hex_start = type_hex_start + 10
+    -- Convert to 0-based byte offset for decode function
+    local double_byte_off = (double_hex_start - 1) / 2
+    return decode_hex_double_be_at(hex_str, double_byte_off)
+end
+
 --- Decode resolution from 32-char hex string (two doubles: width, height)
 -- Example: "00000000000087400000000000e08640" = 1920×1080
 -- @param hex_str string: 32-char hex string
@@ -1329,7 +1372,7 @@ end
 -- @param timeline_id_map table: Sm2Timeline DbId → {name, seq_id} (for TimelineHandleVec)
 -- @param timeline_elem table: <Sm2Timeline> XML element
 -- @param folder_id string|nil: parent folder DbId (from Sm2MpTimelineClip)
-local function extract_timeline_metadata(metadata_map, timeline_id_map, timeline_elem, folder_id)
+local function extract_timeline_metadata(metadata_map, timeline_id_map, timeline_elem, folder_id, mp_clip_elem)
     local name_elem = find_direct_child(timeline_elem, "Name")
     local timeline_name = name_elem and get_text(name_elem) or nil
     if not timeline_name or timeline_name == "" then return end
@@ -1364,6 +1407,22 @@ local function extract_timeline_metadata(metadata_map, timeline_id_map, timeline
         start_tc_seconds = decode_hex_double(get_text(media_extents_elem))
     end
 
+    -- UIElementsState on Sm2Sequence: timeline viewport scale (pixels per frame)
+    local ui_scale = nil
+    local ui_state_elem = find_direct_child(sm2_seq, "UIElementsState")
+    if ui_state_elem then
+        ui_scale = extract_ui_state_double(get_text(ui_state_elem), "UI_SEQUENCE_SCALE")
+    end
+
+    -- CurPlayheadPosition on Sm2MpTimelineClip: playhead in frames relative to start TC
+    local cur_playhead = nil
+    if mp_clip_elem then
+        local ph_elem = find_direct_child(mp_clip_elem, "CurPlayheadPosition")
+        if ph_elem then
+            cur_playhead = tonumber(get_text(ph_elem))
+        end
+    end
+
     metadata_map[seq_id] = {
         name = timeline_name,
         fps = fps,
@@ -1371,6 +1430,8 @@ local function extract_timeline_metadata(metadata_map, timeline_id_map, timeline
         height = height,
         folder_id = folder_id,
         start_tc_seconds = start_tc_seconds,
+        ui_scale = ui_scale,
+        cur_playhead_relative = cur_playhead,
     }
 
     -- Map Sm2Timeline DbId → name (for resolving TimelineHandleVec)
@@ -1410,7 +1471,7 @@ local function build_timeline_metadata_map(tmp_dir, pump)
 
                 local nested_timeline = find_element(tc_elem, "Sm2Timeline")
                 if nested_timeline then
-                    extract_timeline_metadata(metadata_map, timeline_id_map, nested_timeline, tc_folder_id)
+                    extract_timeline_metadata(metadata_map, timeline_id_map, nested_timeline, tc_folder_id, tc_elem)
                 end
             end
 
@@ -2077,6 +2138,10 @@ function M.parse_drp_file(drp_path, progress_cb)
 
                 -- Store start timecode from MediaExtents (seconds → frames)
                 timeline.start_tc_seconds = metadata and metadata.start_tc_seconds or nil
+
+                -- Viewport data from Resolve's UI state (pixels-per-frame scale + playhead)
+                timeline.ui_scale = metadata and metadata.ui_scale or nil
+                timeline.cur_playhead_relative = metadata and metadata.cur_playhead_relative or nil
 
                 table.insert(timelines, timeline)
                 ::continue_seq::
@@ -2839,18 +2904,43 @@ function M.import_into_project(project_id, parse_result, opts)
                 timeline_data.start_tc_seconds, start_timecode_frame, fps_num, fps_den)
         end
 
-        -- STEP 3: Zoom-to-fit viewport
-        local view_start = min_start_frame or 0
-        local content_duration = max_end_frame - view_start
-        local view_duration
+        -- STEP 3: Viewport from Resolve's UI state, or zoom-to-fit fallback
+        local view_start, view_duration
+        local playhead_frame
 
-        if content_duration > 0 then
-            local margin = math.floor(content_duration * 0.05)
-            view_start = math.max(0, view_start - margin)
-            view_duration = content_duration + (margin * 2)
+        local drp_scale = timeline_data.ui_scale
+        local drp_playhead_rel = timeline_data.cur_playhead_relative
+
+        if drp_scale and drp_scale > 0 then
+            -- Resolve stores scale as pixels-per-frame. Convert to viewport duration
+            -- using an estimated panel width (exact width adapts at display time).
+            local ESTIMATED_PANEL_WIDTH = 1200
+            view_duration = math.floor(ESTIMATED_PANEL_WIDTH / drp_scale)
+
+            -- Playhead is relative to start TC in the DRP
+            playhead_frame = start_timecode_frame + (drp_playhead_rel or 0)
+
+            -- Center viewport on playhead
+            view_start = math.max(start_timecode_frame,
+                playhead_frame - math.floor(view_duration / 2))
+
+            log.event("Viewport from DRP: scale=%.4f → dur=%d, playhead=%d (rel=%s)",
+                drp_scale, view_duration, playhead_frame, tostring(drp_playhead_rel))
         else
-            local effective_fps = fps_num / fps_den
-            view_duration = math.floor(10 * effective_fps)
+            -- Fallback: zoom-to-fit content
+            view_start = min_start_frame or start_timecode_frame
+            local content_duration = max_end_frame - view_start
+
+            if content_duration > 0 then
+                local margin = math.floor(content_duration * 0.05)
+                view_start = math.max(start_timecode_frame, view_start - margin)
+                view_duration = content_duration + (margin * 2)
+            else
+                local effective_fps = fps_num / fps_den
+                view_duration = math.floor(10 * effective_fps)
+            end
+
+            playhead_frame = min_start_frame or start_timecode_frame
         end
 
         -- STEP 4: Create Sequence
@@ -2870,7 +2960,7 @@ function M.import_into_project(project_id, parse_result, opts)
                 start_timecode_frame = start_timecode_frame,
                 view_start_frame = view_start,
                 view_duration_frames = view_duration,
-                playhead_frame = min_start_frame or 0,
+                playhead_frame = playhead_frame,
             }
         )
 

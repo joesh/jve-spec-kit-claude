@@ -89,8 +89,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local buffer = math.floor(content_dur / 10)
         local fit_duration = content_dur + buffer
 
-        timeline_state.set_viewport_start_time(min_start)
+        -- Duration first (recenters around playhead), then override start
         timeline_state.set_viewport_duration(fit_duration)
+        timeline_state.set_viewport_start_time(min_start)
         return true
     end
 
