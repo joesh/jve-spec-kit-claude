@@ -79,6 +79,7 @@ local BUTTON_BACKGROUND_COLOR = SCROLL_BORDER_COLOR  -- Reuse scroll border for 
 -- =============================================================================
 local DEFAULT_FONT_SIZE = "12px"
 local HEADER_FONT_SIZE = "14px"
+local TIMECODE_FONT_SIZE = "20px"
 
 -- =============================================================================
 -- DEBUG SYSTEM
@@ -133,6 +134,7 @@ ui_constants.COLORS = {
 ui_constants.FONTS = {
     DEFAULT_FONT_SIZE = DEFAULT_FONT_SIZE,
     HEADER_FONT_SIZE = HEADER_FONT_SIZE,
+    TIMECODE_FONT_SIZE = TIMECODE_FONT_SIZE,
 }
 
 -- =============================================================================

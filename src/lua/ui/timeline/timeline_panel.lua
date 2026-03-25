@@ -179,7 +179,7 @@ local function build_timecode_field_stylesheet()
     local field_text = colors.FIELD_TEXT_COLOR or "#cccccc"
     local focus_bg = colors.FIELD_FOCUS_BACKGROUND_COLOR or field_bg
     local focus_border = colors.FOCUS_BORDER_COLOR or selection_color
-    local font_size = (ui_constants.FONTS and ui_constants.FONTS.HEADER_FONT_SIZE) or "14px"
+    local font_size = (ui_constants.FONTS and ui_constants.FONTS.TIMECODE_FONT_SIZE) or "24px"
     local selection_bg = selection_color
     local selection_text = colors.WHITE_TEXT_COLOR or "#ffffff"
 
@@ -189,6 +189,8 @@ local function build_timecode_field_stylesheet()
             color: %s;
             border: 1px solid %s;
             padding: 2px 6px;
+            font-family: "Helvetica Neue";
+            font-weight: 500;
             font-size: %s;
             qproperty-alignment: AlignCenter;
             selection-background-color: %s;
