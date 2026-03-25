@@ -107,8 +107,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Write marks + playhead to master clip sequence (IS-a master clips).
-        -- set_playhead asserts frame < content_duration — surfaces data bugs
-        -- (e.g. DRP import duration mismatch) at the write boundary.
+        -- source_in/source_out are absolute TC (media_tc_origin + file offset).
+        -- Masterclip playhead/marks use the same absolute TC space — TMB
+        -- subtracts first_frame_tc at decode time.
         local master_seq = Sequence.load(target_master_id)
         if master_seq then
             master_seq:set_in(target_clip.source_in)

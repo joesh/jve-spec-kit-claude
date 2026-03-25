@@ -25,6 +25,7 @@ local database = require("core.database")
 local project_gen = require("core.project_generation")
 
 local Signals = require("core.signals")
+local timecode = require("core.timecode")
 
 local SequenceMonitor = {}
 SequenceMonitor.__index = SequenceMonitor
@@ -244,6 +245,10 @@ function SequenceMonitor:_create_widgets()
             self:_notify()
         end)
     end
+
+    -- Timecode display row: playhead TC (left) + duration (right)
+    -- Positioned between video surface and mark bar (above the scrub bar)
+    self:_create_tc_row(content_layout)
 
     -- Mark bar (ScriptableTimeline widget)
     assert(qt_constants.WIDGET.CREATE_TIMELINE,
@@ -708,11 +713,89 @@ end
 -- Internal
 --------------------------------------------------------------------------------
 
+local TC_STYLE = [[
+    QLabel {
+        background: #2b2b2b;
+        color: #cccccc;
+        padding: 2px 6px;
+        font-family: "Menlo", "Monaco", monospace;
+        font-size: 11px;
+    }
+]]
+
+function SequenceMonitor:_create_tc_row(parent_layout)
+    local row_layout = qt_constants.LAYOUT.CREATE_HBOX()
+    if qt_constants.LAYOUT.SET_MARGINS then
+        qt_constants.LAYOUT.SET_MARGINS(row_layout, 0, 0, 0, 0)
+    end
+    if qt_constants.LAYOUT.SET_SPACING then
+        qt_constants.LAYOUT.SET_SPACING(row_layout, 0)
+    end
+
+    -- Playhead TC (left-aligned)
+    self._tc_playhead_label = qt_constants.WIDGET.CREATE_LABEL("00:00:00:00")
+    qt_constants.PROPERTIES.SET_STYLE(self._tc_playhead_label, TC_STYLE)
+    if qt_constants.PROPERTIES.SET_ALIGNMENT then
+        qt_constants.PROPERTIES.SET_ALIGNMENT(
+            self._tc_playhead_label, qt_constants.PROPERTIES.ALIGN_LEFT)
+    end
+    qt_constants.LAYOUT.ADD_WIDGET(row_layout, self._tc_playhead_label)
+
+    -- Duration (right-aligned)
+    self._tc_duration_label = qt_constants.WIDGET.CREATE_LABEL("--")
+    qt_constants.PROPERTIES.SET_STYLE(self._tc_duration_label, TC_STYLE)
+    if qt_constants.PROPERTIES.SET_ALIGNMENT then
+        qt_constants.PROPERTIES.SET_ALIGNMENT(
+            self._tc_duration_label, qt_constants.PROPERTIES.ALIGN_RIGHT)
+    end
+    qt_constants.LAYOUT.ADD_WIDGET(row_layout, self._tc_duration_label)
+
+    -- Wrap in a container widget
+    local tc_row_widget = qt_constants.WIDGET.CREATE()
+    qt_constants.LAYOUT.SET_ON_WIDGET(tc_row_widget, row_layout)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tc_row_widget, "Expanding", "Fixed")
+    qt_constants.LAYOUT.ADD_WIDGET(parent_layout, tc_row_widget)
+end
+
+function SequenceMonitor:_update_tc_display()
+    if not self._tc_playhead_label then return end
+
+    -- Playhead TC
+    if self.sequence_id and self.fps_num and self.fps_den then
+        local tc_str = timecode.format_ruler_label(self.playhead, {
+            fps_numerator = self.fps_num,
+            fps_denominator = self.fps_den,
+        })
+        qt_constants.PROPERTIES.SET_TEXT(self._tc_playhead_label, tc_str)
+    else
+        qt_constants.PROPERTIES.SET_TEXT(self._tc_playhead_label, "00:00:00:00")
+    end
+
+    -- Duration: NLE-standard measurement
+    -- Both marks: in→out. Only in: in→end. Only out: start→out. Neither: total.
+    if not self._tc_duration_label then return end
+    if self.sequence_id and self.fps_num and self.fps_den then
+        local mark_in = self:get_mark_in()
+        local mark_out = self:get_mark_out()
+        local range_start = mark_in or 0
+        local range_end = mark_out or self.total_frames
+        local dur_frames = range_end - range_start
+        local dur_str = timecode.format_ruler_label(dur_frames, {
+            fps_numerator = self.fps_num,
+            fps_denominator = self.fps_den,
+        })
+        qt_constants.PROPERTIES.SET_TEXT(self._tc_duration_label, dur_str)
+    else
+        qt_constants.PROPERTIES.SET_TEXT(self._tc_duration_label, "--")
+    end
+end
+
 function SequenceMonitor:_set_title(text)
     qt_constants.PROPERTIES.SET_TEXT(self._title_label, text)
 end
 
 function SequenceMonitor:_notify()
+    self:_update_tc_display()
     for _, fn in ipairs(self._listeners) do
         fn()
     end

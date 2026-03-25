@@ -75,6 +75,7 @@ package.loaded["core.qt_constants"] = {
     },
     LAYOUT = {
         CREATE_VBOX = function() return { _type = "vbox" } end,
+        CREATE_HBOX = function() return { _type = "hbox" } end,
         SET_SPACING = function() end,
         SET_MARGINS = function() end,
         ADD_WIDGET = function() end,
@@ -83,6 +84,9 @@ package.loaded["core.qt_constants"] = {
     },
     PROPERTIES = {
         SET_STYLE = function() end,
+        SET_ALIGNMENT = function() end,
+        ALIGN_LEFT = "AlignLeft",
+        ALIGN_RIGHT = "AlignRight",
         SET_TEXT = function(label, text)
             if label then label._text = text end
         end,
@@ -533,6 +537,78 @@ do
     Signals.emit("marks_changed", "timeline1")
     assert(view:get_mark_in() == 5, "timeline mark_in via signal, got " .. tostring(view:get_mark_in()))
     assert(view:get_mark_out() == 50, "timeline mark_out via signal, got " .. tostring(view:get_mark_out()))
+
+    view:destroy()
+    print("  ok")
+end
+
+-- ─── Test 10b: TC display shows playhead and mark duration ───
+print("\n--- tc display ---")
+do
+    local Sequence = require("models.sequence")
+    -- Reset masterclip playhead to a known value for this test
+    local seq = Sequence.load(mc_id)
+    seq.playhead_position = 50
+    seq:save()
+
+    local view = SequenceMonitor.new({ view_id = "test_tc" })
+    timer_callbacks = {}
+    view:load_sequence(mc_id)
+
+    -- TC labels exist
+    assert(view._tc_playhead_label, "playhead TC label created")
+    assert(view._tc_duration_label, "duration TC label created")
+
+    -- Playhead at frame 50 @ 24fps = 00:00:02:02
+    assert(view._tc_playhead_label._text == "00:00:02:02",
+        "playhead TC = 00:00:02:02 at frame 50 @ 24fps, got " .. tostring(view._tc_playhead_label._text))
+
+    -- No marks → duration = total (100 frames @ 24fps = 00:00:04:04)
+    assert(view._tc_duration_label._text == "00:00:04:04",
+        "no marks → total duration, got " .. tostring(view._tc_duration_label._text))
+
+    -- Set marks: in=24, out=72 → duration=48 frames = 00:00:02:00 @ 24fps
+    seq = Sequence.load(mc_id)
+    seq.mark_in = 24
+    seq.mark_out = 72
+    seq:save()
+    local Signals = package.loaded["core.signals"]
+    Signals.emit("marks_changed", mc_id)
+
+    assert(view._tc_duration_label._text == "00:00:02:00",
+        "mark duration 48 frames @ 24fps = 00:00:02:00, got " .. tostring(view._tc_duration_label._text))
+
+    -- Only mark_in=24, no out → in to end = 100-24 = 76 frames = 00:00:03:04
+    seq = Sequence.load(mc_id)
+    seq.mark_in = 24
+    seq.mark_out = nil
+    seq:save()
+    Signals.emit("marks_changed", mc_id)
+    assert(view._tc_duration_label._text == "00:00:03:04",
+        "in-only → in to end = 76 frames, got " .. tostring(view._tc_duration_label._text))
+
+    -- Only mark_out=72, no in → start to out = 72 frames = 00:00:03:00
+    seq = Sequence.load(mc_id)
+    seq.mark_in = nil
+    seq.mark_out = 72
+    seq:save()
+    Signals.emit("marks_changed", mc_id)
+    assert(view._tc_duration_label._text == "00:00:03:00",
+        "out-only → start to out = 72 frames, got " .. tostring(view._tc_duration_label._text))
+
+    -- Seek to frame 73 → 00:00:03:01
+    view:seek_to_frame(73)
+    assert(view._tc_playhead_label._text == "00:00:03:01",
+        "playhead TC after seek to 73 = 00:00:03:01, got " .. tostring(view._tc_playhead_label._text))
+
+    -- Clear marks → back to total duration
+    seq = Sequence.load(mc_id)
+    seq.mark_in = nil
+    seq.mark_out = nil
+    seq:save()
+    Signals.emit("marks_changed", mc_id)
+    assert(view._tc_duration_label._text == "00:00:04:04",
+        "cleared marks → total duration, got " .. tostring(view._tc_duration_label._text))
 
     view:destroy()
     print("  ok")

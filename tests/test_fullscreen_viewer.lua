@@ -57,6 +57,7 @@ local mock_qt_constants = {
     },
     LAYOUT = {
         CREATE_VBOX = function() return mock_layout end,
+        CREATE_HBOX = function() return { _type = "hbox" } end,
         SET_MARGINS = function() end,
         SET_SPACING = function() end,
         ADD_WIDGET = function() end,
@@ -73,6 +74,9 @@ local mock_qt_constants = {
         SET_STYLE = function() end,
         SET_TEXT = function() end,
         SET_GEOMETRY = function() end,
+        SET_ALIGNMENT = function() end,
+        ALIGN_LEFT = "AlignLeft",
+        ALIGN_RIGHT = "AlignRight",
     },
     GEOMETRY = {
         SET_SIZE_POLICY = function() end,
