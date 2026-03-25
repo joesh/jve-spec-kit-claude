@@ -411,8 +411,11 @@ public:
     PanelFocusFilter(lua_State* L_ptr, const std::string& handler)
         : QObject(QCoreApplication::instance()), lua_state(L_ptr), handler_name(handler) {}
 
-    void add_panel_widget(QWidget* w) {
-        if (w) panel_widgets.push_back(w);
+    void add_panel_widget(QWidget* w, const std::string& panel_id) {
+        if (w) {
+            panel_widgets.push_back(w);
+            panel_ids.push_back(panel_id);
+        }
     }
 
 protected:
@@ -426,11 +429,11 @@ protected:
         // Walk up parent chain to find a registered panel container
         QWidget* w = clicked;
         while (w) {
-            for (auto* panel : panel_widgets) {
-                if (w == panel) {
+            for (size_t i = 0; i < panel_widgets.size(); ++i) {
+                if (w == panel_widgets[i]) {
                     lua_getglobal(lua_state, handler_name.c_str());
                     if (lua_isfunction(lua_state, -1)) {
-                        lua_push_widget(lua_state, panel);
+                        lua_pushstring(lua_state, panel_ids[i].c_str());
                         if (lua_pcall(lua_state, 1, 0, 0) != LUA_OK) {
                             handle_lua_callback_error(lua_state);
                         }
@@ -449,6 +452,7 @@ private:
     lua_State* lua_state;
     std::string handler_name;
     std::vector<QWidget*> panel_widgets;
+    std::vector<std::string> panel_ids;
 };
 
 static PanelFocusFilter* g_panel_focus_filter = nullptr;
@@ -464,11 +468,12 @@ int lua_install_panel_focus_filter(lua_State* L) {
     return 0;
 }
 
-// Register a panel widget with the global focus filter: qt_register_panel_focus_widget(widget)
+// Register a panel widget with the global focus filter: qt_register_panel_focus_widget(widget, panel_id)
 int lua_register_panel_focus_widget(lua_State* L) {
     QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
-    if (!widget || !g_panel_focus_filter) return 0;
-    g_panel_focus_filter->add_panel_widget(widget);
+    const char* panel_id = luaL_checkstring(L, 2);
+    if (!widget || !panel_id || !g_panel_focus_filter) return 0;
+    g_panel_focus_filter->add_panel_widget(widget, panel_id);
     return 0;
 }
 

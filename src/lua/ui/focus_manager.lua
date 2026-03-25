@@ -37,9 +37,6 @@ local COLORS = {
 
 local BORDER_WIDTH = 2
 
--- Widget → panel_id reverse lookup for click-to-focus
-local widget_to_panel_id = {}
-
 local function sanitize_panel_id(panel_id)
     return tostring(panel_id or ""):gsub("[^%w_]", "_")
 end
@@ -78,9 +75,9 @@ function M.install_click_to_focus()
     if not _G.qt_install_panel_focus_filter then return end
 
     -- Global handler: C++ calls this with the panel widget on any click
-    _G._panel_click_focus_handler = function(panel_widget)
-        local panel_id = widget_to_panel_id[panel_widget]
-        if panel_id then
+    -- C++ passes panel_id string directly (avoids userdata identity mismatch)
+    _G._panel_click_focus_handler = function(panel_id)
+        if panel_id and registered_panels[panel_id] then
             M.set_focused_panel(panel_id)
         end
     end
@@ -145,9 +142,8 @@ function M.register_panel(panel_id, widget, header_widget, panel_name, options)
     end
 
     -- Register with global click-to-focus filter (catches clicks on any child)
-    widget_to_panel_id[widget] = panel_id
     if _G.qt_register_panel_focus_widget then
-        pcall(_G.qt_register_panel_focus_widget, widget)
+        pcall(_G.qt_register_panel_focus_widget, widget, panel_id)
     end
 
     log.detail("Focus tracking registered for panel: %s", panel_name or panel_id)
