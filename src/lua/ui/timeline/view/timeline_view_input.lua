@@ -463,22 +463,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             return
         end
 
-        -- Gap Selection
-        track_id = track_id or view.get_track_id_at_y(y, height)
-        if track_id then
-            local time = state.pixel_to_time(x, width)
-            local gap = find_gap_at_time(view, track_id, time)
-            if gap then
-                view.pending_gap_click = {
-                    initial_gap = gap,
-                    command_modifier = modifiers and modifiers.command or false
-                }
-                -- Gap click pending - don't fall through to playhead
-                return
-            end
-        end
-
-        -- Playhead (lowest priority - only if no edge, clip, or gap was clicked)
+        -- Playhead drag (before gap/empty check — playhead is always grabbable)
         local playhead_value = state.get_playhead_position()
         local playhead_x = state.time_to_pixel(playhead_value, width)
         if math.abs(x - playhead_x) < 5 then
@@ -492,16 +477,22 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             return
         end
 
-        -- Empty space drag (Rubber band)
-        if not (modifiers and modifiers.command) then
-            command_manager.execute("DeselectAll", {
-                project_id = state.get_project_id(),
-                sequence_id = state.get_sequence_id(),
-            })
+        -- Gap or empty space: prepare potential rubber band.
+        -- On release without drag → gap select (if gap) or deselect all.
+        -- On drag past threshold → rubber band selection.
+        track_id = track_id or view.get_track_id_at_y(y, height)
+        local gap = nil
+        if track_id then
+            local time = state.pixel_to_time(x, width)
+            gap = find_gap_at_time(view, track_id, time)
         end
-        if view.on_drag_start then
-            view.panel_drag_move, view.panel_drag_end = view.on_drag_start(view.widget, x, y, modifiers)
-        end
+        view.potential_drag = {
+            type = "rubber_band",
+            start_x = x,
+            start_y = y,
+            gap = gap,
+            modifiers = modifiers,
+        }
 
     elseif event_type == "move" then
         if view.potential_drag then
@@ -509,6 +500,28 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             local dy = math.abs(y - view.potential_drag.start_y)
             if dx >= DRAG_THRESHOLD or dy >= DRAG_THRESHOLD then
                 view.pending_gap_click = nil
+
+                -- Rubber band: deselect and start panel drag
+                if view.potential_drag.type == "rubber_band" then
+                    if not (view.potential_drag.modifiers and view.potential_drag.modifiers.command) then
+                        command_manager.execute("DeselectAll", {
+                            project_id = state.get_project_id(),
+                            sequence_id = state.get_sequence_id(),
+                        })
+                    end
+                    if view.on_drag_start then
+                        view.panel_drag_move, view.panel_drag_end = view.on_drag_start(
+                            view.widget, view.potential_drag.start_x, view.potential_drag.start_y,
+                            view.potential_drag.modifiers)
+                    end
+                    -- Continue the drag immediately with current position
+                    if view.panel_drag_move then
+                        view.panel_drag_move(view.widget, x, y)
+                    end
+                    view.potential_drag = nil
+                    return
+                end
+
                 view.drag_state = {
                     type = view.potential_drag.type,
                     start_x = view.potential_drag.start_x,
@@ -661,6 +674,30 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         end
 
     elseif event_type == "release" then
+        -- Click (no drag) on gap or empty space
+        if view.potential_drag and view.potential_drag.type == "rubber_band" then
+            local pd = view.potential_drag
+            if pd.gap then
+                -- Click on gap without dragging → select gap
+                command_manager.execute("SelectGaps", {
+                    project_id = state.get_project_id(),
+                    sequence_id = state.get_sequence_id(),
+                    target_gaps = { pd.gap },
+                    modifiers = { command = pd.modifiers and pd.modifiers.command or false },
+                })
+            else
+                -- Click on empty space without dragging → deselect
+                if not (pd.modifiers and pd.modifiers.command) then
+                    command_manager.execute("DeselectAll", {
+                        project_id = state.get_project_id(),
+                        sequence_id = state.get_sequence_id(),
+                    })
+                end
+            end
+            view.potential_drag = nil
+            view.render()
+            return
+        end
         if view.potential_drag then view.potential_drag = nil end
         if view.drag_state then
             local drag = view.drag_state
@@ -680,20 +717,8 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             view.panel_drag_move = nil; view.panel_drag_end = nil
         end
 
-        if view.pending_gap_click then
-            local gap = view.pending_gap_click.initial_gap
-            local tid = view.get_track_id_at_y(y, height)
-            if tid then
-                -- Execute SelectGaps command (handles Cmd→toggle)
-                command_manager.execute("SelectGaps", {
-                    project_id = state.get_project_id(),
-                    sequence_id = state.get_sequence_id(),
-                    target_gaps = { gap },
-                    modifiers = { command = view.pending_gap_click.command_modifier },
-                })
-            end
-            view.pending_gap_click = nil
-        end
+        -- Legacy pending_gap_click cleanup (gap clicks now handled via rubber_band potential_drag)
+        view.pending_gap_click = nil
         state.set_dragging_playhead(false)
         view.render()
     end
