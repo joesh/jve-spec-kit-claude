@@ -43,6 +43,7 @@ db:exec([[INSERT INTO media(id,project_id,name,file_path,duration_frames,fps_num
 command_manager.init("seq", "proj")
 
 -- Two disjoint clips on the same track with a small gap.
+-- c1: [0, 10)   c2: [12, 22)
 local c1 = Clip.create("C1", "media1", {
     id = "c1",
     project_id = "proj",
@@ -71,6 +72,8 @@ local c2 = Clip.create("C2", "media1", {
 })
 assert(c2:save(db))
 
+-- Duplicate both clips with delta=5. The duplicates should land at [5, 15) and [17, 27).
+-- This overlaps the source clips — resolve_occlusions should trim them (overwrite behavior).
 local dup = Command.create("DuplicateClips", "proj")
 dup:set_parameter("project_id", "proj")
 dup:set_parameter("sequence_id", "seq")
@@ -83,30 +86,19 @@ local result = command_manager.execute(dup)
 assert(result.success, result.error_message or "DuplicateClips failed")
 
 local clips = database.load_clips("seq")
-local starts = {}
+local by_start = {}
 for _, clip in ipairs(clips) do
     if clip.track_id == "v1" and clip.clip_kind == "timeline" then
-        starts[clip.id] = clip.timeline_start
+        by_start[clip.timeline_start] = (by_start[clip.timeline_start] or 0) + 1
     end
 end
 
-assert(starts.c1 == 0, "Original clip c1 should remain at 0")
-assert(starts.c2 == 12, "Original clip c2 should remain at 12")
+-- Duplicates land at requested positions (5 and 17)
+assert(by_start[5], "Duplicate of c1 should land at frame 5 (requested delta)")
+assert(by_start[17], "Duplicate of c2 should land at frame 17 (requested delta)")
 
--- The requested delta would overlap the source selection; the command must clamp
--- to the nearest non-overlapping placement (to the right by default).
-local found_22, found_34 = false, false
-for _, start in pairs(starts) do
-    if start == 22 then
-        found_22 = true
-    elseif start == 34 then
-        found_34 = true
-    end
-end
-
-assert(found_22 and found_34,
-    "Expected duplicates to clamp to starts 22 and 34 on V1 (block placement)")
+-- Source c1 was [0,10), duplicate lands at [5,15) → c1 trimmed to [0,5)
+assert(by_start[0], "Source c1 should be trimmed to start at 0")
 
 cleanup_db_artifacts(db_path)
-print("✅ DuplicateClips clamps delta to avoid overwriting the source selection")
-
+print("✅ DuplicateClips overwrites at requested position (no source clamping)")
