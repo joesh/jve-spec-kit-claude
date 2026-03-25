@@ -82,7 +82,7 @@ local function run_scenario(label, tmb, seek_frame, bounds)
     assert(pc, "run_scenario: CREATE failed for " .. label)
 
     PLAYBACK.SET_TMB(pc, tmb)
-    PLAYBACK.SET_BOUNDS(pc, bounds, RATE_NUM, RATE_DEN)
+    PLAYBACK.SET_BOUNDS(pc, 0, bounds, RATE_NUM, RATE_DEN)
     PLAYBACK.SET_SURFACE(pc, test_surface)
 
     -- Clip provider: clips already loaded via TMB_SET_TRACK_CLIPS in create_gap_tmb.

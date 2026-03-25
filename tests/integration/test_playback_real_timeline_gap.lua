@@ -128,7 +128,7 @@ local pc = PLAYBACK.CREATE()
 assert(pc, "PLAYBACK.CREATE failed")
 
 PLAYBACK.SET_TMB(pc, tmb)
-PLAYBACK.SET_BOUNDS(pc, BOUNDS, RATE_NUM, RATE_DEN)
+PLAYBACK.SET_BOUNDS(pc, 0, BOUNDS, RATE_NUM, RATE_DEN)
 PLAYBACK.SET_SURFACE(pc, test_surface)
 
 -- Clip provider: clips already loaded via TMB_SET_TRACK_CLIPS above.

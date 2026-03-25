@@ -45,7 +45,7 @@ print("  ✓ Created TMB")
 
 -- Set up controller
 qt_constants.PLAYBACK.SET_TMB(pc, tmb)
-qt_constants.PLAYBACK.SET_BOUNDS(pc, 1000, 24, 1)
+qt_constants.PLAYBACK.SET_BOUNDS(pc, 0, 1000, 24, 1)
 qt_constants.PLAYBACK.SET_SURFACE(pc, surface)
 print("  ✓ Configured controller (TMB, bounds, surface)")
 

@@ -613,19 +613,22 @@ void PlaybackController::SetTMB(emp::TimelineMediaBuffer* tmb) {
     m_tmb = tmb;
 }
 
-void PlaybackController::SetBounds(int64_t total_frames, int32_t fps_num, int32_t fps_den) {
+void PlaybackController::SetBounds(int64_t start_frame, int64_t end_frame, int32_t fps_num, int32_t fps_den) {
     JVE_ASSERT(fps_num > 0 && fps_den > 0,
         "PlaybackController::SetBounds: fps must be positive");
-    JVE_ASSERT(total_frames > 0,
-        "PlaybackController::SetBounds: total_frames must be positive");
+    JVE_ASSERT(end_frame > start_frame,
+        "PlaybackController::SetBounds: end_frame must exceed start_frame");
+    JVE_ASSERT(start_frame >= 0,
+        "PlaybackController::SetBounds: start_frame must be non-negative");
 
-    m_total_frames = total_frames;
+    m_start_frame = start_frame;
+    m_total_frames = end_frame;
     m_fps_num = fps_num;
     m_fps_den = fps_den;
     m_fps = static_cast<double>(fps_num) / fps_den;
 
-    JVE_LOG_EVENT(Ticks, "PlaybackController: SetBounds %lld frames @ %d/%d fps",
-                 (long long)total_frames, fps_num, fps_den);
+    JVE_LOG_EVENT(Ticks, "PlaybackController: SetBounds [%lld, %lld) @ %d/%d fps",
+                 (long long)start_frame, (long long)end_frame, fps_num, fps_den);
 }
 
 // ============================================================================
@@ -938,15 +941,15 @@ void PlaybackController::Stop() {
 }
 
 void PlaybackController::Park(int64_t frame) {
-    JVE_ASSERT(frame >= 0,
-        "PlaybackController::Park: frame must be >= 0");
-    JVE_ASSERT(m_total_frames > 0,
+    JVE_ASSERT(frame >= m_start_frame,
+        "PlaybackController::Park: frame must be >= start_frame");
+    JVE_ASSERT(m_total_frames > m_start_frame,
         "PlaybackController::Park: bounds not set (call SetBounds before Park)");
     {
-        char buf[128];
+        char buf[160];
         snprintf(buf, sizeof(buf),
-            "PlaybackController::Park: frame %lld >= total_frames %lld",
-            (long long)frame, (long long)m_total_frames);
+            "PlaybackController::Park: frame %lld out of [%lld, %lld)",
+            (long long)frame, (long long)m_start_frame, (long long)m_total_frames);
         JVE_ASSERT(frame < m_total_frames, buf);
     }
     JVE_ASSERT(m_tmb,
@@ -1344,11 +1347,11 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
 
     // Boundary detection
     int dir = m_direction.load(std::memory_order_relaxed);
-    bool hit_start = (dir < 0 && new_pos <= 0);
+    bool hit_start = (dir < 0 && new_pos <= m_start_frame);
     bool hit_end = (dir > 0 && new_pos >= m_total_frames - 1);
 
     if (hit_start || hit_end) {
-        int64_t boundary_frame = hit_start ? 0 : (m_total_frames - 1);
+        int64_t boundary_frame = hit_start ? m_start_frame : (m_total_frames - 1);
         m_position.store(boundary_frame, std::memory_order_relaxed);
         m_hit_boundary.store(true, std::memory_order_relaxed);
 
@@ -1475,7 +1478,7 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
         // Audio-master path: derive position directly from audio clock
         if (m_audio_master_position) {
             int64_t new_pos = PlaybackClock::FrameFromTimeUS(audio_time_us, m_fps_num, m_fps_den);
-            new_pos = std::max<int64_t>(0, std::min(new_pos, m_total_frames - 1));
+            new_pos = std::max(m_start_frame, std::min(new_pos, m_total_frames - 1));
 
             assertNoTeleport(current, new_pos, speed, "advancePosition(audio-master)");
 
@@ -1533,7 +1536,7 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     // Step 4: Teleport assert + clamp.
     assertNoTeleport(current, new_pos, speed, "advancePosition");
 
-    new_pos = std::max<int64_t>(0, std::min(new_pos, m_total_frames - 1));
+    new_pos = std::max(m_start_frame, std::min(new_pos, m_total_frames - 1));
 
     // Write frame to ring
     if (m_current_tick) {

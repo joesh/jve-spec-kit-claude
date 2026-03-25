@@ -249,7 +249,7 @@ public:
     void SetMirrorSurface(GPUVideoSurface* surface);  // fullscreen mirror (nullable)
     void ClearMirrorSurface();
     void SetTMB(emp::TimelineMediaBuffer* tmb);
-    void SetBounds(int64_t total_frames, int32_t fps_num, int32_t fps_den);
+    void SetBounds(int64_t start_frame, int64_t end_frame, int32_t fps_num, int32_t fps_den);
 
     // Transport (from Lua, main thread)
     void Play(int direction, float speed);
@@ -355,7 +355,8 @@ private:
     std::atomic<bool> m_hit_boundary{false};
 
     // ---- Configuration (set from main thread before Play) ----
-    int64_t m_total_frames{0};
+    int64_t m_start_frame{0};
+    int64_t m_total_frames{0};  // absolute end frame (exclusive)
     int32_t m_fps_num{24};
     int32_t m_fps_den{1};
     double m_fps{24.0};  // precomputed fps_num/fps_den
@@ -452,7 +453,7 @@ public:
 
     void SetSurface(GPUVideoSurface*) {}
     void SetTMB(emp::TimelineMediaBuffer*) {}
-    void SetBounds(int64_t, int32_t, int32_t) {}
+    void SetBounds(int64_t, int64_t, int32_t, int32_t) {}
 
     void Play(int, float) {}
     void Stop() {}

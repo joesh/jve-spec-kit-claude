@@ -51,7 +51,7 @@ local pc = PLAYBACK.CREATE()
 assert(pc, "test_seek_gap_clears_frame: CREATE failed")
 
 PLAYBACK.SET_TMB(pc, tmb)
-PLAYBACK.SET_BOUNDS(pc, 100, 24, 1)
+PLAYBACK.SET_BOUNDS(pc, 0, 100, 24, 1)
 PLAYBACK.SET_SURFACE(pc, test_surface)
 
 -- Clip provider: clips already loaded via create_single_clip_tmb above.

@@ -60,8 +60,8 @@ package.loaded["core.qt_constants"] = {
         CREATE = function() return "mock_controller" end,
         CLOSE = function(pc) track_playback("CLOSE", pc) end,
         SET_TMB = function(pc, tmb) track_playback("SET_TMB", pc, tmb) end,
-        SET_BOUNDS = function(pc, tf, fn, fd)
-            track_playback("SET_BOUNDS", pc, tf, fn, fd)
+        SET_BOUNDS = function(pc, sf, tf, fn, fd)
+            track_playback("SET_BOUNDS", pc, sf, tf, fn, fd)
         end,
         SET_SURFACE = function(pc, s) track_playback("SET_SURFACE", pc, s) end,
         SET_CLIP_PROVIDER = function(pc, fn)

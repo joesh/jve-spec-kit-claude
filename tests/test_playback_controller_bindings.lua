@@ -43,8 +43,8 @@ assert(frame == 0, "Initial frame should be 0")
 print("  ✓ Initial frame: 0")
 
 -- Test 4: Set bounds
-qt_constants.PLAYBACK.SET_BOUNDS(pc, 1000, 24, 1)
-print("  ✓ Set bounds: 1000 frames @ 24fps")
+qt_constants.PLAYBACK.SET_BOUNDS(pc, 0, 1000, 24, 1)
+print("  ✓ Set bounds: [0, 1000) @ 24fps")
 
 -- Test 5: Seek
 qt_constants.PLAYBACK.SEEK(pc, 100)

@@ -1411,13 +1411,14 @@ static int lua_playback_set_tmb(lua_State* L) {
     return 0;
 }
 
-// PLAYBACK.SET_BOUNDS(controller, total_frames, fps_num, fps_den)
+// PLAYBACK.SET_BOUNDS(controller, start_frame, end_frame, fps_num, fps_den)
 static int lua_playback_set_bounds(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
-    int64_t total_frames = static_cast<int64_t>(luaL_checkinteger(L, 2));
-    int32_t fps_num = static_cast<int32_t>(luaL_checkinteger(L, 3));
-    int32_t fps_den = static_cast<int32_t>(luaL_checkinteger(L, 4));
-    controller->SetBounds(total_frames, fps_num, fps_den);
+    int64_t start_frame = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    int64_t end_frame = static_cast<int64_t>(luaL_checkinteger(L, 3));
+    int32_t fps_num = static_cast<int32_t>(luaL_checkinteger(L, 4));
+    int32_t fps_den = static_cast<int32_t>(luaL_checkinteger(L, 5));
+    controller->SetBounds(start_frame, end_frame, fps_num, fps_den);
     return 0;
 }
 
