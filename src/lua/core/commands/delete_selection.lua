@@ -1,13 +1,15 @@
 --- DeleteSelection command: unified delete for timeline and browser.
 --
--- Priority: (1) browser delete if browser focused, (2) ripple delete if shift+clips selected,
--- (3) batch delete selected clips, (4) ripple delete selected gaps.
--- Named param: ripple=true triggers ripple delete.
+-- Priority: (1) browser delete if browser focused, (2) mark-based lift/extract if marks set,
+-- (3) ripple delete if shift+clips selected, (4) batch delete selected clips,
+-- (5) ripple delete selected gaps.
+-- Named param: ripple=true triggers ripple delete / extract.
 --
--- Non-undoable wrapper — delegates to BatchCommand/RippleDeleteSelection/RippleDelete.
+-- Non-undoable wrapper — delegates to LiftRange/ExtractRange/DeleteClip/RippleDeleteSelection/RippleDelete.
 --
 -- @file delete_selection.lua
 local M = {}
+local log = require("core.logger").for_area("commands")
 
 local SPEC = {
     undoable = false,
@@ -45,6 +47,28 @@ function M.register(executors, undoers, db)
         local undo_redo_controller = require("core.undo_redo_controller")
         undo_redo_controller.clear_toggle()
 
+        -- Mark-based lift/extract: when both marks set, operate on mark range
+        local mark_in = timeline_state.get_mark_in and timeline_state.get_mark_in()
+        local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out()
+        if mark_in and mark_out and mark_out > mark_in then
+            local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+            assert(sequence_id, "DeleteSelection: missing sequence_id for mark-based delete")
+            local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
+            assert(project_id and project_id ~= "", "DeleteSelection: missing project_id")
+
+            local cmd_name = ripple and "ExtractRange" or "LiftRange"
+            local result = command_manager.execute(cmd_name, {
+                project_id = project_id,
+                sequence_id = sequence_id,
+                mark_in = mark_in,
+                mark_out = mark_out,
+            })
+            if not result.success then
+                log.error("DeleteSelection: %s failed: %s", cmd_name, result.error_message or "unknown")
+            end
+            return true
+        end
+
         local selected_clips = timeline_state.get_selected_clips()
 
         -- Ripple delete selected clips
@@ -71,39 +95,51 @@ function M.register(executors, undoers, db)
             end
         end
 
-        -- Batch delete selected clips
+        -- Delete selected clips
         if selected_clips and #selected_clips > 0 then
-            local json = require("dkjson")
             local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
             local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
             assert(project_id and project_id ~= "", "DeleteSelection: missing active project_id")
 
-            local command_specs = {}
+            -- Snapshot IDs before the loop — apply_mutations modifies the
+            -- live selected_clips array as each child deletes.
+            local clip_ids_to_delete = {}
             for _, clip in ipairs(selected_clips) do
-                command_specs[#command_specs + 1] = {
-                    command_type = "DeleteClip",
-                    parameters = { clip_id = clip.id }
-                }
+                clip_ids_to_delete[#clip_ids_to_delete + 1] = clip.id
             end
 
-            local batch_params = {
-                project_id = project_id,
-                commands_json = json.encode(command_specs),
-            }
-            if active_sequence_id and active_sequence_id ~= "" then
-                batch_params.sequence_id = active_sequence_id
+            -- Group all DeleteClip children into one undo atom
+            command_manager.begin_undo_group("DeleteSelection")
+
+            local deleted = 0
+            local failed = 0
+            for _, clip_id in ipairs(clip_ids_to_delete) do
+                local result = command_manager.execute("DeleteClip", {
+                    clip_id = clip_id,
+                    project_id = project_id,
+                    sequence_id = active_sequence_id,
+                })
+                if result.success then
+                    deleted = deleted + 1
+                else
+                    failed = failed + 1
+                    log.error("DeleteSelection: DeleteClip failed for %s: %s",
+                        clip_id, result.error_message or "unknown")
+                end
             end
 
-            local result = command_manager.execute("BatchCommand", batch_params)
-            if result.success then
+            command_manager.end_undo_group()
+
+            if deleted > 0 then
                 if timeline_state.set_selection then
                     timeline_state.set_selection({})
                 end
-                print(string.format("Deleted %d clips (single undo)", #selected_clips))
-            else
-                print(string.format("Failed to delete clips: %s", result.error_message or "unknown error"))
+                log.event("Deleted %d clips (single undo)", deleted)
             end
-            return true
+            if failed > 0 then
+                log.warn("DeleteSelection: %d of %d delete(s) failed", failed, deleted + failed)
+            end
+            return failed == 0 or deleted > 0
         end
 
         -- Ripple delete selected gaps

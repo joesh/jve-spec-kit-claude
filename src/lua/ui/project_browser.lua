@@ -756,16 +756,8 @@ local function populate_tree()
         clip.modified_at = clip.modified_at or clip.created_at or media.modified_at or media.created_at
     end
 
-    -- Sort sequences and master clips by current sort state
-    browser_sort.sort_items(timeline_sequences,
-        sort_state.primary_col, sort_state.primary_order,
-        sort_state.secondary_col, sort_state.secondary_order)
-    browser_sort.sort_items(master_clips,
-        sort_state.primary_col, sort_state.primary_order,
-        sort_state.secondary_col, sort_state.secondary_order)
-
-    -- Sort bins by name
-    table.sort(bins, function(a, b) return (a.name or ""):lower() < (b.name or ""):lower() end)
+    -- Bins must be added in depth order (parents before children).
+    -- Final sort is done by Qt's SORT_TREE after all items are added.
 
     -- Root sequences (those NOT assigned to a bin)
     for _, sequence in ipairs(timeline_sequences) do
@@ -774,18 +766,24 @@ local function populate_tree()
         end
     end
 
-    -- Root bins
-    for _, bin in ipairs(bins) do
-        if not bin.parent_id then
-            add_bin(bin, nil)
+    -- Sort bins parent-before-child (by depth), then add to tree
+    local function bin_depth(bin)
+        local d = 0
+        local cur = bin
+        while cur and cur.parent_id do
+            d = d + 1
+            cur = bin_lookup[cur.parent_id]
         end
+        return d
     end
-
-    -- Nested bins
+    table.sort(bins, function(a, b)
+        local da, db = bin_depth(a), bin_depth(b)
+        if da ~= db then return da < db end
+        return (a.name or ""):lower() < (b.name or ""):lower()
+    end)
     for _, bin in ipairs(bins) do
-        if bin.parent_id and bin_tree_map[bin.parent_id] then
-            add_bin(bin, bin_tree_map[bin.parent_id])
-        end
+        local parent_tree = bin.parent_id and bin_tree_map[bin.parent_id] or nil
+        add_bin(bin, parent_tree)
     end
 
     -- Sequences inside bins
@@ -885,6 +883,11 @@ local function populate_tree()
             add_master_clip_item(nil, clip)
         end
     end
+
+    -- Sort the tree in-place by current sort column.
+    -- Qt handles sorting within each level (root items + within each bin).
+    qt_constants.CONTROL.SORT_TREE(M.tree, sort_state.primary_col,
+        sort_state.primary_order or "asc")
 
     local function restore_previous_selection_from_cache(previous)
         if not previous or #previous == 0 then
@@ -1112,11 +1115,15 @@ function M.create()
     ensure_command_listener()
     populate_tree()
 
-    -- Header click → sort
+    -- Header click → sort in-place (no rebuild)
     local header_click_handler = register_handler(function(col, cmd_held)
         browser_sort.handle_header_click(sort_state, col, cmd_held)
         save_sort_state()
-        populate_tree()
+        qt_constants.CONTROL.SORT_TREE(tree, sort_state.primary_col,
+            sort_state.primary_order or "asc")
+        -- Update header labels to show sort indicators
+        local labels = browser_sort.build_header_labels(BASE_HEADERS, sort_state)
+        qt_constants.CONTROL.SET_TREE_HEADERS(tree, labels)
         apply_column_widths()
     end)
     qt_constants.CONTROL.SET_TREE_HEADER_CLICK_HANDLER(tree, header_click_handler)

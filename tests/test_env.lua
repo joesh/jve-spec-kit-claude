@@ -185,6 +185,8 @@ function M.mock_command_manager()
         end,
         begin_command_event = function() end,
         end_command_event = function() end,
+        begin_undo_group = function() return 1 end,
+        end_undo_group = function() end,
         peek_command_event_origin = function() return nil end,
     }
     package.loaded["core.command_manager"] = mock

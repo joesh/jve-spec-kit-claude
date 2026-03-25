@@ -98,6 +98,9 @@ int lua_show_dialog(lua_State* L);
 // Control functions
 int lua_set_scroll_area_widget(lua_State* L);
 int lua_set_scroll_area_viewport_margins(lua_State* L);
+int lua_get_scroll_area_v_scroll(lua_State* L);
+int lua_set_scroll_area_v_scroll(lua_State* L);
+int lua_set_scroll_area_v_scroll_handler(lua_State* L);
 int lua_set_context_menu_handler(lua_State* L);
 
 // Tree widget functions
@@ -137,6 +140,8 @@ int lua_set_button_click_handler(lua_State* L);
 	int lua_set_line_edit_editing_finished_handler(lua_State* L);
 	int lua_set_global_key_handler(lua_State* L);
 	int lua_set_focus_handler(lua_State* L);
+	int lua_install_panel_focus_filter(lua_State* L);
+	int lua_register_panel_focus_widget(lua_State* L);
 	int lua_set_focus_policy(lua_State* L);
 	int lua_set_focus(lua_State* L);
 	int lua_set_geometry_change_handler(lua_State* L);

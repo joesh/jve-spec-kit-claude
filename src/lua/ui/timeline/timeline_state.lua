@@ -93,6 +93,7 @@ M.set_viewport_duration = function(duration_obj)
 end
 M.get_playhead_position = viewport.get_playhead_position
 M.set_playhead_position = viewport.set_playhead_position
+M.set_is_playing = function(playing) data.state.is_playing = playing end
 M.time_to_pixel = viewport.time_to_pixel
 M.pixel_to_time = viewport.pixel_to_time
 M.capture_viewport = function()
@@ -218,6 +219,47 @@ M.normalize_edge_selection = selection.normalize_edge_selection
 M.get_project_id = function() return data.state.project_id end
 M.get_sequence_id = function() return data.state.sequence_id end
 M.get_sequence_frame_rate = function() return data.state.sequence_frame_rate end
+M.get_start_timecode_frame = function() return data.state.sequence_timecode_start_frame or 0 end
+M.get_video_scroll_offset = function() return data.state.video_scroll_offset or 0 end
+M.get_audio_scroll_offset = function() return data.state.audio_scroll_offset or 0 end
+-- Scroll setters: update in-memory only. DB persistence happens at save points
+-- (sequence switch-away, project close) via persist_scroll_offsets().
+-- Reason: Qt fires async scroll events (0) during widget rebuild/layout that
+-- would clobber the incoming sequence's saved offsets if persisted eagerly.
+M.set_video_scroll_offset = function(offset)
+    data.state.video_scroll_offset = math.floor(offset)
+end
+M.set_audio_scroll_offset = function(offset)
+    data.state.audio_scroll_offset = math.floor(offset)
+end
+
+--- Persist current scroll offsets to DB. Call at save points only.
+-- Reads the ACTUAL Qt scroll bar values (not in-memory state, which can be
+-- clobbered by async events). Falls back to in-memory if widgets unavailable.
+M.persist_scroll_offsets = function()
+    local seq_id = data.state.sequence_id
+    if not seq_id then return end
+    -- Read from Qt widgets (ground truth) if available
+    local v_off = data.state.video_scroll_offset or 0
+    local a_off = data.state.audio_scroll_offset or 0
+    local ok, panel = pcall(require, "ui.timeline.timeline_panel")
+    if ok and panel then
+        local qt = require("core.qt_constants")
+        if panel.timeline_video_scroll and qt.CONTROL.GET_SCROLL_AREA_V_SCROLL then
+            v_off = qt.CONTROL.GET_SCROLL_AREA_V_SCROLL(panel.timeline_video_scroll) or v_off
+        end
+        if panel.timeline_audio_scroll and qt.CONTROL.GET_SCROLL_AREA_V_SCROLL then
+            a_off = qt.CONTROL.GET_SCROLL_AREA_V_SCROLL(panel.timeline_audio_scroll) or a_off
+        end
+    end
+    local Sequence = require("models.sequence")
+    Sequence.update_scroll_offsets(seq_id, v_off, a_off)
+end
+M.get_video_audio_split_ratio = function() return data.state.video_audio_split_ratio or 0.5 end
+M.set_video_audio_split_ratio = function(ratio)
+    data.state.video_audio_split_ratio = math.max(0.05, math.min(0.95, ratio))
+    core.persist_state_to_db()
+end
 M.get_sequence_fps_numerator = function()
     assert(data.state.sequence_frame_rate, "timeline_state.get_sequence_fps_numerator: sequence_frame_rate not initialized")
     return data.state.sequence_frame_rate.fps_numerator

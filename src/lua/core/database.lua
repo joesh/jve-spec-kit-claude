@@ -20,6 +20,10 @@ local M = {}
 local sqlite3 = require("core.sqlite3")
 local json = require("dkjson")
 local log = require("core.logger").for_area("database")
+
+-- Expected schema version. Projects with a different version cannot be opened.
+-- TODO: Replace this gate with a proper migration system that upgrades V5→V6, etc.
+M.SCHEMA_VERSION = 6
 local path_utils = require("core.path_utils")
 
 local BIN_NAMESPACE = "bin"
@@ -473,6 +477,28 @@ function M.set_path(path)
 
     db_connection = db
 
+    -- Schema version gate: if DB already has a schema_version table, check it
+    -- BEFORE applying schema (which would silently insert the new version).
+    local sv_check = db:prepare("SELECT MAX(version) FROM schema_version")
+    if sv_check then
+        -- Table exists (existing project) — verify version
+        if sv_check:exec() and sv_check:next() then
+            local existing_version = sv_check:value(0)
+            sv_check:finalize()
+            if existing_version and existing_version ~= M.SCHEMA_VERSION then
+                db_connection:close()
+                db_connection = nil
+                error(string.format(
+                    "Project schema V%d is incompatible with this version of JVE (requires V%d).\n\n" ..
+                    "Re-import from the original source (.drp) to create a compatible project.",
+                    existing_version, M.SCHEMA_VERSION))
+            end
+        else
+            sv_check:finalize()
+        end
+    end
+    -- If sv_check is nil, table doesn't exist yet (new DB) — schema will create it.
+
     -- Apply main application schema
     load_main_schema(db_connection)
 
@@ -637,6 +663,7 @@ function M.ensure_commands_table_columns()
             "ensure_commands_table_columns: ALTER TABLE ADD COLUMN %s failed: %s", col, tostring(err)))
     end
 end
+
 
 function M.shutdown(opts)
     if not db_connection then

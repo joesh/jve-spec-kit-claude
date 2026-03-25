@@ -107,6 +107,26 @@ function M.post_open_init(sequence, project_path)
     assert(project_path and project_path ~= "",
         "open_project.post_open_init: project_path required")
 
+    local ui_state = require("ui.ui_state")
+    local timeline_panel = ui_state.get_timeline_panel()
+    local database = require("core.database")
+    local panel_manager = require("ui.panel_manager")
+
+    -- Snapshot outgoing project's full layout before switching
+    local layout_snapshot = nil
+    if timeline_panel and timeline_panel.snapshot_layout then
+        layout_snapshot = timeline_panel.snapshot_layout()
+    end
+    local outgoing_splitter_sizes = panel_manager.get_persistable_sizes()
+    local main_window = ui_state.get_main_window()
+    local outgoing_geometry = nil
+    if main_window and qt_constants.PROPERTIES.GET_GEOMETRY then
+        local x, y, w, h = qt_constants.PROPERTIES.GET_GEOMETRY(main_window)
+        if w > 100 and h > 100 then
+            outgoing_geometry = { x = x, y = y, width = w, height = h }
+        end
+    end
+
     -- Notify all interested modules of project change (stops playback, clears caches)
     local Signals = require("core.signals")
     Signals.emit("project_changed", sequence.project_id)
@@ -116,14 +136,33 @@ function M.post_open_init(sequence, project_path)
     command_manager.init(sequence.id, sequence.project_id)
 
     -- Get UI references
-    local ui_state = require("ui.ui_state")
-    local main_window = ui_state.get_main_window()
     local project_browser = ui_state.get_project_browser()
-    local timeline_panel = ui_state.get_timeline_panel()
+
+    -- Restore layout: use new project's saved state, or inherit from outgoing
+    local new_project_id = sequence.project_id
+    local saved_splitters = database.get_project_setting(new_project_id, "splitter_sizes")
+    if not saved_splitters and outgoing_splitter_sizes then
+        -- New project has no layout → inherit from outgoing and persist
+        database.set_project_setting(new_project_id, "splitter_sizes", outgoing_splitter_sizes)
+        saved_splitters = outgoing_splitter_sizes
+    end
+    if saved_splitters then
+        panel_manager.restore_sizes(saved_splitters)
+    end
+
+    local saved_geo = database.get_project_setting(new_project_id, "window_geometry")
+    if not saved_geo and outgoing_geometry then
+        database.set_project_setting(new_project_id, "window_geometry", outgoing_geometry)
+    end
 
     -- Load timeline
     if timeline_panel and timeline_panel.load_sequence then
         timeline_panel.load_sequence(sequence.id)
+    end
+
+    -- Inherit timeline scroll/splitter from outgoing project if new has defaults
+    if layout_snapshot and timeline_panel and timeline_panel.apply_layout_if_default then
+        timeline_panel.apply_layout_if_default(layout_snapshot)
     end
 
     -- Refresh project browser (set project_id first to avoid stale cache)

@@ -24,6 +24,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true
         end
 
+        -- If source monitor is focused, zoom it instead
+        local pm = require('ui.panel_manager')
+        local active = pm.get_active_sequence_monitor()
+        if active and active.view_id == "source_monitor" then
+            active:zoom_by(0.5)
+            return true
+        end
+
         local timeline_state
         do
             local ok, mod = pcall(require, 'ui.timeline.timeline_state')
@@ -38,11 +46,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local dur = timeline_state.get_viewport_duration()
         assert(type(dur) == "number", "TimelineZoomIn: viewport_duration must be integer frames")
 
-        -- Reduce by 20%, enforce minimum 30 frames (~1 second at 30fps)
-        local new_dur = math.floor(dur * 0.8)
+        -- Reduce by 50%, enforce minimum 30 frames (~1 second at 30fps)
+        local new_dur = math.floor(dur * 0.5)
         new_dur = math.max(30, new_dur)
 
         timeline_state.set_viewport_duration(new_dur)
+
+        -- Break zoom-to-fit toggle — user is now in a manual zoom state
+        local zoom_fit = require("core.commands.timeline_zoom_fit")
+        zoom_fit.clear_toggle_state()
         return true
     end
 

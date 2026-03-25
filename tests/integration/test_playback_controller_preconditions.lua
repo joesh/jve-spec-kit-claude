@@ -61,7 +61,7 @@ do
 
     -- Proper sequence: TMB → bounds → surface → play
     PLAYBACK.SET_TMB(pc, tmb)
-    PLAYBACK.SET_BOUNDS(pc, 1000, 24, 1)
+    PLAYBACK.SET_BOUNDS(pc, 0, 1000, 24, 1)
     PLAYBACK.SET_SURFACE(pc, test_surface)
 
     -- Now Play should work
@@ -84,7 +84,7 @@ do
 
     -- Full setup required for Seek: TMB, bounds, surface
     PLAYBACK.SET_TMB(pc, tmb)
-    PLAYBACK.SET_BOUNDS(pc, 500, 30, 1)
+    PLAYBACK.SET_BOUNDS(pc, 0, 500, 30, 1)
     PLAYBACK.SET_SURFACE(pc, test_surface)
 
     -- Seek should work
@@ -107,7 +107,7 @@ do
     local pc = PLAYBACK.CREATE()
 
     -- Valid bounds
-    PLAYBACK.SET_BOUNDS(pc, 100, 24, 1)
+    PLAYBACK.SET_BOUNDS(pc, 0, 100, 24, 1)
     check(true, "SetBounds(100, 24, 1) accepted")
 
     -- Note: SetBounds with fps_num=0, fps_den=0, or total_frames=0
@@ -127,7 +127,7 @@ do
     EMP.TMB_SET_SEQUENCE_RATE(tmb, 24, 1)
 
     PLAYBACK.SET_TMB(pc, tmb)
-    PLAYBACK.SET_BOUNDS(pc, 1000, 24, 1)
+    PLAYBACK.SET_BOUNDS(pc, 0, 1000, 24, 1)
     PLAYBACK.SET_SURFACE(pc, test_surface)
 
     -- Valid: direction=1, speed=1.0
@@ -162,7 +162,7 @@ do
     EMP.TMB_SET_SEQUENCE_RATE(tmb, 24, 1)
 
     PLAYBACK.SET_TMB(pc, tmb)
-    PLAYBACK.SET_BOUNDS(pc, 100, 24, 1)
+    PLAYBACK.SET_BOUNDS(pc, 0, 100, 24, 1)
     PLAYBACK.SET_SURFACE(pc, test_surface)
 
     -- Initially not at boundary

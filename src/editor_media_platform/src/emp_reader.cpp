@@ -117,11 +117,132 @@ public:
     bool have_audio_pts = false;
     TimeUS audio_pts_us = 0;
 
+    // Resampler FIFO residual tracking. When we skip the flush between
+    // sequential decodes, some output samples stay in the FIFO and appear
+    // at the start of the NEXT call's output. We track the expected vs
+    // actual output delta so the next call can decode fewer input frames
+    // and still produce the correct total.
+    int64_t resample_owed_samples = 0;  // samples FIFO owes us from last call
+
     // Per-frame decode time from the last batch decode (play path).
     // batch_total_ms / batch_frame_count. Set on each batch decode,
     // retained across cache-hit calls so callers always see the codec's
     // true per-frame cost rather than 0 (cache hit) or N*frame (batch).
     float last_batch_ms_per_frame = -1.0f;
+
+    // ── Audio decode cache ──
+    // Chunk-based cache of decoded PCM in source coordinates.
+    // Prevents backward seeks when multiple callers (prefetch, mix thread,
+    // pump) access the same Reader at different timeline boundaries.
+    // Each caller's sequential decodes accumulate into contiguous chunks;
+    // discontinuous callers create separate chunks (no data loss).
+    // The Reader pool's use_mutex serializes access, so no internal lock.
+    struct AudioDecodeCache {
+        struct Chunk {
+            TimeUS start_us;
+            TimeUS end_us;
+            int32_t sample_rate;
+            int32_t channels;
+            std::vector<float> pcm;
+        };
+
+        std::vector<Chunk> chunks;
+        static constexpr size_t MAX_CHUNKS = 24;
+        // Contiguity tolerance: resampling 44.1→48kHz can produce chunks
+        // whose boundaries differ by ~20ms from the next request start.
+        static constexpr TimeUS CONTIGUITY_TOLERANCE_US = 50000;  // 50ms
+
+        // Find a single chunk that covers [t0, t1) within tolerance.
+        // Resampling (e.g. 44.1→48kHz) can produce chunks whose actual
+        // duration is a few ms shorter than the requested range.
+        // The extract clamps to available samples, so a small shortfall
+        // yields slightly fewer output frames (inaudible at <50ms).
+        static constexpr TimeUS COVERAGE_TOLERANCE_US = 50000;  // 50ms
+
+        std::shared_ptr<PcmChunk> find_and_extract(
+                TimeUS t0, TimeUS t1, int32_t sr, SampleFormat fmt) const {
+            for (const auto& c : chunks) {
+                if (c.sample_rate != sr) continue;
+                if (c.start_us > t0 || c.end_us + COVERAGE_TOLERANCE_US < t1) continue;
+
+                int64_t skip = ((t0 - c.start_us) * c.sample_rate) / 1000000;
+                int64_t want = ((t1 - t0) * c.sample_rate) / 1000000;
+                int64_t total = static_cast<int64_t>(c.pcm.size()) / c.channels;
+                if (skip < 0) skip = 0;
+                if (skip + want > total) want = total - skip;
+                if (want <= 0) continue;
+
+                std::vector<float> sub(static_cast<size_t>(want * c.channels));
+                std::copy(c.pcm.data() + skip * c.channels,
+                          c.pcm.data() + (skip + want) * c.channels,
+                          sub.data());
+                auto impl = std::make_unique<PcmChunkImpl>(
+                    c.sample_rate, c.channels, fmt, t0, std::move(sub));
+                return std::make_shared<PcmChunk>(std::move(impl));
+            }
+            return nullptr;
+        }
+
+        void store(TimeUS t0, TimeUS t1, const float* data, int64_t frames,
+                   int32_t sr, int32_t ch) {
+            // Try to extend an existing chunk (forward or backward contiguous)
+            for (auto& c : chunks) {
+                if (c.sample_rate != sr || c.channels != ch) continue;
+
+                if (std::abs(t0 - c.end_us) < CONTIGUITY_TOLERANCE_US) {
+                    // Forward contiguous — append
+                    c.pcm.insert(c.pcm.end(), data, data + frames * ch);
+                    c.end_us = t1;
+                    trim_chunk(c);
+                    return;
+                }
+                if (std::abs(t1 - c.start_us) < CONTIGUITY_TOLERANCE_US) {
+                    // Backward contiguous — prepend
+                    c.pcm.insert(c.pcm.begin(), data, data + frames * ch);
+                    c.start_us = t0;
+                    trim_chunk(c);
+                    return;
+                }
+                // Check if new data is fully contained within existing chunk
+                if (c.start_us <= t0 && c.end_us >= t1) {
+                    return;  // Already have this data
+                }
+            }
+
+            // No contiguous match — add as new chunk, evict oldest if full
+            while (chunks.size() >= MAX_CHUNKS) {
+                chunks.erase(chunks.begin());
+            }
+            Chunk nc;
+            nc.start_us = t0;
+            nc.end_us = t1;
+            nc.sample_rate = sr;
+            nc.channels = ch;
+            nc.pcm.assign(data, data + frames * ch);
+            chunks.push_back(std::move(nc));
+        }
+
+        void clear() { chunks.clear(); }
+
+    private:
+        // Must be larger than max playback duration so pump's requests
+        // always find data from the continuous prefetch decode.
+        // 48kHz stereo × 60s = ~23 MB — acceptable for a single Reader.
+        static constexpr TimeUS MAX_CHUNK_DURATION_US = 60000000;  // 60s per chunk
+
+        static void trim_chunk(Chunk& c) {
+            if (c.end_us - c.start_us <= MAX_CHUNK_DURATION_US) return;
+            TimeUS trim_to = c.end_us - MAX_CHUNK_DURATION_US;
+            int64_t trim_samples = ((trim_to - c.start_us) * c.sample_rate) / 1000000;
+            int64_t total = static_cast<int64_t>(c.pcm.size()) / c.channels;
+            if (trim_samples > 0 && trim_samples < total) {
+                c.pcm.erase(c.pcm.begin(), c.pcm.begin() + trim_samples * c.channels);
+                c.start_us = trim_to;
+            }
+        }
+    };
+
+    AudioDecodeCache audio_cache;
 };
 
 Reader::Reader(std::unique_ptr<ReaderImpl> impl, std::shared_ptr<MediaFile> asset)
@@ -171,8 +292,7 @@ Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset)
                     params->codec_id, params->width, params->height,
                     asset->info().path.c_str());
         } else if (impl::codec_supports_videotoolbox(params->codec_id)) {
-            EMP_LOG_WARN("*** SW DECODE FALLBACK *** codec=%d %dx%d — "
-                    "VT session likely exhausted, expect ~140ms/frame. path=%s",
+            EMP_LOG_WARN("SW decode: codec=%d %dx%d — VT unsupported for this file. path=%s",
                     params->codec_id, params->width, params->height,
                     asset->info().path.c_str());
         } else {
@@ -427,6 +547,50 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
         return Error::invalid_arg("DecodeAudioRangeUS: t1 must be > t0");
     }
 
+    // ── Decode cache: serve from chunk cache if available ──
+    // This prevents backward seeks when prefetch advances the decoder ahead
+    // of on-demand callers (mix thread, pump). All callers share the same
+    // Reader via the pool's use_mutex, so no additional locking needed.
+    {
+        // Full cache hit: entire [t0, t1) covered
+        auto cached = m_impl->audio_cache.find_and_extract(
+            t0_us, t1_us, out.sample_rate, out.fmt);
+        if (cached) {
+            return cached;
+        }
+
+        // Partial cache hit: cache covers [t0, X) where X < t1.
+        if (m_impl->have_audio_pts && m_impl->audio_pts_us > t0_us
+                && m_impl->audio_pts_us < t1_us) {
+            auto prefix = m_impl->audio_cache.find_and_extract(
+                t0_us, m_impl->audio_pts_us, out.sample_rate, out.fmt);
+            if (prefix) {
+                auto suffix_result = DecodeAudioRangeUS(
+                    m_impl->audio_pts_us, t1_us, out);
+                if (suffix_result.is_error() || !suffix_result.value()
+                        || suffix_result.value()->frames() == 0) {
+                    return prefix;
+                }
+                auto suffix = suffix_result.value();
+
+                int64_t total_frames = prefix->frames() + suffix->frames();
+                constexpr int STEREO = 2;
+                std::vector<float> combined(total_frames * STEREO);
+                std::copy(prefix->data_f32(),
+                          prefix->data_f32() + prefix->frames() * STEREO,
+                          combined.data());
+                std::copy(suffix->data_f32(),
+                          suffix->data_f32() + suffix->frames() * STEREO,
+                          combined.data() + prefix->frames() * STEREO);
+
+                auto impl = std::make_unique<PcmChunkImpl>(
+                    out.sample_rate, STEREO, out.fmt, t0_us,
+                    std::move(combined));
+                return std::make_shared<PcmChunk>(std::move(impl));
+            }
+        }
+    }
+
     MediaFileImpl* asset_impl = m_media_file->impl_ptr();
     AVFormatContext* fmt_ctx = asset_impl->fmt_ctx.get();
     AVStream* audio_stream = asset_impl->fmt_ctx.audio_stream();
@@ -456,22 +620,52 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
     std::vector<float> pcm_buffer;
     pcm_buffer.reserve(static_cast<size_t>(max_samples * RESAMPLER_OUTPUT_CHANNELS));
 
-    // Seek to start position in audio stream
-    int64_t seek_pts = impl::us_to_stream_pts(t0_us, audio_stream);
-    int ret = av_seek_frame(fmt_ctx, audio_stream_idx, seek_pts, AVSEEK_FLAG_BACKWARD);
-    if (ret < 0) {
-        // Seek failed - try from beginning
-        ret = av_seek_frame(fmt_ctx, audio_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
-        if (ret < 0) {
-            return impl::ffmpeg_error(ret, "Audio seek failed");
+    // Sequential decode optimization: skip seek if the decoder is already
+    // positioned near the start of the requested range. For compressed formats
+    // (MP3, AAC), seeking destroys the bit reservoir and is imprecise — causing
+    // gaps and artifacts. Sequential decode produces gapless audio.
+    constexpr TimeUS CONTIGUOUS_THRESHOLD_US = 100000;  // 100ms tolerance
+    bool need_seek = true;
+    if (m_impl->have_audio_pts) {
+        int64_t gap = t0_us - m_impl->audio_pts_us;
+        // Decoder is behind t0 but close enough — sequential decode will catch up
+        if (gap >= 0 && gap < CONTIGUOUS_THRESHOLD_US) {
+            need_seek = false;
+        }
+        // Decoder is slightly ahead of t0 — continue sequential decode.
+        // The output will start at audio_pts (not t0), creating a small gap
+        // at the beginning. decoded_start_us is set from the ACTUAL first
+        // frame PTS, not t0, so callers know where the data really starts.
+        if (gap < 0 && gap > -CONTIGUOUS_THRESHOLD_US) {
+            need_seek = false;
         }
     }
-    avcodec_flush_buffers(audio_codec);
-    m_impl->resample_ctx.reset();  // Clear resampler FIFO after discontinuous seek
+
+    if (need_seek) {
+        // Seek with pre-roll: start 50ms before t0 so the resampler's FIR
+        // filter is primed with real audio before we start collecting output.
+        // Without this, the first ~26ms of output are zeros (group delay).
+        constexpr TimeUS RESAMPLER_PREROLL_US = 50000;  // 50ms
+        TimeUS seek_target_us = std::max(static_cast<TimeUS>(0), t0_us - RESAMPLER_PREROLL_US);
+
+        int64_t seek_pts = impl::us_to_stream_pts(seek_target_us, audio_stream);
+        int ret = av_seek_frame(fmt_ctx, audio_stream_idx, seek_pts, AVSEEK_FLAG_BACKWARD);
+        if (ret < 0) {
+            // Seek failed - try from beginning
+            ret = av_seek_frame(fmt_ctx, audio_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
+            if (ret < 0) {
+                return impl::ffmpeg_error(ret, "Audio seek failed");
+            }
+        }
+        avcodec_flush_buffers(audio_codec);
+        m_impl->resample_ctx.reset();  // Clear resampler FIFO after discontinuous seek
+        m_impl->resample_owed_samples = 0;  // FIFO is empty after reset
+    }
 
     // Decode audio packets until we've covered [t0_us, t1_us)
     TimeUS decoded_start_us = -1;
     int64_t total_output_samples = 0;
+    int ret;
 
     while (true) {
         ret = av_read_frame(fmt_ctx, m_impl->m_audio_pkt);
@@ -511,17 +705,26 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
             TimeUS frame_duration_us = (frame_samples * 1000000LL) / audio_codec->sample_rate;
             TimeUS frame_end_us = frame_pts_us + frame_duration_us;
 
-            // Skip frames entirely before our range
+            // Skip frames before our range. After a seek, feed them to the
+            // resampler (but discard output) to prime the FIR filter — otherwise
+            // the first ~26ms of output are zeros (group delay ramp-up).
             if (frame_end_us <= t0_us) {
+                if (need_seek) {
+                    int64_t prime_out = m_impl->resample_ctx.get_out_samples(frame_samples);
+                    if (prime_out > 0) {
+                        std::vector<float> discard(prime_out * RESAMPLER_OUTPUT_CHANNELS);
+                        m_impl->resample_ctx.convert(
+                            m_impl->m_audio_frame->data, frame_samples,
+                            discard.data(), prime_out);
+                    }
+                }
                 av_frame_unref(m_impl->m_audio_frame);
                 continue;
             }
 
-            // Stop if we've passed our range
-            if (frame_pts_us >= t1_us) {
-                av_frame_unref(m_impl->m_audio_frame);
-                goto done;
-            }
+            // Don't stop on PTS alone — the resampler's FIR filter may need
+            // frames past t1 to push out enough output samples. The output
+            // sample count check (below) is the authoritative stop condition.
 
             // Record start time of first decoded audio
             if (decoded_start_us < 0) {
@@ -547,40 +750,56 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
             av_frame_unref(m_impl->m_audio_frame);
         }
 
-        // Check if we've decoded enough
-        TimeUS decoded_duration_us = (total_output_samples * 1000000LL) / out.sample_rate;
-        if (decoded_start_us >= 0 && decoded_start_us + decoded_duration_us >= t1_us) {
+        // Check if we've produced enough output samples.
+        // Need expected + owed because owed samples will be trimmed (they're
+        // FIFO residual from previous call, belonging to the previous range).
+        int64_t expected_samples = ((t1_us - t0_us) * out.sample_rate) / 1000000;
+        int64_t need_total = expected_samples + (need_seek ? 0 : m_impl->resample_owed_samples);
+        if (total_output_samples >= need_total) {
             break;
         }
     }
 
 done:
-    // Flush any remaining samples from resampler
-    if (total_output_samples > 0) {
-        size_t flush_buffer_size = 1024 * RESAMPLER_OUTPUT_CHANNELS;
-        size_t current_size = pcm_buffer.size();
-        pcm_buffer.resize(current_size + flush_buffer_size);
+    // NEVER flush the resampler. The FIR filter's FIFO residual carries over
+    // to the next call, producing continuous audio across ALL calls (including
+    // the prefill→pump transition). Flushing creates a discontinuity because
+    // the filter history is zeroed — verified at 44.1→48kHz.
+    //
+    // The FIFO retains residual samples from the previous call, which appear
+    // at the START of this call's output. Trim them — they belong to the
+    // previous call's time range.
+    constexpr int RESAMPLER_OUT_CH = 2;
 
-        int64_t flushed = m_impl->resample_ctx.flush(
-            pcm_buffer.data() + current_size,
-            1024
-        );
-
-        pcm_buffer.resize(current_size + static_cast<size_t>(flushed * RESAMPLER_OUTPUT_CHANNELS));
-        total_output_samples += flushed;
+    if (m_impl->resample_owed_samples > 0) {
+        int64_t skip = std::min(m_impl->resample_owed_samples, total_output_samples);
+        if (skip > 0) {
+            pcm_buffer.erase(pcm_buffer.begin(),
+                             pcm_buffer.begin() + skip * RESAMPLER_OUT_CH);
+            total_output_samples -= skip;
+        }
     }
 
-    // Handle case where we got no audio (EOF before range)
-    if (decoded_start_us < 0) {
-        decoded_start_us = t0_us;
+    // Track the deficit: how many samples the FIFO owes the NEXT call.
+    {
+        int64_t expected = ((t1_us - t0_us) * out.sample_rate) / 1000000;
+        m_impl->resample_owed_samples = expected - total_output_samples;
+        if (m_impl->resample_owed_samples < 0) m_impl->resample_owed_samples = 0;
     }
 
-    // Create PcmChunk
-    // Note: Resampler always outputs stereo (2 channels) regardless of source
-    // See ffmpeg_resample.h - "Converts any input format to float32 stereo"
+    decoded_start_us = t0_us;
+    TimeUS decoded_end_us = decoded_start_us + (total_output_samples * 1000000LL) / out.sample_rate;
+    m_impl->have_audio_pts = true;
+    m_impl->audio_pts_us = decoded_end_us;
+
+    // Store in decode cache before moving pcm_buffer
+    m_impl->audio_cache.store(decoded_start_us, decoded_end_us,
+                              pcm_buffer.data(), total_output_samples,
+                              out.sample_rate, RESAMPLER_OUT_CH);
+
     auto chunk_impl = std::make_unique<PcmChunkImpl>(
         out.sample_rate,
-        2,  // Resampler always outputs stereo
+        RESAMPLER_OUT_CH,
         out.fmt,
         decoded_start_us,
         std::move(pcm_buffer)

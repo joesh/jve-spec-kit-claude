@@ -149,6 +149,17 @@ function M.get_persistable_sizes()
     }
 end
 
+--- Restore splitter sizes from saved state.
+function M.restore_sizes(sizes)
+    assert(state.main_splitter, "panel_manager.restore_sizes: not initialized")
+    if sizes.top and #sizes.top >= 2 then
+        set_splitter_sizes(state.top_splitter, sizes.top)
+    end
+    if sizes.main and #sizes.main >= 2 then
+        set_splitter_sizes(state.main_splitter, sizes.main)
+    end
+end
+
 function M.toggle_maximize(panel_id)
     if not state.main_splitter then
         return false, "Panel manager not initialized"

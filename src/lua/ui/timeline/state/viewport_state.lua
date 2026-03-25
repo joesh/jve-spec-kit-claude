@@ -72,15 +72,19 @@ local function clamp_viewport_start(desired_start, duration)
         "viewport_state: duration must be integer, got " .. tostring(duration))
 
     local total_extent = calculate_timeline_extent()
-    local max_start = math.max(0, total_extent - duration)
+    -- Floor is start_timecode_frame (prevents scrolling into dead space before content)
+    local floor = data.state.sequence_timecode_start_frame or 0
+    local max_start = math.max(floor, total_extent - duration)
 
-    if desired_start < 0 then return 0 end
+    if desired_start < floor then return floor end
     if desired_start > max_start then return max_start end
     return desired_start
 end
 
 local function ensure_playhead_visible()
     if viewport_guard_count > 0 then return false end
+    -- Only auto-scroll during playback; when parked, user must be free to scroll
+    if not data.state.is_playing then return false end
     local state = data.state
 
     local duration = state.viewport_duration
@@ -148,7 +152,8 @@ function M.set_playhead_position(time_obj, persist_callback, selection_callback)
     assert(type(time_obj) == "number" and time_obj == math.floor(time_obj),
         "viewport_state.set_playhead_position: time must be integer frame, got " .. tostring(time_obj))
 
-    local clamped = math.max(0, time_obj)
+    local floor = state.sequence_timecode_start_frame or 0
+    local clamped = math.max(floor, time_obj)
     local changed = state.playhead_position ~= clamped
     state.playhead_position = clamped
 

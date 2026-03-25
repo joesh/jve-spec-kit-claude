@@ -31,14 +31,16 @@ SimpleLuaEngine::SimpleLuaEngine() : L(nullptr)
             return trace
         end
 
-        -- Override default error() to always include stack trace
+        -- Override default error() to include stack trace (except level 0)
         local original_error = error
         function error(message, level)
             level = level or 1
-            local trace = debug.traceback(tostring(message), level + 1)
-            print("ERROR with stack trace:")
-            print(trace)
-            original_error(message, level + 1)
+            if level > 0 then
+                local trace = debug.traceback(tostring(message), level + 1)
+                print("ERROR with stack trace:")
+                print(trace)
+            end
+            original_error(message, level > 0 and (level + 1) or 0)
         end
 
         -- Install panic handler for pcall/xpcall

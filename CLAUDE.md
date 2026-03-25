@@ -6,6 +6,8 @@ This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Re
 - C++ for performance-critical: rendering, timeline manipulation, complex diffs
 - Lua for UI logic, layout, interaction, extensibility
 - SQLite for persistence
+- Lua (LuaJIT) + C++ (Qt6) + Qt6 (dialogs), ffprobe (TC probing), dkjson (JSON) (002-relink-clips)
+- SQLite (.jvp project files), `~/.jve/` for app prefs (002-relink-clips)
 
 READ ENGINEERING.md
 
@@ -62,7 +64,33 @@ Tests are LuaJIT scripts in `tests/` with `test_*.lua` naming. Each test:
 - Uses `print()` for test output (tests don't use logger module)
 - Ends with `print("✅ test_name.lua passed")` on success
 
-**IMPORTANT** When writing tests use the ABSOLUTE MINIMUM set of mocks. Mocks are bad. They encode incorrect assumptions about how the real code works. Avoid them if at all possible.
+**IMPORTANT** Tests must be **black-box**: test outputs and side effects, not internals.
+- **ZERO mocks** that encode assumptions about data or code paths. If a test builds data structures manually to simulate what code produces, it's testing assumptions, not code. Delete it.
+- **Non-trivial values**: parameters that happen to be zero (source_in=0, offset=0) don't catch real bugs. Use values that exercise unit conversion, coordinate spaces, boundary conditions.
+- **Interesting configurations**: muted clips, reversed clips, non-unity speed, BWF offsets, boundary-spanning segments. These are what break.
+- A test that can't catch a real bug is **worse than no test** — it gives false confidence.
+
+## Integration Testing with --test Mode
+For features that need real C++ bindings (Qt widgets, XML parser, EMP/TMB, audio pipeline), use `--test` to run a Lua script inside the full JVEEditor process:
+
+```bash
+# Run a test script with full C++ bindings available
+./build/bin/JVEEditor --test /tmp/my_test.lua
+
+# With logging enabled
+JVE_LOG=media:detail ./build/bin/JVEEditor --test /tmp/my_test.lua
+
+# Save output for analysis (don't re-run the editor for each grep)
+JVE_LOG=media:detail ./build/bin/JVEEditor --test /tmp/my_test.lua > /tmp/test_output.txt 2>&1
+```
+
+This is essential for:
+- DRP import testing (needs `qt_xml_parse` C++ binding)
+- Binding tests that exercise Qt widget creation
+- Playback/audio pipeline tests that need TMB/SSE/AOP
+- Any test that would otherwise require the user to manually operate the UI
+
+**Always save output to a file** — don't pipe to grep directly, as re-running the editor for each query is wasteful. For Lua-only changes, `--test` doesn't require `make` (no C++ recompile needed).
 
 ## Logger Usage
 Use the unified logger (never bare `print`). Each module binds to a functional area once:
@@ -148,6 +176,9 @@ Format:
 - **Command-specific logic in menu_system.lua** - menu dispatch must route through gather_context then command; no parameter resolution in menu handlers
 - **The word "orchestration"** in code, comments, or commit messages — it substitutes for "algorithm" without claiming algorithmic rigor. Use precise terms: "tick loop", "audio-following", "change detection", etc.
 - **fixing a failing test before being ABSOLUTELY SURE its failure is not surfacing a bug**
+- **Choosing expedience over architectural correctness** — Before every decision, ask: "Is this the architecturally correct thing to do?" If the answer is no, don't do it. Don't add workarounds, caches that mask bugs, fallback values, or "temporary" hacks. Do the right thing the first time. If unsure, ask.
+- **Lazy implementations that skip understanding** — Before modifying ANY subsystem, read 2+ working examples of the same pattern and trace the FULL execution path (execute → mutations → UI refresh → undo → mutations → UI refresh). Use the SAME mechanisms as existing code. Never write a no-op undoer or a `reload_timeline` fallback without understanding why the proper mutation path doesn't work. If you don't understand how something works, READ THE CODE — don't guess.
+- **Blaming data instead of code** — When observed data doesn't match expectations (wrong IDs, missing records, unexpected values), the code that produced or consumed that data has a bug. NEVER theorize "stale data," "previous session," "test data issue," or "user error." Trace the code path that wrote the data. The unexpected data IS the bug symptom — investigate the implementation, not the data.
 
 ## **✅ SUCCESS PATTERN**
 

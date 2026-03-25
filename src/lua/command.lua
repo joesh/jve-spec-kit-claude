@@ -78,6 +78,13 @@ function M.parse_from_query(query, project_id)
             end
         end
 
+        -- Schema column order: id(0), parent_id(1), sequence_number(2),
+        -- command_type(3), command_args(4), parent_sequence_number(5),
+        -- undo_group_id(6), pre_hash(7), post_hash(8), timestamp(9),
+        -- playhead_value(10), playhead_rate(11), playhead_value_post(12),
+        -- playhead_rate_post(13), selected_clip_ids(14), selected_edge_infos(15),
+        -- selected_gap_infos(16), selected_clip_ids_pre(17),
+        -- selected_edge_infos_pre(18), selected_gap_infos_pre(19)
         command = {
             id = query:value(0),
             parent_id = query:value(1),
@@ -85,19 +92,21 @@ function M.parse_from_query(query, project_id)
             type = query:value(3),
             parameters = args_table,
             parent_sequence_number = query:value(5),
-            pre_hash = query:value(6) or "",
-            post_hash = query:value(7) or "",
-            created_at = query:value(8) or os.time(),
-            executed_at = query:value(8),
-            playhead_value = query:value(9),
-            playhead_rate = query:value(10),
-            selected_clip_ids = query:value(11),
-            selected_edge_infos = query:value(12),
-            selected_gap_infos = query:value(13),
-            selected_clip_ids_pre = query:value(14),
-            selected_edge_infos_pre = query:value(15),
-            selected_gap_infos_pre = query:value(16),
-            status = query:value(17) or "Created"
+            undo_group_id = query:value(6),
+            pre_hash = query:value(7) or "",
+            post_hash = query:value(8) or "",
+            created_at = query:value(9) or os.time(),
+            executed_at = query:value(9),
+            playhead_value = query:value(10),
+            playhead_rate = query:value(11),
+            playhead_value_post = query:value(12),
+            playhead_rate_post = query:value(13),
+            selected_clip_ids = query:value(14),
+            selected_edge_infos = query:value(15),
+            selected_gap_infos = query:value(16),
+            selected_clip_ids_pre = query:value(17),
+            selected_edge_infos_pre = query:value(18),
+            selected_gap_infos_pre = query:value(19),
         }
         command.project_id = project_id or args_table.project_id
     else

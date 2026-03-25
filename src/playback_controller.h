@@ -183,6 +183,12 @@ public:
     // Reset incremental push tracking (call at every transport change)
     void ResetPushState();
 
+    // Set push end after prefill so pump starts after prefilled range
+    void SetLastPushEnd(int64_t us);
+
+    // Set sequence end time so pump can push remaining audio near the end
+    void SetEndTimeUS(int64_t us);
+
     // Pump timing constants (match Lua CFG) — public for pre-fill sizing
     static constexpr int TARGET_BUFFER_MS = 200;
     static constexpr int MAX_RENDER_FRAMES = 4096;
@@ -200,6 +206,7 @@ private:
     // Each time range is extracted and pushed ONCE — eliminates quantization drift
     // from redundant μs→sample conversions on overlapping windows.
     std::atomic<int64_t> m_last_push_end_us{-1};
+    std::atomic<int64_t> m_end_time_us{INT64_MAX};
 
     // Dependencies (set by Start, read by pumpLoop)
     emp::TimelineMediaBuffer* m_tmb{nullptr};
@@ -242,7 +249,7 @@ public:
     void SetMirrorSurface(GPUVideoSurface* surface);  // fullscreen mirror (nullable)
     void ClearMirrorSurface();
     void SetTMB(emp::TimelineMediaBuffer* tmb);
-    void SetBounds(int64_t total_frames, int32_t fps_num, int32_t fps_den);
+    void SetBounds(int64_t start_frame, int64_t end_frame, int32_t fps_num, int32_t fps_den);
 
     // Transport (from Lua, main thread)
     void Play(int direction, float speed);
@@ -333,6 +340,7 @@ private:
 
     // Advance position based on elapsed time or audio
     int64_t advancePosition(double elapsed_seconds);
+    void assertNoTeleport(int64_t current, int64_t new_pos, double speed, const char* context);
 
     // CVDisplayLink setup/teardown
     bool startDisplayLink();  // returns false if display unavailable (headless)
@@ -347,7 +355,8 @@ private:
     std::atomic<bool> m_hit_boundary{false};
 
     // ---- Configuration (set from main thread before Play) ----
-    int64_t m_total_frames{0};
+    int64_t m_start_frame{0};
+    int64_t m_total_frames{0};  // absolute end frame (exclusive)
     int32_t m_fps_num{24};
     int32_t m_fps_den{1};
     double m_fps{24.0};  // precomputed fps_num/fps_den
@@ -444,7 +453,7 @@ public:
 
     void SetSurface(GPUVideoSurface*) {}
     void SetTMB(emp::TimelineMediaBuffer*) {}
-    void SetBounds(int64_t, int32_t, int32_t) {}
+    void SetBounds(int64_t, int64_t, int32_t, int32_t) {}
 
     void Play(int, float) {}
     void Stop() {}

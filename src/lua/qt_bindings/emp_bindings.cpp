@@ -147,8 +147,13 @@ static int lua_emp_media_file_info(lua_State* L) {
     lua_pushboolean(L, info.is_vfr);
     lua_setfield(L, -2, "is_vfr");
 
-    // Start timecode in frames at media's native rate
-    lua_pushinteger(L, static_cast<lua_Integer>(info.start_tc));
+    // TC origins
+    lua_pushinteger(L, static_cast<lua_Integer>(info.first_frame_tc));
+    lua_setfield(L, -2, "first_frame_tc");
+    lua_pushinteger(L, static_cast<lua_Integer>(info.first_sample_tc));
+    lua_setfield(L, -2, "first_sample_tc");
+    // Legacy alias
+    lua_pushinteger(L, static_cast<lua_Integer>(info.first_frame_tc));
     lua_setfield(L, -2, "start_tc");
 
     // Rotation in degrees (0, 90, 180, 270) from display matrix
@@ -577,6 +582,14 @@ static int lua_emp_tmb_set_track_clips(lua_State* L) {
         ci.speed_ratio = static_cast<float>(lua_tonumber(L, -1));
         lua_pop(L, 1);
 
+        lua_getfield(L, -1, "offline");
+        ci.offline = lua_isboolean(L, -1) ? lua_toboolean(L, -1) : false;
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "volume");
+        ci.volume = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : 1.0f;
+        lua_pop(L, 1);
+
         lua_pop(L, 1); // pop clip table
 
         if (ci.rate_den <= 0) {
@@ -668,6 +681,14 @@ static int lua_emp_tmb_add_clips(lua_State* L) {
             return luaL_error(L, "TMB_ADD_CLIPS: element %d missing speed_ratio", i);
         }
         ci.speed_ratio = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "offline");
+        ci.offline = lua_isboolean(L, -1) ? lua_toboolean(L, -1) : false;
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "volume");
+        ci.volume = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : 1.0f;
         lua_pop(L, 1);
 
         lua_pop(L, 1); // pop clip table
@@ -906,8 +927,15 @@ static int lua_emp_media_file_probe(lua_State* L) {
     lua_setfield(L, -2, "duration_us");
     lua_pushboolean(L, info.is_vfr);
     lua_setfield(L, -2, "is_vfr");
-    lua_pushinteger(L, static_cast<lua_Integer>(info.start_tc));
+    // TC origins
+    lua_pushinteger(L, static_cast<lua_Integer>(info.first_frame_tc));
+    lua_setfield(L, -2, "first_frame_tc");
+    lua_pushinteger(L, static_cast<lua_Integer>(info.first_sample_tc));
+    lua_setfield(L, -2, "first_sample_tc");
+    // Legacy alias (read by existing Lua code until fully migrated)
+    lua_pushinteger(L, static_cast<lua_Integer>(info.first_frame_tc));
     lua_setfield(L, -2, "start_tc");
+
     lua_pushinteger(L, info.rotation);
     lua_setfield(L, -2, "rotation");
     lua_pushinteger(L, info.video_par_num);
@@ -920,6 +948,10 @@ static int lua_emp_media_file_probe(lua_State* L) {
     lua_setfield(L, -2, "audio_sample_rate");
     lua_pushinteger(L, info.audio_channels);
     lua_setfield(L, -2, "audio_channels");
+
+    // BWF time_reference: -1 = not present, else samples since midnight
+    lua_pushinteger(L, static_cast<lua_Integer>(info.bwf_time_reference));
+    lua_setfield(L, -2, "bwf_time_reference");
 
     return 1;
 }
@@ -1379,13 +1411,14 @@ static int lua_playback_set_tmb(lua_State* L) {
     return 0;
 }
 
-// PLAYBACK.SET_BOUNDS(controller, total_frames, fps_num, fps_den)
+// PLAYBACK.SET_BOUNDS(controller, start_frame, end_frame, fps_num, fps_den)
 static int lua_playback_set_bounds(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
-    int64_t total_frames = static_cast<int64_t>(luaL_checkinteger(L, 2));
-    int32_t fps_num = static_cast<int32_t>(luaL_checkinteger(L, 3));
-    int32_t fps_den = static_cast<int32_t>(luaL_checkinteger(L, 4));
-    controller->SetBounds(total_frames, fps_num, fps_den);
+    int64_t start_frame = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    int64_t end_frame = static_cast<int64_t>(luaL_checkinteger(L, 3));
+    int32_t fps_num = static_cast<int32_t>(luaL_checkinteger(L, 4));
+    int32_t fps_den = static_cast<int32_t>(luaL_checkinteger(L, 5));
+    controller->SetBounds(start_frame, end_frame, fps_num, fps_den);
     return 0;
 }
 

@@ -164,14 +164,29 @@ local SEQ_FPS_NUM = 25
 local SEQ_FPS_DEN = 1
 local WINDOW_HI = 123286
 
+-- Probe file's TC origin (first_frame_tc) via EMP binding.
+-- source_in must be absolute TC = first_frame_tc + file_offset.
+local function tc_origin(path)
+    local probe = EMP.MEDIA_FILE_PROBE(path)
+    assert(probe, "MEDIA_FILE_PROBE failed: " .. path)
+    return probe.first_frame_tc or 0
+end
+
 local v1_clips = {
-    { clip_id = "v1-18-097-002", media_path = media.day4_c002, timeline_start = 122960, duration = 43,  source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-100-001", media_path = media.day4_c008, timeline_start = 123003, duration = 40,  source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-098-003", media_path = media.day4_c005, timeline_start = 123043, duration = 129, source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-100-003", media_path = media.day4_c010, timeline_start = 123172, duration = 114, source_in = 0, rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-097-002", media_path = media.day4_c002, timeline_start = 122960, duration = 43,  source_in = tc_origin(media.day4_c002), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-100-001", media_path = media.day4_c008, timeline_start = 123003, duration = 40,  source_in = tc_origin(media.day4_c008), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-098-003", media_path = media.day4_c005, timeline_start = 123043, duration = 129, source_in = tc_origin(media.day4_c005), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-100-003", media_path = media.day4_c010, timeline_start = 123172, duration = 114, source_in = tc_origin(media.day4_c010), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
 }
 
 -- Audio track: same clips, same layout (AAC 48kHz stereo in all Anamnesis MOVs)
+-- Audio clips: use sample rate and first_sample_tc for TC origin
+local function audio_tc_origin(path)
+    local probe = EMP.MEDIA_FILE_PROBE(path)
+    assert(probe, "MEDIA_FILE_PROBE failed: " .. path)
+    return probe.first_sample_tc or 0
+end
+
 local a1_clips = {}
 for i, vc in ipairs(v1_clips) do
     a1_clips[i] = {
@@ -179,9 +194,9 @@ for i, vc in ipairs(v1_clips) do
         media_path = vc.media_path,
         timeline_start = vc.timeline_start,
         duration = vc.duration,
-        source_in = vc.source_in,
-        rate_num = vc.rate_num,
-        rate_den = vc.rate_den,
+        source_in = audio_tc_origin(vc.media_path),
+        rate_num = 48000,
+        rate_den = 1,
         speed_ratio = vc.speed_ratio,
     }
 end
@@ -205,7 +220,7 @@ local pc = PLAYBACK.CREATE()
 assert(pc, "Failed to create PlaybackController")
 
 PLAYBACK.SET_TMB(pc, tmb)
-PLAYBACK.SET_BOUNDS(pc, WINDOW_HI, SEQ_FPS_NUM, SEQ_FPS_DEN)
+PLAYBACK.SET_BOUNDS(pc, 0, WINDOW_HI, SEQ_FPS_NUM, SEQ_FPS_DEN)
 PLAYBACK.SET_SURFACE(pc, surface)
 
 -- Clip provider: clips already loaded via TMB_SET_TRACK_CLIPS above.

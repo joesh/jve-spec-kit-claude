@@ -27,9 +27,8 @@ local last_sequence_number = 0
 local active_sequence_id = nil
 local _active_project_id = nil  -- luacheck: ignore 231
 
--- Undo group tracking (Emacs-style)
+-- Undo group tracking
 local undo_group_stack = {}
-local last_undo_group_id = 0
 
 local GLOBAL_STACK_ID = "global"
 local TIMELINE_STACK_PREFIX = "timeline:"
@@ -369,14 +368,68 @@ function M.find_latest_child_command(parent_sequence)
     return command
 end
 
+--- Find all sequence_numbers in an undo group, bounded by a cursor position.
+-- @param group_id  The undo_group_id to match
+-- @param up_to_seq  Only include sequence_numbers <= this value (for undo)
+--                   Pass nil to include all members (for redo, caller filters)
+-- @param after_seq  Only include sequence_numbers > this value (for redo)
+--                   Pass nil to skip lower bound (for undo)
+-- @return array of sequence_numbers (DESC when up_to_seq set, ASC when after_seq set)
+function M.find_group_members(group_id, up_to_seq, after_seq)
+    if not db or not group_id then
+        return {}
+    end
+    local sql
+    local bind_count
+    if up_to_seq and after_seq then
+        sql = [[SELECT sequence_number FROM commands
+                WHERE undo_group_id = ? AND sequence_number <= ? AND sequence_number > ?
+                ORDER BY sequence_number DESC]]
+        bind_count = 3
+    elseif up_to_seq then
+        sql = [[SELECT sequence_number FROM commands
+                WHERE undo_group_id = ? AND sequence_number <= ?
+                ORDER BY sequence_number DESC]]
+        bind_count = 2
+    elseif after_seq then
+        sql = [[SELECT sequence_number FROM commands
+                WHERE undo_group_id = ? AND sequence_number > ?
+                ORDER BY sequence_number ASC]]
+        bind_count = 2
+    else
+        sql = [[SELECT sequence_number FROM commands
+                WHERE undo_group_id = ?
+                ORDER BY sequence_number DESC]]
+        bind_count = 1
+    end
+    local query = db:prepare(sql)
+    assert(query, "find_group_members: failed to prepare SQL (schema mismatch?)")
+    query:bind_value(1, group_id)
+    if bind_count == 3 then
+        query:bind_value(2, up_to_seq)
+        query:bind_value(3, after_seq)
+    elseif bind_count == 2 then
+        query:bind_value(2, up_to_seq or after_seq)
+    end
+    local results = {}
+    if query:exec() then
+        while query:next() do
+            results[#results + 1] = query:value(0)
+        end
+    end
+    query:finalize()
+    return results
+end
+
 -- Undo group management (Emacs-style)
 -- group_id is optional - if not provided, a unique ID is generated
 -- When called from within a command executor, pass the parent command's sequence_number
 function M.begin_undo_group(label, group_id)
     if not group_id then
-        -- Generate a unique group ID when not provided
-        last_undo_group_id = last_undo_group_id + 1
-        group_id = "explicit_group_" .. last_undo_group_id
+        -- Allocate from the sequence number counter to guarantee uniqueness
+        -- with automatic undo_group_ids (which are also sequence numbers).
+        last_sequence_number = last_sequence_number + 1
+        group_id = last_sequence_number
     end
     table.insert(undo_group_stack, {
         id = group_id,

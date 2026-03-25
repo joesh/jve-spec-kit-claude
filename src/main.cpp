@@ -11,6 +11,10 @@
 #include <cstring>
 #include <cstdio>
 
+#ifdef __APPLE__
+#include <objc/objc-runtime.h>
+#endif
+
 #include "simple_lua_engine.h"
 #include "resource_paths.h"
 #include "assert_handler.h"
@@ -87,6 +91,25 @@ int main(int argc, char *argv[])
 
     QApplication app(argc, argv);
 
+    // Force dark mode on macOS — set on NSApp so all windows (including dialogs) inherit
+#ifdef Q_OS_MAC
+    {
+        id nsApp = ((id (*)(Class, SEL))objc_msgSend)(objc_getClass("NSApplication"), sel_getUid("sharedApplication"));
+        if (nsApp) {
+            Class NSAppearanceClass = objc_getClass("NSAppearance");
+            id darkName = ((id (*)(Class, SEL, const char*))objc_msgSend)(
+                objc_getClass("NSString"), sel_getUid("stringWithUTF8String:"), "NSAppearanceNameDarkAqua");
+            if (NSAppearanceClass && darkName) {
+                id appearance = ((id (*)(Class, SEL, id))objc_msgSend)(
+                    NSAppearanceClass, sel_getUid("appearanceNamed:"), darkName);
+                if (appearance) {
+                    ((void (*)(id, SEL, id))objc_msgSend)(nsApp, sel_getUid("setAppearance:"), appearance);
+                }
+            }
+        }
+    }
+#endif
+
     // Application metadata
     app.setApplicationName("JVE Editor");
     app.setApplicationVersion("1.0.0");
@@ -100,6 +123,7 @@ int main(int argc, char *argv[])
 
         SimpleLuaEngine luaEngine;
         jve_set_lua_state(luaEngine.getLuaState());
+        jve_set_global_lua_state(luaEngine.getLuaState());
 
         // Add tests/ to package.path so integration tests can require("integration.integration_test_env")
         lua_State* L = luaEngine.getLuaState();
@@ -154,7 +178,19 @@ int main(int argc, char *argv[])
     darkPalette.setColor(QPalette::Link, QColor(42, 130, 218));
     darkPalette.setColor(QPalette::Highlight, QColor(42, 130, 218));
     darkPalette.setColor(QPalette::HighlightedText, Qt::black);
+    // Disabled state must be visually distinct on dark backgrounds
+    darkPalette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(70, 70, 70));
+    darkPalette.setColor(QPalette::Disabled, QPalette::WindowText, QColor(70, 70, 70));
+    darkPalette.setColor(QPalette::Disabled, QPalette::Text, QColor(70, 70, 70));
+    darkPalette.setColor(QPalette::Disabled, QPalette::Button, QColor(28, 28, 28));
     app.setPalette(darkPalette);
+
+    // Stylesheet reinforces disabled button appearance (Fusion palette alone
+    // doesn't always render disabled buttons distinctly on dark backgrounds).
+    // Target both standalone buttons and buttons inside QDialogButtonBox.
+    app.setStyleSheet(
+        "QPushButton:disabled { color: #666666; background-color: #1e1e1e; }"
+    );
 
     // Set up application data directory
     QString appDataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
@@ -195,6 +231,7 @@ int main(int argc, char *argv[])
     // Create Lua engine for pure Lua UI
     SimpleLuaEngine luaEngine;
     jve_set_lua_state(luaEngine.getLuaState());
+    jve_set_global_lua_state(luaEngine.getLuaState());
 
     // Execute Lua main window creation using ResourcePaths
     QString mainWindowScript = QString::fromStdString(JVE::ResourcePaths::getScriptPath("ui/layout.lua"));

@@ -184,12 +184,19 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_scroll_area_widget_resizable); lua_setfield(L, -2, "SET_SCROLL_AREA_WIDGET_RESIZABLE");
     lua_pushcfunction(L, lua_set_scroll_area_h_scrollbar_policy); lua_setfield(L, -2, "SET_SCROLL_AREA_H_SCROLLBAR_POLICY");
     lua_pushcfunction(L, lua_set_scroll_area_v_scrollbar_policy); lua_setfield(L, -2, "SET_SCROLL_AREA_V_SCROLLBAR_POLICY");
+    lua_pushcfunction(L, lua_get_scroll_area_v_scroll); lua_setfield(L, -2, "GET_SCROLL_AREA_V_SCROLL");
+    lua_pushcfunction(L, lua_set_scroll_area_v_scroll); lua_setfield(L, -2, "SET_SCROLL_AREA_V_SCROLL");
     lua_pushcfunction(L, lua_set_layout_spacing); lua_setfield(L, -2, "SET_LAYOUT_SPACING");
     lua_pushcfunction(L, lua_set_layout_margins); lua_setfield(L, -2, "SET_LAYOUT_MARGINS");
     lua_pushcfunction(L, lua_set_enabled); lua_setfield(L, -2, "SET_ENABLED");
     lua_pushcfunction(L, lua_set_progress_bar_value); lua_setfield(L, -2, "SET_PROGRESS_BAR_VALUE");
     lua_pushcfunction(L, lua_set_progress_bar_range); lua_setfield(L, -2, "SET_PROGRESS_BAR_RANGE");
     lua_pushcfunction(L, lua_set_text_edit_read_only); lua_setfield(L, -2, "SET_TEXT_EDIT_READ_ONLY");
+    lua_pushcfunction(L, lua_scroll_text_edit_to_end); lua_setfield(L, -2, "SCROLL_TEXT_EDIT_TO_END");
+    lua_pushcfunction(L, lua_set_button_auto_default); lua_setfield(L, -2, "SET_BUTTON_AUTO_DEFAULT");
+    lua_pushcfunction(L, lua_create_button_box); lua_setfield(L, -2, "CREATE_BUTTON_BOX");
+    lua_pushcfunction(L, lua_button_box_add); lua_setfield(L, -2, "BUTTON_BOX_ADD");
+    lua_pushcfunction(L, lua_button_box_set_handler); lua_setfield(L, -2, "BUTTON_BOX_SET_HANDLER");
     lua_pushcfunction(L, lua_set_line_edit_read_only); lua_setfield(L, -2, "SET_LINE_EDIT_READ_ONLY");
     lua_pushcfunction(L, lua_set_widget_size_policy); lua_setfield(L, -2, "SET_WIDGET_SIZE_POLICY");
     lua_pushcfunction(L, lua_set_button_click_handler); lua_setfield(L, -2, "SET_BUTTON_CLICK_HANDLER");
@@ -203,6 +210,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_add_tree_child_item); lua_setfield(L, -2, "ADD_TREE_CHILD_ITEM");
     lua_pushcfunction(L, lua_get_tree_selected_index); lua_setfield(L, -2, "GET_TREE_SELECTED_INDEX");
     lua_pushcfunction(L, lua_clear_tree); lua_setfield(L, -2, "CLEAR_TREE");
+    lua_pushcfunction(L, lua_sort_tree); lua_setfield(L, -2, "SORT_TREE");
     lua_pushcfunction(L, lua_set_tree_item_expanded); lua_setfield(L, -2, "SET_TREE_ITEM_EXPANDED");
     lua_pushcfunction(L, lua_is_tree_item_expanded); lua_setfield(L, -2, "IS_TREE_ITEM_EXPANDED");
     lua_pushcfunction(L, lua_set_tree_item_data); lua_setfield(L, -2, "SET_TREE_ITEM_DATA");
@@ -247,6 +255,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_tree_expand_collapse_handler); lua_setglobal(L, "qt_set_tree_expand_collapse_handler");
     lua_pushcfunction(L, lua_hide_splitter_handle); lua_setglobal(L, "qt_hide_splitter_handle");
     lua_pushcfunction(L, lua_set_splitter_moved_handler); lua_setglobal(L, "qt_set_splitter_moved_handler");
+    lua_pushcfunction(L, lua_set_scroll_area_v_scroll_handler); lua_setglobal(L, "qt_set_scroll_area_v_scroll_handler");
     lua_pushcfunction(L, lua_get_splitter_handle); lua_setglobal(L, "qt_get_splitter_handle");
     lua_pushcfunction(L, lua_update_widget); lua_setglobal(L, "qt_update_widget");
 
@@ -279,10 +288,13 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_create_single_shot_timer); lua_setglobal(L, "qt_create_single_shot_timer");
     lua_pushcfunction(L, lua_set_scroll_area_alignment); lua_setglobal(L, "qt_set_scroll_area_alignment");
     lua_pushcfunction(L, lua_set_scroll_area_anchor_bottom); lua_setglobal(L, "qt_set_scroll_area_anchor_bottom");
+    lua_pushcfunction(L, lua_suspend_scroll_area_anchor); lua_setglobal(L, "qt_suspend_scroll_area_anchor");
     lua_pushcfunction(L, lua_set_focus_policy); lua_setglobal(L, "qt_set_focus_policy");
     lua_pushcfunction(L, lua_set_focus); lua_setglobal(L, "qt_set_focus");
     lua_pushcfunction(L, lua_set_global_key_handler); lua_setglobal(L, "qt_set_global_key_handler");
     lua_pushcfunction(L, lua_set_focus_handler); lua_setglobal(L, "qt_set_focus_handler");
+    lua_pushcfunction(L, lua_install_panel_focus_filter); lua_setglobal(L, "qt_install_panel_focus_filter");
+    lua_pushcfunction(L, lua_register_panel_focus_widget); lua_setglobal(L, "qt_register_panel_focus_widget");
     lua_pushcfunction(L, lua_show_confirm_dialog); lua_setglobal(L, "qt_show_confirm_dialog");
     lua_pushcfunction(L, lua_show_dialog); lua_setglobal(L, "qt_show_dialog");
     lua_pushcfunction(L, lua_show_menu_popup); lua_setglobal(L, "qt_show_menu_popup");

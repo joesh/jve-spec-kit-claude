@@ -50,8 +50,14 @@ local function fresh_state()
         viewport_start_time = 0,
         viewport_duration = 300,
 
+        -- Vertical scroll offsets (pixels, per-widget)
+        video_scroll_offset = 0,
+        audio_scroll_offset = 0,
+        video_audio_split_ratio = 0.5,
+
         -- Playhead (integer frame)
         playhead_position = 0,
+        is_playing = false,
 
         -- Selection
         selected_clips = {},

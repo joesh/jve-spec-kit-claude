@@ -50,7 +50,7 @@ do
     local pc = PLAYBACK.CREATE()
 
     PLAYBACK.SET_TMB(pc, tmb)
-    PLAYBACK.SET_BOUNDS(pc, total_frames, 24, 1)
+    PLAYBACK.SET_BOUNDS(pc, 0, total_frames, 24, 1)
     PLAYBACK.SET_SURFACE(pc, test_surface)
 
     -- Seek to last frame: valid

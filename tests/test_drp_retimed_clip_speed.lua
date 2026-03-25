@@ -208,12 +208,14 @@ local v_real = drp_importer.parse_resolve_tracks(seq_real, 25)
 local real_clip = v_real[1].clips[1]
 
 -- Before fix: garbage speed 1.27e-11 accepted → source_in = floor(2327 * 1.27e-11) = 0
--- After fix: garbage rejected, MTBA confirms speed=1.0 → source_in = 2327
-assert(real_clip.source_in == 2327, string.format(
-    "REGRESSION: clip 40-335.3-1 source_in must be 2327 (not 0 from garbage speed), got %d",
-    real_clip.source_in))
-assert(real_clip.source_out == 2327 + 109, string.format(
-    "source_out should be %d, got %d", 2327 + 109, real_clip.source_out))
+-- After fix: garbage rejected, MTBA confirms speed=1.0 → source_in = media_tc_origin + 2327
+-- media_tc_origin = floor(14481.12 * 25 + 0.5) = 362028
+local mst5_origin = math.floor(14481.12 * 25 + 0.5)  -- 362028
+assert(real_clip.source_in == mst5_origin + 2327, string.format(
+    "REGRESSION: clip 40-335.3-1 source_in must be %d (abs TC), got %d",
+    mst5_origin + 2327, real_clip.source_in))
+assert(real_clip.source_out == mst5_origin + 2327 + 109, string.format(
+    "source_out should be %d, got %d", mst5_origin + 2327 + 109, real_clip.source_out))
 assert(real_clip.duration == 109, "timeline duration should be 109, got " .. real_clip.duration)
 assert(math.abs(real_clip.clip_speed - 1.0) < 0.001, string.format(
     "clip_speed should be 1.0 (MTBA YMax=XMax), got %.4f", real_clip.clip_speed))
@@ -268,10 +270,12 @@ local seq_nohex = elem("Sequence", "", {
 local v_nohex = drp_importer.parse_resolve_tracks(seq_nohex, 25)
 local nohex_clip = v_nohex[1].clips[1]
 
-assert(nohex_clip.source_in == 1163, string.format(
-    "Non-hex clip source_in should be 1163, got %d", nohex_clip.source_in))
-assert(nohex_clip.source_out == 1163 + 117, string.format(
-    "source_out should be %d, got %d", 1163 + 117, nohex_clip.source_out))
+-- media_tc_origin = floor(14481.12 * 25 + 0.5) = 362028
+local mst7_origin = math.floor(14481.12 * 25 + 0.5)
+assert(nohex_clip.source_in == mst7_origin + 1163, string.format(
+    "Non-hex clip source_in should be %d (abs TC), got %d", mst7_origin + 1163, nohex_clip.source_in))
+assert(nohex_clip.source_out == mst7_origin + 1163 + 117, string.format(
+    "source_out should be %d, got %d", mst7_origin + 1163 + 117, nohex_clip.source_out))
 assert(math.abs(nohex_clip.clip_speed - 1.0) < 0.001, string.format(
     "clip_speed should be 1.0, got %.4f", nohex_clip.clip_speed))
 print(string.format("  ✓ source_in=%d source_out=%d (different trim, same media)",
@@ -318,12 +322,13 @@ local v_333 = drp_importer.parse_resolve_tracks(seq_333, 25)
 local clip_333 = v_333[1].clips[1]
 
 -- Domain: MTBA speed = YMax/XMax = 73.28/83.28 ≈ 0.88 (88% speed).
--- source_in: 447 DRP × 0.88 ≈ 393 source frames.
--- Resolve shows source TC 01:14:36:16, media start 01:14:20:22 → 394 frames at 25fps.
--- (Known 1-frame discrepancy: DRP rounding vs Resolve display — see MEMORY.md)
-assert(clip_333.source_in == 393, string.format(
-    "REGRESSION: clip 01-333-2 source_in must use MTBA speed 0.88, not hex 0.7273. "..
-    "Expected 393 (MTBA), got %d.", clip_333.source_in))
+-- in_offset: 447 DRP × 0.88 ≈ 393 source frames.
+-- media_tc_origin = floor(4460.88 * 25 + 0.5) = 111522
+-- source_in = media_tc_origin + in_offset = 111522 + 393 = 111915
+local mst8_origin = math.floor(4460.88 * 25 + 0.5)  -- 111522
+assert(clip_333.source_in == mst8_origin + 393, string.format(
+    "REGRESSION: clip 01-333-2 source_in must be %d (abs TC with MTBA speed 0.88). "..
+    "Got %d.", mst8_origin + 393, clip_333.source_in))
 print(string.format("  ✓ source_in = %d (MTBA speed, not hex 0.7273 → 325)",
     clip_333.source_in))
 

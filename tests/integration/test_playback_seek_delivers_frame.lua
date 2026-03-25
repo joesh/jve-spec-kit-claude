@@ -41,7 +41,7 @@ local pc = PLAYBACK.CREATE()
 assert(pc, "Failed to create PlaybackController")
 
 PLAYBACK.SET_TMB(pc, tmb)
-PLAYBACK.SET_BOUNDS(pc, clip_info.duration, clip_info.rate_num, clip_info.rate_den)
+PLAYBACK.SET_BOUNDS(pc, 0, clip_info.duration, clip_info.rate_num, clip_info.rate_den)
 PLAYBACK.SET_SURFACE(pc, surface)
 
 -- Clip provider: clips already loaded via create_single_clip_tmb above.

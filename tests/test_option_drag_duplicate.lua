@@ -2,7 +2,6 @@
 
 local test_env = require('test_env')
 
-require('dkjson') -- luacheck: ignore 411
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 local Command = require('command')
@@ -115,7 +114,7 @@ assert(duplicate_count == 1, string.format('Expected exactly one duplicated clip
 
 print('✅ Option-drag duplicate preserved downstream alignment (single clip)')
 
--- Multi-clip duplicate regression: ensure BatchCommand of Overwrite specs leaves downstream clips untouched.
+-- Multi-clip duplicate regression: ensure multiple Overwrite commands leave downstream clips untouched.
 local MULTI_DB = "/tmp/jve/test_option_drag_duplicate_multi.db"
 setup_database(MULTI_DB)
 

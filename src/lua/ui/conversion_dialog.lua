@@ -112,6 +112,7 @@ function M.show(config)
     qt.CONTROL.SET_LINE_EDIT_READ_ONLY(save_edit, true)
     qt.LAYOUT.ADD_WIDGET(save_row, save_edit)
     local browse_btn = qt.WIDGET.CREATE_BUTTON("Browse…")
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(browse_btn, false)
     qt.LAYOUT.ADD_WIDGET(save_row, browse_btn)
     qt.LAYOUT.ADD_LAYOUT(main_layout, save_row)
     qt.LAYOUT.ADD_SPACING(main_layout, 8)
@@ -127,21 +128,17 @@ function M.show(config)
 
     qt.LAYOUT.ADD_STRETCH(main_layout)
 
-    -- Button row
-    local btn_row = qt.LAYOUT.CREATE_HBOX()
-    qt.LAYOUT.ADD_STRETCH(btn_row)
-
+    -- Save Log button (hidden initially, shown after warnings)
     local save_log_btn = qt.WIDGET.CREATE_BUTTON("Save Log…")
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(save_log_btn, false)
     qt.DISPLAY.SET_VISIBLE(save_log_btn, false)
-    qt.LAYOUT.ADD_WIDGET(btn_row, save_log_btn)
+    qt.LAYOUT.ADD_WIDGET(main_layout, save_log_btn)
 
-    local convert_btn = qt.WIDGET.CREATE_BUTTON("Convert")
-    qt.LAYOUT.ADD_WIDGET(btn_row, convert_btn)
-
-    local cancel_btn = qt.WIDGET.CREATE_BUTTON("Cancel")
-    qt.LAYOUT.ADD_WIDGET(btn_row, cancel_btn)
-
-    qt.LAYOUT.ADD_LAYOUT(main_layout, btn_row)
+    -- Button box: Convert (accept/default) + Cancel (reject)
+    local button_box = qt.CONTROL.CREATE_BUTTON_BOX()
+    local convert_btn = qt.CONTROL.BUTTON_BOX_ADD(button_box, "Convert", "accept")
+    qt.CONTROL.BUTTON_BOX_ADD(button_box, "Cancel", "reject")  -- handled via rejected signal
+    qt.LAYOUT.ADD_WIDGET(main_layout, button_box)
 
     -- -----------------------------------------------------------------------
     -- Helpers
@@ -150,7 +147,14 @@ function M.show(config)
     local function set_converting(active)
         qt.CONTROL.SET_ENABLED(browse_btn, not active)
         qt.CONTROL.SET_ENABLED(convert_btn, not active)
-        if active then progress.show() else progress.hide() end
+        if active then
+            progress.show()
+            qt.PROPERTIES.SET_TEXT(convert_btn, "Converting…")
+        else
+            progress.hide()
+            qt.PROPERTIES.SET_TEXT(convert_btn, "Convert")
+        end
+        qt.CONTROL.PROCESS_EVENTS()
     end
 
     -- -----------------------------------------------------------------------
@@ -174,18 +178,44 @@ function M.show(config)
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(browse_btn, browse_name)
     globals[#globals + 1] = browse_name
 
-    -- Convert
+    -- Convert (accepted signal from button box)
+    local converting = false
     local convert_name = "__conversion_dialog_convert"
     _G[convert_name] = function()
         if not dest_path or dest_path == "" then return end
 
+        -- Check if destination already exists
+        local check = io.open(dest_path, "rb")
+        if check then
+            check:close()
+            local overwrite = qt.DIALOG.SHOW_CONFIRM({
+                parent = dialog,
+                title = "File Exists",
+                message = "A project already exists at this location.",
+                informative_text = dest_path,
+                confirm_text = "Overwrite",
+                cancel_text = "Cancel",
+                icon = "warning",
+            })
+            if not overwrite then return end
+        end
+
         -- Hide previous error, show progress
         qt.DISPLAY.SET_VISIBLE(error_label, false)
+        converting = true
         set_converting(true)
 
         local ok, err = config.convert_fn(config.source_path, dest_path, progress.update)
 
-        if ok then
+        converting = false
+        if progress.is_cancelled() then
+            -- User cancelled during conversion — clean up partial output
+            set_converting(false)
+            os.remove(dest_path)
+            os.remove(dest_path .. "-wal")
+            os.remove(dest_path .. "-shm")
+            qt.DIALOG.CLOSE(dialog, false)
+        elseif ok then
             local has_warnings = #progress.get_log_lines() > 0
             if has_warnings then
                 set_converting(false)
@@ -207,15 +237,25 @@ function M.show(config)
             log.error("Conversion failed: %s", tostring(err))
         end
     end
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(convert_btn, convert_name)
+    qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "accepted", convert_name)
     globals[#globals + 1] = convert_name
 
-    -- Cancel
+    -- Cancel (rejected signal from button box)
     local cancel_name = "__conversion_dialog_cancel"
     _G[cancel_name] = function()
-        qt.DIALOG.CLOSE(dialog, false)
+        if not converting then
+            -- Not converting yet — just close the dialog
+            qt.DIALOG.CLOSE(dialog, false)
+            return
+        end
+        if progress.is_cancelled() then return end
+        progress.cancel()  -- next progress.update() returns "cancel"
+        qt.PROPERTIES.SET_TEXT(error_label, "Cancelling…")
+        qt.DISPLAY.SET_VISIBLE(error_label, true)
+        -- Don't close — convert_fn will return at next progress pump,
+        -- then the convert handler checks is_cancelled() and cleans up.
     end
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(cancel_btn, cancel_name)
+    qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "rejected", cancel_name)
     globals[#globals + 1] = cancel_name
 
     -- Save Log

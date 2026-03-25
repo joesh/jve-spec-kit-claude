@@ -25,6 +25,7 @@ local database = require("core.database")
 local project_gen = require("core.project_generation")
 
 local Signals = require("core.signals")
+local timecode = require("core.timecode")
 
 local SequenceMonitor = {}
 SequenceMonitor.__index = SequenceMonitor
@@ -52,7 +53,8 @@ function SequenceMonitor.new(config)
     -- Sequence state
     self.sequence_id = nil
     self.sequence = nil       -- Sequence model (for marks on masterclips)
-    self.total_frames = 0
+    self.start_frame = 0      -- absolute TC start (from sequence.start_timecode_frame)
+    self.total_frames = 0     -- absolute TC end (exclusive)
     self.playhead = 0
     self.fps_num = nil
     self.fps_den = nil
@@ -119,11 +121,12 @@ function SequenceMonitor.new(config)
             self.engine:notify_content_changed()
             self.total_frames = self.engine.total_frames
             -- Clamp viewport to new total_frames
-            if self.viewport_duration > self.total_frames then
-                self.viewport_duration = self.total_frames
+            local physical = self.total_frames - self.start_frame
+            if self.viewport_duration > physical then
+                self.viewport_duration = physical
             end
             if self.viewport_start + self.viewport_duration > self.total_frames then
-                self.viewport_start = math.max(0, self.total_frames - self.viewport_duration)
+                self.viewport_start = math.max(self.start_frame, self.total_frames - self.viewport_duration)
             end
             -- MVC pull: re-display frame at parked playhead (content under us changed)
             self:on_model_changed()
@@ -245,6 +248,10 @@ function SequenceMonitor:_create_widgets()
         end)
     end
 
+    -- Timecode display row: playhead TC (left) + duration (right)
+    -- Positioned between video surface and mark bar (above the scrub bar)
+    self:_create_tc_row(content_layout)
+
     -- Mark bar (ScriptableTimeline widget)
     assert(qt_constants.WIDGET.CREATE_TIMELINE,
         "SequenceMonitor: CREATE_TIMELINE not available")
@@ -315,13 +322,14 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     self.engine:load_sequence(sequence_id, opts.total_frames)
 
     -- Sync state from engine
+    self.start_frame = self.engine.start_frame or 0
     self.total_frames = self.engine.total_frames
     self.fps_num = self.engine.fps_num
     self.fps_den = self.engine.fps_den
 
     -- Reset viewport to full extent (zoom-to-fit)
-    self.viewport_start = 0
-    self.viewport_duration = self.total_frames
+    self.viewport_start = self.start_frame
+    self.viewport_duration = self.total_frames - self.start_frame
 
     -- Restore playhead from DB (both masterclips and timelines).
     -- Sequence.load() asserts playhead_position is NOT NULL — no fallback.
@@ -329,18 +337,15 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     assert(type(saved_playhead) == "number", string.format(
         "SequenceMonitor(%s):load_sequence: playhead_position must be number, got %s (seq=%s)",
         self.view_id, type(saved_playhead), sequence_id:sub(1, 8)))
-    -- Validate playhead is in [0, total_frames). Stale DB values are a data
-    -- integrity bug — set_playhead validation prevents new bad writes, so
-    -- reading a bad value means the DB was corrupted or import was broken.
-    -- Empty sequence (total_frames=0): only playhead=0 is valid.
-    if self.total_frames > 0 then
-        assert(saved_playhead >= 0 and saved_playhead < self.total_frames, string.format(
-            "SequenceMonitor(%s):load_sequence: playhead %d out of range [0, %d) (seq=%s)",
-            self.view_id, saved_playhead, self.total_frames, sequence_id:sub(1, 8)))
+    -- Validate playhead is in [start_frame, total_frames).
+    if self.total_frames > self.start_frame then
+        assert(saved_playhead >= self.start_frame and saved_playhead < self.total_frames, string.format(
+            "SequenceMonitor(%s):load_sequence: playhead %d out of range [%d, %d) (seq=%s)",
+            self.view_id, saved_playhead, self.start_frame, self.total_frames, sequence_id:sub(1, 8)))
     else
-        assert(saved_playhead == 0, string.format(
-            "SequenceMonitor(%s):load_sequence: empty sequence playhead must be 0, got %d (seq=%s)",
-            self.view_id, saved_playhead, sequence_id:sub(1, 8)))
+        assert(saved_playhead == self.start_frame, string.format(
+            "SequenceMonitor(%s):load_sequence: empty sequence playhead must be %d, got %d (seq=%s)",
+            self.view_id, self.start_frame, saved_playhead, sequence_id:sub(1, 8)))
     end
     self.playhead = saved_playhead
     self.engine:seek(saved_playhead)
@@ -365,6 +370,7 @@ function SequenceMonitor:unload()
     self.engine:stop()
     self.sequence_id = nil
     self.sequence = nil
+    self.start_frame = 0
     self.total_frames = 0
     self.playhead = 0
     self.fps_num = nil
@@ -398,7 +404,7 @@ function SequenceMonitor:seek_to_frame(frame)
     self.engine:seek(frame)
 
     -- engine:seek uses set_position_silent (no callback), update manually
-    self.playhead = math.max(0, math.floor(frame))
+    self.playhead = math.max(self.start_frame, math.floor(frame))
     self:_ensure_playhead_visible()
     if self.sequence and self.sequence:is_masterclip() then
         self:_schedule_persist()
@@ -468,7 +474,7 @@ end
 function SequenceMonitor:set_playhead(frame)
     assert(frame ~= nil, string.format(
         "SequenceMonitor(%s):set_playhead: frame is nil", self.view_id))
-    local pos = math.max(0, math.floor(frame))
+    local pos = math.max(self.start_frame, math.floor(frame))
     if pos == self.playhead then return end
 
     self.playhead = pos
@@ -502,21 +508,22 @@ function SequenceMonitor:set_viewport(start, duration)
         string.format("SequenceMonitor(%s):set_viewport: start/duration must be numbers",
             self.view_id))
     local total = self.total_frames
-    if total <= 0 then return end
+    local physical = total - self.start_frame
+    if physical <= 0 then return end
 
     -- Clamp duration
-    duration = math.max(MIN_VIEWPORT_FRAMES, math.min(duration, total))
+    duration = math.max(MIN_VIEWPORT_FRAMES, math.min(duration, physical))
     duration = math.floor(duration)
 
     -- Clamp start
-    start = math.max(0, math.min(start, total - duration))
+    start = math.max(self.start_frame, math.min(start, total - duration))
     start = math.floor(start)
 
     self.viewport_start = start
     self.viewport_duration = duration
 
     -- Postcondition: viewport must be within sequence bounds
-    assert(self.viewport_start >= 0 and self.viewport_start + self.viewport_duration <= total,
+    assert(self.viewport_start >= self.start_frame and self.viewport_start + self.viewport_duration <= total,
         string.format("SequenceMonitor(%s):set_viewport: postcondition failed: [%d, %d+%d=%d] > total=%d",
             self.view_id, self.viewport_start, self.viewport_start, self.viewport_duration,
             self.viewport_start + self.viewport_duration, total))
@@ -530,20 +537,21 @@ function SequenceMonitor:zoom_by(factor)
     assert(type(factor) == "number" and factor > 0,
         string.format("SequenceMonitor(%s):zoom_by: factor must be positive number, got %s",
             self.view_id, tostring(factor)))
-    if self.total_frames <= 0 then return end
+    local physical = self.total_frames - self.start_frame
+    if physical <= 0 then return end
 
     local new_dur = math.floor(self.viewport_duration * factor)
-    new_dur = math.max(MIN_VIEWPORT_FRAMES, math.min(new_dur, self.total_frames))
+    new_dur = math.max(MIN_VIEWPORT_FRAMES, math.min(new_dur, physical))
 
     -- Center on playhead
     local new_start = self.playhead - math.floor(new_dur / 2)
-    new_start = math.max(0, math.min(new_start, self.total_frames - new_dur))
+    new_start = math.max(self.start_frame, math.min(new_start, self.total_frames - new_dur))
 
     self.viewport_start = math.floor(new_start)
     self.viewport_duration = new_dur
 
     -- Postcondition: viewport must be within sequence bounds
-    assert(self.viewport_start >= 0 and self.viewport_start + self.viewport_duration <= self.total_frames,
+    assert(self.viewport_start >= self.start_frame and self.viewport_start + self.viewport_duration <= self.total_frames,
         string.format("SequenceMonitor(%s):zoom_by: postcondition failed: [%d, %d+%d=%d] > total=%d",
             self.view_id, self.viewport_start, self.viewport_start, self.viewport_duration,
             self.viewport_start + self.viewport_duration, self.total_frames))
@@ -553,14 +561,15 @@ end
 
 --- Reset viewport to full extent (zoom-to-fit).
 function SequenceMonitor:zoom_to_fit()
-    self.viewport_start = 0
-    self.viewport_duration = self.total_frames
+    self.viewport_start = self.start_frame
+    self.viewport_duration = self.total_frames - self.start_frame
     self:_notify()
 end
 
 --- Ensure playhead is visible within viewport. Shifts viewport if needed.
 function SequenceMonitor:_ensure_playhead_visible()
-    if self.total_frames <= 0 or self.viewport_duration >= self.total_frames then
+    local physical_frames = self.total_frames - self.start_frame
+    if physical_frames <= 0 or self.viewport_duration >= physical_frames then
         return  -- Full extent, playhead always visible
     end
     local vp_end = self.viewport_start + self.viewport_duration
@@ -570,7 +579,7 @@ function SequenceMonitor:_ensure_playhead_visible()
         self.viewport_start = self.playhead - self.viewport_duration + 1
     end
     -- Re-clamp
-    self.viewport_start = math.max(0, math.min(
+    self.viewport_start = math.max(self.start_frame, math.min(
         self.viewport_start, self.total_frames - self.viewport_duration))
 end
 
@@ -609,10 +618,10 @@ function SequenceMonitor:save_playhead_to_db()
 
     -- Validate before writing — catch view-level playhead drift.
     -- total_frames=0 means unloaded; skip save in that case.
-    if self.total_frames > 0 then
-        assert(self.playhead >= 0 and self.playhead < self.total_frames, string.format(
-            "save_playhead_to_db(%s): playhead %d out of range [0, %d)",
-            self.view_id, self.playhead, self.total_frames))
+    if self.total_frames > self.start_frame then
+        assert(self.playhead >= self.start_frame and self.playhead < self.total_frames, string.format(
+            "save_playhead_to_db(%s): playhead %d out of range [%d, %d)",
+            self.view_id, self.playhead, self.start_frame, self.total_frames))
     end
     self.sequence.playhead_position = self.playhead
     self.sequence:save()
@@ -708,11 +717,89 @@ end
 -- Internal
 --------------------------------------------------------------------------------
 
+local TC_STYLE = [[
+    QLabel {
+        background: #2b2b2b;
+        color: #cccccc;
+        padding: 2px 6px;
+        font-family: "Menlo", "Monaco", monospace;
+        font-size: 11px;
+    }
+]]
+
+function SequenceMonitor:_create_tc_row(parent_layout)
+    local row_layout = qt_constants.LAYOUT.CREATE_HBOX()
+    if qt_constants.LAYOUT.SET_MARGINS then
+        qt_constants.LAYOUT.SET_MARGINS(row_layout, 0, 0, 0, 0)
+    end
+    if qt_constants.LAYOUT.SET_SPACING then
+        qt_constants.LAYOUT.SET_SPACING(row_layout, 0)
+    end
+
+    -- Playhead TC (left-aligned)
+    self._tc_playhead_label = qt_constants.WIDGET.CREATE_LABEL("00:00:00:00")
+    qt_constants.PROPERTIES.SET_STYLE(self._tc_playhead_label, TC_STYLE)
+    if qt_constants.PROPERTIES.SET_ALIGNMENT then
+        qt_constants.PROPERTIES.SET_ALIGNMENT(
+            self._tc_playhead_label, qt_constants.PROPERTIES.ALIGN_LEFT)
+    end
+    qt_constants.LAYOUT.ADD_WIDGET(row_layout, self._tc_playhead_label)
+
+    -- Duration (right-aligned)
+    self._tc_duration_label = qt_constants.WIDGET.CREATE_LABEL("--")
+    qt_constants.PROPERTIES.SET_STYLE(self._tc_duration_label, TC_STYLE)
+    if qt_constants.PROPERTIES.SET_ALIGNMENT then
+        qt_constants.PROPERTIES.SET_ALIGNMENT(
+            self._tc_duration_label, qt_constants.PROPERTIES.ALIGN_RIGHT)
+    end
+    qt_constants.LAYOUT.ADD_WIDGET(row_layout, self._tc_duration_label)
+
+    -- Wrap in a container widget
+    local tc_row_widget = qt_constants.WIDGET.CREATE()
+    qt_constants.LAYOUT.SET_ON_WIDGET(tc_row_widget, row_layout)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tc_row_widget, "Expanding", "Fixed")
+    qt_constants.LAYOUT.ADD_WIDGET(parent_layout, tc_row_widget)
+end
+
+function SequenceMonitor:_update_tc_display()
+    if not self._tc_playhead_label then return end
+
+    -- Playhead TC
+    if self.sequence_id and self.fps_num and self.fps_den then
+        local tc_str = timecode.format_ruler_label(self.playhead, {
+            fps_numerator = self.fps_num,
+            fps_denominator = self.fps_den,
+        })
+        qt_constants.PROPERTIES.SET_TEXT(self._tc_playhead_label, tc_str)
+    else
+        qt_constants.PROPERTIES.SET_TEXT(self._tc_playhead_label, "00:00:00:00")
+    end
+
+    -- Duration: NLE-standard measurement
+    -- Both marks: in→out. Only in: in→end. Only out: start→out. Neither: total.
+    if not self._tc_duration_label then return end
+    if self.sequence_id and self.fps_num and self.fps_den then
+        local mark_in = self:get_mark_in()
+        local mark_out = self:get_mark_out()
+        local range_start = mark_in or self.start_frame
+        local range_end = mark_out or self.total_frames
+        local dur_frames = range_end - range_start
+        local dur_str = timecode.format_ruler_label(dur_frames, {
+            fps_numerator = self.fps_num,
+            fps_denominator = self.fps_den,
+        })
+        qt_constants.PROPERTIES.SET_TEXT(self._tc_duration_label, dur_str)
+    else
+        qt_constants.PROPERTIES.SET_TEXT(self._tc_duration_label, "--")
+    end
+end
+
 function SequenceMonitor:_set_title(text)
     qt_constants.PROPERTIES.SET_TEXT(self._title_label, text)
 end
 
 function SequenceMonitor:_notify()
+    self:_update_tc_display()
     for _, fn in ipairs(self._listeners) do
         fn()
     end

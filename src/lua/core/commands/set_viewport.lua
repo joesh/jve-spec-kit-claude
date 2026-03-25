@@ -10,6 +10,9 @@ local SPEC = {
         sequence_id = { required = true, kind = "string" },
         viewport_start_time = { required = true },
         viewport_duration = { required = true },
+        video_scroll_offset = {},
+        audio_scroll_offset = {},
+        video_audio_split_ratio = {},
     },
 }
 
@@ -23,6 +26,15 @@ function M.register(executors, undoers, db)
         end
         sequence.viewport_start_time = args.viewport_start_time
         sequence.viewport_duration = args.viewport_duration
+        if args.video_scroll_offset ~= nil then
+            sequence.video_scroll_offset = args.video_scroll_offset
+        end
+        if args.audio_scroll_offset ~= nil then
+            sequence.audio_scroll_offset = args.audio_scroll_offset
+        end
+        if args.video_audio_split_ratio ~= nil then
+            sequence.video_audio_split_ratio = args.video_audio_split_ratio
+        end
         if not sequence:save() then
             return { success = false, error_message = "SetViewport: failed to save" }
         end

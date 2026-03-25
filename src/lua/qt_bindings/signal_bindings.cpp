@@ -251,33 +251,41 @@ private:
     lua_State* lua_state;
 };
 
-// Event filter class to maintain bottom-anchored scrolling
+// Event filter class to maintain bottom-anchored scrolling.
+// Suspended during programmatic scroll restoration (sequence tab switch)
+// to prevent async singleShot callbacks from clobbering the restored position.
 class BottomAnchorFilter : public QObject
 {
 public:
-    BottomAnchorFilter(QScrollArea* sa) : QObject(sa), scrollArea(sa), distanceFromBottom(0) {}
+    BottomAnchorFilter(QScrollArea* sa) : QObject(sa), scrollArea(sa), distanceFromBottom(0), suspended(false) {}
+
+    void setSuspended(bool s) { suspended = s; }
+    bool isSuspended() const { return suspended; }
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override
     {
-        if (scrollArea && scrollArea->widget()) {
-            QScrollBar* vbar = scrollArea->verticalScrollBar();
-            if (vbar) {
-                if (event->type() == QEvent::Resize) {
-                    int oldMax = vbar->maximum();
-                    int oldValue = vbar->value();
-                    distanceFromBottom = oldMax - oldValue;
+        if (suspended || !scrollArea || !scrollArea->widget()) {
+            return QObject::eventFilter(obj, event);
+        }
+        QScrollBar* vbar = scrollArea->verticalScrollBar();
+        if (vbar) {
+            if (event->type() == QEvent::Resize) {
+                int oldMax = vbar->maximum();
+                int oldValue = vbar->value();
+                distanceFromBottom = oldMax - oldValue;
 
-                    QTimer::singleShot(0, [this, vbar]() {
-                        int newMax = vbar->maximum();
-                        int newValue = newMax - distanceFromBottom;
-                        vbar->setValue(qMax(0, newValue));
-                    });
-                } else if (event->type() == QEvent::Wheel || event->type() == QEvent::MouseButtonPress) {
-                    QTimer::singleShot(0, [this, vbar]() {
-                        distanceFromBottom = vbar->maximum() - vbar->value();
-                    });
-                }
+                QTimer::singleShot(0, [this, vbar]() {
+                    if (suspended) return;
+                    int newMax = vbar->maximum();
+                    int newValue = newMax - distanceFromBottom;
+                    vbar->setValue(qMax(0, newValue));
+                });
+            } else if (event->type() == QEvent::Wheel || event->type() == QEvent::MouseButtonPress) {
+                QTimer::singleShot(0, [this, vbar]() {
+                    if (suspended) return;
+                    distanceFromBottom = vbar->maximum() - vbar->value();
+                });
             }
         }
         return QObject::eventFilter(obj, event);
@@ -286,6 +294,7 @@ protected:
 private:
     QScrollArea* scrollArea;
     int distanceFromBottom;
+    bool suspended;
 };
 
 // ============================================================================
@@ -393,6 +402,81 @@ int lua_set_line_edit_editing_finished_handler(lua_State* L) {
     return 0;
 }
 
+// Panel focus filter: installed on QApplication, catches MouseButtonPress,
+// walks up widget parent chain to find a registered panel container, calls
+// Lua handler with the panel widget. One filter for all panels.
+class PanelFocusFilter : public QObject
+{
+public:
+    PanelFocusFilter(lua_State* L_ptr, const std::string& handler)
+        : QObject(QCoreApplication::instance()), lua_state(L_ptr), handler_name(handler) {}
+
+    void add_panel_widget(QWidget* w, const std::string& panel_id) {
+        if (w) {
+            panel_widgets.push_back(w);
+            panel_ids.push_back(panel_id);
+        }
+    }
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override {
+        if (event->type() != QEvent::MouseButtonPress || !lua_state)
+            return QObject::eventFilter(obj, event);
+
+        QWidget* clicked = qobject_cast<QWidget*>(obj);
+        if (!clicked) return QObject::eventFilter(obj, event);
+
+        // Walk up parent chain to find a registered panel container
+        QWidget* w = clicked;
+        while (w) {
+            for (size_t i = 0; i < panel_widgets.size(); ++i) {
+                if (w == panel_widgets[i]) {
+                    lua_getglobal(lua_state, handler_name.c_str());
+                    if (lua_isfunction(lua_state, -1)) {
+                        lua_pushstring(lua_state, panel_ids[i].c_str());
+                        if (lua_pcall(lua_state, 1, 0, 0) != LUA_OK) {
+                            handle_lua_callback_error(lua_state);
+                        }
+                    } else {
+                        lua_pop(lua_state, 1);
+                    }
+                    return QObject::eventFilter(obj, event);
+                }
+            }
+            w = w->parentWidget();
+        }
+        return QObject::eventFilter(obj, event);
+    }
+
+private:
+    lua_State* lua_state;
+    std::string handler_name;
+    std::vector<QWidget*> panel_widgets;
+    std::vector<std::string> panel_ids;
+};
+
+static PanelFocusFilter* g_panel_focus_filter = nullptr;
+
+// Install global panel focus filter: qt_install_panel_focus_filter(handler_name)
+// Call once at startup. handler_name receives the panel widget on click.
+int lua_install_panel_focus_filter(lua_State* L) {
+    const char* handler_name = luaL_checkstring(L, 1);
+    if (!handler_name) return 0;
+
+    g_panel_focus_filter = new PanelFocusFilter(L, handler_name);
+    QCoreApplication::instance()->installEventFilter(g_panel_focus_filter);
+    return 0;
+}
+
+// Register a panel widget with the global focus filter: qt_register_panel_focus_widget(widget, panel_id)
+int lua_register_panel_focus_widget(lua_State* L) {
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    const char* panel_id = luaL_checkstring(L, 2);
+    if (!widget || !panel_id || !g_panel_focus_filter) return 0;
+    g_panel_focus_filter->add_panel_widget(widget, panel_id);
+    return 0;
+}
+
 // Global key handler
 int lua_set_global_key_handler(lua_State* L) {
     QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1)); // Passed but not used for filter installation
@@ -431,6 +515,30 @@ int lua_set_splitter_moved_handler(lua_State* L) {
             lua_pushinteger(L, index);
 
             if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+                handle_lua_callback_error(L);
+            }
+        } else {
+            lua_pop(L, 1);
+        }
+    });
+    return 0;
+}
+
+// Scroll area vertical scroll changed handler
+int lua_set_scroll_area_v_scroll_handler(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    const char* handler_name = lua_tostring(L, 2);
+    if (!sa || !handler_name) return 0;
+
+    QScrollBar* sb = sa->verticalScrollBar();
+    if (!sb) return 0;
+
+    std::string handler_str = std::string(handler_name);
+    QObject::connect(sb, &QScrollBar::valueChanged, [L, handler_str](int value) {
+        lua_getglobal(L, handler_str.c_str());
+        if (lua_isfunction(L, -1)) {
+            lua_pushinteger(L, value);
+            if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
                 handle_lua_callback_error(L);
             }
         } else {
@@ -532,6 +640,22 @@ int lua_set_scroll_area_anchor_bottom(lua_State* L) {
         QScrollBar* vbar = sa->verticalScrollBar();
         if (vbar) {
             vbar->setValue(vbar->maximum());
+        }
+    }
+    return 0;
+}
+
+int lua_suspend_scroll_area_anchor(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    bool suspend = lua_toboolean(L, 2);
+    if (!sa || !sa->viewport()) return 0;
+
+    // Find the BottomAnchorFilter installed on this scroll area's viewport
+    for (QObject* child : sa->viewport()->children()) {
+        BottomAnchorFilter* filter = dynamic_cast<BottomAnchorFilter*>(child);
+        if (filter) {
+            filter->setSuspended(suspend);
+            break;
         }
     }
     return 0;

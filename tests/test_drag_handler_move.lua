@@ -137,21 +137,17 @@ do
     }
 
     drag_handler.handle_release(view, drag_state, {})
-    assert(#executed == 1, "expected batch move command when shifting track")
-    local batch = executed[1]
-    assert(batch.type == "BatchCommand", "expected BatchCommand wrapper")
-    local specs = require("dkjson").decode(batch.params.commands_json)
-    assert(#specs == 2, "expected move specs for both clips")
+    assert(#executed == 2, "expected 2 MoveClipToTrack commands for multi-clip drag")
     local targets = {}
     local expected_frames = {
         clip_a = 240,
         clip_b = 264,
     }
-    for _, spec in ipairs(specs) do
-        assert(spec.command_type == "MoveClipToTrack", "move specs should be MoveClipToTrack")
-        targets[spec.parameters.target_track_id] = true
-        local expected = expected_frames[spec.parameters.clip_id]
-        assert(spec.parameters.pending_new_start == expected, "move should carry delta start for each clip")
+    for _, cmd in ipairs(executed) do
+        assert(cmd.type == "MoveClipToTrack", "each command should be MoveClipToTrack")
+        targets[cmd.params.target_track_id] = true
+        local expected = expected_frames[cmd.params.clip_id]
+        assert(cmd.params.pending_new_start == expected, "move should carry delta start for each clip")
     end
     assert(targets["track_b"] and targets["track_c"], "moves should land on track_b and track_c maintaining offsets")
 end

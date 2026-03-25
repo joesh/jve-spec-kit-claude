@@ -1,4 +1,5 @@
 #include "binding_macros.h"
+#include <QApplication>
 #include <QDialog>
 #include <QFileDialog>
 #include <QMessageBox>
@@ -144,15 +145,29 @@ int lua_show_confirm_dialog(lua_State* L)
 
 // Custom Dialog Bindings
 // CREATE(title [, width, height]) -> dialog widget
+// CREATE(title [, width, height [, parent]])
 int lua_create_dialog(lua_State* L) {
     const char* title = luaL_checkstring(L, 1);
     int width = luaL_optinteger(L, 2, 400);
     int height = luaL_optinteger(L, 3, 300);
 
-    QDialog* dialog = new QDialog();
+    // Optional parent widget (arg 4) — inherits appearance (dark mode) on macOS
+    QWidget* parent = nullptr;
+    if (lua_gettop(L) >= 4 && !lua_isnil(L, 4)) {
+        parent = get_widget<QWidget>(L, 4);
+    }
+
+    QDialog* dialog = new QDialog(parent);
     dialog->setWindowTitle(QString::fromUtf8(title));
     dialog->resize(width, height);
     dialog->setWindowModality(Qt::ApplicationModal);
+
+    // Propagate app stylesheet to parented dialogs (macOS parented dialogs
+    // don't always inherit the application-level stylesheet)
+    auto* app = qobject_cast<QApplication*>(QApplication::instance());
+    if (app && !app->styleSheet().isEmpty()) {
+        dialog->setStyleSheet(app->styleSheet());
+    }
 
     lua_push_widget(L, dialog);
     return 1;

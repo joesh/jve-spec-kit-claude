@@ -36,14 +36,21 @@ local function ensure_playback_initialized()
 end
 
 function M.register(executors, undoers, db)
+    local function sync_playing_state(playing)
+        local ok, ts = pcall(require, 'ui.timeline.timeline_state')
+        if ok and ts.set_is_playing then ts.set_is_playing(playing) end
+    end
+
     local function toggle_play_executor(command)
         if not ensure_playback_initialized() then return true end
         local engine = get_active_engine()
         assert(engine, "TogglePlay: engine is nil after playback initialized")
         if engine:is_playing() then
             engine:stop()
+            sync_playing_state(false)
         else
             engine:play()
+            sync_playing_state(true)
         end
         return true
     end
@@ -57,6 +64,7 @@ function M.register(executors, undoers, db)
         else
             engine:shuttle(1)     -- L = forward shuttle
         end
+        sync_playing_state(true)
         return true
     end
 
@@ -69,6 +77,7 @@ function M.register(executors, undoers, db)
         else
             engine:shuttle(-1)    -- J = reverse shuttle
         end
+        sync_playing_state(true)
         return true
     end
 
@@ -76,6 +85,7 @@ function M.register(executors, undoers, db)
         k_held = true
         local engine = get_active_engine()
         if engine then engine:stop() end
+        sync_playing_state(false)
         return true
     end
 

@@ -220,6 +220,17 @@ end
 -- Startup: resolve project path with retry loop
 -- ---------------------------------------------------------------------------
 
+-- Smoke test hook: schedule a clean exit once the event loop starts.
+-- Fires regardless of which startup path is taken (project open or welcome screen).
+if os.getenv("JVE_QUIT_AFTER_INIT") == "1" then
+    local quit_delay = tonumber(os.getenv("JVE_QUIT_DELAY_MS")) or 2000
+    log.event("JVE_QUIT_AFTER_INIT: will exit after %dms", quit_delay)
+    qt_create_single_shot_timer(quit_delay, function()
+        log.event("JVE_QUIT_AFTER_INIT: quiescent — exiting")
+        os.exit(0)
+    end)
+end
+
 -- Welcome screen handle — survives across retry iterations, destroyed after
 -- main window is created and shown (no window gap).
 local ws_handle = nil
@@ -476,6 +487,9 @@ if mount_result and mount_result.success then
 else
     log.error("Inspector mount failed: %s", tostring(mount_result))
 end
+
+-- Install global click-to-focus before registering panels
+focus_manager.install_click_to_focus()
 
 -- Register all panels with focus manager for visual indicators
 focus_manager.register_panel("project_browser", project_browser, nil, "Project Browser", {

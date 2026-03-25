@@ -2,18 +2,27 @@
 #include <QPushButton>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialogButtonBox>
 #include <QSlider>
 #include <QGroupBox>
 #include <QTextEdit>
 #include <QLineEdit>
 #include <QProgressBar>
+#include <QScrollBar>
 #include <QApplication>
 
 // CONTROL.PROCESS_EVENTS() — drain Qt event queue (also drains GCD main queue on macOS).
+// Also forces pending repaints so widget state changes (disable, text) are visible
+// even when called from within a signal handler.
 // Essential for integration tests: PlaybackController dispatches frame delivery
 // and callbacks via dispatch_async(dispatch_get_main_queue()), which requires
 // the main run loop to be pumped.
 static int lua_process_events(lua_State*) {
+    // sendPostedEvents first to flush deferred layout/paint events,
+    // then processEvents to drain the full queue including repaints.
+    // Without sendPostedEvents, widget changes (setText, setEnabled)
+    // made inside a signal handler aren't visible until the handler returns.
+    QApplication::sendPostedEvents();
     QApplication::processEvents();
     return 0;
 }
@@ -82,6 +91,25 @@ int lua_get_combobox_current_text(lua_State* L) {
     return 1;
 }
 
+int lua_get_scroll_area_v_scroll(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    if (sa && sa->verticalScrollBar()) {
+        lua_pushinteger(L, sa->verticalScrollBar()->value());
+    } else {
+        lua_pushinteger(L, 0);
+    }
+    return 1;
+}
+
+int lua_set_scroll_area_v_scroll(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    int value = luaL_checkinteger(L, 2);
+    if (sa && sa->verticalScrollBar()) {
+        sa->verticalScrollBar()->setValue(value);
+    }
+    return 0;
+}
+
 int lua_set_scroll_area_viewport_margins(lua_State* L) {
     LuaScrollArea* sa = static_cast<LuaScrollArea*>(static_cast<QWidget*>(lua_to_widget(L, 1)));
     int left = luaL_checkinteger(L, 2);
@@ -130,6 +158,27 @@ int lua_set_text_edit_read_only(lua_State* L) {
     QTextEdit* te = get_widget<QTextEdit>(L, 1);
     bool ro = lua_toboolean(L, 2);
     if (te) te->setReadOnly(ro);
+    return 0;
+}
+
+// CONTROL.SCROLL_TEXT_EDIT_TO_END(text_edit)
+int lua_scroll_text_edit_to_end(lua_State* L) {
+    QTextEdit* te = get_widget<QTextEdit>(L, 1);
+    if (te) {
+        te->moveCursor(QTextCursor::End);
+        te->ensureCursorVisible();
+    }
+    return 0;
+}
+
+// CONTROL.SET_BUTTON_AUTO_DEFAULT(button, bool)
+int lua_set_button_auto_default(lua_State* L) {
+    QPushButton* btn = get_widget<QPushButton>(L, 1);
+    bool ad = lua_toboolean(L, 2);
+    if (btn) {
+        btn->setAutoDefault(ad);
+        btn->setDefault(ad);
+    }
     return 0;
 }
 
@@ -188,4 +237,97 @@ int lua_get_combobox_current_index(lua_State* L) {
         lua_pushnil(L);
     }
     return 1;
+}
+
+// ============================================================================
+// QDialogButtonBox bindings
+// ============================================================================
+
+// CONTROL.CREATE_BUTTON_BOX() → button_box widget
+int lua_create_button_box(lua_State* L) {
+    auto* bb = new QDialogButtonBox();
+    lua_push_widget(L, bb);
+    return 1;
+}
+
+// Map Lua role string to QDialogButtonBox::ButtonRole
+static QDialogButtonBox::ButtonRole role_from_string(const char* role) {
+    if (!role) return QDialogButtonBox::ActionRole;
+    if (strcmp(role, "accept") == 0) return QDialogButtonBox::AcceptRole;
+    if (strcmp(role, "reject") == 0) return QDialogButtonBox::RejectRole;
+    if (strcmp(role, "apply") == 0)  return QDialogButtonBox::ApplyRole;
+    if (strcmp(role, "reset") == 0)  return QDialogButtonBox::ResetRole;
+    if (strcmp(role, "help") == 0)   return QDialogButtonBox::HelpRole;
+    return QDialogButtonBox::ActionRole;
+}
+
+// CONTROL.BUTTON_BOX_ADD(button_box, text, role) → button widget
+// role: "accept", "reject", "apply", "reset", "help", "action" (default)
+// Accept-role button automatically becomes the default button.
+// Reject-role button has autoDefault disabled.
+int lua_button_box_add(lua_State* L) {
+    auto* bb = get_widget<QDialogButtonBox>(L, 1);
+    const char* text = luaL_checkstring(L, 2);
+    const char* role_str = lua_isstring(L, 3) ? lua_tostring(L, 3) : "action";
+
+    if (!bb) return luaL_error(L, "BUTTON_BOX_ADD: first argument must be QDialogButtonBox");
+
+    auto role = role_from_string(role_str);
+    QPushButton* btn = new QPushButton(QString::fromUtf8(text));
+
+    // Accept role: make it the default button
+    if (role == QDialogButtonBox::AcceptRole) {
+        btn->setDefault(true);
+        btn->setAutoDefault(true);
+    } else {
+        // All non-accept buttons: prevent stealing default on focus
+        btn->setAutoDefault(false);
+        btn->setDefault(false);
+    }
+
+    bb->addButton(btn, role);
+    lua_push_widget(L, btn);
+    return 1;
+}
+
+// CONTROL.BUTTON_BOX_SET_HANDLER(button_box, signal, global_name)
+// signal: "accepted", "rejected"
+int lua_button_box_set_handler(lua_State* L) {
+    auto* bb = get_widget<QDialogButtonBox>(L, 1);
+    const char* signal = luaL_checkstring(L, 2);
+    const char* handler_name = luaL_checkstring(L, 3);
+
+    if (!bb) return luaL_error(L, "BUTTON_BOX_SET_HANDLER: first argument must be QDialogButtonBox");
+
+    lua_State* gL = L;  // capture for lambda
+
+    if (strcmp(signal, "accepted") == 0) {
+        QObject::connect(bb, &QDialogButtonBox::accepted, bb, [gL, handler_name]() {
+            lua_getglobal(gL, handler_name);
+            if (lua_isfunction(gL, -1)) {
+                if (lua_pcall(gL, 0, 0, 0) != 0) {
+                    fprintf(stderr, "BUTTON_BOX accepted handler error: %s\n", lua_tostring(gL, -1));
+                    lua_pop(gL, 1);
+                }
+            } else {
+                lua_pop(gL, 1);
+            }
+        });
+    } else if (strcmp(signal, "rejected") == 0) {
+        QObject::connect(bb, &QDialogButtonBox::rejected, bb, [gL, handler_name]() {
+            lua_getglobal(gL, handler_name);
+            if (lua_isfunction(gL, -1)) {
+                if (lua_pcall(gL, 0, 0, 0) != 0) {
+                    fprintf(stderr, "BUTTON_BOX rejected handler error: %s\n", lua_tostring(gL, -1));
+                    lua_pop(gL, 1);
+                }
+            } else {
+                lua_pop(gL, 1);
+            }
+        });
+    } else {
+        return luaL_error(L, "BUTTON_BOX_SET_HANDLER: unknown signal '%s' (use 'accepted' or 'rejected')", signal);
+    }
+
+    return 0;
 }

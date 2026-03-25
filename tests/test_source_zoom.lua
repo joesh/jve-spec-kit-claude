@@ -50,6 +50,7 @@ package.loaded["core.qt_constants"] = {
     },
     LAYOUT = {
         CREATE_VBOX = function() return { _type = "vbox" } end,
+        CREATE_HBOX = function() return { _type = "hbox" } end,
         SET_SPACING = function() end,
         SET_MARGINS = function() end,
         ADD_WIDGET = function() end,
@@ -58,6 +59,9 @@ package.loaded["core.qt_constants"] = {
     },
     PROPERTIES = {
         SET_STYLE = function() end,
+        SET_ALIGNMENT = function() end,
+        ALIGN_LEFT = "AlignLeft",
+        ALIGN_RIGHT = "AlignRight",
         SET_TEXT = function(label, text) if label then label._text = text end end,
     },
     GEOMETRY = { SET_SIZE_POLICY = function() end },

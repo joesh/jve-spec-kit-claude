@@ -195,6 +195,38 @@ local function notify_command_event(event)
     end
 end
 
+--- Apply __timeline_mutations from a command to the UI cache.
+-- Returns true if mutations were applied, false if not (caller should reload).
+local function apply_command_mutations(cmd)
+    local mutations = cmd:get_parameter("__timeline_mutations")
+    if not mutations then return false end
+    local ts = require('ui.timeline.timeline_state')
+    if not ts.apply_mutations then return false end
+    local fallback_seq = extract_sequence_id(cmd)
+
+    if mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
+        -- Single-bucket format
+        local target_seq = mutations.sequence_id or fallback_seq
+        assert(target_seq and target_seq ~= "",
+            string.format("apply_command_mutations: no sequence_id for %s mutations", cmd.type or "unknown"))
+        return ts.apply_mutations(target_seq, mutations)
+    end
+
+    -- Multi-bucket format (keyed by sequence_id)
+    local applied = false
+    for _, bucket in pairs(mutations) do
+        if type(bucket) == "table" then
+            local target_seq = bucket.sequence_id or fallback_seq
+            assert(target_seq and target_seq ~= "",
+                string.format("apply_command_mutations: no sequence_id in bucket for %s", cmd.type or "unknown"))
+            if ts.apply_mutations(target_seq, bucket) then
+                applied = true
+            end
+        end
+    end
+    return applied
+end
+
 -- Forward compatibility for event listeners
 function M.add_listener(listener)
     if type(listener) == "function" then
@@ -823,14 +855,18 @@ function M._execute_body(command_or_name, params)
             goto cleanup
         end
 
-        -- Assign sequence number and link to parent
+        -- Assign sequence number and chain to current cursor position.
+        -- After each nested save, set_current_sequence_number advances the cursor,
+        -- so siblings chain linearly: child1→pre-root, child2→child1, etc.
+        -- This is used only for cursor restore after undo — group membership
+        -- is determined by undo_group_id, not parent chain.
         sequence_number = history.increment_sequence_number()
         command.sequence_number = sequence_number
-        -- Nested commands must have root command as parent for proper undo/redo tree traversal.
-        -- Using history position would break the chain when root hasn't saved yet.
-        command.parent_sequence_number = root_command_sequence_number
+        command.parent_sequence_number = history.get_current_sequence_number()
+            or root_command_sequence_number
 
-        -- Inherit undo group: explicit group takes precedence over automatic grouping
+        -- Inherit undo group: explicit group (from begin_undo_group) takes
+        -- precedence over automatic grouping (from recording root)
         explicit_group = history.get_current_undo_group_id()
         command.undo_group_id = explicit_group or root_command_sequence_number
 
@@ -883,6 +919,8 @@ function M._execute_body(command_or_name, params)
                 history.set_current_sequence_number(sequence_number)
                 log.event("Nested command %s (seq=%d) saved, group=%s",
                     command.type, sequence_number, tostring(root_command_sequence_number))
+
+                apply_command_mutations(command)
             else
                 result.success = false
                 result.error_message = "Failed to save nested command to database"
@@ -914,9 +952,6 @@ function M._execute_body(command_or_name, params)
     spec = registry.get_spec(command.type)
     if spec and spec.undoable == false then
         -- Capture root playhead/selection for nested recording commands to inherit.
-        -- Non-recording wrappers (e.g. DeleteSelection) don't save themselves,
-        -- but they spawn nested recording commands (BatchCommand) that need
-        -- root_playhead_value to persist to command history.
         if root_playhead_value == nil then
             timeline_state = require('ui.timeline.timeline_state')
             root_playhead_value = timeline_state.get_playhead_position()
@@ -930,7 +965,10 @@ function M._execute_body(command_or_name, params)
                 root_selected_gaps_pre = command.selected_gap_infos_pre
             end
         end
+        -- No implicit undo group — commands that need grouping use explicit
+        -- begin_undo_group/end_undo_group in their executor (e.g., Blade, DeleteSelection).
         result = execute_non_recording(command)
+
         exec_scope:finish("non_recording")
         goto cleanup
     end
@@ -1170,7 +1208,6 @@ function M._execute_body(command_or_name, params)
             local skip_timeline_reload = command_flag(command, "skip_timeline_reload", "__skip_timeline_reload")
             if not skip_timeline_reload then
                  local reload_sequence_id = extract_sequence_id(command)
-                 local mutations = command:get_parameter("__timeline_mutations")
                  local applied_mutations = false
                  local timeline_active_seq = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
                  if reload_sequence_id and reload_sequence_id ~= "" and (not timeline_active_seq or timeline_active_seq == "") then
@@ -1178,22 +1215,10 @@ function M._execute_body(command_or_name, params)
                      timeline_state.init(reload_sequence_id, command.project_id)
                  end
 
-                 if mutations and timeline_state.apply_mutations then
-                     -- Logic to apply mutations ...
-                     -- Simplified for brevity in rewrite, but logic remains same:
-                     if mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
-                        applied_mutations = timeline_state.apply_mutations(mutations.sequence_id or reload_sequence_id, mutations)
-                     else
-                        for _, bucket in pairs(mutations) do
-                             if timeline_state.apply_mutations(bucket.sequence_id or reload_sequence_id, bucket) then
-                                applied_mutations = true
-                             end
-                        end
-                     end
-                 end
+                 applied_mutations = apply_command_mutations(command)
 
                  if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
-                     -- Fallback
+                     log.warn("execute: no mutations for %s, falling back to reload_clips", command.type)
                      timeline_state.reload_clips(reload_sequence_id)
                  end
                  perf.log("ui_refresh")
@@ -1261,105 +1286,70 @@ function M.get_current_sequence_number()
 end
 
 function M:list_history_entries()
-    -- Load Command objects - they know how to label themselves
+    -- Load all commands sorted by sequence_number ASC
     local Command = require("command")
     local commands = Command.load_history()
+    local cmd_labels = require("core.command_labels")
 
     local current_seq = history.get_current_sequence_number() or 0
 
-    local nodes = {}
-    local parent_of = {}
-    local children = {}
-
-    local function add_child(parent, child_seq)
-        local list = children[parent]
-        if not list then
-            list = {}
-            children[parent] = list
+    -- Identify undo groups: first/last member, count
+    local group_first = {}   -- gid → lowest seq
+    local group_last = {}    -- gid → highest seq
+    local group_count = {}   -- gid → member count
+    for _, cmd in ipairs(commands) do
+        local gid = cmd.undo_group_id
+        if gid then
+            local seq = cmd.sequence_number or 0
+            if not group_first[gid] or seq < group_first[gid] then
+                group_first[gid] = seq
+            end
+            if not group_last[gid] or seq > group_last[gid] then
+                group_last[gid] = seq
+            end
+            group_count[gid] = (group_count[gid] or 0) + 1
         end
-        table.insert(list, child_seq)
     end
 
-    -- Build tree structure from Command objects
+    -- Build visible entry list: one entry per command or per group
+    local out = {}
+    local visible_seq_for = {}  -- maps any seq → visible representative seq
+
     for _, cmd in ipairs(commands) do
         local seq = cmd.sequence_number or 0
-        local parent_seq = cmd.parent_sequence_number or 0
+        local gid = cmd.undo_group_id
+        local count = gid and group_count[gid] or 1
 
-        nodes[seq] = {
-            sequence_number = seq,
-            command_type = cmd.type,
-            timestamp = cmd.created_at,
-            parent_sequence_number = cmd.parent_sequence_number,
-            label = cmd:label(),  -- Command computes its own label
-        }
-        parent_of[seq] = parent_seq
-        add_child(parent_seq, seq)
-    end
-
-    local function latest_child_of(seq)
-        local list = children[seq]
-        if not list or #list == 0 then
-            return nil
-        end
-        local best = nil
-        for _, child_seq in ipairs(list) do
-            if not best or child_seq > best then
-                best = child_seq
+        if gid and count > 1 then
+            -- Group member: only emit for first member, skip rest
+            visible_seq_for[seq] = group_first[gid]
+            if seq == group_first[gid] then
+                local base = cmd_labels.label_for_type(cmd.type) or cmd:label()
+                out[#out + 1] = {
+                    sequence_number = seq,
+                    command_type = cmd.type,
+                    timestamp = cmd.created_at,
+                    label = base .. " (" .. count .. ")",
+                    group_last = group_last[gid],
+                }
             end
+        else
+            -- Single command (no group or group of 1)
+            visible_seq_for[seq] = seq
+            out[#out + 1] = {
+                sequence_number = seq,
+                command_type = cmd.type,
+                timestamp = cmd.created_at,
+                label = cmd:label(),
+                group_last = gid and group_last[gid] or nil,
+            }
         end
-        return best
     end
 
-    if current_seq == 0 then
-        local out = {{sequence_number = 0, command_type = "Start", timestamp = nil, parent_sequence_number = nil}}
-        local cursor = 0
-        while true do
-            local child = latest_child_of(cursor)
-            if not child then
-                break
-            end
-            table.insert(out, nodes[child])
-            cursor = child
-        end
-        return out
-    end
-    if not nodes[current_seq] then
-        return {}
-    end
+    -- Map current cursor to visible representative
+    local visible_current = visible_seq_for[current_seq] or current_seq
 
-    local path_rev = {}
-    local cursor = current_seq
-    while cursor and cursor ~= 0 do
-        table.insert(path_rev, cursor)
-        cursor = parent_of[cursor] or 0
-    end
-
-    local path = {}
-    for i = #path_rev, 1, -1 do
-        table.insert(path, path_rev[i])
-    end
-
-    local redo_chain = {}
-    cursor = current_seq
-    while true do
-        local child = latest_child_of(cursor)
-        if not child then
-            break
-        end
-        table.insert(redo_chain, child)
-        cursor = child
-    end
-
-    local out = {}
-    table.insert(out, {sequence_number = 0, command_type = "Start", timestamp = nil, parent_sequence_number = nil})
-    for _, seq in ipairs(path) do
-        table.insert(out, nodes[seq])
-    end
-    for _, seq in ipairs(redo_chain) do
-        table.insert(out, nodes[seq])
-    end
-
-    return out
+    return out, visible_current
 end
 
 function M:jump_to_sequence_number(target_sequence_number)
@@ -1476,6 +1466,63 @@ function M.undo()
     return { success = false, error_message = "Nothing to undo" }
 end
 
+--- Core undo: run undoer + apply mutations. No cursor/selection/playhead/notify.
+-- Mirrors the lean nested forward execution path.
+local function run_undoer(cmd)
+    local undoer = registry.get_undoer(cmd.type)
+    if not undoer then
+        registry.load_command_module("Undo" .. tostring(cmd.type))
+        undoer = registry.get_undoer(cmd.type)
+    end
+    if not undoer then
+        return false, string.format("No undoer registered for %s", tostring(cmd.type))
+    end
+
+    -- Clear forward-execution mutations so the undoer writes clean reverse mutations.
+    cmd:set_parameter("__timeline_mutations", nil)
+
+    local ok, exec_result, extra = pcall(undoer, cmd)
+    if not ok then
+        return false, tostring(exec_result)
+    end
+    local success, err_msg = normalize_executor_result(exec_result)
+    if not success then
+        if (not err_msg or err_msg == "") and type(extra) == "string" then
+            err_msg = extra
+        end
+        return false, err_msg or "Undo executor returned false"
+    end
+
+    if not apply_command_mutations(cmd) then
+        local seq_id = extract_sequence_id(cmd)
+        if seq_id and seq_id ~= "" then
+            log.warn("run_undoer: no mutations for %s, falling back to reload_clips", cmd.type)
+            local ts = require('ui.timeline.timeline_state')
+            if ts.reload_clips then ts.reload_clips(seq_id) end
+        end
+    end
+    return true, nil
+end
+
+--- Undo ceremony: cursor, selection, playhead, notify. Called once after undoer(s).
+local function apply_undo_ceremony(cmd)
+    history.set_current_sequence_number(cmd.parent_sequence_number)
+    history.save_undo_position()
+    state_mgr.restore_selection_from_serialized(
+        cmd.selected_clip_ids_pre, cmd.selected_edge_infos_pre, cmd.selected_gap_infos_pre)
+    if cmd.playhead_value ~= nil then
+        local ts = require('ui.timeline.timeline_state')
+        if ts.set_playhead_position then
+            ts.set_playhead_position(cmd.playhead_value)
+        end
+    end
+    notify_command_event({
+        event = "undo",
+        command = cmd,
+        project_id = cmd.project_id,
+    })
+end
+
 function M.undo_group(group_id)
     assert(db, "undo_group: no database connection")
 
@@ -1484,70 +1531,52 @@ function M.undo_group(group_id)
         return { success = false, error_message = "Nothing to undo" }
     end
 
-    -- Walk backwards from current position, collecting commands in this group
-    -- Follow parent_sequence_number links for branch-safe traversal
-    local commands_to_undo = {}
-    local seq = current_seq
-
-    while seq do
-        local cmd = M.get_command_at_sequence(seq, active_project_id)
-        if not cmd then
-            break
-        end
-        if cmd.undo_group_id ~= group_id then
-            break
-        end
-        table.insert(commands_to_undo, cmd)
-        -- Follow parent link (tree-based traversal, not linear decrement)
-        seq = cmd.parent_sequence_number
-    end
-
-    if #commands_to_undo == 0 then
+    -- Collect all commands in this group up to the current cursor position,
+    -- ordered by sequence_number DESC (highest first = undo in reverse order).
+    local seq_numbers = history.find_group_members(group_id, current_seq, nil)
+    if #seq_numbers == 0 then
         return { success = false, error_message = "No commands found in undo group" }
     end
 
-    -- Undo each command (already in reverse order)
-    for _, cmd in ipairs(commands_to_undo) do
-        local result = M.execute_undo(cmd)
-        if not result.success then
-            return result, cmd
+    undo_redo_in_progress = true
+
+    -- Run undoers + apply mutations per child (lean path, no ceremony)
+    local earliest_cmd = nil
+    for _, seq in ipairs(seq_numbers) do
+        local cmd = M.get_command_at_sequence(seq, active_project_id)
+        if not cmd then
+            undo_redo_in_progress = false
+            return { success = false, error_message = "Command not found at sequence " .. tostring(seq) }
         end
+        local success, err_msg = run_undoer(cmd)
+        if not success then
+            undo_redo_in_progress = false
+            return { success = false, error_message = err_msg }, cmd
+        end
+        earliest_cmd = cmd
     end
 
-    -- Set history pointer to parent of earliest undone command
-    local earliest_cmd = commands_to_undo[#commands_to_undo]
-    history.set_current_sequence_number(earliest_cmd.parent_sequence_number)
-    history.save_undo_position()
-    -- Note: selection is restored by the last execute_undo (root command).
-    -- Nested commands now inherit root's selection, so all restore correctly.
+    -- Ceremony once: cursor, selection, playhead, notify
+    apply_undo_ceremony(earliest_cmd)
+    undo_redo_in_progress = false
 
     return { success = true }
 end
 
-local function execute_redo_command(cmd)
-    assert(cmd, "execute_redo_command requires cmd")
-
-    -- Set flag to prevent UI persistence commands from executing during redo
-    undo_redo_in_progress = true
-
+--- Core redo: run executor + save + apply mutations. No cursor/selection/playhead/notify.
+local function run_redo_executor(cmd)
     local executor = registry.get_executor(cmd.type)
     if not executor then
-        undo_redo_in_progress = false
-        return { success = false, error_message = "No executor for redo command: " .. tostring(cmd.type) }
+        return false, "No executor for redo command: " .. tostring(cmd.type)
     end
 
     local ok, exec_result = pcall(executor, cmd)
     if not ok then
-        last_error_message = tostring(exec_result)
-        undo_redo_in_progress = false
-        return { success = false, error_message = last_error_message }
+        return false, tostring(exec_result)
     end
-
     local success, err_msg = normalize_executor_result(exec_result)
     if not success then
-        last_error_message = err_msg or "Redo executor returned false"
-        undo_redo_in_progress = false
-        return { success = false, error_message = last_error_message }
+        return false, err_msg or "Redo executor returned false"
     end
 
     -- Persist updated mutations (e.g., new split clip IDs generated during redo)
@@ -1556,48 +1585,48 @@ local function execute_redo_command(cmd)
         log.warn("Redo: failed to persist updated command %s", cmd.type)
     end
 
-    history.set_current_sequence_number(cmd.sequence_number)
-    history.save_undo_position()
-    state_mgr.restore_selection_from_serialized(cmd.selected_clip_ids, cmd.selected_edge_infos, cmd.selected_gap_infos)
-
-    -- Re-apply timeline mutations if present (mirror undo behaviour)
-    local timeline_state = require('ui.timeline.timeline_state')
-    local reload_sequence_id = extract_sequence_id(cmd)
-    local mutations = cmd:get_parameter("__timeline_mutations")
-    local applied_mutations = false
-
-    if mutations and timeline_state.apply_mutations then
-        if mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
-            applied_mutations = timeline_state.apply_mutations(mutations.sequence_id or reload_sequence_id, mutations)
-        else
-            for _, bucket in pairs(mutations) do
-                if timeline_state.apply_mutations(bucket.sequence_id or reload_sequence_id, bucket) then
-                    applied_mutations = true
-                end
-            end
+    if not apply_command_mutations(cmd) then
+        local seq_id = extract_sequence_id(cmd)
+        if seq_id and seq_id ~= "" then
+            log.warn("run_redo_executor: no mutations for %s, falling back to reload_clips", cmd.type)
+            local ts = require('ui.timeline.timeline_state')
+            if ts.reload_clips then ts.reload_clips(seq_id) end
         end
     end
+    return true, nil
+end
 
-    if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
-        timeline_state.reload_clips(reload_sequence_id)
+--- Redo ceremony: cursor, selection, playhead, notify. Called once after executor(s).
+local function apply_redo_ceremony(cmd)
+    history.set_current_sequence_number(cmd.sequence_number)
+    history.save_undo_position()
+    state_mgr.restore_selection_from_serialized(
+        cmd.selected_clip_ids, cmd.selected_edge_infos, cmd.selected_gap_infos)
+    local skip_playhead = cmd:get_parameter("__skip_sequence_replay_on_undo")
+    if cmd.playhead_value_post ~= nil and not skip_playhead then
+        local ts = require('ui.timeline.timeline_state')
+        if ts.set_playhead_position then
+            ts.set_playhead_position(cmd.playhead_value_post)
+        end
     end
-
-    -- Restore post-execution playhead position (mirrors undo restoring pre-execution)
-    -- Skip for commands that manage their own view state restoration (e.g., ImportFCP7XML).
-    -- These commands set __skip_sequence_replay_on_undo and restore playhead via sequence_view_states.
-    local skip_playhead_restore = cmd:get_parameter("__skip_sequence_replay_on_undo")
-    if cmd.playhead_value_post ~= nil and timeline_state.set_playhead_position and not skip_playhead_restore then
-        timeline_state.set_playhead_position(cmd.playhead_value_post)
-    end
-
     notify_command_event({
         event = "redo",
         command = cmd,
         project_id = cmd.project_id,
-        sequence_number = cmd.sequence_number
     })
+end
 
-    -- Clear redo-in-progress flag
+local function execute_redo_command(cmd)
+    assert(cmd, "execute_redo_command requires cmd")
+
+    undo_redo_in_progress = true
+    local success, err_msg = run_redo_executor(cmd)
+    if not success then
+        last_error_message = err_msg
+        undo_redo_in_progress = false
+        return { success = false, error_message = err_msg }
+    end
+    apply_redo_ceremony(cmd)
     undo_redo_in_progress = false
 
     return { success = true }
@@ -1651,133 +1680,68 @@ end
 function M.redo_group(group_id)
     assert(db, "redo_group: no database connection")
 
-    local parent = history.get_current_sequence_number() or 0
-    local root_cmd = nil  -- Track root command for selection restore
+    local current_seq = history.get_current_sequence_number() or 0
 
-    -- Follow history tree forward while commands are in this group
-    while true do
-        local next_cmd_info = history.find_latest_child_command(parent)
-        if not next_cmd_info then
-            break
-        end
-
-        local cmd = M.get_command_at_sequence(next_cmd_info.sequence_number, active_project_id)
-        if not cmd or cmd.undo_group_id ~= group_id then
-            break
-        end
-
-        -- First command in group is the root (it captured post-selection)
-        if not root_cmd then
-            root_cmd = cmd
-        end
-
-        local result = execute_redo_command(cmd)
-        if not result.success then
-            return result, cmd
-        end
-
-        parent = cmd.sequence_number
+    -- Collect all commands in this group after the current cursor position,
+    -- ordered by sequence_number ASC (lowest first = redo in chronological order).
+    local seq_numbers = history.find_group_members(group_id, nil, current_seq)
+    if #seq_numbers == 0 then
+        return { success = false, error_message = "No commands found to redo in group" }
     end
 
-    -- Restore post-selection from root command. Nested commands don't have post-selection
-    -- because it's captured AFTER the root executor completes, but nested commands
-    -- execute DURING the root executor. So we restore from root after all redos.
-    if root_cmd then
+    undo_redo_in_progress = true
+
+    -- Run executors + apply mutations per child (lean path, no ceremony)
+    local last_cmd = nil
+    local root_cmd = nil
+    for _, seq in ipairs(seq_numbers) do
+        local cmd = M.get_command_at_sequence(seq, active_project_id)
+        if not cmd then
+            undo_redo_in_progress = false
+            return { success = false, error_message = "Command not found at sequence " .. tostring(seq) }
+        end
+        if not root_cmd then root_cmd = cmd end
+        local success, err_msg = run_redo_executor(cmd)
+        if not success then
+            undo_redo_in_progress = false
+            return { success = false, error_message = err_msg }, cmd
+        end
+        last_cmd = cmd
+    end
+
+    -- Ceremony once: cursor from last command, selection from root
+    apply_redo_ceremony(last_cmd)
+    if root_cmd and root_cmd ~= last_cmd then
         state_mgr.restore_selection_from_serialized(
             root_cmd.selected_clip_ids, root_cmd.selected_edge_infos, root_cmd.selected_gap_infos)
     end
+    undo_redo_in_progress = false
 
     return { success = true }
 end
 
+--- Core undo: run undoer + apply mutations. No cursor/selection/playhead/notify.
+-- Mirrors the lean nested forward execution path.
 function M.execute_undo(original_command)
     log.event("Executing undo for command: %s", tostring(original_command.type))
 
-    -- Set flag to prevent UI persistence commands from executing during undo
     undo_redo_in_progress = true
 
-    local undo_command = original_command:create_undo()
-    
-    -- Get undoer if explicitly registered (overrides command:create_undo logic if needed)
-    local undoer = registry.get_undoer(original_command.type)
-    if not undoer then
-        -- Try to auto-load the undo module, but fail hard if still missing to avoid replaying the forward command.
-        registry.load_command_module("Undo" .. tostring(original_command.type))
-        undoer = registry.get_undoer(original_command.type)
-        if not undoer then
-            local msg = string.format("No undoer registered for %s", tostring(original_command.type))
-            log.error("No undoer registered for %s", tostring(original_command.type))
-            undo_redo_in_progress = false
-            return { success = false, error_message = msg }
-        end
-    end
-    local execution_success = false
-    local undo_error_message = ""
-    
-    local ok, exec_result, extra = pcall(undoer, original_command)
-    if ok then
-        local success, err_msg = normalize_executor_result(exec_result)
-        if (not success) and (not err_msg or err_msg == "") and type(extra) == "string" then
-            err_msg = extra
-        end
-        execution_success = success
-        undo_error_message = err_msg or ""
-    else
-        execution_success = false
-        undo_error_message = tostring(exec_result)
-    end
+    local success, err_msg = run_undoer(original_command)
 
     local result = { success = false, error_message = "", result_data = "" }
-
-    if execution_success then
+    if success then
         result.success = true
+        local undo_command = original_command:create_undo()
         result.result_data = undo_command:serialize()
-
-        history.set_current_sequence_number(original_command.parent_sequence_number)
-        history.save_undo_position()
-
-        state_mgr.restore_selection_from_serialized(original_command.selected_clip_ids_pre, original_command.selected_edge_infos_pre, original_command.selected_gap_infos_pre)
-
-        -- Handle mutations for Undo
-        local timeline_state = require('ui.timeline.timeline_state')
-        local reload_sequence_id = extract_sequence_id(original_command)
-        local mutations = original_command:get_parameter("__timeline_mutations")
-        local applied_mutations = false
-
-        if mutations and timeline_state.apply_mutations then
-             if mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
-                applied_mutations = timeline_state.apply_mutations(mutations.sequence_id or reload_sequence_id, mutations)
-             else
-                for _, bucket in pairs(mutations) do
-                     if timeline_state.apply_mutations(bucket.sequence_id or reload_sequence_id, bucket) then
-                        applied_mutations = true
-                     end
-                end
-             end
-        end
-
-        if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
-             timeline_state.reload_clips(reload_sequence_id)
-        end
-
-        if original_command.playhead_value ~= nil and timeline_state.set_playhead_position then
-            timeline_state.set_playhead_position(original_command.playhead_value)
-        end
-
+        apply_undo_ceremony(original_command)
         log.event("Undo successful (position=%s)", tostring(history.get_current_sequence_number()))
-        
-        notify_command_event({
-            event = "undo",
-            command = original_command,
-            project_id = original_command.project_id
-        })
     else
-        last_error_message = undo_error_message ~= "" and undo_error_message or last_error_message
-        result.error_message = last_error_message or "Undo execution failed"
+        last_error_message = err_msg or "Undo execution failed"
+        result.error_message = last_error_message
         log.error("Undo failed: %s", tostring(result.error_message))
     end
 
-    -- Clear undo-in-progress flag
     undo_redo_in_progress = false
 
     return result

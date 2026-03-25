@@ -87,8 +87,11 @@ function M.create()
     qt.LAYOUT.ADD_STRETCH(right_layout)
 
     local new_btn = qt.WIDGET.CREATE_BUTTON("New Project...")
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(new_btn, false)
     local open_btn = qt.WIDGET.CREATE_BUTTON("Open Project...")
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(open_btn, false)
     local quit_btn = qt.WIDGET.CREATE_BUTTON("Quit")
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(quit_btn, false)
 
     local new_handler = "__welcome_screen_new"
     _G[new_handler] = function()
@@ -149,6 +152,11 @@ end
 --- Clean up _G handler references.
 -- @param handle table: from M.create()
 function M.destroy(handle)
+    -- Close the dialog widget first, then clean up _G handlers
+    if handle.dialog then
+        local qt = require("core.qt_constants")
+        qt.DIALOG.CLOSE(handle.dialog)
+    end
     for _, name in ipairs(handle.globals) do
         _G[name] = nil
     end

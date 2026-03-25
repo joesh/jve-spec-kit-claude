@@ -55,58 +55,56 @@ print("=== TimelineZoomIn / TimelineZoomOut Tests ===")
 assert(timeline_state.get_viewport_duration() == 300,
     string.format("Initial viewport expected 300, got %d", timeline_state.get_viewport_duration()))
 
--- Test 1: ZoomIn reduces duration by 20% (multiplies by 0.8)
-print("Test 1: ZoomIn reduces duration by 20%")
+-- Test 1: ZoomIn halves duration (multiplies by 0.5)
+print("Test 1: ZoomIn halves duration")
 local result = command_manager.execute("TimelineZoomIn", { project_id = "default_project" })
 assert(result.success, "TimelineZoomIn should succeed: " .. tostring(result.error_message))
--- 300 * 0.8 = 240 frames (8 seconds)
-assert(timeline_state.get_viewport_duration() == 240,
-    string.format("ZoomIn should reduce to 240 frames (8s), got %d", timeline_state.get_viewport_duration()))
+-- 300 * 0.5 = 150 frames (5 seconds)
+assert(timeline_state.get_viewport_duration() == 150,
+    string.format("ZoomIn should reduce to 150 frames (5s), got %d", timeline_state.get_viewport_duration()))
 
--- Test 2: ZoomOut increases duration by 25% (multiplies by 1.25)
-print("Test 2: ZoomOut increases duration by 25%")
+-- Test 2: ZoomOut doubles duration (multiplies by 2.0)
+print("Test 2: ZoomOut doubles duration")
 timeline_state.set_viewport_duration(300)  -- reset to 10 seconds
 result = command_manager.execute("TimelineZoomOut", { project_id = "default_project" })
 assert(result.success, "TimelineZoomOut should succeed: " .. tostring(result.error_message))
--- 300 * 1.25 = 375 frames (12.5 seconds)
-assert(timeline_state.get_viewport_duration() == 375,
-    string.format("ZoomOut should increase to 375 frames (12.5s), got %d", timeline_state.get_viewport_duration()))
+-- 300 * 2.0 = 600 frames (20 seconds)
+assert(timeline_state.get_viewport_duration() == 600,
+    string.format("ZoomOut should increase to 600 frames (20s), got %d", timeline_state.get_viewport_duration()))
 
 -- Test 3: ZoomIn enforces minimum 1 second viewport
 print("Test 3: ZoomIn enforces minimum 1 second viewport")
 timeline_state.set_viewport_duration(30)  -- 1 second exactly
 result = command_manager.execute("TimelineZoomIn", { project_id = "default_project" })
 assert(result.success, "TimelineZoomIn should succeed at minimum")
--- 30 * 0.8 = 24 frames, but minimum is 30 frames (1 second)
+-- 30 * 0.5 = 15 frames, but minimum is 30 frames (1 second)
 assert(timeline_state.get_viewport_duration() == 30,
     string.format("ZoomIn should stay at minimum 30 frames (1s), got %d", timeline_state.get_viewport_duration()))
 
 -- Test 4: Multiple ZoomIn calls accumulate
 print("Test 4: Multiple ZoomIn calls accumulate")
 timeline_state.set_viewport_duration(300)  -- Start at 10 seconds
-command_manager.execute("TimelineZoomIn", { project_id = "default_project" })  -- 240 frames
-command_manager.execute("TimelineZoomIn", { project_id = "default_project" })  -- 192 frames
--- 300 * 0.8 * 0.8 = 192
-assert(timeline_state.get_viewport_duration() == 192,
-    string.format("Two ZoomIn calls should result in 192 frames, got %d", timeline_state.get_viewport_duration()))
+command_manager.execute("TimelineZoomIn", { project_id = "default_project" })  -- 150 frames
+command_manager.execute("TimelineZoomIn", { project_id = "default_project" })  -- 75 frames
+-- 300 * 0.5 * 0.5 = 75
+assert(timeline_state.get_viewport_duration() == 75,
+    string.format("Two ZoomIn calls should result in 75 frames, got %d", timeline_state.get_viewport_duration()))
 
 -- Test 5: Multiple ZoomOut calls accumulate
 print("Test 5: Multiple ZoomOut calls accumulate")
 timeline_state.set_viewport_duration(300)  -- Start at 10 seconds
-command_manager.execute("TimelineZoomOut", { project_id = "default_project" })  -- 375 frames
-command_manager.execute("TimelineZoomOut", { project_id = "default_project" })  -- floor(375*1.25) = 468
--- 300 * 1.25 = 375, floor(375 * 1.25) = 468
-local expected_min = 468
-local expected_max = 469
-assert(timeline_state.get_viewport_duration() >= expected_min and timeline_state.get_viewport_duration() <= expected_max,
-    string.format("Two ZoomOut calls should result in 468-469 frames, got %d", timeline_state.get_viewport_duration()))
+command_manager.execute("TimelineZoomOut", { project_id = "default_project" })  -- 600 frames
+command_manager.execute("TimelineZoomOut", { project_id = "default_project" })  -- 1200 frames
+-- 300 * 2.0 * 2.0 = 1200
+assert(timeline_state.get_viewport_duration() == 1200,
+    string.format("Two ZoomOut calls should result in 1200 frames, got %d", timeline_state.get_viewport_duration()))
 
--- Test 6: ZoomIn then ZoomOut returns close to original
+-- Test 6: ZoomIn then ZoomOut returns to original
 print("Test 6: ZoomIn/ZoomOut round-trip")
 timeline_state.set_viewport_duration(300)  -- 10 seconds
-command_manager.execute("TimelineZoomIn", { project_id = "default_project" })  -- 240 frames
-command_manager.execute("TimelineZoomOut", { project_id = "default_project" })  -- floor(240*1.25) = 300
--- 300 * 0.8 * 1.25 = 300 exactly
+command_manager.execute("TimelineZoomIn", { project_id = "default_project" })  -- 150 frames
+command_manager.execute("TimelineZoomOut", { project_id = "default_project" })  -- 150 * 2.0 = 300
+-- 300 * 0.5 * 2.0 = 300 exactly
 assert(timeline_state.get_viewport_duration() == 300,
     string.format("ZoomIn/ZoomOut round-trip should return to 300 frames, got %d", timeline_state.get_viewport_duration()))
 

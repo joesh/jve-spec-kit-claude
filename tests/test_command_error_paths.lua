@@ -225,7 +225,7 @@ q = mock_query({
 cmd = Command.parse_from_query(q, nil)
 check("parse empty JSON → empty params", next(cmd.parameters) == nil)
 
--- 3e. Layout 1 (17+ cols) with valid JSON
+-- 3e. Layout 1 (17+ cols) with valid JSON — matches schema column order
 q = mock_query({
     [0] = "cmd_id_4",     -- id
     [1] = "parent_1",     -- parent_id
@@ -233,19 +233,21 @@ q = mock_query({
     [3] = "SplitClip",    -- command_type
     [4] = '{"position":42}',  -- command_args
     [5] = 0,              -- parent_sequence_number
-    [6] = "pre",          -- pre_hash
-    [7] = "post",         -- post_hash
-    [8] = 2000,           -- timestamp
-    [9] = 99,             -- playhead_value
-    [10] = 24,            -- playhead_rate
-    [11] = "[]",          -- selected_clip_ids
-    [12] = "[]",          -- selected_edge_infos
-    [13] = "[]",          -- selected_gap_infos
-    [14] = "[]",          -- selected_clip_ids_pre
-    [15] = "[]",          -- selected_edge_infos_pre
-    [16] = "[]",          -- selected_gap_infos_pre
-    [17] = "Executed",    -- status
-}, 18)
+    [6] = 42,             -- undo_group_id
+    [7] = "pre",          -- pre_hash
+    [8] = "post",         -- post_hash
+    [9] = 2000,           -- timestamp
+    [10] = 99,            -- playhead_value
+    [11] = 24,            -- playhead_rate
+    [12] = 100,           -- playhead_value_post
+    [13] = 24,            -- playhead_rate_post
+    [14] = "[]",          -- selected_clip_ids
+    [15] = "[]",          -- selected_edge_infos
+    [16] = "[]",          -- selected_gap_infos
+    [17] = "[]",          -- selected_clip_ids_pre
+    [18] = "[]",          -- selected_edge_infos_pre
+    [19] = "[]",          -- selected_gap_infos_pre
+}, 20)
 
 cmd = Command.parse_from_query(q, "proj1")
 check("parse layout1 → command", cmd ~= nil)

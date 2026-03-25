@@ -20,11 +20,9 @@ local log = require("core.logger").for_area("commands")
 local focus_manager = require("ui.focus_manager")
 local timeline_state = require("ui.timeline.timeline_state")
 local command_manager = require("core.command_manager")
-local database = require("core.database")
-local Command = require("command")
 local uuid = require("uuid")
 local Clip = require("models.clip")
-local json = require("dkjson")
+
 
 local project_browser = nil
 do
@@ -36,35 +34,6 @@ end
 
 local M = {}
 
-local function get_active_sequence_rate()
-    local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
-    if not sequence_id or sequence_id == "" then
-        error("clipboard_actions: missing active sequence_id for sequence rate detection", 2)
-    end
-
-    local Sequence = require("models.sequence")
-    local sequence = Sequence.load(sequence_id)
-
-    if not sequence then
-        error("clipboard_actions: active sequence not found: " .. tostring(sequence_id), 2)
-    end
-
-    if not sequence.frame_rate or not sequence.frame_rate.fps_numerator or not sequence.frame_rate.fps_denominator then
-        error(string.format("clipboard_actions: sequence %s missing frame rate", tostring(sequence_id)), 2)
-    end
-
-    local num = sequence.frame_rate.fps_numerator
-    local den = sequence.frame_rate.fps_denominator
-
-    -- Validate frame rate values
-    if num and num > 0 and den and den > 0 then
-        return num, den
-    else
-        error(string.format("clipboard_actions: invalid sequence frame rate %s/%s for %s",
-            tostring(num), tostring(den), tostring(sequence_id)), 2)
-    end
-end
-
 local function load_clip_properties(clip_id)
     assert(clip_id and clip_id ~= "", "clipboard_actions.load_clip_properties: clip_id required")
     local Property = require("models.property")
@@ -73,7 +42,7 @@ local function load_clip_properties(clip_id)
 end
 
 local function resolve_clip_entry(entry)
-    if type(entry) == "table" and entry.start_value and entry.track_id then
+    if type(entry) == "table" and entry.timeline_start and entry.track_id then
         return entry
     end
     if type(entry) == "table" and entry.id and timeline_state.get_clip_by_id then
@@ -87,6 +56,98 @@ local function resolve_clip_entry(entry)
         return clip
     end
     error("clipboard_actions.resolve_clip_entry: unresolvable entry type " .. type(entry))
+end
+
+--- Copy clips in mark range [mark_in, mark_out) to clipboard.
+-- Clips partially overlapping are clipped to the range boundaries.
+local function copy_mark_range()
+    local mark_in = timeline_state.get_mark_in and timeline_state.get_mark_in()
+    local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out()
+    if not mark_in or not mark_out or mark_out <= mark_in then
+        return false, "Marks not set or empty range"
+    end
+
+    -- Sequence rate for timeline→source unit conversion
+    local seq_fps_num = timeline_state.get_sequence_fps_numerator()
+    local seq_fps_den = timeline_state.get_sequence_fps_denominator()
+    local seq_rate = seq_fps_num / seq_fps_den
+
+    local all_clips = timeline_state.get_clips and timeline_state.get_clips() or {}
+    local clip_payloads = {}
+
+    for _, clip in ipairs(all_clips) do
+        local clip_start = clip.timeline_start
+        local clip_end = clip_start + clip.duration
+        -- Skip clips entirely outside mark range
+        if clip_end <= mark_in or clip_start >= mark_out then goto continue end
+
+        assert(clip.rate and clip.rate.fps_numerator and clip.rate.fps_denominator,
+            "copy_mark_range: clip " .. tostring(clip.id) .. " missing rate")
+
+        -- Clip to mark range boundaries
+        local eff_start = math.max(clip_start, mark_in)
+        local eff_end = math.min(clip_end, mark_out)
+        local eff_duration = eff_end - eff_start
+
+        -- Adjust source_in/source_out for the trimmed portion.
+        -- left_trim/right_trim are in timeline frames; source coords are in source units
+        -- (video frames or audio samples). Convert via clip_rate/seq_rate.
+        local left_trim = eff_start - clip_start
+        local right_trim = clip_end - eff_end
+        local clip_rate = clip.rate.fps_numerator / clip.rate.fps_denominator
+        local source_per_timeline = clip_rate / seq_rate
+
+        local source_left = math.floor(left_trim * source_per_timeline + 0.5)
+        local source_right = math.floor(right_trim * source_per_timeline + 0.5)
+        local source_in = clip.source_in + source_left
+        local source_out = clip.source_out - source_right
+
+        clip_payloads[#clip_payloads + 1] = {
+            original_id = clip.id,
+            track_id = clip.track_id,
+            media_id = clip.media_id,
+            fps_numerator = clip.rate.fps_numerator,
+            fps_denominator = clip.rate.fps_denominator,
+            master_clip_id = clip.master_clip_id,
+            owner_sequence_id = clip.owner_sequence_id,
+            clip_kind = clip.clip_kind,
+            timeline_start = eff_start,
+            duration = eff_duration,
+            source_in = source_in,
+            source_out = source_out,
+            name = clip.name,
+            offline = clip.offline,
+            copied_properties = load_clip_properties(clip.id),
+        }
+        ::continue::
+    end
+
+    if #clip_payloads == 0 then
+        return false, "No clips in mark range"
+    end
+
+    -- Offsets relative to mark_in
+    for _, entry in ipairs(clip_payloads) do
+        entry.offset_frames = entry.timeline_start - mark_in
+        log.event("  clipboard entry: track=%s name=%s offset=%d dur=%d src_in=%d src_out=%d",
+            tostring(entry.track_id), tostring(entry.name),
+            entry.offset_frames, entry.duration, entry.source_in, entry.source_out)
+    end
+
+    local payload = {
+        kind = "timeline_clips",
+        project_id = (timeline_state.get_project_id and timeline_state.get_project_id()) or nil,
+        sequence_id = (timeline_state.get_sequence_id and timeline_state.get_sequence_id()) or nil,
+        reference_start_frame = mark_in,
+        clips = clip_payloads,
+        count = #clip_payloads,
+    }
+    assert(payload.project_id and payload.project_id ~= "")
+    assert(payload.sequence_id and payload.sequence_id ~= "")
+
+    clipboard.set(payload)
+    log.event("Copied %d clip(s) from mark range [%d, %d)", #clip_payloads, mark_in, mark_out)
+    return true
 end
 
 local function copy_timeline_selection()
@@ -175,107 +236,16 @@ local function copy_timeline_selection()
     return true
 end
 
-local function paste_timeline(payload)
-    if type(payload) ~= "table" or payload.kind ~= "timeline_clips" then
-        return false, "Clipboard does not contain timeline clips"
-    end
-
-    local active_sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
-    assert(active_sequence_id and active_sequence_id ~= "", "clipboard_actions.paste_timeline: missing active sequence_id")
-    if payload.sequence_id and payload.sequence_id ~= active_sequence_id then
-        return false, string.format("Clipboard sequence '%s' differs from active sequence_id '%s'",
-            tostring(payload.sequence_id), tostring(active_sequence_id))
-    end
-
+local function paste_timeline()
     local project_id = (timeline_state.get_project_id and timeline_state.get_project_id()) or nil
     assert(project_id and project_id ~= "", "clipboard_actions.paste_timeline: missing active project_id")
 
-    assert(timeline_state.get_playhead_position, "clipboard_actions.paste_timeline: timeline_state missing get_playhead_position")
-    local playhead_ms = timeline_state.get_playhead_position()
-    assert(playhead_ms ~= nil, "clipboard_actions.paste_timeline: playhead position is nil")
-
-    -- Get active sequence frame rate from database
-    local seq_fps_num, seq_fps_den = get_active_sequence_rate()
-
-    -- Convert playhead (milliseconds) to frames at sequence rate
-    local playhead_frames = math.floor((playhead_ms / 1000.0) * (seq_fps_num / seq_fps_den))
-
-    local clips = payload.clips or {}
-    if #clips == 0 then
-        return false, "Clipboard is empty"
+    local result = command_manager.execute("Paste", {
+        project_id = project_id,
+    })
+    if not result or not result.success then
+        return false, result and result.error_message or "Paste command failed"
     end
-
-    local new_selection = {}
-    local tracks = database.load_tracks(active_sequence_id)
-    local track_lookup = {}
-    for _, track in ipairs(tracks) do
-        if track and track.id then
-            track_lookup[track.id] = track
-        end
-    end
-
-    for _, clip_data in ipairs(clips) do
-        if clip_data.track_id and clip_data.media_id then
-            local track = assert(track_lookup[clip_data.track_id], "clipboard_actions.paste_timeline: missing track for clip")
-            local track_type = assert(track.track_type, "clipboard_actions.paste_timeline: missing track type")
-
-            -- All coords are integers
-            assert(type(clip_data.timeline_start) == "number", "clipboard_actions.paste_timeline: timeline_start must be integer")
-            assert(type(clip_data.duration) == "number", "clipboard_actions.paste_timeline: duration must be integer")
-            assert(type(clip_data.source_in) == "number", "clipboard_actions.paste_timeline: source_in must be integer")
-            assert(type(clip_data.source_out) == "number", "clipboard_actions.paste_timeline: source_out must be integer")
-
-            -- Calculate offset from reference point
-            assert(clip_data.offset_frames ~= nil, "clipboard_actions.paste_timeline: clip missing offset_frames")
-            local offset_frames = clip_data.offset_frames
-            local paste_start_frame = playhead_frames + offset_frames
-
-            -- Clipboard clips are single video OR audio clips (not linked pairs)
-            -- Paste directly using Overwrite command
-            assert(track_type == "VIDEO" or track_type == "AUDIO",
-                "clipboard_actions.paste_timeline: unsupported track type: " .. tostring(track_type))
-
-            local clip_id = uuid.generate()
-            local cmd = assert(Command.create("Overwrite", project_id),
-                "clipboard_actions.paste_timeline: failed to create command")
-            cmd:set_parameters({
-                sequence_id = active_sequence_id,
-                track_id = track.id,
-                overwrite_time = paste_start_frame,
-                duration = clip_data.duration,
-                source_in = clip_data.source_in,
-                source_out = clip_data.source_out,
-                project_id = project_id,
-                clip_id = clip_id,
-            })
-            -- master_clip_id is the masterclip sequence ID (master_clip_id on timeline clips)
-            if clip_data.master_clip_id then
-                cmd:set_parameter("master_clip_id", clip_data.master_clip_id)
-            end
-            if clip_data.name then
-                cmd:set_parameter("clip_name", clip_data.name)
-            end
-            assert(clip_data.master_clip_id,
-                "clipboard_actions.paste_timeline: missing master_clip_id")
-
-            local result = command_manager.execute(cmd)
-            assert(result and result.success,
-                string.format("clipboard_actions.paste_timeline: paste failed: %s",
-                    result and result.error_message or "unknown error"))
-
-            new_selection[#new_selection + 1] = {id = clip_id}
-        end
-    end
-
-    if #new_selection == 0 then
-        return false, "Clipboard clips missing media references"
-    end
-
-    if timeline_state and timeline_state.set_selection then
-        timeline_state.set_selection(new_selection)
-    end
-
-    log.event("Pasted %d timeline clip(s)", #new_selection)
     return true
 end
 
@@ -334,8 +304,8 @@ local function copy_browser_selection()
                         source_out = assert(clip.source_out,
                             "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing source_out"),
                         master_clip_id = clip.master_clip_id,
-                        start_value = assert(clip.start_value,
-                            "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing start_value"),
+                        timeline_start = assert(clip.timeline_start,
+                            "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing timeline_start"),
                         enabled = clip.enabled,
                         offline = clip.offline,
                         project_id = assert(clip.project_id or entry.project_id,
@@ -390,44 +360,45 @@ local function paste_browser(payload)
     local project_id = assert(payload.project_id, "clipboard_actions.paste_browser: payload missing project_id")
     local target_bin_override = resolve_target_bin(nil)
 
-    local specs = {}
+    command_manager.begin_undo_group("PasteBrowser")
+
+    local pasted = 0
+    local failed = 0
     for _, item in ipairs(items) do
         if item.snapshot and item.snapshot.media_id then
-            local params = {
+            local result = command_manager.execute("DuplicateMasterClip", {
                 project_id = project_id,
                 clip_snapshot = item.snapshot,
                 bin_id = target_bin_override or item.bin_id,
                 new_clip_id = uuid.generate(),
                 name = item.duplicate_name,
-                copied_properties = item.copied_properties
-            }
-            specs[#specs + 1] = {
-                command_type = "DuplicateMasterClip",
-                parameters = params
-            }
+                copied_properties = item.copied_properties,
+            })
+            assert(type(result) == "table", "paste_browser: execute returned non-table")
+            if result.success then
+                pasted = pasted + 1
+            else
+                failed = failed + 1
+                log.error("paste_browser: DuplicateMasterClip failed: %s",
+                    result.error_message or "unknown")
+            end
         end
     end
 
-    if #specs == 0 then
-        return false, "Clipboard snapshot missing media references"
+    command_manager.end_undo_group()
+
+    if failed > 0 then
+        log.warn("paste_browser: %d of %d paste(s) failed", failed, pasted + failed)
     end
-
-    local commands_json = json.encode(specs)
-    local result = command_manager.execute("BatchCommand", {
-        commands_json = commands_json,
-        project_id = project_id,
-    })
-
-    if not result or not result.success then
-        local message = (result and result.error_message) or "Paste failed"
-        return false, message
+    if pasted == 0 then
+        return false, "Clipboard snapshot missing media references"
     end
 
     if project_browser and project_browser.refresh then
         project_browser.refresh()
     end
 
-    log.event("Pasted %d browser clip(s)", #specs)
+    log.event("Pasted %d browser clip(s)", pasted)
     return true
 end
 
@@ -436,6 +407,12 @@ end
 function M.copy()
     local focused_panel = focus_manager.get_focused_panel and focus_manager.get_focused_panel()
     if focused_panel == "timeline" then
+        -- Marks take priority over selection for copy
+        local mark_in = timeline_state.get_mark_in and timeline_state.get_mark_in()
+        local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out()
+        if mark_in and mark_out and mark_out > mark_in then
+            return copy_mark_range()
+        end
         return copy_timeline_selection()
     elseif focused_panel == "project_browser" then
         return copy_browser_selection()
@@ -456,7 +433,7 @@ function M.paste()
         if focused_panel ~= "timeline" then
             return false, "Timeline paste requires timeline focus"
         end
-        return paste_timeline(payload)
+        return paste_timeline()
     elseif payload.kind == "browser_master_clips" then
         if focused_panel ~= "project_browser" then
             return false, "Browser paste requires project browser focus"

@@ -70,6 +70,12 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
     local viewport_start = opts.view_start_frame or 0
     local viewport_dur = opts.view_duration_frames or Sequence.default_viewport_duration(fr.fps_numerator, fr.fps_denominator)
 
+    local start_tc = opts.start_timecode_frame or 0
+    assert(type(start_tc) == "number" and start_tc >= 0,
+        string.format("Sequence.create: start_timecode_frame must be non-negative integer, got %s",
+            tostring(start_tc)))
+    start_tc = math.floor(start_tc)
+
     local sequence = {
         id = opts.id or uuid.generate(),
         project_id = project_id,
@@ -80,10 +86,16 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
         height = h,
         audio_sample_rate = opts.audio_rate or 48000,
 
+        -- Timeline start timecode (display offset only)
+        start_timecode_frame = start_tc,
+
         -- Integer frame coordinates (fps is metadata in frame_rate)
         playhead_position = playhead_pos,
         viewport_start_time = viewport_start,
         viewport_duration = viewport_dur,
+        video_scroll_offset = opts.video_scroll_offset or 0,
+        audio_scroll_offset = opts.audio_scroll_offset or 0,
+        video_audio_split_ratio = opts.video_audio_split_ratio or 0.5,
 
         mark_in = opts.mark_in_frame,   -- nil or integer
         mark_out = opts.mark_out_frame, -- nil or integer
@@ -111,7 +123,8 @@ function Sequence.load(id)
                 SELECT id, project_id, name, kind, fps_numerator, fps_denominator, width, height,
                        playhead_frame, view_start_frame,
                        view_duration_frames, mark_in_frame, mark_out_frame, audio_rate,
-                       selected_clip_ids, selected_edge_infos
+                       selected_clip_ids, selected_edge_infos, start_timecode_frame,
+                       video_scroll_offset, audio_scroll_offset, video_audio_split_ratio
                 FROM sequences WHERE id = ?
             ]])
     
@@ -156,6 +169,16 @@ function Sequence.load(id)
                 selected_clip_ids_json = selected_clip_ids,  -- Let caller parse JSON
                 selected_edge_infos_json = selected_edge_infos,
 
+                -- These columns are NOT NULL DEFAULT in schema; nil means DB corruption
+                start_timecode_frame = assert(stmt:value(16) ~= nil and stmt:value(16),
+                    "Sequence.load: start_timecode_frame is NULL"),
+                video_scroll_offset = assert(stmt:value(17) ~= nil and stmt:value(17),
+                    "Sequence.load: video_scroll_offset is NULL"),
+                audio_scroll_offset = assert(stmt:value(18) ~= nil and stmt:value(18),
+                    "Sequence.load: audio_scroll_offset is NULL"),
+                video_audio_split_ratio = assert(stmt:value(19) ~= nil and stmt:value(19),
+                    "Sequence.load: video_audio_split_ratio is NULL"),
+
                 created_at = os.time(),
                 modified_at = os.time()
             }
@@ -197,10 +220,13 @@ function Sequence:save()
     local stmt = conn:prepare([[
         INSERT INTO sequences
         (id, project_id, name, kind, fps_numerator, fps_denominator, width, height,
-         playhead_frame, view_start_frame, view_duration_frames, mark_in_frame, mark_out_frame, audio_rate,
+         start_timecode_frame,
+         playhead_frame, view_start_frame, view_duration_frames,
+         video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
+         mark_in_frame, mark_out_frame, audio_rate,
          selected_clip_ids, selected_edge_infos,
          created_at, modified_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             project_id = excluded.project_id,
             name = excluded.name,
@@ -209,9 +235,13 @@ function Sequence:save()
             fps_denominator = excluded.fps_denominator,
             width = excluded.width,
             height = excluded.height,
+            start_timecode_frame = excluded.start_timecode_frame,
             playhead_frame = excluded.playhead_frame,
             view_start_frame = excluded.view_start_frame,
             view_duration_frames = excluded.view_duration_frames,
+            video_scroll_offset = excluded.video_scroll_offset,
+            audio_scroll_offset = excluded.audio_scroll_offset,
+            video_audio_split_ratio = excluded.video_audio_split_ratio,
             mark_in_frame = excluded.mark_in_frame,
             mark_out_frame = excluded.mark_out_frame,
             audio_rate = excluded.audio_rate,
@@ -233,35 +263,39 @@ function Sequence:save()
     stmt:bind_value(6, db_fps_den)
     stmt:bind_value(7, self.width)
     stmt:bind_value(8, self.height)
-    stmt:bind_value(9, db_playhead)
-    stmt:bind_value(10, db_view_start)
-    stmt:bind_value(11, db_view_dur)
-    
-    if db_mark_in then 
-        stmt:bind_value(12, db_mark_in) 
-    else 
+    stmt:bind_value(9, self.start_timecode_frame or 0)
+    stmt:bind_value(10, db_playhead)
+    stmt:bind_value(11, db_view_start)
+    stmt:bind_value(12, db_view_dur)
+    stmt:bind_value(13, self.video_scroll_offset or 0)
+    stmt:bind_value(14, self.audio_scroll_offset or 0)
+    stmt:bind_value(15, self.video_audio_split_ratio or 0.5)
+
+    if db_mark_in then
+        stmt:bind_value(16, db_mark_in)
+    else
         if stmt.bind_null then
-            stmt:bind_null(12) 
+            stmt:bind_null(16)
         else
-            stmt:bind_value(12, nil)
+            stmt:bind_value(16, nil)
         end
     end
-    
-    if db_mark_out then 
-        stmt:bind_value(13, db_mark_out) 
-    else 
+
+    if db_mark_out then
+        stmt:bind_value(17, db_mark_out)
+    else
         if stmt.bind_null then
-            stmt:bind_null(13)
+            stmt:bind_null(17)
         else
-            stmt:bind_value(13, nil)
+            stmt:bind_value(17, nil)
         end
     end
-    
-    stmt:bind_value(14, db_audio_rate)
-    stmt:bind_value(15, self.selected_clip_ids_json or "")
-    stmt:bind_value(16, self.selected_edge_infos_json or "")
-    stmt:bind_value(17, self.created_at or os.time())
-    stmt:bind_value(18, self.modified_at)
+
+    stmt:bind_value(18, db_audio_rate)
+    stmt:bind_value(19, self.selected_clip_ids_json or "")
+    stmt:bind_value(20, self.selected_edge_infos_json or "")
+    stmt:bind_value(21, self.created_at or os.time())
+    stmt:bind_value(22, self.modified_at)
 
     local ok = stmt:exec()
     if not ok then
@@ -272,6 +306,27 @@ function Sequence:save()
 
     stmt:finalize()
     return ok
+end
+
+--- Lightweight scroll offset update — avoids full save overhead.
+-- Pass nil for either offset to leave it unchanged.
+function Sequence.update_scroll_offsets(seq_id, video_offset, audio_offset)
+    local db = require("core.database")
+    local conn = assert(db.get_connection(), "Sequence.update_scroll_offsets: no database connection")
+    if video_offset then
+        local stmt = assert(conn:prepare("UPDATE sequences SET video_scroll_offset = ? WHERE id = ?"))
+        stmt:bind_value(1, video_offset)
+        stmt:bind_value(2, seq_id)
+        stmt:exec()
+        stmt:finalize()
+    end
+    if audio_offset then
+        local stmt = assert(conn:prepare("UPDATE sequences SET audio_scroll_offset = ? WHERE id = ?"))
+        stmt:bind_value(1, audio_offset)
+        stmt:bind_value(2, seq_id)
+        stmt:exec()
+        stmt:finalize()
+    end
 end
 
 -- Count all sequences in the database
@@ -422,6 +477,13 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
     local width = has_video and media.width or 1920
     local height = has_video and media.height or 1080
 
+    -- TC origin from media metadata (set at import time, e.g. DRP MediaStartTime)
+    local start_tc_frame = 0
+    local tc_value = media:get_start_tc()
+    if tc_value and tc_value > 0 then
+        start_tc_frame = tc_value
+    end
+
     assert(media.name and media.name ~= "",
         string.format("Sequence.ensure_masterclip: media has no name for media_id=%s", tostring(media_id)))
     local seq = Sequence.create(media.name, project_id,
@@ -430,6 +492,7 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
             id = opts.id,
             kind = "masterclip",
             audio_rate = sample_rate,
+            start_timecode_frame = start_tc_frame,
         })
     assert(seq:save(), string.format(
         "Sequence.ensure_masterclip: failed to save masterclip sequence for media_id=%s",
@@ -449,10 +512,10 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
             clip_kind = "master",
             track_id = vtrack.id,
             owner_sequence_id = seq.id,
-            timeline_start = 0,
+            timeline_start = start_tc_frame,
             duration = duration_frames,
-            source_in = 0,
-            source_out = duration_frames,
+            source_in = start_tc_frame,
+            source_out = start_tc_frame + duration_frames,
             fps_numerator = fps_num,
             fps_denominator = fps_den,
         })
@@ -472,6 +535,10 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
                 })
             assert(atrack:save(), "Sequence.ensure_masterclip: failed to save audio track")
 
+            -- Audio source_in in absolute TC (samples).
+            -- Authoritative audio TC comes from media metadata (DRP MediaStartTime
+            -- converted to samples at audio rate). Falls back to 0 for media without TC.
+            local audio_tc = media:get_audio_start_tc() or 0
             local aclip = Clip.create(
                 string.format("%s (Audio %d)", media.name, ch), media_id, {
                     id = replay_audio_clip_ids[ch],
@@ -479,10 +546,10 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
                     clip_kind = "master",
                     track_id = atrack.id,
                     owner_sequence_id = seq.id,
-                    timeline_start = 0,
+                    timeline_start = start_tc_frame,
                     duration = duration_frames,
-                    source_in = 0,
-                    source_out = duration_samples,
+                    source_in = audio_tc,
+                    source_out = audio_tc + duration_samples,
                     fps_numerator = sample_rate,
                     fps_denominator = 1,
                 })
@@ -499,6 +566,9 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
 
     return seq.id
 end
+
+--- Migrate a legacy masterclip from relative [0, duration) to absolute TC.
+-- Called from Sequence.load() when start_timecode_frame > 0.
 
 --- Find the masterclip sequence_id for a given media_id.
 -- @param media_id string
@@ -711,18 +781,34 @@ end
 -- mark_out_frame columns). Stream clips keep source_in=0, source_out=full
 -- always — marks do NOT constrain the rendering view.
 
---- Set mark-in point (video frame units).
+--- Set mark-in point (video frame units, absolute TC).
 -- @param frame number Frame position in video timebase
 function Sequence:set_in(frame)
     assert(type(frame) == "number", "Sequence:set_in: frame must be a number")
+    local dur = self:content_duration()
+    if dur > 0 then
+        local start = self.start_timecode_frame or 0
+        local end_frame = start + dur
+        assert(frame >= start and frame < end_frame,
+            string.format("Sequence:set_in(%s): frame %d out of [%d, %d)",
+                tostring(self.id), frame, start, end_frame))
+    end
     self.mark_in = frame
     self:save()
 end
 
---- Set mark-out point (video frame units).
+--- Set mark-out point (video frame units, absolute TC).
 -- @param frame number Frame position in video timebase
 function Sequence:set_out(frame)
     assert(type(frame) == "number", "Sequence:set_out: frame must be a number")
+    local dur = self:content_duration()
+    if dur > 0 then
+        local start = self.start_timecode_frame or 0
+        local end_frame = start + dur
+        assert(frame >= start and frame <= end_frame,
+            string.format("Sequence:set_out(%s): frame %d out of [%d, %d]",
+                tostring(self.id), frame, start, end_frame))
+    end
     self.mark_out = frame
     self:save()
 end
@@ -1253,9 +1339,8 @@ function Sequence:content_duration()
 end
 
 --- Set playhead position with bounds validation.
--- Asserts frame is within [0, content_duration). Catches out-of-range writes
--- at the point of introduction rather than at the read boundary.
--- @param frame integer  playhead position in video frames
+-- Asserts frame is within [start_tc, start_tc + content_duration).
+-- @param frame integer  playhead position in video frames (absolute TC)
 function Sequence:set_playhead(frame)
     assert(type(frame) == "number",
         string.format("Sequence:set_playhead(%s): frame must be number, got %s",
@@ -1263,14 +1348,16 @@ function Sequence:set_playhead(frame)
     assert(frame == math.floor(frame),
         string.format("Sequence:set_playhead(%s): frame must be integer, got %s",
             tostring(self.id), tostring(frame)))
-    assert(frame >= 0,
-        string.format("Sequence:set_playhead(%s): frame must be >= 0, got %d",
-            tostring(self.id), frame))
+    local start = self.start_timecode_frame or 0
+    assert(frame >= start,
+        string.format("Sequence:set_playhead(%s): frame %d < start_tc %d",
+            tostring(self.id), frame, start))
     local duration = self:content_duration()
     if duration > 0 then
-        assert(frame < duration,
-            string.format("Sequence:set_playhead(%s): frame %d >= content duration %d",
-                tostring(self.id), frame, duration))
+        local end_frame = start + duration
+        assert(frame < end_frame,
+            string.format("Sequence:set_playhead(%s): frame %d >= end %d (start_tc=%d, dur=%d)",
+                tostring(self.id), frame, end_frame, start, duration))
     end
     self.playhead_position = frame
 end

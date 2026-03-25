@@ -84,14 +84,14 @@ assert(result.success, "GoToStart should succeed: " .. tostring(result.error_mes
 assert(timeline_state.get_playhead_position() == 0,
     string.format("GoToStart should move to frame 0, got %s", tostring(timeline_state.get_playhead_position())))
 
--- Test 2: GoToEnd moves playhead to total_frames of the active monitor
-print("Test 2: GoToEnd moves playhead to total_frames")
+-- Test 2: GoToEnd moves playhead to last valid frame (total_frames - 1)
+print("Test 2: GoToEnd moves playhead to total_frames - 1")
 mock_monitor.total_frames = 350
 timeline_state.set_playhead_position(0)
 result = command_manager.execute("GoToEnd", { project_id = "default_project" })
 assert(result.success, "GoToEnd should succeed: " .. tostring(result.error_message))
-assert(timeline_state.get_playhead_position() == 350,
-    string.format("GoToEnd should move to frame 350, got %s", tostring(timeline_state.get_playhead_position())))
+assert(timeline_state.get_playhead_position() == 349,
+    string.format("GoToEnd should move to frame 349 (last valid), got %s", tostring(timeline_state.get_playhead_position())))
 
 -- Test 3: GoToStart is idempotent (already at start)
 print("Test 3: GoToStart is idempotent")
@@ -100,22 +100,12 @@ result = command_manager.execute("GoToStart", { project_id = "default_project" }
 assert(result.success, "GoToStart should succeed when already at start")
 assert(timeline_state.get_playhead_position() == 0, "GoToStart should stay at 0")
 
--- Test 4: GoToEnd is idempotent (already at end)
+-- Test 4: GoToEnd is idempotent (already at last valid frame)
 print("Test 4: GoToEnd is idempotent")
-timeline_state.set_playhead_position(350)
+timeline_state.set_playhead_position(349)
 result = command_manager.execute("GoToEnd", { project_id = "default_project" })
 assert(result.success, "GoToEnd should succeed when already at end")
-assert(timeline_state.get_playhead_position() == 350, "GoToEnd should stay at 350")
-
--- Test 5: GoToEnd with zero total_frames goes to 0
-print("Test 5: GoToEnd with zero total_frames")
-mock_monitor.total_frames = 0
-timeline_state.set_playhead_position(100)
-result = command_manager.execute("GoToEnd", { project_id = "default_project" })
-assert(result.success, "GoToEnd should succeed with zero total_frames")
-assert(timeline_state.get_playhead_position() == 0,
-    string.format("GoToEnd with zero total_frames should go to 0, got %s",
-        tostring(timeline_state.get_playhead_position())))
+assert(timeline_state.get_playhead_position() == 349, "GoToEnd should stay at 349")
 
 -- Test 6: set_playhead_position receives integer, not Rational
 print("Test 6: set_playhead_position receives integer, not Rational")

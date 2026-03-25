@@ -85,6 +85,7 @@ function PlaybackEngine.new(config)
     self.direction = 0
     self.speed = 1
     self._position = 0
+    self.start_frame = 0
     self.total_frames = 0
     self.fps_num = nil
     self.fps_den = nil
@@ -201,12 +202,13 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames)
     self.audio_sample_rate = info.audio_sample_rate
     self.current_clip_id = nil
     self.current_audio_clip_ids = {}
-    self._position = 0
+    self.start_frame = seq.start_timecode_frame or 0
+    self._position = self.start_frame
 
     if total_frames and total_frames >= 1 then
         self.total_frames = total_frames
     else
-        self.total_frames = math.max(1, self:_compute_content_end())
+        self.total_frames = math.max(self.start_frame + 1, self:_compute_content_end())
     end
 
     self.max_media_time_us = helpers.calc_time_us_from_frame(
@@ -253,7 +255,7 @@ end
 function PlaybackEngine:_refresh_content_bounds()
     if not self.sequence then return end
 
-    local new_end = math.max(1, self:_compute_content_end())
+    local new_end = math.max(self.start_frame + 1, self:_compute_content_end())
     if new_end == self.total_frames then return end
 
     self.total_frames = new_end
@@ -333,7 +335,7 @@ function PlaybackEngine:_setup_playback_controller()
 
     -- Configure: TMB, bounds
     PLAYBACK.SET_TMB(pc, self._tmb)
-    PLAYBACK.SET_BOUNDS(pc, self.total_frames, self.fps_num, self.fps_den)
+    PLAYBACK.SET_BOUNDS(pc, self.start_frame, self.total_frames, self.fps_num, self.fps_den)
 
     -- Wire surface if already set
     if self._video_surface then
@@ -461,7 +463,7 @@ function PlaybackEngine:_on_controller_position(frame, stopped)
         self:_stop_audio()
     elseif self.transport_mode == "shuttle" and not self.latched then
         -- Boundary latch detection (migrated from deleted Lua _tick)
-        local hit_start = (self.direction < 0 and frame <= 0)
+        local hit_start = (self.direction < 0 and frame <= self.start_frame)
         local hit_end = (self.direction > 0 and frame >= self.total_frames - 1)
         if hit_start or hit_end then
             self:_apply_latch(frame)
@@ -552,6 +554,11 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
         "PlaybackEngine:_build_tmb_clip: clip %s speed_ratio must be non-zero (|sr|<100), got %s",
         clip.id, tostring(speed_ratio)))
 
+    -- Check if media file exists — TMB uses this to generate beep for offline clips
+    local f = io.open(entry.media_path, "r")
+    local is_offline = (f == nil)
+    if f then f:close() end
+
     return {
         clip_id = clip.id,
         media_path = entry.media_path,
@@ -561,6 +568,8 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
         rate_num = clip.rate.fps_numerator,
         rate_den = clip.rate.fps_denominator,
         speed_ratio = speed_ratio,
+        offline = is_offline,
+        volume = clip.volume,
     }
 end
 

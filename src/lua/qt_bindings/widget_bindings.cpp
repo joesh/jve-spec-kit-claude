@@ -3,6 +3,8 @@
 #include <QMainWindow>
 #include <QLabel>
 #include <QLineEdit>
+#include <QTextEdit>
+#include <QAbstractButton>
 #include <QScrollArea>
 #include <QGuiApplication>
 #include <QScreen>
@@ -56,7 +58,8 @@ int lua_set_text_generic(lua_State* L) {
     
     if (QLabel* l = qobject_cast<QLabel*>(w)) l->setText(qtxt);
     else if (QLineEdit* le = qobject_cast<QLineEdit*>(w)) le->setText(qtxt);
-    // Add other types here
+    else if (QTextEdit* te = qobject_cast<QTextEdit*>(w)) te->setPlainText(qtxt);
+    else if (QAbstractButton* ab = qobject_cast<QAbstractButton*>(w)) ab->setText(qtxt);
     
     lua_pushboolean(L, 1);
     return 1;

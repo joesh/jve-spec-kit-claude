@@ -20,6 +20,46 @@ local M = {}
 
 local log = require("core.logger").for_area("media")
 
+--- Run a shell command, capture output to a temp file, read that file.
+-- Avoids io.popen pipes entirely — LuaJIT's pipe reads are susceptible to
+-- EINTR from Qt signals/timers, and there's no portable way to mask signals
+-- in Lua. Writing to a temp file and reading it back sidesteps the issue.
+-- @param cmd string: shell command to execute
+-- @param context string: caller name for assert message
+-- @return string: command output (asserts on failure)
+local function shell_capture(cmd, context)
+    local tmp = os.tmpname()
+    local ok, err = pcall(function()
+        local exit_code = os.execute(cmd .. " > " .. tmp .. " 2>/dev/null")
+        assert(exit_code == 0,
+            string.format("%s: command failed (exit %s): %s", context, tostring(exit_code), cmd))
+    end)
+    if not ok then
+        os.remove(tmp)
+        error(err, 2)
+    end
+    local handle, open_err = io.open(tmp, "r")
+    if not handle then
+        os.remove(tmp)
+        error(string.format("%s: failed to open temp file %s: %s", context, tmp, tostring(open_err)), 2)
+    end
+    local data, read_err = handle:read("*all")
+    handle:close()
+    os.remove(tmp)
+    assert(data, string.format("%s: failed to read temp file %s: %s", context, tmp, tostring(read_err)))
+    return data
+end
+
+--- Read all data from a local file handle (io.open), asserting on failure.
+-- @param handle file: open file handle from io.open
+-- @param context string: caller name for assert message
+-- @return string: file contents
+local function file_read_all(handle, context)
+    local data, err = handle:read("*all")
+    assert(data, string.format("%s: read(*all) failed: %s", context, tostring(err)))
+    return data
+end
+
 --- Unzip .drp file to temporary directory
 -- @param drp_path string: Path to .drp file
 -- @return string|nil: Temp directory path, or nil on error
@@ -190,6 +230,49 @@ local function decode_hex_double(hex_str)
     return decode_hex_double_at(hex_str, 0)
 end
 
+--- Decode a big-endian IEEE 754 double from hex at a BYTE offset.
+-- UIElementsState uses BE encoding (unlike FieldsBlob which is LE).
+local function decode_hex_double_be_at(hex_str, byte_offset)
+    if not hex_str or #hex_str < byte_offset * 2 + 16 then return nil end
+    local ffi = require("ffi")
+    local bytes = ffi.new("uint8_t[8]")
+    for i = 0, 7 do
+        local hex_byte = hex_str:sub(byte_offset * 2 + i * 2 + 1, byte_offset * 2 + i * 2 + 2)
+        local byte_val = tonumber(hex_byte, 16)
+        if not byte_val then return nil end
+        bytes[7 - i] = byte_val  -- reverse for BE→LE
+    end
+    return ffi.cast("double*", bytes)[0]
+end
+
+--- Extract a named double from a UIElementsState hex blob.
+-- UIElementsState TLV format: 4B version, 4B count, then entries:
+--   4B name_byte_count, N bytes UTF-16BE name, 4B type_tag, 1B pad, value
+-- @param hex_str string: Full UIElementsState hex
+-- @param key_name string: ASCII key name (e.g. "UI_SEQUENCE_SCALE")
+-- @return number|nil: The double value, or nil if not found
+local function extract_ui_state_double(hex_str, key_name)
+    if not hex_str or hex_str == "" then return nil end
+    -- Build UTF-16 BE search pattern for the key name
+    local pattern_parts = {}
+    for i = 1, #key_name do
+        pattern_parts[#pattern_parts + 1] = string.format("00%02x", key_name:byte(i))
+    end
+    local pattern = table.concat(pattern_parts)
+    local pos = hex_str:find(pattern, 1, true)
+    if not pos then return nil end
+    -- All offsets in hex char positions (1-based Lua string indices)
+    -- After name pattern: type tag (8 hex) + pad (2 hex) + double (16 hex)
+    local type_hex_start = pos + #pattern
+    local type_hex = hex_str:sub(type_hex_start, type_hex_start + 7)
+    if type_hex ~= "00000026" then return nil end
+    -- Double value starts after type (8 hex) + pad (2 hex) = 10 hex chars
+    local double_hex_start = type_hex_start + 10
+    -- Convert to 0-based byte offset for decode function
+    local double_byte_off = (double_hex_start - 1) / 2
+    return decode_hex_double_be_at(hex_str, double_byte_off)
+end
+
 --- Decode resolution from 32-char hex string (two doubles: width, height)
 -- Example: "00000000000087400000000000e08640" = 1920×1080
 -- @param hex_str string: 32-char hex string
@@ -281,22 +364,26 @@ local function decode_bt_clip_path(hex_str)
     local filename = bytes:sub(fname_data_pos, fname_data_pos + fname_len - 1)
 
     -- Both components must be non-empty to form a valid path
-    if #directory == 0 or #filename == 0 then return nil end
+    if #directory == 0 or #filename == 0 then return nil, nil end
 
-    -- Reject garbled paths: protobuf field data sometimes leaks into filename/directory
-    -- (e.g., "file.mp4\x1a\x18Sun Aug 21"). Valid paths never contain control chars.
+    -- Reject garbled directories (protobuf field data leak). Valid paths never contain control chars.
     if directory:find("[%z\1-\31]") then
         log.warn("decode_bt_clip_path: garbled directory in blob (raw=%s), skipping",
             directory:sub(1, 30))
-        return nil
-    end
-    if filename:find("[%z\1-\31]") then
-        log.warn("decode_bt_clip_path: garbled filename in blob (dir=%s, raw=%s), skipping",
-            directory, filename:sub(1, 30))
-        return nil
+        return nil, nil
     end
 
-    return directory .. "/" .. filename
+    -- Filename may contain control chars (protobuf date fields leaking into
+    -- the filename field — common in audio clip blobs). When this happens,
+    -- the full path is unreliable. Return nil for path but provide the
+    -- directory so the caller can construct the path using the XML <Name>.
+    if filename:find("[%z\1-\31]") then
+        log.detail("decode_bt_clip_path: garbled filename in blob (dir=%s, raw=%s), returning dir only",
+            directory, filename:sub(1, 30))
+        return nil, directory
+    end
+
+    return directory .. "/" .. filename, directory
 end
 
 --- Decode hex string to raw byte string.
@@ -512,6 +599,63 @@ local function decode_bt_audio_duration(hex_str)
     }
 end
 
+--- Decode a LE IEEE 754 double from 16 hex chars without FFI.
+-- Pure Lua implementation safe for high-frequency calls (125K+ clips in large DRPs).
+-- decode_hex_double_at uses ffi.new/ffi.cast which corrupts LuaJIT state at scale.
+-- @param hex16 string: 16 hex characters representing 8 LE bytes
+-- @return number|nil: decoded double, or nil if invalid
+local function decode_le_double_pure(hex16)
+    if #hex16 ~= 16 then return nil end
+    -- Parse 8 bytes (LE order)
+    local b = {}
+    for i = 1, 8 do
+        local byte = tonumber(hex16:sub(i * 2 - 1, i * 2), 16)
+        if not byte then return nil end
+        b[i] = byte
+    end
+    -- IEEE 754 double: sign(1) exponent(11) mantissa(52), big-endian bit layout
+    -- LE bytes: b[1]=LSB .. b[8]=MSB
+    local sign = (b[8] >= 128) and -1 or 1
+    local exp = ((b[8] % 128) * 16) + math.floor(b[7] / 16)
+    -- Mantissa: 52 bits from b[7](low 4 bits) .. b[1]
+    local mantissa = (b[7] % 16) * 2^48
+                   + b[6] * 2^40 + b[5] * 2^32
+                   + b[4] * 2^24 + b[3] * 2^16
+                   + b[2] * 2^8  + b[1]
+    if exp == 0 and mantissa == 0 then return 0.0 end
+    if exp == 0x7FF then return nil end  -- Inf/NaN
+    if exp == 0 then
+        -- Subnormal
+        return sign * 2^(-1022) * (mantissa / 2^52)
+    end
+    return sign * 2^(exp - 1023) * (1 + mantissa / 2^52)
+end
+
+--- Decode clip volume from EffectFiltersBA hex blob.
+-- EffectFiltersBA contains per-clip audio effects (volume, EQ, reverb, etc.) in a
+-- variable-length TLV binary. The volume double (LE IEEE 754, dB) always follows
+-- the marker "0f085f1a0b0a0911" — a TLV field ID that precedes the volume value
+-- in both short (40-byte, volume-only) and long (92+ byte, multi-effect) blobs.
+-- @param hex_str string|nil: hex-encoded EffectFiltersBA content
+-- @return number|nil: volume in dB (0.0 = unity, negative = quieter), nil if no volume found
+local function decode_effect_filters_volume_db(hex_str)
+    if not hex_str or hex_str == "" then return nil end
+    -- Find the volume marker in the hex string
+    local marker = "0f085f1a0b0a0911"
+    local marker_pos = hex_str:find(marker, 1, true)
+    if not marker_pos then return nil end
+    -- Volume double starts immediately after the 8-byte (16 hex char) marker
+    local vol_start = marker_pos + #marker
+    if vol_start + 15 > #hex_str then return nil end  -- need 16 hex chars for the double
+    local hex16 = hex_str:sub(vol_start, vol_start + 15)
+    local db_val = decode_le_double_pure(hex16)
+    if not db_val then return nil end
+    -- Sanity: Resolve volume range is -inf..+12dB fader.
+    -- Anything outside [-100, +24] is corrupt blob data, not volume.
+    if db_val < -100 or db_val > 24 then return nil end
+    return db_val
+end
+
 --- Detect reverse playback from KeyframesBA raw payload.
 -- KeyframesBA contains nested keyframe data where each keyframe has:
 --   {interp, YOut, YIn, Y, XOut, XIn, X}
@@ -674,23 +818,29 @@ end
 -- @param clip_elem table: Sm2MpVideoClip or Sm2MpAudioClip XML element
 -- @return string|nil: decoded original path, or nil if no blob found/parseable
 local function extract_original_path(clip_elem)
-    -- Try BtVideoInfo first (video master clips)
+    -- Get XML name for fallback (blob filename can be garbled for audio clips)
+    local name_elem = find_element(clip_elem, "Name")
+    local xml_name = name_elem and get_text(name_elem)
+
+    -- Try BtVideoInfo first (video master clips — blob filename is reliable)
     local bt_video = find_element(clip_elem, "BtVideoInfo")
     if bt_video then
         local blob_elem = find_direct_child(bt_video, "Clip")
         if blob_elem then
-            local path = decode_bt_clip_path(get_text(blob_elem))
+            local path, directory = decode_bt_clip_path(get_text(blob_elem))
             if path then return path end
+            if directory and xml_name then return directory .. "/" .. xml_name end
         end
     end
 
-    -- Try BtAudioInfo (audio master clips or embedded audio)
+    -- Try BtAudioInfo (audio master clips — blob filename is unreliable,
+    -- use blob directory + XML <Name> which has the correct filename)
     local bt_audio = find_element(clip_elem, "BtAudioInfo")
     if bt_audio then
         local blob_elem = find_direct_child(bt_audio, "Clip")
         if blob_elem then
-            local path = decode_bt_clip_path(get_text(blob_elem))
-            if path then return path end
+            local _, directory = decode_bt_clip_path(get_text(blob_elem))
+            if directory and xml_name then return directory .. "/" .. xml_name end
         end
     end
 
@@ -715,7 +865,10 @@ local function extract_media_duration(clip_elem)
         if time_elem then
             local result = decode_bt_video_time(get_text(time_elem))
             if result and result.num_frames and result.num_frames > 0 then
-                return { num_frames = result.num_frames }
+                return {
+                    num_frames = result.num_frames,
+                    frame_rate = result.frame_rate,
+                }
             end
         end
     end
@@ -1027,10 +1180,11 @@ local function parse_master_clip_element(clip_elem, folder_id)
         file_path = original_path,
     }
 
-    -- Store duration info: video frames directly, or raw audio samples for later conversion
+    -- Store duration + rate info from blob
     if duration_info then
         if duration_info.num_frames then
             master_clip.num_frames = duration_info.num_frames
+            master_clip.frame_rate = duration_info.frame_rate
         elseif duration_info.audio_duration then
             master_clip.audio_duration = duration_info.audio_duration
         end
@@ -1070,17 +1224,26 @@ local function parse_mp_folder_file(mp_file_path, parent_folder_path)
         -- Find master clips in MediaVec
         local media_vec = find_direct_child(folder_elem, "MediaVec")
         if media_vec then
+            local elem_count = 0
+            local clip_count = 0
             for _, element in ipairs(media_vec.children or {}) do
                 if element.tag == "Element" then
+                    elem_count = elem_count + 1
                     for _, child in ipairs(element.children or {}) do
                         if child.tag == "Sm2MpVideoClip" or child.tag == "Sm2MpAudioClip" then
                             local master_clip = parse_master_clip_element(child, db_id)
                             if master_clip then
+                                clip_count = clip_count + 1
                                 table.insert(result.master_clips, master_clip)
                             end
                         end
                     end
                 end
+            end
+            if elem_count > 0 then
+                log.detail("parse_mp_folder: %s — %d elements, %d clips parsed",
+                    mp_file_path:match("([^/]+/MpFolder%.xml)$") or mp_file_path,
+                    elem_count, clip_count)
             end
         end
     end
@@ -1099,13 +1262,7 @@ local function parse_media_pool_hierarchy(tmp_dir, pump)
 
     -- Find all MpFolder.xml files recursively
     local find_cmd = string.format('find "%s/MediaPool" -name "MpFolder.xml" 2>/dev/null', tmp_dir)
-    local find_handle = io.popen(find_cmd)
-    if not find_handle then
-        return { folders = folders, master_clips = master_clips, folder_map = folder_map }
-    end
-
-    local mp_files_raw = find_handle:read("*all")
-    find_handle:close()
+    local mp_files_raw = shell_capture(find_cmd, "parse_media_pool_hierarchy")
 
     local mp_file_list = {}
     for f in mp_files_raw:gmatch("[^\n]+") do
@@ -1215,7 +1372,7 @@ end
 -- @param timeline_id_map table: Sm2Timeline DbId → {name, seq_id} (for TimelineHandleVec)
 -- @param timeline_elem table: <Sm2Timeline> XML element
 -- @param folder_id string|nil: parent folder DbId (from Sm2MpTimelineClip)
-local function extract_timeline_metadata(metadata_map, timeline_id_map, timeline_elem, folder_id)
+local function extract_timeline_metadata(metadata_map, timeline_id_map, timeline_elem, folder_id, mp_clip_elem)
     local name_elem = find_direct_child(timeline_elem, "Name")
     local timeline_name = name_elem and get_text(name_elem) or nil
     if not timeline_name or timeline_name == "" then return end
@@ -1243,12 +1400,38 @@ local function extract_timeline_metadata(metadata_map, timeline_id_map, timeline
         if height then height = math.floor(height) end
     end
 
+    -- MediaExtents: two LE doubles [start_tc_seconds, end_tc_seconds]
+    local start_tc_seconds = nil
+    local media_extents_elem = find_direct_child(sm2_seq, "MediaExtents")
+    if media_extents_elem then
+        start_tc_seconds = decode_hex_double(get_text(media_extents_elem))
+    end
+
+    -- UIElementsState on Sm2Sequence: timeline viewport scale (pixels per frame)
+    local ui_scale = nil
+    local ui_state_elem = find_direct_child(sm2_seq, "UIElementsState")
+    if ui_state_elem then
+        ui_scale = extract_ui_state_double(get_text(ui_state_elem), "UI_SEQUENCE_SCALE")
+    end
+
+    -- CurPlayheadPosition on Sm2MpTimelineClip: playhead in frames relative to start TC
+    local cur_playhead = nil
+    if mp_clip_elem then
+        local ph_elem = find_direct_child(mp_clip_elem, "CurPlayheadPosition")
+        if ph_elem then
+            cur_playhead = tonumber(get_text(ph_elem))
+        end
+    end
+
     metadata_map[seq_id] = {
         name = timeline_name,
         fps = fps,
         width = width,
         height = height,
         folder_id = folder_id,
+        start_tc_seconds = start_tc_seconds,
+        ui_scale = ui_scale,
+        cur_playhead_relative = cur_playhead,
     }
 
     -- Map Sm2Timeline DbId → name (for resolving TimelineHandleVec)
@@ -1267,13 +1450,7 @@ local function build_timeline_metadata_map(tmp_dir, pump)
     local timeline_id_map = {}  -- Sm2Timeline DbId → {name, seq_id}
 
     local find_cmd = string.format('find "%s/MediaPool" -name "MpFolder.xml" 2>/dev/null', tmp_dir)
-    local find_handle = io.popen(find_cmd)
-    if not find_handle then
-        return metadata_map, timeline_id_map
-    end
-
-    local mp_files_raw = find_handle:read("*all")
-    find_handle:close()
+    local mp_files_raw = shell_capture(find_cmd, "build_timeline_metadata_map")
 
     local mp_file_list = {}
     for f in mp_files_raw:gmatch("[^\n]+") do
@@ -1294,7 +1471,7 @@ local function build_timeline_metadata_map(tmp_dir, pump)
 
                 local nested_timeline = find_element(tc_elem, "Sm2Timeline")
                 if nested_timeline then
-                    extract_timeline_metadata(metadata_map, timeline_id_map, nested_timeline, tc_folder_id)
+                    extract_timeline_metadata(metadata_map, timeline_id_map, nested_timeline, tc_folder_id, tc_elem)
                 end
             end
 
@@ -1423,6 +1600,21 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             local mst_elem = find_element(clip_elem, "MediaStartTime")
             local media_start_time = mst_elem and tonumber(get_text(mst_elem))
 
+            -- Extract <MediaFrameRate> — LE hex-encoded double (first 16 chars).
+            -- Available on all clips, even those without <MediaRef>.
+            -- Provides frame_rate independent of blob propagation.
+            local mfr_elem = find_element(clip_elem, "MediaFrameRate")
+            local media_frame_rate = nil
+            if mfr_elem then
+                local mfr_hex = get_text(mfr_elem)
+                if mfr_hex ~= "" and #mfr_hex >= 16 then
+                    local decoded = decode_hex_double_at(mfr_hex, 0)
+                    if decoded and decoded > 0 and decoded < 1000 then
+                        media_frame_rate = decoded
+                    end
+                end
+            end
+
             -- DRP field meanings (confirmed from real DRP XML analysis):
             --   <MediaStartTime> = file's TC origin in SECONDS since midnight (not per-clip)
             --   <In>             = source mark-in offset in TIMELINE FRAMES
@@ -1446,12 +1638,14 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 -- Hex part encodes speed ratio as LE IEEE 754 double
                 if hex_part and #hex_part >= 16 then
                     local speed = decode_hex_double_at(hex_part, 0)
-                    if speed and math.abs(speed) > 0.001 and math.abs(speed) < 100 then
-                        -- Preserve signed speed: negative = reverse playback.
-                        -- Direction is encoded via source_in > source_out swap below.
+                    if speed and math.abs(speed) >= 0.05 and math.abs(speed) < 100 then
+                        -- Accept hex speed if it's in a plausible range (5%-10000%).
+                        -- Below 0.05 (5%) is almost certainly garbage — Resolve's hex
+                        -- field encodes internal values that don't match user-visible
+                        -- speed for variable-speed and some constant-speed clips.
                         clip_speed = speed
                     else
-                        log.warn("DRP retime: clip '%s' hex speed invalid (decoded=%s from '%s')",
+                        log.detail("DRP retime: clip '%s' hex speed unusable (decoded=%s from '%s'), will use MTBA or 1.0",
                                  clip_name, tostring(speed), hex_part:sub(1, 16))
                     end
                 end
@@ -1474,7 +1668,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                         if clip_speed ~= 1.0 then
                             local hex_abs = math.abs(clip_speed)
                             if math.abs(hex_abs - mtba.speed_ratio) / mtba.speed_ratio > 0.05 then
-                                log.warn("DRP retime: clip '%s' hex speed %.4f overridden by MTBA %.4f (YMax/XMax=%.2f/%.2f)",
+                                log.detail("DRP retime: clip '%s' hex speed %.4f → MTBA %.4f (YMax/XMax=%.2f/%.2f)",
                                          clip_name, clip_speed, mtba_speed, mtba.y_max, mtba.x_max)
                             end
                         end
@@ -1485,38 +1679,69 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 end
             end
 
+            -- Final guard: if clip_speed is still implausibly low after hex + MTBA,
+            -- it's garbage. Reset to 1.0 (non-retimed). This catches clips where
+            -- hex speed was garbage AND MTBA was absent or had no speed data.
+            if math.abs(clip_speed) > 0 and math.abs(clip_speed) < 0.05 then
+                log.warn("DRP retime: clip '%s' final speed %.6f implausibly low — treating as non-retimed",
+                    clip_name, clip_speed)
+                clip_speed = 1.0
+            end
+
             local duration_timeline_frames = duration_raw
             local abs_speed = math.abs(clip_speed)
-            local source_in_native
+
+            -- Compute media TC origin: <MediaStartTime> converted to clip-rate units.
+            -- MST is seconds since midnight. When MST=0 or nil, media_tc_origin=0
+            -- (file starts at 00:00:00:00 = file-relative = absolute TC).
+            local media_tc_origin = 0
+            local in_offset  -- <In> converted to native units (file-relative)
             local source_duration
+
             if track_type == "AUDIO" then
-                -- Audio: convert <In> from timeline frames to samples (48kHz)
-                -- Use abs_speed for magnitude; direction handled via coord swap below.
+                -- Audio: convert to samples (48kHz)
                 local audio_speed = (abs_speed ~= 1.0) and abs_speed or 1.0
-                source_in_native = math.floor(in_value * 48000 / frame_rate * audio_speed + 0.5)
+                if media_start_time and media_start_time > 0 then
+                    media_tc_origin = math.floor(media_start_time * 48000 + 0.5)
+                end
+                in_offset = math.floor(in_value * 48000 / frame_rate * audio_speed + 0.5)
                 source_duration = math.floor(duration_raw * 48000 / frame_rate * audio_speed + 0.5)
             elseif abs_speed ~= 1.0 then
                 -- Retimed video: in_value and duration_raw are in RETIMED timebase
-                -- (not actual source frames). Apply speed magnitude to convert.
-                source_in_native = math.floor(in_value * abs_speed + 0.5)
+                if media_start_time and media_start_time > 0 then
+                    media_tc_origin = math.floor(media_start_time * frame_rate + 0.5)
+                end
+                in_offset = math.floor(in_value * abs_speed + 0.5)
                 source_duration = math.floor(duration_raw * abs_speed + 0.5)
             else
                 -- Non-retimed video: in_value IS the source frame directly
-                source_in_native = math.floor(in_value)
+                if media_start_time and media_start_time > 0 then
+                    media_tc_origin = math.floor(media_start_time * frame_rate + 0.5)
+                end
+                in_offset = math.floor(in_value)
                 source_duration = duration_raw
             end
 
+            -- Sanity: MST max = 86400s (midnight). At 48kHz = ~4.1B samples.
+            assert(media_tc_origin >= 0 and media_tc_origin < 5e9, string.format(
+                "parse_resolve_tracks: clip '%s' media_tc_origin=%d out of range (MST=%s)",
+                clip_name, media_tc_origin, tostring(media_start_time)))
+            assert(in_offset >= 0, string.format(
+                "parse_resolve_tracks: clip '%s' in_offset=%d < 0 (in_value=%s speed=%s)",
+                clip_name, in_offset, tostring(in_value), tostring(abs_speed)))
+
+            -- source_in is ABSOLUTE TC = media_tc_origin + file-relative offset
+            local source_in_native = media_tc_origin + in_offset
+
             -- Source extent in VIDEO FRAMES (for media duration tracking).
-            -- The file must be at least this many frames long for this clip to exist.
+            -- File-relative (excludes media_tc_origin — file length, not TC space).
             local source_extent_frames
             if track_type == "AUDIO" then
-                -- Audio source_in/duration are in samples after conversion above,
-                -- but in_value and duration_raw are still in timeline frames.
-                -- Extent in frames = in_value + duration_raw (pre-conversion).
+                -- Audio in_offset/duration are in samples; use pre-conversion frame values
                 source_extent_frames = math.floor(in_value) + duration_raw
             else
-                -- Video (incl. retimed): source_in_native + source_duration
-                source_extent_frames = source_in_native + source_duration
+                -- Video: file-relative in_offset + source_duration
+                source_extent_frames = in_offset + source_duration
             end
             assert(source_extent_frames >= 0, string.format(
                 "parse_resolve_tracks: clip '%s' has negative source_extent_frames=%d",
@@ -1529,6 +1754,18 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 source_in_native, source_out_native = source_out_native, source_in_native
             end
 
+            -- Extract per-clip volume from EffectFiltersBA (direct child of clip element)
+            local efba_elem = find_direct_child(clip_elem, "EffectFiltersBA")
+            local efba_hex = efba_elem and get_text(efba_elem)
+            local volume_linear = 1.0
+            if efba_hex and efba_hex ~= "" then
+                local volume_db = decode_effect_filters_volume_db(efba_hex)
+                if volume_db then
+                    volume_linear = 10 ^ (volume_db / 20)
+                end
+                -- nil = not a volume blob (different effect type, wrong size, etc.) → unity
+            end
+
             local clip = {
                 name = clip_name,
                 start_value = start_frames,        -- timeline position (integer frames)
@@ -1539,9 +1776,11 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 source_in = source_in_native,
                 source_out = source_out_native,
                 clip_speed = clip_speed,            -- signed speed for downstream validation
-                enabled = get_text(find_element(clip_elem, "WasDisbanded")) ~= "true",
+                enabled = get_text(find_element(clip_elem, "WasDisbanded")) ~= "true"
+                    and (tonumber(get_text(find_element(clip_elem, "Flags"))) or 0) % 4 < 2,  -- bit 1 = muted
+                volume = volume_linear,            -- linear gain from EffectFiltersBA (1.0 = 0dB)
                 file_path = file_path,
-                media_key = file_path,
+                file_uuid = get_text(find_element(clip_elem, "MediaRef")),
                 file_id = get_text(find_element(clip_elem, "MediaRef")),
                 frame_rate = frame_rate,
                 media_start_time = media_start_time  -- seconds since midnight (file TC origin)
@@ -1555,29 +1794,42 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 clip_count = clip_count + 1
 
                 if file_path and file_path ~= "" then
-                    local entry = media_lookup[file_path]
+                    -- Key by UUID (file_id) for dedup across volumes.
+                    -- Fall back to path key for clips without MediaRef.
+                    local lookup_key = (clip.file_id and clip.file_id ~= "") and clip.file_id or file_path
+                    local entry = media_lookup[lookup_key]
                     if not entry then
                         -- Use master clip name (original filename) for media name,
                         -- not timeline clip name (user's custom label)
                         local mc_name = media_ref_name_map and media_ref_name_map[clip.file_id]
-                        media_lookup[file_path] = {
-                            id = clip.file_id,
+                        entry = {
+                            file_uuid = (clip.file_id and clip.file_id ~= "") and clip.file_id or nil,
                             name = mc_name or clip.name or file_path,
-                            path = file_path,
+                            file_path = file_path,
                             duration = source_extent_frames,
-                            frame_rate = frame_rate,
-                            width = 1920,
-                            height = 1080,
+                            frame_rate = media_frame_rate,  -- from <MediaFrameRate>; blob propagation may override
                             audio_channels = track_type == "AUDIO" and 2 or 0,
-                            key = file_path,
-                            media_start_time = media_start_time
+                            has_video = track_type == "VIDEO",
+                            media_start_time = media_start_time,
+                            alt_paths = {},
                         }
+                        media_lookup[lookup_key] = entry
                     else
+                        -- Same UUID, maybe different path — track alt_paths
+                        if file_path ~= entry.file_path then
+                            entry.alt_paths[file_path] = true
+                        end
                         if source_extent_frames > entry.duration then
                             entry.duration = source_extent_frames
                         end
                         if track_type == "AUDIO" and entry.audio_channels < 2 then
                             entry.audio_channels = 2
+                        end
+                        if track_type == "VIDEO" then
+                            entry.has_video = true
+                        end
+                        if media_frame_rate and not entry.frame_rate then
+                            entry.frame_rate = media_frame_rate
                         end
                     end
                 end
@@ -1782,12 +2034,12 @@ function M.parse_drp_file(drp_path, progress_cb)
     local project = parse_project_metadata(project_elem)
     pump(10, "Scanning media pool…")
 
-    -- Parse MediaPool XML for master clips
+    -- Parse MediaPool XML for master clips (Pass 1: basic path-only entries)
     local media_pool_path = tmp_dir .. "/MediaPool/Master/MpFolder.xml"
-    local media_items = {}
+    local media_pool_items = {}
     local media_pool_root = parse_xml_file(media_pool_path)
     if media_pool_root then
-        media_items = parse_media_pool(media_pool_root)
+        media_pool_items = parse_media_pool(media_pool_root)
     end
 
     -- Build timeline metadata map by scanning all MediaPool folders
@@ -1824,13 +2076,8 @@ function M.parse_drp_file(drp_path, progress_cb)
     -- Parse sequence XMLs
     local timelines = {}
     local seq_dir = tmp_dir .. "/SeqContainer"
-    local seq_files_raw = io.popen("ls " .. seq_dir .. "/*.xml 2>/dev/null")
+    local seq_files = shell_capture("ls " .. seq_dir .. "/*.xml 2>/dev/null", "parse_drp_file:ls_seq")
     local sequence_file_list = {}
-    local seq_files = ""
-    if seq_files_raw then
-        seq_files = seq_files_raw:read("*all")
-        seq_files_raw:close()
-    end
 
     -- Collect file list for progress counting
     local seq_file_paths = {}
@@ -1889,54 +2136,129 @@ function M.parse_drp_file(drp_path, progress_cb)
                 -- Store folder_id for bin hierarchy import
                 timeline.folder_id = metadata and metadata.folder_id or nil
 
+                -- Store start timecode from MediaExtents (seconds → frames)
+                timeline.start_tc_seconds = metadata and metadata.start_tc_seconds or nil
+
+                -- Viewport data from Resolve's UI state (pixels-per-frame scale + playhead)
+                timeline.ui_scale = metadata and metadata.ui_scale or nil
+                timeline.cur_playhead_relative = metadata and metadata.cur_playhead_relative or nil
+
                 table.insert(timelines, timeline)
                 ::continue_seq::
             end
         end
     end
 
-    local media_lookup = {}
-    for _, item in ipairs(media_items) do
-        if item.file_path and item.file_path ~= "" then
-            media_lookup[item.file_path] = item
+    -- media_items: UUID → entry (one entry per master clip).
+    -- For entries without UUID, key is file_path.
+    -- Secondary path→entry index for path-based lookups.
+    local media_items = {}     -- uuid_or_path → entry
+    local path_to_key = {}     -- file_path → key in media_items (for path lookups)
+
+    local function media_put(entry)
+        local key = (entry.file_uuid and entry.file_uuid ~= "") and entry.file_uuid or entry.file_path
+        if not key or key == "" then return end
+        media_items[key] = entry
+        if entry.file_path and entry.file_path ~= "" then
+            path_to_key[entry.file_path] = key
+        end
+        for alt in pairs(entry.alt_paths or {}) do
+            path_to_key[alt] = key
         end
     end
 
+    local function media_get(file_uuid, file_path)
+        if file_uuid and file_uuid ~= "" and media_items[file_uuid] then
+            return media_items[file_uuid]
+        end
+        if file_path and file_path ~= "" then
+            local key = path_to_key[file_path]
+            if key then return media_items[key] end
+        end
+        return nil
+    end
+
+    -- Seed from parse_media_pool (Pass 1: path-only, no UUIDs)
+    for _, item in ipairs(media_pool_items) do
+        if item.file_path and item.file_path ~= "" then
+            if not item.alt_paths then item.alt_paths = {} end
+            media_put(item)
+        end
+    end
+
+    -- Merge per-timeline media_files (from parse_resolve_tracks, UUID-keyed)
     for _, timeline in ipairs(timelines) do
         if timeline.media_files then
-            for key, info in pairs(timeline.media_files) do
-                local path = info.path or key
-                if path and path ~= "" and not media_lookup[path] then
+            for _, info in pairs(timeline.media_files) do
+                local existing = media_get(info.file_uuid, info.file_path)
+                if existing then
+                    -- Same master clip — merge all paths
+                    local ekey = (existing.file_uuid and existing.file_uuid ~= "") and existing.file_uuid or existing.file_path
+                    if info.file_path and info.file_path ~= existing.file_path then
+                        existing.alt_paths[info.file_path] = true
+                        path_to_key[info.file_path] = ekey
+                    end
+                    for alt in pairs(info.alt_paths or {}) do
+                        if alt ~= existing.file_path then
+                            existing.alt_paths[alt] = true
+                            path_to_key[alt] = ekey
+                        end
+                    end
+                    if (info.duration or 0) > (existing.duration or 0) then
+                        existing.duration = info.duration
+                    end
+                    if (info.audio_channels or 0) > (existing.audio_channels or 0) then
+                        existing.audio_channels = info.audio_channels
+                    end
+                    if info.has_video then
+                        existing.has_video = true
+                    end
+                    if info.media_start_time and not existing.media_start_time then
+                        existing.media_start_time = info.media_start_time
+                    end
+                    if info.frame_rate and not existing.frame_rate then
+                        existing.frame_rate = info.frame_rate
+                    end
+                    -- If existing was path-keyed but info has UUID, upgrade the key
+                    if info.file_uuid and info.file_uuid ~= "" and not existing.file_uuid then
+                        -- Remove old path-based key, re-insert under UUID
+                        media_items[existing.file_path] = nil
+                        existing.file_uuid = info.file_uuid
+                        media_put(existing)
+                    end
+                else
                     local entry = {
-                        name = info.name or path,
-                        file_path = path,
+                        file_uuid = info.file_uuid,
+                        name = info.name or info.file_path,
+                        file_path = info.file_path,
                         duration = info.duration or 0,
-                        resolve_id = info.id,
-                        media_start_time = info.media_start_time
+                        frame_rate = info.frame_rate,
+                        audio_channels = info.audio_channels,
+                        has_video = info.has_video,
+                        media_start_time = info.media_start_time,
+                        alt_paths = info.alt_paths or {},
                     }
-                    table.insert(media_items, entry)
-                    media_lookup[path] = entry
+                    media_put(entry)
                 end
             end
         end
     end
 
+    -- Pass 4: raw XML grep for orphaned paths not found in structured parse
     for _, seq_file in ipairs(sequence_file_list) do
-        local handle = io.open(seq_file, "r")
-        if handle then
-            local content = handle:read("*all")
-            handle:close()
-            for raw_path in content:gmatch("<MediaFilePath>(.-)</MediaFilePath>") do
-                local cleaned = raw_path:match("^%s*(.-)%s*$")
-                if cleaned ~= "" and not media_lookup[cleaned] then
-                    local entry = {
-                        name = cleaned:match("([^/\\]+)$") or cleaned,
-                        file_path = cleaned,
-                        duration = 0
-                    }
-                    table.insert(media_items, entry)
-                    media_lookup[cleaned] = entry
-                end
+        local handle = assert(io.open(seq_file, "r"),
+            string.format("parse_drp_file: failed to open %s", seq_file))
+        local content = file_read_all(handle, "drp_importer:seq_xml:" .. seq_file)
+        handle:close()
+        for raw_path in content:gmatch("<MediaFilePath>(.-)</MediaFilePath>") do
+            local cleaned = raw_path:match("^%s*(.-)%s*$")
+            if cleaned ~= "" and not media_get(nil, cleaned) then
+                media_put({
+                    name = cleaned:match("([^/\\]+)$") or cleaned,
+                    file_path = cleaned,
+                    duration = 0,
+                    alt_paths = {},
+                })
             end
         end
     end
@@ -1949,24 +2271,119 @@ function M.parse_drp_file(drp_path, progress_cb)
         project.settings.frame_rate = timelines[1].fps
     end
 
-    -- Apply authoritative media durations from MediaPool blob data.
-    -- Pool master clips contain Time/TracksBA blobs with actual media duration,
-    -- which is more accurate than source_extent derived from timeline clips.
-    local project_fps = project.settings.frame_rate
-    for _, pmc in ipairs(media_pool_hierarchy.master_clips) do
-        if pmc.file_path then
-            local entry = media_lookup[pmc.file_path]
-            if entry then
-                if pmc.num_frames and pmc.num_frames > 0 then
-                    entry.duration = pmc.num_frames
-                elseif pmc.audio_duration and project_fps then
-                    local audio_frames = math.floor(
-                        pmc.audio_duration.samples * project_fps
-                        / pmc.audio_duration.sample_rate + 0.5)
-                    if audio_frames > 0 then
-                        entry.duration = audio_frames
+    -- UUID enrichment: fast regex scan of sequence XMLs for <MediaRef>+<MediaFilePath>
+    -- pairs. Entries from Pass 1/4 may lack UUIDs (e.g., from skipped sequences).
+    -- Text scan is much faster than full XML parse (~100x for large DRPs).
+    pump(96, "Enriching media UUIDs…")
+    local enriched_count = 0
+    for seq_idx, seq_file in ipairs(sequence_file_list) do
+        local handle = assert(io.open(seq_file, "r"),
+            string.format("parse_drp_file: failed to open %s for UUID enrichment", seq_file))
+        local content = file_read_all(handle, "drp_importer:seq_xml:" .. seq_file)
+        handle:close()
+        do
+            -- Collapse whitespace so patterns can span XML elements on separate lines.
+            -- Lua's . doesn't match \n, so multi-line XML breaks .- patterns.
+            content = content:gsub("%s+", " ")
+            -- Extract <MediaRef>+<MediaFilePath> pairs (UUID enrichment)
+            for ref_id, mfp in content:gmatch("<MediaRef>([^<]+)</MediaRef>.-<MediaFilePath>([^<]+)</MediaFilePath>") do
+                ref_id = ref_id:match("^%s*(.-)%s*$")
+                mfp = mfp:match("^%s*(.-)%s*$")
+                if ref_id ~= "" and mfp ~= "" then
+                    local path_entry = media_get(nil, mfp)
+                    local uuid_entry = media_get(ref_id, nil)
+
+                    if path_entry and uuid_entry and path_entry ~= uuid_entry then
+                        -- Merge path_entry into uuid_entry
+                        if mfp ~= uuid_entry.file_path then
+                            uuid_entry.alt_paths[mfp] = true
+                        end
+                        if (path_entry.duration or 0) > (uuid_entry.duration or 0) then
+                            uuid_entry.duration = path_entry.duration
+                        end
+                        if path_entry.media_start_time and not uuid_entry.media_start_time then
+                            uuid_entry.media_start_time = path_entry.media_start_time
+                        end
+                        media_items[path_entry.file_path] = nil
+                        path_to_key[mfp] = ref_id
+                        enriched_count = enriched_count + 1
+                    elseif path_entry and not path_entry.file_uuid then
+                        media_items[path_entry.file_path] = nil
+                        path_entry.file_uuid = ref_id
+                        media_put(path_entry)
+                        enriched_count = enriched_count + 1
+                    elseif not path_entry and uuid_entry then
+                        uuid_entry.alt_paths[mfp] = true
+                        path_to_key[mfp] = ref_id
+                    elseif not path_entry and not uuid_entry then
+                        media_put({
+                            file_uuid = ref_id,
+                            name = mfp:match("([^/\\]+)$") or mfp,
+                            file_path = mfp,
+                            duration = 0,
+                            alt_paths = {},
+                        })
+                        enriched_count = enriched_count + 1
                     end
                 end
+            end
+
+            -- Extract <MediaFilePath>+<MediaFrameRate> for entries missing frame_rate.
+            -- Catches clips in skipped sequences (no MediaRef, no blob propagation).
+            for mfp, mfr_hex in content:gmatch("<MediaFilePath>([^<]+)</MediaFilePath>.-<MediaFrameRate>([^<]+)</MediaFrameRate>") do
+                mfp = mfp:match("^%s*(.-)%s*$")
+                if mfp ~= "" and #mfr_hex >= 16 then
+                    local entry = media_get(nil, mfp)
+                    if entry and not entry.frame_rate then
+                        local fps = decode_hex_double_at(mfr_hex, 0)
+                        if fps and fps > 0 and fps < 1000 then
+                            entry.frame_rate = fps
+                            enriched_count = enriched_count + 1
+                        end
+                    end
+                end
+            end
+        end
+        if seq_idx % 10 == 0 then
+            pump(96 + math.floor(seq_idx / #sequence_file_list * 2))
+        end
+    end
+    if enriched_count > 0 then
+        log.event("UUID enrichment: %d entries from %d files",
+            enriched_count, #sequence_file_list)
+    end
+
+    -- Apply authoritative media durations from MediaPool blob data.
+    pump(98, "Applying media durations…")
+    local pmc_count = #media_pool_hierarchy.master_clips
+    for pmc_idx, pmc in ipairs(media_pool_hierarchy.master_clips) do
+        if pmc_idx % 50 == 0 then
+            pump(98 + math.floor(pmc_idx / pmc_count))
+        end
+        local entry = media_get(pmc.id, pmc.file_path)
+
+        if not entry and pmc.id then
+            log.detail("pmc %s (id=%s): no media entry (encrypted blob, unreferenced)",
+                pmc.name or "?", pmc.id)
+        end
+
+        if entry then
+            -- Update canonical path from blob if blob has a decodable path
+            if pmc.file_path and pmc.file_path ~= entry.file_path then
+                entry.alt_paths[entry.file_path] = true
+                entry.file_path = pmc.file_path
+                path_to_key[pmc.file_path] = (entry.file_uuid and entry.file_uuid ~= "") and entry.file_uuid or entry.file_path
+            end
+
+            if pmc.num_frames and pmc.num_frames > 0 then
+                entry.duration = pmc.num_frames
+                if pmc.frame_rate then
+                    entry.frame_rate = pmc.frame_rate
+                end
+            elseif pmc.audio_duration then
+                entry.duration = pmc.audio_duration.samples
+                entry.audio_sample_rate = pmc.audio_duration.sample_rate
+                entry.frame_rate = pmc.audio_duration.sample_rate
             end
         end
     end
@@ -2001,7 +2418,6 @@ function M.parse_drp_file(drp_path, progress_cb)
         end
     end
 
-    -- Cleanup temp directory
     os.execute("rm -rf " .. tmp_dir)
 
     return {
@@ -2024,22 +2440,33 @@ M.parse_resolve_tracks = parse_resolve_tracks
 M.parse_fields_blob_tabs = parse_fields_blob_tabs
 M.decode_bt_video_time = decode_bt_video_time
 M.decode_bt_audio_duration = decode_bt_audio_duration
+M.decode_effect_filters_volume_db = decode_effect_filters_volume_db
 M.decode_media_timemap = decode_media_timemap
 
 --- Lightweight metadata extraction — project name only, no full parse.
--- Pipes project.xml from ZIP via unzip -p (no temp directory).
+-- Extracts project.xml from ZIP via unzip -p to temp file (EINTR-safe).
 -- @param drp_path string: Path to .drp file
 -- @return table|nil: { name = "Project Name" }, or nil on error
 -- @return string|nil: error message if failed
 function M.quick_metadata(drp_path)
     assert(drp_path and drp_path ~= "", "drp_importer.quick_metadata: drp_path required")
 
-    local cmd = string.format('unzip -p "%s" project.xml 2>/dev/null', drp_path)
-    local handle = io.popen(cmd)
-    if not handle then return nil, "Failed to read .drp archive" end
+    local tmp = os.tmpname()
+    local cmd = string.format('unzip -p "%s" project.xml > "%s" 2>/dev/null', drp_path, tmp)
+    local exit_code = os.execute(cmd)
+    if exit_code ~= 0 then
+        os.remove(tmp)
+        return nil, "Failed to read .drp archive"
+    end
 
+    local handle = io.open(tmp, "r")
+    if not handle then
+        os.remove(tmp)
+        return nil, "Failed to open temp file for project.xml"
+    end
     local xml_content = handle:read("*a")
     handle:close()
+    os.remove(tmp)
 
     if not xml_content or xml_content == "" then
         return nil, "No project.xml in .drp archive"
@@ -2266,9 +2693,27 @@ function M.import_into_project(project_id, parse_result, opts)
     }
 
     -- Import DRP folder hierarchy as bins
+    -- Create bins from DRP folder hierarchy.
+    -- Sort by depth (parents before children) so each folder's parent bin
+    -- exists when we create it. DRP folders arrive in filesystem scan order
+    -- which doesn't guarantee parent-first.
+    local folders = parse_result.folders or {}
+    local folder_lookup = {}
+    for _, f in ipairs(folders) do folder_lookup[f.id] = f end
+
+    local function folder_depth(f)
+        local d = 0
+        local cur = f
+        while cur and cur.parent_id do
+            d = d + 1
+            cur = folder_lookup[cur.parent_id]
+        end
+        return d
+    end
+    table.sort(folders, function(a, b) return folder_depth(a) < folder_depth(b) end)
+
     local drp_folder_to_bin = {}  -- DRP folder DbId → JVE bin_id
-    for _, folder in ipairs(parse_result.folders or {}) do
-        -- Map DRP parent_ref to JVE parent_id (already-created bin)
+    for _, folder in ipairs(folders) do
         local parent_bin_id = folder.parent_id and drp_folder_to_bin[folder.parent_id] or nil
         local bin_id = uuid.generate_with_prefix("bin")
         local ok, def = tag_service.create_bin(project_id, {
@@ -2278,61 +2723,134 @@ function M.import_into_project(project_id, parse_result, opts)
         })
         if ok and def then
             drp_folder_to_bin[folder.id] = def.id
-            log.event("  Created bin: %s (parent=%s)", folder.name, tostring(parent_bin_id))
         else
             log.warn("Failed to create bin: %s", folder.name)
         end
     end
 
-    -- Build pool master clip name → DRP folder bin mapping
-    -- pool_master_clips have {name, folder_id} from MediaPool hierarchy
-    -- Two indexes: by exact name and by filename (for audio-from-video matching)
-    local pool_name_to_drp_bin = {}
+    -- Build pool master clip → DRP folder bin mappings.
+    -- Primary: UUID → bin (reliable, handles renames). Fallback: name → bin.
+    local pool_uuid_to_drp_bin = {}  -- pmc.id → JVE bin_id
+    local pool_name_to_drp_bin = {}  -- pmc.name → JVE bin_id (for non-UUID media)
     for _, pmc in ipairs(parse_result.pool_master_clips or {}) do
         if pmc.folder_id and drp_folder_to_bin[pmc.folder_id] then
+            if pmc.id then
+                pool_uuid_to_drp_bin[pmc.id] = drp_folder_to_bin[pmc.folder_id]
+            end
             pool_name_to_drp_bin[pmc.name] = drp_folder_to_bin[pmc.folder_id]
         end
     end
 
-    -- Import media items
-    local media_by_path = {}
-    for _, media_item in ipairs(parse_result.media_items) do
+    -- Create "Unorganized" bin for orphaned media not in any DRP pool folder
+    local unorganized_bin_id = nil
+    do
+        local bin_id = uuid.generate_with_prefix("bin")
+        local ok, def = tag_service.create_bin(project_id, {
+            id = bin_id,
+            name = "Unorganized",
+        })
+        if ok and def then
+            unorganized_bin_id = def.id
+        end
+    end
+
+    -- Import media items (hash table keyed by uuid or path)
+    local media_by_uuid = {}  -- file_uuid → Media record (primary, for dedup)
+    local media_by_path = {}  -- file_path → Media record (secondary, for path-only lookups)
+    for _, media_item in pairs(parse_result.media_items) do
         local dur = media_item.duration or 0
         if dur <= 0 then
             log.warn("Skipping zero-duration media: %s", media_item.name)
-        else
-            local fps = assert(media_item.frame_rate or project_settings.frame_rate,
-                string.format("drp_importer: no frame_rate for media '%s'", media_item.name))
+            goto continue_media
+        end
 
-            -- Convert MediaStartTime (seconds since midnight) to frames at media's rate
+        -- Proxy path from blob — check alt_paths for a non-proxy original path
+        if media_item.file_path and media_item.file_path:find("/ProxyMedia/") then
+            local original_path = nil
+            for alt_path in pairs(media_item.alt_paths or {}) do
+                if not alt_path:find("/ProxyMedia/") then
+                    original_path = alt_path
+                    break
+                end
+            end
+            if original_path then
+                media_item.file_path = original_path
+                log.event("Proxy media '%s' — using original path: %s", media_item.name, original_path)
+            else
+                log.event("Skipping proxy-only media: %s", media_item.name)
+                goto continue_media
+            end
+        end
+
+        do
+            local fps = media_item.frame_rate
+            if not fps then
+                log.warn("Skipping media without frame_rate: %s (path=%s, uuid=%s)",
+                    media_item.name, tostring(media_item.file_path), tostring(media_item.file_uuid))
+                goto continue_media
+            end
+
+            -- Skip if we already created a record for this file_path
+            -- (multiple master clips can reference the same file)
+            if media_item.file_path and media_by_path[media_item.file_path] then
+                local existing = media_by_path[media_item.file_path]
+                if media_item.file_uuid then
+                    media_by_uuid[media_item.file_uuid] = existing
+                end
+                goto continue_media
+            end
+
+            -- Convert MediaStartTime (seconds since midnight) to native units
             local media_metadata = '{}'
+            local native_rate = math.floor(fps + 0.5)
             if media_item.media_start_time then
                 local json = require("dkjson")
-                local fps_int = math.floor(fps + 0.5)
+                local mst = media_item.media_start_time
+                local audio_sr = media_item.audio_sample_rate or 48000
                 media_metadata = json.encode({
-                    start_tc_value = math.floor(media_item.media_start_time * fps_int + 0.5),
-                    start_tc_rate = fps_int,
+                    start_tc_value = math.floor(mst * native_rate + 0.5),
+                    start_tc_rate = native_rate,
+                    start_tc_audio_samples = math.floor(mst * audio_sr + 0.5),
+                    start_tc_audio_rate = audio_sr,
                 })
             end
+
+            -- DRP track type is authoritative: media only on audio tracks → no video.
+            -- Width/height 0 prevents ensure_masterclip from creating a video track.
+            local media_width = media_item.has_video and project_settings.width or 0
+            local media_height = media_item.has_video and project_settings.height or 0
 
             local media = Media.create({
                 project_id = project_id,
                 name = media_item.name,
                 file_path = media_item.file_path,
+                file_uuid = media_item.file_uuid,
                 duration_frames = dur,
                 frame_rate = fps,
-                width = project_settings.width,
-                height = project_settings.height,
+                audio_sample_rate = media_item.audio_sample_rate,
+                audio_channels = media_item.audio_channels,
+                width = media_width,
+                height = media_height,
                 metadata = media_metadata,
             })
 
             assert(media:save(), string.format(
                 "drp_importer: failed to save media '%s' (path=%s)",
                 media_item.name, media_item.file_path))
+
+            -- Register in both lookup maps
+            if media_item.file_uuid then
+                media_by_uuid[media_item.file_uuid] = media
+            end
             media_by_path[media_item.file_path] = media
+            for alt in pairs(media_item.alt_paths or {}) do
+                media_by_path[alt] = media
+            end
+
             table.insert(result.media_ids, media.id)
             log.event("  Imported media: %s", media.name)
         end
+        ::continue_media::
     end
 
     sub_report(20, "Importing timelines…")
@@ -2379,18 +2897,54 @@ function M.import_into_project(project_id, parse_result, opts)
             end
         end
 
-        -- STEP 3: Zoom-to-fit viewport
-        local view_start = min_start_frame or 0
-        local content_duration = max_end_frame - view_start
-        local view_duration
-
-        if content_duration > 0 then
-            local margin = math.floor(content_duration * 0.05)
-            view_start = math.max(0, view_start - margin)
-            view_duration = content_duration + (margin * 2)
-        else
+        -- STEP 2b: Timeline start timecode from MediaExtents (authoritative).
+        -- MediaExtents[0] on Sm2Sequence is the start TC in seconds.
+        -- Convert to frames; clamps viewport/playhead to prevent dead space.
+        local start_timecode_frame = 0
+        if timeline_data.start_tc_seconds and timeline_data.start_tc_seconds > 0 then
             local effective_fps = fps_num / fps_den
-            view_duration = math.floor(10 * effective_fps)
+            start_timecode_frame = math.floor(timeline_data.start_tc_seconds * effective_fps + 0.5)
+            log.event("Timeline start TC: %.2fs → %d frames (%d/%d fps)",
+                timeline_data.start_tc_seconds, start_timecode_frame, fps_num, fps_den)
+        end
+
+        -- STEP 3: Viewport from Resolve's UI state, or zoom-to-fit fallback
+        local view_start, view_duration
+        local playhead_frame
+
+        local drp_scale = timeline_data.ui_scale
+        local drp_playhead_rel = timeline_data.cur_playhead_relative
+
+        if drp_scale and drp_scale > 0 then
+            -- Resolve stores scale as pixels-per-frame. Convert to viewport duration
+            -- using an estimated panel width (exact width adapts at display time).
+            local ESTIMATED_PANEL_WIDTH = 1200
+            view_duration = math.floor(ESTIMATED_PANEL_WIDTH / drp_scale)
+
+            -- Playhead is relative to start TC in the DRP
+            playhead_frame = start_timecode_frame + (drp_playhead_rel or 0)
+
+            -- Center viewport on playhead
+            view_start = math.max(start_timecode_frame,
+                playhead_frame - math.floor(view_duration / 2))
+
+            log.event("Viewport from DRP: scale=%.4f → dur=%d, playhead=%d (rel=%s)",
+                drp_scale, view_duration, playhead_frame, tostring(drp_playhead_rel))
+        else
+            -- Fallback: zoom-to-fit content
+            view_start = min_start_frame or start_timecode_frame
+            local content_duration = max_end_frame - view_start
+
+            if content_duration > 0 then
+                local margin = math.floor(content_duration * 0.05)
+                view_start = math.max(start_timecode_frame, view_start - margin)
+                view_duration = content_duration + (margin * 2)
+            else
+                local effective_fps = fps_num / fps_den
+                view_duration = math.floor(10 * effective_fps)
+            end
+
+            playhead_frame = min_start_frame or start_timecode_frame
         end
 
         -- STEP 4: Create Sequence
@@ -2407,9 +2961,10 @@ function M.import_into_project(project_id, parse_result, opts)
             seq_height,
             {
                 audio_rate = 48000,
+                start_timecode_frame = start_timecode_frame,
                 view_start_frame = view_start,
                 view_duration_frames = view_duration,
-                playhead_frame = min_start_frame or 0,
+                playhead_frame = playhead_frame,
             }
         )
 
@@ -2426,20 +2981,8 @@ function M.import_into_project(project_id, parse_result, opts)
                 tag_service.add_to_bin(project_id, {sequence.id}, timeline_folder_bin, "sequence")
             end
 
-            -- Create per-sequence master clip bin: "{seq_name} Master Clips"
-            -- Parent = timeline's folder bin (from DRP hierarchy), or nil (root)
-            local parent_bin_id = timeline_folder_bin
-            local mc_bin_label = string.format("%s Master Clips", timeline_data.name)
-            local mc_bin_id = uuid.generate_with_prefix("bin")
-            local mc_ok, mc_def = tag_service.create_bin(project_id, {
-                id = mc_bin_id,
-                name = mc_bin_label,
-                parent_id = parent_bin_id,
-            })
-            local master_bin_id = (mc_ok and mc_def) and mc_def.id or nil
-            if master_bin_id then
-                log.event("  Created master clip bin: %s", mc_bin_label)
-            end
+            -- Master clips are assigned to DRP folder bins (from pool hierarchy)
+            -- after clip creation. No per-timeline "Master Clips" bin needed.
 
             local clips_for_linking = {}
 
@@ -2462,15 +3005,25 @@ function M.import_into_project(project_id, parse_result, opts)
                     table.insert(result.track_ids, track.id)
 
                     for _, clip_data in ipairs(track_data.clips) do
+                        -- Prefer UUID lookup (handles cross-volume dedup),
+                        -- fall back to path for clips without MediaRef
                         local media_id = nil
-                        if clip_data.file_path and media_by_path[clip_data.file_path] then
+                        if clip_data.file_uuid and media_by_uuid[clip_data.file_uuid] then
+                            media_id = media_by_uuid[clip_data.file_uuid].id
+                        elseif clip_data.file_path and media_by_path[clip_data.file_path] then
                             media_id = media_by_path[clip_data.file_path].id
                         end
 
-                        -- Skip clips with no resolvable media (generated clips, titles, removed media)
+                        -- Skip clips with no resolvable media
                         if not media_id then
-                            log.warn("Skipping clip '%s' - no media record for path: %s",
-                                clip_data.name or "unnamed", tostring(clip_data.file_path))
+                            if not clip_data.file_path or clip_data.file_path == "" then
+                                -- No path = nested timeline, compound clip, or adjustment layer
+                                log.detail("Skipping nested/generated clip '%s' (no media path)",
+                                    clip_data.name or "unnamed")
+                            else
+                                log.warn("Skipping clip '%s' - no media record for path: %s",
+                                    clip_data.name or "unnamed", clip_data.file_path)
+                            end
                             goto continue_clip
                         end
 
@@ -2516,7 +3069,9 @@ function M.import_into_project(project_id, parse_result, opts)
                             source_out = source_out,
                             fps_numerator = clip_rate_num,
                             fps_denominator = clip_rate_den,
-                            bin_id = master_bin_id,
+                            enabled = clip_data.enabled,
+                            volume = clip_data.volume,
+                            -- bin assigned after clip creation via DRP folder lookup
                         })
 
                         assert(clip:save(), string.format(
@@ -2528,22 +3083,43 @@ function M.import_into_project(project_id, parse_result, opts)
                             -- Assign masterclip sequence to DRP folder bin (many-to-many safe)
                             -- Match by media name first, then by file path basename
                             -- (audio-from-video clips have different names than pool master clips)
-                            if clip.master_clip_id and clip_data.file_path then
-                                local media = media_by_path[clip_data.file_path]
-                                local drp_bin = media and pool_name_to_drp_bin[media.name]
+                            if clip.master_clip_id then
+                                -- Assign master clip to its DRP pool folder bin.
+                                -- UUID→bin is most reliable, then name, then basename.
+                                local drp_bin = nil
+                                if clip_data.file_uuid and clip_data.file_uuid ~= "" then
+                                    drp_bin = pool_uuid_to_drp_bin[clip_data.file_uuid]
+                                end
                                 if not drp_bin then
+                                    local media = nil
+                                    if clip_data.file_uuid and clip_data.file_uuid ~= "" then
+                                        media = media_by_uuid[clip_data.file_uuid]
+                                    end
+                                    if not media and clip_data.file_path and clip_data.file_path ~= "" then
+                                        media = media_by_path[clip_data.file_path]
+                                    end
+                                    if media then
+                                        drp_bin = pool_name_to_drp_bin[media.name]
+                                    end
+                                end
+                                if not drp_bin and clip_data.file_path then
                                     local basename = clip_data.file_path:match("([^/\\]+)$")
                                     drp_bin = basename and pool_name_to_drp_bin[basename]
+                                end
+                                if not drp_bin then
+                                    drp_bin = unorganized_bin_id
                                 end
                                 if drp_bin then
                                     tag_service.add_to_bin(project_id, {clip.master_clip_id}, drp_bin, "master_clip")
                                 end
                             end
 
-                            if clip_data.file_path then
+                            if clip_data.file_uuid or clip_data.file_path then
                                 table.insert(clips_for_linking, {
                                     clip_id = clip.id,
-                                    file_path = clip_data.file_path,
+                                    -- Use UUID as link key when available (same master clip
+                                    -- at different volume paths should still link A/V)
+                                    link_key = clip_data.file_uuid or clip_data.file_path,
                                     timeline_start = clip_data.start_value,
                                     role = track_data.type == "VIDEO" and "video" or "audio",
                                 })
@@ -2557,7 +3133,7 @@ function M.import_into_project(project_id, parse_result, opts)
             -- STEP 6: Create A/V link groups
             local link_groups_by_key = {}
             for _, clip_info in ipairs(clips_for_linking) do
-                local key = clip_info.file_path .. ":" .. tostring(clip_info.timeline_start)
+                local key = clip_info.link_key .. ":" .. tostring(clip_info.timeline_start)
                 link_groups_by_key[key] = link_groups_by_key[key] or {}
                 table.insert(link_groups_by_key[key], clip_info)
             end
@@ -2615,9 +3191,17 @@ end
 function M.convert(drp_path, jvp_path, progress_cb)
     assert(drp_path and drp_path ~= "", "drp_importer.convert: drp_path required")
     assert(jvp_path and jvp_path ~= "", "drp_importer.convert: jvp_path required")
-    local report = progress_cb or function() end
+    local raw_report = progress_cb or function() end
+    local function report(pct, text)
+        if raw_report(pct, text) == "cancel" then
+            -- level 0: suppress stack trace from error() override
+            error({cancelled = true}, 0)
+        end
+    end
 
     log.event("Converting %s -> %s", drp_path, jvp_path)
+
+    local convert_ok, convert_err = pcall(function()
 
     report(5, "Parsing archive…")
     -- Thread progress_cb into parse phase so Qt events get pumped.
@@ -2714,6 +3298,15 @@ function M.convert(drp_path, jvp_path, progress_cb)
     end
 
     report(100, "Done")
+
+    end) -- pcall wrapping convert body
+
+    if not convert_ok then
+        if type(convert_err) == "table" and convert_err.cancelled then
+            return false, "Cancelled"
+        end
+        error(convert_err)  -- re-throw real errors
+    end
     return true
 end
 

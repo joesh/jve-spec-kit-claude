@@ -64,6 +64,7 @@ function M.show_dialog(parent_window)
     local loc_input = qt.WIDGET.CREATE_LINE_EDIT("")
     qt.PROPERTIES.SET_TEXT(loc_input, default_location)
     local browse_btn = qt.WIDGET.CREATE_BUTTON("Browse...")
+    qt.CONTROL.SET_BUTTON_AUTO_DEFAULT(browse_btn, false)
     qt.LAYOUT.ADD_WIDGET(loc_layout, loc_label)
     qt.LAYOUT.ADD_WIDGET(loc_layout, loc_input)
     qt.LAYOUT.ADD_WIDGET(loc_layout, browse_btn)
@@ -109,18 +110,17 @@ function M.show_dialog(parent_window)
     -- Button row
     -- -----------------------------------------------------------------------
     qt.LAYOUT.ADD_STRETCH(main_layout)
-    local btn_layout = qt.LAYOUT.CREATE_HBOX()
-    qt.LAYOUT.ADD_STRETCH(btn_layout)
 
-    local cancel_btn = qt.WIDGET.CREATE_BUTTON("Cancel")
-    local create_btn = qt.WIDGET.CREATE_BUTTON("Create")
+    local button_box = qt.CONTROL.CREATE_BUTTON_BOX()
+    qt.CONTROL.BUTTON_BOX_ADD(button_box, "Create", "accept")
+    qt.CONTROL.BUTTON_BOX_ADD(button_box, "Cancel", "reject")
 
     local cancel_handler = "__new_project_cancel"
     _G[cancel_handler] = function()
         dialog_result = nil
         qt.DIALOG.CLOSE(dialog, false)
     end
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(cancel_btn, cancel_handler)
+    qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "rejected", cancel_handler)
 
     local create_handler = "__new_project_create"
     _G[create_handler] = function()
@@ -182,12 +182,9 @@ function M.show_dialog(parent_window)
         }
         qt.DIALOG.CLOSE(dialog, true)
     end
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(create_btn, create_handler)
+    qt.CONTROL.BUTTON_BOX_SET_HANDLER(button_box, "accepted", create_handler)
 
-    qt.LAYOUT.ADD_WIDGET(btn_layout, cancel_btn)
-    qt.LAYOUT.ADD_SPACING(btn_layout, 8)
-    qt.LAYOUT.ADD_WIDGET(btn_layout, create_btn)
-    qt.LAYOUT.ADD_LAYOUT(main_layout, btn_layout)
+    qt.LAYOUT.ADD_WIDGET(main_layout, button_box)
 
     qt.DIALOG.SET_LAYOUT(dialog, main_layout)
 

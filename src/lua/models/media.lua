@@ -82,6 +82,45 @@ function M:set_file_path(path)
     mark_dirty(self.id)
 end
 
+--- Get stored start timecode as (frames, rate).
+-- Parses metadata JSON for start_tc_value and start_tc_rate.
+-- @return number|nil frames, number|nil rate
+function M:get_start_tc()
+    local meta = self:_parsed_metadata()
+    if meta and meta.start_tc_value then
+        return meta.start_tc_value, meta.start_tc_rate
+    end
+    return nil, nil
+end
+
+--- Get audio TC origin in samples from metadata.
+-- @return number|nil samples, number|nil sample_rate
+function M:get_audio_start_tc()
+    local meta = self:_parsed_metadata()
+    if meta and meta.start_tc_audio_samples then
+        return meta.start_tc_audio_samples, meta.start_tc_audio_rate
+    end
+    -- Fallback: convert video TC to samples if audio TC not stored
+    if meta and meta.start_tc_value and self.audio_sample_rate then
+        local sr = self.audio_sample_rate
+        local fps = meta.start_tc_rate or 1
+        return math.floor(meta.start_tc_value * sr / fps), sr
+    end
+    return nil, nil
+end
+
+function M:_parsed_metadata()
+    local meta = self.metadata
+    if not meta or meta == "" or meta == "{}" then
+        return nil
+    end
+    if type(meta) == "string" then
+        local json = require("dkjson")
+        meta = json.decode(meta)
+    end
+    return type(meta) == "table" and meta or nil
+end
+
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
@@ -150,12 +189,14 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
         id = params.id or uuid.generate(),
         project_id = params.project_id,
         _file_path = file_path,
+        file_uuid = params.file_uuid,  -- DRP master clip UUID for cross-volume dedup
         name = name,
         duration = dur_frames,  -- integer frames
         frame_rate = { fps_numerator = num, fps_denominator = den },
         width = tonumber(params.width) or 0, -- NSF-OK: 0 = unknown dimension (audio-only media has no width)
         height = tonumber(params.height) or 0, -- NSF-OK: 0 = unknown dimension
         rotation = tonumber(params.rotation) or 0, -- NSF-OK: 0 = no rotation
+        audio_sample_rate = tonumber(params.audio_sample_rate) or 0, -- NSF-OK: 0 = no audio or unknown
         audio_channels = tonumber(params.audio_channels) or 0, -- NSF-OK: 0 = unknown/not applicable
         codec = params.codec or "", -- NSF-OK: "" = unknown codec
         created_at = params.created_at or os.time(),
@@ -176,7 +217,8 @@ function M.load(media_id)
 
     local query = assert(db:prepare([[
         SELECT id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
-               width, height, rotation, audio_channels, codec, created_at, modified_at, metadata
+               width, height, rotation, audio_sample_rate, audio_channels, codec,
+               created_at, modified_at, metadata, file_uuid
         FROM media WHERE id = ?
     ]]), string.format("Media.load: failed to prepare query for media_id=%s", media_id))
 
@@ -207,11 +249,13 @@ function M.load(media_id)
         width = tonumber(query:value(7)) or 0, -- NSF-OK: 0 = unknown dimension
         height = tonumber(query:value(8)) or 0, -- NSF-OK: 0 = unknown dimension
         rotation = tonumber(query:value(9)) or 0, -- NSF-OK: 0 = no rotation
-        audio_channels = tonumber(query:value(10)) or 0, -- NSF-OK: 0 = unknown
-        codec = query:value(11),
-        created_at = query:value(12),
-        modified_at = query:value(13),
-        metadata = query:value(14)
+        audio_sample_rate = tonumber(query:value(10)) or 0, -- NSF-OK: 0 = no audio
+        audio_channels = tonumber(query:value(11)) or 0, -- NSF-OK: 0 = unknown
+        codec = query:value(12),
+        created_at = query:value(13),
+        modified_at = query:value(14),
+        metadata = query:value(15),
+        file_uuid = query:value(16),  -- may be nil for non-DRP media
     }
 
     query:finalize()
@@ -243,18 +287,21 @@ function M:save()
     end
 
     local query = db:prepare([[
-        INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, rotation, audio_channels, codec, created_at, modified_at, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO media (id, project_id, name, file_path, file_uuid, duration_frames, fps_numerator, fps_denominator,
+            width, height, rotation, audio_sample_rate, audio_channels, codec, created_at, modified_at, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             project_id = excluded.project_id,
             name = excluded.name,
             file_path = excluded.file_path,
+            file_uuid = excluded.file_uuid,
             duration_frames = excluded.duration_frames,
             fps_numerator = excluded.fps_numerator,
             fps_denominator = excluded.fps_denominator,
             width = excluded.width,
             height = excluded.height,
             rotation = excluded.rotation,
+            audio_sample_rate = excluded.audio_sample_rate,
             audio_channels = excluded.audio_channels,
             codec = excluded.codec,
             modified_at = excluded.modified_at,
@@ -270,17 +317,19 @@ function M:save()
     query:bind_value(2, self.project_id)
     query:bind_value(3, self.name)
     query:bind_value(4, self._file_path)
-    query:bind_value(5, dur_frames)
-    query:bind_value(6, num)
-    query:bind_value(7, den)
-    query:bind_value(8, self.width)
-    query:bind_value(9, self.height)
-    query:bind_value(10, self.rotation or 0)
-    query:bind_value(11, self.audio_channels)
-    query:bind_value(12, self.codec)
-    query:bind_value(13, self.created_at)
-    query:bind_value(14, self.modified_at)
-    query:bind_value(15, self.metadata)
+    query:bind_value(5, self.file_uuid)  -- nullable (non-DRP media won't have one)
+    query:bind_value(6, dur_frames)
+    query:bind_value(7, num)
+    query:bind_value(8, den)
+    query:bind_value(9, self.width)
+    query:bind_value(10, self.height)
+    query:bind_value(11, self.rotation or 0)
+    query:bind_value(12, self.audio_sample_rate or 0)
+    query:bind_value(13, self.audio_channels)
+    query:bind_value(14, self.codec)
+    query:bind_value(15, self.created_at)
+    query:bind_value(16, self.modified_at)
+    query:bind_value(17, self.metadata)
 
     if not query:exec() then
         log.warn("Media:save: Query execution failed: %s", query:last_error())
@@ -290,6 +339,35 @@ function M:save()
 
     query:finalize()
 
+    return true
+end
+
+--- Delete this media record and all clips referencing it.
+-- @return boolean success
+function M:delete()
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Media:delete: no database connection")
+    assert(self.id and self.id ~= "", "Media:delete: id required")
+
+    -- Delete clips referencing this media first (FK constraint)
+    local del_clips = assert(db:prepare("DELETE FROM clips WHERE media_id = ?"),
+        "Media:delete: failed to prepare clip delete")
+    del_clips:bind_value(1, self.id)
+    del_clips:exec()
+    del_clips:finalize()
+
+    -- Delete the media record
+    local del_media = assert(db:prepare("DELETE FROM media WHERE id = ?"),
+        "Media:delete: failed to prepare media delete")
+    del_media:bind_value(1, self.id)
+    if not del_media:exec() then
+        local err = del_media:last_error()
+        del_media:finalize()
+        error(string.format("Media:delete: failed to delete media %s: %s", self.id, err))
+    end
+    del_media:finalize()
+
+    log.event("Media:delete: deleted media %s", self.id)
     return true
 end
 

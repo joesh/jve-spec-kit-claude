@@ -341,8 +341,8 @@ timeline_state.set_selection({})
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
 -- playhead = 800 + (550 - 500) = 850, but master_clip_a has 500 frames → assert fires
 assert(not result.success, "Should fail: source position 850 exceeds master clip's 500 frames")
-assert(result.error_message:find("set_playhead") or result.error_message:find("content duration"),
-    "Error should mention set_playhead bounds, got: " .. tostring(result.error_message))
+assert(result.error_message:find("set_playhead") or result.error_message:find("set_in") or result.error_message:find("set_out"),
+    "Error should mention bounds validation, got: " .. tostring(result.error_message))
 
 -- Cleanup
 timeline_state.set_selection({})

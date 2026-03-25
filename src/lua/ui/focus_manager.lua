@@ -70,6 +70,21 @@ local function apply_all_borders()
     end
 end
 
+-- Install the global click-to-focus event filter. Call once at startup.
+function M.install_click_to_focus()
+    if not _G.qt_install_panel_focus_filter then return end
+
+    -- Global handler: C++ calls this with the panel widget on any click
+    -- C++ passes panel_id string directly (avoids userdata identity mismatch)
+    _G._panel_click_focus_handler = function(panel_id)
+        if panel_id and registered_panels[panel_id] then
+            M.set_focused_panel(panel_id)
+        end
+    end
+    _G.qt_install_panel_focus_filter("_panel_click_focus_handler")
+    log.event("Global click-to-focus filter installed")
+end
+
 -- Register a panel for focus tracking
 -- Args:
 --   panel_id (string) - unique identifier
@@ -124,6 +139,11 @@ function M.register_panel(panel_id, widget, header_widget, panel_name, options)
             end
             qt_set_focus_handler(focus_widget, handler_name)
         end
+    end
+
+    -- Register with global click-to-focus filter (catches clicks on any child)
+    if _G.qt_register_panel_focus_widget then
+        pcall(_G.qt_register_panel_focus_widget, widget, panel_id)
     end
 
     log.detail("Focus tracking registered for panel: %s", panel_name or panel_id)

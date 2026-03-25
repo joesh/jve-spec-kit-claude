@@ -67,7 +67,8 @@ local function load_internal(clip_id, raise_errors)
                c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
                c.fps_numerator, c.fps_denominator, c.enabled, c.offline,
                s.fps_numerator, s.fps_denominator,
-               c.mark_in_frame, c.mark_out_frame, c.playhead_frame
+               c.mark_in_frame, c.mark_out_frame, c.playhead_frame,
+               c.volume
         FROM clips c
         LEFT JOIN tracks t ON c.track_id = t.id
         LEFT JOIN sequences s ON t.sequence_id = s.id
@@ -159,6 +160,11 @@ local function load_internal(clip_id, raise_errors)
         playhead_frame = assert(query:value(20) ~= nil and query:value(20),
             string.format("Clip.load: playhead_frame is NULL for clip %s (NOT NULL column)",
                 tostring(query:value(0)))),
+
+        -- Audio mixer state (clip gain, applied before track fader)
+        volume = assert(query:value(21) ~= nil and query:value(21),
+            string.format("Clip.load: volume is NULL for clip %s (NOT NULL DEFAULT 1.0 column)",
+                tostring(query:value(0)))),
     }
     
     query:finalize()
@@ -232,6 +238,11 @@ function M.create(name, media_id, opts)
         
         enabled = opts.enabled ~= false,
         offline = false,  -- transient: recomputed by media_status registry
+
+        -- Audio mixer state (clip gain, applied before track fader)
+        -- Domain default, not a fallback: new clips start at unity gain (0dB).
+        -- DRP import passes explicit volume from parsed data.
+        volume = opts.volume or 1.0,
 
         -- Source viewer state (nullable marks + playhead)
         mark_in = opts.mark_in,           -- nil = no mark
@@ -376,6 +387,11 @@ local function save_internal(self, _opts)
     assert(type(self.source_in) == "number", "Clip.save: source_in must be integer (got " .. type(self.source_in) .. ")")
     assert(type(self.source_out) == "number", "Clip.save: source_out must be integer (got " .. type(self.source_out) .. ")")
 
+    -- Verify volume
+    assert(type(self.volume) == "number" and self.volume >= 0,
+        string.format("Clip.save: volume must be non-negative number (got %s=%s) for clip %s",
+            type(self.volume), tostring(self.volume), tostring(self.id)))
+
     -- Verify mark field types (nullable marks must be number or nil)
     if self.mark_in ~= nil then
         assert(type(self.mark_in) == "number",
@@ -430,6 +446,7 @@ local function save_internal(self, _opts)
                 master_clip_id = ?, owner_sequence_id = ?,
                 timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?,
                 fps_numerator = ?, fps_denominator = ?, enabled = ?, offline = ?,
+                volume = ?,
                 mark_in_frame = ?, mark_out_frame = ?, playhead_frame = ?,
                 modified_at = strftime('%s','now')
             WHERE id = ?
@@ -441,10 +458,11 @@ local function save_internal(self, _opts)
                 master_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                 fps_numerator, fps_denominator, enabled, offline,
+                volume,
                 mark_in_frame, mark_out_frame, playhead_frame,
                 created_at, modified_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
         ]])
     end
 
@@ -477,10 +495,11 @@ local function save_internal(self, _opts)
         query:bind_value(13, db_fps_den)
         query:bind_value(14, self.enabled and 1 or 0)
         query:bind_value(15, self.offline and 1 or 0)
-        bind_nullable(query, 16, self.mark_in)
-        bind_nullable(query, 17, self.mark_out)
-        query:bind_value(18, self.playhead_frame)
-        query:bind_value(19, self.id)
+        query:bind_value(16, self.volume)
+        bind_nullable(query, 17, self.mark_in)
+        bind_nullable(query, 18, self.mark_out)
+        query:bind_value(19, self.playhead_frame)
+        query:bind_value(20, self.id)
     else
         query:bind_value(1, self.id)
         query:bind_value(2, self.project_id)
@@ -498,9 +517,10 @@ local function save_internal(self, _opts)
         query:bind_value(14, db_fps_den)
         query:bind_value(15, self.enabled and 1 or 0)
         query:bind_value(16, self.offline and 1 or 0)
-        bind_nullable(query, 17, self.mark_in)
-        bind_nullable(query, 18, self.mark_out)
-        query:bind_value(19, self.playhead_frame)
+        query:bind_value(17, self.volume)
+        bind_nullable(query, 18, self.mark_in)
+        bind_nullable(query, 19, self.mark_out)
+        query:bind_value(20, self.playhead_frame)
     end
 
     local krono_exec = (krono_enabled and krono_exists and krono.now and krono.now()) or nil
@@ -775,6 +795,97 @@ function M.find_master_clip_for_media(media_id)
     local clip_id = stmt:value(0)
     stmt:finalize()
     return M.load(clip_id)
+end
+
+--- Find all clips (master + timeline) referencing a given media_id.
+-- @param media_id string
+-- @return table Array of Clip objects
+function M.find_clips_for_media(media_id)
+    assert(media_id and media_id ~= "", "Clip.find_clips_for_media: media_id required")
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Clip.find_clips_for_media: no database connection")
+
+    local stmt = assert(db:prepare([[
+        SELECT id FROM clips WHERE media_id = ?
+    ]]), "Clip.find_clips_for_media: failed to prepare query")
+
+    stmt:bind_value(1, media_id)
+    assert(stmt:exec(), "Clip.find_clips_for_media: query exec failed")
+
+    local clips = {}
+    while stmt:next() do
+        local clip = M.load(stmt:value(0))
+        if clip then clips[#clips + 1] = clip end
+    end
+    stmt:finalize()
+    return clips
+end
+
+--- Update source_in and source_out and persist.
+-- @param source_in number New source_in (native units)
+-- @param source_out number New source_out (native units)
+function M:set_source_range(source_in, source_out)
+    assert(type(source_in) == "number", "Clip:set_source_range: source_in must be a number")
+    assert(type(source_out) == "number", "Clip:set_source_range: source_out must be a number")
+    self.source_in = source_in
+    self.source_out = source_out
+    self:save()
+end
+
+--- Read lightweight source state for multiple clips (no JOINs).
+-- @param clip_ids table Array or set of clip IDs
+-- @return table {clip_id → {media_id, source_in, source_out}}
+function M.batch_read_source(clip_ids)
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Clip.batch_read_source: no database connection")
+
+    local stmt = assert(db:prepare(
+        "SELECT media_id, source_in_frame, source_out_frame FROM clips WHERE id = ?"),
+        "Clip.batch_read_source: failed to prepare query")
+
+    local result = {}
+    for clip_id in pairs(clip_ids) do
+        stmt:bind_value(1, clip_id)
+        assert(stmt:exec(), "Clip.batch_read_source: exec failed for " .. clip_id)
+        assert(stmt:next(), "Clip.batch_read_source: clip not found: " .. clip_id)
+        local mid = stmt:value(0)
+        assert(mid, string.format(
+            "Clip.batch_read_source: clip %s has NULL media_id", clip_id))
+        result[clip_id] = {
+            media_id = mid,
+            source_in = stmt:value(1),
+            source_out = stmt:value(2),
+        }
+        stmt:reset()
+    end
+    stmt:finalize()
+    return result
+end
+
+--- Batch update media_id + source range for multiple clips.
+-- @param updates table {clip_id → {media_id, source_in, source_out}}
+function M.batch_update_source(updates)
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Clip.batch_update_source: no database connection")
+
+    local stmt = assert(db:prepare([[
+        UPDATE clips SET media_id = ?, source_in_frame = ?, source_out_frame = ?,
+            modified_at = strftime('%s','now') WHERE id = ?
+    ]]), "Clip.batch_update_source: failed to prepare query")
+
+    for clip_id, vals in pairs(updates) do
+        assert(vals.media_id, "Clip.batch_update_source: media_id required for " .. clip_id)
+        assert(vals.source_in, "Clip.batch_update_source: source_in required for " .. clip_id)
+        assert(vals.source_out, "Clip.batch_update_source: source_out required for " .. clip_id)
+        stmt:bind_value(1, vals.media_id)
+        stmt:bind_value(2, vals.source_in)
+        stmt:bind_value(3, vals.source_out)
+        stmt:bind_value(4, clip_id)
+        assert(stmt:exec(), "Clip.batch_update_source: exec failed for " .. clip_id)
+        stmt:reset()
+    end
+    stmt:finalize()
 end
 
 return M

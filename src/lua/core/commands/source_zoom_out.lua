@@ -40,7 +40,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        sm:zoom_by(1.25)
+        sm:zoom_by(2.0)
         return true
     end
 

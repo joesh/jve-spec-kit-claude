@@ -46,18 +46,70 @@ function M.create(layout, opts)
     local log_lines = {}
 
     local panel = {}
+    local cancelled = false
+
+    --- Request cancellation. Next update() will return "cancel".
+    function panel.cancel()
+        cancelled = true
+    end
+
+    --- Check if cancellation was requested.
+    function panel.is_cancelled()
+        return cancelled
+    end
 
     --- Update progress. Pumps Qt events to keep UI responsive.
+    -- @return "cancel" if cancellation was requested, nil otherwise
     -- @param pct number: 0-100 progress percentage
     -- @param text string|nil: status text (e.g. "Processing 42 of 100")
     -- @param log_line string|nil: append a line to the log/results area
+    local log_dirty = false
+    local last_pump_time = 0
+    local PUMP_INTERVAL_S = 0.05  -- 50ms — responsive without excessive overhead
+    -- Only show last N log lines in the widget to avoid O(n) render on large logs
+    local MAX_DISPLAY_LINES = 500
+
     function panel.update(pct, text, log_line)
-        qt.CONTROL.SET_PROGRESS_BAR_VALUE(progress_bar, pct or 0)
-        if text then qt.PROPERTIES.SET_TEXT(status_label, text) end
         if log_line then
             log_lines[#log_lines + 1] = log_line
-            qt.PROPERTIES.SET_TEXT(log_area, table.concat(log_lines, "\n"))
+            log_dirty = true
+        end
+        -- Throttle by wall-clock time: pump Qt events every 50ms.
+        -- Works for both high-frequency (120K clips) and low-frequency (parse milestones).
+        local now = os.clock()
+        if now - last_pump_time >= PUMP_INTERVAL_S then
+            last_pump_time = now
+            qt.CONTROL.SET_PROGRESS_BAR_VALUE(progress_bar, pct or 0)
+            if text then qt.PROPERTIES.SET_TEXT(status_label, text) end
+            if log_dirty then
+                qt.DISPLAY.SET_VISIBLE(log_area, true)
+                local start = math.max(1, #log_lines - MAX_DISPLAY_LINES + 1)
+                local display = {}
+                for i = start, #log_lines do
+                    display[#display + 1] = log_lines[i]
+                end
+                qt.PROPERTIES.SET_TEXT(log_area, table.concat(display, "\n"))
+                log_dirty = false
+            end
+            qt.CONTROL.PROCESS_EVENTS()
+            if cancelled then return "cancel" end
+        end
+        if cancelled then return "cancel" end
+    end
+
+    --- Flush any pending log lines to the widget.
+    function panel.flush()
+        -- Final update: progress bar, status, and log
+        qt.CONTROL.SET_PROGRESS_BAR_VALUE(progress_bar, 100)
+        if log_dirty or true then
             qt.DISPLAY.SET_VISIBLE(log_area, true)
+            local start = math.max(1, #log_lines - MAX_DISPLAY_LINES + 1)
+            local display = {}
+            for i = start, #log_lines do
+                display[#display + 1] = log_lines[i]
+            end
+            qt.PROPERTIES.SET_TEXT(log_area, table.concat(display, "\n"))
+            log_dirty = false
         end
         qt.CONTROL.PROCESS_EVENTS()
     end
@@ -77,6 +129,7 @@ function M.create(layout, opts)
     --- Reset state for a new run.
     function panel.reset()
         log_lines = {}
+        cancelled = false
         qt.CONTROL.SET_PROGRESS_BAR_VALUE(progress_bar, 0)
         qt.PROPERTIES.SET_TEXT(status_label, "")
         qt.PROPERTIES.SET_TEXT(log_area, "")

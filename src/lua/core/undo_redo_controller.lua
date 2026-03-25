@@ -54,10 +54,12 @@ function M.handle_redo_toggle(command_manager)
     local current_pos = get_current_sequence_position(command_manager)
 
     -- Check if we're at the redo position → toggle back to undo
+    -- BUT only if there's nothing more to redo (otherwise continue forward)
     if redo_toggle_state
         and redo_toggle_state.undo_position ~= nil
         and redo_toggle_state.redo_position ~= nil
-        and current_pos == redo_toggle_state.redo_position then
+        and current_pos == redo_toggle_state.redo_position
+        and not (command_manager.can_redo and command_manager.can_redo()) then
         if command_manager.can_undo and not command_manager.can_undo() then
             M.clear_toggle()
             return { success = false, error_message = "nothing to undo (toggle)" }

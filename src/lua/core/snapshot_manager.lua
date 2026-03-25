@@ -184,7 +184,8 @@ local function build_snapshot_payload(db, sequence_id, clips)
             fps_denominator = clip.rate and clip.rate.fps_denominator,
 
             enabled = clip.enabled and 1 or 0,
-            offline = 0  -- transient: never persist
+            offline = 0,  -- transient: never persist
+            volume = clip.volume
         })
 
         if clip.media_id and clip.media_id ~= "" then
@@ -319,7 +320,10 @@ local function deserialize_snapshot_payload(json_str)
                 rate = { fps_numerator = num, fps_denominator = den },
                 
                 enabled = data.enabled == 1,
-                offline = false  -- transient: recomputed by media_status
+                offline = false,  -- transient: recomputed by media_status
+                -- Schema evolution: volume added after initial snapshot format.
+                -- Existing snapshots without volume are pre-clip-gain and 1.0 is correct.
+                volume = data.volume or 1.0
             }
         end
     end

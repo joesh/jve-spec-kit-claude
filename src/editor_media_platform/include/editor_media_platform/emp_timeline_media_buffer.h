@@ -63,6 +63,8 @@ struct ClipInfo {
     int64_t source_in;            // source frames (absolute TC space)
     int32_t rate_num, rate_den;   // clip rate (for frame→us conversion)
     float speed_ratio;            // conform: seq_fps / media_fps (1.0 = none)
+    bool offline = false;         // true = media file not found, generate beep
+    float volume = 1.0f;         // clip gain (linear): applied before track fader
 
     int64_t timeline_end() const { return timeline_start + duration; }
     Rate rate() const {
@@ -218,6 +220,13 @@ private:
                                 const std::string& path);
     void release_reader(TrackId track, const std::string& clip_id);
     void evict_lru_reader();
+
+    // Generate a beep tone for offline/unplayable audio clips.
+    // 1kHz sine, 100ms on / 900ms off (once per second).
+    // position_us: absolute timeline position (determines beep phase).
+    // duration_us: requested chunk duration.
+    // clip_start_us: clip's timeline start (beep phase relative to clip, not timeline)
+    std::shared_ptr<PcmChunk> generate_offline_beep(int64_t position_us, int64_t duration_us, int64_t clip_start_us);
     void log_pool_state(const char* action, const TrackId& track,
                         const std::string& clip_id, bool is_hw);
 

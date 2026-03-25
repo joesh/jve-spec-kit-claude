@@ -1,4 +1,4 @@
--- JVE Database Schema V5.0
+-- JVE Database Schema V6.0
 -- "Scorched Earth" - Frame-Accurate, Rational Timebase
 -- No backward compatibility with legacy schemas.
 
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (5);
+INSERT OR IGNORE INTO schema_version (version) VALUES (6);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS media (
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     file_path TEXT NOT NULL UNIQUE,
-    
+    file_uuid TEXT,  -- DRP master clip UUID (MediaRef DbId) for cross-volume dedup
+
     -- Duration in its native timebase
     duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),
     
@@ -41,6 +42,9 @@ CREATE TABLE IF NOT EXISTS media (
     fps_numerator INTEGER NOT NULL CHECK(fps_numerator > 0),
     fps_denominator INTEGER NOT NULL CHECK(fps_denominator > 0),
     
+    -- Audio sample rate (e.g. 48000, 44100). 0 = no audio or unknown.
+    audio_sample_rate INTEGER DEFAULT 0,
+
     -- Metadata
     width INTEGER DEFAULT 0,
     height INTEGER DEFAULT 0,
@@ -74,10 +78,16 @@ CREATE TABLE IF NOT EXISTS sequences (
     width INTEGER NOT NULL,
     height INTEGER NOT NULL,
     
+    -- Timeline Start Timecode (display offset, does not affect internal coordinates)
+    start_timecode_frame INTEGER NOT NULL DEFAULT 0,
+
     -- State (Rational Frames)
     view_start_frame INTEGER NOT NULL DEFAULT 0,
     view_duration_frames INTEGER NOT NULL DEFAULT 240,
     playhead_frame INTEGER NOT NULL DEFAULT 0,
+    video_scroll_offset INTEGER NOT NULL DEFAULT 0,
+    audio_scroll_offset INTEGER NOT NULL DEFAULT 0,
+    video_audio_split_ratio REAL NOT NULL DEFAULT 0.5,  -- 0.0–1.0, fraction of height for video
     
     -- Marks (Optional, Nullable)
     mark_in_frame INTEGER,
@@ -151,6 +161,9 @@ CREATE TABLE IF NOT EXISTS clips (
     -- State
     enabled BOOLEAN NOT NULL DEFAULT 1,
     offline BOOLEAN NOT NULL DEFAULT 0,
+
+    -- Audio Mixer State (clip gain, applied before track fader)
+    volume REAL NOT NULL DEFAULT 1.0,  -- linear: 1.0 = unity (0dB)
 
     -- Per-clip source viewer state (marks + playhead)
     mark_in_frame INTEGER,       -- nullable (no mark set)

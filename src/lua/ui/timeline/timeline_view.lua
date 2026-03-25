@@ -31,6 +31,7 @@ function M.create(widget, state_module, track_filter_fn, options)
         vertical_scroll_offset = options.vertical_scroll_offset or 0,
         render_bottom_to_top = options.render_bottom_to_top or false,
         on_drag_start = options.on_drag_start,
+        on_scroll_changed = options.on_scroll_changed,  -- callback(offset) for persistence
         filtered_tracks = {},
         track_layout_cache = {by_index={}, by_id={}},
         potential_drag = nil,
@@ -143,7 +144,11 @@ function M.create(widget, state_module, track_filter_fn, options)
     return {
         widget = widget,
         render = view.render,
-        set_vertical_scroll = function(off) view.vertical_scroll_offset = off; view.render() end,
+        set_vertical_scroll = function(off)
+            view.vertical_scroll_offset = off
+            view.render()
+            if view.on_scroll_changed then view.on_scroll_changed(off) end
+        end,
         get_vertical_scroll = function() return view.vertical_scroll_offset end,
         on_mouse_event = on_mouse,
         on_wheel_event = on_wheel

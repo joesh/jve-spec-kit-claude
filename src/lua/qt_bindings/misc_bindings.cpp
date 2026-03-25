@@ -336,7 +336,8 @@ int lua_set_window_appearance(lua_State* L)
     }
 
 #ifdef Q_OS_MAC
-    if (!widget->windowHandle()) {
+    bool hadWindowHandle = widget->windowHandle() != nullptr;
+    if (!hadWindowHandle) {
         widget->createWinId();
     }
     id nsWindow = nil;
@@ -344,7 +345,16 @@ int lua_set_window_appearance(lua_State* L)
     if (cocoaView) {
         nsWindow = ((id (*)(id, SEL))objc_msgSend)(cocoaView, sel_getUid("window"));
     }
-    if (nsWindow) {
+    if (!nsWindow) {
+        JVE_LOG_WARN(Ui, "set_window_appearance: no NSWindow for widget %s (class=%s, hadHandle=%d, winId=%p)",
+            widget->objectName().toUtf8().constData(),
+            widget->metaObject()->className(),
+            hadWindowHandle ? 1 : 0,
+            (void*)cocoaView);
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    {
         id appearanceString = qt_nsstring_from_utf8(appearance_name);
         if (!appearanceString) {
             appearanceString = qt_nsstring_from_utf8("NSAppearanceNameDarkAqua");

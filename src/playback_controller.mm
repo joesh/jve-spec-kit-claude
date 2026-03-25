@@ -45,15 +45,23 @@ CVReturn displayLinkCallback(
     CVOptionFlags* /*flagsOut*/,
     void* displayLinkContext)
 {
+    // Register lua_State on this OS-managed thread (once per thread lifetime)
+    // so JVE_ASSERT throws JveAssertError instead of _exit.
+    static thread_local bool s_lua_inited = false;
+    if (!s_lua_inited) { jve_init_thread_lua_state(); s_lua_inited = true; }
+
     auto* controller = static_cast<PlaybackController*>(displayLinkContext);
     uint64_t cb_start = mach_absolute_time();
-    // Use inNow->hostTime (vsync-locked) instead of mach_absolute_time()
-    // (callback execution time). Vsync timestamps are perfectly periodic;
-    // mach_absolute_time() has scheduling jitter → irregular frame timing.
-    controller->displayLinkTick(
-        inNow->hostTime,
-        inOutputTime->hostTime
-    );
+    try {
+        controller->displayLinkTick(
+            inNow->hostTime,
+            inOutputTime->hostTime
+        );
+    } catch (const JveAssertError& e) {
+        JVE_LOG_ERROR(Ticks, "CVDisplayLink assert: %s — stopping playback", e.what());
+        controller->Stop();
+        return kCVReturnSuccess;
+    }
     uint64_t cb_end = mach_absolute_time();
     double cb_ms = machTimeToSeconds(cb_end - cb_start) * 1000.0;
     if (cb_ms > 10.0) {
@@ -270,16 +278,30 @@ void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* ss
     m_running.store(true, std::memory_order_relaxed);
     ResetPushState();
 
-    m_thread = std::thread(&AudioPump::pumpLoop, this);
+    m_thread = std::thread([this]() {
+        jve_init_thread_lua_state();
+        try {
+            pumpLoop();
+        } catch (const JveAssertError& e) {
+            JVE_LOG_ERROR(Audio, "AudioPump terminated by assert: %s", e.what());
+            m_running.store(false, std::memory_order_relaxed);
+        } catch (const std::exception& e) {
+            fprintf(stderr, "[audio] ERROR: AudioPump thread exception: %s\n", e.what());
+            m_running.store(false, std::memory_order_relaxed);
+        } catch (...) {
+            fprintf(stderr, "[audio] ERROR: AudioPump thread unknown exception\n");
+            m_running.store(false, std::memory_order_relaxed);
+        }
+    });
     JVE_LOG_EVENT(Audio, "AudioPump: started");
 }
 
 void AudioPump::Stop() {
+    m_stop_requested.store(true, std::memory_order_relaxed);
+
     if (!m_running.load(std::memory_order_relaxed)) {
         return;
     }
-
-    m_stop_requested.store(true, std::memory_order_relaxed);
 
     if (m_thread.joinable()) {
         m_thread.join();
@@ -297,6 +319,14 @@ void AudioPump::ResetPushState() {
     m_last_push_end_us.store(-1, std::memory_order_relaxed);
 }
 
+void AudioPump::SetLastPushEnd(int64_t us) {
+    m_last_push_end_us.store(us, std::memory_order_relaxed);
+}
+
+void AudioPump::SetEndTimeUS(int64_t us) {
+    m_end_time_us.store(us, std::memory_order_relaxed);
+}
+
 void AudioPump::SetQualityMode(int mode) {
     m_quality_mode.store(mode, std::memory_order_relaxed);
 }
@@ -311,7 +341,9 @@ void AudioPump::pumpLoop() {
     int64_t stalled_cycles = 0;
     int64_t last_media_time = -1;
 
+    int cycle_count = 0;
     while (!m_stop_requested.load(std::memory_order_relaxed)) {
+        cycle_count++;
         // 1. Get current media time from clock
         int64_t aop_playhead = m_aop->PlayheadTimeUS();
         int64_t media_time_us = m_clock->CurrentTimeUS(aop_playhead);
@@ -329,24 +361,22 @@ void AudioPump::pumpLoop() {
         // Solution: always fetch from SSE's current position (cache warming),
         // but only push to SSE when we need new data (from last_end onwards).
         constexpr int64_t MIX_LOOKAHEAD_US = 2000000;
-        constexpr int64_t REFILL_THRESHOLD_US = 1000000;  // push when < 1s ahead
+        constexpr int64_t REFILL_THRESHOLD_US = 1500000;
 
         int64_t last_end = m_last_push_end_us.load(std::memory_order_relaxed);
         int64_t sse_time = m_sse->CurrentTimeUS();
 
-        // Always fetch from SSE position to keep TMB cache warm.
-        // This ensures that when we DO push, the data is already decoded.
-        int64_t warm_start, warm_end;
-        if (speed >= 0) {
-            warm_start = sse_time;
-            warm_end = sse_time + MIX_LOOKAHEAD_US;
-        } else {
-            warm_start = sse_time - MIX_LOOKAHEAD_US;
-            warm_end = sse_time;
-        }
-        m_tmb->GetMixedAudio(warm_start, warm_end);  // result discarded — cache warming
+        // NOTE: Cache warming removed — it triggered backward seeks on every pump
+        // cycle (SSE position lags behind decoder position), destroying sequential
+        // decode state for compressed formats (MP3/AAC). The push path below
+        // decodes on demand when the buffer needs refilling.
 
         // Decide whether SSE needs more source data
+        if (cycle_count <= 3) {
+            JVE_LOG_EVENT(Audio,
+                "pump cycle %d: sse_time=%.3fs last_end=%.3fs speed=%.1f",
+                cycle_count, sse_time / 1e6, last_end / 1e6, speed);
+        }
         bool need_push = false;
         int64_t push_start = 0;
         if (last_end < 0) {
@@ -392,27 +422,44 @@ void AudioPump::pumpLoop() {
             int64_t aligned_push = aligned_start + (offset_samples * 1000000LL) / m_sample_rate;
 
             int64_t fetch_start, fetch_end;
+            int64_t end_us = m_end_time_us.load(std::memory_order_relaxed);
             if (speed >= 0) {
                 fetch_start = aligned_push;
-                fetch_end = aligned_push + MIX_LOOKAHEAD_US;
+                // Push all remaining audio when near the end — prevents
+                // starvation pop from a partial last chunk.
+                int64_t remaining = end_us - aligned_push;
+                fetch_end = (remaining <= MIX_LOOKAHEAD_US * 5)
+                    ? end_us
+                    : aligned_push + MIX_LOOKAHEAD_US;
             } else {
                 fetch_end = aligned_push;
-                fetch_start = aligned_push - MIX_LOOKAHEAD_US;
+                int64_t remaining = aligned_push;
+                fetch_start = (remaining <= MIX_LOOKAHEAD_US * 5)
+                    ? 0
+                    : aligned_push - MIX_LOOKAHEAD_US;
+            }
+            // Don't fetch past the end or before the start
+            if (fetch_start < 0) fetch_start = 0;
+            if (fetch_end <= fetch_start) {
+                // Nothing left to push — advance past the end so we don't retry
+                m_last_push_end_us.store(end_us + 1, std::memory_order_relaxed);
+                continue;
             }
 
             auto pcm = m_tmb->GetMixedAudio(fetch_start, fetch_end);
 
             if (pcm && pcm->frames() > 0) {
-                // Push to SSE (source data for time-stretching).
-                // SetTarget is NOT called here — SSE advances naturally via
-                // advance_time() inside Render(). Transport events (Play, SetSpeed)
-                // call SetTarget after Reset().
+                int64_t expected_frames = ((fetch_end - fetch_start) * m_sample_rate) / 1000000;
+                JVE_LOG_EVENT(Audio,
+                    "pump: push [%.3f..%.3f)s pcm_start=%.3fs frames=%lld (expected=%lld, ratio=%.1f%%)",
+                    fetch_start / 1e6, fetch_end / 1e6,
+                    pcm->start_time_us() / 1e6,
+                    (long long)pcm->frames(), (long long)expected_frames,
+                    pcm->frames() * 100.0 / std::max<int64_t>(1, expected_frames));
                 m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(), pcm->start_time_us());
                 pushed_source = true;
 
                 // Track end of pushed data using sample-aligned arithmetic.
-                // Convert frames to μs via the same round-trip to ensure the
-                // next push_start aligns to the same sample grid.
                 int64_t end_samples = offset_samples + pcm->frames();
                 int64_t pcm_end_us = aligned_start + (end_samples * 1000000LL) / m_sample_rate;
                 if (speed >= 0) {
@@ -566,19 +613,22 @@ void PlaybackController::SetTMB(emp::TimelineMediaBuffer* tmb) {
     m_tmb = tmb;
 }
 
-void PlaybackController::SetBounds(int64_t total_frames, int32_t fps_num, int32_t fps_den) {
+void PlaybackController::SetBounds(int64_t start_frame, int64_t end_frame, int32_t fps_num, int32_t fps_den) {
     JVE_ASSERT(fps_num > 0 && fps_den > 0,
         "PlaybackController::SetBounds: fps must be positive");
-    JVE_ASSERT(total_frames > 0,
-        "PlaybackController::SetBounds: total_frames must be positive");
+    JVE_ASSERT(end_frame > start_frame,
+        "PlaybackController::SetBounds: end_frame must exceed start_frame");
+    JVE_ASSERT(start_frame >= 0,
+        "PlaybackController::SetBounds: start_frame must be non-negative");
 
-    m_total_frames = total_frames;
+    m_start_frame = start_frame;
+    m_total_frames = end_frame;
     m_fps_num = fps_num;
     m_fps_den = fps_den;
     m_fps = static_cast<double>(fps_num) / fps_den;
 
-    JVE_LOG_EVENT(Ticks, "PlaybackController: SetBounds %lld frames @ %d/%d fps",
-                 (long long)total_frames, fps_num, fps_den);
+    JVE_LOG_EVENT(Ticks, "PlaybackController: SetBounds [%lld, %lld) @ %d/%d fps",
+                 (long long)start_frame, (long long)end_frame, fps_num, fps_den);
 }
 
 // ============================================================================
@@ -696,6 +746,18 @@ void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
     if (pcm && pcm->frames() > 0) {
         m_sse->PushSourcePcm(pcm->data_f32(), pcm->frames(),
                              pcm->start_time_us());
+
+        // Tell the pump where prefill data ends so its first push starts
+        // AFTER the prefilled range (no overlap → no chunk eviction in SSE).
+        if (m_audio_pump) {
+            int64_t prefill_end_us = pcm->start_time_us()
+                + (pcm->frames() * 1000000LL) / m_audio_sample_rate;
+            if (signed_speed >= 0) {
+                m_audio_pump->SetLastPushEnd(prefill_end_us);
+            } else {
+                m_audio_pump->SetLastPushEnd(pcm->start_time_us());
+            }
+        }
     }
 
     // Render in chunks until ring buffer is full
@@ -738,6 +800,10 @@ void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
     // Start pump thread
     if (m_audio_pump) {
         m_audio_pump->SetQualityMode(quality_mode);
+        // Tell pump where the sequence ends so it pushes all remaining
+        // audio near the end (prevents starvation pop at final boundary)
+        int64_t seq_end_us = (m_total_frames * 1000000LL * m_fps_den) / m_fps_num;
+        m_audio_pump->SetEndTimeUS(seq_end_us);
         if (!m_audio_pump->IsRunning()) {
             m_audio_pump->Start(m_tmb, m_sse, m_aop, &m_clock,
                                 m_audio_sample_rate, m_audio_channels,
@@ -875,15 +941,15 @@ void PlaybackController::Stop() {
 }
 
 void PlaybackController::Park(int64_t frame) {
-    JVE_ASSERT(frame >= 0,
-        "PlaybackController::Park: frame must be >= 0");
-    JVE_ASSERT(m_total_frames > 0,
+    JVE_ASSERT(frame >= m_start_frame,
+        "PlaybackController::Park: frame must be >= start_frame");
+    JVE_ASSERT(m_total_frames > m_start_frame,
         "PlaybackController::Park: bounds not set (call SetBounds before Park)");
     {
-        char buf[128];
+        char buf[160];
         snprintf(buf, sizeof(buf),
-            "PlaybackController::Park: frame %lld >= total_frames %lld",
-            (long long)frame, (long long)m_total_frames);
+            "PlaybackController::Park: frame %lld out of [%lld, %lld)",
+            (long long)frame, (long long)m_start_frame, (long long)m_total_frames);
         JVE_ASSERT(frame < m_total_frames, buf);
     }
     JVE_ASSERT(m_tmb,
@@ -1281,11 +1347,11 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
 
     // Boundary detection
     int dir = m_direction.load(std::memory_order_relaxed);
-    bool hit_start = (dir < 0 && new_pos <= 0);
+    bool hit_start = (dir < 0 && new_pos <= m_start_frame);
     bool hit_end = (dir > 0 && new_pos >= m_total_frames - 1);
 
     if (hit_start || hit_end) {
-        int64_t boundary_frame = hit_start ? 0 : (m_total_frames - 1);
+        int64_t boundary_frame = hit_start ? m_start_frame : (m_total_frames - 1);
         m_position.store(boundary_frame, std::memory_order_relaxed);
         m_hit_boundary.store(true, std::memory_order_relaxed);
 
@@ -1293,7 +1359,7 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
             m_playing.store(false, std::memory_order_relaxed);
             m_current_tick = nullptr;
             dispatch_async(dispatch_get_main_queue(), ^{
-                stopDisplayLink();
+                Stop();
                 reportPosition(boundary_frame, true);
             });
             return;
@@ -1340,6 +1406,23 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
 // ============================================================================
 // Position advancement
 // ============================================================================
+
+void PlaybackController::assertNoTeleport(int64_t current, int64_t new_pos,
+                                            double speed, const char* context) {
+    double abs_speed = std::abs(speed);
+    if (abs_speed < 0.01) abs_speed = 1.0;
+    double delta_seconds = std::abs(new_pos - current) * static_cast<double>(m_fps_den) / m_fps_num;
+    double wall_seconds = delta_seconds / abs_speed;
+    if (wall_seconds > 2.0) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "%s: jumped %.3fs (wall=%.3fs) in one tick "
+            "(current=%lld, new=%lld, speed=%.2f)",
+            context, delta_seconds, wall_seconds,
+            (long long)current, (long long)new_pos, speed);
+        JVE_ASSERT(false, buf);
+    }
+}
 
 int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     // Input validation: elapsed must be non-negative and sane.
@@ -1395,22 +1478,9 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
         // Audio-master path: derive position directly from audio clock
         if (m_audio_master_position) {
             int64_t new_pos = PlaybackClock::FrameFromTimeUS(audio_time_us, m_fps_num, m_fps_den);
-            new_pos = std::max<int64_t>(0, std::min(new_pos, m_total_frames - 1));
+            new_pos = std::max(m_start_frame, std::min(new_pos, m_total_frames - 1));
 
-            // Postcondition: audio-master must not teleport video.
-            // Clock discontinuity (bad reanchor, overflow) would silently jump.
-            {
-                int64_t delta = std::abs(new_pos - current);
-                if (delta >= 240) {
-                    char buf[256];
-                    snprintf(buf, sizeof(buf),
-                        "advancePosition(audio-master): jumped %lld frames in one tick "
-                        "(current=%lld, new=%lld, audio_time_us=%lld, drift=%.3fs)",
-                        (long long)delta, (long long)current, (long long)new_pos,
-                        (long long)audio_time_us, drift_s);
-                    JVE_ASSERT(false, buf);
-                }
-            }
+            assertNoTeleport(current, new_pos, speed, "advancePosition(audio-master)");
 
             if (m_current_tick) {
                 m_current_tick->drift_s = drift_s;
@@ -1464,20 +1534,9 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     }
 
     // Step 4: Teleport assert + clamp.
-    {
-        int64_t delta = std::abs(new_pos - current);
-        if (delta >= 240) {
-            char buf[256];
-            snprintf(buf, sizeof(buf),
-                "advancePosition: jumped %lld frames in one tick "
-                "(current=%lld, new=%lld, elapsed=%.4fs, speed=%.2f)",
-                (long long)delta, (long long)current, (long long)new_pos,
-                elapsed_seconds, speed);
-            JVE_ASSERT(false, buf);
-        }
-    }
+    assertNoTeleport(current, new_pos, speed, "advancePosition");
 
-    new_pos = std::max<int64_t>(0, std::min(new_pos, m_total_frames - 1));
+    new_pos = std::max(m_start_frame, std::min(new_pos, m_total_frames - 1));
 
     // Write frame to ring
     if (m_current_tick) {

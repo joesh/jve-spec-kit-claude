@@ -171,6 +171,10 @@ local sequence_load_mock = {
             [13] = 48000,              -- audio_rate
             [14] = "[]",               -- selected_clip_ids
             [15] = "[]",               -- selected_edge_infos
+            [16] = 0,                  -- start_timecode_frame
+            [17] = 0,                  -- video_scroll_offset
+            [18] = 0,                  -- audio_scroll_offset
+            [19] = 0.5,               -- video_audio_split_ratio
         }
         return values[idx]
     end,

@@ -154,13 +154,14 @@ local function flush_state_to_db()
     })
     command_manager.execute(playhead_cmd)
 
-    -- Persist viewport
+    -- Persist viewport (scroll offsets handled separately by persist_scroll_offsets)
     local viewport_cmd = Command.create("SetViewport", project_id)
     viewport_cmd:set_parameters({
         project_id = project_id,
         sequence_id = sequence_id,
         viewport_start_time = data.state.viewport_start_time,
         viewport_duration = data.state.viewport_duration,
+        video_audio_split_ratio = data.state.video_audio_split_ratio,
     })
     command_manager.execute(viewport_cmd)
 
@@ -265,8 +266,12 @@ function M.init(sequence_id, project_id)
     -- Skip persist if re-initializing the SAME sequence - our cached values may be stale
     -- (e.g., after undo deleted the sequence and redo recreated it with fresh values).
     local is_same_sequence = data.state.sequence_id == sequence_id
-    if persist_dirty and not is_same_sequence then
-        M.persist_state_to_db(true)
+    if not is_same_sequence then
+        -- Scroll offsets are persisted by load_sequence BEFORE init (while Qt
+        -- scroll areas still have correct content/range for the outgoing sequence)
+        if persist_dirty then
+            M.persist_state_to_db(true)
+        end
     end
     -- Clear dirty flag when switching or re-initializing - we're about to load fresh data
     persist_dirty = false
@@ -298,6 +303,7 @@ function M.init(sequence_id, project_id)
 
     data.state.project_id = sequence.project_id
     data.state.sequence_frame_rate = sequence.frame_rate
+    data.state.sequence_timecode_start_frame = sequence.start_timecode_frame or 0
     data.sequence = sequence  -- Model reference for mark getters
 
     assert(sequence.frame_rate.fps_numerator and sequence.frame_rate.fps_denominator,
@@ -305,6 +311,11 @@ function M.init(sequence_id, project_id)
 
     -- Restore Playhead from sequence model
     data.state.playhead_position = sequence.playhead_position
+
+    -- Restore vertical scroll offsets and splitter ratio
+    data.state.video_scroll_offset = sequence.video_scroll_offset or 0
+    data.state.audio_scroll_offset = sequence.audio_scroll_offset or 0
+    data.state.video_audio_split_ratio = sequence.video_audio_split_ratio or 0.5
 
     -- Restore Selection from sequence model (JSON strings)
     if sequence.selected_clip_ids_json and sequence.selected_clip_ids_json ~= "" then
@@ -466,6 +477,8 @@ Signals.connect("media_changed", function(_changed_media_ids)
     local active = data.state.sequence_id
     if not active or active == "" then return end
     M.reload_clips(active)
+    -- Propagate to playback engine so TMB re-fetches clips with updated media paths
+    Signals.emit("content_changed", active)
 end)
 
 return M

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstring>
 #include <deque>
+#include <mutex>
 
 namespace sse {
 
@@ -23,19 +24,36 @@ public:
     SourceBuffer(int channels) : m_channels(channels), m_total_frames(0) {}
 
     void push(const float* data, int64_t frames, int64_t start_time_us, int sample_rate) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         // Calculate new chunk's time range
         int64_t new_end_us = start_time_us + (frames * 1000000LL) / sample_rate;
 
-        // Remove any existing chunks that overlap with the new chunk's time range
-        // This prevents echo from duplicate/overlapping PCM data after seeks
+        // Handle overlapping chunks: trim or remove existing chunks so the new
+        // chunk's time range doesn't produce echo from duplicate PCM data.
+        // Old behavior removed the entire old chunk — this preserves any
+        // non-overlapping prefix (data before the new chunk's start).
         auto it = m_chunks.begin();
         while (it != m_chunks.end()) {
             int64_t chunk_end_us = it->start_time_us + (it->frames * 1000000LL) / sample_rate;
 
-            // Check for overlap: ranges overlap if start1 < end2 AND start2 < end1
-            bool overlaps = (it->start_time_us < new_end_us) && (start_time_us < chunk_end_us);
+            constexpr int64_t OVERLAP_TOLERANCE_US = 1000;
+            bool overlaps = (it->start_time_us + OVERLAP_TOLERANCE_US < new_end_us)
+                         && (start_time_us + OVERLAP_TOLERANCE_US < chunk_end_us);
 
             if (overlaps) {
+                // If old chunk starts before new chunk, trim it to keep the prefix
+                if (it->start_time_us + OVERLAP_TOLERANCE_US < start_time_us) {
+                    int64_t keep_frames = ((start_time_us - it->start_time_us)
+                                           * sample_rate) / 1000000;
+                    if (keep_frames > 0 && keep_frames < it->frames) {
+                        it->data.resize(static_cast<size_t>(keep_frames * m_channels));
+                        m_total_frames -= (it->frames - keep_frames);
+                        it->frames = keep_frames;
+                        ++it;
+                        continue;
+                    }
+                }
+                // Fully overlapped or starts after new chunk — remove entirely
                 m_total_frames -= it->frames;
                 it = m_chunks.erase(it);
             } else {
@@ -53,6 +71,7 @@ public:
     }
 
     void clear() {
+        std::lock_guard<std::mutex> lock(m_mutex);
         m_chunks.clear();
         m_total_frames = 0;
     }
@@ -60,7 +79,8 @@ public:
     // Get samples at a specific media time.
     // Handles reads that span two adjacent chunks (common with incremental push).
     // Returns false if time is not covered by buffered data.
-    bool get_samples(int64_t time_us, int sample_rate, float* out, int64_t frames) const {
+    bool get_samples(int64_t time_us, int sample_rate, float* out, int64_t frames) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         if (m_chunks.empty()) return false;
 
         // Find chunk containing start time
@@ -101,8 +121,8 @@ public:
         return false;
     }
 
-    // Get time range covered by buffer
-    bool get_time_range(int64_t* min_us, int64_t* max_us, int sample_rate) const {
+    bool get_time_range(int64_t* min_us, int64_t* max_us, int sample_rate) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         if (m_chunks.empty()) return false;
         *min_us = m_chunks.front().start_time_us;
         const auto& last = m_chunks.back();
@@ -110,8 +130,8 @@ public:
         return true;
     }
 
-    // Trim old chunks (before keep_after_us) to keep buffer size reasonable
     void trim(int64_t keep_after_us, int sample_rate) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         while (!m_chunks.empty()) {
             const auto& chunk = m_chunks.front();
             int64_t chunk_end_us = chunk.start_time_us + (chunk.frames * 1000000LL) / sample_rate;
@@ -124,8 +144,8 @@ public:
         }
     }
 
-    // Trim chunks after keep_before_us (for reverse playback)
     void trim_after(int64_t keep_before_us, int sample_rate) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         while (!m_chunks.empty()) {
             const auto& chunk = m_chunks.back();
             // If chunk starts after the threshold, remove it
@@ -140,8 +160,10 @@ public:
 
     int64_t total_frames() const { return m_total_frames; }
     bool empty() const { return m_chunks.empty(); }
+    int chunk_count() { std::lock_guard<std::mutex> lock(m_mutex); return (int)m_chunks.size(); }
 
 private:
+    mutable std::mutex m_mutex;
     int m_channels;
     std::deque<Chunk> m_chunks;
     int64_t m_total_frames;
@@ -349,8 +371,14 @@ private:
 
         if (!have_source) {
             m_starved = true;
+            int64_t buf_min = 0, buf_max = 0;
+            m_source_buffer.get_time_range(&buf_min, &buf_max, m_config.sample_rate);
+            fprintf(stderr, "[audio] SSE STARVED: fetch=%.3fs current=%.3fs buf=[%.3f..%.3f)s chunks=%d frames=%lld\n",
+                fetch_time / 1e6, m_current_time_us / 1e6,
+                buf_min / 1e6, buf_max / 1e6,
+                (int)m_source_buffer.chunk_count(), (long long)out_frames);
             std::memset(out, 0, out_frames * ch * sizeof(float));
-            advance_time(out_frames);  // Keep clock moving through silence
+            advance_time(out_frames);
             return out_frames;
         }
 

@@ -23,8 +23,22 @@
 // can throw instead of _exit when we're inside a Lua-callable context.
 static thread_local lua_State* t_lua_state = nullptr;
 
+// Global lua_State — set once at startup, read by background threads
+// via jve_init_thread_lua_state() to copy into their thread-local slot.
+static lua_State* g_lua_state = nullptr;
+
 void jve_set_lua_state(lua_State* L) {
     t_lua_state = L;
+}
+
+void jve_set_global_lua_state(lua_State* L) {
+    g_lua_state = L;
+}
+
+void jve_init_thread_lua_state() {
+    if (!t_lua_state && g_lua_state) {
+        t_lua_state = g_lua_state;
+    }
 }
 
 // Flag to prevent recursive abort handling

@@ -179,7 +179,7 @@ local function build_timecode_field_stylesheet()
     local field_text = colors.FIELD_TEXT_COLOR or "#cccccc"
     local focus_bg = colors.FIELD_FOCUS_BACKGROUND_COLOR or field_bg
     local focus_border = colors.FOCUS_BORDER_COLOR or selection_color
-    local font_size = (ui_constants.FONTS and ui_constants.FONTS.HEADER_FONT_SIZE) or "14px"
+    local font_size = (ui_constants.FONTS and ui_constants.FONTS.TIMECODE_FONT_SIZE) or "24px"
     local selection_bg = selection_color
     local selection_text = colors.WHITE_TEXT_COLOR or "#ffffff"
 
@@ -189,6 +189,8 @@ local function build_timecode_field_stylesheet()
             color: %s;
             border: 1px solid %s;
             padding: 2px 6px;
+            font-family: "Helvetica Neue";
+            font-weight: 500;
             font-size: %s;
             qproperty-alignment: AlignCenter;
             selection-background-color: %s;
@@ -1415,6 +1417,7 @@ function M.create(opts)
 
     -- Video scroll area
     local timeline_video_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
+    M.timeline_video_scroll = timeline_video_scroll  -- for scroll persist/restore
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(timeline_video_scroll, video_widget)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(timeline_video_scroll, "Expanding", "Expanding")
     qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(timeline_video_scroll, "AlwaysOff")
@@ -1445,6 +1448,7 @@ function M.create(opts)
 
     -- Audio scroll area
     local timeline_audio_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
+    M.timeline_audio_scroll = timeline_audio_scroll  -- for scroll persist/restore
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(timeline_audio_scroll, audio_widget)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(timeline_audio_scroll, "Expanding", "Expanding")
     qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(timeline_audio_scroll, "AlwaysOff")
@@ -1603,8 +1607,22 @@ function M.create(opts)
         rubber_band_visible = false
     end
 
+    M.vertical_splitter = vertical_splitter  -- for split ratio restore
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(vertical_splitter, "Expanding", "Expanding")
     qt_constants.LAYOUT.ADD_WIDGET(timeline_area_layout, vertical_splitter)
+
+    -- Persist scroll offsets whenever the Qt scroll area changes
+    _G["video_scroll_changed"] = function(value)
+        log.event("video_scroll_changed: %d", value)
+        state.set_video_scroll_offset(value)
+    end
+    qt_set_scroll_area_v_scroll_handler(M.timeline_video_scroll, "video_scroll_changed")
+
+    _G["audio_scroll_changed"] = function(value)
+        log.event("audio_scroll_changed: %d", value)
+        state.set_audio_scroll_offset(value)
+    end
+    qt_set_scroll_area_v_scroll_handler(M.timeline_audio_scroll, "audio_scroll_changed")
 
     -- Set stretch factor so splitter gets all remaining vertical space
     qt_set_layout_stretch_factor(timeline_area_layout, vertical_splitter, 1)
@@ -1645,7 +1663,7 @@ function M.create(opts)
     qt_set_splitter_moved_handler(headers_main_splitter, "headers_splitter_moved")
     log.event("  Handler registered")
 
-    -- When timeline video/audio boundary moves, update headers
+    -- When timeline video/audio boundary moves, update headers + persist ratio
     _G["timeline_splitter_moved"] = function(pos, index)
         log.event("timeline_splitter_moved fired: pos=%d, index=%d", pos, index)
         if not syncing then
@@ -1653,6 +1671,11 @@ function M.create(opts)
             local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(vertical_splitter)
             log.event("  Syncing to headers: sizes = {%d, %d}", sizes[1], sizes[2])
             qt_constants.LAYOUT.SET_SPLITTER_SIZES(headers_main_splitter, sizes)
+            -- Persist split ratio
+            local total = sizes[1] + sizes[2]
+            if total > 0 then
+                state.set_video_audio_split_ratio(sizes[1] / total)
+            end
             syncing = false
         end
     end
@@ -1751,6 +1774,30 @@ function M.create(opts)
         log.error("Failed to load initial sequence %s: %s", tostring(initial_sequence_id), tostring(load_err))
     end
 
+    -- After renderer updates widget content, apply any pending scroll restore.
+    -- BUG: When switching from a sequence with fewer tracks (smaller widget height)
+    -- to one with more tracks, the first render uses the stale height. The scroll
+    -- restore succeeds (Qt accepts the value) but the drawing commands only cover
+    -- the stale height region. The visible area at the new scroll position shows
+    -- blank tracks until the user scrolls slightly (triggering a full repaint).
+    -- Attempted fixes that did NOT work:
+    --   - widget->update() / widget->repaint() after scroll restore
+    --   - Deferred restore via singleShot(0) timer
+    --   - Multi-pass retry (consume after 2+ renders)
+    -- Root cause: the renderer draws commands clipped to widget height at render time.
+    -- After SET_MIN_HEIGHT resizes the widget, Qt doesn't automatically repaint the
+    -- newly allocated region with the correct commands.
+    state.add_listener(function()
+        local pending = M._pending_scroll_restore
+        if not pending then return end
+        if state.get_sequence_id() ~= pending.seq_id then
+            M._pending_scroll_restore = nil
+            return
+        end
+        M._pending_scroll_restore = nil
+        M.restore_scroll_with_targets(pending.video, pending.audio)
+    end)
+
     -- State → Viewer: when parked, state changes (from commands, ruler clicks, timecode entry)
     -- propagate to the viewer for frame display.
     -- Decimation: deferred via timer so timeline repaints aren't blocked by frame decode.
@@ -1821,6 +1868,13 @@ end
 function M.open_tab(sequence_id)
     if not sequence_id or sequence_id == "" then return end
     if open_tabs[sequence_id] then return end  -- already exists
+    -- Validate sequence exists before creating tab widget
+    local Sequence = require("models.sequence")
+    local seq = Sequence.load(sequence_id)
+    if not seq then
+        log.warn("open_tab: sequence %s not found in DB — skipping tab", tostring(sequence_id))
+        return
+    end
     ensure_tab_for_sequence(sequence_id)
 end
 
@@ -1829,13 +1883,17 @@ function M.load_sequence(sequence_id)
         return
     end
 
-    -- Guard: only skip if BOTH state AND UI (tab) confirm this sequence is fully loaded.
-    -- command_manager.init sets timeline_state.sequence_id before load_sequence runs
-    -- (during open_project), so state alone is insufficient proof.
+    -- Guard: skip full reload if already loaded, but always restore scroll/splitter
     local current = state.get_sequence_id and state.get_sequence_id()
     if current == sequence_id and open_tabs[sequence_id] then
+        M.restore_scroll_and_splitter()
         return
     end
+
+    -- Persist outgoing scroll offsets NOW, while Qt scroll areas still have
+    -- the correct content and range for the outgoing sequence. Must happen
+    -- before state.init or any widget rebuild.
+    state.persist_scroll_offsets()
 
     log.event("Loading sequence %s into timeline panel", sequence_id)
     local Sequence = require("models.sequence")
@@ -1854,6 +1912,15 @@ function M.load_sequence(sequence_id)
         command_manager.activate_timeline_stack(sequence_id)
     end
 
+    -- Suspend bottom-anchor filters during rebuild — their async singleShot(0)
+    -- callbacks would overwrite restored scroll positions
+    if M.timeline_video_scroll then
+        qt_suspend_scroll_area_anchor(M.timeline_video_scroll, true)
+    end
+    if M.header_video_scroll then
+        qt_suspend_scroll_area_anchor(M.header_video_scroll, true)
+    end
+
     if M.header_video_scroll and M.header_audio_scroll then
         local new_video_splitter = select(1, create_video_headers())
         qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(M.header_video_scroll, new_video_splitter)
@@ -1866,6 +1933,23 @@ function M.load_sequence(sequence_id)
         end
     end
 
+    -- Store pending scroll targets. The renderer (which fires async via
+    -- notify_listeners) will apply these AFTER it updates widget content/heights.
+    -- Setting scroll before the render would show stale content at the new position.
+    M._pending_scroll_restore = {
+        seq_id = sequence_id,
+        video = sequence.video_scroll_offset or 0,
+        audio = sequence.audio_scroll_offset or 0,
+    }
+
+    -- Resume anchor filters after restore
+    if M.timeline_video_scroll then
+        qt_suspend_scroll_area_anchor(M.timeline_video_scroll, false)
+    end
+    if M.header_video_scroll then
+        qt_suspend_scroll_area_anchor(M.header_video_scroll, false)
+    end
+
     ensure_tab_for_sequence(sequence_id)
     update_tab_styles(sequence_id)
 
@@ -1873,6 +1957,105 @@ function M.load_sequence(sequence_id)
     local pm = require("ui.panel_manager")
     local tl_view = pm.get_sequence_monitor("timeline_monitor")
     tl_view:load_sequence(sequence_id)
+end
+
+--- Restore scroll offsets from explicit target values (immune to async Qt clobbering).
+function M.restore_scroll_with_targets(v_scroll, a_scroll)
+    if M.timeline_video_scroll then
+        log.event("Restoring video scroll offset: %d", v_scroll)
+        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_video_scroll, v_scroll)
+    end
+    if M.timeline_audio_scroll then
+        log.event("Restoring audio scroll offset: %d", a_scroll)
+        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_audio_scroll, a_scroll)
+    end
+    if M.vertical_splitter and M.headers_main_splitter then
+        local ratio = state.get_video_audio_split_ratio()
+        log.event("Restoring split ratio: %.3f", ratio)
+        local total = qt_constants.LAYOUT.GET_SPLITTER_SIZES(M.vertical_splitter)
+        local total_height = total[1] + total[2]
+        if total_height > 0 then
+            local video_h = math.floor(total_height * ratio + 0.5)
+            local audio_h = total_height - video_h
+            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.vertical_splitter, {video_h, audio_h})
+            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {video_h, audio_h})
+        end
+    end
+end
+
+--- Restore scroll offsets and splitter ratio from persisted state.
+-- Called after sequence load and after initial panel creation.
+function M.restore_scroll_and_splitter()
+    if M.timeline_video_scroll then
+        local v_off = state.get_video_scroll_offset()
+        log.event("Restoring video scroll offset: %d", v_off)
+        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_video_scroll, v_off)
+    end
+    if M.timeline_audio_scroll then
+        local a_off = state.get_audio_scroll_offset()
+        log.event("Restoring audio scroll offset: %d", a_off)
+        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_audio_scroll, a_off)
+    end
+    if M.vertical_splitter and M.headers_main_splitter then
+        local ratio = state.get_video_audio_split_ratio()
+        log.event("Restoring split ratio: %.3f", ratio)
+        local total = qt_constants.LAYOUT.GET_SPLITTER_SIZES(M.vertical_splitter)
+        local total_height = total[1] + total[2]
+        if total_height > 0 then
+            local video_h = math.floor(total_height * ratio + 0.5)
+            local audio_h = total_height - video_h
+            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.vertical_splitter, {video_h, audio_h})
+            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {video_h, audio_h})
+        end
+    end
+end
+
+--- Snapshot current layout state for inheritance by new projects.
+function M.snapshot_layout()
+    local snapshot = {}
+    if M.vertical_splitter then
+        local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(M.vertical_splitter)
+        local total = sizes[1] + sizes[2]
+        if total > 0 then
+            snapshot.split_ratio = sizes[1] / total
+        end
+    end
+    if M.timeline_video_scroll then
+        snapshot.video_scroll = qt_constants.CONTROL.GET_SCROLL_AREA_V_SCROLL(M.timeline_video_scroll)
+    end
+    if M.timeline_audio_scroll then
+        snapshot.audio_scroll = qt_constants.CONTROL.GET_SCROLL_AREA_V_SCROLL(M.timeline_audio_scroll)
+    end
+    return snapshot
+end
+
+--- Apply inherited layout from a previous project.
+-- Writes values to state AND to the Qt widgets, then persists to DB.
+function M.apply_layout_if_default(snapshot)
+    if not snapshot then return end
+
+    -- Apply splitter ratio
+    if snapshot.split_ratio and M.vertical_splitter and M.headers_main_splitter then
+        local total = qt_constants.LAYOUT.GET_SPLITTER_SIZES(M.vertical_splitter)
+        local total_height = total[1] + total[2]
+        if total_height > 0 then
+            local video_h = math.floor(total_height * snapshot.split_ratio + 0.5)
+            local audio_h = total_height - video_h
+            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.vertical_splitter, {video_h, audio_h})
+            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {video_h, audio_h})
+            state.set_video_audio_split_ratio(snapshot.split_ratio)
+        end
+    end
+
+    -- Apply scroll offsets
+    if snapshot.video_scroll and M.timeline_video_scroll then
+        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_video_scroll, snapshot.video_scroll)
+        state.set_video_scroll_offset(snapshot.video_scroll)
+    end
+    if snapshot.audio_scroll and M.timeline_audio_scroll then
+        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_audio_scroll, snapshot.audio_scroll)
+        state.set_audio_scroll_offset(snapshot.audio_scroll)
+    end
 end
 
 -- Check if timeline is currently dragging clips or edges

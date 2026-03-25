@@ -30,7 +30,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             sv.engine:stop()
         end
 
-        sv:seek_to_frame(0)
+        -- Each sequence knows its own start TC (0 for master clips, DRP value for timelines)
+        local start_frame = 0
+        if sv.sequence then
+            start_frame = sv.sequence.start_timecode_frame or 0
+        end
+        sv:seek_to_frame(start_frame)
         return true
     end
 
