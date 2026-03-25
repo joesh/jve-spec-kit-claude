@@ -86,18 +86,39 @@ end
 -- Parses metadata JSON for start_tc_value and start_tc_rate.
 -- @return number|nil frames, number|nil rate
 function M:get_start_tc()
+    local meta = self:_parsed_metadata()
+    if meta and meta.start_tc_value then
+        return meta.start_tc_value, meta.start_tc_rate
+    end
+    return nil, nil
+end
+
+--- Get audio TC origin in samples from metadata.
+-- @return number|nil samples, number|nil sample_rate
+function M:get_audio_start_tc()
+    local meta = self:_parsed_metadata()
+    if meta and meta.start_tc_audio_samples then
+        return meta.start_tc_audio_samples, meta.start_tc_audio_rate
+    end
+    -- Fallback: convert video TC to samples if audio TC not stored
+    if meta and meta.start_tc_value and self.audio_sample_rate then
+        local sr = self.audio_sample_rate
+        local fps = meta.start_tc_rate or 1
+        return math.floor(meta.start_tc_value * sr / fps), sr
+    end
+    return nil, nil
+end
+
+function M:_parsed_metadata()
     local meta = self.metadata
     if not meta or meta == "" or meta == "{}" then
-        return nil, nil
+        return nil
     end
     if type(meta) == "string" then
         local json = require("dkjson")
         meta = json.decode(meta)
     end
-    if type(meta) == "table" and meta.start_tc_value then
-        return meta.start_tc_value, meta.start_tc_rate
-    end
-    return nil, nil
+    return type(meta) == "table" and meta or nil
 end
 
 -- ---------------------------------------------------------------------------

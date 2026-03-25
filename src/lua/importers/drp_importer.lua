@@ -2800,14 +2800,18 @@ function M.import_into_project(project_id, parse_result, opts)
                 goto continue_media
             end
 
-            -- Convert MediaStartTime (seconds since midnight) to native units at media's rate
+            -- Convert MediaStartTime (seconds since midnight) to native units
             local media_metadata = '{}'
             local native_rate = math.floor(fps + 0.5)
             if media_item.media_start_time then
                 local json = require("dkjson")
+                local mst = media_item.media_start_time
+                local audio_sr = media_item.audio_sample_rate or 48000
                 media_metadata = json.encode({
-                    start_tc_value = math.floor(media_item.media_start_time * native_rate + 0.5),
+                    start_tc_value = math.floor(mst * native_rate + 0.5),
                     start_tc_rate = native_rate,
+                    start_tc_audio_samples = math.floor(mst * audio_sr + 0.5),
+                    start_tc_audio_rate = audio_sr,
                 })
             end
 

@@ -187,15 +187,7 @@ function Sequence.load(id)
             sequence.mark_in = stmt:value(11)
             sequence.mark_out = stmt:value(12)
     stmt:finalize()
-    local seq = setmetatable(sequence, Sequence)
-
-    -- Migrate legacy masterclips from relative [0, duration) to absolute TC.
-    -- Detect: masterclip with start_tc > 0 whose video stream clip has source_in = 0.
-    if seq:is_masterclip() and seq.start_timecode_frame > 0 then
-        seq:_migrate_to_absolute_tc()
-    end
-
-    return seq
+    return setmetatable(sequence, Sequence)
 end
 
 function Sequence:save()
@@ -543,12 +535,10 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
                 })
             assert(atrack:save(), "Sequence.ensure_masterclip: failed to save audio track")
 
-            -- Audio source_in/source_out stay file-relative (0-based).
-            -- TMB audio path subtracts first_sample_tc from the clip's
-            -- source_in. For masterclips the audio TC origin comes from
-            -- the file's BWF time_reference, not from the video TC — we
-            -- can't reliably compute it here. Timeline clips get absolute
-            -- audio TC from the DRP importer which has the authoritative value.
+            -- Audio source_in in absolute TC (samples).
+            -- Authoritative audio TC comes from media metadata (DRP MediaStartTime
+            -- converted to samples at audio rate). Falls back to 0 for media without TC.
+            local audio_tc = media:get_audio_start_tc() or 0
             local aclip = Clip.create(
                 string.format("%s (Audio %d)", media.name, ch), media_id, {
                     id = replay_audio_clip_ids[ch],
@@ -558,8 +548,8 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
                     owner_sequence_id = seq.id,
                     timeline_start = start_tc_frame,
                     duration = duration_frames,
-                    source_in = 0,
-                    source_out = duration_samples,
+                    source_in = audio_tc,
+                    source_out = audio_tc + duration_samples,
                     fps_numerator = sample_rate,
                     fps_denominator = 1,
                 })
@@ -579,95 +569,6 @@ end
 
 --- Migrate a legacy masterclip from relative [0, duration) to absolute TC.
 -- Called from Sequence.load() when start_timecode_frame > 0.
--- Idempotent: no-op if stream clips already have absolute source_in.
-function Sequence:_migrate_to_absolute_tc()
-    local database = require("core.database") -- luacheck: ignore 431
-    if not database.has_connection() then return end
-    local db = database.get_connection()
-
-    local start_tc = self.start_timecode_frame
-    assert(start_tc > 0, "_migrate_to_absolute_tc: start_tc must be > 0")
-
-    -- Check if video stream clip still has source_in = 0 (needs migration)
-    local check = db:prepare([[
-        SELECT c.id, c.source_in_frame, c.source_out_frame, c.timeline_start_frame,
-               c.fps_numerator, c.fps_denominator, t.track_type
-        FROM clips c
-        JOIN tracks t ON c.track_id = t.id
-        WHERE c.owner_sequence_id = ? AND c.clip_kind = 'master'
-    ]])
-    assert(check, "_migrate_to_absolute_tc: failed to prepare check query")
-    check:bind_value(1, self.id)
-    assert(check:exec(), "_migrate_to_absolute_tc: check query exec failed")
-
-    local needs_migration = false
-    local clips = {}
-    while check:next() do
-        local clip = {
-            id = check:value(0),
-            source_in = check:value(1),
-            source_out = check:value(2),
-            timeline_start = check:value(3),
-            fps_num = check:value(4),
-            fps_den = check:value(5),
-            track_type = check:value(6),
-        }
-        clips[#clips + 1] = clip
-        if clip.track_type == "VIDEO" and clip.source_in == 0 then
-            needs_migration = true
-        end
-        -- Detect bad audio migration: audio source_in should be 0 for masterclips
-        -- (audio TC comes from BWF file, not video TC conversion)
-        if clip.track_type == "AUDIO" and clip.source_in ~= 0 then
-            needs_migration = true
-        end
-    end
-    check:finalize()
-
-    if not needs_migration then return end
-
-    local log = require("core.logger").for_area("database")
-    log.event("Migrating masterclip %s to absolute TC (start_tc=%d, %d clips)",
-        self.id:sub(1, 8), start_tc, #clips)
-
-    -- Migrate each clip
-    local update = db:prepare([[
-        UPDATE clips SET source_in_frame = ?, source_out_frame = ?, timeline_start_frame = ?
-        WHERE id = ?
-    ]])
-    assert(update, "_migrate_to_absolute_tc: failed to prepare update")
-
-    for _, clip in ipairs(clips) do
-        if clip.track_type == "VIDEO" then
-            -- Video: shift source_in/source_out by video TC origin
-            update:bind_value(1, clip.source_in + start_tc)
-            update:bind_value(2, clip.source_out + start_tc)
-        else
-            -- Audio: reset to file-relative (0-based).
-            -- Audio TC origin comes from BWF time_reference in the file,
-            -- not from video TC — can't reliably compute here.
-            -- Also fixes bad audio source_in from earlier migration.
-            local audio_duration = clip.source_out - clip.source_in
-            update:bind_value(1, 0)
-            update:bind_value(2, audio_duration)
-        end
-        update:bind_value(3, clip.timeline_start + start_tc)  -- timeline_start always video frames
-        update:bind_value(4, clip.id)
-        assert(update:exec(), "_migrate_to_absolute_tc: update failed for clip " .. clip.id)
-        update:reset()
-    end
-    update:finalize()
-
-    -- Migrate playhead and marks
-    self.playhead_position = self.playhead_position + start_tc
-    if self.mark_in then self.mark_in = self.mark_in + start_tc end
-    if self.mark_out then self.mark_out = self.mark_out + start_tc end
-    self:save()
-
-    log.event("Migrated masterclip %s: playhead=%d marks=[%s, %s]",
-        self.id:sub(1, 8), self.playhead_position,
-        tostring(self.mark_in), tostring(self.mark_out))
-end
 
 --- Find the masterclip sequence_id for a given media_id.
 -- @param media_id string
