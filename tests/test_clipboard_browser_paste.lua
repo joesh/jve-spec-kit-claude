@@ -148,10 +148,10 @@ assert(payload, "clipboard should have content after copy")
 assert(payload.kind == "browser_master_clips", "clipboard kind should be browser_master_clips")
 assert(payload.count == 2, string.format("clipboard should have 2 items (got %d)", payload.count))
 
--- Paste via command (mirrors real UI: Paste command opens undo group)
+-- Paste via clipboard_actions (focus-aware dispatch — browser paste goes through DuplicateMasterClip)
 browser_refreshed = false
-local paste_result = command_manager.execute("Paste", { project_id = "proj" })
-assert(paste_result.success, "browser paste should succeed: " .. tostring(paste_result.error_message))
+local paste_ok, paste_err = clipboard_actions.paste()
+assert(paste_ok, "browser paste should succeed: " .. tostring(paste_err))
 assert(browser_refreshed, "paste should trigger project_browser.refresh()")
 
 -- Verify: 2 new master clips created (4 total)

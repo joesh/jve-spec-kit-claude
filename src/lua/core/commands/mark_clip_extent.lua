@@ -7,7 +7,7 @@
 local M = {}
 
 local SPEC = {
-    undoable = false,  -- delegates to SetMarkIn/SetMarkOut which ARE undoable
+    undoable = false,  -- delegates to SetMarkIn/SetMarkOut (also non-undoable)
     args = {
         project_id = { required = true },
         sequence_id = {},

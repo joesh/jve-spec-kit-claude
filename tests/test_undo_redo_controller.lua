@@ -109,9 +109,9 @@ do
 end
 
 --------------------------------------------------------------------------------
--- 7. handle_redo_toggle: second press at redo_position does undo (toggle back)
+-- 7. handle_redo_toggle: continues forward when more to redo
 --------------------------------------------------------------------------------
-print("  test 7: second redo_toggle undoes (toggle)")
+print("  test 7: second redo_toggle continues forward when can_redo")
 urc.clear_toggle()
 do
     local mock, calls, get_pos = make_mock(3, 1)
@@ -120,27 +120,30 @@ do
     urc.handle_redo_toggle(mock)
     assert(get_pos() == 2, "after 1st press: pos=2")
 
-    -- Second press at redo position: undo 2→1
+    -- Second press: can_redo is true (pos=2 < max=3), so redo again, not toggle
     urc.handle_redo_toggle(mock)
-    assert(calls.undo == 1, "expected 1 undo call on toggle-back")
-    assert(get_pos() == 1, "after 2nd press: pos=1 (toggled back)")
+    assert(calls.redo == 2, "expected 2 redo calls (continued forward)")
+    assert(get_pos() == 3, "after 2nd press: pos=3")
 end
 
 --------------------------------------------------------------------------------
--- 8. handle_redo_toggle: third press re-does redo
+-- 8. handle_redo_toggle: toggles back when nothing left to redo
 --------------------------------------------------------------------------------
-print("  test 8: third redo_toggle re-does redo")
+print("  test 8: redo_toggle toggles back when at end of stack")
 urc.clear_toggle()
 do
-    local mock, calls, get_pos = make_mock(3, 1)
+    -- Stack of 2 commands, start at pos=1 — only 1 redo available
+    local mock, calls, get_pos = make_mock(2, 1)
 
-    -- 1st: redo 1→2
+    -- 1st: redo 1→2 (now at end of stack)
     urc.handle_redo_toggle(mock)
-    assert(get_pos() == 2)
+    assert(get_pos() == 2, "after 1st press: pos=2")
+    assert(calls.redo == 1)
 
-    -- 2nd: toggle back 2→1
+    -- 2nd: at redo position AND can_redo=false → toggle back 2→1
     urc.handle_redo_toggle(mock)
-    assert(get_pos() == 1)
+    assert(calls.undo == 1, "expected 1 undo call on toggle-back")
+    assert(get_pos() == 1, "after 2nd press: pos=1 (toggled back)")
 
     -- 3rd: redo again 1→2
     urc.handle_redo_toggle(mock)
@@ -216,7 +219,7 @@ do
     local undo_should_fail = false
     local mock = {
         can_undo = function() return pos > 0 end,
-        can_redo = function() return pos < 3 end,
+        can_redo = function() return pos < 2 end,  -- only 1 redo available
         undo = function()
             if undo_should_fail then
                 return { success = false, error_message = "corruption" }
@@ -237,10 +240,11 @@ do
     urc.handle_redo_toggle(mock)
     assert(pos == 2, "pos unchanged after failed undo")
 
-    -- Toggle state cleared; next press is fresh redo 2→3
+    -- Toggle state cleared; can_redo is false at pos=2, so nothing to redo
     undo_should_fail = false
-    urc.handle_redo_toggle(mock)
-    assert(pos == 3, "fresh redo after failed toggle-back")
+    local result = urc.handle_redo_toggle(mock)
+    assert(pos == 2, "pos unchanged — nothing to redo at end of stack")
+    assert(not result.success, "should report nothing to redo")
 end
 
 print("✅ test_undo_redo_controller.lua passed")

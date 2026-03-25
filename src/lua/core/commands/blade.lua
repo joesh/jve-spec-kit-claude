@@ -44,6 +44,9 @@ function M.register(executors)
         local project_id = args.project_id
         assert(project_id and project_id ~= "", "Blade: missing active project_id")
 
+        -- Group all SplitClip children into one undo atom
+        command_manager.begin_undo_group("Blade")
+
         local split_count = 0
         local fail_count = 0
         for _, clip in ipairs(target_clips) do
@@ -71,6 +74,8 @@ function M.register(executors)
                 end
             end
         end
+
+        command_manager.end_undo_group()
 
         if split_count > 0 then
             log.event("Blade: split %d clip(s) at %s", split_count, tostring(playhead_value))

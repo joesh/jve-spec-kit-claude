@@ -965,12 +965,9 @@ function M._execute_body(command_or_name, params)
                 root_selected_gaps_pre = command.selected_gap_infos_pre
             end
         end
-        -- Open an explicit undo group so all nested recording commands
-        -- share a single undo atom. Begin a transaction that the nested
-        -- commands will participate in (they skip BEGIN when a group is active).
-        local _wrapper_group_id = M.begin_undo_group(command.type) -- luacheck: ignore 211
+        -- No implicit undo group — commands that need grouping use explicit
+        -- begin_undo_group/end_undo_group in their executor (e.g., Blade, DeleteSelection).
         result = execute_non_recording(command)
-        M.end_undo_group()
 
         exec_scope:finish("non_recording")
         goto cleanup

@@ -38,6 +38,39 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             print("Executing Cut command")
         end
 
+        -- Mark-based cut: copy mark range + lift
+        local mark_in = timeline_state.get_mark_in and timeline_state.get_mark_in()
+        local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out()
+        if mark_in and mark_out and mark_out > mark_in then
+            local clipboard_actions = require("core.clipboard_actions")
+            local ok_copy, copy_err = clipboard_actions.copy()
+            if not ok_copy then
+                print("Cut: copy mark range failed: " .. tostring(copy_err))
+                return false
+            end
+            local command_manager = require("core.command_manager")
+            local sequence_id = command_helper.resolve_active_sequence_id(args.sequence_id, timeline_state)
+            assert(sequence_id, "Cut: missing sequence_id for mark-based cut")
+            local project_id = args.project_id
+                or (timeline_state.get_project_id and timeline_state.get_project_id())
+            assert(project_id and project_id ~= "", "Cut: missing project_id")
+            local result = command_manager.execute("LiftRange", {
+                project_id = project_id,
+                sequence_id = sequence_id,
+                mark_in = mark_in,
+                mark_out = mark_out,
+            })
+            assert(result and result.success,
+                "Cut: LiftRange failed: " .. tostring(result and result.error_message))
+            -- Set empty undo state — LiftRange's undoer handles the DB revert
+            command:set_parameters({
+                ["deleted_clip_states"] = {},
+                ["deleted_clip_properties"] = {},
+            })
+            print(string.format("✅ Cut mark range [%d, %d)", mark_in, mark_out))
+            return true
+        end
+
         local selected = timeline_state.get_selected_clips() or {}
         local unique = {}
         local clip_ids = {}
