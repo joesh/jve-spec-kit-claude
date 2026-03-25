@@ -1971,37 +1971,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		            end
 		        end
 
-		        local started, begin_err = db:begin_transaction()
-		        if not started then
-		            if string.find(tostring(begin_err), "cannot start a transaction within a transaction") then
-		                started = nil
-		            else
-		                log.error("UndoBatchRippleEdit: Failed to begin transaction: %s", tostring(begin_err))
-		                return { success = false, error_message = "Failed to begin transaction: " .. tostring(begin_err) }
-		            end
-		        end
-
+		        -- No transaction here — command_manager provides one
 		        local ok, success, err = pcall(command_helper.revert_mutations, db, executed_mutations, command, args.sequence_id)
 		        if not ok then
-		            if started then db:rollback_transaction(started) end
 		            log.error("UndoBatchRippleEdit: Failed to revert mutations: %s", tostring(success))
 		            return { success = false, error_message = "Failed to revert mutations: " .. tostring(success) }
 		        end
 		        if success ~= true then
-		            if started then db:rollback_transaction(started) end
 		            log.error("UndoBatchRippleEdit: Failed to revert mutations: %s", tostring(err))
 		            return { success = false, error_message = "Failed to revert mutations: " .. tostring(err) }
 		        end
-
-		        if started then
-		            local ok_commit, commit_err = db:commit_transaction(started)
-		            if not ok_commit then
-		                db:rollback_transaction(started)
-		                return { success = false, error_message = "Failed to commit undo transaction: " .. tostring(commit_err) }
-		            end
-		        end
-
-	        log.event("Undo Batch ripple: Reverted all changes")
 	        return { success = true }
 	    end
 

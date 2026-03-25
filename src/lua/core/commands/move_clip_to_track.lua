@@ -209,30 +209,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             "UndoMoveClipToTrack: could not resolve sequence_id from command args or mutations")
         command:set_parameter("sequence_id", sequence_id)
 
-        local started, begin_err = db:begin_transaction()
-        if not started then
-            print("WARNING: UndoMoveClipToTrack: Proceeding without transaction: " .. tostring(begin_err))
-        end
-
+        -- No transaction here — command_manager provides one
         local ok, err = command_helper.revert_mutations(db, args.executed_mutations, command, sequence_id)
         if not ok then
-            if started then db:rollback_transaction(started) end
-            local msg = "UndoMoveClipToTrack: Failed to revert mutations: " .. tostring(err)
-            print("ERROR: " .. msg)
-            return {success = false, error_message = msg}
+            return {success = false, error_message = "UndoMoveClipToTrack: revert_mutations failed: " .. tostring(err)}
         end
-        
-        if started then
-            local ok_commit, commit_err = db:commit_transaction(started)
-            if not ok_commit then
-                db:rollback_transaction(started)
-                local msg = "Failed to commit undo transaction: " .. tostring(commit_err)
-                print("ERROR: " .. msg)
-                return {success = false, error_message = msg}
-            end
-        end
-
-        print("✅ Restored clip move and occlusions")
         return {success = true}
     end
 

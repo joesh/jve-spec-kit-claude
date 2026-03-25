@@ -127,19 +127,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true
         end
 
-        local started, begin_err = db:begin_transaction()
-        assert(started, "UndoDuplicateClips: failed to begin transaction: " .. tostring(begin_err))
-
+        -- No transaction here — command_manager provides one
         local ok, err = command_helper.revert_mutations(db, args.executed_mutations, command, args.sequence_id)
         if not ok then
-            if started then db:rollback_transaction(started) end
             return false, "UndoDuplicateClips: revert_mutations failed: " .. tostring(err)
-        end
-
-        local ok_commit, commit_err = db:commit_transaction(started)
-        if not ok_commit then
-            db:rollback_transaction(started)
-            return false, "UndoDuplicateClips: commit failed: " .. tostring(commit_err)
         end
 
         return true

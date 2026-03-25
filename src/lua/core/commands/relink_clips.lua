@@ -45,9 +45,7 @@ function M.register(executors, undoers, db)
         local new_media_records = args.new_media_records or {} -- NSF-OK: optional param, empty = no new media
         local media_count = 0
 
-        -- Wrap all DB changes in a transaction — partial failures roll back
-        local txn_started = db:begin_transaction()
-
+        -- No transaction here — command_manager provides one
         local ok, err = pcall(function()
 
         -- Phase 1: Create new media records (for segment files)
@@ -109,10 +107,8 @@ function M.register(executors, undoers, db)
         end) -- end pcall
 
         if not ok then
-            if txn_started then db:rollback_transaction(txn_started) end
             error(err)
         end
-        if txn_started then db:commit_transaction(txn_started) end
 
         -- Emit media_changed for all affected media_ids so viewers refresh
         local changed_media = {}
@@ -142,9 +138,7 @@ function M.register(executors, undoers, db)
 
         local old_media_paths = args.old_media_paths
 
-        -- Wrap all DB changes in a transaction — partial failures roll back
-        local txn_started = db:begin_transaction()
-
+        -- No transaction here — command_manager provides one
         local ok, err = pcall(function()
 
         -- Phase 1: Restore clips via model batch method
@@ -171,10 +165,8 @@ function M.register(executors, undoers, db)
         end) -- end pcall
 
         if not ok then
-            if txn_started then db:rollback_transaction(txn_started) end
             error(err)
         end
-        if txn_started then db:commit_transaction(txn_started) end
 
         -- Emit media_changed so viewers refresh offline status
         local changed_media = {}
