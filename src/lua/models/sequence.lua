@@ -543,9 +543,12 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
                 })
             assert(atrack:save(), "Sequence.ensure_masterclip: failed to save audio track")
 
-            -- Audio source_in/source_out in samples at absolute TC
-            local start_tc_samples = math.floor(
-                start_tc_frame * sample_rate * fps_den / fps_num)
+            -- Audio source_in/source_out stay file-relative (0-based).
+            -- TMB audio path subtracts first_sample_tc from the clip's
+            -- source_in. For masterclips the audio TC origin comes from
+            -- the file's BWF time_reference, not from the video TC — we
+            -- can't reliably compute it here. Timeline clips get absolute
+            -- audio TC from the DRP importer which has the authoritative value.
             local aclip = Clip.create(
                 string.format("%s (Audio %d)", media.name, ch), media_id, {
                     id = replay_audio_clip_ids[ch],
@@ -555,8 +558,8 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
                     owner_sequence_id = seq.id,
                     timeline_start = start_tc_frame,
                     duration = duration_frames,
-                    source_in = start_tc_samples,
-                    source_out = start_tc_samples + duration_samples,
+                    source_in = 0,
+                    source_out = duration_samples,
                     fps_numerator = sample_rate,
                     fps_denominator = 1,
                 })
@@ -613,6 +616,11 @@ function Sequence:_migrate_to_absolute_tc()
         if clip.track_type == "VIDEO" and clip.source_in == 0 then
             needs_migration = true
         end
+        -- Detect bad audio migration: audio source_in should be 0 for masterclips
+        -- (audio TC comes from BWF file, not video TC conversion)
+        if clip.track_type == "AUDIO" and clip.source_in ~= 0 then
+            needs_migration = true
+        end
     end
     check:finalize()
 
@@ -623,8 +631,6 @@ function Sequence:_migrate_to_absolute_tc()
         self.id:sub(1, 8), start_tc, #clips)
 
     -- Migrate each clip
-    local fps_num = self.frame_rate.fps_numerator
-    local fps_den = self.frame_rate.fps_denominator
     local update = db:prepare([[
         UPDATE clips SET source_in_frame = ?, source_out_frame = ?, timeline_start_frame = ?
         WHERE id = ?
@@ -632,16 +638,19 @@ function Sequence:_migrate_to_absolute_tc()
     assert(update, "_migrate_to_absolute_tc: failed to prepare update")
 
     for _, clip in ipairs(clips) do
-        local tc_offset
         if clip.track_type == "VIDEO" then
-            tc_offset = start_tc
+            -- Video: shift source_in/source_out by video TC origin
+            update:bind_value(1, clip.source_in + start_tc)
+            update:bind_value(2, clip.source_out + start_tc)
         else
-            -- Audio: convert start_tc from video frames to samples
-            local sample_rate = clip.fps_num  -- audio clip fps_numerator = sample_rate
-            tc_offset = math.floor(start_tc * sample_rate * fps_den / fps_num)
+            -- Audio: reset to file-relative (0-based).
+            -- Audio TC origin comes from BWF time_reference in the file,
+            -- not from video TC — can't reliably compute here.
+            -- Also fixes bad audio source_in from earlier migration.
+            local audio_duration = clip.source_out - clip.source_in
+            update:bind_value(1, 0)
+            update:bind_value(2, audio_duration)
         end
-        update:bind_value(1, clip.source_in + tc_offset)
-        update:bind_value(2, clip.source_out + tc_offset)
         update:bind_value(3, clip.timeline_start + start_tc)  -- timeline_start always video frames
         update:bind_value(4, clip.id)
         assert(update:exec(), "_migrate_to_absolute_tc: update failed for clip " .. clip.id)
