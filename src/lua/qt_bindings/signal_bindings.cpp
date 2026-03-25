@@ -402,6 +402,76 @@ int lua_set_line_edit_editing_finished_handler(lua_State* L) {
     return 0;
 }
 
+// Panel focus filter: installed on QApplication, catches MouseButtonPress,
+// walks up widget parent chain to find a registered panel container, calls
+// Lua handler with the panel widget. One filter for all panels.
+class PanelFocusFilter : public QObject
+{
+public:
+    PanelFocusFilter(lua_State* L_ptr, const std::string& handler)
+        : QObject(QCoreApplication::instance()), lua_state(L_ptr), handler_name(handler) {}
+
+    void add_panel_widget(QWidget* w) {
+        if (w) panel_widgets.push_back(w);
+    }
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override {
+        if (event->type() != QEvent::MouseButtonPress || !lua_state)
+            return QObject::eventFilter(obj, event);
+
+        QWidget* clicked = qobject_cast<QWidget*>(obj);
+        if (!clicked) return QObject::eventFilter(obj, event);
+
+        // Walk up parent chain to find a registered panel container
+        QWidget* w = clicked;
+        while (w) {
+            for (auto* panel : panel_widgets) {
+                if (w == panel) {
+                    lua_getglobal(lua_state, handler_name.c_str());
+                    if (lua_isfunction(lua_state, -1)) {
+                        lua_push_widget(lua_state, panel);
+                        if (lua_pcall(lua_state, 1, 0, 0) != LUA_OK) {
+                            handle_lua_callback_error(lua_state);
+                        }
+                    } else {
+                        lua_pop(lua_state, 1);
+                    }
+                    return QObject::eventFilter(obj, event);
+                }
+            }
+            w = w->parentWidget();
+        }
+        return QObject::eventFilter(obj, event);
+    }
+
+private:
+    lua_State* lua_state;
+    std::string handler_name;
+    std::vector<QWidget*> panel_widgets;
+};
+
+static PanelFocusFilter* g_panel_focus_filter = nullptr;
+
+// Install global panel focus filter: qt_install_panel_focus_filter(handler_name)
+// Call once at startup. handler_name receives the panel widget on click.
+int lua_install_panel_focus_filter(lua_State* L) {
+    const char* handler_name = luaL_checkstring(L, 1);
+    if (!handler_name) return 0;
+
+    g_panel_focus_filter = new PanelFocusFilter(L, handler_name);
+    QCoreApplication::instance()->installEventFilter(g_panel_focus_filter);
+    return 0;
+}
+
+// Register a panel widget with the global focus filter: qt_register_panel_focus_widget(widget)
+int lua_register_panel_focus_widget(lua_State* L) {
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!widget || !g_panel_focus_filter) return 0;
+    g_panel_focus_filter->add_panel_widget(widget);
+    return 0;
+}
+
 // Global key handler
 int lua_set_global_key_handler(lua_State* L) {
     QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1)); // Passed but not used for filter installation

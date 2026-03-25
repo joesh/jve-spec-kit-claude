@@ -488,6 +488,9 @@ else
     log.error("Inspector mount failed: %s", tostring(mount_result))
 end
 
+-- Install global click-to-focus before registering panels
+focus_manager.install_click_to_focus()
+
 -- Register all panels with focus manager for visual indicators
 focus_manager.register_panel("project_browser", project_browser, nil, "Project Browser", {
     focus_widgets = project_browser_mod.get_focus_widgets and project_browser_mod.get_focus_widgets() or nil
