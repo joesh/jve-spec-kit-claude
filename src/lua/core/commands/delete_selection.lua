@@ -56,6 +56,8 @@ function M.register(executors, undoers, db)
             local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
             assert(project_id and project_id ~= "", "DeleteSelection: missing project_id")
 
+            command_manager.begin_undo_group("DeleteMarkRange")
+
             local cmd_name = ripple and "ExtractRange" or "LiftRange"
             local result = command_manager.execute(cmd_name, {
                 project_id = project_id,
@@ -65,7 +67,13 @@ function M.register(executors, undoers, db)
             })
             if not result.success then
                 log.error("DeleteSelection: %s failed: %s", cmd_name, result.error_message or "unknown")
+            else
+                command_manager.execute("ClearMarks", {
+                    project_id = project_id, sequence_id = sequence_id,
+                })
             end
+
+            command_manager.end_undo_group()
             return true
         end
 

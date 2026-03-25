@@ -67,6 +67,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 ["deleted_clip_states"] = {},
                 ["deleted_clip_properties"] = {},
             })
+            command_manager.execute("ClearMarks", {
+                project_id = project_id, sequence_id = sequence_id,
+            })
             print(string.format("✅ Cut mark range [%d, %d)", mark_in, mark_out))
             return true
         end
