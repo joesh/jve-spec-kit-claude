@@ -187,7 +187,15 @@ function Sequence.load(id)
             sequence.mark_in = stmt:value(11)
             sequence.mark_out = stmt:value(12)
     stmt:finalize()
-    return setmetatable(sequence, Sequence)
+    local seq = setmetatable(sequence, Sequence)
+
+    -- Migrate legacy masterclips from relative [0, duration) to absolute TC.
+    -- Detect: masterclip with start_tc > 0 whose video stream clip has source_in = 0.
+    if seq:is_masterclip() and seq.start_timecode_frame > 0 then
+        seq:_migrate_to_absolute_tc()
+    end
+
+    return seq
 end
 
 function Sequence:save()
@@ -512,10 +520,10 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
             clip_kind = "master",
             track_id = vtrack.id,
             owner_sequence_id = seq.id,
-            timeline_start = 0,
+            timeline_start = start_tc_frame,
             duration = duration_frames,
-            source_in = 0,
-            source_out = duration_frames,
+            source_in = start_tc_frame,
+            source_out = start_tc_frame + duration_frames,
             fps_numerator = fps_num,
             fps_denominator = fps_den,
         })
@@ -535,6 +543,9 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
                 })
             assert(atrack:save(), "Sequence.ensure_masterclip: failed to save audio track")
 
+            -- Audio source_in/source_out in samples at absolute TC
+            local start_tc_samples = math.floor(
+                start_tc_frame * sample_rate * fps_den / fps_num)
             local aclip = Clip.create(
                 string.format("%s (Audio %d)", media.name, ch), media_id, {
                     id = replay_audio_clip_ids[ch],
@@ -542,10 +553,10 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
                     clip_kind = "master",
                     track_id = atrack.id,
                     owner_sequence_id = seq.id,
-                    timeline_start = 0,
+                    timeline_start = start_tc_frame,
                     duration = duration_frames,
-                    source_in = 0,
-                    source_out = duration_samples,
+                    source_in = start_tc_samples,
+                    source_out = start_tc_samples + duration_samples,
                     fps_numerator = sample_rate,
                     fps_denominator = 1,
                 })
@@ -561,6 +572,92 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
     end
 
     return seq.id
+end
+
+--- Migrate a legacy masterclip from relative [0, duration) to absolute TC.
+-- Called from Sequence.load() when start_timecode_frame > 0.
+-- Idempotent: no-op if stream clips already have absolute source_in.
+function Sequence:_migrate_to_absolute_tc()
+    local database = require("core.database") -- luacheck: ignore 431
+    if not database.has_connection() then return end
+    local db = database.get_connection()
+
+    local start_tc = self.start_timecode_frame
+    assert(start_tc > 0, "_migrate_to_absolute_tc: start_tc must be > 0")
+
+    -- Check if video stream clip still has source_in = 0 (needs migration)
+    local check = db:prepare([[
+        SELECT c.id, c.source_in_frame, c.source_out_frame, c.timeline_start_frame,
+               c.fps_numerator, c.fps_denominator, t.track_type
+        FROM clips c
+        JOIN tracks t ON c.track_id = t.id
+        WHERE c.owner_sequence_id = ? AND c.clip_kind = 'master'
+    ]])
+    assert(check, "_migrate_to_absolute_tc: failed to prepare check query")
+    check:bind_value(1, self.id)
+    assert(check:exec(), "_migrate_to_absolute_tc: check query exec failed")
+
+    local needs_migration = false
+    local clips = {}
+    while check:next() do
+        local clip = {
+            id = check:value(0),
+            source_in = check:value(1),
+            source_out = check:value(2),
+            timeline_start = check:value(3),
+            fps_num = check:value(4),
+            fps_den = check:value(5),
+            track_type = check:value(6),
+        }
+        clips[#clips + 1] = clip
+        if clip.track_type == "VIDEO" and clip.source_in == 0 then
+            needs_migration = true
+        end
+    end
+    check:finalize()
+
+    if not needs_migration then return end
+
+    local log = require("core.logger").for_area("database")
+    log.event("Migrating masterclip %s to absolute TC (start_tc=%d, %d clips)",
+        self.id:sub(1, 8), start_tc, #clips)
+
+    -- Migrate each clip
+    local fps_num = self.frame_rate.fps_numerator
+    local fps_den = self.frame_rate.fps_denominator
+    local update = db:prepare([[
+        UPDATE clips SET source_in_frame = ?, source_out_frame = ?, timeline_start_frame = ?
+        WHERE id = ?
+    ]])
+    assert(update, "_migrate_to_absolute_tc: failed to prepare update")
+
+    for _, clip in ipairs(clips) do
+        local tc_offset
+        if clip.track_type == "VIDEO" then
+            tc_offset = start_tc
+        else
+            -- Audio: convert start_tc from video frames to samples
+            local sample_rate = clip.fps_num  -- audio clip fps_numerator = sample_rate
+            tc_offset = math.floor(start_tc * sample_rate * fps_den / fps_num)
+        end
+        update:bind_value(1, clip.source_in + tc_offset)
+        update:bind_value(2, clip.source_out + tc_offset)
+        update:bind_value(3, clip.timeline_start + start_tc)  -- timeline_start always video frames
+        update:bind_value(4, clip.id)
+        assert(update:exec(), "_migrate_to_absolute_tc: update failed for clip " .. clip.id)
+        update:reset()
+    end
+    update:finalize()
+
+    -- Migrate playhead and marks
+    self.playhead_position = self.playhead_position + start_tc
+    if self.mark_in then self.mark_in = self.mark_in + start_tc end
+    if self.mark_out then self.mark_out = self.mark_out + start_tc end
+    self:save()
+
+    log.event("Migrated masterclip %s: playhead=%d marks=[%s, %s]",
+        self.id:sub(1, 8), self.playhead_position,
+        tostring(self.mark_in), tostring(self.mark_out))
 end
 
 --- Find the masterclip sequence_id for a given media_id.
@@ -774,18 +871,34 @@ end
 -- mark_out_frame columns). Stream clips keep source_in=0, source_out=full
 -- always — marks do NOT constrain the rendering view.
 
---- Set mark-in point (video frame units).
+--- Set mark-in point (video frame units, absolute TC).
 -- @param frame number Frame position in video timebase
 function Sequence:set_in(frame)
     assert(type(frame) == "number", "Sequence:set_in: frame must be a number")
+    local dur = self:content_duration()
+    if dur > 0 then
+        local start = self.start_timecode_frame or 0
+        local end_frame = start + dur
+        assert(frame >= start and frame < end_frame,
+            string.format("Sequence:set_in(%s): frame %d out of [%d, %d)",
+                tostring(self.id), frame, start, end_frame))
+    end
     self.mark_in = frame
     self:save()
 end
 
---- Set mark-out point (video frame units).
+--- Set mark-out point (video frame units, absolute TC).
 -- @param frame number Frame position in video timebase
 function Sequence:set_out(frame)
     assert(type(frame) == "number", "Sequence:set_out: frame must be a number")
+    local dur = self:content_duration()
+    if dur > 0 then
+        local start = self.start_timecode_frame or 0
+        local end_frame = start + dur
+        assert(frame >= start and frame <= end_frame,
+            string.format("Sequence:set_out(%s): frame %d out of [%d, %d]",
+                tostring(self.id), frame, start, end_frame))
+    end
     self.mark_out = frame
     self:save()
 end
@@ -1316,9 +1429,8 @@ function Sequence:content_duration()
 end
 
 --- Set playhead position with bounds validation.
--- Asserts frame is within [0, content_duration). Catches out-of-range writes
--- at the point of introduction rather than at the read boundary.
--- @param frame integer  playhead position in video frames
+-- Asserts frame is within [start_tc, start_tc + content_duration).
+-- @param frame integer  playhead position in video frames (absolute TC)
 function Sequence:set_playhead(frame)
     assert(type(frame) == "number",
         string.format("Sequence:set_playhead(%s): frame must be number, got %s",
@@ -1326,14 +1438,16 @@ function Sequence:set_playhead(frame)
     assert(frame == math.floor(frame),
         string.format("Sequence:set_playhead(%s): frame must be integer, got %s",
             tostring(self.id), tostring(frame)))
-    assert(frame >= 0,
-        string.format("Sequence:set_playhead(%s): frame must be >= 0, got %d",
-            tostring(self.id), frame))
+    local start = self.start_timecode_frame or 0
+    assert(frame >= start,
+        string.format("Sequence:set_playhead(%s): frame %d < start_tc %d",
+            tostring(self.id), frame, start))
     local duration = self:content_duration()
     if duration > 0 then
-        assert(frame < duration,
-            string.format("Sequence:set_playhead(%s): frame %d >= content duration %d",
-                tostring(self.id), frame, duration))
+        local end_frame = start + duration
+        assert(frame < end_frame,
+            string.format("Sequence:set_playhead(%s): frame %d >= end %d (start_tc=%d, dur=%d)",
+                tostring(self.id), frame, end_frame, start, duration))
     end
     self.playhead_position = frame
 end

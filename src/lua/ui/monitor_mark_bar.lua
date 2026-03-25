@@ -75,9 +75,10 @@ function M.create(widget, config)
     -- Convert pixel x-coordinate to frame index (viewport-aware)
     local function x_to_frame(x, width)
         local vp_dur = state.viewport_duration
-        if vp_dur <= 0 or width <= 0 then return 0 end
+        local sf = state.start_frame or 0
+        if vp_dur <= 0 or width <= 0 then return sf end
         local frame = math.floor(state.viewport_start + (x / width) * vp_dur + 0.5)
-        return math.max(0, math.min(frame, state.total_frames - 1))
+        return math.max(sf, math.min(frame, state.total_frames - 1))
     end
 
     local function render()
@@ -102,9 +103,9 @@ function M.create(widget, config)
         local mark_in = get_mark_in()
         local mark_out = get_mark_out()
 
-        -- Mark range fill (implicit boundary: 0 if mark_in nil, total_frames if mark_out nil)
+        -- Mark range fill (implicit boundary: start_frame if mark_in nil, total_frames if mark_out nil)
         if mark_in or mark_out then
-            local eff_in = mark_in or 0
+            local eff_in = mark_in or (state.start_frame or 0)
             local eff_out = mark_out or state.total_frames
             if eff_out > eff_in then
                 local start_x = frame_to_x(eff_in, width)
