@@ -179,8 +179,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        -- Update anchor on non-Shift clicks
-        if not modifiers.shift and target_clip then
+        -- Update anchor on non-Shift clicks (requires position data for range select)
+        if not modifiers.shift and target_clip
+            and type(target_clip.timeline_start) == "number"
+            and type(target_clip.duration) == "number" then
             local track = timeline_state.get_track_by_id
                 and timeline_state.get_track_by_id(target_clip.track_id)
             if track then

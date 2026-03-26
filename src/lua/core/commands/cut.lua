@@ -44,10 +44,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if mark_in and mark_out and mark_out > mark_in then
             local clipboard_actions = require("core.clipboard_actions")
             local ok_copy, copy_err = clipboard_actions.copy()
-            if not ok_copy then
-                print("Cut: copy mark range failed: " .. tostring(copy_err))
-                return false
-            end
+            assert(ok_copy,
+                "Cut: copy mark range failed: " .. tostring(copy_err))
             local command_manager = require("core.command_manager")
             local sequence_id = command_helper.resolve_active_sequence_id(args.sequence_id, timeline_state)
             assert(sequence_id, "Cut: missing sequence_id for mark-based cut")
