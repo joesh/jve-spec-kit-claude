@@ -64,6 +64,10 @@ local module_aliases = {
     ShuttleForward = "core.commands.playback",
     ShuttleReverse = "core.commands.playback",
     ShuttleStop = "core.commands.playback",
+
+    -- Replace commands live in replace_clip_property.lua (multi-register)
+    ReplaceClipProperty = "core.commands.replace_clip_property",
+    ReplaceAllClipProperties = "core.commands.replace_clip_property",
 }
 function M.init(database, set_last_error_fn)
     db = database
