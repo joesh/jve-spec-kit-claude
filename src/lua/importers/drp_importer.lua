@@ -19,6 +19,7 @@
 local M = {}
 
 local log = require("core.logger").for_area("media")
+local importer_core = require("importers.importer_core")
 
 --- Run a shell command, capture output to a temp file, read that file.
 -- Avoids io.popen pipes entirely — LuaJIT's pipe reads are susceptible to
@@ -2503,13 +2504,9 @@ end
 -- import_into_project() is the single source of truth for DRP entity creation:
 -- media records, sequences, tracks, clips, A/V link groups.
 
--- Models (SQL isolation: all DB access goes through models)
+-- Models (SQL isolation: only what DRP-specific code needs post-extraction)
 local Project = require("models.project")
-local Media = require("models.media")
 local Sequence = require("models.sequence")
-local Track = require("models.track")
-local Clip = require("models.clip")
-local clip_link = require("models.clip_link")
 
 -- ---------------------------------------------------------------------------
 -- Helper: Infer frame rate from 1-hour timecode start position
@@ -2528,58 +2525,7 @@ local clip_link = require("models.clip_link")
 --   59.94 fps     | ~215,784         | 60000/1001
 --   60 fps        | 216,000          | 60/1
 --
-local function infer_fps_from_one_hour_start(min_start_frame)
-    if not min_start_frame or min_start_frame <= 0 then
-        return nil
-    end
-
-    local one_hour_markers = {
-        { 86314,  23.976, 24000, 1001 },
-        { 86400,  24,     24,    1    },
-        { 90000,  25,     25,    1    },
-        { 107892, 29.97,  30000, 1001 },
-        { 108000, 30,     30,    1    },
-        { 180000, 50,     50,    1    },
-        { 215784, 59.94,  60000, 1001 },
-        { 216000, 60,     60,    1    },
-    }
-
-    local tolerance = 0.01
-
-    for _, marker in ipairs(one_hour_markers) do
-        local expected = marker[1]
-        local lower = expected * (1 - tolerance)
-        local upper = expected * (1 + tolerance)
-
-        if min_start_frame >= lower and min_start_frame <= upper then
-            log.event("Inferred %.3f fps from 1-hour TC start (frame %d ~ %d)",
-                    marker[2], min_start_frame, expected)
-            return marker[2], marker[3], marker[4]
-        end
-    end
-
-    log.event("Could not infer fps from start frame %d (not near 1-hour TC)", min_start_frame)
-    return nil
-end
-
--- ---------------------------------------------------------------------------
--- Helper: Frame rate to rational
--- ---------------------------------------------------------------------------
-
-local function frame_rate_to_rational(frame_rate)
-    local fps = tonumber(frame_rate)
-    assert(fps and fps > 0, "drp_importer: invalid frame_rate: " .. tostring(frame_rate))
-
-    if math.abs(fps - 23.976) < 0.01 then
-        return 24000, 1001
-    elseif math.abs(fps - 29.97) < 0.01 then
-        return 30000, 1001
-    elseif math.abs(fps - 59.94) < 0.01 then
-        return 60000, 1001
-    end
-
-    return math.floor(fps + 0.5), 1
-end
+-- frame_rate_to_rational and infer_fps_from_one_hour_start moved to importer_core.lua
 
 -- ---------------------------------------------------------------------------
 -- import_into_project: Shared entity-creation for both Open and Import verbs
@@ -2668,21 +2614,22 @@ end
 -- recomputed reactively by core.media.media_status registry.
 
 --- Import parsed DRP data into an existing project.
--- Creates: media records, sequences, tracks, clips, A/V link groups.
+-- Delegates to importer_core for entity creation, then applies DRP-specific
+-- post-import steps (pool master clip marks).
 -- @param project_id string: Target project ID (must already exist)
 -- @param parse_result table: Output of parse_drp_file()
 -- @param opts table: Optional settings
---   opts.project_settings table: {frame_rate, width, height} project defaults
 -- @return table: {media_ids, sequence_ids, track_ids, clip_ids} for undo
 function M.import_into_project(project_id, parse_result, opts)
-    assert(project_id and project_id ~= "", "drp_importer.import_into_project: project_id required")
-    assert(parse_result and parse_result.success, "drp_importer.import_into_project: parse_result must be successful")
-    opts = opts or {}
-    local project_settings = opts.project_settings or parse_result.project.settings
-    local sub_report = opts.progress_cb or function() end
+    local result = importer_core.import_into_project(project_id, parse_result, opts)
 
-    local tag_service = require("core.tag_service")
-    local uuid = require("uuid")
+    -- DRP-specific: apply pool master clip marks
+    apply_pool_master_clip_marks(parse_result.pool_master_clips, result.media_by_path)
+
+    return result
+end
+-- Original import_into_project body (500+ lines) moved to importer_core.lua.
+--[=[
 
     -- Track created entity IDs for undo
     local result = {
@@ -3177,6 +3124,7 @@ function M.import_into_project(project_id, parse_result, opts)
 
     return result
 end
+]=]
 
 -- ---------------------------------------------------------------------------
 -- convert: Parse .drp and create new .jvp at target path (Open verb)
@@ -3310,7 +3258,7 @@ function M.convert(drp_path, jvp_path, progress_cb)
     return true
 end
 
-M.frame_rate_to_rational = frame_rate_to_rational
+M.frame_rate_to_rational = importer_core.frame_rate_to_rational
 M.decode_bt_clip_path = decode_bt_clip_path
 
 return M
