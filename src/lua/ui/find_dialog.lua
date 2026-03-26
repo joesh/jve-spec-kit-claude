@@ -299,7 +299,7 @@ local function create_window()
     qt.CONTROL.SET_LAYOUT_SPACING(layout, 4)
     qt.CONTROL.SET_LAYOUT_MARGINS(layout, 10, 10, 10, 10)
 
-    -- Row 1: Sentence-style search: [Any ▼] [contains ▼] [________]
+    -- Row 1: [Any ▼] [contains ▼] [________search________]
     local row1 = qt.LAYOUT.CREATE_HBOX()
     ws.attr_combo = qt.WIDGET.CREATE_COMBOBOX()
     qt.PROPERTIES.ADD_COMBOBOX_ITEM(ws.attr_combo, "Any")
@@ -319,7 +319,8 @@ local function create_window()
     qt.LAYOUT.ADD_WIDGET(row1, ws.find_edit)
     qt.LAYOUT.ADD_LAYOUT(layout, row1)
 
-    -- Row 2: Replace with [________] (disabled by default)
+    -- Row 2: Replace with  [________replace________]
+    -- "Replace with" label aligns with the combos above, edit field aligns with find field
     local row2 = qt.LAYOUT.CREATE_HBOX()
     ws.replace_label = qt.WIDGET.CREATE_LABEL("Replace with")
     qt.LAYOUT.ADD_WIDGET(row2, ws.replace_label)
@@ -327,6 +328,14 @@ local function create_window()
     qt.PROPERTIES.SET_PLACEHOLDER_TEXT(ws.replace_edit, "replacement text")
     qt.LAYOUT.ADD_WIDGET(row2, ws.replace_edit)
     qt.LAYOUT.ADD_LAYOUT(layout, row2)
+
+    -- Monitor replace field: enable/disable Replace buttons
+    register_handler("__find_dlg_replace_changed", function()
+        local has_text = has_replace_text()
+        qt.CONTROL.SET_ENABLED(ws.rep_btn, has_text)
+        qt.CONTROL.SET_ENABLED(ws.rep_all_btn, has_text)
+    end)
+    qt_set_line_edit_text_changed_handler(ws.replace_edit, "__find_dlg_replace_changed")
 
     -- Row 3: in [All Clips ▼]
     local row3 = qt.LAYOUT.CREATE_HBOX()
@@ -385,11 +394,13 @@ local function create_window()
     local row6 = qt.LAYOUT.CREATE_HBOX()
 
     ws.rep_btn = qt.WIDGET.CREATE_BUTTON("Replace")
+    qt.CONTROL.SET_ENABLED(ws.rep_btn, false)
     register_handler("__find_dlg_rep", do_replace)
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(ws.rep_btn, "__find_dlg_rep")
     qt.LAYOUT.ADD_WIDGET(row6, ws.rep_btn)
 
     ws.rep_all_btn = qt.WIDGET.CREATE_BUTTON("Replace All")
+    qt.CONTROL.SET_ENABLED(ws.rep_all_btn, false)
     register_handler("__find_dlg_rep_all", do_replace_all)
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(ws.rep_all_btn, "__find_dlg_rep_all")
     qt.LAYOUT.ADD_WIDGET(row6, ws.rep_all_btn)
