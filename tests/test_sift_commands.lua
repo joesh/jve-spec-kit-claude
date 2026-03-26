@@ -56,7 +56,7 @@ local sift_state = require("core.sift_state")
 -- ============================================================================
 print("--- sift fresh ---")
 sift_state.clear()
-sift_commands.sift(clips, {column = "codec", operator = "contains", value = "ProRes"}, db, "proj1")
+sift_commands.sift(clips, {column = "codec", operator = "contains", value = "ProRes"}, "proj1")
 
 check("sift: is_active", sift_state.is_active())
 local result = sift_state.evaluate(clips)
@@ -72,7 +72,7 @@ check("sift: visible count = 2", set_size(vis) == 2)
 -- Expand Sift (OR)
 -- ============================================================================
 print("--- expand sift ---")
-sift_commands.expand_sift(clips, {column = "codec", operator = "contains", value = "DNxHD"}, db, "proj1")
+sift_commands.expand_sift(clips, {column = "codec", operator = "contains", value = "DNxHD"}, "proj1")
 
 result = sift_state.evaluate(clips)
 vis = {}
@@ -87,7 +87,7 @@ check("expand: visible count = 4", set_size(vis) == 4)
 -- Narrow Sift (AND)
 -- ============================================================================
 print("--- narrow sift ---")
-sift_commands.narrow_sift(clips, {column = "fps", operator = "equals", value = "24"}, db, "proj1")
+sift_commands.narrow_sift(clips, {column = "fps", operator = "equals", value = "24"}, "proj1")
 
 result = sift_state.evaluate(clips)
 vis = {}
@@ -103,15 +103,15 @@ check("narrow: visible count = 2", set_size(vis) == 2)
 -- Clear Sift
 -- ============================================================================
 print("--- clear sift ---")
-sift_commands.clear_sift(db, "proj1")
+sift_commands.clear_sift("proj1")
 check("clear: not active", not sift_state.is_active())
 
 -- ============================================================================
 -- Persistence: sift criteria saved to project settings
 -- ============================================================================
 print("--- persistence ---")
-sift_commands.sift(clips, {column = "codec", operator = "contains", value = "ProRes"}, db, "proj1")
-sift_commands.expand_sift(clips, {column = "codec", operator = "contains", value = "DNxHD"}, db, "proj1")
+sift_commands.sift(clips, {column = "codec", operator = "contains", value = "ProRes"}, "proj1")
+sift_commands.expand_sift(clips, {column = "codec", operator = "contains", value = "DNxHD"}, "proj1")
 
 -- Read back from project settings
 local settings_stmt = db:prepare("SELECT settings FROM projects WHERE id = ?")
@@ -129,7 +129,7 @@ check("settings sift_state is string", type(settings.sift_state) == "string")
 sift_state.clear()
 check("cleared", not sift_state.is_active())
 
-sift_commands.restore_sift(clips, db, "proj1")
+sift_commands.restore_sift(clips, "proj1")
 check("restored: is_active", sift_state.is_active())
 result = sift_state.evaluate(clips)
 vis = {}
@@ -137,7 +137,7 @@ for _, id in ipairs(result.visible_ids) do vis[id] = true end
 check("restored: ProRes+DNxHD visible", set_size(vis) == 4)
 
 -- Clear after restore
-sift_commands.clear_sift(db, "proj1")
+sift_commands.clear_sift("proj1")
 
 -- Verify settings cleared
 settings_stmt = db:prepare("SELECT settings FROM projects WHERE id = ?")

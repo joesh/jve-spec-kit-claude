@@ -125,7 +125,7 @@ find_state.clear()
 -- ============================================================================
 print("=== Category 3: Bin Sift ===")
 
-sift_commands.sift(clips, {column="codec", operator="contains", value="ProRes"}, db, "proj1")
+sift_commands.sift(clips, {column="codec", operator="contains", value="ProRes"}, "proj1")
 check("3.1 sift active", sift_state.is_active())
 eval = sift_state.evaluate(clips)
 local vis = {}
@@ -133,32 +133,32 @@ for _, id in ipairs(eval.visible_ids) do vis[id] = true end
 check("3.1 ProRes clips visible", vis["c01"] == true)
 check("3.1 non-ProRes hidden", not vis["c04"])
 
-sift_commands.expand_sift(clips, {column="codec", operator="contains", value="DNxHD"}, db, "proj1")
+sift_commands.expand_sift(clips, {column="codec", operator="contains", value="DNxHD"}, "proj1")
 eval = sift_state.evaluate(clips)
 vis = {}
 for _, id in ipairs(eval.visible_ids) do vis[id] = true end
 check("3.2 expand: DNxHD now visible", vis["c04"] == true)
 
-sift_commands.narrow_sift(clips, {column="fps", operator="equals", value="24"}, db, "proj1")
+sift_commands.narrow_sift(clips, {column="fps", operator="equals", value="24"}, "proj1")
 eval = sift_state.evaluate(clips)
 vis = {}
 for _, id in ipairs(eval.visible_ids) do vis[id] = true end
 check("3.3 narrow: only 24fps remain", not vis["c03"])  -- ProRes 25fps hidden
 
-sift_commands.clear_sift(db, "proj1")
+sift_commands.clear_sift("proj1")
 check("3.4 clear: not active", not sift_state.is_active())
 
 -- Persistence
-sift_commands.sift(clips, {column="codec", operator="contains", value="ProRes"}, db, "proj1")
+sift_commands.sift(clips, {column="codec", operator="contains", value="ProRes"}, "proj1")
 sift_state.clear()
-sift_commands.restore_sift(clips, db, "proj1")
+sift_commands.restore_sift(clips, "proj1")
 check("3.5 restored after clear", sift_state.is_active())
 eval = sift_state.evaluate(clips)
 check("3.5 restored correct count", #eval.visible_ids > 0)
-sift_commands.clear_sift(db, "proj1")
+sift_commands.clear_sift("proj1")
 
 -- New clip matches
-sift_commands.sift(clips, {column="codec", operator="contains", value="ProRes"}, db, "proj1")
+sift_commands.sift(clips, {column="codec", operator="contains", value="ProRes"}, "proj1")
 local clips_plus = {}
 for _, c in ipairs(clips) do clips_plus[#clips_plus + 1] = c end
 clips_plus[#clips_plus + 1] = {id="c16", name="NewProRes", codec="ProRes", fps=24, duration=100, enabled=true, properties={}}
@@ -168,7 +168,7 @@ local vis_set = {}
 for _, id in ipairs(eval.visible_ids) do vis_set[id] = true end
 check("3.6 new ProRes visible", vis_set["c16"] == true)
 check("3.6 new DNxHD hidden", not vis_set["c17"])
-sift_commands.clear_sift(db, "proj1")
+sift_commands.clear_sift("proj1")
 
 -- ============================================================================
 -- Category 4: Timeline Find

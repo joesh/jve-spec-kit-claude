@@ -59,7 +59,7 @@ function M.register(command_executors, _, db, _)
             local project_id = get_project_id()
             assert(project_id, "ExpandSift: no project open")
             assert(sift_state.is_active(), "ExpandSift: no active sift")
-            sift_commands.expand_sift(clips, {column = args.column, operator = args.operator, value = args.value}, db, project_id)
+            sift_commands.expand_sift(clips, {column = args.column, operator = args.operator, value = args.value}, project_id)
             refresh_browser()
             local eval = sift_state.evaluate(clips)
             return {success = true, visible_count = #eval.visible_ids}
@@ -76,7 +76,7 @@ function M.register(command_executors, _, db, _)
             local project_id = get_project_id()
             assert(project_id, "NarrowSift: no project open")
             assert(sift_state.is_active(), "NarrowSift: no active sift")
-            sift_commands.narrow_sift(clips, {column = args.column, operator = args.operator, value = args.value}, db, project_id)
+            sift_commands.narrow_sift(clips, {column = args.column, operator = args.operator, value = args.value}, project_id)
             refresh_browser()
             local eval = sift_state.evaluate(clips)
             return {success = true, visible_count = #eval.visible_ids}
@@ -88,7 +88,7 @@ function M.register(command_executors, _, db, _)
     command_executors["ClearSift"] = function(_)
         local project_id = get_project_id()
         if project_id then
-            sift_commands.clear_sift(db, project_id)
+            sift_commands.clear_sift(project_id)
         else
             sift_state.clear()
         end
