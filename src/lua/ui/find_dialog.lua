@@ -513,6 +513,7 @@ function M.show(opts)
     ws.project_id = opts.project_id
     ws.on_find = opts.on_find
     ws.on_navigate = opts.on_navigate
+    ws.on_select_all = opts.on_select_all
     ws.save_selection = opts.save_selection
     ws.on_restore_selection = opts.on_restore_selection
 

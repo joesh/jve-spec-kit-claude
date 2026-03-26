@@ -2129,8 +2129,8 @@ function M:navigate_to_clip(clip_id)
     for _, clip in ipairs(clips) do
         if clip.id == clip_id then
             local frame = clip.timeline_start_frame or clip.timeline_start or 0
-            -- set_playhead_position also calls ensure_playhead_visible (auto-scroll)
             timeline_state.set_playhead_position(frame)
+            timeline_state.surface_playhead()
             timeline_state.set_selection({{id = clip_id}})
             return
         end
