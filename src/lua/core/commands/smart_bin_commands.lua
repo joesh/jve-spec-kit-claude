@@ -60,6 +60,37 @@ function M.register(command_executors, command_undoers, db, _)
     -- ========================================================================
     command_executors["CreateSmartBin"] = function(command)
         local args = command:get_all_parameters()
+
+        -- If no name/criteria provided, open dialog (UI path)
+        if not args.name or not args.criteria_json then
+            local timeline_state = require("ui.timeline.timeline_state")
+            local project_id = args.project_id
+                or (timeline_state.get_project_id and timeline_state.get_project_id())
+            assert(project_id, "CreateSmartBin: no project open")
+
+            local tag_service = require("core.tag_service")
+            local bins_list = tag_service.list(project_id)
+            local bin_opts = {}
+            for _, b in ipairs(bins_list) do
+                bin_opts[#bin_opts + 1] = {id = b.id, name = b.name}
+            end
+
+            local smart_bin_dialog = require("ui.smart_bin_dialog")
+            local result = smart_bin_dialog.show_create({
+                project_id = project_id,
+                bins = bin_opts,
+            })
+
+            if not result then
+                return {success = true, cancelled = true}
+            end
+
+            args.project_id = project_id
+            args.name = result.name
+            args.criteria_json = result.criteria_json
+            args.scope_bin_id = result.scope_bin_id
+        end
+
         local sb = smart_bin.create(db, {
             project_id = args.project_id,
             name = args.name,
@@ -67,6 +98,11 @@ function M.register(command_executors, command_undoers, db, _)
             scope_bin_id = args.scope_bin_id,
         })
         command:set_parameter("smart_bin_id", sb.id)
+
+        -- Refresh browser to show new smart bin
+        local project_browser = require("ui.project_browser")
+        if project_browser.refresh then project_browser.refresh() end
+
         return {success = true, smart_bin_id = sb.id}
     end
 
