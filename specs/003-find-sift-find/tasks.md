@@ -73,11 +73,11 @@
 
 ## Phase 3.6: Polish & Validation
 
-- [ ] T027 [P] Run full quickstart validation: Execute all 35 scenarios from `quickstart.md` via `--test` mode scripts. Document any failures, fix, re-run. Ensure all 7 categories pass (query engine, bin find, bin sift, timeline find, timeline index, find & replace, smart bins).
+- [x] T027 [P] Run full quickstart validation: Execute all 35 scenarios from `quickstart.md` via `--test` mode scripts. Document any failures, fix, re-run. Ensure all 7 categories pass (query engine, bin find, bin sift, timeline find, timeline index, find & replace, smart bins).
 
-- [ ] T028 [P] Run `make -j4` full validation: All existing tests pass (no regressions). Zero luacheck warnings on new files. All new test files pass.
+- [x] T028 [P] Run `make -j4` full validation: All existing tests pass (no regressions). Zero luacheck warnings on new files. All new test files pass.
 
-- [ ] T029 Performance validation: Create test project with 1000+ clips (generate via test script). Measure query_engine.filter() time — must be <100ms. Measure sift apply time. Measure Smart Bin evaluate time. If any exceed target, optimize (index-based lookup, precomputed values).
+- [x] T029 Performance validation: Create test project with 1000+ clips (generate via test script). Measure query_engine.filter() time — must be <100ms. Measure sift apply time. Measure Smart Bin evaluate time. If any exceed target, optimize (index-based lookup, precomputed values).
 
 ## Dependencies
 ```
