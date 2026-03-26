@@ -72,15 +72,12 @@ function M.register(command_executors, _, db, _)
         local project_id = get_project_id()
         assert(project_id, "Sift: no project open")
 
-        local sift_dialog = require("ui.sift_dialog")
-
-        sift_dialog.show({
+        -- Open the unified Find & Filter dialog
+        local find_dialog = require("ui.find_dialog")
+        find_dialog.show({
             clips = clips,
-            db = db,
+            context = "browser",
             project_id = project_id,
-            on_sift = function()
-                refresh_browser()
-            end,
         })
 
         return {success = true}

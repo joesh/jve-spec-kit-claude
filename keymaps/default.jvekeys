@@ -102,7 +102,7 @@
 "Cmd+H" = "FindReplace"
 "Cmd+G" = "FindNext"
 "Cmd+Shift+G" = "FindPrevious"
-"Cmd+Shift+F" = "Sift @project_browser"
+"Cmd+Shift+F" = "Sift"
 
 [Browser]
 "Return" = "ActivateBrowserSelection @project_browser"

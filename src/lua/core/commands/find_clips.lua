@@ -243,21 +243,18 @@ function M.register(command_executors, _, _, _)
         local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
         assert(project_id, "FindReplace: no project open")
 
-        -- Get selected clip IDs for scope
-        local selected_ids = nil
-        if context == "browser" then
-            local pb = require("ui.project_browser")
-            if pb.selected_items and #pb.selected_items > 0 then
-                selected_ids = {}
-                for _, item in ipairs(pb.selected_items) do
-                    if item.clip_id then
-                        selected_ids[#selected_ids + 1] = item.clip_id
-                    end
-                end
+        local ui_state = require("ui.ui_state")
+        local parent = ui_state.get_main_window and ui_state.get_main_window() or nil
+        local find_dialog = require("ui.find_dialog")
+
+        local function on_find(find_result)
+            if not find_result or not find_result.current_match then return end
+            if context == "timeline" then
+                navigate_timeline_to_clip(find_result.current_match, clips)
+            else
+                select_clip_in_browser(find_result.current_match)
             end
         end
-
-        local find_replace_dialog = require("ui.find_replace_dialog")
 
         local function on_navigate(clip_id, _)
             if context == "timeline" then
@@ -267,10 +264,13 @@ function M.register(command_executors, _, _, _)
             end
         end
 
-        find_replace_dialog.show({
+        find_dialog.show({
             clips = clips,
+            context = context,
             project_id = project_id,
-            selected_clip_ids = selected_ids,
+            parent = parent,
+            show_replace = true,
+            on_find = on_find,
             on_navigate = on_navigate,
         })
 
