@@ -62,7 +62,7 @@ end
 print("\n--- Test 2: anamnesis DRP ---")
 do
     local path = test_env.resolve_repo_path(
-        "tests/fixtures/resolve/2026-03-01-anamnesis joe edit.drp")
+        "tests/fixtures/resolve/2026-03-20-anamnesis joe edit.drp")
     local jvp = "/tmp/jve/test_bin_structure_anam.jvp"
     os.remove(jvp); os.remove(jvp.."-wal"); os.remove(jvp.."-shm")
 
