@@ -48,7 +48,6 @@ local ws = {
     save_selection = nil,
     on_restore_selection = nil,
     -- State
-    replace_visible = false,
     geometry_ready = false,
 }
 
@@ -235,7 +234,14 @@ local function do_clear_sift()
     update_status("Sift cleared")
 end
 
+local function has_replace_text()
+    if not ws.replace_edit then return false end
+    local text = qt.PROPERTIES.GET_TEXT(ws.replace_edit)
+    return text and text ~= ""
+end
+
 local function do_replace()
+    if not has_replace_text() then return end
     if not find_state.is_active() then return end
     local current_id = find_state.get_current_match()
     if not current_id then return end
@@ -250,6 +256,7 @@ local function do_replace()
 end
 
 local function do_replace_all()
+    if not has_replace_text() then return end
     if not find_state.is_active() then
         if not do_find() then return end
     end
@@ -263,19 +270,6 @@ local function do_replace_all()
         project_id = ws.project_id,
     })
     update_status(string.format("Replaced %d", #match_ids))
-end
-
--- ============================================================================
--- Toggle replace section
--- ============================================================================
-
-local function set_replace_enabled(enabled)
-    ws.replace_visible = enabled
-    if ws.replace_edit then qt.CONTROL.SET_ENABLED(ws.replace_edit, enabled) end
-    if ws.replace_label then qt.CONTROL.SET_ENABLED(ws.replace_label, enabled) end
-    if ws.rep_btn then qt.CONTROL.SET_ENABLED(ws.rep_btn, enabled) end
-    if ws.rep_all_btn then qt.CONTROL.SET_ENABLED(ws.rep_all_btn, enabled) end
-    if ws.skip_btn then qt.CONTROL.SET_ENABLED(ws.skip_btn, enabled) end
 end
 
 -- ============================================================================
@@ -387,7 +381,7 @@ local function create_window()
 
     qt.LAYOUT.ADD_LAYOUT(layout, row5)
 
-    -- Row 6: Replace buttons (disabled by default)
+    -- Row 6: Replace buttons (active only when replace field has text)
     local row6 = qt.LAYOUT.CREATE_HBOX()
 
     ws.rep_btn = qt.WIDGET.CREATE_BUTTON("Replace")
@@ -405,16 +399,6 @@ local function create_window()
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(ws.skip_btn, "__find_dlg_skip")
     qt.LAYOUT.ADD_WIDGET(row6, ws.skip_btn)
 
-    -- Toggle button for replace section
-    local toggle_btn = qt.WIDGET.CREATE_BUTTON("Replace ▼")
-    register_handler("__find_dlg_toggle", function()
-        ws.replace_visible = not ws.replace_visible
-        set_replace_enabled(ws.replace_visible)
-        qt.PROPERTIES.SET_TEXT(toggle_btn, ws.replace_visible and "Replace ▲" or "Replace ▼")
-    end)
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(toggle_btn, "__find_dlg_toggle")
-    qt.LAYOUT.ADD_WIDGET(row6, toggle_btn)
-
     qt.LAYOUT.ADD_LAYOUT(layout, row6)
 
     -- Status bar
@@ -429,9 +413,6 @@ local function create_window()
 
     qt.LAYOUT.SET_ON_WIDGET(content, layout)
     qt.LAYOUT.SET_CENTRAL_WIDGET(window, content)
-
-    -- Start with replace disabled
-    set_replace_enabled(false)
 
     return window
 end
@@ -461,7 +442,7 @@ end
 -- ============================================================================
 
 --- Show the unified Find & Filter panel.
--- @param opts {clips, context, project_id, show_replace, on_find, on_navigate, save_selection, on_restore_selection}
+-- @param opts {clips, context, project_id, on_find, on_navigate, save_selection, on_restore_selection}
 function M.show(opts)
     assert(opts, "find_dialog.show: opts required")
 
@@ -478,11 +459,6 @@ function M.show(opts)
     if not ws.window then
         ws.window = create_window()
         restore_settings()
-    end
-
-    -- Show/expand replace section if requested
-    if opts.show_replace then
-        set_replace_enabled(true)
     end
 
     -- Show and bring to front
