@@ -17,7 +17,8 @@
 -- Project Browser - Media library and bin management
 -- Shows imported media files, allows drag-to-timeline
 -- Mimics DaVinci Resolve Media Pool style
-local M = {}
+local View = require("ui.view")
+local M = View.new("project_browser")
 local db = require("core.database")
 local tag_service = require("core.tag_service")
 local ui_constants = require("core.ui_constants")
@@ -2509,5 +2510,41 @@ Signals.connect("media_changed", function(_changed_media_ids)
     if not M.tree then return end
     M.refresh()
 end)
+
+-- ============================================================================
+-- View interface
+-- ============================================================================
+
+function M:navigate_to_clip(clip_id)
+    assert(clip_id, "project_browser:navigate_to_clip: clip_id required")
+    local clip = M.master_clip_map and M.master_clip_map[clip_id]
+    if clip and clip.tree_id and M.tree then
+        qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(M.tree, clip.tree_id)
+    end
+end
+
+function M:get_clips()
+    local clip_data = {}
+    if M.master_clips then
+        for _, clip in ipairs(M.master_clips) do
+            local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
+            clip_data[#clip_data + 1] = {
+                id = clip.clip_id or clip.id,
+                name = clip.name or media.name or "",
+                codec = clip.codec or media.codec or "",
+                fps = clip.fps_float or 0,
+                duration = clip.duration or 0,
+                enabled = clip.enabled ~= false,
+                volume = clip.volume or 1.0,
+                width = clip.width or media.width or 0,
+                height = clip.height or media.height or 0,
+                audio_channels = media.audio_channels or 0,
+                audio_sample_rate = media.audio_sample_rate or 0,
+                properties = {},
+            }
+        end
+    end
+    return clip_data
+end
 
 return M

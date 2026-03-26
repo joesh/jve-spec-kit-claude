@@ -279,4 +279,25 @@ function M.initialize_all_panels()
     apply_all_borders()
 end
 
+-- ============================================================================
+-- View registry
+-- ============================================================================
+
+local registered_views = {}
+
+function M.register_view(panel_id, view)
+    assert(panel_id, "focus_manager.register_view: panel_id required")
+    assert(view, "focus_manager.register_view: view required")
+    registered_views[panel_id] = view
+end
+
+function M.get_active_view()
+    if not focused_panel_id then return nil end
+    return registered_views[focused_panel_id]
+end
+
+function M.get_view(panel_id)
+    return registered_views[panel_id]
+end
+
 return M

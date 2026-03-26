@@ -35,7 +35,8 @@ local Signals = require("core.signals")
 -- luacheck: globals qt_line_edit_select_all qt_scroll_area_h_scroll_by qt_scroll_area_h_scroll_info
 -- luacheck: globals qt_set_scroll_area_h_scroll_handler
 
-local M = {}
+local View = require("ui.view")
+local M = View.new("timeline")
 
 -- Constants
 local DEFAULT_TRACK_HEIGHT = timeline_state.dimensions.default_track_height or ui_constants.TIMELINE.TRACK_HEIGHT or 50
@@ -2117,5 +2118,46 @@ end
 
 -- Register for project_changed signal
 Signals.connect("project_changed", M.on_project_change, 50)
+
+-- ============================================================================
+-- View interface
+-- ============================================================================
+
+function M:navigate_to_clip(clip_id)
+    assert(clip_id, "timeline_panel:navigate_to_clip: clip_id required")
+    local clips = timeline_state.get_clips and timeline_state.get_clips() or {}
+    for _, clip in ipairs(clips) do
+        if clip.id == clip_id then
+            local frame = clip.timeline_start_frame or clip.timeline_start or 0
+            -- set_playhead_position also calls ensure_playhead_visible (auto-scroll)
+            timeline_state.set_playhead_position(frame)
+            timeline_state.set_selection({{id = clip_id}})
+            return
+        end
+    end
+end
+
+function M:get_clips()
+    local raw = timeline_state.get_clips and timeline_state.get_clips() or {}
+    local clips = {}
+    for _, clip in ipairs(raw) do
+        clips[#clips + 1] = {
+            id = clip.id,
+            name = clip.name or "",
+            codec = clip.codec or "",
+            fps = clip.fps_float or 0,
+            duration = clip.duration_frames or clip.duration or 0,
+            enabled = clip.enabled ~= false,
+            volume = clip.volume or 1.0,
+            timeline_start_frame = clip.timeline_start_frame or clip.timeline_start or 0,
+            track_id = clip.track_id or "",
+            properties = {},
+        }
+    end
+    table.sort(clips, function(a, b)
+        return a.timeline_start_frame < b.timeline_start_frame
+    end)
+    return clips
+end
 
 return M

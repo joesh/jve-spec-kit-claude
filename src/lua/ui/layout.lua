@@ -429,6 +429,10 @@ keyboard_shortcuts.init(timeline_state_from_panel, command_manager, project_brow
 -- 6. Initialize focus manager for visual panel indicators
 local focus_manager = require("ui.focus_manager")
 
+-- Register views for navigation (Find uses focus_manager.get_active_view())
+focus_manager.register_view("timeline", timeline_panel_mod)
+focus_manager.register_view("project_browser", project_browser_mod)
+
 -- Audio follows focus: transfer audio ownership when switching between monitors.
 -- Non-monitor panels (browser, inspector) keep the last monitor's audio active.
 focus_manager.on_focus_change(function(old_id, new_id)
