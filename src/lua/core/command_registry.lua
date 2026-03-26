@@ -68,6 +68,23 @@ local module_aliases = {
     -- Replace commands live in replace_clip_property.lua (multi-register)
     ReplaceClipProperty = "core.commands.replace_clip_property",
     ReplaceAllClipProperties = "core.commands.replace_clip_property",
+
+    -- Find commands (multi-register)
+    FindClips = "core.commands.find_clips",
+    FindNext = "core.commands.find_clips",
+    FindPrevious = "core.commands.find_clips",
+    ClearFind = "core.commands.find_clips",
+
+    -- Sift commands (multi-register)
+    Sift = "core.commands.sift",
+    ExpandSift = "core.commands.sift",
+    NarrowSift = "core.commands.sift",
+    ClearSift = "core.commands.sift",
+
+    -- Smart Bin commands (multi-register)
+    CreateSmartBin = "core.commands.smart_bin_commands",
+    UpdateSmartBin = "core.commands.smart_bin_commands",
+    DeleteSmartBin = "core.commands.smart_bin_commands",
 }
 function M.init(database, set_last_error_fn)
     db = database
