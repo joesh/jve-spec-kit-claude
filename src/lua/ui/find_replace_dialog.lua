@@ -242,12 +242,9 @@ function M.show(opts)
         local column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(field_combo)
         local find_value = qt.PROPERTIES.GET_TEXT(find_edit)
         local replace_value = qt.PROPERTIES.GET_TEXT(replace_edit)
-        local scope = get_scope()
-        local scoped_clips = get_scoped_clips(opts, scope)
         local match_ids = find_state.get_matches()
         command_manager.execute("ReplaceAllClipProperties", {
             clip_ids = match_ids,
-            clips = scoped_clips,
             column = column,
             find_value = find_value,
             replace_value = replace_value,
