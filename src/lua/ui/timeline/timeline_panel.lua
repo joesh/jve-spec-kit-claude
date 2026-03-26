@@ -473,17 +473,10 @@ local function close_tab(sequence_id)
         if next_id then
             M.load_sequence(next_id)
         else
-            local project_id = state.get_project_id and state.get_project_id()
-            assert(project_id and project_id ~= "", string.format(
-                "close_tab: no project_id after closing last tab (seq=%s)",
-                tostring(sequence_id)))
-            local sequences = database.load_sequences(project_id)
-            assert(sequences and #sequences > 0, string.format(
-                "close_tab: project %s has zero sequences — invariant violation",
-                tostring(project_id)))
-            local fallback_id = sequences[1].id
-            ensure_tab_for_sequence(fallback_id)
-            M.load_sequence(fallback_id)
+            -- TODO: implement empty timeline state (clear views, monitor, inspector)
+            -- For now, prevent closing the last tab
+            ensure_tab_for_sequence(sequence_id)
+            M.load_sequence(sequence_id)
         end
     else
         update_tab_styles(current_sequence)
