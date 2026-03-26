@@ -447,7 +447,7 @@ set_target_properties(test_tmb PROPERTIES
 )
 add_test(NAME test_tmb COMMAND test_tmb)
 
-add_custom_target(lua_tests ALL
+add_custom_target(lua_tests
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_lua_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running Lua test suite"
@@ -459,7 +459,7 @@ add_test(NAME lua_suite
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
-add_custom_target(binding_tests ALL
+add_custom_target(binding_tests
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_binding_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running binding tests (Lua tests requiring C++ bindings)"
@@ -470,7 +470,7 @@ add_test(NAME binding_suite
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
-add_custom_target(integration_tests ALL
+add_custom_target(integration_tests
     COMMAND ${CMAKE_SOURCE_DIR}/tests/run_integration_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running integration tests (real C++ EMP bindings)"

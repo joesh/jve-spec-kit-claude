@@ -25,10 +25,29 @@ local magnetic_snapping = require("core.magnetic_snapping")
 local TimelineActiveRegion = require("core.timeline_active_region")
 local command_manager = require("core.command_manager")
 
+local cancel = require("core.cancel")
+
 local RIGHT_MOUSE_BUTTON = 2
 local DRAG_THRESHOLD = ui_constants.TIMELINE.DRAG_THRESHOLD
 local qt_constants = require("core.qt_constants")
 local log = require("core.logger").for_area("timeline")
+
+--- Discard all drag state without committing. Used by Escape cancel and cleanup.
+local function discard_drag(view, state)
+    if view.drag_state then
+        if view.drag_state.type == "edges" then
+            state.clear_active_edge_drag_state()
+        end
+        view.drag_state = nil
+        snapping_state.reset_drag()
+    end
+    view.potential_drag = nil
+    view.pending_gap_click = nil
+    view.panel_drag_move = nil
+    view.panel_drag_end = nil
+    state.set_dragging_playhead(false)
+    view.render()
+end
 
 local function edges_match(a, b)
     return a and b
@@ -495,6 +514,11 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         }
 
     elseif event_type == "move" then
+        if cancel.consume() then
+            log.event("Escape cancel consumed during move")
+            discard_drag(view, state)
+            return
+        end
         if view.potential_drag then
             local dx = math.abs(x - view.potential_drag.start_x)
             local dy = math.abs(y - view.potential_drag.start_y)
@@ -674,6 +698,11 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         end
 
     elseif event_type == "release" then
+        if cancel.consume() then
+            log.event("Escape cancel consumed during release")
+            discard_drag(view, state)
+            return
+        end
         -- Click (no drag) on gap or empty space
         if view.potential_drag and view.potential_drag.type == "rubber_band" then
             local pd = view.potential_drag

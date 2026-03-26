@@ -1471,6 +1471,7 @@ function M.create(opts)
     -- Create rubber band for drag selection (parented to splitter so it can span both views)
     -- Note: rubber band starts hidden (QRubberBand::hide() called in C++)
     local rubber_band = qt_constants.WIDGET.CREATE_RUBBER_BAND(vertical_splitter)
+    M._rubber_band = rubber_band  -- accessible by cancel signal handler
 
     -- Panel drag coordination callbacks
     -- Called by view during drag to update rubber band geometry
@@ -1606,6 +1607,23 @@ function M.create(opts)
         drag_state.splitter_start_y = nil
         rubber_band_visible = false
     end
+
+    -- Subscribe to cancel signal: hide rubber band + inject synthetic mouse move
+    -- so the drag handler's cancel.consume() runs the normal state cleanup.
+    local Signals = require("core.signals")
+    Signals.connect("cancel", function()
+        -- Hide rubber band immediately
+        qt_constants.DISPLAY.SET_VISIBLE(rubber_band, false)
+        rubber_band_visible = false
+        drag_state.dragging = false
+        -- Synthetic move triggers discard_drag → clears view state + forces repaint
+        if video_view_ref and video_view_ref.on_mouse_event then
+            video_view_ref.on_mouse_event("move", 0, 0, 0, {})
+        end
+        if audio_view_ref and audio_view_ref.on_mouse_event then
+            audio_view_ref.on_mouse_event("move", 0, 0, 0, {})
+        end
+    end)
 
     M.vertical_splitter = vertical_splitter  -- for split ratio restore
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(vertical_splitter, "Expanding", "Expanding")

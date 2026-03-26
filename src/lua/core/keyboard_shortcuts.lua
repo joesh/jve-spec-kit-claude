@@ -145,21 +145,34 @@ local function handle_key_impl(event)
         return true
     end
 
-    -- Escape: exit fullscreen viewer (highest priority)
+    -- Escape: set global cancel flag — drag/modal handlers consume on next event
     if key == KEY.Escape then
+        local cancel = require("core.cancel")
+        cancel.request()
+        log.detail("  → Escape: cancel flag set")
+
+        -- Exit fullscreen (highest priority)
         local fv = require("ui.fullscreen_viewer")
         if fv.is_active() then
             log.detail("  → Escape exit fullscreen")
             fv.exit()
             return true
         end
-    end
 
-    -- Escape: cancel timecode entry and exit text field
-    if key == KEY.Escape and focus_is_text_input and panel_active_timeline then
-        log.detail("  → Escape cancel timecode entry")
-        timeline_panel.cancel_timecode_entry()
-        return true
+        -- Cancel timecode entry
+        if focus_is_text_input and panel_active_timeline then
+            log.detail("  → Escape cancel timecode entry")
+            timeline_panel.cancel_timecode_entry()
+            return true
+        end
+
+        -- Cancel text editing in any panel (rename, etc.)
+        if focus_is_text_input then
+            log.detail("  → Escape cancel text input")
+            return false  -- Let Qt handle Escape on the widget
+        end
+
+        -- Not consumed here — drag handlers check cancel.consume() on next event
     end
 
     -- Text input bypass: let text fields consume ALL keys

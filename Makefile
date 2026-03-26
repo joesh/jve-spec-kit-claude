@@ -5,11 +5,14 @@ BUILD_DIR = build
 
 .PHONY: all build clean install help configure reconfigure luacheck nav-index
 
-# Default target: lint then build
+# Default target: lint, build, and run all tests
 all: configure luacheck
 	@$(MAKE) -C $(BUILD_DIR) --no-print-directory
+	@$(MAKE) -C $(BUILD_DIR) lua_tests --no-print-directory
+	@$(MAKE) -C $(BUILD_DIR) binding_tests --no-print-directory
+	@$(MAKE) -C $(BUILD_DIR) integration_tests --no-print-directory
 
-# Build only, skip linting
+# Build only (C++ compile + link, no tests, no lint)
 build: configure
 	@$(MAKE) -C $(BUILD_DIR) --no-print-directory
 
