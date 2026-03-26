@@ -1,7 +1,7 @@
---- Find commands: FindClips, FindNext, FindPrevious, ClearFind
+--- Find commands: Find, FindNext, FindPrevious, ClearFind
 --
 -- Non-undoable commands wrapping find_state module.
--- Available to scripting via command_manager.execute("FindClips", {...})
+-- Available to scripting via command_manager.execute("Find", {...})
 --
 -- @file find_clips.lua
 
@@ -39,7 +39,7 @@ local SPEC_CLEAR_FIND = {
 }
 
 function M.register(command_executors, command_undoers, _, _)
-    command_executors["FindClips"] = function(command)
+    command_executors["Find"] = function(command)
         local args = command:get_all_parameters()
         local query = {
             column = args.column,
@@ -51,7 +51,7 @@ function M.register(command_executors, command_undoers, _, _)
         -- In full integration, browser/timeline provide clips
         -- For now, clips must be passed via __clips ephemeral param
         local clips = args.__clips
-        assert(clips, "FindClips: __clips required (UI layer provides clip list)")
+        assert(clips, "Find: __clips required (UI layer provides clip list)")
 
         -- Scope filtering
         local opts = {}
@@ -107,12 +107,18 @@ function M.register(command_executors, command_undoers, _, _)
         return {success = true, previous_selection = prev}
     end
 
+    -- FindReplace: non-undoable stub — UI layer opens dialog
+    command_executors["FindReplace"] = function(_)
+        return {success = true, action = "open_dialog"}
+    end
+
     -- Style B: multi-command registration
     return {
-        ["FindClips"] = {executor = command_executors["FindClips"], spec = SPEC_FIND},
+        ["Find"] = {executor = command_executors["Find"], spec = SPEC_FIND},
         ["FindNext"] = {executor = command_executors["FindNext"], spec = SPEC_FIND_NEXT},
         ["FindPrevious"] = {executor = command_executors["FindPrevious"], spec = SPEC_FIND_NEXT},
         ["ClearFind"] = {executor = command_executors["ClearFind"], spec = SPEC_CLEAR_FIND},
+        ["FindReplace"] = {executor = command_executors["FindReplace"], spec = SPEC_CLEAR_FIND},
     }
 end
 

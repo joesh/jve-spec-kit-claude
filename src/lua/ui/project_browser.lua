@@ -36,6 +36,7 @@ local uuid = require("uuid")
 local project_gen = require("core.project_generation")
 local path_utils = require("core.path_utils")
 local browser_sort = require("ui.browser_sort")
+local sift_state = require("core.sift_state")
 
 local handler_seq = 0
 
@@ -604,6 +605,11 @@ local function populate_tree()
         sort_state.secondary_order = settings.browser_sort_secondary_order
         sort_state.loaded = true
     end
+    -- Restore sift state from project settings
+    if settings.sift_state and not sift_state.is_active() then
+        sift_state.from_json(settings.sift_state)
+    end
+
     local saved_expanded_bins = settings.browser_expanded_bins
 
     M.media_bin_map = tag_service.list_master_clip_assignments(M.project_id)
@@ -786,6 +792,21 @@ local function populate_tree()
         add_bin(bin, parent_tree)
     end
 
+    -- Smart Bins (FR-062): add after regular bins with distinct label
+    local smart_bins_list = db.load_smart_bins(project_id)
+    for _, sb in ipairs(smart_bins_list) do
+        local display_name = "🔍 " .. sb.name
+        local tree_id = qt_constants.CONTROL.ADD_TREE_ITEM(M.tree, {display_name, "", "", "", "", ""})
+        store_tree_item(M.tree, tree_id, {
+            type = "smart_bin",
+            id = sb.id,
+            name = sb.name,
+            criteria_json = sb.criteria_json,
+            scope_bin_id = sb.scope_bin_id,
+        })
+        qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, ICONS.bin)
+    end
+
     -- Sequences inside bins
     for _, sequence in ipairs(timeline_sequences) do
         local bin_ids = seq_bin_map[sequence.id]
@@ -866,8 +887,38 @@ local function populate_tree()
         clip.tree_id = tree_id
     end
 
+    -- Sift filtering: build hidden set from sift_state
+    local sift_hidden = {}
+    if sift_state.is_active() then
+        -- Build clip_data from master_clips for sift evaluation
+        local clip_data_list = {}
+        for _, clip in ipairs(master_clips) do
+            local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
+            clip_data_list[#clip_data_list + 1] = {
+                id = clip.clip_id,
+                name = clip.name or media.name or "",
+                codec = clip.codec or media.codec or "",
+                fps = clip.fps_float or 0,
+                duration = clip.duration or 0,
+                enabled = true,
+                volume = 1.0,
+                width = clip.width or media.width or 0,
+                height = clip.height or media.height or 0,
+                audio_channels = media.audio_channels or 0,
+                audio_sample_rate = media.audio_sample_rate or 0,
+                properties = {},
+            }
+        end
+        local eval = sift_state.evaluate(clip_data_list)
+        for _, id in ipairs(eval.hidden_ids) do
+            sift_hidden[id] = true
+        end
+    end
+
     -- Master clips: show in each assigned bin (many-to-many)
     for _, clip in ipairs(master_clips) do
+        -- Skip sifted-out clips
+        if sift_hidden[clip.clip_id] then goto continue_clip end
         local bin_ids = M.media_bin_map and M.media_bin_map[clip.clip_id] or {}
         local placed = false
         for _, bid in ipairs(bin_ids) do
@@ -882,6 +933,7 @@ local function populate_tree()
             clip.bin_id = nil
             add_master_clip_item(nil, clip)
         end
+        ::continue_clip::
     end
 
     -- Sort the tree in-place by current sort column.
@@ -1305,6 +1357,9 @@ function M.set_project_title(name)
     assert(name and name ~= "", "project_browser.set_project_title: name must not be nil or empty")
     local label = M.project_title_widget
     local display = name
+    if sift_state.is_active() then
+        display = display .. " (Sifted)"
+    end
     if label and qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TEXT then
         qt_constants.PROPERTIES.SET_TEXT(label, display)
     else

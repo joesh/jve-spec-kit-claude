@@ -63,13 +63,13 @@
 
 ## Phase 3.5: Browser & Menu Integration
 
-- [ ] T023 Implement sift indicator in project browser: When sift_state.is_active(), display "(Sifted)" in browser header (FR-022). On project_browser.populate(), filter items through sift_state — hide items whose clip_id is in hidden_ids. On new media import, re-evaluate sift and show/hide accordingly (FR-027). Load sift criteria from project settings on project open. File: `src/lua/ui/project_browser.lua` (modify existing). `make -j4`.
+- [x] T023 Implement sift indicator in project browser: When sift_state.is_active(), display "(Sifted)" in browser header (FR-022). On project_browser.populate(), filter items through sift_state — hide items whose clip_id is in hidden_ids. On new media import, re-evaluate sift and show/hide accordingly (FR-027). Load sift criteria from project settings on project open. File: `src/lua/ui/project_browser.lua` (modify existing). `make -j4`.
 
-- [ ] T024 Integrate Smart Bins into project browser tree: When populating browser, query smart_bin.find_by_project() and add Smart Bin nodes with distinct icon (FR-062). Clicking a Smart Bin evaluates its criteria and shows matching clips. Double-click on a clip in Smart Bin behaves normally (FR-063). Right-click on Smart Bin: Edit..., Delete. File: `src/lua/ui/project_browser.lua` (modify existing). `make -j4`.
+- [x] T024 Integrate Smart Bins into project browser tree: When populating browser, query smart_bin.find_by_project() and add Smart Bin nodes with distinct icon (FR-062). Clicking a Smart Bin evaluates its criteria and shows matching clips. Double-click on a clip in Smart Bin behaves normally (FR-063). Right-click on Smart Bin: Edit..., Delete. File: `src/lua/ui/project_browser.lua` (modify existing). `make -j4`.
 
-- [ ] T025 Add menu items: Edit menu: Find... (Cmd+F), Find Next (Cmd+G), Find Previous (Cmd+Shift+G), Find and Replace... (Cmd+H), separator, Sift... (Cmd+Shift+F), Expand Sift..., Narrow Sift..., Clear Sift, separator, Timeline Index... View menu or context menu: New Smart Bin... Enable/disable menu items based on context (e.g., Expand/Narrow/Clear only when sift active, Find Next only when find active). File: modify `menus.xml` and `src/lua/core/menu_system.lua` as needed. `make -j4`.
+- [x] T025 Add menu items: Edit menu: Find... (Cmd+F), Find Next (Cmd+G), Find Previous (Cmd+Shift+G), Find and Replace... (Cmd+H), separator, Sift... (Cmd+Shift+F), Expand Sift..., Narrow Sift..., Clear Sift, separator, Timeline Index... View menu or context menu: New Smart Bin... Enable/disable menu items based on context (e.g., Expand/Narrow/Clear only when sift active, Find Next only when find active). File: modify `menus.xml` and `src/lua/core/menu_system.lua` as needed. `make -j4`.
 
-- [ ] T026 Wire keyboard shortcuts: Ensure command_registry auto-loads the new command files. Verify Cmd+F dispatches to Find in correct context (browser vs timeline based on focus). Verify Cmd+G/Cmd+Shift+G work for Find Next/Previous. Verify Cmd+Shift+F opens Sift dialog. Verify Ctrl+G still works for GoToTimecode. End-to-end smoke test via `--test` mode. `make -j4`.
+- [x] T026 Wire keyboard shortcuts: Ensure command_registry auto-loads the new command files. Verify Cmd+F dispatches to Find in correct context (browser vs timeline based on focus). Verify Cmd+G/Cmd+Shift+G work for Find Next/Previous. Verify Cmd+Shift+F opens Sift dialog. Verify Ctrl+G still works for GoToTimecode. End-to-end smoke test via `--test` mode. `make -j4`.
 
 ## Phase 3.6: Polish & Validation
 

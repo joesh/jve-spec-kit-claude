@@ -70,9 +70,10 @@ local module_aliases = {
     ReplaceAllClipProperties = "core.commands.replace_clip_property",
 
     -- Find commands (multi-register)
-    FindClips = "core.commands.find_clips",
+    Find = "core.commands.find_clips",
     FindNext = "core.commands.find_clips",
     FindPrevious = "core.commands.find_clips",
+    FindReplace = "core.commands.find_clips",
     ClearFind = "core.commands.find_clips",
 
     -- Sift commands (multi-register)
@@ -80,6 +81,7 @@ local module_aliases = {
     ExpandSift = "core.commands.sift",
     NarrowSift = "core.commands.sift",
     ClearSift = "core.commands.sift",
+    ShowTimelineIndex = "core.commands.sift",
 
     -- Smart Bin commands (multi-register)
     CreateSmartBin = "core.commands.smart_bin_commands",

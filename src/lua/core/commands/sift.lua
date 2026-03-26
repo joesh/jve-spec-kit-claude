@@ -66,12 +66,18 @@ function M.register(command_executors, _, db, _)
         return {success = true}
     end
 
+    -- ShowTimelineIndex: non-undoable stub — UI layer opens dialog
+    command_executors["ShowTimelineIndex"] = function(_)
+        return {success = true, action = "open_dialog"}
+    end
+
     -- Style B: multi-command registration
     return {
         ["Sift"] = {executor = command_executors["Sift"], spec = SPEC_SIFT},
         ["ExpandSift"] = {executor = command_executors["ExpandSift"], spec = SPEC_SIFT},
         ["NarrowSift"] = {executor = command_executors["NarrowSift"], spec = SPEC_SIFT},
         ["ClearSift"] = {executor = command_executors["ClearSift"], spec = SPEC_CLEAR_SIFT},
+        ["ShowTimelineIndex"] = {executor = command_executors["ShowTimelineIndex"], spec = SPEC_CLEAR_SIFT},
     }
 end
 
