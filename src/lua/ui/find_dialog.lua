@@ -199,8 +199,7 @@ local function do_sift()
     if not value or value == "" then return end
 
     local query = {column = column, operator = operator, value = value}
-    local db = db_module.get_connection()
-    sift_commands_mod.sift(ws.clips, query, db, ws.project_id)
+    sift_commands_mod.sift(ws.clips, query, ws.project_id)
     local eval = sift_state.evaluate(ws.clips)
     update_status(string.format("Sifted: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids))
 end
@@ -213,8 +212,7 @@ local function do_expand_sift()
     if not value or value == "" then return end
 
     local query = {column = column, operator = operator, value = value}
-    local db = db_module.get_connection()
-    sift_commands_mod.expand_sift(ws.clips, query, db, ws.project_id)
+    sift_commands_mod.expand_sift(ws.clips, query, ws.project_id)
     local eval = sift_state.evaluate(ws.clips)
     update_status(string.format("Sifted: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids))
 end
@@ -227,15 +225,13 @@ local function do_narrow_sift()
     if not value or value == "" then return end
 
     local query = {column = column, operator = operator, value = value}
-    local db = db_module.get_connection()
-    sift_commands_mod.narrow_sift(ws.clips, query, db, ws.project_id)
+    sift_commands_mod.narrow_sift(ws.clips, query, ws.project_id)
     local eval = sift_state.evaluate(ws.clips)
     update_status(string.format("Sifted: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids))
 end
 
 local function do_clear_sift()
-    local db = db_module.get_connection()
-    sift_commands_mod.clear_sift(db, ws.project_id)
+    sift_commands_mod.clear_sift(ws.project_id)
     update_status("Sift cleared")
 end
 
@@ -309,50 +305,45 @@ local function create_window()
     qt.CONTROL.SET_LAYOUT_SPACING(layout, 4)
     qt.CONTROL.SET_LAYOUT_MARGINS(layout, 10, 10, 10, 10)
 
-    -- Row 1: Attribute + Operator
+    -- Row 1: Sentence-style search: [Any ▼] [contains ▼] [________]
     local row1 = qt.LAYOUT.CREATE_HBOX()
-    qt.LAYOUT.ADD_WIDGET(row1, qt.WIDGET.CREATE_LABEL("Attribute:"))
     ws.attr_combo = qt.WIDGET.CREATE_COMBOBOX()
+    qt.PROPERTIES.ADD_COMBOBOX_ITEM(ws.attr_combo, "Any")
     local fields = query_engine.get_searchable_fields()
     for _, f in ipairs(fields) do
         qt.PROPERTIES.ADD_COMBOBOX_ITEM(ws.attr_combo, f.name)
     end
     qt.LAYOUT.ADD_WIDGET(row1, ws.attr_combo)
-    qt.LAYOUT.ADD_WIDGET(row1, qt.WIDGET.CREATE_LABEL("  Op:"))
     ws.op_combo = qt.WIDGET.CREATE_COMBOBOX()
     local ops = populate_operators("name")
     for _, op in ipairs(ops) do
         qt.PROPERTIES.ADD_COMBOBOX_ITEM(ws.op_combo, op)
     end
     qt.LAYOUT.ADD_WIDGET(row1, ws.op_combo)
+    ws.find_edit = qt.WIDGET.CREATE_LINE_EDIT("")
+    qt.PROPERTIES.SET_PLACEHOLDER_TEXT(ws.find_edit, "search text")
+    qt.LAYOUT.ADD_WIDGET(row1, ws.find_edit)
     qt.LAYOUT.ADD_LAYOUT(layout, row1)
 
-    -- Row 2: Find field
+    -- Row 2: Replace with [________] (disabled by default)
     local row2 = qt.LAYOUT.CREATE_HBOX()
-    qt.LAYOUT.ADD_WIDGET(row2, qt.WIDGET.CREATE_LABEL("Find:"))
-    ws.find_edit = qt.WIDGET.CREATE_LINE_EDIT("")
-    qt.PROPERTIES.SET_PLACEHOLDER_TEXT(ws.find_edit, "Search text...")
-    qt.LAYOUT.ADD_WIDGET(row2, ws.find_edit)
+    ws.replace_label = qt.WIDGET.CREATE_LABEL("Replace with")
+    qt.LAYOUT.ADD_WIDGET(row2, ws.replace_label)
+    ws.replace_edit = qt.WIDGET.CREATE_LINE_EDIT("")
+    qt.PROPERTIES.SET_PLACEHOLDER_TEXT(ws.replace_edit, "replacement text")
+    qt.LAYOUT.ADD_WIDGET(row2, ws.replace_edit)
     qt.LAYOUT.ADD_LAYOUT(layout, row2)
 
-    -- Row 3: Replace field (disabled by default)
+    -- Row 3: in [All Clips ▼]
     local row3 = qt.LAYOUT.CREATE_HBOX()
-    ws.replace_label = qt.WIDGET.CREATE_LABEL("Replace:")
-    qt.LAYOUT.ADD_WIDGET(row3, ws.replace_label)
-    ws.replace_edit = qt.WIDGET.CREATE_LINE_EDIT("")
-    qt.PROPERTIES.SET_PLACEHOLDER_TEXT(ws.replace_edit, "Replacement text...")
-    qt.LAYOUT.ADD_WIDGET(row3, ws.replace_edit)
-    qt.LAYOUT.ADD_LAYOUT(layout, row3)
-
-    -- Row 4: Scope
-    local row4 = qt.LAYOUT.CREATE_HBOX()
-    qt.LAYOUT.ADD_WIDGET(row4, qt.WIDGET.CREATE_LABEL("Scope:"))
+    qt.LAYOUT.ADD_WIDGET(row3, qt.WIDGET.CREATE_LABEL("in"))
     ws.scope_combo = qt.WIDGET.CREATE_COMBOBOX()
     qt.PROPERTIES.ADD_COMBOBOX_ITEM(ws.scope_combo, "All Clips")
     qt.PROPERTIES.ADD_COMBOBOX_ITEM(ws.scope_combo, "Visible (Sifted)")
     qt.PROPERTIES.ADD_COMBOBOX_ITEM(ws.scope_combo, "Selected Clips")
-    qt.LAYOUT.ADD_WIDGET(row4, ws.scope_combo)
-    qt.LAYOUT.ADD_LAYOUT(layout, row4)
+    qt.LAYOUT.ADD_WIDGET(row3, ws.scope_combo)
+    qt.LAYOUT.ADD_STRETCH(row3)
+    qt.LAYOUT.ADD_LAYOUT(layout, row3)
 
     -- Row 5: Find buttons
     local row5 = qt.LAYOUT.CREATE_HBOX()

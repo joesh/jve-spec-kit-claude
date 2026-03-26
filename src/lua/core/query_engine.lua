@@ -151,6 +151,28 @@ function M.match(clip_data, query)
     assert(query.operator, "query_engine.match: operator is required")
     assert(query.value and query.value ~= "", "query_engine.match: value is required and must not be empty")
 
+    -- "Any" column: match if ANY text field matches
+    if query.column == "Any" then
+        -- Try all direct text fields
+        for _, field_name in ipairs({"name", "codec"}) do
+            local val = resolve_value(clip_data, field_name)
+            if val and M.match(clip_data, {column = field_name, operator = query.operator, value = query.value}) then
+                return true
+            end
+        end
+        -- Try all custom properties
+        if clip_data.properties then
+            for prop_name, prop_val in pairs(clip_data.properties) do
+                if type(prop_val) == "string" and prop_val ~= "" then
+                    if M.match(clip_data, {column = prop_name, operator = query.operator, value = query.value}) then
+                        return true
+                    end
+                end
+            end
+        end
+        return false
+    end
+
     local raw = resolve_value(clip_data, query.column)
     if raw == nil then
         return false
