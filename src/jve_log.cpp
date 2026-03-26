@@ -9,9 +9,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <string>
+#include <unordered_map>
 
 // ---- Global level array (default: WARN for all areas) ----
 JveLevel g_jve_area_levels[static_cast<int>(JveArea::COUNT)];
+
+// ---- Extended area levels for hierarchical names (e.g. "ui.find") ----
+static std::unordered_map<std::string, JveLevel> g_extended_levels;
 
 // ---- Area name table ----
 static const char* const AREA_NAMES[] = {
@@ -56,26 +61,32 @@ static void set_area_level(int area_idx, JveLevel level) {
 }
 
 static void apply_entry(const char* area_str, int area_len, JveLevel level) {
+    std::string name(area_str, area_len);
+
     // Meta-category: "play" → ticks, audio, video
-    if (area_len == 4 && strncasecmp(area_str, "play", 4) == 0) {
+    if (name == "play") {
         set_area_level(static_cast<int>(JveArea::Ticks), level);
         set_area_level(static_cast<int>(JveArea::Audio), level);
         set_area_level(static_cast<int>(JveArea::Video), level);
         return;
     }
-    // Meta-category: "all" → every area
-    if (area_len == 3 && strncasecmp(area_str, "all", 3) == 0) {
+    // Meta-category: "all" → every area + all extended
+    if (name == "all") {
         for (int i = 0; i < static_cast<int>(JveArea::COUNT); ++i) {
             g_jve_area_levels[i] = level;
         }
+        for (auto& kv : g_extended_levels) {
+            kv.second = level;
+        }
         return;
     }
-    // Direct area
+    // Direct core area
     int idx = parse_area(area_str, area_len);
     if (idx >= 0) {
         set_area_level(idx, level);
     }
-    // Unknown area name → silently ignored (typo tolerance for env vars)
+    // Always store in extended map (handles both "ui" and "ui.find")
+    g_extended_levels[name] = level;
 }
 
 // ---- Init ----
@@ -148,6 +159,49 @@ void jve_log(JveArea area, JveLevel level, const char* fmt, ...) {
     fputc('\n', stderr);
 }
 
+// ---- Hierarchical area check ----
+// "ui.find" checks: extended["ui.find"] first, then parent "ui" (core area 6).
+
+static bool jve_log_enabled_str(const char* area_name, JveLevel level) {
+    // Check explicit level for this exact name
+    auto it = g_extended_levels.find(area_name);
+    if (it != g_extended_levels.end()) {
+        return level >= it->second;
+    }
+    // Find parent: "ui.find" → "ui"
+    const char* dot = strchr(area_name, '.');
+    if (dot) {
+        std::string parent(area_name, dot - area_name);
+        // Check extended map for parent
+        auto pit = g_extended_levels.find(parent);
+        if (pit != g_extended_levels.end()) {
+            return level >= pit->second;
+        }
+        // Check core area for parent
+        int idx = parse_area(parent.c_str(), static_cast<int>(parent.size()));
+        if (idx >= 0) {
+            return level >= g_jve_area_levels[idx];
+        }
+    }
+    // No parent match — default to WARN
+    return level >= JveLevel::Warn;
+}
+
+static void jve_log_str(const char* area_name, JveLevel level, const char* msg) {
+    time_t now = time(nullptr);
+    struct tm tm_buf;
+    localtime_r(&now, &tm_buf);
+
+    char time_str[16];
+    strftime(time_str, sizeof(time_str), "%H:%M:%S", &tm_buf);
+
+    int level_idx = static_cast<int>(level);
+    const char* level_name = (level_idx >= 0 && level_idx <= static_cast<int>(JveLevel::None))
+        ? LEVEL_NAMES[level_idx] : "???";
+
+    fprintf(stderr, "[%s] [%s] %s: %s\n", time_str, area_name, level_name, msg);
+}
+
 // ---- FFI exports ----
 
 extern "C" {
@@ -166,6 +220,19 @@ void jve_log_ffi(int area, int level, const char* msg) {
     if (area < 0 || area >= static_cast<int>(JveArea::COUNT)) return;
     if (level < 0 || level > static_cast<int>(JveLevel::None)) return;
     jve_log(static_cast<JveArea>(area), static_cast<JveLevel>(level), "%s", msg);
+}
+
+bool jve_log_enabled_str_ffi(const char* area_name, int level) {
+    if (!area_name) return false;
+    if (level < 0 || level > static_cast<int>(JveLevel::None)) return false;
+    return jve_log_enabled_str(area_name, static_cast<JveLevel>(level));
+}
+
+void jve_log_str_ffi(const char* area_name, int level, const char* msg) {
+    if (!area_name || !msg) return;
+    if (level < 0 || level > static_cast<int>(JveLevel::None)) return;
+    if (!jve_log_enabled_str(area_name, static_cast<JveLevel>(level))) return;
+    jve_log_str(area_name, static_cast<JveLevel>(level), msg);
 }
 
 } // extern "C"

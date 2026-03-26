@@ -100,6 +100,8 @@ local function init_backend()
                 void jve_log_init_ffi(void);
                 bool jve_log_enabled_ffi(int area, int level);
                 void jve_log_ffi(int area, int level, const char* msg);
+                bool jve_log_enabled_str_ffi(const char* area_name, int level);
+                void jve_log_str_ffi(const char* area_name, int level, const char* msg);
             ]]
         end)
         if ok then
@@ -185,24 +187,38 @@ function logger.for_area(area_name)
         }
     end
 
-    -- Hierarchical area (e.g. "ui.find") — register in AREA_NAMES for output
-    local display_area_num = parent_area_num or 6  -- default to "ui" slot
-    -- Add to AREA_NAMES for display (use parent's slot but show full name)
-    local saved_name = AREA_NAMES[display_area_num]
+    -- Hierarchical area (e.g. "ui.find")
+    -- Use string-based FFI if available, otherwise Lua fallback
+    local ffi_ok, ffi = pcall(require, "ffi")
+    local has_str_ffi = ffi_ok and pcall(function() return ffi.C.jve_log_enabled_str_ffi("test", 2) end)
 
     local function make_fn_ext(level_num)
         return function(fmt, ...)
-            if not is_enabled_hierarchical(full_name, parent_area_num, level_num) then return end
-            local msg
-            if select("#", ...) > 0 then
-                msg = string.format(fmt, ...)
+            if has_str_ffi then
+                -- C++ handles hierarchical check + output with correct area name
+                if not ffi.C.jve_log_enabled_str_ffi(full_name, level_num) then return end
+                local msg
+                if select("#", ...) > 0 then
+                    msg = string.format(fmt, ...)
+                else
+                    msg = fmt
+                end
+                ffi.C.jve_log_str_ffi(full_name, level_num, msg)
             else
-                msg = fmt
+                -- Lua fallback
+                if not is_enabled_hierarchical(full_name, parent_area_num, level_num) then return end
+                local msg
+                if select("#", ...) > 0 then
+                    msg = string.format(fmt, ...)
+                else
+                    msg = fmt
+                end
+                local display_num = parent_area_num or 6
+                local saved = AREA_NAMES[display_num]
+                AREA_NAMES[display_num] = full_name
+                log_output(display_num, level_num, msg)
+                AREA_NAMES[display_num] = saved
             end
-            -- Temporarily swap area name for output, then restore
-            AREA_NAMES[display_area_num] = full_name
-            log_output(display_area_num, level_num, msg)
-            AREA_NAMES[display_area_num] = saved_name
         end
     end
     return {
