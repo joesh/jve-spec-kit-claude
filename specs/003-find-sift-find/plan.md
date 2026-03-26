@@ -21,11 +21,14 @@ Add Find (select matches), Sift (hide non-matches with Expand/Narrow composition
 ## Constitution Check
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-**I. Library-First Architecture**: ✅ Query engine is a standalone pure-function module (`query_engine.lua`) with no UI dependencies. Sift state management is a separate module. Smart Bin persistence is isolated in its own model.
-**II. CLI Interface Standard**: ⚠️ DEVIATION — This is a desktop GUI application. Commands are exposed through `command_manager` (the app's equivalent of CLI dispatch) rather than stdin/stdout. All operations are registered commands with keyboard shortcuts and menu items.
-**III. Test-First Development**: ✅ TDD — query engine unit tests first, then command integration tests, then UI integration tests via `--test` mode.
-**IV. Documentation-Driven Specifications**: ✅ Full spec with 30 acceptance scenarios, 7 clarifications resolved, 40+ functional requirements.
-**V. Template-Based Consistency**: ✅ Commands follow existing registration pattern (SPEC + executor + undoer). Dialogs follow existing Qt dialog pattern (global handler callbacks).
+**I. Modular Architecture**: ✅ Query engine is a standalone pure-function module with no UI deps. Sift state and Smart Bin model are separate modules. MVC: browser pulls sift state from model, not push.
+**II. Command-Driven Interface**: ✅ All operations (Find, Sift, Replace, Smart Bin CRUD) are registered commands with keyboard shortcuts and menu items.
+**III. Test-First Development**: ✅ TDD — 7 test files written before any implementation. Black-box tests with non-trivial data.
+**IV. Documentation-Driven Specifications**: ✅ Full spec with 30 acceptance scenarios, 7 clarifications, 40+ functional requirements.
+**V. Template-Based Consistency**: ✅ Commands follow existing SPEC + executor + undoer pattern. Dialogs follow existing Qt dialog pattern.
+**VI. Fail-Fast Assert Policy**: ✅ No silent fallbacks. Missing data = assert. Invalid queries = assert with context.
+**VII. No Fallbacks or Default Values**: ✅ No invented defaults for missing metadata. Query on unrecognized column = assert.
+**VIII. No Backward Compatibility**: ✅ smart_bins table added directly to schema.sql. No migration shims, no `IF NOT EXISTS`.
 
 ## Project Structure
 
@@ -128,11 +131,7 @@ query_engine.lua [P]
 ```
 
 ## Complexity Tracking
-
-| Deviation | Why Needed | Simpler Alternative Rejected Because |
-|-----------|------------|-------------------------------------|
-| CLI Interface Standard (II) | Desktop GUI app — commands exposed via command_manager, not stdin/stdout | stdin/stdout is irrelevant for desktop NLE; command_manager IS the dispatch interface |
-| No schema migration for smart_bins | Migration system is TODO/stub | `CREATE TABLE IF NOT EXISTS` is safe for additive tables; formalized when migration system ships |
+*No deviations — constitution now matches project engineering standards.*
 
 ## Progress Tracking
 
@@ -145,7 +144,7 @@ query_engine.lua [P]
 - [ ] Phase 5: Validation passed
 
 **Gate Status**:
-- [x] Initial Constitution Check: PASS (with documented CLI deviation)
+- [x] Initial Constitution Check: PASS
 - [x] Post-Design Constitution Check: PASS (query engine is library-first, TDD planned, all artifacts generated)
 - [x] All NEEDS CLARIFICATION resolved
 - [x] Complexity deviations documented

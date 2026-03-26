@@ -285,6 +285,22 @@ CREATE TABLE IF NOT EXISTS tag_assignments (
 );
 
 -- ============================================================================
+-- SMART BINS (dynamic query-based bins)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS smart_bins (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL CHECK(length(name) > 0),
+    scope_bin_id TEXT REFERENCES tags(id) ON DELETE SET NULL,
+    criteria_json TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL,
+    modified_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_smart_bins_project ON smart_bins(project_id);
+
+-- ============================================================================
 -- INDEXES (performance-critical)
 -- ============================================================================
 

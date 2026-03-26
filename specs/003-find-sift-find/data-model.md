@@ -66,7 +66,7 @@ A named, persistent collection of Query criteria that dynamically resolves to ma
 
 **SQL**:
 ```sql
-CREATE TABLE IF NOT EXISTS smart_bins (
+CREATE TABLE smart_bins (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL CHECK(length(name) > 0),
@@ -132,7 +132,7 @@ The `smart_bins` table is new and requires a schema migration (V6 → V7). This 
 2. Defer Smart Bins until migration system exists
 3. Create table dynamically on first access (avoid version gate)
 
-**Recommendation**: Option 3 for now — `CREATE TABLE IF NOT EXISTS` on project open, no version bump. Smart Bins are additive (no existing data changes). When migration system ships, formalize.
+**Decision**: Add table directly to schema.sql. No backward compat, no `IF NOT EXISTS` workaround. Old projects get reset/deleted per project rules (ENGINEERING.md 2.15).
 
 ## Searchable Fields Registry
 

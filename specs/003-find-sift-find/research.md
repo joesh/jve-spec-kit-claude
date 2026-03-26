@@ -35,7 +35,7 @@
 ### Persistence: Sift State
 - **Decision**: Persist sift criteria with the project file
 - **Rationale**: JVE principle — maintain identical state across sessions. Editor reopens project and sees the same sifted view.
-- **Mechanism**: `projects.settings` JSON column already stores `browser_sort_*` preferences. Sift criteria can follow same pattern. Smart Bins need their own DB table (persistent, per-project, potentially many).
+- **Mechanism**: `projects.settings` JSON column already stores `browser_sort_*` preferences. Sift criteria follow same pattern. Smart Bins get their own table in schema.sql (no backward compat, no `IF NOT EXISTS`).
 - **Alternatives**: Session-only (Avid's approach) — rejected because JVE values session continuity.
 
 ### Persistence: Dialog Settings
