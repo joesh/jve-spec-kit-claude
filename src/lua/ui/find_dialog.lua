@@ -275,11 +275,11 @@ end
 
 local function set_replace_enabled(enabled)
     ws.replace_visible = enabled
-    if ws.replace_edit then qt.PROPERTIES.SET_ENABLED(ws.replace_edit, enabled) end
-    if ws.replace_label then qt.PROPERTIES.SET_ENABLED(ws.replace_label, enabled) end
-    if ws.rep_btn then qt.PROPERTIES.SET_ENABLED(ws.rep_btn, enabled) end
-    if ws.rep_all_btn then qt.PROPERTIES.SET_ENABLED(ws.rep_all_btn, enabled) end
-    if ws.skip_btn then qt.PROPERTIES.SET_ENABLED(ws.skip_btn, enabled) end
+    if ws.replace_edit then qt.CONTROL.SET_ENABLED(ws.replace_edit, enabled) end
+    if ws.replace_label then qt.CONTROL.SET_ENABLED(ws.replace_label, enabled) end
+    if ws.rep_btn then qt.CONTROL.SET_ENABLED(ws.rep_btn, enabled) end
+    if ws.rep_all_btn then qt.CONTROL.SET_ENABLED(ws.rep_all_btn, enabled) end
+    if ws.skip_btn then qt.CONTROL.SET_ENABLED(ws.skip_btn, enabled) end
 end
 
 -- ============================================================================
