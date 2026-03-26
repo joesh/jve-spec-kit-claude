@@ -351,20 +351,20 @@ local function create_window()
     -- Row 5: Find buttons
     local row5 = qt.LAYOUT.CREATE_HBOX()
 
-    local find_btn = qt.WIDGET.CREATE_BUTTON("Find")
-    register_handler("__find_dlg_find", do_find)
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(find_btn, "__find_dlg_find")
-    qt.LAYOUT.ADD_WIDGET(row5, find_btn)
+    local next_btn = qt.WIDGET.CREATE_BUTTON("Next")
+    register_handler("__find_dlg_next", do_find_next)
+    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(next_btn, "__find_dlg_next")
+    qt.LAYOUT.ADD_WIDGET(row5, next_btn)
 
-    local prev_btn = qt.WIDGET.CREATE_BUTTON("<")
+    local prev_btn = qt.WIDGET.CREATE_BUTTON("Prev")
     register_handler("__find_dlg_prev", do_find_prev)
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(prev_btn, "__find_dlg_prev")
     qt.LAYOUT.ADD_WIDGET(row5, prev_btn)
 
-    local next_btn = qt.WIDGET.CREATE_BUTTON(">")
-    register_handler("__find_dlg_next", do_find_next)
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(next_btn, "__find_dlg_next")
-    qt.LAYOUT.ADD_WIDGET(row5, next_btn)
+    local all_btn = qt.WIDGET.CREATE_BUTTON("All")
+    register_handler("__find_dlg_all", do_find)
+    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(all_btn, "__find_dlg_all")
+    qt.LAYOUT.ADD_WIDGET(row5, all_btn)
 
     qt.LAYOUT.ADD_SPACING(row5, 12)
 
