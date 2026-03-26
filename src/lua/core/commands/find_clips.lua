@@ -79,8 +79,9 @@ function M.register(command_executors, _, _, _)
             find_state.get_match_count(),
             find_state.get_current_index())
         if not find_state.is_active() then
-            log.warn("FindNext: no active find session")
-            return {success = false, error_message = "No active find session"}
+            -- No active find — open the dialog so user can enter search text
+            log.event("FindNext: no active session, opening Find dialog")
+            return command_executors["Find"](_)
         end
         find_state.next()
         local match = find_state.get_current_match()
@@ -92,8 +93,8 @@ function M.register(command_executors, _, _, _)
 
     command_executors["FindPrevious"] = function(_)
         if not find_state.is_active() then
-            log.warn("FindPrevious: no active find session")
-            return {success = false, error_message = "No active find session"}
+            log.event("FindPrevious: no active session, opening Find dialog")
+            return command_executors["Find"](_)
         end
         find_state.previous()
         navigate_to_match()
