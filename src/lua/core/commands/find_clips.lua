@@ -70,11 +70,7 @@ function M.register(command_executors, _, _, _)
             end,
             on_select_all = function(match_ids)
                 log.event("Find on_select_all: %d clips", #match_ids)
-                -- Build selection list for the view
-                for _, clip_id in ipairs(match_ids) do
-                    view:navigate_to_clip(clip_id)
-                end
-                -- TODO: view:select_clips(match_ids) for proper multi-select
+                view:select_clips(match_ids)
             end,
         })
 

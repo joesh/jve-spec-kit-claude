@@ -2137,6 +2137,15 @@ function M:navigate_to_clip(clip_id)
     end
 end
 
+function M:select_clips(clip_ids)
+    assert(clip_ids, "timeline_panel:select_clips: clip_ids required")
+    local sel = {}
+    for _, id in ipairs(clip_ids) do
+        sel[#sel + 1] = {id = id}
+    end
+    timeline_state.set_selection(sel)
+end
+
 function M:get_clips()
     local raw = timeline_state.get_clips and timeline_state.get_clips() or {}
     local clips = {}

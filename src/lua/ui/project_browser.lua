@@ -2523,6 +2523,14 @@ function M:navigate_to_clip(clip_id)
     end
 end
 
+function M:select_clips(clip_ids)
+    assert(clip_ids, "project_browser:select_clips: clip_ids required")
+    -- Select first clip and navigate to it; multi-select TBD
+    if #clip_ids > 0 then
+        self:navigate_to_clip(clip_ids[1])
+    end
+end
+
 function M:get_clips()
     local clip_data = {}
     if M.master_clips then
