@@ -51,7 +51,47 @@ local log_enabled  -- function(area_num, level_num) -> bool
 local log_output   -- function(area_num, level_num, msg)
 local area_levels  -- integer-keyed table for core areas
 
+-- Parse JVE_LOG env var for hierarchical area levels.
+-- Called by both FFI and pure-Lua backends.
+local function parse_env_levels()
+    area_levels = {}
+    for i = 0, AREA_COUNT - 1 do
+        area_levels[i] = LEVELS.warn  -- default: WARN
+    end
+
+    local env = os.getenv("JVE_LOG")
+    if not env or env == "" then return end
+
+    for entry in env:gmatch("[^,]+") do
+        local area_str, level_str = entry:match("^%s*([^:]+):([^:]+)%s*$")
+        if area_str and level_str then
+            area_str = area_str:lower()
+            level_str = level_str:lower()
+            local lvl = LEVELS[level_str]
+            if lvl then
+                if area_str == "all" then
+                    for i = 0, AREA_COUNT - 1 do area_levels[i] = lvl end
+                    for k in pairs(extended_area_levels) do
+                        extended_area_levels[k] = lvl
+                    end
+                elseif area_str == "play" then
+                    area_levels[AREAS.ticks] = lvl
+                    area_levels[AREAS.audio] = lvl
+                    area_levels[AREAS.video] = lvl
+                elseif AREAS[area_str] ~= nil then
+                    area_levels[AREAS[area_str]] = lvl
+                end
+                -- Store for hierarchical matching
+                extended_area_levels[area_str] = lvl
+            end
+        end
+    end
+end
+
 local function init_backend()
+    -- Always parse env for hierarchical area support
+    parse_env_levels()
+
     -- Try FFI first (available when running inside JVEEditor)
     local ffi_ok, ffi = pcall(require, "ffi")
     if ffi_ok then
@@ -63,7 +103,6 @@ local function init_backend()
             ]]
         end)
         if ok then
-            -- Test if the symbol is actually linked (fails in plain luajit)
             local sym_ok = pcall(function() return ffi.C.jve_log_enabled_ffi(0, 2) end)
             if sym_ok then
                 log_enabled = function(a, l) return ffi.C.jve_log_enabled_ffi(a, l) end
@@ -74,42 +113,6 @@ local function init_backend()
     end
 
     -- Pure-Lua fallback (test environment)
-    -- Parse JVE_LOG env var ourselves; write to stderr
-    area_levels = {}
-    for i = 0, AREA_COUNT - 1 do
-        area_levels[i] = LEVELS.warn  -- default: WARN
-    end
-
-    local env = os.getenv("JVE_LOG")
-    if env and env ~= "" then
-        for entry in env:gmatch("[^,]+") do
-            local area_str, level_str = entry:match("^%s*([^:]+):([^:]+)%s*$")
-            if area_str and level_str then
-                area_str = area_str:lower()
-                level_str = level_str:lower()
-                local lvl = LEVELS[level_str]
-                if lvl then
-                    if area_str == "all" then
-                        for i = 0, AREA_COUNT - 1 do area_levels[i] = lvl end
-                        -- Also set all extended areas
-                        for k in pairs(extended_area_levels) do
-                            extended_area_levels[k] = lvl
-                        end
-                    elseif area_str == "play" then
-                        area_levels[AREAS.ticks] = lvl
-                        area_levels[AREAS.audio] = lvl
-                        area_levels[AREAS.video] = lvl
-                    elseif AREAS[area_str] ~= nil then
-                        area_levels[AREAS[area_str]] = lvl
-                    end
-                    -- Store for hierarchical matching: "ui:event" sets extended_area_levels["ui"] = event
-                    -- so "ui.find" will inherit from it
-                    extended_area_levels[area_str] = lvl
-                end
-            end
-        end
-    end
-
     log_enabled = function(a, l) return l >= area_levels[a] end
     log_output = function(a, l, msg)
         local ts = os.date("%H:%M:%S")
