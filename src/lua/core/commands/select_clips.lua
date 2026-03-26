@@ -1,6 +1,7 @@
 --- SelectClips Command - Handle timeline clip selection with modifier semantics
 --
 -- Encapsulates all clip selection logic:
+-- - Shift modifier: range select — all clips between anchor and target (Resolve-style)
 -- - Option modifier: expand target clips to include linked clips
 -- - Command modifier: toggle (add if not selected, remove if selected)
 -- - No modifier on unselected: replace selection
@@ -11,6 +12,10 @@ local M = {}
 
 local clip_links = require("models.clip_link")
 local timeline_state = require("ui.timeline.timeline_state")
+
+-- Selection anchor: position + track of the last individually clicked clip.
+-- Shift+Click forms a box from anchor to target (time × track range).
+local selection_anchor = nil  -- {timeline_start, timeline_end, track_index, track_type}
 
 local SPEC = {
     undoable = false,
@@ -61,6 +66,55 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Alt/Option modifier: expand targets to include linked clips
         if modifiers.alt then
             target_ids = expand_to_linked_clips(target_ids, db)
+        end
+
+        -- Resolve the target clip (for anchor tracking and Shift range)
+        local target_clip = target_ids[1] and timeline_state.get_clip_by_id(target_ids[1])
+
+        -- Shift modifier: range select (box from anchor to target)
+        if modifiers.shift and selection_anchor and target_clip then
+            local target_track = timeline_state.get_track_by_id
+                and timeline_state.get_track_by_id(target_clip.track_id)
+            if target_track then
+                local target_index = target_track.track_index
+                    or (timeline_state.get_track_index and timeline_state.get_track_index(target_clip.track_id))
+                local target_start = target_clip.timeline_start
+                local target_end = target_start + target_clip.duration
+
+                -- Box bounds: time range and track index range
+                local time_min = math.min(selection_anchor.timeline_start, target_start)
+                local time_max = math.max(selection_anchor.timeline_end, target_end)
+                local idx_min = math.min(selection_anchor.track_index, target_index)
+                local idx_max = math.max(selection_anchor.track_index, target_index)
+                local anchor_type = selection_anchor.track_type
+
+                -- Find all clips in the box
+                local all_clips = timeline_state.get_clips()
+                local new_selection = {}
+                for _, clip in ipairs(all_clips) do
+                    local clip_end = clip.timeline_start + clip.duration
+                    -- Time overlap: clip intersects [time_min, time_max)
+                    if clip.timeline_start < time_max and clip_end > time_min then
+                        local track = timeline_state.get_track_by_id
+                            and timeline_state.get_track_by_id(clip.track_id)
+                        if track then
+                            -- Only same track type as anchor (video or audio)
+                            if track.track_type == anchor_type then
+                                local ti = track.track_index
+                                    or (timeline_state.get_track_index
+                                        and timeline_state.get_track_index(clip.track_id))
+                                if ti and ti >= idx_min and ti <= idx_max then
+                                    table.insert(new_selection, clip)
+                                end
+                            end
+                        end
+                    end
+                end
+
+                timeline_state.clear_edge_selection()
+                timeline_state.set_selection(new_selection)
+                return { success = true, selected_count = #new_selection }
+            end
         end
 
         -- Get current selection from timeline state
@@ -122,6 +176,22 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         table.insert(new_selection, clip)
                     end
                 end
+            end
+        end
+
+        -- Update anchor on non-Shift clicks
+        if not modifiers.shift and target_clip then
+            local track = timeline_state.get_track_by_id
+                and timeline_state.get_track_by_id(target_clip.track_id)
+            if track then
+                selection_anchor = {
+                    timeline_start = target_clip.timeline_start,
+                    timeline_end = target_clip.timeline_start + target_clip.duration,
+                    track_index = track.track_index
+                        or (timeline_state.get_track_index
+                            and timeline_state.get_track_index(target_clip.track_id)),
+                    track_type = track.track_type,
+                }
             end
         end
 
