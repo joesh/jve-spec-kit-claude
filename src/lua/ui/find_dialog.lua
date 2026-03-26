@@ -176,8 +176,11 @@ end
 local function do_find_next()
     log.event("do_find_next: active=%s count=%d idx=%d",
         tostring(find_state.is_active()), find_state.get_match_count(), find_state.get_current_index())
+    -- Auto-execute find on first press, then cycle
     if not find_state.is_active() then
-        log.warn("do_find_next: not active, ignoring")
+        log.event("do_find_next: no active session, executing find first")
+        if not do_find() then return end
+        -- do_find already navigates to first match
         return
     end
     find_state.next()
@@ -186,18 +189,17 @@ local function do_find_next()
     log.event("do_find_next: after next idx=%d match=%s", idx, tostring(match))
     update_status(string.format("Match %d of %d", idx, find_state.get_match_count()))
     if ws.on_navigate and match then
-        log.event("do_find_next: calling on_navigate")
         ws.on_navigate(match, idx)
-    else
-        log.event("do_find_next: no on_navigate or no match (on_navigate=%s)", tostring(ws.on_navigate))
     end
 end
 
 local function do_find_prev()
     log.event("do_find_prev: active=%s count=%d idx=%d",
         tostring(find_state.is_active()), find_state.get_match_count(), find_state.get_current_index())
+    -- Auto-execute find on first press, then cycle backward
     if not find_state.is_active() then
-        log.warn("do_find_prev: not active, ignoring")
+        log.event("do_find_prev: no active session, executing find first")
+        if not do_find() then return end
         return
     end
     find_state.previous()
@@ -394,7 +396,20 @@ local function create_window()
     qt.LAYOUT.ADD_WIDGET(row5, prev_btn)
 
     local all_btn = qt.WIDGET.CREATE_BUTTON("All")
-    register_handler("__find_dlg_all", do_find)
+    register_handler("__find_dlg_all", function()
+        log.event("do_select_all")
+        -- Execute find if not active
+        if not find_state.is_active() then
+            if not do_find() then return end
+        end
+        -- Select all matches via view
+        local match_ids = find_state.get_matches()
+        log.event("do_select_all: %d matches to select", #match_ids)
+        if #match_ids > 0 and ws.on_select_all then
+            ws.on_select_all(match_ids)
+        end
+        update_status(string.format("Selected %d", #match_ids))
+    end)
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(all_btn, "__find_dlg_all")
     qt.LAYOUT.ADD_WIDGET(row5, all_btn)
 
