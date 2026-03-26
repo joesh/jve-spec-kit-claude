@@ -16,6 +16,7 @@ local command_manager = require("core.command_manager")
 local sift_commands_mod = require("core.sift_commands")
 local db_module = require("core.database")
 local json = require("dkjson")
+local log = require("core.logger").for_area("ui.find")
 
 local M = {}
 
@@ -115,6 +116,7 @@ end
 -- ============================================================================
 
 local function do_find()
+    log.event("do_find: clips=%d", ws.clips and #ws.clips or 0)
     if not ws.clips or #ws.clips == 0 then
         update_status("No clips")
         return false
@@ -123,20 +125,20 @@ local function do_find()
     local column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo)
     local operator = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo)
     local value = qt.PROPERTIES.GET_TEXT(ws.find_edit)
+    log.event("do_find: column=%s op=%s value=%s", tostring(column), tostring(operator), tostring(value))
     if not value or value == "" then
         update_status("Enter search text")
         return false
     end
 
-    -- Save selection before first find
     if not find_state.is_active() and ws.save_selection then
         find_state.save_selection(ws.save_selection())
     end
 
-    -- Scope filtering
     local opts = {}
     if ws.scope_combo then
         local scope_text = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.scope_combo)
+        log.event("do_find: scope=%s sift_active=%s", scope_text, tostring(sift_state.is_active()))
         if scope_text == "Visible (Sifted)" and sift_state.is_active() then
             local eval = sift_state.evaluate(ws.clips)
             local hidden = {}
@@ -148,9 +150,10 @@ local function do_find()
     find_state.execute(ws.clips, {column = column, operator = operator, value = value}, opts)
 
     local count = find_state.get_match_count()
+    local current = find_state.get_current_match()
+    log.event("do_find: %d matches, current=%s, active=%s", count, tostring(current), tostring(find_state.is_active()))
     update_status(string.format("%d match%s", count, count == 1 and "" or "es"))
 
-    -- Persist
     save_settings({
         last_column = column,
         last_operator = operator,
@@ -158,32 +161,49 @@ local function do_find()
         last_replace = ws.replace_edit and qt.PROPERTIES.GET_TEXT(ws.replace_edit) or nil,
     })
 
-    -- Navigate to first match
     if ws.on_find and count > 0 then
+        log.event("do_find: calling on_find callback")
         ws.on_find({
             match_count = count,
-            current_match = find_state.get_current_match(),
+            current_match = current,
         })
+    else
+        log.event("do_find: no on_find callback or 0 matches (on_find=%s)", tostring(ws.on_find))
     end
     return true
 end
 
 local function do_find_next()
-    if not find_state.is_active() then return end
+    log.event("do_find_next: active=%s count=%d idx=%d",
+        tostring(find_state.is_active()), find_state.get_match_count(), find_state.get_current_index())
+    if not find_state.is_active() then
+        log.warn("do_find_next: not active, ignoring")
+        return
+    end
     find_state.next()
     local match = find_state.get_current_match()
     local idx = find_state.get_current_index()
+    log.event("do_find_next: after next idx=%d match=%s", idx, tostring(match))
     update_status(string.format("Match %d of %d", idx, find_state.get_match_count()))
     if ws.on_navigate and match then
+        log.event("do_find_next: calling on_navigate")
         ws.on_navigate(match, idx)
+    else
+        log.event("do_find_next: no on_navigate or no match (on_navigate=%s)", tostring(ws.on_navigate))
     end
 end
 
 local function do_find_prev()
-    if not find_state.is_active() then return end
+    log.event("do_find_prev: active=%s count=%d idx=%d",
+        tostring(find_state.is_active()), find_state.get_match_count(), find_state.get_current_index())
+    if not find_state.is_active() then
+        log.warn("do_find_prev: not active, ignoring")
+        return
+    end
     find_state.previous()
     local match = find_state.get_current_match()
     local idx = find_state.get_current_index()
+    log.event("do_find_prev: after prev idx=%d match=%s", idx, tostring(match))
     update_status(string.format("Match %d of %d", idx, find_state.get_match_count()))
     if ws.on_navigate and match then
         ws.on_navigate(match, idx)
@@ -191,19 +211,23 @@ local function do_find_prev()
 end
 
 local function do_sift()
+    log.event("do_sift: clips=%d project=%s", ws.clips and #ws.clips or 0, tostring(ws.project_id))
     if not ws.clips or #ws.clips == 0 then return end
     local column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo)
     local operator = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo)
     local value = qt.PROPERTIES.GET_TEXT(ws.find_edit)
     if not value or value == "" then return end
+    log.event("do_sift: %s %s %s", column, operator, value)
 
     local query = {column = column, operator = operator, value = value}
     sift_commands_mod.sift(ws.clips, query, ws.project_id)
     local eval = sift_state.evaluate(ws.clips)
+    log.event("do_sift: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids)
     update_status(string.format("Sifted: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids))
 end
 
 local function do_expand_sift()
+    log.event("do_expand_sift: sift_active=%s", tostring(sift_state.is_active()))
     if not ws.clips or not sift_state.is_active() then return end
     local column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo)
     local operator = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo)
@@ -213,10 +237,12 @@ local function do_expand_sift()
     local query = {column = column, operator = operator, value = value}
     sift_commands_mod.expand_sift(ws.clips, query, ws.project_id)
     local eval = sift_state.evaluate(ws.clips)
+    log.event("do_expand_sift: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids)
     update_status(string.format("Sifted: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids))
 end
 
 local function do_narrow_sift()
+    log.event("do_narrow_sift: sift_active=%s", tostring(sift_state.is_active()))
     if not ws.clips or not sift_state.is_active() then return end
     local column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo)
     local operator = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo)
@@ -226,10 +252,12 @@ local function do_narrow_sift()
     local query = {column = column, operator = operator, value = value}
     sift_commands_mod.narrow_sift(ws.clips, query, ws.project_id)
     local eval = sift_state.evaluate(ws.clips)
+    log.event("do_narrow_sift: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids)
     update_status(string.format("Sifted: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids))
 end
 
 local function do_clear_sift()
+    log.event("do_clear_sift")
     sift_commands_mod.clear_sift(ws.project_id)
     update_status("Sift cleared")
 end
@@ -241,10 +269,12 @@ local function has_replace_text()
 end
 
 local function do_replace()
+    log.event("do_replace: has_text=%s active=%s", tostring(has_replace_text()), tostring(find_state.is_active()))
     if not has_replace_text() then return end
     if not find_state.is_active() then return end
     local current_id = find_state.get_current_match()
     if not current_id then return end
+    log.event("do_replace: replacing clip %s", current_id)
     command_manager.execute("ReplaceClipProperty", {
         clip_id = current_id,
         column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo),
@@ -256,11 +286,13 @@ local function do_replace()
 end
 
 local function do_replace_all()
+    log.event("do_replace_all: has_text=%s active=%s", tostring(has_replace_text()), tostring(find_state.is_active()))
     if not has_replace_text() then return end
     if not find_state.is_active() then
         if not do_find() then return end
     end
     local match_ids = find_state.get_matches()
+    log.event("do_replace_all: %d matches to replace", #match_ids)
     if #match_ids == 0 then return end
     command_manager.execute("ReplaceAllClipProperties", {
         clip_ids = match_ids,
@@ -456,6 +488,9 @@ end
 -- @param opts {clips, context, project_id, on_find, on_navigate, save_selection, on_restore_selection}
 function M.show(opts)
     assert(opts, "find_dialog.show: opts required")
+    log.event("find_dialog.show: context=%s clips=%d project=%s on_find=%s on_navigate=%s",
+        tostring(opts.context), opts.clips and #opts.clips or 0, tostring(opts.project_id),
+        tostring(opts.on_find), tostring(opts.on_navigate))
 
     -- Update context
     ws.clips = opts.clips
@@ -468,11 +503,13 @@ function M.show(opts)
 
     -- Create window on first call
     if not ws.window then
+        log.event("find_dialog.show: creating window")
         ws.window = create_window()
         restore_settings()
     end
 
     -- Show and bring to front
+    log.event("find_dialog.show: displaying window")
     qt.DISPLAY.SHOW(ws.window)
     qt.DISPLAY.RAISE(ws.window)
     qt.DISPLAY.ACTIVATE(ws.window)

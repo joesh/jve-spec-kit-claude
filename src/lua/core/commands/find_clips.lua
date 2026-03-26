@@ -6,7 +6,7 @@
 -- @file find_clips.lua
 
 local find_state = require("core.find_state")
-local log = require("core.logger").for_area("ui")
+local log = require("core.logger").for_area("ui.find")
 
 local M = {}
 
@@ -24,10 +24,14 @@ end
 
 local function navigate_to_match()
     local match_id = find_state.get_current_match()
+    log.event("navigate_to_match: match_id=%s", tostring(match_id))
     if not match_id then return end
     local view = get_active_view()
+    log.event("navigate_to_match: view=%s view_id=%s", tostring(view), view and view.view_id or "nil")
     if view then
         view:navigate_to_clip(match_id)
+    else
+        log.warn("navigate_to_match: no active view")
     end
 end
 
@@ -70,13 +74,20 @@ function M.register(command_executors, _, _, _)
     end
 
     command_executors["FindNext"] = function(_)
+        log.event("FindNext: active=%s count=%d idx=%d",
+            tostring(find_state.is_active()),
+            find_state.get_match_count(),
+            find_state.get_current_index())
         if not find_state.is_active() then
             log.warn("FindNext: no active find session")
             return {success = false, error_message = "No active find session"}
         end
         find_state.next()
+        local match = find_state.get_current_match()
+        log.event("FindNext: after next idx=%d match=%s",
+            find_state.get_current_index(), tostring(match))
         navigate_to_match()
-        return {success = true, current_match = find_state.get_current_match()}
+        return {success = true, current_match = match}
     end
 
     command_executors["FindPrevious"] = function(_)
