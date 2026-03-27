@@ -22,11 +22,15 @@ local function get_active_view()
     return focus_manager.get_active_view()
 end
 
+-- The view that was active when Find was opened — used for navigation
+-- so switching panel focus doesn't break Next/Prev
+local find_view = nil
+
 local function navigate_to_match()
     local match_id = find_state.get_current_match()
     log.event("navigate_to_match: match_id=%s", tostring(match_id))
     if not match_id then return end
-    local view = get_active_view()
+    local view = find_view or get_active_view()
     log.event("navigate_to_match: view=%s view_id=%s", tostring(view), view and view.view_id or "nil")
     if view then
         view:navigate_to_clip(match_id)
@@ -47,6 +51,8 @@ function M.register(command_executors, _, _, _)
             log.warn("Find: no active view")
             return {success = false, error_message = "No active view"}
         end
+        find_view = view
+        log.event("Find: locked to view %s", view.view_id)
 
         local clips = view:get_clips()
         if #clips == 0 then
@@ -70,7 +76,8 @@ function M.register(command_executors, _, _, _)
             end,
             on_select_all = function(match_ids)
                 log.event("Find on_select_all: %d clips", #match_ids)
-                view:select_clips(match_ids)
+                local target = find_view or view
+                target:select_clips(match_ids)
             end,
         })
 
@@ -111,6 +118,7 @@ function M.register(command_executors, _, _, _)
 
     command_executors["ClearFind"] = function(_)
         find_state.clear()
+        find_view = nil
         return {success = true}
     end
 
