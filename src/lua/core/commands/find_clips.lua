@@ -83,6 +83,14 @@ function M.register(command_executors, _, _, _)
         end
         log.event("Find: view %s", view.view_id)
 
+        if view.view_id == "project_browser" then
+            -- Browser: toggle embedded find bar
+            local pb = require("ui.project_browser")
+            pb.show_find_bar()
+            return {success = true}
+        end
+
+        -- Timeline: use floating dialog (for now)
         local clips = view:get_clips()
         if #clips == 0 then
             log.warn("Find: no clips in current view")

@@ -1283,6 +1283,215 @@ function M.create()
         qt_constants.CONTROL.SET_TREE_KEY_HANDLER(tree, key_handler)
     end
 
+    -- ========================================================================
+    -- Find bar (Avid-style, hidden by default, Cmd+F toggles)
+    -- ========================================================================
+    local find_bar_container = qt_constants.WIDGET.CREATE()
+    local find_bar_layout = qt_constants.LAYOUT.CREATE_VBOX()
+    qt_constants.CONTROL.SET_LAYOUT_SPACING(find_bar_layout, 2)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(find_bar_layout, 4, 2, 4, 2)
+
+    -- Row 1: Find: [____×] [←] [→] 3/16  [Any ▼]
+    local find_row = qt_constants.LAYOUT.CREATE_HBOX()
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, qt_constants.WIDGET.CREATE_LABEL("Find:"))
+    local find_edit = qt_constants.WIDGET.CREATE_LINE_EDIT("")
+    qt_constants.PROPERTIES.SET_PLACEHOLDER_TEXT(find_edit, "search")
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, find_edit)
+
+    local prev_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x90")  -- ←
+    local next_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x92")  -- →
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, prev_btn)
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, next_btn)
+
+    local match_label = qt_constants.WIDGET.CREATE_LABEL("0/0")
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, match_label)
+
+    local attr_combo = qt_constants.WIDGET.CREATE_COMBOBOX()
+    local query_engine = require("core.query_engine")
+    qt_constants.PROPERTIES.ADD_COMBOBOX_ITEM(attr_combo, "Any")
+    for _, f in ipairs(query_engine.get_searchable_fields()) do
+        qt_constants.PROPERTIES.ADD_COMBOBOX_ITEM(attr_combo, f.name)
+    end
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, attr_combo)
+
+    local all_btn = qt_constants.WIDGET.CREATE_BUTTON("All")
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, all_btn)
+
+    qt_constants.LAYOUT.ADD_LAYOUT(find_bar_layout, find_row)
+
+    -- Row 2: Replace: [____] [Replace] [Replace & Find] [Replace All]
+    local replace_row = qt_constants.LAYOUT.CREATE_HBOX()
+    qt_constants.LAYOUT.ADD_WIDGET(replace_row, qt_constants.WIDGET.CREATE_LABEL("Replace:"))
+    local replace_edit = qt_constants.WIDGET.CREATE_LINE_EDIT("")
+    qt_constants.PROPERTIES.SET_PLACEHOLDER_TEXT(replace_edit, "replacement")
+    qt_constants.LAYOUT.ADD_WIDGET(replace_row, replace_edit)
+
+    local rep_btn = qt_constants.WIDGET.CREATE_BUTTON("Replace")
+    qt_constants.CONTROL.SET_ENABLED(rep_btn, false)
+    qt_constants.LAYOUT.ADD_WIDGET(replace_row, rep_btn)
+
+    local rep_find_btn = qt_constants.WIDGET.CREATE_BUTTON("Replace & Find")
+    qt_constants.CONTROL.SET_ENABLED(rep_find_btn, false)
+    qt_constants.LAYOUT.ADD_WIDGET(replace_row, rep_find_btn)
+
+    local rep_all_btn = qt_constants.WIDGET.CREATE_BUTTON("Replace All")
+    qt_constants.CONTROL.SET_ENABLED(rep_all_btn, false)
+    qt_constants.LAYOUT.ADD_WIDGET(replace_row, rep_all_btn)
+
+    qt_constants.LAYOUT.ADD_LAYOUT(find_bar_layout, replace_row)
+
+    qt_constants.LAYOUT.SET_ON_WIDGET(find_bar_container, find_bar_layout)
+
+    -- Store find bar refs
+    M.find_bar = {
+        container = find_bar_container,
+        find_edit = find_edit,
+        replace_edit = replace_edit,
+        attr_combo = attr_combo,
+        match_label = match_label,
+        rep_btn = rep_btn,
+        rep_find_btn = rep_find_btn,
+        rep_all_btn = rep_all_btn,
+        visible = false,
+    }
+
+    -- Wire find bar handlers
+    local find_state = require("core.find_state")
+    local find_log = require("core.logger").for_area("ui.find")
+
+    local function update_match_label()
+        local count = find_state.get_match_count()
+        local idx = find_state.get_current_index()
+        qt_constants.PROPERTIES.SET_TEXT(match_label, string.format("%d/%d", idx, count))
+    end
+
+    local function do_browser_find()
+        local value = qt_constants.PROPERTIES.GET_TEXT(find_edit)
+        if not value or value == "" then return false end
+        local column = qt_constants.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(attr_combo)
+        find_log.event("browser_find: column=%s value=%s clips=%d", column, value, M.master_clips and #M.master_clips or 0)
+        local clips = M:get_clips()
+        find_state.execute(clips, {column = column, operator = "contains", value = value})
+        update_match_label()
+        local match = find_state.get_current_match()
+        if match then M:navigate_to_clip(match) end
+        return true
+    end
+
+    local function do_browser_next()
+        if not find_state.is_active() then
+            if not do_browser_find() then return end
+            return
+        end
+        find_state.next()
+        update_match_label()
+        local match = find_state.get_current_match()
+        if match then M:navigate_to_clip(match) end
+    end
+
+    local function do_browser_prev()
+        if not find_state.is_active() then
+            if not do_browser_find() then return end
+            return
+        end
+        find_state.previous()
+        update_match_label()
+        local match = find_state.get_current_match()
+        if match then M:navigate_to_clip(match) end
+    end
+
+    local function do_browser_select_all()
+        if not find_state.is_active() then
+            if not do_browser_find() then return end
+        end
+        local ids = find_state.get_matches()
+        find_log.event("browser_select_all: %d matches", #ids)
+        if #ids > 0 then M:select_clips(ids) end
+        update_match_label()
+    end
+
+    local function has_replace()
+        local text = qt_constants.PROPERTIES.GET_TEXT(replace_edit)
+        return text and text ~= ""
+    end
+
+    local function do_browser_replace()
+        if not has_replace() or not find_state.is_active() then return end
+        local current = find_state.get_current_match()
+        if not current then return end
+        local cm = require("core.command_manager")
+        cm.execute("ReplaceClipProperty", {
+            clip_id = current,
+            column = qt_constants.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(attr_combo),
+            find_value = qt_constants.PROPERTIES.GET_TEXT(find_edit),
+            replace_value = qt_constants.PROPERTIES.GET_TEXT(replace_edit),
+            project_id = M.project_id,
+        })
+    end
+
+    local function do_browser_replace_and_find()
+        do_browser_replace()
+        do_browser_next()
+    end
+
+    local function do_browser_replace_all()
+        if not has_replace() then return end
+        if not find_state.is_active() then
+            if not do_browser_find() then return end
+        end
+        local ids = find_state.get_matches()
+        if #ids == 0 then return end
+        local cm = require("core.command_manager")
+        cm.execute("ReplaceAllClipProperties", {
+            clip_ids = ids,
+            column = qt_constants.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(attr_combo),
+            find_value = qt_constants.PROPERTIES.GET_TEXT(find_edit),
+            replace_value = qt_constants.PROPERTIES.GET_TEXT(replace_edit),
+            project_id = M.project_id,
+        })
+        update_match_label()
+    end
+
+    -- Button handlers
+    local next_h = "__browser_find_next"
+    _G[next_h] = do_browser_next
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(next_btn, next_h)
+
+    local prev_h = "__browser_find_prev"
+    _G[prev_h] = do_browser_prev
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(prev_btn, prev_h)
+
+    local all_h = "__browser_find_all"
+    _G[all_h] = do_browser_select_all
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(all_btn, all_h)
+
+    local rep_h = "__browser_find_rep"
+    _G[rep_h] = do_browser_replace
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(rep_btn, rep_h)
+
+    local repf_h = "__browser_find_rep_find"
+    _G[repf_h] = do_browser_replace_and_find
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(rep_find_btn, repf_h)
+
+    local repa_h = "__browser_find_rep_all"
+    _G[repa_h] = do_browser_replace_all
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(rep_all_btn, repa_h)
+
+    -- Monitor replace field for enable/disable
+    _G["__browser_find_replace_changed"] = function()
+        local has_text = has_replace()
+        qt_constants.CONTROL.SET_ENABLED(rep_btn, has_text)
+        qt_constants.CONTROL.SET_ENABLED(rep_find_btn, has_text)
+        qt_constants.CONTROL.SET_ENABLED(rep_all_btn, has_text)
+    end
+    qt_set_line_edit_text_changed_handler(replace_edit, "__browser_find_replace_changed")
+
+    -- Start hidden
+    if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+        qt_constants.DISPLAY.SET_VISIBLE(find_bar_container, false)
+    end
+
+    qt_constants.LAYOUT.ADD_WIDGET(layout, find_bar_container)
     qt_constants.LAYOUT.ADD_WIDGET(layout, tree)
 
     -- Set layout on container
@@ -1291,6 +1500,33 @@ function M.create()
     -- Store references for later access
     M.tree = tree
     M.container = container
+
+    --- Toggle find bar visibility (called by Find command)
+    function M.toggle_find_bar()
+        if not M.find_bar then return end
+        M.find_bar.visible = not M.find_bar.visible
+        if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+            qt_constants.DISPLAY.SET_VISIBLE(M.find_bar.container, M.find_bar.visible)
+        end
+        -- Focus the find field when showing
+        if M.find_bar.visible and qt_constants.CONTROL and qt_constants.CONTROL.SET_FOCUS then
+            qt_constants.CONTROL.SET_FOCUS(M.find_bar.find_edit)
+        end
+    end
+
+    function M.show_find_bar()
+        if not M.find_bar then return end
+        if not M.find_bar.visible then
+            M.toggle_find_bar()
+        end
+    end
+
+    function M.hide_find_bar()
+        if not M.find_bar then return end
+        if M.find_bar.visible then
+            M.toggle_find_bar()
+        end
+    end
 
     local media_count = M.master_clips and #M.master_clips or 0
     local sequence_count = 0
