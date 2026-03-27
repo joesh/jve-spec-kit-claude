@@ -38,14 +38,20 @@ end
 --- Re-execute the current find query against the active view's clips.
 -- Called when focus changes so matches update to the new view.
 local function re_execute_for_view()
-    local query = find_state.get_current_query()
-    if not query then return end
     local view = get_active_view()
     if not view then return end
     local clips = view:get_clips()
-    log.event("re_execute_for_view: view=%s clips=%d query=%s",
-        view.view_id, #clips, tostring(query.value))
+    -- Re-execute using the dialog's current text fields
+    local find_dialog = require("ui.find_dialog")
+    local query = find_dialog.get_current_query()
+    if not query then
+        log.event("re_execute_for_view: no query from dialog")
+        return
+    end
+    log.event("re_execute_for_view: view=%s clips=%d query=%s %s %s",
+        view.view_id, #clips, query.column, query.operator, query.value)
     find_state.execute(clips, query)
+    log.event("re_execute_for_view: %d matches", find_state.get_match_count())
 end
 
 -- ============================================================================

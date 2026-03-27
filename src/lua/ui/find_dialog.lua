@@ -473,6 +473,18 @@ function M.update_clips(clips)
     log.event("find_dialog.update_clips: %d clips", clips and #clips or 0)
 end
 
+--- Get current query from the dialog's text fields.
+function M.get_current_query()
+    if not ws.attr_combo or not ws.op_combo or not ws.find_edit then return nil end
+    local value = qt.PROPERTIES.GET_TEXT(ws.find_edit)
+    if not value or value == "" then return nil end
+    return {
+        column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo),
+        operator = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo),
+        value = value,
+    }
+end
+
 --- Check if the panel is currently visible.
 function M.is_visible()
     return ws.window ~= nil
