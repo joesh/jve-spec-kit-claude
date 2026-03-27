@@ -22,15 +22,11 @@ local function get_active_view()
     return focus_manager.get_active_view()
 end
 
--- The view that was active when Find was opened — used for navigation
--- so switching panel focus doesn't break Next/Prev
-local find_view = nil
-
 local function navigate_to_match()
     local match_id = find_state.get_current_match()
     log.event("navigate_to_match: match_id=%s", tostring(match_id))
     if not match_id then return end
-    local view = find_view or get_active_view()
+    local view = get_active_view()
     log.event("navigate_to_match: view=%s view_id=%s", tostring(view), view and view.view_id or "nil")
     if view then
         view:navigate_to_clip(match_id)
@@ -39,11 +35,39 @@ local function navigate_to_match()
     end
 end
 
+--- Re-execute the current find query against the active view's clips.
+-- Called when focus changes so matches update to the new view.
+local function re_execute_for_view()
+    local query = find_state.get_current_query()
+    if not query then return end
+    local view = get_active_view()
+    if not view then return end
+    local clips = view:get_clips()
+    log.event("re_execute_for_view: view=%s clips=%d query=%s",
+        view.view_id, #clips, tostring(query.value))
+    find_state.execute(clips, query)
+end
+
 -- ============================================================================
 -- Command executors
 -- ============================================================================
 
 function M.register(command_executors, _, _, _)
+
+    -- Register focus change listener to re-execute find for new view
+    local focus_manager = require("ui.focus_manager")
+    focus_manager.on_focus_change(function(_, new_id)
+        if find_state.is_active() and new_id then
+            local new_view = focus_manager.get_view(new_id)
+            if new_view then
+                log.event("focus changed to %s, re-executing find", new_id)
+                -- Update dialog's clip list
+                local find_dialog = require("ui.find_dialog")
+                find_dialog.update_clips(new_view:get_clips())
+                re_execute_for_view()
+            end
+        end
+    end)
 
     command_executors["Find"] = function(_)
         local view = get_active_view()
@@ -51,8 +75,7 @@ function M.register(command_executors, _, _, _)
             log.warn("Find: no active view")
             return {success = false, error_message = "No active view"}
         end
-        find_view = view
-        log.event("Find: locked to view %s", view.view_id)
+        log.event("Find: view %s", view.view_id)
 
         local clips = view:get_clips()
         if #clips == 0 then
@@ -76,7 +99,7 @@ function M.register(command_executors, _, _, _)
             end,
             on_select_all = function(match_ids)
                 log.event("Find on_select_all: %d clips", #match_ids)
-                local target = find_view or view
+                local target = get_active_view() or view
                 target:select_clips(match_ids)
             end,
         })
@@ -118,7 +141,6 @@ function M.register(command_executors, _, _, _)
 
     command_executors["ClearFind"] = function(_)
         find_state.clear()
-        find_view = nil
         return {success = true}
     end
 

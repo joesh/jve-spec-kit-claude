@@ -543,6 +543,12 @@ function M.hide()
     end
 end
 
+--- Update the clip list (called when focus changes views).
+function M.update_clips(clips)
+    ws.clips = clips
+    log.event("find_dialog.update_clips: %d clips", clips and #clips or 0)
+end
+
 --- Check if the panel is currently visible.
 function M.is_visible()
     return ws.window ~= nil
