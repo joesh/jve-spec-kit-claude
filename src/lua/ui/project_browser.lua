@@ -1296,6 +1296,9 @@ function M.create()
     qt_constants.LAYOUT.ADD_WIDGET(find_row, qt_constants.WIDGET.CREATE_LABEL("Find:"))
     local find_edit = qt_constants.WIDGET.CREATE_LINE_EDIT("")
     qt_constants.PROPERTIES.SET_PLACEHOLDER_TEXT(find_edit, "search")
+    if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
+        qt_constants.GEOMETRY.SET_SIZE_POLICY(find_edit, "Expanding", "Fixed")
+    end
     qt_constants.LAYOUT.ADD_WIDGET(find_row, find_edit)
 
     local prev_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x90")  -- ←
@@ -1319,11 +1322,16 @@ function M.create()
 
     qt_constants.LAYOUT.ADD_LAYOUT(find_bar_layout, find_row)
 
-    -- Row 2: Replace: [____] [Replace] [Replace & Find] [Replace All]
+    -- Row 2: Replace (hidden by default, shown when replace_edit has text)
+    local replace_container = qt_constants.WIDGET.CREATE()
     local replace_row = qt_constants.LAYOUT.CREATE_HBOX()
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(replace_row, 0, 0, 0, 0)
     qt_constants.LAYOUT.ADD_WIDGET(replace_row, qt_constants.WIDGET.CREATE_LABEL("Replace:"))
     local replace_edit = qt_constants.WIDGET.CREATE_LINE_EDIT("")
     qt_constants.PROPERTIES.SET_PLACEHOLDER_TEXT(replace_edit, "replacement")
+    if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
+        qt_constants.GEOMETRY.SET_SIZE_POLICY(replace_edit, "Expanding", "Fixed")
+    end
     qt_constants.LAYOUT.ADD_WIDGET(replace_row, replace_edit)
 
     local rep_btn = qt_constants.WIDGET.CREATE_BUTTON("Replace")
@@ -1338,7 +1346,12 @@ function M.create()
     qt_constants.CONTROL.SET_ENABLED(rep_all_btn, false)
     qt_constants.LAYOUT.ADD_WIDGET(replace_row, rep_all_btn)
 
-    qt_constants.LAYOUT.ADD_LAYOUT(find_bar_layout, replace_row)
+    qt_constants.LAYOUT.SET_ON_WIDGET(replace_container, replace_row)
+    -- Hidden by default
+    if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+        qt_constants.DISPLAY.SET_VISIBLE(replace_container, false)
+    end
+    qt_constants.LAYOUT.ADD_WIDGET(find_bar_layout, replace_container)
 
     qt_constants.LAYOUT.SET_ON_WIDGET(find_bar_container, find_bar_layout)
 
@@ -1347,6 +1360,7 @@ function M.create()
         container = find_bar_container,
         find_edit = find_edit,
         replace_edit = replace_edit,
+        replace_container = replace_container,
         attr_combo = attr_combo,
         match_label = match_label,
         rep_btn = rep_btn,
@@ -1483,6 +1497,10 @@ function M.create()
         qt_constants.CONTROL.SET_ENABLED(rep_btn, has_text)
         qt_constants.CONTROL.SET_ENABLED(rep_find_btn, has_text)
         qt_constants.CONTROL.SET_ENABLED(rep_all_btn, has_text)
+        -- Show/hide replace row based on content
+        if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+            qt_constants.DISPLAY.SET_VISIBLE(replace_container, has_text)
+        end
     end
     qt_set_line_edit_text_changed_handler(replace_edit, "__browser_find_replace_changed")
 
