@@ -11,9 +11,7 @@
 local qt = require("core.qt_constants")
 local query_engine = require("core.query_engine")
 local find_state = require("core.find_state")
-local sift_state = require("core.sift_state")
 local command_manager = require("core.command_manager")
-local sift_commands_mod = require("core.sift_commands")
 local db_module = require("core.database")
 local json = require("dkjson")
 local log = require("core.logger").for_area("ui.find")
@@ -135,19 +133,7 @@ local function do_find()
         find_state.save_selection(ws.save_selection())
     end
 
-    local opts = {}
-    if ws.scope_combo then
-        local scope_text = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.scope_combo)
-        log.event("do_find: scope=%s sift_active=%s", scope_text, tostring(sift_state.is_active()))
-        if scope_text == "Visible (Sifted)" and sift_state.is_active() then
-            local eval = sift_state.evaluate(ws.clips)
-            local hidden = {}
-            for _, id in ipairs(eval.hidden_ids) do hidden[id] = true end
-            opts.hidden_ids = hidden
-        end
-    end
-
-    find_state.execute(ws.clips, {column = column, operator = operator, value = value}, opts)
+    find_state.execute(ws.clips, {column = column, operator = operator, value = value})
 
     local count = find_state.get_match_count()
     local current = find_state.get_current_match()
@@ -210,58 +196,6 @@ local function do_find_prev()
     if ws.on_navigate and match then
         ws.on_navigate(match, idx)
     end
-end
-
-local function do_sift()
-    log.event("do_sift: clips=%d project=%s", ws.clips and #ws.clips or 0, tostring(ws.project_id))
-    if not ws.clips or #ws.clips == 0 then return end
-    local column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo)
-    local operator = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo)
-    local value = qt.PROPERTIES.GET_TEXT(ws.find_edit)
-    if not value or value == "" then return end
-    log.event("do_sift: %s %s %s", column, operator, value)
-
-    local query = {column = column, operator = operator, value = value}
-    sift_commands_mod.sift(ws.clips, query, ws.project_id)
-    local eval = sift_state.evaluate(ws.clips)
-    log.event("do_sift: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids)
-    update_status(string.format("Sifted: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids))
-end
-
-local function do_expand_sift()
-    log.event("do_expand_sift: sift_active=%s", tostring(sift_state.is_active()))
-    if not ws.clips or not sift_state.is_active() then return end
-    local column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo)
-    local operator = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo)
-    local value = qt.PROPERTIES.GET_TEXT(ws.find_edit)
-    if not value or value == "" then return end
-
-    local query = {column = column, operator = operator, value = value}
-    sift_commands_mod.expand_sift(ws.clips, query, ws.project_id)
-    local eval = sift_state.evaluate(ws.clips)
-    log.event("do_expand_sift: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids)
-    update_status(string.format("Sifted: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids))
-end
-
-local function do_narrow_sift()
-    log.event("do_narrow_sift: sift_active=%s", tostring(sift_state.is_active()))
-    if not ws.clips or not sift_state.is_active() then return end
-    local column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo)
-    local operator = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo)
-    local value = qt.PROPERTIES.GET_TEXT(ws.find_edit)
-    if not value or value == "" then return end
-
-    local query = {column = column, operator = operator, value = value}
-    sift_commands_mod.narrow_sift(ws.clips, query, ws.project_id)
-    local eval = sift_state.evaluate(ws.clips)
-    log.event("do_narrow_sift: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids)
-    update_status(string.format("Sifted: %d visible, %d hidden", #eval.visible_ids, #eval.hidden_ids))
-end
-
-local function do_clear_sift()
-    log.event("do_clear_sift")
-    sift_commands_mod.clear_sift(ws.project_id)
-    update_status("Sift cleared")
 end
 
 local function has_replace_text()
@@ -413,25 +347,15 @@ local function create_window()
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(all_btn, "__find_dlg_all")
     qt.LAYOUT.ADD_WIDGET(row5, all_btn)
 
-    qt.LAYOUT.ADD_SPACING(row5, 12)
-
-    local sift_btn = qt.WIDGET.CREATE_BUTTON("Sift")
-    register_handler("__find_dlg_sift", do_sift)
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(sift_btn, "__find_dlg_sift")
-    qt.LAYOUT.ADD_WIDGET(row5, sift_btn)
-
-    local expand_btn = qt.WIDGET.CREATE_BUTTON("Expand")
-    register_handler("__find_dlg_expand", do_expand_sift)
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(expand_btn, "__find_dlg_expand")
-    qt.LAYOUT.ADD_WIDGET(row5, expand_btn)
-
-    local narrow_btn = qt.WIDGET.CREATE_BUTTON("Narrow")
-    register_handler("__find_dlg_narrow", do_narrow_sift)
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(narrow_btn, "__find_dlg_narrow")
-    qt.LAYOUT.ADD_WIDGET(row5, narrow_btn)
+    -- Sift buttons removed — sift will return as a proper browser-only filter UI
+    -- with visible criteria chips. See find_dialog_with_sift.lua.bak for the code.
 
     local clear_btn = qt.WIDGET.CREATE_BUTTON("Clear")
-    register_handler("__find_dlg_clear", do_clear_sift)
+    register_handler("__find_dlg_clear", function()
+        log.event("do_clear_find")
+        find_state.clear()
+        update_status("")
+    end)
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(clear_btn, "__find_dlg_clear")
     qt.LAYOUT.ADD_WIDGET(row5, clear_btn)
 

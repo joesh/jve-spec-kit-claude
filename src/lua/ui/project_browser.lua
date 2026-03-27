@@ -37,7 +37,6 @@ local uuid = require("uuid")
 local project_gen = require("core.project_generation")
 local path_utils = require("core.path_utils")
 local browser_sort = require("ui.browser_sort")
-local sift_state = require("core.sift_state")
 
 local handler_seq = 0
 
@@ -606,11 +605,6 @@ local function populate_tree()
         sort_state.secondary_order = settings.browser_sort_secondary_order
         sort_state.loaded = true
     end
-    -- Restore sift state from project settings
-    if settings.sift_state and not sift_state.is_active() then
-        sift_state.from_json(settings.sift_state)
-    end
-
     local saved_expanded_bins = settings.browser_expanded_bins
 
     M.media_bin_map = tag_service.list_master_clip_assignments(M.project_id)
@@ -888,38 +882,10 @@ local function populate_tree()
         clip.tree_id = tree_id
     end
 
-    -- Sift filtering: build hidden set from sift_state
-    local sift_hidden = {}
-    if sift_state.is_active() then
-        -- Build clip_data from master_clips for sift evaluation
-        local clip_data_list = {}
-        for _, clip in ipairs(master_clips) do
-            local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
-            clip_data_list[#clip_data_list + 1] = {
-                id = clip.clip_id,
-                name = clip.name or media.name or "",
-                codec = clip.codec or media.codec or "",
-                fps = clip.fps_float or 0,
-                duration = clip.duration or 0,
-                enabled = true,
-                volume = 1.0,
-                width = clip.width or media.width or 0,
-                height = clip.height or media.height or 0,
-                audio_channels = media.audio_channels or 0,
-                audio_sample_rate = media.audio_sample_rate or 0,
-                properties = {},
-            }
-        end
-        local eval = sift_state.evaluate(clip_data_list)
-        for _, id in ipairs(eval.hidden_ids) do
-            sift_hidden[id] = true
-        end
-    end
+    -- Sift filtering removed — will return as proper browser-only filter UI
 
     -- Master clips: show in each assigned bin (many-to-many)
     for _, clip in ipairs(master_clips) do
-        -- Skip sifted-out clips
-        if sift_hidden[clip.clip_id] then goto continue_clip end
         local bin_ids = M.media_bin_map and M.media_bin_map[clip.clip_id] or {}
         local placed = false
         for _, bid in ipairs(bin_ids) do
@@ -934,7 +900,6 @@ local function populate_tree()
             clip.bin_id = nil
             add_master_clip_item(nil, clip)
         end
-        ::continue_clip::
     end
 
     -- Sort the tree in-place by current sort column.
@@ -1358,9 +1323,6 @@ function M.set_project_title(name)
     assert(name and name ~= "", "project_browser.set_project_title: name must not be nil or empty")
     local label = M.project_title_widget
     local display = name
-    if sift_state.is_active() then
-        display = display .. " (Sifted)"
-    end
     if label and qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TEXT then
         qt_constants.PROPERTIES.SET_TEXT(label, display)
     else
@@ -2532,6 +2494,9 @@ function M:select_clips(clip_ids)
 end
 
 function M:get_clips()
+    local log_pb = require("core.logger").for_area("ui.find")
+    log_pb.event("project_browser:get_clips master_clips=%s count=%d",
+        tostring(M.master_clips ~= nil), M.master_clips and #M.master_clips or 0)
     local clip_data = {}
     if M.master_clips then
         for _, clip in ipairs(M.master_clips) do
@@ -2550,6 +2515,14 @@ function M:get_clips()
                 audio_sample_rate = media.audio_sample_rate or 0,
                 properties = {},
             }
+        end
+    end
+    if #clip_data > 0 then
+        log_pb.detail("project_browser:get_clips first=%s last=%s",
+            clip_data[1].name, clip_data[#clip_data].name)
+        -- Log a few names to debug matching
+        for i = 1, math.min(5, #clip_data) do
+            log_pb.detail("  clip[%d] id=%s name=%s", i, clip_data[i].id, clip_data[i].name)
         end
     end
     return clip_data
