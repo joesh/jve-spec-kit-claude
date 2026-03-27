@@ -37,7 +37,6 @@ local ws = {
     -- Replace controls
     rep_btn = nil,
     rep_all_btn = nil,
-    skip_btn = nil,
     -- Context
     clips = nil,
     context = nil,       -- "browser" | "timeline"
@@ -376,10 +375,6 @@ local function create_window()
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(ws.rep_all_btn, "__find_dlg_rep_all")
     qt.LAYOUT.ADD_WIDGET(row6, ws.rep_all_btn)
 
-    ws.skip_btn = qt.WIDGET.CREATE_BUTTON("Skip")
-    register_handler("__find_dlg_skip", do_find_next)
-    qt.CONTROL.SET_BUTTON_CLICK_HANDLER(ws.skip_btn, "__find_dlg_skip")
-    qt.LAYOUT.ADD_WIDGET(row6, ws.skip_btn)
 
     qt.LAYOUT.ADD_LAYOUT(layout, row6)
 
