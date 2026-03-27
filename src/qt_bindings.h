@@ -125,6 +125,7 @@ int lua_set_tree_close_editor_handler(lua_State* L);
 int lua_set_tree_item_icon(lua_State* L);
 int lua_set_tree_item_double_click_handler(lua_State* L);
 int lua_set_tree_current_item(lua_State* L);
+int lua_set_tree_selected_items(lua_State* L);
 int lua_get_tree_item_at(lua_State* L);
 int lua_set_tree_drag_drop_mode(lua_State* L);
 int lua_set_tree_drop_handler(lua_State* L);

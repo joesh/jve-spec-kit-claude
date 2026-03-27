@@ -2487,10 +2487,20 @@ end
 
 function M:select_clips(clip_ids)
     assert(clip_ids, "project_browser:select_clips: clip_ids required")
-    -- TODO: needs C++ SET_TREE_SELECTED_ITEMS binding for multi-select
-    -- For now, navigate to first match
-    if #clip_ids > 0 then
-        self:navigate_to_clip(clip_ids[1])
+    if not M.tree or #clip_ids == 0 then return end
+    -- Build array of tree_ids from clip_ids
+    local tree_ids = {}
+    for _, cid in ipairs(clip_ids) do
+        local clip = M.master_clip_map and M.master_clip_map[cid]
+        if clip and clip.tree_id then
+            tree_ids[#tree_ids + 1] = clip.tree_id
+        end
+    end
+    if #tree_ids > 0 and qt_constants.CONTROL.SET_TREE_SELECTED_ITEMS then
+        qt_constants.CONTROL.SET_TREE_SELECTED_ITEMS(M.tree, tree_ids)
+    elseif #tree_ids > 0 then
+        -- Fallback: select first only
+        qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(M.tree, tree_ids[1])
     end
 end
 

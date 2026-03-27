@@ -636,6 +636,42 @@ int lua_set_tree_current_item(lua_State* L) {
     return 1;
 }
 
+// Select multiple tree items by ID array.
+// Args: tree_widget, {item_id_1, item_id_2, ...}
+// Clears existing selection first, then selects all listed items.
+int lua_set_tree_selected_items(lua_State* L) {
+    QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
+    if (!tree || !lua_istable(L, 2)) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+
+    tree->clearSelection();
+    int count = 0;
+    int n = lua_objlen(L, 2);
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, 2, i);
+        lua_Integer item_id = lua_tointeger(L, -1);
+        lua_pop(L, 1);
+        QTreeWidgetItem* item = getTreeItemById(tree, item_id);
+        if (item) {
+            item->setSelected(true);
+            ++count;
+        }
+    }
+    // Scroll to first selected item
+    if (count > 0) {
+        lua_rawgeti(L, 2, 1);
+        QTreeWidgetItem* first = getTreeItemById(tree, lua_tointeger(L, -1));
+        lua_pop(L, 1);
+        if (first) {
+            tree->scrollToItem(first);
+        }
+    }
+    lua_pushinteger(L, count);
+    return 1;
+}
+
 int lua_get_tree_item_at(lua_State* L) {
     QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
     int x = luaL_checkint(L, 2);
