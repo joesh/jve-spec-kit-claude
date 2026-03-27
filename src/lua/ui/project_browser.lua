@@ -1303,10 +1303,29 @@ function M.create()
 
     local prev_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x90")  -- ←
     local next_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x92")  -- →
+    -- Fixed small width for arrow buttons
+    local arrow_w = 24
+    if qt_constants.GEOMETRY then
+        if qt_constants.GEOMETRY.SET_MAX_WIDTH then
+            qt_constants.GEOMETRY.SET_MAX_WIDTH(prev_btn, arrow_w)
+            qt_constants.GEOMETRY.SET_MAX_WIDTH(next_btn, arrow_w)
+        end
+        if qt_constants.GEOMETRY.SET_MIN_WIDTH then
+            qt_constants.GEOMETRY.SET_MIN_WIDTH(prev_btn, arrow_w)
+            qt_constants.GEOMETRY.SET_MIN_WIDTH(next_btn, arrow_w)
+        end
+        if qt_constants.GEOMETRY.SET_SIZE_POLICY then
+            qt_constants.GEOMETRY.SET_SIZE_POLICY(prev_btn, "Fixed", "Fixed")
+            qt_constants.GEOMETRY.SET_SIZE_POLICY(next_btn, "Fixed", "Fixed")
+        end
+    end
     qt_constants.LAYOUT.ADD_WIDGET(find_row, prev_btn)
     qt_constants.LAYOUT.ADD_WIDGET(find_row, next_btn)
 
     local match_label = qt_constants.WIDGET.CREATE_LABEL("0/0")
+    if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
+        qt_constants.GEOMETRY.SET_SIZE_POLICY(match_label, "Fixed", "Fixed")
+    end
     qt_constants.LAYOUT.ADD_WIDGET(find_row, match_label)
 
     local attr_combo = qt_constants.WIDGET.CREATE_COMBOBOX()
@@ -1318,6 +1337,9 @@ function M.create()
     qt_constants.LAYOUT.ADD_WIDGET(find_row, attr_combo)
 
     local all_btn = qt_constants.WIDGET.CREATE_BUTTON("All")
+    if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
+        qt_constants.GEOMETRY.SET_SIZE_POLICY(all_btn, "Fixed", "Fixed")
+    end
     qt_constants.LAYOUT.ADD_WIDGET(find_row, all_btn)
 
     qt_constants.LAYOUT.ADD_LAYOUT(find_bar_layout, find_row)
