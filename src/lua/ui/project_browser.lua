@@ -17,6 +17,7 @@
 -- Project Browser - Media library and bin management
 -- Shows imported media files, allows drag-to-timeline
 -- Mimics DaVinci Resolve Media Pool style
+-- luacheck: globals qt_set_focus qt_line_edit_select_all qt_set_line_edit_text_changed_handler
 local View = require("ui.view")
 local M = View.new("project_browser")
 local db = require("core.database")
@@ -1531,15 +1532,20 @@ function M.create()
         if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
             qt_constants.DISPLAY.SET_VISIBLE(M.find_bar.container, M.find_bar.visible)
         end
-        -- Focus the find field when showing
-        if M.find_bar.visible and qt_constants.CONTROL and qt_constants.CONTROL.SET_FOCUS then
-            qt_constants.CONTROL.SET_FOCUS(M.find_bar.find_edit)
+        -- Focus + select all text when showing
+        if M.find_bar.visible then
+            pcall(qt_set_focus, M.find_bar.find_edit)
+            pcall(qt_line_edit_select_all, M.find_bar.find_edit)
         end
     end
 
     function M.show_find_bar()
         if not M.find_bar then return end
-        if not M.find_bar.visible then
+        if M.find_bar.visible then
+            -- Already visible — just re-focus and select
+            pcall(qt_set_focus, M.find_bar.find_edit)
+            pcall(qt_line_edit_select_all, M.find_bar.find_edit)
+        else
             M.toggle_find_bar()
         end
     end

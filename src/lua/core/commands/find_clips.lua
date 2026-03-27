@@ -84,9 +84,9 @@ function M.register(command_executors, _, _, _)
         log.event("Find: view %s", view.view_id)
 
         if view.view_id == "project_browser" then
-            -- Browser: toggle embedded find bar
+            -- Browser: show embedded find bar, focus + select text
             local pb = require("ui.project_browser")
-            pb.toggle_find_bar()
+            pb.show_find_bar()
             return {success = true}
         end
 
