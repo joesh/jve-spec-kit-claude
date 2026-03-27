@@ -1301,12 +1301,16 @@ function M.create()
     end
     qt_constants.LAYOUT.ADD_WIDGET(find_row, find_edit)
 
+    local arrow_style = "QPushButton { min-width: 20px; max-width: 20px; padding: 1px 2px; }"
     local prev_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x90")  -- ←
+    qt_constants.PROPERTIES.SET_STYLE(prev_btn, arrow_style)
     local next_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x92")  -- →
+    qt_constants.PROPERTIES.SET_STYLE(next_btn, arrow_style)
     qt_constants.LAYOUT.ADD_WIDGET(find_row, prev_btn)
     qt_constants.LAYOUT.ADD_WIDGET(find_row, next_btn)
 
     local match_label = qt_constants.WIDGET.CREATE_LABEL("0/0")
+    qt_constants.PROPERTIES.SET_STYLE(match_label, "QLabel { min-width: 30px; max-width: 50px; }")
     qt_constants.LAYOUT.ADD_WIDGET(find_row, match_label)
 
     local attr_combo = qt_constants.WIDGET.CREATE_COMBOBOX()
@@ -1318,6 +1322,7 @@ function M.create()
     qt_constants.LAYOUT.ADD_WIDGET(find_row, attr_combo)
 
     local all_btn = qt_constants.WIDGET.CREATE_BUTTON("All")
+    qt_constants.PROPERTIES.SET_STYLE(all_btn, "QPushButton { min-width: 28px; max-width: 40px; padding: 1px 4px; }")
     qt_constants.LAYOUT.ADD_WIDGET(find_row, all_btn)
 
     qt_constants.LAYOUT.ADD_LAYOUT(find_bar_layout, find_row)
