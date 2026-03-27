@@ -2487,7 +2487,8 @@ end
 
 function M:select_clips(clip_ids)
     assert(clip_ids, "project_browser:select_clips: clip_ids required")
-    -- Select first clip and navigate to it; multi-select TBD
+    -- TODO: needs C++ SET_TREE_SELECTED_ITEMS binding for multi-select
+    -- For now, navigate to first match
     if #clip_ids > 0 then
         self:navigate_to_clip(clip_ids[1])
     end
