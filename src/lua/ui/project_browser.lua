@@ -2787,10 +2787,26 @@ function M:get_clips()
             }
         end
     end
+    -- Sort clip_data to match the browser's current tree sort order
+    local col_to_field = {
+        [COL_NAME] = "name",
+        [COL_DURATION] = "duration",
+        [COL_FPS] = "fps",
+        [COL_CODEC] = "codec",
+    }
+    local sort_field = col_to_field[sort_state.primary_col] or "name"
+    local sort_asc = sort_state.primary_order ~= "desc"
+    table.sort(clip_data, function(a, b)
+        local va = a[sort_field] or ""
+        local vb = b[sort_field] or ""
+        if type(va) == "string" then va = va:lower() end
+        if type(vb) == "string" then vb = vb:lower() end
+        if sort_asc then return va < vb else return va > vb end
+    end)
+
     if #clip_data > 0 then
         log_pb.detail("project_browser:get_clips first=%s last=%s",
             clip_data[1].name, clip_data[#clip_data].name)
-        -- Log a few names to debug matching
         for i = 1, math.min(5, #clip_data) do
             log_pb.detail("  clip[%d] id=%s name=%s", i, clip_data[i].id, clip_data[i].name)
         end
