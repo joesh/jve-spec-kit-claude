@@ -1310,8 +1310,8 @@ function M.create()
     qt_constants.LAYOUT.ADD_WIDGET(find_row, prev_btn)
     qt_constants.LAYOUT.ADD_WIDGET(find_row, next_btn)
 
-    local match_label = qt_constants.WIDGET.CREATE_LABEL("0/0")
-    qt_constants.PROPERTIES.SET_STYLE(match_label, "QLabel { min-width: 30px; max-width: 50px; }")
+    local match_label = qt_constants.WIDGET.CREATE_LABEL("")
+    qt_constants.PROPERTIES.SET_STYLE(match_label, "QLabel { min-width: 45px; }")
     qt_constants.LAYOUT.ADD_WIDGET(find_row, match_label)
 
     local attr_combo = qt_constants.WIDGET.CREATE_COMBOBOX()
@@ -1412,6 +1412,13 @@ function M.create()
     local function do_browser_prev()
         if not find_state.is_active() then
             if not do_browser_find() then return end
+            -- Go to last match instead of first
+            if find_state.get_match_count() > 0 then
+                find_state.previous()  -- wraps from 1 to last
+                update_match_label()
+                local match = find_state.get_current_match()
+                if match then M:navigate_to_clip(match) end
+            end
             return
         end
         find_state.previous()
@@ -1509,6 +1516,18 @@ function M.create()
         end
     end
     qt_set_line_edit_text_changed_handler(replace_edit, "__browser_find_replace_changed")
+
+    -- Live search: execute find as user types, update match count
+    _G["__browser_find_text_changed"] = function()
+        local value = qt_constants.PROPERTIES.GET_TEXT(find_edit)
+        if not value or value == "" then
+            find_state.clear()
+            qt_constants.PROPERTIES.SET_TEXT(match_label, "")
+            return
+        end
+        do_browser_find()
+    end
+    qt_set_line_edit_text_changed_handler(find_edit, "__browser_find_text_changed")
 
     -- Start hidden
     if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
