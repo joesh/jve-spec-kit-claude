@@ -1385,16 +1385,19 @@ function M.create()
         qt_constants.PROPERTIES.SET_TEXT(match_label, string.format("%d/%d", idx, count))
     end
 
-    local function do_browser_find()
+    local function do_browser_find(navigate)
         local value = qt_constants.PROPERTIES.GET_TEXT(find_edit)
         if not value or value == "" then return false end
         local column = qt_constants.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(attr_combo)
-        find_log.event("browser_find: column=%s value=%s clips=%d", column, value, M.master_clips and #M.master_clips or 0)
+        find_log.event("browser_find: column=%s value=%s clips=%d navigate=%s",
+            column, value, M.master_clips and #M.master_clips or 0, tostring(navigate))
         local clips = M:get_clips()
         find_state.execute(clips, {column = column, operator = "contains", value = value})
         update_match_label()
-        local match = find_state.get_current_match()
-        if match then M:navigate_to_clip(match) end
+        if navigate ~= false then
+            local match = find_state.get_current_match()
+            if match then M:navigate_to_clip(match) end
+        end
         return true
     end
 
@@ -1525,7 +1528,7 @@ function M.create()
             qt_constants.PROPERTIES.SET_TEXT(match_label, "")
             return
         end
-        do_browser_find()
+        do_browser_find(false)  -- count only, don't navigate (keeps focus in field)
     end
     qt_set_line_edit_text_changed_handler(find_edit, "__browser_find_text_changed")
 
