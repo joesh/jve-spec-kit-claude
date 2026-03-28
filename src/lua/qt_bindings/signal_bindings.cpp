@@ -530,6 +530,31 @@ int lua_set_panel_default_button(lua_State* L) {
     return 0;
 }
 
+// Cycle focus within a panel's focusable children (Tab wrapping).
+// Args: container_widget, bool forward
+int lua_cycle_panel_focus(lua_State* L) {
+    QWidget* panel = get_widget<QWidget>(L, 1);
+    bool forward = lua_toboolean(L, 2);
+    if (!panel) return 0;
+
+    QList<QWidget*> focusable;
+    for (auto* child : panel->findChildren<QWidget*>()) {
+        if ((child->focusPolicy() & Qt::TabFocus) && child->isVisible() && child->isEnabled()) {
+            focusable.append(child);
+        }
+    }
+    if (focusable.isEmpty()) return 0;
+
+    QWidget* current = QApplication::focusWidget();
+    int idx = focusable.indexOf(current);
+    if (idx < 0) { focusable.first()->setFocus(); return 0; }
+
+    int next = forward ? (idx + 1) % focusable.size()
+                       : (idx - 1 + focusable.size()) % focusable.size();
+    focusable[next]->setFocus();
+    return 0;
+}
+
 // Panel focus filter: installed on QApplication, catches MouseButtonPress,
 // walks up widget parent chain to find a registered panel container, calls
 // Lua handler with the panel widget. One filter for all panels.

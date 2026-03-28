@@ -1532,9 +1532,7 @@ function M.create()
     end
     qt_set_line_edit_text_changed_handler(find_edit, "__browser_find_text_changed")
 
-    -- Return key in find field = Find Next
-    _G["__browser_find_return"] = do_browser_next
-    qt_set_line_edit_return_pressed_handler(find_edit, "__browser_find_return")
+    -- Return in find field handled by PanelFocusTrap default button (next_btn)
 
     -- Start hidden
     if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
