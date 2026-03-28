@@ -402,6 +402,25 @@ int lua_set_line_edit_editing_finished_handler(lua_State* L) {
     return 0;
 }
 
+int lua_set_line_edit_return_pressed_handler(lua_State* L) {
+    QLineEdit* le = get_widget<QLineEdit>(L, 1);
+    const char* handler_name = luaL_checkstring(L, 2);
+    if (!le || !handler_name) return 0;
+
+    std::string handler_str(handler_name);
+    QObject::connect(le, &QLineEdit::returnPressed, [L, handler_str]() {
+        lua_getglobal(L, handler_str.c_str());
+        if (lua_isfunction(L, -1)) {
+            if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+                handle_lua_callback_error(L);
+            }
+        } else {
+            lua_pop(L, 1);
+        }
+    });
+    return 0;
+}
+
 // Panel focus filter: installed on QApplication, catches MouseButtonPress,
 // walks up widget parent chain to find a registered panel container, calls
 // Lua handler with the panel widget. One filter for all panels.

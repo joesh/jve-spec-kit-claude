@@ -17,7 +17,7 @@
 -- Project Browser - Media library and bin management
 -- Shows imported media files, allows drag-to-timeline
 -- Mimics DaVinci Resolve Media Pool style
--- luacheck: globals qt_set_focus qt_line_edit_select_all qt_set_line_edit_text_changed_handler
+-- luacheck: globals qt_set_focus qt_line_edit_select_all qt_set_line_edit_text_changed_handler qt_set_line_edit_return_pressed_handler
 local View = require("ui.view")
 local M = View.new("project_browser")
 local db = require("core.database")
@@ -1531,6 +1531,10 @@ function M.create()
         do_browser_find(false)  -- count only, don't navigate (keeps focus in field)
     end
     qt_set_line_edit_text_changed_handler(find_edit, "__browser_find_text_changed")
+
+    -- Return key in find field = Find Next
+    _G["__browser_find_return"] = do_browser_next
+    qt_set_line_edit_return_pressed_handler(find_edit, "__browser_find_return")
 
     -- Start hidden
     if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
