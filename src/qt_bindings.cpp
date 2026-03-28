@@ -230,6 +230,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_tree_current_item); lua_setfield(L, -2, "SET_TREE_CURRENT_ITEM");
     lua_pushcfunction(L, lua_set_tree_selected_items); lua_setfield(L, -2, "SET_TREE_SELECTED_ITEMS");
     lua_pushcfunction(L, lua_get_tree_item_at); lua_setfield(L, -2, "GET_TREE_ITEM_AT");
+    lua_pushcfunction(L, lua_get_tree_items_in_order); lua_setfield(L, -2, "GET_TREE_ITEMS_IN_ORDER");
     lua_pushcfunction(L, lua_set_tree_header_click_handler); lua_setfield(L, -2, "SET_TREE_HEADER_CLICK_HANDLER");
     lua_pushcfunction(L, lua_set_tree_expand_collapse_handler); lua_setfield(L, -2, "SET_TREE_EXPAND_COLLAPSE_HANDLER");
     lua_pushcfunction(L, lua_process_events); lua_setfield(L, -2, "PROCESS_EVENTS");

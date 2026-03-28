@@ -2771,14 +2771,15 @@ end
 
 function M:get_clips()
     local log_pb = require("core.logger").for_area("ui.find")
-    log_pb.event("project_browser:get_clips master_clips=%s count=%d",
-        tostring(M.master_clips ~= nil), M.master_clips and #M.master_clips or 0)
-    local clip_data = {}
+
+    -- Build lookup from clip_id → clip_data
+    local clip_by_id = {}
     if M.master_clips then
         for _, clip in ipairs(M.master_clips) do
             local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
-            clip_data[#clip_data + 1] = {
-                id = clip.clip_id or clip.id,
+            local cid = clip.clip_id or clip.id
+            clip_by_id[cid] = {
+                id = cid,
                 name = clip.name or media.name or "",
                 codec = clip.codec or media.codec or "",
                 fps = clip.fps_float or 0,
@@ -2793,30 +2794,30 @@ function M:get_clips()
             }
         end
     end
-    -- Sort clip_data to match the browser's current tree sort order
-    local col_to_field = {
-        [COL_NAME] = "name",
-        [COL_DURATION] = "duration",
-        [COL_FPS] = "fps",
-        [COL_CODEC] = "codec",
-    }
-    local sort_field = col_to_field[sort_state.primary_col] or "name"
-    local sort_asc = sort_state.primary_order ~= "desc"
-    table.sort(clip_data, function(a, b)
-        local va = a[sort_field] or ""
-        local vb = b[sort_field] or ""
-        if type(va) == "string" then va = va:lower() end
-        if type(vb) == "string" then vb = vb:lower() end
-        if sort_asc then return va < vb else return va > vb end
-    end)
 
-    if #clip_data > 0 then
-        log_pb.detail("project_browser:get_clips first=%s last=%s",
-            clip_data[1].name, clip_data[#clip_data].name)
-        for i = 1, math.min(5, #clip_data) do
-            log_pb.detail("  clip[%d] id=%s name=%s", i, clip_data[i].id, clip_data[i].name)
+    -- Get tree visual order and build clip_data in that order
+    local clip_data = {}
+    if M.tree and qt_constants.CONTROL.GET_TREE_ITEMS_IN_ORDER then
+        local tree_ids = qt_constants.CONTROL.GET_TREE_ITEMS_IN_ORDER(M.tree)
+        for _, tid in ipairs(tree_ids) do
+            local info = M.item_lookup and M.item_lookup[tostring(tid)]
+            if info and info.type == "master_clip" and info.clip_id then
+                local cd = clip_by_id[info.clip_id]
+                if cd then
+                    clip_data[#clip_data + 1] = cd
+                end
+            end
         end
     end
+
+    -- Fallback: if no tree or binding missing, return unsorted
+    if #clip_data == 0 then
+        for _, cd in pairs(clip_by_id) do
+            clip_data[#clip_data + 1] = cd
+        end
+    end
+
+    log_pb.event("project_browser:get_clips count=%d", #clip_data)
     return clip_data
 end
 

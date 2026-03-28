@@ -672,6 +672,36 @@ int lua_set_tree_selected_items(lua_State* L) {
     return 1;
 }
 
+// Return all tree item IDs in visual (top-to-bottom) order.
+// Traverses the tree depth-first, matching display order.
+// Args: tree_widget
+// Returns: Lua array of item IDs
+int lua_get_tree_items_in_order(lua_State* L) {
+    QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
+    if (!tree) {
+        lua_newtable(L);
+        return 1;
+    }
+
+    lua_newtable(L);
+    int idx = 1;
+
+    // Recursive depth-first traversal matching visual order
+    std::function<void(QTreeWidgetItem*)> visit = [&](QTreeWidgetItem* item) {
+        lua_pushinteger(L, makeTreeItemId(item));
+        lua_rawseti(L, -2, idx++);
+        for (int i = 0; i < item->childCount(); ++i) {
+            visit(item->child(i));
+        }
+    };
+
+    for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+        visit(tree->topLevelItem(i));
+    }
+
+    return 1;
+}
+
 int lua_get_tree_item_at(lua_State* L) {
     QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
     int x = luaL_checkint(L, 2);
