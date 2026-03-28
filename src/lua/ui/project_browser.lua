@@ -1532,8 +1532,11 @@ function M.create()
     end
     qt_set_line_edit_text_changed_handler(find_edit, "__browser_find_text_changed")
 
-    -- Return key in find field = Find Next
-    _G["__browser_find_return"] = do_browser_next
+    -- Return key in find field = Find Next, then re-focus find field
+    _G["__browser_find_return"] = function()
+        do_browser_next()
+        pcall(qt_set_focus, find_edit)
+    end
     qt_set_line_edit_return_pressed_handler(find_edit, "__browser_find_return")
 
     -- Start hidden
