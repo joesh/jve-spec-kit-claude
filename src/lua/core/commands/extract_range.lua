@@ -102,6 +102,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Phase 2: Ripple — shift clips at/after mark_in left by range_duration
+        -- If phase 2 fails, command_manager's transaction wraps both phases
+        -- and will rollback all mutations (lift + ripple) atomically.
         local ripple_mutations = {}
         for _, track in ipairs(tracks) do
             local ok, err, mutations = clip_mutator.resolve_ripple(db, {
@@ -109,10 +111,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 insert_time = mark_in,
                 shift_amount = -range_duration,
             })
-            if not ok then
-                set_last_error("ExtractRange: ripple failed: " .. tostring(err))
-                return false
-            end
+            assert(ok,
+                "ExtractRange: ripple failed on track " .. tostring(track.id) .. ": " .. tostring(err))
             for _, mut in ipairs(mutations or {}) do
                 table.insert(ripple_mutations, mut)
             end

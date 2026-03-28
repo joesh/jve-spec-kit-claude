@@ -40,6 +40,17 @@
     <item name="Select All" command="SelectAll"/>
     <item name="Deselect All" command="DeselectAll"/>
     <separator/>
+    <separator/>
+    <item name="Find..." command="Find"/>
+    <item name="Find Next" command="FindNext"/>
+    <item name="Find Previous" command="FindPrevious"/>
+    <item name="Find and Replace..." command="FindReplace"/>
+    <separator/>
+    <item name="Sift..." command="Sift"/>
+    <item name="Expand Sift..." command="ExpandSift"/>
+    <item name="Narrow Sift..." command="NarrowSift"/>
+    <item name="Clear Sift" command="ClearSift"/>
+    <separator/>
     <item name="Keyboard Shortcuts..." command="ShowKeyboardCustomization"/>
   </menu>
 
@@ -79,6 +90,7 @@
   <!-- Media Menu -->
   <menu name="Media">
     <item name="New Bin" command="NewBin"/>
+    <item name="New Smart Bin..." command="CreateSmartBin"/>
     <item name="Rename..." command="RenameItem"/>
     <separator/>
     <item name="Relink Media..." command="ShowRelinkDialog"/>
@@ -93,6 +105,7 @@
     <item name="Show Project Browser" command="ShowProjectBrowser" checkable="true"/>
     <item name="Show Timeline" command="ShowTimeline" checkable="true"/>
     <item name="Show Inspector" command="ShowInspector" checkable="true"/>
+    <item name="Timeline Index..." command="ShowTimelineIndex"/>
     <item name="Show Viewer" command="ShowViewer" checkable="true"/>
     <separator/>
     <item name="Toggle Panel Maximize" command="ToggleMaximizePanel"/>

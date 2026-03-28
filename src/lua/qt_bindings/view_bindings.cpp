@@ -623,16 +623,91 @@ int lua_set_tree_item_double_click_handler(lua_State* L) {
 int lua_set_tree_current_item(lua_State* L) {
     QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
     lua_Integer item_id = luaL_checkinteger(L, 2);
-    
+    // Optional 3rd arg: bool preserve_focus (default false)
+    bool preserve_focus = lua_isboolean(L, 3) && lua_toboolean(L, 3);
+
     if (tree) {
         QTreeWidgetItem* item = getTreeItemById(tree, item_id);
         if (item) {
-            tree->setCurrentItem(item);
+            if (preserve_focus) {
+                // Save current focus, set item, restore focus
+                QWidget* prev_focus = QApplication::focusWidget();
+                tree->setCurrentItem(item);
+                if (prev_focus) prev_focus->setFocus();
+            } else {
+                tree->setCurrentItem(item);
+            }
             lua_pushboolean(L, 1);
             return 1;
         }
     }
     lua_pushboolean(L, 0);
+    return 1;
+}
+
+// Select multiple tree items by ID array.
+// Args: tree_widget, {item_id_1, item_id_2, ...}
+// Clears existing selection first, then selects all listed items.
+int lua_set_tree_selected_items(lua_State* L) {
+    QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
+    if (!tree || !lua_istable(L, 2)) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+
+    tree->clearSelection();
+    int count = 0;
+    int n = lua_objlen(L, 2);
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, 2, i);
+        lua_Integer item_id = lua_tointeger(L, -1);
+        lua_pop(L, 1);
+        QTreeWidgetItem* item = getTreeItemById(tree, item_id);
+        if (item) {
+            item->setSelected(true);
+            ++count;
+        }
+    }
+    // Scroll to first selected item
+    if (count > 0) {
+        lua_rawgeti(L, 2, 1);
+        QTreeWidgetItem* first = getTreeItemById(tree, lua_tointeger(L, -1));
+        lua_pop(L, 1);
+        if (first) {
+            tree->scrollToItem(first);
+        }
+    }
+    lua_pushinteger(L, count);
+    return 1;
+}
+
+// Return all tree item IDs in visual (top-to-bottom) order.
+// Traverses the tree depth-first, matching display order.
+// Args: tree_widget
+// Returns: Lua array of item IDs
+int lua_get_tree_items_in_order(lua_State* L) {
+    QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
+    if (!tree) {
+        lua_newtable(L);
+        return 1;
+    }
+
+    lua_newtable(L);
+    int idx = 1;
+
+    // Recursive depth-first traversal matching visual order
+    std::function<void(QTreeWidgetItem*)> visit = [&](QTreeWidgetItem* item) {
+        lua_pushinteger(L, makeTreeItemId(item));
+        lua_rawseti(L, -2, idx++);
+        for (int i = 0; i < item->childCount(); ++i) {
+            visit(item->child(i));
+        }
+    };
+
+    for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+        visit(tree->topLevelItem(i));
+    }
+
     return 1;
 }
 

@@ -18,7 +18,7 @@
 "Cmd+Shift+R" = "ShowRelinkDialog"
 "Cmd+Z" = "Undo"
 "Cmd+Shift+Z" = "Redo"
-"Cmd+G" = "GoToTimecode @timeline"
+"Ctrl+G" = "GoToTimecode @timeline"
 "Cmd+X" = "Cut @timeline"
 "Cmd+C" = "Copy @timeline"
 "Cmd+V" = "Paste @timeline"
@@ -95,7 +95,12 @@
 "Cmd+3" = "SelectPanel timeline"
 "Cmd+4" = "SelectPanel project_browser"
 "Tilde" = "ToggleMaximizePanel"
-"Shift+Cmd+F" = "ToggleFullscreenView"
+"Cmd+Shift+F" = "ToggleFullscreenView"
+
+[Find]
+"Cmd+F" = "Find"
+"Cmd+G" = "FindNext"
+"Cmd+Shift+G" = "FindPrevious"
 
 [Browser]
 "Return" = "ActivateBrowserSelection @project_browser"

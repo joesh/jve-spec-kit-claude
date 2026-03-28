@@ -65,13 +65,13 @@ function M.register(executors, undoers, db)
                 mark_in = mark_in,
                 mark_out = mark_out,
             })
-            if not result.success then
-                log.error("DeleteSelection: %s failed: %s", cmd_name, result.error_message or "unknown")
-            else
-                command_manager.execute("ClearMarks", {
-                    project_id = project_id, sequence_id = sequence_id,
-                })
-            end
+            assert(result.success,
+                string.format("DeleteSelection: %s failed: %s",
+                    cmd_name, result.error_message or "unknown"))
+
+            command_manager.execute("ClearMarks", {
+                project_id = project_id, sequence_id = sequence_id,
+            })
 
             command_manager.end_undo_group()
             return true

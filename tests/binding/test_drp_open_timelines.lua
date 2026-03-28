@@ -87,7 +87,7 @@ print("  PASS: single tab extracted correctly")
 -- Test 4: Full parse_drp_file with real fixture uses SequenceTabsData (not HandleVec)
 -- ===========================================================================
 print("TEST 4: real DRP fixture — open_timeline_ids from SequenceTabsData, not HandleVec")
-local fixture_path = "fixtures/resolve/2026-03-01-anamnesis joe edit.drp"
+local fixture_path = "fixtures/resolve/2026-03-20-anamnesis joe edit.drp"
 local f = io.open(fixture_path, "rb")
 if f then
     f:close()

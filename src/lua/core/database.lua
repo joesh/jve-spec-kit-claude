@@ -2369,4 +2369,36 @@ function M.save_clip_marks(clip_id, mark_in, mark_out, playhead)
         "database.save_clip_marks: UPDATE failed for clip %s", clip_id))
 end
 
+-- ============================================================================
+-- Smart Bins
+-- ============================================================================
+
+function M.load_smart_bins(project_id)
+    assert(project_id and project_id ~= "", "database.load_smart_bins: project_id required")
+    assert(db_connection, "database.load_smart_bins: no active database connection")
+
+    local results = {}
+    local stmt = db_connection:prepare([[
+        SELECT id, project_id, name, scope_bin_id, criteria_json, created_at, modified_at
+        FROM smart_bins WHERE project_id = ? ORDER BY name
+    ]])
+    assert(stmt, "database.load_smart_bins: failed to prepare query")
+    stmt:bind_value(1, project_id)
+    if stmt:exec() then
+        while stmt:next() do
+            results[#results + 1] = {
+                id = stmt:value(0),
+                project_id = stmt:value(1),
+                name = stmt:value(2),
+                scope_bin_id = stmt:value(3),
+                criteria_json = stmt:value(4),
+                created_at = stmt:value(5),
+                modified_at = stmt:value(6),
+            }
+        end
+    end
+    stmt:finalize()
+    return results
+end
+
 return M

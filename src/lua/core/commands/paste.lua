@@ -279,11 +279,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, group_clips in pairs(clips_by_master) do
             if #group_clips >= 2 then
                 local link_id, link_err = clip_link.create_link_group(group_clips, db)
-                if link_id then
-                    table.insert(link_group_ids, link_id)
-                else
-                    log.warn("Paste: failed to create link group: %s", tostring(link_err))
-                end
+                assert(link_id,
+                    "Paste: failed to create link group: " .. tostring(link_err))
+                table.insert(link_group_ids, link_id)
             end
         end
 

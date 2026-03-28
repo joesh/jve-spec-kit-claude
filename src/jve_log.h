@@ -77,6 +77,10 @@ void jve_log_init_ffi(void);
 bool jve_log_enabled_ffi(int area, int level);
 void jve_log_ffi(int area, int level, const char* msg);
 
+// String-based FFI for hierarchical areas (e.g. "ui.find")
+bool jve_log_enabled_str_ffi(const char* area_name, int level);
+void jve_log_str_ffi(const char* area_name, int level, const char* msg);
+
 #ifdef __cplusplus
 }
 #endif

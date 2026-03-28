@@ -105,6 +105,31 @@ local function ensure_playhead_visible()
     return false
 end
 
+--- Explicitly scroll viewport to center on the playhead.
+-- Unlike ensure_playhead_visible (playback-only auto-scroll),
+-- this works when parked. Used by Find navigate_to_clip.
+function M.surface_playhead()
+    local state = data.state
+    local duration = state.viewport_duration
+    if type(duration) ~= "number" or duration <= 0 then return false end
+
+    local playhead = state.playhead_position
+    local start = state.viewport_start_time
+    local end_time = start + duration
+
+    -- Only scroll if playhead is outside viewport
+    if playhead < start or playhead > end_time then
+        local desired_start = playhead - math.floor(duration / 2)
+        local clamped = clamp_viewport_start(desired_start, duration)
+        if state.viewport_start_time ~= clamped then
+            state.viewport_start_time = clamped
+            data.notify_listeners()
+            return true
+        end
+    end
+    return false
+end
+
 function M.get_viewport_start_time()
     return data.state.viewport_start_time
 end

@@ -458,10 +458,13 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
 
     for _, row in ipairs(track_clips) do
         local clip_start = row.timeline_start or row.start_value
+        assert(type(clip_start) == "number",
+            string.format("resolve_occlusions_multi: clip %s missing timeline_start",
+                tostring(row.id)))
         local clip_dur = row.duration
-        if type(clip_start) ~= "number" or type(clip_dur) ~= "number" or clip_dur <= 0 then
-            goto next_clip
-        end
+        assert(type(clip_dur) == "number" and clip_dur > 0,
+            string.format("resolve_occlusions_multi: clip %s invalid duration: %s",
+                tostring(row.id), tostring(clip_dur)))
         local clip_end = clip_start + clip_dur
 
         -- Subtract all spans from [clip_start, clip_end) → surviving fragments
@@ -537,8 +540,6 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
                 table.insert(actions, plan_insert(split_clip))
             end
         end
-
-        ::next_clip::
     end
 
     return true, nil, actions

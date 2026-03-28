@@ -145,6 +145,18 @@ local function handle_key_impl(event)
         return true
     end
 
+    -- Tab/Shift+Tab in non-timeline panels: wrap within panel container
+    if (key == KEY.Tab or key == KEY.Backtab) and not panel_active_timeline then
+        local fm = require("ui.focus_manager")
+        local view = fm.get_view(focused_panel)
+        if view and view.container then
+            log.detail("  → Tab in %s, cycling focus", focused_panel)
+            -- luacheck: globals qt_cycle_panel_focus
+            qt_cycle_panel_focus(view.container, key == KEY.Tab)
+            return true
+        end
+    end
+
     -- Escape: set global cancel flag — drag/modal handlers consume on next event
     if key == KEY.Escape then
         local cancel = require("core.cancel")
@@ -173,6 +185,16 @@ local function handle_key_impl(event)
         end
 
         -- Not consumed here — drag handlers check cancel.consume() on next event
+    end
+
+    -- Return/Enter on a button: let Qt handle it (animateClick via focus trap)
+    -- Don't let registry dispatch intercept Return when a button has focus
+    if (key == KEY.Return or key == KEY.Enter) then
+        local widget_class = event.focus_widget_class or ""
+        if widget_class == "QPushButton" or widget_class == "QToolButton" then
+            log.detail("  → Return on button, deferring to Qt")
+            return false
+        end
     end
 
     -- Text input bypass: let text fields consume ALL keys

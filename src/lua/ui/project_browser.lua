@@ -17,7 +17,9 @@
 -- Project Browser - Media library and bin management
 -- Shows imported media files, allows drag-to-timeline
 -- Mimics DaVinci Resolve Media Pool style
-local M = {}
+-- luacheck: globals qt_set_focus qt_line_edit_select_all qt_set_line_edit_text_changed_handler qt_set_line_edit_return_pressed_handler qt_install_panel_focus_trap qt_set_panel_default_button
+local View = require("ui.view")
+local M = View.new("project_browser")
 local db = require("core.database")
 local tag_service = require("core.tag_service")
 local ui_constants = require("core.ui_constants")
@@ -786,6 +788,21 @@ local function populate_tree()
         add_bin(bin, parent_tree)
     end
 
+    -- Smart Bins (FR-062): add after regular bins with distinct label
+    local smart_bins_list = db.load_smart_bins(project_id)
+    for _, sb in ipairs(smart_bins_list) do
+        local display_name = "🔍 " .. sb.name
+        local tree_id = qt_constants.CONTROL.ADD_TREE_ITEM(M.tree, {display_name, "", "", "", "", ""})
+        store_tree_item(M.tree, tree_id, {
+            type = "smart_bin",
+            id = sb.id,
+            name = sb.name,
+            criteria_json = sb.criteria_json,
+            scope_bin_id = sb.scope_bin_id,
+        })
+        qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, ICONS.bin)
+    end
+
     -- Sequences inside bins
     for _, sequence in ipairs(timeline_sequences) do
         local bin_ids = seq_bin_map[sequence.id]
@@ -865,6 +882,8 @@ local function populate_tree()
         qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, icon)
         clip.tree_id = tree_id
     end
+
+    -- Sift filtering removed — will return as proper browser-only filter UI
 
     -- Master clips: show in each assigned bin (many-to-many)
     for _, clip in ipairs(master_clips) do
@@ -1265,6 +1284,262 @@ function M.create()
         qt_constants.CONTROL.SET_TREE_KEY_HANDLER(tree, key_handler)
     end
 
+    -- ========================================================================
+    -- Find bar (Avid-style, hidden by default, Cmd+F toggles)
+    -- ========================================================================
+    local find_bar_container = qt_constants.WIDGET.CREATE()
+    local find_bar_layout = qt_constants.LAYOUT.CREATE_VBOX()
+    qt_constants.CONTROL.SET_LAYOUT_SPACING(find_bar_layout, 2)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(find_bar_layout, 4, 2, 4, 2)
+
+    -- Row 1: Find: [____×] [←] [→] 3/16  [Any ▼]
+    local find_row = qt_constants.LAYOUT.CREATE_HBOX()
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, qt_constants.WIDGET.CREATE_LABEL("Find:"))
+    local find_edit = qt_constants.WIDGET.CREATE_LINE_EDIT("")
+    qt_constants.PROPERTIES.SET_PLACEHOLDER_TEXT(find_edit, "search")
+    if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
+        qt_constants.GEOMETRY.SET_SIZE_POLICY(find_edit, "Expanding", "Fixed")
+    end
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, find_edit)
+
+    local arrow_style = "QPushButton { min-width: 20px; max-width: 20px; padding: 1px 2px; }"
+    local prev_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x90")  -- ←
+    qt_constants.PROPERTIES.SET_STYLE(prev_btn, arrow_style)
+    local next_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x92")  -- →
+    qt_constants.PROPERTIES.SET_STYLE(next_btn, arrow_style)
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, prev_btn)
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, next_btn)
+
+    local match_label = qt_constants.WIDGET.CREATE_LABEL("")
+    qt_constants.PROPERTIES.SET_STYLE(match_label, "QLabel { min-width: 45px; }")
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, match_label)
+
+    local attr_combo = qt_constants.WIDGET.CREATE_COMBOBOX()
+    local query_engine = require("core.query_engine")
+    qt_constants.PROPERTIES.ADD_COMBOBOX_ITEM(attr_combo, "Any")
+    for _, f in ipairs(query_engine.get_searchable_fields()) do
+        qt_constants.PROPERTIES.ADD_COMBOBOX_ITEM(attr_combo, f.name)
+    end
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, attr_combo)
+
+    local all_btn = qt_constants.WIDGET.CREATE_BUTTON("All")
+    qt_constants.PROPERTIES.SET_STYLE(all_btn, "QPushButton { min-width: 28px; max-width: 40px; padding: 1px 4px; }")
+    qt_constants.LAYOUT.ADD_WIDGET(find_row, all_btn)
+
+    qt_constants.LAYOUT.ADD_LAYOUT(find_bar_layout, find_row)
+
+    -- Row 2: Replace (hidden by default, shown when replace_edit has text)
+    local replace_container = qt_constants.WIDGET.CREATE()
+    local replace_row = qt_constants.LAYOUT.CREATE_HBOX()
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(replace_row, 0, 0, 0, 0)
+    qt_constants.LAYOUT.ADD_WIDGET(replace_row, qt_constants.WIDGET.CREATE_LABEL("Replace:"))
+    local replace_edit = qt_constants.WIDGET.CREATE_LINE_EDIT("")
+    qt_constants.PROPERTIES.SET_PLACEHOLDER_TEXT(replace_edit, "replacement")
+    if qt_constants.GEOMETRY and qt_constants.GEOMETRY.SET_SIZE_POLICY then
+        qt_constants.GEOMETRY.SET_SIZE_POLICY(replace_edit, "Expanding", "Fixed")
+    end
+    qt_constants.LAYOUT.ADD_WIDGET(replace_row, replace_edit)
+
+    local rep_btn = qt_constants.WIDGET.CREATE_BUTTON("Replace")
+    qt_constants.CONTROL.SET_ENABLED(rep_btn, false)
+    qt_constants.LAYOUT.ADD_WIDGET(replace_row, rep_btn)
+
+    local rep_find_btn = qt_constants.WIDGET.CREATE_BUTTON("Replace & Find")
+    qt_constants.CONTROL.SET_ENABLED(rep_find_btn, false)
+    qt_constants.LAYOUT.ADD_WIDGET(replace_row, rep_find_btn)
+
+    local rep_all_btn = qt_constants.WIDGET.CREATE_BUTTON("Replace All")
+    qt_constants.CONTROL.SET_ENABLED(rep_all_btn, false)
+    qt_constants.LAYOUT.ADD_WIDGET(replace_row, rep_all_btn)
+
+    qt_constants.LAYOUT.SET_ON_WIDGET(replace_container, replace_row)
+    -- Hidden by default
+    if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+        qt_constants.DISPLAY.SET_VISIBLE(replace_container, false)
+    end
+    qt_constants.LAYOUT.ADD_WIDGET(find_bar_layout, replace_container)
+
+    qt_constants.LAYOUT.SET_ON_WIDGET(find_bar_container, find_bar_layout)
+
+    -- Store find bar refs
+    M.find_bar = {
+        container = find_bar_container,
+        find_edit = find_edit,
+        replace_edit = replace_edit,
+        replace_container = replace_container,
+        attr_combo = attr_combo,
+        match_label = match_label,
+        rep_btn = rep_btn,
+        rep_find_btn = rep_find_btn,
+        rep_all_btn = rep_all_btn,
+        visible = false,
+    }
+
+    -- Wire find bar handlers
+    local find_state = require("core.find_state")
+    local find_log = require("core.logger").for_area("ui.find")
+
+    local function update_match_label()
+        local count = find_state.get_match_count()
+        local idx = find_state.get_current_index()
+        qt_constants.PROPERTIES.SET_TEXT(match_label, string.format("%d/%d", idx, count))
+    end
+
+    local function do_browser_find(navigate)
+        local value = qt_constants.PROPERTIES.GET_TEXT(find_edit)
+        if not value or value == "" then return false end
+        local column = qt_constants.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(attr_combo)
+        find_log.event("browser_find: column=%s value=%s clips=%d navigate=%s",
+            column, value, M.master_clips and #M.master_clips or 0, tostring(navigate))
+        local clips = M:get_clips()
+        find_state.execute(clips, {column = column, operator = "contains", value = value})
+        update_match_label()
+        if navigate ~= false then
+            local match = find_state.get_current_match()
+            if match then M:navigate_to_clip(match) end
+        end
+        return true
+    end
+
+    local function do_browser_next()
+        if not find_state.is_active() then
+            if not do_browser_find() then return end
+            return
+        end
+        find_state.next()
+        update_match_label()
+        local match = find_state.get_current_match()
+        if match then M:navigate_to_clip(match) end
+    end
+
+    local function do_browser_prev()
+        if not find_state.is_active() then
+            if not do_browser_find() then return end
+            -- Go to last match instead of first
+            if find_state.get_match_count() > 0 then
+                find_state.previous()  -- wraps from 1 to last
+                update_match_label()
+                local match = find_state.get_current_match()
+                if match then M:navigate_to_clip(match) end
+            end
+            return
+        end
+        find_state.previous()
+        update_match_label()
+        local match = find_state.get_current_match()
+        if match then M:navigate_to_clip(match) end
+    end
+
+    local function do_browser_select_all()
+        if not find_state.is_active() then
+            if not do_browser_find() then return end
+        end
+        local ids = find_state.get_matches()
+        find_log.event("browser_select_all: %d matches", #ids)
+        if #ids > 0 then M:select_clips(ids) end
+        update_match_label()
+    end
+
+    local function has_replace()
+        local text = qt_constants.PROPERTIES.GET_TEXT(replace_edit)
+        return text and text ~= ""
+    end
+
+    local function do_browser_replace()
+        if not has_replace() or not find_state.is_active() then return end
+        local current = find_state.get_current_match()
+        if not current then return end
+        local cm = require("core.command_manager")
+        cm.execute("ReplaceClipProperty", {
+            clip_id = current,
+            column = qt_constants.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(attr_combo),
+            find_value = qt_constants.PROPERTIES.GET_TEXT(find_edit),
+            replace_value = qt_constants.PROPERTIES.GET_TEXT(replace_edit),
+            project_id = M.project_id,
+        })
+    end
+
+    local function do_browser_replace_and_find()
+        do_browser_replace()
+        do_browser_next()
+    end
+
+    local function do_browser_replace_all()
+        if not has_replace() then return end
+        if not find_state.is_active() then
+            if not do_browser_find() then return end
+        end
+        local ids = find_state.get_matches()
+        if #ids == 0 then return end
+        local cm = require("core.command_manager")
+        cm.execute("ReplaceAllClipProperties", {
+            clip_ids = ids,
+            column = qt_constants.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(attr_combo),
+            find_value = qt_constants.PROPERTIES.GET_TEXT(find_edit),
+            replace_value = qt_constants.PROPERTIES.GET_TEXT(replace_edit),
+            project_id = M.project_id,
+        })
+        update_match_label()
+    end
+
+    -- Button handlers
+    local next_h = "__browser_find_next"
+    _G[next_h] = do_browser_next
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(next_btn, next_h)
+
+    local prev_h = "__browser_find_prev"
+    _G[prev_h] = do_browser_prev
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(prev_btn, prev_h)
+
+    local all_h = "__browser_find_all"
+    _G[all_h] = do_browser_select_all
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(all_btn, all_h)
+
+    local rep_h = "__browser_find_rep"
+    _G[rep_h] = do_browser_replace
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(rep_btn, rep_h)
+
+    local repf_h = "__browser_find_rep_find"
+    _G[repf_h] = do_browser_replace_and_find
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(rep_find_btn, repf_h)
+
+    local repa_h = "__browser_find_rep_all"
+    _G[repa_h] = do_browser_replace_all
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(rep_all_btn, repa_h)
+
+    -- Monitor replace field for enable/disable
+    _G["__browser_find_replace_changed"] = function()
+        local has_text = has_replace()
+        qt_constants.CONTROL.SET_ENABLED(rep_btn, has_text)
+        qt_constants.CONTROL.SET_ENABLED(rep_find_btn, has_text)
+        qt_constants.CONTROL.SET_ENABLED(rep_all_btn, has_text)
+        -- Show/hide replace row based on content
+        if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+            qt_constants.DISPLAY.SET_VISIBLE(replace_container, has_text)
+        end
+    end
+    qt_set_line_edit_text_changed_handler(replace_edit, "__browser_find_replace_changed")
+
+    -- Live search: execute find as user types, update match count
+    _G["__browser_find_text_changed"] = function()
+        local value = qt_constants.PROPERTIES.GET_TEXT(find_edit)
+        if not value or value == "" then
+            find_state.clear()
+            qt_constants.PROPERTIES.SET_TEXT(match_label, "")
+            return
+        end
+        do_browser_find(false)  -- count only, don't navigate (keeps focus in field)
+    end
+    qt_set_line_edit_text_changed_handler(find_edit, "__browser_find_text_changed")
+
+    -- Return in find field handled by PanelFocusTrap default button (next_btn)
+
+    -- Start hidden
+    if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+        qt_constants.DISPLAY.SET_VISIBLE(find_bar_container, false)
+    end
+
+    qt_constants.LAYOUT.ADD_WIDGET(layout, find_bar_container)
     qt_constants.LAYOUT.ADD_WIDGET(layout, tree)
 
     -- Set layout on container
@@ -1273,6 +1548,41 @@ function M.create()
     -- Store references for later access
     M.tree = tree
     M.container = container
+
+    -- Install panel focus trap: Tab wraps within panel, Return activates default button
+    qt_install_panel_focus_trap(container, next_btn)  -- next_btn is default for Return
+
+    --- Toggle find bar visibility (called by Find command)
+    function M.toggle_find_bar()
+        if not M.find_bar then return end
+        M.find_bar.visible = not M.find_bar.visible
+        if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+            qt_constants.DISPLAY.SET_VISIBLE(M.find_bar.container, M.find_bar.visible)
+        end
+        -- Focus + select all text when showing
+        if M.find_bar.visible then
+            pcall(qt_set_focus, M.find_bar.find_edit)
+            pcall(qt_line_edit_select_all, M.find_bar.find_edit)
+        end
+    end
+
+    function M.show_find_bar()
+        if not M.find_bar then return end
+        if M.find_bar.visible then
+            -- Already visible — just re-focus and select
+            pcall(qt_set_focus, M.find_bar.find_edit)
+            pcall(qt_line_edit_select_all, M.find_bar.find_edit)
+        else
+            M.toggle_find_bar()
+        end
+    end
+
+    function M.hide_find_bar()
+        if not M.find_bar then return end
+        if M.find_bar.visible then
+            M.toggle_find_bar()
+        end
+    end
 
     local media_count = M.master_clips and #M.master_clips or 0
     local sequence_count = 0
@@ -2454,5 +2764,90 @@ Signals.connect("media_changed", function(_changed_media_ids)
     if not M.tree then return end
     M.refresh()
 end)
+
+-- ============================================================================
+-- View interface
+-- ============================================================================
+
+function M:navigate_to_clip(clip_id)
+    assert(clip_id, "project_browser:navigate_to_clip: clip_id required")
+    local clip = M.master_clip_map and M.master_clip_map[clip_id]
+    if clip and clip.tree_id and M.tree then
+        -- Pass true for no_focus: select + scroll without stealing keyboard focus
+        -- (keeps focus in find bar when navigating via Return or arrow buttons)
+        qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(M.tree, clip.tree_id, true)
+    end
+end
+
+function M:select_clips(clip_ids)
+    assert(clip_ids, "project_browser:select_clips: clip_ids required")
+    if not M.tree or #clip_ids == 0 then return end
+    -- Build array of tree_ids from clip_ids
+    local tree_ids = {}
+    for _, cid in ipairs(clip_ids) do
+        local clip = M.master_clip_map and M.master_clip_map[cid]
+        if clip and clip.tree_id then
+            tree_ids[#tree_ids + 1] = clip.tree_id
+        end
+    end
+    if #tree_ids > 0 and qt_constants.CONTROL.SET_TREE_SELECTED_ITEMS then
+        qt_constants.CONTROL.SET_TREE_SELECTED_ITEMS(M.tree, tree_ids)
+    elseif #tree_ids > 0 then
+        -- Fallback: select first only
+        qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(M.tree, tree_ids[1])
+    end
+end
+
+function M:get_clips()
+    local log_pb = require("core.logger").for_area("ui.find")
+
+    -- Build lookup from clip_id → clip_data
+    local clip_by_id = {}
+    if M.master_clips then
+        for _, clip in ipairs(M.master_clips) do
+            local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
+            local cid = clip.clip_id or clip.id
+            clip_by_id[cid] = {
+                id = cid,
+                name = clip.name or media.name or "",
+                codec = clip.codec or media.codec or "",
+                fps = clip.fps_float or 0,
+                duration = clip.duration or 0,
+                enabled = clip.enabled ~= false,
+                volume = clip.volume or 1.0,
+                width = clip.width or media.width or 0,
+                height = clip.height or media.height or 0,
+                audio_channels = media.audio_channels or 0,
+                audio_sample_rate = media.audio_sample_rate or 0,
+                properties = {},
+            }
+        end
+    end
+
+    -- Get tree visual order and build clip_data in that order
+    local clip_data = {}
+    if M.tree and qt_constants.CONTROL.GET_TREE_ITEMS_IN_ORDER then
+        local tree_ids = qt_constants.CONTROL.GET_TREE_ITEMS_IN_ORDER(M.tree)
+        for _, tid in ipairs(tree_ids) do
+            local info = M.item_lookup and M.item_lookup[tostring(tid)]
+            if info and info.type == "master_clip" and info.clip_id then
+                local cd = clip_by_id[info.clip_id]
+                if cd then
+                    clip_data[#clip_data + 1] = cd
+                end
+            end
+        end
+    end
+
+    -- Fallback: if no tree or binding missing, return unsorted
+    if #clip_data == 0 then
+        for _, cd in pairs(clip_by_id) do
+            clip_data[#clip_data + 1] = cd
+        end
+    end
+
+    log_pb.event("project_browser:get_clips count=%d", #clip_data)
+    return clip_data
+end
 
 return M

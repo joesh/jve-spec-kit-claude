@@ -70,9 +70,15 @@ local function copy_mark_range()
     -- Sequence rate for timeline→source unit conversion
     local seq_fps_num = timeline_state.get_sequence_fps_numerator()
     local seq_fps_den = timeline_state.get_sequence_fps_denominator()
+    assert(type(seq_fps_num) == "number" and seq_fps_num > 0,
+        "copy_mark_range: sequence fps_numerator missing or invalid: " .. tostring(seq_fps_num))
+    assert(type(seq_fps_den) == "number" and seq_fps_den > 0,
+        "copy_mark_range: sequence fps_denominator missing or invalid: " .. tostring(seq_fps_den))
     local seq_rate = seq_fps_num / seq_fps_den
 
-    local all_clips = timeline_state.get_clips and timeline_state.get_clips() or {}
+    assert(timeline_state.get_clips,
+        "copy_mark_range: timeline_state.get_clips not available")
+    local all_clips = timeline_state.get_clips()
     local clip_payloads = {}
 
     for _, clip in ipairs(all_clips) do

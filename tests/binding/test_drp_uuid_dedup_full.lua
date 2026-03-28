@@ -9,7 +9,7 @@ local database = require("core.database")
 
 local test_env = require("test_env")
 local fixture_path = test_env.resolve_repo_path(
-    "tests/fixtures/resolve/2026-03-01-anamnesis joe edit.drp")
+    "tests/fixtures/resolve/2026-03-20-anamnesis joe edit.drp")
 
 local JVP_PATH = "/tmp/jve/test_drp_uuid_dedup.jvp"
 os.remove(JVP_PATH)
