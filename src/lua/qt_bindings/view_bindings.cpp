@@ -623,11 +623,20 @@ int lua_set_tree_item_double_click_handler(lua_State* L) {
 int lua_set_tree_current_item(lua_State* L) {
     QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
     lua_Integer item_id = luaL_checkinteger(L, 2);
-    
+    // Optional 3rd arg: bool no_focus (default false)
+    bool no_focus = lua_isboolean(L, 3) && lua_toboolean(L, 3);
+
     if (tree) {
         QTreeWidgetItem* item = getTreeItemById(tree, item_id);
         if (item) {
-            tree->setCurrentItem(item);
+            if (no_focus) {
+                // Select + scroll without stealing keyboard focus
+                tree->clearSelection();
+                item->setSelected(true);
+                tree->scrollToItem(item);
+            } else {
+                tree->setCurrentItem(item);
+            }
             lua_pushboolean(L, 1);
             return 1;
         }

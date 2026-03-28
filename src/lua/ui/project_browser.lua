@@ -1532,11 +1532,8 @@ function M.create()
     end
     qt_set_line_edit_text_changed_handler(find_edit, "__browser_find_text_changed")
 
-    -- Return key in find field = Find Next, then re-focus find field
-    _G["__browser_find_return"] = function()
-        do_browser_next()
-        pcall(qt_set_focus, find_edit)
-    end
+    -- Return key in find field = Find Next
+    _G["__browser_find_return"] = do_browser_next
     qt_set_line_edit_return_pressed_handler(find_edit, "__browser_find_return")
 
     -- Start hidden
@@ -2775,7 +2772,9 @@ function M:navigate_to_clip(clip_id)
     assert(clip_id, "project_browser:navigate_to_clip: clip_id required")
     local clip = M.master_clip_map and M.master_clip_map[clip_id]
     if clip and clip.tree_id and M.tree then
-        qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(M.tree, clip.tree_id)
+        -- Pass true for no_focus: select + scroll without stealing keyboard focus
+        -- (keeps focus in find bar when navigating via Return or arrow buttons)
+        qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(M.tree, clip.tree_id, true)
     end
 end
 
