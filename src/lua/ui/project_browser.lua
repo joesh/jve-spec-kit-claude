@@ -17,7 +17,7 @@
 -- Project Browser - Media library and bin management
 -- Shows imported media files, allows drag-to-timeline
 -- Mimics DaVinci Resolve Media Pool style
--- luacheck: globals qt_set_focus qt_line_edit_select_all qt_set_line_edit_text_changed_handler qt_set_line_edit_return_pressed_handler
+-- luacheck: globals qt_set_focus qt_line_edit_select_all qt_set_line_edit_text_changed_handler qt_set_line_edit_return_pressed_handler qt_install_panel_focus_trap qt_set_panel_default_button
 local View = require("ui.view")
 local M = View.new("project_browser")
 local db = require("core.database")
@@ -1550,6 +1550,9 @@ function M.create()
     -- Store references for later access
     M.tree = tree
     M.container = container
+
+    -- Install panel focus trap: Tab wraps within panel, Return activates default button
+    qt_install_panel_focus_trap(container, next_btn)  -- next_btn is default for Return
 
     --- Toggle find bar visibility (called by Find command)
     function M.toggle_find_bar()

@@ -12,7 +12,10 @@
 #include <QSplitterHandle>
 #include <QTimer>
 #include <QApplication> // For QApplication::focusWidget()
-#include <QMetaObject> // For metaObject()->className()
+#include <QComboBox>    // For PanelFocusTrap Return on combo
+#include <QMap>         // For g_panel_traps
+#include <QMetaObject>  // For metaObject()->className()
+#include <QPushButton>  // For PanelFocusTrap (qobject_cast)
 
 // Helper to determine if a widget accepts text input
 static bool widget_accepts_text_input(QWidget* widget)
@@ -418,6 +421,112 @@ int lua_set_line_edit_return_pressed_handler(lua_State* L) {
             lua_pop(L, 1);
         }
     });
+    return 0;
+}
+
+// ============================================================================
+// Panel focus trap: Tab wraps within a panel, Return activates focused button.
+// Installed on a panel's container widget via qt_install_panel_focus_trap().
+// ============================================================================
+class PanelFocusTrap : public QObject {
+public:
+    explicit PanelFocusTrap(QWidget* panel) : QObject(panel), m_panel(panel) {
+        panel->installEventFilter(this);
+    }
+
+    void setDefaultButton(QAbstractButton* btn) { m_defaultButton = btn; }
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override {
+        if (event->type() != QEvent::KeyPress) return false;
+
+        auto* ke = static_cast<QKeyEvent*>(event);
+        int key = ke->key();
+
+        // Return/Enter: activate focused control or default button
+        if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+            QWidget* focused = QApplication::focusWidget();
+            // Focused button: activate it directly
+            if (auto* btn = qobject_cast<QAbstractButton*>(focused)) {
+                btn->animateClick();
+                return true;
+            }
+            // QComboBox: show popup
+            if (auto* combo = qobject_cast<QComboBox*>(focused)) {
+                combo->showPopup();
+                return true;
+            }
+            // QLineEdit or anything else: activate default button
+            if (m_defaultButton && m_defaultButton->isVisible() && m_defaultButton->isEnabled()) {
+                m_defaultButton->animateClick();
+                return true;
+            }
+            return false;
+        }
+
+        // Tab/Shift+Tab: wrap focus within this panel
+        if (key == Qt::Key_Tab || key == Qt::Key_Backtab) {
+            bool forward = (key == Qt::Key_Tab);
+            QList<QWidget*> focusable;
+            for (auto* child : m_panel->findChildren<QWidget*>()) {
+                if ((child->focusPolicy() & Qt::TabFocus) && child->isVisible() && child->isEnabled()) {
+                    focusable.append(child);
+                }
+            }
+            if (focusable.isEmpty()) return false;
+
+            QWidget* current = QApplication::focusWidget();
+            int idx = focusable.indexOf(current);
+            if (idx < 0) { focusable.first()->setFocus(); return true; }
+
+            int next = forward ? (idx + 1) % focusable.size()
+                               : (idx - 1 + focusable.size()) % focusable.size();
+            focusable[next]->setFocus();
+            return true;
+        }
+
+        return false;
+    }
+
+private:
+    QWidget* m_panel;
+    QAbstractButton* m_defaultButton = nullptr;
+};
+
+// Install panel focus trap on a container widget.
+// Args: container_widget, [optional] default_button
+// Returns the trap as light userdata so set_panel_default_button can find it.
+static QMap<QWidget*, PanelFocusTrap*> g_panel_traps;
+
+int lua_install_panel_focus_trap(lua_State* L) {
+    QWidget* widget = get_widget<QWidget>(L, 1);
+    if (widget) {
+        auto* trap = new PanelFocusTrap(widget);
+        g_panel_traps[widget] = trap;
+        // Optional 2nd arg: default button
+        if (lua_gettop(L) >= 2) {
+            QWidget* btn_widget = get_widget<QWidget>(L, 2);
+            if (auto* btn = qobject_cast<QAbstractButton*>(btn_widget)) {
+                trap->setDefaultButton(btn);
+            }
+        }
+    }
+    return 0;
+}
+
+// Set/change the default button for a panel's focus trap.
+// Args: container_widget, button_widget
+int lua_set_panel_default_button(lua_State* L) {
+    QWidget* widget = get_widget<QWidget>(L, 1);
+    QWidget* btn_widget = get_widget<QWidget>(L, 2);
+    if (widget && btn_widget) {
+        auto it = g_panel_traps.find(widget);
+        if (it != g_panel_traps.end()) {
+            if (auto* btn = qobject_cast<QAbstractButton*>(btn_widget)) {
+                it.value()->setDefaultButton(btn);
+            }
+        }
+    }
     return 0;
 }
 
