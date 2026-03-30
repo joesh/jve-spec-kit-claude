@@ -7,6 +7,14 @@
 
 ---
 
+## Clarifications
+
+### Session 2026-03-29
+- Q: Should Lua dispatch be removed or kept as command executor? → A: Keep Lua dispatch as command executor. QShortcut handles context/key resolution, fires signal into Lua, Lua calls command_manager.execute().
+- Q: How do single-key shortcuts (J/K/L/Space/I/O) coexist with text input? → A: Use WindowShortcut for all shortcuts. Qt natively suppresses shortcuts when QLineEdit has focus (QLineEdit claims ShortcutOverride for alphanumeric/space/etc). No special text-input bypass needed.
+
+---
+
 ## User Scenarios & Testing
 
 ### Primary User Story
@@ -39,14 +47,15 @@ A developer or editor using JVE expects standard desktop keyboard behavior: Tab 
 14. **Given** fullscreen view is active, **When** Escape is pressed, **Then** fullscreen exits (highest priority, global).
 15. **Given** the find bar is visible, **When** Escape is pressed, **Then** the find bar hides.
 16. **Given** a drag operation is in progress, **When** Escape is pressed, **Then** the drag cancels.
+17. **Given** a QLineEdit has focus, **When** Escape is pressed, **Then** it restores the text field to its pre-editing state.
 
 #### Backward Compatibility
-17. **Given** the existing `default.jvekeys` TOML file, **When** the app starts, **Then** all existing shortcuts work identically to before the refactor.
-18. **Given** a user has customized keybindings, **When** upgrading, **Then** their customizations are preserved.
+18. **Given** the existing `default.jvekeys` TOML file, **When** the app starts, **Then** all existing shortcuts work identically to before the refactor.
+19. **Given** a user has customized keybindings, **When** upgrading, **Then** their customizations are preserved.
 
 ### Edge Cases
 - Multiple panels claim the same key (e.g., Return) — the panel with focus wins.
-- Key pressed while no panel has focus — global shortcuts still fire.
+- Key pressed while no panel has focus — global shortcuts still fire. This isn’t possible as there’s an invariant that some panel ALWAYS has focus.
 - Modifier-only keys (Shift, Cmd, etc.) — ignored as before.
 - Auto-repeat keys (held down) — existing behavior preserved for arrow nudge, playback shuttle.
 - Text input in timeline timecode entry — existing Tab/Return/Escape behavior preserved.
@@ -76,12 +85,12 @@ A developer or editor using JVE expects standard desktop keyboard behavior: Tab 
 - **FR-023**: Return on a focused QComboBox MUST open the dropdown.
 
 #### Text Input Protection
-- **FR-030**: When a text input widget has focus, modifier-key shortcuts (Cmd+A, Cmd+C, Cmd+V, Cmd+Z, Cmd+X) MUST go to the text widget, not to global commands.
-- **FR-031**: Alphanumeric keys MUST always go to the focused text widget, never to command dispatch.
+- **FR-030**: Text input protection MUST be handled by Qt's native ShortcutOverride mechanism — QLineEdit claims alphanumeric, space, arrow, and modifier-editing keys (Cmd+A/C/V/Z/X, Ctrl+A/E) via ShortcutOverride, suppressing matching QShortcuts automatically.
+- **FR-031**: No custom text-input bypass logic is needed. The existing `focus_is_text_input` check in the Lua dispatch MUST be removed.
 
 #### Minimal Global Filter
 - **FR-040**: The application-level event filter MUST be reduced to handle ONLY truly global concerns: Escape for fullscreen exit and drag cancel.
-- **FR-041**: All other key dispatch MUST go through Qt's `QShortcut` system.
+- **FR-041**: All other key dispatch MUST go through Qt's `QShortcut` system. QShortcut activated signals call into Lua, which executes commands via command_manager.
 
 #### TOML Compatibility
 - **FR-050**: The `default.jvekeys` TOML format MUST be preserved with no user-facing changes.
