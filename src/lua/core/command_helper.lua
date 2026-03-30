@@ -385,6 +385,10 @@ function M.restore_clip_state(state)
 
             enabled = state.enabled ~= false,
             offline = state.offline,
+            volume = state.volume,
+            mark_in = state.mark_in,
+            mark_out = state.mark_out,
+            playhead_frame = state.playhead,
         })
         clip:restore_without_occlusion(nil)
     else
@@ -395,6 +399,10 @@ function M.restore_clip_state(state)
         clip.source_in = state.source_in
         clip.source_out = state.source_out
         clip.enabled = state.enabled ~= false
+        if state.volume ~= nil then clip.volume = state.volume end
+        if state.mark_in ~= nil then clip.mark_in = state.mark_in end
+        if state.mark_out ~= nil then clip.mark_out = state.mark_out end
+        if state.playhead ~= nil then clip.playhead = state.playhead end
         clip:restore_without_occlusion(nil)
     end
     
@@ -430,6 +438,25 @@ function M.capture_clip_state(clip)
     -- Timestamps needed for restore operations (may be nil if not set)
     if clip.created_at then state.created_at = clip.created_at end
     if clip.modified_at then state.modified_at = clip.modified_at end
+    -- Per-clip metadata: volume, source viewer marks/playhead.
+    -- load_clips() omits these for performance; fetch from Clip model if missing.
+    local volume = clip.volume
+    local mark_in = clip.mark_in
+    local mark_out = clip.mark_out
+    local playhead = clip.playhead or clip.playhead_frame
+    if volume == nil and clip.id then
+        local full_clip = Clip.load_optional(clip.id)
+        if full_clip then
+            volume = full_clip.volume
+            mark_in = full_clip.mark_in
+            mark_out = full_clip.mark_out
+            playhead = full_clip.playhead_frame
+        end
+    end
+    if volume ~= nil then state.volume = volume end
+    if mark_in ~= nil then state.mark_in = mark_in end
+    if mark_out ~= nil then state.mark_out = mark_out end
+    if playhead ~= nil then state.playhead = playhead end
     return state
 end
 

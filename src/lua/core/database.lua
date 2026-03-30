@@ -266,9 +266,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
     end
 
     local clip_id = query:value(0)
-    local raw_project_id = query:value(1)
-    local sequence_project_id = query:value(2)
-    local clip_project_id = raw_project_id or sequence_project_id
+    local clip_project_id = query:value(1)
     if not clip_project_id then
         error(string.format(
             "FATAL: load_clips: clip %s missing project_id (sequence %s)",
@@ -277,8 +275,8 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         ))
     end
 
-    local track_sequence_id = query:value(17)
-    local owner_sequence_id = query:value(8) or track_sequence_id
+    local track_sequence_id = query:value(16)
+    local owner_sequence_id = query:value(7) or track_sequence_id
     if not owner_sequence_id then
         error(string.format(
             "FATAL: load_clips: clip %s missing owner_sequence_id",
@@ -286,9 +284,9 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         ))
     end
 
-    local media_name = query:value(18)
-    local media_path = query:value(19)
-    local media_id = query:value(6)
+    local media_name = query:value(17)
+    local media_path = query:value(18)
+    local media_id = query:value(5)
     if media_id and media_id ~= "" then
         local has_name = media_name and media_name ~= ""
         local has_path = media_path and media_path ~= ""
@@ -301,12 +299,12 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         end
     end
 
-    local clip_fps_num = query:value(15)
-    local clip_fps_den = query:value(16)
+    local clip_fps_num = query:value(14)
+    local clip_fps_den = query:value(15)
 
     -- load_clips/load_clip_entry SELECT appends sequence fps metadata.
-    local sequence_fps_num = query:value(22)
-    local sequence_fps_den = query:value(23)
+    local sequence_fps_num = query:value(21)
+    local sequence_fps_den = query:value(22)
     if not sequence_fps_num or not sequence_fps_den then
         error(string.format(
             "FATAL: load_clips: missing sequence fps for clip %s (sequence %s)",
@@ -328,27 +326,27 @@ local function build_clip_from_query_row(query, requested_sequence_id)
 	    local clip = {
 	        id = clip_id,
 	        project_id = clip_project_id,
-	        clip_kind = query:value(3),
-	        name = query:value(4),
-	        track_id = query:value(5),
+	        clip_kind = query:value(2),
+	        name = query:value(3),
+	        track_id = query:value(4),
 	        media_id = media_id,
-	        created_at = query:value(20),
-	        modified_at = query:value(21),
-	        master_clip_id = query:value(7),
+	        created_at = query:value(19),
+	        modified_at = query:value(20),
+	        master_clip_id = query:value(6),
 	        owner_sequence_id = owner_sequence_id,
 	        track_sequence_id = track_sequence_id,
         
                         -- Integer frame coordinates (required - corrupt DB if missing)
 
                         -- Timeline positions are in the owning sequence timebase.
-                        timeline_start = assert(query:value(9), string.format("load_clips: clip %s missing timeline_start", clip_id)),
+                        timeline_start = assert(query:value(8), string.format("load_clips: clip %s missing timeline_start", clip_id)),
 
-                        duration = assert(query:value(10), string.format("load_clips: clip %s missing duration", clip_id)),
+                        duration = assert(query:value(9), string.format("load_clips: clip %s missing duration", clip_id)),
 
                         -- Source bounds are in the clip timebase (media/source rate).
-                        source_in = assert(query:value(11), string.format("load_clips: clip %s missing source_in", clip_id)),
+                        source_in = assert(query:value(10), string.format("load_clips: clip %s missing source_in", clip_id)),
 
-                        source_out = assert(query:value(12), string.format("load_clips: clip %s missing source_out", clip_id)),
+                        source_out = assert(query:value(11), string.format("load_clips: clip %s missing source_out", clip_id)),
         
                         
         
@@ -359,7 +357,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         
                         
         
-                        enabled = query:value(13) == 1,
+                        enabled = query:value(12) == 1,
 
                         offline = false,  -- transient: recomputed by media_status
 
@@ -862,7 +860,7 @@ function M.load_clips(sequence_id)
     end
 
 	    local query = db_connection:prepare([[
-	        SELECT c.id, c.project_id, s.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
+	        SELECT c.id, c.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
 	               c.master_clip_id, c.owner_sequence_id,
 	               c.timeline_start_frame, c.duration_frames,
 	               c.source_in_frame, c.source_out_frame,
@@ -912,7 +910,7 @@ function M.load_clip_entry(clip_id)
     end
 
 	    local query = db_connection:prepare([[
-	        SELECT c.id, c.project_id, s.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
+	        SELECT c.id, c.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
 	               c.master_clip_id, c.owner_sequence_id,
 	               c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
 	               c.enabled, c.offline, c.fps_numerator, c.fps_denominator,
@@ -935,7 +933,7 @@ function M.load_clip_entry(clip_id)
 
     local clip = nil
     if query:exec() and query:next() then
-        clip = build_clip_from_query_row(query, query:value(17))
+        clip = build_clip_from_query_row(query, query:value(16))
     end
 
     query:finalize()
@@ -993,44 +991,8 @@ end
 -- Use command system instead: Command.create("AddClip", ...)
 
 -- Update clip position - PRESERVED (has real SQL implementation)
-function M.update_clip_position(clip_id, start_value, duration_value)
-    if not clip_id then
-        error("FATAL: update_clip_position() requires clip_id parameter")
-    end
-    if not start_value then
-        error("FATAL: update_clip_position() requires start_time parameter")
-    end
-    if not duration_value then
-        error("FATAL: update_clip_position() requires duration parameter")
-    end
-
-    if not db_connection then
-        error("FATAL: No database connection - cannot update clip position")
-    end
-
-    local query = db_connection:prepare([[
-        UPDATE clips
-        SET start_value = ?, duration_value = ?, modified_at = strftime('%s','now')
-        WHERE id = ?
-    ]])
-
-    if not query then
-        error("FATAL: Failed to prepare UPDATE query for clip position")
-    end
-
-    query:bind_value(1, start_value)
-    query:bind_value(2, duration_value)
-    query:bind_value(3, clip_id)
-
-    local success = query:exec()
-    if not success then
-        error(string.format("FATAL: Failed to update clip position for clip %s", clip_id))
-    end
-
-    return true
-end
-
--- REMOVED: update_clip_property() - Stub that returned false success
+-- REMOVED: update_clip_position() — dead code, referenced non-existent columns (start_value, duration_value)
+-- REMOVED: update_clip_property() — stub that returned false success
 -- Use command system instead: Command.create("SetClipProperty", ...)
 
 -- REMOVED: delete_clip() - Stub that returned false success

@@ -124,7 +124,8 @@ function Sequence.load(id)
                        playhead_frame, view_start_frame,
                        view_duration_frames, mark_in_frame, mark_out_frame, audio_rate,
                        selected_clip_ids, selected_edge_infos, start_timecode_frame,
-                       video_scroll_offset, audio_scroll_offset, video_audio_split_ratio
+                       video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
+                       selected_gap_infos, created_at, modified_at
                 FROM sequences WHERE id = ?
             ]])
     
@@ -179,13 +180,16 @@ function Sequence.load(id)
                 video_audio_split_ratio = assert(stmt:value(19) ~= nil and stmt:value(19),
                     "Sequence.load: video_audio_split_ratio is NULL"),
 
-                created_at = os.time(),
-                modified_at = os.time()
+                created_at = stmt:value(21) or os.time(),
+                modified_at = stmt:value(22) or os.time()
             }
 
             -- Optional Marks (integer frames or nil)
             sequence.mark_in = stmt:value(11)
             sequence.mark_out = stmt:value(12)
+
+            -- Optional gap selection (JSON string or nil)
+            sequence.selected_gap_infos_json = stmt:value(20)
     stmt:finalize()
     return setmetatable(sequence, Sequence)
 end
@@ -224,9 +228,9 @@ function Sequence:save()
          playhead_frame, view_start_frame, view_duration_frames,
          video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
          mark_in_frame, mark_out_frame, audio_rate,
-         selected_clip_ids, selected_edge_infos,
+         selected_clip_ids, selected_edge_infos, selected_gap_infos,
          created_at, modified_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             project_id = excluded.project_id,
             name = excluded.name,
@@ -247,6 +251,7 @@ function Sequence:save()
             audio_rate = excluded.audio_rate,
             selected_clip_ids = excluded.selected_clip_ids,
             selected_edge_infos = excluded.selected_edge_infos,
+            selected_gap_infos = excluded.selected_gap_infos,
             modified_at = excluded.modified_at
     ]])
 
@@ -294,8 +299,9 @@ function Sequence:save()
     stmt:bind_value(18, db_audio_rate)
     stmt:bind_value(19, self.selected_clip_ids_json or "")
     stmt:bind_value(20, self.selected_edge_infos_json or "")
-    stmt:bind_value(21, self.created_at or os.time())
-    stmt:bind_value(22, self.modified_at)
+    stmt:bind_value(21, self.selected_gap_infos_json or "[]")
+    stmt:bind_value(22, self.created_at or os.time())
+    stmt:bind_value(23, self.modified_at)
 
     local ok = stmt:exec()
     if not ok then
