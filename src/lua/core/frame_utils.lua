@@ -141,7 +141,8 @@ function M.format_timecode(time_obj, frame_rate, opts)
     -- 24/1 -> 24
     -- 30000/1001 -> 29.97 -> 30 (NDF)
     local fps = math.floor((rate.fps_numerator / rate.fps_denominator) + 0.5)
-    if fps == 0 then fps = 1 end
+    assert(fps > 0, string.format("format_timecode: invalid fps=%d (from %s/%s)",
+        fps, tostring(rate.fps_numerator), tostring(rate.fps_denominator)))
 
     local frames_per_minute = fps * 60
     local frames_per_hour = frames_per_minute * 60
@@ -189,7 +190,8 @@ function M.parse_timecode(timecode, frame_rate)
 
     local hh, mm, ss, ff = parts[1], parts[2], parts[3], parts[4]
     local fps = math.floor((rate.fps_numerator / rate.fps_denominator) + 0.5)
-    if fps <= 0 then fps = 1 end
+    assert(fps > 0, string.format("parse_timecode: invalid fps=%d (from %s/%s)",
+        fps, tostring(rate.fps_numerator), tostring(rate.fps_denominator)))
 
     local total_frames = ff + (ss * fps) + (mm * 60 * fps) + (hh * 3600 * fps)
     if sign < 0 then total_frames = -total_frames end
