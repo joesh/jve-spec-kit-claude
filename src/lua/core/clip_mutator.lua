@@ -140,7 +140,12 @@ local function plan_insert(row)
         enabled = row.enabled and 1 or 0,
         offline = 0,  -- transient: always 0 in DB
         created_at = assert(row.created_at, "clip_mutator: insert mutation missing created_at for clip " .. tostring(row.id)),
-        modified_at = assert(row.modified_at, "clip_mutator: insert mutation missing modified_at for clip " .. tostring(row.id))
+        modified_at = assert(row.modified_at, "clip_mutator: insert mutation missing modified_at for clip " .. tostring(row.id)),
+        -- Per-clip metadata (may be nil for new clips — DB uses defaults)
+        volume = row.volume,
+        mark_in_frame = row.mark_in,
+        mark_out_frame = row.mark_out,
+        playhead_frame = row.playhead_frame or row.playhead
     }
 end
 

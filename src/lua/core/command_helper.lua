@@ -614,9 +614,10 @@ function M.apply_mutations(db, mutations)
                 master_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                 fps_numerator, fps_denominator, enabled, offline,
-                created_at, modified_at
+                created_at, modified_at,
+                volume, mark_in_frame, mark_out_frame, playhead_frame
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not insert_stmt then
             return nil, "Failed to prepare INSERT statement: " .. tostring(db:last_error() or "unknown")
@@ -773,6 +774,13 @@ function M.apply_mutations(db, mutations)
             end
             stmt:bind_value(17, mut.created_at)
             stmt:bind_value(18, mut.modified_at)
+            -- Per-clip metadata: volume/marks/playhead
+            -- volume and playhead_frame are NOT NULL with defaults; always bind
+            stmt:bind_value(19, mut.volume or 1.0)
+            -- mark_in/mark_out are nullable; only bind when present
+            if mut.mark_in_frame ~= nil then stmt:bind_value(20, mut.mark_in_frame) end
+            if mut.mark_out_frame ~= nil then stmt:bind_value(21, mut.mark_out_frame) end
+            stmt:bind_value(22, mut.playhead_frame or 0)
             local ok = stmt:exec()
             local err = db:last_error()
             reset_stmt(stmt)
@@ -1025,9 +1033,10 @@ function M.revert_mutations(db, mutations, command, sequence_id)
                 master_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                 fps_numerator, fps_denominator, enabled, offline,
-                created_at, modified_at
+                created_at, modified_at,
+                volume, mark_in_frame, mark_out_frame, playhead_frame
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not stmt then return false, "Failed to prepare undo delete: " .. tostring(db:last_error()) end
 
@@ -1049,6 +1058,11 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         stmt:bind_value(16, 0)  -- offline is transient, always 0 in DB
         stmt:bind_value(17, prev.created_at)
         stmt:bind_value(18, prev.modified_at)
+        -- Per-clip metadata (from capture_clip_state)
+        stmt:bind_value(19, prev.volume or 1.0)
+        if prev.mark_in ~= nil then stmt:bind_value(20, prev.mark_in) end
+        if prev.mark_out ~= nil then stmt:bind_value(21, prev.mark_out) end
+        stmt:bind_value(22, prev.playhead or 0)
 
         local ok = stmt:exec()
         stmt:finalize()
