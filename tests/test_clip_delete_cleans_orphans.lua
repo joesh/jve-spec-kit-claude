@@ -5,7 +5,6 @@ require("test_env")
 
 local database = require("core.database")
 local Clip = require("models.clip")
-local Property = require("models.property")
 
 local pass_count = 0
 local fail_count = 0

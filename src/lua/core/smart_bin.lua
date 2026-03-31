@@ -126,8 +126,14 @@ function M.update(db, id, fields)
         values[#values + 1] = fields.criteria_json
     end
     if fields.scope_bin_id ~= nil then
-        sets[#sets + 1] = "scope_bin_id = ?"
-        values[#values + 1] = fields.scope_bin_id
+        -- json.null means "set to SQL NULL" (clear scope → project-wide)
+        if fields.scope_bin_id == json.null then
+            sets[#sets + 1] = "scope_bin_id = NULL"
+            -- No value to bind — NULL is literal in SQL
+        else
+            sets[#sets + 1] = "scope_bin_id = ?"
+            values[#values + 1] = fields.scope_bin_id
+        end
     end
     sets[#sets + 1] = "modified_at = ?"
     values[#values + 1] = os.time()
