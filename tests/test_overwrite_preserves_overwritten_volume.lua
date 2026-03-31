@@ -155,11 +155,5 @@ check("undo: timeline_start=0", get_clip_field("existing", "timeline_start_frame
 
 -- Summary
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))
-if fail_count > 0 then
-    -- KNOWN BUG: Overwrite undo goes through reload_clips fallback instead of
-    -- revert_mutations, which doesn't restore volume for deleted-then-recreated clips.
-    -- The Overwrite wrapper delegates to AddClipsToSequence, but the undo path
-    -- can't find the stored mutations — needs investigation.
-    print("KNOWN: Overwrite undo volume loss — see qa-sweep-2026-03-30.md")
-end
-print("✅ test_overwrite_preserves_overwritten_volume.lua passed (known issue documented)")
+assert(fail_count == 0, fail_count .. " tests failed")
+print("✅ test_overwrite_preserves_overwritten_volume.lua passed")
