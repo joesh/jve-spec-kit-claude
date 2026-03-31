@@ -753,7 +753,8 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
                c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
                c.fps_numerator, c.fps_denominator,
                c.enabled, c.offline, c.created_at, c.modified_at,
-               s.id, s.fps_numerator, s.fps_denominator
+               s.id, s.fps_numerator, s.fps_denominator,
+               c.volume
         FROM clips c
         LEFT JOIN tracks t ON c.track_id = t.id
         LEFT JOIN sequences s ON t.sequence_id = s.id
@@ -806,6 +807,7 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         offline = false,  -- transient: recomputed by media_status
         created_at = stmt:value(16),
         modified_at = stmt:value(17),
+        volume = stmt:value(21),
     }
     stmt:finalize()
     return clip
@@ -944,6 +946,7 @@ function ClipMutator.plan_duplicate_block(db, params)
             offline = false,  -- transient
             created_at = now,
             modified_at = now,
+            volume = clip.volume,
         }
 
         table.insert(new_clip_ids, new_id)
