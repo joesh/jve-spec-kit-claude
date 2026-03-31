@@ -160,7 +160,8 @@ local function load_track_clips(db, track_id)
                c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
                c.fps_numerator, c.fps_denominator,
                s.fps_numerator, s.fps_denominator,
-               c.enabled, c.offline, c.created_at, c.modified_at
+               c.enabled, c.offline, c.created_at, c.modified_at,
+               c.volume
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences s ON t.sequence_id = s.id
@@ -211,7 +212,8 @@ local function load_track_clips(db, track_id)
             seq_fps_numerator = seq_num,
             seq_fps_denominator = seq_den,
             enabled = stmt:value(16) == 1 or stmt:value(16) == true,
-            offline = false  -- transient: recomputed by media_status
+            offline = false,  -- transient: recomputed by media_status
+            volume = stmt:value(20)
         })
     end
     stmt:finalize()
