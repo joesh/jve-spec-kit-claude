@@ -262,6 +262,13 @@ function PlaybackEngine:_refresh_content_bounds()
     self.max_media_time_us = helpers.calc_time_us_from_frame(
         new_end - 1, self.fps_num, self.fps_den)
 
+    -- Push updated bounds to C++ PlaybackController so its tick loop
+    -- uses the new end frame for boundary detection.
+    if self._playback_controller then
+        qt_constants.PLAYBACK.SET_BOUNDS(self._playback_controller,
+            self.start_frame, self.total_frames, self.fps_num, self.fps_den)
+    end
+
     if self._audio_owner and audio_playback
        and audio_playback.session_initialized then
         audio_playback.set_max_time(self.max_media_time_us)
