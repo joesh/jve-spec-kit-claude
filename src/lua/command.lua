@@ -490,12 +490,13 @@ end
 
 -- Return human-readable label for this command.
 -- Commands can override by setting display_label parameter.
+-- Includes parameter detail when available (visible when history window is wide).
 function M:label()
     local custom = self.parameters and self.parameters.display_label
     if custom and custom ~= "" then
         return custom
     end
-    return command_labels.label_for_type(self.type)
+    return command_labels.label_for_command(self)
 end
 
 -- Serialize command to JSON string
