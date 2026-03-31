@@ -27,18 +27,20 @@ local krono_ok, krono = pcall(require, "core.krono")
 	        track_id = row.track_id,
 	        media_id = row.media_id,
             master_clip_id = row.master_clip_id,
-
             owner_sequence_id = row.owner_sequence_id,
 	        created_at = row.created_at,
 	        modified_at = row.modified_at,
+	        timeline_start = row.timeline_start,
 	        start_value = row.start_value,
 	        duration = row.duration,
 	        source_in = row.source_in,
 	        source_out = row.source_out,
 	        fps_numerator = row.fps_numerator,
 	        fps_denominator = row.fps_denominator,
+	        rate = row.rate,
 	        enabled = row.enabled,
-            offline = row.offline
+            offline = row.offline,
+            volume = row.volume
 	    }
 	end
 
