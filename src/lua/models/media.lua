@@ -83,30 +83,187 @@ function M:set_file_path(path)
 end
 
 --- Get stored start timecode as (frames, rate).
--- Parses metadata JSON for start_tc_value and start_tc_rate.
+-- If TC not in metadata and file exists on disk, extracts from file via EMP
+-- and persists the result. Returns 0 for files with no TC tag (TC 00:00:00:00).
 -- @return number|nil frames, number|nil rate
 function M:get_start_tc()
+    self:_ensure_tc_extracted()
     local meta = self:_parsed_metadata()
-    if meta and meta.start_tc_value then
+    -- Use ~= nil, not truthiness: start_tc_value=0 is valid (TC 00:00:00:00)
+    if meta and meta.start_tc_value ~= nil then
         return meta.start_tc_value, meta.start_tc_rate
     end
     return nil, nil
 end
 
 --- Get audio TC origin in samples from metadata.
+-- If TC not in metadata and file exists on disk, extracts from file via EMP.
 -- @return number|nil samples, number|nil sample_rate
 function M:get_audio_start_tc()
+    self:_ensure_tc_extracted()
     local meta = self:_parsed_metadata()
-    if meta and meta.start_tc_audio_samples then
+    if meta and meta.start_tc_audio_samples ~= nil then
         return meta.start_tc_audio_samples, meta.start_tc_audio_rate
     end
-    -- Fallback: convert video TC to samples if audio TC not stored
-    if meta and meta.start_tc_value and self.audio_sample_rate then
+    -- Derive from video TC if audio TC not stored separately
+    if meta and meta.start_tc_value ~= nil and self.audio_sample_rate then
         local sr = self.audio_sample_rate
-        local fps = meta.start_tc_rate or 1
-        return math.floor(meta.start_tc_value * sr / fps), sr
+        local fps = meta.start_tc_rate
+        assert(fps and fps > 0, string.format(
+            "Media:get_audio_start_tc: start_tc_rate must be positive, got %s (media_id=%s)",
+            tostring(fps), tostring(self.id)))
+        local audio_tc = math.floor(meta.start_tc_value * sr / fps)
+        -- Output bounds: audio TC can't be negative, can't exceed 24h at sample rate
+        assert(audio_tc >= 0, string.format(
+            "Media:get_audio_start_tc: derived audio_tc=%d is negative (video_tc=%d sr=%d fps=%d media_id=%s)",
+            audio_tc, meta.start_tc_value, sr, fps, tostring(self.id)))
+        local max_samples = 24 * 3600 * sr  -- 24 hours
+        assert(audio_tc <= max_samples, string.format(
+            "Media:get_audio_start_tc: derived audio_tc=%d exceeds 24h (%d samples) media_id=%s",
+            audio_tc, max_samples, tostring(self.id)))
+        return audio_tc, sr
     end
     return nil, nil
+end
+
+--- Explicitly extract TC origin from the media file and store in metadata.
+-- Call this at import time when the file is guaranteed to exist.
+-- Asserts on failure — if you're calling this, the file MUST be readable.
+function M:extract_tc_from_file()
+    local path = self._file_path
+    assert(path and path ~= "", string.format(
+        "Media:extract_tc_from_file: file_path required (media_id=%s)", tostring(self.id)))
+
+    local EMP = qt_constants and qt_constants.EMP
+    assert(EMP and EMP.MEDIA_FILE_OPEN,
+        "Media:extract_tc_from_file: EMP bindings not available")
+
+    local media_file = EMP.MEDIA_FILE_OPEN(path)
+    assert(media_file, string.format(
+        "Media:extract_tc_from_file: EMP failed to open %s", path))
+
+    local info = EMP.MEDIA_FILE_INFO(media_file)
+    EMP.MEDIA_FILE_CLOSE(media_file)
+    assert(info, string.format(
+        "Media:extract_tc_from_file: EMP returned no info for %s", path))
+
+    -- EMP always returns these fields; nil means a broken binding
+    assert(info.first_frame_tc ~= nil, string.format(
+        "Media:extract_tc_from_file: EMP info missing first_frame_tc for %s", path))
+    assert(info.first_sample_tc ~= nil, string.format(
+        "Media:extract_tc_from_file: EMP info missing first_sample_tc for %s", path))
+
+    local fps_num = info.fps_num
+    if not fps_num or fps_num <= 0 then
+        fps_num = self.frame_rate and self.frame_rate.fps_numerator
+    end
+    assert(fps_num and fps_num > 0, string.format(
+        "Media:extract_tc_from_file: no valid fps for %s (info.fps_num=%s, media fps=%s)",
+        path, tostring(info.fps_num),
+        tostring(self.frame_rate and self.frame_rate.fps_numerator)))
+
+    local sample_rate = info.audio_sample_rate
+    if not sample_rate or sample_rate <= 0 then
+        sample_rate = self.audio_sample_rate
+    end
+
+    local json = require("dkjson")
+    local meta = self:_parsed_metadata() or {}
+    meta.start_tc_value = info.first_frame_tc
+    meta.start_tc_rate = fps_num
+    meta.start_tc_audio_samples = info.first_sample_tc
+    meta.start_tc_audio_rate = (sample_rate and sample_rate > 0) and sample_rate or nil
+
+    self.metadata = json.encode(meta)
+
+    log.event("Media:extract_tc_from_file: %s → video_tc=%d audio_tc=%d",
+        tostring(self.id):sub(1, 8), meta.start_tc_value, meta.start_tc_audio_samples)
+end
+
+--- Extract TC origin from media file via EMP if not already in metadata.
+-- Called lazily from get_start_tc()/get_audio_start_tc().
+-- Only sets TC when extraction succeeds (file exists + EMP available).
+-- Does NOT fabricate TC=0 when file is missing — that would hide real TC values.
+-- Callers (ensure_masterclip) assert TC is known; import paths must provide it.
+function M:_ensure_tc_extracted()
+    -- Already have TC? (check ~= nil because 0 is valid)
+    local meta = self:_parsed_metadata()
+    if meta and meta.start_tc_value ~= nil then
+        return
+    end
+
+    -- File must exist on disk
+    local path = self._file_path
+    if not path or path == "" then return end
+    local f = io.open(path, "r")
+    if not f then return end
+    f:close()
+
+    -- EMP must be available
+    local EMP = qt_constants and qt_constants.EMP
+    if not EMP or not EMP.MEDIA_FILE_OPEN then return end
+
+    -- Open file, extract TC origins.
+    -- If EMP is available and file exists, extraction MUST succeed — assert on failure.
+    local media_file = EMP.MEDIA_FILE_OPEN(path)
+    assert(media_file, string.format(
+        "Media:_ensure_tc_extracted: EMP failed to open %s (media_id=%s)",
+        path, tostring(self.id)))
+
+    local info = EMP.MEDIA_FILE_INFO(media_file)
+    EMP.MEDIA_FILE_CLOSE(media_file)
+    assert(info, string.format(
+        "Media:_ensure_tc_extracted: EMP returned no info for %s (media_id=%s)",
+        path, tostring(self.id)))
+
+    assert(info.first_frame_tc ~= nil,
+        "Media:_ensure_tc_extracted: EMP info missing first_frame_tc for " .. path)
+    assert(info.first_sample_tc ~= nil,
+        "Media:_ensure_tc_extracted: EMP info missing first_sample_tc for " .. path)
+
+    local fps_num = info.fps_num
+    if not fps_num or fps_num <= 0 then
+        fps_num = self.frame_rate and self.frame_rate.fps_numerator
+    end
+    -- fps_num can be 0/nil for audio-only files — that's valid
+    -- (audio TC is in samples, doesn't need video fps)
+    if not fps_num or fps_num <= 0 then fps_num = 0 end
+
+    local sample_rate = info.audio_sample_rate
+    if not sample_rate or sample_rate <= 0 then
+        sample_rate = self.audio_sample_rate
+    end
+
+    -- Merge into existing metadata
+    local json = require("dkjson")
+    meta = meta or {}
+    meta.start_tc_value = info.first_frame_tc
+    meta.start_tc_rate = fps_num
+    meta.start_tc_audio_samples = info.first_sample_tc
+    meta.start_tc_audio_rate = (sample_rate and sample_rate > 0) and sample_rate or nil
+
+    -- Update in-memory + persist to DB
+    self.metadata = json.encode(meta)
+    self:_save_metadata()
+
+    log.event("Media:_ensure_tc_extracted: %s → video_tc=%d audio_tc=%d",
+        tostring(self.id):sub(1, 8), info.first_frame_tc, info.first_sample_tc)
+end
+
+--- Persist only the metadata column to DB (minimal write for TC extraction).
+function M:_save_metadata()
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        string.format("Media:_save_metadata: no database connection (media_id=%s)", tostring(self.id)))
+
+    local stmt = assert(db:prepare("UPDATE media SET metadata = ? WHERE id = ?"),
+        string.format("Media:_save_metadata: failed to prepare query (media_id=%s)", tostring(self.id)))
+    stmt:bind_value(1, self.metadata)
+    stmt:bind_value(2, self.id)
+    assert(stmt:exec(),
+        string.format("Media:_save_metadata: exec failed (media_id=%s): %s",
+            tostring(self.id), tostring(stmt:last_error())))
+    stmt:finalize()
 end
 
 function M:_parsed_metadata()
@@ -158,8 +315,11 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
 
     local file_path = params.file_path
     local name = params.name or params.file_name
-    local dur_input = params.duration
     local dur_frames_input = params.duration_frames
+    if params.duration and not dur_frames_input then
+        error("Media.create: 'duration' is removed — use 'duration_frames' (integer frames). "
+            .. "Convert ms→frames at the I/O boundary before calling Media.create.")
+    end
     local fps_input = params.frame_rate
 
     local num, den
@@ -173,14 +333,7 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
 
     local dur_frames
     if dur_frames_input then
-        -- If duration_frames provided, use directly (integer)
         dur_frames = assert(tonumber(dur_frames_input), "Media.create: duration_frames must be a number, got " .. tostring(dur_frames_input))
-    elseif dur_input then
-        -- Milliseconds -> frames (I/O boundary conversion)
-        assert(type(dur_input) == "number", "Media.create: duration must be integer ms, got " .. type(dur_input))
-        local dur_ms = dur_input
-        local seconds = dur_ms / 1000.0
-        dur_frames = math.floor(seconds * num / den + 0.5)
     else
         dur_frames = 0 -- Unknown duration (audio-only, still image)
     end
@@ -201,7 +354,7 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
         codec = params.codec or "", -- NSF-OK: "" = unknown codec
         created_at = params.created_at or os.time(),
         modified_at = params.modified_at or os.time(),
-        metadata = params.metadata or '{}'
+        metadata = params.metadata or '{}',
     }
 
     setmetatable(media, media_mt)
@@ -267,11 +420,8 @@ end
 -- Save a media item to the database
 function M:save()
     local database = require("core.database")
-    local db = database.get_connection()
-    if not db then
-        log.warn("Media:save: No database connection available")
-        return false
-    end
+    local db = assert(database.get_connection(),
+        string.format("Media:save: no database connection (media_id=%s)", tostring(self.id)))
 
     -- Duration is now an integer
     assert(type(self.duration) == "number", "Media:save: duration must be integer for media " .. tostring(self.id))
@@ -308,10 +458,7 @@ function M:save()
             metadata = excluded.metadata
     ]])
 
-    if not query then
-        log.warn("Media:save: Failed to prepare query")
-        return false
-    end
+    assert(query, string.format("Media:save: failed to prepare query (media_id=%s)", tostring(self.id)))
 
     query:bind_value(1, self.id)
     query:bind_value(2, self.project_id)
@@ -349,7 +496,32 @@ function M:delete()
     local db = assert(database.get_connection(), "Media:delete: no database connection")
     assert(self.id and self.id ~= "", "Media:delete: id required")
 
-    -- Delete clips referencing this media first (FK constraint)
+    -- Delete properties and clip_links for clips referencing this media
+    -- (properties table has no FK cascade — must clean up explicitly)
+    local clip_ids_stmt = db:prepare("SELECT id FROM clips WHERE media_id = ?")
+    if clip_ids_stmt then
+        clip_ids_stmt:bind_value(1, self.id)
+        if clip_ids_stmt:exec() then
+            while clip_ids_stmt:next() do
+                local cid = clip_ids_stmt:value(0)
+                local prop_stmt = db:prepare("DELETE FROM properties WHERE clip_id = ?")
+                if prop_stmt then
+                    prop_stmt:bind_value(1, cid)
+                    prop_stmt:exec()
+                    prop_stmt:finalize()
+                end
+                local link_stmt = db:prepare("DELETE FROM clip_links WHERE clip_id = ?")
+                if link_stmt then
+                    link_stmt:bind_value(1, cid)
+                    link_stmt:exec()
+                    link_stmt:finalize()
+                end
+            end
+        end
+        clip_ids_stmt:finalize()
+    end
+
+    -- Delete clips referencing this media (FK constraint)
     local del_clips = assert(db:prepare("DELETE FROM clips WHERE media_id = ?"),
         "Media:delete: failed to prepare clip delete")
     del_clips:bind_value(1, self.id)
