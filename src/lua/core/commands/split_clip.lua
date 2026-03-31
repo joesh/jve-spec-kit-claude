@@ -243,56 +243,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["Split"] = function(command)
         local args = command:get_all_parameters()
 
-        -- Get timeline state to gather interactive parameters
-        local timeline_state_ok, timeline_state = pcall(require, "ui.timeline.timeline_state")
-        if not timeline_state_ok or not timeline_state then
-            return {success = false, error_message = "Split: timeline state unavailable"}
+        local clips_to_split, playhead = command_helper.resolve_clips_at_playhead()
+        if #clips_to_split == 0 then
+            log.event("Split: no clips under playhead")
+            return true
         end
-
-        local playhead = timeline_state.get_playhead_position and timeline_state.get_playhead_position()
-        if not playhead then
-            return {success = false, error_message = "Split: playhead position unavailable"}
-        end
-        assert(type(playhead) == "number", "Split: playhead must be integer frames")
 
         local _json = require("dkjson")  -- luacheck: ignore 211 (unused, required for module init)
         local Command = require("command")
-
-        -- Get all clips under the playhead
-        local clips_at_playhead = timeline_state.get_clips_at_time and timeline_state.get_clips_at_time(playhead) or {}
-
-        if #clips_at_playhead == 0 then
-            local all_clips = timeline_state.get_clips and timeline_state.get_clips() or {}
-            return {success = false, error_message = string.format(
-                "Split: no clips under playhead (playhead=%d frames, total=%d)",
-                playhead, #all_clips)}
-        end
-
-        -- Check if there's a selection that overlaps with clips at playhead
-        local selected_clips = timeline_state.get_selected_clips and timeline_state.get_selected_clips() or {}
-        local clips_to_split
-
-        if #selected_clips > 0 then
-            local selected_ids = {}
-            for _, sel in ipairs(selected_clips) do
-                if sel and sel.id then
-                    selected_ids[sel.id] = true
-                end
-            end
-            local selected_at_playhead = {}
-            for _, clip in ipairs(clips_at_playhead) do
-                if selected_ids[clip.id] then
-                    table.insert(selected_at_playhead, clip)
-                end
-            end
-            if #selected_at_playhead > 0 then
-                clips_to_split = selected_at_playhead
-            else
-                clips_to_split = clips_at_playhead
-            end
-        else
-            clips_to_split = clips_at_playhead
-        end
 
         local specs = {}
         for _, clip in ipairs(clips_to_split) do
@@ -305,6 +263,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             })
         end
 
+        local timeline_state = require("ui.timeline.timeline_state")
         local project_id = args.project_id or (timeline_state.get_project_id and timeline_state.get_project_id())
         if not project_id or project_id == "" then
             return {success = false, error_message = "Split: project_id unavailable"}

@@ -44,6 +44,32 @@ function M.resolve_active_sequence_id(sequence_id_param, timeline_state)
     return nil
 end
 
+--- Resolve target clips at playhead using selection-aware two-tier logic.
+-- 1. If clips are selected AND any intersect playhead → those clips
+-- 2. Otherwise → all clips at playhead
+-- Returns target_clips (may be empty), playhead (integer frames).
+function M.resolve_clips_at_playhead()
+    local timeline_state = require("ui.timeline.timeline_state")
+
+    local playhead = timeline_state.get_playhead_position()
+    assert(type(playhead) == "number", "resolve_clips_at_playhead: playhead must be integer")
+
+    local selected = timeline_state.get_selected_clips()
+    local target_clips
+
+    if selected and #selected > 0 then
+        target_clips = timeline_state.get_clips_at_time(playhead, selected)
+        if #target_clips == 0 then
+            -- Selection doesn't intersect playhead — fall back to all clips
+            target_clips = timeline_state.get_clips_at_time(playhead)
+        end
+    else
+        target_clips = timeline_state.get_clips_at_time(playhead)
+    end
+
+    return target_clips, playhead
+end
+
 function M.trim_string(value)
     if type(value) ~= "string" then
         return ""

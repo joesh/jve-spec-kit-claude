@@ -96,14 +96,19 @@ print("Created Clip A (0-100) and Clip B (100-200)")
 -- Should trim B to 150-200 (start moves to 150, duration 50).
 -- New Clip C inserted at 50-150.
 
+-- Set marks on masterclip sequence — Overwrite reads timing from these
+local Sequence = require("models.sequence")
+local mc_seq = Sequence.load(master_clip_id)
+assert(mc_seq, "Failed to load masterclip sequence")
+mc_seq:set_in(0)
+mc_seq:set_out(100)
+mc_seq:save()
+
 local cmd = Command.create("Overwrite", "project")
 cmd:set_parameter("master_clip_id", master_clip_id)
 cmd:set_parameter("track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
 cmd:set_parameter("overwrite_time", 50)
-cmd:set_parameter("duration", 100)
-cmd:set_parameter("source_in", 0)
-cmd:set_parameter("source_out", 100)
 cmd:set_parameter("clip_name", "Clip C")
 
 print("Executing Overwrite (50-150)...")

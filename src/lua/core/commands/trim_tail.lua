@@ -10,10 +10,10 @@ local command_helper = require("core.command_helper")
 
 local SPEC = {
     args = {
-        clip_ids = { required = true },  -- array of clip IDs to trim
+        clip_ids = {},   -- array of clip IDs (derived from selection/playhead if omitted)
         project_id = { required = true },
         sequence_id = { required = true },
-        trim_frame = { required = true },  -- playhead frame (int)
+        trim_frame = {},  -- playhead frame (derived from playhead if omitted)
     },
     persisted = {
         original_states = {},  -- array of {clip_id, timeline_start, duration, source_in, source_out}
@@ -28,11 +28,28 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local log = require("core.logger").for_area("commands")
         local command_manager = require("core.command_manager")
 
+        -- Derive clip_ids and trim_frame from UI state if not provided
         local clip_ids = args.clip_ids
+        local trim_frame = args.trim_frame
+
+        if not clip_ids then
+            local target_clips, playhead = command_helper.resolve_clips_at_playhead()
+            if #target_clips == 0 then
+                log.event("TrimTail: no clips under playhead")
+                return true
+            end
+            clip_ids = {}
+            for _, clip in ipairs(target_clips) do
+                clip_ids[#clip_ids + 1] = clip.id
+            end
+            trim_frame = trim_frame or playhead
+            -- Persist derived values for undo/redo
+            command:set_parameters({ clip_ids = clip_ids, trim_frame = trim_frame })
+        end
+
         assert(type(clip_ids) == "table" and #clip_ids > 0,
             "TrimTail: clip_ids must be non-empty array")
-
-        local trim_frame = args.trim_frame
+        assert(type(trim_frame) == "number", "TrimTail: trim_frame required")
         log.event("TrimTail clips=%d frame=%d", #clip_ids, trim_frame)
 
         -- Load all clips ONCE and validate

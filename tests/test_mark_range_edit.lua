@@ -74,12 +74,18 @@ local function create_mc(media_id, dur)
 end
 
 local function insert_clip(p)
+    local Sequence = require("models.sequence")
     local mc = create_mc(p.media_id, p.media_dur)
+    -- Set marks on masterclip sequence — Overwrite reads timing from these
+    local mc_seq = Sequence.load(mc)
+    assert(mc_seq, "insert_clip: failed to load masterclip sequence")
+    mc_seq:set_in(p.src_in)
+    mc_seq:set_out(p.src_out)
+    mc_seq:save()
     local cmd = Command.create("Overwrite", "proj")
     cmd:set_parameters({
         master_clip_id = mc, track_id = p.track_id, sequence_id = "seq",
-        overwrite_time = p.start, duration = p.dur,
-        source_in = p.src_in, source_out = p.src_out,
+        overwrite_time = p.start,
         clip_id = p.id, advance_playhead = false,
     })
     assert(command_manager.execute(cmd).success, "overwrite failed")

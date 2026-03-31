@@ -69,15 +69,20 @@ print("=== Redo Playhead Position Regression Test ===")
 -- Initial state: playhead at frame 0
 assert(timeline_state.get_playhead_position() == 0, "Precondition: playhead at 0")
 
+-- Set marks on masterclip sequence — Insert reads timing from these
+local Sequence = require("models.sequence")
+local mc_seq = Sequence.load(master_clip_id)
+assert(mc_seq, "Failed to load masterclip sequence")
+mc_seq:set_in(0)
+mc_seq:set_out(100)
+mc_seq:save()
+
 -- Execute Insert with advance_playhead=true
 local insert_cmd = Command.create("Insert", "default_project")
 insert_cmd:set_parameter("sequence_id", "seq1")
 insert_cmd:set_parameter("track_id", "v1")
 insert_cmd:set_parameter("master_clip_id", master_clip_id)
 insert_cmd:set_parameter("insert_time", 0)
-insert_cmd:set_parameter("duration", 100)
-insert_cmd:set_parameter("source_in", 0)
-insert_cmd:set_parameter("source_out", 100)
 insert_cmd:set_parameter("advance_playhead", true)
 
 print("Step 1: Execute Insert (100 frames at 0, advance_playhead=true)")

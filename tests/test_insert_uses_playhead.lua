@@ -86,15 +86,19 @@ assert(video_track_id, "Should have a VIDEO track")
 -- =============================================================================
 print("Test: Insert without insert_time uses playhead position")
 
+-- Set marks on masterclip sequence — Insert reads timing from these
+local mc_seq = Sequence.load(master_clip_id)
+assert(mc_seq, "Failed to load masterclip sequence")
+mc_seq:set_in(0)
+mc_seq:set_out(50)
+mc_seq:save()
+
 command_manager.begin_command_event("script")
 local result = command_manager.execute("Insert", {
     master_clip_id = master_clip_id,
     track_id = video_track_id,
     sequence_id = seq.id,
     project_id = project.id,
-    duration = 50,
-    source_in = 0,
-    source_out = 50,
 })
 command_manager.end_command_event()
 assert(result.success, "Insert should succeed: " .. tostring(result.error_message))

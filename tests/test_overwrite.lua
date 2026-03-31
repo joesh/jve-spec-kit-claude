@@ -60,8 +60,39 @@ media:save(db)
 local master_clip_id = test_env.create_test_masterclip_sequence(
     "project", "OW Video Master", 30, 1, 500, "media_ow")
 
+-- Helper: set marks on masterclip sequence before Insert/Overwrite
+local Sequence = require("models.sequence")
+local function set_mc_marks(mc_id, source_in, source_out)
+    local mc_seq = Sequence.load(mc_id)
+    assert(mc_seq, "set_mc_marks: failed to load masterclip sequence")
+    mc_seq:set_in(source_in)
+    mc_seq:set_out(source_out)
+    mc_seq:save()
+end
+
+-- Helper: clear marks on masterclip sequence (use full duration)
+local function clear_mc_marks(mc_id)
+    local mc_seq = Sequence.load(mc_id)
+    if mc_seq then
+        mc_seq:clear_marks()
+    end
+end
+
 -- Helper: execute command with proper event wrapping
+-- For Insert/Overwrite: reads source_in/source_out from params, sets marks, removes timing params
 local function execute_command(name, params)
+    if (name == "Insert" or name == "Overwrite") and params.master_clip_id then
+        if params.source_in and params.source_out then
+            set_mc_marks(params.master_clip_id, params.source_in, params.source_out)
+            params.source_in = nil
+            params.source_out = nil
+            params.duration = nil
+        else
+            -- No timing → clear marks so full duration is used
+            clear_mc_marks(params.master_clip_id)
+            params.duration = nil
+        end
+    end
     command_manager.begin_command_event("script")
     local result = command_manager.execute(name, params)
     command_manager.end_command_event()
