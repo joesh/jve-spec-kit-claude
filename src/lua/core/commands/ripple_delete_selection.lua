@@ -26,6 +26,7 @@ local SPEC = {
         dry_run = { kind = "boolean" },
         project_id = { required = true },
         ripple_selection_deleted_clips = {},
+        ripple_selection_deleted_properties = {},
         ripple_selection_sequence_id = {},
         ripple_selection_shift_amount = {},
         ripple_selection_shifted = {},
@@ -229,12 +230,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local deleted_states = {}
+        local deleted_properties = {}
         local selected_by_track = {}
         local global_segments_raw = {}
         local total_removed_duration = 0
 
         for _, clip in ipairs(clips) do
             table.insert(deleted_states, command_helper.capture_clip_state(clip))
+            -- Capture properties before deletion (lost if not snapshotted)
+            local props = command_helper.snapshot_properties_for_clip(clip.id)
+            if props and #props > 0 then
+                deleted_properties[clip.id] = props
+            end
             local dur_frames = clip_duration_frames(clip)
             local start_frames = clip_start_frames(clip)
             total_removed_duration = total_removed_duration + dur_frames
@@ -392,6 +399,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         command:set_parameters({
             ["ripple_selection_deleted_clips"] = deleted_states,
+            ["ripple_selection_deleted_properties"] = deleted_properties,
             ["ripple_selection_shifted"] = shifted_clips,
             ["ripple_selection_shift_amount"] = total_removed_duration,
             ["ripple_selection_total_removed"] = total_removed_duration,
@@ -453,6 +461,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
+        local deleted_properties = args.ripple_selection_deleted_properties or {}
         for _, state in ipairs(deleted_states) do
             local restored = command_helper.restore_clip_state(state)
             if restored then
@@ -467,6 +476,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     log.warn("Undo: Failed to reinsert deleted clip %s", tostring(restored.id))
                     failed = true
                 else
+                    -- Restore clip properties (color correction, EQ, etc.)
+                    local clip_props = deleted_properties[state.id]
+                    if clip_props and #clip_props > 0 then
+                        command_helper.insert_properties_for_clip(restored.id, clip_props)
+                    end
+
                     local insert_payload = command_helper.clip_insert_payload(restored, args.ripple_selection_sequence_id or restored.owner_sequence_id)
                     if insert_payload then
                         command_helper.add_insert_mutation(command, insert_payload.track_sequence_id or args.ripple_selection_sequence_id, insert_payload)
