@@ -55,29 +55,60 @@ local function import_undoer(command_name, command, db)
     assert(args.result_project_id,
         command_name .. ": missing result_project_id")
 
-    -- Delete in dependency order: clips → tracks → sequences → media → project
+    -- Delete in dependency order: properties/links → clips → tracks → sequences → media → project
+    -- Properties and clip_links have no FK cascade — must delete explicitly
     for _, clip_id in ipairs(args.created_clip_ids or {}) do
-        assert(db:exec(string.format("DELETE FROM clips WHERE id = '%s'", clip_id)),
-            command_name .. ": clips DELETE failed for " .. tostring(clip_id))
+        local prop_stmt = db:prepare("DELETE FROM properties WHERE clip_id = ?")
+        if prop_stmt then
+            prop_stmt:bind_value(1, clip_id)
+            prop_stmt:exec()
+            prop_stmt:finalize()
+        end
+        local link_stmt = db:prepare("DELETE FROM clip_links WHERE clip_id = ?")
+        if link_stmt then
+            link_stmt:bind_value(1, clip_id)
+            link_stmt:exec()
+            link_stmt:finalize()
+        end
+    end
+
+    for _, clip_id in ipairs(args.created_clip_ids or {}) do
+        local del_stmt = db:prepare("DELETE FROM clips WHERE id = ?")
+        assert(del_stmt, command_name .. ": clips DELETE prepare failed")
+        del_stmt:bind_value(1, clip_id)
+        assert(del_stmt:exec(), command_name .. ": clips DELETE failed for " .. tostring(clip_id))
+        del_stmt:finalize()
     end
 
     for _, track_id in ipairs(args.created_track_ids or {}) do
-        assert(db:exec(string.format("DELETE FROM tracks WHERE id = '%s'", track_id)),
-            command_name .. ": tracks DELETE failed for " .. tostring(track_id))
+        local stmt = db:prepare("DELETE FROM tracks WHERE id = ?")
+        assert(stmt, command_name .. ": tracks DELETE prepare failed")
+        stmt:bind_value(1, track_id)
+        assert(stmt:exec(), command_name .. ": tracks DELETE failed for " .. tostring(track_id))
+        stmt:finalize()
     end
 
     for _, seq_id in ipairs(args.created_sequence_ids or {}) do
-        assert(db:exec(string.format("DELETE FROM sequences WHERE id = '%s'", seq_id)),
-            command_name .. ": sequences DELETE failed for " .. tostring(seq_id))
+        local stmt = db:prepare("DELETE FROM sequences WHERE id = ?")
+        assert(stmt, command_name .. ": sequences DELETE prepare failed")
+        stmt:bind_value(1, seq_id)
+        assert(stmt:exec(), command_name .. ": sequences DELETE failed for " .. tostring(seq_id))
+        stmt:finalize()
     end
 
     for _, media_id in ipairs(args.created_media_ids or {}) do
-        assert(db:exec(string.format("DELETE FROM media WHERE id = '%s'", media_id)),
-            command_name .. ": media DELETE failed for " .. tostring(media_id))
+        local stmt = db:prepare("DELETE FROM media WHERE id = ?")
+        assert(stmt, command_name .. ": media DELETE prepare failed")
+        stmt:bind_value(1, media_id)
+        assert(stmt:exec(), command_name .. ": media DELETE failed for " .. tostring(media_id))
+        stmt:finalize()
     end
 
-    assert(db:exec(string.format("DELETE FROM projects WHERE id = '%s'", args.result_project_id)),
-        command_name .. ": projects DELETE failed for " .. tostring(args.result_project_id))
+    local proj_stmt = db:prepare("DELETE FROM projects WHERE id = ?")
+    assert(proj_stmt, command_name .. ": projects DELETE prepare failed")
+    proj_stmt:bind_value(1, args.result_project_id)
+    assert(proj_stmt:exec(), command_name .. ": projects DELETE failed for " .. tostring(args.result_project_id))
+    proj_stmt:finalize()
 
     log.event("Undo: Deleted imported project and all associated data")
     return true
