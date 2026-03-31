@@ -209,7 +209,8 @@ function M.clip_insert_payload(source, fallback_sequence_id)
         fps_denominator = rate and rate.fps_denominator or nil,
         
         enabled = source.enabled ~= false,
-        offline = false  -- transient: recomputed by media_status
+        offline = false,  -- transient: recomputed by media_status
+        volume = source.volume,
     }
 end
 
@@ -1039,7 +1040,8 @@ function M.revert_mutations(db, mutations, command, sequence_id)
                 source_out_value = val_frames(prev.source_out, "source_out"),
                 fps_numerator = fps_num,
                 fps_denominator = fps_den,
-                enabled = prev.enabled
+                enabled = prev.enabled,
+                volume = prev.volume,
             })
         end
         return true
@@ -1107,7 +1109,8 @@ function M.revert_mutations(db, mutations, command, sequence_id)
                 source_out_value = val_frames(prev.source_out, "source_out"),
                 enabled = prev.enabled,
                 name = prev.name,
-                media_id = prev.media_id
+                media_id = prev.media_id,
+                volume = prev.volume,
             })
         end
         return true
