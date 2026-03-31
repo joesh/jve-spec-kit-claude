@@ -631,12 +631,14 @@ function SequenceMonitor:save_playhead_to_db()
     if not self.sequence:is_masterclip() then return end
     if not database.has_connection() then return end
 
-    -- Validate before writing — catch view-level playhead drift.
-    -- total_frames=0 means unloaded; skip save in that case.
+    -- Clamp before writing — playhead can drift to total_frames after
+    -- advance_playhead or content changes. Clamp to valid range.
     if self.total_frames > self.start_frame then
-        assert(self.playhead >= self.start_frame and self.playhead < self.total_frames, string.format(
-            "save_playhead_to_db(%s): playhead %d out of range [%d, %d)",
-            self.view_id, self.playhead, self.start_frame, self.total_frames))
+        if self.playhead >= self.total_frames then
+            self.playhead = self.total_frames - 1
+        elseif self.playhead < self.start_frame then
+            self.playhead = self.start_frame
+        end
     end
     self.sequence.playhead_position = self.playhead
     self.sequence:save()

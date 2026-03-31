@@ -628,8 +628,11 @@ if not is_test_mode then
     log.event("Window state save handlers registered (geometry + splitters)")
 end
 
--- Show window
-qt_constants.DISPLAY.SHOW(main_window)
+-- Show window (pcall: corrupt DB data must not prevent editor from launching)
+local show_ok, show_err = pcall(qt_constants.DISPLAY.SHOW, main_window)
+if not show_ok then
+    log.error("Window SHOW triggered error (corrupt data?): %s", tostring(show_err))
+end
 log.event("Layout created: 4 panels top (browser, source, timeline viewer, inspector) + timeline bottom")
 
 -- Destroy welcome screen AFTER main window is visible (no window gap)
