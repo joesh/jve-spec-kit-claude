@@ -417,6 +417,9 @@ function ClipMutator.resolve_occlusions(db, params)
                     fps_numerator = row_fps_num,
                     fps_denominator = row_fps_den,
                     enabled = original.enabled,
+                    volume = original.volume,
+                    master_clip_id = original.master_clip_id,
+                    owner_sequence_id = original.owner_sequence_id,
                     created_at = os.time(),
                     modified_at = os.time()
                 }
