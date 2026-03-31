@@ -1286,12 +1286,11 @@ function M.get_current_sequence_number()
 end
 
 function M:list_history_entries()
-    -- Load all commands sorted by sequence_number ASC
+    -- Load only the main branch (ancestors of cursor + redo chain forward)
     local Command = require("command")
-    local commands = Command.load_history()
-    local cmd_labels = require("core.command_labels")
-
     local current_seq = history.get_current_sequence_number() or 0
+    local commands = Command.load_history_branch(current_seq)
+    local cmd_labels = require("core.command_labels")
 
     -- Identify undo groups: first/last member, count
     local group_first = {}   -- gid → lowest seq

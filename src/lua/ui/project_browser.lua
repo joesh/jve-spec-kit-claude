@@ -1661,6 +1661,22 @@ function M.get_selected_media()
     return M.get_selected_master_clip()
 end
 
+--- Get all selected master clips (for multi-clip Insert/Overwrite).
+-- @return table Array of master clip entries from master_clip_map
+function M.get_selected_master_clips()
+    local clips = {}
+    if not M.selected_items then return clips end
+    for _, item in ipairs(M.selected_items) do
+        if item.type == "master_clip" and item.clip_id then
+            local clip = M.master_clip_map[item.clip_id]
+            if clip then
+                table.insert(clips, clip)
+            end
+        end
+    end
+    return clips
+end
+
 function M.get_selection_snapshot()
     local snapshot = {}
     if not M.selected_items then
@@ -2054,7 +2070,7 @@ show_browser_context_menu = function(event)
         table.insert(actions, {
             label = "Insert Into Timeline",
             handler = function()
-                M.add_selected_to_timeline("Insert")
+                command_manager.execute_ui("Insert", {advance_playhead = true})
             end
         })
         table.insert(actions, {
@@ -2106,217 +2122,6 @@ show_browser_context_menu = function(event)
     end
 
     qt_constants.MENU.SHOW_POPUP(menu, math.floor(global_x or 0), math.floor(global_y or 0))
-end
-
-function M.add_selected_to_timeline(command_type, options)
-    local this_func_label = "project_browser.add_selected_to_timeline"
-
-    -- UI: Gather user intent and selection
-    assert(M.timeline_panel, this_func_label .. ": timeline panel not available")
-    assert(command_type == "Insert" or command_type == "Overwrite", this_func_label .. ": unsupported command_type")
-
-    -- Get all selected master clips
-    local selected_clips = {}
-    if M.selected_items then
-        for _, item in ipairs(M.selected_items) do
-            if item.type == "master_clip" and item.clip_id then
-                local clip = M.master_clip_map[item.clip_id]
-                if clip then
-                    table.insert(selected_clips, clip)
-                end
-            end
-        end
-    end
-
-    if #selected_clips == 0 then
-        local diag = {}
-        if not M.selected_items or #M.selected_items == 0 then
-            table.insert(diag, "M.selected_items is empty")
-        else
-            local first = M.selected_items[1]
-            table.insert(diag, string.format("selected type=%s", tostring(first and first.type)))
-        end
-        error(this_func_label .. ": no media item selected (" .. table.concat(diag, ", ") .. ")")
-    end
-
-    -- Get timeline context
-    local timeline_state_module = assert(M.timeline_panel.get_state and M.timeline_panel.get_state(), this_func_label .. ": timeline state not available")
-    local sequence_id = assert(timeline_state_module.get_sequence_id and timeline_state_module.get_sequence_id(), this_func_label .. ": missing active sequence_id")
-    local project_id = assert(timeline_state_module.get_project_id and timeline_state_module.get_project_id(), this_func_label .. ": missing active project_id")
-    local insert_pos = assert(timeline_state_module.get_playhead_position and timeline_state_module.get_playhead_position(), this_func_label .. ": missing insert position")
-
-    local advance_playhead = options and options.advance_playhead == true
-
-    -- For single clip, use Insert/Overwrite command (simpler, backward compatible)
-    if #selected_clips == 1 then
-        local clip = selected_clips[1]
-        local media = clip.media or (clip.media_id and M.media_map[clip.media_id])
-
-        -- Apply source viewer marks if the source view is showing this clip
-        local marks_applied = false
-        local source_in_mark, source_out_mark, duration_mark
-        local pm = require("ui.panel_manager")
-        local source_sv = pm.get_sequence_monitor("source_monitor")
-        if source_sv and source_sv.sequence_id == clip.clip_id then
-            local viewer_mark_in = source_sv:get_mark_in()
-            local viewer_mark_out = source_sv:get_mark_out()
-            -- Implicit boundary: 0 if mark_in nil, total_frames if mark_out nil
-            if viewer_mark_in ~= nil or viewer_mark_out ~= nil then
-                source_in_mark = viewer_mark_in or 0
-                source_out_mark = viewer_mark_out or source_sv.total_frames
-                duration_mark = source_out_mark - source_in_mark
-                marks_applied = true
-            end
-        end
-
-        -- Build command parameters
-        local time_param_name = command_type == "Insert" and "insert_time" or "overwrite_time"
-        local cmd_params = {
-            media_id = clip.media_id,
-            master_clip_id = clip.clip_id,
-            sequence_id = sequence_id,
-            project_id = project_id,
-            [time_param_name] = insert_pos,
-            advance_playhead = advance_playhead,
-        }
-        if marks_applied then
-            cmd_params.source_in = source_in_mark
-            cmd_params.source_out = source_out_mark
-            cmd_params.duration = duration_mark
-        end
-
-        local cmd = assert(Command.create(command_type, project_id), this_func_label .. ": failed to create " .. command_type .. " command")
-        cmd:set_parameters(cmd_params)
-        local result = command_manager.execute(cmd)
-        assert(result and result.success, string.format(this_func_label .. ": %s failed: %s", command_type, result and result.error_message or "unknown error"))
-
-        log.event("Media added to timeline: %s", media and (media.name or media.file_name) or "unknown")
-    else
-        -- Multiple clips: build groups and call AddClipsToSequence directly
-        local clip_edit_helper = require("core.clip_edit_helper")
-        local Track = require("models.track")
-        local Media = require("models.media")
-        local Sequence = require("models.sequence")
-
-        -- Get sequence FPS
-        local sequence = assert(Sequence.load(sequence_id), this_func_label .. ": sequence not found")
-        local seq_fps_num = assert(sequence.frame_rate and sequence.frame_rate.fps_numerator, this_func_label .. ": sequence missing fps_numerator")
-        local seq_fps_den = assert(sequence.frame_rate and sequence.frame_rate.fps_denominator, this_func_label .. ": sequence missing fps_denominator")
-
-        -- Get target video track
-        local video_tracks = Track.find_by_sequence(sequence_id, "VIDEO")
-        assert(#video_tracks > 0, this_func_label .. ": no video tracks in sequence")
-        local target_video_track = video_tracks[1]
-
-        -- Check source viewer marks (only apply to first clip if viewing it)
-        local pm = require("ui.panel_manager")
-        local source_sv = pm.get_sequence_monitor("source_monitor")
-
-        -- Build groups for each selected clip (serial arrangement)
-        local groups = {}
-        for i, clip in ipairs(selected_clips) do
-            local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or Media.load(clip.media_id)
-            assert(media, this_func_label .. ": media not found for clip " .. tostring(clip.clip_id))
-
-            local media_fps_num = (clip.rate and clip.rate.fps_numerator) or (media.frame_rate and media.frame_rate.fps_numerator)
-            local media_fps_den = (clip.rate and clip.rate.fps_denominator) or (media.frame_rate and media.frame_rate.fps_denominator)
-            assert(media_fps_num and media_fps_den, this_func_label .. ": clip/media missing fps")
-
-            -- Determine source marks: use viewer marks only for first clip if showing it
-            local source_in, source_out, duration
-            local viewer_mark_in = source_sv and source_sv:get_mark_in()
-            local viewer_mark_out = source_sv and source_sv:get_mark_out()
-            if i == 1 and source_sv
-                and source_sv.sequence_id == clip.clip_id
-                and viewer_mark_in ~= nil and viewer_mark_out ~= nil then
-                source_in = viewer_mark_in
-                source_out = viewer_mark_out
-                duration = viewer_mark_out - viewer_mark_in
-            else
-                -- Use clip's existing source in/out or full media duration
-                -- All coords are integer frames
-                if clip.source_in and clip.source_out and clip.duration then
-                    source_in = clip.source_in
-                    source_out = clip.source_out
-                    duration = clip.duration
-                else
-                    local media_dur_frames = media.duration
-                    assert(type(media_dur_frames) == "number", this_func_label .. ": media.duration must be integer")
-                    source_in = 0
-                    source_out = media_dur_frames
-                    duration = media_dur_frames
-                end
-            end
-
-            -- Build clips for this group (video + audio)
-            local clip_entries = {}
-
-            -- Video clip
-            table.insert(clip_entries, {
-                role = "video",
-                media_id = clip.media_id,
-                master_clip_id = clip.clip_id,
-                project_id = project_id,
-                name = clip.name or media.name or clip.clip_id,
-                source_in = source_in,
-                source_out = source_out,
-                duration = duration,
-                fps_numerator = media_fps_num,
-                fps_denominator = media_fps_den,
-                target_track_id = target_video_track.id,
-            })
-
-            -- Audio clips
-            local audio_channels = (media.audio_channels) or 0
-            if audio_channels > 0 then
-                local audio_track_resolver = clip_edit_helper.create_audio_track_resolver(sequence_id)
-                for ch = 0, audio_channels - 1 do
-                    local audio_track = audio_track_resolver(nil, ch)
-                    table.insert(clip_entries, {
-                        role = "audio",
-                        channel = ch,
-                        media_id = clip.media_id,
-                        master_clip_id = clip.clip_id,
-                        project_id = project_id,
-                        name = (clip.name or media.name or clip.clip_id) .. " (Audio)",
-                        source_in = source_in,
-                        source_out = source_out,
-                        duration = duration,
-                        fps_numerator = media_fps_num,
-                        fps_denominator = media_fps_den,
-                        target_track_id = audio_track.id,
-                    })
-                end
-            end
-
-            table.insert(groups, {
-                clips = clip_entries,
-                duration = duration,
-                master_clip_id = clip.clip_id,
-            })
-        end
-
-        -- Execute AddClipsToSequence
-        local edit_type = command_type == "Insert" and "insert" or "overwrite"
-        local result = command_manager.execute("AddClipsToSequence", {
-            groups = groups,
-            position = insert_pos,
-            sequence_id = sequence_id,
-            project_id = project_id,
-            edit_type = edit_type,
-            arrangement = "serial",
-            advance_playhead = advance_playhead,
-        })
-        assert(result and result.success, string.format(this_func_label .. ": %s failed: %s", command_type, result and result.error_message or "unknown error"))
-
-        log.event("Added %d clips to timeline (%s)", #selected_clips, edit_type)
-    end
-
-    if focus_manager and focus_manager.focus_panel then
-        focus_manager.focus_panel("timeline")
-    else
-        focus_manager.set_focused_panel("timeline")
-    end
 end
 
 local function collect_all_tree_entries()
@@ -2377,6 +2182,12 @@ function M.delete_selected_items()
     local clip_failures = 0
     local sequence_failures = 0
     local bin_failures = 0
+
+    -- Group all deletes into one undo step
+    local multi = #M.selected_items > 1
+    if multi then
+        command_manager.begin_undo_group("Delete Selected")
+    end
 
     local handled_sequences = {}
     for _, item in ipairs(M.selected_items) do
@@ -2474,6 +2285,10 @@ function M.delete_selected_items()
                 log.warn("Delete bin %s failed: %s", tostring(item.name or item.id), result and result.error_message or "unknown error")
             end
         end
+    end
+
+    if multi then
+        command_manager.end_undo_group()
     end
 
     if deleted > 0 then

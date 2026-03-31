@@ -178,6 +178,96 @@ function M.load_history()
     return commands
 end
 
+--- Load only commands on the main branch for history display.
+-- The main branch is: ancestors of cursor + redo chain (following latest child
+-- at each step) + undo group members of any command on the branch.
+-- Uses a recursive CTE so cost scales with branch depth, not total command count.
+-- @param cursor_seq number: current undo cursor (sequence_number), 0 or nil for empty
+-- @return table: list of Command objects sorted by sequence_number ASC
+function M.load_history_branch(cursor_seq)
+    local database = require("core.database")
+    local db = database.get_connection()
+    if not db then
+        return {}
+    end
+
+    cursor_seq = cursor_seq or 0
+
+    -- Step 1: Find the tip of the main branch by walking forward from cursor
+    -- following the latest child (highest sequence_number) at each step.
+    -- cursor_seq=0 means "before any command" — children are those with NULL parent.
+    local tip = cursor_seq
+    while true do
+        local child_q
+        if tip == 0 then
+            child_q = db:prepare([[
+                SELECT MAX(sequence_number) FROM commands
+                WHERE parent_sequence_number IS NULL
+                  AND command_type NOT LIKE 'Undo%'
+            ]])
+        else
+            child_q = db:prepare([[
+                SELECT MAX(sequence_number) FROM commands
+                WHERE parent_sequence_number = ?
+                  AND command_type NOT LIKE 'Undo%'
+            ]])
+        end
+        if not child_q then break end
+        if tip ~= 0 then
+            child_q:bind_value(1, tip)
+        end
+        local next_seq = nil
+        if child_q:exec() and child_q:next() then
+            next_seq = child_q:value(0)
+        end
+        child_q:finalize()
+        if not next_seq then break end
+        tip = next_seq
+    end
+
+    if tip == 0 then
+        return {}
+    end
+
+    -- Step 2: Walk from tip back to root via parent_sequence_number (the branch spine),
+    -- then include all undo group members of any command on that spine.
+    local query = db:prepare([[
+        WITH RECURSIVE spine(seq) AS (
+            SELECT ?
+            UNION ALL
+            SELECT c.parent_sequence_number
+            FROM commands c
+            JOIN spine s ON c.sequence_number = s.seq
+            WHERE c.parent_sequence_number IS NOT NULL
+        )
+        SELECT * FROM commands
+        WHERE sequence_number IN (SELECT seq FROM spine)
+           OR undo_group_id IN (
+                SELECT c2.undo_group_id FROM commands c2
+                WHERE c2.sequence_number IN (SELECT seq FROM spine)
+                  AND c2.undo_group_id IS NOT NULL
+              )
+        ORDER BY sequence_number ASC
+    ]])
+    if not query then
+        return {}
+    end
+    query:bind_value(1, tip)
+
+    local commands = {}
+    if query:exec() then
+        while query:next() do
+            local cmd = M.parse_from_query(query, nil)
+            if cmd then
+                table.insert(commands, cmd)
+            end
+        end
+    end
+    query:finalize()
+
+    return commands
+end
+
 -- Load command at specific sequence number
 function M.load_at_sequence(seq_num, project_id)
     local database = require("core.database")
