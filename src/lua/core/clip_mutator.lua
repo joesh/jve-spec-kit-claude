@@ -537,6 +537,7 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
                     track_id = original.track_id,
                     media_id = original.media_id,
                     master_clip_id = original.master_clip_id,
+                    owner_sequence_id = original.owner_sequence_id,
                     timeline_start = f.s,
                     duration = f.e - f.s,
                     source_in = get_source_in(original) + shift,
@@ -544,6 +545,7 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
                     fps_numerator = row_fps_num,
                     fps_denominator = row_fps_den,
                     enabled = original.enabled,
+                    volume = original.volume,
                     created_at = os.time(),
                     modified_at = os.time(),
                 }
@@ -622,6 +624,7 @@ function ClipMutator.resolve_ripple(db, params)
                 fps_numerator = row_fps_num,
                 fps_denominator = row_fps_den,
                 enabled = row.enabled,
+                volume = original.volume,
                 offline = false,  -- transient
                 created_at = os.time(),
                 modified_at = os.time()
