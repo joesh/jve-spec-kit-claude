@@ -258,8 +258,10 @@ function M.focus_panel(panel_id)
         target_widget = panel.focus_widgets[1]
     end
 
-    -- Qt will trigger the focus event which will call our handler
+    -- Set Qt focus on the target widget
     qt_set_focus(target_widget)
+    -- Update visual indicators directly (click-to-focus filter only catches mouse events)
+    M.set_focused_panel(panel_id)
     return true
 end
 

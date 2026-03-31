@@ -173,7 +173,7 @@ print(string.format("  ✓ source_in=%d, source_dur=%d, speed=%.1f", fast.source
 
 --------------------------------------------------------------------------------
 -- Test 5: REAL DATA — clip 40-335.3-1 from fixture DRP
--- Fixture: tests/fixtures/resolve/2026-03-20-anamnesis joe edit.drp
+-- Fixture: tests/fixtures/resolve/anamnesis joe edit.drp
 -- Sequence: 3890091e-19cd-415c-935d-3d4a8c28647e
 --
 -- This clip has <In>2327|000000000000ac3d</In> where the hex decodes to

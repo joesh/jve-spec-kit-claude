@@ -17,7 +17,7 @@
 -- Project Browser - Media library and bin management
 -- Shows imported media files, allows drag-to-timeline
 -- Mimics DaVinci Resolve Media Pool style
--- luacheck: globals qt_set_focus qt_line_edit_select_all qt_set_line_edit_text_changed_handler qt_set_line_edit_return_pressed_handler qt_install_panel_focus_trap qt_set_panel_default_button
+-- luacheck: globals qt_set_focus qt_line_edit_select_all qt_set_line_edit_text_changed_handler qt_set_line_edit_return_pressed_handler
 local View = require("ui.view")
 local M = View.new("project_browser")
 local db = require("core.database")
@@ -110,9 +110,9 @@ local REFRESH_COMMANDS = {
     DeleteMasterClip = true,
     DeleteSequence = true,
     DuplicateMasterClip = true,
+    RenameItem = true,
     ImportResolveProject = true,
     ImportResolveDatabase = true,
-    RenameItem = true,
     CreateSequence = true,
 }
 
@@ -311,6 +311,7 @@ local function finalize_pending_rename(new_name)
 
     pending.preview_name = nil
     M.pending_rename = nil
+    -- MVC: command_listener triggers M.refresh() which re-runs active find
 end
 
 M._test_finalize_pending_rename = finalize_pending_rename
@@ -1027,9 +1028,11 @@ end
 -- Create project browser widget
 function M.create()
     -- Create container
-    local container = qt_constants.WIDGET.CREATE()
+    -- luacheck: globals qt_create_focus_container qt_set_container_default_button
+    local container = qt_create_focus_container()  -- Tab wraps within panel via focusNextPrevChild
     -- Opaque background prevents resize artifacts (transparent children leave ghost pixels)
-    qt_constants.PROPERTIES.SET_STYLE(container, [[QWidget { background: #2b2b2b; }]])
+    -- No blanket QWidget stylesheet — Fusion dark palette handles colors.
+    -- Blanket QWidget rules override palette for all children (breaks combobox highlight etc.)
     local layout = qt_constants.LAYOUT.CREATE_VBOX()
 
     -- Set layout spacing
@@ -1077,25 +1080,11 @@ function M.create()
     local tree = qt_constants.WIDGET.CREATE_TREE()
 
     -- CSS: item colors, header — no branch rules (native Qt disclosure triangles)
+    -- Minimal tree styling — let Fusion dark palette handle selection, focus, hover.
+    -- Only set font size and header appearance.
     local tree_style = string.format([[
         QTreeWidget {
-            background: #262626;
-            color: #cccccc;
-            border: none;
             font-size: %s;
-            outline: none;
-        }
-        QTreeWidget::item {
-            padding: 2px;
-            padding-left: 4px;
-            height: 22px;
-        }
-        QTreeWidget::item:selected {
-            background: #4a4a4a;
-            color: white;
-        }
-        QTreeWidget::item:hover {
-            background: #333333;
         }
         QHeaderView::section {
             background: #2b2b2b;
@@ -1302,11 +1291,13 @@ function M.create()
     end
     qt_constants.LAYOUT.ADD_WIDGET(find_row, find_edit)
 
-    local arrow_style = "QPushButton { min-width: 20px; max-width: 20px; padding: 1px 2px; }"
+    -- Let Fusion palette handle focus/hover/pressed on regular buttons.
+    -- Only the default button (Next) gets accent styling.
     local prev_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x90")  -- ←
-    qt_constants.PROPERTIES.SET_STYLE(prev_btn, arrow_style)
     local next_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x92")  -- →
-    qt_constants.PROPERTIES.SET_STYLE(next_btn, arrow_style)
+    qt_constants.PROPERTIES.SET_STYLE(next_btn,
+        "QPushButton { background-color: #0a84ff; color: white; "
+        .. "min-width: 20px; max-width: 20px; padding: 1px 2px; border-radius: 3px; }")
     qt_constants.LAYOUT.ADD_WIDGET(find_row, prev_btn)
     qt_constants.LAYOUT.ADD_WIDGET(find_row, next_btn)
 
@@ -1323,7 +1314,7 @@ function M.create()
     qt_constants.LAYOUT.ADD_WIDGET(find_row, attr_combo)
 
     local all_btn = qt_constants.WIDGET.CREATE_BUTTON("All")
-    qt_constants.PROPERTIES.SET_STYLE(all_btn, "QPushButton { min-width: 28px; max-width: 40px; padding: 1px 4px; }")
+    -- No per-widget stylesheet — Fusion palette handles focus/hover/pressed
     qt_constants.LAYOUT.ADD_WIDGET(find_row, all_btn)
 
     qt_constants.LAYOUT.ADD_LAYOUT(find_bar_layout, find_row)
@@ -1384,6 +1375,7 @@ function M.create()
         local idx = find_state.get_current_index()
         qt_constants.PROPERTIES.SET_TEXT(match_label, string.format("%d/%d", idx, count))
     end
+    M._update_match_label = update_match_label
 
     local function do_browser_find(navigate)
         local value = qt_constants.PROPERTIES.GET_TEXT(find_edit)
@@ -1532,7 +1524,19 @@ function M.create()
     end
     qt_set_line_edit_text_changed_handler(find_edit, "__browser_find_text_changed")
 
-    -- Return in find field handled by PanelFocusTrap default button (next_btn)
+    -- Re-run find when attribute column changes
+    -- luacheck: globals qt_set_combobox_change_handler
+    _G["__browser_find_attr_changed"] = function()
+        local value = qt_constants.PROPERTIES.GET_TEXT(find_edit)
+        if value and value ~= "" then
+            do_browser_find(false)
+        end
+    end
+    qt_set_combobox_change_handler(attr_combo, "__browser_find_attr_changed")
+
+    -- Return in find field → Find Next via QLineEdit::returnPressed signal.
+    -- Standard Qt pattern for non-QDialog windows (setDefault only works in QDialog).
+    qt_set_line_edit_return_pressed_handler(find_edit, "__browser_find_next")
 
     -- Start hidden
     if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
@@ -1549,8 +1553,23 @@ function M.create()
     M.tree = tree
     M.container = container
 
+    -- When tree gets focus with nothing selected, select the first item
+    local tree_focus_h = register_handler(function(event)
+        local focus_in = event and (event == "FocusIn" or event.type == "FocusIn"
+            or event == true or event == 1)
+        if focus_in and not M.selected_item then
+            if qt_constants.CONTROL.GET_TREE_ITEMS_IN_ORDER then
+                local items = qt_constants.CONTROL.GET_TREE_ITEMS_IN_ORDER(tree)
+                if items and #items > 0 then
+                    qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(tree, items[1])
+                end
+            end
+        end
+    end)
+    qt_set_focus_handler(tree, tree_focus_h)
+
     -- Install panel focus trap: Tab wraps within panel, Return activates default button
-    qt_install_panel_focus_trap(container, next_btn)  -- next_btn is default for Return
+    qt_set_container_default_button(container, next_btn)  -- Return → Find Next via QShortcut
 
     --- Toggle find bar visibility (called by Find command)
     function M.toggle_find_bar()
@@ -1667,6 +1686,17 @@ end
 function M.refresh()
     ensure_command_listener()
     populate_tree()
+    -- Re-run active find against updated data
+    local find_state = require("core.find_state")
+    if find_state.is_active() and M.find_bar and M.find_bar.find_edit then
+        local value = qt_constants.PROPERTIES.GET_TEXT(M.find_bar.find_edit)
+        if value and value ~= "" then
+            local column = qt_constants.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(M.find_bar.attr_combo)
+            local clips = M:get_clips()
+            find_state.execute(clips, {column = column, operator = "contains", value = value})
+            if M._update_match_label then M._update_match_label() end
+        end
+    end
 end
 
 handle_tree_drop = function(event)

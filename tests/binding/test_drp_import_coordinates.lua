@@ -13,7 +13,7 @@ local database = require("core.database")
 local test_env = require("test_env")
 local json = require("dkjson")
 
-local fixture = test_env.resolve_repo_path("tests/fixtures/resolve/sample_project.drp")
+local fixture = test_env.require_fixture("tests/fixtures/resolve/sample_project.drp")
 local JVP = "/tmp/jve/test_drp_coordinates.jvp"
 os.remove(JVP); os.remove(JVP .. "-wal"); os.remove(JVP .. "-shm")
 

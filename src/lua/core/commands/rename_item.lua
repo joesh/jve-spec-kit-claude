@@ -32,19 +32,21 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         new_name = command_helper.trim_string(new_name)
 
         if target_type == "master_clip" then
-            local Clip = require("models.clip")
-            local clip = Clip.load_optional(target_id)
-            if not clip then
-                return false, "RenameItem: Master clip not found"
+            -- Master clips ARE sequences (IS-a refactor). Load from sequences table.
+            local Sequence = require("models.sequence")
+            local mc = Sequence.load(target_id)
+            if not mc then
+                return false, "RenameItem: Master clip not found (id=" .. tostring(target_id) .. ")"
             end
-            local previous_name = clip.name or ""
+            local previous_name = mc.name or ""
             if previous_name == new_name then
                 return true, previous_name
             end
-            clip.name = new_name
-            if not clip:save({skip_occlusion = true}) then
+            mc.name = new_name
+            if not mc:save() then
                 return false, "RenameItem: Failed to save master clip"
             end
+            -- Also update timeline clips that reference this master clip
             local update_stmt = db:prepare([[
                 UPDATE clips
                 SET name = ?
@@ -54,13 +56,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 return false, "RenameItem: Failed to prepare timeline rename"
             end
             update_stmt:bind_value(1, new_name)
-            update_stmt:bind_value(2, clip.id)
+            update_stmt:bind_value(2, mc.id)
             if not update_stmt:exec() then
                 update_stmt:finalize()
                 return false, "RenameItem: Failed to update timeline clips"
             end
             update_stmt:finalize()
-            command_helper.reload_timeline(clip.owner_sequence_id or clip.master_clip_id)
+            command_helper.reload_timeline(mc.id)
             return true, previous_name
         elseif target_type == "sequence" then
             local Sequence = require("models.sequence")

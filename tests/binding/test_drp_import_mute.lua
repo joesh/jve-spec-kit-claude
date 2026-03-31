@@ -16,20 +16,8 @@ local database = require("core.database")
 local Sequence = require("models.sequence")
 local test_env = require("test_env")
 
-local fixture = test_env.resolve_repo_path(
-    "tests/fixtures/resolve/2026-03-20-anamnesis joe edit.drp")
-
-local function file_exists(path)
-    local f = io.open(path, "r")
-    if f then f:close(); return true end
-    return false
-end
-
-if not file_exists(fixture) then
-    print("SKIP: anamnesis DRP fixture not found")
-    print("✅ test_drp_import_mute.lua skipped")
-    os.exit(0)
-end
+local fixture = test_env.require_fixture(
+    "tests/fixtures/resolve/anamnesis joe edit.drp")
 
 print("\n=== DRP Import Mute Flag Test (anamnesis) ===")
 

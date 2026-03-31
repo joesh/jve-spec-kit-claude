@@ -8,8 +8,8 @@ local drp_importer = require("importers.drp_importer")
 local database = require("core.database")
 
 local test_env = require("test_env")
-local fixture_path = test_env.resolve_repo_path(
-    "tests/fixtures/resolve/2026-03-20-anamnesis joe edit.drp")
+local fixture_path = test_env.require_fixture(
+    "tests/fixtures/resolve/anamnesis joe edit.drp")
 
 local JVP_PATH = "/tmp/jve/test_drp_uuid_dedup.jvp"
 os.remove(JVP_PATH)

@@ -70,19 +70,50 @@ public:
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override {
-        // Claim all shortcut overrides so Qt never fires QAction shortcuts.
-        // Menu setShortcut() is display-only; all dispatch goes through Lua.
+        // ShortcutOverride: only claim residual keys that the Lua handler
+        // still manages (arrow repeat, context gathering, escape cascade).
+        // All other keys pass through to Qt's QShortcut resolution.
         if (event->type() == QEvent::ShortcutOverride) {
-            event->accept();
-            return true;
+            QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
+            int k = keyEvent->key();
+            auto mods = keyEvent->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier);
+
+            // Always-residual keys (any modifier combo): arrows, Escape, F9/F10
+            // Tab NOT claimed — Qt's native focusNextPrevChild handles Tab cycling.
+            // Return NOT claimed — Qt's native default button / button click handles it.
+            if (k == Qt::Key_Left || k == Qt::Key_Right ||
+                k == Qt::Key_Escape ||
+                k == Qt::Key_F9 || k == Qt::Key_F10) {
+                event->accept();
+                return true;
+            }
+            // Residual without Cmd/Ctrl/Alt: Comma, Period, E.
+            // Shift+Comma/Period = 5-frame nudge (still residual).
+            // Cmd+Comma, Cmd+E etc. → let QShortcut resolve.
+            if (mods == Qt::NoModifier &&
+                (k == Qt::Key_Comma || k == Qt::Key_Period || k == Qt::Key_E)) {
+                event->accept();
+                return true;
+            }
+            // Let Qt resolve QShortcuts for everything else
+            return false;
         }
         if (event->type() == QEvent::KeyPress && lua_state) {
             QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
 
-            // Skip standalone modifier keys — they don't map to commands
             int k = keyEvent->key();
+
+            // Skip standalone modifier keys — they don't map to commands
             if (k == Qt::Key_Control || k == Qt::Key_Shift ||
                 k == Qt::Key_Alt || k == Qt::Key_Meta) {
+                return QObject::eventFilter(obj, event);
+            }
+
+            // Skip Tab and Return — let Qt handle natively.
+            // Tab: QWidget::event() → focusNextPrevChild() (focus cycling with highlights)
+            // Return: QShortcut on FocusContainmentWidget (default button) or widget keyPressEvent
+            if (k == Qt::Key_Tab || k == Qt::Key_Backtab ||
+                k == Qt::Key_Return || k == Qt::Key_Enter) {
                 return QObject::eventFilter(obj, event);
             }
 
@@ -477,11 +508,12 @@ protected:
 
             QWidget* current = QApplication::focusWidget();
             int idx = focusable.indexOf(current);
-            if (idx < 0) { focusable.first()->setFocus(); return true; }
+            // Use TabFocusReason so Qt shows focus highlights (ring/outline)
+            if (idx < 0) { focusable.first()->setFocus(Qt::TabFocusReason); return true; }
 
             int next = forward ? (idx + 1) % focusable.size()
                                : (idx - 1 + focusable.size()) % focusable.size();
-            focusable[next]->setFocus();
+            focusable[next]->setFocus(forward ? Qt::TabFocusReason : Qt::BacktabFocusReason);
             return true;
         }
 
@@ -547,11 +579,11 @@ int lua_cycle_panel_focus(lua_State* L) {
 
     QWidget* current = QApplication::focusWidget();
     int idx = focusable.indexOf(current);
-    if (idx < 0) { focusable.first()->setFocus(); return 0; }
+    if (idx < 0) { focusable.first()->setFocus(Qt::TabFocusReason); return 0; }
 
     int next = forward ? (idx + 1) % focusable.size()
                        : (idx - 1 + focusable.size()) % focusable.size();
-    focusable[next]->setFocus();
+    focusable[next]->setFocus(forward ? Qt::TabFocusReason : Qt::BacktabFocusReason);
     return 0;
 }
 

@@ -88,25 +88,28 @@ local function find_cmd(name)
     return false
 end
 
-print("\nTest 1: J dispatches ShuttleReverse")
+-- Tests 1-3: JKL are NOT dispatched by the Lua residual handler.
+-- QShortcut handles JKL dispatch; the residual handler returns false.
+print("\nTest 1: J not handled by residual handler (QShortcut handles it)")
 reset()
-keyboard_shortcuts.handle_key({ key = QT_KEY_J, modifiers = 0, text = "j", focus_widget_is_text_input = 0 })
-assert(find_cmd("ShuttleReverse"), "J should dispatch ShuttleReverse, got: " .. table.concat(dispatched, ", "))
-print("  ✓ J → ShuttleReverse")
+local handled = keyboard_shortcuts.handle_key({ key = QT_KEY_J, modifiers = 0, text = "j", focus_widget_is_text_input = 0 })
+assert(not handled, "J must not be handled by residual handler")
+assert(not find_cmd("ShuttleReverse"), "ShuttleReverse must not dispatch via residual handler")
+print("  ✓ J not handled by residual handler")
 
-print("\nTest 2: K dispatches ShuttleStop")
+print("\nTest 2: K not handled by residual handler")
 reset()
-keyboard_shortcuts.handle_key({ key = QT_KEY_K, modifiers = 0, text = "k", focus_widget_is_text_input = 0 })
-assert(find_cmd("ShuttleStop"), "K should dispatch ShuttleStop, got: " .. table.concat(dispatched, ", "))
-print("  ✓ K → ShuttleStop")
+handled = keyboard_shortcuts.handle_key({ key = QT_KEY_K, modifiers = 0, text = "k", focus_widget_is_text_input = 0 })
+assert(not handled, "K must not be handled by residual handler")
+print("  ✓ K not handled by residual handler")
 
-print("\nTest 3: L dispatches ShuttleForward")
+print("\nTest 3: L not handled by residual handler")
 reset()
-keyboard_shortcuts.handle_key({ key = QT_KEY_L, modifiers = 0, text = "l", focus_widget_is_text_input = 0 })
-assert(find_cmd("ShuttleForward"), "L should dispatch ShuttleForward, got: " .. table.concat(dispatched, ", "))
-print("  ✓ L → ShuttleForward")
+handled = keyboard_shortcuts.handle_key({ key = QT_KEY_L, modifiers = 0, text = "l", focus_widget_is_text_input = 0 })
+assert(not handled, "L must not be handled by residual handler")
+print("  ✓ L not handled by residual handler")
 
-print("\nTest 4: J in text field does not dispatch")
+print("\nTest 4: J in text field not handled (QShortcut text protection)")
 reset()
 keyboard_shortcuts.handle_key({ key = QT_KEY_J, modifiers = 0, text = "j", focus_widget_is_text_input = true })
 assert(not find_cmd("ShuttleReverse"), "J should not dispatch in text field")

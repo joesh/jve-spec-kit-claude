@@ -9,7 +9,7 @@ local drp_importer = require("importers.drp_importer")
 local database = require("core.database")
 
 local test_env = require("test_env")
-local fixture_path = test_env.resolve_repo_path("tests/fixtures/resolve/sample_project.drp")
+local fixture_path = test_env.require_fixture("tests/fixtures/resolve/sample_project.drp")
 
 local JVP_PATH = "/tmp/jve/test_drp_import_marks.jvp"
 os.remove(JVP_PATH)

@@ -65,6 +65,16 @@ function M.resolve_repo_path(relative)
     return repo_root .. "/" .. relative
 end
 
+--- Resolve a fixture path and ASSERT it exists. Tests must not silently pass
+--- when their fixture files are missing.
+function M.require_fixture(relative)
+    local path = M.resolve_repo_path(relative)
+    local f = io.open(path, "r")
+    assert(f, string.format("FIXTURE MISSING: %s\n  Tests must not silently pass with missing fixtures.", path))
+    f:close()
+    return path
+end
+
 -- Provide deterministic JSON helpers via bundled dkjson
 local function ensure_json_helpers()
     if _G.qt_json_encode and _G.qt_json_decode then

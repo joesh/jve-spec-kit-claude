@@ -7,6 +7,7 @@
 -- Non-modal: stays open while user works. Eventually dockable.
 --
 -- @file find_dialog.lua
+-- luacheck: globals qt_set_line_edit_return_pressed_handler qt_set_line_edit_text_changed_handler qt_create_single_shot_timer
 
 local qt = require("core.qt_constants")
 local query_engine = require("core.query_engine")
@@ -251,6 +252,9 @@ local function create_window()
     local window = qt.WIDGET.CREATE_MAIN_WINDOW()
     qt.WIDGET.SET_WINDOW_FLAGS(window, 0x0000000B)  -- Qt::Tool
     qt.PROPERTIES.SET_TITLE(window, "Find & Filter")
+    -- Apply global stylesheet (separate window doesn't inherit from main window)
+    local ui_constants = require("core.ui_constants")
+    qt_set_widget_stylesheet(window, ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR)  -- luacheck: globals qt_set_widget_stylesheet
 
     -- Restore geometry
     local project_id = db_module.get_current_project_id()
@@ -284,6 +288,9 @@ local function create_window()
     ws.find_edit = qt.WIDGET.CREATE_LINE_EDIT("")
     qt.PROPERTIES.SET_PLACEHOLDER_TEXT(ws.find_edit, "search text")
     qt.LAYOUT.ADD_WIDGET(row1, ws.find_edit)
+    -- Return in find field → Find Next (QLineEdit::returnPressed)
+    register_handler("__find_dlg_edit_return", do_find_next)
+    qt_set_line_edit_return_pressed_handler(ws.find_edit, "__find_dlg_edit_return")
     qt.LAYOUT.ADD_LAYOUT(layout, row1)
 
     -- Row 2: Replace with  [________replace________]
@@ -315,15 +322,24 @@ local function create_window()
     qt.LAYOUT.ADD_STRETCH(row3)
     qt.LAYOUT.ADD_LAYOUT(layout, row3)
 
+    -- Button styles: focus ring via :focus, default button via accent color
+    local btn_focus = "QPushButton:focus { border: 1px solid #5ac8fa; }"
+    local default_btn_style = "QPushButton { background-color: #0a84ff; color: white; "
+        .. "border-radius: 4px; padding: 3px 12px; } "
+        .. "QPushButton:focus { border: 1px solid #5ac8fa; }"
+    local normal_btn_style = "QPushButton { padding: 3px 12px; } " .. btn_focus
+
     -- Row 5: Find buttons
     local row5 = qt.LAYOUT.CREATE_HBOX()
 
     local next_btn = qt.WIDGET.CREATE_BUTTON("Next")
+    qt.PROPERTIES.SET_STYLE(next_btn, default_btn_style)  -- Default button: accent blue
     register_handler("__find_dlg_next", do_find_next)
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(next_btn, "__find_dlg_next")
     qt.LAYOUT.ADD_WIDGET(row5, next_btn)
 
     local prev_btn = qt.WIDGET.CREATE_BUTTON("Prev")
+    qt.PROPERTIES.SET_STYLE(prev_btn, normal_btn_style)
     register_handler("__find_dlg_prev", do_find_prev)
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(prev_btn, "__find_dlg_prev")
     qt.LAYOUT.ADD_WIDGET(row5, prev_btn)
@@ -352,6 +368,13 @@ local function create_window()
     local clear_btn = qt.WIDGET.CREATE_BUTTON("Clear")
     register_handler("__find_dlg_clear", function()
         log.event("do_clear_find")
+        -- Restore pre-find selection before clearing state
+        if ws.on_restore_selection then
+            local prev_sel = find_state.get_previous_selection()
+            if prev_sel then
+                ws.on_restore_selection(prev_sel)
+            end
+        end
         find_state.clear()
         update_status("")
     end)
@@ -445,6 +468,7 @@ function M.show(opts)
 
     -- Show and bring to front
     log.event("find_dialog.show: displaying window")
+    ws.visible = true
     qt.DISPLAY.SHOW(ws.window)
     qt.DISPLAY.RAISE(ws.window)
     qt.DISPLAY.ACTIVATE(ws.window)
@@ -457,6 +481,7 @@ end
 
 --- Hide the panel.
 function M.hide()
+    ws.visible = false
     if ws.window and qt.DISPLAY and qt.DISPLAY.SET_VISIBLE then
         qt.DISPLAY.SET_VISIBLE(ws.window, false)
     end
@@ -482,7 +507,7 @@ end
 
 --- Check if the panel is currently visible.
 function M.is_visible()
-    return ws.window ~= nil
+    return ws.visible == true
 end
 
 return M

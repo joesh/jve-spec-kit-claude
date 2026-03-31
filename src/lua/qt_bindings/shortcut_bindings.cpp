@@ -92,18 +92,37 @@ int lua_delete_shortcut(lua_State* L) {
 }
 
 // ============================================================================
-// Set focus containment on a widget — Tab wraps within its children
-// Uses focusNextPrevChild logic via event filter
-// Args: container_widget
+// FocusContainmentWidget — overrides focusNextPrevChild() to trap Tab within
+// a panel's children. This is the Qt-standard mechanism for panel-scoped
+// focus cycling. Using TabFocusReason ensures native focus highlights appear.
 // ============================================================================
-class FocusContainment : public QObject {
+class FocusContainmentWidget : public StyledWidget {
 public:
-    explicit FocusContainment(QWidget* panel) : QObject(panel), m_panel(panel) {}
+    using StyledWidget::StyledWidget;
 
-    bool handleTab(bool forward) {
+    void setDefaultButton(QAbstractButton* btn) { m_defaultButton = btn; }
+    QAbstractButton* defaultButton() const { return m_defaultButton; }
+
+protected:
+    bool focusNextPrevChild(bool next) override {
+        // Collect top-level focusable children only — skip internal sub-widgets
+        // of compound controls (QTreeWidget viewport, scrollbar handles, etc.)
         QList<QWidget*> focusable;
-        for (auto* child : m_panel->findChildren<QWidget*>()) {
-            if ((child->focusPolicy() & Qt::TabFocus) && child->isVisible() && child->isEnabled()) {
+        for (auto* child : findChildren<QWidget*>()) {
+            if (!(child->focusPolicy() & Qt::TabFocus)
+                || !child->isVisible() || !child->isEnabled()) {
+                continue;
+            }
+            // Skip if a focusable ancestor (other than this container) exists —
+            // that means child is an internal widget of a compound control.
+            bool is_internal = false;
+            for (QWidget* p = child->parentWidget(); p && p != this; p = p->parentWidget()) {
+                if (p->focusPolicy() & Qt::TabFocus) {
+                    is_internal = true;
+                    break;
+                }
+            }
+            if (!is_internal) {
                 focusable.append(child);
             }
         }
@@ -111,39 +130,73 @@ public:
 
         QWidget* current = QApplication::focusWidget();
         int idx = focusable.indexOf(current);
-        if (idx < 0) { focusable.first()->setFocus(); return true; }
+        // If current focus is inside a compound widget (e.g., tree viewport),
+        // resolve to the top-level focusable parent in our list.
+        if (idx < 0 && current) {
+            for (QWidget* p = current->parentWidget(); p && p != this; p = p->parentWidget()) {
+                idx = focusable.indexOf(p);
+                if (idx >= 0) break;
+            }
+        }
+        if (idx < 0) {
+            focusable.first()->setFocus(Qt::TabFocusReason);
+            return true;
+        }
 
-        int next = forward ? (idx + 1) % focusable.size()
-                           : (idx - 1 + focusable.size()) % focusable.size();
-        focusable[next]->setFocus();
-        return true;
+        int target = next ? (idx + 1) % focusable.size()
+                          : (idx - 1 + focusable.size()) % focusable.size();
+        QWidget* targetWidget = focusable[target];
+        targetWidget->setFocus(next ? Qt::TabFocusReason
+                                    : Qt::BacktabFocusReason);
+
+        // If focusing a tree with no current item, select the first item
+        // so the focus ring is visible on an item row.
+        if (auto* tree = qobject_cast<QTreeWidget*>(targetWidget)) {
+            if (!tree->currentItem() && tree->topLevelItemCount() > 0) {
+                tree->setCurrentItem(tree->topLevelItem(0));
+            }
+        }
+        return true;  // Handled — Tab stays within this panel
     }
 
 private:
-    QWidget* m_panel;
+    QAbstractButton* m_defaultButton = nullptr;
 };
 
-static QMap<QWidget*, FocusContainment*> g_focus_containments;
+// ============================================================================
+// Create a FocusContainmentWidget — use as panel container for Tab wrapping.
+// Args: (none)
+// Returns: widget userdata
+// ============================================================================
+int lua_create_focus_container(lua_State* L) {
+    auto* widget = new FocusContainmentWidget();
+    lua_push_widget(L, widget);
+    return 1;
+}
 
-int lua_set_focus_containment(lua_State* L) {
-    QWidget* widget = get_widget<QWidget>(L, 1);
-    if (!widget) return 0;
-
-    if (!g_focus_containments.contains(widget)) {
-        g_focus_containments[widget] = new FocusContainment(widget);
+// ============================================================================
+// Set a default button on a FocusContainmentWidget.
+// The default button is activated via QLineEdit::returnPressed connections
+// (set up in Lua) — not via QShortcut which fires too early.
+// Args: container_widget, button_widget
+// ============================================================================
+int lua_set_container_default_button(lua_State* L) {
+    auto* container = dynamic_cast<FocusContainmentWidget*>(
+        get_widget<QWidget>(L, 1));
+    auto* button = get_widget<QAbstractButton>(L, 2);
+    if (!container) {
+        return luaL_error(L, "qt_set_container_default_button: "
+                             "container must be a FocusContainmentWidget");
     }
+    if (!button) {
+        return luaL_error(L, "qt_set_container_default_button: "
+                             "button required");
+    }
+
+    container->setDefaultButton(button);
+    // Default button activation is handled by connecting QLineEdit::returnPressed
+    // to the action in Lua (qt_set_line_edit_return_pressed_handler).
+    // No QShortcut — QShortcut fires before widgets process Return, wrong priority.
     return 0;
 }
 
-// Called from Lua keyboard dispatch for Tab within a contained panel
-int lua_cycle_contained_focus(lua_State* L) {
-    QWidget* widget = get_widget<QWidget>(L, 1);
-    bool forward = lua_toboolean(L, 2);
-    if (!widget) return 0;
-
-    auto it = g_focus_containments.find(widget);
-    if (it != g_focus_containments.end()) {
-        it.value()->handleTab(forward);
-    }
-    return 0;
-}

@@ -18,7 +18,7 @@ print("\n=== DRP Bin Structure Test ===")
 -- -----------------------------------------------------------------------
 print("\n--- Test 1: sample_project.drp ---")
 do
-    local path = test_env.resolve_repo_path("tests/fixtures/resolve/sample_project.drp")
+    local path = test_env.require_fixture("tests/fixtures/resolve/sample_project.drp")
     local jvp = "/tmp/jve/test_bin_structure_sample.jvp"
     os.remove(jvp); os.remove(jvp.."-wal"); os.remove(jvp.."-shm")
 
@@ -61,8 +61,8 @@ end
 -- -----------------------------------------------------------------------
 print("\n--- Test 2: anamnesis DRP ---")
 do
-    local path = test_env.resolve_repo_path(
-        "tests/fixtures/resolve/2026-03-20-anamnesis joe edit.drp")
+    local path = test_env.require_fixture(
+        "tests/fixtures/resolve/anamnesis joe edit.drp")
     local jvp = "/tmp/jve/test_bin_structure_anam.jvp"
     os.remove(jvp); os.remove(jvp.."-wal"); os.remove(jvp.."-shm")
 

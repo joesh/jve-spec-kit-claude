@@ -426,6 +426,17 @@ local timeline_state_from_panel = timeline_panel_mod.get_state()
 log.event("timeline_state from panel = %s", tostring(timeline_state_from_panel))
 keyboard_shortcuts.init(timeline_state_from_panel, command_manager, project_browser_mod, timeline_panel_mod)
 
+-- 5b. Create QShortcut objects from TOML bindings for Qt-native shortcut resolution.
+-- Panel containers map context names to widgets; Qt fires the right shortcut based on focus.
+local shortcut_registry = require("core.keyboard_shortcut_registry")
+shortcut_registry.create_qt_shortcuts({
+    window = main_window,
+    timeline = timeline_panel,
+    source_monitor = source_monitor:get_widget(),
+    timeline_monitor = timeline_monitor:get_widget(),
+    project_browser = project_browser,
+})
+
 -- 6. Initialize focus manager for visual panel indicators
 local focus_manager = require("ui.focus_manager")
 

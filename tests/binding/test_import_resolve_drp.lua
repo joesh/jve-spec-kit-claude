@@ -32,7 +32,7 @@ local function scalar(db, sql, param)
 end
 
 local test_env = require('test_env')
-local fixture_path = test_env.resolve_repo_path("tests/fixtures/resolve/sample_project.drp")
+local fixture_path = test_env.require_fixture("tests/fixtures/resolve/sample_project.drp")
 
 -- Validate raw parser behaviour
 local parse_result = drp_importer.parse_drp_file(fixture_path)

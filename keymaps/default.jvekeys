@@ -103,6 +103,6 @@
 "Cmd+Shift+G" = "FindPrevious"
 
 [Browser]
-"Return" = "ActivateBrowserSelection @project_browser"
-"F2" = "RenameItem @project_browser"
+# Return handled natively: tree keymap (activate/toggle) + PanelFocusTrap (button click)
+"F2" = "StartRename @project_browser"
 "Cmd+Shift+N" = "NewBin @project_browser"

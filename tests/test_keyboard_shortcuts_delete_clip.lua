@@ -65,6 +65,11 @@ local function make_clip(name, start, dur)
 end
 
 -- ── Init real command system + keyboard dispatch ──
+-- After QShortcut migration, Delete/Backspace are dispatched by QShortcut,
+-- not the Lua residual handler. Test through registry.handle_key_event()
+-- (same dispatch function the QShortcut handlers use).
+local registry = require("core.keyboard_shortcut_registry")
+
 local function init_all()
     -- Reload modules to clear state from previous test
     package.loaded["core.command_manager"] = nil
@@ -80,6 +85,7 @@ local function init_all()
 
     command_manager = require("core.command_manager")
     keyboard_shortcuts = require("core.keyboard_shortcuts")
+    registry = require("core.keyboard_shortcut_registry")
     timeline_state = require("ui.timeline.timeline_state")
     focus_manager = require("ui.focus_manager")
 
@@ -92,6 +98,14 @@ local function init_all()
 
     focus_manager.set_focused_panel("timeline")
     timeline_state.set_playhead_position(0)
+end
+
+-- Dispatch a key event through the registry (simulates QShortcut handler path)
+local function dispatch_key(key, modifiers)
+    command_manager.begin_command_event("ui")
+    local handled = registry.handle_key_event(key, modifiers, "timeline")
+    command_manager.end_command_event()
+    return handled
 end
 
 -- ── Qt key codes (literal values from Qt::Key enum, NOT from our constants) ──
@@ -108,10 +122,7 @@ do
     init_all()
     timeline_state.set_selection({ clip_b })
 
-    keyboard_shortcuts.handle_key({
-        key = QT_KEY_DELETE, modifiers = 0,
-        text = "", focus_widget_is_text_input = 0,
-    })
+    dispatch_key(QT_KEY_DELETE, 0)
 
     -- Verify clip B removed from database (query by sequence, filter by track)
     local all_clips = db.load_clips(seq.id)
@@ -137,10 +148,7 @@ do
     init_all()
     timeline_state.set_selection({ clip_d })
 
-    keyboard_shortcuts.handle_key({
-        key = QT_KEY_BACKSPACE, modifiers = 0,
-        text = "", focus_widget_is_text_input = 0,
-    })
+    dispatch_key(QT_KEY_BACKSPACE, 0)
 
     local all_clips = db.load_clips(seq.id)
     local remaining = {}
@@ -165,10 +173,7 @@ do
     init_all()
     timeline_state.set_selection({ clip_f })
 
-    keyboard_shortcuts.handle_key({
-        key = QT_KEY_DELETE, modifiers = QT_MOD_SHIFT,
-        text = "", focus_widget_is_text_input = 0,
-    })
+    dispatch_key(QT_KEY_DELETE, QT_MOD_SHIFT)
 
     local all_clips = db.load_clips(seq.id)
     local remaining = {}
@@ -193,26 +198,30 @@ do
     clip_g:delete()
 end
 
--- ── Test 4: Delete in text field does NOT delete clips ──
-print("\nTest 4: Delete in text field does not delete clips")
+-- ── Test 4: Delete not handled by Lua residual handler ──
+-- In the QShortcut architecture, text input protection is Qt-native:
+-- QLineEdit accepts ShortcutOverride for Delete, preventing QShortcut from firing.
+print("\nTest 4: Delete not handled by Lua residual handler")
 do
     local clip_h = make_clip("H", 0, 24)
     init_all()
     timeline_state.set_selection({ clip_h })
 
-    keyboard_shortcuts.handle_key({
+    -- Lua handler should return false for Delete (not a residual key)
+    local handled = keyboard_shortcuts.handle_key({
         key = QT_KEY_DELETE, modifiers = 0,
-        text = "", focus_widget_is_text_input = true,
+        text = "", focus_widget_is_text_input = false,
     })
+    assert(not handled, "Delete must not be handled by Lua residual handler")
 
+    -- Clip still exists (wasn't deleted via Lua handler)
     local all_clips = db.load_clips(seq.id)
     local remaining = {}
     for _, c in ipairs(all_clips) do
         if c.track_id == track.id then remaining[#remaining + 1] = c end
     end
-    assert(#remaining == 1, "Clip should survive when typing in text field")
-    assert(remaining[1].id == clip_h.id, "Clip H should survive")
-    print("  ✓ clip H survives text input bypass")
+    assert(#remaining == 1, "Clip should survive — Lua handler doesn't dispatch Delete")
+    print("  ✓ Delete not handled by residual handler")
 
     clip_h:delete()
 end

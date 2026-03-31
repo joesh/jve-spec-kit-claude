@@ -183,18 +183,31 @@ ui_constants.STYLES = {
 
     -- Main window styling
     MAIN_WINDOW_TITLE_BAR = table.concat({
+        -- Window and container backgrounds (no blanket QWidget rule — that kills native rendering)
         "QMainWindow { background-color: " .. PANEL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; }",
-        "QWidget { background-color: " .. PANEL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; }",
-        "QLabel { background-color: " .. SCROLL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. SCROLL_BORDER_COLOR .. "; padding: 8px; }",
         "QSplitter { background-color: " .. PANEL_BACKGROUND_COLOR .. "; }",
         "QSplitter::handle { background-color: " .. SCROLL_BORDER_COLOR .. "; width: 2px; height: 2px; }",
-        "QTreeWidget { background-color: " .. SCROLL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. SCROLL_BORDER_COLOR .. "; }",
+        -- Text controls
+        "QLabel { background-color: " .. SCROLL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. SCROLL_BORDER_COLOR .. "; padding: 8px; }",
         "QLineEdit { background-color: " .. BUTTON_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. DROPDOWN_BORDER_COLOR .. "; padding: 4px; }",
+        "QLineEdit:focus { border: 1px solid #5ac8fa; }",
+        -- Tree
+        "QTreeWidget { background-color: " .. SCROLL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. SCROLL_BORDER_COLOR .. "; }",
+        -- Buttons
+        "QPushButton { background-color: " .. BUTTON_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. DROPDOWN_BORDER_COLOR .. "; border-radius: 3px; padding: 3px 8px; }",
+        "QPushButton:focus { border: 1px solid #5ac8fa; }",
+        "QPushButton:hover { background-color: " .. HOVER_BACKGROUND_COLOR .. "; }",
+        -- Combobox: no stylesheet — Fusion dark palette handles rendering + highlight correctly.
+        -- Menus
         "QMenuBar { background-color: " .. PANEL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: none; }",
         "QMenuBar::item { background: transparent; color: " .. WHITE_TEXT_COLOR .. "; padding: 6px 12px; }",
         "QMenuBar::item:selected { background-color: " .. HOVER_BACKGROUND_COLOR .. "; }",
         "QMenu { background-color: " .. PANEL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. SCROLL_BORDER_COLOR .. "; }",
-        "QMenu::item:selected { background-color: " .. HOVER_BACKGROUND_COLOR .. "; }"
+        "QMenu::item:selected { background-color: " .. HOVER_BACKGROUND_COLOR .. "; }",
+        -- Scroll bars
+        "QScrollBar:vertical { background-color: " .. PANEL_BACKGROUND_COLOR .. "; width: 8px; }",
+        "QScrollBar::handle:vertical { background-color: " .. DROPDOWN_BORDER_COLOR .. "; border-radius: 4px; min-height: 20px; }",
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }",
     }, "\n"),
     
     -- Debug system

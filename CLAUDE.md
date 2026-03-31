@@ -37,10 +37,12 @@ pgrep -x JVEEditor || rm -f "$HOME/Documents/JVE Projects/Untitled Project.jvp-s
 ```
 
 ## Commands
-make -j4            # Builds C++ AND runs luacheck on all Lua files
+make -j4            # Builds C++ AND runs luacheck on all Lua files AND all tests
 make clean          # Clean build artifacts
 
 **NOTE** don't run make|grep. instead send output to a /tmp file and grep that. running make takes real time!
+
+**When iterating on UI changes**: use `cd build && make JVEEditor -j4` to build just the executable (skips tests). Run full `make -j4` (from repo root) only when ready to validate everything.
 
 # Run the application
 ./build/bin/JVEEditor      # Launches, shows 3-panel layout, timeline panel

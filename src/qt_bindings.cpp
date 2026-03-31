@@ -149,6 +149,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_get_combobox_current_text); lua_setfield(L, -2, "GET_COMBOBOX_CURRENT_TEXT");
     lua_pushcfunction(L, lua_set_combobox_current_index); lua_setfield(L, -2, "SET_COMBOBOX_CURRENT_INDEX");
     lua_pushcfunction(L, lua_get_combobox_current_index); lua_setfield(L, -2, "GET_COMBOBOX_CURRENT_INDEX");
+    lua_pushcfunction(L, lua_set_combobox_change_handler); lua_setglobal(L, "qt_set_combobox_change_handler");
     lua_pushcfunction(L, lua_set_slider_range); lua_setfield(L, -2, "SET_SLIDER_RANGE");
     lua_pushcfunction(L, lua_set_slider_value); lua_setfield(L, -2, "SET_SLIDER_VALUE");
     lua_pushcfunction(L, lua_get_slider_value); lua_setfield(L, -2, "GET_SLIDER_VALUE");
@@ -253,8 +254,8 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_connect_shortcut); lua_setglobal(L, "qt_connect_shortcut");
     lua_pushcfunction(L, lua_set_shortcut_enabled); lua_setglobal(L, "qt_set_shortcut_enabled");
     lua_pushcfunction(L, lua_delete_shortcut); lua_setglobal(L, "qt_delete_shortcut");
-    lua_pushcfunction(L, lua_set_focus_containment); lua_setglobal(L, "qt_set_focus_containment");
-    lua_pushcfunction(L, lua_cycle_contained_focus); lua_setglobal(L, "qt_cycle_contained_focus");
+    lua_pushcfunction(L, lua_create_focus_container); lua_setglobal(L, "qt_create_focus_container");
+    lua_pushcfunction(L, lua_set_container_default_button); lua_setglobal(L, "qt_set_container_default_button");
     lua_pushcfunction(L, lua_line_edit_select_all); lua_setglobal(L, "qt_line_edit_select_all");
     lua_pushcfunction(L, lua_set_tree_selection_changed_handler); lua_setglobal(L, "qt_set_tree_selection_handler");
     lua_pushcfunction(L, lua_set_tree_selection_mode); lua_setglobal(L, "qt_set_tree_selection_mode");

@@ -542,4 +542,222 @@ function M.handle_key_event(key, modifiers, context)
     return true
 end
 
+-------------------------------------------------------------------------------
+-- QShortcut creation from TOML bindings
+-------------------------------------------------------------------------------
+
+-- Active QShortcut objects: {shortcut_userdata, handler_name}[]
+M.active_shortcuts = nil
+
+-- Handler counter for unique global function names
+local handler_counter = 0
+
+--- Map TOML key names to QKeySequence-compatible strings.
+-- Most key names pass through unchanged (Space, Return, Delete, F1, etc.).
+-- Symbol keys need their character form for QKeySequence.
+local TOML_KEY_TO_QT = {
+    Tilde       = "~",
+    Grave       = "`",
+    BracketLeft = "[",
+    BracketRight = "]",
+    BraceLeft   = "{",
+    BraceRight  = "}",
+    Equal       = "=",
+    Plus        = "+",
+    Minus       = "-",
+    Comma       = ",",
+    Period      = ".",
+    Backspace   = "Backspace",
+    -- Digit keys: keyboard_constants uses "Key2" etc., QKeySequence expects "2"
+    Key2        = "2",
+    Key3        = "3",
+    Key4        = "4",
+    -- Single letters, function keys, Space, Return, Delete,
+    -- Home, End, Up, Down, Tab, Escape — all work as-is in QKeySequence
+}
+
+--- Convert a parsed shortcut (key code + modifiers) back to Qt QKeySequence string.
+-- Used for shortcuts that went through parse_shortcut() normalization
+-- (e.g., Shift+BracketLeft → BraceLeft with no Shift).
+local function shortcut_to_qt_keyseq(shortcut_obj)
+    local bit = require("bit")
+    local KEY = kb_constants.KEY
+    local MOD = kb_constants.MOD
+
+    local qt_parts = {}
+
+    -- Modifiers — order matters for QKeySequence but Qt is flexible
+    if bit.band(shortcut_obj.modifiers, MOD.Control) ~= 0 then
+        qt_parts[#qt_parts + 1] = "Ctrl"
+    end
+    if bit.band(shortcut_obj.modifiers, MOD.Alt) ~= 0 then
+        qt_parts[#qt_parts + 1] = "Alt"
+    end
+    if bit.band(shortcut_obj.modifiers, MOD.Shift) ~= 0 then
+        qt_parts[#qt_parts + 1] = "Shift"
+    end
+    if bit.band(shortcut_obj.modifiers, MOD.Meta) ~= 0 then
+        qt_parts[#qt_parts + 1] = "Meta"
+    end
+
+    -- Key code → name
+    -- First try reverse lookup in TOML_KEY_TO_QT values (symbol keys)
+    local key_code = shortcut_obj.key
+    local qt_key_name = nil
+
+    -- Reverse lookup in KEY table to get TOML name, then map to Qt
+    for name, code in pairs(KEY) do
+        if code == key_code then
+            qt_key_name = TOML_KEY_TO_QT[name] or name
+            break
+        end
+    end
+
+    -- Fall back to character for printable ASCII
+    if not qt_key_name then
+        if key_code >= 32 and key_code < 127 then
+            qt_key_name = string.char(key_code)
+        else
+            assert(false, string.format(
+                "shortcut_to_qt_keyseq: no Qt name for key code %d", key_code))
+        end
+    end
+
+    qt_parts[#qt_parts + 1] = qt_key_name
+    return table.concat(qt_parts, "+")
+end
+
+--- Create a Lua handler function for a QShortcut binding.
+-- Registers as a global so the C++ QShortcut::activated signal can invoke it.
+-- Returns the global function name.
+local function create_shortcut_handler(binding)
+    handler_counter = handler_counter + 1
+    local name = string.format("__jve_shortcut_%d", handler_counter)
+
+    _G[name] = function()
+        assert(command_manager,
+            string.format("shortcut handler %s: command_manager not set", binding.command_name))
+
+        -- Wrap in command event (same as keyboard_shortcuts.handle_key)
+        local owns_event = not command_manager.peek_command_event_origin()
+        if owns_event then
+            command_manager.begin_command_event("ui")
+        end
+
+        local params = {}
+        for k, v in pairs(binding.named_params) do
+            params[k] = v
+        end
+        if #binding.positional_args > 0 then
+            params._positional = binding.positional_args
+        end
+
+        local ok, err = pcall(command_manager.execute_ui, binding.command_name, params)
+
+        if owns_event then
+            command_manager.end_command_event()
+        end
+
+        if not ok then
+            -- Fail loud per CLAUDE.md §1.14: no silent error handling
+            assert(false, string.format(
+                "shortcut handler %s: %s", binding.command_name, tostring(err)))
+        end
+    end
+
+    return name
+end
+
+--- Create QShortcut objects from all loaded TOML bindings.
+-- @param panel_containers table mapping context names to Qt widgets:
+--   { window=main_window, timeline=timeline_container,
+--     source_monitor=source_widget, timeline_monitor=tl_monitor_widget,
+--     project_browser=browser_container }
+function M.create_qt_shortcuts(panel_containers)
+    assert(panel_containers, "create_qt_shortcuts: panel_containers required")
+    assert(panel_containers.window, "create_qt_shortcuts: window container required")
+
+    -- Clean up any existing shortcuts first
+    M.destroy_qt_shortcuts()
+
+    M.active_shortcuts = {}
+
+    -- luacheck: globals qt_create_shortcut qt_connect_shortcut
+    assert(type(qt_create_shortcut) == "function",
+        "create_qt_shortcuts: qt_create_shortcut C++ binding not available")
+    assert(type(qt_connect_shortcut) == "function",
+        "create_qt_shortcuts: qt_connect_shortcut C++ binding not available")
+
+    local count = 0
+    for _, bindings in pairs(M.keybindings) do
+        for _, binding in ipairs(bindings) do
+            local qt_key_seq = shortcut_to_qt_keyseq(binding.shortcut)
+            assert(qt_key_seq and qt_key_seq ~= "", string.format(
+                "create_qt_shortcuts: empty key sequence for binding '%s'",
+                binding.command_name))
+
+            if not binding.contexts or #binding.contexts == 0 then
+                -- Global binding: WindowShortcut on main window
+                local sc = qt_create_shortcut(
+                    panel_containers.window, qt_key_seq, "window")
+                assert(sc, string.format(
+                    "create_qt_shortcuts: qt_create_shortcut returned nil for '%s' (window)",
+                    qt_key_seq))
+                local handler_name = create_shortcut_handler(binding)
+                qt_connect_shortcut(sc, handler_name)
+                M.active_shortcuts[#M.active_shortcuts + 1] = {
+                    shortcut = sc,
+                    handler_name = handler_name,
+                }
+                count = count + 1
+                log.detail("QShortcut: %s → %s (window)", qt_key_seq, binding.command_name)
+            else
+                -- Panel-scoped: one QShortcut per context
+                for _, ctx in ipairs(binding.contexts) do
+                    local container = panel_containers[ctx]
+                    if container then
+                        local sc = qt_create_shortcut(
+                            container, qt_key_seq, "widget_children")
+                        assert(sc, string.format(
+                            "create_qt_shortcuts: qt_create_shortcut returned nil for '%s' (@%s)",
+                            qt_key_seq, ctx))
+                        local handler_name = create_shortcut_handler(binding)
+                        qt_connect_shortcut(sc, handler_name)
+                        M.active_shortcuts[#M.active_shortcuts + 1] = {
+                            shortcut = sc,
+                            handler_name = handler_name,
+                        }
+                        count = count + 1
+                        log.detail("QShortcut: %s → %s (@%s)", qt_key_seq, binding.command_name, ctx)
+                    else
+                        assert(false, string.format(
+                            "create_qt_shortcuts: no container for context '%s' (binding: %s)",
+                            ctx, binding.command_name))
+                    end
+                end
+            end
+        end
+    end
+
+    log.event("Created %d QShortcut objects from TOML bindings", count)
+end
+
+--- Destroy all active QShortcut objects and clean up handler globals.
+function M.destroy_qt_shortcuts()
+    if not M.active_shortcuts then return end
+
+    -- luacheck: globals qt_delete_shortcut
+    for _, entry in ipairs(M.active_shortcuts) do
+        if entry.shortcut then
+            qt_delete_shortcut(entry.shortcut)
+        end
+        if entry.handler_name then
+            _G[entry.handler_name] = nil
+        end
+    end
+
+    log.event("Destroyed %d QShortcut objects", #M.active_shortcuts)
+    M.active_shortcuts = nil
+end
+
 return M

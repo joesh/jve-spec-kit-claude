@@ -23,7 +23,7 @@ print("\n--- Test 1: Assert on missing fps in timeline metadata ---")
 -- We can't easily create a malformed DRP fixture, so we test the code path
 -- by checking that valid DRP files have fps metadata.
 
-local DRP_PATH = test_env.resolve_repo_path("tests/fixtures/resolve/sample_project.drp")
+local DRP_PATH = test_env.require_fixture("tests/fixtures/resolve/sample_project.drp")
 local f = io.open(DRP_PATH, "r")
 if f then
     f:close()
@@ -154,7 +154,7 @@ print("✓ Required clip fields (Start, Duration) use assert")
 print("\n--- Test 5: Pipe-delimited <In> values parsed ---")
 -- The second DRP fixture has clips with <In>23294|hexdata format.
 -- These must parse as source_in=23294, not 0 (the old or-0 fallback).
-local drp2_path = test_env.resolve_repo_path("tests/fixtures/resolve/2025-06-14 NO KINGS SEATTLE.drp")
+local drp2_path = test_env.require_fixture("tests/fixtures/resolve/2025-06-14 NO KINGS SEATTLE.drp")
 local handle2 = io.open(drp2_path, "r")
 if handle2 then
     handle2:close()

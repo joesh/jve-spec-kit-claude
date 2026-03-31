@@ -226,7 +226,7 @@ print("  ✓ MatchFrame: media duration = 1253 (set_playhead(1203) safe)")
 
 print("\n--- Test 5: End-to-end DRP parse → blob duration override ---")
 
-local fixture_path = test_env.resolve_repo_path("tests/fixtures/resolve/sample_project.drp")
+local fixture_path = test_env.require_fixture("tests/fixtures/resolve/sample_project.drp")
 local f = io.open(fixture_path)
 assert(f, "fixture not found: " .. fixture_path)
 f:close()

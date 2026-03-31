@@ -134,28 +134,8 @@ local function handle_key_impl(event)
     local panel_active_browser = (focused_panel == "project_browser")
     local focus_is_text_input = event.focus_widget_is_text_input and event.focus_widget_is_text_input ~= 0
 
-    -- Tab: toggle timecode entry in timeline
-    if key == KEY.Tab and panel_active_timeline and not modifier_meta and not modifier_alt then
-        log.detail("  → Tab toggle timecode entry")
-        if focus_is_text_input then
-            timeline_panel.focus_timeline_view()
-        else
-            timeline_panel.focus_timecode_entry()
-        end
-        return true
-    end
-
-    -- Tab/Shift+Tab in non-timeline panels: wrap within panel container
-    if (key == KEY.Tab or key == KEY.Backtab) and not panel_active_timeline then
-        local fm = require("ui.focus_manager")
-        local view = fm.get_view(focused_panel)
-        if view and view.container then
-            log.detail("  → Tab in %s, cycling focus", focused_panel)
-            -- luacheck: globals qt_cycle_panel_focus
-            qt_cycle_panel_focus(view.container, key == KEY.Tab)
-            return true
-        end
-    end
+    -- Tab/Return: handled entirely by Qt (focusNextPrevChild + QShortcut default buttons).
+    -- No Lua involvement — GlobalKeyFilter skips them.
 
     -- Escape: set global cancel flag — drag/modal handlers consume on next event
     if key == KEY.Escape then
@@ -168,6 +148,23 @@ local function handle_key_impl(event)
         if fv.is_active() then
             log.detail("  → Escape exit fullscreen")
             fv.exit()
+            return true
+        end
+
+        -- Dismiss floating find dialog if visible
+        -- pcall: find_dialog depends on dkjson (C lib), unavailable in headless tests
+        local find_ok, find_dlg = pcall(require, "ui.find_dialog")
+        if find_ok and find_dlg and find_dlg.is_visible() then
+            log.detail("  → Escape dismiss floating find dialog")
+            find_dlg.hide()
+            return true
+        end
+
+        -- Dismiss embedded find bar if visible (browser panel)
+        local pb = project_browser
+        if pb and pb.find_bar and pb.find_bar.visible then
+            log.detail("  → Escape dismiss find bar")
+            pb.hide_find_bar()
             return true
         end
 
@@ -187,30 +184,19 @@ local function handle_key_impl(event)
         -- Not consumed here — drag handlers check cancel.consume() on next event
     end
 
-    -- Return/Enter on a button: let Qt handle it (animateClick via focus trap)
-    -- Don't let registry dispatch intercept Return when a button has focus
-    if (key == KEY.Return or key == KEY.Enter) then
-        local widget_class = event.focus_widget_class or ""
-        if widget_class == "QPushButton" or widget_class == "QToolButton" then
-            log.detail("  → Return on button, deferring to Qt")
-            return false
-        end
-    end
+    -- Non-residual keys: QShortcut handles dispatch (T003/T004).
+    -- Qt's ShortcutOverride on QLineEdit provides text input protection.
+    -- Only residual keys below (arrows, F9/F10, Comma/Period, E) need Lua handling.
 
-    -- Text input bypass: let text fields consume ALL keys
-    -- Tab and Escape are handled above; everything else (including Cmd+A/C/V/X/Z) goes to the widget
-    if focus_is_text_input then
-        log.detail("  → text input bypass (returning false)")
+    -- Text input bypass for residual keys that conflict with typing.
+    -- (F9/F10 are function keys — safe in text fields. Escape/Tab handled above.)
+    if focus_is_text_input
+        and (key == KEY.Left or key == KEY.Right
+            or key == KEY.Comma or key == KEY.Period
+            or key == KEY.E) then
+        log.detail("  → residual key in text input, deferring to widget")
         return false
     end
-
-    -- Registry dispatch (TOML keybindings → command_manager.execute_ui)
-    log.detail("  → trying registry dispatch")
-    if shortcut_registry.handle_key_event(key, modifiers, focused_panel) then
-        log.detail("  → registry handled key")
-        return true
-    end
-    log.detail("  → registry did NOT handle key")
 
     -- Arrow keys: need special handling for arrow_repeat timer
     -- (Not in TOML because arrow repeat is input management, not command dispatch)
