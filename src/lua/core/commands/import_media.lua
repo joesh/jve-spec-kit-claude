@@ -379,11 +379,29 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local masterclip_sequence_ids = args.masterclip_sequence_ids or {}
         local media_ids = args.media_ids or {}
 
+        -- Helper: clean up properties/links before deleting a clip
+        -- (properties table has no FK cascade)
+        local function cleanup_clip_metadata(clip_id)
+            local prop_stmt = db:prepare("DELETE FROM properties WHERE clip_id = ?")
+            if prop_stmt then
+                prop_stmt:bind_value(1, clip_id)
+                prop_stmt:exec()
+                prop_stmt:finalize()
+            end
+            local link_stmt = db:prepare("DELETE FROM clip_links WHERE clip_id = ?")
+            if link_stmt then
+                link_stmt:bind_value(1, clip_id)
+                link_stmt:exec()
+                link_stmt:finalize()
+            end
+        end
+
         -- Delete audio stream clips
         for _, clip_ids_for_file in ipairs(audio_clip_ids) do
             if type(clip_ids_for_file) == "table" then
                 for _, clip_id in ipairs(clip_ids_for_file) do
                     if clip_id and clip_id ~= "" then
+                        cleanup_clip_metadata(clip_id)
                         local stmt = assert(db:prepare("DELETE FROM clips WHERE id = ?"),
                             "UndoImportMedia: failed to prepare audio clip DELETE for " .. tostring(clip_id))
                         stmt:bind_value(1, clip_id)
@@ -397,6 +415,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Delete video stream clips
         for _, clip_id in ipairs(video_clip_ids) do
             if clip_id and clip_id ~= "" then
+                cleanup_clip_metadata(clip_id)
                 local stmt = assert(db:prepare("DELETE FROM clips WHERE id = ?"),
                     "UndoImportMedia: failed to prepare video clip DELETE for " .. tostring(clip_id))
                 stmt:bind_value(1, clip_id)
