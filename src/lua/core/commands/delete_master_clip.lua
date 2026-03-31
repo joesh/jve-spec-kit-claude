@@ -37,6 +37,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     assert(db, "DeleteMasterClip.register: missing db")
 
     local Clip = require("models.clip")
+    local delete_sequence_mod = require("core.commands.delete_sequence")
 
     local function delete_clip_with_metadata(clip_id)
         local prop_stmt = db:prepare("DELETE FROM properties WHERE clip_id = ?")
@@ -86,7 +87,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if clip.master_clip_id and clip.master_clip_id ~= "" then
             local ref_query = db:prepare([[
                 SELECT c.id, c.track_id, c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
-                       c.enabled, c.offline, c.fps_numerator, c.fps_denominator, c.name, c.owner_sequence_id, t.sequence_id
+                       c.enabled, c.offline, c.fps_numerator, c.fps_denominator, c.name, c.owner_sequence_id, t.sequence_id,
+                       c.volume, c.created_at, c.modified_at
                 FROM clips c
                 JOIN tracks t ON c.track_id = t.id
                 WHERE c.master_clip_id = ?
@@ -115,6 +117,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         name = ref_query:value(10),
                         owner_sequence_id = ref_query:value(11),
                         sequence_id = ref_query:value(12),  -- For cache invalidation
+                        volume = ref_query:value(13),
+                        created_at = ref_query:value(14),
+                        modified_at = ref_query:value(15),
                         master_clip_id = clip.master_clip_id,
                         project_id = clip.project_id,
                         media_id = clip.media_id,
@@ -153,6 +158,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
             end
         end
+
+        -- Snapshot the full masterclip sequence BEFORE deleting anything.
+        -- This captures the sequence record, tracks, clips, properties, and links
+        -- so undo can restore everything.
+        local seq_id = clip.master_clip_id or args.master_clip_id
+        local seq_snapshot = delete_sequence_mod.snapshot_for_delete(db, seq_id)
+        command:set_parameter("master_clip_snapshot", seq_snapshot)
 
         -- Remove stream clips that belong to the master clip's source sequence
         local child_stmt = db:prepare("SELECT id FROM clips WHERE owner_sequence_id = ?")
@@ -198,54 +210,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             delete_sequence_stmt:finalize()
         end
 
-        local snapshot = {
-            id = clip.id,
-            project_id = clip.project_id,
-            clip_kind = clip.clip_kind,
-            name = clip.name,
-            track_id = clip.track_id,
-            media_id = clip.media_id,
-            master_clip_id = clip.master_clip_id,
-            owner_sequence_id = clip.owner_sequence_id,
-            timeline_start = clip.timeline_start,
-            duration = clip.duration,
-            source_in = clip.source_in,
-            source_out = clip.source_out,
-            enabled = clip.enabled,
-            offline = clip.offline,
-            fps_numerator = clip.rate and clip.rate.fps_numerator,
-            fps_denominator = clip.rate and clip.rate.fps_denominator,
-        }
-        -- FAIL FAST: fps is required for proper undo
-        assert(snapshot.fps_numerator, "DeleteMasterClip: clip " .. clip.id .. " missing rate.fps_numerator")
-        assert(snapshot.fps_denominator, "DeleteMasterClip: clip " .. clip.id .. " missing rate.fps_denominator")
-        command:set_parameter("master_clip_snapshot", snapshot)
-
-        local properties = {}
-        local prop_query = db:prepare("SELECT id, property_name, property_value, property_type, default_value FROM properties WHERE clip_id = ?")
-        if prop_query then
-            prop_query:bind_value(1, args.master_clip_id)
-            if prop_query:exec() then
-                while prop_query:next() do
-                    table.insert(properties, {
-                        id = prop_query:value(0),
-                        property_name = prop_query:value(1),
-                        property_value = prop_query:value(2),
-                        property_type = prop_query:value(3),
-                        default_value = prop_query:value(4),
-                    })
-                end
-            end
-            prop_query:finalize()
-        end
-        command:set_parameter("master_clip_properties", properties)
-
-        -- Remove metadata for the master clip itself
-        if not delete_clip_with_metadata(args.master_clip_id) then
-            set_error(set_last_error, "DeleteMasterClip: Failed to delete clip")
-            return false
-        end
-
         print(string.format("✅ Deleted master clip %s", clip.name or args.master_clip_id))
         return true
     end
@@ -253,59 +217,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_undoers["DeleteMasterClip"] = function(command)
         local args = command:get_all_parameters()
 
-        if not args.master_clip_snapshot then
-            set_error(set_last_error, "UndoDeleteMasterClip: Missing args.master_clip_snapshot")
-            return false
-        end
+        assert(args.master_clip_snapshot,
+            "UndoDeleteMasterClip: missing master_clip_snapshot")
 
-        -- FAIL FAST: fps is required for Clip.create
-        assert(args.master_clip_snapshot.fps_numerator, "UndoDeleteMasterClip: snapshot missing fps_numerator")
-        assert(args.master_clip_snapshot.fps_denominator, "UndoDeleteMasterClip: snapshot missing fps_denominator")
-
-        local restored = Clip.create(args.master_clip_snapshot.name or "Master Clip", args.master_clip_snapshot.media_id, {
-            id = args.master_clip_snapshot.id,
-            project_id = args.master_clip_snapshot.project_id,
-            clip_kind = args.master_clip_snapshot.clip_kind,
-            track_id = args.master_clip_snapshot.track_id,
-            owner_sequence_id = args.master_clip_snapshot.owner_sequence_id,
-            master_clip_id = args.master_clip_snapshot.master_clip_id,
-            timeline_start = args.master_clip_snapshot.timeline_start,
-            duration = args.master_clip_snapshot.duration,
-            source_in = args.master_clip_snapshot.source_in,
-            source_out = args.master_clip_snapshot.source_out,
-            enabled = args.master_clip_snapshot.enabled ~= false,
-            offline = args.master_clip_snapshot.offline,
-            fps_numerator = args.master_clip_snapshot.fps_numerator,
-            fps_denominator = args.master_clip_snapshot.fps_denominator,
-        })
-
-        if not restored:save() then
-            set_error(set_last_error, "UndoDeleteMasterClip: Failed to restore master clip")
-            return false
-        end
-
-        local properties = args.master_clip_properties or {}
-        if #properties > 0 then
-            local insert_prop = db:prepare("INSERT INTO properties (id, clip_id, property_name, property_value, property_type, default_value) VALUES (?, ?, ?, ?, ?, ?)")
-            if not insert_prop then
-                set_error(set_last_error, "UndoDeleteMasterClip: Failed to prepare property restore")
-                return false
-            end
-            for _, prop in ipairs(properties) do
-                insert_prop:bind_value(1, prop.id)
-                insert_prop:bind_value(2, args.master_clip_snapshot.id)
-                insert_prop:bind_value(3, prop.property_name)
-                insert_prop:bind_value(4, prop.property_value)
-                insert_prop:bind_value(5, prop.property_type)
-                insert_prop:bind_value(6, prop.default_value)
-                if not insert_prop:exec() then
-                    insert_prop:finalize()
-                    set_error(set_last_error, "UndoDeleteMasterClip: Failed to restore property")
-                    return false
-                end
-            end
-            insert_prop:finalize()
-        end
+        -- Restore the full masterclip sequence (sequence + tracks + clips + properties)
+        local ok = delete_sequence_mod.restore_from_payload(db, args.master_clip_snapshot, set_last_error)
+        assert(ok, "UndoDeleteMasterClip: restore_from_payload failed")
 
         -- Restore timeline clips that were deleted with force=true
         local deleted_timeline_clips = args.deleted_timeline_clips or {}
@@ -326,17 +243,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 offline = snap.offline,
                 fps_numerator = snap.fps_numerator,
                 fps_denominator = snap.fps_denominator,
+                volume = snap.volume,
             })
-            if not timeline_clip:save() then
-                set_error(set_last_error, "UndoDeleteMasterClip: Failed to restore timeline clip " .. snap.id)
-                return false
-            end
+            assert(timeline_clip:save(),
+                "UndoDeleteMasterClip: Failed to restore timeline clip " .. snap.id)
             if snap.sequence_id then
                 affected_sequences[snap.sequence_id] = true
             end
         end
 
-        -- Invalidate timeline cache for affected sequences
         if next(affected_sequences) then
             local command_helper = require("core.command_helper")
             for seq_id, _ in pairs(affected_sequences) do
@@ -344,10 +259,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
+        local seq_name = args.master_clip_snapshot.sequence and args.master_clip_snapshot.sequence.name or "unknown"
         local timeline_msg = #deleted_timeline_clips > 0
             and string.format(" and %d timeline clip(s)", #deleted_timeline_clips)
             or ""
-        print(string.format("UNDO: Restored master clip %s%s", args.master_clip_snapshot.name or args.master_clip_snapshot.id, timeline_msg))
+        print(string.format("UNDO: Restored master clip %s%s", seq_name, timeline_msg))
         return true
     end
 
