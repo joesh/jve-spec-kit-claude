@@ -115,6 +115,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             offline = original_clip.offline,
             fps_numerator = original_clip.rate.fps_numerator,
             fps_denominator = original_clip.rate.fps_denominator,
+            -- Preserve per-clip metadata on both halves
+            volume = original_clip.volume,
         })
 
         if args.second_clip_id then
