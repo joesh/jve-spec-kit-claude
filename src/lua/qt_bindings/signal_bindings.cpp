@@ -78,12 +78,12 @@ protected:
             int k = keyEvent->key();
             auto mods = keyEvent->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier);
 
-            // Always-residual keys (any modifier combo): arrows, Escape, F9/F10
+            // Always-residual keys (any modifier combo): arrows, Escape
             // Tab NOT claimed — Qt's native focusNextPrevChild handles Tab cycling.
             // Return NOT claimed — Qt's native default button / button click handles it.
+            // F9/F10 NOT claimed — handled via TOML keymap / QShortcut.
             if (k == Qt::Key_Left || k == Qt::Key_Right ||
-                k == Qt::Key_Escape ||
-                k == Qt::Key_F9 || k == Qt::Key_F10) {
+                k == Qt::Key_Escape) {
                 event->accept();
                 return true;
             }

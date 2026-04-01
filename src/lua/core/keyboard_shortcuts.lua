@@ -186,10 +186,10 @@ local function handle_key_impl(event)
 
     -- Non-residual keys: QShortcut handles dispatch (T003/T004).
     -- Qt's ShortcutOverride on QLineEdit provides text input protection.
-    -- Only residual keys below (arrows, F9/F10, Comma/Period, E) need Lua handling.
+    -- Only residual keys below (arrows, Comma/Period, E) need Lua handling.
+    -- F9/F10 moved to TOML keymap — Insert/Overwrite resolve context via gather_context.
 
     -- Text input bypass for residual keys that conflict with typing.
-    -- (F9/F10 are function keys — safe in text fields. Escape/Tab handled above.)
     if focus_is_text_input
         and (key == KEY.Left or key == KEY.Right
             or key == KEY.Comma or key == KEY.Period
@@ -211,17 +211,6 @@ local function handle_key_impl(event)
             arrow_repeat.start(dir, modifier_shift, step_arrow_frame)
             return true
         end
-    end
-
-    -- F9/F10: Insert/Overwrite (need project_browser context gathering)
-    if key == KEY.F9 and panel_active_timeline then
-        project_browser.add_selected_to_timeline("Insert", { advance_playhead = true })
-        return true
-    end
-
-    if key == KEY.F10 and panel_active_timeline then
-        project_browser.add_selected_to_timeline("Overwrite", { advance_playhead = true })
-        return true
     end
 
     -- Comma/Period: Nudge clips/edges (context gathering for edges)
