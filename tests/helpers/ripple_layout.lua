@@ -132,9 +132,30 @@ local function build_config(opts)
     end
 
     if opts and opts.tracks then
+        -- Handle order override first
+        if opts.tracks.order then
+            cfg.tracks.order = opts.tracks.order
+        end
         for key, override in pairs(opts.tracks) do
-            assert(cfg.tracks[key], string.format("Unknown track override '%s'", key))
-            merge_table(cfg.tracks[key], override)
+            if key == "order" then  -- luacheck: ignore 542
+                -- Already handled above
+            elseif cfg.tracks[key] then
+                merge_table(cfg.tracks[key], override)
+            else
+                -- Add new track with inferred defaults
+                local inferred_type = key:match("^a") and "AUDIO" or "VIDEO"
+                cfg.tracks[key] = {
+                    id = "track_" .. key,
+                    name = override.name or key:upper(),
+                    track_type = override.track_type or inferred_type,
+                    track_index = override.track_index or (#cfg.tracks.order + 1),
+                    enabled = override.enabled or 1
+                }
+                merge_table(cfg.tracks[key], override)
+                if not opts.tracks.order then
+                    table.insert(cfg.tracks.order, key)
+                end
+            end
         end
     end
 
