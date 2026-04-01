@@ -94,17 +94,25 @@ local function create_media_and_masterclip(media_id, duration_frames)
 end
 
 --- Insert a clip directly via Insert command. All values are integer frames.
+-- Sets marks on the masterclip sequence to define the source range.
 local function insert_clip(params)
+    local Sequence = require("models.sequence")
     local master_clip_id = create_media_and_masterclip(params.media_id, params.media_duration)
+
+    -- Set in/out marks on the masterclip sequence (the source range)
+    if params.source_in or params.source_out then
+        local mc_seq = assert(Sequence.load(master_clip_id), "insert_clip: masterclip not found")
+        mc_seq.mark_in = params.source_in
+        mc_seq.mark_out = params.source_out
+        assert(mc_seq:save(), "insert_clip: failed to save masterclip marks")
+    end
+
     local cmd = Command.create("Insert", "proj")
     cmd:set_parameters({
         master_clip_id = master_clip_id,
         track_id = params.track_id,
         sequence_id = "seq",
         insert_time = params.timeline_start,
-        duration = params.duration,
-        source_in = params.source_in,
-        source_out = params.source_out,
         clip_id = params.clip_id,
         advance_playhead = false,
     })

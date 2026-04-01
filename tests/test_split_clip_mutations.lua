@@ -50,11 +50,24 @@ db:exec(string.format([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 
-    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
-                       width, height, audio_channels, codec, metadata, created_at, modified_at)
-    VALUES ('media_stub', 'default_project', 'Stub', '/tmp/jve/stub.mov', 1000, 30, 1,
-            1920, 1080, 2, 'prores', '{}', %d, %d);
+]], now, now, now, now))
 
+require("test_env").create_test_media({
+    id = "media_stub",
+    project_id = "default_project",
+    name = "Stub",
+    file_path = "/tmp/jve/stub.mov",
+    duration_frames = 1000,
+    fps_numerator = 30,
+    fps_denominator = 1,
+    width = 1920,
+    height = 1080,
+    audio_channels = 2,
+    codec = "prores",
+    audio_sample_rate = 48000,
+})
+
+db:exec(string.format([[
     INSERT INTO clips (
         id, project_id, clip_kind, name, track_id, media_id, master_clip_id, owner_sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,

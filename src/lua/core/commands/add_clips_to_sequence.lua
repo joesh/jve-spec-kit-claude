@@ -462,13 +462,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Apply all mutations
+        print("DEBUG_ACS: about to apply " .. #all_mutations .. " mutations")
+        for i, m in ipairs(all_mutations) do
+            print("DEBUG_ACS:   mut[" .. i .. "] type=" .. tostring(m.type) .. " clip=" .. tostring(m.clip_id):sub(1,8))
+        end
         local ok_apply, apply_err = command_helper.apply_mutations(db, all_mutations)
+        print("DEBUG_ACS: apply_mutations returned ok=" .. tostring(ok_apply) .. " err=" .. tostring(apply_err))
         if not ok_apply then
             local msg = this_func_label .. ": failed to apply mutations: " .. tostring(apply_err)
+            print("DEBUG_ACS: FAILING: " .. msg)
             set_last_error(msg)
             return false, msg
         end
 
+        print("DEBUG_ACS: populating timeline mutations")
         -- Populate __timeline_mutations for UI cache updates
         populate_timeline_mutations(command, sequence_id, all_mutations)
 
@@ -500,6 +507,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Store for undo
+        print("DEBUG_ACS: storing executed_mutations, count=" .. #all_mutations)
         command:set_parameter("executed_mutations", all_mutations)
         local clip_ids = {}
         for _, created in ipairs(created_clips) do

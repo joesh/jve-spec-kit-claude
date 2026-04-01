@@ -483,12 +483,13 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
     local width = has_video and media.width or 1920
     local height = has_video and media.height or 1080
 
-    -- TC origin from media metadata (set at import time, e.g. DRP MediaStartTime)
-    local start_tc_frame = 0
-    local tc_value = media:get_start_tc()
-    if tc_value and tc_value > 0 then
-        start_tc_frame = tc_value
-    end
+    -- TC origin: extracted from file via EMP (import path) or from DRP metadata.
+    -- get_start_tc() auto-extracts from file if not already in metadata.
+    local start_tc_frame = media:get_start_tc()
+    assert(start_tc_frame ~= nil, string.format(
+        "Sequence.ensure_masterclip: media %s has no TC origin "
+        .. "(file offline with no TC metadata?)", tostring(media_id)))
+    -- start_tc_frame may be 0 (TC 00:00:00:00) — that's valid
 
     assert(media.name and media.name ~= "",
         string.format("Sequence.ensure_masterclip: media has no name for media_id=%s", tostring(media_id)))
@@ -499,6 +500,7 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
             kind = "masterclip",
             audio_rate = sample_rate,
             start_timecode_frame = start_tc_frame,
+            playhead_frame = start_tc_frame,
         })
     assert(seq:save(), string.format(
         "Sequence.ensure_masterclip: failed to save masterclip sequence for media_id=%s",
@@ -543,8 +545,11 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
 
             -- Audio source_in in absolute TC (samples).
             -- Authoritative audio TC comes from media metadata (DRP MediaStartTime
-            -- converted to samples at audio rate). Falls back to 0 for media without TC.
-            local audio_tc = media:get_audio_start_tc() or 0
+            -- converted to samples at audio rate) or extracted from file via EMP.
+            local audio_tc = media:get_audio_start_tc()
+            assert(audio_tc ~= nil, string.format(
+                "Sequence.ensure_masterclip: media %s has no audio TC origin",
+                tostring(media_id)))
             local aclip = Clip.create(
                 string.format("%s (Audio %d)", media.name, ch), media_id, {
                     id = replay_audio_clip_ids[ch],
@@ -857,6 +862,81 @@ function Sequence:get_effective_out(total_frames)
     assert(type(total_frames) == "number",
         "Sequence:get_effective_out: total_frames must be a number")
     return self.mark_out or total_frames
+end
+
+-- =============================================================================
+-- EFFECTIVE SOURCE RANGE ACCESSORS (for edit commands)
+-- =============================================================================
+-- These accessors return the effective source_in/source_out for each stream,
+-- accounting for sequence marks when set. Marks are in video frame space;
+-- audio accessors convert to sample space using coordinate-aware conversion.
+
+--- Get effective video source_in: mark_in if set, otherwise video clip's source_in.
+-- @return number Video frame position (absolute TC)
+function Sequence:get_effective_video_in()
+    if self.mark_in then
+        return self.mark_in
+    end
+    local video = self:video_stream()
+    assert(video, "Sequence:get_effective_video_in: no video stream")
+    return video.source_in
+end
+
+--- Get effective video source_out: mark_out if set, otherwise video clip's source_out.
+-- @return number Video frame position (absolute TC)
+function Sequence:get_effective_video_out()
+    if self.mark_out then
+        return self.mark_out
+    end
+    local video = self:video_stream()
+    assert(video, "Sequence:get_effective_video_out: no video stream")
+    return video.source_out
+end
+
+--- Convert a video frame position to an audio sample position, accounting for
+-- the different coordinate origins of video and audio streams.
+-- @param frame number Absolute TC video frame position
+-- @return number Audio sample position in the audio stream's coordinate space
+function Sequence:video_frame_to_audio_sample(frame)
+    assert(type(frame) == "number", "Sequence:video_frame_to_audio_sample: frame must be a number")
+
+    local video = self:video_stream()
+    assert(video, "Sequence:video_frame_to_audio_sample: no video stream")
+    local audio = self:audio_streams()[1]
+    assert(audio, "Sequence:video_frame_to_audio_sample: no audio stream")
+
+    local sample_rate = audio.rate.fps_numerator
+    local video_fps_num = self.frame_rate.fps_numerator
+    local video_fps_den = self.frame_rate.fps_denominator
+
+    -- Convert relative to video origin, then to samples, then add audio origin
+    local relative_frame = frame - video.source_in
+    local relative_samples = math.floor(relative_frame * sample_rate * video_fps_den / video_fps_num)
+    return audio.source_in + relative_samples
+end
+
+--- Get effective audio source_in: converts mark_in to sample space if set,
+-- otherwise returns audio clip's source_in.
+-- @return number Audio sample position
+function Sequence:get_effective_audio_in()
+    if self.mark_in then
+        return self:video_frame_to_audio_sample(self.mark_in)
+    end
+    local audio = self:audio_streams()[1]
+    assert(audio, "Sequence:get_effective_audio_in: no audio stream")
+    return audio.source_in
+end
+
+--- Get effective audio source_out: converts mark_out to sample space if set,
+-- otherwise returns audio clip's source_out.
+-- @return number Audio sample position
+function Sequence:get_effective_audio_out()
+    if self.mark_out then
+        return self:video_frame_to_audio_sample(self.mark_out)
+    end
+    local audio = self:audio_streams()[1]
+    assert(audio, "Sequence:get_effective_audio_out: no audio stream")
+    return audio.source_out
 end
 
 -- =============================================================================

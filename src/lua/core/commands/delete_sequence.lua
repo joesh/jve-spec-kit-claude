@@ -172,6 +172,24 @@ function M.restore_from_payload(db, payload, set_last_error)
     return restore_sequence_from_payload(db, set_last_error, payload)
 end
 
+--- Build a snapshot payload for a sequence (before deleting it).
+-- Returns the same format that restore_from_payload expects.
+function M.snapshot_for_delete(db_conn, sequence_id)
+    local sequence_row = fetch_sequence_record(db_conn, sequence_id)
+    assert(sequence_row, "snapshot_for_delete: sequence not found: " .. tostring(sequence_id))
+    local tracks = fetch_sequence_tracks(db_conn, sequence_id)
+    local clips, clip_properties, clip_links = fetch_sequence_clips(db_conn, sequence_id)
+    local snapshot = fetch_sequence_snapshot(db_conn, sequence_id)
+    return {
+        sequence = sequence_row,
+        tracks = tracks,
+        clips = clips,
+        properties = clip_properties,
+        clip_links = clip_links,
+        snapshot = snapshot,
+    }
+end
+
 
 set_error = function(set_last_error, message)
     if set_last_error then

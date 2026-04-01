@@ -1918,6 +1918,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	            end
 	        end
 
+	        -- DEBUG: dump planned mutations for diagnosis
+	        for _di, _dm in ipairs(ctx.planned_mutations or {}) do
+	            if _dm.type == "update" then
+	                print(string.format("DEBUG_BRE: mut[%d] UPDATE clip=%s start=%s dur=%s", _di, tostring(_dm.clip_id):sub(1,8), tostring(_dm.timeline_start_frame), tostring(_dm.duration_frames)))
+	            elseif _dm.type == "bulk_shift" then
+	                print(string.format("DEBUG_BRE: mut[%d] BULK_SHIFT track=%s shift=%s anchor=%s clip_ids=%s", _di, tostring(_dm.track_id):sub(1,8), tostring(_dm.shift_frames), tostring(_dm.first_clip_id and _dm.first_clip_id:sub(1,8)), tostring(_dm.clip_ids and #_dm.clip_ids or "nil")))
+	            elseif _dm.type == "delete" then
+	                print(string.format("DEBUG_BRE: mut[%d] DELETE clip=%s", _di, tostring(_dm.clip_id):sub(1,8)))
+	            end
+	        end
+	        print(string.format("DEBUG_BRE: downstream_shift=%s clips_to_shift=%d", tostring(ctx.downstream_shift_frames), #(ctx.clips_to_shift or {})))
+
 	        log.event("Batch ripple: processed %d edges, shifted %d downstream clips by %d frames",
 	            #ctx.edge_infos, #(ctx.clips_to_shift or {}), ctx.downstream_shift_frames or 0)
 

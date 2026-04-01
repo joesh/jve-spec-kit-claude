@@ -25,19 +25,6 @@ assert(db:exec([[
     INSERT INTO projects (id, name, created_at, modified_at, settings)
     VALUES ('proj', 'Project', strftime('%s','now'), strftime('%s','now'), '{}');
 
-    INSERT INTO media (
-        id, project_id, name, file_path,
-        duration_frames, fps_numerator, fps_denominator,
-        width, height, audio_channels, codec,
-        created_at, modified_at
-    )
-    VALUES (
-        'media1', 'proj', 'TestMedia', '/tmp/test.mov',
-        1000, 48000, 1,
-        0, 0, 2, 'pcm_s16le',
-        strftime('%s','now'), strftime('%s','now')
-    );
-
     INSERT INTO sequences (
         id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_rate,
@@ -58,6 +45,19 @@ assert(db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('a1', 'seq', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0);
 ]]))
+
+require("test_env").create_test_media({
+    id = "media1",
+    project_id = "proj",
+    name = "TestMedia",
+    file_path = "/tmp/test.mov",
+    duration_frames = 1000,
+    fps_numerator = 48000,
+    fps_denominator = 1,
+    audio_channels = 2,
+    codec = "pcm_s16le",
+    audio_sample_rate = 48000,
+})
 
 -- =========================================================================
 -- Test 1: Create clip with non-unity volume, save, reload, verify

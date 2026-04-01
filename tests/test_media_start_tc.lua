@@ -27,7 +27,7 @@ assert(rate == 25, string.format("expected rate=25, got %s", tostring(rate)))
 print("  ✓ get_start_tc returns (89750, 25)")
 
 ---------------------------------------------------------------------------------
--- Test 2: Media with empty metadata
+-- Test 2: Media with empty metadata — TC unknown (no file to extract from)
 ---------------------------------------------------------------------------------
 print("\n--- Test 2: get_start_tc with empty metadata ---")
 
@@ -41,12 +41,12 @@ local media_empty = Media.create({
 })
 
 local v2, r2 = media_empty:get_start_tc()
-assert(v2 == nil, "expected nil value for empty metadata")
-assert(r2 == nil, "expected nil rate for empty metadata")
-print("  ✓ get_start_tc returns (nil, nil) for empty metadata")
+assert(v2 == nil, string.format("expected nil (TC unknown, no file), got %s", tostring(v2)))
+assert(r2 == nil, string.format("expected nil rate, got %s", tostring(r2)))
+print("  ✓ get_start_tc returns (nil, nil) for empty metadata (file offline)")
 
 ---------------------------------------------------------------------------------
--- Test 3: Media with no metadata field
+-- Test 3: Media with no metadata field — TC unknown
 ---------------------------------------------------------------------------------
 print("\n--- Test 3: get_start_tc with default metadata ---")
 
@@ -59,8 +59,8 @@ local media_default = Media.create({
 })
 
 local v3, r3 = media_default:get_start_tc()
-assert(v3 == nil, "expected nil value for default metadata")
-assert(r3 == nil, "expected nil rate for default metadata")
+assert(v3 == nil, string.format("expected nil (TC unknown), got %s", tostring(v3)))
+assert(r3 == nil, string.format("expected nil rate, got %s", tostring(r3)))
 print("  ✓ get_start_tc returns (nil, nil) for default metadata")
 
 ---------------------------------------------------------------------------------

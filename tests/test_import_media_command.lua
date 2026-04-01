@@ -76,18 +76,24 @@ media_reader.import_media = function(file_path, db_conn, project_id, existing_me
         },
     }
 
+    local dkjson = require("dkjson")
     local media_record = Media.create({
         id = media_id,
         project_id = project_id,
         name = file_path:match("([^/\\]+)$") or file_path,
         file_path = file_path,
-        duration = metadata.duration_ms, -- milliseconds; Media.create converts to frames
-        frame_rate = metadata.video and metadata.video.frame_rate or 0,
+        duration_frames = math.floor(metadata.duration_ms / 1000.0 * (metadata.video and metadata.video.frame_rate or 24) + 0.5),
+        frame_rate = metadata.video and metadata.video.frame_rate or 24,
         width = metadata.video and metadata.video.width or 0,
         height = metadata.video and metadata.video.height or 0,
         audio_channels = metadata.audio and metadata.audio.channels or 0,
         codec = metadata.video and metadata.video.codec or metadata.audio.codec or "",
-        metadata = '{}',
+        metadata = dkjson.encode({
+            start_tc_value = 0,
+            start_tc_rate = metadata.video and metadata.video.frame_rate or 24,
+            start_tc_audio_samples = 0,
+            start_tc_audio_rate = metadata.audio and metadata.audio.sample_rate or nil,
+        }),
         created_at = os.time(),
         modified_at = os.time()
     })

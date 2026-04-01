@@ -130,18 +130,25 @@ local function get_clip_position(clip_id)
     return nil, nil
 end
 
+-- Helper: set marks on masterclip sequence to define source subrange
+local Sequence = require("models.sequence")
+local function set_masterclip_marks(mc_id, mark_in, mark_out)
+    local mc_seq = assert(Sequence.load(mc_id), "set_masterclip_marks: not found")
+    mc_seq.mark_in = mark_in
+    mc_seq.mark_out = mark_out
+    assert(mc_seq:save(), "set_masterclip_marks: save failed")
+end
+
 -- =============================================================================
 -- TEST 1: Basic insertion at specific position
 -- =============================================================================
 print("Test 1: Basic insertion at frame 0")
+set_masterclip_marks(master_clip_id, 0, 50)
 local insert_cmd = Command.create("Insert", "project")
 insert_cmd:set_parameter("master_clip_id", master_clip_id)
 insert_cmd:set_parameter("track_id", "track_v1")
 insert_cmd:set_parameter("sequence_id", "sequence")
 insert_cmd:set_parameter("insert_time", 0)
-insert_cmd:set_parameter("duration", 50)
-insert_cmd:set_parameter("source_in", 0)
-insert_cmd:set_parameter("source_out", 50)
 
 local result = execute_cmd(insert_cmd)
 assert(result.success, "Insert should succeed: " .. tostring(result.error_message))
@@ -157,14 +164,12 @@ assert(downstream_start == 250, string.format("Downstream should ripple to 250, 
 -- TEST 2: Insert ripples downstream clips
 -- =============================================================================
 print("Test 2: Second insert at frame 0 ripples everything")
+set_masterclip_marks(master_clip_id, 0, 30)
 local insert_cmd2 = Command.create("Insert", "project")
 insert_cmd2:set_parameter("master_clip_id", master_clip_id)
 insert_cmd2:set_parameter("track_id", "track_v1")
 insert_cmd2:set_parameter("sequence_id", "sequence")
 insert_cmd2:set_parameter("insert_time", 0)
-insert_cmd2:set_parameter("duration", 30)
-insert_cmd2:set_parameter("source_in", 0)
-insert_cmd2:set_parameter("source_out", 30)
 
 result = execute_cmd(insert_cmd2)
 assert(result.success, "Second insert should succeed")
@@ -212,12 +217,14 @@ print("Test 5: Insert uses media duration when unspecified")
 db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_clip'")
 db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
 
+-- Clear marks — no marks = use full clip range
+set_masterclip_marks(master_clip_id, nil, nil)
 local insert_cmd3 = Command.create("Insert", "project")
 insert_cmd3:set_parameter("master_clip_id", master_clip_id)
 insert_cmd3:set_parameter("track_id", "track_v1")
 insert_cmd3:set_parameter("sequence_id", "sequence")
 insert_cmd3:set_parameter("insert_time", 0)
--- No duration specified - should use media duration (100 frames)
+-- No marks set — should use full media duration (100 frames)
 
 result = execute_cmd(insert_cmd3)
 assert(result.success, "Insert without duration should succeed: " .. tostring(result.error_message))
@@ -238,14 +245,12 @@ print("Test 6: Insert at exact clip start boundary")
 db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_clip'")
 db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
 
+set_masterclip_marks(master_clip_id, 0, 50)
 local insert_cmd4 = Command.create("Insert", "project")
 insert_cmd4:set_parameter("master_clip_id", master_clip_id)
 insert_cmd4:set_parameter("track_id", "track_v1")
 insert_cmd4:set_parameter("sequence_id", "sequence")
 insert_cmd4:set_parameter("insert_time", 200)  -- Exactly at downstream start
-insert_cmd4:set_parameter("duration", 50)
-insert_cmd4:set_parameter("source_in", 0)
-insert_cmd4:set_parameter("source_out", 50)
 
 result = execute_cmd(insert_cmd4)
 assert(result.success, "Insert at boundary should succeed")
@@ -297,15 +302,13 @@ db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_cli
 db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
 
 -- Insert 3 clips
+set_masterclip_marks(master_clip_id, 0, 20)
 for i = 1, 3 do
     local cmd = Command.create("Insert", "project")
     cmd:set_parameter("master_clip_id", master_clip_id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("sequence_id", "sequence")
     cmd:set_parameter("insert_time", 0)
-    cmd:set_parameter("duration", 20)
-    cmd:set_parameter("source_in", 0)
-    cmd:set_parameter("source_out", 20)
     result = execute_cmd(cmd)
     assert(result.success, string.format("Insert %d should succeed", i))
 end
