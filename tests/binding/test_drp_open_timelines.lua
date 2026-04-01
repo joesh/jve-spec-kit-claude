@@ -4,7 +4,7 @@
 -- Bug: parse_project_metadata used TimelineHandleVec → opened ALL timelines as tabs.
 -- Fix: parse SequenceTabsData from binary FieldsBlob → only the 3 actual open tabs.
 
-require("test_env")
+local test_env = require("test_env")
 
 local drp = require("importers.drp_importer")
 
@@ -87,10 +87,8 @@ print("  PASS: single tab extracted correctly")
 -- Test 4: Full parse_drp_file with real fixture uses SequenceTabsData (not HandleVec)
 -- ===========================================================================
 print("TEST 4: real DRP fixture — open_timeline_ids from SequenceTabsData, not HandleVec")
-local fixture_path = "fixtures/resolve/2026-03-20-anamnesis joe edit.drp"
-local f = io.open(fixture_path, "rb")
-if f then
-    f:close()
+local fixture_path = test_env.require_fixture("tests/fixtures/resolve/anamnesis joe edit.drp")
+do
     local result = drp.parse_drp_file(fixture_path)
     assert(result.success, "parse_drp_file failed: " .. tostring(result.error))
 
@@ -108,8 +106,6 @@ if f then
     assert(result.active_timeline_name,
         "Expected active_timeline_name to be set")
     print(string.format("  PASS: active timeline = '%s'", result.active_timeline_name))
-else
-    print("  SKIP: DRP fixture not found (run from tests/ directory)")
 end
 
 print("✅ test_drp_open_timelines.lua passed")

@@ -426,6 +426,17 @@ local timeline_state_from_panel = timeline_panel_mod.get_state()
 log.event("timeline_state from panel = %s", tostring(timeline_state_from_panel))
 keyboard_shortcuts.init(timeline_state_from_panel, command_manager, project_browser_mod, timeline_panel_mod)
 
+-- 5b. Create QShortcut objects from TOML bindings for Qt-native shortcut resolution.
+-- Panel containers map context names to widgets; Qt fires the right shortcut based on focus.
+local shortcut_registry = require("core.keyboard_shortcut_registry")
+shortcut_registry.create_qt_shortcuts({
+    window = main_window,
+    timeline = timeline_panel,
+    source_monitor = source_monitor:get_widget(),
+    timeline_monitor = timeline_monitor:get_widget(),
+    project_browser = project_browser,
+})
+
 -- 6. Initialize focus manager for visual panel indicators
 local focus_manager = require("ui.focus_manager")
 
@@ -617,8 +628,11 @@ if not is_test_mode then
     log.event("Window state save handlers registered (geometry + splitters)")
 end
 
--- Show window
-qt_constants.DISPLAY.SHOW(main_window)
+-- Show window (pcall: corrupt DB data must not prevent editor from launching)
+local show_ok, show_err = pcall(qt_constants.DISPLAY.SHOW, main_window)
+if not show_ok then
+    log.error("Window SHOW triggered error (corrupt data?): %s", tostring(show_err))
+end
 log.event("Layout created: 4 panels top (browser, source, timeline viewer, inspector) + timeline bottom")
 
 -- Destroy welcome screen AFTER main window is visible (no window gap)

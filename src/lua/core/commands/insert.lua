@@ -63,8 +63,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local track_id = args.track_id
 
-        -- Resolve sequence_id
-        local sequence_id = clip_edit_helper.resolve_sequence_id(args, track_id, command)
+        -- Resolve sequence_id — Insert/Overwrite always target the TIMELINE sequence,
+        -- not the active monitor (which may be the source viewer showing a masterclip).
+        local sequence_id = clip_edit_helper.resolve_timeline_sequence_id(args, track_id, command)
         assert(sequence_id and sequence_id ~= "",
             string.format("Insert command: sequence_id required (track_id=%s)", tostring(track_id)))
 
@@ -76,10 +77,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Resolve insert_time from playhead
         local insert_time = clip_edit_helper.resolve_edit_time(args.insert_time, command, "insert_time")
 
-        -- Load masterclip sequence - REQUIRED
+        -- Load masterclip sequence — resolve from browser selection if not explicit
         local master_clip_id = args.master_clip_id
-        assert(master_clip_id and master_clip_id ~= "",
-            "Insert command: master_clip_id is required")
+        if not master_clip_id or master_clip_id == "" then
+            master_clip_id = clip_edit_helper.resolve_master_clip_id_from_ui()
+            assert(master_clip_id, "Insert command: no master clip selected in browser")
+            command:set_parameter("master_clip_id", master_clip_id)
+        end
         local source_sequence = Sequence.load(master_clip_id)
         assert(source_sequence, string.format(
             "Insert command: masterclip %s not found", master_clip_id))
@@ -103,18 +107,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Load media for audio channel info
         local media = Media.load(media_id)
 
-        -- Resolve timing from stream clips in their native units
-        local timing_overrides = {
-            source_in = args.source_in_value or args.source_in,
-            source_out = args.source_out_value or args.source_out,
-            duration = args.duration_value or args.duration,
-        }
-
-        -- Get video timing if video stream exists (may be nil for audio-only)
-        local video_timing = clip_edit_helper.resolve_video_stream_timing(source_sequence, timing_overrides)
-
-        -- Get audio timing if audio stream exists (may be nil for video-only)
-        local audio_timing = clip_edit_helper.resolve_audio_stream_timing(source_sequence, timing_overrides)
+        -- Resolve timing from source sequence marks + stream clips
+        local video_timing = clip_edit_helper.resolve_video_stream_timing(source_sequence)
+        local audio_timing = clip_edit_helper.resolve_audio_stream_timing(source_sequence)
 
         -- Must have at least one stream
         assert(video_timing or audio_timing, string.format(

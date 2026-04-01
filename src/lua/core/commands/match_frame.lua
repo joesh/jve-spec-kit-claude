@@ -13,6 +13,7 @@ local log = require("core.logger").for_area("commands")
 local timeline_state = require('ui.timeline.timeline_state')
 local project_browser = require('ui.project_browser')
 local Sequence = require('models.sequence')
+local command_helper = require("core.command_helper")
 
 local SPEC = {
     undoable = false,
@@ -71,34 +72,14 @@ end
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["MatchFrame"] = function(command)
-        local playhead = timeline_state.get_playhead_position()
-        local clips_at_playhead = timeline_state.get_clips_at_time(playhead)
+        local target_clips, playhead = command_helper.resolve_clips_at_playhead()
 
-        if #clips_at_playhead == 0 then
+        if #target_clips == 0 then
             set_last_error("MatchFrame: No clips under playhead")
             return false
         end
 
-        -- If any clip under playhead is selected, prefer selected clips
-        local selected = timeline_state.get_selected_clips()
-        local selected_set = {}
-        for _, clip in ipairs(selected) do
-            if clip.id then selected_set[clip.id] = true end
-        end
-
-        local selected_under_playhead = {}
-        for _, clip in ipairs(clips_at_playhead) do
-            if selected_set[clip.id] then
-                selected_under_playhead[#selected_under_playhead + 1] = clip
-            end
-        end
-
-        local target_clip
-        if #selected_under_playhead > 0 then
-            target_clip = pick_best(selected_under_playhead)
-        else
-            target_clip = pick_best(clips_at_playhead)
-        end
+        local target_clip = pick_best(target_clips)
 
         local target_master_id = extract_master_clip_id(target_clip)
         if not target_master_id then

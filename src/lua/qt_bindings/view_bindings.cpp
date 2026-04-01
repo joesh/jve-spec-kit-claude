@@ -8,6 +8,8 @@
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QMimeData>
+#include <QLineEdit>
+#include <QAbstractItemDelegate>
 #include <QIcon>
 #include <QApplication>
 
@@ -508,9 +510,48 @@ int lua_set_tree_item_changed_handler(lua_State* L) {
 }
 
 int lua_set_tree_close_editor_handler(lua_State* L) {
-    (void)L;
-    // This usually requires a delegate. For now, we skip complex delegate logic unless critical.
-    // We'll return 0 to indicate not implemented or just stub it if needed.
+    QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
+    const char* handler_name = luaL_checkstring(L, 2);
+    if (!tree || !handler_name) return 0;
+
+    std::string handler_str(handler_name);
+    // closeEditor fires when inline editing ends (Return, Escape, click away)
+    QObject::connect(tree->itemDelegate(), &QAbstractItemDelegate::closeEditor,
+        [L, handler_str, tree](QWidget* editor, QAbstractItemDelegate::EndEditHint hint) {
+            lua_getglobal(L, handler_str.c_str());
+            if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return; }
+
+            lua_newtable(L);
+            // Get the item being edited
+            QModelIndex idx = tree->currentIndex();
+            lua_pushstring(L, "item_id");
+            if (idx.isValid()) {
+                QTreeWidgetItem* item = tree->itemFromIndex(idx);
+                lua_pushinteger(L, item ? makeTreeItemId(item) : 0);
+            } else {
+                lua_pushnil(L);
+            }
+            lua_settable(L, -3);
+
+            lua_pushstring(L, "accepted");
+            // RevertModelCache = user cancelled (Escape), others = accepted
+            lua_pushboolean(L, hint != QAbstractItemDelegate::RevertModelCache);
+            lua_settable(L, -3);
+
+            lua_pushstring(L, "text");
+            if (auto* le = qobject_cast<QLineEdit*>(editor)) {
+                lua_pushstring(L, le->text().toUtf8().constData());
+            } else {
+                lua_pushstring(L, "");
+            }
+            lua_settable(L, -3);
+
+            if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+                const char* err = lua_tostring(L, -1);
+                fprintf(stderr, "closeEditor handler error: %s\n", err ? err : "unknown");
+                lua_pop(L, 1);
+            }
+        });
     return 0;
 }
 

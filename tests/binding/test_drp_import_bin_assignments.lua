@@ -15,7 +15,7 @@ local database = require("core.database")
 local tag_service = require("core.tag_service")
 
 local test_env = require("test_env")
-local fixture_path = test_env.resolve_repo_path("tests/fixtures/resolve/sample_project.drp")
+local fixture_path = test_env.require_fixture("tests/fixtures/resolve/sample_project.drp")
 
 local JVP_PATH = "/tmp/jve/test_drp_import_bin_assignments.jvp"
 os.remove(JVP_PATH)

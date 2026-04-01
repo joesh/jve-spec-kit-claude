@@ -44,6 +44,32 @@ function M.resolve_active_sequence_id(sequence_id_param, timeline_state)
     return nil
 end
 
+--- Resolve target clips at playhead using selection-aware two-tier logic.
+-- 1. If clips are selected AND any intersect playhead → those clips
+-- 2. Otherwise → all clips at playhead
+-- Returns target_clips (may be empty), playhead (integer frames).
+function M.resolve_clips_at_playhead()
+    local timeline_state = require("ui.timeline.timeline_state")
+
+    local playhead = timeline_state.get_playhead_position()
+    assert(type(playhead) == "number", "resolve_clips_at_playhead: playhead must be integer")
+
+    local selected = timeline_state.get_selected_clips()
+    local target_clips
+
+    if selected and #selected > 0 then
+        target_clips = timeline_state.get_clips_at_time(playhead, selected)
+        if #target_clips == 0 then
+            -- Selection doesn't intersect playhead — fall back to all clips
+            target_clips = timeline_state.get_clips_at_time(playhead)
+        end
+    else
+        target_clips = timeline_state.get_clips_at_time(playhead)
+    end
+
+    return target_clips, playhead
+end
+
 function M.trim_string(value)
     if type(value) ~= "string" then
         return ""
@@ -183,7 +209,8 @@ function M.clip_insert_payload(source, fallback_sequence_id)
         fps_denominator = rate and rate.fps_denominator or nil,
         
         enabled = source.enabled ~= false,
-        offline = false  -- transient: recomputed by media_status
+        offline = false,  -- transient: recomputed by media_status
+        volume = source.volume,
     }
 end
 
@@ -385,6 +412,10 @@ function M.restore_clip_state(state)
 
             enabled = state.enabled ~= false,
             offline = state.offline,
+            volume = state.volume,
+            mark_in = state.mark_in,
+            mark_out = state.mark_out,
+            playhead_frame = state.playhead,
         })
         clip:restore_without_occlusion(nil)
     else
@@ -395,6 +426,10 @@ function M.restore_clip_state(state)
         clip.source_in = state.source_in
         clip.source_out = state.source_out
         clip.enabled = state.enabled ~= false
+        if state.volume ~= nil then clip.volume = state.volume end
+        if state.mark_in ~= nil then clip.mark_in = state.mark_in end
+        if state.mark_out ~= nil then clip.mark_out = state.mark_out end
+        if state.playhead ~= nil then clip.playhead = state.playhead end
         clip:restore_without_occlusion(nil)
     end
     
@@ -430,6 +465,25 @@ function M.capture_clip_state(clip)
     -- Timestamps needed for restore operations (may be nil if not set)
     if clip.created_at then state.created_at = clip.created_at end
     if clip.modified_at then state.modified_at = clip.modified_at end
+    -- Per-clip metadata: volume, source viewer marks/playhead.
+    -- load_clips() omits these for performance; fetch from Clip model if missing.
+    local volume = clip.volume
+    local mark_in = clip.mark_in
+    local mark_out = clip.mark_out
+    local playhead = clip.playhead or clip.playhead_frame
+    if volume == nil and clip.id then
+        local full_clip = Clip.load_optional(clip.id)
+        if full_clip then
+            volume = full_clip.volume
+            mark_in = full_clip.mark_in
+            mark_out = full_clip.mark_out
+            playhead = full_clip.playhead_frame
+        end
+    end
+    if volume ~= nil then state.volume = volume end
+    if mark_in ~= nil then state.mark_in = mark_in end
+    if mark_out ~= nil then state.mark_out = mark_out end
+    if playhead ~= nil then state.playhead = playhead end
     return state
 end
 
@@ -587,9 +641,10 @@ function M.apply_mutations(db, mutations)
                 master_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                 fps_numerator, fps_denominator, enabled, offline,
-                created_at, modified_at
+                created_at, modified_at,
+                volume, mark_in_frame, mark_out_frame, playhead_frame
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not insert_stmt then
             return nil, "Failed to prepare INSERT statement: " .. tostring(db:last_error() or "unknown")
@@ -746,6 +801,13 @@ function M.apply_mutations(db, mutations)
             end
             stmt:bind_value(17, mut.created_at)
             stmt:bind_value(18, mut.modified_at)
+            -- Per-clip metadata: volume/marks/playhead
+            -- volume and playhead_frame are NOT NULL with defaults; always bind
+            stmt:bind_value(19, mut.volume or 1.0)
+            -- mark_in/mark_out are nullable; only bind when present
+            if mut.mark_in_frame ~= nil then stmt:bind_value(20, mut.mark_in_frame) end
+            if mut.mark_out_frame ~= nil then stmt:bind_value(21, mut.mark_out_frame) end
+            stmt:bind_value(22, mut.playhead_frame or 0)
             local ok = stmt:exec()
             local err = db:last_error()
             reset_stmt(stmt)
@@ -978,7 +1040,8 @@ function M.revert_mutations(db, mutations, command, sequence_id)
                 source_out_value = val_frames(prev.source_out, "source_out"),
                 fps_numerator = fps_num,
                 fps_denominator = fps_den,
-                enabled = prev.enabled
+                enabled = prev.enabled,
+                volume = prev.volume,
             })
         end
         return true
@@ -998,9 +1061,10 @@ function M.revert_mutations(db, mutations, command, sequence_id)
                 master_clip_id, owner_sequence_id,
                 timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                 fps_numerator, fps_denominator, enabled, offline,
-                created_at, modified_at
+                created_at, modified_at,
+                volume, mark_in_frame, mark_out_frame, playhead_frame
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not stmt then return false, "Failed to prepare undo delete: " .. tostring(db:last_error()) end
 
@@ -1022,6 +1086,11 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         stmt:bind_value(16, 0)  -- offline is transient, always 0 in DB
         stmt:bind_value(17, prev.created_at)
         stmt:bind_value(18, prev.modified_at)
+        -- Per-clip metadata (from capture_clip_state)
+        stmt:bind_value(19, prev.volume or 1.0)
+        if prev.mark_in ~= nil then stmt:bind_value(20, prev.mark_in) end
+        if prev.mark_out ~= nil then stmt:bind_value(21, prev.mark_out) end
+        stmt:bind_value(22, prev.playhead or 0)
 
         local ok = stmt:exec()
         stmt:finalize()
@@ -1040,7 +1109,8 @@ function M.revert_mutations(db, mutations, command, sequence_id)
                 source_out_value = val_frames(prev.source_out, "source_out"),
                 enabled = prev.enabled,
                 name = prev.name,
-                media_id = prev.media_id
+                media_id = prev.media_id,
+                volume = prev.volume,
             })
         end
         return true

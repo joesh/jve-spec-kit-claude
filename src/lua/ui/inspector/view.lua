@@ -199,9 +199,11 @@ local function build_mark_summary()
   local frame_rate = current_frame_rate()
 
   local in_text = mark_in and format_timecode(mark_in, frame_rate) or "--"
-  local out_text = mark_out and format_timecode(mark_out, frame_rate) or "--"
+  -- mark_out is stored exclusive (first excluded frame); display inclusive (last included frame)
+  local out_text = mark_out and format_timecode(mark_out - 1, frame_rate) or "--"
 
   local duration_text = "--"
+  -- Duration = mark_out - mark_in (correct: exclusive - inclusive = count)
   if mark_in and mark_out and mark_out >= mark_in then
     duration_text = format_timecode(mark_out - mark_in, frame_rate)
   elseif mark_in and mark_out and mark_out < mark_in then

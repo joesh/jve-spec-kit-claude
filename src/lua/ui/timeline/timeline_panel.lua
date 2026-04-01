@@ -398,6 +398,7 @@ function M.focus_timeline_view()
     return focus_timeline_view()
 end
 
+
 --- Cancel timecode entry: restore original display text and exit field.
 -- Called by Escape key handler. Restores text BEFORE focus change so the
 -- editingFinished handler sees valid (unchanged) timecode — effectively a no-op.
@@ -1257,7 +1258,8 @@ function M.create(opts)
     end))
 
     -- Main container
-    local container = qt_constants.WIDGET.CREATE()
+    -- luacheck: globals qt_create_focus_container
+    local container = qt_create_focus_container()  -- Tab cycles between timecode + timeline view
     -- Opaque background prevents resize artifacts (transparent children leave ghost pixels)
     qt_constants.PROPERTIES.SET_STYLE(container, [[QWidget { background: #2b2b2b; }]])
     local main_layout = qt_constants.LAYOUT.CREATE_VBOX()
@@ -1423,6 +1425,8 @@ function M.create(opts)
     -- Register video widget → scroll area mapping for coordinate conversion
     widget_to_scroll_area[video_widget] = timeline_video_scroll
     M.video_widget = video_widget
+    -- TabFocus so focusNextPrevChild includes it (timecode ↔ timeline via Tab)
+    if qt_set_focus_policy then qt_set_focus_policy(video_widget, "StrongFocus") end  -- luacheck: globals qt_set_focus_policy
 
     -- Create audio timeline view
     local audio_widget = qt_constants.WIDGET.CREATE_TIMELINE()

@@ -67,15 +67,11 @@ function M.init(database, sequence_id, project_id)
     
     M.reset()
 
-    -- Query last sequence number from database
-    local query = db:prepare("SELECT MAX(sequence_number) FROM commands")
-    assert(query, "CommandHistory.init: failed to prepare sequence_number query")
-    local ok = query:exec()
-    assert(ok, "CommandHistory.init: failed to execute sequence_number query")
-    if query:next() then
-        last_sequence_number = query:value(0) or 0
-    end
-    query:finalize()
+    -- Query last sequence number from database.
+    -- MUST use MAX of ALL commands (including orphaned branches) to prevent
+    -- UNIQUE constraint collisions. Orphaned commands still occupy sequence numbers
+    -- and will eventually be accessible via a branch browser.
+    M.refresh_last_sequence_number()
 
     local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
     global_state.sequence_id = active_sequence_id
@@ -143,6 +139,22 @@ end
 
 function M.get_last_sequence_number()
     return last_sequence_number
+end
+
+--- Re-read MAX(sequence_number) from DB. Called on init and after UNIQUE collisions.
+function M.refresh_last_sequence_number()
+    if not db then return end
+    local query = db:prepare("SELECT MAX(sequence_number) FROM commands")
+    if not query then return end
+    if query:exec() and query:next() then
+        local db_max = query:value(0) or 0
+        if db_max > last_sequence_number then
+            log.warn("refresh_last_sequence_number: DB MAX=%d > cached=%d (stale WAL or concurrent session)",
+                db_max, last_sequence_number)
+            last_sequence_number = db_max
+        end
+    end
+    query:finalize()
 end
 
 function M.increment_sequence_number()

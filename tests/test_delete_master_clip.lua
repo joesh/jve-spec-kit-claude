@@ -80,21 +80,23 @@ end
 
 -- Helper: create a master clip with source sequence
 local function create_master_clip(id, name)
-    -- Create source sequence for the master clip
+    -- Create source sequence for the master clip (IS-a: kind='masterclip')
     local source_seq = Sequence.create(name .. " (Source)", "project",
         {fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
-        {id = id .. "_src_seq", kind = "master"})
+        {id = id .. "_src_seq", kind = "masterclip"})
     assert(source_seq:save(), "Failed to save source sequence")
 
     -- Create video track in source sequence
     local src_track = Track.create_video("Video 1", source_seq.id, {id = id .. "_src_track", index = 1})
     assert(src_track:save(), "Failed to save source track")
 
-    -- Create the master clip
+    -- Create the master clip (stream clip inside masterclip sequence)
     local clip = Clip.create(name, "media_dmc", {
         id = id,
         project_id = "project",
         clip_kind = "master",
+        track_id = src_track.id,
+        owner_sequence_id = source_seq.id,
         master_clip_id = source_seq.id,
         timeline_start = 0,
         duration = 100,
@@ -104,24 +106,7 @@ local function create_master_clip(id, name)
         fps_numerator = 30,
         fps_denominator = 1
     })
-    assert(clip:save(db), "Failed to save master clip " .. id)
-
-    -- Create child clip in source sequence (stream clip inside masterclip sequence)
-    local child = Clip.create(name .. " (Video)", "media_dmc", {
-        id = id .. "_child",
-        project_id = "project",
-        clip_kind = "master",
-        track_id = src_track.id,
-        owner_sequence_id = source_seq.id,
-        timeline_start = 0,
-        duration = 100,
-        source_in = 0,
-        source_out = 100,
-        enabled = true,
-        fps_numerator = 30,
-        fps_denominator = 1
-    })
-    assert(child:save(db), "Failed to save child clip")
+    assert(clip:save({skip_occlusion = true}), "Failed to save master clip " .. id)
 
     return clip
 end
@@ -164,7 +149,7 @@ create_master_clip("master_1", "Test Clip")
 
 -- Verify clip exists before delete
 assert(clip_exists("master_1"), "Master clip should exist before delete")
-assert(clip_exists("master_1_child"), "Child clip should exist before delete")
+-- master_1 is the stream clip inside the masterclip sequence
 assert(sequence_exists("master_1_src_seq"), "Source sequence should exist before delete")
 
 local result = execute_command("DeleteMasterClip", {
@@ -176,17 +161,16 @@ assert(result.success, "DeleteMasterClip should succeed: " .. tostring(result.er
 
 -- Verify clip is deleted
 assert(not clip_exists("master_1"), "Master clip should be deleted")
-assert(not clip_exists("master_1_child"), "Child clip should be deleted")
+assert(not clip_exists("master_1"), "Stream clip should be deleted")
 
 -- =============================================================================
--- TEST 2: Undo restores master clip
+-- TEST 2: Undo restores master clip (sequence + tracks + clips)
 -- =============================================================================
 print("Test 2: Undo restores master clip")
 local undo_result = undo()
 assert(undo_result.success, "Undo should succeed: " .. tostring(undo_result.error_message))
-
--- Verify clip is restored
 assert(clip_exists("master_1"), "Master clip should be restored after undo")
+assert(sequence_exists("master_1_src_seq"), "Source sequence should be restored after undo")
 
 -- =============================================================================
 -- TEST 3: Redo re-deletes master clip
@@ -194,9 +178,8 @@ assert(clip_exists("master_1"), "Master clip should be restored after undo")
 print("Test 3: Redo re-deletes master clip")
 local redo_result = redo()
 assert(redo_result.success, "Redo should succeed: " .. tostring(redo_result.error_message))
-
--- Verify clip is deleted again
 assert(not clip_exists("master_1"), "Master clip should be deleted after redo")
+assert(not sequence_exists("master_1_src_seq"), "Source sequence should be deleted after redo")
 
 -- =============================================================================
 -- TEST 4: Cannot delete clip that is not a master clip
@@ -311,8 +294,8 @@ assert(not clip_exists("master_c"), "master_c should be deleted")
 
 -- Undo all three
 for i = 1, 3 do
-    undo_result = undo()
-    assert(undo_result.success, "Undo " .. i .. " should succeed")
+    local ur = undo()
+    assert(ur.success, "Undo " .. i .. " should succeed: " .. tostring(ur.error_message))
 end
 
 -- Verify all restored

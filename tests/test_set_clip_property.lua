@@ -109,31 +109,20 @@ media_reader.import_media = function(_, _, _, existing_media_id)
         has_audio = true,
         audio = {channels = 2, sample_rate = 48000, codec = "aac"},
     }
-    local conn = database.get_connection()
-    assert(conn, "media import stub: database not initialized")
-    local now_ts = os.time()
-    local stmt = conn:prepare([[
-        INSERT OR REPLACE INTO media (
-            id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
-            width, height, audio_channels, codec, metadata, created_at, modified_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?)
-    ]])
-    assert(stmt, "media import stub: failed to prepare media insert")
-    stmt:bind_value(1, media_id)
-    stmt:bind_value(2, "test_project")
-    stmt:bind_value(3, "media.mov")
-    stmt:bind_value(4, "/tmp/jve/media.mov")
-    stmt:bind_value(5, metadata.duration_ms)
-    stmt:bind_value(6, 1000)
-    stmt:bind_value(7, 1)
-    stmt:bind_value(8, metadata.video and metadata.video.width or 0)
-    stmt:bind_value(9, metadata.video and metadata.video.height or 0)
-    stmt:bind_value(10, metadata.audio and metadata.audio.channels or 0)
-    stmt:bind_value(11, metadata.video and metadata.video.codec or metadata.audio.codec or "")
-    stmt:bind_value(12, now_ts)
-    stmt:bind_value(13, now_ts)
-    assert(stmt:exec(), "media import stub: failed to insert media row")
-    stmt:finalize()
+    require("test_env").create_test_media({
+        id = media_id,
+        project_id = "test_project",
+        name = "media.mov",
+        file_path = "/tmp/jve/media.mov",
+        duration_frames = metadata.duration_ms,
+        fps_numerator = 1000,
+        fps_denominator = 1,
+        width = 1920,
+        height = 1080,
+        audio_channels = 2,
+        codec = "prores",
+        audio_sample_rate = 48000,
+    })
     return media_id, metadata
 end
 

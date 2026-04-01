@@ -52,19 +52,24 @@ local function setup_db(path)
     return conn
 end
 
+local test_env = require("test_env")
+
 local function insert_clip(conn, id, track_id, start_frames, dur_frames, media_id)
     media_id = media_id or (id .. "_media")
     local now = os.time()
 
-    assert(conn:exec(string.format([[
-        INSERT OR IGNORE INTO media (
-            id, project_id, name, file_path,
-            duration_frames, fps_numerator, fps_denominator,
-            width, height, audio_channels, codec,
-            created_at, modified_at, metadata
-        ) VALUES ('%s', 'proj', '%s.mov', '/tmp/jve/%s.mov',
-            %d, 24, 1, 1920, 1080, 0, 'prores', 0, 0, '{}')
-    ]], media_id, media_id, media_id, dur_frames)))
+    test_env.create_test_media({
+        id = media_id,
+        project_id = "proj",
+        name = media_id .. ".mov",
+        file_path = "/tmp/jve/" .. media_id .. ".mov",
+        duration_frames = dur_frames,
+        fps_numerator = 24,
+        fps_denominator = 1,
+        width = 1920,
+        height = 1080,
+        codec = "prores",
+    })
 
     assert(conn:exec(string.format([[
         INSERT INTO clips (

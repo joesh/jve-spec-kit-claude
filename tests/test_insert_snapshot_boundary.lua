@@ -62,6 +62,14 @@ assert(media:save(db), "Failed to save media_1")
 local master_clip_id = test_env.create_test_masterclip_sequence(
     "project", "Media 1 Master", 24, 1, 240, "media_1")
 
+-- Set marks on masterclip sequence — Insert reads timing from these
+local Sequence = require("models.sequence")
+local mc_seq = Sequence.load(master_clip_id)
+assert(mc_seq, "Failed to load masterclip sequence")
+mc_seq:set_in(0)
+mc_seq:set_out(24)
+mc_seq:save()
+
 -- Advance sequence numbering to just before the snapshot interval so the next command triggers it.
 local interval = snapshot_manager.SNAPSHOT_INTERVAL or 50
 for _ = 1, interval - 1 do
@@ -73,9 +81,6 @@ cmd:set_parameter("master_clip_id", master_clip_id)
 cmd:set_parameter("track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
 cmd:set_parameter("insert_time", 0)
-cmd:set_parameter("duration", 24)
-cmd:set_parameter("source_in", 0)
-cmd:set_parameter("source_out", 24)
 cmd:set_parameter("project_id", "project")
 cmd:set_parameter("clip_name", "BoundaryInsert")
 

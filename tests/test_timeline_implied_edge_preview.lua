@@ -21,7 +21,7 @@ local function sign(value)
 end
 
 local TEST_DB = "/tmp/jve/test_timeline_implied_edge_preview.db"
-local layout = ripple_layout.create({db_path = TEST_DB})
+local layout = ripple_layout.create({db_path = TEST_DB, clips = { v2 = {timeline_start = 2000, duration = 1000} }})
 local clips = layout.clips
 local tracks = layout.tracks
 

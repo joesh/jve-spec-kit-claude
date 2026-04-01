@@ -44,7 +44,53 @@ local function validate_frame(val, field_name)
     return val
 end
 
-local function load_internal(clip_id, raise_errors)
+-- Forward-declare so load_masterclip_stream can call it
+local load_internal
+
+--- IS-a: a masterclip is both a sequence and a clip. When the caller asks for
+--- a clip by masterclip sequence ID, resolve to the first stream clip inside
+--- that sequence. This is the ONE place that handles the dual identity.
+local function load_masterclip_stream(db, seq_id)
+    -- Check if this ID is a masterclip sequence
+    local seq_stmt = db:prepare("SELECT kind FROM sequences WHERE id = ?")
+    if not seq_stmt then return nil end
+    seq_stmt:bind_value(1, seq_id)
+    if not seq_stmt:exec() or not seq_stmt:next() then
+        seq_stmt:finalize()
+        return nil
+    end
+    local kind = seq_stmt:value(0)
+    seq_stmt:finalize()
+    if kind ~= "masterclip" then return nil end
+
+    -- Find the first stream clip in this masterclip sequence
+    local clip_stmt = db:prepare([[
+        SELECT c.id FROM clips c
+        JOIN tracks t ON c.track_id = t.id
+        WHERE t.sequence_id = ? AND c.clip_kind = 'master'
+        ORDER BY t.track_type DESC, t.track_index ASC
+        LIMIT 1
+    ]])
+    if not clip_stmt then return nil end
+    clip_stmt:bind_value(1, seq_id)
+    if not clip_stmt:exec() or not clip_stmt:next() then
+        clip_stmt:finalize()
+        return nil
+    end
+    local stream_clip_id = clip_stmt:value(0)
+    clip_stmt:finalize()
+
+    -- Load the stream clip via the normal path (recursive call is safe —
+    -- the stream clip exists in the clips table, so it won't recurse again).
+    local clip = load_internal(stream_clip_id, false)
+    if clip then
+        -- Override master_clip_id to be the sequence ID (IS-a identity)
+        clip.master_clip_id = seq_id
+    end
+    return clip
+end
+
+load_internal = function(clip_id, raise_errors)
     if not clip_id or clip_id == "" then
         if raise_errors then
             error("Clip.load_failed: Invalid clip_id")
@@ -94,11 +140,15 @@ local function load_internal(clip_id, raise_errors)
     end
 
     if not query:next() then
+        query:finalize()
+        -- IS-a: masterclip IS a sequence. If not found in clips table,
+        -- check if it's a masterclip sequence and return its first stream clip.
+        -- This is THE one place that handles the IS-a lookup transparency.
+        local mc_clip = load_masterclip_stream(db, clip_id)
+        if mc_clip then return mc_clip end
         if raise_errors then
-            query:finalize()
             error(string.format("Clip.load_failed: Clip not found: %s", clip_id))
         end
-        query:finalize()
         return nil
     end
 
@@ -556,6 +606,20 @@ function M:delete()
     local db = database.get_connection()
     assert(db, "Clip.delete: No database connection available")
 
+    -- Clean up properties and clip_links (no FK cascade on these tables)
+    local prop_stmt = db:prepare("DELETE FROM properties WHERE clip_id = ?")
+    if prop_stmt then
+        prop_stmt:bind_value(1, self.id)
+        prop_stmt:exec()
+        prop_stmt:finalize()
+    end
+    local link_stmt = db:prepare("DELETE FROM clip_links WHERE clip_id = ?")
+    if link_stmt then
+        link_stmt:bind_value(1, self.id)
+        link_stmt:exec()
+        link_stmt:finalize()
+    end
+
     local query = db:prepare("DELETE FROM clips WHERE id = ?")
     query:bind_value(1, self.id)
 
@@ -564,7 +628,7 @@ function M:delete()
         query:finalize()
         error(string.format("Clip.delete: Failed to delete clip %s: %s", tostring(self.id), err))
     end
-    
+
     query:finalize()
 
     return true

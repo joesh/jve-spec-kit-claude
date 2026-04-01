@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS tracks (
 
 CREATE TABLE IF NOT EXISTS clips (
     id TEXT PRIMARY KEY,
-    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE, -- Ownership
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, -- Ownership
     
     -- Structural Fields (Restored)
     clip_kind TEXT NOT NULL DEFAULT 'timeline', -- 'master', 'timeline'

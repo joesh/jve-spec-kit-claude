@@ -68,6 +68,7 @@ int lua_set_checked(lua_State* L);
 int lua_get_checked(lua_State* L);
 int lua_add_combobox_item(lua_State* L);
 int lua_set_combobox_current_text(lua_State* L);
+int lua_set_combobox_change_handler(lua_State* L);
 int lua_get_combobox_current_text(lua_State* L);
 int lua_set_slider_range(lua_State* L);
 int lua_set_slider_value(lua_State* L);
@@ -130,6 +131,15 @@ int lua_set_line_edit_return_pressed_handler(lua_State* L);
 int lua_install_panel_focus_trap(lua_State* L);
 int lua_set_panel_default_button(lua_State* L);
 int lua_cycle_panel_focus(lua_State* L);
+
+// QShortcut bindings
+int lua_create_shortcut(lua_State* L);
+int lua_connect_shortcut(lua_State* L);
+int lua_set_shortcut_enabled(lua_State* L);
+int lua_delete_shortcut(lua_State* L);
+int lua_create_focus_container(lua_State* L);
+int lua_set_container_default_button(lua_State* L);
+
 int lua_get_tree_item_at(lua_State* L);
 int lua_get_tree_items_in_order(lua_State* L);
 int lua_set_tree_drag_drop_mode(lua_State* L);

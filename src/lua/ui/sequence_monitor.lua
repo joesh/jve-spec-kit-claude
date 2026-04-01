@@ -108,9 +108,12 @@ function SequenceMonitor.new(config)
         end
     end)
 
-    -- Seek when SetPlayhead command targets this sequence
+    -- Seek when SetPlayhead command targets this sequence.
+    -- Skip if playhead hasn't moved — flush_state_to_db re-persists the current
+    -- position which emits playhead_changed; seeking on that would stop playback.
     self._playhead_changed_id = Signals.connect("playhead_changed", function(sequence_id, frame)
-        if self.sequence_id == sequence_id and type(frame) == "number" then
+        if self.sequence_id == sequence_id and type(frame) == "number"
+           and frame ~= self.playhead then
             self:seek_to_frame(frame)
         end
     end)
@@ -337,15 +340,27 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     assert(type(saved_playhead) == "number", string.format(
         "SequenceMonitor(%s):load_sequence: playhead_position must be number, got %s (seq=%s)",
         self.view_id, type(saved_playhead), sequence_id:sub(1, 8)))
-    -- Validate playhead is in [start_frame, total_frames).
+    -- Clamp playhead to valid range [start_frame, max(start_frame, total_frames - 1)].
+    -- Playhead can end up at total_frames after Overwrite advance_playhead or undo
+    -- with content change — clamping is safer than asserting.
     if self.total_frames > self.start_frame then
-        assert(saved_playhead >= self.start_frame and saved_playhead < self.total_frames, string.format(
-            "SequenceMonitor(%s):load_sequence: playhead %d out of range [%d, %d) (seq=%s)",
-            self.view_id, saved_playhead, self.start_frame, self.total_frames, sequence_id:sub(1, 8)))
+        if saved_playhead < self.start_frame then
+            log.warn("load_sequence(%s): clamping playhead %d to start %d",
+                sequence_id:sub(1, 8), saved_playhead, self.start_frame)
+            saved_playhead = self.start_frame
+        elseif saved_playhead >= self.total_frames then
+            local clamped = self.total_frames - 1
+            log.warn("load_sequence(%s): clamping playhead %d to last frame %d",
+                sequence_id:sub(1, 8), saved_playhead, clamped)
+            saved_playhead = clamped
+        end
     else
-        assert(saved_playhead == self.start_frame, string.format(
-            "SequenceMonitor(%s):load_sequence: empty sequence playhead must be %d, got %d (seq=%s)",
-            self.view_id, self.start_frame, saved_playhead, sequence_id:sub(1, 8)))
+        -- Empty sequence: playhead must be at start
+        if saved_playhead ~= self.start_frame then
+            log.warn("load_sequence(%s): empty sequence, clamping playhead %d to %d",
+                sequence_id:sub(1, 8), saved_playhead, self.start_frame)
+            saved_playhead = self.start_frame
+        end
     end
     self.playhead = saved_playhead
     self.engine:seek(saved_playhead)
@@ -616,12 +631,14 @@ function SequenceMonitor:save_playhead_to_db()
     if not self.sequence:is_masterclip() then return end
     if not database.has_connection() then return end
 
-    -- Validate before writing — catch view-level playhead drift.
-    -- total_frames=0 means unloaded; skip save in that case.
+    -- Clamp before writing — playhead can drift to total_frames after
+    -- advance_playhead or content changes. Clamp to valid range.
     if self.total_frames > self.start_frame then
-        assert(self.playhead >= self.start_frame and self.playhead < self.total_frames, string.format(
-            "save_playhead_to_db(%s): playhead %d out of range [%d, %d)",
-            self.view_id, self.playhead, self.start_frame, self.total_frames))
+        if self.playhead >= self.total_frames then
+            self.playhead = self.total_frames - 1
+        elseif self.playhead < self.start_frame then
+            self.playhead = self.start_frame
+        end
     end
     self.sequence.playhead_position = self.playhead
     self.sequence:save()

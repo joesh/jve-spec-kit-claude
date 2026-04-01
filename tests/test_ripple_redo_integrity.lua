@@ -96,13 +96,21 @@ local function clip_count()
     return count
 end
 
+-- Set marks on masterclip sequence — Insert reads timing from these
+local Sequence = require("models.sequence")
+local function set_mc_marks(mc_id, src_in, src_out)
+    local mc_seq = Sequence.load(mc_id)
+    assert(mc_seq, "set_mc_marks: failed to load masterclip sequence")
+    mc_seq:set_in(src_in)
+    mc_seq:set_out(src_out)
+    mc_seq:save()
+end
+
+set_mc_marks(master_clip_id, 0, 4543560)
 local insert_cmd = Command.create("Insert", "default_project")
 insert_cmd:set_parameter("master_clip_id", master_clip_id)
 insert_cmd:set_parameter("track_id", "track_default_v1")
 insert_cmd:set_parameter("insert_time", 0)
-insert_cmd:set_parameter("duration", 4543560)
-insert_cmd:set_parameter("source_in", 0)
-insert_cmd:set_parameter("source_out", 4543560)
 insert_cmd:set_parameter("sequence_id", "default_sequence")
 exec(insert_cmd)
 
@@ -214,13 +222,11 @@ master_clip_id = test_env.create_test_masterclip_sequence(
     'default_project', 'Media Src Master', 30, 1, 10000000, 'media_src')
 
 local function insert_clip(start_value, duration, source_in)
+    set_mc_marks(master_clip_id, source_in or 0, (source_in or 0) + duration)
     local cmd = Command.create("Insert", "default_project")
     cmd:set_parameter("master_clip_id", master_clip_id)
     cmd:set_parameter("track_id", "track_default_v1")
     cmd:set_parameter("insert_time", start_value)
-    cmd:set_parameter("duration", duration)
-    cmd:set_parameter("source_in", source_in or 0)
-    cmd:set_parameter("source_out", (source_in or 0) + duration)
     cmd:set_parameter("sequence_id", "default_sequence")
     exec(cmd)
 end

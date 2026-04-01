@@ -34,6 +34,8 @@ local function expect_error(label, fn, pattern)
     return err
 end
 
+local dkjson = require("dkjson")
+
 print("\n=== ensure_masterclip Tests (NSF Compliance) ===")
 
 -- Set up database
@@ -94,6 +96,10 @@ local media_va = Media.create({
     height = 1080,
     audio_channels = 2,
     codec = "prores",
+    metadata = dkjson.encode({
+        start_tc_value = 0, start_tc_rate = 24,
+        start_tc_audio_samples = 0, start_tc_audio_rate = 48000,
+    }),
 })
 assert(media_va:save(), "Failed to save video+audio media")
 
@@ -257,6 +263,10 @@ local media_v = Media.create({
     height = 2160,
     audio_channels = 0,
     codec = "h264",
+    metadata = dkjson.encode({
+        start_tc_value = 0, start_tc_rate = 30,
+        start_tc_audio_samples = 0,
+    }),
 })
 assert(media_v:save())
 
@@ -301,6 +311,10 @@ local media_a = Media.create({
     height = 0,
     audio_channels = 1,
     codec = "pcm",
+    metadata = dkjson.encode({
+        start_tc_value = 0, start_tc_rate = 48000,
+        start_tc_audio_samples = 0, start_tc_audio_rate = 48000,
+    }),
 })
 assert(media_a:save())
 
@@ -366,6 +380,10 @@ local media_replay = Media.create({
     height = 1080,
     audio_channels = 1,
     codec = "prores",
+    metadata = dkjson.encode({
+        start_tc_value = 0, start_tc_rate = 24,
+        start_tc_audio_samples = 0, start_tc_audio_rate = 48000,
+    }),
 })
 assert(media_replay:save())
 
@@ -536,6 +554,10 @@ local media_ntsc = Media.create({
     height = 1080,
     audio_channels = 1,
     codec = "h264",
+    metadata = dkjson.encode({
+        start_tc_value = 0, start_tc_rate = 30000,
+        start_tc_audio_samples = 0, start_tc_audio_rate = 48000,
+    }),
 })
 assert(media_ntsc:save())
 
@@ -583,6 +605,10 @@ local media_still = Media.create({
     height = 3000,
     audio_channels = 0,
     codec = "jpeg",
+    metadata = dkjson.encode({
+        start_tc_value = 0, start_tc_rate = 24,
+        start_tc_audio_samples = 0,
+    }),
 })
 assert(media_still:save())
 

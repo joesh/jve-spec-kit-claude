@@ -39,7 +39,7 @@ local QT_KEY_BACKSPACE = 16777219   -- 0x01000003
 local QT_KEY_B         = 66
 local QT_KEY_Z         = 90
 local QT_KEY_N         = 78
-local QT_KEY_RETURN    = 16777220   -- 0x01000004
+-- QT_KEY_RETURN removed: Return binding moved to native tree keymap
 local QT_KEY_F2        = 16777265   -- 0x01000031
 local QT_KEY_2         = 50
 local QT_KEY_3         = 51
@@ -196,16 +196,14 @@ print("  ✓ Snapping binding: N")
 -- Browser
 -- ═════════════════════════════════════════
 print("\n--- Browser ---")
-assert_binding(QT_KEY_RETURN, 0, "ActivateBrowserSelection", "Return")
-assert_contexts(QT_KEY_RETURN, 0, {"project_browser"}, "Return contexts")
-print("  ✓ Browser binding: Return")
+-- Return removed from TOML — handled natively by tree keymap + PanelFocusTrap
 
 -- ═════════════════════════════════════════
 -- Rename (F2) — regression test for F2 constant collision with Qt::Key_Control
 -- ═════════════════════════════════════════
 print("\n--- Rename ---")
-assert_binding(QT_KEY_F2, 0, "RenameItem", "F2")
+assert_binding(QT_KEY_F2, 0, "StartRename", "F2")
 assert_contexts(QT_KEY_F2, 0, {"project_browser"}, "F2 contexts")
-print("  ✓ F2 → RenameItem (not confused with Control key)")
+print("  ✓ F2 → StartRename (not confused with Control key)")
 
 print("\n✅ test_toml_keybinding_loading.lua passed")

@@ -18,7 +18,6 @@ local database = require('core.database')
 local command_manager = require('core.command_manager')
 local _ = require('core.command_implementations') -- load for side effects
 local Command = require('command')
-local Media = require('models.media')
 local timeline_state = require('ui.timeline.timeline_state')
 
 local TEST_DB = "/tmp/jve/test_ripple_delete_selection.db"
@@ -51,7 +50,7 @@ db:exec([[
 
 local function clips_snapshot()
     local clips = {}
-    local stmt = db:prepare("SELECT id, track_id, timeline_start_frame, duration_frames FROM clips ORDER BY timeline_start_frame")
+    local stmt = db:prepare("SELECT id, track_id, timeline_start_frame, duration_frames FROM clips WHERE owner_sequence_id = 'default_sequence' ORDER BY timeline_start_frame")
     assert(stmt:exec())
     while stmt:next() do
         clips[#clips + 1] = {
@@ -75,7 +74,7 @@ local function find_clip(id)
 end
 
 local function assert_no_overlaps()
-    local stmt = db:prepare("SELECT id, track_id, timeline_start_frame, duration_frames FROM clips ORDER BY track_id, timeline_start_frame")
+    local stmt = db:prepare("SELECT id, track_id, timeline_start_frame, duration_frames FROM clips WHERE owner_sequence_id = 'default_sequence' ORDER BY track_id, timeline_start_frame")
     assert(stmt:exec())
     local prev = {}
     while stmt:next() do
@@ -123,17 +122,17 @@ local function create_clip_command(params)
     local clip_duration = params.duration
     local media_id = params.media_id or (clip_id .. "_media")
 
-    local media = Media.create({
+    require("test_env").create_test_media({
         id = media_id,
         project_id = 'default_project',
+        name = clip_id .. '.mov',
         file_path = '/tmp/jve/' .. clip_id .. '.mov',
-        file_name = clip_id .. '.mov',
         duration_frames = clip_duration,
         fps_numerator = 30,
-        fps_denominator = 1
+        fps_denominator = 1,
+        width = 1920,
+        height = 1080,
     })
-    assert(media, "failed to create media for clip " .. tostring(clip_id))
-    assert(media:save(db), "failed to save media for clip " .. tostring(clip_id))
 
     local clip = require('models.clip').create("Test Clip", media_id, {
         id = params.clip_id,

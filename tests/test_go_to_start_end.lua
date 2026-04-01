@@ -72,6 +72,14 @@ function mock_monitor:seek_to_frame(frame)
     timeline_state.set_playhead_position(self.playhead)
 end
 
+-- Connect mock monitor to playhead_changed signal (mirrors real SequenceMonitor behavior)
+local Signals = require("core.signals")
+Signals.connect("playhead_changed", function(sequence_id, frame)
+    if mock_monitor.sequence_id == sequence_id and type(frame) == "number" then
+        mock_monitor:seek_to_frame(frame)
+    end
+end)
+
 command_manager.init('default_sequence', 'default_project')
 
 print("=== GoToStart / GoToEnd Tests ===")
@@ -84,14 +92,14 @@ assert(result.success, "GoToStart should succeed: " .. tostring(result.error_mes
 assert(timeline_state.get_playhead_position() == 0,
     string.format("GoToStart should move to frame 0, got %s", tostring(timeline_state.get_playhead_position())))
 
--- Test 2: GoToEnd moves playhead to last valid frame (total_frames - 1)
-print("Test 2: GoToEnd moves playhead to total_frames - 1")
+-- Test 2: GoToEnd moves playhead to first frame past content (exclusive out-point)
+print("Test 2: GoToEnd moves playhead to total_frames (out-point)")
 mock_monitor.total_frames = 350
 timeline_state.set_playhead_position(0)
 result = command_manager.execute("GoToEnd", { project_id = "default_project" })
 assert(result.success, "GoToEnd should succeed: " .. tostring(result.error_message))
-assert(timeline_state.get_playhead_position() == 349,
-    string.format("GoToEnd should move to frame 349 (last valid), got %s", tostring(timeline_state.get_playhead_position())))
+assert(timeline_state.get_playhead_position() == 350,
+    string.format("GoToEnd should move to frame 350 (out-point), got %s", tostring(timeline_state.get_playhead_position())))
 
 -- Test 3: GoToStart is idempotent (already at start)
 print("Test 3: GoToStart is idempotent")
@@ -100,12 +108,12 @@ result = command_manager.execute("GoToStart", { project_id = "default_project" }
 assert(result.success, "GoToStart should succeed when already at start")
 assert(timeline_state.get_playhead_position() == 0, "GoToStart should stay at 0")
 
--- Test 4: GoToEnd is idempotent (already at last valid frame)
+-- Test 4: GoToEnd is idempotent (already at out-point)
 print("Test 4: GoToEnd is idempotent")
-timeline_state.set_playhead_position(349)
+timeline_state.set_playhead_position(350)
 result = command_manager.execute("GoToEnd", { project_id = "default_project" })
 assert(result.success, "GoToEnd should succeed when already at end")
-assert(timeline_state.get_playhead_position() == 349, "GoToEnd should stay at 349")
+assert(timeline_state.get_playhead_position() == 350, "GoToEnd should stay at 350")
 
 -- Test 6: set_playhead_position receives integer, not Rational
 print("Test 6: set_playhead_position receives integer, not Rational")

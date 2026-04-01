@@ -177,7 +177,7 @@ package.loaded["models.media"] = {
             project_id = params.project_id,
             name = params.name,
             file_path = params.file_path,
-            duration = params.duration,
+            duration_frames = params.duration_frames,
             frame_rate = params.frame_rate,
             width = params.width,
             height = params.height,
@@ -200,7 +200,8 @@ assert_eq(#mock_saved_media, 1, "One media record saved to database")
 if #mock_saved_media > 0 then
     local saved = mock_saved_media[1]
     assert_eq(saved.file_path, test_video_path, "File path stored correctly")
-    assert_true(saved.duration > 4000 and saved.duration < 6000, "Duration stored correctly")
+    assert_true(saved.duration_frames and saved.duration_frames > 100 and saved.duration_frames < 200,
+        string.format("Duration frames stored correctly (got %s)", tostring(saved.duration_frames)))
     assert_eq(saved.width, 1920, "Width stored correctly")
     assert_eq(saved.height, 1080, "Height stored correctly")
 end

@@ -62,15 +62,17 @@ db:exec(string.format(
 -- Helper: insert a clip with all required columns
 local function insert_clip(id, opts)
     opts = opts or {}
-    local stmt = db:prepare("INSERT OR REPLACE INTO clips (id, track_id, clip_kind, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, offline, created_at, modified_at) VALUES (?, ?, 'timeline', ?, ?, ?, ?, 30, 1, 1, 0, ?, ?)")
+    local stmt = db:prepare("INSERT OR REPLACE INTO clips (id, project_id, owner_sequence_id, track_id, clip_kind, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, offline, created_at, modified_at) VALUES (?, ?, ?, ?, 'timeline', ?, ?, ?, ?, 30, 1, 1, 0, ?, ?)")
     stmt:bind_value(1, id)
-    stmt:bind_value(2, opts.track_id or track_id)
-    stmt:bind_value(3, opts.start or 0)
-    stmt:bind_value(4, opts.duration or 100)
-    stmt:bind_value(5, opts.source_in or 0)
-    stmt:bind_value(6, opts.source_out or (opts.duration or 100))
-    stmt:bind_value(7, now)
-    stmt:bind_value(8, now)
+    stmt:bind_value(2, project_id)
+    stmt:bind_value(3, sequence_id)
+    stmt:bind_value(4, opts.track_id or track_id)
+    stmt:bind_value(5, opts.start or 0)
+    stmt:bind_value(6, opts.duration or 100)
+    stmt:bind_value(7, opts.source_in or 0)
+    stmt:bind_value(8, opts.source_out or (opts.duration or 100))
+    stmt:bind_value(9, now)
+    stmt:bind_value(10, now)
     local ok = stmt:exec()
     if not ok then
         local err_msg = "unknown"

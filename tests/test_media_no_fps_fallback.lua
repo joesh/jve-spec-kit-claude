@@ -57,7 +57,7 @@ local ok2, err2 = pcall(function()
     Media.create({
         file_path = "/test.mov",
         name = "test",
-        duration = 1000,
+        duration_frames = 1000,
         frame_rate = nil,  -- no fps!
         project_id = "proj1",
     })
@@ -72,7 +72,7 @@ local ok3 = pcall(function()
     Media.create({
         file_path = "/test.mov",
         name = "test",
-        duration = 1000,
+        duration_frames = 1000,
         frame_rate = 0,
         project_id = "proj1",
     })
@@ -84,7 +84,7 @@ check("Media.create asserts on fps=0", not ok3)
 local media = Media.create({
     file_path = "/test.mov",
     name = "test",
-    duration = 1000,
+    duration_frames = 1000,
     frame_rate = 24,
     project_id = "proj1",
 })

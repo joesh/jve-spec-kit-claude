@@ -93,6 +93,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
             gap_query:finalize()
 
+            print(string.format("DEBUG_RD: gap [%d, %d), found %d blocking clips", gap_start, gap_end, #blocking_clips))
+            for _, bc in ipairs(blocking_clips) do
+                print(string.format("DEBUG_RD:   blocker clip=%s track=%s [%d, %d)", tostring(bc.clip_id):sub(1,8), tostring(bc.track_id):sub(1,8), bc.start, bc.end_time))
+            end
             if #blocking_clips > 0 then
                 local messages = {}
                 for index, info in ipairs(blocking_clips) do

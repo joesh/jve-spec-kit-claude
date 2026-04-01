@@ -7,6 +7,7 @@
 -- @file blade.lua
 local M = {}
 local log = require("core.logger").for_area("commands")
+local command_helper = require("core.command_helper")
 
 local SPEC = {
     undoable = false,
@@ -18,25 +19,11 @@ local SPEC = {
 
 function M.register(executors)
     local function executor(command)
-        local timeline_state = require('ui.timeline.timeline_state')
         local command_manager = require("core.command_manager")
 
-        local selected_clips = timeline_state.get_selected_clips()
-        local playhead_value = timeline_state.get_playhead_position()
-
-        local target_clips
-        if selected_clips and #selected_clips > 0 then
-            target_clips = timeline_state.get_clips_at_time(playhead_value, selected_clips)
-        else
-            target_clips = timeline_state.get_clips_at_time(playhead_value)
-        end
-
+        local target_clips, playhead_value = command_helper.resolve_clips_at_playhead()
         if #target_clips == 0 then
-            if selected_clips and #selected_clips > 0 then
-                log.event("Blade: playhead does not intersect selected clips")
-            else
-                log.event("Blade: no clips under playhead")
-            end
+            log.event("Blade: no clips under playhead")
             return true
         end
 

@@ -26,37 +26,23 @@ local function setup_db(path)
     return db
 end
 
+local test_env = require("test_env")
+
 local function create_clip(id, track_id, start_frame, duration_frame)
     local conn = database.get_connection()
     local media_id = id .. "_media"
 
-    local media_stmt = conn:prepare([[
-        INSERT OR REPLACE INTO media (
-            id,
-            project_id,
-            name,
-            file_path,
-            duration_frames,
-            fps_numerator,
-            fps_denominator,
-            width,
-            height,
-            audio_channels,
-            codec,
-            created_at,
-            modified_at,
-            metadata
-        )
-        VALUES (?, ?, ?, ?, ?, 30, 1, 1920, 1080, 0, '', 0, 0, '{}')
-    ]])
-    assert(media_stmt, "failed to prepare media insert")
-    assert(media_stmt:bind_value(1, media_id))
-    assert(media_stmt:bind_value(2, "default_project"))
-    assert(media_stmt:bind_value(3, id .. ".mov"))
-    assert(media_stmt:bind_value(4, "/tmp/jve/" .. id .. ".mov"))
-    assert(media_stmt:bind_value(5, duration_frame))
-    assert(media_stmt:exec())
-    media_stmt:finalize()
+    test_env.create_test_media({
+        id = media_id,
+        project_id = "default_project",
+        name = id .. ".mov",
+        file_path = "/tmp/jve/" .. id .. ".mov",
+        duration_frames = duration_frame,
+        fps_numerator = 30,
+        fps_denominator = 1,
+        width = 1920,
+        height = 1080,
+    })
 
     local now = os.time()
     local clip_stmt = conn:prepare([[

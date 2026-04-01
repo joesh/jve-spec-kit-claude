@@ -103,36 +103,24 @@ do
     check("Correct command name passed", executed_commands[1] == "SomeOtherCommand")
 end
 
--- ─── Test 5: Insert menu → project_browser, NOT raw command ───
-print("\n--- Insert → project_browser.add_selected_to_timeline ---")
+-- ─── Test 5: Insert menu → execute_ui (no special case) ───
+print("\n--- Insert → execute_ui (pure command dispatch) ---")
 do
-    local insert_called_with = nil
-    package.loaded["ui.project_browser"] = {
-        add_selected_to_timeline = function(cmd_type, opts)
-            insert_called_with = cmd_type
-        end,
-    }
     executed_commands = {}
     local cb = menu_system._test_get_action_callback("Insert")
     cb()
-    check("Insert routed to project_browser", insert_called_with == "Insert")
-    check("Insert NOT sent to raw command", #executed_commands == 0)
+    check("Insert dispatched via execute_ui", #executed_commands == 1)
+    check("Insert command name correct", executed_commands[1] == "Insert")
 end
 
--- ─── Test 6: Overwrite menu → project_browser, NOT raw command ───
-print("\n--- Overwrite → project_browser.add_selected_to_timeline ---")
+-- ─── Test 6: Overwrite menu → execute_ui (no special case) ───
+print("\n--- Overwrite → execute_ui (pure command dispatch) ---")
 do
-    local overwrite_called_with = nil
-    package.loaded["ui.project_browser"] = {
-        add_selected_to_timeline = function(cmd_type, opts)
-            overwrite_called_with = cmd_type
-        end,
-    }
     executed_commands = {}
     local cb = menu_system._test_get_action_callback("Overwrite")
     cb()
-    check("Overwrite routed to project_browser", overwrite_called_with == "Overwrite")
-    check("Overwrite NOT sent to raw command", #executed_commands == 0)
+    check("Overwrite dispatched via execute_ui", #executed_commands == 1)
+    check("Overwrite command name correct", executed_commands[1] == "Overwrite")
 end
 
 -- Summary

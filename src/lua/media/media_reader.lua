@@ -82,6 +82,8 @@ local function run_ffprobe(file_path)
                 if num and den and tonumber(den) ~= 0 then
                     stream.frame_rate = tonumber(num) / tonumber(den)
                 else
+                    -- r_frame_rate can be "0/0" for audio streams — frame_rate=0 is valid there
+                    -- (audio streams don't have a meaningful frame rate)
                     stream.frame_rate = tonumber(stream.r_frame_rate) or 0
                 end
             end
@@ -149,17 +151,16 @@ end
 -- ============================================================================
 
 local function find_media_id_by_path(db, file_path)
-    if not db or not file_path or file_path == "" then
-        return nil
-    end
+    assert(db, "find_media_id_by_path: db is nil")
+    assert(file_path and file_path ~= "", "find_media_id_by_path: file_path required")
+
+    -- db.prepare may not exist when called with a mock (e.g. media_reader tests)
     if type(db.prepare) ~= "function" then
         return nil
     end
 
-    local stmt = db:prepare("SELECT id FROM media WHERE file_path = ?")
-    if not stmt then
-        return nil
-    end
+    local stmt = assert(db:prepare("SELECT id FROM media WHERE file_path = ?"),
+        "find_media_id_by_path: failed to prepare query")
 
     stmt:bind_value(1, file_path)
 
@@ -170,7 +171,7 @@ local function find_media_id_by_path(db, file_path)
 
     stmt:finalize()
 
-    return media_id
+    return media_id  -- nil = "not found" (distinct from SQL error, which asserts above)
 end
 
 --- Probe media file and extract metadata
@@ -215,26 +216,40 @@ function M.probe_file(file_path)
     -- Build metadata structure
     local metadata = {
         file_path = file_path,
-        duration_ms = math.floor((probe_data.format.duration or 0) * 1000),
+        duration_ms = math.floor(probe_data.format.duration * 1000),
         has_video = video_stream ~= nil,
         has_audio = audio_stream ~= nil
     }
 
     if video_stream then
+        assert(video_stream.width and video_stream.width > 0,
+            string.format("probe_file: video stream has no width for %s", file_path))
+        assert(video_stream.height and video_stream.height > 0,
+            string.format("probe_file: video stream has no height for %s", file_path))
+        assert(video_stream.frame_rate and video_stream.frame_rate > 0,
+            string.format("probe_file: video stream has no frame_rate for %s", file_path))
+        assert(video_stream.codec_name,
+            string.format("probe_file: video stream has no codec_name for %s", file_path))
         metadata.video = {
-            width = video_stream.width or 0,
-            height = video_stream.height or 0,
-            frame_rate = video_stream.frame_rate or 0,
-            codec = video_stream.codec_name or "unknown",
+            width = video_stream.width,
+            height = video_stream.height,
+            frame_rate = video_stream.frame_rate,
+            codec = video_stream.codec_name,
             rotation = extract_rotation(video_stream)
         }
     end
 
     if audio_stream then
+        assert(audio_stream.channels and tonumber(audio_stream.channels) > 0,
+            string.format("probe_file: audio stream has no channels for %s", file_path))
+        assert(audio_stream.sample_rate and tonumber(audio_stream.sample_rate) > 0,
+            string.format("probe_file: audio stream has no sample_rate for %s", file_path))
+        assert(audio_stream.codec_name,
+            string.format("probe_file: audio stream has no codec_name for %s", file_path))
         metadata.audio = {
-            channels = tonumber(audio_stream.channels) or 0,
-            sample_rate = tonumber(audio_stream.sample_rate) or 0,
-            codec = audio_stream.codec_name or "unknown"
+            channels = tonumber(audio_stream.channels),
+            sample_rate = tonumber(audio_stream.sample_rate),
+            codec = audio_stream.codec_name
         }
     end
 
@@ -272,14 +287,28 @@ function M.import_media(file_path, db, project_id, existing_media_id)
     end
 
     -- Create Media record
+    -- Convert duration from ms to native units at the I/O boundary
+    local fps = metadata.video and metadata.video.frame_rate
+    local duration_frames
+    if fps and fps > 0 then
+        -- Video: duration in video frames
+        duration_frames = math.floor(metadata.duration_ms / 1000.0 * fps + 0.5)
+    else
+        -- Audio-only: duration in audio samples
+        assert(metadata.audio and metadata.audio.sample_rate and metadata.audio.sample_rate > 0,
+            string.format("import_media: no video fps and no audio sample_rate for %s", file_path))
+        fps = metadata.audio.sample_rate
+        duration_frames = math.floor(metadata.duration_ms / 1000.0 * fps + 0.5)
+    end
+
     local Media = require("models.media")
     local media = Media.create({
         id = media_id,
         project_id = project_id,
         name = filename,
         file_path = file_path,
-        duration = metadata.duration_ms,
-        frame_rate = metadata.video and metadata.video.frame_rate or 0,
+        duration_frames = duration_frames,
+        frame_rate = fps,
         width = metadata.video and metadata.video.width or 0,
         height = metadata.video and metadata.video.height or 0,
         rotation = metadata.video and metadata.video.rotation or 0,
@@ -293,7 +322,17 @@ function M.import_media(file_path, db, project_id, existing_media_id)
         return nil, nil, "Failed to create Media record"
     end
 
-    -- Save to database
+    -- Extract TC origin from the file via EMP.
+    -- File is guaranteed to exist (we just probed it).
+    -- This sets start_tc_value/start_tc_rate in metadata so ensure_masterclip
+    -- gets the real TC, not a fabricated 0.
+    -- In the running app, EMP is always available. In unit tests without EMP,
+    -- _ensure_tc_extracted() will lazily extract when the file is first accessed.
+    if qt_constants and qt_constants.EMP then
+        media:extract_tc_from_file()
+    end
+
+    -- Save to database (includes TC metadata)
     if not media:save() then
         return nil, nil, "Failed to save Media record to database"
     end

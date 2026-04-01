@@ -27,18 +27,20 @@ local krono_ok, krono = pcall(require, "core.krono")
 	        track_id = row.track_id,
 	        media_id = row.media_id,
             master_clip_id = row.master_clip_id,
-
             owner_sequence_id = row.owner_sequence_id,
 	        created_at = row.created_at,
 	        modified_at = row.modified_at,
+	        timeline_start = row.timeline_start,
 	        start_value = row.start_value,
 	        duration = row.duration,
 	        source_in = row.source_in,
 	        source_out = row.source_out,
 	        fps_numerator = row.fps_numerator,
 	        fps_denominator = row.fps_denominator,
+	        rate = row.rate,
 	        enabled = row.enabled,
-            offline = row.offline
+            offline = row.offline,
+            volume = row.volume
 	    }
 	end
 
@@ -140,7 +142,12 @@ local function plan_insert(row)
         enabled = row.enabled and 1 or 0,
         offline = 0,  -- transient: always 0 in DB
         created_at = assert(row.created_at, "clip_mutator: insert mutation missing created_at for clip " .. tostring(row.id)),
-        modified_at = assert(row.modified_at, "clip_mutator: insert mutation missing modified_at for clip " .. tostring(row.id))
+        modified_at = assert(row.modified_at, "clip_mutator: insert mutation missing modified_at for clip " .. tostring(row.id)),
+        -- Per-clip metadata (may be nil for new clips — DB uses defaults)
+        volume = row.volume,
+        mark_in_frame = row.mark_in,
+        mark_out_frame = row.mark_out,
+        playhead_frame = row.playhead_frame or row.playhead
     }
 end
 
@@ -155,7 +162,8 @@ local function load_track_clips(db, track_id)
                c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
                c.fps_numerator, c.fps_denominator,
                s.fps_numerator, s.fps_denominator,
-               c.enabled, c.offline, c.created_at, c.modified_at
+               c.enabled, c.offline, c.created_at, c.modified_at,
+               c.volume
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences s ON t.sequence_id = s.id
@@ -206,7 +214,8 @@ local function load_track_clips(db, track_id)
             seq_fps_numerator = seq_num,
             seq_fps_denominator = seq_den,
             enabled = stmt:value(16) == 1 or stmt:value(16) == true,
-            offline = false  -- transient: recomputed by media_status
+            offline = false,  -- transient: recomputed by media_status
+            volume = stmt:value(20)
         })
     end
     stmt:finalize()
@@ -410,6 +419,9 @@ function ClipMutator.resolve_occlusions(db, params)
                     fps_numerator = row_fps_num,
                     fps_denominator = row_fps_den,
                     enabled = original.enabled,
+                    volume = original.volume,
+                    master_clip_id = original.master_clip_id,
+                    owner_sequence_id = original.owner_sequence_id,
                     created_at = os.time(),
                     modified_at = os.time()
                 }
@@ -527,6 +539,7 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
                     track_id = original.track_id,
                     media_id = original.media_id,
                     master_clip_id = original.master_clip_id,
+                    owner_sequence_id = original.owner_sequence_id,
                     timeline_start = f.s,
                     duration = f.e - f.s,
                     source_in = get_source_in(original) + shift,
@@ -534,6 +547,7 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
                     fps_numerator = row_fps_num,
                     fps_denominator = row_fps_den,
                     enabled = original.enabled,
+                    volume = original.volume,
                     created_at = os.time(),
                     modified_at = os.time(),
                 }
@@ -612,6 +626,7 @@ function ClipMutator.resolve_ripple(db, params)
                 fps_numerator = row_fps_num,
                 fps_denominator = row_fps_den,
                 enabled = row.enabled,
+                volume = original.volume,
                 offline = false,  -- transient
                 created_at = os.time(),
                 modified_at = os.time()
@@ -748,7 +763,8 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
                c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
                c.fps_numerator, c.fps_denominator,
                c.enabled, c.offline, c.created_at, c.modified_at,
-               s.id, s.fps_numerator, s.fps_denominator
+               s.id, s.fps_numerator, s.fps_denominator,
+               c.volume
         FROM clips c
         LEFT JOIN tracks t ON c.track_id = t.id
         LEFT JOIN sequences s ON t.sequence_id = s.id
@@ -801,6 +817,7 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         offline = false,  -- transient: recomputed by media_status
         created_at = stmt:value(16),
         modified_at = stmt:value(17),
+        volume = stmt:value(21),
     }
     stmt:finalize()
     return clip
@@ -939,6 +956,7 @@ function ClipMutator.plan_duplicate_block(db, params)
             offline = false,  -- transient
             created_at = now,
             modified_at = now,
+            volume = clip.volume,
         }
 
         table.insert(new_clip_ids, new_id)

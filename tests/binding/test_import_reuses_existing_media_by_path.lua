@@ -40,7 +40,7 @@ local function scalar(db, sql, value)
 end
 
 local function load_fixture_contents()
-    local fixture_path = test_env.resolve_repo_path("tests/fixtures/resolve/sample_timeline_fcp7xml.xml")
+    local fixture_path = test_env.require_fixture("tests/fixtures/resolve/sample_timeline_fcp7xml.xml")
     local handle = assert(io.open(fixture_path, "r"))
     local contents = assert(handle:read("*all"))
     handle:close()

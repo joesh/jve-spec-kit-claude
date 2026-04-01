@@ -116,13 +116,13 @@ local function test_split_clip_command_func()
     track:save(db)
     assert_not_nil(track.id, "Track ID should not be nil")
 
-    -- Media: 10 seconds at 24 FPS
-    local media_duration_rational = 240
+    -- Media: 10 seconds at 24 FPS = 240 frames
+    local media_duration_frames = 240
     local media = Media.create({
         project_id = project.id,
         file_path = "/path/to/split_media.mov",
         name = "Split Media",
-        duration = media_duration_rational,
+        duration_frames = media_duration_frames,
         fps_numerator = 24,
         fps_denominator = 1,
         width = 1920,

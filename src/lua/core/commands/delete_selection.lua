@@ -95,6 +95,9 @@ function M.register(executors, undoers, db)
                 if timeline_state.get_sequence_id then
                     params.sequence_id = timeline_state.get_sequence_id()
                 end
+                if timeline_state.get_project_id then
+                    params.project_id = timeline_state.get_project_id()
+                end
                 local result = command_manager.execute("RippleDeleteSelection", params)
                 if not result.success then
                     print(string.format("Failed to ripple delete selection: %s", result.error_message or "unknown error"))
@@ -161,6 +164,9 @@ function M.register(executors, undoers, db)
             }
             if timeline_state.get_sequence_id then
                 params.sequence_id = timeline_state.get_sequence_id()
+            end
+            if timeline_state.get_project_id then
+                params.project_id = timeline_state.get_project_id()
             end
 
             local result = command_manager.execute("RippleDelete", params)

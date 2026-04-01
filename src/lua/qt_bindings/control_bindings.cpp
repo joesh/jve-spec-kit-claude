@@ -239,6 +239,33 @@ int lua_get_combobox_current_index(lua_State* L) {
     return 1;
 }
 
+// Connect QComboBox::currentIndexChanged to a Lua handler
+// Args: combobox, handler_name (global function)
+int lua_set_combobox_change_handler(lua_State* L) {
+    QComboBox* cb = get_widget<QComboBox>(L, 1);
+    const char* handler_name = luaL_checkstring(L, 2);
+    if (!cb || !handler_name) {
+        return luaL_error(L, "qt_set_combobox_change_handler: combobox and handler required");
+    }
+
+    std::string handler_str(handler_name);
+    QObject::connect(cb, QOverload<int>::of(&QComboBox::currentIndexChanged),
+        [L, handler_str](int) {
+            lua_getglobal(L, handler_str.c_str());
+            if (lua_isfunction(L, -1)) {
+                if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+                    const char* err = lua_tostring(L, -1);
+                    fprintf(stderr, "combobox change handler '%s' error: %s\n",
+                        handler_str.c_str(), err ? err : "unknown");
+                    lua_pop(L, 1);
+                }
+            } else {
+                lua_pop(L, 1);
+            }
+        });
+    return 0;
+}
+
 // ============================================================================
 // QDialogButtonBox bindings
 // ============================================================================

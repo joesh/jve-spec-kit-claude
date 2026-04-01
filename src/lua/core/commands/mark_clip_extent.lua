@@ -57,8 +57,9 @@ function M.register(executors, undoers, db)
             assert(seq_id, "MarkClipExtent: sequence_id missing from args and timeline_state")
 
             local command_manager = require("core.command_manager")
-            command_manager.execute("SetMarkIn", {sequence_id = seq_id, frame = clip_start})
-            command_manager.execute("SetMarkOut", {sequence_id = seq_id, frame = clip_last_frame})
+            local project_id = args.project_id
+            command_manager.execute("SetMarkIn", {project_id = project_id, sequence_id = seq_id, frame = clip_start})
+            command_manager.execute("SetMarkOut", {project_id = project_id, sequence_id = seq_id, frame = clip_last_frame})
         end
 
         return true

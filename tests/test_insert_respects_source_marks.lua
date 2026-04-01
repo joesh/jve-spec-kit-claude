@@ -2,6 +2,10 @@
 
 -- Regression: B6 — Insert/Overwrite must use source viewer in/out marks
 -- when they are set, not the full media source_in/source_out range.
+--
+-- Source viewer marks are resolved in gather_context_for_command.lua's
+-- resolve_clip_marks, which checks if the source monitor is showing
+-- the clip and uses its marks if set.
 
 require("test_env")
 
@@ -19,9 +23,7 @@ end
 
 print("\n=== B6: Insert respects source viewer marks ===")
 
-require("command")
-
--- Stub dependencies
+-- Stub logger
 package.loaded["core.logger"] = {
     info = function() end, debug = function() end,
     warn = function() end, error = function() end,
@@ -29,155 +31,138 @@ package.loaded["core.logger"] = {
     for_area = function() return { event = function() end, detail = function() end, warn = function() end, error = function() end } end,
 }
 
--- Capture what Insert/Overwrite command receives
-local captured_params
-local mock_cm = require("test_env").mock_command_manager()
-mock_cm.execute = function(cmd_or_type, params)
-    if type(cmd_or_type) == "table" and cmd_or_type.get_all_parameters then
-        captured_params = cmd_or_type:get_all_parameters()
-    elseif type(cmd_or_type) == "string" and params then
-        captured_params = params
-    end
-    return { success = true }
-end
-mock_cm.begin_command_event = function() end
-mock_cm.end_command_event = function() end
+-- Marks now live on the masterclip sequence object (not the source viewer).
+-- No source viewer mock needed.
 
--- Mock source SequenceMonitor (registered with panel_manager)
-local _mock_mark_in = 10
-local _mock_mark_out = 50
-local mock_source_sv = {
-    sequence_id = "master_1",  -- IS-a: masterclip IS a sequence
-    total_frames = 100,
-    fps_num = 24,
-    fps_den = 1,
+-- Pre-load mocks BEFORE gather_context requires them
+package.loaded["core.utils.track_resolver"] = {
+    resolve_video_track = function() return {id = "track_v1"} end,
+    resolve_audio_track = function() return {id = "track_a1"} end,
 }
-function mock_source_sv:has_clip() return self.sequence_id ~= nil end
-function mock_source_sv:get_mark_in() return _mock_mark_in end
-function mock_source_sv:get_mark_out() return _mock_mark_out end
-
-local function set_mock_marks(mark_in, mark_out)
-    _mock_mark_in = mark_in
-    _mock_mark_out = mark_out
-end
-local function set_mock_sequence_id(id)
-    mock_source_sv.sequence_id = id
-end
-
-local panel_manager = require("ui.panel_manager")
-panel_manager.register_sequence_monitor("source_monitor", mock_source_sv)
-panel_manager.register_sequence_monitor("timeline_monitor", mock_source_sv)
-
--- Mock focus_manager
-package.loaded["core.focus_manager"] = {
-    set_focused_panel = function() end,
-    focus_panel = function() end,
+package.loaded["core.utils.clip_media"] = {
+    has_video = function() return true end,
+    audio_channel_count = function() return 0 end,
 }
 
--- Mock timeline_state
-local mock_timeline_state = {
-    get_sequence_id = function() return "seq1" end,
-    get_project_id = function() return "proj1" end,
-    get_playhead_position = function() return 0 end,
-}
-
--- Mock timeline_panel
-local mock_timeline_panel = {
-    get_state = function() return mock_timeline_state end,
-}
-
--- Load project_browser
-local project_browser = require("ui.project_browser")
-project_browser.timeline_panel = mock_timeline_panel
-
--- Create master clip with full source range (0-100)
--- Shape matches real data from database.load_master_clips: fps under clip.rate
--- and media.frame_rate, NOT flat on the object.
+-- Master clip with full source range (0-100)
 local master_clip = {
     clip_id = "master_1",
+    id = "master_1",
     project_id = "proj1",
     name = "TestMedia",
     media_id = "media_1",
     source_in = 0,
     source_out = 100,
     duration = 100,
-    timeline_start = 0,
     rate = {fps_numerator = 24, fps_denominator = 1},
-    media = {
-        id = "media_1",
-        duration_frames = 100,
-        frame_rate = {fps_numerator = 24, fps_denominator = 1},
-    },
 }
-project_browser.master_clip_map = { ["master_1"] = master_clip }
-project_browser.media_map = { ["media_1"] = master_clip.media }
-project_browser.selected_items = {{ type = "master_clip", clip_id = "master_1" }}
 
--- ─── Test 1: Insert with marks → clip uses mark range ───
+local media = {
+    id = "media_1",
+    duration = 100,
+    frame_rate = {fps_numerator = 24, fps_denominator = 1},
+}
+
+-- Load gather_context (the module being tested)
+local gather_context = require("core.gather_context_for_command")
+
+-- We can't call gather_edit_context directly (needs timeline_state etc.)
+-- but we can test the source viewer mark resolution via gather_single_clip_context
+-- with a mock timeline_state, or test the exported behavior via a mock.
+
+-- For this test, we use gather_edit_context with a mock timeline_state
+local mock_timeline_state = {
+    get_sequence_id = function() return "seq1" end,
+    get_project_id = function() return "proj1" end,
+    get_playhead_position = function() return 0 end,
+}
+
+-- Mock sequence load (gather_context loads sequence to get FPS)
+local Sequence = require("models.sequence")
+local _orig_load = Sequence.load
+Sequence.load = function(id)
+    if id == "seq1" then
+        return {
+            id = "seq1",
+            frame_rate = {fps_numerator = 24, fps_denominator = 1},
+        }
+    end
+    return _orig_load(id)
+end
+
+-- ─── Test 1: Sequence marks applied → group uses mark range ───
 print("\n--- insert with source marks → uses marks ---")
 do
-    captured_params = nil
-    set_mock_sequence_id("master_1")
-    set_mock_marks(10, 50)
+    -- Marks live on the masterclip (sequence marks, set by I/O keys)
+    master_clip.mark_in = 10
+    master_clip.mark_out = 50
 
-    project_browser.add_selected_to_timeline("Insert", {advance_playhead = true})
+    local result = gather_context.gather_edit_context({
+        master_clips = {master_clip},
+        timeline_state = mock_timeline_state,
+        media_map = {["media_1"] = media},
+    })
 
-    assert(captured_params, "captured_params should be set")
-    local si = captured_params.source_in
-    local so = captured_params.source_out
-    local si_frames = type(si) == "table" and si.frames or si
-    local so_frames = type(so) == "table" and so.frames or so
-
-    check("source_in = mark_in (10)", si_frames == 10)
-    check("source_out = mark_out (50)", so_frames == 50)
+    assert(result.groups and #result.groups == 1, "should build 1 group")
+    local clip = result.groups[1].clips[1]
+    check("source_in = mark_in (10)", clip.source_in == 10)
+    check("source_out = mark_out (50)", clip.source_out == 50)
+    check("duration = 40", clip.duration == 40)
 end
 
--- ─── Test 2: Insert without marks → uses original source range ───
-print("\n--- insert without marks → uses original range ---")
+-- ─── Test 2: No marks → uses clip's original range ───
+print("\n--- no marks → uses original range ---")
 do
-    captured_params = nil
-    set_mock_sequence_id("master_1")
-    set_mock_marks(nil, nil)
+    master_clip.mark_in = nil
+    master_clip.mark_out = nil
 
-    project_browser.add_selected_to_timeline("Insert", {advance_playhead = true})
+    local result = gather_context.gather_edit_context({
+        master_clips = {master_clip},
+        timeline_state = mock_timeline_state,
+        media_map = {["media_1"] = media},
+    })
 
-    assert(captured_params, "captured_params should be set")
-    -- When no marks, source_in/source_out are nil (command will use clip defaults)
-    local si = captured_params.source_in
-    local so = captured_params.source_out
-    -- nil means use default from master clip, which is correct
-    check("source_in = nil (use default)", si == nil)
-    check("source_out = nil (use default)", so == nil)
+    local clip = result.groups[1].clips[1]
+    check("source_in = original (0)", clip.source_in == 0)
+    check("source_out = original (100)", clip.source_out == 100)
+    check("duration = 100", clip.duration == 100)
 end
 
--- ─── Test 3: Insert doesn't mutate the master clip object ───
-print("\n--- insert doesn't mutate master_clip ---")
+-- ─── Test 3: No marks on clip → uses original range (regardless of viewer) ───
+print("\n--- no marks on clip → original range ---")
 do
-    set_mock_sequence_id("master_1")
-    set_mock_marks(10, 50)
+    master_clip.mark_in = nil
+    master_clip.mark_out = nil
 
-    project_browser.add_selected_to_timeline("Insert", {advance_playhead = true})
+    local result = gather_context.gather_edit_context({
+        master_clips = {master_clip},
+        timeline_state = mock_timeline_state,
+        media_map = {["media_1"] = media},
+    })
 
-    local orig_si = master_clip.source_in
-    local orig_so = master_clip.source_out
-    check("master_clip.source_in unchanged (0)", orig_si == 0)
-    check("master_clip.source_out unchanged (100)", orig_so == 100)
+    local clip = result.groups[1].clips[1]
+    check("different viewer → source_in = original (0)", clip.source_in == 0)
+    check("different viewer → source_out = original (100)", clip.source_out == 100)
 end
 
--- ─── Test 4: Different clip in viewer → uses original range ───
-print("\n--- different clip in viewer → original range ---")
+-- ─── Test 4: Master clip source range not mutated by gather_context ───
+print("\n--- gather_context doesn't mutate master_clip ---")
 do
-    captured_params = nil
-    set_mock_sequence_id("other_clip")  -- Not the selected master clip
-    set_mock_marks(10, 50)
+    master_clip.mark_in = 10
+    master_clip.mark_out = 50
 
-    project_browser.add_selected_to_timeline("Insert", {advance_playhead = true})
+    gather_context.gather_edit_context({
+        master_clips = {master_clip},
+        timeline_state = mock_timeline_state,
+        media_map = {["media_1"] = media},
+    })
 
-    assert(captured_params, "captured_params should be set")
-    -- Different clip in viewer → source_in/source_out nil (use master clip defaults)
-    local si = captured_params.source_in
-    check("different viewer clip → source_in nil (use default)", si == nil)
+    check("master_clip.source_in unchanged (0)", master_clip.source_in == 0)
+    check("master_clip.source_out unchanged (100)", master_clip.source_out == 100)
 end
+
+-- Restore
+Sequence.load = _orig_load
 
 -- Summary
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))

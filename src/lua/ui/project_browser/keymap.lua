@@ -79,7 +79,7 @@ function M.handle(event, ctx)
         return false
     end
 
-    if selected.type == "timeline" then
+    if selected.type == "timeline" or selected.type == "master_clip" then
         if ctx.activate_sequence then
             ctx.activate_sequence()
         end

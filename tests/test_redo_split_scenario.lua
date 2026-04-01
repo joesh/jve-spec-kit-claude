@@ -7,7 +7,6 @@ package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require('test_env')
 
 local database = require('core.database')
-local Media = require('models.media')
 local command_manager = require('core.command_manager')
 
 -- Mock Qt timer
@@ -40,7 +39,7 @@ db:exec([[
 command_manager.init('sequence', 'project')
 
 -- Create Media
-local media = Media.create({
+require("test_env").create_test_media({
     id = "media_1",
     project_id = "project",
     file_path = "/tmp/jve/video1.mov",
@@ -51,8 +50,8 @@ local media = Media.create({
     width = 1920,
     height = 1080,
     audio_channels = 2,
+    audio_sample_rate = 48000,
 })
-media:save(db)
 
 -- Helper functions
 local function execute_command(name, params)

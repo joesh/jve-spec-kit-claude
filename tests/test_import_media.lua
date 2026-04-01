@@ -45,19 +45,26 @@ local function create_mock_import(file_path, db, project_id, existing_media_id)
     -- Generate or reuse media ID
     local media_id = existing_media_id or uuid.generate_with_prefix("media")
 
-    -- Create the Media record
+    -- Create the Media record with TC metadata
+    local dkjson = require("dkjson")
     local Media = require("models.media")
     local media = Media.create({
         id = media_id,
         project_id = project_id,
         name = file_path:match("([^/\\]+)$") or file_path,
         file_path = file_path,
-        duration = metadata.duration_ms,
+        duration_frames = math.floor(metadata.duration_ms / 1000.0 * 30 + 0.5),
         frame_rate = 30,
         width = 1920,
         height = 1080,
         audio_channels = 2,
         codec = "h264",
+        metadata = dkjson.encode({
+            start_tc_value = 0,
+            start_tc_rate = 30,
+            start_tc_audio_samples = 0,
+            start_tc_audio_rate = 48000,
+        }),
         created_at = os.time(),
         modified_at = os.time()
     })

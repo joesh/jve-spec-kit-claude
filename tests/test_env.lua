@@ -65,6 +65,16 @@ function M.resolve_repo_path(relative)
     return repo_root .. "/" .. relative
 end
 
+--- Resolve a fixture path and ASSERT it exists. Tests must not silently pass
+--- when their fixture files are missing.
+function M.require_fixture(relative)
+    local path = M.resolve_repo_path(relative)
+    local f = io.open(path, "r")
+    assert(f, string.format("FIXTURE MISSING: %s\n  Tests must not silently pass with missing fixtures.", path))
+    f:close()
+    return path
+end
+
 -- Provide deterministic JSON helpers via bundled dkjson
 local function ensure_json_helpers()
     if _G.qt_json_encode and _G.qt_json_decode then
@@ -248,6 +258,37 @@ function M.raw_sql(db, sql, ...)
         error("raw_sql: exec failed: " .. formatted, 2)
     end
     return true
+end
+
+--------------------------------------------------------------------------------
+-- Test Media Helper
+--------------------------------------------------------------------------------
+
+--- Create a Media record with proper TC metadata for testing.
+-- Tests have no real files, so TC must be explicitly provided.
+-- Defaults to TC=0 (00:00:00:00) — the correct value for files without a TC tag.
+-- @param params table: Media.create params (id, project_id, name, file_path, etc.)
+-- @return Media: saved media record
+function M.create_test_media(params)
+    local Media = require("models.media")
+    local json = require("dkjson")
+    -- Ensure TC metadata is present (no real file to extract from in tests)
+    if not params.metadata then
+        local fps_num = params.fps_numerator
+            or (type(params.frame_rate) == "table" and params.frame_rate.fps_numerator)
+            or 24
+        local sr = tonumber(params.audio_sample_rate) or 0
+        params.metadata = json.encode({
+            start_tc_value = params.start_tc or 0,
+            start_tc_rate = fps_num,
+            start_tc_audio_samples = params.start_tc_audio or 0,
+            start_tc_audio_rate = sr > 0 and sr or nil,
+        })
+    end
+    local media = Media.create(params)
+    assert(media, "create_test_media: Media.create returned nil")
+    assert(media:save(), "create_test_media: save failed for " .. tostring(params.id))
+    return media
 end
 
 --------------------------------------------------------------------------------

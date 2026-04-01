@@ -17,7 +17,7 @@
 -- Project Browser - Media library and bin management
 -- Shows imported media files, allows drag-to-timeline
 -- Mimics DaVinci Resolve Media Pool style
--- luacheck: globals qt_set_focus qt_line_edit_select_all qt_set_line_edit_text_changed_handler qt_set_line_edit_return_pressed_handler qt_install_panel_focus_trap qt_set_panel_default_button
+-- luacheck: globals qt_set_focus qt_line_edit_select_all qt_set_line_edit_text_changed_handler qt_set_line_edit_return_pressed_handler
 local View = require("ui.view")
 local M = View.new("project_browser")
 local db = require("core.database")
@@ -110,9 +110,9 @@ local REFRESH_COMMANDS = {
     DeleteMasterClip = true,
     DeleteSequence = true,
     DuplicateMasterClip = true,
+    RenameItem = true,
     ImportResolveProject = true,
     ImportResolveDatabase = true,
-    RenameItem = true,
     CreateSequence = true,
 }
 
@@ -311,6 +311,7 @@ local function finalize_pending_rename(new_name)
 
     pending.preview_name = nil
     M.pending_rename = nil
+    -- MVC: command_listener triggers M.refresh() which re-runs active find
 end
 
 M._test_finalize_pending_rename = finalize_pending_rename
@@ -1027,9 +1028,11 @@ end
 -- Create project browser widget
 function M.create()
     -- Create container
-    local container = qt_constants.WIDGET.CREATE()
+    -- luacheck: globals qt_create_focus_container qt_set_container_default_button
+    local container = qt_create_focus_container()  -- Tab wraps within panel via focusNextPrevChild
     -- Opaque background prevents resize artifacts (transparent children leave ghost pixels)
-    qt_constants.PROPERTIES.SET_STYLE(container, [[QWidget { background: #2b2b2b; }]])
+    -- No blanket QWidget stylesheet — Fusion dark palette handles colors.
+    -- Blanket QWidget rules override palette for all children (breaks combobox highlight etc.)
     local layout = qt_constants.LAYOUT.CREATE_VBOX()
 
     -- Set layout spacing
@@ -1077,25 +1080,11 @@ function M.create()
     local tree = qt_constants.WIDGET.CREATE_TREE()
 
     -- CSS: item colors, header — no branch rules (native Qt disclosure triangles)
+    -- Minimal tree styling — let Fusion dark palette handle selection, focus, hover.
+    -- Only set font size and header appearance.
     local tree_style = string.format([[
         QTreeWidget {
-            background: #262626;
-            color: #cccccc;
-            border: none;
             font-size: %s;
-            outline: none;
-        }
-        QTreeWidget::item {
-            padding: 2px;
-            padding-left: 4px;
-            height: 22px;
-        }
-        QTreeWidget::item:selected {
-            background: #4a4a4a;
-            color: white;
-        }
-        QTreeWidget::item:hover {
-            background: #333333;
         }
         QHeaderView::section {
             background: #2b2b2b;
@@ -1302,11 +1291,13 @@ function M.create()
     end
     qt_constants.LAYOUT.ADD_WIDGET(find_row, find_edit)
 
-    local arrow_style = "QPushButton { min-width: 20px; max-width: 20px; padding: 1px 2px; }"
+    -- Let Fusion palette handle focus/hover/pressed on regular buttons.
+    -- Only the default button (Next) gets accent styling.
     local prev_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x90")  -- ←
-    qt_constants.PROPERTIES.SET_STYLE(prev_btn, arrow_style)
     local next_btn = qt_constants.WIDGET.CREATE_BUTTON("\xE2\x86\x92")  -- →
-    qt_constants.PROPERTIES.SET_STYLE(next_btn, arrow_style)
+    qt_constants.PROPERTIES.SET_STYLE(next_btn,
+        "QPushButton { background-color: #0a84ff; color: white; "
+        .. "min-width: 20px; max-width: 20px; padding: 1px 2px; border-radius: 3px; }")
     qt_constants.LAYOUT.ADD_WIDGET(find_row, prev_btn)
     qt_constants.LAYOUT.ADD_WIDGET(find_row, next_btn)
 
@@ -1323,7 +1314,7 @@ function M.create()
     qt_constants.LAYOUT.ADD_WIDGET(find_row, attr_combo)
 
     local all_btn = qt_constants.WIDGET.CREATE_BUTTON("All")
-    qt_constants.PROPERTIES.SET_STYLE(all_btn, "QPushButton { min-width: 28px; max-width: 40px; padding: 1px 4px; }")
+    -- No per-widget stylesheet — Fusion palette handles focus/hover/pressed
     qt_constants.LAYOUT.ADD_WIDGET(find_row, all_btn)
 
     qt_constants.LAYOUT.ADD_LAYOUT(find_bar_layout, find_row)
@@ -1384,6 +1375,7 @@ function M.create()
         local idx = find_state.get_current_index()
         qt_constants.PROPERTIES.SET_TEXT(match_label, string.format("%d/%d", idx, count))
     end
+    M._update_match_label = update_match_label
 
     local function do_browser_find(navigate)
         local value = qt_constants.PROPERTIES.GET_TEXT(find_edit)
@@ -1532,7 +1524,19 @@ function M.create()
     end
     qt_set_line_edit_text_changed_handler(find_edit, "__browser_find_text_changed")
 
-    -- Return in find field handled by PanelFocusTrap default button (next_btn)
+    -- Re-run find when attribute column changes
+    -- luacheck: globals qt_set_combobox_change_handler
+    _G["__browser_find_attr_changed"] = function()
+        local value = qt_constants.PROPERTIES.GET_TEXT(find_edit)
+        if value and value ~= "" then
+            do_browser_find(false)
+        end
+    end
+    qt_set_combobox_change_handler(attr_combo, "__browser_find_attr_changed")
+
+    -- Return in find field → Find Next via QLineEdit::returnPressed signal.
+    -- Standard Qt pattern for non-QDialog windows (setDefault only works in QDialog).
+    qt_set_line_edit_return_pressed_handler(find_edit, "__browser_find_next")
 
     -- Start hidden
     if qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
@@ -1549,8 +1553,23 @@ function M.create()
     M.tree = tree
     M.container = container
 
+    -- When tree gets focus with nothing selected, select the first item
+    local tree_focus_h = register_handler(function(event)
+        local focus_in = event and (event == "FocusIn" or event.type == "FocusIn"
+            or event == true or event == 1)
+        if focus_in and not M.selected_item then
+            if qt_constants.CONTROL.GET_TREE_ITEMS_IN_ORDER then
+                local items = qt_constants.CONTROL.GET_TREE_ITEMS_IN_ORDER(tree)
+                if items and #items > 0 then
+                    qt_constants.CONTROL.SET_TREE_CURRENT_ITEM(tree, items[1])
+                end
+            end
+        end
+    end)
+    qt_set_focus_handler(tree, tree_focus_h)
+
     -- Install panel focus trap: Tab wraps within panel, Return activates default button
-    qt_install_panel_focus_trap(container, next_btn)  -- next_btn is default for Return
+    qt_set_container_default_button(container, next_btn)  -- Return → Find Next via QShortcut
 
     --- Toggle find bar visibility (called by Find command)
     function M.toggle_find_bar()
@@ -1642,6 +1661,22 @@ function M.get_selected_media()
     return M.get_selected_master_clip()
 end
 
+--- Get all selected master clips (for multi-clip Insert/Overwrite).
+-- @return table Array of master clip entries from master_clip_map
+function M.get_selected_master_clips()
+    local clips = {}
+    if not M.selected_items then return clips end
+    for _, item in ipairs(M.selected_items) do
+        if item.type == "master_clip" and item.clip_id then
+            local clip = M.master_clip_map[item.clip_id]
+            if clip then
+                table.insert(clips, clip)
+            end
+        end
+    end
+    return clips
+end
+
 function M.get_selection_snapshot()
     local snapshot = {}
     if not M.selected_items then
@@ -1667,6 +1702,17 @@ end
 function M.refresh()
     ensure_command_listener()
     populate_tree()
+    -- Re-run active find against updated data
+    local find_state = require("core.find_state")
+    if find_state.is_active() and M.find_bar and M.find_bar.find_edit then
+        local value = qt_constants.PROPERTIES.GET_TEXT(M.find_bar.find_edit)
+        if value and value ~= "" then
+            local column = qt_constants.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(M.find_bar.attr_combo)
+            local clips = M:get_clips()
+            find_state.execute(clips, {column = column, operator = "contains", value = value})
+            if M._update_match_label then M._update_match_label() end
+        end
+    end
 end
 
 handle_tree_drop = function(event)
@@ -2024,7 +2070,7 @@ show_browser_context_menu = function(event)
         table.insert(actions, {
             label = "Insert Into Timeline",
             handler = function()
-                M.add_selected_to_timeline("Insert")
+                command_manager.execute_ui("Insert", {advance_playhead = true})
             end
         })
         table.insert(actions, {
@@ -2076,217 +2122,6 @@ show_browser_context_menu = function(event)
     end
 
     qt_constants.MENU.SHOW_POPUP(menu, math.floor(global_x or 0), math.floor(global_y or 0))
-end
-
-function M.add_selected_to_timeline(command_type, options)
-    local this_func_label = "project_browser.add_selected_to_timeline"
-
-    -- UI: Gather user intent and selection
-    assert(M.timeline_panel, this_func_label .. ": timeline panel not available")
-    assert(command_type == "Insert" or command_type == "Overwrite", this_func_label .. ": unsupported command_type")
-
-    -- Get all selected master clips
-    local selected_clips = {}
-    if M.selected_items then
-        for _, item in ipairs(M.selected_items) do
-            if item.type == "master_clip" and item.clip_id then
-                local clip = M.master_clip_map[item.clip_id]
-                if clip then
-                    table.insert(selected_clips, clip)
-                end
-            end
-        end
-    end
-
-    if #selected_clips == 0 then
-        local diag = {}
-        if not M.selected_items or #M.selected_items == 0 then
-            table.insert(diag, "M.selected_items is empty")
-        else
-            local first = M.selected_items[1]
-            table.insert(diag, string.format("selected type=%s", tostring(first and first.type)))
-        end
-        error(this_func_label .. ": no media item selected (" .. table.concat(diag, ", ") .. ")")
-    end
-
-    -- Get timeline context
-    local timeline_state_module = assert(M.timeline_panel.get_state and M.timeline_panel.get_state(), this_func_label .. ": timeline state not available")
-    local sequence_id = assert(timeline_state_module.get_sequence_id and timeline_state_module.get_sequence_id(), this_func_label .. ": missing active sequence_id")
-    local project_id = assert(timeline_state_module.get_project_id and timeline_state_module.get_project_id(), this_func_label .. ": missing active project_id")
-    local insert_pos = assert(timeline_state_module.get_playhead_position and timeline_state_module.get_playhead_position(), this_func_label .. ": missing insert position")
-
-    local advance_playhead = options and options.advance_playhead == true
-
-    -- For single clip, use Insert/Overwrite command (simpler, backward compatible)
-    if #selected_clips == 1 then
-        local clip = selected_clips[1]
-        local media = clip.media or (clip.media_id and M.media_map[clip.media_id])
-
-        -- Apply source viewer marks if the source view is showing this clip
-        local marks_applied = false
-        local source_in_mark, source_out_mark, duration_mark
-        local pm = require("ui.panel_manager")
-        local source_sv = pm.get_sequence_monitor("source_monitor")
-        if source_sv and source_sv.sequence_id == clip.clip_id then
-            local viewer_mark_in = source_sv:get_mark_in()
-            local viewer_mark_out = source_sv:get_mark_out()
-            -- Implicit boundary: 0 if mark_in nil, total_frames if mark_out nil
-            if viewer_mark_in ~= nil or viewer_mark_out ~= nil then
-                source_in_mark = viewer_mark_in or 0
-                source_out_mark = viewer_mark_out or source_sv.total_frames
-                duration_mark = source_out_mark - source_in_mark
-                marks_applied = true
-            end
-        end
-
-        -- Build command parameters
-        local time_param_name = command_type == "Insert" and "insert_time" or "overwrite_time"
-        local cmd_params = {
-            media_id = clip.media_id,
-            master_clip_id = clip.clip_id,
-            sequence_id = sequence_id,
-            project_id = project_id,
-            [time_param_name] = insert_pos,
-            advance_playhead = advance_playhead,
-        }
-        if marks_applied then
-            cmd_params.source_in = source_in_mark
-            cmd_params.source_out = source_out_mark
-            cmd_params.duration = duration_mark
-        end
-
-        local cmd = assert(Command.create(command_type, project_id), this_func_label .. ": failed to create " .. command_type .. " command")
-        cmd:set_parameters(cmd_params)
-        local result = command_manager.execute(cmd)
-        assert(result and result.success, string.format(this_func_label .. ": %s failed: %s", command_type, result and result.error_message or "unknown error"))
-
-        log.event("Media added to timeline: %s", media and (media.name or media.file_name) or "unknown")
-    else
-        -- Multiple clips: build groups and call AddClipsToSequence directly
-        local clip_edit_helper = require("core.clip_edit_helper")
-        local Track = require("models.track")
-        local Media = require("models.media")
-        local Sequence = require("models.sequence")
-
-        -- Get sequence FPS
-        local sequence = assert(Sequence.load(sequence_id), this_func_label .. ": sequence not found")
-        local seq_fps_num = assert(sequence.frame_rate and sequence.frame_rate.fps_numerator, this_func_label .. ": sequence missing fps_numerator")
-        local seq_fps_den = assert(sequence.frame_rate and sequence.frame_rate.fps_denominator, this_func_label .. ": sequence missing fps_denominator")
-
-        -- Get target video track
-        local video_tracks = Track.find_by_sequence(sequence_id, "VIDEO")
-        assert(#video_tracks > 0, this_func_label .. ": no video tracks in sequence")
-        local target_video_track = video_tracks[1]
-
-        -- Check source viewer marks (only apply to first clip if viewing it)
-        local pm = require("ui.panel_manager")
-        local source_sv = pm.get_sequence_monitor("source_monitor")
-
-        -- Build groups for each selected clip (serial arrangement)
-        local groups = {}
-        for i, clip in ipairs(selected_clips) do
-            local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or Media.load(clip.media_id)
-            assert(media, this_func_label .. ": media not found for clip " .. tostring(clip.clip_id))
-
-            local media_fps_num = (clip.rate and clip.rate.fps_numerator) or (media.frame_rate and media.frame_rate.fps_numerator)
-            local media_fps_den = (clip.rate and clip.rate.fps_denominator) or (media.frame_rate and media.frame_rate.fps_denominator)
-            assert(media_fps_num and media_fps_den, this_func_label .. ": clip/media missing fps")
-
-            -- Determine source marks: use viewer marks only for first clip if showing it
-            local source_in, source_out, duration
-            local viewer_mark_in = source_sv and source_sv:get_mark_in()
-            local viewer_mark_out = source_sv and source_sv:get_mark_out()
-            if i == 1 and source_sv
-                and source_sv.sequence_id == clip.clip_id
-                and viewer_mark_in ~= nil and viewer_mark_out ~= nil then
-                source_in = viewer_mark_in
-                source_out = viewer_mark_out
-                duration = viewer_mark_out - viewer_mark_in
-            else
-                -- Use clip's existing source in/out or full media duration
-                -- All coords are integer frames
-                if clip.source_in and clip.source_out and clip.duration then
-                    source_in = clip.source_in
-                    source_out = clip.source_out
-                    duration = clip.duration
-                else
-                    local media_dur_frames = media.duration
-                    assert(type(media_dur_frames) == "number", this_func_label .. ": media.duration must be integer")
-                    source_in = 0
-                    source_out = media_dur_frames
-                    duration = media_dur_frames
-                end
-            end
-
-            -- Build clips for this group (video + audio)
-            local clip_entries = {}
-
-            -- Video clip
-            table.insert(clip_entries, {
-                role = "video",
-                media_id = clip.media_id,
-                master_clip_id = clip.clip_id,
-                project_id = project_id,
-                name = clip.name or media.name or clip.clip_id,
-                source_in = source_in,
-                source_out = source_out,
-                duration = duration,
-                fps_numerator = media_fps_num,
-                fps_denominator = media_fps_den,
-                target_track_id = target_video_track.id,
-            })
-
-            -- Audio clips
-            local audio_channels = (media.audio_channels) or 0
-            if audio_channels > 0 then
-                local audio_track_resolver = clip_edit_helper.create_audio_track_resolver(sequence_id)
-                for ch = 0, audio_channels - 1 do
-                    local audio_track = audio_track_resolver(nil, ch)
-                    table.insert(clip_entries, {
-                        role = "audio",
-                        channel = ch,
-                        media_id = clip.media_id,
-                        master_clip_id = clip.clip_id,
-                        project_id = project_id,
-                        name = (clip.name or media.name or clip.clip_id) .. " (Audio)",
-                        source_in = source_in,
-                        source_out = source_out,
-                        duration = duration,
-                        fps_numerator = media_fps_num,
-                        fps_denominator = media_fps_den,
-                        target_track_id = audio_track.id,
-                    })
-                end
-            end
-
-            table.insert(groups, {
-                clips = clip_entries,
-                duration = duration,
-                master_clip_id = clip.clip_id,
-            })
-        end
-
-        -- Execute AddClipsToSequence
-        local edit_type = command_type == "Insert" and "insert" or "overwrite"
-        local result = command_manager.execute("AddClipsToSequence", {
-            groups = groups,
-            position = insert_pos,
-            sequence_id = sequence_id,
-            project_id = project_id,
-            edit_type = edit_type,
-            arrangement = "serial",
-            advance_playhead = advance_playhead,
-        })
-        assert(result and result.success, string.format(this_func_label .. ": %s failed: %s", command_type, result and result.error_message or "unknown error"))
-
-        log.event("Added %d clips to timeline (%s)", #selected_clips, edit_type)
-    end
-
-    if focus_manager and focus_manager.focus_panel then
-        focus_manager.focus_panel("timeline")
-    else
-        focus_manager.set_focused_panel("timeline")
-    end
 end
 
 local function collect_all_tree_entries()
@@ -2347,6 +2182,12 @@ function M.delete_selected_items()
     local clip_failures = 0
     local sequence_failures = 0
     local bin_failures = 0
+
+    -- Group all deletes into one undo step
+    local multi = #M.selected_items > 1
+    if multi then
+        command_manager.begin_undo_group("Delete Selected")
+    end
 
     local handled_sequences = {}
     for _, item in ipairs(M.selected_items) do
@@ -2444,6 +2285,10 @@ function M.delete_selected_items()
                 log.warn("Delete bin %s failed: %s", tostring(item.name or item.id), result and result.error_message or "unknown error")
             end
         end
+    end
+
+    if multi then
+        command_manager.end_undo_group()
     end
 
     if deleted > 0 then

@@ -69,34 +69,7 @@ else
     print("  ❌ FAIL: Should throw FATAL error for missing connection")
 end
 
--- Test 6: update_clip_position() validates all parameters
-print("\nTest 6: update_clip_position() validates parameters")
-success, err = pcall(function()
-    return db.update_clip_position(nil, 100, 200)
-end)
-if not success and err:match("FATAL.*requires clip_id") then
-    print("  ✅ PASS: Throws error for missing clip_id")
-else
-    print("  ❌ FAIL: Should throw FATAL error for missing clip_id")
-end
-
-success, err = pcall(function()
-    return db.update_clip_position("clip1", nil, 200)
-end)
-if not success and err:match("FATAL.*requires start_time") then
-    print("  ✅ PASS: Throws error for missing start_time")
-else
-    print("  ❌ FAIL: Should throw FATAL error for missing start_time")
-end
-
-success, err = pcall(function()
-    return db.update_clip_position("clip1", 100, nil)
-end)
-if not success and err:match("FATAL.*requires duration") then
-    print("  ✅ PASS: Throws error for missing duration")
-else
-    print("  ❌ FAIL: Should throw FATAL error for missing duration")
-end
+-- Test 6: REMOVED — update_clip_position() was dead code (wrong column names), deleted
 
 -- Test 7: load_media() without connection should throw error
 print("\nTest 7: load_media() without connection throws error")

@@ -47,17 +47,23 @@ local function setup_db(path)
     return conn
 end
 
+local test_env = require("test_env")
+
 local function insert_clip(conn, id, start_frames, dur_frames, track_id)
     track_id = track_id or "v1"
     local media_id = id .. "_media"
-    assert(conn:exec(string.format([[
-        INSERT OR IGNORE INTO media (id, project_id, name, file_path,
-            duration_frames, fps_numerator, fps_denominator,
-            width, height, audio_channels, codec,
-            created_at, modified_at, metadata)
-        VALUES ('%s', 'proj', '%s.mov', '/tmp/jve/%s.mov',
-            %d, 24, 1, 1920, 1080, 0, 'prores', 0, 0, '{}')
-    ]], media_id, media_id, media_id, dur_frames)))
+    test_env.create_test_media({
+        id = media_id,
+        project_id = "proj",
+        name = media_id .. ".mov",
+        file_path = "/tmp/jve/" .. media_id .. ".mov",
+        duration_frames = dur_frames,
+        fps_numerator = 24,
+        fps_denominator = 1,
+        width = 1920,
+        height = 1080,
+        codec = "prores",
+    })
     local now = os.time()
     assert(conn:exec(string.format([[
         INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id,
@@ -207,5 +213,70 @@ assert(visible_current == last_entry.sequence_number,
     "arrow should be on the latest group")
 
 print("✅ multiple groups display correctly")
+
+----------------------------------------------------------------------
+-- Test 7: Abandoned branches are hidden from history
+----------------------------------------------------------------------
+-- Setup: fresh DB, execute A → B → undo B → execute C
+-- Branch: root → A → B (abandoned)
+--                  └→ C (active)
+-- History should show [A, C] not [A, B, C]
+local DB7 = "/tmp/jve/test_edit_history_7.db"
+local conn7 = setup_db(DB7)
+insert_clip(conn7, "b1", 0, 200, "v1")
+insert_clip(conn7, "b2", 200, 200, "v1")
+timeline_state.reload_clips("seq")
+
+-- Command A: delete b1
+local b1 = timeline_state.get_clip_by_id("b1")
+assert(b1, "b1 should exist")
+timeline_state.set_selection({b1})
+result = command_manager.execute("DeleteSelection", {
+    project_id = "proj", sequence_id = "seq",
+})
+assert(result.success, "delete b1 should succeed")
+
+-- Command B: delete b2
+timeline_state.reload_clips("seq")
+local b2 = timeline_state.get_clip_by_id("b2")
+assert(b2, "b2 should exist after deleting b1")
+timeline_state.set_selection({b2})
+result = command_manager.execute("DeleteSelection", {
+    project_id = "proj", sequence_id = "seq",
+})
+assert(result.success, "delete b2 should succeed")
+
+-- Undo B (back to just A done)
+local undo7 = command_manager.undo()
+assert(undo7.success, "undo b2 should succeed")
+
+-- Command C: delete b2 again (creates new branch from A)
+timeline_state.reload_clips("seq")
+b2 = timeline_state.get_clip_by_id("b2")
+assert(b2, "b2 should reappear after undo")
+timeline_state.set_selection({b2})
+result = command_manager.execute("DeleteSelection", {
+    project_id = "proj", sequence_id = "seq",
+})
+assert(result.success, "delete b2 (branch C) should succeed")
+
+-- Verify: history should show 2 entries (A and C), NOT 3 (A, B, C)
+entries, visible_current = command_manager:list_history_entries()
+assert(#entries == 2,
+    string.format("abandoned branch B should be hidden: expected 2 entries, got %d", #entries))
+
+-- Arrow should be on the last entry (C)
+assert(visible_current == entries[#entries].sequence_number,
+    "arrow should be on the latest command (C)")
+
+-- Verify total commands in DB is 3 (A, B, C all stored — B just not displayed)
+local total_q = conn7:prepare("SELECT COUNT(*) FROM commands")
+assert(total_q:exec() and total_q:next())
+local total_commands = total_q:value(0)
+total_q:finalize()
+assert(total_commands == 3,
+    string.format("DB should have 3 commands (including abandoned), got %d", total_commands))
+
+print("✅ abandoned branches hidden from history")
 
 print("\n✅ test_edit_history_window.lua passed")

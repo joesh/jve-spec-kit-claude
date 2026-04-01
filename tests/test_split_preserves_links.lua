@@ -32,12 +32,22 @@ db:exec(string.format([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
         enabled, locked, muted, soloed, volume, pan)
     VALUES ('trk_a', 'seq1', 'A1', 'AUDIO', 2, 1, 0, 0, 0, 1.0, 0.0);
-    INSERT INTO media (id, project_id, name, file_path, duration_frames,
-        fps_numerator, fps_denominator, width, height, audio_channels,
-        codec, metadata, created_at, modified_at)
-    VALUES ('med1', 'proj1', 'media.mov', '/tmp/media.mov', 3000,
-        24000, 1001, 1920, 1080, 2, 'prores', '{}', %d, %d);
-]], now, now, now, now, now, now))
+]], now, now, now, now))
+
+require("test_env").create_test_media({
+    id = "med1",
+    project_id = "proj1",
+    name = "media.mov",
+    file_path = "/tmp/media.mov",
+    duration_frames = 3000,
+    fps_numerator = 24000,
+    fps_denominator = 1001,
+    width = 1920,
+    height = 1080,
+    audio_channels = 2,
+    codec = "prores",
+    audio_sample_rate = 48000,
+})
 
 -- Create linked clips: V1 [video 0..1000] linked to A1 [audio 0..1000]
 db:exec(string.format([[

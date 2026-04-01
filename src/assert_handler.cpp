@@ -45,7 +45,11 @@ void jve_init_thread_lua_state() {
 static volatile sig_atomic_t g_handling_abort = 0;
 
 // Demangle C++ symbol names (macOS/Linux)
-static const char* demangle(const char* symbol, char* buffer, size_t bufsize) {
+// Uses thread-local buffer to hold demangled result (each call overwrites previous).
+// Safe for single-threaded stack trace printing.
+static thread_local char* t_demangle_buf = nullptr;
+
+static const char* demangle(const char* symbol) {
 #ifdef __APPLE__
     // Symbol format: "1  libfoo.dylib  0x123  _ZN3Foo3barEv + 42"
     // Find the mangled name (starts with _Z usually)
@@ -57,22 +61,20 @@ static const char* demangle(const char* symbol, char* buffer, size_t bufsize) {
     while (*end && *end != ' ' && *end != '+') end++;
 
     size_t len = end - start;
-    if (len >= bufsize) return symbol;
-
     char mangled[256];
     if (len >= sizeof(mangled)) return symbol;
     memcpy(mangled, start, len);
     mangled[len] = '\0';
 
+    // Free previous result
+    free(t_demangle_buf);
+    t_demangle_buf = nullptr;
+
     int status = 0;
-    size_t outlen = bufsize;
-    char* demangled = abi::__cxa_demangle(mangled, buffer, &outlen, &status);
-    if (status == 0 && demangled) {
-        return demangled;
+    t_demangle_buf = abi::__cxa_demangle(mangled, nullptr, nullptr, &status);
+    if (status == 0 && t_demangle_buf) {
+        return t_demangle_buf;
     }
-#else
-    (void)buffer;
-    (void)bufsize;
 #endif
     return symbol;
 }
@@ -98,10 +100,9 @@ void jve_assert_fail(const char* expr, const char* msg, const char* file, int li
     char** symbols = backtrace_symbols(callstack, frames);
 
     if (symbols) {
-        char demangled_buf[512];
         // Skip first 2 frames (this function and the assert macro)
         for (int i = 2; i < frames; i++) {
-            const char* name = demangle(symbols[i], demangled_buf, sizeof(demangled_buf));
+            const char* name = demangle(symbols[i]);
             fprintf(stderr, "  [%2d] %s\n", i - 2, name);
         }
         free(symbols);

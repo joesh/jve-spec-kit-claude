@@ -8,7 +8,6 @@ require('test_env')
 
 local database = require('core.database')
 local Clip = require('models.clip')
-local Media = require('models.media')
 require('models.track')  -- luacheck: ignore 411 (needed for Clip model dependencies)
 local command_manager = require('core.command_manager')
 
@@ -48,7 +47,8 @@ db:exec([[
 command_manager.init('sequence', 'project')
 
 -- Create Media (500 frames @ 30fps)
-local media = Media.create({
+local test_env = require("test_env")
+test_env.create_test_media({
     id = "media_1",
     project_id = "project",
     file_path = "/tmp/jve/video1.mov",
@@ -59,8 +59,8 @@ local media = Media.create({
     width = 1920,
     height = 1080,
     audio_channels = 2,
+    audio_sample_rate = 48000,
 })
-media:save(db)
 
 -- Helper: execute command with proper event wrapping
 local function execute_command(name, params)

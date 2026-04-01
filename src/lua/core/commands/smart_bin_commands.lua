@@ -139,7 +139,10 @@ function M.register(command_executors, command_undoers, db, _)
             name = args.previous_name,
             criteria_json = args.previous_criteria_json,
         }
-        if args.previous_scope_bin_id ~= json.null then
+        -- Restore scope_bin_id (json.null means "set to NULL / project-wide")
+        if args.previous_scope_bin_id == json.null then
+            fields.scope_bin_id = json.null  -- signals smart_bin.update to SET NULL
+        elseif args.previous_scope_bin_id ~= nil then
             fields.scope_bin_id = args.previous_scope_bin_id
         end
         smart_bin.update(db, args.smart_bin_id, fields)

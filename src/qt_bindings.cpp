@@ -18,6 +18,7 @@
 #include "lua/qt_bindings/aop_bindings.cpp"
 #include "lua/qt_bindings/sse_bindings.cpp"
 #include "lua/qt_bindings/fs_watcher_bindings.cpp"
+#include "lua/qt_bindings/shortcut_bindings.cpp"
 #include "lua/qt_bindings/xml_bindings.cpp"
 
 // Define the metatable name (declared extern in qt_bindings.h)
@@ -148,6 +149,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_get_combobox_current_text); lua_setfield(L, -2, "GET_COMBOBOX_CURRENT_TEXT");
     lua_pushcfunction(L, lua_set_combobox_current_index); lua_setfield(L, -2, "SET_COMBOBOX_CURRENT_INDEX");
     lua_pushcfunction(L, lua_get_combobox_current_index); lua_setfield(L, -2, "GET_COMBOBOX_CURRENT_INDEX");
+    lua_pushcfunction(L, lua_set_combobox_change_handler); lua_setglobal(L, "qt_set_combobox_change_handler");
     lua_pushcfunction(L, lua_set_slider_range); lua_setfield(L, -2, "SET_SLIDER_RANGE");
     lua_pushcfunction(L, lua_set_slider_value); lua_setfield(L, -2, "SET_SLIDER_VALUE");
     lua_pushcfunction(L, lua_get_slider_value); lua_setfield(L, -2, "GET_SLIDER_VALUE");
@@ -246,6 +248,14 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_install_panel_focus_trap); lua_setglobal(L, "qt_install_panel_focus_trap");
     lua_pushcfunction(L, lua_set_panel_default_button); lua_setglobal(L, "qt_set_panel_default_button");
     lua_pushcfunction(L, lua_cycle_panel_focus); lua_setglobal(L, "qt_cycle_panel_focus");
+
+    // QShortcut bindings
+    lua_pushcfunction(L, lua_create_shortcut); lua_setglobal(L, "qt_create_shortcut");
+    lua_pushcfunction(L, lua_connect_shortcut); lua_setglobal(L, "qt_connect_shortcut");
+    lua_pushcfunction(L, lua_set_shortcut_enabled); lua_setglobal(L, "qt_set_shortcut_enabled");
+    lua_pushcfunction(L, lua_delete_shortcut); lua_setglobal(L, "qt_delete_shortcut");
+    lua_pushcfunction(L, lua_create_focus_container); lua_setglobal(L, "qt_create_focus_container");
+    lua_pushcfunction(L, lua_set_container_default_button); lua_setglobal(L, "qt_set_container_default_button");
     lua_pushcfunction(L, lua_line_edit_select_all); lua_setglobal(L, "qt_line_edit_select_all");
     lua_pushcfunction(L, lua_set_tree_selection_changed_handler); lua_setglobal(L, "qt_set_tree_selection_handler");
     lua_pushcfunction(L, lua_set_tree_selection_mode); lua_setglobal(L, "qt_set_tree_selection_mode");

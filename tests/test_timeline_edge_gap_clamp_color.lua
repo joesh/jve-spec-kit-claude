@@ -14,7 +14,8 @@ local layout = ripple_layout.create({
         v1_right = {
             timeline_start = 1800,
             duration = 1200
-        }
+        },
+        v2 = {timeline_start = 2000, duration = 1000}
     }
 })
 local clips = layout.clips

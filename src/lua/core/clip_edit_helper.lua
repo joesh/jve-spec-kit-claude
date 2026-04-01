@@ -43,11 +43,59 @@ function M.resolve_media_id_from_ui(media_id, command)
     return media_id
 end
 
+--- Resolve master_clip_id from browser selection.
+-- @return string|nil The masterclip sequence ID (clip_id from browser)
+function M.resolve_master_clip_id_from_ui()
+    local ui_state = require("ui.ui_state")
+    local project_browser = ui_state.get_project_browser and ui_state.get_project_browser()
+    if project_browser and project_browser.get_selected_master_clip then
+        local selected = project_browser.get_selected_master_clip()
+        if selected and selected.clip_id then
+            return selected.clip_id
+        end
+    end
+    return nil
+end
+
 --- Resolve sequence_id from args, track_id, or timeline_state
 -- @param args table Command arguments
 -- @param track_id string|nil Track ID to resolve from
 -- @param command table Command object for setting parameters
 -- @return string|nil Resolved sequence_id
+--- Resolve sequence_id for edit commands (Insert/Overwrite).
+-- Uses args.sequence_id if provided AND it's a timeline sequence.
+-- Rejects masterclip sequence_ids (execute_ui may inject these when
+-- the source monitor is focused). Falls back to timeline_state.
+function M.resolve_timeline_sequence_id(args, track_id, command)
+    local sequence_id = args.sequence_id
+
+    -- Reject masterclip sequence_ids — edit commands target timelines
+    if sequence_id and sequence_id ~= "" then
+        local Sequence = require("models.sequence")
+        local seq = Sequence.load(sequence_id)
+        if seq and seq.kind == "masterclip" then
+            sequence_id = nil  -- wrong target, fall through
+        end
+    end
+
+    -- Fall back to track-based resolution
+    if (not sequence_id or sequence_id == "") and track_id and track_id ~= "" then
+        sequence_id = command_helper.resolve_sequence_for_track(nil, track_id)
+    end
+
+    -- Fall back to timeline_state
+    if not sequence_id or sequence_id == "" then
+        local timeline_state = get_timeline_state()
+        sequence_id = timeline_state and timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+    end
+
+    if sequence_id and sequence_id ~= "" and command then
+        command:set_parameter("sequence_id", sequence_id)
+    end
+
+    return sequence_id
+end
+
 function M.resolve_sequence_id(args, track_id, command)
     local sequence_id = args.sequence_id
 
@@ -114,23 +162,20 @@ function M.resolve_edit_time(edit_time, command, param_name)
     return edit_time
 end
 
---- Resolve timing for video stream from source (masterclip sequence or legacy master clip)
--- Pulls source_in/out from the video stream clip in native video frame units
--- Duck-typed: works with any object that has :video_stream() method
--- @param source table Masterclip sequence or master clip with :video_stream() method
--- @param params table Optional overrides {source_in, source_out, duration}
+--- Resolve timing for video stream from source (masterclip sequence)
+-- Uses sequence accessors that handle marks vs clip boundaries.
+-- @param source table Masterclip sequence with :get_effective_video_in/out()
 -- @return table {source_in, source_out, duration, fps_numerator, fps_denominator}
 -- @return string|nil Error message if failed
-function M.resolve_video_stream_timing(source, params)
-    params = params or {}
+function M.resolve_video_stream_timing(source)
     local video = source:video_stream()
     if not video then
         return nil, "No video stream in source"
     end
 
-    local source_in = params.source_in or video.source_in
-    local source_out = params.source_out or video.source_out
-    local duration = params.duration or (source_out - source_in)
+    local source_in = source:get_effective_video_in()
+    local source_out = source:get_effective_video_out()
+    local duration = source_out - source_in
 
     return {
         source_in = source_in,
@@ -141,41 +186,20 @@ function M.resolve_video_stream_timing(source, params)
     }, nil
 end
 
---- Resolve timing for audio stream from source (masterclip sequence or legacy master clip)
--- Pulls source_in/out from the first audio stream clip in native sample units
--- Duck-typed: works with any object that has :audio_streams() and :frame_to_samples() methods
--- @param source table Masterclip sequence or master clip with stream methods
--- @param params table Optional overrides in VIDEO frames (will be converted)
+--- Resolve timing for audio stream from source (masterclip sequence)
+-- Uses sequence accessors that handle coordinate-aware mark→sample conversion.
+-- @param source table Masterclip sequence with :get_effective_audio_in/out()
 -- @return table {source_in, source_out, duration, fps_numerator, fps_denominator}
 -- @return string|nil Error message if failed
-function M.resolve_audio_stream_timing(source, params)
-    params = params or {}
+function M.resolve_audio_stream_timing(source)
     local audio_streams = source:audio_streams()
     if #audio_streams == 0 then
         return nil, "No audio streams in source"
     end
 
     local audio = audio_streams[1]
-
-    -- If params provided, they're in video frames - convert to samples
-    local source_in, source_out
-    if params.source_in then
-        source_in = source:frame_to_samples(params.source_in)
-        assert(source_in, string.format(
-            "clip_edit_helper.resolve_audio_stream_timing: frame_to_samples failed for source_in=%d",
-            params.source_in))
-    else
-        source_in = audio.source_in
-    end
-    if params.source_out then
-        source_out = source:frame_to_samples(params.source_out)
-        assert(source_out, string.format(
-            "clip_edit_helper.resolve_audio_stream_timing: frame_to_samples failed for source_out=%d",
-            params.source_out))
-    else
-        source_out = audio.source_out
-    end
-
+    local source_in = source:get_effective_audio_in()
+    local source_out = source:get_effective_audio_out()
     local duration = source_out - source_in
 
     return {

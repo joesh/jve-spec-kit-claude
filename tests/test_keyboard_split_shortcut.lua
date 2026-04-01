@@ -65,13 +65,23 @@ local event = {
     focus_widget_is_text_input = 0,
 }
 
+-- After QShortcut migration, Cmd+B is NOT handled by the Lua residual handler.
+-- QShortcut dispatches Blade directly. The Lua handler returns false.
 local ok, err = pcall(function()
     return keyboard_shortcuts.handle_key(event)
 end)
 
 assert(ok, "keyboard_shortcuts.handle_key errored: " .. tostring(err))
-assert(#captured_commands > 0, "Blade command was not dispatched")
-assert(captured_commands[1].name == "Blade",
-    "Expected Blade command, got: " .. tostring(captured_commands[1].name))
+assert(#captured_commands == 0,
+    "Blade must not dispatch via residual handler (QShortcut handles it)")
 
-print("✅ Cmd/Ctrl+B dispatches Blade command via TOML keybindings")
+-- Verify Cmd+B binding exists in TOML registry for QShortcut creation
+local registry = require("core.keyboard_shortcut_registry")
+local parsed = registry.parse_shortcut("Cmd+B")
+local combo_key = string.format("%d_%d", parsed.key, parsed.modifiers)
+local bindings = registry.keybindings[combo_key]
+assert(bindings and #bindings > 0, "Cmd+B must exist in TOML registry")
+assert(bindings[1].command_name == "Blade",
+    "Cmd+B TOML binding must be Blade, got: " .. tostring(bindings[1].command_name))
+
+print("✅ Cmd/Ctrl+B is registered in TOML for QShortcut dispatch")

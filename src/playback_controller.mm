@@ -945,22 +945,23 @@ void PlaybackController::Park(int64_t frame) {
         "PlaybackController::Park: frame must be >= start_frame");
     JVE_ASSERT(m_total_frames > m_start_frame,
         "PlaybackController::Park: bounds not set (call SetBounds before Park)");
-    {
-        char buf[160];
-        snprintf(buf, sizeof(buf),
-            "PlaybackController::Park: frame %lld out of [%lld, %lld)",
-            (long long)frame, (long long)m_start_frame, (long long)m_total_frames);
-        JVE_ASSERT(frame < m_total_frames, buf);
-    }
     JVE_ASSERT(m_tmb,
         "PlaybackController::Park: TMB not set (call SetTMB before Park)");
-    // No surface assert — Lua handles display in park mode
 
     m_position.store(frame, std::memory_order_relaxed);
     m_direction.store(0, std::memory_order_relaxed);
     m_hit_boundary.store(false, std::memory_order_relaxed);
     m_fractional_frames = 0.0;
     m_last_displayed_frame = -1;
+
+    // Past content end — show black, update position, skip decode
+    if (frame >= m_total_frames) {
+        JVE_LOG_EVENT(Ticks, "Park: frame=%lld past content end (%lld) — black",
+            (long long)frame, (long long)m_total_frames);
+        if (m_surface) m_surface->clearFrame();
+        if (m_mirror_surface) m_mirror_surface->clearFrame();
+        return;
+    }
 
     // Tell TMB we're parking (direction=0 → synchronous decode)
     m_tmb->SetPlayhead(frame, 0, 1.0f);

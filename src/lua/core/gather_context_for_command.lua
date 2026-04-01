@@ -22,9 +22,9 @@ local Media = require("models.media")
 local clip_media = require("core.utils.clip_media")
 local track_resolver = require("core.utils.track_resolver")
 
---- Get the clip's stored marks or fall back to full duration
+--- Get the clip's stored marks or full duration.
 -- @param clip table Master clip with source_in, source_out, duration fields
--- @param media table Media object for fallback duration
+-- @param media table Media object for duration
 -- @param fps_num number FPS numerator (metadata only)
 -- @param fps_den number FPS denominator (metadata only)
 -- @return number source_in (frames), number source_out (frames), number duration (frames)
@@ -33,11 +33,12 @@ local function resolve_clip_marks(clip, media, fps_num, fps_den)
     assert(fps_num and fps_num > 0, "gather_context: fps_num required")
     assert(fps_den and fps_den > 0, "gather_context: fps_den required")
 
-    local source_in = clip.source_in
-    local source_out = clip.source_out
+    -- Sequence marks (set by I/O keys) take priority over clip's stored range
+    local source_in = clip.mark_in or clip.source_in
+    local source_out = clip.mark_out or clip.source_out
     local duration = clip.duration
 
-    -- Normalize source_in to integer (number = valid, nil = fallback to 0)
+    -- Normalize source_in to integer (number = valid, nil = start of clip)
     if source_in == nil then
         source_in = 0
     elseif type(source_in) ~= "number" then

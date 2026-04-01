@@ -81,8 +81,10 @@ local DEFAULT_CONFIG = {
             metadata = "{}"
         }
     },
+    -- No default clips. Each test must explicitly provide the clips it needs.
+    -- This prevents phantom clips from silently affecting test behavior.
     clips = {
-        order = {"v1_left", "v2", "v1_right"},
+        order = {"v1_left", "v1_right"},
         v1_left = {
             id = "clip_v1_left",
             name = "V1 Left",
@@ -104,17 +106,6 @@ local DEFAULT_CONFIG = {
             source_in = 0,
             fps_numerator = 1000,
             fps_denominator = 1
-        },
-        v2 = {
-            id = "clip_v2_overlap",
-            name = "V2 Clip",
-            track_key = "v2",
-            media_key = "main",
-            timeline_start = 2000,
-            duration = 1000,
-            source_in = 0,
-            fps_numerator = 1000,
-            fps_denominator = 1
         }
     }
 }
@@ -132,9 +123,30 @@ local function build_config(opts)
     end
 
     if opts and opts.tracks then
+        -- Handle order override first
+        if opts.tracks.order then
+            cfg.tracks.order = opts.tracks.order
+        end
         for key, override in pairs(opts.tracks) do
-            assert(cfg.tracks[key], string.format("Unknown track override '%s'", key))
-            merge_table(cfg.tracks[key], override)
+            if key == "order" then  -- luacheck: ignore 542
+                -- Already handled above
+            elseif cfg.tracks[key] then
+                merge_table(cfg.tracks[key], override)
+            else
+                -- Add new track with inferred defaults
+                local inferred_type = key:match("^a") and "AUDIO" or "VIDEO"
+                cfg.tracks[key] = {
+                    id = "track_" .. key,
+                    name = override.name or key:upper(),
+                    track_type = override.track_type or inferred_type,
+                    track_index = override.track_index or (#cfg.tracks.order + 1),
+                    enabled = override.enabled or 1
+                }
+                merge_table(cfg.tracks[key], override)
+                if not opts.tracks.order then
+                    table.insert(cfg.tracks.order, key)
+                end
+            end
         end
     end
 

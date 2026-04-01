@@ -18,24 +18,36 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["GoToStart"] = function(command)
         local args = command:get_all_parameters()
 
-        if args.dry_run then
-            return true
-        end
-
         local pm = require('ui.panel_manager')
         local sv = pm.get_active_sequence_monitor()
         assert(sv and sv.sequence_id, "GoToStart: no sequence loaded in active view")
-
-        if sv.engine:is_playing() then
-            sv.engine:stop()
-        end
 
         -- Each sequence knows its own start TC (0 for master clips, DRP value for timelines)
         local start_frame = 0
         if sv.sequence then
             start_frame = sv.sequence.start_timecode_frame or 0
         end
-        sv:seek_to_frame(start_frame)
+
+        if args.dry_run then
+            return true, { start_frame = start_frame }
+        end
+
+        if sv.engine:is_playing() then
+            sv.engine:stop()
+        end
+
+        -- Update model — playhead_changed signal drives view (seek + viewport scroll)
+        local Sequence = require("models.sequence")
+        local sequence = Sequence.load(sv.sequence_id)
+        assert(sequence, "GoToStart: sequence not found: " .. tostring(sv.sequence_id))
+        sequence.playhead_position = start_frame
+        sequence:save()
+        local Signals = require("core.signals")
+        Signals.emit("playhead_changed", sv.sequence_id, start_frame)
+
+        -- Scroll timeline viewport to keep playhead visible
+        local timeline_state = require("ui.timeline.timeline_state")
+        timeline_state.surface_playhead()
         return true
     end
 

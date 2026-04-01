@@ -352,9 +352,9 @@ assert(ripple_after.duration == 5000, string.format("ripple duration should clam
 print("✅ RippleEdit clamps extension to media duration")
 
 print("Test 5: Insert splits overlapping clip")
-local base_media = Media.create({id = "media_split_base", project_id = "project", file_path = "/tmp/jve/base.mov", file_name = "base.mov", duration = 180, frame_rate = 30, created_at = os.time(), modified_at = os.time()})
+local base_media = Media.create({id = "media_split_base", project_id = "project", file_path = "/tmp/jve/base.mov", name = "base.mov", duration_frames = 180, frame_rate = 30, created_at = os.time(), modified_at = os.time()})
 assert(base_media:save(db), "failed to save base media")
-local new_media = Media.create({id = "media_split_new", project_id = "project", file_path = "/tmp/jve/new.mov", file_name = "new.mov", duration = 30, frame_rate = 30, created_at = os.time(), modified_at = os.time()})
+local new_media = Media.create({id = "media_split_new", project_id = "project", file_path = "/tmp/jve/new.mov", name = "new.mov", duration_frames = 30, frame_rate = 30, created_at = os.time(), modified_at = os.time()})
 assert(new_media:save(db), "failed to save new media")
 
 -- Create masterclip sequence for the new media (required for Insert)

@@ -162,6 +162,8 @@ local function reset_environment()
     focus_manager.set_focused_panel(nil)
     local project_browser_stub = {
         add_selected_to_timeline = function() end,
+        find_bar = nil,  -- find bar state for Escape dismiss test
+        hide_find_bar = function() end,
     }
     keyboard_shortcuts.init(timeline_state, command_manager_stub, project_browser_stub, timeline_panel_stub)
 end
@@ -199,19 +201,19 @@ handled = keyboard_shortcuts.handle_key({
 assert_true(handled, "Right arrow should be handled when timeline has focus")
 assert_true(find_command("MovePlayhead"), "Right arrow should dispatch MovePlayhead command")
 
--- Test 3: Text inputs bypass timeline shortcuts
+-- Test 3: Non-residual keys not handled by Lua (QShortcut handles them)
+-- I key is dispatched by QShortcut, not the Lua residual handler
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
     key = QT_KEY_I,
     modifiers = QT_MOD_NONE,
     text = "i",
-    focus_widget_is_text_input = true,
+    focus_widget_is_text_input = false,
 })
-assert_false(handled, "Character keys should pass through when typing in a text field")
-assert_false(find_command("SetMarkIn"), "SetMarkIn should not dispatch while typing in text field")
+assert_false(handled, "I key must not be handled by residual handler (QShortcut handles it)")
 
--- Test 4: Undo is still handled as a global shortcut (via TOML dispatch)
+-- Test 4: Cmd+Z not handled by Lua (QShortcut handles global shortcuts)
 reset_environment()
 focus_manager.set_focused_panel("inspector")
 handled = keyboard_shortcuts.handle_key({
@@ -220,10 +222,9 @@ handled = keyboard_shortcuts.handle_key({
     text = "",
     focus_widget_is_text_input = false,
 })
-assert_true(handled, "Cmd/Ctrl+Z should be treated as a global command")
-assert_true(find_command("Undo"), "Cmd+Z should dispatch Undo command")
+assert_false(handled, "Cmd+Z must not be handled by residual handler (QShortcut handles it)")
 
--- Test 5: Return activates browser selection only when browser focused
+-- Test 5: Return not handled by Lua (tree keymap + PanelFocusTrap handle it)
 reset_environment()
 focus_manager.set_focused_panel("project_browser")
 handled = keyboard_shortcuts.handle_key({
@@ -232,10 +233,9 @@ handled = keyboard_shortcuts.handle_key({
     text = "\n",
     focus_widget_is_text_input = false,
 })
-assert_true(handled, "Return should trigger browser activation when browser focused")
-assert_equal(command_manager_stub.executed_commands[#command_manager_stub.executed_commands], "ActivateBrowserSelection", "Browser activation command should be executed")
+assert_false(handled, "Return must not be handled by residual handler (native widget handles it)")
 
--- Test 6: Return ignored when browser not focused
+-- Test 6: Return not handled regardless of panel
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
@@ -244,10 +244,9 @@ handled = keyboard_shortcuts.handle_key({
     text = "\n",
     focus_widget_is_text_input = false,
 })
-assert_false(handled, "Return should not be handled when browser not focused")
-assert_equal(#command_manager_stub.executed_commands, 0, "No commands should execute when Return ignored")
+assert_false(handled, "Return must not be handled by residual handler in any panel")
 
--- Test 7: Cmd+A in text field should NOT dispatch SelectAll command
+-- Test 7: Cmd+A not handled by Lua (QShortcut or text widget handles it)
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
@@ -256,10 +255,9 @@ handled = keyboard_shortcuts.handle_key({
     text = "",
     focus_widget_is_text_input = true,
 })
-assert_false(handled, "Cmd+A must pass through to text field, not dispatch SelectAll")
-assert_false(find_command("SelectAll"), "SelectAll must not fire while typing in text field")
+assert_false(handled, "Cmd+A must not be handled by residual handler")
 
--- Test 8: Cmd+Z in text field should NOT dispatch Undo command
+-- Test 8: Cmd+Z not handled by Lua (text field or QShortcut handles it)
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
@@ -268,10 +266,9 @@ handled = keyboard_shortcuts.handle_key({
     text = "",
     focus_widget_is_text_input = true,
 })
-assert_false(handled, "Cmd+Z must pass through to text field for inline undo")
-assert_false(find_command("Undo"), "Undo must not fire while typing in text field")
+assert_false(handled, "Cmd+Z must not be handled by residual handler in text field")
 
--- Test 9: Cmd+B in text field should NOT dispatch Blade command
+-- Test 9: Cmd+B not handled by Lua
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
@@ -280,34 +277,9 @@ handled = keyboard_shortcuts.handle_key({
     text = "",
     focus_widget_is_text_input = true,
 })
-assert_false(handled, "Cmd+B must pass through to text field, not dispatch Blade")
-assert_false(find_command("Blade"), "Blade must not fire while typing in text field")
+assert_false(handled, "Cmd+B must not be handled by residual handler")
 
--- Test 10: focus_widget_is_text_input=0 (C++ false) must NOT bypass
-reset_environment()
-focus_manager.set_focused_panel("timeline")
-handled = keyboard_shortcuts.handle_key({
-    key = QT_KEY_I,
-    modifiers = QT_MOD_NONE,
-    text = "i",
-    focus_widget_is_text_input = 0,  -- C++ lua_pushboolean(false) = 0
-})
-assert_true(handled, "focus_widget_is_text_input=0 must not trigger text bypass")
-assert_true(find_command("SetMark"), "SetMark must dispatch when focus_widget_is_text_input=0")
-
--- Test 11: focus_widget_is_text_input=nil (missing field) must NOT bypass
-reset_environment()
-focus_manager.set_focused_panel("timeline")
-handled = keyboard_shortcuts.handle_key({
-    key = QT_KEY_I,
-    modifiers = QT_MOD_NONE,
-    text = "i",
-    -- focus_widget_is_text_input omitted entirely
-})
-assert_true(handled, "missing focus_widget_is_text_input must not trigger text bypass")
-assert_true(find_command("SetMark"), "SetMark must dispatch when focus_widget_is_text_input is nil")
-
--- Test 12: Arrow keys in text field must pass through (not start arrow_repeat)
+-- Test 10: Residual key (Left arrow) in text field bypassed for cursor movement
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
@@ -318,6 +290,18 @@ handled = keyboard_shortcuts.handle_key({
 })
 assert_false(handled, "Left arrow must pass through to text field for cursor movement")
 assert_false(find_command("MovePlayhead"), "MovePlayhead must not fire while in text field")
+
+-- Test 11: Residual key (Left arrow) NOT bypassed when text_input=0 (C++ false)
+reset_environment()
+focus_manager.set_focused_panel("timeline")
+handled = keyboard_shortcuts.handle_key({
+    key = QT_KEY_LEFT,
+    modifiers = QT_MOD_NONE,
+    text = "",
+    focus_widget_is_text_input = 0,  -- C++ lua_pushboolean(false) = 0
+})
+assert_true(handled, "Left arrow must start repeat when focus_widget_is_text_input=0")
+assert_true(find_command("MovePlayhead"), "MovePlayhead must dispatch when text_input=0")
 
 -- Test 13: Escape in text field cancels timecode entry
 reset_environment()
@@ -346,5 +330,28 @@ handled = keyboard_shortcuts.handle_key({
 assert_false(handled, "Escape outside text field should not be consumed")
 assert_equal(timeline_panel_stub.cancel_timecode_calls, 0,
     "cancel_timecode_entry must not be called outside text field")
+
+-- Test 15: Escape dismisses find bar when visible
+reset_environment()
+focus_manager.set_focused_panel("project_browser")
+-- Simulate find bar visible
+-- Re-init with find_bar state on project_browser stub
+local find_bar_hidden = false
+local pb_with_find = {
+    add_selected_to_timeline = function() end,
+    find_bar = { visible = true },
+    hide_find_bar = function() find_bar_hidden = true end,
+}
+keyboard_shortcuts.init(timeline_state, command_manager_stub, pb_with_find, timeline_panel_stub)
+focus_manager.set_focused_panel("project_browser")
+
+handled = keyboard_shortcuts.handle_key({
+    key = QT_KEY_ESCAPE,
+    modifiers = QT_MOD_NONE,
+    text = "",
+    focus_widget_is_text_input = false,
+})
+assert_true(handled, "Escape must be consumed when find bar is visible")
+assert_true(find_bar_hidden, "Escape must call hide_find_bar when find bar is visible")
 
 print("✅ keyboard focus routing tests passed")

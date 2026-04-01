@@ -55,7 +55,7 @@ local function import_fixture(db_path)
     command_manager.init('default_sequence', 'default_project')
 
     local import_cmd = Command.create("ImportFCP7XML", "default_project")
-    import_cmd:set_parameter("xml_path", test_env.resolve_repo_path("tests/fixtures/resolve/sample_timeline_fcp7xml.xml"))
+    import_cmd:set_parameter("xml_path", test_env.require_fixture("tests/fixtures/resolve/sample_timeline_fcp7xml.xml"))
     import_cmd:set_parameter("project_id", "default_project")
 
     local result = command_manager.execute(import_cmd)

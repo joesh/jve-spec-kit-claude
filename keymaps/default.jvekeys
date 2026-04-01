@@ -69,7 +69,8 @@
 "Cmd+Delete" = "CloseGap @timeline"
 # Comma/Period handled in keyboard_shortcuts.lua (edge vs clip context gathering)
 # E handled in keyboard_shortcuts.lua (edge context gathering)
-# F9/F10 handled in keyboard_shortcuts.lua (project_browser context gathering)
+"F9" = "Insert advance_playhead=true"
+"F10" = "Overwrite advance_playhead=true"
 # Zoom
 "Shift+Z" = "TimelineZoomFit @timeline"
 "Cmd+Equal" = "TimelineZoomIn @timeline"
@@ -103,6 +104,6 @@
 "Cmd+Shift+G" = "FindPrevious"
 
 [Browser]
-"Return" = "ActivateBrowserSelection @project_browser"
-"F2" = "RenameItem @project_browser"
+# Return handled natively: tree keymap (activate/toggle) + PanelFocusTrap (button click)
+"F2" = "StartRename @project_browser"
 "Cmd+Shift+N" = "NewBin @project_browser"

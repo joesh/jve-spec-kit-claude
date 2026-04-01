@@ -329,14 +329,7 @@ local function create_action_callback(command_name, params)
 
         log.event("Menu clicked: %s", tostring(command_name))
 
-        -- Special handling for commands that need external context gathering
-        if command_name == "Insert" or command_name == "Overwrite" then
-            local project_browser = require("ui.project_browser")
-            project_browser.add_selected_to_timeline(command_name, {advance_playhead = true})
-            return
-        end
-
-        -- Pure command dispatch for everything else
+        -- Pure command dispatch — all commands go through execute_ui
         -- Copy params to avoid mutating the closure's table (project_id would become stale)
         local project_id = get_active_project_id()
         local command_params = {}

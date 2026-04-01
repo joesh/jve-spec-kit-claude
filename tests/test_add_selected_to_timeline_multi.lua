@@ -164,9 +164,29 @@ end
 print(string.format("  Found %d clips in master_clip_map", found_clips))
 assert(found_clips == 3, "Should find all 3 clips in master_clip_map")
 
--- Call add_selected_to_timeline
+-- Use the new path: get_selected_master_clips + gather_context + AddClipsToSequence
+local gather_context = require("core.gather_context_for_command")
+local timeline_state = require("ui.timeline.timeline_state")
+
+local selected_clips = project_browser.get_selected_master_clips()
+assert(#selected_clips == 3, "get_selected_master_clips should return 3 clips")
+
+local context = gather_context.gather_edit_context({
+    master_clips = selected_clips,
+    timeline_state = timeline_state,
+    media_map = project_browser.media_map,
+})
+
 local ok, err = pcall(function()
-    project_browser.add_selected_to_timeline("Insert", {advance_playhead = true})
+    command_manager.execute("AddClipsToSequence", {
+        groups = context.groups,
+        position = context.position,
+        sequence_id = context.sequence_id,
+        project_id = context.project_id,
+        edit_type = "insert",
+        arrangement = "serial",
+        advance_playhead = true,
+    })
 end)
 
 if not ok then

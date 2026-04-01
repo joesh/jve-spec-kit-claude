@@ -449,7 +449,22 @@ function M.register(executors, undoers, db)
         command:set_parameter("sequence_view_states", sequence_view_states)
         command:save(db)
 
-        -- Delete in reverse order (clips, tracks, sequences)
+        -- Delete in reverse order: properties/links → clips → tracks → sequences
+        -- Properties and clip_links have no FK cascade — must delete explicitly
+        for _, clip_id in ipairs(clip_ids) do
+            local prop_stmt = db:prepare("DELETE FROM properties WHERE clip_id = ?")
+            if prop_stmt then
+                prop_stmt:bind_value(1, clip_id)
+                prop_stmt:exec()
+                prop_stmt:finalize()
+            end
+            local link_stmt = db:prepare("DELETE FROM clip_links WHERE clip_id = ?")
+            if link_stmt then
+                link_stmt:bind_value(1, clip_id)
+                link_stmt:exec()
+                link_stmt:finalize()
+            end
+        end
 
         for _, clip_id in ipairs(clip_ids) do
             local delete_query = assert(db:prepare("DELETE FROM clips WHERE id = ?"),

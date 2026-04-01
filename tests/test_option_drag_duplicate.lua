@@ -49,7 +49,7 @@ local function create_clip(params)
         project_id = 'default_project',
         file_path = '/tmp/jve/' .. params.media_id .. '.mov',
         file_name = params.media_id .. '.mov',
-        duration = params.duration_value,
+        duration_frames = params.duration_value,
         frame_rate = 30,
     })
     assert(media)

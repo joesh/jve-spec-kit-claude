@@ -11,23 +11,16 @@ local drp_converter = require("importers.drp_importer")
 local database = require("core.database")
 local test_env = require("test_env")
 
-local fixture_path = test_env.resolve_repo_path(
-    "tests/fixtures/resolve/2026-03-20-anamnesis joe edit.drp")
+local fixture_path = test_env.require_fixture(
+    "tests/fixtures/resolve/anamnesis joe edit.drp")
 local wav_path = "/Users/joe/Local/Anamnesis/2026-02-28-mm/anamnesis joe edit/"
     .. "Volumes/AnamBack4 Joe/OUTPUT/From Sound Post/Ross Wilkes-Houghton Sound Mix/"
     .. "Anemnesis Stereo Mix - Online 23012026_01.wav"
 
-local function file_exists(path)
-    local f = io.open(path, "r")
-    if f then f:close(); return true end
-    return false
-end
-
-if not file_exists(fixture_path) or not file_exists(wav_path) then
-    print("SKIP: fixture or WAV not found")
-    print("✅ test_drp_bwf_audio_sync.lua skipped")
-    os.exit(0)
-end
+-- WAV is external media, not a repo fixture — assert it exists too
+local wf = io.open(wav_path, "r")
+assert(wf, "EXTERNAL MEDIA MISSING: " .. wav_path)
+wf:close()
 
 print("\n=== DRP BWF Audio Sync Test ===")
 
@@ -55,7 +48,7 @@ assert(ok, "DRP convert failed: " .. tostring(err))
 
 -- Query clips + media metadata
 local db = database.get_connection()
-local seq_stmt = db:prepare("SELECT id FROM sequences WHERE name LIKE '%2026-02-28%' LIMIT 1")
+local seq_stmt = db:prepare("SELECT id FROM sequences WHERE name LIKE '%2026-03-28%' LIMIT 1")
 assert(seq_stmt:exec() and seq_stmt:next())
 local timeline_id = seq_stmt:value(0)
 seq_stmt:finalize()
