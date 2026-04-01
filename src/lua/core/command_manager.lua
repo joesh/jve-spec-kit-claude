@@ -1196,6 +1196,47 @@ function M._execute_body(command_or_name, params)
                  perf.reset()
             end
 
+            -- PRE-COMMIT MUTATION VALIDATION
+            -- Catch garbage mutations before they reach the DB. If a command
+            -- produced obviously wrong results (e.g., a clip delete from a
+            -- constraint calculation bug), rollback instead of committing.
+            -- NOTE: Legitimate trim-to-zero deletes ARE allowed — they happen
+            -- when |delta| >= clip duration. A garbage delete happens when the
+            -- user's requested delta is too small to reach zero but a broken
+            -- per-edge constraint amplifies it internally.
+            local mutation_order = command:get_parameter("executed_mutation_order")
+            if type(mutation_order) == "table" and #mutation_order > 0 then
+                local original_states = command:get_parameter("original_states")
+                local delta_frames = command:get_parameter("delta_frames")
+                for _, mut in ipairs(mutation_order) do
+                    if mut.type == "delete" and original_states and original_states[mut.clip_id] then
+                        local orig = original_states[mut.clip_id]
+                        if orig.duration and type(delta_frames) == "number" then
+                            local abs_delta = math.abs(delta_frames)
+                            -- A delete is only legitimate when the user's delta
+                            -- is large enough to trim the clip to zero duration.
+                            -- If |delta| < duration, the clip should NOT be deleted —
+                            -- a constraint bug amplified the delta internally.
+                            if abs_delta < orig.duration then
+                                log.error("PRE-COMMIT REJECTED: %s would delete clip %s "
+                                    .. "(duration=%d but |delta|=%d is too small to reach zero). "
+                                    .. "Likely a constraint bug. Rolling back.",
+                                    command.type, tostring(mut.clip_id),
+                                    orig.duration, abs_delta)
+                                rollback_transaction()
+                                history.decrement_sequence_number()
+                                result.success = false
+                                result.error_message = string.format(
+                                    "Safety rollback: %s would delete clip (duration=%d) with delta=%d",
+                                    command.type, orig.duration, delta_frames)
+                                exec_scope:finish("mutation_validation_failed")
+                                goto cleanup
+                            end
+                        end
+                    end
+                end
+            end
+
             -- COMMIT (skip if undo group is active - savepoint will handle commit)
             if not undo_group_active then
                 local db_module = require("core.database")
