@@ -55,12 +55,28 @@ function M.register(executors, undoers, db)
             string.format("MovePlayhead: engine.fps_den must be > 0, got %s", tostring(engine.fps_den)))
         local fps_float = engine.fps_num / engine.fps_den
 
+        -- Read current position from engine (view) to compute target.
+        -- NOTE: this relies on signals firing synchronously — engine position
+        -- is updated by the playhead_changed handler before the next keystroke.
         local delta_frames = parse_duration(literal, fps_float)
         local current_frame = engine:get_position()
         local new_frame = math.max(0, current_frame + delta_frames)
 
-        sv:seek_to_frame(new_frame)
+        -- Update model — playhead_changed signal drives view (seek + display)
+        local Sequence = require("models.sequence")
+        local sequence = Sequence.load(sv.sequence_id)
+        assert(sequence, "MovePlayhead: sequence not found: " .. tostring(sv.sequence_id))
+        sequence.playhead_position = new_frame
+        sequence:save()
+        local Signals = require("core.signals")
+        Signals.emit("playhead_changed", sv.sequence_id, new_frame)
 
+        -- Scroll timeline viewport to keep playhead visible
+        local timeline_state = require("ui.timeline.timeline_state")
+        timeline_state.surface_playhead()
+
+        -- Jog audio: play short audio burst for frame-step feel.
+        -- Runs after signal (engine already seeked to new_frame).
         if engine.play_frame_audio then
             engine:play_frame_audio(new_frame)
         end

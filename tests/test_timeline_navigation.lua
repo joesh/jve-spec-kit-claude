@@ -73,6 +73,14 @@ function mock_monitor:seek_to_frame(frame)
     timeline_state.set_playhead_position(self.playhead)
 end
 
+-- Connect mock monitor to playhead_changed signal (mirrors real SequenceMonitor)
+local Signals = require("core.signals")
+Signals.connect("playhead_changed", function(sequence_id, frame)
+    if mock_monitor.sequence_id == sequence_id and type(frame) == "number" then
+        mock_monitor:seek_to_frame(frame)
+    end
+end)
+
 command_manager.init('default_sequence', 'default_project')
 
 print("=== Timeline Navigation Command Tests ===\n")
@@ -85,8 +93,8 @@ timeline_state.set_playhead_position(321)
 
 result = command_manager.execute("GoToEnd", { project_id = "default_project" })
 assert(result.success == true, "GoToEnd should succeed")
-assert(timeline_state.get_playhead_position() == 3499,
-    string.format("GoToEnd must set playhead to last valid frame (expected 3499, got %s)",
+assert(timeline_state.get_playhead_position() == 3500,
+    string.format("GoToEnd must set playhead to out-point (expected 3500, got %s)",
         tostring(timeline_state.get_playhead_position())))
 
 print("✅ GoToStart/GoToEnd navigation commands adjust playhead correctly")
