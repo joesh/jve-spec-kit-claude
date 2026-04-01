@@ -980,7 +980,7 @@ do
     print("  ok")
 end
 
--- ─── Test 30: out-of-bounds saved playhead asserts on load ───
+-- ─── Test 30: out-of-bounds saved playhead clamped on load ───
 print("\n--- out-of-bounds saved playhead ---")
 do
     -- Artificially save a playhead beyond total_frames (bypasses set_playhead validation)
@@ -992,9 +992,10 @@ do
     local view = SequenceMonitor.new({ view_id = "test_oob_ph" })
     timer_callbacks = {}
 
-    -- load_sequence must assert on stale DB playhead — not silently clamp
-    expect_assert(function() view:load_sequence(mc_id) end,
-        "out-of-bounds playhead must assert on load")
+    -- load_sequence must clamp stale DB playhead (not crash — prevents startup failure)
+    view:load_sequence(mc_id)
+    assert(view.playhead < 999, "out-of-bounds playhead must be clamped on load (got " .. tostring(view.playhead) .. ")")
+    view:destroy()
 
     -- Reset DB to valid state for subsequent tests
     seq.playhead_position = 0
