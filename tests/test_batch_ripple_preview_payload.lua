@@ -7,7 +7,7 @@ local Command = require("command")
 local ripple_layout = require("tests.helpers.ripple_layout")
 
 local TEST_DB = "/tmp/jve/test_batch_ripple_preview_payload.db"
-local layout = ripple_layout.create({db_path = TEST_DB})
+local layout = ripple_layout.create({db_path = TEST_DB, clips = { v2 = {timeline_start = 2000, duration = 1000} }})
 local clips = layout.clips
 local tracks = layout.tracks
 

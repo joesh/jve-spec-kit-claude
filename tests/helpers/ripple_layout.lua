@@ -81,8 +81,10 @@ local DEFAULT_CONFIG = {
             metadata = "{}"
         }
     },
+    -- No default clips. Each test must explicitly provide the clips it needs.
+    -- This prevents phantom clips from silently affecting test behavior.
     clips = {
-        order = {"v1_left", "v2", "v1_right"},
+        order = {"v1_left", "v1_right"},
         v1_left = {
             id = "clip_v1_left",
             name = "V1 Left",
@@ -101,17 +103,6 @@ local DEFAULT_CONFIG = {
             media_key = "main",
             timeline_start = 3500,
             duration = 1200,
-            source_in = 0,
-            fps_numerator = 1000,
-            fps_denominator = 1
-        },
-        v2 = {
-            id = "clip_v2_overlap",
-            name = "V2 Clip",
-            track_key = "v2",
-            media_key = "main",
-            timeline_start = 2000,
-            duration = 1000,
             source_in = 0,
             fps_numerator = 1000,
             fps_denominator = 1

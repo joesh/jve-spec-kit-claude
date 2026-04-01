@@ -293,6 +293,28 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
     end
 
+    -- Convert absolute-TC source_in to file-relative offset by subtracting
+    -- the media's TC origin. source_in is stored as media_tc_origin + file_offset
+    -- (commit 4bec175). Media constraint math needs the file_offset, not absolute TC.
+    local function file_relative_source_in(media, source_in_abs)
+        if not media or not source_in_abs then
+            return source_in_abs
+        end
+        local tc_origin = media:get_start_tc()
+        if not tc_origin then
+            return source_in_abs
+        end
+        local file_offset = source_in_abs - tc_origin
+        -- Sanity: file_offset should be non-negative. If negative, TC metadata is
+        -- wrong or source_in predates the media start — clamp to 0.
+        if file_offset < 0 then
+            log.warn("apply_media_limits: file_offset=%d is negative (source_in=%d tc_origin=%d media=%s)",
+                file_offset, source_in_abs, tc_origin, tostring(media.id))
+            file_offset = 0
+        end
+        return file_offset
+    end
+
     local function apply_media_limits(ctx, edge_info, clip, will_negate)
         if is_gap_edge(edge_info.edge_type) then
             return
@@ -312,7 +334,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if normalized_edge == "in" then
             if not effective_delta_positive and clip_state.source_in then
                 assert(type(clip_state.source_in) == "number", "apply_media_limits: clip_state.source_in must be integer")
-                local extend_limit = -clip_state.source_in
+                -- source_in is absolute TC; convert to file-relative for limit calc
+                local media = (ctx.preloaded_media and ctx.preloaded_media[clip.media_id]) or (clip.media_id and require("models.media").load(clip.media_id, db))
+                if ctx.preloaded_media and clip.media_id then
+                    ctx.preloaded_media[clip.media_id] = media
+                end
+                local file_src_in = file_relative_source_in(media, clip_state.source_in)
+                local extend_limit = -file_src_in
                 ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, extend_limit)
                 if not is_multitrack_roll then
                     update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
@@ -327,7 +355,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 assert(type(media.duration) == "number", "apply_media_limits: media.duration must be integer")
                 assert(type(clip_state.source_in) == "number", "apply_media_limits: clip_state.source_in must be integer")
                 assert(type(clip_state.duration) == "number", "apply_media_limits: clip_state.duration must be integer")
-                local available_frames = media.duration - clip_state.source_in - clip_state.duration
+                -- source_in is absolute TC; convert to file-relative for limit calc
+                local file_src_in = file_relative_source_in(media, clip_state.source_in)
+                local available_frames = media.duration - file_src_in - clip_state.duration
                 if will_negate then
                     local global_constraint = -available_frames
                     ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, global_constraint)
@@ -548,9 +578,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         assert(ctx.all_clips, "inject_implicit_gap_edges: all_clips is nil")
 
         -- Collect the edit boundary from each selected ripple edge.
-        -- "out" → right edge (clip.timeline_start + duration)
-        -- "in"  → left edge (clip.timeline_start)
-        local boundary_positions = {}
+        -- "out" → right edge (clip.timeline_start + duration), search >=
+        -- "in"  → left edge (clip.timeline_start), search > then >= fallback
+        --
+        -- For "in" edges, > skips the edited clip's counterpart on other
+        -- tracks (same timeline_start). The >= fallback catches the split
+        -- scenario where clips are aligned at the exact in-edge position
+        -- and no clip exists strictly after it on that track.
+        local boundary_entries = {}  -- { frame, is_in_edge }
         local selected_track_ids = {}
         for _, edge_info in ipairs(ctx.edge_infos) do
             if edge_info.trim_type ~= "roll" then
@@ -559,32 +594,56 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     selected_track_ids[clip.track_id] = true
                     local normalized = edge_utils.to_bracket(edge_info.edge_type)
                     local boundary
+                    local is_in_edge
                     if normalized == "out" then
                         boundary = clip.timeline_start + clip.duration
+                        is_in_edge = false
                     else
                         boundary = clip.timeline_start
+                        is_in_edge = true
                     end
-                    boundary_positions[boundary] = true
+                    table.insert(boundary_entries, { frame = boundary, is_in_edge = is_in_edge })
                 end
             end
         end
 
         -- For each boundary, find the first clip AFTER that position on each
         -- unselected track and inject a gap_before edge on it.
-        -- "After" means strictly > for the clip search. The gap_before itself
-        -- is materialized between the previous clip and this one, capturing
-        -- the zero-length (or real) gap at or near the boundary.
+        -- "out" edges: >= (first clip at or after boundary)
+        -- "in" edges: > first (skip counterpart at boundary), >= fallback
         -- Zero-length gaps naturally clamp: can't compress below 0.
         local injected_clips = {}
-        for boundary_frame in pairs(boundary_positions) do
+        for _, entry in ipairs(boundary_entries) do
+            local boundary_frame = entry.frame
             for track_id, track_clips in pairs(ctx.track_clip_map) do
                 if not selected_track_ids[track_id] then
                     local downstream_clip = nil
-                    for _, clip in ipairs(track_clips) do
-                        assert(type(clip.timeline_start) == "number", "inject_implicit_gap_edges: clip.timeline_start must be integer")
-                        if clip.timeline_start >= boundary_frame then
-                            downstream_clip = clip
-                            break
+                    if entry.is_in_edge then
+                        -- "in" edge: try > first to skip counterpart clips
+                        for _, clip in ipairs(track_clips) do
+                            assert(type(clip.timeline_start) == "number", "inject_implicit_gap_edges: clip.timeline_start must be integer")
+                            if clip.timeline_start > boundary_frame then
+                                downstream_clip = clip
+                                break
+                            end
+                        end
+                        -- Fallback: >= for split-aligned clips
+                        if not downstream_clip then
+                            for _, clip in ipairs(track_clips) do
+                                if clip.timeline_start >= boundary_frame then
+                                    downstream_clip = clip
+                                    break
+                                end
+                            end
+                        end
+                    else
+                        -- "out" edge: >= as before
+                        for _, clip in ipairs(track_clips) do
+                            assert(type(clip.timeline_start) == "number", "inject_implicit_gap_edges: clip.timeline_start must be integer")
+                            if clip.timeline_start >= boundary_frame then
+                                downstream_clip = clip
+                                break
+                            end
                         end
                     end
                     if downstream_clip and not injected_clips[downstream_clip.id] then
@@ -594,6 +653,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                             edge_type = "gap_before",
                             track_id = track_id,
                             trim_type = "ripple",
+                            is_implicit_injection = true,
                         }
                         local gap_clip = create_temp_gap_clip(edge_info, ctx.clip_lookup, ctx.all_clips, ctx.seq_fps_num, ctx.seq_fps_den)
                         if gap_clip then
@@ -1335,6 +1395,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             if is_gap_edge(edge_info.edge_type) then
                 record_gap_delta(ctx, clip_id, applied_delta)
+                -- Implicit gaps clamped to 0 are blockers: the gap couldn't
+                -- absorb the shift. Record the gap edge key so the UI shows
+                -- the implied edge red.
+                if clip.is_temp_gap and applied_delta ~= 0 and clip.duration == 0 then
+                    local original_dur = original and original.duration or 0
+                    if original_dur == 0 or (original_dur + applied_delta < 0) then
+                        ctx.forced_clamped_edges[key] = true
+                    end
+                end
             end
 
 	            if edge_info.trim_type ~= "roll" then
@@ -1405,6 +1474,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        assert(ctx.clips_to_shift, "compute_shift_bounds: clips_to_shift is nil")
 	        local min_frames = -math.huge
 	        local max_frames = math.huge
+	        local min_blocker_key = nil  -- edge key of clip whose out-edge blocks leftward shift
+	        local max_blocker_key = nil  -- edge key of clip whose in-edge blocks rightward shift
 
         local function accumulate_bounds_for_clip(shift_clip_data)
             local neighbors = ctx.neighbor_bounds_cache and ctx.neighbor_bounds_cache[shift_clip_data.id]
@@ -1441,7 +1512,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	                    end
 	                end
 	                local bound = prev_end - start_frames
-	                if bound > min_frames then min_frames = bound end
+	                if bound > min_frames then
+	                    min_frames = bound
+	                    if neighbors.prev_id then
+	                        min_blocker_key = tostring(neighbors.prev_id) .. ":out"
+	                    end
+	                end
 	            end
 
 	            local next_is_shifting = neighbors.next_id and ctx.shift_lookup and ctx.shift_lookup[neighbors.next_id]
@@ -1454,7 +1530,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	                    end
 	                end
 	                local bound = next_start - end_frames
-	                if bound < max_frames then max_frames = bound end
+	                if bound < max_frames then
+	                    max_frames = bound
+	                    if neighbors.next_id then
+	                        max_blocker_key = tostring(neighbors.next_id) .. ":in"
+	                    end
+	                end
 	            end
         end
 
@@ -1468,7 +1549,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        return min_frames, max_frames
+        return min_frames, max_frames, min_blocker_key, max_blocker_key
     end
 
 	    local function build_preview_shift_blocks(ctx)
@@ -1549,15 +1630,24 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        end
 
 	        assert(ctx.clips_to_shift, "compute_downstream_shifts: clips_to_shift is nil")
-	        local min_shift_frames, max_shift_frames = compute_shift_bounds(ctx)
+	        local min_shift_frames, max_shift_frames, min_blocker_key, max_blocker_key = compute_shift_bounds(ctx)
 	        local desired_shift_frames = ctx.downstream_shift_frames
 	        local adjusted_frames = desired_shift_frames
 
         if min_shift_frames ~= -math.huge and desired_shift_frames < min_shift_frames then
             adjusted_frames = min_shift_frames
+            -- Record the blocking edge for red display in UI
+            if min_blocker_key then
+                ctx.forced_clamped_edges = ctx.forced_clamped_edges or {}
+                ctx.forced_clamped_edges[min_blocker_key] = true
+            end
         end
         if max_shift_frames ~= math.huge and desired_shift_frames > max_shift_frames then
             adjusted_frames = max_shift_frames
+            if max_blocker_key then
+                ctx.forced_clamped_edges = ctx.forced_clamped_edges or {}
+                ctx.forced_clamped_edges[max_blocker_key] = true
+            end
         end
         local forced_retry = ctx.args.__force_retry_delta
         if forced_retry then
@@ -1565,6 +1655,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if adjusted_frames ~= desired_shift_frames then
+            -- Persist blocker edge keys through retry so UI can show them red
+            if ctx.forced_clamped_edges then
+                local blocker_keys = {}
+                for key in pairs(ctx.forced_clamped_edges) do
+                    table.insert(blocker_keys, key)
+                end
+                if #blocker_keys > 0 then
+                    ctx.command:set_parameter("__shift_blocker_keys", blocker_keys)
+                end
+            end
             return false, adjusted_frames
         end
 
@@ -1869,7 +1969,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     end
                     local global_sign = signum(ctx.clamped_delta_frames or 0)
 
-                    -- Selected edges.
+                    -- Selected edges (and implicit gap edges injected on unselected tracks).
                     for _, edge_info in ipairs(ctx.edge_infos or {}) do
                         local raw_edge_type = edge_info.edge_type
                         local anchor_clip_id = edge_info.original_clip_id or edge_info.clip_id
@@ -1877,14 +1977,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                             local edge_key = string.format("%s:%s", tostring(anchor_clip_id), tostring(raw_edge_type))
                             local source_key = build_edge_key(edge_info)
                             local applied = compute_applied_delta(ctx, source_key, edge_info)
+                            local is_implicit = edge_info.is_implicit_injection == true
                             upsert({
                                 edge_key = edge_key,
                                 clip_id = anchor_clip_id,
                                 track_id = edge_info.track_id,
                                 raw_edge_type = raw_edge_type,
                                 normalized_edge = edge_info.normalized_edge or edge_utils.to_bracket(raw_edge_type),
-                                is_selected = true,
-                                is_implied = false,
+                                is_selected = not is_implicit,
+                                is_implied = is_implicit,
                                 is_limiter = clamped_edges[edge_key] == true,
                                 applied_delta_frames = applied or 0
                             })
@@ -2022,6 +2123,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     command_executors["BatchRippleEdit"] = function(command)
         local ctx = batch_context.create(command)
+
+        -- Restore shift-bound blocker keys from a prior retry so the UI
+        -- can highlight the blocking edges red even after delta re-clamp.
+        local saved_blockers = command:get_parameter("__shift_blocker_keys")
+        if type(saved_blockers) == "table" then
+            for _, key in ipairs(saved_blockers) do
+                ctx.forced_clamped_edges[key] = true
+            end
+        end
 
         if not ctx.edge_infos or #ctx.edge_infos == 0 then
             log.error("BatchRippleEdit missing edge_infos")

@@ -9,7 +9,7 @@ local ripple_layout = require("tests.helpers.ripple_layout")
 local TimelineActiveRegion = require("core.timeline_active_region")
 
 local TEST_DB = "/tmp/jve/test_timeline_edge_preview_lead.db"
-local layout = ripple_layout.create({db_path = TEST_DB})
+local layout = ripple_layout.create({db_path = TEST_DB, clips = { v2 = {timeline_start = 2000, duration = 1000} }})
 local tracks = layout.tracks
 local clips = layout.clips
 

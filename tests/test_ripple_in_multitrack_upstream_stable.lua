@@ -50,8 +50,10 @@ local tests = {
 -- ─────────────────────────────────────────────────────────────────────────────
 
 {
-    name = "out-edge V1 only: audio downstream clips shift left",
-    -- Only V1 edge selected. A1/A2 downstream clips must shift too.
+    name = "out-edge V1 only: blocked by adjacent audio (Eo, Go red)",
+    -- Only V1 edge selected. A1/A2 have zero gap — shift blocked.
+    -- E out-edge and G out-edge are the blockers (shown red in UI).
+    -- Whole operation blocked: nothing moves.
     before = [[
         V1: [A 0-100][B 100-350][C 350-500][D 500-700]
         A1: [E 0-500][F 500-700]
@@ -59,23 +61,25 @@ local tests = {
     ]],
     drag = "C out -30",
     after = [[
-        V1: [A 0-100][B 100-350][C 350-470][D 470-670]
-        A1: [E 0-500][F 470-670]
-        A2: [G 0-500][H 470-670]
+        V1: [A 0-100][B 100-350][C 350-500][D 500-700]
+        A1: [E 0-500][F 500-700]
+        A2: [G 0-500][H 500-700]
     ]],
 },
 
 {
-    name = "in-edge V1 only: downstream on all tracks shifts left",
-    -- Trim B's head right. E and F (downstream of B's right edge) must shift.
+    name = "in-edge V1 only: blocked by adjacent audio (Do red)",
+    -- Trim B's head right. F can't shift left past D's out-edge.
+    -- D out-edge is the blocker (shown red in UI).
+    -- Whole operation blocked: nothing moves.
     before = [[
         V1: [A 0-200][B 200-500][E 500-700]
         A1: [C 0-200][D 200-500][F 500-700]
     ]],
     drag = "B in 40",
     after = [[
-        V1: [A 0-200][B 200-460][E 460-660]
-        A1: [C 0-200][D 200-500][F 460-660]
+        V1: [A 0-200][B 200-500][E 500-700]
+        A1: [C 0-200][D 200-500][F 500-700]
     ]],
 },
 
@@ -106,20 +110,21 @@ local tests = {
 },
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- BOUNDARY ADJACENCY: clips at exact right edge must shift (>= not >)
+-- BOUNDARY ADJACENCY: adjacent clips block the operation
 -- ─────────────────────────────────────────────────────────────────────────────
 
 {
-    name = "boundary adjacency: clip at exact right edge shifts",
-    -- D starts at 500 = A's original right edge. MUST shift.
+    name = "boundary adjacency: blocked by adjacent audio (Co red)",
+    -- D starts at 500 = A's right edge. C ends at 500. Zero gap.
+    -- D can't shift left past C's out-edge. Whole operation blocked.
     before = [[
         V1: [A 0-500][B 500-800]
         A1: [C 0-500][D 500-800]
     ]],
     drag = "A out -100",
     after = [[
-        V1: [A 0-400][B 400-700]
-        A1: [C 0-500][D 400-700]
+        V1: [A 0-500][B 500-800]
+        A1: [C 0-500][D 500-800]
     ]],
 },
 
