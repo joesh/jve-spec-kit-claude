@@ -33,7 +33,7 @@ local layout = ripple_layout.create({
 })
 
 local tracks = layout.tracks
-local clips = layout.clips
+local _clips = layout.clips  -- luacheck: no unused
 
 local executor = command_manager.get_executor("BatchRippleEdit")
 assert(executor, "BatchRippleEdit executor missing")

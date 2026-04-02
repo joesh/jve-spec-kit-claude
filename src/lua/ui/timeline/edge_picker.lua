@@ -269,9 +269,8 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
     end
 
     -- Calculate element width in pixels for an edge entry
-    local function get_element_width_px(entry, boundary_px)
+    local function get_element_width_px(entry, _boundary_px)
         if not entry then return nil end
-        local edge_type = entry.edge_type
 
         -- All edges use the clip's pixel width (gap clips included)
         local c = entry.clip
