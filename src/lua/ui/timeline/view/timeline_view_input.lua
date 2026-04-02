@@ -149,25 +149,23 @@ local function find_gap_at_time(view, track_id, time_frame)
         return nil
     end
 
-    -- TEMPORARILY REVERTED for TDD: old gap scanning logic (broken with gap-as-clip)
-    local previous_end = 0
+    -- With gap-as-clip, gap clips are in the track list. Find the gap clip
+    -- at the given time position directly.
     for _, clip in ipairs(clips_on_track) do
-        if type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
-            goto continue_gap
-        end
-        local gap_start = previous_end
-        local gap_end = clip.timeline_start
-        local gap_duration = gap_end - gap_start
-        if gap_duration > 0 and time_frame >= gap_start and time_frame < gap_end then
+        if clip.clip_kind == "gap"
+            and type(clip.timeline_start) == "number"
+            and type(clip.duration) == "number"
+            and clip.duration > 0
+            and time_frame >= clip.timeline_start
+            and time_frame < clip.timeline_start + clip.duration then
             return {
                 track_id = track_id,
-                start_value = gap_start,
-                duration_value = gap_duration,
-                duration = gap_duration,
+                start_value = clip.timeline_start,
+                duration_value = clip.duration,
+                duration = clip.duration,
+                gap_clip_id = clip.id,
             }
         end
-        previous_end = clip.timeline_start + clip.duration
-        ::continue_gap::
     end
     return nil
 end

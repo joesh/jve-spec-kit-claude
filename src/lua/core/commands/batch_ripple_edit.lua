@@ -1737,15 +1737,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
 	    local function finalize_execution(ctx)
-	        -- Filter gap clips from original_states — they're not persisted
-	        -- and shouldn't be in the undo data
-	        local persisted_states = {}
-	        for id, state in pairs(ctx.original_states_map) do
-	            if state.clip_kind ~= "gap" then
-	                persisted_states[id] = state
-	            end
-	        end
-	        ctx.command:set_parameter("original_states", persisted_states)
+	        -- original_states includes gap clips (for constraint computation during
+	        -- the edit). The undo hydrator uses executed_mutation_order to decide
+	        -- which clips to revert — gap clips aren't in mutation_order, so they
+	        -- won't be reverted from DB. But original_states must be non-empty for
+	        -- the hydrator to work.
+	        ctx.command:set_parameter("original_states", ctx.original_states_map)
 	        if ctx.bulk_shift_mutations and #ctx.bulk_shift_mutations > 0 then
 	            ctx.command:set_parameter("bulk_shifts", ctx.bulk_shift_mutations)
 	        else
