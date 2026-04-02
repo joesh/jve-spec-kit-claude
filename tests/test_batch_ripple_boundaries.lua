@@ -120,10 +120,13 @@ do
         }
     })
 
+    -- Gap starts at v1_left end (1000), gap_id = gap_track_v1_1000
+    local gap_id = layout:gap_id("v1", 1000)
+
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
-        {clip_id = layout.clips.v1_left.id, edge_type = "gap_after", track_id = layout.tracks.v1.id}
+        {clip_id = gap_id, edge_type = "in", track_id = layout.tracks.v1.id}
     })
     cmd:set_parameter("delta_frames", -999999999)  -- Absurdly large negative
 

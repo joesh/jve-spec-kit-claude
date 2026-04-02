@@ -249,11 +249,13 @@ ClipLink.create_link_group({
     { clip_id = "clip_a1_left", role = "audio", time_offset = 0 },
 }, db)
 
--- Delete the right clips to create a gap scenario
+-- Delete the right clips to create a gap scenario (gap extends to end of timeline)
 db:exec([[DELETE FROM clips WHERE id = 'clip_v1_right']])
 db:exec([[DELETE FROM clips WHERE id = 'clip_a1_right']])
 
--- Update mock data - now there's no adjacent clip after left clips
+-- Update mock data - now there's no adjacent media clip, but gap-as-clip means
+-- there are no gap clips either since there's nothing after the left clips
+-- (gap_lifecycle only creates gaps between clips, not trailing gaps)
 mock_clips = {
     { id = "clip_v1_left", track_id = "trk_v", timeline_start = 0, duration = 1000 },
     { id = "clip_a1_left", track_id = "trk_a", timeline_start = 0, duration = 1000 },
@@ -261,34 +263,34 @@ mock_clips = {
 
 mock_edges = {}
 
--- Roll at V1 left clip's out edge - should get gap_after on the right side
+-- With gap-as-clip, there's no adjacent clip after left clips — no gap clip
+-- to roll against. The single-edge expansion should just give out edges.
+-- (A roll requires two clips at a boundary; at end-of-timeline there's nothing.)
 result = command_manager.execute("SelectEdges", {
     project_id = "proj1",
     sequence_id = "seq1",
     target_edges = {
         {clip_id = "clip_v1_left", edge_type = "out", trim_type = "roll"},
-        {clip_id = "clip_v1_left", edge_type = "gap_after", trim_type = "roll"},
     },
     modifiers = { alt = true },
 })
 assert(result.success, "SelectEdges should succeed")
 
 selected = mock_edges
--- Should have: v1_left:out, v1_left:gap_after, a1_left:out, a1_left:gap_after
-assert(#selected == 4, string.format(
-    "Roll with gap should give 4 edges (out + gap_after per track), got %d", #selected))
+-- Single edge expansion: v1_left:out + a1_left:out
+assert(#selected == 2, string.format(
+    "End-of-timeline roll should give 2 out edges (one per linked clip), got %d", #selected))
 
--- Verify gap_after edges are included
-local found_v1_gap = false
-local found_a1_gap = false
+local found_v1_out = false
+local found_a1_out = false
 for _, edge in ipairs(selected) do
-    if edge.clip_id == "clip_v1_left" and edge.edge_type == "gap_after" then found_v1_gap = true end
-    if edge.clip_id == "clip_a1_left" and edge.edge_type == "gap_after" then found_a1_gap = true end
+    if edge.clip_id == "clip_v1_left" and edge.edge_type == "out" then found_v1_out = true end
+    if edge.clip_id == "clip_a1_left" and edge.edge_type == "out" then found_a1_out = true end
 end
-assert(found_v1_gap, "Should have clip_v1_left:gap_after")
-assert(found_a1_gap, "Should have clip_a1_left:gap_after")
+assert(found_v1_out, "Should have clip_v1_left:out")
+assert(found_a1_out, "Should have clip_a1_left:out")
 
-print("✓ Roll with gap: gap_after edges included on all linked tracks")
+print("✓ End-of-timeline: out edges expanded to linked tracks")
 
 -- Cleanup
 database.shutdown()

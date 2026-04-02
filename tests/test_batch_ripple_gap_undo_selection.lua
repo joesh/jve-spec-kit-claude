@@ -1,5 +1,7 @@
 #!/usr/bin/env luajit
 
+-- Updated for gap-as-clip: gap edges reference gap clip IDs
+
 package.path = "./?.lua;./src/lua/?.lua;" .. package.path
 
 require("test_env")

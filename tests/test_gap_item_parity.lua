@@ -1,5 +1,7 @@
 #!/usr/bin/env luajit
 
+-- Updated for gap-as-clip: gap_after/gap_before → gap clip in/out edges
+
 require("test_env")
 
 local command_manager = require("core.command_manager")
@@ -13,25 +15,28 @@ local db = layout.db
 local clips = layout.clips
 local tracks = layout.tracks
 
+-- v1_left ends at 1500, v1_right starts at 3500 → gap is 1500..3500
+local gap_id = layout:gap_id("v1", 1500)
+
 local scenarios = {
     {
-        name = "gap_after_ripple_out",
+        name = "gap_in_ripple",
         edges = {
-            {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"}
+            {clip_id = gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"}
         },
         delta = 400
     },
     {
-        name = "gap_before_ripple_in",
+        name = "gap_out_ripple",
         edges = {
-            {clip_id = clips.v1_right.id, edge_type = "gap_before", track_id = tracks.v1.id, trim_type = "ripple"}
+            {clip_id = gap_id, edge_type = "out", track_id = tracks.v1.id, trim_type = "ripple"}
         },
         delta = -300
     },
     {
         name = "mixed_gap_clip",
         edges = {
-            {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"},
+            {clip_id = gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"},
             {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"}
         },
         lead = {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"},
@@ -40,7 +45,7 @@ local scenarios = {
     {
         name = "gap_roll",
         edges = {
-            {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "roll"},
+            {clip_id = gap_id, edge_type = "out", track_id = tracks.v1.id, trim_type = "roll"},
             {clip_id = clips.v1_right.id, edge_type = "in", track_id = tracks.v1.id, trim_type = "roll"}
         },
         lead = {clip_id = clips.v1_right.id, edge_type = "in", track_id = tracks.v1.id, trim_type = "roll"},

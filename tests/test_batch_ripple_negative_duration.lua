@@ -110,10 +110,13 @@ do
         }
     })
 
+    -- Gap starts at v1_left end (1000)
+    local gap_id = layout:gap_id("v1", 1000)
+
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
-        {clip_id = layout.clips.v1_left.id, edge_type = "gap_after", track_id = layout.tracks.v1.id}
+        {clip_id = gap_id, edge_type = "in", track_id = layout.tracks.v1.id}
     })
     cmd:set_parameter("delta_frames", 1000)  -- Close the gap completely
 
@@ -128,7 +131,7 @@ do
     layout:cleanup()
 end
 
--- Test 5: Gap_before trying to close beyond zero should clamp
+-- Test 5: Gap out-edge trying to close beyond zero should clamp
 do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_gap_overclose.db",
@@ -138,10 +141,13 @@ do
         }
     })
 
+    -- Gap starts at v1_left end (1000)
+    local gap_id = layout:gap_id("v1", 1000)
+
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
-        {clip_id = layout.clips.v1_right.id, edge_type = "gap_before", track_id = layout.tracks.v1.id}
+        {clip_id = gap_id, edge_type = "out", track_id = layout.tracks.v1.id}
     })
     cmd:set_parameter("delta_frames", -800)  -- Try to close 800 frames (gap only 500)
 

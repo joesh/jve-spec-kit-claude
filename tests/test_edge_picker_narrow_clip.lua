@@ -27,12 +27,13 @@ local MIN_WIDTH = ui_constants.TIMELINE.MIN_EDGE_SELECTABLE_WIDTH_PX
 assert(MIN_WIDTH, "MIN_EDGE_SELECTABLE_WIDTH_PX must be defined")
 assert(MIN_WIDTH == 17, "MIN_EDGE_SELECTABLE_WIDTH_PX should be 17")
 
-local function make_clip(id, start_frames, dur_frames)
+local function make_clip(id, start_frames, dur_frames, kind)
     return {
         id = id,
         track_id = "v1",
         timeline_start = start_frames,
-        duration = dur_frames
+        duration = dur_frames,
+        clip_kind = kind or "timeline"
     }
 end
 
@@ -106,19 +107,21 @@ print("  ✓ Test 3: Middle of clip has no edge selection (clip body handled sep
 
 -- =============================================================================
 -- TEST 4: Narrow gap (5px) - gap edges NOT selectable
+-- With gap-as-clip, the gap is a real clip in the list with 5px width.
 -- =============================================================================
 do
-    local clip1 = make_clip("a", 0, 100)           -- frames 0-100
-    local clip2 = make_clip("b", 105, 100)         -- frames 105-205 (5px gap)
-    local clips = {clip1, clip2}
+    local clip1 = make_clip("a", 0, 100)                    -- frames 0-100
+    local gap = make_clip("gap_v1_100", 100, 5, "gap")     -- frames 100-105 (5px gap clip)
+    local clip2 = make_clip("b", 105, 100)                  -- frames 105-205
+    local clips = {clip1, gap, clip2}
 
-    -- At start of gap (frame 100): clip1.out + gap_after
+    -- At start of gap (frame 100): clip1.out + gap.in — gap too narrow for roll
     local gap_start = pick(clips, 100)
     assert(gap_start.roll_used == false, "TEST 4a: roll disabled for narrow gap")
     assert(#gap_start.selection == 1, "TEST 4a: only clip edge selectable")
     assert(gap_start.selection[1].edge_type == "out", "TEST 4a: should select clip1.out")
 
-    -- At end of gap (frame 105): gap_before + clip2.in
+    -- At end of gap (frame 105): gap.out + clip2.in — gap too narrow for roll
     local gap_end = pick(clips, 105)
     assert(gap_end.roll_used == false, "TEST 4b: roll disabled for narrow gap")
     assert(#gap_end.selection == 1, "TEST 4b: only clip edge selectable")
@@ -128,18 +131,20 @@ print("  ✓ Test 4: Narrow gap (5px) edges not selectable")
 
 -- =============================================================================
 -- TEST 5: Wide gap (100px) - gap edges ARE selectable
+-- With gap-as-clip, the gap is a real 100px clip in the list.
 -- =============================================================================
 do
-    local clip1 = make_clip("a", 0, 100)           -- frames 0-100
-    local clip2 = make_clip("b", 200, 100)         -- frames 200-300 (100px gap)
-    local clips = {clip1, clip2}
+    local clip1 = make_clip("a", 0, 100)                     -- frames 0-100
+    local gap = make_clip("gap_v1_100", 100, 100, "gap")    -- frames 100-200 (100px gap clip)
+    local clip2 = make_clip("b", 200, 100)                   -- frames 200-300
+    local clips = {clip1, gap, clip2}
 
-    -- At start of gap (frame 100): clip1.out + gap_after - roll works
+    -- At start of gap (frame 100): clip1.out + gap.in - roll works
     local gap_start = pick(clips, 100)
     assert(gap_start.roll_used == true, "TEST 5a: roll works for wide gap")
     assert(#gap_start.selection == 2, "TEST 5a: both edges selectable")
 
-    -- At end of gap (frame 200): gap_before + clip2.in - roll works
+    -- At end of gap (frame 200): gap.out + clip2.in - roll works
     local gap_end = pick(clips, 200)
     assert(gap_end.roll_used == true, "TEST 5b: roll works for wide gap")
     assert(#gap_end.selection == 2, "TEST 5b: both edges selectable")

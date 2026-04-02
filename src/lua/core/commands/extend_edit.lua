@@ -40,7 +40,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- For simplicity, use lead edge (first edge) to compute single delta
         -- (multi-edge extend with different deltas would need BatchRippleEdit enhancement)
         local lead_edge = edge_infos[1]
-        local clip = Clip.load(lead_edge.clip_id)
+        -- Gap clips are in-memory only (not in DB). Try Clip.load for media clips,
+        -- fall back to timeline_state for gap clips.
+        local clip = Clip.load_optional(lead_edge.clip_id)
+        if not clip then
+            local timeline_state = package.loaded["ui.timeline.timeline_state"]
+            if timeline_state and timeline_state.get_clip_by_id then
+                clip = timeline_state.get_clip_by_id(lead_edge.clip_id)
+            end
+        end
         if not clip then
             set_last_error(string.format("ExtendEdit: clip not found: %s", lead_edge.clip_id))
             return false
@@ -48,9 +56,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- Compute current edge position
         local edge_position
-        if lead_edge.edge_type == "in" or lead_edge.edge_type == "gap_before" then
+        if lead_edge.edge_type == "in" then
             edge_position = clip.timeline_start
-        elseif lead_edge.edge_type == "out" or lead_edge.edge_type == "gap_after" then
+        elseif lead_edge.edge_type == "out" then
             edge_position = clip.timeline_start + clip.duration
         else
             set_last_error(string.format("ExtendEdit: unknown edge_type: %s", tostring(lead_edge.edge_type)))
