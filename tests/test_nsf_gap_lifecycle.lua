@@ -60,16 +60,31 @@ print("  ✓ nil position asserts")
 
 print("--- NSF Half 2: Output invariants ---")
 
--- Overlapping clips are valid (overwrite edits). No gap between them.
+-- Overlapping clips: transient state during overwrite/insert before occlusion.
+-- No gap in overlapping region, no crash.
 do
     local clips = {
         media_clip("c1", "v1", 0, 200),
         media_clip("c2", "v1", 100, 200),  -- overlaps c1
     }
     local gaps = gap_lifecycle.compute_gaps_for_track("v1", clips, SEQ_FPS)
-    assert(#gaps == 0, "overlapping clips should produce no gaps")
+    assert(#gaps == 0, "overlapping clips produce no gaps")
 end
-print("  ✓ overlapping clips produce no gaps")
+print("  ✓ overlapping clips produce no gaps (transient overwrite state)")
+
+-- Overlapping then gap: c1[0-200] c2[100-200] c3[400-500] → gap [200-400]
+do
+    local clips = {
+        media_clip("c1", "v1", 0, 200),
+        media_clip("c2", "v1", 100, 100),  -- overlaps c1 but ends at same point
+        media_clip("c3", "v1", 400, 100),
+    }
+    local gaps = gap_lifecycle.compute_gaps_for_track("v1", clips, SEQ_FPS)
+    assert(#gaps == 1, string.format("expected 1 gap after overlap, got %d", #gaps))
+    assert(gaps[1].timeline_start == 200, "gap should start at 200")
+    assert(gaps[1].duration == 200, "gap should be 200 frames")
+end
+print("  ✓ overlap followed by gap computes correctly")
 
 -- Computed gaps must satisfy invariants:
 -- gap.timeline_start + gap.duration == next clip's timeline_start
