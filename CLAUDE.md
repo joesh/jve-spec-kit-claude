@@ -10,6 +10,8 @@ This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Re
 - SQLite (.jvp project files), `~/.jve/` for app prefs (002-relink-clips)
 - C++ (Qt6) + Lua (LuaJIT) + Qt6 QShortcut, QKeySequence, QWidget::focusNextPrevChild (004-keyboard-architecture-refactor)
 - TOML keybindings (`keymaps/default.jvekeys`) (004-keyboard-architecture-refactor)
+- Lua (LuaJIT) + C++ (Qt6) + SQLite (persistence), command_manager (undo/redo), timeline_state (in-memory model) (005-gap-as-clip-refactor)
+- SQLite for media clips (unchanged). Gaps are in-memory only — not persisted. (005-gap-as-clip-refactor)
 
 READ ENGINEERING.md
 

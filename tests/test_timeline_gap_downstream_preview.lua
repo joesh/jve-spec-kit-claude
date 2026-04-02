@@ -71,7 +71,9 @@ function view.get_track_y_by_id(track_id)
     return entry and entry.y or -1
 end
 
-local gap_edge = {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"}
+local v1_gap_start = clips.v1_left.timeline_start + clips.v1_left.duration
+local v1_gap_id = layout:gap_id("v1", v1_gap_start)
+local gap_edge = {clip_id = v1_gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"}
 local clip_edge = {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"}
 
 view.drag_state = {

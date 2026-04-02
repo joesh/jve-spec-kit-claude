@@ -188,6 +188,11 @@ function M.get_at_time(time_value, candidate_clips)
             goto continue_clip
         end
 
+        -- Skip gap clips — callers need media clips under playhead
+        if clip.clip_kind == "gap" then
+            goto continue_clip
+        end
+
         local clip_end = start_val + duration_val
         if time_value > start_val and time_value < clip_end then
             table.insert(matches, clip)

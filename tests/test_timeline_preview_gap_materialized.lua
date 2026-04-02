@@ -67,7 +67,8 @@ _G.timeline = {
     update = function() end
 }
 
-local gap_edge = {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"}
+local v1_gap_id = layout:gap_id("v1", gap_start)
+local gap_edge = {clip_id = v1_gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"}
 
 view.drag_state = {
     type = "edges",
@@ -108,4 +109,4 @@ end
 
 _G.timeline = original_timeline
 layout:cleanup()
-print("✅ Gap previews skip yellow clip rectangles when only materialized gaps are affected")
+print("✅ Gap previews skip yellow clip rectangles when only gap clips are affected")

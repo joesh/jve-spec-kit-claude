@@ -119,28 +119,10 @@ assert(stmt:exec() and stmt:next(), "Inserted clip not found")
 local clip_id = stmt:value(0)
 stmt:finalize()
 
-local function delete_delta_frames(target_clip_id)
-    local dur_stmt = db:prepare([[
-        SELECT duration_frames, fps_numerator, fps_denominator
-        FROM clips
-        WHERE id = ?
-    ]])
-    assert(dur_stmt, "failed to prepare clip duration lookup")
-    assert(dur_stmt:bind_value(1, target_clip_id))
-    assert(dur_stmt:exec() and dur_stmt:next(), "Failed to load clip duration for ripple delete")
-    local duration_frames = dur_stmt:value(0)
-    local fps_num = dur_stmt:value(1)
-    local fps_den = dur_stmt:value(2)
-    dur_stmt:finalize()
-
-    local extra_one_second = math.ceil(fps_num / fps_den)
-    -- Overshoot by ~1s worth of frames to guarantee deletion
-    return -(duration_frames + extra_one_second)
-end
-
+-- Trim out-point significantly to test redo integrity
 local ripple_cmd = Command.create("RippleEdit", "default_project")
-ripple_cmd:set_parameter("edge_info", {clip_id = clip_id, edge_type = "gap_before", track_id = "track_default_v1"})
-ripple_cmd:set_parameter("delta_frames", delete_delta_frames(clip_id))  -- computed negative delta large enough to remove the clip
+ripple_cmd:set_parameter("edge_info", {clip_id = clip_id, edge_type = "out", track_id = "track_default_v1"})
+ripple_cmd:set_parameter("delta_frames", -100)  -- shorten clip by 100 frames
 ripple_cmd:set_parameter("sequence_id", "default_sequence")
 exec(ripple_cmd)
 

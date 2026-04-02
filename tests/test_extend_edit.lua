@@ -58,6 +58,18 @@ package.loaded["models.clip"] = {
     load = function(id)
         local c = clip_store[id]
         if not c then return nil end
+        -- For gap clips, return the clip directly (no source normalization)
+        if c.clip_kind == "gap" then
+            return c
+        end
+        return make_clip(c.id, c.timeline_start, c.duration, c.source_in, c.source_out, c.track_id)
+    end,
+    load_optional = function(id)
+        local c = clip_store[id]
+        if not c then return nil end
+        if c.clip_kind == "gap" then
+            return c
+        end
         return make_clip(c.id, c.timeline_start, c.duration, c.source_in, c.source_out, c.track_id)
     end,
 }
@@ -274,39 +286,45 @@ do
 end
 
 -- ═══════════════════════════════════════════════════════════
--- Test: gap_before edge type
+-- Test: gap clip out edge (replaces old gap_before test)
 -- ═══════════════════════════════════════════════════════════
 
-print("\n--- ExtendEdit: gap_before edge ---")
+print("\n--- ExtendEdit: gap clip out edge ---")
 do
     ripple_calls = {}
-    clip_store["c7"] = {
-        id = "c7",
-        timeline_start = 100,
+    -- Gap clip at [50, 100), out edge at 100. Playhead at 80.
+    -- delta = 80 - 100 = -20 (shrink gap from the right)
+    clip_store["gap_t1_50"] = {
+        id = "gap_t1_50",
+        timeline_start = 50,
         duration = 50,
-        source_in = 0,
-        source_out = 50,
+        clip_kind = "gap",
         track_id = "t1",
+        source_in = nil,
+        source_out = nil,
+        rate = { fps_numerator = 24, fps_denominator = 1 },
+        fps_numerator = 24,
+        fps_denominator = 1,
     }
 
     local cmd = Command.create("ExtendEdit", "p1")
     cmd:set_parameters({
         edge_infos = {{
-            clip_id = "c7",
-            edge_type = "gap_before",
+            clip_id = "gap_t1_50",
+            edge_type = "out",
             track_id = "t1",
         }},
-        playhead_frame = 80,  -- gap_before uses timeline_start (100), delta = 80-100 = -20
+        playhead_frame = 80,  -- out edge at 100, delta = 80-100 = -20
         project_id = "p1",
         sequence_id = "s1",
     })
 
     local ok = executors["ExtendEdit"](cmd)
-    check("gap_before: executor returns true", ok == true)
-    check("gap_before: RippleEdit called", #ripple_calls == 1)
+    check("gap out: executor returns true", ok == true)
+    check("gap out: RippleEdit called", #ripple_calls == 1)
 
     if #ripple_calls > 0 then
-        check("gap_before: delta_frames = -20", ripple_calls[1].params.delta_frames == -20)
+        check("gap out: delta_frames = -20", ripple_calls[1].params.delta_frames == -20)
     end
 end
 

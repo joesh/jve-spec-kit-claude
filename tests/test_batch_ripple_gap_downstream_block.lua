@@ -52,10 +52,10 @@ command_manager.init("default_sequence", "default_project")
 
 local cmd = Command.create("BatchRippleEdit", "default_project")
 cmd:set_parameter("edge_infos", {
-    {clip_id = "v1_anchor", edge_type = "gap_after", track_id = "track_v1"},
-    {clip_id = "v2_left",   edge_type = "gap_after", track_id = "track_v2"},
+    {clip_id = "gap_track_v1_3000", edge_type = "in", track_id = "track_v1"},
+    {clip_id = "gap_track_v2_3200", edge_type = "in", track_id = "track_v2"},
 })
-cmd:set_parameter("delta_frames", 5000) -- Drag [ RIGHT beyond available gap (expect clamp).
+cmd:set_parameter("delta_frames", 5000) -- Drag gap in-edge RIGHT beyond available gap (expect clamp).
 cmd:set_parameter("sequence_id", "default_sequence")
 
 local result = command_manager.execute(cmd)

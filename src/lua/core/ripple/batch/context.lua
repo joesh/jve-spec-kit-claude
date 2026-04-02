@@ -82,9 +82,6 @@ function M.create(command)
         for _, edge in ipairs(ctx.edge_infos_raw) do
             local source_original_id = edge.original_clip_id or edge.clip_id
             local cleaned_id = edge.clip_id
-            if type(cleaned_id) == "string" and cleaned_id:find("^temp_gap_") then
-                cleaned_id = cleaned_id:gsub("^temp_gap_", "")
-            end
             if not cleaned_id then
                 log.warn("skipping edge_info with nil clip_id")
                 goto continue_edge

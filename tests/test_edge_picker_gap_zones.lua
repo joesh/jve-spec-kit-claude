@@ -1,5 +1,8 @@
 #!/usr/bin/env luajit
 
+-- Test edge_picker zone behavior: left zone → left edge, center → roll, right → right edge.
+-- (Updated for gap-as-clip: gaps are real clips in the track list.)
+
 package.path = package.path
     .. ";../src/lua/?.lua"
     .. ";../src/lua/?/init.lua"
@@ -15,24 +18,21 @@ local EDGE = ui_constants.TIMELINE.EDGE_ZONE_PX
 local ROLL = ui_constants.TIMELINE.ROLL_ZONE_PX or EDGE
 local ROLL_RADIUS = ROLL / 2
 
-local function make_clip(id, start_frames, dur_frames)
+local function make_clip(id, start_frames, dur_frames, kind)
     return {
         id = id,
         track_id = "v1",
         timeline_start = start_frames,
-        duration = dur_frames
+        duration = dur_frames,
+        clip_kind = kind or "timeline"
     }
-end
-
-local function time_to_pixel(time_obj)
-    return time_obj
 end
 
 local function pick(clips, x)
     return edge_picker.pick_edges(clips, x, 2000, {
         edge_zone = EDGE,
         roll_zone = ROLL,
-        time_to_pixel = function(t) return time_to_pixel(t) end
+        time_to_pixel = function(t) return t end
     })
 end
 
@@ -55,26 +55,29 @@ do
     assert(right_zone.selection[1].edge_type == "in" and right_zone.selection[1].clip_id == "b", "right zone should pick right clip in edge")
 end
 
--- Gap/clip boundary: no roll because only one real clip is available.
+-- Gap/clip boundary: with gap-as-clip, gap is a real clip in the list.
+-- Roll between gap:out and clip:in at the boundary.
 do
+    local gap = make_clip("gap_v1_0", 0, 200, "gap")
     local clip = make_clip("solo", 200, 50)
     local boundary = 200
 
-    local left_side = pick({clip}, boundary - (ROLL_RADIUS + 2))
+    local left_side = pick({gap, clip}, boundary - (ROLL_RADIUS + 2))
     assert(left_side.roll_used == false, "gap left zone should not roll")
-    assert(left_side.selection[1].edge_type == "gap_before", "gap left zone should select gap_before edge")
+    assert(left_side.selection[1].edge_type == "out", "gap left zone should select gap's out edge")
+    assert(left_side.selection[1].clip_id == "gap_v1_0", "gap left zone should reference gap clip")
 
-    local center = pick({clip}, boundary)
-    assert(center.roll_used == true, "gap/clip center should roll with the neighboring gap")
+    local center = pick({gap, clip}, boundary)
+    assert(center.roll_used == true, "gap/clip center should roll")
     assert(#center.selection == 2, "gap/clip center should select both edges for roll")
     local gap_seen, clip_seen = false, false
     for _, entry in ipairs(center.selection) do
-        if entry.edge_type == "gap_before" then gap_seen = true end
-        if entry.edge_type == "in" then clip_seen = true end
+        if entry.clip_id == "gap_v1_0" and entry.edge_type == "out" then gap_seen = true end
+        if entry.clip_id == "solo" and entry.edge_type == "in" then clip_seen = true end
     end
-    assert(gap_seen and clip_seen, "gap/clip center roll should include both edges")
+    assert(gap_seen and clip_seen, "gap/clip center roll should include gap:out + clip:in")
 
-    local right_side = pick({clip}, boundary + (ROLL_RADIUS + 2))
+    local right_side = pick({gap, clip}, boundary + (ROLL_RADIUS + 2))
     assert(right_side.roll_used == false, "gap right zone should not roll")
     assert(right_side.selection[1].edge_type == "in", "gap right zone should select clip in edge")
 end

@@ -1,5 +1,7 @@
 #!/usr/bin/env luajit
 
+-- Updated for gap-as-clip: gap_after on v1_left → gap clip "in" edge
+
 require("test_env")
 
 local command_manager = require("core.command_manager")
@@ -14,10 +16,13 @@ local layout = ripple_layout.create({
 local db = layout.db
 local clips = layout.clips
 
+-- v1_left ends at 1500, v1_right starts at 3500 → gap is 1500..3500
+local gap_id = layout:gap_id("v1", 1500)
+
 local cmd = Command.create("BatchRippleEdit", layout.project_id)
 cmd:set_parameter("sequence_id", layout.sequence_id)
 cmd:set_parameter("edge_infos", {
-    {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = layout.tracks.v1.id, trim_type = "ripple"}
+    {clip_id = gap_id, edge_type = "in", track_id = layout.tracks.v1.id, trim_type = "ripple"}
 })
 cmd:set_parameter("delta_frames", 2000)
 

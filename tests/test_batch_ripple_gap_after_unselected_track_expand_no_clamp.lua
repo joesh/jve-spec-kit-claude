@@ -1,5 +1,7 @@
 #!/usr/bin/env luajit
 
+-- Updated for gap-as-clip: gap_after on v1_left → gap clip "in" edge
+
 require("test_env")
 
 local Command = require("command")
@@ -18,7 +20,7 @@ local function find_shifted_clip(payload, clip_id)
     return nil
 end
 
--- Regression: Opening a lead gap_after ([) should not be clamped by the
+-- Regression: Opening a lead gap in-edge ([) should not be clamped by the
 -- gap-before width on unselected tracks (opening creates space; no collision risk).
 do
     local layout = ripple_layout.create({
@@ -35,9 +37,12 @@ do
     local executor = command_manager.get_executor("BatchRippleEdit")
     assert(executor, "BatchRippleEdit executor missing")
 
+    -- v1_left ends at 1000, gap is 1000..2000 → gap_id = gap_track_v1_1000
+    local gap_id = layout:gap_id("v1", 1000)
+
     local lead_edge = {
-        clip_id = layout.clips.v1_left.id,
-        edge_type = "gap_after",
+        clip_id = gap_id,
+        edge_type = "in",
         track_id = layout.tracks.v1.id,
         trim_type = "ripple",
     }
@@ -53,9 +58,9 @@ do
     assert(ok and type(payload) == "table", "Dry run should succeed")
 
     assert(payload.clamped_delta_ms == -500,
-        string.format("Expected no clamp when opening lead gap_after; got clamped_delta_ms=%s", tostring(payload.clamped_delta_ms)))
+        string.format("Expected no clamp when opening lead gap in-edge; got clamped_delta_ms=%s", tostring(payload.clamped_delta_ms)))
     assert(not payload.clamped_edges or next(payload.clamped_edges) == nil,
-        "Expected no clamped edges when opening lead gap_after")
+        "Expected no clamped edges when opening lead gap in-edge")
 
     local v1_shifted = find_shifted_clip(payload, layout.clips.v1_right.id)
     assert(v1_shifted and v1_shifted.new_start_value and v1_shifted.new_start_value == 2500,
@@ -71,4 +76,3 @@ do
 end
 
 print("✅ BatchRippleEdit does not clamp opening lead gap_after due to unselected track gaps")
-

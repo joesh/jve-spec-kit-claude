@@ -1,5 +1,7 @@
 #!/usr/bin/env luajit
 
+-- Updated for gap-as-clip: gap_after on clip_anchor → gap clip "in" edge
+
 require("test_env")
 
 local database = require("core.database")
@@ -51,12 +53,15 @@ assert(db:exec(seed))
 
 command_manager.init("default_sequence", "default_project")
 
+-- clip_anchor ends at 1500, gap is 1500..2500 → gap_id = gap_track_v1_1500
+local gap_id = string.format("gap_track_v1_%d", 1500)
+
 local cmd = Command.create("BatchRippleEdit", "default_project")
 cmd:set_parameter("sequence_id", "default_sequence")
 cmd:set_parameter("edge_infos", {
-    {clip_id = "clip_anchor", edge_type = "gap_after", track_id = "track_v1"}
+    {clip_id = gap_id, edge_type = "in", track_id = "track_v1"}
 })
-cmd:set_parameter("delta_frames", 400) -- drag [ on the upstream clip to the RIGHT should shrink the gap
+cmd:set_parameter("delta_frames", 400) -- close gap by 400 frames
 
 local result = command_manager.execute(cmd)
 assert(result.success, result.error_message or "BatchRippleEdit gap expansion failed")
@@ -64,7 +69,7 @@ assert(result.success, result.error_message or "BatchRippleEdit gap expansion fa
 local target_clip = Clip.load("clip_gap_target", db)
 local downstream_clip = Clip.load("clip_downstream", db)
 
-assert(target_clip.timeline_start == 2100, string.format("Gap target should shift LEFT when upstream [ is dragged right; expected 2100, got %s", tostring(target_clip.timeline_start)))
+assert(target_clip.timeline_start == 2100, string.format("Gap target should shift LEFT when gap in-edge is dragged right; expected 2100, got %s", tostring(target_clip.timeline_start)))
 assert(downstream_clip.timeline_start == 3600, string.format("Downstream clip should shift by the same delta; expected 3600, got %s", tostring(downstream_clip.timeline_start)))
 
 os.remove(TEST_DB)

@@ -11,11 +11,11 @@ Test: Edge preview should filter gaps from affected_clips but include them in sh
 Setup:
   - V1: gap from 1500-2500 (1000 frames)
   - V2: clip from 1800-2600 (800 frames)
-  - Drag V2 out + V1 gap_after left by -200
+  - Drag V2 out + V1 gap in-edge left by -200
 Expected preview payload:
   - affected_clips: [V2] (gap filtered out)
   - shifted_clips: [V1_right] (downstream clip that shifted)
-  - materialized_gaps: [temp_gap_v1_*] (gap was materialized but filtered from preview)
+  - gap clips always exist in clip list (no materialized_gaps needed)
 ]]
 
 local TEST_DB = "/tmp/jve/test_edge_preview_filtering.db"
@@ -32,8 +32,10 @@ assert(executor, "BatchRippleEdit executor missing")
 
 local cmd = Command.create("BatchRippleEdit", layout.project_id)
 cmd:set_parameter("sequence_id", layout.sequence_id)
+-- v1_left ends at 1500, gap to v1_right at 2500 → gap starts at 1500
+local v1_gap_id = layout:gap_id("v1", 1500)
 cmd:set_parameter("edge_infos", {
-    {clip_id = layout.clips.v1_left.id, edge_type = "gap_after", track_id = layout.tracks.v1.id, trim_type = "ripple"},
+    {clip_id = v1_gap_id, edge_type = "in", track_id = layout.tracks.v1.id, trim_type = "ripple"},
     {clip_id = layout.clips.v2.id, edge_type = "out", track_id = layout.tracks.v2.id, trim_type = "ripple"}
 })
 cmd:set_parameter("lead_edge", {clip_id = layout.clips.v2.id, edge_type = "out", track_id = layout.tracks.v2.id, trim_type = "ripple"})
@@ -43,16 +45,16 @@ cmd:set_parameter("dry_run", true)
 local ok, payload = executor(cmd)
 assert(ok and type(payload) == "table", "Dry run should return payload table")
 
--- Note: Command payload WILL contain temp gaps - renderer filters them
+-- Note: Command payload WILL contain gap clips - renderer filters them
 -- Let's verify the gap IS present in raw payload
 local gap_found_in_payload = false
 for _, entry in ipairs(payload.affected_clips or {}) do
-    if type(entry.clip_id) == "string" and entry.clip_id:find("^temp_gap_") then
+    if type(entry.clip_id) == "string" and entry.clip_id:find("^gap_") then
         gap_found_in_payload = true
         break
     end
 end
-assert(gap_found_in_payload, "Command should include temp gap in affected_clips (renderer will filter)")
+assert(gap_found_in_payload, "Command should include gap clip in affected_clips (renderer will filter)")
 
 -- Verify V2 is in affected_clips
 local v2_found = false
@@ -82,9 +84,7 @@ for _, entry in ipairs(payload.shifted_clips or {}) do
 end
 assert(v1_right_found, "v1_right should be in shifted_clips")
 
--- Verify materialized_gaps contains the temp gap ID
-assert(type(payload.materialized_gaps) == "table" and #payload.materialized_gaps >= 1,
-    "materialized_gaps should contain at least one gap ID")
+-- Gap clips always exist — no materialized_gaps needed in gap-as-clip model
 
 -- Test renderer gap filtering (require for side effects, renderer tested elsewhere)
 require("ui.timeline.view.timeline_view_renderer")
@@ -95,10 +95,10 @@ require("ui.timeline.view.timeline_view_renderer")
 local filtered_affected = {}
 for _, entry in ipairs(payload.affected_clips or {}) do
     local is_gap = false
-    if entry.is_gap or entry.is_temp_gap then
+    if entry.clip_kind == "gap" then
         is_gap = true
     end
-    if type(entry.clip_id) == "string" and entry.clip_id:find("^temp_gap_") then
+    if type(entry.clip_id) == "string" and entry.clip_id:find("^gap_") then
         is_gap = true
     end
     if not is_gap then

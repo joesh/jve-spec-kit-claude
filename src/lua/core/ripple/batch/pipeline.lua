@@ -30,7 +30,6 @@ function M.run(ctx, db, ops)
 
     ops.build_clip_cache(ctx)
     ops.prime_neighbor_bounds_cache(ctx)
-    ops.materialize_gap_edges(ctx)
     ops.inject_implicit_gap_edges(ctx)
     ops.assign_edge_tracks(ctx)
     ops.determine_lead_edge(ctx)

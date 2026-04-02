@@ -2,7 +2,7 @@
 
 package.path = "./?.lua;./src/lua/?.lua;" .. package.path
 
--- Capture timeline draw calls so we can assert that gap edges render handles.
+-- Capture timeline draw calls so we can assert that gap clip edges render handles.
 local original_timeline = timeline
 local drawn_rects = {}
 timeline = {
@@ -35,7 +35,16 @@ local prev_clip = {
     duration = 1000
 }
 
-local clip = {
+-- Gap clip between prev_clip and next_clip
+local gap_clip = {
+    id = "gap_track_v1_1000",
+    track_id = "track_v1",
+    timeline_start = 1000,
+    duration = 1000,
+    clip_kind = "gap"
+}
+
+local next_clip = {
     id = "clip_gap_target",
     track_id = "track_v1",
     timeline_start = 2000,
@@ -53,12 +62,12 @@ function state.get_mark_out() return nil end
 function state.get_sequence_id() return "default_sequence" end
 function state.get_project_id() return "default_project" end
 function state.get_sequence_frame_rate() return {fps_numerator = 1000, fps_denominator = 1} end
-function state.get_clips() return {prev_clip, clip} end
+function state.get_clips() return {prev_clip, gap_clip, next_clip} end
 function state.get_track_clip_index(track_id)
     if track_id ~= "track_v1" then
         return nil
     end
-    return {prev_clip, clip}
+    return {prev_clip, gap_clip, next_clip}
 end
 function state.get_clip_by_id(clip_id)
     for _, c in ipairs(state.get_clips() or {}) do
@@ -124,11 +133,13 @@ local function render_for_edge(edge_entry)
     return handle_rects
 end
 
-local clip_gap_edge = {clip_id = clip.id, edge_type = "gap_before", trim_type = "ripple"}
-local clip_gap_rects = render_for_edge(clip_gap_edge)
+-- Gap clip "in" edge (left boundary of gap)
+local gap_in_edge = {clip_id = gap_clip.id, edge_type = "in", trim_type = "ripple"}
+local gap_in_rects = render_for_edge(gap_in_edge)
 
-local temp_gap_edge = {clip_id = "temp_gap_track_v1_0_2000", edge_type = "gap_before", track_id = "track_v1", trim_type = "ripple"}
-render_for_edge(temp_gap_edge) -- should not error; verifies temp gap edges render
+-- Gap clip "out" edge (right boundary of gap)
+local gap_out_edge = {clip_id = gap_clip.id, edge_type = "out", trim_type = "ripple"}
+local gap_out_rects = render_for_edge(gap_out_edge)
 
 local function get_handle_bounds(rects)
     local min_x, max_x = math.huge, -math.huge
@@ -139,24 +150,21 @@ local function get_handle_bounds(rects)
     return min_x, max_x
 end
 
-local function assert_extends_into_gap(rects, boundary_px, direction, label)
-    local min_x, max_x = get_handle_bounds(rects)
-    if direction == "left" then
-        assert(max_x <= boundary_px, string.format("%s handle should stay on or left of boundary (boundary=%d, max_x=%d)", label, boundary_px, max_x))
-    else
-        assert(min_x >= boundary_px, string.format("%s handle should stay on or right of boundary (boundary=%d, min_x=%d)", label, boundary_px, min_x))
-    end
-end
-
+-- Verify in-edge handle is near the gap's left boundary
 local width = 800
-local gap_before_boundary = state.time_to_pixel(clip.timeline_start, width)
-assert_extends_into_gap(clip_gap_rects, gap_before_boundary, "left", "gap_before")
+local gap_in_boundary = state.time_to_pixel(gap_clip.timeline_start, width)
+local in_min, _ = get_handle_bounds(gap_in_rects)
+assert(math.abs(in_min - gap_in_boundary) < 20,
+    string.format("gap in-edge handle should be near gap start (boundary=%d, handle_min=%d)",
+        gap_in_boundary, in_min))
 
-local clip_gap_after_edge = {clip_id = prev_clip.id, edge_type = "gap_after", trim_type = "ripple"}
-local clip_gap_after_rects = render_for_edge(clip_gap_after_edge)
-local gap_after_boundary = state.time_to_pixel(prev_clip.timeline_start + prev_clip.duration, width)
-assert_extends_into_gap(clip_gap_after_rects, gap_after_boundary, "right", "gap_after")
+-- Verify out-edge handle is near the gap's right boundary
+local gap_out_boundary = state.time_to_pixel(gap_clip.timeline_start + gap_clip.duration, width)
+local _, out_max = get_handle_bounds(gap_out_rects)
+assert(math.abs(out_max - gap_out_boundary) < 20,
+    string.format("gap out-edge handle should be near gap end (boundary=%d, handle_max=%d)",
+        gap_out_boundary, out_max))
 
 timeline = original_timeline
 
-print("✅ timeline view renders handles for selected gap edges with correct orientation, including temp_gap_* ids")
+print("✅ timeline view renders handles for selected gap clip edges with correct orientation")

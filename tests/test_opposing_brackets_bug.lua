@@ -13,7 +13,7 @@ but it should ONLY negate for edges that form an EDIT POINT (adjacent clips, sam
 
 In this test:
 - V2 out ] at t=2600 (lead edge)
-- V1 gap_after [ at t=1500 (NOT adjacent to V2, different track)
+- V1 gap in [ at t=1500 (NOT adjacent to V2, different track)
 
 When dragging right +200:
 - V2 should extend by 200 (correct)
@@ -37,6 +37,9 @@ local db = layout.db
 local clips = layout.clips
 local tracks = layout.tracks
 
+-- Gap on V1 between v1_left (end=1500) and v1_right (start=2500): gap starts at 1500
+local gap_id = layout:gap_id("v1", 1500)
+
 print("BEFORE:")
 print(string.format("  V1 gap:  1500-2500 (1000 frames)"))
 print(string.format("  V2:      1800-2600 (800 frames)"))
@@ -45,7 +48,7 @@ print(string.format("  V2:      1800-2600 (800 frames)"))
 local cmd = Command.create("BatchRippleEdit", layout.project_id)
 cmd:set_parameter("sequence_id", layout.sequence_id)
 cmd:set_parameter("edge_infos", {
-    {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"},
+    {clip_id = gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"},
     {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"}
 })
 cmd:set_parameter("lead_edge", {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"})
@@ -95,10 +98,13 @@ local db_close = layout_close.db
 local clips_close = layout_close.clips
 local tracks_close = layout_close.tracks
 
+-- Gap on V1 between v1_left (end=1500) and v1_right (start=2500): gap starts at 1500
+local gap_id_close = layout_close:gap_id("v1", 1500)
+
 local cmd_close = Command.create("BatchRippleEdit", layout_close.project_id)
 cmd_close:set_parameter("sequence_id", layout_close.sequence_id)
 cmd_close:set_parameter("edge_infos", {
-    {clip_id = clips_close.v1_left.id, edge_type = "gap_after", track_id = tracks_close.v1.id, trim_type = "ripple"},
+    {clip_id = gap_id_close, edge_type = "in", track_id = tracks_close.v1.id, trim_type = "ripple"},
     {clip_id = clips_close.v2.id, edge_type = "out", track_id = tracks_close.v2.id, trim_type = "ripple"}
 })
 cmd_close:set_parameter("lead_edge", {clip_id = clips_close.v2.id, edge_type = "out", track_id = tracks_close.v2.id, trim_type = "ripple"})

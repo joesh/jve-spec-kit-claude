@@ -36,14 +36,14 @@ check("out edge extends duration by delta", new_dur == 105)
 local s, d = Renderer.compute_preview_geometry(nil, "out", 5)
 check("nil clip returns nil", s == nil and d == nil)
 
--- Test 4: compute_preview_geometry with gap_after edge on clip with bad coords returns nil
-local s4, d4 = Renderer.compute_preview_geometry(clip_bad, "out", 5, "gap_after")
-check("gap_after with non-integer coords returns nil", s4 == nil and d4 == nil)
+-- Test 4: compute_preview_geometry with gap clip uses standard in/out edges
+local s4, d4 = Renderer.compute_preview_geometry(clip_bad, "out", 5)
+check("non-integer coords returns nil", s4 == nil and d4 == nil)
 
--- Test 5: gap_after returns zero-width at clip end
-local gap_start, gap_dur = Renderer.compute_preview_geometry(clip_ok, "out", 10, "gap_after")
-check("gap_after positioned at clip end", gap_start == 100)
-check("gap_after has zero duration", gap_dur == 0)
+-- Test 5: gap clip with "out" edge extends duration normally
+local gap_start, gap_dur = Renderer.compute_preview_geometry(clip_ok, "out", 10)
+check("out edge extends duration", gap_dur == 110)
+check("out edge preserves start", gap_start == 0)
 
 if failed > 0 then
     print(string.format("❌ test_edge_drag_renderer_no_fps_fallback.lua: %d passed, %d FAILED", passed, failed))

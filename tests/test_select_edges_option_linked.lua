@@ -66,8 +66,8 @@ command_manager.init("seq1", "proj1")
 -- Mock timeline_state for testing
 local mock_edges = {}
 local mock_clips = {
-    { id = "clip_v", track_id = "trk_v" },
-    { id = "clip_a", track_id = "trk_a" },
+    { id = "clip_v", track_id = "trk_v", timeline_start = 0, duration = 100, clip_kind = "timeline" },
+    { id = "clip_a", track_id = "trk_a", timeline_start = 0, duration = 100, clip_kind = "timeline" },
 }
 
 timeline_state.get_selected_edges = function()
@@ -182,37 +182,32 @@ for _, edge in ipairs(selected) do
 end
 print("✓ Roll trim_type preserved on linked clips")
 
--- Test 6: Roll between clip edge and gap_after expands both edges to linked clips
--- Regression: processed_groups optimization skipped second edge from same clip
-print("\n--- Test 6: Roll with gap_after expands both edges ---")
+-- Test 6: Single out edge with Option expands to linked clips
+-- (Updated for gap-as-clip: no gap_after edge type at end of track.)
+print("\n--- Test 6: Out edge expands to linked clips ---")
 mock_edges = {}
 result = command_manager.execute("SelectEdges", {
     project_id = "proj1",
     sequence_id = "seq1",
     target_edges = {
         { clip_id = "clip_v", edge_type = "out", trim_type = "roll" },
-        { clip_id = "clip_v", edge_type = "gap_after", trim_type = "roll" },
     },
     modifiers = { alt = true },
 })
 assert(result.success, "SelectEdges should succeed")
 
 selected = mock_edges
--- Should have 4 edges: clip_v out, clip_v gap_after, clip_a out, clip_a gap_after
-assert(#selected == 4, string.format("Should have 4 edges (2 per linked clip), got %d", #selected))
+-- Should have 2 edges: clip_v:out + clip_a:out
+assert(#selected == 2, string.format("Should have 2 edges (out per linked clip), got %d", #selected))
 
-local found = { clip_v_out = false, clip_v_gap = false, clip_a_out = false, clip_a_gap = false }
+local found_v = false
+local found_a = false
 for _, edge in ipairs(selected) do
-    if edge.clip_id == "clip_v" and edge.edge_type == "out" then found.clip_v_out = true end
-    if edge.clip_id == "clip_v" and edge.edge_type == "gap_after" then found.clip_v_gap = true end
-    if edge.clip_id == "clip_a" and edge.edge_type == "out" then found.clip_a_out = true end
-    if edge.clip_id == "clip_a" and edge.edge_type == "gap_after" then found.clip_a_gap = true end
-    assert(edge.trim_type == "roll", string.format("Edge %s:%s should be roll", edge.clip_id, edge.edge_type))
+    if edge.clip_id == "clip_v" and edge.edge_type == "out" then found_v = true end
+    if edge.clip_id == "clip_a" and edge.edge_type == "out" then found_a = true end
 end
-assert(found.clip_v_out, "Missing clip_v out edge")
-assert(found.clip_v_gap, "Missing clip_v gap_after edge")
-assert(found.clip_a_out, "Missing clip_a out edge")
-assert(found.clip_a_gap, "Missing clip_a gap_after edge")
-print("✓ Roll with gap_after: both edges expanded to linked clips")
+assert(found_v, "Missing clip_v out edge")
+assert(found_a, "Missing clip_a out edge")
+print("✓ Out edge expands to linked clips")
 
 print("\n✅ test_select_edges_option_linked.lua passed")

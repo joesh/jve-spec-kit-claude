@@ -18,8 +18,11 @@ local tracks = layout.tracks
 local executor = command_manager.get_executor("BatchRippleEdit")
 assert(executor, "BatchRippleEdit executor missing")
 
+-- v1_left ends at 1500, gap to v1_right at 3500 → gap starts at 1500
+local v1_gap_id = layout:gap_id("v1", 1500)
+
 local edges = {
-    {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"},
+    {clip_id = v1_gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"},
     {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"}
 }
 

@@ -63,10 +63,10 @@ local function edge_point_frames(edge, clip)
     local start_frames = clip.timeline_start
     local end_frames = start_frames + clip.duration
     local edge_type = edge and edge.edge_type
-    if edge_type == "in" or edge_type == "gap_before" then
+    if edge_type == "in" then
         return start_frames
     end
-    if edge_type == "out" or edge_type == "gap_after" then
+    if edge_type == "out" then
         return end_frames
     end
     error("timeline_active_region: unsupported edge_type " .. tostring(edge_type))
@@ -146,8 +146,9 @@ function M.compute_for_edge_drag(state_module, edges, opts)
             local idx = binary_search_first_start_on_or_after(track_clips, point)
             local prev_clip = (idx > 1) and track_clips[idx - 1] or nil
             local next_clip = (idx <= #track_clips) and track_clips[idx] or nil
-            local force_prev = (edge.edge_type == "gap_before")
-            local force_next = (edge.edge_type == "gap_after")
+            local is_gap_clip = clip.clip_kind == "gap"
+            local force_prev = is_gap_clip and edge.edge_type == "out"
+            local force_next = is_gap_clip and edge.edge_type == "in"
             min_frames, max_frames = include_neighbor_if_close(min_frames, max_frames, prev_clip, point, pad_frames, force_prev)
             min_frames, max_frames = include_neighbor_if_close(min_frames, max_frames, next_clip, point, pad_frames, force_next)
         end

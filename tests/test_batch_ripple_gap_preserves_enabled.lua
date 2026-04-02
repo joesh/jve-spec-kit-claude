@@ -45,9 +45,12 @@ assert(db:exec(string.format([[
 
 command_manager.init("default_sequence", "default_project")
 
+-- left ends at 2000, gap is 2000..5000 → gap_id = gap_track_v1_2000
+local gap_id = string.format("gap_%s_%d", "track_v1", 2000)
+
 local cmd = Command.create("BatchRippleEdit", "default_project")
 cmd:set_parameter("edge_infos", {
-    {clip_id = "right", edge_type = "gap_before", track_id = "track_v1"},
+    {clip_id = gap_id, edge_type = "out", track_id = "track_v1"},
 })
 cmd:set_parameter("delta_frames", -3000) -- Drag ] left to close the 3s gap.
 cmd:set_parameter("sequence_id", "default_sequence")

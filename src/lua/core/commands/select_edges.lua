@@ -23,33 +23,34 @@ local SPEC = {
     },
 }
 
---- Determine the "side" of an edge (downstream = out/gap_after, upstream = in/gap_before)
+--- Determine the "side" of an edge (downstream = out, upstream = in).
+-- With gap-as-clip, all edges are standard in/out on either media or gap clips.
 local function edge_to_side(edge_type)
-    if edge_type == "out" or edge_type == "gap_after" then
+    if edge_type == "out" then
         return "downstream"
-    elseif edge_type == "in" or edge_type == "gap_before" then
+    elseif edge_type == "in" then
         return "upstream"
     end
     return nil
 end
 
 --- Determine if edges form a roll selection (both edges at same boundary).
---- A roll requires 2+ edges with at least one "out" and one "in" (or gap equivalents),
+--- A roll requires 2+ edges with at least one "out" and one "in",
 --- all with trim_type="roll".
 local function is_roll_selection(edges)
     if #edges < 2 then return false end
 
-    local has_out = false  -- out or gap_before (left side of boundary)
-    local has_in = false   -- in or gap_after (right side of boundary)
+    local has_out = false
+    local has_in = false
     local all_roll = true
 
     for _, edge in ipairs(edges) do
         if edge.trim_type ~= "roll" then
             all_roll = false
         end
-        if edge.edge_type == "out" or edge.edge_type == "gap_before" then
+        if edge.edge_type == "out" then
             has_out = true
-        elseif edge.edge_type == "in" or edge.edge_type == "gap_after" then
+        elseif edge.edge_type == "in" then
             has_in = true
         end
     end

@@ -1,5 +1,8 @@
 #!/usr/bin/env luajit
 
+-- Updated for gap-as-clip: gap_after on v1_left → gap clip "in" edge;
+-- implied gap_before on v2_shift → implied gap clip "out" edge
+
 require("test_env")
 
 local Command = require("command")
@@ -25,9 +28,12 @@ do
     local executor = command_manager.get_executor("BatchRippleEdit")
     assert(executor, "BatchRippleEdit executor missing")
 
+    -- v1_left ends at 1000, gap is 1000..2000 → gap_id = gap_track_v1_1000
+    local gap_id = layout:gap_id("v1", 1000)
+
     local lead_edge = {
-        clip_id = layout.clips.v1_left.id,
-        edge_type = "gap_after", -- normalized "in"
+        clip_id = gap_id,
+        edge_type = "in",
         track_id = layout.tracks.v1.id,
         trim_type = "ripple",
     }
@@ -44,7 +50,10 @@ do
     assert(payload.clamped_delta_ms == 0,
         string.format("Expected clamp to 0 due to zero-length gap; got clamped_delta_ms=%s", tostring(payload.clamped_delta_ms)))
 
-    local implied_key = string.format("%s:%s", layout.clips.v2_shift.id, "gap_before")
+    -- v2_prefix ends at 1400, v2_shift starts at 1400 → zero gap at 1400
+    -- inject_implicit_gap_edges creates implied zero-length gap with "in" edge
+    local implied_gap_id = layout:gap_id("v2", 1400)
+    local implied_key = string.format("%s:%s", implied_gap_id, "in")
     assert(payload.clamped_edges and payload.clamped_edges[implied_key],
         "Expected implied zero-gap edge to be reported as clamped: " .. implied_key)
 

@@ -369,6 +369,17 @@ function M.create(opts)
         return timeline_state
     end
 
+    --- Compute the gap clip ID for a gap at a given position on a track.
+    -- Gap IDs follow the format: gap_<track_id>_<timeline_start>
+    -- @param track_key string Track key (e.g., "v1") — resolved to track.id
+    -- @param gap_start number Timeline position where the gap starts (integer frames)
+    -- @return string Gap clip ID
+    function layout:gap_id(track_key, gap_start)
+        local track = self.tracks[track_key]
+        assert(track, "gap_id: unknown track key '" .. tostring(track_key) .. "'")
+        return string.format("gap_%s_%d", track.id, gap_start)
+    end
+
     return layout
 end
 

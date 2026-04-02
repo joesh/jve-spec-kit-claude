@@ -38,20 +38,9 @@ function M.compute_edge_boundary_time(edge_info, original_states_map)
     assert(original_states_map, "edge_info.compute_edge_boundary_time: original_states_map is nil")
     local clip_state = original_states_map[edge_info.clip_id]
     assert(clip_state, string.format("edge_info.compute_edge_boundary_time: no original state for clip %s", tostring(edge_info.clip_id)))
-    local is_temp_gap = type(edge_info.clip_id) == "string" and edge_info.clip_id:find("^temp_gap_")
     local raw_edge = edge_info.edge_type
     local normalized_edge = edge_info.normalized_edge or edge_utils.to_bracket(raw_edge)
-    if raw_edge == "gap_before" then
-        if is_temp_gap then
-            return clip_state.timeline_start + clip_state.duration
-        end
-        return clip_state.timeline_start
-    elseif raw_edge == "gap_after" then
-        if is_temp_gap then
-            return clip_state.timeline_start
-        end
-        return clip_state.timeline_start + clip_state.duration
-    elseif normalized_edge == "in" then
+    if normalized_edge == "in" then
         return clip_state.timeline_start
     elseif normalized_edge == "out" then
         return clip_state.timeline_start + clip_state.duration

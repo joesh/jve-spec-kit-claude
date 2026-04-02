@@ -28,6 +28,7 @@ local command_manager = require("core.command_manager")
 local Command = require("command")
 local Signals = require("core.signals")
 local project_gen = require("core.project_generation")
+local gap_lifecycle = require("core.gap_lifecycle")
 
 local persist_timer = nil
 local persist_dirty = false
@@ -43,6 +44,68 @@ local function create_single_shot_timer(delay_ms, callback)
     return nil
 end
 
+--- Recompute gap clips for all tracks.
+-- Strips existing gap clips, recomputes from media clip positions, appends.
+-- Called after loading clips from DB or after any mutation changes clip positions.
+local function recompute_gap_clips()
+    local clips = data.state.clips
+    local tracks = data.state.tracks
+    if not clips or not tracks or #tracks == 0 then return end
+
+    local seq_fr = data.state.sequence_frame_rate
+    -- sequence_frame_rate may not be set yet during early init (before sequence load).
+    -- Only assert when we have an active sequence — otherwise silent skip is correct.
+    if not seq_fr then
+        assert(not data.state.sequence_id or data.state.sequence_id == "",
+            "recompute_gap_clips: sequence_frame_rate is nil but sequence_id is set")
+        return
+    end
+
+    -- Strip existing gap clips from the list
+    local media_only = {}
+    for _, clip in ipairs(clips) do
+        if clip.clip_kind ~= "gap" then
+            table.insert(media_only, clip)
+        end
+    end
+    data.state.clips = media_only
+    clips = media_only
+
+    -- Build per-track sorted clip lists (media clips only)
+    local track_clips = {}
+    for _, clip in ipairs(clips) do
+        if clip.track_id then
+            local list = track_clips[clip.track_id]
+            if not list then
+                list = {}
+                track_clips[clip.track_id] = list
+            end
+            table.insert(list, clip)
+        end
+    end
+
+    -- Sort each track's clips by timeline_start
+    for _, list in pairs(track_clips) do
+        table.sort(list, function(a, b)
+            if a.timeline_start == b.timeline_start then
+                return (a.id or "") < (b.id or "")
+            end
+            return a.timeline_start < b.timeline_start
+        end)
+    end
+
+    -- Compute gaps for each track and append to clip list
+    for _, track in ipairs(tracks) do
+        if track.id then
+            local sorted = track_clips[track.id] or {}
+            local gaps = gap_lifecycle.compute_gaps_for_track(track.id, sorted, seq_fr)
+            for _, gap in ipairs(gaps) do
+                table.insert(clips, gap)
+            end
+        end
+    end
+end
+
 local TRACK_HEIGHT_TEMPLATE_KEY = "track_height_template"
 
 local function clamp_track_height(height)
@@ -50,40 +113,6 @@ local function clamp_track_height(height)
     local clamped = math.floor(height)
     if clamped < 24 then clamped = 24 end
     return clamped
-end
-
-local TEMP_GAP_PREFIX = "temp_gap_"
-
-local function parse_temp_gap_identifier(clip_id)
-    if type(clip_id) ~= "string" then return nil end
-    if not clip_id:find("^" .. TEMP_GAP_PREFIX) then return nil end
-    local payload = clip_id:sub(#TEMP_GAP_PREFIX + 1)
-    local start_str, end_str = payload:match("_(%-?%d+)_(-?%d+)$")
-    if not start_str or not end_str then return nil end
-    local track_id = payload:sub(1, #payload - (#start_str + #end_str + 2))
-    if not track_id or track_id == "" then return nil end
-    return track_id, tonumber(start_str), tonumber(end_str)
-end
-
-local function resolve_gap_clip_id(edge)
-    if not edge or not edge.edge_type then return nil end
-    local track_id, start_frames, end_frames = parse_temp_gap_identifier(edge.clip_id)
-    if not track_id then return nil end
-    for _, clip in ipairs(data.state.clips or {}) do
-        if clip.track_id == track_id and type(clip.timeline_start) == "number" and type(clip.duration) == "number" then
-            if edge.edge_type == "gap_after" then
-                local clip_end = clip.timeline_start + clip.duration
-                if clip_end == start_frames then
-                    return clip.id
-                end
-            elseif edge.edge_type == "gap_before" then
-                if clip.timeline_start == end_frames then
-                    return clip.id
-                end
-            end
-        end
-    end
-    return nil
 end
 
 local function build_track_height_map()
@@ -178,16 +207,16 @@ local function flush_state_to_db()
     local edge_descriptors = {}
     for _, edge in ipairs(data.state.selected_edges) do
         if edge and edge.clip_id and edge.edge_type then
-            local clip_id = edge.clip_id
-            if type(clip_id) == "string" and clip_id:find("^" .. TEMP_GAP_PREFIX) then
-                local resolved = resolve_gap_clip_id(edge)
-                if resolved then clip_id = resolved end
+            -- Skip gap clip edges — gap clips are in-memory only, not persisted
+            if type(edge.clip_id) == "string" and edge.clip_id:find("^gap_") then
+                goto continue_edge_persist
             end
             table.insert(edge_descriptors, {
-                clip_id = clip_id,
+                clip_id = edge.clip_id,
                 edge_type = edge.edge_type,
                 trim_type = edge.trim_type
             })
+            ::continue_edge_persist::
         end
     end
     local success_edges, edges_json = pcall(json.encode, edge_descriptors)
@@ -309,6 +338,10 @@ function M.init(sequence_id, project_id)
     assert(sequence.frame_rate.fps_numerator and sequence.frame_rate.fps_denominator,
         string.format("FATAL: Sequence %s has NULL frame rate in database", tostring(sequence_id)))
 
+    -- Compute and inject in-memory gap clips for all tracks
+    recompute_gap_clips()
+    clip_state.invalidate_indexes()
+
     -- Restore Playhead from sequence model
     data.state.playhead_position = sequence.playhead_position
 
@@ -337,15 +370,6 @@ function M.init(sequence_id, project_id)
             for _, edge in ipairs(edges) do
                 if type(edge) == "table" and edge.clip_id and edge.edge_type then
                     local clip_obj = clip_state.get_by_id(edge.clip_id)
-                    if not clip_obj and type(edge.clip_id) == "string" and edge.clip_id:find("^" .. TEMP_GAP_PREFIX) then
-                        local resolved = resolve_gap_clip_id(edge)
-                        if resolved then
-                            clip_obj = clip_state.get_by_id(resolved)
-                            if clip_obj then
-                                edge.clip_id = resolved
-                            end
-                        end
-                    end
                     if clip_obj then
                         table.insert(data.state.selected_edges, {
                             clip_id = edge.clip_id,
@@ -407,6 +431,7 @@ function M.reload_clips(target_sequence_id, opts)
     end
 
     data.state.clips = db.load_clips(active)
+    recompute_gap_clips()
     clip_state.invalidate_indexes()
 
     -- Refresh selection objects
@@ -480,5 +505,7 @@ Signals.connect("media_changed", function(_changed_media_ids)
     -- Propagate to playback engine so TMB re-fetches clips with updated media paths
     Signals.emit("content_changed", active)
 end)
+
+M.recompute_gap_clips = recompute_gap_clips
 
 return M

@@ -13,10 +13,13 @@ local layout = ripple_layout.create({db_path = TEST_DB, clips = { v2 = {timeline
 local clips = layout.clips
 local tracks = layout.tracks
 
+-- Gap on V1 between v1_left (end=1500) and v1_right (start=3500): gap starts at 1500
+local gap_id = layout:gap_id("v1", 1500)
+
 local cmd = Command.create("BatchRippleEdit", layout.project_id)
 cmd:set_parameter("sequence_id", layout.sequence_id)
 cmd:set_parameter("edge_infos", {
-    {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"},
+    {clip_id = gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"},
     {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"}
 })
 cmd:set_parameter("lead_edge", {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"})

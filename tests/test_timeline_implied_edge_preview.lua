@@ -61,7 +61,10 @@ function view.get_track_y_by_id(track_id)
     return entry and entry.y or -1
 end
 
-local gap_edge = {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"}
+local v1_gap_start = clips.v1_left.timeline_start + clips.v1_left.duration
+local v1_gap_id = layout:gap_id("v1", v1_gap_start)
+local v2_gap_id = layout:gap_id("v2", 0)  -- gap before V2 starts at 0 (no preceding clip)
+local gap_edge = {clip_id = v1_gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"}
 
 local function build_shift_payload(shift_frames, clamp_map)
     local new_start = v2_clip.timeline_start + shift_frames
@@ -72,8 +75,8 @@ local function build_shift_payload(shift_frames, clamp_map)
     if shift_sign ~= 0 and global_sign ~= 0 and shift_sign ~= global_sign then
         expected_bracket = (expected_bracket == "in") and "out" or "in"
     end
-    local expected_raw = (expected_bracket == "in") and "gap_after" or "gap_before"
-    local implied_key = string.format("%s:%s", clips.v2.id, expected_raw)
+    local expected_raw = expected_bracket  -- in new model, raw == normalized for gap clips
+    local implied_key = string.format("%s:%s", v2_gap_id, expected_raw)
     local selected_key = string.format("%s:%s", gap_edge.clip_id, gap_edge.edge_type)
     local limiter = clamp_map and clamp_map[implied_key] == true
     return {
@@ -192,7 +195,7 @@ if shift_sign ~= 0 and global_sign ~= 0 and shift_sign ~= global_sign then
 end
 for _, edge in ipairs(implied_meta) do
     if edge and edge.is_implied then
-        local expected_raw = (expected_bracket == "in") and "gap_after" or "gap_before"
+        local expected_raw = expected_bracket  -- in new model, raw == normalized for gap clips
         assert(edge.raw_edge_type == expected_raw,
             string.format("Implied edge should use gap geometry; got %s", tostring(edge.raw_edge_type)))
         assert(edge.normalized_edge == expected_bracket,
@@ -205,7 +208,7 @@ local implied_available = count_track_rects(drawn, tracks.v2.id, implied_availab
 assert(implied_available > 0,
     "Tracks shifted by ripple should render implied handles in a dimmed available color")
 
-local clamp_key = string.format("%s:%s", clips.v2.id, "gap_before")
+local clamp_key = string.format("%s:%s", v2_gap_id, "out")
 local drawn_clamped = select(1, render_with_payload(build_shift_payload(200, {[clamp_key] = true})))
 local implied_limit = count_track_rects(drawn_clamped, tracks.v2.id, implied_limit_color)
 assert(implied_limit > 0,

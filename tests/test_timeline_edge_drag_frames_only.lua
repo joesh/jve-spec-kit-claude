@@ -117,7 +117,7 @@ local function new_view(state)
     }
 end
 
-local edge = {clip_id = "clip_b", edge_type = "gap_before", trim_type = "ripple", track_id = "track_v1"}
+local edge = {clip_id = "clip_b", edge_type = "in", trim_type = "ripple", track_id = "track_v1"}
 
 local original_pick_edges = edge_picker.pick_edges
 local original_to_ms = time_utils.to_milliseconds

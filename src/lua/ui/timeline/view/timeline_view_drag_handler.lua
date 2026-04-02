@@ -241,7 +241,11 @@ function M.handle_release(view, drag_state, modifiers)
 
         if #edges == 0 then goto cleanup end
 
-        local delta_frames = drag_state.preview_clamped_delta_frames or drag_state.delta_frames
+        -- Use the original unclamped delta. BatchRippleEdit will clamp it
+        -- during execution. Using the preview's clamped output as input causes
+        -- double-clamping: constraints recomputed on an already-clamped value
+        -- can converge to 0.
+        local delta_frames = drag_state.delta_frames
         assert(type(delta_frames) == "number", "timeline_view_drag_handler: delta_frames must be integer for edge drag")
         if delta_frames == 0 then
             goto cleanup

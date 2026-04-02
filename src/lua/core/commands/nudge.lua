@@ -180,7 +180,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 
                 register_original_state(clip)
 
-                if edge_info.edge_type == "in" or edge_info.edge_type == "gap_before" then
+                if edge_info.edge_type == "in" then
                     -- Nudge 'in' edge means moving it right (shortening) or left (lengthening)
                     local new_timeline_start = clip.timeline_start + nudge_frames
                     local new_duration = clip.duration - nudge_frames
@@ -193,7 +193,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     clip.duration = new_duration
                     clip.source_in = new_source_in
 
-                elseif edge_info.edge_type == "out" or edge_info.edge_type == "gap_after" then
+                elseif edge_info.edge_type == "out" then
                     -- Nudge 'out' edge means moving it right (lengthening) or left (shortening)
                     local new_duration = clip.duration + nudge_frames
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env luajit
 
+-- Updated for gap-as-clip: gap edges reference gap clip IDs
+
 package.path = "./?.lua;./src/lua/?.lua;" .. package.path
 
 require("test_env")
@@ -55,8 +57,11 @@ local _ = layout.db  -- luacheck: ignore 211
 local clips = layout.clips
 local tracks = layout.tracks
 
+-- v1_left ends at 900, gap is 900..1500 → gap_id = gap_track_v1_900
+local gap_id = layout:gap_id("v1", 900)
+
 local pre_selected = {
-    {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"},
+    {clip_id = gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"},
     {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"}
 }
 last_edge_selection = pre_selected

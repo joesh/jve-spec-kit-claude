@@ -47,7 +47,7 @@ command_manager.init("default_sequence", "default_project")
 
 local cmd = Command.create("BatchRippleEdit", "default_project")
 cmd:set_parameter("edge_infos", {
-    {clip_id = "clip_c1", edge_type = "gap_before", track_id = "track_v1"},
+    {clip_id = "gap_track_v1_0", edge_type = "out", track_id = "track_v1"},
 })
 cmd:set_parameter("delta_frames", -6000) -- Close g1 entirely (leftmost gap).
 cmd:set_parameter("sequence_id", "default_sequence")

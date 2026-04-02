@@ -19,11 +19,14 @@ local db = layout.db
 local clips = layout.clips
 local tracks = layout.tracks
 
--- Select V1 gap-after edge and V2 out edge; drag V2 ] left by 200 frames.
+-- Gap on V1 between v1_left (end=1500) and v1_right (start=2600): gap starts at 1500
+local gap_id = layout:gap_id("v1", 1500)
+
+-- Select V1 gap in-edge and V2 out edge; drag V2 ] left by 200 frames.
 local cmd = Command.create("BatchRippleEdit", layout.project_id)
 cmd:set_parameter("sequence_id", layout.sequence_id)
 cmd:set_parameter("edge_infos", {
-    {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"},
+    {clip_id = gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"},
     {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"}
 })
 cmd:set_parameter("lead_edge", {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"})

@@ -74,8 +74,8 @@ local initial_count = clip_count()
 
 local cmd = Command.create("BatchRippleEdit", "default_project")
 cmd:set_parameter("edge_infos", {
-    {clip_id = "v1_right", edge_type = "gap_before", track_id = "track_v1"},
-    {clip_id = "v2_right", edge_type = "gap_before", track_id = "track_v2"},
+    {clip_id = "gap_track_v1_60", edge_type = "out", track_id = "track_v1"},
+    {clip_id = "gap_track_v2_90", edge_type = "out", track_id = "track_v2"},
 })
 cmd:set_parameter("delta_frames", -60) -- 2000ms @30fps
 cmd:set_parameter("sequence_id", "default_sequence")
@@ -90,11 +90,11 @@ assert(undo.success, undo.error_message or "Undo failed for batch ripple")
 assert(clip_count() == initial_count, string.format("Undo should restore original clip count (%d)", initial_count))
 
 -- Ensure no temp gap ids exist
-local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE id LIKE 'temp_gap_%'")
-assert(stmt:exec() and stmt:next(), "Failed to query temp gap clips")
-local temp_count = tonumber(stmt:value(0)) or 0
+local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE id LIKE 'gap_%'")
+assert(stmt:exec() and stmt:next(), "Failed to query gap clips")
+local gap_count = tonumber(stmt:value(0)) or 0
 stmt:finalize()
-assert(temp_count == 0, "Undo should not leave temp_gap clips persisted")
+assert(gap_count == 0, "Undo should not leave gap clips persisted")
 
 os.remove(TEST_DB)
 print("✅ Batch ripple undo does not persist gap placeholders")

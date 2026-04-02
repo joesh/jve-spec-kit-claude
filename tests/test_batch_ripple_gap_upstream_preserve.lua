@@ -52,7 +52,7 @@ command_manager.init("seq", "proj")
 local cmd = Command.create("BatchRippleEdit", "proj")
 cmd:set_parameter("sequence_id", "seq")
 cmd:set_parameter("edge_infos", {
-    {clip_id = "clip_v2_right", edge_type = "gap_before", track_id = "v2", trim_type = "ripple"}
+    {clip_id = "gap_v2_820", edge_type = "out", track_id = "v2", trim_type = "ripple"}
 })
 cmd:set_parameter("delta_frames", -120)
 

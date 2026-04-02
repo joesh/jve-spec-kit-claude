@@ -119,6 +119,12 @@ local function find_clip_under_cursor(view, x, y, width, height)
         if type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
             goto continue_clip
         end
+        -- Gap clips use the separate gap selection path (selected_gaps),
+        -- not the clip selection path. Returning them here would cause
+        -- DeleteClip to try deleting an in-memory-only clip from DB.
+        if clip.clip_kind == "gap" then
+            goto continue_clip
+        end
         local start_frames = clip.timeline_start
         if start_frames > target_frames then
             break
@@ -143,28 +149,23 @@ local function find_gap_at_time(view, track_id, time_frame)
         return nil
     end
 
-    local previous_end = 0
-    local previous_clip_id = nil
-
+    -- With gap-as-clip, gap clips are in the track list. Find the gap clip
+    -- at the given time position directly.
     for _, clip in ipairs(clips_on_track) do
-        if type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
-            goto continue_clip
-        end
-        local gap_start = previous_end
-        local gap_end = clip.timeline_start
-        local gap_duration = gap_end - gap_start
-        if gap_duration > 0 and time_frame >= gap_start and time_frame < gap_end then
+        if clip.clip_kind == "gap"
+            and type(clip.timeline_start) == "number"
+            and type(clip.duration) == "number"
+            and clip.duration > 0
+            and time_frame >= clip.timeline_start
+            and time_frame < clip.timeline_start + clip.duration then
             return {
                 track_id = track_id,
-                start_value = gap_start,
-                duration = gap_duration,
-                prev_clip_id = previous_clip_id,
-                next_clip_id = clip.id
+                start_value = clip.timeline_start,
+                duration_value = clip.duration,
+                duration = clip.duration,
+                gap_clip_id = clip.id,
             }
         end
-        previous_end = clip.timeline_start + clip.duration
-        previous_clip_id = clip.id
-        ::continue_clip::
     end
     return nil
 end
@@ -571,8 +572,6 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                         if c and c.timeline_start and c.duration then
                             if edge.edge_type == "in" then edge.original_time = c.timeline_start
                             elseif edge.edge_type == "out" then edge.original_time = c.timeline_start + c.duration
-                            elseif edge.edge_type == "gap_before" then edge.original_time = c.timeline_start
-                            elseif edge.edge_type == "gap_after" then edge.original_time = c.timeline_start + c.duration
                             end
                         end
                     end
@@ -679,13 +678,10 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                         cursor = "split_h"
                     else
                         -- Single edge selection: cursor based on edge type
-                        -- From misc_bindings.cpp: trim_left = ] bracket, trim_right = [ bracket
-                        -- Must match renderer logic (timeline_view_renderer.lua:429):
-                        --   is_in = (normalized_edge == "in") or (raw_edge_type == "gap_after")
-                        -- So: "in" or "gap_after" → [ bracket → trim_right
-                        --     "out" or "gap_before" → ] bracket → trim_left
+                        -- "in" → [ bracket → trim_right
+                        -- "out" → ] bracket → trim_left
                         local sel = hover_pick.selection[1]
-                        if sel and (sel.edge_type == "in" or sel.edge_type == "gap_after") then
+                        if sel and sel.edge_type == "in" then
                             cursor = "trim_right"
                         else
                             cursor = "trim_left"

@@ -1,5 +1,7 @@
 #!/usr/bin/env luajit
 
+-- Updated for gap-as-clip: gap_after on v1_left → gap clip "in" edge
+
 require("test_env")
 
 local ripple_layout = require("tests.helpers.ripple_layout")
@@ -34,10 +36,13 @@ assert(initial_gap == 2000,
 assert(initial_right_start == 3500,
     string.format("test precondition failed: expected V1 right start 3500, got %d", initial_right_start))
 
+-- v1_left ends at 1500, gap is 1500..3500 → gap_id = gap_track_v1_1500
+local gap_id = layout:gap_id("v1", 1500)
+
 local cmd = Command.create("BatchRippleEdit", layout.project_id)
 cmd:set_parameter("sequence_id", layout.sequence_id)
 cmd:set_parameter("edge_infos", {
-    {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"},
+    {clip_id = gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"},
     {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"}
 })
 cmd:set_parameter("lead_edge", {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"})

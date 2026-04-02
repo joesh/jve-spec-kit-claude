@@ -158,27 +158,16 @@ end
 -- Compute new start/duration for preview overlays. Gap edges are treated as first-class
 -- clip handles so previews stay anchored at the dragged boundary.
 -- All coordinates are integer frames.
-function Renderer.compute_preview_geometry(clip, edge_type, delta, raw_edge_type)
+function Renderer.compute_preview_geometry(clip, edge_type, delta, _raw_edge_type)
     if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
         return nil, nil
     end
-    local raw_edge = raw_edge_type or edge_type
     local normalized_edge = edge_utils.to_bracket(edge_type)
     local start = clip.timeline_start
     local duration = clip.duration
     local delta_frames = type(delta) == "number" and delta or 0
 
-    -- Gap geometry: Gaps are rendered at the *boundary* they represent
-    -- gap_after: Positioned at end of clip (left boundary of gap space)
-    -- gap_before: Positioned at start of clip (right boundary of gap space)
-    -- Both have duration=0 since they're just boundary markers, not spans
-    if raw_edge == "gap_after" then
-        start = clip.timeline_start + clip.duration  -- End of clip stays anchored for [
-        duration = 0
-    elseif raw_edge == "gap_before" then
-        start = clip.timeline_start + delta_frames  -- Gap-before (]) follows drag delta
-        duration = 0
-    elseif normalized_edge == "in" then
+    if normalized_edge == "in" then
         duration = duration - delta_frames
     elseif normalized_edge == "out" then
         duration = duration + delta_frames

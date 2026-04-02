@@ -33,19 +33,9 @@ for _, p in ipairs(zero_previews) do
     assert(p.at_limit == false, "zero delta should not be marked at_limit")
 end
 
--- Regression: gap edges should behave like anchored clip handles that move with the drag delta.
-local clip = {
-    timeline_start = 100,
-    duration = 200
-}
-local delta = 24 -- 1 second
-local gap_start, gap_dur = edge_drag_renderer.compute_preview_geometry(clip, "gap_after", delta)
-local expected_gap_anchor = clip.timeline_start + clip.duration
-assert(gap_start == expected_gap_anchor,
-    string.format("gap_after preview should stay anchored at clip out-point; expected %d got %d", expected_gap_anchor, gap_start or -1))
-assert(gap_dur == 0, "gap preview geometry should have zero width (handle only)")
-
 -- Regression: in-edge previews must shift their start positions when trimming.
+local clip = { timeline_start = 100, duration = 200 }
+local delta = 24
 local in_start, in_duration = edge_drag_renderer.compute_preview_geometry(clip, "in", delta)
 local expected_in_start = clip.timeline_start
 assert(in_start == expected_in_start,
