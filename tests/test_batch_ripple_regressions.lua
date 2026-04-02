@@ -395,11 +395,10 @@ do
 
 	    assert(math.floor(payload.clamped_delta_ms) == 200,
 	        "Ripple should clamp to the available upstream gap on V2")
-    -- V2 gap between v2_upstream (end=2400) and v2_mid (start=2600): gap_track_v2_2400
-    local implied_gap_id = string.format("gap_%s_%d", layout.tracks.v2.id, 2400)
-    local implied_key = string.format("%s:%s", implied_gap_id, "out")
+    -- The blocking edge is v2_upstream's out edge (its end at 2400 prevents further leftward shift)
+    local implied_key = string.format("%s:%s", layout.clips.v2_upstream.id, "out")
     assert(payload.clamped_edges and payload.clamped_edges[implied_key],
-        "Blocking cross-track gap edge must be reported in clamped_edges")
+        "Blocking cross-track clip edge must be reported in clamped_edges")
 
     layout:cleanup()
 end

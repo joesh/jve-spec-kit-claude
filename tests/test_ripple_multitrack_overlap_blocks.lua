@@ -78,12 +78,17 @@ end
 
 local db = setup_db("/tmp/jve/test_ripple_multitrack_overlap_blocks.db")
 
--- Drag gap_before on both right clips (BatchRippleEdit), large delta. A single delta is used,
--- so clamp must pick the tightest gap (V2's 4s) to keep tracks in sync.
+-- Gap on V1 between v1_left (end=4000) and v1_right (start=8000): gap_track_v1_4000
+-- Gap on V2 between v2_left (end=6000) and v2_right (start=9000): gap_track_v2_6000
+local v1_gap_id = string.format("gap_track_v1_%d", 4000)
+local v2_gap_id = string.format("gap_track_v2_%d", 6000)
+
+-- Drag gap out-edge on both right clips (BatchRippleEdit), large delta. A single delta is used,
+-- so clamp must pick the tightest gap (V2's 3s) to keep tracks in sync.
 local cmd = Command.create("BatchRippleEdit", "default_project")
 cmd:set_parameter("edge_infos", {
-    {clip_id = "v1_right", edge_type = "gap_before", track_id = "track_v1"},
-    {clip_id = "v2_right", edge_type = "gap_before", track_id = "track_v2"},
+    {clip_id = v1_gap_id, edge_type = "out", track_id = "track_v1"},
+    {clip_id = v2_gap_id, edge_type = "out", track_id = "track_v2"},
 })
 cmd:set_parameter("delta_frames", -6000) -- Drag ] LEFT to close both gaps (clamp to 3s)
 cmd:set_parameter("sequence_id", "default_sequence")

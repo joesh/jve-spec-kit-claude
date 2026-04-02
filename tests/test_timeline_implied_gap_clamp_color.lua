@@ -68,9 +68,12 @@ timeline = {
     update = function() end
 }
 
+-- Gap before v1_right: v1_left ends at 1500, v1_right starts at 4200 → gap starts at 1500
+local v1_gap_start = clips.v1_left.timeline_start + clips.v1_left.duration
+local v1_gap_id = layout:gap_id("v1", v1_gap_start)
 local gap_edge = {
-    clip_id = clips.v1_right.id,
-    edge_type = "gap_before",
+    clip_id = v1_gap_id,
+    edge_type = "out",
     track_id = tracks.v1.id,
     trim_type = "ripple"
 }
@@ -103,7 +106,10 @@ local avail_color = timeline_state.colors.edge_selected_available or "#00ff00"
 local implied_dim_factor = 0.55
 local implied_limit_color = color_utils.dim_hex(limit_color, implied_dim_factor)
 
-assert((view.drag_state.clamped_edges or {})[string.format("%s:%s", clips.v2_shift.id, "gap_before")],
+-- Gap before v2_shift: v2_blocker ends at 4000, v2_shift starts at 4400 → gap starts at 4000
+local v2_gap_start = clips.v2_blocker.timeline_start + clips.v2_blocker.duration
+local v2_gap_id = layout:gap_id("v2", v2_gap_start)
+assert((view.drag_state.clamped_edges or {})[string.format("%s:%s", v2_gap_id, "out")],
     "Dry run should attribute clamp to the implied downstream gap edge")
 
 local dragged_limit = count_track_colors(tracks.v1.id, limit_color)

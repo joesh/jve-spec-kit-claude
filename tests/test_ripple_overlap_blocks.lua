@@ -88,11 +88,14 @@ end
 local function run_case(db_path, use_batch)
     local db_conn = seed_db(db_path)
 
+    -- Gap between clip_left (end=2000) and clip_right (start=3000): gap_track_v1_2000
+    local gap_id = string.format("gap_track_v1_%d", 2000)
+
     local cmd
     if use_batch then
         cmd = Command.create("BatchRippleEdit", "default_project")
         cmd:set_parameter("edge_infos", {
-            {clip_id = "clip_right", edge_type = "gap_before", track_id = "track_v1"}
+            {clip_id = gap_id, edge_type = "out", track_id = "track_v1"}
         })
     else
         cmd = Command.create("RippleEdit", "default_project")
@@ -127,7 +130,7 @@ assert(start_single == 2000, "single ripple should clamp to avoid overlapping le
 
 -- Batch ripple (single edge in batch path) uses the same clamp rules
 local start_batch = run_case("/tmp/jve/test_ripple_overlap_batch.db", true)
-assert(start_batch == 2000, "batch ripple should clamp gap-before edges identically to single ripple")
+assert(start_batch == 2000, "batch ripple should clamp gap out-edge identically to single ripple")
 
 -- Zero-gap: clamp to no movement when clips touch
 local function run_zero_gap(db_path)
