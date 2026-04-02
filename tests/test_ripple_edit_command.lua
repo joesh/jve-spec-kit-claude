@@ -322,29 +322,7 @@ asserts._set_enabled_for_tests(true)
 assert(not result.success, "RippleEdit with nonexistent clip should fail")
 
 -- =============================================================================
--- TEST 9: Ripple edit with gap_before (close gap)
--- =============================================================================
-print("Test 9: Gap before closes gap")
-reset_timeline()
-
--- Create clips with gap: A [0, 100), gap [100, 200), B [200, 300)
-create_clip("clip_a", 0, 100, 0)
-create_clip("clip_b", 200, 100, 0)
-
-local ripple_cmd9 = Command.create("RippleEdit", "project")
-ripple_cmd9:set_parameter("edge_info", {
-    clip_id = "clip_b",
-    track_id = "track_v1",
-    edge_type = "gap_before"
-})
-ripple_cmd9:set_parameter("delta_frames", -50)  -- Close gap by 50 frames
-
-result = execute_cmd(ripple_cmd9)
-assert(result.success, "RippleEdit gap_before should succeed")
-
--- Clip B should move from 200 to 150
-state_b = get_clip_state("clip_b")
-assert(state_b.start == 150, string.format("Clip B should move to 150, got %d", state_b.start))
+-- TEST 9: (removed — gap_before operations now use BatchRippleEdit + gap clips)
 
 -- =============================================================================
 -- TEST 10: Dry run returns preview without modifying

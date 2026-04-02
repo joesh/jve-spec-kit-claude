@@ -383,7 +383,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             assert(type(snapshot.track_clip_map) == "table", "build_clip_cache: __preloaded_clip_snapshot.track_clip_map is required")
             if ctx.dry_run then
                 ctx.all_clips = snapshot.clips
-                -- Shallow-copy clip_lookup so register_temp_gap doesn't
+                -- Shallow-copy clip_lookup so gap registration doesn't
                 -- pollute the shared snapshot across preview/commit cycles.
                 local lookup_copy = {}
                 for k, v in pairs(snapshot.clip_lookup) do lookup_copy[k] = v end
@@ -416,7 +416,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
 
             for _, clip_id in ipairs(clip_ids) do
-                local is_gap = type(clip_id) == "string" and (clip_id:find("^gap_") or clip_id:find("^temp_gap_"))
+                local is_gap = type(clip_id) == "string" and clip_id:find("^gap_")
                 local clip = is_gap and snapshot.clip_lookup[clip_id] or Clip.load_optional(clip_id)
                 if clip then
                     table.insert(ctx.all_clips, clip)
@@ -822,7 +822,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         ctx.clamped_delta_frames = ctx.delta_frames
 
         -- Pre-compute which tracks have roll edit points (multiple CLIP roll edges on same track).
-        -- Gap edges (gap_before/gap_after) don't count - they're part of the same edit as the clip edge.
+        -- Gap clip edges don't count - they're part of the same edit as the clip edge.
         -- Roll edges on these tracks use global constraints; multitrack roll uses per-edge.
         -- Tracks with a roll edit point use global constraints (not per-edge).
         -- A roll edit point is:
@@ -1599,7 +1599,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		        local shift_frames = ctx.downstream_shift_frames or 0
 		        local growth_frames = ctx.clamped_delta_frames or 0
 
-		        local temp_gap_mutations = {}
+		        local gap_mutations = {}
 		        local clip_mutations = {}
 
 		        local function sort_key_start_frames(mut)
@@ -1626,8 +1626,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		                if ctx.dry_run then
 		                    assert(type(clip.timeline_start) == "number", "build_planned_mutations: gap timeline_start must be integer")
 		                    assert(type(clip.duration) == "number", "build_planned_mutations: gap duration must be integer")
-		                    table.insert(temp_gap_mutations, {
-		                        type = "temp_gap",
+		                    table.insert(gap_mutations, {
+		                        type = "gap_preview",
 		                        clip_id = id,
 		                        timeline_start_frame = clip.timeline_start,
 		                        duration_frames = clip.duration
@@ -1686,7 +1686,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		        for _, mut in ipairs(post_bulk_shifts) do
 		            table.insert(ctx.planned_mutations, mut)
 		        end
-		        for _, mut in ipairs(temp_gap_mutations) do
+		        for _, mut in ipairs(gap_mutations) do
 		            table.insert(ctx.planned_mutations, mut)
 		        end
 
@@ -1754,7 +1754,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        end
 	        local order = {}
 	        for _, mut in ipairs(ctx.planned_mutations or {}) do
-	            if type(mut) == "table" and mut.type and mut.clip_id and mut.type ~= "temp_gap" then
+	            if type(mut) == "table" and mut.type and mut.clip_id and mut.type ~= "gap_preview" then
 	                table.insert(order, {type = mut.type, clip_id = mut.clip_id})
 	            end
 	        end
@@ -2134,7 +2134,7 @@ pick_gap_anchor_clip_id = function(track_clips, boundary_frames, raw_edge_type)
     local idx = lower_bound_start_frames(track_clips, boundary_frames or 0)
     local right = track_clips[idx]
     local left = (idx > 1) and track_clips[idx - 1] or nil
-    if raw_edge_type == "gap_before" then
+    if raw_edge_type == "out" then
         return (right and right.id) or (left and left.id) or nil
     end
     return (left and left.id) or (right and right.id) or nil

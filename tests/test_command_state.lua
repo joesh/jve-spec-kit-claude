@@ -211,20 +211,14 @@ do
 end
 
 -- ============================================================
--- parse_temp_gap_identifier (tested via resolve_gap_clip_id indirectly,
--- but we test it via emit to see if edge resolution works)
+-- Gap clip setup (gap clips use gap_ prefix, in-memory only)
 -- ============================================================
-print("\n--- temp gap identifier parsing ---")
+print("\n--- gap clip setup ---")
 do
-    -- Insert a clip at a known position for gap resolution (after clip_cs_001 which is 0-200)
+    -- Insert a clip at a known position (after clip_cs_001 which is 0-200)
     insert_clip("clip_gap_test", {start = 300, duration = 50, source_out = 50})
-
-    -- We can't call parse_temp_gap_identifier directly (it's local),
-    -- but we can test it through capture_selection_snapshot/restore
-    -- which use resolve_gap_clip_id internally.
-    -- For now, test the format expectations documented in the code.
-    -- The format is: "temp_gap_<track_id>_<start_frames>_<end_frames>"
-    check("temp gap format documented", true)
+    -- Gap clips use format: "gap_<track_id>_<timeline_start>"
+    check("gap id format documented", true)
 end
 
 -- ============================================================
@@ -381,17 +375,16 @@ do
 end
 
 -- ============================================================
--- capture_selection_snapshot — temp_gap_* edge resolution
+-- capture_selection_snapshot — gap clip edge passthrough
 -- ============================================================
-print("\n--- temp gap edge resolution ---")
+print("\n--- gap clip edge passthrough ---")
 do
-    -- clip_gap_test is at position 300, duration 50 → ends at 350
-    -- A gap_after edge: query finds clip whose (start+duration) = gap start
+    -- Gap clip edges are passed through as-is (gap_ prefix IDs)
     local mock_timeline = {
         get_selected_clips = function() return {} end,
         get_selected_edges = function()
             return {
-                {clip_id = "temp_gap_" .. track_id .. "_350_400", edge_type = "gap_after"},
+                {clip_id = "gap_" .. track_id .. "_350", edge_type = "out"},
             }
         end,
         get_selected_gaps = function() return {} end,
@@ -400,10 +393,9 @@ do
 
     local _, edges_json, _ = command_state.capture_selection_snapshot()
     local edges = _G.qt_json_decode(edges_json)
-    check("temp gap resolved", #edges == 1)
-    -- The gap_after at frame 350 should resolve to the clip whose end = 350
-    -- clip_gap_test starts at 300, duration 50 → end = 350
-    check("resolved to real clip_id", edges[1].clip_id == "clip_gap_test")
+    check("gap edge captured", #edges == 1)
+    check("gap clip_id preserved", edges[1].clip_id == "gap_" .. track_id .. "_350")
+    check("edge type preserved", edges[1].edge_type == "out")
 end
 
 -- ============================================================

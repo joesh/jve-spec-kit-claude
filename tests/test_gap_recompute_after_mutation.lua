@@ -7,7 +7,7 @@
 require("test_env")
 
 local command_manager = require("core.command_manager")
-local timeline_state = require("ui.timeline.timeline_state")
+require("ui.timeline.timeline_state") -- luacheck: ignore 211 (side-effect require)
 local ripple_layout = require("tests.helpers.ripple_layout")
 local Clip = require("models.clip")
 
@@ -22,7 +22,7 @@ local layout = ripple_layout.create({
     }
 })
 local ts = layout:init_timeline_state()
-local tracks = layout.tracks
+local tracks = layout.tracks -- luacheck: ignore 211
 
 -- Initial state: gaps at [500,700] and [1000,1200]
 local gap1_id = layout:gap_id("v1", 500)

@@ -572,8 +572,6 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                         if c and c.timeline_start and c.duration then
                             if edge.edge_type == "in" then edge.original_time = c.timeline_start
                             elseif edge.edge_type == "out" then edge.original_time = c.timeline_start + c.duration
-                            elseif edge.edge_type == "gap_before" then edge.original_time = c.timeline_start
-                            elseif edge.edge_type == "gap_after" then edge.original_time = c.timeline_start + c.duration
                             end
                         end
                     end
@@ -680,13 +678,10 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                         cursor = "split_h"
                     else
                         -- Single edge selection: cursor based on edge type
-                        -- From misc_bindings.cpp: trim_left = ] bracket, trim_right = [ bracket
-                        -- Must match renderer logic (timeline_view_renderer.lua:429):
-                        --   is_in = (normalized_edge == "in") or (raw_edge_type == "gap_after")
-                        -- So: "in" or "gap_after" → [ bracket → trim_right
-                        --     "out" or "gap_before" → ] bracket → trim_left
+                        -- "in" → [ bracket → trim_right
+                        -- "out" → ] bracket → trim_left
                         local sel = hover_pick.selection[1]
-                        if sel and (sel.edge_type == "in" or sel.edge_type == "gap_after") then
+                        if sel and sel.edge_type == "in" then
                             cursor = "trim_right"
                         else
                             cursor = "trim_left"

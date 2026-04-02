@@ -6,7 +6,7 @@
 require("test_env")
 
 local command_manager = require("core.command_manager")
-local timeline_state = require("ui.timeline.timeline_state")
+local timeline_state = require("ui.timeline.timeline_state") -- luacheck: ignore 211
 local timeline_view_input = require("ui.timeline.view.timeline_view_input")
 local ripple_layout = require("tests.helpers.ripple_layout")
 local Clip = require("models.clip")

@@ -357,7 +357,7 @@ end
 
 function M.restore_clip_state(state)
     if not state then return end
-    if type(state.id) == "string" and state.id:find("^temp_gap_") then return nil end
+    if state.clip_kind == "gap" then return nil end
 
     -- Fill missing ownership if possible
     local seq_id = state.owner_sequence_id or state.track_sequence_id or lookup_track_sequence(state.track_id)

@@ -92,15 +92,11 @@ local function run_case(db_path, use_batch)
     local gap_id = string.format("gap_track_v1_%d", 2000)
 
     local cmd
-    if use_batch then
-        cmd = Command.create("BatchRippleEdit", "default_project")
-        cmd:set_parameter("edge_infos", {
-            {clip_id = gap_id, edge_type = "out", track_id = "track_v1"}
-        })
-    else
-        cmd = Command.create("RippleEdit", "default_project")
-        cmd:set_parameter("edge_info", {clip_id = "clip_right", edge_type = "gap_before", track_id = "track_v1"})
-    end
+    -- Gap operations always use BatchRippleEdit (gap clips are in-memory only)
+    cmd = Command.create("BatchRippleEdit", "default_project")
+    cmd:set_parameter("edge_infos", {
+        {clip_id = gap_id, edge_type = "out", track_id = "track_v1"}
+    })
     cmd:set_parameter("delta_frames", -1500) -- drag ] LEFT to close the gap
     cmd:set_parameter("sequence_id", "default_sequence")
 
@@ -110,11 +106,7 @@ local function run_case(db_path, use_batch)
     local start_value = fetch_start(db_conn, "clip_right")
 
     local args_stmt
-    if use_batch then
-        args_stmt = db_conn:prepare("SELECT command_args FROM commands WHERE command_type = 'BatchRippleEdit'")
-    else
-        args_stmt = db_conn:prepare("SELECT command_args FROM commands WHERE command_type = 'RippleEdit'")
-    end
+    args_stmt = db_conn:prepare("SELECT command_args FROM commands WHERE command_type = 'BatchRippleEdit'")
     assert(args_stmt:exec() and args_stmt:next(), "command row missing")
     local args_json = tostring(args_stmt:value(0))
     args_stmt:finalize()
@@ -124,13 +116,9 @@ local function run_case(db_path, use_batch)
     return start_value
 end
 
--- Single-edge ripple clamp
-local start_single = run_case(TEST_DB, false)
-assert(start_single == 2000, "single ripple should clamp to avoid overlapping left clip")
-
--- Batch ripple (single edge in batch path) uses the same clamp rules
-local start_batch = run_case("/tmp/jve/test_ripple_overlap_batch.db", true)
-assert(start_batch == 2000, "batch ripple should clamp gap out-edge identically to single ripple")
+-- Gap operations use BatchRippleEdit (gap clips are in-memory only)
+local start_batch = run_case(TEST_DB, true)
+assert(start_batch == 2000, "batch ripple should clamp gap out-edge to avoid overlapping left clip")
 
 -- Zero-gap: clamp to no movement when clips touch
 local function run_zero_gap(db_path)

@@ -132,7 +132,7 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
     local limit_left = nil  -- What's limiting us on the left
     local limit_right = nil  -- What's limiting us on the right
 
-    local is_gap_clip = clip and (clip.is_gap or (clip.media_id == nil and type(clip.id) == "string" and clip.id:find("^temp_gap_") ~= nil))
+    local is_gap_clip = clip and clip.clip_kind == "gap"
     local duration = clip_duration(clip)
     local source_in = clip_source_in(clip)
     local source_out = clip_source_out(clip)

@@ -130,12 +130,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         
         local edge_info = args.edge_info
-        if type(args.edge_info.clip_id) == "string" and args.edge_info.clip_id:find("^temp_gap_") then
-            edge_info = {}
-            for k, v in pairs(args.edge_info) do edge_info[k] = v end
-            edge_info.clip_id = edge_info.clip_id:gsub("^temp_gap_", "")
-            command:set_parameter("edge_info", edge_info)
-        end
 
         local sequence_id = command_helper.resolve_sequence_for_track(nil, edge_info.track_id)
         if not sequence_id or sequence_id == "" then
@@ -209,7 +203,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
              end
         end
 
-        if edge_info.edge_type == "gap_before" and clamped_delta_frames < 0 then
+        if clip.clip_kind == "gap" and edge_info.edge_type == "out" and clamped_delta_frames < 0 then
             local closest_end = nil
             for _, other in ipairs(all_clips) do
                 if other.track_id == clip.track_id and other.id ~= clip.id then
@@ -229,7 +223,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        if edge_info.edge_type == "gap_after" and clamped_delta_frames > 0 then
+        if clip.clip_kind == "gap" and edge_info.edge_type == "in" and clamped_delta_frames > 0 then
             local next_start = nil
             for _, other in ipairs(all_clips) do
                 if other.track_id == clip.track_id and other.id ~= clip.id then
@@ -262,7 +256,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local deleted_clip = nil
         local success
 
-        if edge_info.edge_type == "gap_before" then
+        if clip.clip_kind == "gap" and edge_info.edge_type == "out" then
             -- Gap closure/expansion: slide the entire clip (and downstream clips) by delta
             local new_start = clip.timeline_start + delta_frames
             if new_start < 0 then
@@ -280,7 +274,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 clip.timeline_start = new_start
             end
             ripple_time = original_start -- shift co-timed clips on other tracks as well
-        elseif edge_info.edge_type == "gap_after" then
+        elseif clip.clip_kind == "gap" and edge_info.edge_type == "in" then
             -- Shift downstream clips relative to the trailing gap after this clip
             shift_frames = -delta_frames
             ripple_time = original_end
@@ -319,7 +313,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local excluded_ids = {[clip.id] = true}
         local clips_to_shift = collect_downstream_clips(all_clips, excluded_ids, ripple_time)
 
-        if shift_frames < 0 and clips_to_shift and #clips_to_shift > 0 and edge_info.edge_type == "gap_before" then
+        if shift_frames < 0 and clips_to_shift and #clips_to_shift > 0 and clip.clip_kind == "gap" and edge_info.edge_type == "out" then
             local max_allowed = shift_frames
             local trimmed_end = clip.timeline_start + clip.duration
             -- Build lookup of downstream clip IDs so we can skip constraints

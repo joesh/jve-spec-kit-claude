@@ -109,40 +109,6 @@ local function clamp_track_height(height)
     return clamped
 end
 
-local TEMP_GAP_PREFIX = "temp_gap_"
-
-local function parse_temp_gap_identifier(clip_id)
-    if type(clip_id) ~= "string" then return nil end
-    if not clip_id:find("^" .. TEMP_GAP_PREFIX) then return nil end
-    local payload = clip_id:sub(#TEMP_GAP_PREFIX + 1)
-    local start_str, end_str = payload:match("_(%-?%d+)_(-?%d+)$")
-    if not start_str or not end_str then return nil end
-    local track_id = payload:sub(1, #payload - (#start_str + #end_str + 2))
-    if not track_id or track_id == "" then return nil end
-    return track_id, tonumber(start_str), tonumber(end_str)
-end
-
-local function resolve_gap_clip_id(edge)
-    if not edge or not edge.edge_type then return nil end
-    local track_id, start_frames, end_frames = parse_temp_gap_identifier(edge.clip_id)
-    if not track_id then return nil end
-    for _, clip in ipairs(data.state.clips or {}) do
-        if clip.track_id == track_id and type(clip.timeline_start) == "number" and type(clip.duration) == "number" then
-            if edge.edge_type == "gap_after" then
-                local clip_end = clip.timeline_start + clip.duration
-                if clip_end == start_frames then
-                    return clip.id
-                end
-            elseif edge.edge_type == "gap_before" then
-                if clip.timeline_start == end_frames then
-                    return clip.id
-                end
-            end
-        end
-    end
-    return nil
-end
-
 local function build_track_height_map()
     local result = {}
     for _, track in ipairs(data.state.tracks) do
@@ -235,16 +201,16 @@ local function flush_state_to_db()
     local edge_descriptors = {}
     for _, edge in ipairs(data.state.selected_edges) do
         if edge and edge.clip_id and edge.edge_type then
-            local clip_id = edge.clip_id
-            if type(clip_id) == "string" and clip_id:find("^" .. TEMP_GAP_PREFIX) then
-                local resolved = resolve_gap_clip_id(edge)
-                if resolved then clip_id = resolved end
+            -- Skip gap clip edges — gap clips are in-memory only, not persisted
+            if type(edge.clip_id) == "string" and edge.clip_id:find("^gap_") then
+                goto continue_edge_persist
             end
             table.insert(edge_descriptors, {
-                clip_id = clip_id,
+                clip_id = edge.clip_id,
                 edge_type = edge.edge_type,
                 trim_type = edge.trim_type
             })
+            ::continue_edge_persist::
         end
     end
     local success_edges, edges_json = pcall(json.encode, edge_descriptors)
@@ -398,15 +364,6 @@ function M.init(sequence_id, project_id)
             for _, edge in ipairs(edges) do
                 if type(edge) == "table" and edge.clip_id and edge.edge_type then
                     local clip_obj = clip_state.get_by_id(edge.clip_id)
-                    if not clip_obj and type(edge.clip_id) == "string" and edge.clip_id:find("^" .. TEMP_GAP_PREFIX) then
-                        local resolved = resolve_gap_clip_id(edge)
-                        if resolved then
-                            clip_obj = clip_state.get_by_id(resolved)
-                            if clip_obj then
-                                edge.clip_id = resolved
-                            end
-                        end
-                    end
                     if clip_obj then
                         table.insert(data.state.selected_edges, {
                             clip_id = edge.clip_id,

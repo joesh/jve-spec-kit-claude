@@ -23,48 +23,6 @@ local profile_scope = require("core.profile_scope")
 local json = require("dkjson")
 local log = require("core.logger").for_area("commands")
 
-local TEMP_GAP_PREFIX = "temp_gap_"
-
-local function parse_temp_gap_identifier(clip_id)
-    if type(clip_id) ~= "string" then return nil end
-    if not clip_id:find("^" .. TEMP_GAP_PREFIX) then return nil end
-    local payload = clip_id:sub(#TEMP_GAP_PREFIX + 1)
-    local start_str, end_str = payload:match("_(%-?%d+)_(-?%d+)$")
-    if not start_str or not end_str then return nil end
-    local track_id = payload:sub(1, #payload - (#start_str + #end_str + 2))
-    if not track_id or track_id == "" then return nil end
-    return track_id, tonumber(start_str), tonumber(end_str)
-end
-
-local function resolve_gap_clip_id(edge)
-    if not edge or not edge.edge_type or not db then return nil end
-    local track_id, start_frames, end_frames = parse_temp_gap_identifier(edge.clip_id)
-    if not track_id then return nil end
-
-    local stmt
-    if edge.edge_type == "gap_after" then
-        stmt = db:prepare([[SELECT id FROM clips WHERE track_id = ? AND (timeline_start_frame + duration_frames) = ? LIMIT 1]])
-        if stmt then
-            stmt:bind_value(1, track_id)
-            stmt:bind_value(2, start_frames)
-        end
-    elseif edge.edge_type == "gap_before" then
-        stmt = db:prepare([[SELECT id FROM clips WHERE track_id = ? AND timeline_start_frame = ? LIMIT 1]])
-        if stmt then
-            stmt:bind_value(1, track_id)
-            stmt:bind_value(2, end_frames)
-        end
-    end
-
-    if not stmt then return nil end
-    local resolved = nil
-    if stmt:exec() and stmt:next() then
-        resolved = stmt:value(0)
-    end
-    stmt:finalize()
-    return resolved
-end
-
 function M.init(database)
     db = database
 end
@@ -170,13 +128,8 @@ function M.capture_selection_snapshot()
     local edge_descriptors = {}
     for _, edge in ipairs(selected_edges) do
         if edge and edge.clip_id and edge.edge_type then
-            local clip_id = edge.clip_id
-            if type(clip_id) == "string" and clip_id:find("^" .. TEMP_GAP_PREFIX) then
-                local resolved = resolve_gap_clip_id(edge)
-                if resolved then clip_id = resolved end
-            end
             table.insert(edge_descriptors, {
-                clip_id = clip_id,
+                clip_id = edge.clip_id,
                 edge_type = edge.edge_type,
                 trim_type = edge.trim_type
             })
@@ -255,13 +208,7 @@ function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json)
         local restored_edges = {}
         for _, info in ipairs(edge_infos) do
             if type(info) == "table" and info.clip_id and info.edge_type then
-                local clip_id = info.clip_id
-                -- Legacy: resolve old temp_gap_ prefixed IDs from pre-refactor undo records
-                if type(clip_id) == "string" and clip_id:find("^" .. TEMP_GAP_PREFIX) then
-                    local resolved = resolve_gap_clip_id(info)
-                    if resolved then clip_id = resolved end
-                end
-                local clip = safe_load_clip(clip_id)
+                local clip = safe_load_clip(info.clip_id)
                 if clip then
                     table.insert(restored_edges, {
                         clip_id = clip.id,

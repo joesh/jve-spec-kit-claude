@@ -7,11 +7,11 @@
 require("test_env")
 
 local command_manager = require("core.command_manager")
-local timeline_state = require("ui.timeline.timeline_state")
+require("ui.timeline.timeline_state") -- luacheck: ignore 211 (side-effect require)
 local timeline_renderer = require("ui.timeline.view.timeline_view_renderer")
-local timeline_view_input = require("ui.timeline.view.timeline_view_input")
+require("ui.timeline.view.timeline_view_input") -- luacheck: ignore 211 (side-effect require)
 local ripple_layout = require("tests.helpers.ripple_layout")
-local Clip = require("models.clip")
+require("models.clip") -- luacheck: ignore 211 (side-effect require)
 
 local TEST_DB = "/tmp/jve/test_gap_clip_visibility_and_undo.db"
 local layout = ripple_layout.create({
@@ -24,7 +24,7 @@ local layout = ripple_layout.create({
     }
 })
 local ts = layout:init_timeline_state()
-local clips = layout.clips
+local clips = layout.clips -- luacheck: ignore 211
 local tracks = layout.tracks
 
 -- Verify gaps exist in clip list (prerequisite for all tests)

@@ -34,7 +34,6 @@ local function build_edge_signature(edges)
     return table.concat(parts, "|")
 end
 
-local TEMP_GAP_PREFIX = "temp_gap_"
 local IMPLIED_EDGE_DIM_FACTOR = 0.55
 
 local function coerce_clip_entries(entries)
@@ -49,16 +48,9 @@ end
 
 local function is_gap_preview(entry)
     if not entry then return false end
-    if entry.is_gap or entry.is_temp_gap then
-        return true
-    end
-    if type(entry.clip_id) == "string" and entry.clip_id:find("^" .. TEMP_GAP_PREFIX) then
-        return true
-    end
-    if (entry.raw_edge_type == "gap_before" or entry.raw_edge_type == "gap_after")
-        and type(entry.clip_id) == "string" and entry.clip_id:find("^" .. TEMP_GAP_PREFIX) then
-        return true
-    end
+    if entry.is_gap then return true end
+    if entry.clip_kind == "gap" then return true end
+    if type(entry.clip_id) == "string" and entry.clip_id:find("^gap_") then return true end
     return false
 end
 
@@ -121,52 +113,6 @@ local function assert_integer(value, context)
     return value
 end
 
-local function parse_temp_gap_identifier(clip_id)
-    if type(clip_id) ~= "string" then
-        return nil
-    end
-    if not clip_id:find("^" .. TEMP_GAP_PREFIX) then
-        return nil
-    end
-    local payload = clip_id:sub(#TEMP_GAP_PREFIX + 1)
-    local start_str, end_str = payload:match("_(%-?%d+)_(-?%d+)$")
-    if not start_str or not end_str then
-        return nil
-    end
-    local track_len = #payload - (#start_str + #end_str + 2)
-    if track_len <= 0 then
-        return nil
-    end
-    local track_id = payload:sub(1, track_len)
-    return track_id, tonumber(start_str), tonumber(end_str)
-end
-
-local function build_temp_gap_preview_clip(preview)
-    if not preview or not preview.clip_id then
-        return nil
-    end
-    local base_track_id, start_frames, end_frames = parse_temp_gap_identifier(preview.clip_id)
-    local track_id = preview.target_track_id or base_track_id
-    if not track_id or not start_frames or not end_frames then
-        return nil
-    end
-    local duration_frames = end_frames - start_frames
-    if duration_frames < 0 then
-        duration_frames = 0
-    end
-    -- All coords are integer frames
-    return {
-        id = preview.clip_id,
-        track_id = track_id,
-        timeline_start = start_frames,
-        duration = duration_frames,
-        source_in = 0,
-        source_out = duration_frames,
-        enabled = 1,
-        is_gap = true
-    }
-end
-
 local function get_preview_clip(state_module, preview_clip_cache, preview_entry)
     if not preview_entry or not preview_entry.clip_id then
         return nil
@@ -180,11 +126,6 @@ local function get_preview_clip(state_module, preview_clip_cache, preview_entry)
         if clip then
             return clip
         end
-    end
-    local gap_clip = build_temp_gap_preview_clip(preview_entry)
-    if gap_clip then
-        preview_clip_cache[preview_entry.clip_id] = gap_clip
-        return gap_clip
     end
     return nil
 end
@@ -389,10 +330,7 @@ local function render_edge_handle(view, clip, normalized_edge, raw_edge_type, st
     local ch = th - 10
     local handle_y = cy + 5
     local ex = (normalized_edge == "in") and sx or (sx + cw)
-    if raw_edge_type == "gap_before" or raw_edge_type == "gap_after" then
-        ex = sx
-    end
-    local is_in = (normalized_edge == "in") or (raw_edge_type == "gap_after")
+    local is_in = (normalized_edge == "in")
     local bw = 8
     local bt = 2
     if is_in then
