@@ -67,7 +67,7 @@ local function build_manual_timeline(config)
     command_manager.init("default_sequence", "default_project")
     return {db = db, project_id = "default_project", sequence_id = "default_sequence"}
 end
--- Scenario 1: gap_before only selection should shrink the gap when dragged left.
+-- Scenario 1: gap out-edge only selection should shrink the gap when dragged left.
 do
     local TEST_DB = "/tmp/jve/test_batch_ripple_gap_before_only.db"
     local layout = ripple_layout.create({
@@ -85,22 +85,25 @@ do
     local right_before = Clip.load(clips.v1_right.id, layout.db)
     local gap_frames_before = compute_gap_frames(left_before, right_before)
 
+    -- Gap between v1_left (end=1000) and v1_right (start=3200): gap starts at 1000
+    local gap_id = layout:gap_id("v1", 1000)
+
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
-        {clip_id = clips.v1_right.id, edge_type = "gap_before", track_id = tracks.v1.id, trim_type = "ripple"}
+        {clip_id = gap_id, edge_type = "out", track_id = tracks.v1.id, trim_type = "ripple"}
     })
     cmd:set_parameter("delta_frames", -400)
 
     local result = command_manager.execute(cmd)
-    assert(result.success, result.error_message or "gap_before ripple failed")
+    assert(result.success, result.error_message or "gap out-edge ripple failed")
 
     local left_after = Clip.load(clips.v1_left.id, layout.db)
     local right_after = Clip.load(clips.v1_right.id, layout.db)
     local gap_frames_after = compute_gap_frames(left_after, right_after)
 
     assert(right_after.timeline_start == right_before.timeline_start - 400,
-        string.format("gap_before trim should move right clip left; expected %d, got %d",
+        string.format("gap out-edge trim should move right clip left; expected %d, got %d",
             right_before.timeline_start - 400, right_after.timeline_start))
     assert(gap_frames_after == gap_frames_before - 400,
         string.format("Gap should shrink by 400 frames; expected %d, got %d",
@@ -122,11 +125,14 @@ do
     local clips = layout.clips
     local tracks = layout.tracks
 
+    -- Gap between v1_left (end=1000) and v1_right (start=2500): gap starts at 1000
+    local gap_id = layout:gap_id("v1", 1000)
+
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("dry_run", true)
     cmd:set_parameter("edge_infos", {
-        {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "roll"},
+        {clip_id = gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "roll"},
         {clip_id = clips.v1_right.id, edge_type = "in", track_id = tracks.v1.id, trim_type = "roll"}
     })
     cmd:set_parameter("delta_frames", 200)
@@ -204,10 +210,13 @@ do
         }
     })
 
+    -- Gap between clip_left (end=1000) and clip_gap (start=2200): gap_track_v1_1000
+    local gap_id = string.format("gap_track_v1_%d", 1000)
+
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
-        {clip_id = "clip_left", edge_type = "gap_after", track_id = "track_v1", trim_type = "roll"},
+        {clip_id = gap_id, edge_type = "in", track_id = "track_v1", trim_type = "roll"},
         {clip_id = "clip_gap", edge_type = "in", track_id = "track_v1", trim_type = "roll"}
     })
     cmd:set_parameter("delta_frames", 200)
@@ -320,10 +329,13 @@ do
         }
     })
 
+    -- Gap between v1_left (end=1000) and v1_right (start=4000): gap starts at 1000
+    local gap_id = layout:gap_id("v1", 1000)
+
     local executor = command_manager.get_executor("BatchRippleEdit")
     local left_gap = {
-        clip_id = layout.clips.v1_left.id,
-        edge_type = "gap_after",
+        clip_id = gap_id,
+        edge_type = "in",
         track_id = layout.tracks.v1.id,
         trim_type = "ripple"
     }
@@ -359,10 +371,13 @@ do
         }
     })
 
+    -- Gap between v1_left (end=1000) and v1_right (start=2600): gap starts at 1000
+    local gap_id = layout:gap_id("v1", 1000)
+
     local executor = command_manager.get_executor("BatchRippleEdit")
     local left_gap = {
-        clip_id = layout.clips.v1_left.id,
-        edge_type = "gap_after",
+        clip_id = gap_id,
+        edge_type = "in",
         track_id = layout.tracks.v1.id,
         trim_type = "ripple"
     }
@@ -371,7 +386,7 @@ do
 	    cmd:set_parameter("sequence_id", layout.sequence_id)
 	    cmd:set_parameter("edge_infos", {left_gap})
 	    cmd:set_parameter("lead_edge", left_gap)
-	    -- gap_after is normalized as an "in" bracket; positive delta closes the gap (shifts downstream left).
+	    -- gap in-edge: positive delta closes the gap (shifts downstream left).
 	    cmd:set_parameter("delta_frames", 500)
 	    cmd:set_parameter("dry_run", true)
 
@@ -380,7 +395,9 @@ do
 
 	    assert(math.floor(payload.clamped_delta_ms) == 200,
 	        "Ripple should clamp to the available upstream gap on V2")
-    local implied_key = string.format("%s:%s", layout.clips.v2_mid.id, "gap_before")
+    -- V2 gap between v2_upstream (end=2400) and v2_mid (start=2600): gap_track_v2_2400
+    local implied_gap_id = string.format("gap_%s_%d", layout.tracks.v2.id, 2400)
+    local implied_key = string.format("%s:%s", implied_gap_id, "out")
     assert(payload.clamped_edges and payload.clamped_edges[implied_key],
         "Blocking cross-track gap edge must be reported in clamped_edges")
 
@@ -405,10 +422,13 @@ do
     local downstream_before = Clip.load("clip_downstream", layout.db)
     local downstream_start = downstream_before.timeline_start
 
+    -- Gap between clip_left (end=1000) and clip_mid (start=2600): gap_track_v1_1000
+    local gap_id = string.format("gap_track_v1_%d", 1000)
+
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
-        {clip_id = "clip_mid", edge_type = "gap_before", track_id = "track_v1", trim_type = "ripple"}
+        {clip_id = gap_id, edge_type = "out", track_id = "track_v1", trim_type = "ripple"}
     })
     cmd:set_parameter("delta_frames", -1200)
     cmd:set_parameter("__force_retry_delta", -300)

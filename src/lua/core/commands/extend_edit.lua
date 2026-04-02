@@ -40,9 +40,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- For simplicity, use lead edge (first edge) to compute single delta
         -- (multi-edge extend with different deltas would need BatchRippleEdit enhancement)
         local lead_edge = edge_infos[1]
-        -- Gap clips are in-memory only (not in DB). Try Clip.load for media clips,
-        -- fall back to timeline_state for gap clips.
-        local clip = Clip.load_optional(lead_edge.clip_id)
+        -- Try DB first, then timeline_state (for gap clips which are in-memory only)
+        local clip = Clip.load_optional and Clip.load_optional(lead_edge.clip_id) or Clip.load(lead_edge.clip_id)
         if not clip then
             local timeline_state = package.loaded["ui.timeline.timeline_state"]
             if timeline_state and timeline_state.get_clip_by_id then
