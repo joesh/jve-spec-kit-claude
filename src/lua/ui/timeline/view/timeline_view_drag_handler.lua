@@ -288,6 +288,9 @@ function M.handle_release(view, drag_state, modifiers)
         for _, e in ipairs(edges) do
             local normalized = normalize_edge_entry(e)
             if normalized then
+                log.event("drag_commit: clip=%s edge=%s trim=%s",
+                    tostring(normalized.clip_id):sub(1,12), tostring(normalized.edge_type),
+                    tostring(normalized.trim_type))
                 table.insert(edge_infos, normalized)
             end
         end

@@ -405,6 +405,9 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         if picked_edges and picked_edges.selection and #picked_edges.selection > 0 then
             local target_edges = {}
             for _, edge in ipairs(picked_edges.selection) do
+                log.event("edge_pick: clip=%s edge=%s trim=%s roll_used=%s",
+                    tostring(edge.clip_id):sub(1,12), tostring(edge.edge_type),
+                    tostring(edge.trim_type), tostring(picked_edges.roll_used))
                 table.insert(target_edges, {
                     clip_id = edge.clip_id,
                     edge_type = edge.edge_type,

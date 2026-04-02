@@ -19,6 +19,7 @@
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
 local clip_state = require("ui.timeline.state.clip_state")
+local log = require("core.logger").for_area("timeline")
 
 local on_selection_changed_callback = nil
 
@@ -52,6 +53,8 @@ local function normalize_edge_selection()
             end
         else
             -- Clip no longer exists (e.g. gap clip removed after recomputation)
+            log.event("normalize_edge_selection: dropping stale edge clip=%s edge=%s (clip not found)",
+                tostring(edge.clip_id):sub(1,12), tostring(edge.edge_type))
             changed = true
         end
     end
@@ -101,6 +104,11 @@ function M.set_edge_selection(edges, opts, persist_callback)
         clear_clips = true,
         clear_gaps = true
     }
+    for _, edge in ipairs(edges or {}) do
+        log.event("set_edge_selection: clip=%s edge=%s trim=%s",
+            tostring(edge.clip_id):sub(1,12), tostring(edge.edge_type),
+            tostring(edge.trim_type))
+    end
     data.state.selected_edges = edges or {}
 
     if opts.clear_clips ~= false then data.state.selected_clips = {} end

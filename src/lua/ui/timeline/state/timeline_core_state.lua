@@ -29,6 +29,7 @@ local Command = require("command")
 local Signals = require("core.signals")
 local project_gen = require("core.project_generation")
 local gap_lifecycle = require("core.gap_lifecycle")
+local log = require("core.logger").for_area("timeline")
 
 local persist_timer = nil
 local persist_dirty = false
@@ -61,10 +62,13 @@ local function recompute_gap_clips()
         return
     end
 
-    -- Strip existing gap clips from the list
+    -- Strip existing gap clips, remembering old gap IDs for edge selection migration
+    local old_gap_tracks = {}
     local media_only = {}
     for _, clip in ipairs(clips) do
-        if clip.clip_kind ~= "gap" then
+        if clip.clip_kind == "gap" then
+            old_gap_tracks[clip.id] = clip.track_id
+        else
             table.insert(media_only, clip)
         end
     end
@@ -95,13 +99,51 @@ local function recompute_gap_clips()
     end
 
     -- Compute gaps for each track and append to clip list
+    -- Build new gap lookup by track for edge selection migration
+    local new_gaps_by_track = {}
     for _, track in ipairs(tracks) do
         if track.id then
             local sorted = track_clips[track.id] or {}
             local gaps = gap_lifecycle.compute_gaps_for_track(track.id, sorted, seq_fr)
+            new_gaps_by_track[track.id] = gaps
             for _, gap in ipairs(gaps) do
                 table.insert(clips, gap)
             end
+        end
+    end
+
+    -- Migrate edge selections: old gap clip IDs → nearest new gap on same track
+    local selected_edges = data.state.selected_edges
+    if selected_edges and #selected_edges > 0 then
+        local migrated = false
+        for _, edge in ipairs(selected_edges) do
+            local old_track = old_gap_tracks[edge.clip_id]
+            if old_track then
+                -- This edge references a gap clip that was just destroyed.
+                -- Find the new gap on the same track.
+                local new_gaps = new_gaps_by_track[old_track]
+                if new_gaps and #new_gaps > 0 then
+                    -- Pick the gap closest to the old one's position.
+                    -- Parse old position from ID: gap_<track_id>_<start>
+                    local old_start = tonumber(edge.clip_id:match("_(%d+)$"))
+                    local best_gap = new_gaps[1]
+                    if old_start then
+                        local best_dist = math.abs(best_gap.timeline_start - old_start)
+                        for _, g in ipairs(new_gaps) do
+                            local dist = math.abs(g.timeline_start - old_start)
+                            if dist < best_dist then
+                                best_gap = g
+                                best_dist = dist
+                            end
+                        end
+                    end
+                    edge.clip_id = best_gap.id
+                    migrated = true
+                end
+            end
+        end
+        if migrated then
+            log.event("recompute_gap_clips: migrated edge selection to new gap clip IDs")
         end
     end
 end
