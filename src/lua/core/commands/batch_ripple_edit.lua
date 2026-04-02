@@ -1737,12 +1737,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
 	    local function finalize_execution(ctx)
-	        -- original_states includes gap clips (for constraint computation during
-	        -- the edit). The undo hydrator uses executed_mutation_order to decide
-	        -- which clips to revert — gap clips aren't in mutation_order, so they
-	        -- won't be reverted from DB. But original_states must be non-empty for
-	        -- the hydrator to work.
-	        ctx.command:set_parameter("original_states", ctx.original_states_map)
+	        -- Filter gap clips from original_states — they're in-memory only,
+	        -- not persisted, and must not reach the undo hydrator.
+	        local persisted_states = {}
+	        for id, state in pairs(ctx.original_states_map) do
+	            if state.clip_kind ~= "gap" then
+	                persisted_states[id] = state
+	            end
+	        end
+	        ctx.command:set_parameter("original_states", persisted_states)
 	        if ctx.bulk_shift_mutations and #ctx.bulk_shift_mutations > 0 then
 	            ctx.command:set_parameter("bulk_shifts", ctx.bulk_shift_mutations)
 	        else
@@ -2030,6 +2033,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		    command_undoers["BatchRippleEdit"] = function(command)
 		        local args = command:get_all_parameters()
 		        log.event("Undoing BatchRippleEdit command")
+
+		        -- Gap-only edits produce no DB mutations. Nothing to undo.
+		        local originals = command:get_parameter("original_states")
+		        local mutations = command:get_parameter("executed_mutations")
+		        local order = command:get_parameter("executed_mutation_order")
+		        local bulk = command:get_parameter("bulk_shifts")
+		        if (not mutations or next(mutations) == nil)
+		            and (not originals or next(originals) == nil)
+		            and (not order or #order == 0)
+		            and (not bulk or #bulk == 0) then
+		            return { success = true }
+		        end
 
 		        local executed_mutations = hydrate_executed_mutations_if_missing(command)
 
