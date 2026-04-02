@@ -144,6 +144,15 @@ local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_c
     assert(type(mutations) == "table",
         "timeline_state.apply_mutations: mutations must be a table, got " .. type(mutations))
     local changed = clips.apply_mutations(mutations, callback)
+    -- Recompute gap clips after any mutation that changes clip positions.
+    -- Gaps are derived state — always recomputed, never mutated directly.
+    if changed then
+        local core_state = require("ui.timeline.state.timeline_core_state")
+        if core_state.recompute_gap_clips then
+            core_state.recompute_gap_clips()
+            clips.invalidate_indexes()
+        end
+    end
     Signals.emit("timeline_mutations_applied", mutations, changed)
     return changed
 end

@@ -44,16 +44,26 @@ local function create_single_shot_timer(delay_ms, callback)
     return nil
 end
 
---- Compute gap clips for all tracks and inject them into data.state.clips.
--- Called after loading clips from DB. Gaps are in-memory only — never persisted.
-local function inject_gap_clips()
+--- Recompute gap clips for all tracks.
+-- Strips existing gap clips, recomputes from media clip positions, appends.
+-- Called after loading clips from DB or after any mutation changes clip positions.
+local function recompute_gap_clips()
     local clips = data.state.clips
     local tracks = data.state.tracks
     if not clips or not tracks or #tracks == 0 then return end
 
-    -- Need sequence frame rate for gap clip fps fields
     local seq_fr = data.state.sequence_frame_rate
     if not seq_fr then return end
+
+    -- Strip existing gap clips from the list
+    local media_only = {}
+    for _, clip in ipairs(clips) do
+        if clip.clip_kind ~= "gap" then
+            table.insert(media_only, clip)
+        end
+    end
+    data.state.clips = media_only
+    clips = media_only
 
     -- Build per-track sorted clip lists (media clips only)
     local track_clips = {}
@@ -357,7 +367,7 @@ function M.init(sequence_id, project_id)
         string.format("FATAL: Sequence %s has NULL frame rate in database", tostring(sequence_id)))
 
     -- Compute and inject in-memory gap clips for all tracks
-    inject_gap_clips()
+    recompute_gap_clips()
     clip_state.invalidate_indexes()
 
     -- Restore Playhead from sequence model
@@ -458,7 +468,7 @@ function M.reload_clips(target_sequence_id, opts)
     end
 
     data.state.clips = db.load_clips(active)
-    inject_gap_clips()
+    recompute_gap_clips()
     clip_state.invalidate_indexes()
 
     -- Refresh selection objects
@@ -532,5 +542,7 @@ Signals.connect("media_changed", function(_changed_media_ids)
     -- Propagate to playback engine so TMB re-fetches clips with updated media paths
     Signals.emit("content_changed", active)
 end)
+
+M.recompute_gap_clips = recompute_gap_clips
 
 return M
