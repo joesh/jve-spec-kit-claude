@@ -10,7 +10,7 @@ local command_manager = require("core.command_manager")
 local Clip = require("models.clip")
 local ripple_layout = require("tests.helpers.ripple_layout")
 
--- Test 1: Pure gap_after ripple (single gap edge, no clips)
+-- Test 1: Pure gap in-edge ripple (single gap edge, no clips)
 do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_pure_gap_after.db",
@@ -20,15 +20,18 @@ do
         }
     })
 
+    -- Gap between v1_left (end=1000) and v1_right (start=2000): gap_track_v1_1000
+    local gap_id = layout:gap_id("v1", 1000)
+
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
-        {clip_id = layout.clips.v1_left.id, edge_type = "gap_after", track_id = layout.tracks.v1.id}
+        {clip_id = gap_id, edge_type = "in", track_id = layout.tracks.v1.id}
     })
     cmd:set_parameter("delta_frames", 300)  -- Close gap by 300 frames
 
     local result = command_manager.execute(cmd)
-    assert(result.success, "Pure gap_after ripple should succeed")
+    assert(result.success, "Pure gap in-edge ripple should succeed")
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
     assert(after_right.timeline_start == 1700,
@@ -37,7 +40,7 @@ do
     layout:cleanup()
 end
 
--- Test 2: Pure gap_before ripple (single gap edge, no clips)
+-- Test 2: Pure gap out-edge ripple (single gap edge, no clips)
 do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_pure_gap_before.db",
@@ -47,15 +50,18 @@ do
         }
     })
 
+    -- Gap between v1_left (end=1000) and v1_right (start=2500): gap_track_v1_1000
+    local gap_id = layout:gap_id("v1", 1000)
+
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
-        {clip_id = layout.clips.v1_right.id, edge_type = "gap_before", track_id = layout.tracks.v1.id}
+        {clip_id = gap_id, edge_type = "out", track_id = layout.tracks.v1.id}
     })
     cmd:set_parameter("delta_frames", -400)  -- Close gap from right side
 
     local result = command_manager.execute(cmd)
-    assert(result.success, "Pure gap_before ripple should succeed")
+    assert(result.success, "Pure gap out-edge ripple should succeed")
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
     assert(after_right.timeline_start == 2100,
@@ -64,7 +70,7 @@ do
     layout:cleanup()
 end
 
--- Test 3: gap_after + gap_before roll (both sides of same gap, like clip roll)
+-- Test 3: gap in + out roll (both sides of same gap, like clip roll)
 do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_gap_gap_roll.db",
@@ -75,11 +81,14 @@ do
         }
     })
 
+    -- Gap between v1_left (end=1000) and v1_right (start=2000): gap_track_v1_1000
+    local gap_id = layout:gap_id("v1", 1000)
+
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
-        {clip_id = layout.clips.v1_left.id, edge_type = "gap_after", track_id = layout.tracks.v1.id, trim_type = "roll"},
-        {clip_id = layout.clips.v1_right.id, edge_type = "gap_before", track_id = layout.tracks.v1.id, trim_type = "roll"}
+        {clip_id = gap_id, edge_type = "in", track_id = layout.tracks.v1.id, trim_type = "roll"},
+        {clip_id = gap_id, edge_type = "out", track_id = layout.tracks.v1.id, trim_type = "roll"}
     })
     cmd:set_parameter("delta_frames", 200)  -- Shift gap boundary right
 
@@ -98,7 +107,7 @@ do
     layout:cleanup()
 end
 
--- Test 4: Multiple gap_after edges across tracks (multi-track gap ripple)
+-- Test 4: Multiple gap in-edges across tracks (multi-track gap ripple)
 do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_multi_gap_sync.db",
@@ -110,11 +119,16 @@ do
         }
     })
 
+    -- V1 gap: v1_left ends at 1000, v1_right starts at 2000 -> gap_track_v1_1000
+    local v1_gap_id = layout:gap_id("v1", 1000)
+    -- V2 gap: v2 ends at 2300, v2_right starts at 3000 -> gap_track_v2_2300
+    local v2_gap_id = layout:gap_id("v2", 2300)
+
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
-        {clip_id = layout.clips.v1_left.id, edge_type = "gap_after", track_id = layout.tracks.v1.id},
-        {clip_id = layout.clips.v2.id, edge_type = "gap_after", track_id = layout.tracks.v2.id}
+        {clip_id = v1_gap_id, edge_type = "in", track_id = layout.tracks.v1.id},
+        {clip_id = v2_gap_id, edge_type = "in", track_id = layout.tracks.v2.id}
     })
     cmd:set_parameter("delta_frames", 900)  -- Try to close both gaps
 
@@ -133,7 +147,7 @@ do
     layout:cleanup()
 end
 
--- Test 5: gap_after + gap_before on different tracks (asymmetric gap operations)
+-- Test 5: gap in + gap out on different tracks (asymmetric gap operations)
 do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_cross_track_gaps.db",
@@ -146,11 +160,16 @@ do
         }
     })
 
+    -- V1 gap: v1_left ends at 1000, v1_right starts at 2000 -> gap_track_v1_1000
+    local v1_gap_id = layout:gap_id("v1", 1000)
+    -- V2 gap: v2_left ends at 1500, v2_right starts at 2500 -> gap_track_v2_1500
+    local v2_gap_id = layout:gap_id("v2", 1500)
+
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
-        {clip_id = layout.clips.v1_left.id, edge_type = "gap_after", track_id = layout.tracks.v1.id},
-        {clip_id = layout.clips.v2_right.id, edge_type = "gap_before", track_id = layout.tracks.v2.id}
+        {clip_id = v1_gap_id, edge_type = "in", track_id = layout.tracks.v1.id},
+        {clip_id = v2_gap_id, edge_type = "out", track_id = layout.tracks.v2.id}
     })
     cmd:set_parameter("delta_frames", 300)
 

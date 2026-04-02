@@ -1,5 +1,8 @@
 #!/usr/bin/env luajit
 
+-- Regression: gap-clip roll adjusts the gap and the adjacent clip's in-point
+-- without shifting downstream. (Updated for gap-as-clip.)
+
 require("test_env")
 
 local command_manager = require("core.command_manager")
@@ -12,10 +15,14 @@ local layout = ripple_layout.create({db_path = TEST_DB})
 local clips = layout.clips
 local tracks = layout.tracks
 
+-- Default layout: v1_left=[0,1500], gap=[1500,3500], v1_right=[3500,4700]
+-- Roll at gap:out / v1_right:in boundary (position 3500)
+local gap_id = layout:gap_id("v1", 1500)
+
 local cmd = Command.create("BatchRippleEdit", layout.project_id)
 cmd:set_parameter("sequence_id", layout.sequence_id)
 cmd:set_parameter("edge_infos", {
-    {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "roll"},
+    {clip_id = gap_id, edge_type = "out", track_id = tracks.v1.id, trim_type = "roll"},
     {clip_id = clips.v1_right.id, edge_type = "in", track_id = tracks.v1.id, trim_type = "roll"}
 })
 cmd:set_parameter("lead_edge", {clip_id = clips.v1_right.id, edge_type = "in", track_id = tracks.v1.id, trim_type = "roll"})

@@ -142,16 +142,54 @@ function M.run(test)
     end
 
     -- Build edge_infos
+    -- gap_before/gap_after are translated to gap clip references:
+    --   gap_after on clip X → gap clip's "in" edge (gap starts at clip X's end)
+    --   gap_before on clip Y → gap clip's "out" edge (gap ends at clip Y's start)
     local edge_infos = {}
     for _, edge in ipairs(drag_edges) do
         local track_id = clip_to_track[edge.clip_name]
         assert(track_id, "drag: clip " .. edge.clip_name .. " not found in layout")
-        table.insert(edge_infos, {
-            clip_id = "clip_" .. edge.clip_name,
-            edge_type = edge.edge_type,
-            trim_type = "ripple",
-            track_id = track_id,
-        })
+
+        if edge.edge_type == "gap_after" or edge.edge_type == "gap_before" then
+            -- Find the clip's position to compute gap clip ID
+            local clip_data = Clip.load("clip_" .. edge.clip_name)
+            assert(clip_data, "drag: clip " .. edge.clip_name .. " not in DB")
+            local gap_start, gap_edge_type
+            if edge.edge_type == "gap_after" then
+                gap_start = clip_data.timeline_start + clip_data.duration
+                gap_edge_type = "in"
+            else -- gap_before
+                -- Gap starts at previous clip's end on the same track.
+                local prev_clip_end = 0
+                for tn, clips_list in pairs(before_tracks) do
+                    local tid = "track_" .. tn:lower()
+                    if tid == track_id then
+                        for _, c in ipairs(clips_list) do
+                            local c_end = c.end_pos
+                            if c_end <= clip_data.timeline_start and c_end > prev_clip_end then
+                                prev_clip_end = c_end
+                            end
+                        end
+                    end
+                end
+                gap_start = prev_clip_end
+                gap_edge_type = "out"
+            end
+            local gap_id = string.format("gap_%s_%d", track_id, gap_start)
+            table.insert(edge_infos, {
+                clip_id = gap_id,
+                edge_type = gap_edge_type,
+                trim_type = "ripple",
+                track_id = track_id,
+            })
+        else
+            table.insert(edge_infos, {
+                clip_id = "clip_" .. edge.clip_name,
+                edge_type = edge.edge_type,
+                trim_type = "ripple",
+                track_id = track_id,
+            })
+        end
     end
 
     -- Execute

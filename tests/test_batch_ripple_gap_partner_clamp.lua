@@ -17,18 +17,17 @@ local layout = ripple_layout.create({
 local executor = command_manager.get_executor("BatchRippleEdit")
 assert(executor, "BatchRippleEdit executor missing")
 
-local function track_id_for_clip(clip_entry)
-    local track = layout.tracks[clip_entry.track_key]
-    return track and track.id
-end
+-- v1_left ends at 1000, v1_right starts at 4000 → gap is 1000..4000
+-- gap_id = gap_track_v1_1000
+local gap_id = layout:gap_id("v1", 1000)
 
-local function assert_clamp(edge_clip_entry, edge_type, partner_clip_entry, partner_edge_type, delta_frames, scenario_label)
+local function assert_clamp(edge_type, partner_edge_type, delta_frames, scenario_label)
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
-        {clip_id = edge_clip_entry.id, edge_type = edge_type, track_id = track_id_for_clip(edge_clip_entry), trim_type = "ripple"}
+        {clip_id = gap_id, edge_type = edge_type, track_id = layout.tracks.v1.id, trim_type = "ripple"}
     })
-    cmd:set_parameter("lead_edge", {clip_id = edge_clip_entry.id, edge_type = edge_type, track_id = track_id_for_clip(edge_clip_entry), trim_type = "ripple"})
+    cmd:set_parameter("lead_edge", {clip_id = gap_id, edge_type = edge_type, track_id = layout.tracks.v1.id, trim_type = "ripple"})
     cmd:set_parameter("delta_frames", delta_frames)
     cmd:set_parameter("dry_run", true)
 
@@ -36,8 +35,8 @@ local function assert_clamp(edge_clip_entry, edge_type, partner_clip_entry, part
     assert(ok and type(payload) == "table", "Dry run should return payload table (" .. scenario_label .. ")")
     assert(payload.clamped_edges and next(payload.clamped_edges), "Clamped edges should identify the limiter (" .. scenario_label .. ")")
 
-    local dragged_key = string.format("%s:%s", edge_clip_entry.id, edge_type)
-    local partner_key = string.format("%s:%s", partner_clip_entry.id, partner_edge_type)
+    local dragged_key = string.format("%s:%s", gap_id, edge_type)
+    local partner_key = string.format("%s:%s", gap_id, partner_edge_type)
 
     assert(payload.clamped_edges[dragged_key],
         "Dragged gap edge must report the clamp when its movement is limited (" .. scenario_label .. ")")
@@ -46,34 +45,30 @@ local function assert_clamp(edge_clip_entry, edge_type, partner_clip_entry, part
 end
 
 assert_clamp(
-    layout.clips.v1_left,
-    "gap_after",
-    layout.clips.v1_right,
-    "gap_before",
+    "in",
+    "out",
     5000,
     "positive gap expansion"
 )
 
 assert_clamp(
-    layout.clips.v1_right,
-    "gap_before",
-    layout.clips.v1_left,
-    "gap_after",
+    "out",
+    "in",
     -5000,
     "negative gap collapse"
 )
 
 local function assert_dragged_clamp_with_selected_partner(delta_frames, scenario_label)
     local left_gap = {
-        clip_id = layout.clips.v1_left.id,
-        edge_type = "gap_after",
-        track_id = track_id_for_clip(layout.clips.v1_left),
+        clip_id = gap_id,
+        edge_type = "in",
+        track_id = layout.tracks.v1.id,
         trim_type = "ripple"
     }
     local right_gap = {
-        clip_id = layout.clips.v1_right.id,
-        edge_type = "gap_before",
-        track_id = track_id_for_clip(layout.clips.v1_right),
+        clip_id = gap_id,
+        edge_type = "out",
+        track_id = layout.tracks.v1.id,
         trim_type = "ripple"
     }
     local cmd = Command.create("BatchRippleEdit", layout.project_id)

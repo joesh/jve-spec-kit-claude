@@ -73,10 +73,11 @@ local function fetch_clip_start(clip_id)
     return math.floor(value / 30.0 * 1000.0 + 0.5)
 end
 
--- Build a BatchRippleEdit that includes a gap edge whose clip_id was accidentally
--- materialized (temp_gap_ prefix). Replay must sanitize this and still succeed.
+-- clip_left ends at frame 30, gap is 30..90 → gap_id = gap_track_v1_30
+local gap_id = string.format("gap_%s_%d", "track_v1", 30)
+
 local edge_infos = {
-    {clip_id = "temp_gap_clip_right", edge_type = "gap_before", track_id = "track_v1"},
+    {clip_id = gap_id, edge_type = "out", track_id = "track_v1"},
 }
 
 local cmd = Command.create("BatchRippleEdit", "default_project")
@@ -85,10 +86,10 @@ cmd:set_parameter("delta_frames", -15)  -- Drag ] LEFT: close gap by 500ms @30fp
 cmd:set_parameter("sequence_id", "default_sequence")
 
 local result = command_manager.execute(cmd)
-assert(result.success, result.error_message or "BatchRippleEdit failed with temp_gap edge")
+assert(result.success, result.error_message or "BatchRippleEdit failed with gap edge")
 
 -- Right clip should have moved left by 500ms
 assert(fetch_clip_start("clip_right") == 2500, "Right clip should shift left when gap edge is trimmed")
 
 os.remove(TEST_DB)
-print("✅ BatchRippleEdit replays temp_gap gap edges by sanitizing clip ids")
+print("✅ BatchRippleEdit handles gap clip edges correctly")

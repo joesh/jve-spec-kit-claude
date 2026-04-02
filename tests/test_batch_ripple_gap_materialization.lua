@@ -1,7 +1,8 @@
 #!/usr/bin/env luajit
 
--- Regression: gap edges must be materialized as temporary clips so BatchRippleEdit
--- can ripple the empty space between clips without touching media.
+-- Regression: gap clips in the track list allow BatchRippleEdit to
+-- ripple the empty space between clips without touching media.
+-- (Updated for gap-as-clip: gaps are real clips, not materialized on-the-fly.)
 
 require("test_env")
 
@@ -58,15 +59,18 @@ local function reset_db()
     command_manager.init("seq", "proj")
 end
 
+-- Gap is at [240, 720] on track v1 → gap_id = "gap_v1_240"
+local GAP_ID = "gap_v1_240"
+
 reset_db()
 local executor = command_manager.get_executor("BatchRippleEdit")
 assert(executor, "BatchRippleEdit executor unavailable")
 
--- Dry run: the plan MUST include a temp gap clip mutation.
+-- Dry run: gap clip should appear in affected_clips
 local dry_cmd = Command.create("BatchRippleEdit", "proj")
 dry_cmd:set_parameter("sequence_id", "seq")
 dry_cmd:set_parameter("edge_infos", {
-    {clip_id = "clip_left", edge_type = "gap_after", track_id = "v1", trim_type = "ripple"}
+    {clip_id = GAP_ID, edge_type = "in", track_id = "v1", trim_type = "ripple"}
 })
 dry_cmd:set_parameter("delta_frames", 120)
 dry_cmd:set_parameter("dry_run", true)
@@ -74,25 +78,26 @@ dry_cmd:set_parameter("dry_run", true)
 local dry_ok, dry_payload = executor(dry_cmd)
 assert(dry_ok and type(dry_payload) == "table", "BatchRippleEdit dry run failed")
 
-local found_temp_gap = false
-for _, gap_id in ipairs(dry_payload.materialized_gaps or {}) do
-    if type(gap_id) == "string" and gap_id:match("^temp_gap_") then
-        found_temp_gap = true
+-- Verify gap clip appears in preview data
+local found_gap = false
+for _, affected in ipairs(dry_payload.affected_clips or {}) do
+    if type(affected.clip_id) == "string" and affected.clip_id:match("^gap_") then
+        found_gap = true
         break
     end
 end
-assert(found_temp_gap, "BatchRippleEdit must materialize gap edges as temp_gap_* clips during dry run")
+assert(found_gap, "BatchRippleEdit should include gap clip in affected_clips during dry run")
 
--- Execute for real to ensure timeline semantics stay intact.
+-- Execute for real: ripple gap's in-edge by +120 → close gap, shift downstream left
 local cmd = Command.create("BatchRippleEdit", "proj")
 cmd:set_parameter("sequence_id", "seq")
 cmd:set_parameter("edge_infos", {
-    {clip_id = "clip_left", edge_type = "gap_after", track_id = "v1", trim_type = "ripple"}
+    {clip_id = GAP_ID, edge_type = "in", track_id = "v1", trim_type = "ripple"}
 })
-cmd:set_parameter("delta_frames", 120) -- drag [ right to close part of the gap and pull downstream clips upstream
+cmd:set_parameter("delta_frames", 120)
 
 local ok, _ = executor(cmd)
-assert(ok, "BatchRippleEdit gap-after ripple failed to execute")
+assert(ok, "BatchRippleEdit gap-in ripple failed to execute")
 
 local left = Clip.load("clip_left", db)
 local right = Clip.load("clip_right", db)
@@ -100,37 +105,36 @@ local right = Clip.load("clip_right", db)
 assert(left ~= nil, "Left clip missing after ripple")
 assert(right ~= nil, "Right clip missing after ripple")
 
--- Temp gap ensures the clip stays anchored in time with identical media bounds.
+-- Left clip stays anchored — gap ripple doesn't affect upstream media.
 assert(left.timeline_start == 0, string.format("Left clip moved to %d", left.timeline_start))
 assert(left.source_in == 0, "Left clip source_in should remain anchored")
 assert(left.source_out == 240, "Left clip duration should not change when closing downstream gap")
 assert(left.duration == 240, "Closing downstream gap must not trim the upstream clip media")
 
--- Downstream clip should shift upstream by the delta but keep its media range.
+-- Downstream clip shifts upstream by delta but keeps its media range.
 assert(right.timeline_start == 600,
     string.format("Right clip should shift upstream to 600, got %d", right.timeline_start))
 assert(right.source_in == 0 and right.source_out == 240,
     "Right clip media bounds should stay fixed while the gap closes")
 
--- Reset to original state and verify dragging the downstream gap handle LEFT (negative delta)
--- closes the gap even when command replay sanitizes the temp gap id.
+-- Reset and verify gap's out-edge: dragging right side left closes gap
 reset_db()
 
 local cmd_grow = Command.create("BatchRippleEdit", "proj")
 cmd_grow:set_parameter("sequence_id", "seq")
 cmd_grow:set_parameter("edge_infos", {
-    {clip_id = "clip_right", edge_type = "gap_before", track_id = "v1", trim_type = "ripple"}
+    {clip_id = GAP_ID, edge_type = "out", track_id = "v1", trim_type = "ripple"}
 })
 cmd_grow:set_parameter("delta_frames", -120)
 
 local ok_grow = executor(cmd_grow)
-assert(ok_grow, "BatchRippleEdit gap-before positive delta failed to execute")
+assert(ok_grow, "BatchRippleEdit gap-out ripple failed to execute")
 
 local left_after = Clip.load("clip_left", db)
 local right_after = Clip.load("clip_right", db)
-assert(left_after.timeline_start == 0, "Left clip should remain anchored when dragging gap handle right")
+assert(left_after.timeline_start == 0, "Left clip should remain anchored when dragging gap out edge")
 assert(right_after.timeline_start == 600,
-    string.format("Dragging gap handle left should close the gap; expected right clip at 600, got %d", right_after.timeline_start))
+    string.format("Dragging gap out-edge left should close the gap; expected right clip at 600, got %d", right_after.timeline_start))
 
 os.remove(DB)
-print("✅ BatchRippleEdit materializes gap edges and keeps upstream media untouched")
+print("✅ BatchRippleEdit handles gap clips and keeps upstream media untouched")

@@ -8,16 +8,29 @@ local Clip = require("models.clip")
 local ripple_layout = require("tests.helpers.ripple_layout")
 
 local function build_command(layout, clips, tracks, delta, lead_clip)
+    -- Compute gap IDs based on layout geometry
+    -- v1_left always starts at its timeline_start, gap starts at v1_left.timeline_start + v1_left.duration
+    local v1_gap_start = clips.v1_left.timeline_start + clips.v1_left.duration
+    local gap_id = string.format("gap_%s_%d", tracks.v1.id, v1_gap_start)
+
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
-        {clip_id = clips.v1_left.id, edge_type = "gap_after", track_id = tracks.v1.id, trim_type = "ripple"},
+        {clip_id = gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"},
         {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"}
     })
-    local lead = lead_clip == "v2" and clips.v2.id or clips.v1_left.id
+    local lead
+    local lead_edge_type
+    if lead_clip == "v2" then
+        lead = clips.v2.id
+        lead_edge_type = "out"
+    else
+        lead = gap_id
+        lead_edge_type = "in"
+    end
     cmd:set_parameter("lead_edge", {
         clip_id = lead,
-        edge_type = lead_clip == "v2" and "out" or "gap_after",
+        edge_type = lead_edge_type,
         track_id = lead_clip == "v2" and tracks.v2.id or tracks.v1.id,
         trim_type = "ripple"
     })

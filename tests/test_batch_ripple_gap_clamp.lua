@@ -57,9 +57,9 @@ command_manager.init("default_sequence", "default_project")
 local cmd = Command.create("BatchRippleEdit", "default_project")
 cmd:set_parameter("sequence_id", "default_sequence")
 cmd:set_parameter("edge_infos", {
-    {clip_id = "clip_left_v2", edge_type = "gap_after", track_id = "track_v2"}
+    {clip_id = "gap_track_v2_5000", edge_type = "in", track_id = "track_v2"}
 })
-cmd:set_parameter("delta_frames", 20000) -- drag upstream [ RIGHT to close until clamp
+cmd:set_parameter("delta_frames", 20000) -- drag gap in-edge RIGHT to close until clamp
 
 local result = command_manager.execute(cmd)
 assert(result.success, result.error_message or "BatchRippleEdit should clamp instead of overlapping")
