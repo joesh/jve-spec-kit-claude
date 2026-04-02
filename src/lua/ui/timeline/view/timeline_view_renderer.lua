@@ -745,6 +745,10 @@ function M.render(view)
                         if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
                             goto continue_clip
                         end
+                        -- Gap clips are invisible (empty space) — don't render
+                        if clip.clip_kind == "gap" then
+                            goto continue_clip
+                        end
                         local clip_start = clip.timeline_start
                         if clip_start >= viewport_end then
                             break

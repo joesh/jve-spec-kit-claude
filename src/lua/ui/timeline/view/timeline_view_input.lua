@@ -119,6 +119,12 @@ local function find_clip_under_cursor(view, x, y, width, height)
         if type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
             goto continue_clip
         end
+        -- Gap clips use the separate gap selection path (selected_gaps),
+        -- not the clip selection path. Returning them here would cause
+        -- DeleteClip to try deleting an in-memory-only clip from DB.
+        if clip.clip_kind == "gap" then
+            goto continue_clip
+        end
         local start_frames = clip.timeline_start
         if start_frames > target_frames then
             break
@@ -143,12 +149,11 @@ local function find_gap_at_time(view, track_id, time_frame)
         return nil
     end
 
+    -- TEMPORARILY REVERTED for TDD: old gap scanning logic (broken with gap-as-clip)
     local previous_end = 0
-    local previous_clip_id = nil
-
     for _, clip in ipairs(clips_on_track) do
         if type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
-            goto continue_clip
+            goto continue_gap
         end
         local gap_start = previous_end
         local gap_end = clip.timeline_start
@@ -157,14 +162,12 @@ local function find_gap_at_time(view, track_id, time_frame)
             return {
                 track_id = track_id,
                 start_value = gap_start,
+                duration_value = gap_duration,
                 duration = gap_duration,
-                prev_clip_id = previous_clip_id,
-                next_clip_id = clip.id
             }
         end
         previous_end = clip.timeline_start + clip.duration
-        previous_clip_id = clip.id
-        ::continue_clip::
+        ::continue_gap::
     end
     return nil
 end
