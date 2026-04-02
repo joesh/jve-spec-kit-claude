@@ -28,6 +28,7 @@ local command_manager = require("core.command_manager")
 local Command = require("command")
 local Signals = require("core.signals")
 local project_gen = require("core.project_generation")
+local gap_lifecycle = require("core.gap_lifecycle")
 
 local persist_timer = nil
 local persist_dirty = false
@@ -41,6 +42,52 @@ local function create_single_shot_timer(delay_ms, callback)
     end
     callback()
     return nil
+end
+
+--- Compute gap clips for all tracks and inject them into data.state.clips.
+-- Called after loading clips from DB. Gaps are in-memory only — never persisted.
+local function inject_gap_clips()
+    local clips = data.state.clips
+    local tracks = data.state.tracks
+    if not clips or not tracks or #tracks == 0 then return end
+
+    -- Need sequence frame rate for gap clip fps fields
+    local seq_fr = data.state.sequence_frame_rate
+    if not seq_fr then return end
+
+    -- Build per-track sorted clip lists (media clips only)
+    local track_clips = {}
+    for _, clip in ipairs(clips) do
+        if clip.track_id then
+            local list = track_clips[clip.track_id]
+            if not list then
+                list = {}
+                track_clips[clip.track_id] = list
+            end
+            table.insert(list, clip)
+        end
+    end
+
+    -- Sort each track's clips by timeline_start
+    for _, list in pairs(track_clips) do
+        table.sort(list, function(a, b)
+            if a.timeline_start == b.timeline_start then
+                return (a.id or "") < (b.id or "")
+            end
+            return a.timeline_start < b.timeline_start
+        end)
+    end
+
+    -- Compute gaps for each track and append to clip list
+    for _, track in ipairs(tracks) do
+        if track.id then
+            local sorted = track_clips[track.id] or {}
+            local gaps = gap_lifecycle.compute_gaps_for_track(track.id, sorted, seq_fr)
+            for _, gap in ipairs(gaps) do
+                table.insert(clips, gap)
+            end
+        end
+    end
 end
 
 local TRACK_HEIGHT_TEMPLATE_KEY = "track_height_template"
@@ -309,6 +356,10 @@ function M.init(sequence_id, project_id)
     assert(sequence.frame_rate.fps_numerator and sequence.frame_rate.fps_denominator,
         string.format("FATAL: Sequence %s has NULL frame rate in database", tostring(sequence_id)))
 
+    -- Compute and inject in-memory gap clips for all tracks
+    inject_gap_clips()
+    clip_state.invalidate_indexes()
+
     -- Restore Playhead from sequence model
     data.state.playhead_position = sequence.playhead_position
 
@@ -407,6 +458,7 @@ function M.reload_clips(target_sequence_id, opts)
     end
 
     data.state.clips = db.load_clips(active)
+    inject_gap_clips()
     clip_state.invalidate_indexes()
 
     -- Refresh selection objects

@@ -89,22 +89,20 @@ function M.select_boundary_edges(track_clips, target_clip, side, click_type)
             track_id = clip.track_id
         }
 
-        -- Right side of boundary: next clip's in edge or gap
+        -- Right side of boundary: next clip's in edge (gap or media)
+        -- With gap-as-clip, gap clips are in the track list. The next clip
+        -- at this boundary is always found — it's either a media clip or a gap clip.
         local right_edge
         if next_clip and next_clip.timeline_start == boundary_time then
-            -- Adjacent clip
             right_edge = {
                 clip_id = next_clip.id,
                 edge_type = "in",
                 track_id = next_clip.track_id
             }
         else
-            -- Gap after this clip
-            right_edge = {
-                clip_id = clip.id,
-                edge_type = "gap_after",
-                track_id = clip.track_id
-            }
+            -- No adjacent clip — this clip is at the end of the track.
+            -- No roll partner available.
+            right_edge = nil
         end
 
         if click_type == "roll" then
@@ -126,22 +124,19 @@ function M.select_boundary_edges(track_clips, target_clip, side, click_type)
             track_id = clip.track_id
         }
 
-        -- Left side of boundary: prev clip's out edge or gap
+        -- Left side of boundary: prev clip's out edge (gap or media)
+        -- With gap-as-clip, the previous clip is always found if one exists.
         local left_edge
         if prev_clip and (prev_clip.timeline_start + prev_clip.duration) == boundary_time then
-            -- Adjacent clip
             left_edge = {
                 clip_id = prev_clip.id,
                 edge_type = "out",
                 track_id = prev_clip.track_id
             }
         else
-            -- Gap before this clip
-            left_edge = {
-                clip_id = clip.id,
-                edge_type = "gap_before",
-                track_id = clip.track_id
-            }
+            -- No adjacent clip — this clip is at the start of the track.
+            -- No roll partner available.
+            left_edge = nil
         end
 
         if click_type == "roll" then
@@ -203,16 +198,11 @@ function M.build_boundaries(track_clips, time_to_pixel, viewport_width)
         local start_px = time_to_pixel(start_frames, viewport_width)
         local end_px = time_to_pixel(end_frames, viewport_width)
 
+        -- With gap-as-clip, all boundaries are clip:out / clip:in pairs.
+        -- Gap clips appear in the sorted list like any other clip.
         local start_boundary = boundaries[start_frames] or {time = start_frames, px = start_px}
         if prev and (prev.timeline_start + prev.duration) == start_frames then
             start_boundary.left = {clip = prev, clip_id = prev.id, edge_type = "out"}
-        else
-            -- Gap before this clip: gap runs from prev clip's end (or frame 0) to this clip's start
-            local prev_end_frame = prev and (prev.timeline_start + prev.duration) or 0
-            start_boundary.left = start_boundary.left or {
-                clip = clip, clip_id = clip.id, edge_type = "gap_before",
-                gap_other_end_time = prev_end_frame  -- where gap starts (integer frame)
-            }
         end
         start_boundary.right = {clip = clip, clip_id = clip.id, edge_type = "in"}
         boundaries[start_frames] = start_boundary
@@ -221,12 +211,6 @@ function M.build_boundaries(track_clips, time_to_pixel, viewport_width)
         end_boundary.left = {clip = clip, clip_id = clip.id, edge_type = "out"}
         if next_clip and (clip.timeline_start + clip.duration) == next_clip.timeline_start then
             end_boundary.right = {clip = next_clip, clip_id = next_clip.id, edge_type = "in"}
-        else
-            -- Gap after this clip: gap runs from this clip's end to next clip's start (or nil = infinity)
-            end_boundary.right = end_boundary.right or {
-                clip = clip, clip_id = clip.id, edge_type = "gap_after",
-                gap_other_end_time = next_clip and next_clip.timeline_start or nil  -- where gap ends (nil = infinity)
-            }
         end
         boundaries[end_frames] = end_boundary
     end
@@ -281,7 +265,7 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
 
     local function edge_is_gap(entry)
         if not entry then return false end
-        return entry.edge_type == "gap_before" or entry.edge_type == "gap_after"
+        return entry.clip and entry.clip.clip_kind == "gap"
     end
 
     -- Calculate element width in pixels for an edge entry
@@ -289,27 +273,12 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
         if not entry then return nil end
         local edge_type = entry.edge_type
 
-        if edge_type == "in" or edge_type == "out" then
-            -- Clip inner edge: use clip's pixel width
-            local clip = entry.clip
-            if clip and clip.timeline_start and clip.duration then
-                local start_px = time_to_pixel(clip.timeline_start, viewport_width)
-                local end_px = time_to_pixel(clip.timeline_start + clip.duration, viewport_width)
-                return end_px - start_px
-            end
-        elseif edge_type == "gap_before" then
-            -- Gap from gap_other_end_time to this boundary
-            if entry.gap_other_end_time then
-                local gap_start_px = time_to_pixel(entry.gap_other_end_time, viewport_width)
-                return boundary_px - gap_start_px
-            end
-        elseif edge_type == "gap_after" then
-            -- Gap from this boundary to gap_other_end_time
-            if entry.gap_other_end_time then
-                local gap_end_px = time_to_pixel(entry.gap_other_end_time, viewport_width)
-                return gap_end_px - boundary_px
-            end
-            -- nil gap_other_end_time = gap extends to infinity, always selectable
+        -- All edges use the clip's pixel width (gap clips included)
+        local c = entry.clip
+        if c and c.timeline_start and c.duration then
+            local start_px = time_to_pixel(c.timeline_start, viewport_width)
+            local end_px = time_to_pixel(c.timeline_start + c.duration, viewport_width)
+            return end_px - start_px
         end
         return nil
     end

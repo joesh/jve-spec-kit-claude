@@ -33,8 +33,8 @@ local function check_gap_after_stale(clip)
 
     local clip_end = clip.timeline_start + clip.duration
     for _, other in ipairs(track_clips) do
-        if other.id ~= clip.id and other.timeline_start == clip_end then
-            -- Adjacent clip found - gap is closed
+        if other.id ~= clip.id and other.clip_kind ~= "gap" and other.timeline_start == clip_end then
+            -- Adjacent media clip found - gap is closed
             -- Convert to "in" edge on the ADJACENT clip
             return {edge_type = "in", clip_id = other.id}
         end
@@ -53,10 +53,10 @@ local function check_gap_before_stale(clip)
 
     local clip_start = clip.timeline_start
     for _, other in ipairs(track_clips) do
-        if other.id ~= clip.id then
+        if other.id ~= clip.id and other.clip_kind ~= "gap" then
             local other_end = other.timeline_start + other.duration
             if other_end == clip_start then
-                -- Adjacent clip found - gap is closed
+                -- Adjacent media clip found - gap is closed
                 -- Convert to "out" edge on the ADJACENT clip
                 return {edge_type = "out", clip_id = other.id}
             end
