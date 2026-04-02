@@ -416,8 +416,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
 
             for _, clip_id in ipairs(clip_ids) do
-                local is_temp_gap = type(clip_id) == "string" and clip_id:find("^temp_gap_")
-                local clip = is_temp_gap and snapshot.clip_lookup[clip_id] or Clip.load_optional(clip_id)
+                local is_gap = type(clip_id) == "string" and (clip_id:find("^gap_") or clip_id:find("^temp_gap_"))
+                local clip = is_gap and snapshot.clip_lookup[clip_id] or Clip.load_optional(clip_id)
                 if clip then
                     table.insert(ctx.all_clips, clip)
                     ctx.clip_lookup[clip_id] = clip
@@ -479,6 +479,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local gaps = gap_lifecycle.compute_gaps_for_track(track_id, sorted_clips, seq_fps)
             for _, gap in ipairs(gaps) do
                 table.insert(ctx.all_clips, gap)
+                log.detail("build_clip_cache: computed gap %s (start=%d dur=%d)", gap.id, gap.timeline_start, gap.duration)
             end
         end
 
