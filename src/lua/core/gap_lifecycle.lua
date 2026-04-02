@@ -55,7 +55,31 @@ end
 -- @param seq_fps table {fps_numerator, fps_denominator}
 -- @return table Array of gap clips (may be empty)
 function M.compute_gaps_for_track(track_id, sorted_media_clips, seq_fps)
-    return {}
+    assert(track_id, "compute_gaps_for_track: track_id required")
+    assert(type(sorted_media_clips) == "table", "compute_gaps_for_track: sorted_media_clips must be table")
+    assert(seq_fps, "compute_gaps_for_track: seq_fps required")
+
+    if #sorted_media_clips == 0 then
+        return {}
+    end
+
+    local gaps = {}
+    local cursor = 0  -- current position scanning left-to-right
+
+    for _, clip in ipairs(sorted_media_clips) do
+        assert(type(clip.timeline_start) == "number",
+            "compute_gaps_for_track: clip.timeline_start must be integer")
+        assert(type(clip.duration) == "number",
+            "compute_gaps_for_track: clip.duration must be integer")
+
+        local gap_size = clip.timeline_start - cursor
+        if gap_size > 0 then
+            table.insert(gaps, make_gap_clip(track_id, cursor, gap_size, seq_fps))
+        end
+        cursor = clip.timeline_start + clip.duration
+    end
+
+    return gaps
 end
 
 --- Locally recompute gaps after an edit.
@@ -68,7 +92,57 @@ end
 -- @param seq_fps table {fps_numerator, fps_denominator}
 -- @return table Updated array of all clips (media + gap)
 function M.update_gaps_after_edit(track_id, sorted_all_clips, changed_clip_ids, seq_fps)
-    return {}
+    assert(track_id, "update_gaps_after_edit: track_id required")
+    assert(type(sorted_all_clips) == "table", "update_gaps_after_edit: sorted_all_clips must be table")
+    assert(seq_fps, "update_gaps_after_edit: seq_fps required")
+
+    -- Extract only media clips (strip existing gaps), then recompute gaps.
+    -- This is correct because gaps are derived state — always recomputable
+    -- from media clip positions. Local optimization can come later if needed.
+    local media_clips = {}
+    for _, clip in ipairs(sorted_all_clips) do
+        if clip.clip_kind ~= "gap" then
+            table.insert(media_clips, clip)
+        end
+    end
+
+    -- Sort by timeline_start
+    table.sort(media_clips, function(a, b)
+        if a.timeline_start == b.timeline_start then
+            return (a.id or "") < (b.id or "")
+        end
+        return a.timeline_start < b.timeline_start
+    end)
+
+    -- Recompute gaps from media positions
+    local gaps = M.compute_gaps_for_track(track_id, media_clips, seq_fps)
+
+    -- Interleave media and gaps into sorted result
+    local result = {}
+    local gi = 1
+    for _, clip in ipairs(media_clips) do
+        -- Insert any gaps that come before this clip
+        while gi <= #gaps and gaps[gi].timeline_start < clip.timeline_start do
+            table.insert(result, gaps[gi])
+            gi = gi + 1
+        end
+        -- Insert gap at same position (gap ends where clip starts)
+        while gi <= #gaps and gaps[gi].timeline_start + gaps[gi].duration <= clip.timeline_start
+              and gaps[gi].timeline_start >= (result[#result] and (result[#result].timeline_start + result[#result].duration) or 0) do
+            if gaps[gi].timeline_start + gaps[gi].duration == clip.timeline_start then
+                table.insert(result, gaps[gi])
+            end
+            gi = gi + 1
+        end
+        table.insert(result, clip)
+    end
+    -- Append remaining gaps after last clip
+    while gi <= #gaps do
+        table.insert(result, gaps[gi])
+        gi = gi + 1
+    end
+
+    return result
 end
 
 --- Create a zero-length implied gap clip at the given position.
@@ -79,7 +153,11 @@ end
 -- @param seq_fps table {fps_numerator, fps_denominator}
 -- @return table|nil Gap clip, or nil if position is invalid
 function M.create_implied_gap(track_id, position, seq_fps)
-    return nil
+    assert(track_id, "create_implied_gap: track_id required")
+    assert(type(position) == "number", "create_implied_gap: position must be integer")
+    assert(seq_fps, "create_implied_gap: seq_fps required")
+
+    return make_gap_clip(track_id, position, 0, seq_fps)
 end
 
 return M
