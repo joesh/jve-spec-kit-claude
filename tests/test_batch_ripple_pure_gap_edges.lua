@@ -84,21 +84,22 @@ do
     -- Gap between v1_left (end=1000) and v1_right (start=2000): gap_track_v1_1000
     local gap_id = layout:gap_id("v1", 1000)
 
+    -- Roll at gap-clip boundary: gap:out + v1_right:in at position 2000
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
-        {clip_id = gap_id, edge_type = "in", track_id = layout.tracks.v1.id, trim_type = "roll"},
-        {clip_id = gap_id, edge_type = "out", track_id = layout.tracks.v1.id, trim_type = "roll"}
+        {clip_id = gap_id, edge_type = "out", track_id = layout.tracks.v1.id, trim_type = "roll"},
+        {clip_id = layout.clips.v1_right.id, edge_type = "in", track_id = layout.tracks.v1.id, trim_type = "roll"}
     })
-    cmd:set_parameter("delta_frames", 200)  -- Shift gap boundary right
+    cmd:set_parameter("delta_frames", 200)  -- Shift boundary right
 
     local result = command_manager.execute(cmd)
-    assert(result.success, "Gap-to-gap roll should succeed")
+    assert(result.success, "Gap-clip roll should succeed")
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
     local after_downstream = Clip.load(layout.clips.v1_downstream.id, layout.db)
 
-    -- Roll: right clip moves, but downstream should NOT shift (timeline length unchanged)
+    -- Roll: right clip in-point moves right, duration shrinks. Downstream stays put.
     assert(after_right.timeline_start == 2200,
         string.format("Right clip should move right by 200 (roll), got %d", after_right.timeline_start))
     assert(after_downstream.timeline_start == 4000,

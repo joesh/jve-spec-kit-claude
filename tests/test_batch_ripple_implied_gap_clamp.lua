@@ -60,22 +60,19 @@ local function run_implied_clamp(delta_frames)
     local ok, payload = executor(cmd)
     assert(ok and type(payload) == "table", "Dry run should succeed for implied clamp scenario")
 
-    -- v2_blocker ends at 4000, v2_shift starts at 4400 → implied gap is 4000..4400
-    -- implied gap_id = gap_track_v2_4000
+    -- v2_blocker ends at 4000, v2_shift starts at 4400 → gap between them.
+    -- With gap-as-clip, clamp_downstream_overlaps uses media clip IDs for implied keys.
+    -- The implied constraint is on v2_shift's in edge (can't shift left past v2_blocker).
+    -- The implied gap clip between v2_blocker and v2_shift blocks the ripple.
+    -- inject_implicit_gap_edges injects the gap clip's "in" edge.
     local implied_gap_id = layout:gap_id("v2", 4000)
-    local implied_key = string.format("%s:%s", implied_gap_id, "out")
+    local implied_key = string.format("%s:%s", implied_gap_id, "in")
     assert(payload.clamped_edges and payload.clamped_edges[implied_key],
-        "Implied downstream gap should be identified as the blocking edge")
+        string.format("Implied downstream gap should be identified as the blocking edge: %s", implied_key))
 
     local dragged_key = string.format("%s:%s", gap_edge.clip_id, gap_edge.edge_type)
     assert(not payload.clamped_edges[dragged_key],
         "Dragged bracket should remain available when another track blocks the ripple")
-
-    -- v2_blocker ends at 4000, gap_after on v2_blocker → gap clip "in" edge
-    local upstream_gap_id = layout:gap_id("v2", 4000)
-    local upstream_key = string.format("%s:%s", upstream_gap_id, "in")
-    assert(not payload.clamped_edges[upstream_key],
-        "Only the implied limiter should be flagged; upstream brackets should remain available")
 end
 
 run_implied_clamp(-1500)

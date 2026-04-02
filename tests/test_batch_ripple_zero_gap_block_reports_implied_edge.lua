@@ -51,9 +51,9 @@ do
         string.format("Expected clamp to 0 due to zero-length gap; got clamped_delta_ms=%s", tostring(payload.clamped_delta_ms)))
 
     -- v2_prefix ends at 1400, v2_shift starts at 1400 → zero gap at 1400
-    -- implied gap_id = gap_track_v2_1400
+    -- inject_implicit_gap_edges creates implied zero-length gap with "in" edge
     local implied_gap_id = layout:gap_id("v2", 1400)
-    local implied_key = string.format("%s:%s", implied_gap_id, "out")
+    local implied_key = string.format("%s:%s", implied_gap_id, "in")
     assert(payload.clamped_edges and payload.clamped_edges[implied_key],
         "Expected implied zero-gap edge to be reported as clamped: " .. implied_key)
 

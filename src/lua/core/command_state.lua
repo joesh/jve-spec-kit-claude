@@ -223,6 +223,16 @@ function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json)
     if not clip_id then
         return nil
     end
+    -- Gap clips are in-memory only — look up in timeline_state
+    local is_gap = type(clip_id) == "string" and clip_id:find("^gap_")
+    if is_gap then
+        if timeline_state.get_clip_by_id then
+            local clip = timeline_state.get_clip_by_id(clip_id)
+            if clip then return clip end
+        end
+        log.warn("Failed to restore selection for gap clip %s (not in timeline_state)", tostring(clip_id))
+        return nil
+    end
     local clip = Clip.load_optional(clip_id, db)
     if not clip then
         log.warn("Failed to restore selection for clip %s (clip not found)", tostring(clip_id))
@@ -246,6 +256,7 @@ function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json)
         for _, info in ipairs(edge_infos) do
             if type(info) == "table" and info.clip_id and info.edge_type then
                 local clip_id = info.clip_id
+                -- Legacy: resolve old temp_gap_ prefixed IDs from pre-refactor undo records
                 if type(clip_id) == "string" and clip_id:find("^" .. TEMP_GAP_PREFIX) then
                     local resolved = resolve_gap_clip_id(info)
                     if resolved then clip_id = resolved end

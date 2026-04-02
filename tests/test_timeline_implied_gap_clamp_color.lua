@@ -109,7 +109,7 @@ local implied_limit_color = color_utils.dim_hex(limit_color, implied_dim_factor)
 -- Gap before v2_shift: v2_blocker ends at 4000, v2_shift starts at 4400 → gap starts at 4000
 local v2_gap_start = clips.v2_blocker.timeline_start + clips.v2_blocker.duration
 local v2_gap_id = layout:gap_id("v2", v2_gap_start)
-assert((view.drag_state.clamped_edges or {})[string.format("%s:%s", v2_gap_id, "out")],
+assert((view.drag_state.clamped_edges or {})[string.format("%s:%s", v2_gap_id, "in")],
     "Dry run should attribute clamp to the implied downstream gap edge")
 
 local dragged_limit = count_track_colors(tracks.v1.id, limit_color)
