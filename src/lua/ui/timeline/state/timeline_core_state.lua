@@ -53,7 +53,13 @@ local function recompute_gap_clips()
     if not clips or not tracks or #tracks == 0 then return end
 
     local seq_fr = data.state.sequence_frame_rate
-    if not seq_fr then return end
+    -- sequence_frame_rate may not be set yet during early init (before sequence load).
+    -- Only assert when we have an active sequence — otherwise silent skip is correct.
+    if not seq_fr then
+        assert(not data.state.sequence_id or data.state.sequence_id == "",
+            "recompute_gap_clips: sequence_frame_rate is nil but sequence_id is set")
+        return
+    end
 
     -- Strip existing gap clips from the list
     local media_only = {}

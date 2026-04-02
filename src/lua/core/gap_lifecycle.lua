@@ -76,7 +76,12 @@ function M.compute_gaps_for_track(track_id, sorted_media_clips, seq_fps)
         if gap_size > 0 then
             table.insert(gaps, make_gap_clip(track_id, cursor, gap_size, seq_fps))
         end
-        cursor = clip.timeline_start + clip.duration
+        -- Advance cursor past this clip. For overlapping clips (gap_size < 0),
+        -- only advance if this clip extends further than current cursor.
+        local clip_end = clip.timeline_start + clip.duration
+        if clip_end > cursor then
+            cursor = clip_end
+        end
     end
 
     return gaps

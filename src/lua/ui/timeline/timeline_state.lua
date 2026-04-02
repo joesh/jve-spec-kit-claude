@@ -148,10 +148,10 @@ local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_c
     -- Gaps are derived state — always recomputed, never mutated directly.
     if changed then
         local core_state = require("ui.timeline.state.timeline_core_state")
-        if core_state.recompute_gap_clips then
-            core_state.recompute_gap_clips()
-            clips.invalidate_indexes()
-        end
+        assert(core_state.recompute_gap_clips,
+            "timeline_state.apply_mutations: core_state.recompute_gap_clips must exist")
+        core_state.recompute_gap_clips()
+        clips.invalidate_indexes()
     end
     Signals.emit("timeline_mutations_applied", mutations, changed)
     return changed
