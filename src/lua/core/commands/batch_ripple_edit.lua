@@ -441,7 +441,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             assert(type(snapshot.track_clip_map) == "table", "build_clip_cache: __preloaded_clip_snapshot.track_clip_map is required")
             if ctx.dry_run then
                 ctx.all_clips = snapshot.clips
-                ctx.clip_lookup = snapshot.clip_lookup
+                -- Shallow-copy clip_lookup so register_temp_gap doesn't
+                -- pollute the shared snapshot across preview/commit cycles.
+                local lookup_copy = {}
+                for k, v in pairs(snapshot.clip_lookup) do lookup_copy[k] = v end
+                ctx.clip_lookup = lookup_copy
                 ctx.clip_track_lookup = snapshot.clip_track_lookup
                 ctx.track_clip_map = snapshot.track_clip_map
                 ctx.track_clip_positions = snapshot.track_clip_positions
@@ -804,9 +808,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        local is_gap = is_gap_edge(raw_edge_type)
 
         if is_gap and trim_type == "roll" then
-            new_duration_timeline = clip.duration
             if edge_type == "in" then
                 clip.timeline_start = clip.timeline_start + delta_frames
+                new_duration_timeline = clip.duration - delta_frames
+            else
+                new_duration_timeline = clip.duration + delta_frames
             end
         elseif edge_type == "in" then
             new_duration_timeline = clip.duration - delta_frames
@@ -875,19 +881,28 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Pre-compute which tracks have roll edit points (multiple CLIP roll edges on same track).
         -- Gap edges (gap_before/gap_after) don't count - they're part of the same edit as the clip edge.
         -- Roll edges on these tracks use global constraints; multitrack roll uses per-edge.
+        -- Tracks with a roll edit point use global constraints (not per-edge).
+        -- A roll edit point is:
+        --   - clip-clip: 2+ clip roll edges on same track (out + in)
+        --   - clip-gap:  1 clip roll edge + 1 gap roll edge on same track
+        -- Without this, clip-gap rolls get treated as multitrack_roll
+        -- (per-edge constraints) which produces wrong behavior.
         ctx.roll_edit_point_tracks = {}
-        local roll_count_by_track = {}
+        local roll_clip_edges_by_track = {}
+        local roll_gap_edges_by_track = {}
         for _, edge_info in ipairs(ctx.edge_infos) do
             if edge_info.trim_type == "roll" and edge_info.track_id then
-                -- Only count clip edges (in/out), not gap edges
                 local edge_type = edge_info.edge_type
                 if edge_type == "in" or edge_type == "out" then
-                    roll_count_by_track[edge_info.track_id] = (roll_count_by_track[edge_info.track_id] or 0) + 1
+                    roll_clip_edges_by_track[edge_info.track_id] = (roll_clip_edges_by_track[edge_info.track_id] or 0) + 1
+                elseif edge_type == "gap_before" or edge_type == "gap_after" then
+                    roll_gap_edges_by_track[edge_info.track_id] = true
                 end
             end
         end
-        for track_id, count in pairs(roll_count_by_track) do
-            if count > 1 then
+        for track_id, clip_count in pairs(roll_clip_edges_by_track) do
+            -- clip-clip roll: 2+ clip edges, OR clip-gap roll: 1 clip edge + gap edge
+            if clip_count > 1 or (clip_count >= 1 and roll_gap_edges_by_track[track_id]) then
                 ctx.roll_edit_point_tracks[track_id] = true
             end
         end
@@ -1262,13 +1277,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local original_end = original_gap.timeline_start + original_gap.duration
         local new_end = gap_clip.timeline_start + gap_clip.duration
         local shift = new_end - original_end
+        -- The right edge (end) is what determines the right clip's position.
+        -- If the end didn't move, the right clip stays — even if the gap's
+        -- start moved (e.g., gap shrank during a roll).
         if shift == 0 then
-            shift = gap_clip.timeline_start - original_gap.timeline_start
+            return 0
         end
         if shift == 0 and ctx.gap_applied_delta[gap_id] then
-            -- Only fall back to the raw applied delta if the gap's position or
-            -- size actually changed. A zero-length gap that was clamped (tried to
-            -- compress below 0) should produce shift=0 — the gap absorbed nothing.
             local pos_changed = gap_clip.timeline_start ~= original_gap.timeline_start
             local dur_changed = gap_clip.duration ~= original_gap.duration
             if pos_changed or dur_changed then
@@ -1286,9 +1301,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        if not right_id or ctx.gap_right_moved[right_id] then
 	            return
 	        end
-	        -- Roll edits don't propagate to adjacent clips UNLESS that clip has its own
-	        -- selected edge (e.g., gap_after + gap_before roll where both sides are selected)
-	        if gap_clip.trim_type == "roll" and not clip_has_selected_edge(ctx, right_id) then
+	        -- Roll edits don't propagate to adjacent clips UNLESS the gap or its
+	        -- right clip has a selected edge. In a clip-gap roll, the gap clip's
+	        -- edge IS selected (via materialize_gap_edges), so propagation proceeds.
+	        if gap_clip.trim_type == "roll"
+	            and not clip_has_selected_edge(ctx, right_id)
+	            and not clip_has_selected_edge(ctx, gap_id) then
 	            return
 	        end
 	        if gap_right_has_independent_in_edge(ctx, right_id) then

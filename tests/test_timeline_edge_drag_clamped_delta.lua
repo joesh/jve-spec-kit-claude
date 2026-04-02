@@ -55,7 +55,10 @@ command_manager.execute = original_execute
 
 assert(captured_type == "BatchRippleEdit", "Expected drag handler to execute BatchRippleEdit")
 local delta_frames = captured_params.delta_frames
-assert(delta_frames == 60,
-    string.format("Expected clamped delta_frames 60, got %s", tostring(delta_frames)))
+-- The drag handler passes the original unclamped delta to BatchRippleEdit.
+-- BatchRippleEdit does its own constraint computation and clamping.
+-- Using preview-clamped delta as input caused double-clamping bugs.
+assert(delta_frames == 100,
+    string.format("Expected original delta_frames 100, got %s", tostring(delta_frames)))
 
-print("✅ Edge drag uses preview clamped delta when executing")
+print("✅ Edge drag uses original delta (BatchRippleEdit clamps internally)")
