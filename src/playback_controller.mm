@@ -1484,7 +1484,9 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     // Trigger: audio stall (buf=0 for AUDIO_DRY_CONSECUTIVE ticks).
     // Frame stride engages independently in updateStrideDetection().
     // When engaged, video position = audio clock position. No PLL, no drift.
-    // Skipped for backward play (same reason as PLL skip below).
+    // Audio-master skipped for backward play: stalled backward audio would
+    // freeze video at the stalled position. PLL with drift cap handles the
+    // cadence correction instead.
     if (dir > 0 &&
         m_has_audio.load(std::memory_order_relaxed) &&
         m_audio_pump && m_audio_pump->IsRunning() && m_aop) {
@@ -1533,25 +1535,39 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     }
 
     // Step 1: PLL correction from A/V drift.
-    // Skipped for backward play: reverse audio is best-effort (all NLEs treat
-    // it this way). The backward audio path (SSE→TMB) can't reliably maintain
-    // sync, causing drift to grow monotonically. PLL responds by throttling
-    // video to ~200ms/frame — making backward play 4x slower than forward.
-    // Without PLL, video runs at native rate; audio plays as best it can.
+    // Caps drift magnitude to 0.5s: beyond that, audio is likely stalled
+    // (common during backward play when SSE→TMB can't keep up). Without
+    // capping, stalled audio causes drift to grow to 4s+, and PLL throttles
+    // video to ~200ms/frame. With the cap, PLL corrects cadence jitter
+    // when audio is healthy but stops overcorrecting when audio stalls.
     double pll_adjust = 0.0;
     double diff_seconds = 0.0;
     bool has_drift_measurement = false;
 
-    if (dir > 0 &&
-        m_has_audio.load(std::memory_order_relaxed) &&
+    if (m_has_audio.load(std::memory_order_relaxed) &&
         m_audio_pump && m_audio_pump->IsRunning() && m_aop) {
 
         int64_t aop_playhead = m_aop->PlayheadTimeUS();
         int64_t audio_time_us = m_clock.CurrentTimeUS(aop_playhead);
         int64_t video_time_us = (current * 1000000LL * m_fps_den) / m_fps_num;
         diff_seconds = static_cast<double>(video_time_us - audio_time_us) / 1000000.0;
-        double drift_frames = diff_seconds * m_fps;
         has_drift_measurement = true;
+
+        // For backward play, audio often stalls (drift grows to seconds).
+        // PLL must still correct CVDisplayLink cadence jitter (~33ms/42ms
+        // alternation) but must NOT throttle video for large positive drift.
+        // Solution: ignore the audio-derived drift for backward; instead
+        // correct based on the fractional accumulator's deviation from the
+        // ideal cadence. For forward, use full audio-based correction.
+        double drift_frames;
+        if (dir > 0) {
+            drift_frames = diff_seconds * m_fps;
+        } else {
+            // Backward cadence correction: nudge fractional_frames toward
+            // 0.0 (the ideal state after each whole-frame advance).
+            // This corrects CVDisplayLink jitter without any audio dependency.
+            drift_frames = m_fractional_frames * 0.5;  // half the residual
+        }
 
         pll_adjust = std::clamp(drift_frames * PLL_GAIN, -PLL_MAX_CORRECTION, PLL_MAX_CORRECTION);
     }
