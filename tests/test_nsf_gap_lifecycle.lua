@@ -49,7 +49,7 @@ print("  ✓ clip with nil timeline_start asserts")
 
 -- create_implied_gap: nil position must assert
 do
-    local ok, err = pcall(gap_lifecycle.create_implied_gap, "v1", nil, SEQ_FPS)
+    local ok = pcall(gap_lifecycle.create_implied_gap, "v1", nil, SEQ_FPS)
     assert(not ok, "nil position must assert")
 end
 print("  ✓ nil position asserts")

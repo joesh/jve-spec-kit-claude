@@ -1355,6 +1355,10 @@ void TimelineMediaBuffer::set_already_fetched_video(const TrackId& track, int64_
     }
 }
 
+void TimelineMediaBuffer::AdvanceVideoBufferEnd(TrackId track, int64_t pos, int direction) {
+    set_already_fetched_video(track, pos, direction);
+}
+
 int64_t TimelineMediaBuffer::GetVideoBufferEnd(TrackId track) const {
     std::lock_guard<std::mutex> lock(m_tracks_mutex);
     auto it = m_tracks.find(track);

@@ -868,6 +868,37 @@ void PlaybackController::Play(int direction, float speed) {
     // contention with the async REFILL jobs that SetPlayhead() just submitted.
     waitForVideoCache(pos, PREROLL_TIMEOUT_MS);
 
+    // Backward pre-fill: decode frames BELOW playhead via forward sequential
+    // decode. GetVideoFrame(cache_only=false) does sync decode on this thread.
+    // Sequential forward calls are fast (Reader doesn't seek after the first).
+    // Without this, the display starves — prefetch workers fill backward with
+    // per-frame seeks (~150ms/frame for 4K ProRes), too slow for real-time.
+    if (direction == -1) {
+        auto video_tracks = m_tmb->GetVideoTrackIds();
+        int64_t warm_start = std::max(m_start_frame, pos - 48);  // ~2s at 24fps
+        auto t_warm_start = std::chrono::steady_clock::now();
+        for (int track_idx : video_tracks) {
+            emp::TrackId track{emp::TrackType::Video, track_idx};
+            for (int64_t f = warm_start; f <= pos; ++f) {
+                m_tmb->GetVideoFrame(track, f, /*cache_only=*/false);
+            }
+        }
+        auto t_warm_end = std::chrono::steady_clock::now();
+        auto warm_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            t_warm_end - t_warm_start).count();
+        // Advance buffer watermark so prefetch workers start from warm_start-1
+        // instead of re-decoding the pre-filled range with slow backward seeks.
+        for (int track_idx : video_tracks) {
+            emp::TrackId track{emp::TrackType::Video, track_idx};
+            m_tmb->AdvanceVideoBufferEnd(track, warm_start, -1);
+        }
+
+        JVE_LOG_EVENT(Ticks,
+            "Play: backward pre-fill %lld frames in %lldms [%lld..%lld]",
+            (long long)(pos - warm_start + 1), (long long)warm_ms,
+            (long long)warm_start, (long long)pos);
+    }
+
     auto t_after_videocache = std::chrono::steady_clock::now();
 
     if (m_has_audio.load(std::memory_order_relaxed)) {

@@ -187,6 +187,10 @@ public:
     void ReleaseTrack(TrackId track);
     void ReleaseAll();
 
+    // Advance video buffer watermark (e.g. after external pre-fill).
+    // Direction-aware monotonic: never regresses in direction of travel.
+    void AdvanceVideoBufferEnd(TrackId track, int64_t pos, int direction);
+
     // Test accessor: return video_buffer_end for a track (-1 if unset/missing)
     int64_t GetVideoBufferEnd(TrackId track) const;
 
