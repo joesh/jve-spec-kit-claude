@@ -991,10 +991,20 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     }
     auto& ts = track_it->second;
 
-    // Find segment at t0
+    // Find segment at t0. If it's a gap, skip to the next clip within [t0, t1).
+    // Without this, a request spanning gap+clip (e.g., [2.0s..3.3s) where the
+    // gap ends at 2.5s) would return null, silencing the entire range.
     SegmentUS seg = find_segment_at_us(ts, t0);
     if (seg.type == SegmentUS::GAP) {
-        return nullptr;  // legitimate gap — silence is correct
+        if (seg.end_us >= t1) {
+            return nullptr;  // gap covers entire range — silence is correct
+        }
+        // Advance past gap into the next clip
+        t0 = seg.end_us;
+        seg = find_segment_at_us(ts, t0);
+        if (seg.type == SegmentUS::GAP) {
+            return nullptr;  // consecutive gaps or past all content
+        }
     }
 
     const ClipInfo* clip = seg.clip;
