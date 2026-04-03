@@ -1320,6 +1320,47 @@ private slots:
         int64_t expected = 10000000LL;
         QCOMPARE(engine->CurrentTimeUS(), expected);
     }
+    void test_backward_push_chunk_spanning() {
+        // Regression: backward play pushes source chunks in DESCENDING time order.
+        // get_samples spans adjacent chunks via ci+1, which only works when chunks
+        // are sorted ascending by time. Without sorted insertion, backward pushes
+        // make ci+1 point to the wrong temporal neighbor, causing SSE STARVED
+        // when a read straddles the boundary between two backward-pushed chunks.
+        //
+        // Setup: two 2-second chunks at [0s,2s) and [2s,4s), pushed in REVERSE
+        // order. Set target so render_passthrough's fetch_time lands right at
+        // the 2s boundary, requiring data from both chunks.
+        auto cfg = sse::default_config();
+        cfg.sample_rate = 48000;
+        cfg.channels = 2;
+        cfg.block_frames = 512;
+        auto engine = sse::ScrubStretchEngine::Create(cfg);
+
+        int64_t frames_per_chunk = 96000;  // 2s at 48kHz
+        auto chunk_hi = generate_sine_pcm(frames_per_chunk, 2, 440.0f, 48000);
+        auto chunk_lo = generate_sine_pcm(frames_per_chunk, 2, 440.0f, 48000);
+
+        // Push HIGH chunk first, then LOW — reverse of time order
+        engine->PushSourcePcm(chunk_hi.data(), frames_per_chunk, 2000000);  // [2s, 4s)
+        engine->PushSourcePcm(chunk_lo.data(), frames_per_chunk, 0);        // [0s, 2s)
+
+        // At -1x, render_passthrough: fetch_time = current_time - block_duration.
+        // block_duration = 2048 frames / 48000 = 42666us.
+        // We want fetch_time just below 2.0s so the read spans [0s,2s) → [2s,4s).
+        // fetch_time = 1999000us → current_time = 1999000 + 42666 = 2041666us.
+        // Use 2048 output frames (not block_frames — Render takes requested count).
+        engine->SetTarget(2041666, -1.0f, sse::QualityMode::Q1);
+
+        std::vector<float> output(2048 * 2);
+        int64_t rendered = engine->Render(output.data(), 2048);
+
+        QVERIFY2(rendered > 0, "Render returned 0 frames");
+        QVERIFY2(!engine->Starved(),
+            "SSE starved on backward chunk-spanning read — chunks likely not "
+            "sorted by time (get_samples ci+1 fallback fails for reverse push order)");
+        QVERIFY2(has_audio(output.data(), rendered, 2),
+            "Rendered audio is silence despite source data covering the range");
+    }
 };
 
 QTEST_MAIN(TestSSECore)

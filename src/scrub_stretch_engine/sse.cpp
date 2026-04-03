@@ -61,12 +61,24 @@ public:
             }
         }
 
-        // Add the new chunk
+        // Add the new chunk in sorted position (ascending start_time_us).
+        // Forward pushes append naturally. Backward pushes insert at front.
+        // Sorted order is required by get_samples' span-two-chunks fallback
+        // which reads ci+1 — only correct when chunks are time-ascending.
         Chunk chunk;
         chunk.data.assign(data, data + frames * m_channels);
         chunk.start_time_us = start_time_us;
         chunk.frames = frames;
-        m_chunks.push_back(std::move(chunk));
+
+        // Find insertion point: first chunk with start_time > new chunk
+        auto insert_pos = m_chunks.end();
+        for (auto it = m_chunks.begin(); it != m_chunks.end(); ++it) {
+            if (it->start_time_us > start_time_us) {
+                insert_pos = it;
+                break;
+            }
+        }
+        m_chunks.insert(insert_pos, std::move(chunk));
         m_total_frames += frames;
     }
 

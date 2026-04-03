@@ -890,15 +890,30 @@ void PlaybackController::Play(int direction, float speed) {
                 m_tmb->GetVideoFrame(track, f, /*cache_only=*/false);
             }
         }
-        auto t_warm_end = std::chrono::steady_clock::now();
-        auto warm_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            t_warm_end - t_warm_start).count();
         // Advance buffer watermark so prefetch workers start from warm_start-1
         // instead of re-decoding the pre-filled range with slow backward seeks.
         for (int track_idx : video_tracks) {
             emp::TrackId track{emp::TrackType::Video, track_idx};
             m_tmb->AdvanceVideoBufferEnd(track, warm_start, -1);
         }
+
+        // Audio pre-fill: warm TMB audio cache with forward-sequential decodes
+        // over the same range. GetMixedAudio sync path caches per-track results,
+        // so subsequent pump fetches hit the cache instead of backward-seeking.
+        // Chunk in 200ms steps to match TMB's AUDIO_REFILL_SIZE.
+        {
+            int64_t audio_t0 = (warm_start * 1000000LL * m_fps_den) / m_fps_num;
+            int64_t audio_t1 = (pos * 1000000LL * m_fps_den) / m_fps_num;
+            constexpr int64_t CHUNK_US = 200000;  // 200ms
+            for (int64_t t = audio_t0; t < audio_t1; t += CHUNK_US) {
+                int64_t chunk_end = std::min(t + CHUNK_US, audio_t1);
+                m_tmb->GetMixedAudio(t, chunk_end);
+            }
+        }
+
+        auto t_warm_end = std::chrono::steady_clock::now();
+        auto warm_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            t_warm_end - t_warm_start).count();
 
         JVE_LOG_EVENT(Ticks,
             "Play: backward pre-fill %lld frames in %lldms [%lld..%lld]",
