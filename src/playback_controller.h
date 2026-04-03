@@ -324,11 +324,16 @@ private:
 
     // Pre-roll: wait for REFILL workers to populate video cache (called from Play())
     void waitForVideoCache(int64_t pos, int timeout_ms);
+    void prefillBackwardCache(int64_t pos);
     void prefillAudio(int64_t pos, int direction, float speed);
 
     // Pre-roll timing constants
     static constexpr int PREROLL_POLL_MS = 5;        // cache poll interval
     static constexpr int PREROLL_TIMEOUT_MS = 3000;  // give up after 3s
+
+    // Backward pre-fill: decode this many frames below playhead via forward
+    // sequential access. ~2s at 24fps. Warms both video and audio TMB caches.
+    static constexpr int64_t BACKWARD_PREFILL_FRAMES = 48;
 
     // Frame delivery.
     // synchronous=true: Seek (main thread) — direct setFrame + callback calls.

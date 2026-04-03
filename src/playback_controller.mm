@@ -635,6 +635,44 @@ void PlaybackController::SetBounds(int64_t start_frame, int64_t end_frame, int32
 // Transport
 // ============================================================================
 
+void PlaybackController::prefillBackwardCache(int64_t pos) {
+    JVE_ASSERT(m_tmb,
+        "PlaybackController::prefillBackwardCache: TMB not set");
+
+    auto t0 = std::chrono::steady_clock::now();
+    int64_t warm_start = std::max(m_start_frame, pos - BACKWARD_PREFILL_FRAMES);
+
+    // Video: sync decode [warm_start..pos] in forward order.
+    // Sequential forward calls are fast (Reader doesn't seek after the first).
+    // Prefetch workers fill backward with per-frame seeks (~150ms/frame for
+    // 4K ProRes SW decode); pre-filling eliminates that for the initial window.
+    auto video_tracks = m_tmb->GetVideoTrackIds();
+    for (int track_idx : video_tracks) {
+        emp::TrackId track{emp::TrackType::Video, track_idx};
+        for (int64_t f = warm_start; f <= pos; ++f) {
+            m_tmb->GetVideoFrame(track, f, /*cache_only=*/false);
+        }
+        // Advance watermark so workers skip the pre-filled range
+        m_tmb->AdvanceVideoBufferEnd(track, warm_start, -1);
+    }
+
+    // Audio: warm per-track cache with forward-sequential GetMixedAudio.
+    // Results are discarded — the side-effect is cache fill via GetTrackAudio.
+    int64_t audio_t0 = (warm_start * 1000000LL * m_fps_den) / m_fps_num;
+    int64_t audio_t1 = (pos * 1000000LL * m_fps_den) / m_fps_num;
+    constexpr int64_t AUDIO_CHUNK_US = 200000;  // 200ms, matches TMB AUDIO_REFILL_SIZE
+    for (int64_t t = audio_t0; t < audio_t1; t += AUDIO_CHUNK_US) {
+        m_tmb->GetMixedAudio(t, std::min(t + AUDIO_CHUNK_US, audio_t1));
+    }
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+    JVE_LOG_EVENT(Ticks,
+        "Play: backward pre-fill %lld frames in %lldms [%lld..%lld]",
+        (long long)(pos - warm_start + 1), (long long)elapsed,
+        (long long)warm_start, (long long)pos);
+}
+
 void PlaybackController::waitForVideoCache(int64_t pos, int timeout_ms) {
     // Poll TMB's video cache until REFILL workers have decoded the playhead frame
     // on every video track. Uses cache_only=true to avoid acquiring reader locks —
@@ -872,53 +910,10 @@ void PlaybackController::Play(int direction, float speed) {
     // contention with the async REFILL jobs that SetPlayhead() just submitted.
     waitForVideoCache(pos, PREROLL_TIMEOUT_MS);
 
-    // Backward pre-fill: decode frames BELOW playhead via forward sequential
-    // decode. GetVideoFrame(cache_only=false) does sync decode on this thread.
-    // Sequential forward calls are fast (Reader doesn't seek after the first).
-    // Without this, the display starves — prefetch workers fill backward with
-    // per-frame seeks (~150ms/frame for 4K ProRes), too slow for real-time.
-    // Only pre-fill on cold start (not already playing backward).
-    // K+J slow-play calls Play() on every key repeat — re-running the
-    // 250ms pre-fill each time would block the display thread.
+    // Backward pre-fill: warm caches via forward sequential decode so the
+    // display doesn't starve. Only on cold start (not key-repeat re-entry).
     if (direction == -1 && !was_already_playing) {
-        auto video_tracks = m_tmb->GetVideoTrackIds();
-        int64_t warm_start = std::max(m_start_frame, pos - 48);  // ~2s at 24fps
-        auto t_warm_start = std::chrono::steady_clock::now();
-        for (int track_idx : video_tracks) {
-            emp::TrackId track{emp::TrackType::Video, track_idx};
-            for (int64_t f = warm_start; f <= pos; ++f) {
-                m_tmb->GetVideoFrame(track, f, /*cache_only=*/false);
-            }
-        }
-        // Advance buffer watermark so prefetch workers start from warm_start-1
-        // instead of re-decoding the pre-filled range with slow backward seeks.
-        for (int track_idx : video_tracks) {
-            emp::TrackId track{emp::TrackType::Video, track_idx};
-            m_tmb->AdvanceVideoBufferEnd(track, warm_start, -1);
-        }
-
-        // Audio pre-fill: warm TMB audio cache with forward-sequential decodes
-        // over the same range. GetMixedAudio sync path caches per-track results,
-        // so subsequent pump fetches hit the cache instead of backward-seeking.
-        // Chunk in 200ms steps to match TMB's AUDIO_REFILL_SIZE.
-        {
-            int64_t audio_t0 = (warm_start * 1000000LL * m_fps_den) / m_fps_num;
-            int64_t audio_t1 = (pos * 1000000LL * m_fps_den) / m_fps_num;
-            constexpr int64_t CHUNK_US = 200000;  // 200ms
-            for (int64_t t = audio_t0; t < audio_t1; t += CHUNK_US) {
-                int64_t chunk_end = std::min(t + CHUNK_US, audio_t1);
-                m_tmb->GetMixedAudio(t, chunk_end);
-            }
-        }
-
-        auto t_warm_end = std::chrono::steady_clock::now();
-        auto warm_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            t_warm_end - t_warm_start).count();
-
-        JVE_LOG_EVENT(Ticks,
-            "Play: backward pre-fill %lld frames in %lldms [%lld..%lld]",
-            (long long)(pos - warm_start + 1), (long long)warm_ms,
-            (long long)warm_start, (long long)pos);
+        prefillBackwardCache(pos);
     }
 
     auto t_after_videocache = std::chrono::steady_clock::now();
@@ -1549,12 +1544,11 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
         }
     }
 
-    // Step 1: PLL correction from A/V drift.
-    // Caps drift magnitude to 0.5s: beyond that, audio is likely stalled
-    // (common during backward play when SSE→TMB can't keep up). Without
-    // capping, stalled audio causes drift to grow to 4s+, and PLL throttles
-    // video to ~200ms/frame. With the cap, PLL corrects cadence jitter
-    // when audio is healthy but stops overcorrecting when audio stalls.
+    // Step 1: PLL correction.
+    // Forward: correct A/V drift using audio clock (standard PLL).
+    // Backward: audio clock is unreliable (SSE starvation, backward seek
+    // latency). Instead, correct CVDisplayLink cadence jitter by nudging
+    // the fractional accumulator toward 0.0 (ideal post-advance state).
     double pll_adjust = 0.0;
     double diff_seconds = 0.0;
     bool has_drift_measurement = false;
@@ -1581,7 +1575,10 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
             // Backward cadence correction: nudge fractional_frames toward
             // 0.0 (the ideal state after each whole-frame advance).
             // This corrects CVDisplayLink jitter without any audio dependency.
-            drift_frames = m_fractional_frames * 0.5;  // half the residual
+            // Gain < 1.0 avoids oscillation: full correction overshoots,
+            // half-residual converges in ~3 ticks without ringing.
+            static constexpr double BACKWARD_PLL_GAIN = 0.5;
+            drift_frames = m_fractional_frames * BACKWARD_PLL_GAIN;
         }
 
         pll_adjust = std::clamp(drift_frames * PLL_GAIN, -PLL_MAX_CORRECTION, PLL_MAX_CORRECTION);
