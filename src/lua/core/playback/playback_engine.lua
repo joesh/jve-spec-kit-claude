@@ -736,6 +736,13 @@ function PlaybackEngine:slow_play(dir)
     assert(dir == 1 or dir == -1,
         "PlaybackEngine:slow_play: dir must be 1 or -1")
 
+    -- Already playing at 0.5x in this direction? Key repeat — no-op.
+    -- Without this, each K+J repeat calls C++ Play() which resets audio,
+    -- clock, prefetch, and diag state, preventing continuous playback.
+    if self.state == "playing" and self.direction == dir and self.speed == 0.5 then
+        return
+    end
+
     self:_refresh_content_bounds()
 
     self.direction = dir

@@ -827,6 +827,10 @@ void PlaybackController::Play(int direction, float speed) {
     JVE_ASSERT(speed > 0,
         "PlaybackController::Play: speed must be positive");
 
+    // Capture before state reset — used to skip backward pre-fill on re-entry
+    // (K+J key repeat calls Play() repeatedly while already playing).
+    bool was_already_playing = m_playing.load(std::memory_order_relaxed);
+
     // State setup
     m_direction.store(direction, std::memory_order_relaxed);
     m_speed.store(speed, std::memory_order_relaxed);
@@ -873,7 +877,10 @@ void PlaybackController::Play(int direction, float speed) {
     // Sequential forward calls are fast (Reader doesn't seek after the first).
     // Without this, the display starves — prefetch workers fill backward with
     // per-frame seeks (~150ms/frame for 4K ProRes), too slow for real-time.
-    if (direction == -1) {
+    // Only pre-fill on cold start (not already playing backward).
+    // K+J slow-play calls Play() on every key repeat — re-running the
+    // 250ms pre-fill each time would block the display thread.
+    if (direction == -1 && !was_already_playing) {
         auto video_tracks = m_tmb->GetVideoTrackIds();
         int64_t warm_start = std::max(m_start_frame, pos - 48);  // ~2s at 24fps
         auto t_warm_start = std::chrono::steady_clock::now();
@@ -1477,7 +1484,9 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     // Trigger: audio stall (buf=0 for AUDIO_DRY_CONSECUTIVE ticks).
     // Frame stride engages independently in updateStrideDetection().
     // When engaged, video position = audio clock position. No PLL, no drift.
-    if (m_has_audio.load(std::memory_order_relaxed) &&
+    // Skipped for backward play (same reason as PLL skip below).
+    if (dir > 0 &&
+        m_has_audio.load(std::memory_order_relaxed) &&
         m_audio_pump && m_audio_pump->IsRunning() && m_aop) {
 
         int64_t buf = m_aop->BufferedFrames();
@@ -1524,11 +1533,17 @@ int64_t PlaybackController::advancePosition(double elapsed_seconds) {
     }
 
     // Step 1: PLL correction from A/V drift.
+    // Skipped for backward play: reverse audio is best-effort (all NLEs treat
+    // it this way). The backward audio path (SSE→TMB) can't reliably maintain
+    // sync, causing drift to grow monotonically. PLL responds by throttling
+    // video to ~200ms/frame — making backward play 4x slower than forward.
+    // Without PLL, video runs at native rate; audio plays as best it can.
     double pll_adjust = 0.0;
     double diff_seconds = 0.0;
     bool has_drift_measurement = false;
 
-    if (m_has_audio.load(std::memory_order_relaxed) &&
+    if (dir > 0 &&
+        m_has_audio.load(std::memory_order_relaxed) &&
         m_audio_pump && m_audio_pump->IsRunning() && m_aop) {
 
         int64_t aop_playhead = m_aop->PlayheadTimeUS();
