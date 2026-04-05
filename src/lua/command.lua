@@ -225,7 +225,22 @@ function M.load_history_branch(cursor_seq)
         tip = next_seq
     end
 
+    -- Always include provenance record (seq=0, parent=-1) if it exists.
+    -- Provenance is a history marker, not in the undo tree (parent=-1 is unreachable).
+    local provenance = nil
+    local prov_q = db:prepare([[
+        SELECT * FROM commands
+        WHERE sequence_number = 0 AND parent_sequence_number = -1 LIMIT 1
+    ]])
+    if prov_q then
+        if prov_q:exec() and prov_q:next() then
+            provenance = M.parse_from_query(prov_q, nil)
+        end
+        prov_q:finalize()
+    end
+
     if tip == 0 then
+        if provenance then return { provenance } end
         return {}
     end
 
@@ -264,6 +279,11 @@ function M.load_history_branch(cursor_seq)
         end
     end
     query:finalize()
+
+    -- Prepend provenance if present (always first entry in history)
+    if provenance then
+        table.insert(commands, 1, provenance)
+    end
 
     return commands
 end
@@ -732,6 +752,30 @@ end
 
 function M:get_display_label()
     return command_labels.label_for_command(self)
+end
+
+--- Insert a minimal provenance record into the commands table.
+-- Used by importers to mark project origin. Not a real undoable command.
+-- parent_sequence_number = -1 (unreachable sentinel) keeps it visible in
+-- edit history but invisible to undo/redo traversal.
+function M.insert_provenance(command_type, project_id, params)
+    assert(command_type and command_type ~= "", "Command.insert_provenance: command_type required")
+    assert(project_id and project_id ~= "", "Command.insert_provenance: project_id required")
+    local database = require("core.database")
+    local db = database.get_connection()
+    assert(db, "Command.insert_provenance: no database connection")
+    local args_json = json.encode(params or {})
+    local stmt = assert(db:prepare([[
+        INSERT INTO commands (id, parent_sequence_number, sequence_number, command_type,
+            command_args, timestamp, playhead_value, playhead_rate)
+        VALUES (?, -1, 0, ?, ?, ?, 0, 25.0)
+    ]]), "Command.insert_provenance: failed to prepare INSERT")
+    stmt:bind_value(1, uuid.generate())
+    stmt:bind_value(2, command_type)
+    stmt:bind_value(3, args_json)
+    stmt:bind_value(4, os.time())
+    assert(stmt:exec(), "Command.insert_provenance: INSERT failed")
+    stmt:finalize()
 end
 
 return M

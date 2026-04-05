@@ -3247,34 +3247,17 @@ function M.convert(drp_path, jvp_path, progress_cb)
 
     -- Record provenance: insert a synthetic command so the history shows
     -- where this project came from (chain of custody).
+    -- Record provenance in commands table for edit history display.
+    -- sequence_number=0, parent=-1: visible in history, invisible to undo/redo.
     report(98, "Recording provenance…")
-    local uuid = require("uuid")
-    local db_conn = database.get_connection()
-    local provenance_args = json.encode({
+    local Command = require("command")
+    Command.insert_provenance("ImportResolveProject", pid, {
         drp_path = drp_path,
         source_name = parse_result.project.name,
     })
-    local prov_stmt = db_conn:prepare([[
-        INSERT INTO commands (id, sequence_number, command_type, command_args, timestamp)
-        VALUES (?, 1, 'ImportResolveProject', ?, ?)
-    ]])
-    assert(prov_stmt, "drp_importer.convert: failed to prepare provenance INSERT")
-    prov_stmt:bind_value(1, uuid.generate())
-    prov_stmt:bind_value(2, provenance_args)
-    prov_stmt:bind_value(3, os.time())
-    assert(prov_stmt:exec(), "drp_importer.convert: provenance INSERT failed")
-    prov_stmt:finalize()
 
-    -- Set undo cursor on all timeline sequences to point at the provenance record
-    local seq_update = db_conn:prepare([[
-        UPDATE sequences SET current_sequence_number = 1
-        WHERE project_id = ? AND kind = 'timeline'
-    ]])
-    if seq_update then
-        seq_update:bind_value(1, pid)
-        seq_update:exec()
-        seq_update:finalize()
-    end
+    -- Undo cursor at 0 — provenance is history, not undoable
+    Sequence.set_undo_cursor_for_project(pid, 0)
 
     report(100, "Done")
 

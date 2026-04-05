@@ -388,6 +388,24 @@ function Sequence.find_first_by_project(project_id)
     return id
 end
 
+--- Set undo cursor on all timeline sequences in a project.
+-- Used by importers to initialize the undo position after populating a fresh DB.
+function Sequence.set_undo_cursor_for_project(project_id, cursor_value)
+    assert(project_id and project_id ~= "",
+        "Sequence.set_undo_cursor_for_project: project_id required")
+    assert(type(cursor_value) == "number",
+        "Sequence.set_undo_cursor_for_project: cursor_value must be number")
+    local conn = resolve_db()
+    local stmt = assert(conn:prepare([[
+        UPDATE sequences SET current_sequence_number = ?
+        WHERE project_id = ? AND kind = 'timeline'
+    ]]), "Sequence.set_undo_cursor_for_project: failed to prepare")
+    stmt:bind_value(1, cursor_value)
+    stmt:bind_value(2, project_id)
+    assert(stmt:exec(), "Sequence.set_undo_cursor_for_project: UPDATE failed")
+    stmt:finalize()
+end
+
 -- Find the most recently modified sequence in the database
 -- Returns sequence object, or nil if none exist
 function Sequence.find_most_recent()
