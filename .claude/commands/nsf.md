@@ -85,6 +85,42 @@ TESTING:
 [ ] Black-box tests check observable output, not internal calls
 ```
 
+## Coding Style (ENGINEERING.md)
+
+Also audit for violations of the project's coding standards:
+
+### Structure
+- **2.5 Functions Read Like Algorithms** - Main functions tell WHAT happens, helpers handle HOW. Never mix high-level logic with low-level detail in the same function.
+- **2.6 Short Functions** - One responsibility per function. If it doesn't fit on one screen, split it.
+- **2.18 FFI vs Business Logic** - FFI functions are pure C++ mappings (parameter validation only). Business logic calls FFI, never C++ directly. Never put application logic in FFI functions.
+
+### Safety
+- **2.13 No Fallbacks** - Never `or default_value`. Fail explicitly.
+- **2.15 No Backward Compatibility** - No shims, migrations, or legacy paths unless Joe explicitly asks.
+- **2.17 No Stubs** - No dummy return values. Implement fully or fix the architecture.
+- **2.21 Statically-Verifiable** - Prefer compile-time/signature-level enforcement over runtime checks.
+- **2.29 sequence_id on Timeline Commands** - All commands modifying a sequence MUST include `sequence_id`.
+
+### Process
+- **2.4 Clean Builds** - Zero warnings, zero errors before moving on.
+- **2.20 Regression Tests First** - Failing test BEFORE fix. Prove it fails.
+- **2.31 Never Change Test Expectations** - Existing assertions are canon. Fix impl, not tests.
+- **2.32 New Codepaths Require Tests** - Every new branch/handler needs tests (including error paths).
+
+### Code Review Checklist Addition
+
+```
+CODING STYLE:
+[ ] Functions are short, single-responsibility (2.5, 2.6)
+[ ] No high-level + low-level logic mixed in same function (2.5)
+[ ] FFI functions contain no business logic (2.18)
+[ ] No stubs or dummy implementations (2.17)
+[ ] No backward-compat shims (2.15)
+[ ] No fallback values hiding errors (2.13)
+[ ] Timeline commands include sequence_id (2.29)
+[ ] Build is clean (0 warnings, 0 errors) (2.4)
+```
+
 ## Applies To
 
 $ARGUMENTS
