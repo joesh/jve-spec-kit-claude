@@ -82,6 +82,21 @@ M.clear_active_edge_drag_state = function()
     data.notify_listeners()
 end
 
+-- Active Clip Drag State (shared across panes; not persisted)
+M.get_active_clip_drag_state = function()
+    return data.state.active_clip_drag_state
+end
+
+M.set_active_clip_drag_state = function(clip_drag_state)
+    data.state.active_clip_drag_state = clip_drag_state
+    data.notify_listeners()
+end
+
+M.clear_active_clip_drag_state = function()
+    data.state.active_clip_drag_state = nil
+    data.notify_listeners()
+end
+
 -- Viewport & Playhead
 M.get_viewport_start_time = viewport.get_viewport_start_time
 M.set_viewport_start_time = function(time_obj)

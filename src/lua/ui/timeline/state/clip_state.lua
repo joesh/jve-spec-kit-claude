@@ -19,6 +19,11 @@
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
 local db = require("core.database")
+local log = require("core.logger").for_area("timeline")
+
+-- Mutation transaction stack: snapshot in-memory clip state for undo group rollback.
+-- Parallels the DB savepoint mechanism — begin/commit/rollback.
+local mutation_snapshot_stack = {}
 
 -- All coordinates are now integers. No Rational conversion needed.
 -- This function validates and normalizes clip coords from various sources.
@@ -433,5 +438,85 @@ end
 
 function M.get_version() return state_version end
 function M.inc_version() state_version = state_version + 1 end
+
+--- Snapshot current clip + selection state. Called by begin_undo_group.
+function M.begin_mutation_transaction()
+    -- Shallow-clone each clip table (mutations modify fields in-place)
+    local clips_copy = {}
+    for i, clip in ipairs(data.state.clips) do
+        local copy = {}
+        for k, v in pairs(clip) do copy[k] = v end
+        clips_copy[i] = copy
+    end
+
+    -- Store selection as IDs (clip objects will be different after restore)
+    local selected_clip_ids = {}
+    for _, clip in ipairs(data.state.selected_clips or {}) do
+        table.insert(selected_clip_ids, clip.id)
+    end
+
+    -- Shallow-clone edge and gap selection (small tables, own data)
+    local edges_copy = {}
+    for i, edge in ipairs(data.state.selected_edges or {}) do
+        edges_copy[i] = {
+            clip_id = edge.clip_id,
+            edge_type = edge.edge_type,
+            trim_type = edge.trim_type,
+            track_id = edge.track_id,
+        }
+    end
+
+    local gaps_copy = {}
+    for i, gap in ipairs(data.state.selected_gaps or {}) do
+        local g = {}
+        for k, v in pairs(gap) do g[k] = v end
+        gaps_copy[i] = g
+    end
+
+    table.insert(mutation_snapshot_stack, {
+        clips = clips_copy,
+        selected_clip_ids = selected_clip_ids,
+        selected_edges = edges_copy,
+        selected_gaps = gaps_copy,
+    })
+end
+
+--- Discard snapshot on successful undo group completion.
+function M.commit_mutation_transaction()
+    assert(#mutation_snapshot_stack > 0,
+        "clip_state.commit_mutation_transaction: no matching begin (stack empty)")
+    table.remove(mutation_snapshot_stack)
+end
+
+--- Restore clip + selection state from snapshot. Called by rollback_transaction.
+function M.rollback_mutation_transaction()
+    assert(#mutation_snapshot_stack > 0,
+        "clip_state.rollback_mutation_transaction: no matching begin (stack empty)")
+
+    local snapshot = table.remove(mutation_snapshot_stack)
+
+    data.state.clips = snapshot.clips
+
+    -- Rebuild selected_clips from IDs against restored clip objects
+    local id_lookup = {}
+    for _, clip in ipairs(snapshot.clips) do
+        id_lookup[clip.id] = clip
+    end
+    local restored_selection = {}
+    for _, id in ipairs(snapshot.selected_clip_ids) do
+        if id_lookup[id] then
+            table.insert(restored_selection, id_lookup[id])
+        end
+    end
+    data.state.selected_clips = restored_selection
+    data.state.selected_edges = snapshot.selected_edges
+    data.state.selected_gaps = snapshot.selected_gaps
+
+    M.invalidate_indexes()
+    state_version = state_version + 1
+    for _, clip in ipairs(data.state.clips) do clip._version = state_version end
+    data.notify_listeners()
+    log.event("rollback_mutation_transaction: restored %d clips", #snapshot.clips)
+end
 
 return M

@@ -507,6 +507,49 @@ local function get_track_with_offset(state_module, track_id, offset)
     return track_id
 end
 
+--- Compute target track hint for clip drag preview (owning pane only).
+--- Returns preview_target_id (string track ID for single-track), preview_track_offset (number for multi-track).
+--- Single-track selection: returns target track ID directly.
+--- Multi-track selection: returns numeric offset applied to each clip's track.
+local function compute_clip_drag_track_hint(view, drag_state, height, state_module)
+    local current_y = drag_state.current_y or drag_state.start_y
+    local target_tid = view.get_track_id_at_y(current_y, height)
+    if not target_tid then return nil, nil end
+
+    local anchor_clip = nil
+    local aid = drag_state.anchor_clip_id
+    if aid then
+        for _, c in ipairs(drag_state.clips) do
+            if c.id == aid then anchor_clip = c; break end
+        end
+    end
+    if not anchor_clip then anchor_clip = drag_state.clips[1] end
+    if not anchor_clip then return nil, nil end
+
+    local multi = false
+    for _, c in ipairs(drag_state.clips) do
+        if c.track_id ~= drag_state.clips[1].track_id then multi = true; break end
+    end
+
+    local tracks = state_module.get_all_tracks()
+    local anchor_idx, target_idx
+    for i, t in ipairs(tracks) do
+        if t.id == anchor_clip.track_id then anchor_idx = i end
+        if t.id == target_tid then target_idx = i end
+    end
+
+    if anchor_idx and target_idx then
+        local offset = target_idx - anchor_idx
+        if offset ~= 0 then
+            if multi then return nil, offset else return target_tid, nil end
+        end
+        if not multi then return target_tid, nil end
+    else
+        if not multi then return target_tid, nil end
+    end
+    return nil, nil
+end
+
 local function truncate_label(label, max_width)
     if not label or label == "" or max_width <= 0 then return "" end
     local approx_char_width = 7
@@ -757,54 +800,37 @@ function M.render(view)
         end
     end
 
-    -- Drag Previews
+    -- Drag Previews (clip drag)
+    -- Use local drag_state if this view owns the drag, otherwise fall back to
+    -- the shared state so both panes (video + audio) render previews.
+    local clip_drag_state = nil
+    local clip_drag_owns = false
     if view.drag_state and view.drag_state.type == "clips" then
-        local delta_frames = view.drag_state.delta_frames or 0
+        clip_drag_state = view.drag_state
+        clip_drag_owns = true
+    elseif state_module.get_active_clip_drag_state then
+        clip_drag_state = state_module.get_active_clip_drag_state()
+    end
 
-        local preview_hint = nil
-        local current_y = view.drag_state.current_y or view.drag_state.start_y
-        local target_tid = view.get_track_id_at_y(current_y, height)
+    if clip_drag_state and clip_drag_state.type == "clips" then
+        assert(type(clip_drag_state.delta_frames) == "number",
+            "timeline_view_renderer: clip drag state missing delta_frames")
+        local delta_frames = clip_drag_state.delta_frames
+        local preview_target_id, preview_track_offset
 
-        if target_tid then
-            local anchor_clip = nil
-            local aid = view.drag_state.anchor_clip_id
-            if aid then for _, c in ipairs(view.drag_state.clips) do if c.id == aid then anchor_clip = c break end end end
-            if not anchor_clip then anchor_clip = view.drag_state.clips[1] end
-
-            if anchor_clip then
-                local tracks = state_module.get_all_tracks()
-                local anchor_idx, target_idx
-                for i, t in ipairs(tracks) do
-                    if t.id == anchor_clip.track_id then anchor_idx = i end
-                    if t.id == target_tid then target_idx = i end
-                end
-                if anchor_idx and target_idx then
-                    local offset = target_idx - anchor_idx
-                    local multi = false
-                    for _, c in ipairs(view.drag_state.clips) do if c.track_id ~= view.drag_state.clips[1].track_id then multi = true break end end
-                    if offset ~= 0 then
-                        if multi then preview_hint = {track_offset = offset} else preview_hint = target_tid end
-                    else
-                        if not multi then preview_hint = target_tid end
-                    end
-                else
-                    local multi = false
-                    for _, c in ipairs(view.drag_state.clips) do if c.track_id ~= view.drag_state.clips[1].track_id then multi = true break end end
-                    if not multi then preview_hint = target_tid end
-                end
-            end
+        if clip_drag_owns then
+            -- Owning pane: resolve cursor Y → target track → offset
+            preview_target_id, preview_track_offset =
+                compute_clip_drag_track_hint(view, clip_drag_state, height, state_module)
+            -- Share offset so non-owning pane can use it
+            clip_drag_state._preview_track_offset = preview_track_offset
+        else
+            -- Non-owning pane: same offset in global track-index space
+            -- (matches what drag_handler applies on release)
+            preview_track_offset = clip_drag_state._preview_track_offset
         end
 
-        local preview_target_id = nil
-        local preview_track_offset = nil
-        if type(preview_hint) == "string" then
-            preview_target_id = preview_hint
-        elseif type(preview_hint) == "table" then
-            preview_target_id = preview_hint.target_track_id
-            preview_track_offset = preview_hint.track_offset
-        end
-
-        for _, clip in ipairs(view.drag_state.clips) do
+        for _, clip in ipairs(clip_drag_state.clips) do
             if clip and clip.id then
                 local render_track_id = clip.track_id
                 if preview_track_offset then
@@ -813,7 +839,6 @@ function M.render(view)
                     render_track_id = preview_target_id
                 end
 
-                -- All coords are integer frames
                 local start_value = clip.timeline_start + delta_frames
                 draw_clip_instance(clip, render_track_id, start_value, clip.duration, true)
             end

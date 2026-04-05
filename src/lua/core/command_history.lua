@@ -479,4 +479,18 @@ function M.get_undo_group_cursor_on_entry()
     return undo_group_stack[1].cursor_on_entry
 end
 
+--- Mark the current undo group as aborted. Subsequent execute() calls will be rejected.
+function M.mark_undo_group_aborted()
+    if #undo_group_stack > 0 then
+        undo_group_stack[#undo_group_stack].aborted = true
+        log.event("Undo group %s marked aborted", tostring(undo_group_stack[#undo_group_stack].id))
+    end
+end
+
+--- Check if the current undo group has been aborted by a failed command.
+function M.is_undo_group_aborted()
+    if #undo_group_stack == 0 then return false end
+    return undo_group_stack[#undo_group_stack].aborted == true
+end
+
 return M

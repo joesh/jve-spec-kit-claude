@@ -32,11 +32,25 @@ local DRAG_THRESHOLD = ui_constants.TIMELINE.DRAG_THRESHOLD
 local qt_constants = require("core.qt_constants")
 local log = require("core.logger").for_area("timeline")
 
+--- Filter gap clips from a clip list. Gaps are in-memory only and must not
+--- participate in drag operations (Nudge/MoveClipToTrack can't load them from DB).
+local function filter_non_gap_clips(clips)
+    local result = {}
+    for _, clip in ipairs(clips) do
+        if clip.clip_kind ~= "gap" then
+            table.insert(result, clip)
+        end
+    end
+    return result
+end
+
 --- Discard all drag state without committing. Used by Escape cancel and cleanup.
 local function discard_drag(view, state)
     if view.drag_state then
         if view.drag_state.type == "edges" then
             state.clear_active_edge_drag_state()
+        elseif view.drag_state.type == "clips" then
+            state.clear_active_clip_drag_state()
         end
         view.drag_state = nil
         snapping_state.reset_drag()
@@ -465,7 +479,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                     start_x = x,
                     start_y = y,
                     start_value = state.pixel_to_time(x, width),
-                    clips = state.get_selected_clips(),
+                    clips = filter_non_gap_clips(state.get_selected_clips()),
                     modifiers = modifiers,
                     anchor_clip_id = clicked_clip.id
                 }
@@ -478,7 +492,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 start_x = x,
                 start_y = y,
                 start_value = state.pixel_to_time(x, width),
-                clips = state.get_selected_clips(),
+                clips = filter_non_gap_clips(state.get_selected_clips()),
                 modifiers = modifiers,
                 anchor_clip_id = clicked_clip.id
             }
@@ -561,7 +575,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                     lead_edge = view.potential_drag.lead_edge,
                     current_x = x,
                     current_y = y,
-                    current_time = state.pixel_to_time(x, width)
+                    current_time = state.pixel_to_time(x, width),
                 }
                 if not view.drag_state.anchor_clip_id and view.drag_state.clips and #view.drag_state.clips > 0 then
                     view.drag_state.anchor_clip_id = view.drag_state.clips[1].id
@@ -591,6 +605,10 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
 
                     -- Share edge drag state across timeline panes so only one preview computation runs.
                     state.set_active_edge_drag_state(view.drag_state)
+                end
+                if view.drag_state.type == "clips" then
+                    -- Share clip drag state across timeline panes so both render previews.
+                    state.set_active_clip_drag_state(view.drag_state)
                 end
                 view.potential_drag = nil
                 if view.drag_state.type ~= "edges" then
@@ -652,8 +670,8 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             view.drag_state.alt_copy = (modifiers and modifiers.alt)
             if view.drag_state.type == "edges" then
                 state.set_active_edge_drag_state(view.drag_state)
-            else
-                view.render()
+            elseif view.drag_state.type == "clips" then
+                state.set_active_clip_drag_state(view.drag_state)
             end
 
         elseif state.is_dragging_playhead() then
@@ -734,6 +752,8 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
 
             if drag.type == "edges" then
                 state.clear_active_edge_drag_state()
+            elseif drag.type == "clips" then
+                state.clear_active_clip_drag_state()
             end
             view.drag_state = nil
             snapping_state.reset_drag()
