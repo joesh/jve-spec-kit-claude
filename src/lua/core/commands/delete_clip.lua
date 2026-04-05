@@ -33,6 +33,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
         print("Executing DeleteClip command")
 
+        assert(not (type(args.clip_id) == "string" and args.clip_id:find("^gap_")),
+            string.format("DeleteClip: gap clip %s — gaps are derived state, not deletable", args.clip_id))
+
         local clip = Clip.load_optional(args.clip_id)
         if not clip then
 

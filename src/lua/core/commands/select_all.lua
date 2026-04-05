@@ -63,17 +63,23 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true, {total_clips = #(timeline_state.get_clips() or {})}
         end
 
-        local all_clips = timeline_state.get_clips() or {}
-        if #all_clips == 0 then
+        -- Filter out gap clips — they're derived state, not selectable for clip operations
+        local media_clips = {}
+        for _, clip in ipairs(timeline_state.get_clips() or {}) do
+            if clip.clip_kind ~= "gap" then
+                media_clips[#media_clips + 1] = clip
+            end
+        end
+        if #media_clips == 0 then
             timeline_state.set_selection({})
             timeline_state.clear_edge_selection()
             print("SelectAll: no clips available to select")
             return true
         end
 
-        timeline_state.set_selection(all_clips)
+        timeline_state.set_selection(media_clips)
         timeline_state.clear_edge_selection()
-        print(string.format("✅ Selected all %d clip(s)", #all_clips))
+        print(string.format("✅ Selected all %d clip(s)", #media_clips))
         return true
     end
 
