@@ -518,12 +518,28 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- Advance playhead to end of clips if requested
         if args.advance_playhead then
+            local new_playhead = position + total_duration
+
+            -- Persist to model + emit signal (same pattern as GoToStart/GoToEnd)
+            local Sequence = require("models.sequence")
+            local sequence = Sequence.load(args.sequence_id)
+            assert(sequence, "AddClipsToSequence: sequence not found: " .. tostring(args.sequence_id))
+            sequence.playhead_position = new_playhead
+            assert(sequence:save(), "AddClipsToSequence: failed to save playhead")
+            local Signals = require("core.signals")
+            Signals.emit("playhead_changed", args.sequence_id, new_playhead)
+
+            -- Update in-memory viewport state + surface if off-screen
             local ok_ts, timeline_state = pcall(require, 'ui.timeline.timeline_state')
-            if ok_ts and timeline_state and timeline_state.set_playhead_position then
-                local new_playhead = position + total_duration
-                timeline_state.set_playhead_position(new_playhead)
-                command.playhead_value_post = new_playhead
+            if ok_ts and timeline_state then
+                if timeline_state.set_playhead_position then
+                    timeline_state.set_playhead_position(new_playhead)
+                end
+                if timeline_state.surface_playhead then
+                    timeline_state.surface_playhead()
+                end
             end
+            command.playhead_value_post = new_playhead
         end
 
         log.event("Added %d clips at frame %d (%s, %s)",

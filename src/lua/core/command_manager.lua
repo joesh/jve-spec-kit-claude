@@ -326,27 +326,32 @@ function M.execute_ui(command_name, params)
     return result
 end
 
--- SAVEPOINT-aware rollback for undo groups
+-- Rollback in-memory clip state to pre-transaction snapshot.
+local function rollback_mutations()
+    local clip_state = require("ui.timeline.state.clip_state")
+    clip_state.rollback_mutation_transaction()
+end
+
+-- Rollback an undo group: DB savepoint, cursor, in-memory mutations, abort flag.
+local function rollback_undo_group(group_id)
+    db_module.rollback_to_savepoint("undo_group_" .. group_id)
+    local cursor_on_entry = history.get_undo_group_cursor_on_entry()
+    history.set_current_sequence_number(cursor_on_entry)
+    history.save_undo_position()
+    rollback_mutations()
+    history.mark_undo_group_aborted()
+end
+
+-- SAVEPOINT-aware rollback: undo group → rollback to savepoint; standalone → full rollback.
+-- Both paths restore in-memory clip state from the mutation transaction snapshot.
 local function rollback_transaction()
     assert(db_module.has_connection(), "rollback_transaction: no database connection")
     local group_id = history.get_current_undo_group_id()
     if group_id then
-        -- Inside undo group - rollback to savepoint
-        local savepoint_name = "undo_group_" .. group_id
-        db_module.rollback_to_savepoint(savepoint_name)
-
-        -- INVARIANT:
-        -- In-memory history cursor must always point to a durable DB state.
-        -- Commands executed inside an undo group are not durable until the group closes.
-        -- On SAVEPOINT rollback, cursor must be restored to group entry position.
-
-        -- Restore cursor to position before group started (DB ↔ memory sync)
-        local cursor_on_entry = history.get_undo_group_cursor_on_entry()
-        history.set_current_sequence_number(cursor_on_entry)
-        history.save_undo_position()
+        rollback_undo_group(group_id)
     else
-        -- No undo group - full rollback
         db_module.rollback()
+        rollback_mutations()
     end
 end
 
@@ -817,6 +822,14 @@ function M._execute_body(command_or_name, params)
         return { success = true }, nil
     end
 
+    -- Reject nested commands inside an aborted undo group. A prior command
+    -- failed and rolled back the entire group — continuing would execute
+    -- against inconsistent expectations.
+    if execution_depth > 1 and history.is_undo_group_aborted() then
+        log.error("execute rejected: undo group aborted by prior failure")
+        return { success = false, error_message = "Undo group aborted by prior failure" }, nil
+    end
+
     local is_nested = execution_depth > 1
 
     local command, normalize_failure = normalize_command(command_or_name, params)
@@ -1030,6 +1043,12 @@ function M._execute_body(command_or_name, params)
             exec_scope:finish("begin_tx_failed")
             goto cleanup
         end
+        -- Mutation transaction parallels the DB transaction: snapshot in-memory
+        -- clip state so rollback_transaction can restore it if the command fails.
+        -- (For explicit undo groups, begin_undo_group handles this.)
+        begin_tx = true  -- flag for cleanup to commit/discard on success paths
+        local clip_state = require("ui.timeline.state.clip_state")
+        clip_state.begin_mutation_transaction()
     end
 
     perf = create_command_perf_tracker(command)
@@ -1224,6 +1243,7 @@ function M._execute_body(command_or_name, params)
                                     command.type, tostring(mut.clip_id),
                                     orig.duration, abs_delta)
                                 rollback_transaction()
+                                begin_tx = nil  -- mutation snapshot already handled by rollback_transaction
                                 history.decrement_sequence_number()
                                 result.success = false
                                 result.error_message = string.format(
@@ -1241,6 +1261,10 @@ function M._execute_body(command_or_name, params)
             if not undo_group_active then
                 local db_module = require("core.database")
                 assert(db_module.commit(), "command_manager: post-command commit failed")
+                -- Discard mutation snapshot (commit: in-memory state is now authoritative)
+                local clip_state = require("ui.timeline.state.clip_state")
+                clip_state.commit_mutation_transaction()
+                begin_tx = nil  -- prevent double-commit in cleanup
             end
             perf.log("db_commit")
             perf.reset()
@@ -1278,6 +1302,7 @@ function M._execute_body(command_or_name, params)
         else
             result.error_message = "Failed to save command to database"
             rollback_transaction()
+            begin_tx = nil  -- mutation snapshot already handled by rollback_transaction
             history.decrement_sequence_number()
         end
     else
@@ -1286,6 +1311,7 @@ function M._execute_body(command_or_name, params)
             or (last_error_message ~= "" and last_error_message or "Command execution failed")
         last_error_message = ""
         rollback_transaction()
+        begin_tx = nil  -- mutation snapshot already handled by rollback_transaction
         history.decrement_sequence_number()
     end
 
@@ -1303,6 +1329,13 @@ function M._execute_body(command_or_name, params)
     end
 
 ::cleanup::
+    -- If we own a mutation transaction that wasn't committed or rolled back
+    -- (noop, cancel, early exit), discard the snapshot.
+    if begin_tx then
+        local clip_state = require("ui.timeline.state.clip_state")
+        clip_state.commit_mutation_transaction()
+        begin_tx = nil
+    end
     return result, command
 end
 
@@ -1479,7 +1512,8 @@ end
 
 function M.can_undo()
     if not db then return false end
-    return history.get_current_sequence_number() ~= nil
+    local pos = history.get_current_sequence_number()
+    return pos ~= nil and pos > 0
 end
 
 function M.can_redo()
@@ -1530,7 +1564,12 @@ local function run_undoer(cmd)
         if (not err_msg or err_msg == "") and type(extra) == "string" then
             err_msg = extra
         end
-        return false, err_msg or "Undo executor returned false"
+        -- Fall through to last_error_message (set by set_last_error in undoers)
+        if not err_msg or err_msg == "" then
+            err_msg = last_error_message ~= "" and last_error_message or "Undo executor returned false"
+        end
+        last_error_message = ""
+        return false, err_msg
     end
 
     if not apply_command_mutations(cmd) then
@@ -1554,6 +1593,9 @@ local function apply_undo_ceremony(cmd)
         local ts = require('ui.timeline.timeline_state')
         if ts.set_playhead_position then
             ts.set_playhead_position(cmd.playhead_value)
+        end
+        if ts.surface_playhead then
+            ts.surface_playhead()
         end
     end
     notify_command_event({
@@ -1647,6 +1689,9 @@ local function apply_redo_ceremony(cmd)
         local ts = require('ui.timeline.timeline_state')
         if ts.set_playhead_position then
             ts.set_playhead_position(cmd.playhead_value_post)
+        end
+        if ts.surface_playhead then
+            ts.surface_playhead()
         end
     end
     notify_command_event({
@@ -2039,19 +2084,64 @@ function M.begin_undo_group(label)
     local savepoint_name = "undo_group_" .. group_id
     assert(db_module.savepoint(savepoint_name),
         "command_manager.begin_undo_group: failed to create savepoint " .. savepoint_name)
+
+    -- Snapshot in-memory clip state (parallels the DB savepoint)
+    local clip_state = require("ui.timeline.state.clip_state")
+    clip_state.begin_mutation_transaction()
+
     return group_id
 end
 
-function M.end_undo_group()
-    local group_id = history.end_undo_group()
-    if group_id then
-        local db_module = require("core.database")
-        local savepoint_name = "undo_group_" .. group_id
-        db_module.release_savepoint(savepoint_name)
+--- Stamp playhead_value_post on the last command in a completed group.
+-- Nested commands only capture playhead_value (pre). redo_group needs
+-- playhead_value_post on the last child for ceremony.
+local function stamp_group_playhead_post(last_cmd)
+    if not last_cmd or last_cmd.playhead_value_post ~= nil then return end
+    local ts = require('ui.timeline.timeline_state')
+    last_cmd.playhead_value_post = ts.get_playhead_position()
+    last_cmd.playhead_rate_post = ts.get_sequence_frame_rate()
+    assert(last_cmd:save(db),
+        string.format("end_undo_group: failed to save playhead_value_post on seq %s",
+            tostring(last_cmd.sequence_number)))
+end
 
-        -- Only commit once the outermost undo group closes.
-        if not history.get_current_undo_group_id() then
-            db_module.commit()
+--- Get the command at the current undo cursor, or nil.
+local function get_current_cursor_command()
+    local current_seq = history.get_current_sequence_number()
+    if not current_seq then return nil end
+    return M.get_command_at_sequence(current_seq, active_project_id)
+end
+
+function M.end_undo_group()
+    -- Check aborted flag BEFORE popping (end_undo_group pops the stack)
+    local was_aborted = history.is_undo_group_aborted()
+    local group_id = history.end_undo_group()
+    if not group_id then return end
+
+    local db_module = require("core.database")
+    db_module.release_savepoint("undo_group_" .. group_id)
+
+    local last_cmd = get_current_cursor_command()
+
+    if not was_aborted then
+        stamp_group_playhead_post(last_cmd)
+        local clip_state = require("ui.timeline.state.clip_state")
+        clip_state.commit_mutation_transaction()
+    end
+    -- If aborted: snapshot already restored by rollback_transaction
+
+    -- Commit + notify once the outermost group closes
+    if not history.get_current_undo_group_id() then
+        db_module.commit()
+        -- Notify listeners (edit history, etc.). Nested commands don't fire
+        -- notify_command_event, and the non-undoable wrapper (e.g. DeleteSelection)
+        -- goes through execute_non_recording which doesn't notify either.
+        if last_cmd then
+            notify_command_event({
+                event = "execute",
+                command = last_cmd,
+                project_id = last_cmd.project_id,
+            })
         end
     end
 end

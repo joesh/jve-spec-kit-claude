@@ -131,7 +131,13 @@ function SequenceMonitor.new(config)
             if self.viewport_start + self.viewport_duration > self.total_frames then
                 self.viewport_start = math.max(self.start_frame, self.total_frames - self.viewport_duration)
             end
-            -- MVC pull: re-display frame at parked playhead (content under us changed)
+            -- MVC pull: re-read playhead from model (undo/redo restores it)
+            -- then re-display frame at that position
+            local ts = require('ui.timeline.timeline_state')
+            local model_playhead = ts.get_playhead_position()
+            if type(model_playhead) == "number" and model_playhead ~= self.playhead then
+                self.playhead = model_playhead
+            end
             self:on_model_changed()
             self:_notify()
         end

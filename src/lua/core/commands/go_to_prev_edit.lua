@@ -15,6 +15,7 @@
 -- @file go_to_prev_edit.lua
 local M = {}
 local timeline_state = require('ui.timeline.timeline_state')
+local Signals = require("core.signals")
 
 
 local SPEC = {
@@ -98,7 +99,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if target ~= playhead then
-            timeline_state.set_playhead_position(target)
+            -- Persist to model, emit signal, surface viewport (same as GoToStart/GoToEnd)
+            local Sequence = require("models.sequence")
+            local sequence = Sequence.load(sv.sequence_id)
+            assert(sequence, "GoToPrevEdit: sequence not found: " .. tostring(sv.sequence_id))
+            sequence.playhead_position = target
+            assert(sequence:save(), "GoToPrevEdit: failed to save")
+            Signals.emit("playhead_changed", sv.sequence_id, target)
+            timeline_state.surface_playhead()
         end
         return true
     end
