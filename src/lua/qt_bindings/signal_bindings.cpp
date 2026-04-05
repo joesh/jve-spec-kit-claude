@@ -873,6 +873,43 @@ private:
     std::string handler_name;
 };
 
+// Window close handler - fires on QEvent::Close (X button, Cmd+W, etc.)
+class CloseEventFilter : public QObject
+{
+public:
+    CloseEventFilter(lua_State* L_ptr, const std::string& handler, QWidget* widget)
+        : QObject(widget), lua_state(L_ptr), handler_name(handler) {}
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override {
+        if (event->type() == QEvent::Close && lua_state) {
+            lua_getglobal(lua_state, handler_name.c_str());
+            if (lua_isfunction(lua_state, -1)) {
+                if (lua_pcall(lua_state, 0, 0, 0) != LUA_OK) {
+                    handle_lua_callback_error(lua_state);
+                }
+            } else {
+                lua_pop(lua_state, 1);
+            }
+        }
+        return QObject::eventFilter(obj, event);
+    }
+
+private:
+    lua_State* lua_state;
+    std::string handler_name;
+};
+
+int lua_set_close_handler(lua_State* L) {
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    const char* handler_name = luaL_checkstring(L, 2);
+    if (!widget || !handler_name) return 0;
+
+    CloseEventFilter* filter = new CloseEventFilter(L, handler_name, widget);
+    widget->installEventFilter(filter);
+    return 0;
+}
+
 // Window geometry change handler - fires on resize or move
 int lua_set_geometry_change_handler(lua_State* L) {
     QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));

@@ -366,6 +366,7 @@ void registerQtBindings(lua_State* L)
     // Populate 'qt_constants.SIGNAL' subtable for application-level signal handlers
     lua_newtable(L);
     lua_pushcfunction(L, lua_set_geometry_change_handler); lua_setfield(L, -2, "SET_GEOMETRY_CHANGE_HANDLER");
+    lua_pushcfunction(L, lua_set_close_handler); lua_setfield(L, -2, "SET_CLOSE_HANDLER");
     lua_setfield(L, -2, "SIGNAL");
 
     // Set the 'qt_constants' global table

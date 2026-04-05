@@ -21,6 +21,7 @@ local command_labels = require("core.command_labels")
 local db_module = require("core.database")
 
 local GEOMETRY_KEY = "edit_history_window_geometry"
+local VISIBLE_KEY = "edit_history_window_visible"
 
 local window_state = {
     window = nil,
@@ -33,6 +34,13 @@ local window_state = {
     command_manager = nil,
     geometry_ready = false,  -- Prevent saving during initial layout
 }
+
+local function save_visibility(visible)
+    local project_id = db_module.get_current_project_id()
+    if project_id then
+        db_module.set_project_setting(project_id, VISIBLE_KEY, visible)
+    end
+end
 
 local function save_window_geometry()
     if not window_state.window or not window_state.geometry_ready then
@@ -87,6 +95,14 @@ local function create_window()
     _G["__edit_history_save_geometry"] = save_window_geometry
     if qt_constants.SIGNAL and qt_constants.SIGNAL.SET_GEOMETRY_CHANGE_HANDLER then
         qt_constants.SIGNAL.SET_GEOMETRY_CHANGE_HANDLER(window, "__edit_history_save_geometry")
+    end
+
+    -- Install close handler (X button) — same behavior as Escape
+    _G["__edit_history_on_close"] = function()
+        save_visibility(false)
+    end
+    if qt_constants.SIGNAL and qt_constants.SIGNAL.SET_CLOSE_HANDLER then
+        qt_constants.SIGNAL.SET_CLOSE_HANDLER(window, "__edit_history_on_close")
     end
 
     return window, content, tree
@@ -203,6 +219,7 @@ local function install_handlers()
             end
             if window_state.window and qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
                 qt_constants.DISPLAY.SET_VISIBLE(window_state.window, false)
+                save_visibility(false)
                 return true
             end
             return true
@@ -245,11 +262,22 @@ function M.show(command_manager, parent_window)
     qt_constants.DISPLAY.SHOW(window_state.window)
     qt_constants.DISPLAY.RAISE(window_state.window)
     qt_constants.DISPLAY.ACTIVATE(window_state.window)
+    save_visibility(true)
 
     -- Enable geometry persistence after layout settles
     qt_create_single_shot_timer(50, function()
         window_state.geometry_ready = true
     end)
+end
+
+--- Restore history window if it was open when the project was last closed.
+function M.restore_if_open(command_manager)
+    local project_id = db_module.get_current_project_id()
+    if not project_id then return end
+    local was_visible = db_module.get_project_setting(project_id, VISIBLE_KEY)
+    if was_visible then
+        M.show(command_manager, nil)
+    end
 end
 
 return M

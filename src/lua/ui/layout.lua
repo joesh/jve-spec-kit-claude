@@ -711,6 +711,12 @@ qt_create_single_shot_timer(50, function()
         end
         log.event("Created %d background tabs", #open_ids)
     end
+    -- Restore edit history window if it was open last session
+    local edit_history_ok, edit_history = pcall(require, "ui.edit_history_window")
+    if edit_history_ok and edit_history.restore_if_open then
+        pcall(edit_history.restore_if_open, command_manager)
+    end
+
     window_ready_to_save = true
     log.event("Window state persistence enabled")
 end)
