@@ -2135,23 +2135,18 @@ end
 
 function M.activate_timeline_stack(sequence_id)
     local seq = sequence_id or active_sequence_id
+    local prev_seq = active_sequence_id
     active_sequence_id = seq
     local stack_id = history.stack_id_for_sequence(seq)
     history.set_active_stack(stack_id, {sequence_id = seq})
 
-    -- Cache state for this sequence
-    -- Using implicit knowledge that history doesn't cache state
-    -- We need project_id. command_manager has active_project_id.
-    -- luacheck: ignore 542 (empty if branch - preserved for future state caching)
-    if db and seq and seq ~= "" then
-        -- Ideally we get project_id from sequence, but for now use active
-        -- cache_initial_state was local. We removed it.
-        -- If it's needed for state_mgr (snapshots), state_mgr handles it?
-        -- state_mgr.cache_initial_state is not exposed.
-        -- But wait, CommandState has cache_initial_state? No, I removed it.
-        -- Snapshots replaced it?
-        -- The original code called cache_initial_state(seq, project_id).
-        -- For now, let's assume it's fine.
+    -- Notify listeners that the active sequence changed (history panel, etc.)
+    if prev_seq ~= seq then
+        notify_command_event({
+            event = "sequence_switched",
+            sequence_id = seq,
+            project_id = active_project_id,
+        })
     end
 
     return stack_id

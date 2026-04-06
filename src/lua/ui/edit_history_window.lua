@@ -252,7 +252,8 @@ function M.show(command_manager, parent_window)
             if not event or not event.event then
                 return
             end
-            if event.event == "execute" or event.event == "undo" or event.event == "redo" then
+            if event.event == "execute" or event.event == "undo" or event.event == "redo"
+                or event.event == "sequence_switched" then
                 refresh_tree()
             end
         end)
