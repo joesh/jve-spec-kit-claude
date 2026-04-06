@@ -5,7 +5,10 @@ set -euo pipefail
 # so they get real C++ bindings (qt_xml_parse, qt_json_encode, etc.)
 # but don't need a full UI environment.
 #
+# Tests run in parallel for speed. Each gets its own JVEEditor process.
+#
 # Usage: ./scripts/run_binding_tests.sh
+#   RUN_SLOW_TESTS=1 to include tests marked SLOW_TEST
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="$ROOT_DIR/build/bin/JVEEditor"
@@ -23,41 +26,64 @@ mapfile -t TESTS < <(
 )
 
 TOTAL=${#TESTS[@]}
-PASS=0
-FAIL=0
 
 if [[ $TOTAL -eq 0 ]]; then
   echo "No binding tests found in $BIND_DIR" >&2
   exit 2
 fi
 
-echo "[binding-tests] Running $TOTAL binding test(s)..."
-
 RUN_SLOW="${RUN_SLOW_TESTS:-0}"
+RESULTS_DIR="$(mktemp -d -t binding_results.XXXXXX)"
+
+# Determine which tests to run vs skip
 SKIP=0
-
+RUN_TESTS=()
 for t in "${TESTS[@]}"; do
-  base="$(basename "$t")"
-
-  # Skip tests marked -- SLOW unless RUN_SLOW_TESTS=1
   if [[ "$RUN_SLOW" != "1" ]] && head -3 "$t" | grep -q SLOW_TEST; then
     SKIP=$((SKIP+1))
     continue
   fi
+  RUN_TESTS+=("$t")
+done
 
-  echo "[binding-tests] → $base"
+echo "[binding-tests] Running ${#RUN_TESTS[@]} binding test(s) in parallel..."
 
-  tmp_out="$(mktemp -t binding_test_out.XXXXXX)"
-  if "$BINARY" --test "$t" >"$tmp_out" 2>&1; then
+# Launch all tests in parallel
+for t in "${RUN_TESTS[@]}"; do
+  base="$(basename "$t")"
+  (
+    tmp_out="$RESULTS_DIR/$base.out"
+    if "$BINARY" --test "$t" >"$tmp_out" 2>&1; then
+      echo "PASS" > "$RESULTS_DIR/$base.status"
+    else
+      echo "FAIL" > "$RESULTS_DIR/$base.status"
+    fi
+  ) &
+done
+
+wait
+
+# Collect results
+PASS=0
+FAIL=0
+FAILED_NAMES=()
+
+for t in "${RUN_TESTS[@]}"; do
+  base="$(basename "$t")"
+  status="$(cat "$RESULTS_DIR/$base.status" 2>/dev/null || echo "FAIL")"
+  if [[ "$status" == "PASS" ]]; then
+    echo "[binding-tests] ✓ $base"
     PASS=$((PASS+1))
   else
+    echo "[binding-tests] ✗ $base"
     FAIL=$((FAIL+1))
-    echo "  FAILED: $base"
-    cat "$tmp_out" >&2
+    FAILED_NAMES+=("$base")
+    cat "$RESULTS_DIR/$base.out" >&2
   fi
-
-  rm -f "$tmp_out"
 done
+
+# Cleanup temp dir
+rm -rf "$RESULTS_DIR"
 
 echo "------------------------------------"
 if [[ $SKIP -gt 0 ]]; then
@@ -68,5 +94,6 @@ fi
 echo "------------------------------------"
 
 if [[ $FAIL -ne 0 ]]; then
+  echo "Failed tests: ${FAILED_NAMES[*]}" >&2
   exit 1
 fi

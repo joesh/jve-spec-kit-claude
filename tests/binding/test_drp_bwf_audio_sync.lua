@@ -1,5 +1,5 @@
 #!/usr/bin/env luajit
-
+-- SLOW_TEST — superseded by test_drp_anamnesis_full.lua
 -- Test: DRP audio import stores absolute TC source_in.
 -- Verifies that source_in = media_tc_origin + in_offset (absolute TC in samples),
 -- and that TMB's internal first_sample_tc subtraction would produce correct

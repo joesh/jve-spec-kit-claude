@@ -1,5 +1,5 @@
 #!/usr/bin/env luajit
-
+-- SLOW_TEST — superseded by test_drp_anamnesis_full.lua
 -- Black-box test: DRP import respects clip mute flags.
 -- Uses anamnesis DRP which has ~129 muted clips (Flags bit 1 = muted).
 --
