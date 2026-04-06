@@ -471,13 +471,15 @@ function M.capture_clip_state(clip)
     local mark_in = clip.mark_in
     local mark_out = clip.mark_out
     local playhead = clip.playhead or clip.playhead_frame
-    if volume == nil and clip.id then
+    if (volume == nil or not state.created_at) and clip.id then
         local full_clip = Clip.load_optional(clip.id)
         if full_clip then
             volume = full_clip.volume
             mark_in = full_clip.mark_in
             mark_out = full_clip.mark_out
             playhead = full_clip.playhead_frame
+            if not state.created_at then state.created_at = full_clip.created_at end
+            if not state.modified_at then state.modified_at = full_clip.modified_at end
         end
     end
     if volume ~= nil then state.volume = volume end
