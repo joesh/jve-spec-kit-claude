@@ -1108,7 +1108,10 @@ function M._execute_body(command_or_name, params)
     -- Use history module for sequence tracking
     sequence_number = history.increment_sequence_number()
     command.sequence_number = sequence_number
+    -- Parent in the undo tree: the per-sequence cursor if available,
+    -- otherwise the global cursor (first command on a newly-activated sequence).
     command.parent_sequence_number = history.get_current_sequence_number()
+        or history.get_global_cursor()
 
     -- Automatic undo grouping: root command becomes the group, nested commands inherit
     -- If there's an explicit undo group active (from begin_undo_group), use that instead

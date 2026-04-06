@@ -592,9 +592,12 @@ function M.find_merged_undo_target(active_seq_id)
         global_cmd = fetch_command_at(global_cursor, "global")
     end
 
-    -- Pick the one with the higher timestamp (most recent)
+    -- Pick the one with the higher sequence_number (most recent).
+    -- Sequence numbers are monotonically assigned, so higher = more recent.
+    -- Timestamps have only second resolution, so same-second commands
+    -- would tie-break wrong if compared by timestamp alone.
     if seq_cmd and global_cmd then
-        if seq_cmd.timestamp >= global_cmd.timestamp then
+        if seq_cmd.sequence_number >= global_cmd.sequence_number then
             return seq_cmd
         else
             return global_cmd
@@ -672,12 +675,15 @@ function M.find_merged_redo_target(active_seq_id)
         global_child = parse_redo_child(q)
     end
 
-    -- Pick the one with the lower timestamp (earliest undone)
+    -- Pick the one with the lower sequence_number (earliest undone).
+    -- Sequence numbers are monotonically assigned, so lower = earlier.
+    -- Timestamps have only second resolution, so same-second commands
+    -- would tie-break wrong if compared by timestamp alone.
     if seq_child and global_child then
-        if seq_child.timestamp <= global_child.timestamp then
-            return seq_child
-        else
+        if global_child.sequence_number < seq_child.sequence_number then
             return global_child
+        else
+            return seq_child
         end
     end
     return seq_child or global_child
