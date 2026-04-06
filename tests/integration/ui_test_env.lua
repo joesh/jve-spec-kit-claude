@@ -59,7 +59,13 @@ local saved_home = nil
 -- @return table { db_path, project, sequences }
 function M.create_test_project(opts)
     opts = opts or {}
-    local db_path = opts.db_path or "/tmp/jve/test_ui.jvp"
+    -- Each test gets a unique DB path to avoid collisions under parallel runners.
+    -- Derive from project_name (sanitized) for uniqueness across tests.
+    local db_path = opts.db_path
+    if not db_path then
+        local name = (opts.project_name or "ui_test"):gsub("[^%w_-]", "_"):lower()
+        db_path = string.format("/tmp/jve/test_%s.jvp", name)
+    end
 
     -- Clean up previous test database
     os.remove(db_path)
