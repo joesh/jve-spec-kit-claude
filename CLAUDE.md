@@ -12,6 +12,8 @@ This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Re
 - TOML keybindings (`keymaps/default.jvekeys`) (004-keyboard-architecture-refactor)
 - Lua (LuaJIT) + C++ (Qt6) + SQLite (persistence), command_manager (undo/redo), timeline_state (in-memory model) (005-gap-as-clip-refactor)
 - SQLite for media clips (unchanged). Gaps are in-memory only — not persisted. (005-gap-as-clip-refactor)
+- Lua (LuaJIT) + C++ (Qt6) + command_manager.lua, command_history.lua, SQLite (schema.sql) (006-per-sequence-undo)
+- SQLite `.jvp` project files (006-per-sequence-undo)
 
 READ ENGINEERING.md
 
