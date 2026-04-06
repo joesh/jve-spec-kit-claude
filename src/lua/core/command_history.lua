@@ -502,16 +502,13 @@ function M.set_global_cursor(value)
     local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
     global_state.current_sequence_number = value
     global_state.position_initialized = true
-    -- Persist to projects table (best-effort — project row may not exist yet in tests)
     local update = db:prepare("UPDATE projects SET global_undo_cursor = ? WHERE id = ?")
     assert(update, "set_global_cursor: failed to prepare UPDATE")
     update:bind_value(1, value or 0)
     update:bind_value(2, _active_project_id)
-    local ok = update:exec()
+    assert(update:exec(), string.format(
+        "set_global_cursor: UPDATE failed for project %s", _active_project_id))
     update:finalize()
-    if not ok then
-        log.warn("set_global_cursor: UPDATE failed for project %s", _active_project_id)
-    end
 end
 
 --- Load the global cursor from the projects table on init.
@@ -524,17 +521,12 @@ function M.load_global_cursor()
     query:bind_value(1, _active_project_id)
     assert(query:exec(), "load_global_cursor: SELECT failed")
     local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
-    if query:next() then
-        local value = query:value(0)
-        if value and value > 0 then
-            global_state.current_sequence_number = value
-        else
-            global_state.current_sequence_number = nil
-        end
+    assert(query:next(), string.format(
+        "load_global_cursor: no project row for id=%s", _active_project_id))
+    local value = query:value(0)
+    if value and value > 0 then
+        global_state.current_sequence_number = value
     else
-        -- No project row yet — can happen during init before project creation.
-        -- Cursor stays nil, will be set on first global command save.
-        log.event("load_global_cursor: no project row for id=%s (will be created)", _active_project_id)
         global_state.current_sequence_number = nil
     end
     global_state.position_initialized = true

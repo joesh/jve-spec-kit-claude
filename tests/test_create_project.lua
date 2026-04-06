@@ -17,11 +17,15 @@ local db = database.get_connection()
 db:exec(require('import_schema'))
 
 -- Need a minimal project to initialize command_manager
-db:exec([[
-    INSERT INTO projects (id, name) VALUES ('init_project', 'Init Project');
-    INSERT INTO sequences (id, project_id, name, fps_numerator, fps_denominator, width, height)
-    VALUES ('init_sequence', 'init_project', 'Init Sequence', 30, 1, 1920, 1080);
-]])
+local now = os.time()
+assert(db:exec(string.format([[
+    INSERT INTO projects (id, name, created_at, modified_at)
+    VALUES ('init_project', 'Init Project', %d, %d);
+]], now, now)))
+assert(db:exec(string.format([[
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+    VALUES ('init_sequence', 'init_project', 'Init Sequence', 'timeline', 30, 1, 48000, 1920, 1080, %d, %d);
+]], now, now)))
 
 command_manager.init('init_sequence', 'init_project')
 

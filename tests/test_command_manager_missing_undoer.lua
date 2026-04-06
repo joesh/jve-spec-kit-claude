@@ -11,6 +11,12 @@ os.remove(DB)
 assert(database.init(DB))
 local db = database.get_connection()
 db:exec(require("import_schema"))
+local now = os.time()
+assert(db:exec(string.format([[
+    INSERT INTO projects (id, name, created_at, modified_at) VALUES ('default_project', 'Test', %d, %d);
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+    VALUES ('default_sequence', 'default_project', 'Default', 'timeline', 30, 1, 48000, 1920, 1080, %d, %d);
+]], now, now, now, now)))
 command_manager.init("default_sequence", "default_project")
 
 -- Register a dummy executor without an undoer to ensure undo fails loudly.
