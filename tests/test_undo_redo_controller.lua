@@ -55,7 +55,7 @@ end, "command_manager required")
 -- 3. handle_undo calls command_manager.undo()
 --------------------------------------------------------------------------------
 print("  test 3: handle_undo calls undo")
-urc.clear_toggle()
+
 do
     local mock, calls = make_mock(3, 2)
     urc.handle_undo(mock)
@@ -66,7 +66,7 @@ end
 -- 4. handle_undo when can_undo() returns false -> no undo call
 --------------------------------------------------------------------------------
 print("  test 4: handle_undo skips when can_undo=false")
-urc.clear_toggle()
+
 do
     local mock, calls = make_mock(3, 0)
     urc.handle_undo(mock)
@@ -77,7 +77,7 @@ end
 -- 5. handle_undo clears toggle state (redo toggle interrupted by undo)
 --------------------------------------------------------------------------------
 print("  test 5: handle_undo clears toggle state")
-urc.clear_toggle()
+
 do
     -- Set up toggle state: redo once
     local mock, calls, get_pos = make_mock(3, 1)
@@ -100,7 +100,7 @@ end
 -- 6. handle_redo_toggle: first press does redo
 --------------------------------------------------------------------------------
 print("  test 6: first redo_toggle does redo")
-urc.clear_toggle()
+
 do
     local mock, calls, get_pos = make_mock(3, 1)
     urc.handle_redo_toggle(mock)
@@ -112,7 +112,7 @@ end
 -- 7. handle_redo_toggle: continues forward when more to redo
 --------------------------------------------------------------------------------
 print("  test 7: second redo_toggle continues forward when can_redo")
-urc.clear_toggle()
+
 do
     local mock, calls, get_pos = make_mock(3, 1)
 
@@ -131,7 +131,7 @@ end
 -- (toggle-back was removed — controller is now a simple pass-through)
 --------------------------------------------------------------------------------
 print("  test 8: redo_toggle does nothing at end of stack")
-urc.clear_toggle()
+
 do
     -- Stack of 2 commands, start at pos=1 — only 1 redo available
     local mock, calls, get_pos = make_mock(2, 1)
@@ -152,7 +152,7 @@ end
 -- 9. handle_redo_toggle: can_redo()=false -> no redo call
 --------------------------------------------------------------------------------
 print("  test 9: redo_toggle skips when can_redo=false")
-urc.clear_toggle()
+
 do
     local mock, calls = make_mock(2, 2) -- at max, nothing to redo
     urc.handle_redo_toggle(mock)
@@ -160,31 +160,32 @@ do
 end
 
 --------------------------------------------------------------------------------
--- 10. clear_toggle resets so next redo_toggle is fresh
+-- 10. undo between redos resets context for fresh redo
 --------------------------------------------------------------------------------
-print("  test 10: clear_toggle resets for fresh redo")
-urc.clear_toggle()
+print("  test 10: undo between redos gives fresh redo")
+
 do
     local mock, calls, get_pos = make_mock(3, 1)
 
-    -- Redo once to establish toggle state
+    -- Redo once (1→2)
     urc.handle_redo_toggle(mock)
     assert(get_pos() == 2)
 
-    -- Explicitly clear
-    urc.clear_toggle()
+    -- Undo back (2→1)
+    urc.handle_undo(mock)
+    assert(get_pos() == 1)
 
-    -- Next press at pos=2 should attempt a fresh redo (2→3), not toggle-back
+    -- Next redo should be fresh (1→2), not continue from old context
     urc.handle_redo_toggle(mock)
-    assert(calls.redo == 2, "expected 2 total redo calls (fresh after clear)")
-    assert(get_pos() == 3, "expected pos=3 after fresh redo")
+    assert(calls.redo == 2, "expected 2 total redo calls (fresh after undo)")
+    assert(get_pos() == 2, "expected pos=2 after fresh redo")
 end
 
 --------------------------------------------------------------------------------
 -- 11. redo failure clears toggle state
 --------------------------------------------------------------------------------
 print("  test 11: redo failure clears toggle")
-urc.clear_toggle()
+
 do
     local pos = 1
     local mock = {
@@ -210,7 +211,7 @@ end
 -- 12. undo failure during toggle-back clears toggle state
 --------------------------------------------------------------------------------
 print("  test 12: undo failure during toggle-back clears toggle")
-urc.clear_toggle()
+
 do
     local pos = 1
     local undo_should_fail = false

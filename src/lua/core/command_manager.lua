@@ -549,6 +549,15 @@ local PROJECT_LEVEL_COMMAND_TYPES = {
     DeleteSequence = true,
 }
 
+-- Commands that modify DB but don't produce clip-level __timeline_mutations.
+-- These change sequences/projects/metadata, not clip positions/durations.
+-- Excluded from the NSF hash-based mutation assertion.
+local NON_CLIP_COMMAND_TYPES = {
+    CreateSequence = true,
+    DeleteSequence = true,
+    SetSequenceMetadata = true,
+}
+
 local function classify_command_sequence_id(command)
     if PROJECT_LEVEL_COMMAND_TYPES[command.type] then
         return nil
@@ -1089,17 +1098,12 @@ function M._execute_body(command_or_name, params)
 
     perf = create_command_perf_tracker(command)
     needs_state_hash = should_compute_state_hash(command)
-    pre_hash = ""
-    if needs_state_hash then
-        perf.reset()
-        pre_hash = state_mgr.calculate_state_hash(command.project_id)
-        perf.log("state_hash_pre")
-        perf.reset()
-    else
-        perf.reset()
-        perf.log("state_hash_pre_skipped")
-        perf.reset()
-    end
+    -- Always compute pre_hash: needed for NSF mutation check (assert if DB
+    -- changed but executor produced no __timeline_mutations).
+    perf.reset()
+    pre_hash = state_mgr.calculate_state_hash(command.project_id)
+    perf.log("state_hash_pre")
+    perf.reset()
 
     -- Use history module for sequence tracking
     sequence_number = history.increment_sequence_number()
@@ -1326,7 +1330,23 @@ function M._execute_body(command_or_name, params)
                  applied_mutations = apply_command_mutations(command)
 
                  if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
-                     log.warn("execute: no mutations for %s, falling back to reload_clips", command.type)
+                     -- NSF: distinguish "executor forgot mutations" from
+                     -- "mutations present but UI cache unavailable (test env)".
+                     local has_mutations = command:get_parameter("__timeline_mutations") ~= nil
+                     if not has_mutations then
+                         local is_project_level = NON_CLIP_COMMAND_TYPES[command.type]
+                             or not command.sequence_id
+                         local has_nested_children = command.undo_group_id
+                             and #history.find_group_members(command.undo_group_id, nil, nil) > 1
+                         if not is_project_level and not has_nested_children then
+                             local mutation_check_hash = state_mgr.calculate_state_hash(command.project_id)
+                             assert(mutation_check_hash == pre_hash, string.format(
+                                 "execute: command %s modified DB but produced no __timeline_mutations "
+                                 .. "for sequence %s. Fix the executor to produce mutations.",
+                                 command.type, reload_sequence_id))
+                         end
+                     end
+                     -- Mutations present but couldn't apply (test env), or no-op, or delegation.
                      timeline_state.reload_clips(reload_sequence_id)
                  end
                  perf.log("ui_refresh")
@@ -1472,6 +1492,9 @@ function M:list_history_entries()
     -- Map current cursor to visible representative.
     -- In merged view, the "current position" is the most recent done command
     -- across both the sequence cursor and global cursor.
+    -- NOTE: math.max is a proxy for "most recent" — it works because sequence_numbers
+    -- are monotonically assigned and timestamps are monotonically increasing (same thread).
+    -- find_merged_undo_target uses timestamp comparison which must agree with this.
     local current_seq = math.max(seq_cursor, global_cursor)
     local visible_current = visible_seq_for[current_seq] or current_seq
 
@@ -1638,7 +1661,10 @@ local function run_undoer(cmd)
     if not apply_command_mutations(cmd) then
         local seq_id = extract_sequence_id(cmd)
         if seq_id and seq_id ~= "" then
-            log.warn("run_undoer: no mutations for %s, falling back to reload_clips", cmd.type)
+            if not NON_CLIP_COMMAND_TYPES[cmd.type] then
+                log.error("run_undoer: command %s produced no __timeline_mutations for sequence %s\n%s",
+                    cmd.type, seq_id, debug.traceback("", 2))
+            end
             local ts = require('ui.timeline.timeline_state')
             if ts.reload_clips then ts.reload_clips(seq_id) end
         end
@@ -1740,15 +1766,17 @@ local function run_redo_executor(cmd)
     end
 
     -- Persist updated mutations (e.g., new split clip IDs generated during redo)
-    local saved = cmd:save(db)
-    if not saved then
-        log.warn("Redo: failed to persist updated command %s", cmd.type)
-    end
+    assert(cmd:save(db), string.format(
+        "run_redo_executor: failed to persist command %s (seq=%s)",
+        cmd.type, tostring(cmd.sequence_number)))
 
     if not apply_command_mutations(cmd) then
         local seq_id = extract_sequence_id(cmd)
         if seq_id and seq_id ~= "" then
-            log.warn("run_redo_executor: no mutations for %s, falling back to reload_clips", cmd.type)
+            if not NON_CLIP_COMMAND_TYPES[cmd.type] then
+                log.error("run_redo_executor: command %s produced no __timeline_mutations for sequence %s\n%s",
+                    cmd.type, seq_id, debug.traceback("", 2))
+            end
             local ts = require('ui.timeline.timeline_state')
             if ts.reload_clips then ts.reload_clips(seq_id) end
         end

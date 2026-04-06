@@ -44,8 +44,6 @@ function M.register(executors, undoers, db)
 
         local timeline_state = require('ui.timeline.timeline_state')
         local command_manager = require("core.command_manager")
-        local undo_redo_controller = require("core.undo_redo_controller")
-        undo_redo_controller.clear_toggle()
 
         -- Mark-based lift/extract: when both marks set, operate on mark range
         local mark_in = timeline_state.get_mark_in and timeline_state.get_mark_in()

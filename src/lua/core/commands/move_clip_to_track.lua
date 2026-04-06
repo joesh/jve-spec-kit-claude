@@ -40,22 +40,43 @@ local SPEC = {
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
-    -- luacheck: ignore 211 (record_occlusion_actions - prepared for future occlusion handling)
-    local function record_occlusion_actions(command, sequence_id, actions)
-        if not actions or #actions == 0 then return end
-        for _, action in ipairs(actions) do
-            if action.type == "delete" and action.clip and action.clip.id then
-                command_helper.add_delete_mutation(command, sequence_id, action.clip.id)
-            elseif action.type == "trim" and action.after then
-                local update = command_helper.clip_update_payload(action.after, sequence_id)
-                if update then
-                    command_helper.add_update_mutation(command, update.track_sequence_id or sequence_id, update)
-                end
-            elseif action.type == "insert" and action.clip then
-                local insert_payload = command_helper.clip_insert_payload(action.clip, sequence_id)
-                if insert_payload then
-                    command_helper.add_insert_mutation(command, insert_payload.track_sequence_id or sequence_id, insert_payload)
-                end
+    --- Convert clip_mutator planned_mutations into __timeline_mutations for UI cache.
+    local function record_planned_mutations(command, sequence_id, planned_mutations)
+        if not planned_mutations or #planned_mutations == 0 then return end
+        for _, mut in ipairs(planned_mutations) do
+            assert(mut.type, "record_planned_mutations: mutation missing type")
+            assert(mut.clip_id, string.format(
+                "record_planned_mutations: %s mutation missing clip_id", mut.type))
+            if mut.type == "delete" then
+                command_helper.add_delete_mutation(command, sequence_id, mut.clip_id)
+            elseif mut.type == "update" then
+                assert(mut.track_id, string.format(
+                    "record_planned_mutations: update mutation missing track_id (clip=%s)", mut.clip_id))
+                command_helper.add_update_mutation(command, sequence_id, {
+                    clip_id = mut.clip_id,
+                    track_id = mut.track_id,
+                    start_value = mut.timeline_start_frame,
+                    duration_value = mut.duration_frames,
+                    source_in_value = mut.source_in_frame,
+                    source_out_value = mut.source_out_frame,
+                    enabled = mut.enabled == 1,
+                })
+            elseif mut.type == "insert" then
+                assert(mut.track_id, string.format(
+                    "record_planned_mutations: insert mutation missing track_id (clip=%s)", mut.clip_id))
+                command_helper.add_insert_mutation(command, sequence_id, {
+                    id = mut.clip_id,
+                    track_id = mut.track_id,
+                    start_value = mut.timeline_start_frame,
+                    duration_value = mut.duration_frames,
+                    source_in_value = mut.source_in_frame,
+                    source_out_value = mut.source_out_frame,
+                    enabled = mut.enabled == 1,
+                })
+            else
+                error(string.format(
+                    "record_planned_mutations: unknown mutation type '%s' (clip=%s)",
+                    tostring(mut.type), tostring(mut.clip_id)))
             end
         end
     end
@@ -114,7 +135,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             }
         end
 
-        local _original_timeline_start = clip.timeline_start  -- preserved for future undo enhancement
+        local _original_timeline_start = clip.timeline_start  -- luacheck: ignore 211 (preserved for future undo enhancement)
         local original_state = command_helper.capture_clip_state(clip)
 
         -- Pending values must be integers (if provided)
@@ -169,6 +190,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         command:set_parameter("executed_mutations", planned_mutations)
+
+        -- Populate __timeline_mutations for UI cache update
+        record_planned_mutations(command, mutation_sequence, planned_mutations)
 
         print(string.format("✅ Moved clip %s to track %s at %s", clip_id, args.target_track_id, tostring(clip.timeline_start)))
         return true

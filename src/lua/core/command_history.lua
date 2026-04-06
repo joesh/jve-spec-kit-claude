@@ -141,9 +141,9 @@ end
 
 --- Re-read MAX(sequence_number) from DB. Called on init and after UNIQUE collisions.
 function M.refresh_last_sequence_number()
-    if not db then return end
+    assert(db, "refresh_last_sequence_number: no database connection (init not called?)")
     local query = db:prepare("SELECT MAX(sequence_number) FROM commands")
-    if not query then return end
+    assert(query, "refresh_last_sequence_number: failed to prepare MAX query (schema mismatch?)")
     if query:exec() and query:next() then
         local db_max = query:value(0) or 0
         if db_max > last_sequence_number then
@@ -223,19 +223,17 @@ function M.resolve_stack_for_command(command)
 end
 
 function M.load_sequence_undo_position(sequence_id)
-    if not db or not sequence_id or sequence_id == "" then
+    assert(db, "load_sequence_undo_position: no database connection")
+    if not sequence_id or sequence_id == "" then
         return nil, false
     end
 
-    local query = db:prepare([[ 
+    local query = db:prepare([[
         SELECT current_sequence_number
         FROM sequences
         WHERE id = ?
     ]])
-
-    if not query then
-        return nil, false
-    end
+    assert(query, "load_sequence_undo_position: failed to prepare query (schema mismatch?)")
 
     query:bind_value(1, sequence_id)
     local has_row = false
@@ -324,21 +322,16 @@ function M.save_undo_position()
 end
 
 function M.find_latest_child_command(parent_sequence)
-    if not db then
-        return nil
-    end
+    assert(db, "find_latest_child_command: no database connection")
 
-    local query = db:prepare([[ 
+    local query = db:prepare([[
         SELECT sequence_number, command_type, command_args
         FROM commands
         WHERE parent_sequence_number IS ? OR (parent_sequence_number IS NULL AND ? = 0)
         ORDER BY sequence_number DESC
         LIMIT 1
     ]])
-
-    if not query then
-        return nil
-    end
+    assert(query, "find_latest_child_command: failed to prepare query (schema mismatch?)")
 
     query:bind_value(1, parent_sequence)
     query:bind_value(2, parent_sequence)
@@ -379,7 +372,8 @@ end
 --                   Pass nil to skip lower bound (for undo)
 -- @return array of sequence_numbers (DESC when up_to_seq set, ASC when after_seq set)
 function M.find_group_members(group_id, up_to_seq, after_seq)
-    if not db or not group_id then
+    assert(db, "find_group_members: no database connection")
+    if not group_id then
         return {}
     end
     local sql

@@ -153,18 +153,14 @@ end
 function M.load_history()
     local database = require("core.database")
     local db = database.get_connection()
-    if not db then
-        return {}
-    end
+    assert(db, "Command.load_history: no database connection")
 
     local query = db:prepare([[
         SELECT * FROM commands
         WHERE command_type NOT LIKE 'Undo%'
         ORDER BY sequence_number ASC
     ]])
-    if not query then
-        return {}
-    end
+    assert(query, "Command.load_history: failed to prepare query (schema mismatch?)")
 
     local commands = {}
     if query:exec() then
@@ -189,9 +185,7 @@ end
 function M.load_history_branch(cursor_seq)
     local database = require("core.database")
     local db = database.get_connection()
-    if not db then
-        return {}
-    end
+    assert(db, "Command.load_history_branch: no database connection")
 
     cursor_seq = cursor_seq or 0
 
@@ -214,7 +208,7 @@ function M.load_history_branch(cursor_seq)
                   AND command_type NOT LIKE 'Undo%'
             ]])
         end
-        if not child_q then break end
+        assert(child_q, "load_history_branch: failed to prepare child query (schema mismatch?)")
         if tip ~= 0 then
             child_q:bind_value(1, tip)
         end
@@ -234,12 +228,11 @@ function M.load_history_branch(cursor_seq)
         SELECT * FROM commands
         WHERE sequence_number = 0 AND parent_sequence_number = -1 LIMIT 1
     ]])
-    if prov_q then
-        if prov_q:exec() and prov_q:next() then
-            provenance = M.parse_from_query(prov_q, nil)
-        end
-        prov_q:finalize()
+    assert(prov_q, "load_history_branch: failed to prepare provenance query (schema mismatch?)")
+    if prov_q:exec() and prov_q:next() then
+        provenance = M.parse_from_query(prov_q, nil)
     end
+    prov_q:finalize()
 
     if tip == 0 then
         if provenance then return { provenance } end
@@ -266,9 +259,7 @@ function M.load_history_branch(cursor_seq)
               )
         ORDER BY sequence_number ASC
     ]])
-    if not query then
-        return {}
-    end
+    assert(query, "load_history_branch: failed to prepare spine query (schema mismatch?)")
     query:bind_value(1, tip)
 
     local commands = {}
@@ -300,7 +291,7 @@ end
 function M.load_filtered_history_branch(seq_cursor, global_cursor, sequence_id)
     local database = require("core.database")
     local db = database.get_connection()
-    if not db then return {} end
+    assert(db, "Command.load_filtered_history_branch: no database connection")
 
     seq_cursor = seq_cursor or 0
     global_cursor = global_cursor or 0
@@ -334,7 +325,7 @@ function M.load_filtered_history_branch(seq_cursor, global_cursor, sequence_id)
                       AND %s
                 ]], filter_sql))
             end
-            if not child_q then break end
+            assert(child_q, "load_filtered_history_branch: failed to prepare child query (schema mismatch?)")
             local bind_idx = 1
             if tip ~= 0 then
                 child_q:bind_value(bind_idx, tip)
@@ -371,7 +362,7 @@ function M.load_filtered_history_branch(seq_cursor, global_cursor, sequence_id)
               AND command_type NOT LIKE 'Undo%%'
             ORDER BY sequence_number ASC
         ]], filter_sql))
-        if not query then return end
+        assert(query, "load_filtered_history_branch: failed to prepare spine query (schema mismatch?)")
         local bind_idx = 1
         query:bind_value(bind_idx, tip)
         bind_idx = bind_idx + 1
@@ -410,15 +401,14 @@ function M.load_filtered_history_branch(seq_cursor, global_cursor, sequence_id)
         SELECT * FROM commands
         WHERE sequence_number = 0 AND parent_sequence_number = -1 LIMIT 1
     ]])
-    if prov_q then
-        if prov_q:exec() and prov_q:next() then
-            local provenance = M.parse_from_query(prov_q, nil)
-            if provenance and not seen[0] then
-                table.insert(commands, 1, provenance)
-            end
+    assert(prov_q, "load_filtered_history_branch: failed to prepare provenance query (schema mismatch?)")
+    if prov_q:exec() and prov_q:next() then
+        local provenance = M.parse_from_query(prov_q, nil)
+        if provenance and not seen[0] then
+            table.insert(commands, 1, provenance)
         end
-        prov_q:finalize()
     end
+    prov_q:finalize()
 
     return commands
 end
@@ -427,9 +417,8 @@ end
 function M.load_at_sequence(seq_num, project_id)
     local database = require("core.database")
     local db = database.get_connection()
-    if not db or not seq_num then
-        return nil
-    end
+    assert(db, "Command.load_at_sequence: no database connection")
+    assert(seq_num, "Command.load_at_sequence: seq_num is required")
 
     local query = db:prepare([[
         SELECT id, command_type, command_args, sequence_number, parent_sequence_number,
@@ -440,9 +429,9 @@ function M.load_at_sequence(seq_num, project_id)
         FROM commands
         WHERE sequence_number = ? AND command_type NOT LIKE 'Undo%'
     ]])
-    if not query then
-        return nil
-    end
+    assert(query, string.format(
+        "Command.load_at_sequence: failed to prepare query for seq=%s (schema mismatch?)",
+        tostring(seq_num)))
 
     query:bind_value(1, seq_num)
     if not query:exec() or not query:next() then
@@ -495,14 +484,10 @@ end
 function M.load_from_sequence(start_seq, project_id)
     local database = require("core.database")
     local db = database.get_connection()
-    if not db then
-        return {}
-    end
+    assert(db, "Command.load_from_sequence: no database connection")
 
     local query = db:prepare("SELECT * FROM commands WHERE sequence_number >= ? ORDER BY sequence_number")
-    if not query then
-        return {}
-    end
+    assert(query, "Command.load_from_sequence: failed to prepare query (schema mismatch?)")
 
     query:bind_value(1, start_seq)
     local commands = {}
@@ -522,14 +507,10 @@ end
 function M.mark_undone_after(seq_num)
     local database = require("core.database")
     local db = database.get_connection()
-    if not db then
-        return false
-    end
+    assert(db, "Command.mark_undone_after: no database connection")
 
     local query = db:prepare("UPDATE commands SET status = 'Undone' WHERE sequence_number > ?")
-    if not query then
-        return false
-    end
+    assert(query, "Command.mark_undone_after: failed to prepare query (schema mismatch?)")
 
     query:bind_value(1, seq_num)
     local ok = query:exec()
@@ -542,18 +523,14 @@ end
 function M.load_parent_tree()
     local database = require("core.database")
     local db = database.get_connection()
-    if not db then
-        return {}, {}
-    end
+    assert(db, "Command.load_parent_tree: no database connection")
 
     local query = db:prepare([[
         SELECT sequence_number, parent_sequence_number
         FROM commands
         WHERE command_type NOT LIKE 'Undo%'
     ]])
-    if not query then
-        return {}, {}
-    end
+    assert(query, "Command.load_parent_tree: failed to prepare query (schema mismatch?)")
 
     local parent_of = {}
     local exists = {}
@@ -722,10 +699,7 @@ function M:save(db)
         local database = require("core.database")
         db = database.get_connection()
     end
-    if not db then
-        log.warn("Command.save: No database connection available")
-        return false
-    end
+    assert(db, "Command.save: no database connection")
     -- Serialize parameters to JSON
     local params_json = "{}"
     local persistable_parameters = self:get_persistable_parameters()

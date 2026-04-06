@@ -48,7 +48,4 @@ function M.handle_redo_toggle(command_manager)
     return result
 end
 
--- Kept for API compat — now a no-op
-function M.clear_toggle() end
-
 return M
