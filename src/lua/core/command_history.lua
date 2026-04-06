@@ -496,36 +496,48 @@ end
 
 --- Set the global cursor (in-memory + DB persistence).
 function M.set_global_cursor(value)
+    assert(db, "set_global_cursor: no database connection")
+    assert(_active_project_id and _active_project_id ~= "",
+        "set_global_cursor: no active project_id")
     local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
     global_state.current_sequence_number = value
     global_state.position_initialized = true
-    -- Persist to projects table
-    if db and _active_project_id then
-        local update = db:prepare("UPDATE projects SET global_undo_cursor = ? WHERE id = ?")
-        assert(update, "set_global_cursor: failed to prepare UPDATE")
-        update:bind_value(1, value or 0)
-        update:bind_value(2, _active_project_id)
-        assert(update:exec(), "set_global_cursor: UPDATE failed")
-        update:finalize()
+    -- Persist to projects table (best-effort — project row may not exist yet in tests)
+    local update = db:prepare("UPDATE projects SET global_undo_cursor = ? WHERE id = ?")
+    assert(update, "set_global_cursor: failed to prepare UPDATE")
+    update:bind_value(1, value or 0)
+    update:bind_value(2, _active_project_id)
+    local ok = update:exec()
+    update:finalize()
+    if not ok then
+        log.warn("set_global_cursor: UPDATE failed for project %s", _active_project_id)
     end
 end
 
 --- Load the global cursor from the projects table on init.
 function M.load_global_cursor()
-    if not db or not _active_project_id then return end
+    assert(db, "load_global_cursor: no database connection")
+    assert(_active_project_id and _active_project_id ~= "",
+        "load_global_cursor: no active project_id")
     local query = db:prepare("SELECT global_undo_cursor FROM projects WHERE id = ?")
-    if not query then return end
+    assert(query, "load_global_cursor: failed to prepare SELECT")
     query:bind_value(1, _active_project_id)
-    if query:exec() and query:next() then
+    assert(query:exec(), "load_global_cursor: SELECT failed")
+    local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
+    if query:next() then
         local value = query:value(0)
-        local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
         if value and value > 0 then
             global_state.current_sequence_number = value
         else
             global_state.current_sequence_number = nil
         end
-        global_state.position_initialized = true
+    else
+        -- No project row yet — can happen during init before project creation.
+        -- Cursor stays nil, will be set on first global command save.
+        log.event("load_global_cursor: no project row for id=%s (will be created)", _active_project_id)
+        global_state.current_sequence_number = nil
     end
+    global_state.position_initialized = true
     query:finalize()
 end
 
@@ -560,44 +572,38 @@ function M.find_merged_undo_target(active_seq_id)
     local seq_cmd = nil
     local global_cmd = nil
 
-    if seq_cursor and seq_cursor > 0 then
+    -- Helper: fetch command at a cursor position
+    local function fetch_command_at(cursor, label)
         local q = db:prepare([[
             SELECT sequence_number, command_type, sequence_id, timestamp, undo_group_id
             FROM commands WHERE sequence_number = ?
               AND command_type NOT LIKE 'Undo%'
         ]])
-        assert(q, "find_merged_undo_target: failed to prepare sequence query")
-        q:bind_value(1, seq_cursor)
+        assert(q, string.format("find_merged_undo_target: failed to prepare %s query", label))
+        q:bind_value(1, cursor)
+        local cmd = nil
         if q:exec() and q:next() then
-            seq_cmd = {
+            local ts = q:value(3)
+            assert(ts, string.format(
+                "find_merged_undo_target: command at seq=%d has NULL timestamp", cursor))
+            cmd = {
                 sequence_number = q:value(0),
                 command_type = q:value(1),
                 sequence_id = q:value(2),
-                timestamp = q:value(3) or 0,
+                timestamp = ts,
                 undo_group_id = q:value(4),
             }
         end
         q:finalize()
+        return cmd
+    end
+
+    if seq_cursor and seq_cursor > 0 then
+        seq_cmd = fetch_command_at(seq_cursor, "sequence")
     end
 
     if global_cursor and global_cursor > 0 then
-        local q = db:prepare([[
-            SELECT sequence_number, command_type, sequence_id, timestamp, undo_group_id
-            FROM commands WHERE sequence_number = ?
-              AND command_type NOT LIKE 'Undo%'
-        ]])
-        assert(q, "find_merged_undo_target: failed to prepare global query")
-        q:bind_value(1, global_cursor)
-        if q:exec() and q:next() then
-            global_cmd = {
-                sequence_number = q:value(0),
-                command_type = q:value(1),
-                sequence_id = q:value(2),
-                timestamp = q:value(3) or 0,
-                undo_group_id = q:value(4),
-            }
-        end
-        q:finalize()
+        global_cmd = fetch_command_at(global_cursor, "global")
     end
 
     -- Pick the one with the higher timestamp (most recent)
@@ -621,8 +627,29 @@ function M.find_merged_redo_target(active_seq_id)
     local seq_cursor = M.get_sequence_cursor(active_seq_id)
     local global_cursor = M.get_global_cursor()
 
-    local seq_child = nil
-    local global_child = nil
+    local seq_child
+    local global_child
+
+    -- Helper: parse a redo child from a query result
+    local function parse_redo_child(q)
+        if not q:exec() or not q:next() then
+            q:finalize()
+            return nil
+        end
+        local ts = q:value(3)
+        assert(ts, string.format(
+            "find_merged_redo_target: redo child at seq=%s has NULL timestamp",
+            tostring(q:value(0))))
+        local child = {
+            sequence_number = q:value(0),
+            command_type = q:value(1),
+            sequence_id = q:value(2),
+            timestamp = ts,
+            undo_group_id = q:value(4),
+        }
+        q:finalize()
+        return child
+    end
 
     -- Find redo child for active sequence
     if active_seq_id then
@@ -639,16 +666,7 @@ function M.find_merged_redo_target(active_seq_id)
         q:bind_value(1, parent)
         q:bind_value(2, parent)
         q:bind_value(3, active_seq_id)
-        if q:exec() and q:next() then
-            seq_child = {
-                sequence_number = q:value(0),
-                command_type = q:value(1),
-                sequence_id = q:value(2),
-                timestamp = q:value(3) or 0,
-                undo_group_id = q:value(4),
-            }
-        end
-        q:finalize()
+        seq_child = parse_redo_child(q)
     end
 
     -- Find redo child for global
@@ -665,16 +683,7 @@ function M.find_merged_redo_target(active_seq_id)
         assert(q, "find_merged_redo_target: failed to prepare global query")
         q:bind_value(1, parent)
         q:bind_value(2, parent)
-        if q:exec() and q:next() then
-            global_child = {
-                sequence_number = q:value(0),
-                command_type = q:value(1),
-                sequence_id = q:value(2),
-                timestamp = q:value(3) or 0,
-                undo_group_id = q:value(4),
-            }
-        end
-        q:finalize()
+        global_child = parse_redo_child(q)
     end
 
     -- Pick the one with the lower timestamp (earliest undone)
@@ -692,27 +701,30 @@ end
 -- If the command is sequence-scoped, move the sequence cursor.
 -- If the command is global (sequence_id IS NULL), move the global cursor.
 function M.move_cursor_for_undo(cmd)
+    assert(cmd, "move_cursor_for_undo: cmd required")
+    assert(cmd.sequence_number, string.format(
+        "move_cursor_for_undo: cmd missing sequence_number (type=%s)",
+        tostring(cmd.type)))
+    -- parent_sequence_number can be nil (undoing the very first command)
     if cmd.sequence_id then
-        -- Move the sequence cursor
         local stack_id = M.stack_id_for_sequence(cmd.sequence_id)
         local state = M.ensure_stack_state(stack_id)
-        -- Move to parent
-        local parent = cmd.parent_sequence_number
-        state.current_sequence_number = parent
+        state.current_sequence_number = cmd.parent_sequence_number
         state.position_initialized = true
-        -- Also update the module-level cursor if this is the active stack
         if stack_id == active_stack_id then
-            current_sequence_number = parent
+            current_sequence_number = cmd.parent_sequence_number
         end
     else
-        -- Move the global cursor to the parent
-        local parent = cmd.parent_sequence_number
-        M.set_global_cursor(parent)
+        M.set_global_cursor(cmd.parent_sequence_number)
     end
 end
 
 --- Move the appropriate cursor after a redo.
 function M.move_cursor_for_redo(cmd)
+    assert(cmd, "move_cursor_for_redo: cmd required")
+    assert(cmd.sequence_number, string.format(
+        "move_cursor_for_redo: cmd missing sequence_number (type=%s)",
+        tostring(cmd.type)))
     if cmd.sequence_id then
         local stack_id = M.stack_id_for_sequence(cmd.sequence_id)
         local state = M.ensure_stack_state(stack_id)
