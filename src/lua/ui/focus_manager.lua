@@ -78,7 +78,7 @@ function M.install_click_to_focus()
     -- C++ passes panel_id string directly (avoids userdata identity mismatch)
     _G._panel_click_focus_handler = function(panel_id)
         if panel_id and registered_panels[panel_id] then
-            M.set_focused_panel(panel_id)
+            M.focus_panel(panel_id)
         end
     end
     _G.qt_install_panel_focus_filter("_panel_click_focus_handler")

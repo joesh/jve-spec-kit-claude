@@ -20,20 +20,31 @@ require('test_env')
 -- No-op timer: prevent debounced persistence from firing mid-command
 _G.qt_create_single_shot_timer = function() end
 
--- Only mock needed: panel_manager (Qt widget management)
-package.loaded["ui.panel_manager"] = {
-    get_active_sequence_monitor = function() return nil end,
+-- Stub sequence monitor: records load_sequence calls so tests can verify
+-- which master clip was loaded without needing Qt widgets.
+local load_calls = {}
+local stub_source_monitor = {
+    sequence_id = nil,
+    load_sequence = function(self, sequence_id)
+        self.sequence_id = sequence_id
+        table.insert(load_calls, sequence_id)
+    end,
 }
 
--- Mock project_browser to capture focus_master_clip calls
-local focus_calls = {}
-local project_browser = {
-    focus_master_clip = function(master_id, opts)
-        table.insert(focus_calls, {master_id = master_id, opts = opts})
-        return true
-    end
+package.loaded["ui.panel_manager"] = {
+    get_active_sequence_monitor = function() return nil end,
+    get_sequence_monitor = function(view_id)
+        assert(view_id == "source_monitor",
+            "unexpected view_id: " .. tostring(view_id))
+        return stub_source_monitor
+    end,
 }
-package.loaded['ui.project_browser'] = project_browser
+
+package.loaded["ui.focus_manager"] = {
+    focus_panel = function() end,
+    get_focused_panel = function() return "timeline" end,
+    set_focused_panel = function() end,
+}
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
@@ -148,7 +159,7 @@ print("=== MatchFrame Tests ===")
 
 -- Test 1: No clips under playhead → error
 print("Test 1: No clips under playhead")
-focus_calls = {}
+load_calls = {}
 timeline_state.set_playhead_position(250)  -- gap
 timeline_state.set_selection({})
 local result = command_manager.execute("MatchFrame", { project_id = "default_project" })
@@ -157,7 +168,7 @@ assert(result.error_message:find("No clips under playhead"), "Error: " .. tostri
 
 -- Test 2: Single clip under playhead, no master → error
 print("Test 2: Clip without master clip")
-focus_calls = {}
+load_calls = {}
 timeline_state.set_playhead_position(350)  -- only clip_no_parent
 timeline_state.set_selection({})
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
@@ -166,125 +177,114 @@ assert(result.error_message:find("not linked"), "Error: " .. tostring(result.err
 
 -- Test 3: Single clip under playhead with master → success
 print("Test 3: Single clip under playhead with master clip")
-focus_calls = {}
+load_calls = {}
 timeline_state.set_playhead_position(50)  -- only clip_v1 (clip_v2 starts at 100)
 timeline_state.set_selection({})
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
 assert(result.success, "Should succeed: " .. tostring(result.error_message))
-assert(#focus_calls == 1)
-assert(focus_calls[1].master_id == 'master_clip_a', "Should focus master_clip_a")
+assert(#load_calls == 1)
+assert(load_calls[1] == 'master_clip_a', "Should load master_clip_a")
 
 -- Test 4: Multiple clips under playhead, no selection → topmost (highest track_index)
 print("Test 4: Multiple clips, no selection, picks topmost")
-focus_calls = {}
+load_calls = {}
 timeline_state.set_playhead_position(150)  -- clip_v1 (track_index=1) + clip_v2 (track_index=2)
 timeline_state.set_selection({})
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
 assert(result.success, "Should succeed: " .. tostring(result.error_message))
-assert(#focus_calls == 1)
-assert(focus_calls[1].master_id == 'master_clip_b',
-    "Should pick topmost (V2, track_index=2), got " .. tostring(focus_calls[1].master_id))
+assert(#load_calls == 1)
+assert(load_calls[1] == 'master_clip_b',
+    "Should pick topmost (V2, track_index=2), got " .. tostring(load_calls[1]))
 
 -- Test 5: Multiple clips under playhead, one selected → uses selected
 print("Test 5: Multiple clips, V2 selected")
-focus_calls = {}
+load_calls = {}
 timeline_state.set_playhead_position(150)
 timeline_state.set_selection({clip_v2})
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
 assert(result.success, "Should succeed: " .. tostring(result.error_message))
-assert(#focus_calls == 1)
-assert(focus_calls[1].master_id == 'master_clip_b',
-    "Should pick selected V2 clip, got " .. tostring(focus_calls[1].master_id))
+assert(#load_calls == 1)
+assert(load_calls[1] == 'master_clip_b',
+    "Should pick selected V2 clip, got " .. tostring(load_calls[1]))
 
 -- Test 6: Multiple clips under playhead, both selected → topmost selected
 print("Test 6: Multiple clips, both selected, picks topmost selected")
-focus_calls = {}
+load_calls = {}
 timeline_state.set_playhead_position(150)
 timeline_state.set_selection({clip_v2, clip_v1})
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
 assert(result.success, "Should succeed: " .. tostring(result.error_message))
-assert(#focus_calls == 1)
-assert(focus_calls[1].master_id == 'master_clip_b',
-    "Should pick topmost selected (V2, track_index=2), got " .. tostring(focus_calls[1].master_id))
+assert(#load_calls == 1)
+assert(load_calls[1] == 'master_clip_b',
+    "Should pick topmost selected (V2, track_index=2), got " .. tostring(load_calls[1]))
 
--- Test 7: skip_focus always true (browser panel should never steal focus)
-print("Test 7: skip_focus always true")
-focus_calls = {}
+-- Test 7: MatchFrame does NOT touch browser selection (only loads source viewer)
+print("Test 7: MatchFrame does not touch browser")
+load_calls = {}
 timeline_state.set_playhead_position(50)
 timeline_state.set_selection({clip_v1})
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
 assert(result.success, "Should succeed")
-assert(focus_calls[1].opts.skip_focus == true, "skip_focus should always be true")
+assert(#load_calls == 1, "Should call source_viewer.load_master_clip exactly once")
+-- source_viewer.load_master_clip is the only external call — no browser interaction
 
--- Test 8: focus_master_clip throws → error surfaced (not swallowed)
-print("Test 8: focus_master_clip error surfaces")
-focus_calls = {}
+-- Test 8: source_viewer.load_master_clip error surfaces (not swallowed)
+print("Test 8: source_viewer error surfaces")
+load_calls = {}
 timeline_state.set_playhead_position(50)
 timeline_state.set_selection({})
-local orig_focus = project_browser.focus_master_clip
-project_browser.focus_master_clip = function() error("browser exploded") end
+local source_viewer = require("ui.source_viewer")
+local orig_load = source_viewer.load_master_clip
+source_viewer.load_master_clip = function() error("source viewer exploded") end
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
-assert(not result.success, "Should fail when focus_master_clip throws")
-assert(result.error_message:match("browser exploded"),
+assert(not result.success, "Should fail when source_viewer throws")
+assert(result.error_message:match("source viewer exploded"),
     "Error message should contain original error, got: " .. tostring(result.error_message))
-project_browser.focus_master_clip = orig_focus
-print("  ✓ focus_master_clip error surfaced")
+source_viewer.load_master_clip = orig_load
+print("  ✓ source_viewer error surfaced")
 
--- Test 9: focus_master_clip returns false → error surfaced
-print("Test 9: focus_master_clip returns false")
-focus_calls = {}
-timeline_state.set_playhead_position(50)
-timeline_state.set_selection({})
-project_browser.focus_master_clip = function() return false end
-result = command_manager.execute("MatchFrame", { project_id = "default_project" })
-assert(not result.success, "Should fail when focus_master_clip returns false")
-assert(result.error_message:match("Failed to focus"),
-    "Error should say failed to focus, got: " .. tostring(result.error_message))
-project_browser.focus_master_clip = orig_focus
-print("  ✓ focus_master_clip false surfaced")
-
--- Test 10: Video clips trump audio clips when nothing selected
+-- Test 9: Video clips trump audio clips when nothing selected
 -- Bug regression: audio clip on A3 (track_index=3) was picked over video on V1 (track_index=1)
 -- because pick_topmost only compared track_index without considering track_type.
-print("Test 10: Video clips trump audio clips when nothing selected")
-focus_calls = {}
+print("Test 9: Video clips trump audio clips when nothing selected")
+load_calls = {}
 timeline_state.set_playhead_position(50)  -- clip_v1 (V1) + clip_a1 (A1) + clip_a2 (A2) + clip_a3 (A3)
 timeline_state.set_selection({})
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
 assert(result.success, "Should succeed: " .. tostring(result.error_message))
-assert(#focus_calls == 1)
-assert(focus_calls[1].master_id == 'master_clip_a',
-    "Should pick video clip (V1) over audio clips (A1-A3), got " .. tostring(focus_calls[1].master_id))
+assert(#load_calls == 1)
+assert(load_calls[1] == 'master_clip_a',
+    "Should pick video clip (V1) over audio clips (A1-A3), got " .. tostring(load_calls[1]))
 
--- Test 11: Multiple video+audio, no selection → topmost VIDEO wins
-print("Test 11: Multiple video+audio clips, no selection, topmost video wins")
-focus_calls = {}
+-- Test 10: Multiple video+audio, no selection → topmost VIDEO wins
+print("Test 10: Multiple video+audio clips, no selection, topmost video wins")
+load_calls = {}
 timeline_state.set_playhead_position(150)  -- clip_v1 (V1) + clip_v2 (V2) + clip_a1-a3 (A1-A3)
 timeline_state.set_selection({})
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
 assert(result.success, "Should succeed: " .. tostring(result.error_message))
-assert(#focus_calls == 1)
-assert(focus_calls[1].master_id == 'master_clip_b',
-    "Should pick topmost VIDEO (V2/master_clip_b), got " .. tostring(focus_calls[1].master_id))
+assert(#load_calls == 1)
+assert(load_calls[1] == 'master_clip_b',
+    "Should pick topmost VIDEO (V2/master_clip_b), got " .. tostring(load_calls[1]))
 
--- Test 12: Selected audio clip under playhead still wins (selection overrides type preference)
-print("Test 12: Selected audio clip overrides video preference")
-focus_calls = {}
+-- Test 11: Selected audio clip under playhead still wins (selection overrides type preference)
+print("Test 11: Selected audio clip overrides video preference")
+load_calls = {}
 local clip_a1 = timeline_state.get_clip_by_id('clip_a1')
 assert(clip_a1, "clip_a1 should be loaded from DB")
 timeline_state.set_playhead_position(50)
 timeline_state.set_selection({clip_a1})
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
 assert(result.success, "Should succeed: " .. tostring(result.error_message))
-assert(#focus_calls == 1)
-assert(focus_calls[1].master_id == 'master_clip_audio_a1',
-    "Selected audio clip should win, got " .. tostring(focus_calls[1].master_id))
+assert(#load_calls == 1)
+assert(load_calls[1] == 'master_clip_audio_a1',
+    "Selected audio clip should win, got " .. tostring(load_calls[1]))
 
--- Test 13: MatchFrame sets master clip marks to clip's source_in/source_out
+-- Test 12: MatchFrame sets master clip marks to clip's source_in/source_out
 -- clip_v1: timeline_start=0, source_in=10, source_out=210, playhead at 50
 -- Expected: master mark_in=10, mark_out=210, playhead_frame=10+(50-0)=60
-print("Test 13: MatchFrame sets marks and playhead on master clip")
-focus_calls = {}
+print("Test 12: MatchFrame sets marks and playhead on master clip")
+load_calls = {}
 timeline_state.set_playhead_position(50)
 timeline_state.set_selection({})
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
@@ -299,11 +299,11 @@ assert(master_a.playhead_position == 60,
     string.format("playhead_position should be 60 (source_in + playhead - timeline_start), got %s",
         tostring(master_a.playhead_position)))
 
--- Test 14: MatchFrame with playhead deeper into clip
+-- Test 13: MatchFrame with playhead deeper into clip
 -- clip_v2: timeline_start=100, source_in=0, source_out=100, playhead at 150
 -- Expected: master mark_in=0, mark_out=100, playhead_frame=0+(150-100)=50
-print("Test 14: MatchFrame playhead mapping with offset clip")
-focus_calls = {}
+print("Test 13: MatchFrame playhead mapping with offset clip")
+load_calls = {}
 timeline_state.set_playhead_position(150)
 timeline_state.set_selection({clip_v2})
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
@@ -317,11 +317,11 @@ assert(master_b.mark_out == 100,
 assert(master_b.playhead_position == 50,
     string.format("playhead_position should be 50, got %s", tostring(master_b.playhead_position)))
 
--- Test 15: Out-of-range source position → set_playhead asserts → error surfaced
+-- Test 14: Out-of-range source position → set_playhead asserts → error surfaced
 -- Simulates DRP import bug where media.duration is timeline edit duration (short)
 -- but timeline clip's source range references deeper into the real file.
 -- The assert in Sequence:set_playhead catches this at the write boundary.
-print("Test 15: Out-of-range playhead asserts via set_playhead")
+print("Test 14: Out-of-range playhead asserts via set_playhead")
 db:exec(string.format([[
     INSERT INTO clips (
         id, project_id, clip_kind, name, track_id, media_id, master_clip_id, owner_sequence_id,
@@ -335,7 +335,7 @@ db:exec(string.format([[
 ]], now, now))
 -- Reload timeline state to pick up the new clip
 timeline_state.init('default_sequence', 'default_project')
-focus_calls = {}
+load_calls = {}
 timeline_state.set_playhead_position(550)  -- inside clip_overrange [500, 600)
 timeline_state.set_selection({})
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })

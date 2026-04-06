@@ -246,7 +246,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        print("DEBUG_OW: about to return true from Overwrite executor")
+        -- Focus timeline: the edit targeted the timeline panel
+        local ok_fm, focus_manager = pcall(require, "ui.focus_manager")
+        if ok_fm and focus_manager.focus_panel then
+            focus_manager.focus_panel("timeline")
+        end
+
         log.event("Overwrote at frame %d", overwrite_time or 0)
         return true
     end

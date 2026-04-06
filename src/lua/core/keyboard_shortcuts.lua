@@ -16,7 +16,6 @@ local keyboard_shortcuts = {}
 local shortcut_registry = require("core.keyboard_shortcut_registry")
 local panel_manager = require("ui.panel_manager")
 local kb_constants = require("core.keyboard_constants")
-local undo_redo_controller = require("core.undo_redo_controller")
 local arrow_repeat = require("ui.arrow_repeat")
 local focus_manager = require("ui.focus_manager")
 local log = require("core.logger").for_area("ui")
@@ -62,7 +61,6 @@ function keyboard_shortcuts.init(state, cmd_mgr, proj_browser, panel)
     project_browser = proj_browser
     timeline_panel = panel
     initialized = true
-    undo_redo_controller.clear_toggle()
 
     shortcut_registry.set_command_manager(cmd_mgr)
 
@@ -217,7 +215,6 @@ local function handle_key_impl(event)
     if (key == KEY.Comma or key == KEY.Period) and panel_active_timeline and not modifier_meta and not modifier_alt then
         local nudge_frames = modifier_shift and 5 or 1
         if key == KEY.Comma then nudge_frames = -nudge_frames end
-        undo_redo_controller.clear_toggle()
 
         local selected_edges = timeline_state.get_selected_edges()
         local selected_clips = timeline_state.get_selected_clips()
@@ -297,6 +294,15 @@ local function handle_key_impl(event)
                 project_id = project_id, sequence_id = sequence_id,
             })
         end
+        return true
+    end
+
+    -- Fallback: TOML registry lookup for keys that weren't handled above.
+    -- Normally TOML-bound keys fire via QShortcuts, but when Qt focus is outside
+    -- the main panel system (e.g. floating History window), QShortcuts don't resolve.
+    -- The C++ GlobalKeyFilter claims all keys in that case, routing them here.
+    local registry = require("core.keyboard_shortcut_registry")
+    if registry.handle_key_event(key, modifiers, focused_panel) then
         return true
     end
 

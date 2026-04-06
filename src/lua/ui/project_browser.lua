@@ -426,16 +426,8 @@ local function activate_item(item_info)
             return false, "Master clip metadata missing"
         end
 
-        -- Load masterclip into source_monitor (clip_id IS the masterclip sequence ID)
-        local pm = require("ui.panel_manager")
-        local source_sv = pm.get_sequence_monitor("source_monitor")
-        source_sv:load_sequence(clip.clip_id)
-
-        if focus_manager and focus_manager.focus_panel then
-            focus_manager.focus_panel("source_monitor")
-        else
-            focus_manager.set_focused_panel("source_monitor")
-        end
+        local source_viewer = require("ui.source_viewer")
+        source_viewer.load_master_clip(clip.clip_id)
         return true
     elseif item_info.type == "bin" then
         if item_info.id then

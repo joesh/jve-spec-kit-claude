@@ -9,9 +9,30 @@ local test_env = require('test_env')
 -- No-op timer: prevent debounced persistence from firing mid-command
 _G.qt_create_single_shot_timer = function() end
 
+-- Stub source monitor for source_viewer.load_master_clip
+local source_monitor_loaded_ids = {}
+local stub_source_monitor = {
+    sequence_id = nil,
+    load_sequence = function(self, sequence_id)
+        self.sequence_id = sequence_id
+        table.insert(source_monitor_loaded_ids, sequence_id)
+    end,
+}
+
 -- Only mock needed: panel_manager (Qt widget management)
 package.loaded["ui.panel_manager"] = {
     get_active_sequence_monitor = function() return nil end,
+    get_sequence_monitor = function(view_id)
+        assert(view_id == "source_monitor", "unexpected view_id: " .. tostring(view_id))
+        return stub_source_monitor
+    end,
+}
+
+-- Stub focus_manager (needed by source_viewer)
+package.loaded["ui.focus_manager"] = {
+    focus_panel = function() end,
+    get_focused_panel = function() return "timeline" end,
+    set_focused_panel = function() end,
 }
 
 -- Mock project_browser to capture focus_master_clip calls (Qt boundary)
@@ -295,8 +316,8 @@ timeline_state.set_playhead_position(tl_start + 1)
 local match_cmd = Command.create("MatchFrame", "default_project")
 local match_result = command_manager.execute(match_cmd)
 assert(match_result.success, "MatchFrame should succeed on imported clips: " .. tostring(match_result.error_message))
-assert(project_browser.focused_master_clip_id == timeline_master_id,
-    "MatchFrame should focus the master clip")
+assert(stub_source_monitor.sequence_id == timeline_master_id,
+    "MatchFrame should load the master clip into source viewer")
 
 -- ============================================================
 -- Nudge applies mutations (signal-observed)

@@ -214,15 +214,14 @@ local function install_handlers()
     if qt_constants.CONTROL.SET_TREE_KEY_HANDLER then
         local qt_key_escape = 0x01000000
         local key = register_global_handler("__edit_history_key", function(key_code, _text)
-            if key_code ~= qt_key_escape then
-                return false
-            end
-            if window_state.window and qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
-                qt_constants.DISPLAY.SET_VISIBLE(window_state.window, false)
-                save_visibility(false)
+            if key_code == qt_key_escape then
+                if window_state.window and qt_constants.DISPLAY and qt_constants.DISPLAY.SET_VISIBLE then
+                    qt_constants.DISPLAY.SET_VISIBLE(window_state.window, false)
+                    save_visibility(false)
+                end
                 return true
             end
-            return true
+            return false
         end)
         qt_constants.CONTROL.SET_TREE_KEY_HANDLER(window_state.tree, key)
     end

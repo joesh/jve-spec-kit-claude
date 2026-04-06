@@ -95,6 +95,19 @@ protected:
                 event->accept();
                 return true;
             }
+            // When focus is outside the main window (e.g. floating tool panels
+            // like History), QShortcuts scoped to panel containers won't match.
+            // Claim all keys here so they route through the Lua handler, which
+            // falls back to TOML registry lookup using focus_manager's active panel.
+            QWidget* focusWidget = QApplication::focusWidget();
+            QWidget* mainWin = SimpleLuaEngine::s_lastCreatedMainWindow;
+            if (focusWidget && mainWin
+                && focusWidget != mainWin
+                && !mainWin->isAncestorOf(focusWidget)) {
+                event->accept();
+                return true;
+            }
+
             // Let Qt resolve QShortcuts for everything else
             return false;
         }

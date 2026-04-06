@@ -11,7 +11,7 @@
 local M = {}
 local log = require("core.logger").for_area("commands")
 local timeline_state = require('ui.timeline.timeline_state')
-local project_browser = require('ui.project_browser')
+local source_viewer = require('ui.source_viewer')
 local Sequence = require('models.sequence')
 local command_helper = require("core.command_helper")
 
@@ -105,16 +105,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 tostring(target_master_id))
         end
 
-        -- Load master clip into source viewer (skip_focus: don't focus browser)
-        local ok, err = pcall(project_browser.focus_master_clip, target_master_id, {
-            skip_focus = true,
-        })
+        -- Load master clip into source viewer and focus it
+        local ok, err = pcall(source_viewer.load_master_clip, target_master_id)
         if not ok then
             set_last_error("MatchFrame: " .. tostring(err))
-            return false
-        end
-        if err == false then
-            set_last_error("MatchFrame: Failed to focus master clip")
             return false
         end
 

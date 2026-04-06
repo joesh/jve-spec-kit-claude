@@ -393,6 +393,12 @@ int lua_set_focus_policy(lua_State* L) {
 int lua_set_focus(lua_State* L) {
     QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
     if (!widget) return luaL_error(L, "qt_set_focus: widget required");
+    // Activate the widget's window first — on macOS, setFocus() is a no-op
+    // unless the widget's window is the active (key) window.
+    QWidget* window = widget->window();
+    if (window) {
+        window->activateWindow();
+    }
     widget->setFocus(Qt::OtherFocusReason);
     return 0;
 }
