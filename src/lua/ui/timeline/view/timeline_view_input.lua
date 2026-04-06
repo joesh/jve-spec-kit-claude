@@ -450,7 +450,8 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 start_value = state.pixel_to_time(x, width),
                 edges = state.get_selected_edges(),
                 lead_edge = lead_edge,
-                modifiers = modifiers
+                modifiers = modifiers,
+                picker_target_edges = target_edges,
             }
             view.render()
             return
@@ -744,7 +745,21 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             view.render()
             return
         end
-        if view.potential_drag then view.potential_drag = nil end
+        if view.potential_drag then
+            -- Click without drag on edges: narrow selection if picker returned
+            -- a strict subset (e.g. clicking one edge of a roll pair).
+            local pd = view.potential_drag
+            if pd.type == "edges" and pd.picker_target_edges
+                and not (pd.modifiers and (pd.modifiers.command or pd.modifiers.shift)) then
+                local current = state.get_selected_edges() or {}
+                local target = pd.picker_target_edges
+                if #target > 0 and #target < #current then
+                    state.set_edge_selection(target)
+                    view.render()
+                end
+            end
+            view.potential_drag = nil
+        end
         if view.drag_state then
             local drag = view.drag_state
             local drag_handler = require("ui.timeline.view.timeline_view_drag_handler")

@@ -114,6 +114,7 @@ local function new_state(clips)
     state.clear_edge_selection = function() mock_edges = {} end
     state.clear_gap_selection = function() end
     state.set_selection = function() end
+    state.set_dragging_playhead = function() end
     state.get_project_id = function() return "proj1" end
     state.get_sequence_id = function() return "seq1" end
 
@@ -186,4 +187,41 @@ assert(view3.potential_drag, "press should initialize potential drag")
 assert(view3.potential_drag.lead_edge.clip_id == edge_b.clip_id,
     "Lead edge should track the dragged edge even when selection order differs")
 
-print("✅ Timeline edge clicks preserve selection, support Shift toggling, and honor dragged-edge leadership")
+-- Test 4: Click-without-drag on one edge of a multi-edge selection narrows on release
+local state4 = new_state(track_clips)
+state4.set_edge_selection({edge_a, edge_b})
+local view4 = new_view(state4)
+
+with_pick({selection = {edge_a}, zone = "left", dragged_edge = edge_a}, function()
+    timeline_view_input.handle_mouse(view4, "press", 10, 10, 1, nil)
+end)
+
+-- Press preserves full selection (for potential drag)
+assert(#state4:get_selected_edges() == 2, "press should preserve selection for drag")
+
+-- Release without drag: narrowing should happen
+with_pick({selection = {edge_a}, zone = "left", dragged_edge = edge_a}, function()
+    timeline_view_input.handle_mouse(view4, "release", 10, 10, 1, nil)
+end)
+
+assert(#state4:get_selected_edges() == 1, string.format(
+    "release without drag should narrow to clicked edge, got %d", #state4:get_selected_edges()))
+assert(state4:get_selected_edges()[1].clip_id == "clip_a",
+    "narrowed selection should be the clicked edge")
+
+-- Test 5: Click-without-drag when picker returns full selection should NOT narrow
+local state5 = new_state(track_clips)
+state5.set_edge_selection({edge_a, edge_b})
+local view5 = new_view(state5)
+
+with_pick({selection = {edge_a, edge_b}, zone = "center", dragged_edge = edge_a}, function()
+    timeline_view_input.handle_mouse(view5, "press", 10, 10, 1, nil)
+end)
+with_pick({selection = {edge_a, edge_b}, zone = "center", dragged_edge = edge_a}, function()
+    timeline_view_input.handle_mouse(view5, "release", 10, 10, 1, nil)
+end)
+
+assert(#state5:get_selected_edges() == 2,
+    "release in roll zone should preserve both edges")
+
+print("✅ Timeline edge clicks preserve selection, support Shift toggling, honor dragged-edge leadership, and narrow on click-release")
