@@ -174,6 +174,17 @@ protected:
                     lua_settable(lua_state, -3);
                 }
 
+                // Tell Lua whether focus is outside the main window.
+                // When true, QShortcuts can't resolve — Lua must fall back
+                // to TOML registry lookup.
+                QWidget* mainWin = SimpleLuaEngine::s_lastCreatedMainWindow;
+                bool outside = focus_widget && mainWin
+                    && focus_widget != mainWin
+                    && !mainWin->isAncestorOf(focus_widget);
+                lua_pushstring(lua_state, "focus_outside_main_window");
+                lua_pushboolean(lua_state, outside);
+                lua_settable(lua_state, -3);
+
                 if (lua_pcall(lua_state, 1, 1, 0) == LUA_OK) {
                     bool handled = lua_toboolean(lua_state, -1);
                     lua_pop(lua_state, 1);

@@ -249,7 +249,7 @@ local function register_handler(name, fn)
 end
 
 local function create_window()
-    local window = qt.WIDGET.CREATE_MAIN_WINDOW()
+    local window = qt.WIDGET.CREATE_TOOL_WINDOW()
     qt.WIDGET.SET_WINDOW_FLAGS(window, 0x0000000B)  -- Qt::Tool
     qt.PROPERTIES.SET_TITLE(window, "Find & Filter")
     -- Apply global stylesheet (separate window doesn't inherit from main window)

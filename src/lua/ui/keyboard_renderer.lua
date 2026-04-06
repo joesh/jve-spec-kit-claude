@@ -172,7 +172,8 @@ local key_states = {}  -- key_label -> {assigned = bool, hover = bool}
 -- Create the keyboard widget
 function M.create()
     -- Main container widget
-    local keyboard_widget = qt.CREATE_MAIN_WINDOW()
+    local qt_constants = require("core.qt_constants")
+    local keyboard_widget = qt_constants.WIDGET.CREATE_TOOL_WINDOW()
 
     -- Calculate total keyboard dimensions
     local max_row_width = 0

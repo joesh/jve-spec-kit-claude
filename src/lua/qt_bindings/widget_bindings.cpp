@@ -12,8 +12,17 @@
 
 int lua_create_main_window(lua_State* L) {
     QMainWindow* window = new QMainWindow();
-    // Preserve reference so the engine can retrieve it after Lua runs
+    // Only the primary main window is tracked — GlobalKeyFilter uses it
+    // to distinguish "focus inside app" from "focus in floating panel."
     SimpleLuaEngine::s_lastCreatedMainWindow = window;
+    lua_push_widget(L, window);
+    return 1;
+}
+
+// Tool/dialog windows: QMainWindow without overwriting the primary reference.
+// Use for floating panels (History, Find), dialogs, and secondary windows.
+int lua_create_tool_window(lua_State* L) {
+    QMainWindow* window = new QMainWindow();
     lua_push_widget(L, window);
     return 1;
 }

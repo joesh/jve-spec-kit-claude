@@ -25,6 +25,7 @@ int lua_json_decode(lua_State* L);
 
 // Widget creation functions
 int lua_create_main_window(lua_State* L);
+int lua_create_tool_window(lua_State* L);
 int lua_create_widget(lua_State* L);
 int lua_create_scroll_area(lua_State* L);
 int lua_create_label(lua_State* L);

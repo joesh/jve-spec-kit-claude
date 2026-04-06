@@ -421,7 +421,7 @@ end
 -- Preset save prompt -------------------------------------------------------
 
 local function show_save_preset_prompt()
-    local prompt = WIDGET.CREATE_MAIN_WINDOW()
+    local prompt = WIDGET.CREATE_TOOL_WINDOW()
     PROP.SET_TITLE(prompt, "Save Keyboard Preset")
     PROP.SET_SIZE(prompt, 320, 140)
 
@@ -461,7 +461,7 @@ end
 -- Dialog construction ------------------------------------------------------
 
 local function create_dialog()
-    dialog_widget = WIDGET.CREATE_MAIN_WINDOW()
+    dialog_widget = WIDGET.CREATE_TOOL_WINDOW()
     PROP.SET_TITLE(dialog_widget, "Keyboard Shortcuts")
     PROP.SET_SIZE(dialog_widget, 900, 600)
 

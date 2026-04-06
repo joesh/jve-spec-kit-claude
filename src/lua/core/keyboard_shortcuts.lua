@@ -298,12 +298,14 @@ local function handle_key_impl(event)
     end
 
     -- Fallback: TOML registry lookup for keys that weren't handled above.
-    -- Normally TOML-bound keys fire via QShortcuts, but when Qt focus is outside
-    -- the main panel system (e.g. floating History window), QShortcuts don't resolve.
-    -- The C++ GlobalKeyFilter claims all keys in that case, routing them here.
-    local registry = require("core.keyboard_shortcut_registry")
-    if registry.handle_key_event(key, modifiers, focused_panel) then
-        return true
+    -- Only when focus is outside the main window (e.g. floating History window),
+    -- because QShortcuts scoped to panel containers can't resolve there.
+    -- When focus IS inside the main window, QShortcuts handle TOML-bound keys.
+    if event.focus_outside_main_window then
+        local registry = require("core.keyboard_shortcut_registry")
+        if registry.handle_key_event(key, modifiers, focused_panel) then
+            return true
+        end
     end
 
     log.detail("  → unhandled key=%d modifiers=0x%x (no cascade match)", event.key, event.modifiers)

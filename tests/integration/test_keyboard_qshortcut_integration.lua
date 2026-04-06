@@ -189,23 +189,24 @@ check("Cmd+Z not handled by residual handler",
     "Cmd+Z was handled by residual handler (should be QShortcut)")
 
 -------------------------------------------------------------------------------
--- 6. Tab in timeline toggles timecode
+-- 6. Tab is handled by Qt natively (focusNextPrevChild / QShortcut),
+-- NOT by the Lua residual handler. GlobalKeyFilter skips Tab entirely.
 -------------------------------------------------------------------------------
 print("\n--- Tab behavior ---")
 
 focus_manager.set_focused_panel("timeline")
 ui.pump(50)
 
--- Tab in timeline should be handled (timecode toggle)
+-- Tab should NOT be handled by Lua handler (Qt handles it natively)
 handled = keyboard_shortcuts.handle_key({
     key = 16777217,  -- Qt::Key_Tab
     modifiers = 0,
     text = "",
     focus_widget_is_text_input = 0,
 })
-check("Tab handled in timeline (timecode toggle)",
-    handled,
-    "Tab was not handled in timeline")
+check("Tab not handled by Lua residual handler (Qt handles natively)",
+    not handled,
+    "Tab should not reach Lua handler")
 
 -------------------------------------------------------------------------------
 -- 7. Text input bypass for residual keys
@@ -254,30 +255,19 @@ check("E passes through in text input",
 -------------------------------------------------------------------------------
 print("\n--- ShortcutOverride validation ---")
 
--- F10 is residual — verify it reaches the Lua handler.
--- F10 calls project_browser.add_selected_to_timeline which asserts on no selection.
--- The assert proves F10 reached the handler (error is caught by handle_key's pcall).
+-- F10 is TOML-bound (Overwrite) — handled by QShortcut, NOT by Lua residual handler.
+-- Verify it is NOT handled by the Lua handler when focus is inside the main window.
 focus_manager.set_focused_panel("timeline")
 
--- Intercept the F10 path to prove it was reached
-local f10_reached = false
-local orig_add = require("ui.project_browser").add_selected_to_timeline
-require("ui.project_browser").add_selected_to_timeline = function(...)
-    f10_reached = true
-end
-
-keyboard_shortcuts.handle_key({
+handled = keyboard_shortcuts.handle_key({
     key = 16777273,  -- Qt::Key_F10
     modifiers = 0,
     text = "",
     focus_widget_is_text_input = 0,
 })
-
-require("ui.project_browser").add_selected_to_timeline = orig_add
-
-check("F10 reaches Lua handler (residual key)",
-    f10_reached,
-    "F10 did not reach add_selected_to_timeline")
+check("F10 not handled by Lua residual (TOML/QShortcut handles it)",
+    not handled,
+    "F10 should not be handled by residual handler")
 
 -------------------------------------------------------------------------------
 -- Summary

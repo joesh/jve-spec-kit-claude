@@ -121,4 +121,51 @@ local result = keyboard_shortcuts.handle_key_release({ key = QT_KEY_K })
 assert(result == false, "handle_key_release should return false")
 print("  ✓ handle_key_release(K) returns false")
 
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Tests 6-8: focus_outside_main_window TOML fallback
+-- When focus is in a floating window (History panel), QShortcuts can't resolve.
+-- The C++ GlobalKeyFilter claims all keys and sets focus_outside_main_window=true.
+-- The Lua handler must fall back to TOML registry lookup in this case.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+print("\nTest 6: TOML-bound key dispatches when focus_outside_main_window=true")
+reset()
+-- Cmd+Z is TOML-bound to Undo. With focus outside main window, the Lua
+-- handler must fall back to TOML registry and dispatch it.
+local QT_KEY_Z = 90
+local CMD_MOD = 0x04000000  -- Qt::ControlModifier (Cmd on macOS)
+handled = keyboard_shortcuts.handle_key({
+    key = QT_KEY_Z, modifiers = CMD_MOD, text = "z",
+    focus_widget_is_text_input = 0,
+    focus_outside_main_window = true,
+})
+assert(handled, "Cmd+Z must be handled via TOML fallback when focus_outside_main_window")
+print("  ✓ Cmd+Z dispatched via TOML fallback")
+
+print("\nTest 7: Same TOML-bound key NOT dispatched when focus inside main window")
+reset()
+handled = keyboard_shortcuts.handle_key({
+    key = QT_KEY_Z, modifiers = CMD_MOD, text = "z",
+    focus_widget_is_text_input = 0,
+    focus_outside_main_window = false,
+})
+assert(not handled, "Cmd+Z must NOT be handled by Lua when focus inside main window (QShortcut handles it)")
+print("  ✓ Cmd+Z not handled by Lua when focus inside main window")
+
+print("\nTest 8: JKL still not handled even with focus_outside_main_window=true")
+reset()
+-- JKL are TOML-bound but the TOML fallback should still dispatch them.
+-- This verifies the fallback doesn't break when it runs — JKL dispatch is fine
+-- when focus is outside the main window (no QShortcut race).
+handled = keyboard_shortcuts.handle_key({
+    key = QT_KEY_J, modifiers = 0, text = "j",
+    focus_widget_is_text_input = 0,
+    focus_outside_main_window = true,
+})
+-- J IS TOML-bound (ShuttleReverse), so the fallback WILL dispatch it.
+-- This is correct — when focus is in the History window, J should still work.
+assert(handled, "J must be dispatched via TOML fallback when focus_outside_main_window")
+assert(find_cmd("ShuttleReverse"), "ShuttleReverse should dispatch via TOML fallback")
+print("  ✓ J dispatches ShuttleReverse via TOML fallback")
+
 print("\n✅ test_jkl_keyboard_shortcuts.lua passed")

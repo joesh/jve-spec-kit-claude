@@ -95,6 +95,7 @@ void registerQtBindings(lua_State* L)
     // Populate 'qt_constants.WIDGET' subtable with widget creation and manipulation functions
     lua_newtable(L);
     lua_pushcfunction(L, lua_create_main_window); lua_setfield(L, -2, "CREATE_MAIN_WINDOW");
+    lua_pushcfunction(L, lua_create_tool_window); lua_setfield(L, -2, "CREATE_TOOL_WINDOW");
     lua_pushcfunction(L, lua_create_widget); lua_setfield(L, -2, "CREATE");
     lua_pushcfunction(L, lua_create_scroll_area); lua_setfield(L, -2, "CREATE_SCROLL_AREA");
     lua_pushcfunction(L, lua_create_label); lua_setfield(L, -2, "CREATE_LABEL");

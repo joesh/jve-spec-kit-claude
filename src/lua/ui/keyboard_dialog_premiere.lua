@@ -53,7 +53,8 @@ local COLORS = {
 -- Create the main dialog
 function M.create()
     -- Main window
-    local window = CREATE_MAIN_WINDOW()
+    local qt_c = require("core.qt_constants")
+    local window = qt_c.WIDGET.CREATE_TOOL_WINDOW()
     SET_WINDOW_TITLE(window, "Keyboard Shortcuts")
     SET_SIZE(window, 1000, 650)
 

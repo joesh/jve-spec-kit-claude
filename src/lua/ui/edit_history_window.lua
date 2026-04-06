@@ -60,7 +60,7 @@ local function save_window_geometry()
 end
 
 local function create_window()
-    local window = qt_constants.WIDGET.CREATE_MAIN_WINDOW()
+    local window = qt_constants.WIDGET.CREATE_TOOL_WINDOW()
     -- Qt::Tool floats above app windows, goes behind when switching apps
     qt_constants.WIDGET.SET_WINDOW_FLAGS(window, 0x0000000B)  -- Qt::Tool
     qt_constants.PROPERTIES.SET_TITLE(window, "History")

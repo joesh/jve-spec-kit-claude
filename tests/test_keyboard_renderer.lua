@@ -90,6 +90,16 @@ end
 -- Replace real qt_bindings with mock
 package.loaded['qt_bindings'] = mock_qt
 
+-- Stub qt_constants.WIDGET.CREATE_TOOL_WINDOW (keyboard_renderer uses it)
+package.loaded['core.qt_constants'] = {
+    WIDGET = {
+        CREATE_TOOL_WINDOW = function()
+            widget_counter = widget_counter + 1
+            return {id = "widget_" .. widget_counter, type = "tool_window"}
+        end,
+    },
+}
+
 print("Testing keyboard_renderer.lua...\n")
 
 -- Test 1: Module loads
@@ -112,7 +122,7 @@ success, keyboard = pcall(function()
     return keyboard_renderer.create()
 end)
 
-if success and keyboard and keyboard.type == "main_window" then
+if success and keyboard and (keyboard.type == "tool_window" or keyboard.type == "main_window") then
     print("  ✅ PASS: Keyboard widget created")
     print(string.format("    Size: %dx%d", keyboard.width or 0, keyboard.height or 0))
 else
