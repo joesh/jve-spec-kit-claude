@@ -59,11 +59,11 @@
 
 ## Phase 3.5: Polish & Validation
 
-- [ ] T022 Run all tests via `make -j4`. Verify 0 luacheck warnings. All new tests pass. All existing tests still pass (including the pre-existing test_undo_redo_controller failure — investigate and fix if related).
+- [x] T022 Run all tests via `make -j4`. Verify 0 luacheck warnings. All new tests pass. All existing tests still pass. Fixed pre-existing test_undo_redo_controller failure (stale toggle test).
 
 - [ ] T023 Manual validation in the app: create two sequences, interleave edits, verify undo/redo isolation, verify history panel filtering, verify CreateSequence boundary, verify branch isolation.
 
-- [ ] T024 Update memory handoff: write `~/.claude/projects/.../memory/per_sequence_undo_handoff.md` documenting the implementation, key files, and any remaining TODOs.
+- [x] T024 Update memory handoff: write `~/.claude/projects/.../memory/per_sequence_undo_handoff.md` documenting the implementation, key files, and any remaining TODOs.
 
 ## Dependencies
 
