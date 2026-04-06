@@ -21,7 +21,11 @@ CREATE TABLE IF NOT EXISTS projects (
     name TEXT NOT NULL CHECK(length(name) > 0),
     created_at INTEGER NOT NULL,
     modified_at INTEGER NOT NULL,
-    settings TEXT DEFAULT '{}'
+    settings TEXT DEFAULT '{}',
+
+    -- Per-Sequence Undo: global cursor for project-level commands
+    global_undo_cursor INTEGER DEFAULT 0,
+    global_branch_path TEXT DEFAULT ''
 );
 
 -- ============================================================================
@@ -100,7 +104,8 @@ CREATE TABLE IF NOT EXISTS sequences (
     
     -- Undo/Redo State
     current_sequence_number INTEGER DEFAULT 0,
-    
+    current_branch_path TEXT DEFAULT '',
+
     created_at INTEGER NOT NULL,
     modified_at INTEGER NOT NULL
 );
@@ -252,7 +257,10 @@ CREATE TABLE IF NOT EXISTS commands (
 
     selected_clip_ids_pre TEXT,
     selected_edge_infos_pre TEXT,
-    selected_gap_infos_pre TEXT
+    selected_gap_infos_pre TEXT,
+
+    -- Per-Sequence Undo: which sequence this command belongs to (NULL = project-level)
+    sequence_id TEXT
 );
 
 -- ============================================================================

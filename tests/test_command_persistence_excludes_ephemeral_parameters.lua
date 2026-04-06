@@ -28,7 +28,8 @@ assert(db:exec([[
         selected_gap_infos TEXT DEFAULT '[]',
         selected_clip_ids_pre TEXT DEFAULT '[]',
         selected_edge_infos_pre TEXT DEFAULT '[]',
-        selected_gap_infos_pre TEXT DEFAULT '[]'
+        selected_gap_infos_pre TEXT DEFAULT '[]',
+        sequence_id TEXT
     );
 ]]), "failed to create commands table")
 

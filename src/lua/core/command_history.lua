@@ -33,6 +33,8 @@ local undo_group_stack = {}
 local GLOBAL_STACK_ID = "global"
 local TIMELINE_STACK_PREFIX = "timeline:"
 
+M.GLOBAL_STACK_ID = GLOBAL_STACK_ID
+
 local undo_stack_states = {
     [GLOBAL_STACK_ID] = {
         current_sequence_number = nil,
@@ -45,11 +47,6 @@ local undo_stack_states = {
 local active_stack_id = GLOBAL_STACK_ID
 local current_sequence_number = undo_stack_states[GLOBAL_STACK_ID].current_sequence_number
 local current_branch_path = undo_stack_states[GLOBAL_STACK_ID].current_branch_path  -- luacheck: ignore 231
-
-local multi_stack_enabled = false
-if os and os.getenv then
-    multi_stack_enabled = os.getenv("JVE_ENABLE_MULTI_STACK_UNDO") == "1"
-end
 
 -- Registry that callers can use to route commands to specific undo stacks.
 local command_stack_resolvers = {}
@@ -76,6 +73,7 @@ function M.init(database, sequence_id, project_id)
     local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
     global_state.sequence_id = active_sequence_id
     M.set_active_stack(GLOBAL_STACK_ID, {sequence_id = active_sequence_id})
+    M.load_global_cursor()
 end
 
 function M.reset()
@@ -184,9 +182,6 @@ function M.get_current_stack_sequence_id(fallback_to_active_sequence)
 end
 
 function M.stack_id_for_sequence(sequence_id)
-    if not multi_stack_enabled then
-        return GLOBAL_STACK_ID
-    end
     if not sequence_id or sequence_id == "" then
         return GLOBAL_STACK_ID
     end
@@ -194,10 +189,6 @@ function M.stack_id_for_sequence(sequence_id)
 end
 
 function M.resolve_stack_for_command(command)
-    if not multi_stack_enabled then
-        return GLOBAL_STACK_ID, nil
-    end
-
     if command.stack_id then
         if type(command.stack_id) == "string" then
             return command.stack_id, nil
@@ -491,6 +482,263 @@ end
 function M.is_undo_group_aborted()
     if #undo_group_stack == 0 then return false end
     return undo_group_stack[#undo_group_stack].aborted == true
+end
+
+-- ==========================================================================
+-- Per-Sequence Undo: Global cursor management
+-- ==========================================================================
+
+--- Get the global cursor from the projects table.
+function M.get_global_cursor()
+    local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
+    return global_state.current_sequence_number
+end
+
+--- Set the global cursor (in-memory + DB persistence).
+function M.set_global_cursor(value)
+    local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
+    global_state.current_sequence_number = value
+    global_state.position_initialized = true
+    -- Persist to projects table
+    if db and _active_project_id then
+        local update = db:prepare("UPDATE projects SET global_undo_cursor = ? WHERE id = ?")
+        assert(update, "set_global_cursor: failed to prepare UPDATE")
+        update:bind_value(1, value or 0)
+        update:bind_value(2, _active_project_id)
+        assert(update:exec(), "set_global_cursor: UPDATE failed")
+        update:finalize()
+    end
+end
+
+--- Load the global cursor from the projects table on init.
+function M.load_global_cursor()
+    if not db or not _active_project_id then return end
+    local query = db:prepare("SELECT global_undo_cursor FROM projects WHERE id = ?")
+    if not query then return end
+    query:bind_value(1, _active_project_id)
+    if query:exec() and query:next() then
+        local value = query:value(0)
+        local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
+        if value and value > 0 then
+            global_state.current_sequence_number = value
+        else
+            global_state.current_sequence_number = nil
+        end
+        global_state.position_initialized = true
+    end
+    query:finalize()
+end
+
+-- ==========================================================================
+-- Per-Sequence Undo: Merged view for undo/redo walk
+-- ==========================================================================
+
+--- Get the cursor for a specific sequence's stack.
+function M.get_sequence_cursor(sequence_id)
+    if not sequence_id then return nil end
+    local stack_id = M.stack_id_for_sequence(sequence_id)
+    local state = undo_stack_states[stack_id]
+    if state then
+        return state.current_sequence_number
+    end
+    return nil
+end
+
+--- Find the next command to undo in the merged view (active sequence + global).
+-- Returns the command row with the highest timestamp among:
+--   - Active sequence's command at its cursor
+--   - Global command at the global cursor
+-- @param active_seq_id string: active sequence ID
+-- @return table|nil: {sequence_number, command_type, sequence_id, timestamp, undo_group_id} or nil
+function M.find_merged_undo_target(active_seq_id)
+    if not db then return nil end
+
+    local seq_cursor = M.get_sequence_cursor(active_seq_id)
+    local global_cursor = M.get_global_cursor()
+
+    -- Query the command at each cursor position
+    local seq_cmd = nil
+    local global_cmd = nil
+
+    if seq_cursor and seq_cursor > 0 then
+        local q = db:prepare([[
+            SELECT sequence_number, command_type, sequence_id, timestamp, undo_group_id
+            FROM commands WHERE sequence_number = ?
+              AND command_type NOT LIKE 'Undo%'
+        ]])
+        assert(q, "find_merged_undo_target: failed to prepare sequence query")
+        q:bind_value(1, seq_cursor)
+        if q:exec() and q:next() then
+            seq_cmd = {
+                sequence_number = q:value(0),
+                command_type = q:value(1),
+                sequence_id = q:value(2),
+                timestamp = q:value(3) or 0,
+                undo_group_id = q:value(4),
+            }
+        end
+        q:finalize()
+    end
+
+    if global_cursor and global_cursor > 0 then
+        local q = db:prepare([[
+            SELECT sequence_number, command_type, sequence_id, timestamp, undo_group_id
+            FROM commands WHERE sequence_number = ?
+              AND command_type NOT LIKE 'Undo%'
+        ]])
+        assert(q, "find_merged_undo_target: failed to prepare global query")
+        q:bind_value(1, global_cursor)
+        if q:exec() and q:next() then
+            global_cmd = {
+                sequence_number = q:value(0),
+                command_type = q:value(1),
+                sequence_id = q:value(2),
+                timestamp = q:value(3) or 0,
+                undo_group_id = q:value(4),
+            }
+        end
+        q:finalize()
+    end
+
+    -- Pick the one with the higher timestamp (most recent)
+    if seq_cmd and global_cmd then
+        if seq_cmd.timestamp >= global_cmd.timestamp then
+            return seq_cmd
+        else
+            return global_cmd
+        end
+    end
+    return seq_cmd or global_cmd
+end
+
+--- Find the next command to redo in the merged view.
+-- Returns the command with the lowest timestamp among the children of each cursor.
+-- @param active_seq_id string: active sequence ID
+-- @return table|nil: {sequence_number, command_type, sequence_id, timestamp, undo_group_id}
+function M.find_merged_redo_target(active_seq_id)
+    if not db then return nil end
+
+    local seq_cursor = M.get_sequence_cursor(active_seq_id)
+    local global_cursor = M.get_global_cursor()
+
+    local seq_child = nil
+    local global_child = nil
+
+    -- Find redo child for active sequence
+    if active_seq_id then
+        local parent = seq_cursor or 0
+        local q = db:prepare([[
+            SELECT sequence_number, command_type, sequence_id, timestamp, undo_group_id
+            FROM commands
+            WHERE (parent_sequence_number IS ? OR (parent_sequence_number IS NULL AND ? = 0))
+              AND sequence_id = ?
+              AND command_type NOT LIKE 'Undo%'
+            ORDER BY sequence_number DESC LIMIT 1
+        ]])
+        assert(q, "find_merged_redo_target: failed to prepare seq query")
+        q:bind_value(1, parent)
+        q:bind_value(2, parent)
+        q:bind_value(3, active_seq_id)
+        if q:exec() and q:next() then
+            seq_child = {
+                sequence_number = q:value(0),
+                command_type = q:value(1),
+                sequence_id = q:value(2),
+                timestamp = q:value(3) or 0,
+                undo_group_id = q:value(4),
+            }
+        end
+        q:finalize()
+    end
+
+    -- Find redo child for global
+    do
+        local parent = global_cursor or 0
+        local q = db:prepare([[
+            SELECT sequence_number, command_type, sequence_id, timestamp, undo_group_id
+            FROM commands
+            WHERE (parent_sequence_number IS ? OR (parent_sequence_number IS NULL AND ? = 0))
+              AND sequence_id IS NULL
+              AND command_type NOT LIKE 'Undo%'
+            ORDER BY sequence_number DESC LIMIT 1
+        ]])
+        assert(q, "find_merged_redo_target: failed to prepare global query")
+        q:bind_value(1, parent)
+        q:bind_value(2, parent)
+        if q:exec() and q:next() then
+            global_child = {
+                sequence_number = q:value(0),
+                command_type = q:value(1),
+                sequence_id = q:value(2),
+                timestamp = q:value(3) or 0,
+                undo_group_id = q:value(4),
+            }
+        end
+        q:finalize()
+    end
+
+    -- Pick the one with the lower timestamp (earliest undone)
+    if seq_child and global_child then
+        if seq_child.timestamp <= global_child.timestamp then
+            return seq_child
+        else
+            return global_child
+        end
+    end
+    return seq_child or global_child
+end
+
+--- Move the appropriate cursor after an undo.
+-- If the command is sequence-scoped, move the sequence cursor.
+-- If the command is global (sequence_id IS NULL), move the global cursor.
+function M.move_cursor_for_undo(cmd)
+    if cmd.sequence_id then
+        -- Move the sequence cursor
+        local stack_id = M.stack_id_for_sequence(cmd.sequence_id)
+        local state = M.ensure_stack_state(stack_id)
+        -- Move to parent
+        local parent = cmd.parent_sequence_number
+        state.current_sequence_number = parent
+        state.position_initialized = true
+        -- Also update the module-level cursor if this is the active stack
+        if stack_id == active_stack_id then
+            current_sequence_number = parent
+        end
+    else
+        -- Move the global cursor to the parent
+        local parent = cmd.parent_sequence_number
+        M.set_global_cursor(parent)
+    end
+end
+
+--- Move the appropriate cursor after a redo.
+function M.move_cursor_for_redo(cmd)
+    if cmd.sequence_id then
+        local stack_id = M.stack_id_for_sequence(cmd.sequence_id)
+        local state = M.ensure_stack_state(stack_id)
+        state.current_sequence_number = cmd.sequence_number
+        state.position_initialized = true
+        if stack_id == active_stack_id then
+            current_sequence_number = cmd.sequence_number
+        end
+    else
+        M.set_global_cursor(cmd.sequence_number)
+    end
+end
+
+--- Check if undo is possible in the merged view.
+function M.can_undo_merged(active_seq_id)
+    return M.find_merged_undo_target(active_seq_id) ~= nil
+end
+
+--- Check if redo is possible in the merged view.
+function M.can_redo_merged(active_seq_id)
+    return M.find_merged_redo_target(active_seq_id) ~= nil
+end
+
+--- Get the active sequence ID.
+function M.get_active_sequence_id()
+    return active_sequence_id
 end
 
 return M

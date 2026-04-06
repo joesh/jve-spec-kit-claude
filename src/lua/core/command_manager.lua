@@ -172,8 +172,9 @@ end
 
 local command_event_listeners = {}
 
--- Forward declaration (defined at line ~486)
+-- Forward declarations
 local extract_sequence_id
+local get_effective_sequence_id
 
 local function notify_command_event(event)
     if not event then
@@ -540,6 +541,21 @@ extract_sequence_id = function(command)
     return nil
 end
 
+-- Per-Sequence Undo: classify a command as sequence-scoped or project-level.
+-- Returns the sequence_id to store on the command record, or nil for project-level.
+-- CreateSequence/DeleteSequence are project-level despite having sequence_id in args.
+local PROJECT_LEVEL_COMMAND_TYPES = {
+    CreateSequence = true,
+    DeleteSequence = true,
+}
+
+local function classify_command_sequence_id(command)
+    if PROJECT_LEVEL_COMMAND_TYPES[command.type] then
+        return nil
+    end
+    return extract_sequence_id(command)
+end
+
 local function create_command_perf_tracker(command)
     local start_time = os.clock()
 
@@ -656,6 +672,9 @@ function M.init(sequence_id, project_id)
     registry.init(db, M.set_last_error)
     history.init(db, sequence_id, project_id)
     state_mgr.init(db)
+
+    -- Per-Sequence Undo: activate the initial sequence's timeline stack
+    M.activate_timeline_stack(sequence_id)
 
     -- Keep timeline_state IDs initialized so selection persistence doesn't assert during headless tests.
     local Sequence = require("models.sequence")
@@ -925,6 +944,9 @@ function M._execute_body(command_or_name, params)
             command.selected_edge_infos_pre = root_selected_edges_pre
             command.selected_gap_infos_pre = root_selected_gaps_pre
 
+            -- Per-Sequence Undo: classify before persisting
+            command.sequence_id = classify_command_sequence_id(command)
+
             -- Save nested command to DB (shares root's transaction)
             saved = command:save(db)
             if saved then
@@ -994,16 +1016,30 @@ function M._execute_body(command_or_name, params)
         goto cleanup
     end
 
-    stack_id, stack_info = history.resolve_stack_for_command(command)
-    stack_opts = nil
-    if stack_info and type(stack_info) == "table" and stack_info.sequence_id then
-        stack_opts = {sequence_id = stack_info.sequence_id}
-    end
-    if not stack_opts or not stack_opts.sequence_id then
-        local seq_param = extract_sequence_id(command)  -- This one is OK, it's within a block
-        if seq_param and seq_param ~= "" then
-            stack_opts = stack_opts or {}
-            stack_opts.sequence_id = seq_param
+    -- Stack routing: determine which undo stack this command belongs to.
+    -- Project-level commands go to GLOBAL. Sequence-scoped commands go to their sequence's stack.
+    -- Commands that derive sequence_id during execution (Paste, Insert, etc.) have
+    -- sequence_id in their spec — use that as a signal to route to the timeline stack.
+    do
+        local pre_seq_id = extract_sequence_id(command)
+        if PROJECT_LEVEL_COMMAND_TYPES[command.type] then
+            stack_id = history.GLOBAL_STACK_ID
+            stack_opts = nil
+        elseif pre_seq_id then
+            stack_id = history.stack_id_for_sequence(pre_seq_id)
+            stack_opts = {sequence_id = pre_seq_id}
+        else
+            -- Check if this command type has sequence_id in its spec.
+            -- If so, it will derive it during execution — route to the active timeline stack.
+            local cmd_spec = registry.get_spec(command.type)
+            local has_seq_in_spec = cmd_spec and cmd_spec.args and cmd_spec.args.sequence_id
+            if has_seq_in_spec and active_sequence_id then
+                stack_id = history.stack_id_for_sequence(active_sequence_id)
+                stack_opts = {sequence_id = active_sequence_id}
+            else
+                stack_id = history.GLOBAL_STACK_ID
+                stack_opts = nil
+            end
         end
     end
     history.set_active_stack(stack_id, stack_opts)
@@ -1187,6 +1223,9 @@ function M._execute_body(command_or_name, params)
             goto cleanup
         end
 
+        -- Per-Sequence Undo: classify after execution (executors may set sequence_id)
+        command.sequence_id = classify_command_sequence_id(command)
+
         saved = command:save(db)
         perf.log("command:save")
         perf.reset()
@@ -1196,13 +1235,17 @@ function M._execute_body(command_or_name, params)
 
             -- Move HEAD - but only if nested commands haven't already advanced past us
             -- (nested commands chain their parent_sequence_number through the cursor)
-            local current_cursor = history.get_current_sequence_number()
-            if not current_cursor or current_cursor < sequence_number then
-                -- No nested commands ran, or we're the highest - advance normally
-                history.set_current_sequence_number(sequence_number)
+            if command.sequence_id then
+                -- Sequence-scoped: advance the sequence's cursor
+                local current_cursor = history.get_current_sequence_number()
+                if not current_cursor or current_cursor < sequence_number then
+                    history.set_current_sequence_number(sequence_number)
+                end
+                history.save_undo_position()
+            else
+                -- Project-level: advance the global cursor
+                history.set_global_cursor(sequence_number)
             end
-            -- else: nested commands advanced cursor past us, keep it there
-            history.save_undo_position()
 
             -- Snapshotting (only for commands that modify existing sequences)
             local snapshot_mgr = require('core.snapshot_manager')
@@ -1360,10 +1403,12 @@ function M.get_current_sequence_number()
 end
 
 function M:list_history_entries()
-    -- Load only the main branch (ancestors of cursor + redo chain forward)
+    -- Load filtered history: active sequence + global (project-level) commands
     local Command = require("command")
-    local current_seq = history.get_current_sequence_number() or 0
-    local commands = Command.load_history_branch(current_seq)
+    local eff_seq_id = get_effective_sequence_id()
+    local seq_cursor = eff_seq_id and (history.get_sequence_cursor(eff_seq_id) or 0) or 0
+    local global_cursor = history.get_global_cursor() or 0
+    local commands = Command.load_filtered_history_branch(seq_cursor, global_cursor, eff_seq_id)
     local cmd_labels = require("core.command_labels")
 
     -- Identify undo groups: first/last member, count
@@ -1401,6 +1446,7 @@ function M:list_history_entries()
                 out[#out + 1] = {
                     sequence_number = seq,
                     command_type = cmd.type,
+                    sequence_id = cmd.sequence_id,
                     timestamp = cmd.created_at,
                     label = base .. " (" .. count .. ")",
                     group_last = group_last[gid],
@@ -1412,6 +1458,7 @@ function M:list_history_entries()
             out[#out + 1] = {
                 sequence_number = seq,
                 command_type = cmd.type,
+                sequence_id = cmd.sequence_id,
                 timestamp = cmd.created_at,
                 label = cmd:label(),
                 group_last = gid and group_last[gid] or nil,
@@ -1419,7 +1466,10 @@ function M:list_history_entries()
         end
     end
 
-    -- Map current cursor to visible representative
+    -- Map current cursor to visible representative.
+    -- In merged view, the "current position" is the most recent done command
+    -- across both the sequence cursor and global cursor.
+    local current_seq = math.max(seq_cursor, global_cursor)
     local visible_current = visible_seq_for[current_seq] or current_seq
 
     return out, visible_current
@@ -1510,34 +1560,44 @@ function M.get_command_at_sequence(seq_num, project_id)
     return Command.load_at_sequence(seq_num, project_id)
 end
 
+--- Get the effective sequence_id for merged undo/redo walk.
+-- Uses the active stack's sequence_id, falling back to active_sequence_id.
+get_effective_sequence_id = function()
+    return history.get_current_stack_sequence_id(false) or active_sequence_id
+end
+
 function M.can_undo()
     if not db then return false end
-    local pos = history.get_current_sequence_number()
-    return pos ~= nil and pos > 0
+    return history.can_undo_merged(get_effective_sequence_id())
 end
 
 function M.can_redo()
     if not db then return false end
-    local parent = history.get_current_sequence_number() or 0
-    return history.find_latest_child_command(parent) ~= nil
+    return history.can_redo_merged(get_effective_sequence_id())
 end
 
 function M.undo()
-    -- Wrapper for UI calls
-    if M.can_undo() then
-        local last_cmd = M.get_last_command(active_project_id)
-        if last_cmd then
-            -- Check if this command is part of an undo group
-            if last_cmd.undo_group_id then
-                -- Undo entire group
-                return M.undo_group(last_cmd.undo_group_id)
-            else
-                -- Undo single command (existing behavior)
-                return M.execute_undo(last_cmd)
-            end
-        end
+    if not M.can_undo() then
+        return { success = false, error_message = "Nothing to undo" }
     end
-    return { success = false, error_message = "Nothing to undo" }
+
+    -- Find the most recent done command in the merged view
+    local target = history.find_merged_undo_target(get_effective_sequence_id())
+    if not target then
+        return { success = false, error_message = "Nothing to undo" }
+    end
+
+    local cmd = M.get_command_at_sequence(target.sequence_number, active_project_id)
+    if not cmd then
+        return { success = false, error_message = "Command not found at sequence " .. tostring(target.sequence_number) }
+    end
+
+    -- Undo group or single command
+    if cmd.undo_group_id then
+        return M.undo_group(cmd.undo_group_id)
+    else
+        return M.execute_undo(cmd)
+    end
 end
 
 --- Core undo: run undoer + apply mutations. No cursor/selection/playhead/notify.
@@ -1585,8 +1645,11 @@ end
 
 --- Undo ceremony: cursor, selection, playhead, notify. Called once after undoer(s).
 local function apply_undo_ceremony(cmd)
-    history.set_current_sequence_number(cmd.parent_sequence_number)
-    history.save_undo_position()
+    history.move_cursor_for_undo(cmd)
+    -- Persist the cursor for sequence-scoped commands
+    if cmd.sequence_id then
+        history.save_undo_position()
+    end
     state_mgr.restore_selection_from_serialized(
         cmd.selected_clip_ids_pre, cmd.selected_edge_infos_pre, cmd.selected_gap_infos_pre)
     if cmd.playhead_value ~= nil then
@@ -1608,7 +1671,19 @@ end
 function M.undo_group(group_id)
     assert(db, "undo_group: no database connection")
 
-    local current_seq = history.get_current_sequence_number()
+    -- Determine the correct cursor for this group's commands.
+    -- Peek at the first command in the group to check if it's sequence-scoped or global.
+    local peek = history.find_group_members(group_id, nil, nil)
+    if #peek == 0 then
+        return { success = false, error_message = "No commands found in undo group" }
+    end
+    local first_cmd = M.get_command_at_sequence(peek[1], active_project_id)
+    local current_seq
+    if first_cmd and first_cmd.sequence_id then
+        current_seq = history.get_sequence_cursor(first_cmd.sequence_id)
+    else
+        current_seq = history.get_global_cursor()
+    end
     if not current_seq then
         return { success = false, error_message = "Nothing to undo" }
     end
@@ -1680,8 +1755,10 @@ end
 
 --- Redo ceremony: cursor, selection, playhead, notify. Called once after executor(s).
 local function apply_redo_ceremony(cmd)
-    history.set_current_sequence_number(cmd.sequence_number)
-    history.save_undo_position()
+    history.move_cursor_for_redo(cmd)
+    if cmd.sequence_id then
+        history.save_undo_position()
+    end
     state_mgr.restore_selection_from_serialized(
         cmd.selected_clip_ids, cmd.selected_edge_infos, cmd.selected_gap_infos)
     local skip_playhead = cmd:get_parameter("__skip_sequence_replay_on_undo")
@@ -1727,7 +1804,13 @@ function M.redo_to_sequence_number(target_sequence_number)
         return { success = false, error_message = "Redo target not found: " .. tostring(target_sequence_number) }
     end
 
-    local expected_parent = history.get_current_sequence_number() or 0
+    -- Use the appropriate cursor for parent validation
+    local expected_parent
+    if cmd.sequence_id then
+        expected_parent = history.get_sequence_cursor(cmd.sequence_id) or 0
+    else
+        expected_parent = history.get_global_cursor() or 0
+    end
     local actual_parent = cmd.parent_sequence_number or 0
     if expected_parent ~= actual_parent then
         return {
@@ -1745,27 +1828,44 @@ function M.redo_to_sequence_number(target_sequence_number)
 end
 
 function M.redo()
-    -- Wrapper for UI calls
-    if M.can_redo() then
-        local parent = history.get_current_sequence_number() or 0
-        local next_cmd_info = history.find_latest_child_command(parent)
-        if next_cmd_info then
-            local next_cmd = M.get_command_at_sequence(next_cmd_info.sequence_number, active_project_id)
-            if next_cmd and next_cmd.undo_group_id then
-                -- Redo entire group
-                return M.redo_group(next_cmd.undo_group_id)
-            else
-                return M.redo_to_sequence_number(next_cmd_info.sequence_number)
-            end
-        end
+    if not M.can_redo() then
+        return { success = false, error_message = "Nothing to redo" }
     end
-    return { success = false, error_message = "Nothing to redo" }
+
+    -- Find the earliest undone command in the merged view
+    local target = history.find_merged_redo_target(get_effective_sequence_id())
+    if not target then
+        return { success = false, error_message = "Nothing to redo" }
+    end
+
+    local cmd = M.get_command_at_sequence(target.sequence_number, active_project_id)
+    if not cmd then
+        return { success = false, error_message = "Redo command not found at sequence " .. tostring(target.sequence_number) }
+    end
+
+    if cmd.undo_group_id then
+        return M.redo_group(cmd.undo_group_id)
+    else
+        return M.redo_to_sequence_number(target.sequence_number)
+    end
 end
 
 function M.redo_group(group_id)
     assert(db, "redo_group: no database connection")
 
-    local current_seq = history.get_current_sequence_number() or 0
+    -- Determine the correct cursor for this group's commands.
+    local all_members = history.find_group_members(group_id, nil, nil)
+    local current_seq
+    if #all_members > 0 then
+        local first_cmd = M.get_command_at_sequence(all_members[#all_members], active_project_id)
+        if first_cmd and first_cmd.sequence_id then
+            current_seq = history.get_sequence_cursor(first_cmd.sequence_id) or 0
+        else
+            current_seq = history.get_global_cursor() or 0
+        end
+    else
+        current_seq = 0
+    end
 
     -- Collect all commands in this group after the current cursor position,
     -- ordered by sequence_number ASC (lowest first = redo in chronological order).
@@ -2015,8 +2115,7 @@ function M.enable_multi_stack(value)
 end
 
 function M.is_multi_stack_enabled()
-    -- return history.is_multi_stack_enabled()
-    return false -- helper
+    return true
 end
 
 function M.stack_id_for_sequence(sequence_id)

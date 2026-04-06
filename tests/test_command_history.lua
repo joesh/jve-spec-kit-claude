@@ -204,13 +204,12 @@ do
 end
 
 -- ============================================================
--- stack_id_for_sequence (multi_stack_enabled = false by default)
+-- stack_id_for_sequence (per-sequence undo always on)
 -- ============================================================
 print("\n--- stack_id_for_sequence ---")
 do
-    -- Without JVE_ENABLE_MULTI_STACK_UNDO=1, always returns "global"
     local id1 = command_history.stack_id_for_sequence("some_seq")
-    check("multi-stack disabled → global", id1 == "global")
+    check("sequence → timeline:some_seq", id1 == "timeline:some_seq")
 
     local id2 = command_history.stack_id_for_sequence(nil)
     check("nil seq → global", id2 == "global")
@@ -220,15 +219,15 @@ do
 end
 
 -- ============================================================
--- resolve_stack_for_command (multi_stack disabled)
+-- resolve_stack_for_command (per-sequence undo always on)
 -- ============================================================
 print("\n--- resolve_stack_for_command ---")
 do
-    -- Multi-stack disabled → always global
+    -- Command with no sequence_id → global
     local cmd = {type = "TestCommand"}
     local stack_id, opts = command_history.resolve_stack_for_command(cmd)
-    check("disabled → global", stack_id == "global")
-    check("disabled → nil opts", opts == nil)
+    check("no seq_id → global", stack_id == "global")
+    check("no seq_id → nil opts", opts == nil)
 end
 
 -- ============================================================

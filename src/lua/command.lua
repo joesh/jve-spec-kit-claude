@@ -84,7 +84,8 @@ function M.parse_from_query(query, project_id)
         -- playhead_value(10), playhead_rate(11), playhead_value_post(12),
         -- playhead_rate_post(13), selected_clip_ids(14), selected_edge_infos(15),
         -- selected_gap_infos(16), selected_clip_ids_pre(17),
-        -- selected_edge_infos_pre(18), selected_gap_infos_pre(19)
+        -- selected_edge_infos_pre(18), selected_gap_infos_pre(19),
+        -- sequence_id(20)
         command = {
             id = query:value(0),
             parent_id = query:value(1),
@@ -107,6 +108,7 @@ function M.parse_from_query(query, project_id)
             selected_clip_ids_pre = query:value(17),
             selected_edge_infos_pre = query:value(18),
             selected_gap_infos_pre = query:value(19),
+            sequence_id = query:value(20),
         }
         command.project_id = project_id or args_table.project_id
     else
@@ -288,6 +290,139 @@ function M.load_history_branch(cursor_seq)
     return commands
 end
 
+--- Load history filtered by sequence_id for per-sequence undo display.
+-- Returns commands where sequence_id matches or is NULL (project-level),
+-- walking the branch from each cursor.
+-- @param seq_cursor number: sequence cursor position
+-- @param global_cursor number: global cursor position
+-- @param sequence_id string: active sequence ID to filter by
+-- @return table: list of Command objects sorted by sequence_number ASC
+function M.load_filtered_history_branch(seq_cursor, global_cursor, sequence_id)
+    local database = require("core.database")
+    local db = database.get_connection()
+    if not db then return {} end
+
+    seq_cursor = seq_cursor or 0
+    global_cursor = global_cursor or 0
+
+    -- Walk forward from each cursor to find the tips, then walk back to build branches.
+    -- For simplicity, query all matching commands on the current branches.
+    -- Use a union of two branch walks: one for the sequence, one for global.
+    local commands = {}
+    local seen = {}
+
+    -- Helper: walk a branch (ancestors + forward) for commands matching a filter
+    local function walk_branch(cursor, filter_sql, bind_values)
+        if cursor == 0 and #bind_values == 0 then return end
+
+        -- Find tip by walking forward from cursor
+        local tip = cursor
+        while true do
+            local child_q
+            if tip == 0 then
+                child_q = db:prepare(string.format([[
+                    SELECT MAX(sequence_number) FROM commands
+                    WHERE parent_sequence_number IS NULL
+                      AND command_type NOT LIKE 'Undo%%'
+                      AND %s
+                ]], filter_sql))
+            else
+                child_q = db:prepare(string.format([[
+                    SELECT MAX(sequence_number) FROM commands
+                    WHERE parent_sequence_number = ?
+                      AND command_type NOT LIKE 'Undo%%'
+                      AND %s
+                ]], filter_sql))
+            end
+            if not child_q then break end
+            local bind_idx = 1
+            if tip ~= 0 then
+                child_q:bind_value(bind_idx, tip)
+                bind_idx = bind_idx + 1
+            end
+            for _, v in ipairs(bind_values) do
+                child_q:bind_value(bind_idx, v)
+                bind_idx = bind_idx + 1
+            end
+            local next_seq = nil
+            if child_q:exec() and child_q:next() then
+                next_seq = child_q:value(0)
+            end
+            child_q:finalize()
+            if not next_seq then break end
+            tip = next_seq
+        end
+
+        if tip == 0 then return end
+
+        -- Walk back from tip through parent chain, collecting matching commands
+        local query = db:prepare(string.format([[
+            WITH RECURSIVE spine(seq) AS (
+                SELECT ?
+                UNION ALL
+                SELECT c.parent_sequence_number
+                FROM commands c
+                JOIN spine s ON c.sequence_number = s.seq
+                WHERE c.parent_sequence_number IS NOT NULL
+            )
+            SELECT * FROM commands
+            WHERE sequence_number IN (SELECT seq FROM spine)
+              AND %s
+              AND command_type NOT LIKE 'Undo%%'
+            ORDER BY sequence_number ASC
+        ]], filter_sql))
+        if not query then return end
+        local bind_idx = 1
+        query:bind_value(bind_idx, tip)
+        bind_idx = bind_idx + 1
+        for _, v in ipairs(bind_values) do
+            query:bind_value(bind_idx, v)
+            bind_idx = bind_idx + 1
+        end
+
+        if query:exec() then
+            while query:next() do
+                local cmd = M.parse_from_query(query, nil)
+                if cmd and not seen[cmd.sequence_number] then
+                    seen[cmd.sequence_number] = true
+                    commands[#commands + 1] = cmd
+                end
+            end
+        end
+        query:finalize()
+    end
+
+    -- Walk sequence-scoped branch
+    if sequence_id then
+        walk_branch(seq_cursor, "sequence_id = ?", {sequence_id})
+    end
+
+    -- Walk global branch
+    walk_branch(global_cursor, "sequence_id IS NULL", {})
+
+    -- Sort by sequence_number ASC
+    table.sort(commands, function(a, b)
+        return (a.sequence_number or 0) < (b.sequence_number or 0)
+    end)
+
+    -- Prepend provenance if present
+    local prov_q = db:prepare([[
+        SELECT * FROM commands
+        WHERE sequence_number = 0 AND parent_sequence_number = -1 LIMIT 1
+    ]])
+    if prov_q then
+        if prov_q:exec() and prov_q:next() then
+            local provenance = M.parse_from_query(prov_q, nil)
+            if provenance and not seen[0] then
+                table.insert(commands, 1, provenance)
+            end
+        end
+        prov_q:finalize()
+    end
+
+    return commands
+end
+
 -- Load command at specific sequence number
 function M.load_at_sequence(seq_num, project_id)
     local database = require("core.database")
@@ -301,7 +436,7 @@ function M.load_at_sequence(seq_num, project_id)
                pre_hash, post_hash, timestamp, playhead_value, playhead_rate,
                selected_clip_ids, selected_edge_infos, selected_gap_infos,
                selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre,
-               undo_group_id, playhead_value_post, playhead_rate_post
+               undo_group_id, playhead_value_post, playhead_rate_post, sequence_id
         FROM commands
         WHERE sequence_number = ? AND command_type NOT LIKE 'Undo%'
     ]])
@@ -347,7 +482,8 @@ function M.load_at_sequence(seq_num, project_id)
         selected_gap_infos_pre = query:value(15) or "[]",
         undo_group_id = query:value(16),
         playhead_value_post = query:value(17),
-        playhead_rate_post = query:value(18)
+        playhead_rate_post = query:value(18),
+        sequence_id = query:value(19),
     }
 
     setmetatable(command, {__index = M})
@@ -672,7 +808,7 @@ function M:save(db)
                 pre_hash = ?, post_hash = ?, timestamp = ?, playhead_value = ?, playhead_rate = ?,
                 selected_clip_ids = ?, selected_edge_infos = ?, selected_gap_infos = ?,
                 selected_clip_ids_pre = ?, selected_edge_infos_pre = ?, selected_gap_infos_pre = ?, undo_group_id = ?,
-                playhead_value_post = ?, playhead_rate_post = ?
+                playhead_value_post = ?, playhead_rate_post = ?, sequence_id = ?
             WHERE id = ?
         ]])
         if not query then
@@ -701,12 +837,13 @@ function M:save(db)
         query:bind_value(15, self.undo_group_id)
         query:bind_value(16, db_playhead_value_post)
         query:bind_value(17, playhead_rate_post_val)
-        query:bind_value(18, self.id)
+        query:bind_value(18, self.sequence_id)  -- NULL for project-level
+        query:bind_value(19, self.id)
     else
         -- INSERT
         query = db:prepare([[
-            INSERT INTO commands (id, parent_sequence_number, sequence_number, command_type, command_args, pre_hash, post_hash, timestamp, playhead_value, playhead_rate, selected_clip_ids, selected_edge_infos, selected_gap_infos, selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre, undo_group_id, playhead_value_post, playhead_rate_post)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO commands (id, parent_sequence_number, sequence_number, command_type, command_args, pre_hash, post_hash, timestamp, playhead_value, playhead_rate, selected_clip_ids, selected_edge_infos, selected_gap_infos, selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre, undo_group_id, playhead_value_post, playhead_rate_post, sequence_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not query then
             local err = "unknown error"
@@ -737,6 +874,7 @@ function M:save(db)
         query:bind_value(17, self.undo_group_id)
         query:bind_value(18, db_playhead_value_post)
         query:bind_value(19, playhead_rate_post_val)
+        query:bind_value(20, self.sequence_id)  -- NULL for project-level
     end
 
     if not query:exec() then
