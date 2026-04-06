@@ -22,29 +22,10 @@ local SPEC = {
 
 --- From timeline: find clip under playhead, return its master_clip_id.
 local function resolve_from_timeline()
-    local timeline_state = require("ui.timeline.timeline_state")
     local target_clips = command_helper.resolve_clips_at_playhead()
     if #target_clips == 0 then return nil, "No clips under playhead" end
 
-    -- Same pick_best logic as MatchFrame: video trumps audio, topmost track
-    local best = nil
-    local best_index = -1
-    local best_is_video = false
-    for _, clip in ipairs(target_clips) do
-        local track = timeline_state.get_track_by_id(clip.track_id)
-        assert(track, string.format(
-            "FindMasterClipInBrowser: track %s not found for clip %s",
-            tostring(clip.track_id), tostring(clip.id)))
-        local is_video = track.track_type == "VIDEO"
-        -- Video trumps audio; within same type, higher track_index wins
-        if (is_video and not best_is_video)
-           or (is_video == best_is_video and track.track_index > best_index) then
-            best = clip
-            best_index = track.track_index
-            best_is_video = is_video
-        end
-    end
-
+    local best = command_helper.pick_best_clip(target_clips)
     if not best or not best.master_clip_id or best.master_clip_id == "" then
         return nil, "Clip is not linked to a master clip"
     end

@@ -70,6 +70,47 @@ function M.resolve_clips_at_playhead()
     return target_clips, playhead
 end
 
+--- Pick best clip from candidates: video trumps audio, then topmost track_index.
+-- @param candidates array of clip tables (must have track_id)
+-- @return best clip table
+function M.pick_best_clip(candidates)
+    local timeline_state = require("ui.timeline.timeline_state")
+    assert(#candidates > 0, "pick_best_clip: candidates must be non-empty")
+
+    local function track_info(clip)
+        assert(clip.track_id, string.format(
+            "pick_best_clip: clip %s has no track_id", tostring(clip.id)))
+        local track = timeline_state.get_track_by_id(clip.track_id)
+        assert(track, string.format(
+            "pick_best_clip: track %s not found for clip %s",
+            tostring(clip.track_id), tostring(clip.id)))
+        return track.track_index, track.track_type
+    end
+
+    local video_clips = {}
+    local audio_clips = {}
+    for _, clip in ipairs(candidates) do
+        local _, track_type = track_info(clip)
+        if track_type == "VIDEO" then
+            video_clips[#video_clips + 1] = clip
+        else
+            audio_clips[#audio_clips + 1] = clip
+        end
+    end
+
+    local pool = #video_clips > 0 and video_clips or audio_clips
+    local best = nil
+    local best_index = -1
+    for _, clip in ipairs(pool) do
+        local idx = track_info(clip)
+        if idx > best_index then
+            best = clip
+            best_index = idx
+        end
+    end
+    return best
+end
+
 function M.trim_string(value)
     if type(value) ~= "string" then
         return ""

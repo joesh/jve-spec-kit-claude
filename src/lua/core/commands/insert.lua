@@ -242,10 +242,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Focus timeline: the edit targeted the timeline panel
-        local ok_fm, focus_manager = pcall(require, "ui.focus_manager")
-        if ok_fm and focus_manager.focus_panel then
-            focus_manager.focus_panel("timeline")
-        end
+        local focus_manager = require("ui.focus_manager")
+        focus_manager.focus_panel("timeline")
 
         log.event("Inserted clip at frame %d", insert_time or 0)
         return true

@@ -18,6 +18,7 @@ function M.load_master_clip(master_clip_id, opts)
 
     local pm = require("ui.panel_manager")
     local source = pm.get_sequence_monitor("source_monitor")
+    assert(source, "source_viewer: source_monitor not registered in panel_manager")
     source:load_sequence(master_clip_id)
 
     if not opts.skip_focus then

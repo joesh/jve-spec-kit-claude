@@ -10,7 +10,6 @@
 -- @file match_frame.lua
 local M = {}
 local log = require("core.logger").for_area("commands")
-local timeline_state = require('ui.timeline.timeline_state')
 local source_viewer = require('ui.source_viewer')
 local Sequence = require('models.sequence')
 local command_helper = require("core.command_helper")
@@ -31,45 +30,6 @@ local function extract_master_clip_id(clip)
     return nil
 end
 
-local function track_info_for_clip(clip)
-    assert(clip.track_id, string.format(
-        "track_info_for_clip: clip %s has no track_id", tostring(clip.id)))
-    local track = timeline_state.get_track_by_id(clip.track_id)
-    assert(track, string.format(
-        "track_info_for_clip: track %s not found for clip %s",
-        tostring(clip.track_id), tostring(clip.id)))
-    return track.track_index, track.track_type
-end
-
---- From candidates, pick best clip: video trumps audio, then topmost track_index.
-local function pick_best(candidates)
-    assert(#candidates > 0, "pick_best: candidates must be non-empty")
-
-    local video_clips = {}
-    local audio_clips = {}
-    for _, clip in ipairs(candidates) do
-        local _, track_type = track_info_for_clip(clip)
-        if track_type == "VIDEO" then
-            video_clips[#video_clips + 1] = clip
-        else
-            audio_clips[#audio_clips + 1] = clip
-        end
-    end
-
-    local pool = #video_clips > 0 and video_clips or audio_clips
-
-    local best = nil
-    local best_index = -1
-    for _, clip in ipairs(pool) do
-        local idx = track_info_for_clip(clip)
-        if idx > best_index then
-            best = clip
-            best_index = idx
-        end
-    end
-    return best
-end
-
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["MatchFrame"] = function(command)
         local target_clips, playhead = command_helper.resolve_clips_at_playhead()
@@ -79,7 +39,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        local target_clip = pick_best(target_clips)
+        local target_clip = command_helper.pick_best_clip(target_clips)
 
         local target_master_id = extract_master_clip_id(target_clip)
         if not target_master_id then
