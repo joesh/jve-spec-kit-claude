@@ -1118,15 +1118,39 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        end
 	    end
 
-    local function register_track_shift_seed(ctx, clip, normalized_edge, applied_delta, is_gap_edge_type)
-        if not clip.track_id or ctx.track_shift_seeds[clip.track_id] then
-            return
+    local function compute_seed_shift_contribution(seed, drag_sign)
+        local orientation_sign = (seed.orientation == "in") and -1 or 1
+        if seed.is_gap then
+            return seed.applied_delta * orientation_sign
         end
-        ctx.track_shift_seeds[clip.track_id] = {
+        local magnitude = math.abs(seed.applied_delta)
+        local direction_sign = drag_sign
+        if seed.orientation == "out" then
+            direction_sign = (seed.applied_delta >= 0) and 1 or -1
+        end
+        return magnitude * direction_sign * orientation_sign
+    end
+
+    local function register_track_shift_seed(ctx, clip, normalized_edge, applied_delta, is_gap_edge_type, ripple_point)
+        if not clip.track_id then return end
+        if not ctx.track_shift_seeds[clip.track_id] then
+            ctx.track_shift_seeds[clip.track_id] = {}
+        end
+        -- When both edges of the same clip are selected (e.g. gap in+out),
+        -- they form a single roll-like operation — not two independent ripple
+        -- contributions. Only the first edge per clip registers a seed.
+        for _, existing in ipairs(ctx.track_shift_seeds[clip.track_id]) do
+            if existing.clip_id == clip.id then
+                return
+            end
+        end
+        table.insert(ctx.track_shift_seeds[clip.track_id], {
+            clip_id = clip.id,
             orientation = normalized_edge,
             applied_delta = applied_delta,
-            is_gap = is_gap_edge_type
-        }
+            is_gap = is_gap_edge_type,
+            ripple_point = ripple_point,
+        })
     end
 
     local function record_preview_for_edge(ctx, clip, edge_info, normalized_edge)
@@ -1163,32 +1187,70 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
 	    local function compute_track_shift_amounts(ctx)
 	        if ctx.has_ripple_edge then
-	            assert(type(ctx.ripple_anchor_applied_delta) == "number",
-	                "compute_track_shift_amounts: ripple_anchor_applied_delta must be integer")
-	            local shift_factor = (ctx.ripple_anchor_edge_type == "in") and -1 or 1
-	            ctx.downstream_shift_frames = ctx.ripple_anchor_applied_delta * shift_factor
-
 	            local drag_sign = (ctx.clamped_delta_frames >= 0) and 1 or -1
-	            for track_id, seed in pairs(ctx.track_shift_seeds) do
-	                if track_id and seed.orientation and type(seed.applied_delta) == "number" then
-	                    local orientation_sign = (seed.orientation == "in") and -1 or 1
-	                    if seed.is_gap then
-	                        ctx.track_shift_amounts[track_id] = seed.applied_delta * orientation_sign
-	                    else
-	                        local magnitude = math.abs(seed.applied_delta)
-	                        local direction_sign = drag_sign
-	                        if seed.orientation == "out" then
-	                            direction_sign = (seed.applied_delta >= 0) and 1 or -1
-	                        end
-	                        local track_shift_frames = magnitude * direction_sign * orientation_sign
-	                        ctx.track_shift_amounts[track_id] = track_shift_frames
+	            for track_id, seeds in pairs(ctx.track_shift_seeds) do
+	                local track_total = 0
+	                for _, seed in ipairs(seeds) do
+	                    if seed.orientation and type(seed.applied_delta) == "number" then
+	                        track_total = track_total + compute_seed_shift_contribution(seed, drag_sign)
 	                    end
 	                end
+	                ctx.track_shift_amounts[track_id] = track_total
+	            end
+
+	            -- downstream_shift_frames: fallback for tracks without their own seeds.
+	            -- Use the anchor track's accumulated shift so non-seeded tracks stay in sync.
+	            if ctx.ripple_anchor_track_id and ctx.track_shift_amounts[ctx.ripple_anchor_track_id] then
+	                ctx.downstream_shift_frames = ctx.track_shift_amounts[ctx.ripple_anchor_track_id]
+	            else
+	                assert(type(ctx.ripple_anchor_applied_delta) == "number",
+	                    "compute_track_shift_amounts: ripple_anchor_applied_delta must be integer")
+	                local shift_factor = (ctx.ripple_anchor_edge_type == "in") and -1 or 1
+	                ctx.downstream_shift_frames = ctx.ripple_anchor_applied_delta * shift_factor
 	            end
 	        else
 	            ctx.downstream_shift_frames = 0
 	        end
 	    end
+
+    --- When multiple ripple edges are on the same track, edited clips need partial
+    --- shifts from edges that precede them. E.g., if A and B are abutted and both
+    --- out-edges are ripple-trimmed, B needs to shift by A's ripple contribution
+    --- (in addition to its own trim). Without this, a gap opens between A and B.
+    local function apply_same_track_partial_shifts(ctx)
+        local drag_sign = (ctx.clamped_delta_frames >= 0) and 1 or -1
+        for track_id, seeds in pairs(ctx.track_shift_seeds) do
+            if #seeds < 2 then goto next_track end
+
+            -- Sort seeds by ripple_point so we can accumulate left-to-right
+            table.sort(seeds, function(a, b)
+                return (a.ripple_point or 0) < (b.ripple_point or 0)
+            end)
+
+            -- Build prefix sum of shift contributions
+            local prefix_shift = {[0] = 0}
+            for i, seed in ipairs(seeds) do
+                local contribution = 0
+                if seed.orientation and type(seed.applied_delta) == "number" then
+                    contribution = compute_seed_shift_contribution(seed, drag_sign)
+                end
+                prefix_shift[i] = prefix_shift[i - 1] + contribution
+            end
+
+            -- For each seed's clip, apply the cumulative shift from all preceding seeds
+            for i, seed in ipairs(seeds) do
+                local partial_shift = prefix_shift[i - 1]
+                if partial_shift ~= 0 and seed.clip_id then
+                    local clip = ctx.modified_clips[seed.clip_id]
+                    if clip and type(clip.timeline_start) == "number" then
+                        clip.timeline_start = clip.timeline_start + partial_shift
+                    end
+                end
+            end
+
+            ::next_track::
+        end
+    end
 
     local function ensure_earliest_ripple_time(ctx)
         if not ctx.earliest_ripple_time then
@@ -1240,9 +1302,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
             end
 
+	            local ripple_point = compute_ripple_point(original, clip, normalized_edge)
+
 	            if edge_info.trim_type ~= "roll" then
 	                register_ripple_anchor(ctx, normalized_edge, clip_is_gap, applied_delta, clip.track_id, key)
-	                register_track_shift_seed(ctx, clip, normalized_edge, applied_delta, clip_is_gap)
+	                register_track_shift_seed(ctx, clip, normalized_edge, applied_delta, clip_is_gap, ripple_point)
 	            end
 
             record_preview_for_edge(ctx, clip, edge_info, normalized_edge)
@@ -1251,7 +1315,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 ctx.clips_marked_delete[clip_id] = true
             end
 
-	            local ripple_point = compute_ripple_point(original, clip, normalized_edge)
 	            if ripple_point and type(ripple_point) == "number" and clip.track_id then
 	                local existing = ctx.track_ripple_start_frames[clip.track_id]
 	                if not existing or ripple_point < existing then
@@ -1264,6 +1327,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         compute_track_shift_amounts(ctx)
+        apply_same_track_partial_shifts(ctx)
+
+        -- Update preview entries to reflect partial shifts applied above.
+        -- record_preview_for_edge captures clip state before partial shifts,
+        -- so preview_affected_clips may have stale timeline_start values.
+        if ctx.dry_run and ctx.preview_affected_clips then
+            for _, entry in ipairs(ctx.preview_affected_clips) do
+                local clip = ctx.modified_clips[entry.clip_id]
+                if clip and type(clip.timeline_start) == "number" then
+                    entry.new_start_value = clip.timeline_start
+                end
+            end
+        end
+
         ensure_earliest_ripple_time(ctx)
         return true
     end
@@ -1308,8 +1385,28 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        assert(ctx.clips_to_shift, "compute_shift_bounds: clips_to_shift is nil")
 	        local min_frames = -math.huge
 	        local max_frames = math.huge
-	        local min_blocker_key = nil  -- edge key of clip whose out-edge blocks leftward shift
-	        local max_blocker_key = nil  -- edge key of clip whose in-edge blocks rightward shift
+	        local min_blocker_key = nil
+	        local max_blocker_key = nil
+
+	        local function clip_desired_shift(clip_data)
+	            return ctx.track_shift_amounts[clip_data.track_id] or ctx.downstream_shift_frames
+	        end
+
+	        local function current_start_frames(clip_id)
+	            local clip = ctx.modified_clips[clip_id] or ctx.clip_lookup[clip_id] or ctx.base_clips[clip_id]
+	            if not clip or type(clip.timeline_start) ~= "number" then
+	                return nil
+	            end
+	            return clip.timeline_start
+	        end
+
+	        local function current_end_frames(clip_id)
+	            local clip = ctx.modified_clips[clip_id] or ctx.clip_lookup[clip_id] or ctx.base_clips[clip_id]
+	            if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
+	                return nil
+	            end
+	            return clip.timeline_start + clip.duration
+	        end
 
         local function accumulate_bounds_for_clip(shift_clip_data)
             local neighbors = ctx.neighbor_bounds_cache and ctx.neighbor_bounds_cache[shift_clip_data.id]
@@ -1319,22 +1416,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             local start_frames = shift_clip_data.timeline_start
             local end_frames = start_frames + shift_clip_data.duration
-
-	            local function current_start_frames(clip_id)
-	                local clip = ctx.modified_clips[clip_id] or ctx.clip_lookup[clip_id] or ctx.base_clips[clip_id]
-	                if not clip or type(clip.timeline_start) ~= "number" then
-	                    return nil
-	                end
-	                return clip.timeline_start
-	            end
-
-	            local function current_end_frames(clip_id)
-	                local clip = ctx.modified_clips[clip_id] or ctx.clip_lookup[clip_id] or ctx.base_clips[clip_id]
-	                if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
-	                    return nil
-	                end
-	                return clip.timeline_start + clip.duration
-	            end
+            local desired = clip_desired_shift(shift_clip_data)
 
 	            local prev_is_shifting = neighbors.prev_id and ctx.shift_lookup and ctx.shift_lookup[neighbors.prev_id]
 	            if neighbors.prev_end_frames and not prev_is_shifting then
@@ -1345,11 +1427,21 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	                        prev_end = updated_end
 	                    end
 	                end
-	                local bound = prev_end - start_frames
-	                if bound > min_frames then
-	                    min_frames = bound
-	                    if neighbors.prev_id then
-	                        min_blocker_key = tostring(neighbors.prev_id) .. ":out"
+	                local bound = prev_end - start_frames  -- max leftward shift for this clip
+	                -- Only constrain the global shift if this clip's own desired shift
+	                -- exceeds its bound. Clips whose per-track shift fits within their
+	                -- bound are not blockers.
+	                if desired < bound then
+	                    -- This clip's desired shift exceeds its room. Convert the
+	                    -- per-clip bound to a global-shift-equivalent: scale up by
+	                    -- the ratio downstream_shift / desired.
+	                    local ds = ctx.downstream_shift_frames
+	                    local global_bound = (desired ~= 0) and (bound * ds / desired) or bound
+	                    if global_bound > min_frames then
+	                        min_frames = global_bound
+	                        if neighbors.prev_id then
+	                            min_blocker_key = tostring(neighbors.prev_id) .. ":out"
+	                        end
 	                    end
 	                end
 	            end
@@ -1363,11 +1455,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	                        next_start = updated_start
 	                    end
 	                end
-	                local bound = next_start - end_frames
-	                if bound < max_frames then
-	                    max_frames = bound
-	                    if neighbors.next_id then
-	                        max_blocker_key = tostring(neighbors.next_id) .. ":in"
+	                local bound = next_start - end_frames  -- max rightward shift for this clip
+	                if desired > bound then
+	                    local ds = ctx.downstream_shift_frames
+	                    local global_bound = (desired ~= 0) and (bound * ds / desired) or bound
+	                    if global_bound < max_frames then
+	                        max_frames = global_bound
+	                        if neighbors.next_id then
+	                            max_blocker_key = tostring(neighbors.next_id) .. ":in"
+	                        end
 	                    end
 	                end
 	            end
@@ -1580,10 +1676,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         ctx.command:set_parameter("__retry_delta_count", retry_count + 1)
         ctx.command:set_parameter("delta_ms", nil)
 
-	        local shift_factor = (ctx.ripple_anchor_edge_type == "in") and -1 or 1
-	        local anchor_sign = ctx.ripple_anchor_negated and -1 or 1
-	        local retry_delta_frames = adjusted_frames
-	        if shift_factor ~= 0 and anchor_sign ~= 0 then
+	        -- Convert desired total shift back to delta_frames using the actual ratio
+	        -- between current shift and delta. Handles accumulated multi-edge shifts correctly.
+	        local current_shift = ctx.downstream_shift_frames
+	        local current_delta = ctx.clamped_delta_frames
+	        local retry_delta_frames
+	        if current_shift ~= 0 and current_delta ~= 0 then
+	            -- Round toward zero to stay within shift constraint
+	            local raw = adjusted_frames * current_delta / current_shift
+	            retry_delta_frames = raw >= 0 and math.floor(raw) or math.ceil(raw)
+	        else
+	            -- Fallback: single-anchor sign relationship
+	            local shift_factor = (ctx.ripple_anchor_edge_type == "in") and -1 or 1
+	            local anchor_sign = ctx.ripple_anchor_negated and -1 or 1
 	            retry_delta_frames = adjusted_frames / (shift_factor * anchor_sign)
 	        end
 
@@ -1766,18 +1871,36 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        if ctx.dry_run then
 	            local clamped_edges = {}
 	            local final_delta = ctx.clamped_delta_frames
+
+	            -- When the delta was NOT clamped (clamp_direction == 0), implicit gap
+	            -- edges that hit their limit are merely fully consumed — normal
+	            -- operation, not a blockage. Skip them to avoid false-positive red.
+	            -- When the delta WAS clamped, implicit edges may be genuine blockers.
+	            local implicit_edge_keys = {}
+	            if ctx.clamp_direction == 0 then
+	                for _, ei in ipairs(ctx.edge_infos) do
+	                    if ei.is_implicit_injection then
+	                        implicit_edge_keys[build_edge_key(ei)] = true
+	                    end
+	                end
+	            end
+
 	            for edge_key, limits in pairs(ctx.per_edge_constraints) do
-	                local min_hit = (limits.min ~= -math.huge and final_delta == limits.min)
-	                local max_hit = (limits.max ~= math.huge and final_delta == limits.max)
-	                if min_hit or max_hit then
-	                    local target_key = edge_key
-	                    if key_matches_clamp_sources(ctx, edge_key, target_key) then
-	                        clamped_edges[target_key] = true
+	                if not implicit_edge_keys[edge_key] then
+	                    local min_hit = (limits.min ~= -math.huge and final_delta == limits.min)
+	                    local max_hit = (limits.max ~= math.huge and final_delta == limits.max)
+	                    if min_hit or max_hit then
+	                        local target_key = edge_key
+	                        if key_matches_clamp_sources(ctx, edge_key, target_key) then
+	                            clamped_edges[target_key] = true
+	                        end
 	                    end
 	                end
 	            end
 	            for key in pairs(ctx.forced_clamped_edges or {}) do
-	                clamped_edges[key] = true
+	                if ctx.restored_blocker_keys[key] or not implicit_edge_keys[key] then
+	                    clamped_edges[key] = true
+	                end
 	            end
 	
 	            local function merge_edge_keys(edge_keys)
@@ -1994,10 +2117,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- Restore shift-bound blocker keys from a prior retry so the UI
         -- can highlight the blocking edges red even after delta re-clamp.
+        -- These are genuine blockers — must not be filtered by implicit edge checks.
+        ctx.restored_blocker_keys = {}
         local saved_blockers = command:get_parameter("__shift_blocker_keys")
         if type(saved_blockers) == "table" then
             for _, key in ipairs(saved_blockers) do
                 ctx.forced_clamped_edges[key] = true
+                ctx.restored_blocker_keys[key] = true
             end
         end
 
