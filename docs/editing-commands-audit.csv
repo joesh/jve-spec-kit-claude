@@ -1,0 +1,134 @@
+Category,Command,Status,Resolve,Premiere,Priority,Description
+Basic Editing,Insert,Implemented,Y,Y,,Standard 3-point edit
+Basic Editing,Overwrite,Implemented,Y,Y,,Standard 3-point edit
+Basic Editing,Cut,Implemented,Y,Y,,Mark-based and selection-based
+Basic Editing,Copy,Implemented,Y,Y,,Mark-based and selection-based
+Basic Editing,Paste,Implemented,Y,Y,,Paste at playhead (overwrite)
+Basic Editing,Blade (Split),Implemented,Y,Y,,Cmd+B split at playhead
+Basic Editing,LiftRange,Implemented,Y,Y,,Mark-based lift
+Basic Editing,ExtractRange,Implemented,Y,Y,,Mark-based extract
+Basic Editing,DeleteClip,Implemented,Y,Y,,Delete clip
+Basic Editing,RippleDelete,Implemented,Y,Y,,Delete and close gap
+Basic Editing,RippleDeleteSelection,Implemented,Y,Y,,Delete selected clips with ripple
+Basic Editing,InsertGap,Implemented,Y,Y,,Insert gap at playhead
+Basic Editing,Replace Edit,Missing,Y,Y,Tier 1,Replace clip under playhead with source matching around playhead
+Basic Editing,Place on Top / Superimpose,Missing,Y,Y,Tier 1,Source to next available track above
+Basic Editing,Append to End,Missing,Y,Y,Tier 1,Add source after last clip on target track
+Basic Editing,Paste Insert,Missing,Y,Y,Tier 1,Paste at playhead with ripple
+Basic Editing,Ripple Overwrite,Missing,Y,,Tier 2,Overwrite + ripple the duration difference
+Trimming,TrimHead,Implemented,Y,Y,,Trim clip start to playhead
+Trimming,TrimTail,Implemented,Y,Y,,Trim clip end to playhead
+Trimming,ExtendEdit,Implemented,Y,Y,,Extend edge to playhead
+Trimming,RippleEdit,Implemented,Y,Y,,Drag-based ripple edit
+Trimming,BatchRippleEdit,Implemented,Y,Y,,Batch ripple edits
+Trimming,Nudge,Implemented,Y,Y,,Move clip(s) by delta
+Trimming,Roll Trim,Missing,Y,Y,Tier 1,Move edit point between adjacent clips total duration unchanged
+Trimming,Slip,Missing,Y,Y,Tier 1,Shift source window timeline position unchanged
+Trimming,Slide,Missing,Y,Y,Tier 1,Move clip neighbors absorb the change
+Trimming,Dynamic Trim (JKL),Missing,Y,,Tier 2,Trim while playing — Resolve signature feature
+Trimming,Nudge Trim,Missing,Y,Y,Tier 1,Move selected edit point by N frames
+Trimming,Join Through Edit,Missing,Y,,Tier 2,Remove edit point between two clips from same source
+Trimming,Razor All Tracks,Missing,Y,Y,Tier 3,Blade across all tracks at playhead
+Selection,SelectAll,Implemented,Y,Y,,Select all clips/items
+Selection,DeselectAll,Implemented,Y,Y,,Clear selection
+Selection,SelectClips,Implemented,Y,Y,,Timeline clip selection
+Selection,SelectEdges,Implemented,Y,Y,,Edge selection for trimming
+Selection,SelectGaps,Implemented,Y,Y,,Gap selection
+Selection,SelectRectangle,Implemented,Y,Y,,Rectangular drag selection
+Selection,SelectBrowserItems,Implemented,Y,Y,,Browser item selection
+Selection,Select All Forward on Track,Missing,Y,Y,Tier 1,Select clip + everything to its right
+Selection,Select All Backward on Track,Missing,Y,Y,Tier 1,Select clip + everything to its left
+Selection,Select All Forward All Tracks,Missing,Y,Y,Tier 1,Everything right of playhead all tracks
+Selection,Select All Backward All Tracks,Missing,Y,Y,Tier 1,Everything left of playhead all tracks
+Selection,Select Clips at Playhead,Missing,Y,,Tier 2,All clips intersecting playhead
+Selection,Select In to Out,Missing,Y,Y,Tier 2,All clips within mark range
+Selection,Linked Selection toggle,Missing,Y,Y,Tier 1,Global: selecting video auto-selects linked audio
+Marks,SetMarkIn,Implemented,Y,Y,,Set in point at playhead
+Marks,SetMarkOut,Implemented,Y,Y,,Set out point at playhead
+Marks,ClearMarkIn,Implemented,Y,Y,,Clear in point
+Marks,ClearMarkOut,Implemented,Y,Y,,Clear out point
+Marks,ClearMarks,Implemented,Y,Y,,Clear both marks
+Marks,MarkClipExtent,Implemented,Y,Y,,Mark to clip boundaries (X key)
+Marks,GoToMarkIn,Implemented,Y,Y,,Jump to in point
+Marks,GoToMarkOut,Implemented,Y,Y,,Jump to out point
+Marks,Mark Selection,Missing,Y,Y,Tier 2,Set in/out to span of selected clips
+Marks,Mark to End,Missing,Y,,Tier 2,Set in at playhead out at timeline end
+Marks,Mark from Start,Missing,Y,,Tier 2,Set in at timeline start out at playhead
+Marks,Add Marker,Missing,Y,Y,Tier 2,Add marker at playhead — whole subsystem missing
+Marks,Modify Marker,Missing,Y,Y,Tier 2,Edit marker name/color/duration/notes
+Marks,Delete Marker,Missing,Y,Y,Tier 2,Remove marker
+Marks,Delete All Markers,Missing,Y,Y,Tier 2,Clear all markers
+Navigation,GoToNextEdit,Implemented,Y,Y,,Jump to next edit point
+Navigation,GoToPrevEdit,Implemented,Y,Y,,Jump to previous edit point
+Navigation,GoToStart,Implemented,Y,Y,,Go to frame 0
+Navigation,GoToEnd,Implemented,Y,Y,,Go to last frame
+Navigation,GoToTimecode,Implemented,Y,Y,,TC dialog
+Navigation,MovePlayhead,Implemented,Y,Y,,Move by duration literal
+Navigation,SetPlayhead,Implemented,Y,Y,,Set position
+Navigation,StepFrame,Implemented,Y,Y,,Step by frame count
+Navigation,Next/Prev Gap,Missing,Y,Y,Tier 2,Jump to next gap on targeted track
+Navigation,Next/Prev Marker,Missing,Y,Y,Tier 2,Jump to markers
+Navigation,Play Around,Missing,Y,Y,Tier 2,Play around current position with pre/post roll
+Navigation,Scroll to Playhead,Missing,Y,Y,Tier 2,Center view on playhead
+Playback,TogglePlay,Implemented,Y,Y,,Play/pause
+Playback,ShuttleForward,Implemented,Y,Y,,Shuttle forward (with JKL slow-play)
+Playback,ShuttleReverse,Implemented,Y,Y,,Shuttle reverse
+Playback,ShuttleStop,Implemented,Y,Y,,Stop playback
+Clip Properties,SetClipProperty,Implemented,Y,Y,,Set property (volume name etc.)
+Clip Properties,ToggleClipEnabled,Implemented,Y,Y,,Enable/disable clip
+Clip Properties,LinkClips,Implemented,Y,Y,,Create link group
+Clip Properties,UnlinkClips,Implemented,Y,Y,,Break link group
+Clip Properties,DuplicateClips,Implemented,Y,Y,,Duplicate selected clips
+Clip Properties,DuplicateMasterClip,Implemented,Y,Y,,Duplicate in browser
+Clip Properties,MatchFrame,Implemented,Y,Y,,Load source at playhead frame
+Clip Properties,Set Clip Color / Label,Missing,Y,Y,Tier 3,Assign label color for organization
+Clip Properties,Clip Duration Dialog,Missing,Y,Y,Tier 3,Type exact duration numerically
+Track Management,AddTrack,Implemented,Y,Y,,Add track
+Track Management,SetTrackProperty,Implemented,Y,Y,,Mute solo locked volume pan
+Track Management,SetTrackHeights,Implemented,Y,Y,,Set track heights
+Track Management,Delete Track,Missing,Y,Y,Tier 2,Remove track + all clips
+Track Management,Track Patching / Targeting,Missing,Y,Y,Tier 1,Route source V1/A1 to timeline tracks
+Track Management,Auto-Select per track,Missing,Y,,Tier 1,Which tracks participate in razor/select-all
+Track Management,Move Track Up/Down,Missing,Y,Y,Tier 3,Reorder tracks
+Track Management,Rename Track,Missing,Y,Y,Tier 3,Label track
+Project & Media,NewProject,Implemented,Y,Y,,New project dialog
+Project & Media,OpenProject,Implemented,Y,Y,,Open project
+Project & Media,CreateSequence,Implemented,Y,Y,,Create sequence
+Project & Media,ImportMedia,Implemented,Y,Y,,Import media files
+Project & Media,ImportFCP7XML,Implemented,Y,Y,,Import FCP7 XML
+Project & Media,ImportResolveProject,Implemented,Y,Y,,Import Resolve .drp
+Project & Media,NewBin,Implemented,Y,Y,,Create bin
+Project & Media,DeleteBin,Implemented,Y,Y,,Delete bin
+Project & Media,RenameItem,Implemented,Y,Y,,Rename bin/clip
+Project & Media,RevealInFilesystem,Implemented,Y,Y,,Show in Finder
+Project & Media,ShowRelinkDialog,Implemented,Y,Y,,Reconnect offline media
+Project & Media,CreateSmartBin,Implemented,Y,Y,,Smart bin
+Project & Media,UpdateSmartBin,Implemented,Y,Y,,Update smart bin
+Project & Media,DeleteSmartBin,Implemented,Y,Y,,Delete smart bin
+UI / View,TimelineZoomIn,Implemented,Y,Y,,Zoom in
+UI / View,TimelineZoomOut,Implemented,Y,Y,,Zoom out
+UI / View,TimelineZoomFit,Implemented,Y,Y,,Zoom to fit
+UI / View,ToggleSnapping,Implemented,Y,Y,,Toggle snap
+UI / View,ToggleMaximizePanel,Implemented,Y,Y,,Maximize/restore panel
+UI / View,ToggleFullscreenView,Implemented,Y,Y,,Toggle fullscreen
+UI / View,Find/FindNext/FindPrevious,Implemented,Y,Y,,Find in timeline
+UI / View,FindReplace,Implemented,Y,Y,,Find and replace
+UI / View,Sift,Implemented,Y,Y,,Quick filter
+UI / View,EditHistory,Implemented,Y,Y,,Undo/redo history
+UI / View,Undo / Redo,Implemented,Y,Y,,Undo and redo
+UI / View,Zoom to In/Out,Missing,Y,,Tier 3,Zoom to marked region
+UI / View,Show Audio Waveforms toggle,Missing,Y,Y,Tier 3,Waveform display in clips
+UI / View,Show Thumbnails toggle,Missing,Y,Y,Tier 3,Filmstrip in video clips
+UI / View,Proxy Toggle,Missing,Y,Y,Tier 3,Switch proxy/full-res
+Clipboard,Paste Attributes,Missing,Y,Y,Tier 3,Apply effects/properties from one clip to another
+Clipboard,Remove Attributes,Missing,Y,,Tier 3,Strip attributes
+Clipboard,Copy Timecode,Missing,Y,,Tier 3,Copy playhead TC to system clipboard
+Speed / Retiming,Change Clip Speed,Missing,Y,Y,Tier 2,Constant speed percentage
+Speed / Retiming,Freeze Frame,Missing,Y,Y,Tier 2,Hold one frame
+Speed / Retiming,Reverse Clip,Missing,Y,Y,Tier 2,Play backward
+Speed / Retiming,Speed Ramp / Time Remap,Missing,Y,Y,Tier 3,Variable speed with keyframes
+Speed / Retiming,Fit to Fill,Missing,Y,Y,Tier 3,Auto-speed to fill marked duration
+Compound / Multicam,Nest / Compound Clip,Missing,Y,Y,Tier 3,Collapse clips into container
+Compound / Multicam,Multicam Create,Missing,Y,Y,Tier 3,Synced multi-angle group
+Compound / Multicam,Multicam Cut,Missing,Y,Y,Tier 3,Live-switch angles during playback
+Compound / Multicam,Group / Ungroup,Missing,Y,Y,Tier 3,Move/delete as unit (distinct from link)
