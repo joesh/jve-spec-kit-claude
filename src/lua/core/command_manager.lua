@@ -1383,7 +1383,10 @@ function M._execute_body(command_or_name, params)
 end
 
 function M.get_last_command(project_id)
-    return M.get_command_at_sequence(history.get_current_sequence_number(), project_id)
+    -- In merged view, "last command" is the most recent done across sequence + global cursors
+    local target = history.find_merged_undo_target(get_effective_sequence_id())
+    if not target then return nil end
+    return M.get_command_at_sequence(target.sequence_number, project_id)
 end
 
 function M.get_next_redo_command(project_id)

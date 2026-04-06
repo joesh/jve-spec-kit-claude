@@ -127,9 +127,10 @@ do
 end
 
 --------------------------------------------------------------------------------
--- 8. handle_redo_toggle: toggles back when nothing left to redo
+-- 8. handle_redo_toggle: does nothing when nothing left to redo
+-- (toggle-back was removed — controller is now a simple pass-through)
 --------------------------------------------------------------------------------
-print("  test 8: redo_toggle toggles back when at end of stack")
+print("  test 8: redo_toggle does nothing at end of stack")
 urc.clear_toggle()
 do
     -- Stack of 2 commands, start at pos=1 — only 1 redo available
@@ -140,15 +141,11 @@ do
     assert(get_pos() == 2, "after 1st press: pos=2")
     assert(calls.redo == 1)
 
-    -- 2nd: at redo position AND can_redo=false → toggle back 2→1
-    urc.handle_redo_toggle(mock)
-    assert(calls.undo == 1, "expected 1 undo call on toggle-back")
-    assert(get_pos() == 1, "after 2nd press: pos=1 (toggled back)")
-
-    -- 3rd: redo again 1→2
-    urc.handle_redo_toggle(mock)
-    assert(calls.redo == 2, "expected 2 total redo calls")
-    assert(get_pos() == 2, "after 3rd press: pos=2 (re-redone)")
+    -- 2nd: can_redo=false → early return, no undo call
+    local result = urc.handle_redo_toggle(mock)
+    assert(calls.undo == 0, "no undo call — toggle-back removed")
+    assert(get_pos() == 2, "after 2nd press: pos=2 (unchanged)")
+    assert(not result.success, "should return failure when nothing to redo")
 end
 
 --------------------------------------------------------------------------------
