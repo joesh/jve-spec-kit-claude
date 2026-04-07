@@ -2,6 +2,7 @@
 #include "impl/ffmpeg_context.h"
 #include "impl/ffmpeg_hwaccel.h"
 #include "impl/ffmpeg_resample.h"
+#include "impl/qtrle_decode.h"
 #include "impl/media_file_impl.h"
 #include "impl/frame_impl.h"
 #include "impl/pcm_chunk_impl.h"
@@ -99,6 +100,9 @@ public:
     impl::FFmpegScaleContext scale_ctx;
     AVPacket* m_pkt = nullptr;
     AVFrame* m_frame = nullptr;
+
+    // Custom qtrle decoder (replaces FFmpeg for AV_CODEC_ID_QTRLE)
+    std::unique_ptr<impl::QtrleDecoder> qtrle;
 
     // Tracks where the decoder was last positioned (PTS of last decoded frame).
     // Used by Play path to avoid unnecessary seeks during sequential decode.
@@ -281,29 +285,41 @@ Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset)
     if (asset->info().has_video) {
         AVCodecParameters* params = asset_impl->fmt_ctx.video_codec_params();
 
-        auto codec_result = impl->codec_ctx.init(params);
-        if (codec_result.is_error()) {
-            return codec_result.error();
-        }
-
-        // Log HW decode status — SW fallback on VT-capable codec is a perf disaster
-        if (impl->codec_ctx.is_hw_accelerated()) {
-            EMP_LOG_DEBUG("Reader::Create: VT hw_accel codec=%d %dx%d path=%s",
-                    params->codec_id, params->width, params->height,
-                    asset->info().path.c_str());
-        } else if (impl::codec_supports_videotoolbox(params->codec_id)) {
-            EMP_LOG_WARN("SW decode: codec=%d %dx%d — VT unsupported for this file. path=%s",
-                    params->codec_id, params->width, params->height,
+        if (params->codec_id == AV_CODEC_ID_QTRLE) {
+            // Custom parallel qtrle decoder — bypasses FFmpeg's single-threaded
+            // implementation for 10x+ speedup at 4K via GCD dispatch_apply.
+            impl->qtrle = std::make_unique<impl::QtrleDecoder>();
+            auto qtrle_result = impl->qtrle->init(params->width, params->height);
+            if (qtrle_result.is_error()) {
+                return qtrle_result.error();
+            }
+            EMP_LOG_DEBUG("Reader::Create: custom qtrle decoder %dx%d path=%s",
+                    params->width, params->height,
                     asset->info().path.c_str());
         } else {
-            EMP_LOG_DEBUG("Reader::Create: SW decode (no VT support) codec=%d %dx%d path=%s",
-                    params->codec_id, params->width, params->height,
-                    asset->info().path.c_str());
-        }
+            auto codec_result = impl->codec_ctx.init(params);
+            if (codec_result.is_error()) {
+                return codec_result.error();
+            }
 
-        // Only initialize software scaler if NOT using hw accel
-        // (hw path uses GPU YUV→RGB, sw path needs swscale BGRA conversion)
-        if (!impl->codec_ctx.is_hw_accelerated()) {
+            // Log HW decode status
+            if (impl->codec_ctx.is_hw_accelerated()) {
+                EMP_LOG_DEBUG("Reader::Create: VT hw_accel codec=%d %dx%d path=%s",
+                        params->codec_id, params->width, params->height,
+                        asset->info().path.c_str());
+            } else if (impl::codec_supports_videotoolbox(params->codec_id)) {
+                EMP_LOG_WARN("SW decode: codec=%d %dx%d — VT unsupported for this file. path=%s",
+                        params->codec_id, params->width, params->height,
+                        asset->info().path.c_str());
+            } else {
+                EMP_LOG_DEBUG("Reader::Create: SW decode (no VT support) codec=%d %dx%d path=%s",
+                        params->codec_id, params->width, params->height,
+                        asset->info().path.c_str());
+            }
+
+            // Always initialize software scaler as fallback. Even when HW accel
+            // is expected, some codecs (ProRes) defer VT format negotiation to
+            // first decode — if VT fails at runtime, the SW path needs swscale.
             auto scale_result = impl->scale_ctx.init(
                 params->width, params->height,
                 static_cast<AVPixelFormat>(params->format),
@@ -390,6 +406,113 @@ static std::shared_ptr<Frame> avframe_to_emp_frame(
 }
 
 
+// Seek format context without flushing a codec (for custom decoders like qtrle
+// that don't use FFmpeg's codec context).
+static Result<void> seek_format_only(AVFormatContext* fmt_ctx, AVStream* stream,
+                                      TimeUS target_us) {
+    TimeUS stream_start_us = impl::stream_pts_to_us(stream->start_time, stream);
+    TimeUS seek_target_us = target_us;
+    if (seek_target_us < stream_start_us) seek_target_us = stream_start_us;
+
+    int64_t seek_pts = impl::us_to_stream_pts(seek_target_us, stream);
+    int ret = av_seek_frame(fmt_ctx, stream->index, seek_pts, AVSEEK_FLAG_BACKWARD);
+    if (ret < 0) {
+        ret = av_seek_frame(fmt_ctx, stream->index, stream->start_time, AVSEEK_FLAG_BACKWARD);
+        if (ret < 0) return impl::ffmpeg_error(ret, "av_seek_frame (qtrle)");
+    }
+    return {};
+}
+
+// Custom qtrle decode path: read packets from format context, decode with
+// parallel qtrle decoder, return BGRA frame. Handles seek, delta frames,
+// and floor-on-grid PTS semantics.
+static Result<std::shared_ptr<Frame>> decode_qtrle(
+        impl::QtrleDecoder& decoder,
+        AVFormatContext* fmt_ctx, AVStream* stream, int stream_idx,
+        TimeUS target_us, AVPacket* pkt,
+        TimeUS& last_decode_pts, bool& have_decode_pos) {
+
+    DecodeMode mode = GetDecodeMode();
+    bool did_seek = false;
+
+    // Seek decision
+    if (mode == DecodeMode::Scrub || mode == DecodeMode::Park) {
+        auto seek_result = seek_format_only(fmt_ctx, stream, target_us);
+        if (seek_result.is_error()) return seek_result.error();
+        decoder.flush();
+        did_seek = true;
+    } else if (impl::need_seek(last_decode_pts, target_us, have_decode_pos)) {
+        auto seek_result = seek_format_only(fmt_ctx, stream, target_us);
+        if (seek_result.is_error()) return seek_result.error();
+        decoder.flush();
+        did_seek = true;
+    }
+
+    // Acquire pre-touched buffer from pool (avoids ~130ms page fault overhead)
+    int width = decoder.width();
+    int height = decoder.height();
+    int stride = decoder.ref_stride();
+    auto buffer = decoder.acquire_buffer();
+    auto release_cb = decoder.release_callback();
+
+    // Read and decode packets until we reach the target PTS.
+    TimeUS best_pts = INT64_MIN;
+    bool have_frame = false;
+
+    while (true) {
+        int ret = av_read_frame(fmt_ctx, pkt);
+        if (ret == AVERROR_EOF) {
+            break;
+        }
+        if (ret < 0) {
+            return impl::ffmpeg_error(ret, "av_read_frame (qtrle)");
+        }
+
+        if (pkt->stream_index != stream_idx) {
+            av_packet_unref(pkt);
+            continue;
+        }
+
+        TimeUS pkt_pts = impl::stream_pts_to_us(pkt->pts, stream);
+
+        // Decode this packet into the reference buffer
+        auto decode_result = decoder.decode(pkt->data, pkt->size,
+                                             buffer.data(), stride);
+        av_packet_unref(pkt);
+
+        if (decode_result.is_error()) {
+            return decode_result.error();
+        }
+
+        // Track best floor frame (largest PTS <= target)
+        if (pkt_pts <= target_us) {
+            best_pts = pkt_pts;
+            have_frame = true;
+        }
+
+        // Past the target — done
+        if (pkt_pts >= target_us) {
+            break;
+        }
+    }
+
+    if (!have_frame) {
+        return Error::internal("qtrle: no frame found at target time");
+    }
+
+    // Update position tracking
+    last_decode_pts = best_pts;
+    have_decode_pos = !did_seek || (mode == DecodeMode::Play);
+    if (mode == DecodeMode::Scrub || mode == DecodeMode::Park) {
+        have_decode_pos = false;
+    }
+
+    auto frame_impl = std::make_unique<FrameImpl>(
+        width, height, stride, best_pts, std::move(buffer), std::move(release_cb)
+    );
+    return std::make_shared<Frame>(std::move(frame_impl));
+}
+
 Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
     if (!m_media_file->info().has_video) {
         return Error::unsupported("DecodeAt requires video stream");
@@ -399,6 +522,30 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
     AVFormatContext* fmt_ctx = asset_impl->fmt_ctx.get();
     AVStream* stream = asset_impl->fmt_ctx.video_stream();
     int stream_idx = asset_impl->fmt_ctx.video_stream_index();
+
+    // Custom qtrle decode path
+    if (m_impl->qtrle) {
+        auto decode_start = std::chrono::steady_clock::now();
+
+        auto result = decode_qtrle(
+            *m_impl->qtrle, fmt_ctx, stream, stream_idx,
+            t_us, m_impl->m_pkt,
+            m_impl->last_decode_pts, m_impl->have_decode_pos
+        );
+
+        auto decode_end = std::chrono::steady_clock::now();
+        auto decode_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            decode_end - decode_start).count();
+        float decode_ms = static_cast<float>(decode_us) / 1000.0f;
+        m_impl->last_batch_ms_per_frame = decode_ms;
+
+        if (decode_ms > 10) {
+            EMP_LOG_DEBUG("qtrle decode: %.1fms target=%lld",
+                    (double)decode_ms, (long long)t_us);
+        }
+
+        return result;
+    }
 
     DecodeMode mode = GetDecodeMode();
     auto decode_start = std::chrono::steady_clock::now();

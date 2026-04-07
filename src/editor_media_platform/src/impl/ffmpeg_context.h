@@ -57,6 +57,16 @@ private:
     int m_audio_stream_idx = -1;
 };
 
+// Tracks what happened during get_hw_format callback.
+// Some codecs (ProRes) defer format negotiation to first decode rather
+// than calling get_hw_format during avcodec_open2. We need to distinguish
+// "callback not called yet" (deferred) from "callback rejected HW" (failed).
+struct HwFormatNegotiation {
+    AVPixelFormat target_fmt = AV_PIX_FMT_NONE;
+    bool callback_invoked = false;
+    bool succeeded = false;
+};
+
 // FFmpeg codec context wrapper (for Reader)
 // Supports hardware-accelerated decoding when available
 class FFmpegCodecContext {
@@ -78,8 +88,10 @@ public:
 
     AVCodecContext* get() const { return m_codec_ctx; }
 
-    // True if hardware-accelerated decoder is ACTUALLY active.
-    // (Not just "VT device created" — checks negotiated pixel format.)
+    // True if hardware-accelerated decoder is active or expected.
+    // For deferred-format codecs (ProRes), this is set optimistically
+    // when VT device creation succeeds — actual HW use is confirmed
+    // per-frame by checking AVFrame::format at decode time.
     bool is_hw_accelerated() const { return m_hw_active; }
 
     // Hardware pixel format (AV_PIX_FMT_NONE if software decode)
@@ -89,7 +101,8 @@ private:
     AVCodecContext* m_codec_ctx = nullptr;
     AVBufferRef* m_hw_device_ctx = nullptr;
     AVPixelFormat m_hw_pix_fmt = AV_PIX_FMT_NONE;
-    bool m_hw_active = false;  // set after avcodec_open2 confirms negotiation
+    bool m_hw_active = false;
+    HwFormatNegotiation m_negotiation;
 };
 
 // SwScale context wrapper (for format conversion)

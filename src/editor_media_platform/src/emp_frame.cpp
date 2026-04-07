@@ -223,6 +223,45 @@ void FrameImpl::ensure_cpu_buffer() {
             break;
         }
 
+        case kCVPixelFormatType_4444AYpCbCr16: {
+            // Packed 4:4:4:4 with alpha (y416): [A16 Y16 Cb16 Cr16] per pixel.
+            // VideoToolbox outputs this for ProRes 4444 (ap4h) and 4444 XQ (ap4x).
+            // Each component is 16-bit unsigned, full range [0, 65535].
+            // BT.709 full-range YCbCr→RGB conversion to BGRA8.
+            size_t src_stride = CVPixelBufferGetBytesPerRow(m_hw_buffer);
+            uint8_t* src_base = static_cast<uint8_t*>(CVPixelBufferGetBaseAddress(m_hw_buffer));
+            assert(src_base && "FrameImpl::ensure_cpu_buffer: y416 base address is null");
+
+            for (size_t row = 0; row < height; ++row) {
+                uint16_t* src_row = reinterpret_cast<uint16_t*>(src_base + row * src_stride);
+                uint8_t* dst_row = m_cpu_buffer.data() + row * dst_stride;
+
+                for (size_t col = 0; col < width; ++col) {
+                    // y416 layout: A, Y, Cb, Cr (each 16-bit)
+                    float a_val  = src_row[col * 4 + 0] / 65535.0f;
+                    float y_val  = src_row[col * 4 + 1] / 65535.0f;
+                    float cb_val = src_row[col * 4 + 2] / 65535.0f - 0.5f;
+                    float cr_val = src_row[col * 4 + 3] / 65535.0f - 0.5f;
+
+                    // BT.709 full-range YCbCr → RGB
+                    float r = y_val + 1.5748f * cr_val;
+                    float g = y_val - 0.1873f * cb_val - 0.4681f * cr_val;
+                    float b = y_val + 1.8556f * cb_val;
+
+                    auto clamp8 = [](float v) -> uint8_t {
+                        return static_cast<uint8_t>(std::max(0.0f, std::min(255.0f, v * 255.0f)));
+                    };
+
+                    uint8_t* pixel = dst_row + col * 4;
+                    pixel[0] = clamp8(b);
+                    pixel[1] = clamp8(g);
+                    pixel[2] = clamp8(r);
+                    pixel[3] = clamp8(a_val);
+                }
+            }
+            break;
+        }
+
         default: {
             // Unknown format - fail fast with format code for diagnosis
             // Format is FourCC: print as 4 chars

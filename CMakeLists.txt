@@ -74,6 +74,7 @@ set(EMP_SOURCES
     src/editor_media_platform/src/impl/ffmpeg_convert.cpp
     src/editor_media_platform/src/impl/ffmpeg_hwaccel.cpp
     src/editor_media_platform/src/impl/ffmpeg_resample.cpp
+    src/editor_media_platform/src/impl/qtrle_decode.cpp
 )
 
 add_library(EditorMediaPlatform STATIC ${EMP_SOURCES})

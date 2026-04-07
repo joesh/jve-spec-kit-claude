@@ -5,6 +5,7 @@
 
 #include <editor_media_platform/emp_time.h>
 #include <cstdint>
+#include <functional>
 #include <vector>
 #include <mutex>
 
@@ -25,10 +26,17 @@ class FFmpegScaleContext;
 // INVARIANT: Exactly one of cpu_buffer_valid or hw_buffer must be true/non-null
 class FrameImpl {
 public:
+    // Optional release callback: when set, the destructor passes the cpu_buffer
+    // back via this callback instead of freeing it. Used by buffer pools to
+    // recycle pre-touched pages (avoids 4K page fault overhead on reallocation).
+    using ReleaseCallback = std::function<void(std::vector<uint8_t>)>;
+
     // CPU-only constructor (sw decode path)
-    FrameImpl(int w, int h, int stride, TimeUS pts, std::vector<uint8_t> data)
+    FrameImpl(int w, int h, int stride, TimeUS pts, std::vector<uint8_t> data,
+              ReleaseCallback release_cb = nullptr)
         : m_width(w), m_height(h), m_stride(stride), m_pts_us(pts),
-          m_cpu_buffer(std::move(data)), m_cpu_buffer_valid(true)
+          m_cpu_buffer(std::move(data)), m_cpu_buffer_valid(true),
+          m_release_cb(std::move(release_cb))
 #ifdef EMP_HAS_VIDEOTOOLBOX
           , m_hw_buffer(nullptr)
 #endif
@@ -61,6 +69,10 @@ public:
 #endif
 
     ~FrameImpl() {
+        // Return buffer to pool if release callback is set
+        if (m_release_cb && !m_cpu_buffer.empty()) {
+            m_release_cb(std::move(m_cpu_buffer));
+        }
 #ifdef EMP_HAS_VIDEOTOOLBOX
         if (m_hw_buffer) {
             CVPixelBufferRelease(m_hw_buffer);
@@ -110,6 +122,9 @@ private:
     // CPU buffer - may be empty until lazy transfer
     std::vector<uint8_t> m_cpu_buffer;
     bool m_cpu_buffer_valid;
+
+    // Optional release callback for buffer pool recycling
+    ReleaseCallback m_release_cb;
 
 #ifdef EMP_HAS_VIDEOTOOLBOX
     // Hardware buffer (VideoToolbox)

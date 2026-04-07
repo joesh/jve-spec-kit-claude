@@ -143,11 +143,13 @@ FFmpegCodecContext::FFmpegCodecContext(FFmpegCodecContext&& other) noexcept
     : m_codec_ctx(other.m_codec_ctx),
       m_hw_device_ctx(other.m_hw_device_ctx),
       m_hw_pix_fmt(other.m_hw_pix_fmt),
-      m_hw_active(other.m_hw_active) {
+      m_hw_active(other.m_hw_active),
+      m_negotiation(other.m_negotiation) {
     other.m_codec_ctx = nullptr;
     other.m_hw_device_ctx = nullptr;
     other.m_hw_pix_fmt = AV_PIX_FMT_NONE;
     other.m_hw_active = false;
+    other.m_negotiation = {};
 }
 
 FFmpegCodecContext& FFmpegCodecContext::operator=(FFmpegCodecContext&& other) noexcept {
@@ -162,30 +164,35 @@ FFmpegCodecContext& FFmpegCodecContext::operator=(FFmpegCodecContext&& other) no
         m_hw_device_ctx = other.m_hw_device_ctx;
         m_hw_pix_fmt = other.m_hw_pix_fmt;
         m_hw_active = other.m_hw_active;
+        m_negotiation = other.m_negotiation;
         other.m_codec_ctx = nullptr;
         other.m_hw_device_ctx = nullptr;
         other.m_hw_pix_fmt = AV_PIX_FMT_NONE;
         other.m_hw_active = false;
+        other.m_negotiation = {};
     }
     return *this;
 }
 
-// Callback to negotiate hw pixel format
+// Callback to negotiate hw pixel format.
+// ctx->opaque points to HwFormatNegotiation struct (set in init).
 static AVPixelFormat get_hw_format(AVCodecContext* ctx, const AVPixelFormat* pix_fmts) {
-    AVPixelFormat target_fmt = *static_cast<AVPixelFormat*>(ctx->opaque);
+    auto* neg = static_cast<HwFormatNegotiation*>(ctx->opaque);
+    neg->callback_invoked = true;
 
     for (const AVPixelFormat* p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
-        if (*p == target_fmt) {
+        if (*p == neg->target_fmt) {
             EMP_LOG_DEBUG("HW decode: negotiated %s for %s %dx%d profile=%d",
-                          av_get_pix_fmt_name(target_fmt),
+                          av_get_pix_fmt_name(neg->target_fmt),
                           avcodec_get_name(ctx->codec_id),
                           ctx->width, ctx->height, ctx->profile);
+            neg->succeeded = true;
             return *p;
         }
     }
 
     // Hw format not available — fall back to software decode.
-    // Build offered format list for diagnostic.
+    neg->succeeded = false;
     EMP_LOG_WARN("HW decode UNAVAILABLE for %s %dx%d profile=%d — falling back to software "
                  "(offered: %s%s%s%s). This will be slow for large frames.",
                  avcodec_get_name(ctx->codec_id),
@@ -246,6 +253,7 @@ Result<void> FFmpegCodecContext::init(AVCodecParameters* params) {
         }
         m_hw_active = false;
         m_hw_pix_fmt = AV_PIX_FMT_NONE;
+        m_negotiation = {};
 
 #ifdef EMP_HAS_VIDEOTOOLBOX
         // 2. Try to set up VideoToolbox hw acceleration.
@@ -256,6 +264,7 @@ Result<void> FFmpegCodecContext::init(AVCodecParameters* params) {
             if (hw_result.is_ok()) {
                 m_hw_device_ctx = hw_result.value();
                 m_hw_pix_fmt = AV_PIX_FMT_VIDEOTOOLBOX;
+                m_negotiation.target_fmt = m_hw_pix_fmt;
             } else {
                 EMP_LOG_WARN("Codec %s %dx%d profile=%d: VT device creation failed "
                              "— codec not VT-capable, using SW decode",
@@ -282,7 +291,7 @@ Result<void> FFmpegCodecContext::init(AVCodecParameters* params) {
         // 4. Configure hw acceleration if available
         if (m_hw_device_ctx) {
             m_codec_ctx->hw_device_ctx = av_buffer_ref(m_hw_device_ctx);
-            m_codec_ctx->opaque = &m_hw_pix_fmt;
+            m_codec_ctx->opaque = &m_negotiation;
             m_codec_ctx->get_format = get_hw_format;
         }
 
@@ -292,20 +301,29 @@ Result<void> FFmpegCodecContext::init(AVCodecParameters* params) {
             return ffmpeg_error(ret, "avcodec_open2");
         }
 
-        // Confirm HW decode is ACTUALLY active: check if get_format negotiated
-        // the HW pixel format. m_hw_device_ctx being non-null only means a VT
-        // device was created — get_format may have fallen back to software if
-        // VT didn't offer the HW format for this session.
-        if (m_hw_device_ctx && m_codec_ctx->pix_fmt == m_hw_pix_fmt) {
-            m_hw_active = true;
-            break;  // VT negotiation succeeded
-        }
-
+        // 6. Determine HW decode status from get_hw_format callback result.
         if (m_hw_device_ctx) {
-            // VT device created but negotiation fell through to software.
-            // This is transient (session race) — retry.
+            if (m_negotiation.callback_invoked && m_negotiation.succeeded) {
+                // get_hw_format was called during avcodec_open2 and accepted VT.
+                m_hw_active = true;
+                break;
+            }
+
+            if (!m_negotiation.callback_invoked) {
+                // Some codecs (ProRes) defer get_hw_format to first decode.
+                // VT device created + codec opened successfully = VT will
+                // activate at decode time. Trust it.
+                EMP_LOG_DEBUG("Codec %s %dx%d profile=%d: VT format negotiation "
+                             "deferred to first decode — trusting VT setup",
+                             codec->name, params->width, params->height, params->profile);
+                m_hw_active = true;
+                break;
+            }
+
+            // get_hw_format was called but rejected VT — transient race, retry.
             if (attempt < attempts) {
-                EMP_LOG_DEBUG("Codec %s %dx%d profile=%d: VT attempt %d/%d failed — retrying",
+                EMP_LOG_DEBUG("Codec %s %dx%d profile=%d: VT attempt %d/%d "
+                             "rejected — retrying",
                              codec->name, params->width, params->height, params->profile,
                              attempt, attempts);
                 continue;
