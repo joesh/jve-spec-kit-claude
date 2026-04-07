@@ -1665,7 +1665,11 @@ local function run_undoer(cmd)
     if not apply_command_mutations(cmd) then
         local seq_id = extract_sequence_id(cmd)
         if seq_id and seq_id ~= "" then
-            if not NON_CLIP_COMMAND_TYPES[cmd.type] then
+            -- Wrapper commands (Insert, Overwrite) delegate to nested AddClipsToSequence
+            -- which produces the mutations. Only warn for leaf commands.
+            local has_nested = cmd.undo_group_id
+                and #history.find_group_members(cmd.undo_group_id, nil, nil) > 1
+            if not NON_CLIP_COMMAND_TYPES[cmd.type] and not has_nested then
                 log.error("run_undoer: command %s produced no __timeline_mutations for sequence %s\n%s",
                     cmd.type, seq_id, debug.traceback("", 2))
             end
@@ -1777,7 +1781,9 @@ local function run_redo_executor(cmd)
     if not apply_command_mutations(cmd) then
         local seq_id = extract_sequence_id(cmd)
         if seq_id and seq_id ~= "" then
-            if not NON_CLIP_COMMAND_TYPES[cmd.type] then
+            local has_nested = cmd.undo_group_id
+                and #history.find_group_members(cmd.undo_group_id, nil, nil) > 1
+            if not NON_CLIP_COMMAND_TYPES[cmd.type] and not has_nested then
                 log.error("run_redo_executor: command %s produced no __timeline_mutations for sequence %s\n%s",
                     cmd.type, seq_id, debug.traceback("", 2))
             end

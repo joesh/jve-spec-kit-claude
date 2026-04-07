@@ -161,13 +161,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             -- Convert audio duration (samples) to timeline frames
             local sample_rate = audio_timing.fps_numerator
             local timeline_fps = seq_fps_num / seq_fps_den
-            print(string.format("DEBUG_OW: audio_timing: duration=%s source_in=%s source_out=%s fps_num=%s fps_den=%s | sample_rate=%s timeline_fps=%s",
-                tostring(audio_timing.duration), tostring(audio_timing.source_in), tostring(audio_timing.source_out),
-                tostring(audio_timing.fps_numerator), tostring(audio_timing.fps_denominator),
-                tostring(sample_rate), tostring(timeline_fps)))
             local audio_duration_timeline = math.floor(audio_timing.duration * timeline_fps / sample_rate + 0.5)
-            print(string.format("DEBUG_OW: audio_duration_timeline=%s (raw=%s)", tostring(audio_duration_timeline),
-                tostring(audio_timing.duration * timeline_fps / sample_rate)))
 
             local audio_track_resolver = clip_edit_helper.create_audio_track_resolver(sequence_id)
             for ch = 0, audio_channels - 1 do
