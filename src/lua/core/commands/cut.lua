@@ -209,6 +209,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local states = args.deleted_clip_states
         assert(type(args.deleted_clip_properties) == "table", "UndoCut: missing deleted_clip_properties")
         local props = args.deleted_clip_properties
+        local sequence_id = command_helper.resolve_active_sequence_id(args.sequence_id, timeline_state)
+
         for _, state in ipairs(states) do
             local restored = command_helper.restore_clip_state(state)
             if restored then
@@ -221,11 +223,23 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 if clip_props and #clip_props > 0 then
                     command_helper.insert_properties_for_clip(state.id, clip_props)
                 end
+
+                local mut_seq = state.owner_sequence_id or sequence_id
+                command_helper.add_insert_mutation(command, mut_seq, {
+                    id = state.id,
+                    track_id = state.track_id,
+                    start_value = state.timeline_start,
+                    duration_value = state.duration,
+                    source_in_value = state.source_in,
+                    source_out_value = state.source_out,
+                    enabled = state.enabled,
+                    name = state.name,
+                    media_id = state.media_id,
+                    volume = state.volume,
+                })
             end
         end
 
-        local sequence_id = command_helper.resolve_active_sequence_id(args.sequence_id, timeline_state)
-        command_helper.reload_timeline(sequence_id)
         print("✅ Undo Cut: Restored deleted clips")
         return true
     end

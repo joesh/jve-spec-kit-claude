@@ -326,13 +326,13 @@ function M.apply_mutations(mutations, persist_callback)
     -- Handle Deletes
     if mutations.deletes then
         for _, clip_id in ipairs(mutations.deletes) do
-            for i, clip in ipairs(data.state.clips) do
-                if clip.id == clip_id then
+            -- Remove ALL occurrences (duplicates can exist from nested command mutations)
+            for i = #data.state.clips, 1, -1 do
+                if data.state.clips[i].id == clip_id then
                     table.remove(data.state.clips, i)
                     needs_normalization = true
                     deleted_lookup[clip_id] = true
                     changed = true
-                    break
                 end
             end
             -- Also remove from selection to keep selection consistent with clip list
@@ -353,6 +353,7 @@ function M.apply_mutations(mutations, persist_callback)
                 end
             end
         end
+        M.invalidate_indexes()
     end
 
     -- Handle Updates
@@ -404,6 +405,10 @@ function M.apply_mutations(mutations, persist_callback)
                     end
                     if update.enabled ~= nil and update.enabled ~= clip.enabled then
                         clip.enabled = update.enabled and true or false
+                        changed = true
+                    end
+                    if update.name ~= nil and update.name ~= clip.name then
+                        clip.name = update.name
                         changed = true
                     end
                 elseif not deleted_lookup[clip_id] then

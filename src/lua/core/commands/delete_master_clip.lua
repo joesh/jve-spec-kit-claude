@@ -139,22 +139,25 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
 
                 -- force=true: Delete timeline clips first
-                local affected_sequences = {}
+                local command_helper = require("core.command_helper")
+                local clips_by_sequence = {}
                 for _, snap in ipairs(timeline_clip_snapshots) do
                     if not delete_clip_with_metadata(snap.id) then
                         set_error(set_last_error, "DeleteMasterClip: Failed to delete timeline clip " .. snap.id)
                         return false
                     end
                     if snap.sequence_id then
-                        affected_sequences[snap.sequence_id] = true
+                        if not clips_by_sequence[snap.sequence_id] then
+                            clips_by_sequence[snap.sequence_id] = {}
+                        end
+                        table.insert(clips_by_sequence[snap.sequence_id], snap.id)
                     end
                 end
                 command:set_parameter("deleted_timeline_clips", timeline_clip_snapshots)
 
-                -- Invalidate timeline cache for affected sequences
-                local command_helper = require("core.command_helper")
-                for seq_id, _ in pairs(affected_sequences) do
-                    command_helper.reload_timeline(seq_id)
+                -- Produce delete mutations for affected sequences
+                for seq_id, clip_ids in pairs(clips_by_sequence) do
+                    command_helper.add_delete_mutation(command, seq_id, clip_ids)
                 end
             end
         end
@@ -226,7 +229,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- Restore timeline clips that were deleted with force=true
         local deleted_timeline_clips = args.deleted_timeline_clips or {}
-        local affected_sequences = {}
+        local command_helper = require("core.command_helper")
         for _, snap in ipairs(deleted_timeline_clips) do
             local timeline_clip = Clip.create(snap.name or "Timeline Clip", snap.media_id, {
                 id = snap.id,
@@ -247,15 +250,21 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             })
             assert(timeline_clip:save(),
                 "UndoDeleteMasterClip: Failed to restore timeline clip " .. snap.id)
-            if snap.sequence_id then
-                affected_sequences[snap.sequence_id] = true
-            end
-        end
 
-        if next(affected_sequences) then
-            local command_helper = require("core.command_helper")
-            for seq_id, _ in pairs(affected_sequences) do
-                command_helper.reload_timeline(seq_id)
+            local mut_seq = snap.sequence_id or snap.owner_sequence_id
+            if mut_seq then
+                command_helper.add_insert_mutation(command, mut_seq, {
+                    id = snap.id,
+                    track_id = snap.track_id,
+                    start_value = snap.timeline_start,
+                    duration_value = snap.duration,
+                    source_in_value = snap.source_in,
+                    source_out_value = snap.source_out,
+                    enabled = snap.enabled ~= false,
+                    name = snap.name,
+                    media_id = snap.media_id,
+                    volume = snap.volume,
+                })
             end
         end
 

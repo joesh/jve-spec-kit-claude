@@ -265,12 +265,13 @@ function M.add_update_mutation(command, sequence_id, update)
     -- Validate update mutation payload to catch incomplete undo mutations
     local function validate_update(entry)
         assert(entry.clip_id, "add_update_mutation: missing clip_id")
-        -- For UI cache updates, we need position data (not just clip_id)
-        -- This catches bugs where undo sends {clip_id = "..."} without start_value/duration_value
-        if not entry.start_value and not entry.duration_value and not entry.track_id then
+        -- Must have at least one updatable field — reject bare {clip_id = "..."} payloads
+        local has_field = entry.start_value or entry.duration_value or entry.track_id
+            or entry.source_in_value or entry.source_out_value
+            or entry.enabled ~= nil or entry.name ~= nil
+        if not has_field then
             error(string.format(
-                "add_update_mutation: incomplete payload for clip %s - missing start_value, duration_value, and track_id. " ..
-                "Undo mutations must include full clip state for UI cache updates.",
+                "add_update_mutation: empty payload for clip %s - no updatable fields.",
                 tostring(entry.clip_id)
             ), 2)
         end

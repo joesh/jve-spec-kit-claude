@@ -1815,6 +1815,13 @@ end
 local function execute_redo_command(cmd)
     assert(cmd, "execute_redo_command requires cmd")
 
+    -- Restore pre-execution selection before re-running the executor.
+    -- Commands like Cut derive clip_ids from live selection — without this,
+    -- redo fails when selection has changed since the original execution
+    -- (e.g., history panel jump after user interaction).
+    state_mgr.restore_selection_from_serialized(
+        cmd.selected_clip_ids_pre, cmd.selected_edge_infos_pre, cmd.selected_gap_infos_pre)
+
     undo_redo_in_progress = true
     local success, err_msg = run_redo_executor(cmd)
     if not success then

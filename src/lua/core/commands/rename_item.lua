@@ -27,7 +27,8 @@ local SPEC = {
     }
 }
 function M.register(command_executors, command_undoers, db, set_last_error)
-    local function perform_item_rename(target_type, target_id, new_name, project_id)
+    local function perform_item_rename(command, target_type, target_id, new_name, project_id)
+        assert(command, "perform_item_rename: command required for mutation tracking")
 
         new_name = command_helper.trim_string(new_name)
 
@@ -46,23 +47,42 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not mc:save() then
                 return false, "RenameItem: Failed to save master clip"
             end
-            -- Also update timeline clips that reference this master clip
+            -- Find affected timeline clips and their sequences
+            local affected_clips = {}
+            local find_stmt = db:prepare([[
+                SELECT c.id, t.sequence_id
+                FROM clips c
+                JOIN tracks t ON c.track_id = t.id
+                WHERE c.master_clip_id = ? AND c.clip_kind = 'timeline'
+            ]])
+            assert(find_stmt, "RenameItem: Failed to prepare affected clips query")
+            find_stmt:bind_value(1, mc.id)
+            assert(find_stmt:exec(), "RenameItem: Failed to execute affected clips query")
+            while find_stmt:next() do
+                table.insert(affected_clips, {
+                    clip_id = find_stmt:value(0),
+                    sequence_id = find_stmt:value(1),
+                })
+            end
+            find_stmt:finalize()
+            -- Update DB
             local update_stmt = db:prepare([[
                 UPDATE clips
                 SET name = ?
                 WHERE master_clip_id = ? AND clip_kind = 'timeline'
             ]])
-            if not update_stmt then
-                return false, "RenameItem: Failed to prepare timeline rename"
-            end
+            assert(update_stmt, "RenameItem: Failed to prepare timeline rename")
             update_stmt:bind_value(1, new_name)
             update_stmt:bind_value(2, mc.id)
-            if not update_stmt:exec() then
-                update_stmt:finalize()
-                return false, "RenameItem: Failed to update timeline clips"
-            end
+            assert(update_stmt:exec(), "RenameItem: Failed to update timeline clips")
             update_stmt:finalize()
-            command_helper.reload_timeline(mc.id)
+            -- Produce update mutations for each affected clip
+            for _, affected in ipairs(affected_clips) do
+                command_helper.add_update_mutation(command, affected.sequence_id, {
+                    clip_id = affected.clip_id,
+                    name = new_name,
+                })
+            end
             return true, previous_name
         elseif target_type == "sequence" then
             local Sequence = require("models.sequence")
@@ -78,7 +98,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not sequence:save() then
                 return false, "RenameItem: Failed to save sequence"
             end
-            command_helper.reload_timeline(sequence.id)
+            -- Sequence rename doesn't affect clip data — no cache invalidation needed
             return true, previous_name
         elseif target_type == "bin" then
             local tag_service = require("core.tag_service")
@@ -99,7 +119,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local project_id = args.project_id or command.project_id
         local new_name = command_helper.trim_string(args.new_name)
 
-        local success, previous_or_err = perform_item_rename(args.target_type, args.target_id, new_name, project_id)
+        local success, previous_or_err = perform_item_rename(command, args.target_type, args.target_id, new_name, project_id)
         if not success then
             set_last_error(previous_or_err or "RenameItem failed")
             return false
@@ -121,7 +141,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local project_id = args.project_id or command.project_id
 
-        local success, err = perform_item_rename(args.target_type, args.target_id, args.previous_name, project_id)
+        local success, err = perform_item_rename(command, args.target_type, args.target_id, args.previous_name, project_id)
         if not success then
             set_last_error(err or "UndoRenameItem failed")
             return false
