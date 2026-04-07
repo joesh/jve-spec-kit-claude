@@ -2676,13 +2676,21 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
             }
 
             if (seg.type == Segment::GAP) {
-                // Advance cursor past gap — no content to cache, so
-                // buf_end stays put. pick_video_track sees accurate
-                // urgency (distance to actual cached content, not gap end).
                 bool unbounded = (direction > 0)
                     ? (seg.end >= std::numeric_limits<int64_t>::max())
                     : (seg.start <= std::numeric_limits<int64_t>::min());
-                if (unbounded) return;  // past all content
+                if (unbounded) {
+                    // Past all content on this track. Advance buf_end so
+                    // pick_video_track sees this track as "full" and stops
+                    // selecting it. Without this, workers spin in a hot loop:
+                    // pick → enter fill_prefetch → unbounded gap → return →
+                    // pick again (buf_end never moved, track still "urgent").
+                    set_already_fetched_video(track,
+                        playhead + direction * VIDEO_PREFETCH_MAX, direction);
+                    return;
+                }
+                // Bounded gap: advance cursor past it. buf_end stays put
+                // so pick_video_track sees accurate urgency.
                 cursor.skip_gap(seg.start, seg.end);
                 held_reader = {};
                 held_clip_id.clear();
