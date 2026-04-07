@@ -189,10 +189,6 @@ static int lua_aop_write_f32(lua_State* L) {
 }
 
 // AOP.WRITE_PCM(aop, pcm) -> frames_written
-// Writes directly from PcmChunk without intermediate marshaling
-// Requires emp_bindings to be included first for PcmChunk access
-static int lua_aop_write_pcm(lua_State* L);  // Forward declaration, implemented below
-
 // AOP.SAMPLE_RATE(aop) -> int
 // Returns actual sample rate (may differ from requested if device doesn't support it)
 static int lua_aop_sample_rate(lua_State* L) {

@@ -492,7 +492,7 @@ public:
     void setDefaultButton(QAbstractButton* btn) { m_defaultButton = btn; }
 
 protected:
-    bool eventFilter(QObject* obj, QEvent* event) override {
+    bool eventFilter(QObject* /*obj*/, QEvent* event) override {
         if (event->type() != QEvent::KeyPress) return false;
 
         auto* ke = static_cast<QKeyEvent*>(event);
