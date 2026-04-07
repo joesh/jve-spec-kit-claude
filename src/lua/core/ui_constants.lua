@@ -332,13 +332,23 @@ ui_constants.TIMELINE = {
 -- @param floor_start Optional minimum start (e.g. timecode origin)
 -- @return viewport_start, viewport_duration (integer frames)
 function ui_constants.compute_zoom_to_fit(min_start, max_end, floor_start)
+    assert(type(min_start) == "number",
+        "compute_zoom_to_fit: min_start must be number, got " .. type(min_start))
+    assert(type(max_end) == "number",
+        "compute_zoom_to_fit: max_end must be number, got " .. type(max_end))
+    assert(max_end > min_start,
+        string.format("compute_zoom_to_fit: max_end (%d) must exceed min_start (%d)", max_end, min_start))
+
     local content_dur = max_end - min_start
     local pad = math.floor(content_dur * ui_constants.TIMELINE.ZOOM_TO_FIT_PADDING)
     local vp_start = min_start - pad
     local vp_dur = content_dur + pad * 2
-    if floor_start and vp_start < floor_start then
-        -- Clamp start; duration unchanged so unused left pad shifts right
-        vp_start = floor_start
+    if floor_start then
+        assert(type(floor_start) == "number",
+            "compute_zoom_to_fit: floor_start must be number, got " .. type(floor_start))
+        if vp_start < floor_start then
+            vp_start = floor_start
+        end
     end
     return vp_start, vp_dur
 end

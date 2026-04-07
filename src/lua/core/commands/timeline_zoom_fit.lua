@@ -1,7 +1,7 @@
 --- TimelineZoomFit command - toggles between zoom-to-fit and previous viewport
 --
 -- Responsibilities:
--- - Zoom viewport to fit all clips with 10% buffer
+-- - Zoom viewport to fit all media clips with 5% padding per side
 -- - Toggle back to previous viewport when called again
 --
 -- @file timeline_zoom_fit.lua
@@ -67,13 +67,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         for _, clip in ipairs(clips) do
             if clip.clip_kind ~= "gap" then
-                local s = clip.timeline_start or clip.start_value
+                local s = clip.timeline_start
                 local d = clip.duration
-                if type(s) == "number" and type(d) == "number" then
-                    local e = s + d
-                    if not min_start or s < min_start then min_start = s end
-                    if not max_end or e > max_end then max_end = e end
-                end
+                assert(type(s) == "number",
+                    string.format("TimelineZoomFit: clip %s has non-number timeline_start: %s",
+                        tostring(clip.id), type(s)))
+                assert(type(d) == "number",
+                    string.format("TimelineZoomFit: clip %s has non-number duration: %s",
+                        tostring(clip.id), type(d)))
+                local e = s + d
+                if not min_start or s < min_start then min_start = s end
+                if not max_end or e > max_end then max_end = e end
             end
         end
 
@@ -89,8 +93,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         }
 
         local ui_constants = require("core.ui_constants")
-        local tc_floor = timeline_state.get_start_timecode_frame
-            and timeline_state.get_start_timecode_frame() or 0
+        assert(timeline_state.get_start_timecode_frame,
+            "TimelineZoomFit: timeline_state missing get_start_timecode_frame")
+        local tc_floor = timeline_state.get_start_timecode_frame()
         local fit_start, fit_duration = ui_constants.compute_zoom_to_fit(min_start, max_end, tc_floor)
 
         timeline_state.set_viewport_duration(fit_duration)

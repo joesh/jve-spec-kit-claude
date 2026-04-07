@@ -126,6 +126,17 @@ s, d = ui_constants.compute_zoom_to_fit(1000, 3000, 950)
 assert(s == 950 and d == 2200, string.format("floor clips: start=%d dur=%d", s, d))
 print("  PASS: floor clamps start, total padding preserved")
 
+-- Bad inputs: assert on invalid args
+local ok, err = pcall(ui_constants.compute_zoom_to_fit, nil, 3000)
+assert(not ok and err:find("min_start must be number"), "should reject nil min_start")
+ok, err = pcall(ui_constants.compute_zoom_to_fit, 1000, nil)
+assert(not ok and err:find("max_end must be number"), "should reject nil max_end")
+ok, err = pcall(ui_constants.compute_zoom_to_fit, 3000, 1000)
+assert(not ok and err:find("must exceed"), "should reject max_end <= min_start")
+ok, err = pcall(ui_constants.compute_zoom_to_fit, 1000, 3000, "bad")
+assert(not ok and err:find("floor_start must be number"), "should reject non-number floor")
+print("  PASS: bad inputs assert with actionable messages")
+
 -- ============================================================
 -- Test 3: Gap clips don't inflate content bounds
 -- ============================================================
@@ -174,5 +185,21 @@ assert(timeline_state.get_viewport_duration() == manual_dur,
     string.format("Toggle should restore dur %d, got %d", manual_dur, timeline_state.get_viewport_duration()))
 
 print("  PASS: toggle restores previous viewport")
+
+-- ============================================================
+-- Test 5: All-gaps sequence returns false
+-- ============================================================
+print("\nTest 5: No media clips → failure")
+
+-- Delete clip_a, leaving only gaps
+local Clip = require('models.clip')
+local clip_obj = Clip.load_optional("clip_a")
+assert(clip_obj and clip_obj:delete(), "delete clip_a for test 5")
+timeline_state.reload_clips("seq")
+
+zoom_fit_mod.clear_toggle_state()
+r = command_manager.execute("TimelineZoomFit", {project_id = "proj"})
+assert(not r.success, "TimelineZoomFit should fail with no media clips")
+print("  PASS: returns false when no media clips")
 
 print("\n✅ test_zoom_to_fit.lua passed")

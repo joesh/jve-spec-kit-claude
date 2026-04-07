@@ -1919,7 +1919,8 @@ local function zoom_to_fit_if_first_open(sequence)
     if not min_start or not max_end or max_end <= min_start then return end
 
     local ui_constants = require("core.ui_constants")
-    local fit_start, fit_duration = ui_constants.compute_zoom_to_fit(min_start, max_end)
+    local tc_floor = state.get_start_timecode_frame()
+    local fit_start, fit_duration = ui_constants.compute_zoom_to_fit(min_start, max_end, tc_floor)
     state.set_viewport_duration(fit_duration)
     state.set_viewport_start_time(fit_start)
     state.set_playhead_position(min_start)
