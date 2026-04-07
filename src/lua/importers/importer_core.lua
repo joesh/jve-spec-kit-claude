@@ -347,9 +347,10 @@ function M.import_into_project(project_id, parse_result, opts)
             local content_duration = max_end_frame - view_start
 
             if content_duration > 0 then
-                local margin = math.floor(content_duration * 0.05)
-                view_start = math.max(start_timecode_frame, view_start - margin)
-                view_duration = content_duration + (margin * 2)
+                local ui_constants = require("core.ui_constants")
+                local fit_start, fit_dur = ui_constants.compute_zoom_to_fit(view_start, max_end_frame)
+                view_start = math.max(start_timecode_frame, fit_start)
+                view_duration = fit_dur
             else
                 local effective_fps = fps_num / fps_den
                 view_duration = math.floor(10 * effective_fps)

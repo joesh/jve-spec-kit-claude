@@ -85,13 +85,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             duration = saved_duration,
         }
 
-        local content_dur = max_end - min_start
-        local buffer = math.floor(content_dur / 10)
-        local fit_duration = content_dur + buffer
+        local ui_constants = require("core.ui_constants")
+        local fit_start, fit_duration = ui_constants.compute_zoom_to_fit(min_start, max_end)
 
-        -- Duration first (recenters around playhead), then override start
         timeline_state.set_viewport_duration(fit_duration)
-        timeline_state.set_viewport_start_time(min_start)
+        timeline_state.set_viewport_start_time(fit_start)
         return true
     end
 

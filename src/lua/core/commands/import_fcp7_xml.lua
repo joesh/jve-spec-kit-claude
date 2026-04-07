@@ -57,10 +57,9 @@ local function apply_zoom_to_fit_viewport(sequence_id, db)
         return nil
     end
 
-    -- Calculate viewport with 10% buffer (integer frames)
-    local content_duration = max_end - min_start
-    local buffer = math.floor(content_duration / 10)
-    local viewport_duration = content_duration + buffer
+    -- Calculate viewport with symmetric padding (integer frames)
+    local ui_constants = require("core.ui_constants")
+    local fit_start, viewport_duration = ui_constants.compute_zoom_to_fit(min_start, max_end)
 
     -- Load and update the sequence
     local sequence = Sequence.load(sequence_id)
@@ -69,8 +68,7 @@ local function apply_zoom_to_fit_viewport(sequence_id, db)
         return nil
     end
 
-    -- Set viewport to zoom-to-fit
-    sequence.viewport_start_time = min_start
+    sequence.viewport_start_time = fit_start
     sequence.viewport_duration = viewport_duration
 
     if not sequence:save() then

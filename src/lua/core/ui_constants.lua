@@ -323,6 +323,17 @@ ui_constants.TIMELINE = {
     MAX_RIPPLE_CONSTRAINT_RETRIES = 5, -- Maximum retry attempts for ripple constraint resolution
 }
 
+--- Compute zoom-to-fit viewport from content bounds.
+-- Returns viewport_start, viewport_duration with symmetric padding.
+-- @param min_start First frame of content
+-- @param max_end Last frame of content (exclusive)
+-- @return viewport_start, viewport_duration (integer frames)
+function ui_constants.compute_zoom_to_fit(min_start, max_end)
+    local content_dur = max_end - min_start
+    local pad = math.floor(content_dur * ui_constants.TIMELINE.ZOOM_TO_FIT_PADDING)
+    return min_start - pad, content_dur + pad * 2
+end
+
 -- Input constants (mirror Qt::MouseButton bitfield values)
 ui_constants.INPUT = {
     MOUSE_LEFT_BUTTON = 1,    -- Qt::LeftButton
