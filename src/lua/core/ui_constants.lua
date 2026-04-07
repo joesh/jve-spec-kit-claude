@@ -325,13 +325,22 @@ ui_constants.TIMELINE = {
 
 --- Compute zoom-to-fit viewport from content bounds.
 -- Returns viewport_start, viewport_duration with symmetric padding.
+-- When floor_start is given, the start won't go below it (unused padding
+-- redistributes to the right so total padding is preserved).
 -- @param min_start First frame of content
 -- @param max_end Last frame of content (exclusive)
+-- @param floor_start Optional minimum start (e.g. timecode origin)
 -- @return viewport_start, viewport_duration (integer frames)
-function ui_constants.compute_zoom_to_fit(min_start, max_end)
+function ui_constants.compute_zoom_to_fit(min_start, max_end, floor_start)
     local content_dur = max_end - min_start
     local pad = math.floor(content_dur * ui_constants.TIMELINE.ZOOM_TO_FIT_PADDING)
-    return min_start - pad, content_dur + pad * 2
+    local vp_start = min_start - pad
+    local vp_dur = content_dur + pad * 2
+    if floor_start and vp_start < floor_start then
+        -- Clamp start; duration unchanged so unused left pad shifts right
+        vp_start = floor_start
+    end
+    return vp_start, vp_dur
 end
 
 -- Input constants (mirror Qt::MouseButton bitfield values)

@@ -1902,17 +1902,19 @@ local function zoom_to_fit_if_first_open(sequence)
 
     local min_start, max_end
     for _, clip in ipairs(clips) do
-        local s = clip.timeline_start
-        local d = clip.duration
-        assert(type(s) == "number", string.format(
-            "zoom_to_fit_if_first_open: clip %s has non-number timeline_start: %s",
-            tostring(clip.id), type(s)))
-        assert(type(d) == "number", string.format(
-            "zoom_to_fit_if_first_open: clip %s has non-number duration: %s",
-            tostring(clip.id), type(d)))
-        local e = s + d
-        if not min_start or s < min_start then min_start = s end
-        if not max_end or e > max_end then max_end = e end
+        if clip.clip_kind ~= "gap" then
+            local s = clip.timeline_start
+            local d = clip.duration
+            assert(type(s) == "number", string.format(
+                "zoom_to_fit_if_first_open: clip %s has non-number timeline_start: %s",
+                tostring(clip.id), type(s)))
+            assert(type(d) == "number", string.format(
+                "zoom_to_fit_if_first_open: clip %s has non-number duration: %s",
+                tostring(clip.id), type(d)))
+            local e = s + d
+            if not min_start or s < min_start then min_start = s end
+            if not max_end or e > max_end then max_end = e end
+        end
     end
     if not min_start or not max_end or max_end <= min_start then return end
 

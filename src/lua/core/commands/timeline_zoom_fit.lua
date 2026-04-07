@@ -50,8 +50,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Toggle: restore saved viewport (snapshot was taken BEFORE zoom-to-fit)
         if zoom_fit_toggle_state then
             local prev = zoom_fit_toggle_state
-            timeline_state.set_viewport_start_time(prev.start_time)
+            -- Duration first so start isn't clamped by the zoom-to-fit's wider viewport
             timeline_state.set_viewport_duration(prev.duration)
+            timeline_state.set_viewport_start_time(prev.start_time)
             zoom_fit_toggle_state = nil
             return true
         end
@@ -60,17 +61,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local saved_start = timeline_state.get_viewport_start_time()
         local saved_duration = timeline_state.get_viewport_duration()
 
-        -- Compute fit bounds from clips
+        -- Compute fit bounds from media clips only (gaps are filler, not content)
         local clips = timeline_state.get_clips()
         local min_start, max_end = nil, nil
 
         for _, clip in ipairs(clips) do
-            local s = clip.timeline_start or clip.start_value
-            local d = clip.duration
-            if type(s) == "number" and type(d) == "number" then
-                local e = s + d
-                if not min_start or s < min_start then min_start = s end
-                if not max_end or e > max_end then max_end = e end
+            if clip.clip_kind ~= "gap" then
+                local s = clip.timeline_start or clip.start_value
+                local d = clip.duration
+                if type(s) == "number" and type(d) == "number" then
+                    local e = s + d
+                    if not min_start or s < min_start then min_start = s end
+                    if not max_end or e > max_end then max_end = e end
+                end
             end
         end
 
@@ -86,7 +89,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         }
 
         local ui_constants = require("core.ui_constants")
-        local fit_start, fit_duration = ui_constants.compute_zoom_to_fit(min_start, max_end)
+        local tc_floor = timeline_state.get_start_timecode_frame
+            and timeline_state.get_start_timecode_frame() or 0
+        local fit_start, fit_duration = ui_constants.compute_zoom_to_fit(min_start, max_end, tc_floor)
 
         timeline_state.set_viewport_duration(fit_duration)
         timeline_state.set_viewport_start_time(fit_start)
