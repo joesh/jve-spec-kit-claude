@@ -645,8 +645,8 @@ function M.render(view)
         local draw_width = math.max(1, visible_width)
         local clip_enabled = clip.enabled ~= false
 
-        -- Lazy media status: file existence + codec probe for visible clips
-        media_status.ensure_clip_status(clip, true)
+        -- Stamp clip with cached media status (pure reader — no probing)
+        media_status.ensure_clip_status(clip)
 
         -- Resolve colors
         local is_audio = (track_layout.track_type == "AUDIO")

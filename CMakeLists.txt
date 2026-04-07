@@ -133,6 +133,9 @@ set(CORE_SOURCES
 
     # Scrub Stretch Engine (WSOLA time stretch)
     src/scrub_stretch_engine/sse.cpp
+
+    # Background codec probe worker
+    src/lua/qt_bindings/codec_probe_worker.cpp
 )
 
 set(UI_SOURCES

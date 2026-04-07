@@ -354,8 +354,6 @@ function M.init(sequence_id, project_id)
     -- Load Data
     data.state.tracks = db.load_tracks(sequence_id)
     data.state.clips = db.load_clips(sequence_id)
-    -- Media status is lazily evaluated: clips get probed when first displayed
-    -- in the timeline renderer or project browser (ensure_clip_status).
     clip_state.invalidate_indexes()
 
     -- Load Sequence Settings using Sequence model

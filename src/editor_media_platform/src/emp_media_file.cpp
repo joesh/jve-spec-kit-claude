@@ -19,6 +19,22 @@ const MediaFileInfo& MediaFile::info() const {
     return m_info;
 }
 
+Result<void> MediaFile::ProbeCodec() const {
+    if (!m_info.has_video) {
+        return {};  // audio-only — no video codec to check
+    }
+    auto* params = m_impl->fmt_ctx.video_codec_params();
+    if (!params) {
+        return Error::unsupported("No video codec parameters");
+    }
+    const AVCodec* decoder = avcodec_find_decoder(params->codec_id);
+    if (!decoder) {
+        return Error::unsupported(
+            std::string("No decoder for codec ") + avcodec_get_name(params->codec_id));
+    }
+    return {};
+}
+
 // Select nominal rate using FFmpeg heuristic (from spec)
 static Rate select_nominal_rate(AVStream* stream, bool* is_vfr_out) {
     *is_vfr_out = false;

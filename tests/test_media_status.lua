@@ -59,84 +59,50 @@ do
 end
 
 -- ============================================================
-print("\n--- media_status: ensure_clip_status (lazy eval) ---")
+print("\n--- media_status: ensure_clip_status (pure reader) ---")
 do
     media_status.clear()
-
-    -- Create a temp file so this one is online
-    local tmp = "/tmp/jve/test_media_apply.txt"
     os.execute("mkdir -p /tmp/jve")
-    local f = io.open(tmp, "w")
-    f:write("test")
-    f:close()
 
-    -- Test with media_path (timeline clips)
-    local c1 = { id = "c1", media_path = tmp }
+    -- ensure_clip_status is a pure reader: stamps from cache, never writes.
+
+    -- Cache hit: stamps clip from cached status
+    media_status._set_cache("/tmp/jve/online.mov", { offline = false })
+    local c1 = { id = "c1", media_path = "/tmp/jve/online.mov" }
     media_status.ensure_clip_status(c1)
-    check("c1 is online", c1.offline == false)
-    check("c1 no error", c1.error_code == nil)
+    check("c1 online from cache", c1.offline == false)
 
-    local c2 = { id = "c2", media_path = "/tmp/jve/does_not_exist_apply.mov" }
+    -- Cache hit with error
+    media_status._set_cache("/tmp/jve/bad.braw", { offline = true, error_code = "Unsupported" })
+    local c2 = { id = "c2", media_path = "/tmp/jve/bad.braw" }
     media_status.ensure_clip_status(c2)
-    check("c2 is offline", c2.offline == true)
-    check("c2 error is FileNotFound", c2.error_code == "FileNotFound")
+    check("c2 offline from cache", c2.offline == true)
+    check("c2 Unsupported from cache", c2.error_code == "Unsupported")
 
-    -- Test with file_path (browser clips)
-    local c5 = { id = "c5", file_path = tmp }
-    media_status.ensure_clip_status(c5)
-    check("c5 online via file_path", c5.offline == false)
+    -- Cache miss: no-op (clip keeps existing state)
+    local c3 = { id = "c3", media_path = "/tmp/jve/unknown.mov" }
+    media_status.ensure_clip_status(c3)
+    check("c3 unchanged (cache miss)", c3.offline == nil)
 
     -- Empty/nil path: no-op
-    local c3 = { id = "c3", media_path = "" }
-    media_status.ensure_clip_status(c3)
-    check("c3 unchanged (empty media_path)", c3.offline == nil)
-
-    local c4 = { id = "c4" }
+    local c4 = { id = "c4", media_path = "" }
     media_status.ensure_clip_status(c4)
-    check("c4 unchanged (nil media_path)", c4.offline == nil)
+    check("c4 unchanged (empty path)", c4.offline == nil)
 
-    -- Cache hit: second call is instant, doesn't re-probe
-    local c1b = { id = "c1b", media_path = tmp }
-    os.remove(tmp)  -- delete file AFTER initial probe cached it
-    media_status.ensure_clip_status(c1b)
-    check("c1b uses cache (still online despite file deleted)", c1b.offline == false)
+    local c5 = { id = "c5" }
+    media_status.ensure_clip_status(c5)
+    check("c5 unchanged (nil path)", c5.offline == nil)
 
-    media_status.clear()
-end
+    -- file_path fallback works
+    local c7 = { id = "c7", file_path = "/tmp/jve/online.mov" }
+    media_status.ensure_clip_status(c7)
+    check("c7 online via file_path", c7.offline == false)
 
--- ============================================================
-print("\n--- media_status: ensure_clip_status with check_codec ---")
-do
-    media_status.clear()
+    -- file_path also works
+    local c6 = { id = "c6", file_path = "/tmp/jve/online.mov" }
+    media_status.ensure_clip_status(c6)
+    check("c6 online via file_path", c6.offline == false)
 
-    -- Create a temp file
-    local tmp = "/tmp/jve/test_media_codec_check.txt"
-    os.execute("mkdir -p /tmp/jve")
-    local f = io.open(tmp, "w")
-    f:write("test data")
-    f:close()
-
-    -- Without check_codec: file existence only
-    local c1 = { id = "c1", media_path = tmp }
-    media_status.ensure_clip_status(c1)
-    check("without codec check: online", c1.offline == false)
-
-    -- With check_codec=true: queues async codec probe (timer-based).
-    -- In tests (no qt_create_single_shot_timer), drain is a no-op.
-    -- File appears online immediately; codec check would run async.
-    media_status.clear()
-    local c2 = { id = "c2", media_path = tmp }
-    media_status.ensure_clip_status(c2, true)
-    check("with codec check (no EMP): still online", c2.offline == false)
-
-    -- For missing files, check_codec doesn't matter (file doesn't exist)
-    media_status.clear()
-    local c3 = { id = "c3", media_path = "/tmp/jve/does_not_exist_codec.mov" }
-    media_status.ensure_clip_status(c3, true)
-    check("missing file with codec check: offline", c3.offline == true)
-    check("missing file error: FileNotFound", c3.error_code == "FileNotFound")
-
-    os.remove(tmp)
     media_status.clear()
 end
 
@@ -388,69 +354,93 @@ do
 end
 
 -- ============================================================
-print("\n--- media_status: NSF — drain_one_codec_probe processes queued path ---")
+print("\n--- media_status: persistence round-trip ---")
 do
+    -- Set up a test DB so project_settings work
+    local database = require("core.database")
+    local TEST_DB = "/tmp/jve/test_media_persist.db"
+    os.remove(TEST_DB); os.remove(TEST_DB .. "-wal"); os.remove(TEST_DB .. "-shm")
+    os.execute("mkdir -p /tmp/jve")
+    assert(database.init(TEST_DB))
+    local db = database.get_connection()
+    db:exec(require("import_schema"))
+    local now = os.time()
+    db:exec(string.format(
+        "INSERT INTO projects (id, name, created_at, modified_at) VALUES ('p1', 'Test', %d, %d)",
+        now, now))
+
     media_status.clear()
 
-    local tmp = "/tmp/jve/test_drain_codec.txt"
-    os.execute("mkdir -p /tmp/jve")
-    local f = io.open(tmp, "w"); f:write("test"); f:close()
+    -- Simulate TMB discovering errors for 2 paths
+    media_status.register("/tmp/jve/existing_file_persist.txt")
+    local f = io.open("/tmp/jve/existing_file_persist.txt", "w"); f:write("x"); f:close()
+    media_status.register("/tmp/jve/existing_file_persist.txt")
+    media_status.update_from_tmb("/tmp/jve/existing_file_persist.txt", true, "Unsupported")
+    media_status.register("/tmp/jve/missing_persist.mov")
 
-    -- Register path (online via file existence)
-    media_status.register(tmp)
-    check("initially online", media_status.get(tmp).offline == false)
+    -- Load persisted sets project_id for persist_now
+    media_status.load_persisted("p1")
 
-    -- Simulate queueing a codec check (what ensure_clip_status does)
-    local clip = { id = "drain_test", media_path = tmp }
-    media_status.ensure_clip_status(clip, true)
-    check("clip shows online before drain", clip.offline == false)
+    -- Force flush
+    media_status.persist_now()
 
-    -- In tests, no timer exists, so drain never fires automatically.
-    -- Call drain directly to test the mechanism.
-    media_status._drain_one_codec_probe()
+    -- Verify DB has the data
+    local map = database.get_project_setting("p1", "media_error_cache")
+    check("persisted map is table", type(map) == "table")
+    check("existing file persisted as Unsupported",
+        map["/tmp/jve/existing_file_persist.txt"] ~= nil
+        and map["/tmp/jve/existing_file_persist.txt"].error_code == "Unsupported")
+    check("missing file persisted as FileNotFound",
+        map["/tmp/jve/missing_persist.mov"] ~= nil
+        and map["/tmp/jve/missing_persist.mov"].error_code == "FileNotFound")
 
-    -- In tests, no EMP → probe_codec returns nil → path stays online
-    check("after drain (no EMP): still online", media_status.get(tmp).offline == false)
+    -- Clear and reload — should pre-populate cache
+    media_status.clear()
+    check("cache empty after clear", media_status.get("/tmp/jve/existing_file_persist.txt") == nil)
 
-    -- Verify path was marked as probed (won't be re-queued)
-    local clip2 = { id = "drain_test2", media_path = tmp }
-    media_status.ensure_clip_status(clip2, true)
-    check("not re-queued after drain", clip2.offline == false)
+    media_status.load_persisted("p1")
+    local cached = media_status.get("/tmp/jve/existing_file_persist.txt")
+    check("Unsupported restored from DB", cached ~= nil and cached.error_code == "Unsupported")
+    local cached2 = media_status.get("/tmp/jve/missing_persist.mov")
+    check("FileNotFound restored from DB", cached2 ~= nil and cached2.error_code == "FileNotFound")
 
-    os.remove(tmp)
+    os.remove("/tmp/jve/existing_file_persist.txt")
+    os.remove(TEST_DB); os.remove(TEST_DB .. "-wal"); os.remove(TEST_DB .. "-shm")
     media_status.clear()
 end
 
 -- ============================================================
-print("\n--- media_status: NSF — drain skips path already offline ---")
+print("\n--- media_status: ensure_clip_status is pure reader (no cache writes) ---")
 do
+    -- Architecture: ensure_clip_status ONLY reads from cache, never writes.
+    -- This prevents preliminary file-existence results from overwriting
+    -- authoritative codec error discoveries.
     media_status.clear()
-
-    local tmp = "/tmp/jve/test_drain_skip.txt"
     os.execute("mkdir -p /tmp/jve")
-    local f = io.open(tmp, "w"); f:write("test"); f:close()
 
-    -- Register as online, queue codec check
-    media_status.register(tmp)
-    local clip = { id = "skip_test", media_path = tmp }
-    media_status.ensure_clip_status(clip, true)
+    local braw_path = "/tmp/jve/test_pure_reader.braw"
+    local f = io.open(braw_path, "w"); f:write("fake braw"); f:close()
 
-    -- Before drain fires, TMB discovers it's offline
-    media_status.update_from_tmb(tmp, true, "Unsupported")
-    check("now offline via TMB", media_status.get(tmp).offline == true)
+    -- Cache has Unsupported error (from bg probe or load_persisted)
+    media_status._set_cache(braw_path, { offline = true, error_code = "Unsupported" })
 
-    -- Track signals
-    local signal_count = 0
-    local conn = Signals.connect("media_status_changed", function()
-        signal_count = signal_count + 1
-    end)
+    -- ensure_clip_status reads from cache — doesn't probe or overwrite
+    local clip = { id = "pure_reader", media_path = braw_path }
+    media_status.ensure_clip_status(clip)
+    check("reads Unsupported from cache", clip.offline == true)
+    check("error_code preserved", clip.error_code == "Unsupported")
 
-    -- Drain should skip this path (already offline)
-    media_status._drain_one_codec_probe()
-    check("no signal from drain (path already offline)", signal_count == 0)
+    -- Cache unchanged
+    local post = media_status.get(braw_path)
+    check("cache unchanged after ensure", post.error_code == "Unsupported")
 
-    Signals.disconnect(conn)
-    os.remove(tmp)
+    -- Cache miss: clip not stamped (no writing to cache)
+    local unknown = { id = "unknown", media_path = "/tmp/jve/not_cached.mov" }
+    media_status.ensure_clip_status(unknown)
+    check("cache miss: clip.offline is nil", unknown.offline == nil)
+    check("cache miss: no entry created", media_status.get("/tmp/jve/not_cached.mov") == nil)
+
+    os.remove(braw_path)
     media_status.clear()
 end
 

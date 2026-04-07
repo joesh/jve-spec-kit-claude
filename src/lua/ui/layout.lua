@@ -119,6 +119,12 @@ local function open_and_init_project(path)
     command_manager.init(active_sequence_id, active_project_id)
     log.event("CommandManager initialized with database")
 
+    -- Pre-populate media status cache from DB BEFORE any clips render.
+    -- Must happen here so ensure_clip_status finds persisted codec errors
+    -- on first paint (not in the 50ms timer which fires after rendering).
+    local media_status_init = require("core.media.media_status")
+    media_status_init.load_persisted(project.id)
+
     -- Persist last-opened path (for subsequent launches to skip welcome screen)
     local home = os.getenv("HOME")
     if home then
@@ -699,7 +705,8 @@ qt_create_single_shot_timer(50, function()
         log.event("Splitter sizes initialized to defaults")
     end
 
-    -- Create background tabs (scroll area constrains width — no splitter corruption)
+    -- Restore saved tabs. The initial sequence already has a tab (from create),
+    -- so open_tab skips it. After all tabs exist, reorder to match saved order.
     if open_ids and #open_ids > 0 then
         for _, seq_id in ipairs(open_ids) do
             if seq_id ~= initial_sequence_id then
@@ -709,7 +716,8 @@ qt_create_single_shot_timer(50, function()
                 end
             end
         end
-        log.event("Created %d background tabs", #open_ids)
+        timeline_panel_mod.restore_tab_order(open_ids)
+        log.event("Restored %d tabs in saved order", #open_ids)
     end
     -- Restore edit history window if it was open last session
     local edit_history_ok, edit_history = pcall(require, "ui.edit_history_window")
@@ -719,6 +727,12 @@ qt_create_single_shot_timer(50, function()
 
     window_ready_to_save = true
     log.event("Window state persistence enabled")
+
+    -- Defer background codec probe so it doesn't block the first paint
+    local media_status = require("core.media.media_status")
+    qt_create_single_shot_timer(0, function()
+        media_status.start_background_probe(initial_sequence_id)
+    end)
 end)
 
 -- Debug: Check actual widget sizes after window is shown
@@ -728,6 +742,15 @@ local inspector_w, inspector_h = qt_constants.PROPERTIES.GET_SIZE(inspector_pane
 log.event("Main window size: %dx%d", window_w, window_h)
 log.event("Timeline panel size: %dx%d", timeline_w, timeline_h)
 log.event("Inspector panel size: %dx%d", inspector_w, inspector_h)
+
+-- Shutdown hook: called by main.cpp via aboutToQuit before Qt objects are destroyed.
+-- Cancel background workers, flush pending DB writes, persist state.
+_G.__jve_shutdown = function()
+    log.event("Lua shutdown: cancelling background workers, flushing state")
+    local media_status = require("core.media.media_status")
+    media_status.cancel_background_probe()
+    media_status.persist_now()
+end
 
 -- Export widget references for UI tests (main.cpp uses s_lastCreatedMainWindow, not this return value)
 return {

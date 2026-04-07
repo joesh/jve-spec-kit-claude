@@ -78,6 +78,10 @@ public:
     // Get file information
     const MediaFileInfo& info() const;
 
+    // Check if the video codec has a decoder available (no VT negotiation, no Reader).
+    // Returns Ok if decodable, Error{Unsupported} if no decoder found.
+    Result<void> ProbeCodec() const;
+
     // Internal: Constructor is public but MediaFileImpl is opaque, so only EMP can create MediaFiles
     explicit MediaFile(std::unique_ptr<MediaFileImpl> impl, MediaFileInfo info);
 

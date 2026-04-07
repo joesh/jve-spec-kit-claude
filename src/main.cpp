@@ -19,6 +19,7 @@
 #include "resource_paths.h"
 #include "assert_handler.h"
 #include "jve_log.h"
+#include "lua/qt_bindings/codec_probe_worker.h"
 
 static void printHelp(const char* programName)
 {
@@ -260,6 +261,27 @@ int main(int argc, char *argv[])
     }
 
     JVE_LOG_EVENT(Ui, "JVE Editor started successfully");
+
+    // Shutdown hook: run Lua cleanup before Qt objects are destroyed.
+    // aboutToQuit fires before widget destruction — safe to call Lua,
+    // cancel background threads, flush DB, etc.
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, [&luaEngine]() {
+        JVE_LOG_EVENT(Ui, "aboutToQuit: running Lua shutdown");
+
+        // Cancel background probe worker before Lua/Qt teardown.
+        jve_cancel_codec_probe_worker();
+
+        lua_State* L = luaEngine.getLuaState();
+        lua_getglobal(L, "__jve_shutdown");
+        if (lua_isfunction(L, -1)) {
+            if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+                JVE_LOG_ERROR(Ui, "Lua shutdown error: %s", lua_tostring(L, -1));
+                lua_pop(L, 1);
+            }
+        } else {
+            lua_pop(L, 1);
+        }
+    });
 
     int result = app.exec();
 

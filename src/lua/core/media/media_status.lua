@@ -1,9 +1,19 @@
 --- Reactive media status registry
 --
 -- Maintains a {media_path → {offline, error_code}} cache.
--- Lazy evaluation: clips are probed (file existence + codec) only when displayed.
--- Watches file system for changes; re-probes and emits "media_status_changed".
+-- Error state is persisted to project_settings so clips show correct offline/
+-- codec status on first paint after restart — no probing cost.
 --
+-- Writers (authoritative — only these modify status_cache):
+-- 1. load_persisted     — previous session's discoveries, loaded on project open
+-- 2. Background probe   — C++ worker thread, file existence + codec check
+-- 3. TMB (update_from_tmb) — runtime decode error discovery during playback
+-- 4. FS watcher (reprobe_and_notify) — file appeared/disappeared
+--
+-- Reader (pure — never writes to cache):
+-- ensure_clip_status    — stamps clip.offline/error_code from cache, called per render
+--
+-- Watches file system for changes; re-probes and emits "media_status_changed".
 -- For missing files: watches parent directory (QFileSystemWatcher can't watch
 -- nonexistent paths). When parent dir changes, checks if pending files appeared.
 --
@@ -15,15 +25,15 @@ ffi.cdef("int access(const char *pathname, int mode);")
 
 local M = {}
 
+-- Lazy require: database may not be initialized when media_status is first loaded (tests)
+local _database = nil
+local function get_database()
+    if not _database then _database = require("core.database") end
+    return _database
+end
+
 -- status_cache[media_path] = { offline = bool, error_code = string|nil }
 local status_cache = {}
-
--- codec_probed[media_path] = true — paths that have had EMP codec check
-local codec_probed = {}
-
--- Async codec probe queue: paths waiting for EMP check, drained via timer
-local codec_queue = {}           -- {path = true}
-local codec_drain_active = false -- true while timer chain is running
 
 -- pending_paths[parent_dir] = { [media_path] = true, ... }
 -- Tracks missing files by their parent directory for dir-change re-probe.
@@ -41,6 +51,12 @@ local FS = nil
 
 -- TMB handle for ClearOffline (set by playback engine init)
 local tmb_handle = nil
+
+-- Persistence: project_id for debounced DB writes
+local current_project_id = nil
+local persist_timer_active = false
+local PERSIST_DEBOUNCE_MS = 500
+local DB_SETTING_KEY = "media_error_cache"
 
 local function init_fs()
     if fs_available then return true end
@@ -160,102 +176,101 @@ function M.get(media_path)
     return status_cache[media_path]
 end
 
---- Check codec support via EMP container open (no reader/decoder creation).
--- Catches formats with no FFmpeg demuxer (e.g. BRAW without SDK).
--- Does NOT create a reader — reader creation grabs VT sessions, and rapid-fire
--- probing exhausts the pool, forcing TMB's playback readers to SW fallback.
--- For codecs that open but can't decode, TMB discovers the error at render time
--- and feeds back via update_from_tmb().
--- @param media_path string: path to an existing file
--- @return table|nil: {offline=true, error_code=string} if codec fails, nil if OK
-local function probe_codec(media_path)
-    local emp_ok, qt = pcall(function() return qt_constants end)
-    if not (emp_ok and qt and qt.EMP and qt.EMP.MEDIA_FILE_OPEN) then
-        return nil
-    end
+-- ============================================================
+-- Persistence: save/load error state to project_settings
+-- ============================================================
 
-    local handle, err = qt.EMP.MEDIA_FILE_OPEN(media_path)
-    if not handle then
-        assert(err and err.code,
-            string.format("media_status.probe_codec: EMP.MEDIA_FILE_OPEN returned nil handle "
-                .. "with no error for %s", media_path))
-        return { offline = true, error_code = err.code }
+--- Build persist map — all cache entries are authoritative (only authoritative
+-- sources write to status_cache: bg probe, TMB, FS watcher, load_persisted).
+local function build_persist_map()
+    local map = {}
+    for path, status in pairs(status_cache) do
+        map[path] = { offline = status.offline, error_code = status.error_code }
     end
-
-    -- Container opened successfully — codec may still fail at decode time
-    -- (TMB handles that via update_from_tmb)
-    qt.EMP.MEDIA_FILE_CLOSE(handle)
-    return nil
+    return map
 end
 
---- Drain one path from the codec probe queue.
--- Called by timer chain; processes 1 path then reschedules if more pending.
-local function drain_one_codec_probe()
-    codec_drain_active = false
-
-    local path = next(codec_queue)
-    if not path then return end
-
-    codec_queue[path] = nil
-    codec_probed[path] = true
-
-    -- Only probe if still cached as online (status may have changed since queued)
-    local cached = status_cache[path]
-    if cached and not cached.offline then
-        local codec_err = probe_codec(path)
-        if codec_err then
-            status_cache[path] = codec_err
-            log.event("media_status codec probe: %s offline=%s error=%s",
-                path, tostring(codec_err.offline), tostring(codec_err.error_code))
-            Signals.emit("media_status_changed", path, codec_err)
-        end
-    else
-        log.detail("media_status codec drain: skipping %s (already offline or unregistered)", path)
-    end
-
-    -- Chain: schedule next if more pending
-    if next(codec_queue) then
-        M._schedule_codec_drain()
-    end
+-- Helper for logging (and tests)
+function M._count_map(map)
+    local n = 0
+    for _ in pairs(map) do n = n + 1 end
+    return n
 end
 
---- Start the timer-based codec probe drain (if not already running).
-function M._schedule_codec_drain()
-    if codec_drain_active then return end
-    if not next(codec_queue) then return end
+--- Flush dirty cache to DB immediately.
+function M.persist_now()
+    if not current_project_id then return end
+    local map = build_persist_map()
+    local ok, err = pcall(function()
+        get_database().set_project_setting(current_project_id, DB_SETTING_KEY, map)
+    end)
+    if not ok then
+        log.warn("media_status: persist failed: %s", tostring(err))
+        return
+    end
+    log.detail("media_status: persisted %d entries", M._count_map(map))
+end
+
+--- Schedule a debounced persist (coalesces rapid status changes).
+local function schedule_persist()
+    if persist_timer_active then return end
     if type(qt_create_single_shot_timer) ~= "function" then return end
-
-    codec_drain_active = true
-    qt_create_single_shot_timer(0, drain_one_codec_probe)
+    persist_timer_active = true
+    qt_create_single_shot_timer(PERSIST_DEBOUNCE_MS, function()
+        persist_timer_active = false
+        M.persist_now()
+    end)
 end
 
--- Exposed for testing (tests don't have qt_create_single_shot_timer)
-M._drain_one_codec_probe = drain_one_codec_probe
+--- Load persisted error cache from DB into status_cache.
+-- Called on project open (before any rendering).
+function M.load_persisted(project_id)
+    assert(project_id and project_id ~= "",
+        "media_status.load_persisted: project_id required")
+    current_project_id = project_id
+    local ok, map = pcall(function()
+        return get_database().get_project_setting(project_id, DB_SETTING_KEY)
+    end)
+    if not ok then return end  -- no DB connection (test mode)
+    if type(map) ~= "table" then return end
+    local error_count = 0
+    local online_count = 0
+    for path, entry in pairs(map) do
+        if type(entry) == "table" then
+            status_cache[path] = {
+                offline = entry.offline or false,
+                error_code = entry.error_code,
+            }
+            if entry.offline then
+                error_count = error_count + 1
+            else
+                online_count = online_count + 1
+            end
+        end
+    end
+    -- Defer FS watch registration to start_background_probe (batched, non-blocking)
+    M._deferred_watch_paths = map
+    log.event("media_status: loaded %d errors + %d online from DB", error_count, online_count)
+end
 
---- Lazily ensure a clip has up-to-date media status.
--- Cache hit: two table lookups + two field writes (safe for per-frame use).
--- Cache miss: file existence probe + cache.
--- When check_codec is true, queues an async EMP codec probe (timer-based,
--- one path per tick so rendering stays responsive).
+--- Test hook: inject a cache entry directly (simulates load_persisted).
+function M._set_cache(path, status)
+    status_cache[path] = status
+end
+
+--- Stamp a clip with its cached media status (pure reader — no probing).
+-- Cache hit: stamps clip.offline + clip.error_code from cache.
+-- Cache miss: no-op (clip keeps whatever state it had).
+-- Writing to status_cache is done exclusively by authoritative sources:
+-- background probe, TMB, FS watcher, load_persisted.
 -- @param clip table: clip with .media_path or .file_path field
--- @param check_codec boolean: if true, queue codec check for existing files
-function M.ensure_clip_status(clip, check_codec)
+function M.ensure_clip_status(clip)
     assert(type(clip) == "table", "media_status.ensure_clip_status: clip must be a table")
     local path = clip.media_path or clip.file_path
     if not path or path == "" then return end
 
     local cached = status_cache[path]
-    if not cached then
-        -- First time seeing this path — file existence probe + cache + watch
-        cached = M.register(path)
-    end
-
-    -- Queue async codec check for files that exist and haven't been probed
-    if check_codec and not cached.offline and not codec_probed[path]
-        and not codec_queue[path] then
-        codec_queue[path] = true
-        M._schedule_codec_drain()
-    end
+    if not cached then return end
 
     clip.offline = cached.offline
     clip.error_code = cached.error_code
@@ -282,6 +297,7 @@ function M.update_from_tmb(media_path, offline, error_code)
 
     if changed then
         status_cache[media_path] = new_status
+        schedule_persist()
         log.event("media_status updated from TMB: %s offline=%s error=%s",
             media_path, tostring(offline), tostring(error_code))
         Signals.emit("media_status_changed", media_path, new_status)
@@ -297,13 +313,16 @@ end
 
 --- Clear all watches and cache. Called on project_changed.
 function M.clear()
+    -- Cancel any running background probe before clearing
+    M.cancel_background_probe()
+    -- Flush any pending error state before clearing
+    M.persist_now()
     if fs_available then
         FS.CLEAR_ALL()
     end
     status_cache = {}
-    codec_probed = {}
-    codec_queue = {}
-    codec_drain_active = false
+    persist_timer_active = false
+    current_project_id = nil
     pending_paths = {}
     watched_dirs = {}
     watched_files = {}
@@ -324,6 +343,7 @@ local function reprobe_and_notify(media_path)
         or old.error_code ~= new_status.error_code
 
     if changed then
+        schedule_persist()
         -- File reappeared: purge TMB's offline blacklist so it retries the reader
         if old and old.offline and not new_status.offline and tmb_handle then
             local emp_ok, qt = pcall(function() return qt_constants end)
@@ -375,9 +395,153 @@ function M.init_watcher()
     end)
 end
 
--- Register for project_changed signal to clear all state
-Signals.connect("project_changed", function()
-    M.clear()
+-- ============================================================
+-- Background codec probe: worker thread probes all project media
+-- ============================================================
+
+--- Register FS watches for persisted paths in small non-blocking batches.
+local function register_deferred_watches()
+    if not M._deferred_watch_paths then return end
+    init_fs()
+    local watch_list = {}
+    for path, entry in pairs(M._deferred_watch_paths) do
+        if type(entry) == "table" and status_cache[path] then
+            watch_list[#watch_list + 1] = path
+        end
+    end
+    M._deferred_watch_paths = nil
+
+    local WATCH_BATCH = 50
+    local function register_batch(start_idx)
+        local end_idx = math.min(start_idx + WATCH_BATCH - 1, #watch_list)
+        for i = start_idx, end_idx do
+            watch_path(watch_list[i], status_cache[watch_list[i]])
+        end
+        if end_idx < #watch_list and type(qt_create_single_shot_timer) == "function" then
+            qt_create_single_shot_timer(0, function()
+                register_batch(end_idx + 1)
+            end)
+        end
+    end
+    if #watch_list > 0 then
+        register_batch(1)
+    end
+end
+
+--- Start a background codec probe for all media in the project.
+-- Probes active sequence media first, then remaining project media.
+-- Results arrive in batches on the main thread; views are signalled to repaint.
+-- @param active_sequence_id string|nil: sequence to prioritize (its media probed first)
+function M.start_background_probe(active_sequence_id)
+    local qt_ok, qt = pcall(function() return qt_constants end)
+    if not qt_ok or not qt or not qt.EMP or not qt.EMP.CODEC_PROBE_START then
+        log.event("media_status: background probe skipped (no EMP)")
+        return
+    end
+
+    local db = get_database()
+
+    -- Collect media paths: active sequence first, then the rest.
+    -- Skip paths already in cache (loaded from DB or probed this session).
+    local active_paths = {}
+    local active_set = {}
+    local skipped = 0
+    if active_sequence_id and active_sequence_id ~= "" then
+        local clips = db.load_clips(active_sequence_id)
+        for _, clip in ipairs(clips) do
+            local p = clip.media_path or clip.file_path
+            if p and p ~= "" and not active_set[p] then
+                if status_cache[p] then
+                    skipped = skipped + 1
+                else
+                    active_set[p] = true
+                    active_paths[#active_paths + 1] = p
+                end
+            end
+        end
+    end
+
+    local all_media = db.load_media()
+    local rest_paths = {}
+    for _, m in ipairs(all_media) do
+        local p = m.file_path
+        if p and p ~= "" and not active_set[p] then
+            if status_cache[p] then
+                skipped = skipped + 1
+            else
+                rest_paths[#rest_paths + 1] = p
+            end
+        end
+    end
+
+    -- Concatenate: active sequence paths first, then the rest
+    local all_paths = {}
+    for _, p in ipairs(active_paths) do all_paths[#all_paths + 1] = p end
+    for _, p in ipairs(rest_paths) do all_paths[#all_paths + 1] = p end
+
+    register_deferred_watches()
+
+    if #all_paths == 0 then
+        log.event("media_status: background probe skipped (all %d paths already confirmed)", skipped)
+        return
+    end
+
+    log.event("media_status: bg probe starting (%d to scan, %d active-seq, %d cached)",
+        #all_paths, #active_paths, skipped)
+
+    qt.EMP.CODEC_PROBE_START(all_paths, function(results, is_final)
+        -- Main thread callback: update cache, register watches, signal changes
+        local changed_count = 0
+        for path, result in pairs(results) do
+            local old = status_cache[path]
+            local new_status = {
+                offline = result.offline,
+                error_code = result.error_code,
+            }
+
+            watch_path(path, new_status)
+
+            local same = old
+                and old.offline == new_status.offline
+                and old.error_code == new_status.error_code
+            status_cache[path] = new_status
+            if not same then
+                changed_count = changed_count + 1
+                Signals.emit("media_status_changed", path, new_status)
+            end
+        end
+
+        if changed_count > 0 then
+            log.event("media_status: probe batch — %d changed", changed_count)
+        end
+        schedule_persist()
+
+        if is_final then
+            log.event("media_status: bg probe complete")
+            M.persist_now()
+        end
+    end)
+end
+
+--- Cancel any running background codec probe.
+function M.cancel_background_probe()
+    local qt_ok, qt = pcall(function() return qt_constants end)
+    if qt_ok and qt and qt.EMP and qt.EMP.CODEC_PROBE_CANCEL then
+        qt.EMP.CODEC_PROBE_CANCEL()
+    end
+end
+
+-- Register for project_changed signal: flush old, clear, load new, start bg probe
+Signals.connect("project_changed", function(project_id)
+    M.clear()  -- cancels bg probe, flushes pending writes, clears cache
+    if project_id and project_id ~= "" then
+        M.load_persisted(project_id)
+        -- Start background codec probe (prioritize active sequence)
+        local ok, active_seq = pcall(function()
+            return get_database().get_project_setting(project_id, "last_open_sequence_id")
+        end)
+        M.start_background_probe(ok and active_seq or nil)
+    end
 end, 12)  -- priority 12: after playback_controller (10), before media_cache (20)
 
 return M

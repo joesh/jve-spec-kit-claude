@@ -24,6 +24,8 @@
 #include <QLinearGradient>
 #include "binding_macros.h"
 
+#include "codec_probe_worker.h"
+
 #include <lua.hpp>
 #include <memory>
 #include <unordered_map>
@@ -1704,6 +1706,86 @@ static int lua_playback_get_diag_summary(lua_State* L) {
     return 1;
 }
 
+// ============================================================================
+// Background codec probe worker
+// ============================================================================
+
+} // end anonymous namespace (temporarily) for g_codec_probe_worker linkage
+
+CodecProbeWorker g_codec_probe_worker;
+
+namespace { // resume anonymous namespace
+
+// EMP.CODEC_PROBE_START(paths_table, callback)
+// paths_table: array of file path strings
+// callback: function(results_table, is_final)
+//   results_table: { [path] = { offline=bool, error_code=string|nil } }
+//   is_final: true when all paths have been probed
+static int lua_emp_codec_probe_start(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+
+    // Read paths from table
+    std::vector<std::string> paths;
+    int n = lua_objlen(L, 1);
+    paths.reserve(n);
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, 1, i);
+        if (lua_isstring(L, -1)) {
+            paths.emplace_back(lua_tostring(L, -1));
+        }
+        lua_pop(L, 1);
+    }
+
+    if (paths.empty()) return 0;
+
+    // Store callback ref
+    lua_pushvalue(L, 2);
+    int callback_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+
+    g_codec_probe_worker.start(std::move(paths),
+        [L, callback_ref](const std::vector<CodecProbeResult>& batch, bool is_final) {
+            // This runs on main thread (via QTimer::singleShot)
+            lua_rawgeti(L, LUA_REGISTRYINDEX, callback_ref);
+
+            // Build results table: { [path] = { offline=bool, error_code=string|nil } }
+            lua_newtable(L);
+            for (const auto& r : batch) {
+                lua_newtable(L);
+                lua_pushboolean(L, r.offline);
+                lua_setfield(L, -2, "offline");
+                if (!r.error_code.empty()) {
+                    lua_pushstring(L, r.error_code.c_str());
+                } else {
+                    lua_pushnil(L);
+                }
+                lua_setfield(L, -2, "error_code");
+                lua_setfield(L, -2, r.path.c_str());
+            }
+
+            lua_pushboolean(L, is_final);
+
+            if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+                if (is_final) {
+                    luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
+                }
+                handle_lua_callback_error(L);
+            }
+
+            if (is_final) {
+                luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
+            }
+        });
+
+    return 0;
+}
+
+// EMP.CODEC_PROBE_CANCEL()
+static int lua_emp_codec_probe_cancel(lua_State*) {
+    g_codec_probe_worker.cancel();
+    return 0;
+}
+
 } // anonymous namespace
 
 // ============================================================================
@@ -1843,6 +1925,12 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "SURFACE_ON_READY");
     lua_pushcfunction(L, lua_emp_surface_on_error);
     lua_setfield(L, -2, "SURFACE_ON_ERROR");
+
+    // Codec probe worker
+    lua_pushcfunction(L, lua_emp_codec_probe_start);
+    lua_setfield(L, -2, "CODEC_PROBE_START");
+    lua_pushcfunction(L, lua_emp_codec_probe_cancel);
+    lua_setfield(L, -2, "CODEC_PROBE_CANCEL");
 
     lua_setfield(L, -2, "EMP");
 
