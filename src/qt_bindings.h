@@ -44,6 +44,7 @@ int lua_create_vbox_layout(lua_State* L);
 int lua_create_splitter(lua_State* L);
 int lua_set_layout(lua_State* L);
 int lua_add_widget_to_layout(lua_State* L);
+int lua_insert_widget_in_layout(lua_State* L);
 int lua_add_stretch_to_layout(lua_State* L);
 int lua_set_central_widget(lua_State* L);
 int lua_set_splitter_sizes(lua_State* L);

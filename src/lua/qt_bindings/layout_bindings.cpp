@@ -77,6 +77,20 @@ int lua_add_widget_to_layout(lua_State* L) {
     return 1;
 }
 
+int lua_insert_widget_in_layout(lua_State* L) {
+    void* container_ptr = lua_to_widget(L, 1);
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 2));
+    int index = luaL_checkinteger(L, 3);
+    if (!container_ptr || !widget) return luaL_error(L, "insert_widget: layout and widget required");
+
+    QBoxLayout* box = qobject_cast<QBoxLayout*>(
+        static_cast<QObject*>(static_cast<QWidget*>(container_ptr)));
+    if (!box) return luaL_error(L, "insert_widget: container must be a QBoxLayout");
+    box->insertWidget(index, widget);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 int lua_add_stretch_to_layout(lua_State* L) {
     void* container_ptr = lua_to_widget(L, 1);
     int stretch = lua_tointeger(L, 2);

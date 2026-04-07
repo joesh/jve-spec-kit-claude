@@ -129,6 +129,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_create_splitter); lua_setfield(L, -2, "CREATE_SPLITTER");
     lua_pushcfunction(L, lua_set_layout); lua_setfield(L, -2, "SET_ON_WIDGET");
     lua_pushcfunction(L, lua_add_widget_to_layout); lua_setfield(L, -2, "ADD_WIDGET");
+    lua_pushcfunction(L, lua_insert_widget_in_layout); lua_setfield(L, -2, "INSERT_WIDGET");
     lua_pushcfunction(L, lua_add_stretch_to_layout); lua_setfield(L, -2, "ADD_STRETCH");
     lua_pushcfunction(L, lua_add_spacing_to_layout); lua_setfield(L, -2, "ADD_SPACING");
     lua_pushcfunction(L, lua_add_layout_to_layout); lua_setfield(L, -2, "ADD_LAYOUT");

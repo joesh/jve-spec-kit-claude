@@ -437,6 +437,14 @@ local function update_tab_styles(active_sequence_id)
     end
 end
 
+--- Persist open tab IDs (in order) to the project settings DB.
+local function persist_open_tabs()
+    local project_id = state.get_project_id()
+    assert(project_id and project_id ~= "",
+        "persist_open_tabs: no project_id (state not initialized?)")
+    database.set_project_setting(project_id, "open_sequence_ids", tab_order)
+end
+
 local function remove_from_tab_order(sequence_id)
     for index = #tab_order, 1, -1 do
         if tab_order[index] == sequence_id then
@@ -484,6 +492,7 @@ local function close_tab(sequence_id)
         update_tab_styles(current_sequence)
     end
     update_tab_scroll_arrows()
+    persist_open_tabs()
 end
 
 ensure_tab_for_sequence = function(sequence_id)
@@ -606,6 +615,43 @@ local function handle_tab_command_event(event)
             end
         end
 
+        return
+    end
+
+    if command.type == "DeleteSequence" then
+        local sequence_id = nil
+        if command.get_parameter then
+            sequence_id = command:get_parameter("sequence_id")
+        elseif command.parameters then
+            sequence_id = command.parameters.sequence_id
+        end
+        if not sequence_id then return end
+
+        if event.event == "execute" or event.event == "redo" then
+            if not open_tabs[sequence_id] then return end
+            local active = state.get_sequence_id and state.get_sequence_id() or nil
+            -- If deleting the only open tab, switch to another sequence first
+            -- so close_tab doesn't try to recreate a tab for a deleted sequence
+            if active == sequence_id and #tab_order <= 1 then
+                local project_id = state.get_project_id and state.get_project_id() or nil
+                assert(project_id and project_id ~= "",
+                    "DeleteSequence tab handler: no project_id")
+                local sequences = database.load_sequences(project_id)
+                assert(sequences, "DeleteSequence tab handler: load_sequences returned nil for " .. project_id)
+                for _, seq in ipairs(sequences) do
+                    if seq.id ~= sequence_id then
+                        M.load_sequence(seq.id)
+                        break
+                    end
+                end
+            end
+            close_tab(sequence_id)
+        elseif event.event == "undo" then
+            -- Sequence restored — reopen its tab
+            ensure_tab_for_sequence(sequence_id)
+            update_tab_styles(state.get_sequence_id and state.get_sequence_id() or nil)
+            persist_open_tabs()
+        end
         return
     end
 
@@ -1894,6 +1940,66 @@ function M.open_tab(sequence_id)
     ensure_tab_for_sequence(sequence_id)
 end
 
+--- Build a merged tab_order: saved IDs first (validated), then any extras.
+local function build_merged_tab_order(saved_order)
+    local new_order = {}
+    local seen = {}
+    for _, id in ipairs(saved_order) do
+        assert(open_tabs[id],
+            string.format("restore_tab_order: saved ID %s has no open tab"
+                .. " — delete/close path missed cleanup", tostring(id)))
+        if not seen[id] then
+            new_order[#new_order + 1] = id
+            seen[id] = true
+        end
+    end
+    -- Append any open tabs not in saved_order (e.g. tab opened since last save)
+    for _, id in ipairs(tab_order) do
+        if not seen[id] then
+            new_order[#new_order + 1] = id
+            seen[id] = true
+        end
+    end
+    return new_order
+end
+
+--- Detach all tab widgets then re-insert in tab_order sequence.
+local function reorder_tab_widgets()
+    assert(tab_bar_tabs_layout, "reorder_tab_widgets: tab bar layout not created")
+    assert(qt_constants.LAYOUT.INSERT_WIDGET, "reorder_tab_widgets: INSERT_WIDGET binding missing")
+    for _, id in ipairs(tab_order) do
+        local tab = assert(open_tabs[id], "reorder_tab_widgets: no tab for " .. tostring(id))
+        assert(tab.container, "reorder_tab_widgets: tab missing container for " .. tostring(id))
+        qt_constants.WIDGET.SET_PARENT(tab.container, nil)
+    end
+    for i, id in ipairs(tab_order) do
+        local tab = open_tabs[id]
+        qt_constants.LAYOUT.INSERT_WIDGET(tab_bar_tabs_layout, tab.container, i - 1)
+    end
+end
+
+--- Reorder tabs to match a saved list. Reorders both the Lua tab_order
+-- and the Qt tab bar widgets so visual order matches the model.
+-- Called after startup restore to fix the order (initial tab was created first).
+function M.restore_tab_order(saved_order)
+    assert(type(saved_order) == "table", "restore_tab_order: saved_order must be a table")
+    tab_order = build_merged_tab_order(saved_order)
+    reorder_tab_widgets()
+
+    local current_sequence = state.get_sequence_id and state.get_sequence_id() or nil
+    update_tab_styles(current_sequence)
+    update_tab_scroll_arrows()
+end
+
+--- Return a copy of the open tab IDs in display order.
+function M.get_open_tab_ids()
+    local copy = {}
+    for i, id in ipairs(tab_order) do
+        copy[i] = id
+    end
+    return copy
+end
+
 function M.load_sequence(sequence_id)
     if not sequence_id or sequence_id == "" then
         return
@@ -1966,8 +2072,12 @@ function M.load_sequence(sequence_id)
         qt_suspend_scroll_area_anchor(M.header_video_scroll, false)
     end
 
+    local tab_existed = open_tabs[sequence_id] ~= nil
     ensure_tab_for_sequence(sequence_id)
     update_tab_styles(sequence_id)
+    if not tab_existed then
+        persist_open_tabs()
+    end
 
     -- Load sequence into the timeline monitor
     local pm = require("ui.panel_manager")
