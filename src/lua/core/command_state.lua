@@ -27,8 +27,10 @@ function M.init(database)
     db = database
 end
 
--- Calculate state hash for a project
-function M.calculate_state_hash(project_id)
+-- Calculate state hash for change detection.
+-- When sequence_id is provided, scopes to that sequence's tracks+clips only
+-- (fast path for per-command NSF checks). Without it, hashes the full project.
+function M.calculate_state_hash(project_id, sequence_id)
     if not db then
         error("CommandState.calculate_state_hash: No database connection", 2)
     end
@@ -63,44 +65,73 @@ function M.calculate_state_hash(project_id)
         stmt:finalize()
     end
 
-    append_query([[ 
-        SELECT id, name, settings
-        FROM projects
-        WHERE id = ?
-    ]], {project_id}, 3, "project")
+    if sequence_id then
+        -- Scoped mode: only hash the target sequence's tracks and clips.
+        -- Used by per-command NSF checks and suppress_if_unchanged.
+        append_query([[
+            SELECT id, name, fps_numerator, fps_denominator, audio_rate, width, height,
+                   playhead_frame, view_start_frame, view_duration_frames
+            FROM sequences
+            WHERE id = ?
+        ]], {sequence_id}, 10, "sequence")
 
-    append_query([[ 
-        SELECT id, name, fps_numerator, fps_denominator, audio_rate, width, height,
-               playhead_frame, view_start_frame, view_duration_frames
-        FROM sequences
-        WHERE project_id = ?
-        ORDER BY id
-    ]], {project_id}, 10, "sequences")
+        append_query([[
+            SELECT sequence_id, id, track_type, track_index, enabled
+            FROM tracks
+            WHERE sequence_id = ?
+            ORDER BY track_index, id
+        ]], {sequence_id}, 5, "tracks")
 
-    append_query([[ 
-        SELECT t.sequence_id, t.id, t.track_type, t.track_index, t.enabled
-        FROM tracks t
-        JOIN sequences s ON t.sequence_id = s.id
-        WHERE s.project_id = ?
-        ORDER BY t.sequence_id, t.track_index, t.id
-    ]], {project_id}, 5, "tracks")
+        append_query([[
+            SELECT c.track_id, c.id, c.timeline_start_frame, c.duration_frames,
+                   c.enabled, c.source_in_frame, c.source_out_frame, c.media_id,
+                   c.fps_numerator, c.fps_denominator
+            FROM clips c
+            JOIN tracks t ON c.track_id = t.id
+            WHERE t.sequence_id = ?
+            ORDER BY t.track_index, c.timeline_start_frame, c.id
+        ]], {sequence_id}, 10, "clips")
+    else
+        -- Full project mode (legacy, unused in hot path)
+        append_query([[
+            SELECT id, name, settings
+            FROM projects
+            WHERE id = ?
+        ]], {project_id}, 3, "project")
 
-    append_query([[ 
-        SELECT t.sequence_id, c.track_id, c.id, c.timeline_start_frame, c.duration_frames,
-               c.enabled, c.source_in_frame, c.source_out_frame, c.media_id, c.fps_numerator, c.fps_denominator
-        FROM clips c
-        JOIN tracks t ON c.track_id = t.id
-        JOIN sequences s ON t.sequence_id = s.id
-        WHERE s.project_id = ?
-        ORDER BY t.sequence_id, t.track_index, c.timeline_start_frame, c.id
-    ]], {project_id}, 11, "clips")
+        append_query([[
+            SELECT id, name, fps_numerator, fps_denominator, audio_rate, width, height,
+                   playhead_frame, view_start_frame, view_duration_frames
+            FROM sequences
+            WHERE project_id = ?
+            ORDER BY id
+        ]], {project_id}, 10, "sequences")
 
-    append_query([[ 
-        SELECT id, file_path, duration_frames, fps_numerator, fps_denominator, name
-        FROM media
-        WHERE project_id = ?
-        ORDER BY id
-    ]], {project_id}, 6, "media")
+        append_query([[
+            SELECT t.sequence_id, t.id, t.track_type, t.track_index, t.enabled
+            FROM tracks t
+            JOIN sequences s ON t.sequence_id = s.id
+            WHERE s.project_id = ?
+            ORDER BY t.sequence_id, t.track_index, t.id
+        ]], {project_id}, 5, "tracks")
+
+        append_query([[
+            SELECT t.sequence_id, c.track_id, c.id, c.timeline_start_frame, c.duration_frames,
+                   c.enabled, c.source_in_frame, c.source_out_frame, c.media_id, c.fps_numerator, c.fps_denominator
+            FROM clips c
+            JOIN tracks t ON c.track_id = t.id
+            JOIN sequences s ON t.sequence_id = s.id
+            WHERE s.project_id = ?
+            ORDER BY t.sequence_id, t.track_index, c.timeline_start_frame, c.id
+        ]], {project_id}, 11, "clips")
+
+        append_query([[
+            SELECT id, file_path, duration_frames, fps_numerator, fps_denominator, name
+            FROM media
+            WHERE project_id = ?
+            ORDER BY id
+        ]], {project_id}, 6, "media")
+    end
 
     local state_string = table.concat(parts)
     local hash_value = 5381
@@ -108,7 +139,7 @@ function M.calculate_state_hash(project_id)
         hash_value = ((hash_value * 33) + state_string:byte(i)) % 0x100000000
     end
     local hash = string.format("%08x", hash_value)
-    scope:finish(string.format("rows=%d", #parts))
+    scope:finish(string.format("rows=%d seq=%s", #parts, tostring(sequence_id or "all")))
     return hash
 end
 

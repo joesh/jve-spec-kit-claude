@@ -1100,8 +1100,9 @@ function M._execute_body(command_or_name, params)
     needs_state_hash = should_compute_state_hash(command)
     -- Always compute pre_hash: needed for NSF mutation check (assert if DB
     -- changed but executor produced no __timeline_mutations).
+    -- Scoped to active sequence to avoid scanning entire project (127K+ clips).
     perf.reset()
-    pre_hash = state_mgr.calculate_state_hash(command.project_id)
+    pre_hash = state_mgr.calculate_state_hash(command.project_id, active_sequence_id)
     perf.log("state_hash_pre")
     perf.reset()
 
@@ -1214,7 +1215,7 @@ function M._execute_body(command_or_name, params)
         post_hash = ""
         if needs_state_hash then
             perf.reset()
-            post_hash = state_mgr.calculate_state_hash(command.project_id)
+            post_hash = state_mgr.calculate_state_hash(command.project_id, active_sequence_id)
             perf.log("state_hash_post")
             perf.reset()
         else
@@ -1342,7 +1343,7 @@ function M._execute_body(command_or_name, params)
                          local has_nested_children = command.undo_group_id
                              and #history.find_group_members(command.undo_group_id, nil, nil) > 1
                          if not is_project_level and not has_nested_children then
-                             local mutation_check_hash = state_mgr.calculate_state_hash(command.project_id)
+                             local mutation_check_hash = state_mgr.calculate_state_hash(command.project_id, active_sequence_id)
                              assert(mutation_check_hash == pre_hash, string.format(
                                  "execute: command %s modified DB but produced no __timeline_mutations "
                                  .. "for sequence %s. Fix the executor to produce mutations.",
