@@ -655,7 +655,6 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
 
     // Copy clip locals and release tracks_lock first (lock ordering).
     std::string media_path = clip->media_path;
-    Rate clip_rate = clip->rate();
     std::string clip_id = clip->clip_id;
     size_t diag_cache_size = ts.video_cache.size();
     int64_t diag_buf_end = ts.video_buffer_end;
@@ -2169,12 +2168,17 @@ bool TimelineMediaBuffer::process_next_decode_prep_job() {
             if (presult.is_ok()) {
                 float per_frame_ms = probe_reader->LastBatchMsPerFrame();
                 float record_ms = (per_frame_ms > 0) ? per_frame_ms : wall_ms;
-                // Don't write to speed cache — cold-start measurement includes
-                // one-time overhead (codec init, buffer pool page faults) that
-                // inflates the result (e.g. 80ms vs 3ms steady-state for qtrle).
-                // Prefetch's decode_into_cache writes steady-state measurements
-                // on each decode. stride_for_clip returns 1 until real data arrives.
-                EMP_LOG_DEBUG("SPEED_DETECT: %s clip=%.8s path=%s decode=%.1fms (wall=%.1fms) [not cached]",
+                // Write as negative sentinel — marks "probed but cold-start, don't
+                // use for stride". Prevents SetPlayhead from re-submitting SPEED_DETECT
+                // every tick. decode_into_cache overwrites with real steady-state value.
+                // stride_for_clip returns 1 for negative values (safe default).
+                {
+                    std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
+                    if (m_decode_speed_cache.find(job.media_path) == m_decode_speed_cache.end()) {
+                        m_decode_speed_cache[job.media_path] = -record_ms;
+                    }
+                }
+                EMP_LOG_DEBUG("SPEED_DETECT: %s clip=%.8s path=%s decode=%.1fms (wall=%.1fms) [sentinel]",
                     tbuf, job.clip_id.c_str(), job.media_path.c_str(), record_ms, wall_ms);
             } else {
                 EMP_LOG_WARN("SPEED_DETECT: %s clip=%.8s decode failed", tbuf, job.clip_id.c_str());
