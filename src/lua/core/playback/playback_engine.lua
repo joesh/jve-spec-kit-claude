@@ -293,6 +293,13 @@ function PlaybackEngine:_create_tmb()
 
     EMP.TMB_SET_SEQUENCE_RATE(self._tmb, self.fps_num, self.fps_den)
 
+    -- Max output resolution for SW-decoded frames. Frames larger than the
+    -- sequence resolution are downscaled during decode to avoid caching
+    -- oversized CPU buffers (33MB at 4K vs 8MB at 1080p per frame).
+    if self.sequence and self.sequence.width > 0 and self.sequence.height > 0 then
+        EMP.TMB_SET_SEQUENCE_RESOLUTION(self._tmb, self.sequence.width, self.sequence.height)
+    end
+
     -- Audio format: 48kHz stereo F32 (standard output format)
     EMP.TMB_SET_AUDIO_FORMAT(self._tmb, 48000, 2)
 end

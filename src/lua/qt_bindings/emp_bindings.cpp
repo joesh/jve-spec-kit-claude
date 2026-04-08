@@ -495,6 +495,17 @@ static int lua_emp_tmb_set_sequence_rate(lua_State* L) {
     return 0;
 }
 
+// EMP.TMB_SET_SEQUENCE_RESOLUTION(tmb, width, height)
+static int lua_emp_tmb_set_sequence_resolution(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    int32_t w = static_cast<int32_t>(luaL_checkinteger(L, 2));
+    int32_t h = static_cast<int32_t>(luaL_checkinteger(L, 3));
+    if (w <= 0) return luaL_error(L, "TMB_SET_SEQUENCE_RESOLUTION: width must be > 0, got %d", w);
+    if (h <= 0) return luaL_error(L, "TMB_SET_SEQUENCE_RESOLUTION: height must be > 0, got %d", h);
+    tmb->SetSequenceResolution(w, h);
+    return 0;
+}
+
 // EMP.TMB_SET_AUDIO_FORMAT(tmb, sample_rate, channels)
 static int lua_emp_tmb_set_audio_format(lua_State* L) {
     auto tmb = get_tmb(L, 1);
@@ -734,15 +745,16 @@ static int lua_emp_tmb_set_playhead(lua_State* L) {
     return 0;
 }
 
-// EMP.TMB_GET_VIDEO_FRAME(tmb, track_index, timeline_frame) -> frame|nil, info_table
-// Type is implied: always Video
+// EMP.TMB_GET_VIDEO_FRAME(tmb, track_index, timeline_frame [, cache_only]) -> frame|nil, info_table
+// cache_only (optional, default false): if true, only return cached frames (playback mode).
 static int lua_emp_tmb_get_video_frame(lua_State* L) {
     auto tmb = get_tmb(L, 1);
     int track_index = static_cast<int>(luaL_checkinteger(L, 2));
     int64_t timeline_frame = static_cast<int64_t>(luaL_checkinteger(L, 3));
+    bool cache_only = lua_isboolean(L, 4) ? lua_toboolean(L, 4) : false;
 
     emp::TrackId track{emp::TrackType::Video, track_index};
-    auto result = tmb->GetVideoFrame(track, timeline_frame);
+    auto result = tmb->GetVideoFrame(track, timeline_frame, cache_only);
 
     // Push frame handle (or nil for gap/offline)
     if (result.frame) {
@@ -1191,6 +1203,23 @@ static int lua_emp_surface_frame_count(lua_State* L) {
     }
 
     lua_pushinteger(L, gpu_surface->frameCount());
+    return 1;
+}
+
+// EMP.SURFACE_UNIQUE_FRAME_COUNT(surface_widget) -> int
+// Returns the number of frames with distinct source PTS displayed on a GPUVideoSurface.
+// Stride-duplicated frames (same decoded content reused for multiple timeline positions)
+// share the same PTS and don't increment this counter.
+static int lua_emp_surface_unique_frame_count(lua_State* L) {
+    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 1, WIDGET_METATABLE));
+    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+
+    GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
+    if (!gpu_surface) {
+        return luaL_error(L, "SURFACE_UNIQUE_FRAME_COUNT: widget is not a GPUVideoSurface");
+    }
+
+    lua_pushinteger(L, gpu_surface->uniqueFrameCount());
     return 1;
 }
 
@@ -1881,6 +1910,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "TMB_SET_MAX_READERS");
     lua_pushcfunction(L, lua_emp_tmb_set_sequence_rate);
     lua_setfield(L, -2, "TMB_SET_SEQUENCE_RATE");
+    lua_pushcfunction(L, lua_emp_tmb_set_sequence_resolution);
+    lua_setfield(L, -2, "TMB_SET_SEQUENCE_RESOLUTION");
     lua_pushcfunction(L, lua_emp_tmb_set_audio_format);
     lua_setfield(L, -2, "TMB_SET_AUDIO_FORMAT");
     lua_pushcfunction(L, lua_emp_tmb_set_track_clips);
@@ -1919,6 +1950,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "SURFACE_SET_PAR");
     lua_pushcfunction(L, lua_emp_surface_frame_count);
     lua_setfield(L, -2, "SURFACE_FRAME_COUNT");
+    lua_pushcfunction(L, lua_emp_surface_unique_frame_count);
+    lua_setfield(L, -2, "SURFACE_UNIQUE_FRAME_COUNT");
     lua_pushcfunction(L, lua_emp_surface_frame_size);
     lua_setfield(L, -2, "SURFACE_FRAME_SIZE");
     lua_pushcfunction(L, lua_emp_surface_on_ready);

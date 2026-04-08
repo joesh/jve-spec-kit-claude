@@ -64,6 +64,11 @@ public:
     // Retained across cache-hit calls — reflects codec throughput, not per-call latency.
     float LastBatchMsPerFrame() const;
 
+    // Set max output resolution for SW-decoded frames. Frames larger than
+    // this are downscaled during decode. HW frames are unaffected.
+    // 0,0 = no limit (output at source resolution).
+    void SetMaxOutputResolution(int w, int h);
+
     // Get the underlying media file
     std::shared_ptr<MediaFile> media_file() const;
 

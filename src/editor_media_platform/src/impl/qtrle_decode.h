@@ -10,8 +10,6 @@
 
 #include <editor_media_platform/emp_errors.h>
 #include <cstdint>
-#include <functional>
-#include <mutex>
 #include <vector>
 
 namespace emp {
@@ -23,26 +21,33 @@ public:
     // Only 32bpp (ARGB) depth is supported.
     Result<void> init(int width, int height);
 
-    // Decode one qtrle packet into BGRA output buffer.
-    // Handles delta frames via internal reference buffer.
-    // bgra_out must be at least bgra_stride * height bytes.
+    // Set scaled output dimensions. Call before first decode if
+    // downscaling is desired. decode() will produce scaled output into
+    // the caller-provided buffer at these dimensions.
+    void set_scaled_output(int w, int h);
+
+    // Decode one qtrle packet into the internal reference buffer.
+    // If set_scaled_output was called AND scaled_out is non-null,
+    // also writes a downscaled copy directly into scaled_out.
+    // The caller owns scaled_out — decoder writes there, no internal copy.
     Result<void> decode(const uint8_t* pkt_data, int pkt_size,
-                        uint8_t* bgra_out, int bgra_stride);
+                        uint8_t* scaled_out = nullptr, int scaled_stride = 0);
+
+    // Access the decoded reference buffer (full resolution, valid after decode()).
+    const uint8_t* ref_data() const { return m_ref_buffer.data(); }
+    int ref_stride() const { return m_ref_stride; }
+
+    // Scaled output dimensions (0 if no scaling configured).
+    int scaled_width() const { return m_scaled_w; }
+    int scaled_height() const { return m_scaled_h; }
+    bool has_scaled_output() const { return m_scaled_w > 0; }
 
     // Clear reference buffer (call after seek).
     // Next frame must be a keyframe to produce correct output.
     void flush();
 
-    // Acquire a pre-touched output buffer from the pool (avoids page faults).
-    // Returns a buffer of size ref_stride * height, with all pages resident.
-    std::vector<uint8_t> acquire_buffer();
-
-    // Release callback for FrameImpl — returns buffer to pool on Frame destruction.
-    std::function<void(std::vector<uint8_t>)> release_callback();
-
     int width() const { return m_width; }
     int height() const { return m_height; }
-    int ref_stride() const { return m_ref_stride; }
 
 private:
     int m_width = 0;
@@ -53,23 +58,13 @@ private:
     std::vector<uint8_t> m_ref_buffer;
     int m_ref_stride = 0;
 
+    // Scaled output dimensions (set by set_scaled_output).
+    int m_scaled_w = 0;
+    int m_scaled_h = 0;
+
     // Pre-scan result: byte offset into packet data where each scanline begins.
     // Built during the sequential pre-scan pass, consumed by parallel decode.
     std::vector<int> m_line_offsets;
-
-    // Buffer pool: pre-allocated, pre-touched BGRA buffers.
-    // Avoids ~130ms page fault overhead on macOS for 4K (33MB) allocations.
-    // Buffers are returned via FrameImpl's release callback when Frame is freed.
-    // Shared ownership via shared_ptr: Frames may outlive the Reader/QtrleDecoder
-    // (e.g. in TMB cache during shutdown). The shared_ptr ensures the pool stays
-    // alive as long as any Frame holds a release callback referencing it.
-    struct BufferPool {
-        std::vector<std::vector<uint8_t>> free_list;
-        std::mutex mutex;
-        size_t buf_size = 0;
-    };
-    std::shared_ptr<BufferPool> m_pool;
-    static constexpr int POOL_INITIAL_SIZE = 8;
 
     // Parse packet header. Returns offset to RLE data start.
     struct PacketHeader {

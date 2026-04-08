@@ -122,10 +122,19 @@ public:
     // Convert frame to BGRA32
     void convert(AVFrame* src, uint8_t* dst_data, int dst_stride);
 
+    // Re-init with different output dimensions (same source).
+    // Used when SetMaxOutputResolution changes the target after initial init.
+    Result<void> reinit_output(int dst_width, int dst_height);
+
     SwsContext* get() const { return m_sws_ctx; }
+    int dst_width() const { return m_dst_width; }
+    int dst_height() const { return m_dst_height; }
 
 private:
     SwsContext* m_sws_ctx = nullptr;
+    int m_src_width = 0;
+    int m_src_height = 0;
+    AVPixelFormat m_src_fmt = AV_PIX_FMT_NONE;
     int m_dst_width = 0;
     int m_dst_height = 0;
 };

@@ -5,6 +5,7 @@
 
 #include <editor_media_platform/emp_time.h>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <vector>
 #include <mutex>
@@ -31,7 +32,10 @@ public:
     // recycle pre-touched pages (avoids 4K page fault overhead on reallocation).
     using ReleaseCallback = std::function<void(std::vector<uint8_t>)>;
 
-    // CPU-only constructor (sw decode path)
+    // Release callback for raw (malloc'd) buffers.
+    using RawReleaseCallback = std::function<void(uint8_t*, size_t)>;
+
+    // CPU-only constructor (sw decode path — vector-owned buffer)
     FrameImpl(int w, int h, int stride, TimeUS pts, std::vector<uint8_t> data,
               ReleaseCallback release_cb = nullptr)
         : m_width(w), m_height(h), m_stride(stride), m_pts_us(pts),
@@ -48,6 +52,27 @@ public:
         assert(!m_cpu_buffer.empty() && "FrameImpl(cpu): cpu_buffer cannot be empty");
         assert(m_cpu_buffer.size() >= static_cast<size_t>(stride * h) &&
                "FrameImpl(cpu): cpu_buffer too small for dimensions");
+    }
+
+    // Raw-pointer constructor — for malloc'd buffers (no zero-init overhead).
+    // Caller transfers ownership. raw_release_cb called on destruction (or free() if null).
+    FrameImpl(int w, int h, int stride, TimeUS pts,
+              uint8_t* raw_data, size_t raw_size,
+              RawReleaseCallback raw_release_cb = nullptr)
+        : m_width(w), m_height(h), m_stride(stride), m_pts_us(pts),
+          m_cpu_buffer_valid(true),
+          m_raw_data(raw_data), m_raw_size(raw_size),
+          m_raw_release_cb(std::move(raw_release_cb))
+#ifdef EMP_HAS_VIDEOTOOLBOX
+          , m_hw_buffer(nullptr)
+#endif
+    {
+        assert(w > 0 && "FrameImpl(raw): width must be > 0");
+        assert(h > 0 && "FrameImpl(raw): height must be > 0");
+        assert(stride >= w * 4 && "FrameImpl(raw): stride must be >= width*4 (BGRA32)");
+        assert(raw_data && "FrameImpl(raw): data cannot be null");
+        assert(raw_size >= static_cast<size_t>(stride * h) &&
+               "FrameImpl(raw): buffer too small for dimensions");
     }
 
 #ifdef EMP_HAS_VIDEOTOOLBOX
@@ -70,7 +95,14 @@ public:
 
     ~FrameImpl() {
         // Return buffer to pool if release callback is set
-        if (m_release_cb && !m_cpu_buffer.empty()) {
+        if (m_raw_data) {
+            if (m_raw_release_cb) {
+                m_raw_release_cb(m_raw_data, m_raw_size);
+            } else {
+                free(m_raw_data);
+            }
+            m_raw_data = nullptr;
+        } else if (m_release_cb && !m_cpu_buffer.empty()) {
             m_release_cb(std::move(m_cpu_buffer));
         }
 #ifdef EMP_HAS_VIDEOTOOLBOX
@@ -95,6 +127,7 @@ public:
     const uint8_t* data();
 
     size_t data_size() const {
+        if (m_raw_data) return m_raw_size;
         return static_cast<size_t>(m_stride) * m_height;
     }
 
@@ -119,12 +152,18 @@ private:
     int m_stride;
     TimeUS m_pts_us;
 
-    // CPU buffer - may be empty until lazy transfer
+    // CPU buffer — vector path (sw decode, hw→cpu transfer)
     std::vector<uint8_t> m_cpu_buffer;
     bool m_cpu_buffer_valid;
 
-    // Optional release callback for buffer pool recycling
+    // Optional release callback for vector buffer pool recycling
     ReleaseCallback m_release_cb;
+
+    // Raw pointer path — malloc'd buffers (no zero-init overhead).
+    // When m_raw_data is set, data() returns it instead of m_cpu_buffer.
+    uint8_t* m_raw_data = nullptr;
+    size_t m_raw_size = 0;
+    RawReleaseCallback m_raw_release_cb;
 
 #ifdef EMP_HAS_VIDEOTOOLBOX
     // Hardware buffer (VideoToolbox)

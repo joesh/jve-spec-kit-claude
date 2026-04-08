@@ -39,6 +39,7 @@ void* Frame::native_buffer() const {
 // FrameImpl method implementations
 
 const uint8_t* FrameImpl::data() {
+    if (m_raw_data) return m_raw_data;
     ensure_cpu_buffer();
     return m_cpu_buffer.data();
 }
@@ -124,9 +125,9 @@ void FrameImpl::ensure_cpu_buffer() {
             vImage_YpCbCrPixelRange pixel_range;
 
             if (full_range) {
-                pixel_range = (vImage_YpCbCrPixelRange){ 0, 128, 255, 255, 255, 1, 255, 0 };
+                pixel_range = vImage_YpCbCrPixelRange{ 0, 128, 255, 255, 255, 1, 255, 0 };
             } else {
-                pixel_range = (vImage_YpCbCrPixelRange){ 16, 128, 235, 240, 255, 0, 255, 0 };
+                pixel_range = vImage_YpCbCrPixelRange{ 16, 128, 235, 240, 255, 0, 255, 0 };
             }
 
             vImageConvert_YpCbCrToARGB_GenerateConversion(

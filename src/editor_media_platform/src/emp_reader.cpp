@@ -33,6 +33,8 @@ inline int emp_log_level() {
 #include <CoreVideo/CVPixelBuffer.h>
 #endif
 
+#include <cstdlib>  // malloc, free
+
 namespace emp {
 
 // Global decode mode (thread-safe atomic)
@@ -76,6 +78,77 @@ Result<std::vector<DecodedFrame>> decode_frames_batch(
     TimeUS target_us, AVPacket* pkt, AVFrame* temp_frame);
 }
 
+// Thread-safe pool of pre-allocated raw frame buffers. Uses malloc (no
+// zero-init) so page faults happen in the decoder's dispatch_apply instead
+// of sequentially during allocation. Frames return their buffer here via
+// FrameImpl::RawReleaseCallback when their refcount hits zero.
+// shared_ptr so the pool outlives the Reader if cached frames still reference it.
+struct FrameBufferPool {
+    static constexpr size_t MAX_POOLED = 160;  // > MAX_VIDEO_CACHE (144)
+    std::mutex mtx;
+
+    struct Entry { uint8_t* data; size_t size; };
+    std::vector<Entry> buffers;
+
+    ~FrameBufferPool() {
+        for (auto& e : buffers) free(e.data);
+    }
+
+    // Pre-allocate buffers with malloc (no zero-init, no page faults).
+    // Pages will fault on first write inside the decoder's dispatch_apply.
+    void warm(size_t buf_size, size_t count) {
+        assert(buf_size > 0 && "FrameBufferPool::warm: buf_size must be > 0");
+        std::lock_guard<std::mutex> lock(mtx);
+        for (size_t i = buffers.size(); i < count && i < MAX_POOLED; ++i) {
+            auto* p = static_cast<uint8_t*>(malloc(buf_size));
+            assert(p && "FrameBufferPool::warm: malloc failed");
+            buffers.push_back({p, buf_size});
+        }
+    }
+
+    // Take a buffer of at least `size` bytes, or malloc fresh.
+    Entry acquire(size_t size) {
+        assert(size > 0 && "FrameBufferPool::acquire: size must be > 0");
+        std::lock_guard<std::mutex> lock(mtx);
+        for (auto it = buffers.begin(); it != buffers.end(); ++it) {
+            if (it->size >= size) {
+                Entry e = *it;
+                buffers.erase(it);
+                return e;
+            }
+        }
+        // Pool empty — fresh malloc (page faults on first write, parallelized by decoder).
+        auto* p = static_cast<uint8_t*>(malloc(size));
+        assert(p && "FrameBufferPool::acquire: malloc failed");
+        return {p, size};
+    }
+
+    // Return a buffer to the pool for reuse.
+    void release(uint8_t* data, size_t size) {
+        assert(data && "FrameBufferPool::release: data must not be null");
+        std::lock_guard<std::mutex> lock(mtx);
+        if (buffers.size() < MAX_POOLED) {
+            buffers.push_back({data, size});
+        } else {
+            free(data);
+        }
+    }
+
+    // Create a release callback for FrameImpl. Uses weak_ptr so the callback
+    // safely outlives the pool (falls back to free if pool is gone).
+    static FrameImpl::RawReleaseCallback make_release_cb(
+            std::shared_ptr<FrameBufferPool> pool) {
+        std::weak_ptr<FrameBufferPool> pool_ref = pool;
+        return [pool_ref](uint8_t* data, size_t size) {
+            if (auto p = pool_ref.lock()) {
+                p->release(data, size);
+            } else {
+                free(data);
+            }
+        };
+    }
+};
+
 // ReaderImpl holds FFmpeg decode state
 class ReaderImpl {
 public:
@@ -103,6 +176,10 @@ public:
 
     // Custom qtrle decoder (replaces FFmpeg for AV_CODEC_ID_QTRLE)
     std::unique_ptr<impl::QtrleDecoder> qtrle;
+
+    // Frame buffer pool — shared_ptr so cached frames can return buffers
+    // after the Reader is destroyed.
+    std::shared_ptr<FrameBufferPool> frame_pool = std::make_shared<FrameBufferPool>();
 
     // Tracks where the decoder was last positioned (PTS of last decoded frame).
     // Used by Play path to avoid unnecessary seeks during sequential decode.
@@ -264,6 +341,55 @@ float Reader::LastBatchMsPerFrame() const {
     return m_impl->last_batch_ms_per_frame;
 }
 
+void Reader::SetMaxOutputResolution(int w, int h) {
+    assert((w == 0) == (h == 0) &&
+        "SetMaxOutputResolution: both w,h must be 0 (no limit) or both > 0");
+
+    // Compute actual output dimensions (scale to fit within max, preserve aspect).
+    auto compute_output = [](int src_w, int src_h, int max_w, int max_h,
+                             int& out_w, int& out_h) -> bool {
+        if (src_w <= max_w && src_h <= max_h) return false;  // no scaling needed
+        float scale = std::min(static_cast<float>(max_w) / src_w,
+                               static_cast<float>(max_h) / src_h);
+        out_w = std::max(1, static_cast<int>(src_w * scale));
+        out_h = std::max(1, static_cast<int>(src_h * scale));
+        return true;
+    };
+
+    if (m_impl->qtrle && w > 0 && h > 0) {
+        // qtrle: configure decoder's scaled output dimensions
+        int out_w, out_h;
+        if (compute_output(m_impl->qtrle->width(), m_impl->qtrle->height(),
+                           w, h, out_w, out_h)) {
+            m_impl->qtrle->set_scaled_output(out_w, out_h);
+
+            // Pre-allocate frame buffers with malloc (no zero-init).
+            // Page faults happen on first use inside decoder's dispatch_apply.
+            int frame_stride = ((out_w * 4) + 31) & ~31;
+            size_t buf_size = static_cast<size_t>(frame_stride) * out_h;
+            m_impl->frame_pool->warm(buf_size, FrameBufferPool::MAX_POOLED);
+        }
+    } else if (m_impl->scale_ctx.get() && w > 0 && h > 0) {
+        // FFmpeg SW path: re-init swscale to convert+scale in one pass.
+        // This replaces the two-step allocate_bgra_buffer + scale_bgra_if_needed.
+        int out_w, out_h;
+        if (compute_output(m_impl->scale_ctx.dst_width(), m_impl->scale_ctx.dst_height(),
+                           w, h, out_w, out_h)) {
+            // scale_ctx was initialized with dst=src (no scaling).
+            // Re-init with dst=output dims so sws_scale converts+scales in one pass.
+            auto result = m_impl->scale_ctx.reinit_output(out_w, out_h);
+            if (result.is_error()) {
+                EMP_LOG_WARN("SetMaxOutputResolution: reinit_output failed: %s",
+                             result.error().message.c_str());
+            } else {
+                int frame_stride = ((out_w * 4) + 31) & ~31;
+                size_t buf_size = static_cast<size_t>(frame_stride) * out_h;
+                m_impl->frame_pool->warm(buf_size, FrameBufferPool::MAX_POOLED);
+            }
+        }
+    }
+}
+
 std::shared_ptr<MediaFile> Reader::media_file() const {
     return m_media_file;
 }
@@ -374,12 +500,19 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAt(FrameTime t) {
     return DecodeAtUS(t.to_us());
 }
 
-// Helper: Convert AVFrame to emp::Frame (handles both hw and sw paths)
+// Helper: Convert AVFrame to emp::Frame (handles both hw and sw paths).
+// SW path converts directly into a pool-acquired buffer — no zero-init overhead.
+// If scale_ctx was re-initialized with output dims, sws_scale converts+scales
+// in one pass (no intermediate full-resolution buffer).
 static std::shared_ptr<Frame> avframe_to_emp_frame(
     AVFrame* av_frame, TimeUS pts_us,
     impl::FFmpegScaleContext& scale_ctx,
-    [[maybe_unused]] impl::FFmpegCodecContext& codec_ctx)
+    [[maybe_unused]] impl::FFmpegCodecContext& codec_ctx,
+    std::shared_ptr<FrameBufferPool> frame_pool)
 {
+    assert(av_frame && "avframe_to_emp_frame: av_frame is null");
+    assert(frame_pool && "avframe_to_emp_frame: frame_pool is null");
+
 #ifdef EMP_HAS_VIDEOTOOLBOX
     if (av_frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
         CVPixelBufferRef pixel_buffer = (CVPixelBufferRef)av_frame->data[3];
@@ -394,15 +527,22 @@ static std::shared_ptr<Frame> avframe_to_emp_frame(
     }
 #endif
 
-    // Software decode path
-    int stride;
-    auto buffer = impl::allocate_bgra_buffer(av_frame->width, av_frame->height, &stride);
-    impl::convert_frame_to_bgra(scale_ctx, av_frame, buffer.data(), stride);
+    // SW decode: sws_scale converts (and downscales if scale_ctx was re-initialized
+    // with output dims via SetMaxOutputResolution) directly into a pool buffer.
+    int out_w = scale_ctx.dst_width();
+    int out_h = scale_ctx.dst_height();
+    assert(out_w > 0 && out_h > 0 &&
+        "avframe_to_emp_frame: scale_ctx has zero output dims (init not called?)");
+    int out_stride = ((out_w * 4) + 31) & ~31;
+    size_t buf_size = static_cast<size_t>(out_stride) * out_h;
 
-    auto frame_impl = std::make_unique<FrameImpl>(
-        av_frame->width, av_frame->height, stride, pts_us, std::move(buffer)
-    );
-    return std::make_shared<Frame>(std::move(frame_impl));
+    auto entry = frame_pool->acquire(buf_size);
+    scale_ctx.convert(av_frame, entry.data, out_stride);
+
+    return std::make_shared<Frame>(std::make_unique<FrameImpl>(
+        out_w, out_h, out_stride, pts_us,
+        entry.data, entry.size, FrameBufferPool::make_release_cb(frame_pool)
+    ));
 }
 
 
@@ -430,7 +570,10 @@ static Result<std::shared_ptr<Frame>> decode_qtrle(
         impl::QtrleDecoder& decoder,
         AVFormatContext* fmt_ctx, AVStream* stream, int stream_idx,
         TimeUS target_us, AVPacket* pkt,
-        TimeUS& last_decode_pts, bool& have_decode_pos) {
+        TimeUS& last_decode_pts, bool& have_decode_pos,
+        std::shared_ptr<FrameBufferPool> frame_pool) {
+
+    assert(frame_pool && "decode_qtrle: frame_pool is null");
 
     DecodeMode mode = GetDecodeMode();
     bool did_seek = false;
@@ -448,14 +591,21 @@ static Result<std::shared_ptr<Frame>> decode_qtrle(
         did_seek = true;
     }
 
-    // Acquire pre-touched buffer from pool (avoids ~130ms page fault overhead)
-    int width = decoder.width();
-    int height = decoder.height();
-    int stride = decoder.ref_stride();
-    auto buffer = decoder.acquire_buffer();
-    auto release_cb = decoder.release_callback();
+    int src_width = decoder.width();
+    int src_height = decoder.height();
+
+    bool do_scale = decoder.has_scaled_output();
+    int out_w = do_scale ? decoder.scaled_width() : src_width;
+    int out_h = do_scale ? decoder.scaled_height() : src_height;
+    int frame_stride = ((out_w * 4) + 31) & ~31;
+    size_t buf_size = static_cast<size_t>(frame_stride) * out_h;
+
+    // Acquire the frame's final buffer upfront — malloc, no zero-init.
+    // Decoder writes directly here via dispatch_apply (parallel page faults).
+    auto frame_entry = frame_pool->acquire(buf_size);
 
     // Read and decode packets until we reach the target PTS.
+    // Decodes into the persistent reference buffer + inline scale to output.
     TimeUS best_pts = INT64_MIN;
     bool have_frame = false;
 
@@ -475,22 +625,20 @@ static Result<std::shared_ptr<Frame>> decode_qtrle(
 
         TimeUS pkt_pts = impl::stream_pts_to_us(pkt->pts, stream);
 
-        // Decode this packet into the reference buffer
+        // Decode into ref buffer + scale directly into frame's final buffer.
         auto decode_result = decoder.decode(pkt->data, pkt->size,
-                                             buffer.data(), stride);
+            do_scale ? frame_entry.data : nullptr, frame_stride);
         av_packet_unref(pkt);
 
         if (decode_result.is_error()) {
             return decode_result.error();
         }
 
-        // Track best floor frame (largest PTS <= target)
         if (pkt_pts <= target_us) {
             best_pts = pkt_pts;
             have_frame = true;
         }
 
-        // Past the target — done
         if (pkt_pts >= target_us) {
             break;
         }
@@ -507,10 +655,24 @@ static Result<std::shared_ptr<Frame>> decode_qtrle(
         have_decode_pos = false;
     }
 
-    auto frame_impl = std::make_unique<FrameImpl>(
-        width, height, stride, best_pts, std::move(buffer), std::move(release_cb)
-    );
-    return std::make_shared<Frame>(std::move(frame_impl));
+    // For unscaled path, copy from ref buffer into the frame buffer.
+    // (Scaled path: decoder already wrote directly into frame_entry.)
+    if (!do_scale) {
+        int ref_stride = decoder.ref_stride();
+        for (int y = 0; y < out_h; y++) {
+            std::memcpy(frame_entry.data + y * frame_stride,
+                        decoder.ref_data() + y * ref_stride,
+                        out_w * 4);
+        }
+    }
+
+    auto result_frame = std::make_shared<Frame>(std::make_unique<FrameImpl>(
+        out_w, out_h, frame_stride, best_pts,
+        frame_entry.data, frame_entry.size,
+        FrameBufferPool::make_release_cb(frame_pool)
+    ));
+
+    return result_frame;
 }
 
 Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
@@ -530,7 +692,8 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
         auto result = decode_qtrle(
             *m_impl->qtrle, fmt_ctx, stream, stream_idx,
             t_us, m_impl->m_pkt,
-            m_impl->last_decode_pts, m_impl->have_decode_pos
+            m_impl->last_decode_pts, m_impl->have_decode_pos,
+            m_impl->frame_pool
         );
 
         auto decode_end = std::chrono::steady_clock::now();
@@ -587,7 +750,8 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
         AVFrame* floor_frame = target_result.value();
         TimeUS floor_pts = impl::stream_pts_to_us(floor_frame->pts, stream);
         auto result = avframe_to_emp_frame(
-            floor_frame, floor_pts, m_impl->scale_ctx, m_impl->codec_ctx
+            floor_frame, floor_pts, m_impl->scale_ctx, m_impl->codec_ctx,
+            m_impl->frame_pool
         );
         av_frame_free(&best_frame);
 
@@ -646,7 +810,8 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
     // Convert only the target frame to BGRA.
     auto result = avframe_to_emp_frame(
         decoded_frames[floor_idx].frame, floor_pts,
-        m_impl->scale_ctx, m_impl->codec_ctx
+        m_impl->scale_ctx, m_impl->codec_ctx,
+        m_impl->frame_pool
     );
 
     // Record per-frame decode cost before freeing.
@@ -907,7 +1072,6 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
         }
     }
 
-done:
     // NEVER flush the resampler. The FIR filter's FIFO residual carries over
     // to the next call, producing continuous audio across ALL calls (including
     // the prefill→pump transition). Flushing creates a discontinuity because

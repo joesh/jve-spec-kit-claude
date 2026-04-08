@@ -57,6 +57,9 @@ public:
     int frameWidth() const { return m_frameWidth; }
     int frameHeight() const { return m_frameHeight; }
     int frameCount() const { return m_frame_count; }
+    // Count of frames with distinct source PTS (unique visual content).
+    // Stride-duplicated frames share the same PTS and don't increment this.
+    int uniqueFrameCount() const { return m_unique_frame_count; }
 
     // Check if GPU rendering is available
     static bool isAvailable();
@@ -96,6 +99,8 @@ private:
     int m_par_num = 1;
     int m_par_den = 1;
     int m_frame_count = 0;
+    int m_unique_frame_count = 0;
+    int64_t m_last_source_pts = INT64_MIN;
     bool m_initialized = false;
     bool m_ready_fired = false;  // ready_callback fires once: Metal init + non-zero geometry
     ReadyCallback m_ready_callback;

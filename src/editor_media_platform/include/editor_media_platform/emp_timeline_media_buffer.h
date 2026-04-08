@@ -150,6 +150,12 @@ public:
     // Sequence rate (required before GetTrackAudio — converts timeline frames to us)
     void SetSequenceRate(int32_t num, int32_t den);
 
+    // Sequence resolution — max output size for SW-decoded frames.
+    // Frames larger than this are downscaled during decode to avoid
+    // caching oversized CPU buffers (33MB at 4K vs 8MB at 1080p).
+    // HW-decoded frames (CVPixelBuffer) are unaffected — GPU scales for free.
+    void SetSequenceResolution(int32_t w, int32_t h);
+
     // Audio format for pre-buffer (call once before playback)
     void SetAudioFormat(const AudioFormat& fmt);
 
@@ -434,6 +440,10 @@ private:
 
     // ── Sequence rate (for timeline frame → us conversion) ──
     Rate m_seq_rate{0, 1};
+
+    // ── Sequence resolution (max output size for SW-decoded frames) ──
+    int32_t m_seq_width{0};
+    int32_t m_seq_height{0};
 
     // ── Audio format (for pre-buffer — set once before playback) ──
     AudioFormat m_audio_fmt{SampleFormat::F32, 0, 0};

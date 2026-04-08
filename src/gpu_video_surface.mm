@@ -382,6 +382,15 @@ void GPUVideoSurface::setFrameImpl(const std::shared_ptr<emp::Frame>& frame) {
 
     ++m_frame_count;
 
+    // Track unique visual content by source PTS. Stride-duplicated frames
+    // share the same decoded PTS — they look identical even though the
+    // playback controller sends them as different timeline frame numbers.
+    int64_t pts = frame->source_pts_us();
+    if (pts != m_last_source_pts) {
+        ++m_unique_frame_count;
+        m_last_source_pts = pts;
+    }
+
     // Log first frame on each surface (confirms render pipeline works)
     if (m_frame_count == 1) {
         JVE_LOG_EVENT(Video, "setFrameImpl: FIRST FRAME on surface=%p %dx%d widget=%dx%d",
@@ -630,16 +639,25 @@ void GPUVideoSurface::setFrameSW(const uint8_t* data, int w, int h, int stride) 
     m_frameHeight = h;
 
     @autoreleasepool {
-        m_impl->releaseTextures();
+        // Reuse existing texture if dimensions match. Creating a new
+        // MTLTexture every frame causes GPU memory churn — at 4K (33MB)
+        // × 25fps the allocation pressure stalls nextDrawable for >900ms.
+        // replaceRegion on an existing texture avoids the allocation.
+        bool need_new_texture = !m_impl->bgraTexture
+            || [m_impl->bgraTexture width] != static_cast<NSUInteger>(w)
+            || [m_impl->bgraTexture height] != static_cast<NSUInteger>(h);
 
-        // Create (or reuse) a BGRA Metal texture and upload CPU data
-        MTLTextureDescriptor* desc = [MTLTextureDescriptor
-            texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-            width:w height:h mipmapped:NO];
-        desc.usage = MTLTextureUsageShaderRead;
+        if (need_new_texture) {
+            m_impl->releaseTextures();
 
-        m_impl->bgraTexture = [m_impl->device newTextureWithDescriptor:desc];
-        JVE_ASSERT(m_impl->bgraTexture, "GPUVideoSurface::setFrameSW: failed to create BGRA texture");
+            MTLTextureDescriptor* desc = [MTLTextureDescriptor
+                texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                width:w height:h mipmapped:NO];
+            desc.usage = MTLTextureUsageShaderRead;
+
+            m_impl->bgraTexture = [m_impl->device newTextureWithDescriptor:desc];
+            JVE_ASSERT(m_impl->bgraTexture, "GPUVideoSurface::setFrameSW: failed to create BGRA texture");
+        }
 
         [m_impl->bgraTexture replaceRegion:MTLRegionMake2D(0, 0, w, h)
             mipmapLevel:0

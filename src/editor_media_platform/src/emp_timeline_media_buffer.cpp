@@ -789,6 +789,13 @@ void TimelineMediaBuffer::SetSequenceRate(int32_t num, int32_t den) {
     m_seq_rate = Rate{num, den};
 }
 
+void TimelineMediaBuffer::SetSequenceResolution(int32_t w, int32_t h) {
+    assert(w > 0 && "SetSequenceResolution: width must be positive");
+    assert(h > 0 && "SetSequenceResolution: height must be positive");
+    m_seq_width = w;
+    m_seq_height = h;
+}
+
 // ============================================================================
 // SetAudioFormat
 // ============================================================================
@@ -1334,6 +1341,7 @@ int TimelineMediaBuffer::stride_for_clip(const TrackId& track, const ClipInfo& c
     std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
     auto dit = m_decode_speed_cache.find(clip.media_path);
     if (dit == m_decode_speed_cache.end()) return 1;
+    if (dit->second <= 0) return 1;  // sentinel: first sample only, need second
 
     // At higher playback speeds, frames pass faster → need wider stride.
     // speed=2.0 means frame_period_ms is effectively halved.
@@ -1923,6 +1931,11 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
     auto new_reader = reader_result.value();
     auto new_use_mtx = std::make_shared<std::mutex>();
 
+    // Set max output resolution for SW decode scaling
+    if (m_seq_width > 0 && m_seq_height > 0) {
+        new_reader->SetMaxOutputResolution(m_seq_width, m_seq_height);
+    }
+
     // Phase 3 (under lock ~1us): install into pool or discard if another thread raced
     {
         std::lock_guard<std::mutex> lock(m_pool_mutex);
@@ -2120,8 +2133,23 @@ bool TimelineMediaBuffer::process_next_decode_prep_job() {
     });
 
     if (job.type == PreBufferJob::SPEED_DETECT) {
-        auto probe_reader = acquire_reader(job.track, job.clip_id, job.media_path);
-        if (probe_reader) {
+        // Create a throwaway reader for the speed probe. Using acquire_reader
+        // would corrupt the pool reader's format context position (seek + decode),
+        // causing subsequent prefetch calls to read from the wrong position or
+        // hit EOF. Throwaway reader is discarded after the probe — pool untouched.
+        auto mf_result = MediaFile::Open(job.media_path);
+        if (mf_result.is_error()) return true;  // skip — will be caught by prefetch
+        auto probe_mf = mf_result.value();
+        auto reader_result = Reader::Create(probe_mf);
+        if (reader_result.is_error()) return true;
+        auto probe_reader = reader_result.value();
+        // Set max output resolution so throwaway reader scales down during
+        // decode (e.g. 4K qtrle → 1080p). Without this, the probe decodes
+        // at full resolution — wasting time and memory on a discarded frame.
+        if (m_seq_width > 0 && m_seq_height > 0) {
+            probe_reader->SetMaxOutputResolution(m_seq_width, m_seq_height);
+        }
+        {
             const auto& pinfo = probe_reader->media_file()->info();
             int64_t file_frame = job.probe_source_in - pinfo.first_frame_tc;
             JVE_ASSERT(file_frame >= 0,
@@ -2141,11 +2169,12 @@ bool TimelineMediaBuffer::process_next_decode_prep_job() {
             if (presult.is_ok()) {
                 float per_frame_ms = probe_reader->LastBatchMsPerFrame();
                 float record_ms = (per_frame_ms > 0) ? per_frame_ms : wall_ms;
-                {
-                    std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
-                    m_decode_speed_cache[job.media_path] = record_ms;
-                }
-                EMP_LOG_DEBUG("SPEED_DETECT: %s clip=%.8s path=%s decode=%.1fms (wall=%.1fms)",
+                // Don't write to speed cache — cold-start measurement includes
+                // one-time overhead (codec init, buffer pool page faults) that
+                // inflates the result (e.g. 80ms vs 3ms steady-state for qtrle).
+                // Prefetch's decode_into_cache writes steady-state measurements
+                // on each decode. stride_for_clip returns 1 until real data arrives.
+                EMP_LOG_DEBUG("SPEED_DETECT: %s clip=%.8s path=%s decode=%.1fms (wall=%.1fms) [not cached]",
                     tbuf, job.clip_id.c_str(), job.media_path.c_str(), record_ms, wall_ms);
             } else {
                 EMP_LOG_WARN("SPEED_DETECT: %s clip=%.8s decode failed", tbuf, job.clip_id.c_str());
@@ -2409,11 +2438,26 @@ void TimelineMediaBuffer::decode_into_cache(
 
     auto result = held_reader->DecodeAt(ft);
 
-    // Update decode speed cache (write-once: SPEED_DETECT is authoritative)
+    // Update decode speed cache. The first decode of any codec includes
+    // one-time overhead (buffer pool page faults, codec warm-up, I/O
+    // cache misses) that inflates the measurement. stride_for_clip uses
+    // this cache — inflated values cause stride > 1, which skips frames
+    // and breaks sequential decoders like qtrle. Solution: don't record
+    // the first measurement. stride_for_clip returns 1 when no cache
+    // entry exists (safe default). The second decode is representative.
     float per_frame_ms = held_reader->LastBatchMsPerFrame();
     if (per_frame_ms > 0) {
         std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
-        if (m_decode_speed_cache.find(clip->media_path) == m_decode_speed_cache.end()) {
+        auto it = m_decode_speed_cache.find(clip->media_path);
+        if (it == m_decode_speed_cache.end()) {
+            // First measurement — record as sentinel, don't use for stride.
+            // Negative value signals "have one sample, need second to confirm."
+            m_decode_speed_cache[clip->media_path] = -per_frame_ms;
+        } else if (it->second < 0) {
+            // Second measurement — record actual speed (replaces sentinel).
+            m_decode_speed_cache[clip->media_path] = per_frame_ms;
+        } else if (per_frame_ms < it->second) {
+            // Subsequent: running minimum for steady-state convergence.
             m_decode_speed_cache[clip->media_path] = per_frame_ms;
         }
     }
@@ -2640,6 +2684,8 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
                 tbuf, (long long)buffer_end, (long long)playhead, direction, (long long)entry_gen);
         }
 
+        bool decoded_this_call = false;
+
         while (true) {
             if (m_shutdown.load() || m_playhead_direction.load(std::memory_order_relaxed) == 0)
                 return;
@@ -2654,7 +2700,18 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
 
             // Re-read playhead for window check (cursor persists across iterations)
             playhead = m_playhead_frame.load(std::memory_order_relaxed);
-            if (cursor.ahead_of(playhead) >= VIDEO_PREFETCH_MAX) return;  // full
+            if (cursor.ahead_of(playhead) >= VIDEO_PREFETCH_MAX) {
+                if (!decoded_this_call) {
+                    // Scanned entire prefetch window without finding decodable
+                    // content (all gaps or obscured by higher tracks). Advance
+                    // buf_end to the scan frontier so pick_video_track sees
+                    // this track as "processed" and doesn't re-select it.
+                    // Without this, workers hot-loop: pick → scan → no work →
+                    // return → pick again (buf_end never moved).
+                    set_already_fetched_video(track, cursor.pos, direction);
+                }
+                return;
+            }
 
             // Find segment at cursor position
             // Deep-copy ClipInfo under lock — seg.clip points into ts.clips vector
@@ -2699,10 +2756,11 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
 
             if (obscured) {
                 cursor.advance(1);
-                continue;  // no content cached, buf_end stays put
+                continue;
             }
 
             // Decode one frame, then return to let worker re-pick most urgent track
+            decoded_this_call = true;
             int stride = stride_for_clip(track, *seg.clip);
             {
                 char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));

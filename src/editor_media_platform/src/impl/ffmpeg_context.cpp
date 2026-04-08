@@ -360,6 +360,14 @@ FFmpegScaleContext::~FFmpegScaleContext() {
 
 Result<void> FFmpegScaleContext::init(int src_width, int src_height, AVPixelFormat src_fmt,
                                        int dst_width, int dst_height) {
+    if (m_sws_ctx) {
+        sws_freeContext(m_sws_ctx);
+        m_sws_ctx = nullptr;
+    }
+
+    m_src_width = src_width;
+    m_src_height = src_height;
+    m_src_fmt = src_fmt;
     m_dst_width = dst_width;
     m_dst_height = dst_height;
 
@@ -374,6 +382,13 @@ Result<void> FFmpegScaleContext::init(int src_width, int src_height, AVPixelForm
     }
 
     return Result<void>();
+}
+
+Result<void> FFmpegScaleContext::reinit_output(int dst_width, int dst_height) {
+    assert(m_src_width > 0 && "reinit_output: init() not called yet");
+    assert(dst_width > 0 && "reinit_output: dst_width must be > 0");
+    assert(dst_height > 0 && "reinit_output: dst_height must be > 0");
+    return init(m_src_width, m_src_height, m_src_fmt, dst_width, dst_height);
 }
 
 void FFmpegScaleContext::convert(AVFrame* src, uint8_t* dst_data, int dst_stride) {

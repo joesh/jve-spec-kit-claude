@@ -2,18 +2,24 @@
 #include <cassert>
 #include <cstring>
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <dispatch/dispatch.h>
+
+// EMP log level for qtrle decode timing (EMP_LOG_LEVEL >= 2)
+static int qtrle_log_level() {
+    static int level = [] {
+        const char* env = getenv("EMP_LOG_LEVEL");
+        return env ? atoi(env) : 0;
+    }();
+    return level;
+}
+#define QTRLE_LOG_DEBUG(...) do { if (qtrle_log_level() >= 2) { fprintf(stderr, "[QTRLE] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } } while(0)
 
 // Big-endian reads (qtrle header is big-endian)
 static inline uint16_t read_be16(const uint8_t* p) {
     return static_cast<uint16_t>((p[0] << 8) | p[1]);
-}
-
-static inline uint32_t read_be32(const uint8_t* p) {
-    return (static_cast<uint32_t>(p[0]) << 24) |
-           (static_cast<uint32_t>(p[1]) << 16) |
-           (static_cast<uint32_t>(p[2]) << 8)  |
-           static_cast<uint32_t>(p[3]);
 }
 
 // Convert one ARGB pixel to BGRA.
@@ -40,44 +46,20 @@ Result<void> QtrleDecoder::init(int width, int height) {
     m_ref_buffer.resize(buf_size, 0);
     m_line_offsets.resize(height);
 
-    // Pre-allocate buffer pool with pre-touched pages.
-    // On macOS, fresh vector<uint8_t>(33MB) triggers ~2000 page faults (~130ms).
-    // By pre-allocating and writing all bytes once, pages become resident.
-    // When returned to the pool after Frame release, the pages stay resident.
-    m_pool = std::make_shared<BufferPool>();
-    m_pool->buf_size = buf_size;
-    for (int i = 0; i < POOL_INITIAL_SIZE; i++) {
-        std::vector<uint8_t> buf(buf_size);
-        std::memset(buf.data(), 0, buf_size);  // pre-touch all pages
-        m_pool->free_list.push_back(std::move(buf));
-    }
-
     return {};
-}
-
-std::vector<uint8_t> QtrleDecoder::acquire_buffer() {
-    std::lock_guard<std::mutex> lock(m_pool->mutex);
-    if (!m_pool->free_list.empty()) {
-        auto buf = std::move(m_pool->free_list.back());
-        m_pool->free_list.pop_back();
-        return buf;
-    }
-    // Pool exhausted — allocate fresh (slow, but rare)
-    return std::vector<uint8_t>(m_pool->buf_size);
-}
-
-std::function<void(std::vector<uint8_t>)> QtrleDecoder::release_callback() {
-    // Capture shared_ptr to pool — keeps pool alive even if QtrleDecoder
-    // is destroyed before all Frames are released (e.g. during shutdown).
-    auto pool = m_pool;
-    return [pool](std::vector<uint8_t> buf) {
-        std::lock_guard<std::mutex> lock(pool->mutex);
-        pool->free_list.push_back(std::move(buf));
-    };
 }
 
 void QtrleDecoder::flush() {
     std::fill(m_ref_buffer.begin(), m_ref_buffer.end(), 0);
+}
+
+void QtrleDecoder::set_scaled_output(int w, int h) {
+    assert(w > 0 && "QtrleDecoder::set_scaled_output: width must be > 0");
+    assert(h > 0 && "QtrleDecoder::set_scaled_output: height must be > 0");
+    assert(m_width > 0 && "QtrleDecoder::set_scaled_output: call init() first");
+
+    m_scaled_w = w;
+    m_scaled_h = h;
 }
 
 QtrleDecoder::PacketHeader QtrleDecoder::parse_header(
@@ -212,69 +194,93 @@ void QtrleDecoder::decode_scanline(
     }
 }
 
-Result<void> QtrleDecoder::decode(
-        const uint8_t* pkt_data, int pkt_size,
-        uint8_t* bgra_out, int bgra_stride) {
+Result<void> QtrleDecoder::decode(const uint8_t* pkt_data, int pkt_size,
+                                  uint8_t* scaled_out, int scaled_stride) {
     assert(pkt_data && "QtrleDecoder::decode: pkt_data is null");
-    assert(bgra_out && "QtrleDecoder::decode: bgra_out is null");
-    assert(bgra_stride >= m_width * 4 &&
-           "QtrleDecoder::decode: bgra_stride too small");
 
-    // Parse header
     PacketHeader hdr = parse_header(pkt_data, pkt_size);
+    if (hdr.is_duplicate) return {};
 
-    if (hdr.is_duplicate) {
-        // Duplicate frame: copy reference buffer to output
-        for (int y = 0; y < m_height; y++) {
-            std::memcpy(bgra_out + y * bgra_stride,
-                        m_ref_buffer.data() + y * m_ref_stride,
-                        m_width * 4);
-        }
-        return {};
-    }
-
-    // Pointer to RLE data (past header)
     const uint8_t* rle_data = pkt_data + hdr.data_offset;
     int rle_size = pkt_size - hdr.data_offset;
+    if (rle_size <= 0) return Error::internal("QtrleDecoder: empty RLE data");
 
-    if (rle_size <= 0) {
-        return Error::internal("QtrleDecoder: empty RLE data");
-    }
-
-    // Pass 1: Pre-scan to find scanline byte offsets (sequential)
+    auto t0 = std::chrono::steady_clock::now();
     prescan_line_offsets(rle_data, rle_size, hdr.num_lines);
+    auto t1 = std::chrono::steady_clock::now();
 
-    // Pass 2: Parallel decode into reference buffer.
-    // Batch scanlines into chunks to amortize GCD dispatch overhead.
-    // With 2160 lines at 4K, per-scanline dispatch is too fine-grained
-    // (~5μs work per line, dispatch overhead dominates).
     int start_line = hdr.start_line;
     int num_lines = hdr.num_lines;
-    constexpr int NUM_CHUNKS = 16;  // 4K: ~135 lines per chunk
+    constexpr int NUM_CHUNKS = 16;
     int lines_per_chunk = (num_lines + NUM_CHUNKS - 1) / NUM_CHUNKS;
 
+    bool do_scale = scaled_out && m_scaled_w > 0 && m_scaled_h > 0;
+    if (do_scale) {
+        assert(scaled_stride >= m_scaled_w * 4 &&
+            "QtrleDecoder::decode: scaled_stride too small for scaled width");
+    }
+    float scale_x = do_scale ? static_cast<float>(m_width) / m_scaled_w : 0;
+    float scale_y = do_scale ? static_cast<float>(m_height) / m_scaled_h : 0;
+
+    // Phase A: Parallel RLE decode into reference buffer
     dispatch_apply(static_cast<size_t>(NUM_CHUNKS),
                    dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0),
                    ^(size_t chunk_idx) {
         int chunk_start = static_cast<int>(chunk_idx) * lines_per_chunk;
         int chunk_end = std::min(chunk_start + lines_per_chunk, num_lines);
-
         for (int i = chunk_start; i < chunk_end; i++) {
             int line = start_line + i;
             if (line >= m_height) break;
             if (m_line_offsets[i] >= rle_size) continue;
-
-            uint8_t* row_ptr = m_ref_buffer.data() + line * m_ref_stride;
-            decode_scanline(rle_data, m_line_offsets[i], row_ptr);
+            decode_scanline(rle_data, m_line_offsets[i],
+                            m_ref_buffer.data() + line * m_ref_stride);
         }
     });
+    auto t2 = std::chrono::steady_clock::now();
 
-    // Copy reference buffer to output
-    for (int y = 0; y < m_height; y++) {
-        std::memcpy(bgra_out + y * bgra_stride,
-                    m_ref_buffer.data() + y * m_ref_stride,
-                    m_width * 4);
+    // Phase B: Parallel box downscale — writes directly into caller's buffer
+    if (do_scale) {
+        int block_x = std::max(1, static_cast<int>(scale_x));
+        int block_y = std::max(1, static_cast<int>(scale_y));
+        int scaled_w = m_scaled_w;
+        int scaled_h = m_scaled_h;
+
+        dispatch_apply(static_cast<size_t>(16),
+                       dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0),
+                       ^(size_t ci) {
+            int oy0 = static_cast<int>(ci) * ((scaled_h + 15) / 16);
+            int oy1 = std::min(oy0 + ((scaled_h + 15) / 16), scaled_h);
+            for (int oy = oy0; oy < oy1; oy++) {
+                int sy = static_cast<int>(oy * scale_y);
+                uint8_t* dst_row = scaled_out + oy * scaled_stride;
+                for (int ox = 0; ox < scaled_w; ox++) {
+                    int sx = static_cast<int>(ox * scale_x);
+                    uint32_t r = 0, g = 0, b = 0, a = 0;
+                    int count = 0;
+                    for (int by = 0; by < block_y && (sy + by) < m_height; by++) {
+                        const uint8_t* sr = m_ref_buffer.data() + (sy + by) * m_ref_stride;
+                        for (int bx = 0; bx < block_x && (sx + bx) < m_width; bx++) {
+                            const uint8_t* p = sr + (sx + bx) * 4;
+                            b += p[0]; g += p[1]; r += p[2]; a += p[3];
+                            count++;
+                        }
+                    }
+                    uint8_t* dp = dst_row + ox * 4;
+                    dp[0] = b / count; dp[1] = g / count;
+                    dp[2] = r / count; dp[3] = a / count;
+                }
+            }
+        });
     }
+    auto t3 = std::chrono::steady_clock::now();
+
+    auto us = [](auto a, auto b) {
+        return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+    };
+    QTRLE_LOG_DEBUG("prescan=%.1fms rle=%.1fms scale=%.1fms total=%.1fms out=%dx%d",
+            us(t0, t1)/1000.0, us(t1, t2)/1000.0, us(t2, t3)/1000.0,
+            us(t0, t3)/1000.0,
+            do_scale ? m_scaled_w : m_width, do_scale ? m_scaled_h : m_height);
 
     return {};
 }
