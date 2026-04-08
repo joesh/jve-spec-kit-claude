@@ -364,7 +364,8 @@ private:
 
     // Self-directed prefetch loops (replace batch REFILL system).
     // Each worker autonomously picks tracks and fills one frame at a time.
-    void prefetch_worker();        // SPEED_DETECT > READER_WARM > video prefetch
+    void prep_worker();            // SPEED_DETECT + READER_WARM (dedicated thread)
+    void prefetch_worker();        // video prefetch only
     void audio_prefetch_worker();  // audio prefetch only
 
     // Decode-prep job processing (SPEED_DETECT, READER_WARM)

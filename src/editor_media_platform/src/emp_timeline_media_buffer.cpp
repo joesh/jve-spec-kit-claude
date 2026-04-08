@@ -2039,12 +2039,15 @@ void TimelineMediaBuffer::log_pool_state(const char* action, const TrackId& trac
 
 void TimelineMediaBuffer::start_workers(int count) {
     m_shutdown.store(false);
-    assert(count >= 2 && "start_workers: need >= 2 (at least 1 video + 1 audio worker)");
+    assert(count >= 3 && "start_workers: need >= 3 (1 prep + 1 video + 1 audio)");
 
-    // N-1 general workers (decode-prep + video prefetch) + 1 audio worker.
-    // Each worker calls jve_init_thread_lua_state() and has per-iteration
-    // try/catch so a single bad clip doesn't kill the worker.
-    for (int i = 0; i < count - 1; ++i) {
+    // 1 prep worker (SPEED_DETECT, READER_WARM — can block on codec init).
+    // N-2 video workers (prefetch only — never blocked by prep jobs).
+    // 1 audio worker.
+    // This prevents SPEED_DETECT (up to 264ms for H.264 VT init) from
+    // starving video prefetch, which caused frame drops on clip transitions.
+    m_workers.emplace_back(&TimelineMediaBuffer::prep_worker, this);
+    for (int i = 0; i < count - 2; ++i) {
         m_workers.emplace_back(&TimelineMediaBuffer::prefetch_worker, this);
     }
     m_workers.emplace_back(&TimelineMediaBuffer::audio_prefetch_worker, this);
@@ -2860,36 +2863,51 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
 }
 
 // ============================================================================
-// prefetch_worker — handles decode-prep jobs + video prefetch
+// prep_worker — dedicated thread for SPEED_DETECT + READER_WARM jobs
+// ============================================================================
+// Isolated from video prefetch so slow codec init (H.264 VT = 264ms,
+// BRAW SDK = 128ms) never starves frame decode.
+
+void TimelineMediaBuffer::prep_worker() {
+    jve_init_thread_lua_state();
+    while (!m_shutdown.load()) {
+      try {
+        if (process_next_decode_prep_job()) continue;
+
+        std::unique_lock<std::mutex> lock(m_jobs_mutex);
+        m_jobs_cv.wait_for(lock, std::chrono::milliseconds(100), [this] {
+            return m_shutdown.load() || !m_jobs.empty();
+        });
+      } catch (const JveAssertError& e) {
+        EMP_LOG_WARN("prep_worker: assert caught (continuing): %s", e.what());
+      }
+    }
+}
+
+// ============================================================================
+// prefetch_worker — video prefetch only (no prep jobs)
 // ============================================================================
 
 void TimelineMediaBuffer::prefetch_worker() {
     jve_init_thread_lua_state();
     while (!m_shutdown.load()) {
       try {
-        // Priority 1: decode-prep jobs (SPEED_DETECT, READER_WARM)
-        if (process_next_decode_prep_job()) continue;
-
-        // Priority 2: video prefetch
-        // No discard_already_played_prefetch for video. discard forces the reader
-        // to decode N intermediate frames to reach the snapped-forward target —
-        // O(gap) per call. Sequential decode from buf_end is O(1 frame) per call.
-        // The "wasted" behind-playhead entries are evicted naturally.
         TrackId target{TrackType::Video, 0};
         if (pick_video_track(target)) {
             fill_prefetch(target);
             continue;
         }
 
-        // Nothing to do — sleep on CV with 100ms timeout
+        // Nothing to do — sleep until woken by wake_prefetch_workers
+        // (SetPlayhead, cache miss, buffer low) or 100ms timeout.
         {
             std::unique_lock<std::mutex> lock(m_jobs_mutex);
             m_jobs_cv.wait_for(lock, std::chrono::milliseconds(100), [this] {
-                return m_shutdown.load() || !m_jobs.empty();
+                return m_shutdown.load()
+                    || m_playhead_direction.load(std::memory_order_relaxed) != 0;
             });
         }
       } catch (const JveAssertError& e) {
-        // Log and continue — one bad clip shouldn't kill the worker
         EMP_LOG_WARN("prefetch_worker: assert caught (continuing): %s", e.what());
       }
     }
