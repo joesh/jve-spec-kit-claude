@@ -430,6 +430,8 @@ private:
     };
     std::vector<ClipTransition> m_clip_transitions;
     size_t m_diag_tick_index{0};     // running tick counter for transition log
+    uint64_t m_tick_start{0};        // mach_absolute_time at displayLinkTick entry
+    uint64_t m_tick_end{0};          // mach_absolute_time at displayLinkTick exit
 
     void dumpDiagnostics();
 

@@ -65,7 +65,7 @@ CVReturn displayLinkCallback(
     uint64_t cb_end = mach_absolute_time();
     double cb_ms = machTimeToSeconds(cb_end - cb_start) * 1000.0;
     if (cb_ms > 10.0) {
-        JVE_LOG_WARN(Ticks, "CVDisplayLink callback took %.1fms", cb_ms);
+        fprintf(stderr, "[STALL] cb=%.1fms\n", cb_ms);
     }
     return kCVReturnSuccess;
 }
@@ -1362,7 +1362,10 @@ void PlaybackController::Tick() {
 // ============================================================================
 
 void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_time*/) {
+    m_tick_start = mach_absolute_time();
+
     if (!m_playing.load(std::memory_order_relaxed)) {
+        m_tick_end = mach_absolute_time();
         return;
     }
 
@@ -1376,6 +1379,8 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
     tick.elapsed_ms = elapsed * 1000.0;
 
     // ── Tick timing ──
+    // Measure total callback wall time. If total >> (advance+setPlayhead+deliver+report),
+    // the excess is OS scheduling delay (CVDisplayLink thread not scheduled on time).
     uint64_t t0 = mach_absolute_time();
 
     // Advance position (writes drift_s, pll_adjust, frame, SKIP/HOLD flags)
@@ -1448,6 +1453,16 @@ void PlaybackController::displayLinkTick(uint64_t host_time, uint64_t /*output_t
         tick.audio_buf_frames = m_aop->BufferedFrames();
     }
 
+    m_tick_end = mach_absolute_time();
+    double total_ms = machTimeToSeconds(m_tick_end - m_tick_start) * 1000.0;
+    if (total_ms > 10.0) {
+        double prefetch_ms = machTimeToSeconds(t3 - t2) * 1000.0;
+        fprintf(stderr, "[SLOW_TICK] total=%.1fms advance=%.1f setPlayhead=%.1f "
+            "prefetch=%.1f deliver=%.1f report=%.1f elapsed=%.1f frame=%lld\n",
+            total_ms, tick.advance_ms, tick.setPlayhead_ms,
+            prefetch_ms, tick.deliver_ms, tick.report_ms,
+            tick.elapsed_ms, (long long)new_pos);
+    }
     m_current_tick = nullptr;
     ++m_diag_tick_index;
 }
