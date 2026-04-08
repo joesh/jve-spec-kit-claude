@@ -216,6 +216,7 @@ private:
     // RAII handle — holds reader + exclusive lock, released on destruction
     struct ReaderHandle {
         std::shared_ptr<Reader> reader;
+        std::shared_ptr<std::mutex> mutex_owner;  // prevents mutex destruction while locked
         std::unique_lock<std::mutex> lock;
 
         bool valid() const { return reader != nullptr; }
@@ -229,7 +230,7 @@ private:
     ReaderHandle acquire_reader(TrackId track, const std::string& clip_id,
                                 const std::string& path);
     void release_reader(TrackId track, const std::string& clip_id);
-    void evict_lru_reader();
+    PoolEntry evict_lru_reader();  // returns evicted entry for destruction outside lock
 
     // Generate a beep tone for offline/unplayable audio clips.
     // 1kHz sine, 100ms on / 900ms off (once per second).

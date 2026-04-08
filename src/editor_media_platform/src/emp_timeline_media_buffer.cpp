@@ -1892,7 +1892,7 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
     }
 
     if (reader) {
-        return ReaderHandle{reader, std::unique_lock<std::mutex>(*use_mtx)};
+        return ReaderHandle{reader, use_mtx, std::unique_lock<std::mutex>(*use_mtx)};
     }
 
     // Phase 2 (NO lock ~86ms on external drives): MediaFile::Open + Reader::Create
@@ -1935,7 +1935,10 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
         new_reader->SetMaxOutputResolution(m_seq_width, m_seq_height);
     }
 
-    // Phase 3 (under lock ~1us): install into pool or discard if another thread raced
+    // Phase 3 (under lock ~1us): install into pool or discard if another thread raced.
+    // Evicted readers are collected and destroyed AFTER releasing the lock —
+    // their destructors can take milliseconds (codec teardown, I/O flush).
+    std::vector<PoolEntry> evicted;
     {
         std::lock_guard<std::mutex> lock(m_pool_mutex);
 
@@ -1965,7 +1968,7 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
             if (m_offline.count(path)) return ReaderHandle{};
 
             while (static_cast<int>(m_readers.size()) >= m_max_readers) {
-                evict_lru_reader();
+                evicted.push_back(evict_lru_reader());
             }
             m_readers[key] = PoolEntry{path, mf, new_reader, track, ++m_pool_clock, new_use_mtx};
             reader = new_reader;
@@ -1975,8 +1978,9 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
             log_pool_state("NEW", track, clip_id, new_reader->IsHwAccelerated());
         }
     }
+    // evicted entries destruct here — outside m_pool_mutex
 
-    return ReaderHandle{reader, std::unique_lock<std::mutex>(*use_mtx)};
+    return ReaderHandle{reader, use_mtx, std::unique_lock<std::mutex>(*use_mtx)};
 }
 
 void TimelineMediaBuffer::release_reader(TrackId track, const std::string& clip_id) {
@@ -1984,9 +1988,11 @@ void TimelineMediaBuffer::release_reader(TrackId track, const std::string& clip_
     m_readers.erase(std::make_pair(track, clip_id));
 }
 
-void TimelineMediaBuffer::evict_lru_reader() {
-    // Must be called with m_pool_mutex held
-    if (m_readers.empty()) return;
+TimelineMediaBuffer::PoolEntry TimelineMediaBuffer::evict_lru_reader() {
+    // Must be called with m_pool_mutex held.
+    // Returns the evicted entry so its destructor runs AFTER the caller
+    // releases m_pool_mutex (Reader/MediaFile teardown can take ms).
+    assert(!m_readers.empty() && "evict_lru_reader: pool is empty");
 
     auto oldest = m_readers.begin();
     for (auto it = m_readers.begin(); it != m_readers.end(); ++it) {
@@ -2000,7 +2006,9 @@ void TimelineMediaBuffer::evict_lru_reader() {
                  oldest->first.second.c_str(),
                  oldest->second.reader->IsHwAccelerated() ? "VT" : "SW",
                  oldest->second.path.c_str());
+    PoolEntry evicted = std::move(oldest->second);
     m_readers.erase(oldest);
+    return evicted;
 }
 
 void TimelineMediaBuffer::log_pool_state(const char* action, const TrackId& track,
