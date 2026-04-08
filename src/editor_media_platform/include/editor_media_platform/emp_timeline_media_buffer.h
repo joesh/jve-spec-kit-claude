@@ -231,6 +231,8 @@ private:
                                 const std::string& path);
     void release_reader(TrackId track, const std::string& clip_id);
     PoolEntry evict_lru_reader();  // returns evicted entry for destruction outside lock
+    std::string snapshot_pool_state(const char* action, const TrackId& track,
+                                     const std::string& clip_id, bool is_hw);
 
     // Generate a beep tone for offline/unplayable audio clips.
     // 1kHz sine, 100ms on / 900ms off (once per second).
@@ -238,8 +240,8 @@ private:
     // duration_us: requested chunk duration.
     // clip_start_us: clip's timeline start (beep phase relative to clip, not timeline)
     std::shared_ptr<PcmChunk> generate_offline_beep(int64_t position_us, int64_t duration_us, int64_t clip_start_us);
-    void log_pool_state(const char* action, const TrackId& track,
-                        const std::string& clip_id, bool is_hw);
+    // Removed: log_pool_state (fprintf under lock caused 100ms+ stalls).
+    // Replaced by snapshot_pool_state which returns a string for deferred logging.
 
     mutable std::mutex m_pool_mutex;
     // Key: (track, clip_id) → each clip gets its own reader/decode session

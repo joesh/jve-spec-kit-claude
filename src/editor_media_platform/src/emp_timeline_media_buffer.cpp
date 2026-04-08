@@ -434,7 +434,6 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
             for (const auto& [tid, ts] : m_tracks) {
                 if (tid.type != TrackType::Video) continue;
                 for (const auto& c : ts.clips) {
-                    // Check if clip overlaps [frame, scan_end] (forward) or [scan_end, frame] (reverse)
                     bool in_window = (direction > 0)
                         ? (c.timeline_start < scan_end && c.timeline_end() > frame)
                         : (c.timeline_start < frame && c.timeline_end() > scan_end);
@@ -1935,36 +1934,31 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
         new_reader->SetMaxOutputResolution(m_seq_width, m_seq_height);
     }
 
-    // Phase 3 (under lock ~1us): install into pool or discard if another thread raced.
-    // Evicted readers are collected and destroyed AFTER releasing the lock —
-    // their destructors can take milliseconds (codec teardown, I/O flush).
+    // Phase 3 (under lock): install into pool or discard if another thread raced.
+    // Evicted readers + log data collected under lock, then destructor + fprintf
+    // run AFTER releasing. Both can take ms (codec teardown, I/O) and would
+    // block GetVideoFrame's offline check if done under m_pool_mutex.
     std::vector<PoolEntry> evicted;
+    std::string deferred_log;
     {
         std::lock_guard<std::mutex> lock(m_pool_mutex);
 
         auto key = std::make_pair(track, clip_id);
         auto it = m_readers.find(key);
         if (it != m_readers.end()) {
-            // SW→HW upgrade: if existing reader is SW and new reader got HW,
-            // replace the pool entry. Handles WARM creating SW readers at app
-            // startup before VT is ready — later creations (WARM retry, REFILL)
-            // succeed with HW and upgrade the slot. Old reader remains valid
-            // for any thread currently using it (shared_ptr refcount).
             bool existing_sw = !it->second.reader->IsHwAccelerated();
             bool new_hw = new_reader->IsHwAccelerated();
             if (existing_sw && new_hw) {
                 it->second = PoolEntry{path, mf, new_reader, track, ++m_pool_clock, new_use_mtx};
                 reader = new_reader;
                 use_mtx = new_use_mtx;
-                log_pool_state("UPGRADE", track, clip_id, true);
+                deferred_log = snapshot_pool_state("UPGRADE", track, clip_id, true);
             } else {
-                // Same tier or downgrade — keep existing, discard new.
                 it->second.last_used = ++m_pool_clock;
                 reader = it->second.reader;
                 use_mtx = it->second.use_mutex;
             }
         } else {
-            // Re-check offline (may have been registered between Phase 1 and 3)
             if (m_offline.count(path)) return ReaderHandle{};
 
             while (static_cast<int>(m_readers.size()) >= m_max_readers) {
@@ -1973,12 +1967,13 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
             m_readers[key] = PoolEntry{path, mf, new_reader, track, ++m_pool_clock, new_use_mtx};
             reader = new_reader;
             use_mtx = new_use_mtx;
-
-            // Log pool state — critical for diagnosing VT session exhaustion
-            log_pool_state("NEW", track, clip_id, new_reader->IsHwAccelerated());
+            deferred_log = snapshot_pool_state("NEW", track, clip_id, new_reader->IsHwAccelerated());
         }
     }
-    // evicted entries destruct here — outside m_pool_mutex
+    // Destructor + logging outside m_pool_mutex
+    if (!deferred_log.empty()) {
+        EMP_LOG_DEBUG("%s", deferred_log.c_str());
+    }
 
     return ReaderHandle{reader, use_mtx, std::unique_lock<std::mutex>(*use_mtx)};
 }
@@ -2011,9 +2006,10 @@ TimelineMediaBuffer::PoolEntry TimelineMediaBuffer::evict_lru_reader() {
     return evicted;
 }
 
-void TimelineMediaBuffer::log_pool_state(const char* action, const TrackId& track,
-                                          const std::string& clip_id, bool is_hw) {
-    // Must be called with m_pool_mutex held
+std::string TimelineMediaBuffer::snapshot_pool_state(const char* action, const TrackId& track,
+                                                      const std::string& clip_id, bool is_hw) {
+    // Must be called with m_pool_mutex held.
+    // Returns formatted string for deferred logging OUTSIDE the lock.
     int hw_count = 0, sw_count = 0;
     for (const auto& [key, entry] : m_readers) {
         if (entry.reader->IsHwAccelerated()) ++hw_count; else ++sw_count;
@@ -2021,24 +2017,29 @@ void TimelineMediaBuffer::log_pool_state(const char* action, const TrackId& trac
     int total = static_cast<int>(m_readers.size());
 
     char tbuf[8];
-    EMP_LOG_DEBUG("POOL %s: track=%s clip=%s %s — %d/%d readers (VT=%d SW=%d)",
-                 action, track_str(track, tbuf, sizeof(tbuf)), clip_id.c_str(),
-                 is_hw ? "VT" : "SW",
-                 total, m_max_readers, hw_count, sw_count);
+    std::string result;
+    char line[512];
+    snprintf(line, sizeof(line), "POOL %s: track=%s clip=%s %s — %d/%d readers (VT=%d SW=%d)",
+             action, track_str(track, tbuf, sizeof(tbuf)), clip_id.c_str(),
+             is_hw ? "VT" : "SW",
+             total, m_max_readers, hw_count, sw_count);
+    result = line;
 
     // Dump all readers when any SW reader exists — shows which ones are slow
     if (sw_count > 0) {
         for (const auto& [key, entry] : m_readers) {
             char tbuf2[8];
-            EMP_LOG_DEBUG("  [%s] track=%s clip=%s %s lru=%lld path=%s",
+            snprintf(line, sizeof(line), "\n  [%s] track=%s clip=%s %s lru=%lld path=%s",
                          entry.reader->IsHwAccelerated() ? "VT" : "SW",
                          track_str(key.first, tbuf2, sizeof(tbuf2)),
                          key.second.c_str(),
                          entry.reader->IsHwAccelerated() ? "" : "*** SLOW ***",
                          static_cast<long long>(entry.last_used),
                          entry.path.c_str());
+            result += line;
         }
     }
+    return result;
 }
 
 // ============================================================================
