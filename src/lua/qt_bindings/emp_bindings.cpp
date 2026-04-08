@@ -9,6 +9,7 @@
 #include <editor_media_platform/emp_time.h>
 #include <editor_media_platform/emp_timeline_media_buffer.h>
 
+#include "../../editor_media_platform/src/impl/braw_decode.h"
 #include "gpu_video_surface.h"
 #include "cpu_video_surface.h"
 #include "playback_controller.h"
@@ -1856,6 +1857,13 @@ void register_emp_bindings(lua_State* L) {
     // Create EMP subtable in qt_constants
     // Assumes qt_constants is on stack at index -1
     lua_newtable(L);
+
+    // BRAW SDK availability
+    lua_pushcfunction(L, [](lua_State* L) -> int {
+        lua_pushboolean(L, emp::impl::braw_sdk_available());
+        return 1;
+    });
+    lua_setfield(L, -2, "BRAW_SUPPORTED");
 
     // MediaFile functions
     lua_pushcfunction(L, lua_emp_media_file_open);

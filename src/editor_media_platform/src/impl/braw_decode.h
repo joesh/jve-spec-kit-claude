@@ -37,6 +37,9 @@ struct BrawClipInfo {
 // Check file extension (case-insensitive). No I/O, no SDK required.
 bool is_braw_file(const std::string& path);
 
+// Check if the BRAW SDK is available at runtime.
+bool braw_sdk_available();
+
 // Open a .braw clip, extract metadata, close. Requires the SDK at runtime.
 Result<BrawClipInfo> braw_probe_clip(const std::string& path);
 

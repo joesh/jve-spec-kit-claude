@@ -235,21 +235,34 @@ function M.load_persisted(project_id)
     if type(map) ~= "table" then return end
     local error_count = 0
     local online_count = 0
+    local cleared_count = 0
+
     for path, entry in pairs(map) do
         if type(entry) == "table" then
-            status_cache[path] = {
-                offline = entry.offline or false,
-                error_code = entry.error_code,
-            }
-            if entry.offline then
-                error_count = error_count + 1
+            -- Clear stale "Unsupported" codec errors. These may be from a previous
+            -- build that lacked support (e.g. BRAW before SDK integration). The
+            -- background probe will re-check and set the correct status. Only
+            -- "Unsupported" is cleared — "FileNotFound" persists (file really missing).
+            if entry.offline and entry.error_code == "Unsupported" then
+                cleared_count = cleared_count + 1
             else
-                online_count = online_count + 1
+                status_cache[path] = {
+                    offline = entry.offline or false,
+                    error_code = entry.error_code,
+                }
+                if entry.offline then
+                    error_count = error_count + 1
+                else
+                    online_count = online_count + 1
+                end
             end
         end
     end
     -- Defer FS watch registration to start_background_probe (batched, non-blocking)
     M._deferred_watch_paths = map
+    if cleared_count > 0 then
+        log.event("media_status: cleared %d stale 'Unsupported' entries (codec now available)", cleared_count)
+    end
     log.event("media_status: loaded %d errors + %d online from DB", error_count, online_count)
 end
 

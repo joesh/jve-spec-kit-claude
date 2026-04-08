@@ -22,6 +22,8 @@ bool is_braw_file(const std::string& path) {
 namespace emp {
 namespace impl {
 
+bool braw_sdk_available() { return false; }
+
 Result<BrawClipInfo> braw_probe_clip(const std::string&) {
     return Error::unsupported("Blackmagic RAW SDK not installed");
 }
@@ -94,6 +96,10 @@ static IBlackmagicRawFactory* get_braw_factory() {
     });
 
     return s_factory;
+}
+
+bool braw_sdk_available() {
+    return get_braw_factory() != nullptr;
 }
 
 // ============================================================================
