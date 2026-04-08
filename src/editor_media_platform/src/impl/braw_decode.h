@@ -77,6 +77,7 @@ private:
     int m_src_h = 0;
     int m_out_w = 0;   // after resolution scale
     int m_out_h = 0;
+    int m_braw_scale = 0;  // BlackmagicRawResolutionScale (stored as int to avoid SDK header)
     float m_last_decode_ms = 0;
 };
 

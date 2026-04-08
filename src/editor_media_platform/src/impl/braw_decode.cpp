@@ -213,6 +213,7 @@ public:
     int out_stride = 0;
     int out_w = 0;
     int out_h = 0;
+    BlackmagicRawResolutionScale resolution_scale = blackmagicRawResolutionScaleFull;
     HRESULT decode_result = E_FAIL;
 
     void ReadComplete(IBlackmagicRawJob* readJob, HRESULT result,
@@ -223,8 +224,9 @@ public:
             return;
         }
 
-        // Request BGRA8 output format
+        // Set output format and resolution scale BEFORE creating decode job
         frame->SetResourceFormat(blackmagicRawResourceFormatBGRAU8);
+        frame->SetResolutionScale(resolution_scale);
 
         IBlackmagicRawJob* processJob = nullptr;
         result = frame->CreateJobDecodeAndProcessFrame(nullptr, nullptr, &processJob);
@@ -370,24 +372,26 @@ void BrawReaderContext::set_resolution_scale(int max_w, int max_h) {
     float scale = std::min(static_cast<float>(max_w) / m_src_w,
                            static_cast<float>(max_h) / m_src_h);
 
-    BlackmagicRawResolutionScale sdk_scale;
+    BlackmagicRawResolutionScale braw_scale;
     if (scale > 0.5f) {
-        sdk_scale = blackmagicRawResolutionScaleFull;
+        braw_scale = blackmagicRawResolutionScaleFull;
         m_out_w = m_src_w;
         m_out_h = m_src_h;
     } else if (scale > 0.25f) {
-        sdk_scale = blackmagicRawResolutionScaleHalf;
+        braw_scale = blackmagicRawResolutionScaleHalf;
         m_out_w = m_src_w / 2;
         m_out_h = m_src_h / 2;
     } else if (scale > 0.125f) {
-        sdk_scale = blackmagicRawResolutionScaleQuarter;
+        braw_scale = blackmagicRawResolutionScaleQuarter;
         m_out_w = m_src_w / 4;
         m_out_h = m_src_h / 4;
     } else {
-        sdk_scale = blackmagicRawResolutionScaleEighth;
+        braw_scale = blackmagicRawResolutionScaleEighth;
         m_out_w = m_src_w / 8;
         m_out_h = m_src_h / 8;
     }
+
+    m_braw_scale = static_cast<int>(braw_scale);
 
     // Query available resolutions from the SDK
     IBlackmagicRawClipResolutions* resolutions = nullptr;
@@ -395,7 +399,7 @@ void BrawReaderContext::set_resolution_scale(int max_w, int max_h) {
                                        reinterpret_cast<void**>(&resolutions));
     if (SUCCEEDED(hr) && resolutions) {
         uint32_t out_w = 0, out_h = 0;
-        hr = resolutions->GetResolution(sdk_scale, &out_w, &out_h);
+        hr = resolutions->GetResolution(braw_scale, &out_w, &out_h);
         if (SUCCEEDED(hr) && out_w > 0 && out_h > 0) {
             m_out_w = static_cast<int>(out_w);
             m_out_h = static_cast<int>(out_h);
@@ -422,11 +426,12 @@ Result<std::shared_ptr<Frame>> BrawReaderContext::decode_frame(
     size_t buf_size = static_cast<size_t>(frame_stride) * m_out_h;
     auto entry = pool->acquire(buf_size);
 
-    // Configure callback output target
+    // Configure callback output target + resolution scale
     cb->out_data = entry.data;
     cb->out_stride = frame_stride;
     cb->out_w = m_out_w;
     cb->out_h = m_out_h;
+    cb->resolution_scale = static_cast<BlackmagicRawResolutionScale>(m_braw_scale);
     cb->decode_result = E_FAIL;
 
     // Create and submit read job
