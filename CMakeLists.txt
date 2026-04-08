@@ -75,6 +75,8 @@ set(EMP_SOURCES
     src/editor_media_platform/src/impl/ffmpeg_hwaccel.cpp
     src/editor_media_platform/src/impl/ffmpeg_resample.cpp
     src/editor_media_platform/src/impl/qtrle_decode.cpp
+    src/editor_media_platform/src/impl/braw_decode.cpp
+    src/editor_media_platform/src/impl/braw_dispatch.cpp
 )
 
 add_library(EditorMediaPlatform STATIC ${EMP_SOURCES})
@@ -113,6 +115,16 @@ if(APPLE)
     )
 
     target_compile_definitions(EditorMediaPlatform PRIVATE EMP_HAS_VIDEOTOOLBOX)
+
+    # Blackmagic RAW SDK (optional — runtime-loaded via dispatch)
+    set(BRAW_SDK_INCLUDE "/Applications/Blackmagic RAW/Blackmagic RAW SDK/Mac/Include")
+    if(EXISTS "${BRAW_SDK_INCLUDE}/BlackmagicRawAPI.h")
+        target_include_directories(EditorMediaPlatform PRIVATE "${BRAW_SDK_INCLUDE}")
+        target_compile_definitions(EditorMediaPlatform PRIVATE EMP_HAS_BRAW)
+        message(STATUS "Blackmagic RAW SDK found at ${BRAW_SDK_INCLUDE}")
+    else()
+        message(STATUS "Blackmagic RAW SDK not found — BRAW decode disabled")
+    endif()
 endif()
 
 # Ensure FFmpeg headers only in impl/ (enforced by code structure, not CMake)

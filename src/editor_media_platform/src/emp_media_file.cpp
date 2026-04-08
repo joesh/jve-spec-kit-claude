@@ -2,6 +2,7 @@
 #include <editor_media_platform/emp_rate.h>
 #include "impl/media_file_impl.h"
 #include "impl/ffmpeg_context.h"  // av_log_set_level
+#include "impl/braw_decode.h"
 #include <cassert>
 #include <climits>  // INT_MAX for av_reduce
 #include <mutex>
@@ -20,6 +21,11 @@ const MediaFileInfo& MediaFile::info() const {
 }
 
 Result<void> MediaFile::ProbeCodec() const {
+    // BRAW: SDK IS the decoder — if we got metadata, we can decode.
+    if (m_impl->backend == MediaFileBackend::Braw) {
+        return {};
+    }
+
     if (!m_info.has_video) {
         return {};  // audio-only — no video codec to check
     }
@@ -168,6 +174,45 @@ static int64_t extract_bwf_time_reference(AVFormatContext* fmt) {
 }
 
 Result<std::shared_ptr<MediaFile>> MediaFile::Open(const std::string& path) {
+    // ── BRAW: detect by extension, probe with SDK ──
+    if (impl::is_braw_file(path)) {
+        auto probe = impl::braw_probe_clip(path);
+        if (probe.is_error()) return probe.error();
+
+        auto& bi = probe.value();
+        MediaFileInfo info;
+        info.path = path;
+        info.has_video = true;
+        info.video_width = bi.width;
+        info.video_height = bi.height;
+        info.video_fps_num = bi.fps_num;
+        info.video_fps_den = bi.fps_den;
+        info.is_vfr = false;
+        info.rotation = 0;
+        info.video_par_num = 1;
+        info.video_par_den = 1;
+        info.has_audio = false;  // BRAW audio: deferred
+        info.audio_sample_rate = 0;
+        info.audio_channels = 0;
+        info.duration_us = bi.duration_us;
+        info.first_frame_tc = bi.first_frame_tc;
+        info.first_sample_tc = 0;
+        info.bwf_time_reference = -1;
+
+        // Same TC sanity checks as the FFmpeg path
+        constexpr int64_t MAX_TC_FRAMES = 24LL * 3600 * 120;
+        assert(info.first_frame_tc >= 0 && "BRAW: first_frame_tc must be >= 0");
+        if (info.first_frame_tc > MAX_TC_FRAMES) {
+            info.first_frame_tc = 0;  // unreasonable TC — reset to 0
+        }
+
+        auto mf_impl = std::make_unique<MediaFileImpl>();
+        mf_impl->backend = MediaFileBackend::Braw;
+        return std::make_shared<MediaFile>(std::move(mf_impl), std::move(info));
+    }
+
+    // ── FFmpeg path (all other formats) ──
+
     // Suppress FFmpeg's h264 decoder warnings (e.g. "co located POCs unavailable"
     // after seeks). These are normal and harmless but noisy on stderr.
     static std::once_flag s_ffmpeg_log_init;

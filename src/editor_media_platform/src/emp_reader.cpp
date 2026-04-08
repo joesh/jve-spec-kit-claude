@@ -3,6 +3,7 @@
 #include "impl/ffmpeg_hwaccel.h"
 #include "impl/ffmpeg_resample.h"
 #include "impl/qtrle_decode.h"
+#include "impl/braw_decode.h"
 #include "impl/media_file_impl.h"
 #include "impl/frame_impl.h"
 #include "impl/pcm_chunk_impl.h"
@@ -34,6 +35,7 @@ inline int emp_log_level() {
 #endif
 
 #include <cstdlib>  // malloc, free
+#include "impl/frame_buffer_pool.h"
 
 namespace emp {
 
@@ -78,77 +80,6 @@ Result<std::vector<DecodedFrame>> decode_frames_batch(
     TimeUS target_us, AVPacket* pkt, AVFrame* temp_frame);
 }
 
-// Thread-safe pool of pre-allocated raw frame buffers. Uses malloc (no
-// zero-init) so page faults happen in the decoder's dispatch_apply instead
-// of sequentially during allocation. Frames return their buffer here via
-// FrameImpl::RawReleaseCallback when their refcount hits zero.
-// shared_ptr so the pool outlives the Reader if cached frames still reference it.
-struct FrameBufferPool {
-    static constexpr size_t MAX_POOLED = 160;  // > MAX_VIDEO_CACHE (144)
-    std::mutex mtx;
-
-    struct Entry { uint8_t* data; size_t size; };
-    std::vector<Entry> buffers;
-
-    ~FrameBufferPool() {
-        for (auto& e : buffers) free(e.data);
-    }
-
-    // Pre-allocate buffers with malloc (no zero-init, no page faults).
-    // Pages will fault on first write inside the decoder's dispatch_apply.
-    void warm(size_t buf_size, size_t count) {
-        assert(buf_size > 0 && "FrameBufferPool::warm: buf_size must be > 0");
-        std::lock_guard<std::mutex> lock(mtx);
-        for (size_t i = buffers.size(); i < count && i < MAX_POOLED; ++i) {
-            auto* p = static_cast<uint8_t*>(malloc(buf_size));
-            assert(p && "FrameBufferPool::warm: malloc failed");
-            buffers.push_back({p, buf_size});
-        }
-    }
-
-    // Take a buffer of at least `size` bytes, or malloc fresh.
-    Entry acquire(size_t size) {
-        assert(size > 0 && "FrameBufferPool::acquire: size must be > 0");
-        std::lock_guard<std::mutex> lock(mtx);
-        for (auto it = buffers.begin(); it != buffers.end(); ++it) {
-            if (it->size >= size) {
-                Entry e = *it;
-                buffers.erase(it);
-                return e;
-            }
-        }
-        // Pool empty — fresh malloc (page faults on first write, parallelized by decoder).
-        auto* p = static_cast<uint8_t*>(malloc(size));
-        assert(p && "FrameBufferPool::acquire: malloc failed");
-        return {p, size};
-    }
-
-    // Return a buffer to the pool for reuse.
-    void release(uint8_t* data, size_t size) {
-        assert(data && "FrameBufferPool::release: data must not be null");
-        std::lock_guard<std::mutex> lock(mtx);
-        if (buffers.size() < MAX_POOLED) {
-            buffers.push_back({data, size});
-        } else {
-            free(data);
-        }
-    }
-
-    // Create a release callback for FrameImpl. Uses weak_ptr so the callback
-    // safely outlives the pool (falls back to free if pool is gone).
-    static FrameImpl::RawReleaseCallback make_release_cb(
-            std::shared_ptr<FrameBufferPool> pool) {
-        std::weak_ptr<FrameBufferPool> pool_ref = pool;
-        return [pool_ref](uint8_t* data, size_t size) {
-            if (auto p = pool_ref.lock()) {
-                p->release(data, size);
-            } else {
-                free(data);
-            }
-        };
-    }
-};
-
 // ReaderImpl holds FFmpeg decode state
 class ReaderImpl {
 public:
@@ -176,6 +107,9 @@ public:
 
     // Custom qtrle decoder (replaces FFmpeg for AV_CODEC_ID_QTRLE)
     std::unique_ptr<impl::QtrleDecoder> qtrle;
+
+    // BRAW decoder (replaces FFmpeg for .braw files)
+    std::unique_ptr<impl::BrawReaderContext> braw;
 
     // Frame buffer pool — shared_ptr so cached frames can return buffers
     // after the Reader is destroyed.
@@ -356,7 +290,15 @@ void Reader::SetMaxOutputResolution(int w, int h) {
         return true;
     };
 
-    if (m_impl->qtrle && w > 0 && h > 0) {
+    if (m_impl->braw && w > 0 && h > 0) {
+        // BRAW: use SDK's native resolution scaling
+        m_impl->braw->set_resolution_scale(w, h);
+        int out_w = m_impl->braw->output_width();
+        int out_h = m_impl->braw->output_height();
+        int frame_stride = ((out_w * 4) + 31) & ~31;
+        size_t buf_size = static_cast<size_t>(frame_stride) * out_h;
+        m_impl->frame_pool->warm(buf_size, FrameBufferPool::MAX_POOLED);
+    } else if (m_impl->qtrle && w > 0 && h > 0) {
         // qtrle: configure decoder's scaled output dimensions
         int out_w, out_h;
         if (compute_output(m_impl->qtrle->width(), m_impl->qtrle->height(),
@@ -406,6 +348,17 @@ Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset)
 
     // Get format context from asset (requires friend access)
     MediaFileImpl* asset_impl = asset->impl_ptr();
+
+    // BRAW: use SDK decoder, bypass FFmpeg entirely
+    if (asset_impl->backend == MediaFileBackend::Braw) {
+        impl->braw = std::make_unique<impl::BrawReaderContext>();
+        auto braw_result = impl->braw->init(asset->info().path);
+        if (braw_result.is_error()) return braw_result.error();
+        EMP_LOG_DEBUG("Reader::Create: BRAW decoder %dx%d path=%s",
+            asset->info().video_width, asset->info().video_height,
+            asset->info().path.c_str());
+        return std::make_shared<Reader>(std::move(impl), std::move(asset));
+    }
 
     // Initialize video codec if asset has video
     if (asset->info().has_video) {
@@ -678,6 +631,26 @@ static Result<std::shared_ptr<Frame>> decode_qtrle(
 Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
     if (!m_media_file->info().has_video) {
         return Error::unsupported("DecodeAt requires video stream");
+    }
+
+    // BRAW decode path — uses SDK, no FFmpeg involvement
+    if (m_impl->braw) {
+        const auto& info = m_media_file->info();
+        // Convert target_us to frame index (floor to frame boundary)
+        int64_t frame_index = (t_us * info.video_fps_num) / (1000000LL * info.video_fps_den);
+        if (frame_index < 0) frame_index = 0;
+
+        auto decode_start = std::chrono::steady_clock::now();
+        // PTS: convert frame_index back to microseconds (floor to grid)
+        TimeUS frame_pts = frame_index * 1000000LL * info.video_fps_den / info.video_fps_num;
+        auto result = m_impl->braw->decode_frame(
+            static_cast<uint64_t>(frame_index), frame_pts, m_impl->frame_pool);
+
+        float decode_ms = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - decode_start).count();
+        m_impl->last_batch_ms_per_frame = decode_ms;
+
+        return result;
     }
 
     MediaFileImpl* asset_impl = m_media_file->impl_ptr();
