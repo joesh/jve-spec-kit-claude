@@ -1,4 +1,4 @@
---- media_relink_dialog: blocking modal for reconnecting offline media (clip-level)
+--- media_relink_dialog: blocking modal for reconnecting media (clip-level)
 --
 -- Responsibilities:
 -- - Show dialog immediately, populate clip list asynchronously (no beachball)
@@ -46,24 +46,25 @@ local function save_matching_rules(rules)
     f:close()
 end
 
---- Build clip_info structs from offline media, pumping Qt events to stay responsive.
+--- Build clip_info structs from media records, pumping Qt events to stay responsive.
 -- Updates the media list (not per-clip — too many) and header incrementally.
+-- @param media_list table Array of media records to build clip_infos from
 -- @param widgets table {qt, status_label, media_area, header} for live UI updates
-local function build_clip_infos(offline_media, widgets)
+local function build_clip_infos(media_list, widgets)
     local Clip = require("models.clip")
     local qt = widgets.qt
     local clip_infos = {}
     local media_lines = {}
 
-    log.detail("build_clip_infos: gathering clips for %d offline media", #offline_media)
+    log.detail("build_clip_infos: gathering clips for %d media", #media_list)
     local t0 = os.clock()
 
-    for mi, media in ipairs(offline_media) do
+    for mi, media in ipairs(media_list) do
         local tc_value, tc_rate = media:get_start_tc()
         local clips = Clip.find_clips_for_media(media.id)
 
         log.detail("  media %d/%d: %s — %d clips (tc=%s@%s)",
-            mi, #offline_media, media.name or media.id:sub(1,8),
+            mi, #media_list, media.name or media.id:sub(1,8),
             #clips, tostring(tc_value), tostring(tc_rate))
 
         -- Add media-level line (shown in the list)
@@ -94,7 +95,7 @@ local function build_clip_infos(offline_media, widgets)
             if widgets.status_label then
                 qt.PROPERTIES.SET_TEXT(widgets.status_label,
                     string.format("Loading... %d/%d media (%d clips)",
-                        mi, #offline_media, #clip_infos))
+                        mi, #media_list, #clip_infos))
             end
             if widgets.media_area then
                 qt.PROPERTIES.SET_TEXT(widgets.media_area, table.concat(media_lines, "\n"))
@@ -103,7 +104,7 @@ local function build_clip_infos(offline_media, widgets)
             if widgets.header then
                 qt.PROPERTIES.SET_TEXT(widgets.header,
                     string.format("Loading... %d clip(s) from %d/%d media",
-                        #clip_infos, mi, #offline_media))
+                        #clip_infos, mi, #media_list))
             end
             qt.CONTROL.PROCESS_EVENTS()
         end
@@ -115,24 +116,24 @@ local function build_clip_infos(offline_media, widgets)
     end
     if widgets.header then
         qt.PROPERTIES.SET_TEXT(widgets.header,
-            string.format("Found %d offline clip(s) across %d media file(s)",
-                #clip_infos, #offline_media))
+            string.format("Found %d clip(s) across %d media file(s)",
+                #clip_infos, #media_list))
     end
     if widgets.status_label then
         qt.DISPLAY.SET_VISIBLE(widgets.status_label, false)
     end
 
     log.event("build_clip_infos: %d clips from %d media in %.1fs",
-        #clip_infos, #offline_media, os.clock() - t0)
+        #clip_infos, #media_list, os.clock() - t0)
     return clip_infos
 end
 
 --- Extract unique source volume/location roots from media paths.
 -- Groups at the volume level: /Volumes/Name, D:\, /Users/name, etc.
-local function extract_folder_roots(offline_media)
+local function extract_folder_roots(media_list)
     local root_counts = {}
 
-    for _, media in ipairs(offline_media) do
+    for _, media in ipairs(media_list) do
         local path = media:get_file_path()
         local root
         if path:match("^/Volumes/") then
@@ -239,10 +240,13 @@ end
 
 --- Show the reconnect media dialog (blocking modal).
 -- Shows dialog immediately, populates clip list asynchronously.
--- @param opts table|nil: {on_apply = function(results)} called before dialog closes
-function M.show(offline_media, parent_window, project_id, opts)
-    assert(offline_media and #offline_media > 0,
-        "media_relink_dialog.show: offline_media must be non-empty")
+-- @param media_list table Non-empty array of media records to relink
+-- @param parent_window userdata|nil Parent window for modal
+-- @param project_id string Active project ID
+-- @param opts table|nil {on_apply = function(results)} called before dialog closes
+function M.show(media_list, parent_window, project_id, opts)
+    assert(media_list and #media_list > 0,
+        "media_relink_dialog.show: media_list must be non-empty")
     opts = opts or {}
 
     local qt = require("core.qt_constants")
@@ -253,7 +257,7 @@ function M.show(offline_media, parent_window, project_id, opts)
 
 
     -- Extract folder roots immediately (cheap — just path parsing)
-    local folder_roots = extract_folder_roots(offline_media)
+    local folder_roots = extract_folder_roots(media_list)
     local folder_priority = folder_roots
 
     -- State
@@ -273,7 +277,7 @@ function M.show(offline_media, parent_window, project_id, opts)
     -- Header (shows loading count, updated after clip_infos built)
     -- -----------------------------------------------------------------------
     local header = qt.WIDGET.CREATE_LABEL(
-        string.format("Loading %d offline media file(s)...", #offline_media))
+        string.format("Loading %d media file(s)...", #media_list))
     qt.PROPERTIES.SET_STYLE(header, "font-weight: bold; font-size: 14px;")
     qt.LAYOUT.ADD_WIDGET(main_layout, header)
     qt.LAYOUT.ADD_SPACING(main_layout, 4)
@@ -453,12 +457,12 @@ function M.show(offline_media, parent_window, project_id, opts)
     -- -----------------------------------------------------------------------
     qt.DIALOG.SET_LAYOUT(dialog, main_layout)
     log.event("Showing Reconnect Media dialog (%d media, %d source folders)",
-        #offline_media, #folder_roots)
+        #media_list, #folder_roots)
 
     qt.DIALOG.SHOW(dialog, false)  -- non-blocking: dialog appears now
 
     -- Build clip_infos while dialog is visible (updates UI incrementally)
-    clip_infos = build_clip_infos(offline_media, {
+    clip_infos = build_clip_infos(media_list, {
         qt = qt,
         status_label = loading_label,
         media_area = media_area,

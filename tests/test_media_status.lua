@@ -400,7 +400,9 @@ do
 
     media_status.load_persisted("p1")
     local cached = media_status.get("/tmp/jve/existing_file_persist.txt")
-    check("Unsupported restored from DB", cached ~= nil and cached.error_code == "Unsupported")
+    -- "Unsupported" entries are intentionally cleared on load (stale codec errors
+    -- from prior builds get re-probed). Only "FileNotFound" persists across loads.
+    check("Unsupported cleared on reload (re-probe needed)", cached == nil)
     local cached2 = media_status.get("/tmp/jve/missing_persist.mov")
     check("FileNotFound restored from DB", cached2 ~= nil and cached2.error_code == "FileNotFound")
 

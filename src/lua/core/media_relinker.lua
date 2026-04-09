@@ -247,6 +247,86 @@ function M.find_offline_media(db, project_id)
     return offline
 end
 
+--- Find ALL non-proxy media in project (online + offline).
+-- @param db table Database connection
+-- @param project_id string Project ID
+-- @return table Array of media records
+function M.find_project_media(db, project_id)
+    assert(db, "find_project_media: db required")
+    assert(project_id, "find_project_media: project_id required")
+
+    local Media = require("models.media")
+
+    local stmt = db:prepare([[
+        SELECT id, file_path FROM media
+        WHERE project_id = ?
+    ]])
+
+    assert(stmt, "find_project_media: failed to prepare query")
+
+    local results = {}
+    local proxy_count = 0
+    stmt:bind_value(1, project_id)
+    assert(stmt:exec(), "find_project_media: query exec failed")
+    while stmt:next() do
+        local media_id = stmt:value(0)
+        local file_path = stmt:value(1)
+        if is_proxy_path(file_path) then
+            proxy_count = proxy_count + 1
+        else
+            local media = Media.load(media_id)
+            assert(media, string.format("find_project_media: failed to load media %s", media_id))
+            results[#results + 1] = media
+        end
+    end
+    stmt:finalize()
+
+    if proxy_count > 0 then
+        log.event("find_project_media: skipped %d proxy media (ProxyMedia/)", proxy_count)
+    end
+    log.event("find_project_media: %d media in project %s", #results, project_id)
+    return results
+end
+
+--- Find unique media records for a set of clip IDs (excludes proxy).
+-- Deduplicates: multiple clips sharing the same media → one media record.
+-- @param db table Database connection
+-- @param clip_ids table Array of clip ID strings
+-- @return table Array of unique media records
+function M.find_media_for_clips(db, clip_ids)
+    assert(db, "find_media_for_clips: db required")
+    assert(type(clip_ids) == "table" and #clip_ids > 0,
+        "find_media_for_clips: clip_ids must be non-empty array")
+
+    local Media = require("models.media")
+
+    local seen = {}  -- media_id → true
+    local results = {}
+    local stmt = db:prepare("SELECT media_id FROM clips WHERE id = ?")
+    assert(stmt, "find_media_for_clips: failed to prepare query")
+
+    for _, clip_id in ipairs(clip_ids) do
+        stmt:bind_value(1, clip_id)
+        assert(stmt:exec(), string.format("find_media_for_clips: query failed for clip %s", clip_id))
+        assert(stmt:next(), string.format("find_media_for_clips: clip not found: %s", clip_id))
+        local media_id = stmt:value(0)
+        assert(media_id, string.format("find_media_for_clips: clip %s has no media_id", clip_id))
+        stmt:reset()
+
+        if not seen[media_id] then
+            seen[media_id] = true
+            local media = Media.load(media_id)
+            assert(media, string.format("find_media_for_clips: media not found: %s", media_id))
+            if not is_proxy_path(media.file_path) then
+                results[#results + 1] = media
+            end
+        end
+    end
+    stmt:finalize()
+
+    log.event("find_media_for_clips: %d unique media from %d clips", #results, #clip_ids)
+    return results
+end
 
 -- =============================================================================
 -- RelinkClips: Pure Algorithm Functions (T006-T008)
@@ -279,28 +359,11 @@ function M.compute_tc_offset(stored_value, stored_rate, candidate_value, candida
     return candidate_rescaled - stored_value
 end
 
---- Adjust source_in/source_out by a TC offset.
--- Offset is in the same rate as source_in/source_out (caller must rescale).
--- If the adjusted source_in would be negative, returns nil, nil.
--- @param source_in number Current source_in
--- @param source_out number Current source_out
--- @param offset number TC offset (positive = candidate starts later)
--- @param clip_rate number Clip's native rate (for documentation, not used in math)
--- @return number|nil new_source_in, number|nil new_source_out
-function M.adjust_source_range(source_in, source_out, offset, _clip_rate)
-    assert(type(source_in) == "number", "adjust_source_range: source_in required")
-    assert(type(source_out) == "number", "adjust_source_range: source_out required")
-    assert(type(offset) == "number", "adjust_source_range: offset required")
-
-    local new_in = source_in - offset
-    local new_out = source_out - offset
-
-    if new_in < 0 then
-        return nil, nil
-    end
-
-    return new_in, new_out
-end
+-- adjust_source_range REMOVED: source_in/source_out are absolute TC and must
+-- never be modified during relink. The C++ decoder computes file_pos =
+-- source_in - first_sample_tc at decode time. Containment validation
+-- (does the new file's TC range cover the clip's source range?) happens
+-- in find_candidates_for_clip via the accept_trimmed_media check.
 
 --- Check if a candidate filename is a segment variant of an original filename.
 -- Segments have a numeric suffix after an underscore (e.g., _001, _002).
@@ -695,51 +758,18 @@ function M.relink_clips_batch(clips, options, progress_cb)
             end
         elseif #candidates == 1 then
             local cand = candidates[1]
-            local new_source_in = clip_info.source_in
-            local new_source_out = clip_info.source_out
 
-            -- Compute TC offset if candidate has different TC
-            if cand.start_tc_value and clip_info.media_start_tc_value then
-                local offset = M.compute_tc_offset(
-                    clip_info.media_start_tc_value, clip_info.media_start_tc_rate,
-                    cand.start_tc_value, cand.start_tc_rate)
-
-                if math.abs(offset) > 1 then
-                    -- Rescale offset to clip rate
-                    local offset_at_clip_rate = offset
-                    if clip_info.media_start_tc_rate ~= clip_info.fps_num / clip_info.fps_den then
-                        offset_at_clip_rate = math.floor(
-                            offset * (clip_info.fps_num / clip_info.fps_den) /
-                            clip_info.media_start_tc_rate + 0.5)
-                    end
-
-                    local adj_in, adj_out = M.adjust_source_range(
-                        clip_info.source_in, clip_info.source_out, offset_at_clip_rate, clip_info.fps_num)
-
-                    if adj_in then
-                        new_source_in = adj_in
-                        new_source_out = adj_out
-                    else
-                        -- Clip falls outside candidate range
-                        results.failed[#results.failed + 1] = {
-                            clip_id = clip_info.clip_id,
-                            reason = "clip source range falls outside candidate after TC offset",
-                        }
-                        if progress_cb then
-                            progress_cb(math.floor(i / total * 100), nil,
-                                string.format("[--] %s (out of range after TC offset)", clip_name))
-                        end
-                        goto continue
-                    end
-                end
-            end
+            -- source_in/source_out are absolute TC — they identify WHAT content
+            -- to play, not WHERE in a specific file. Relink changes which file
+            -- backs the clip; the C++ decoder computes file_pos = source_in -
+            -- first_sample_tc at decode time. source_in NEVER changes on relink.
 
             results.relinked[#results.relinked + 1] = {
                 clip_id = clip_info.clip_id,
                 original_media_id = clip_info.media_id,
                 new_media_id = nil,  -- reuse existing unless segment
-                new_source_in = new_source_in,
-                new_source_out = new_source_out,
+                new_source_in = clip_info.source_in,
+                new_source_out = clip_info.source_out,
                 new_path = cand.path,
                 strategy = cand.is_segment and "segment" or "filename",
             }
@@ -768,8 +798,6 @@ function M.relink_clips_batch(clips, options, progress_cb)
                     string.format("[??] %s (%d candidates)", clip_name, #candidates))
             end
         end
-
-        ::continue::
     end
 
     if progress_cb then

@@ -1,7 +1,8 @@
---- ShowRelinkDialog command: find offline media and show reconnect dialog
+--- ShowRelinkDialog command: relink master clips to new media locations
 --
 -- Responsibilities:
--- - Scan project media for offline files via media_relinker.find_offline_media
+-- - If clips selected: relink their master clips (deduplicated)
+-- - If no selection: relink all master clips in the project
 -- - Show reconnect dialog with clip list, matching rules, search directory
 -- - Auto-resolve duplicate media using folder priority
 -- - On user confirm, dispatch RelinkClips with clip_relink_map + media changes
@@ -37,14 +38,29 @@ function M.register(executors, _undoers, db)
         local project_id = timeline_state.get_project_id()
         assert(project_id, "ShowRelinkDialog: no project open")
 
-        local offline = media_relinker.find_offline_media(db, project_id)
-
-        if #offline == 0 then
-            log.event("ShowRelinkDialog: no offline media found")
-            return { success = true, message = "All media is online" }
+        -- Selected clips → their master clips; no selection → all project media
+        local selected_clips = timeline_state.get_selected_clips()
+        local selected_ids = {}
+        for _, clip in ipairs(selected_clips or {}) do
+            if clip.clip_kind ~= "gap" then
+                selected_ids[#selected_ids + 1] = clip.id
+            end
         end
 
-        log.event("ShowRelinkDialog: found %d offline media file(s)", #offline)
+        local media_list
+        if #selected_ids > 0 then
+            media_list = media_relinker.find_media_for_clips(db, selected_ids)
+            log.event("ShowRelinkDialog: %d master clip(s) from %d selected clip(s)",
+                #media_list, #selected_ids)
+        else
+            media_list = media_relinker.find_project_media(db, project_id)
+            log.event("ShowRelinkDialog: %d master clip(s) in project", #media_list)
+        end
+
+        if #media_list == 0 then
+            log.event("ShowRelinkDialog: no media to relink")
+            return { success = true, message = "No media to relink" }
+        end
 
         local ui_state = require("ui.ui_state")
         local parent_window = ui_state.get_main_window and ui_state.get_main_window() or nil
@@ -160,7 +176,7 @@ function M.register(executors, _undoers, db)
             })
         end
 
-        local results = media_relink_dialog.show(offline, parent_window, project_id,
+        local results = media_relink_dialog.show(media_list, parent_window, project_id,
             { on_apply = do_apply })
 
         if not results then

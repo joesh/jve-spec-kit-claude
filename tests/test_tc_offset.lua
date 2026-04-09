@@ -64,67 +64,9 @@ do
 end
 
 ---------------------------------------------------------------------------------
--- adjust_source_range(source_in, source_out, offset, clip_rate)
--- Returns new_source_in, new_source_out after applying TC offset.
--- If new_source_in < 0 → returns nil, nil (clip falls outside candidate range).
--- offset is in frames at the same rate as source_in/source_out (clip_rate).
+-- adjust_source_range REMOVED — source_in/source_out are absolute TC and must
+-- never be modified during relink. TC is the source of truth for content identity.
+-- C++ computes file_pos = source_in - first_sample_tc at decode time.
 ---------------------------------------------------------------------------------
-
-print("\n--- adjust_source_range ---")
-
--- Test 7: Zero offset → unchanged
-do
-    local new_in, new_out = relinker.adjust_source_range(100, 200, 0, 25)
-    assert(new_in == 100, string.format("zero offset in: expected 100, got %s", tostring(new_in)))
-    assert(new_out == 200, string.format("zero offset out: expected 200, got %s", tostring(new_out)))
-    print("  ✓ zero offset → source range unchanged")
-end
-
--- Test 8: Positive offset (candidate starts later) → source_in decreases
--- If candidate starts 25 frames later, the clip's source_in relative to
--- the candidate must shift back by 25 frames.
-do
-    local new_in, new_out = relinker.adjust_source_range(100, 200, 25, 25)
-    assert(new_in == 75, string.format("positive offset in: expected 75, got %s", tostring(new_in)))
-    assert(new_out == 175, string.format("positive offset out: expected 175, got %s", tostring(new_out)))
-    print("  ✓ positive offset → source range shifted back")
-end
-
--- Test 9: Negative offset (candidate starts earlier) → source_in increases
-do
-    local new_in, new_out = relinker.adjust_source_range(100, 200, -50, 25)
-    assert(new_in == 150, string.format("negative offset in: expected 150, got %s", tostring(new_in)))
-    assert(new_out == 250, string.format("negative offset out: expected 250, got %s", tostring(new_out)))
-    print("  ✓ negative offset → source range shifted forward")
-end
-
--- Test 10: Offset makes source_in negative → returns nil (out of range)
-do
-    local new_in, new_out = relinker.adjust_source_range(10, 50, 25, 25)
-    assert(new_in == nil, "source_in < 0: expected nil")
-    assert(new_out == nil, "source_out when OOR: expected nil")
-    print("  ✓ offset causing negative source_in → nil, nil")
-end
-
--- Test 11: Cross-rate offset adjustment (offset computed at stored_rate,
--- but source_in/source_out are in clip_rate — the caller must rescale
--- the offset to clip_rate before calling this function)
--- This test verifies the function works with already-rescaled values.
-do
-    -- Audio clip: source_in=480000 samples, source_out=960000 samples
-    -- Offset=48000 samples (1 second earlier in candidate)
-    local new_in, new_out = relinker.adjust_source_range(480000, 960000, 48000, 48000)
-    assert(new_in == 432000, string.format("audio offset in: expected 432000, got %s", tostring(new_in)))
-    assert(new_out == 912000, string.format("audio offset out: expected 912000, got %s", tostring(new_out)))
-    print("  ✓ audio sample offset adjustment works")
-end
-
--- Test 12: Edge case — source_in exactly equals offset → new_source_in = 0 (valid)
-do
-    local new_in, new_out = relinker.adjust_source_range(50, 100, 50, 25)
-    assert(new_in == 0, string.format("edge zero in: expected 0, got %s", tostring(new_in)))
-    assert(new_out == 50, string.format("edge zero out: expected 50, got %s", tostring(new_out)))
-    print("  ✓ source_in exactly at offset → new_source_in = 0 (valid)")
-end
 
 print("\n✅ test_tc_offset.lua passed")

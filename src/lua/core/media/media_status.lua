@@ -258,8 +258,6 @@ function M.load_persisted(project_id)
             end
         end
     end
-    -- Defer FS watch registration to start_background_probe (batched, non-blocking)
-    M._deferred_watch_paths = map
     if cleared_count > 0 then
         log.event("media_status: cleared %d stale 'Unsupported' entries (codec now available)", cleared_count)
     end
@@ -376,6 +374,19 @@ function M._on_file_changed(path)
     if status_cache[path] then
         reprobe_and_notify(path)
     end
+
+    -- Invalidate peak cache for this media file (waveform regeneration).
+    -- Guard: FS callback can fire after project close (no DB connection).
+    local database = require("core.database")
+    if not database.has_connection() then return end
+    local Media = require("models.media")
+    local media_id = Media.find_id_by_path(path)
+    if media_id then
+        local peak_cache = require("core.media.peak_cache")
+        peak_cache.invalidate(media_id)
+    else
+        log.warn("media_status: file changed but no media record for %s — peak cache not invalidated", path)
+    end
 end
 
 --- FS callback: a watched directory changed (file added/removed).
@@ -412,35 +423,6 @@ end
 -- Background codec probe: worker thread probes all project media
 -- ============================================================
 
---- Register FS watches for persisted paths in small non-blocking batches.
-local function register_deferred_watches()
-    if not M._deferred_watch_paths then return end
-    init_fs()
-    local watch_list = {}
-    for path, entry in pairs(M._deferred_watch_paths) do
-        if type(entry) == "table" and status_cache[path] then
-            watch_list[#watch_list + 1] = path
-        end
-    end
-    M._deferred_watch_paths = nil
-
-    local WATCH_BATCH = 50
-    local function register_batch(start_idx)
-        local end_idx = math.min(start_idx + WATCH_BATCH - 1, #watch_list)
-        for i = start_idx, end_idx do
-            watch_path(watch_list[i], status_cache[watch_list[i]])
-        end
-        if end_idx < #watch_list and type(qt_create_single_shot_timer) == "function" then
-            qt_create_single_shot_timer(0, function()
-                register_batch(end_idx + 1)
-            end)
-        end
-    end
-    if #watch_list > 0 then
-        register_batch(1)
-    end
-end
-
 --- Start a background codec probe for all media in the project.
 -- Probes active sequence media first, then remaining project media.
 -- Results arrive in batches on the main thread; views are signalled to repaint.
@@ -455,35 +437,29 @@ function M.start_background_probe(active_sequence_id)
     local db = get_database()
 
     -- Collect media paths: active sequence first, then the rest.
-    -- Skip paths already in cache (loaded from DB or probed this session).
+    -- Always re-probe ALL paths — persisted cache is a first-paint hint,
+    -- not authoritative. Files may have moved/deleted between sessions.
     local active_paths = {}
     local active_set = {}
-    local skipped = 0
     if active_sequence_id and active_sequence_id ~= "" then
         local clips = db.load_clips(active_sequence_id)
         for _, clip in ipairs(clips) do
             local p = clip.media_path or clip.file_path
             if p and p ~= "" and not active_set[p] then
-                if status_cache[p] then
-                    skipped = skipped + 1
-                else
-                    active_set[p] = true
-                    active_paths[#active_paths + 1] = p
-                end
+                active_set[p] = true
+                active_paths[#active_paths + 1] = p
             end
         end
     end
 
     local all_media = db.load_media()
     local rest_paths = {}
+    local rest_set = {}
     for _, m in ipairs(all_media) do
         local p = m.file_path
-        if p and p ~= "" and not active_set[p] then
-            if status_cache[p] then
-                skipped = skipped + 1
-            else
-                rest_paths[#rest_paths + 1] = p
-            end
+        if p and p ~= "" and not active_set[p] and not rest_set[p] then
+            rest_set[p] = true
+            rest_paths[#rest_paths + 1] = p
         end
     end
 
@@ -492,15 +468,13 @@ function M.start_background_probe(active_sequence_id)
     for _, p in ipairs(active_paths) do all_paths[#all_paths + 1] = p end
     for _, p in ipairs(rest_paths) do all_paths[#all_paths + 1] = p end
 
-    register_deferred_watches()
-
     if #all_paths == 0 then
-        log.event("media_status: background probe skipped (all %d paths already confirmed)", skipped)
+        log.event("media_status: background probe skipped (no media paths)")
         return
     end
 
-    log.event("media_status: bg probe starting (%d to scan, %d active-seq, %d cached)",
-        #all_paths, #active_paths, skipped)
+    log.event("media_status: bg probe starting (%d to scan, %d active-seq)",
+        #all_paths, #active_paths)
 
     qt.EMP.CODEC_PROBE_START(all_paths, function(results, is_final)
         -- Main thread callback: update cache, register watches, signal changes
