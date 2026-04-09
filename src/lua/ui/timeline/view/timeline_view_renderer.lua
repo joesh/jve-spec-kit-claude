@@ -143,7 +143,6 @@ local function get_preview_clip(state_module, preview_clip_cache, preview_entry)
 end
 
 local PREVIEW_RECT_COLOR = "#ffff00"
-local SHIFT_BLOCK_COLOR = "#88aaff"  -- blue tint distinguishes bulk shift from edited clips
 
 local function draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height, viewport_duration)
     if not clip or not clip.track_id or not start_value or not duration_value then
@@ -286,36 +285,6 @@ local function compute_shift_block_bounds(track_clips, block_start, delta_frames
     return min_start, max_end
 end
 
---- Draw a single bounding outline for a shift block on one track.
--- Instead of per-clip outlines, this draws one rectangle around the entire
--- region that shifts as a unit. Visually communicates "opaque block."
-local function draw_shift_block_outline(view, track_id, block_start_frames, block_end_frames,
-                                        state_module, width, height, viewport_duration)
-    local track_y = view.get_track_y_by_id(track_id, height)
-    if track_y < 0 then return end
-    local track_height = view.get_track_visual_height(track_id)
-    if not track_height or track_height <= 0 then return end
-
-    local start_px = state_module.time_to_pixel(block_start_frames, width)
-    local end_px = state_module.time_to_pixel(block_end_frames, width)
-
-    -- Viewport cull + clip-to-viewport
-    if start_px > width or end_px < 0 then return end
-    if start_px < 0 then start_px = 0 end
-    if end_px > width then end_px = width end
-
-    local block_width = end_px - start_px
-    if block_width < 1 then return end
-
-    local block_y = track_y + 5
-    local block_h = track_height - 10
-    -- Single outline: top, bottom, left, right
-    timeline.add_rect(view.widget, start_px, block_y, block_width, 2, SHIFT_BLOCK_COLOR)
-    timeline.add_rect(view.widget, start_px, block_y + block_h - 2, block_width, 2, SHIFT_BLOCK_COLOR)
-    timeline.add_rect(view.widget, start_px, block_y, 2, block_h, SHIFT_BLOCK_COLOR)
-    timeline.add_rect(view.widget, start_px + block_width - 2, block_y, 2, block_h, SHIFT_BLOCK_COLOR)
-end
-
 local function render_shift_block_outlines(view, preview_data, state_module, width, height, viewport_duration, viewport_start, viewport_end)
     if not preview_data or type(preview_data.shift_blocks) ~= "table" or #preview_data.shift_blocks == 0 then
         return
@@ -350,6 +319,14 @@ local function render_shift_block_outlines(view, preview_data, state_module, wid
         if entry and entry.clip_id then excluded[entry.clip_id] = true end
     end
 
+    -- Compute bounding box across ALL tracks — one big outline for the
+    -- entire shift block, spanning from topmost to bottommost affected track.
+    local global_min_frames = math.huge
+    local global_max_frames = -math.huge
+    local min_track_y = math.huge
+    local max_track_bottom = -math.huge
+    local found_any = false
+
     local visible_tracks = view.filtered_tracks or {}
     for _, track in ipairs(visible_tracks) do
         local track_id = track and track.id
@@ -361,13 +338,45 @@ local function render_shift_block_outlines(view, preview_data, state_module, wid
                     local min_start, max_end = compute_shift_block_bounds(
                         track_clips, block.start_frames, block.delta_frames, excluded)
                     if min_start then
-                        draw_shift_block_outline(view, track_id, min_start, max_end,
-                            state_module, width, height, viewport_duration)
+                        if min_start < global_min_frames then global_min_frames = min_start end
+                        if max_end > global_max_frames then global_max_frames = max_end end
+
+                        local ty = view.get_track_y_by_id(track_id, height)
+                        local th = view.get_track_visual_height(track_id)
+                        if ty >= 0 and th and th > 0 then
+                            if ty < min_track_y then min_track_y = ty end
+                            if ty + th > max_track_bottom then max_track_bottom = ty + th end
+                            found_any = true
+                        end
                     end
                 end
             end
         end
     end
+
+    if not found_any then return end
+
+    -- Convert frame bounds to pixels
+    local start_px = state_module.time_to_pixel(global_min_frames, width)
+    local end_px = state_module.time_to_pixel(global_max_frames, width)
+
+    -- Viewport cull + clip
+    if start_px > width or end_px < 0 then return end
+    if start_px < 0 then start_px = 0 end
+    if end_px > width then end_px = width end
+
+    local block_width = end_px - start_px
+    if block_width < 1 then return end
+
+    local block_y = min_track_y + 5
+    local block_h = (max_track_bottom - min_track_y) - 10
+    if block_h < 1 then return end
+
+    -- One big outline around the entire shift block
+    timeline.add_rect(view.widget, start_px, block_y, block_width, 2, PREVIEW_RECT_COLOR)
+    timeline.add_rect(view.widget, start_px, block_y + block_h - 2, block_width, 2, PREVIEW_RECT_COLOR)
+    timeline.add_rect(view.widget, start_px, block_y, 2, block_h, PREVIEW_RECT_COLOR)
+    timeline.add_rect(view.widget, start_px + block_width - 2, block_y, 2, block_h, PREVIEW_RECT_COLOR)
 end
 
 local function render_edge_handle(view, clip, normalized_edge, raw_edge_type, start_value, duration_value, color, state_module, width, height, viewport_duration)
