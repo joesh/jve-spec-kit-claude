@@ -4,7 +4,7 @@
 
 ## Summary
 
-Edit operations currently scan all clips on all tracks. This plan introduces a bounded edit region invariant: operations examine only the clips participating in the edit. Redo skips the executor entirely and applies persisted mutations with pre/post-condition validation. Gap recomputation is scoped to affected tracks.
+Edit operations currently scan all clips on all tracks. This plan introduces a bounded edit region invariant: operations examine only the clips participating in the edit. Downstream shifts become a bulk per-track operation with one max-shift check. Gap special-casing is removed (gaps are clips). Gap recomputation is scoped to affected tracks.
 
 ## Technical Context
 **Language/Version**: Lua (LuaJIT) + C++ (Qt6)  
@@ -13,20 +13,20 @@ Edit operations currently scan all clips on all tracks. This plan introduces a b
 **Testing**: LuaJIT test harness, `make -j4`  
 **Target Platform**: macOS (Darwin)  
 **Project Type**: Single (desktop video editor)  
-**Performance Goals**: Roll edit redo < 1ms; execute O(affected clips)  
+**Performance Goals**: Roll edit O(2 clips + neighbors); ripple O(edit region) + O(1 per track)  
 **Constraints**: No fallbacks, fail-fast asserts, no backward compatibility  
 **Scale/Scope**: 20+ track sequences, hundreds of clips per sequence
 
 ## Constitution Check
 
-**I. Modular Architecture**: Pass — bounded clip set is a standalone module; scoped gap recompute is a parameter addition to existing module  
-**II. Command-Driven Interface**: Pass — redo fast path integrates into existing command_manager redo flow  
-**III. Test-First Development**: Pass — TDD: write tests that measure clip access counts, then implement bounds  
+**I. Modular Architecture**: Pass — bounded clip set is a standalone module; scoped gap recompute is a parameter addition  
+**II. Command-Driven Interface**: Pass — integrates into existing command_manager execute flow  
+**III. Test-First Development**: Pass — TDD: tests for bounded access, max-shift check, gap-as-clip constraints  
 **IV. Documentation-Driven Specifications**: Pass — this plan  
 **V. Template-Based Consistency**: Pass — follows existing command/mutation patterns  
-**VI. Fail-Fast Assert Policy**: Pass — bounds enforced by asserts, pre/post-condition checks are asserts  
-**VII. No Fallbacks or Default Values**: Pass — no fallback to full recompute on redo failure  
-**VIII. No Backward Compatibility**: Pass — old redo path replaced, not shimmed  
+**VI. Fail-Fast Assert Policy**: Pass — bounds enforced by asserts  
+**VII. No Fallbacks or Default Values**: Pass — no fallback to full recomputation  
+**VIII. No Backward Compatibility**: Pass — old per-clip downstream path replaced, not shimmed  
 
 ## Project Structure
 
@@ -34,13 +34,13 @@ Edit operations currently scan all clips on all tracks. This plan introduces a b
 ```
 src/lua/
   core/
-    command_manager.lua          — redo fast path, skip executor on redo
     commands/
-      batch_ripple_edit.lua      — bounded build_clip_cache, bounded_clip_set proxy
+      batch_ripple_edit.lua      — bounded build_clip_cache, remove gap special-casing,
+                                   replace per-clip downstream with bulk shift + max-shift check
     ripple/batch/
-      pipeline.lua               — no change (pipeline steps already correct if cache is bounded)
-      context.lua                — no change
+      pipeline.lua               — no change (steps already correct if cache is bounded)
     gap_lifecycle.lua            — no change (already per-track)
+    timeline_active_region.lua   — no change (snapshot already scoped)
   models/
     sequence.lua                 — mutation_generation counter
   ui/timeline/
@@ -50,7 +50,8 @@ src/lua/
     timeline_state.lua           — pass affected_track_ids to recompute_gap_clips
 
 tests/
-  test_bounded_edit_region.lua       — invariant enforcement tests
+  test_bounded_edit_region.lua       — bounded access invariant tests
+  test_max_shift_check.lua           — multi-track max-shift computation tests
   test_scoped_gap_recompute.lua      — gap recompute scoping tests
   test_sequence_generation.lua       — generation counter tests
 ```
@@ -87,7 +88,6 @@ The current code conflates these two scopes: it feeds downstream clips into `com
 **Gap abstraction restored:**
 - Remove all `clip_kind ~= "gap"` checks from the pipeline
 - Gaps participate in neighbor bounds, constraints, edge injection — same as media clips
-- `post_boundary_first_clip` naturally points to media clips because the boundary lookup finds the first clip at/after the boundary (gap or media), and the max shift check handles both uniformly
 
 ### Component 2: Scoped Gap Recomputation (timeline_core_state.lua)
 
@@ -119,7 +119,7 @@ Incremented by `command_manager` after any successful mutation on a sequence. Re
 
 **sequences table**: Add `mutation_generation INTEGER NOT NULL DEFAULT 0`
 
-**__timeline_mutations format** (no change to structure, document existing):
+**__timeline_mutations format** (simplified bulk_shifts):
 ```lua
 {
   sequence_id = "...",
@@ -127,7 +127,7 @@ Incremented by `command_manager` after any successful mutation on a sequence. Re
   deletes = { clip_id, ... },
   inserts = { { full clip record }, ... },
   bulk_shifts = { { track_id, shift_frames, start_frame } },
-  -- NEW: affected_track_ids (derived, not persisted — computed from above)
+  -- affected_track_ids derived at apply time, not persisted
 }
 ```
 
@@ -136,7 +136,7 @@ Incremented by `command_manager` after any successful mutation on a sequence. Re
 - `collect_downstream_clips` — replaced by per-track bulk shift
 - Per-clip `compute_shift_bounds` on downstream clips — replaced by per-track max shift check
 - `clip_kind ~= "gap"` checks in `prime_neighbor_bounds_cache`, `collect_downstream_clips`, `build_clip_cache`
-- `bulk_shift_anchor_clips`, `bulk_shift_anchor_lookup` — downstream is handled uniformly
+- `bulk_shift_anchor_clips`, `bulk_shift_anchor_lookup` — downstream handled uniformly
 - `track_clip_positions` — never read by anything
 
 ## Phase 2: Task Planning Approach
@@ -153,7 +153,7 @@ Incremented by `command_manager` after any successful mutation on a sequence. Re
 8. **Mutation track propagation** — clip_state returns affected tracks, timeline_state forwards
 9. **Remove dead code** — `collect_downstream_clips`, `bulk_shift_anchor_*`, `track_clip_positions`
 10. **Sequence generation counter** — schema + model + increment logic
-11. **Integration validation** — verify with real project, measure redo timing
+11. **Integration validation** — verify with real project, measure edit timing
 
 **Ordering**: 1-2 parallel (tests first). 3-6 sequential (core refactor). 7-8 parallel. 9-10 independent. 11 last.
 
