@@ -31,6 +31,7 @@ local timecode = require("core.timecode")
 local timecode_input = require("core.timecode_input")
 local Track = require("models.track")
 local Signals = require("core.signals")
+local track_state = require("ui.timeline.state.track_state")
 
 -- luacheck: globals qt_line_edit_select_all qt_scroll_area_h_scroll_by qt_scroll_area_h_scroll_info
 -- luacheck: globals qt_set_scroll_area_h_scroll_handler
@@ -1082,6 +1083,22 @@ local function create_audio_headers()
         local rec_btn = qt_constants.WIDGET.CREATE_BUTTON("R")
         qt_constants.PROPERTIES.SET_STYLE(rec_btn, build_track_header_btn_stylesheet(false))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
+
+        -- Waveform toggle button (wired — UI state only, no undo)
+        local wave_enabled = track_state.get_waveform_enabled(captured_track_id)
+        local wave_btn = qt_constants.WIDGET.CREATE_BUTTON("W")
+        qt_constants.PROPERTIES.SET_STYLE(wave_btn,
+            build_track_header_btn_stylesheet(wave_enabled, "#4488aa"))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, wave_btn)
+
+        local captured_wave_btn = wave_btn
+        local wave_handler = register_track_btn_handler(function()
+            local current = track_state.get_waveform_enabled(captured_track_id)
+            track_state.set_waveform_enabled(captured_track_id, not current)
+            qt_constants.PROPERTIES.SET_STYLE(captured_wave_btn,
+                build_track_header_btn_stylesheet(not current, "#4488aa"))
+        end)
+        qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(wave_btn, wave_handler)
 
         qt_constants.LAYOUT.ADD_WIDGET(audio_splitter, header)
         audio_headers[i] = header

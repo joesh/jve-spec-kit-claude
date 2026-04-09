@@ -208,6 +208,10 @@ function M.post_open_init(sequence, project_path)
 
     log.event("Opened project: %s (sequence: %s)", sequence.project_id, sequence.id)
 
+    -- Initialize peak cache and queue waveform generation for all audio media
+    local peak_cache = require("core.media.peak_cache")
+    peak_cache.init_for_project(sequence.project_id)
+
     return { success = true, project_id = sequence.project_id, sequence_id = sequence.id }
 end
 
