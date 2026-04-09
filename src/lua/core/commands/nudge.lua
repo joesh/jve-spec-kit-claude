@@ -17,6 +17,7 @@ local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local clip_mutator = require("core.clip_mutator")
+local frame_utils = require("core.frame_utils")
 local timeline_state = require('ui.timeline.timeline_state')
 
 local SPEC = {
@@ -173,35 +174,60 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             nudge_type = "edges"
             local preview_clips = {}
 
+            -- Get sequence rate for source unit conversion.
+            -- Query from DB (not timeline_state) so tests without UI init work.
+            local seq_fps_num, seq_fps_den
+            local seq_id = active_sequence_id or args.sequence_id
+            if seq_id then
+                local Sequence = require("models.sequence")
+                local seq = Sequence.load(seq_id)
+                if seq and seq.frame_rate then
+                    seq_fps_num = seq.frame_rate.fps_numerator
+                    seq_fps_den = seq.frame_rate.fps_denominator
+                end
+            end
+            assert(seq_fps_num and seq_fps_num > 0 and seq_fps_den and seq_fps_den > 0,
+                string.format("Nudge: sequence frame rate required (seq_id=%s)", tostring(seq_id)))
+
             for _, edge_info in ipairs(args.selected_edges) do
                 local clip = Clip.load(edge_info.clip_id)
                 -- NSF: If user selected an edge, the clip MUST exist
                 assert(clip, string.format("Nudge: selected edge clip %s not found - selection is stale", edge_info.clip_id))
-                
+
                 register_original_state(clip)
 
+                local clip_fps_num = clip.fps_numerator or (clip.rate and clip.rate.fps_numerator)
+                local clip_fps_den = clip.fps_denominator or (clip.rate and clip.rate.fps_denominator)
+                assert(clip_fps_num and clip_fps_den,
+                    string.format("Nudge: clip %s missing fps", tostring(clip.id)))
+
                 if edge_info.edge_type == "in" then
-                    -- Nudge 'in' edge means moving it right (shortening) or left (lengthening)
+                    -- Nudge 'in' edge: source_in moves, source_out stays
                     local new_timeline_start = clip.timeline_start + nudge_frames
                     local new_duration = clip.duration - nudge_frames
-                    local new_source_in = clip.source_in + nudge_frames
+                    local source_delta = frame_utils.timeline_to_source(
+                        nudge_frames, clip_fps_num, clip_fps_den, seq_fps_num, seq_fps_den)
 
                     -- Clamp duration to minimum 1 frame
                     if new_duration < 1 then new_duration = 1 end
 
                     clip.timeline_start = new_timeline_start
                     clip.duration = new_duration
-                    clip.source_in = new_source_in
+                    clip.source_in = clip.source_in + source_delta
+                    -- source_out unchanged
 
                 elseif edge_info.edge_type == "out" then
-                    -- Nudge 'out' edge means moving it right (lengthening) or left (shortening)
+                    -- Nudge 'out' edge: source_out moves, source_in stays
                     local new_duration = clip.duration + nudge_frames
+                    local source_delta = frame_utils.timeline_to_source(
+                        nudge_frames, clip_fps_num, clip_fps_den, seq_fps_num, seq_fps_den)
 
                     -- Clamp duration to minimum 1 frame
                     if new_duration < 1 then new_duration = 1 end
 
                     clip.duration = new_duration
-                    clip.source_out = clip.source_in + new_duration
+                    clip.source_out = clip.source_out + source_delta
+                    -- source_in unchanged
                 end
 
                 -- Clamp timeline_start to 0 or greater

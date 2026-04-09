@@ -16,6 +16,7 @@
 local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
+local frame_utils = require("core.frame_utils")
 local database = require('core.database')
 
 local SPEC = {
@@ -72,29 +73,39 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     -- Note: revert_occlusion_actions removed - occlusion system is disabled
 
-    local function apply_edge_ripple(clip, edge_type, delta_frames)
+    local function timeline_delta_to_source(delta_frames_val, clip_obj, sfps_num, sfps_den)
+        local clip_num = clip_obj.fps_numerator or (clip_obj.rate and clip_obj.rate.fps_numerator)
+        local clip_den = clip_obj.fps_denominator or (clip_obj.rate and clip_obj.rate.fps_denominator)
+        assert(clip_num and clip_den, string.format(
+            "apply_edge_ripple: clip %s missing fps", tostring(clip_obj.id)))
+        return frame_utils.timeline_to_source(delta_frames_val, clip_num, clip_den, sfps_num, sfps_den)
+    end
+
+    local function apply_edge_ripple(clip, edge_type, delta_frames, sfps_num, sfps_den)
         -- All coordinates are integers
         assert(type(clip.duration) == "number", "apply_edge_ripple: clip duration must be integer")
 
         if edge_type == "in" then
-            -- Ripple in: shorten duration, advance source_in
+            -- Ripple in: shorten duration, advance source_in. source_out stays.
             local new_dur = clip.duration - delta_frames
-            if new_dur < 1 then return nil, false, true end -- Too short
+            if new_dur < 1 then return nil, false, true end
 
             clip.duration = new_dur
-            -- clip.timeline_start UNCHANGED
-
             if clip.media_id then
-                clip.source_in = clip.source_in + delta_frames
+                local source_delta = timeline_delta_to_source(delta_frames, clip, sfps_num, sfps_den)
+                clip.source_in = clip.source_in + source_delta
+                -- source_out unchanged: left edge moves, right edge stays
             end
         elseif edge_type == "out" then
-            -- Ripple out: change duration
+            -- Ripple out: change duration, move source_out. source_in stays.
             local new_dur = clip.duration + delta_frames
             if new_dur < 1 then return nil, false, true end
 
             clip.duration = new_dur
             if clip.media_id then
-                clip.source_out = clip.source_in + new_dur
+                local source_delta = timeline_delta_to_source(delta_frames, clip, sfps_num, sfps_den)
+                clip.source_out = clip.source_out + source_delta
+                -- source_in unchanged: right edge moves, left edge stays
             end
         end
 
@@ -279,7 +290,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             shift_frames = -delta_frames
             ripple_time = original_end
         else
-            local _, apply_ok, apply_deleted = apply_edge_ripple(clip, edge_info.edge_type, delta_frames)
+            local _, apply_ok, apply_deleted = apply_edge_ripple(clip, edge_info.edge_type, delta_frames, seq_fps_num, seq_fps_den)
             success = apply_ok
             deleted_clip = apply_deleted
             if not success then

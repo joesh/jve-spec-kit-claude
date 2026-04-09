@@ -16,7 +16,35 @@
 local ClipMutator = {}
 local uuid = require("uuid")
 local log = require("core.logger").for_area("commands")
+local frame_utils = require("core.frame_utils")
 local krono_ok, krono = pcall(require, "core.krono")
+
+--- Look up sequence fps from a track_id via DB join.
+-- Returns fps_numerator, fps_denominator or nil, nil.
+local function lookup_seq_fps_for_track(db, track_id)
+    local stmt = db:prepare(
+        "SELECT s.fps_numerator, s.fps_denominator FROM tracks t JOIN sequences s ON t.sequence_id = s.id WHERE t.id = ?")
+    if not stmt then return nil, nil end
+    stmt:bind_value(1, track_id)
+    local num, den
+    if stmt:exec() and stmt:next() then
+        num = stmt:value(0)
+        den = stmt:value(1)
+    end
+    stmt:finalize()
+    return num, den
+end
+
+--- Extract seq fps from a clip row, using the DB-queried rate when
+--- the row doesn't carry it (e.g., clips from pending caches).
+-- Asserts if neither source has valid fps.
+local function resolve_seq_fps(row, db_seq_fps_num, db_seq_fps_den)
+    local sn = row.seq_fps_numerator or db_seq_fps_num
+    local sd = row.seq_fps_denominator or db_seq_fps_den
+    assert(sn and sn > 0, string.format(
+        "clip_mutator: missing seq_fps for clip %s", tostring(row.id)))
+    return sn, sd
+end
 
     local function clone_state(row)
 	    return {
@@ -297,6 +325,14 @@ function ClipMutator.resolve_occlusions(db, params)
     local end_time = start_value + duration
     local exclude_id = params.exclude_clip_id
 
+    -- Sequence rate for source coordinate conversion (from DB via track→sequence JOIN).
+    -- Clips from load_track_clips carry seq_fps fields; clips from pending caches may not.
+    local track_seq_fps_num, track_seq_fps_den = lookup_seq_fps_for_track(db, track_id)
+
+    local function get_seq_fps(row_or_original)
+        return resolve_seq_fps(row_or_original, track_seq_fps_num, track_seq_fps_den)
+    end
+
     local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
     local krono_start = krono_enabled and krono.now and krono.now() or nil
     local track_clips
@@ -357,6 +393,7 @@ function ClipMutator.resolve_occlusions(db, params)
         end
 
         -- Overlap on tail (trim right side): keep start, shorten duration to end at start_value.
+        -- source_in stays, source_out moves (right edge trim).
         if clip_start < start_value and clip_end <= end_time then
             local new_duration = start_value - clip_start
             if new_duration < 1 then
@@ -364,14 +401,18 @@ function ClipMutator.resolve_occlusions(db, params)
                 goto continue_loop
             end
 
+            local trim_delta = new_duration - row.duration  -- negative (shrinking)
             row.duration = new_duration
-            row.source_out = get_source_in(row) + new_duration
+            row.source_out = row.source_out + frame_utils.timeline_to_source(
+                trim_delta, row.fps_numerator, row.fps_denominator,
+                get_seq_fps(row))
 
             table.insert(actions, plan_update(row, original))
             goto continue_loop
         end
 
         -- Overlap on head (trim left side): shift start to end_time, shorten duration from the front.
+        -- source_in moves by trim_amount (converted to source units), source_out stays.
         if clip_start >= start_value and clip_end > end_time then
             local trim_amount = end_time - clip_start
             local new_duration = clip_end - end_time
@@ -382,7 +423,9 @@ function ClipMutator.resolve_occlusions(db, params)
 
             row.timeline_start = end_time
             row.duration = new_duration
-            row.source_in = get_source_in(row) + trim_amount
+            row.source_in = get_source_in(row) + frame_utils.timeline_to_source(
+                trim_amount, row.fps_numerator, row.fps_denominator,
+                get_seq_fps(row))
             row.source_out = require_source_out(original, "resolve_occlusions/head_trim")
 
             table.insert(actions, plan_update(row, original))
@@ -399,8 +442,11 @@ function ClipMutator.resolve_occlusions(db, params)
                 goto continue_loop
             end
 
+            local left_trim_delta = left_duration - row.duration  -- negative
             row.duration = left_duration
-            row.source_out = get_source_in(row) + left_duration
+            row.source_out = row.source_out + frame_utils.timeline_to_source(
+                left_trim_delta, row.fps_numerator, row.fps_denominator,
+                get_seq_fps(row))
             table.insert(actions, plan_update(row, original))
 
             if right_duration > 0 then
@@ -414,7 +460,9 @@ function ClipMutator.resolve_occlusions(db, params)
                     media_id = original.media_id,
                     timeline_start = end_time,
                     duration = right_duration,
-                    source_in = get_source_in(original) + right_shift,
+                    source_in = get_source_in(original) + frame_utils.timeline_to_source(
+                        right_shift, row_fps_num, row_fps_den,
+                        get_seq_fps(original)),
                     source_out = require_source_out(original, "resolve_occlusions/straddle_split"),
                     fps_numerator = row_fps_num,
                     fps_denominator = row_fps_den,
@@ -465,6 +513,12 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
 
     local track_clips, load_err = load_track_clips(db, track_id)
     if not track_clips then return false, load_err end
+
+    -- Sequence rate from track→sequence JOIN (authoritative source).
+    local db_seq_num, db_seq_den = lookup_seq_fps_for_track(db, track_id)
+    local function get_seq_fps(row)
+        return resolve_seq_fps(row, db_seq_num, db_seq_den)
+    end
 
     local actions = {}
 
@@ -517,19 +571,27 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
             -- Fully occluded
             table.insert(actions, plan_delete(original))
         elseif not unchanged then
-            -- First fragment updates the original clip
+            -- First fragment updates the original clip.
+            -- Each edge moves independently (preserves speed ratio).
             local first = valid[1]
-            local trim_left = first.s - clip_start
+            local trim_left = first.s - clip_start  -- timeline frames removed from left
+            local trim_right = clip_end - first.e   -- timeline frames removed from right
             row.timeline_start = first.s
             row.duration = first.e - first.s
-            row.source_in = get_source_in(original) + trim_left
-            row.source_out = get_source_in(original) + trim_left + row.duration
+            row.source_in = get_source_in(original) + frame_utils.timeline_to_source(
+                trim_left, row.fps_numerator, row.fps_denominator,
+                get_seq_fps(row))
+            row.source_out = require_source_out(original, "resolve_occlusions_multi/first")
+                - frame_utils.timeline_to_source(
+                    trim_right, row.fps_numerator, row.fps_denominator,
+                    get_seq_fps(row))
             table.insert(actions, plan_update(row, original))
 
             -- Remaining fragments become new clips (splits)
             for i = 2, #valid do
                 local f = valid[i]
-                local shift = f.s - clip_start
+                local shift = f.s - clip_start  -- left edge offset in timeline frames
+                local trim_right_frag = clip_end - f.e  -- right edge offset in timeline frames
                 local row_fps_num, row_fps_den = get_row_fps(original)
                 local split_clip = {
                     id = uuid.generate(),
@@ -542,8 +604,13 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
                     owner_sequence_id = original.owner_sequence_id,
                     timeline_start = f.s,
                     duration = f.e - f.s,
-                    source_in = get_source_in(original) + shift,
-                    source_out = get_source_in(original) + shift + (f.e - f.s),
+                    source_in = get_source_in(original) + frame_utils.timeline_to_source(
+                        shift, row_fps_num, row_fps_den,
+                        get_seq_fps(original)),
+                    source_out = require_source_out(original, "resolve_occlusions_multi/split")
+                        - frame_utils.timeline_to_source(
+                            trim_right_frag, row_fps_num, row_fps_den,
+                            get_seq_fps(original)),
                     fps_numerator = row_fps_num,
                     fps_denominator = row_fps_den,
                     enabled = original.enabled,
@@ -575,9 +642,14 @@ function ClipMutator.resolve_ripple(db, params)
     -- Ensure integer frame coordinates
     insert_time = ensure_integer(insert_time, "insert_time")
     shift_amount = ensure_integer(shift_amount, "shift_amount")
-    
+
     local track_clips, err = load_track_clips(db, track_id)
     if not track_clips then return false, err end
+
+    local db_seq_num, db_seq_den = lookup_seq_fps_for_track(db, track_id)
+    local function get_seq_fps(row)
+        return resolve_seq_fps(row, db_seq_num, db_seq_den)
+    end
 
     local actions = {}
     
@@ -600,15 +672,20 @@ function ClipMutator.resolve_ripple(db, params)
             local row_fps_num, row_fps_den = get_row_fps(row)
             local left_dur = insert_time - clip_start
 
+            local tail_trim_delta = left_dur - row.duration  -- negative (shrinking from right)
             row.duration = left_dur
-            row.source_out = get_source_in(row) + left_dur
+            row.source_out = row.source_out + frame_utils.timeline_to_source(
+                tail_trim_delta, row.fps_numerator, row.fps_denominator,
+                get_seq_fps(row))
 
             table.insert(actions, plan_update(row, original))
 
             -- Right Part: Starts at insert_time + shift_amount
             local right_start = insert_time + shift_amount
             local right_dur = clip_end - insert_time
-            local right_src_in = get_source_in(original) + left_dur
+            local right_src_in = get_source_in(original) + frame_utils.timeline_to_source(
+                left_dur, row.fps_numerator, row.fps_denominator,
+                get_seq_fps(row))
 
             local right_clip = {
                 id = uuid.generate(),

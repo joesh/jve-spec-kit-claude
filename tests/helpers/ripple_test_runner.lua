@@ -5,21 +5,28 @@
 --     V1: [A 0-100][B 100-400][C 400-600]
 --     A1: [D 0-600][E 600-800]
 --   ]]
---   drag = "B out -50"          -- or "B out -50, D out -50"
+--   drag = "B out -50"                    -- ripple (default)
+--   drag = "B out roll -50, C in roll -50" -- roll (explicit trim_type)
 --   after = [[
 --     V1: [A 0-100][B 100-350][C 350-550]
 --     A1: [D 0-600][E 550-750]
 --   ]]
 --
 -- Track names: V* = VIDEO, A* = AUDIO
--- Clips: [Name start-end]  (source_in auto-assigned as start*2 to avoid trivial zeros)
+-- Clips: [Name start-end]  (source_in auto-assigned as start*2+100 to avoid trivial zeros)
 -- Gaps: implicit where no clip covers a range
+--
+-- Options:
+--   verify_undo = true  — undo after verification, check before-state restored (default: true)
+--   verify_source_in = true — check source_in changes correctly (default: true)
+--   validate = true — run project_validator between operations (default: true)
 
 local M = {}
 
 local command_manager = require("core.command_manager")
 local Clip = require("models.clip")
 local ripple_layout = require("tests.helpers.ripple_layout")
+local validator = require("tests.helpers.project_validator")
 
 --- Parse a timeline string into {track_name = {{name, start, end_pos}, ...}}
 local function parse_timeline(text)
@@ -39,14 +46,35 @@ local function parse_timeline(text)
     return tracks, track_order
 end
 
---- Parse drag string: "B out -50" or "B out -50, D out -50"
+--- Parse drag string.
+-- Formats:
+--   "B out -50"                        — ripple (default trim_type)
+--   "B out roll -50, C in roll -50"    — explicit trim_type per edge
+--   "B out -50, C in -50"             — ripple (default)
+-- The trim_type keyword is optional; if absent, defaults to "ripple".
 local function parse_drag(text)
     local edges = {}
     for part in text:gmatch("[^,]+") do
-        local name, edge_type, delta = part:match("^%s*(%S+)%s+(%S+)%s+([%-]?%d+)%s*$")
+        -- Try 4-token: "ClipName edge trim_type delta"
+        local name, edge_type, trim_type, delta =
+            part:match("^%s*(%S+)%s+(%S+)%s+(%a+)%s+([%-]?%d+)%s*$")
+        if not name then
+            -- Try 3-token: "ClipName edge delta" (trim_type defaults to "ripple")
+            name, edge_type, delta =
+                part:match("^%s*(%S+)%s+(%S+)%s+([%-]?%d+)%s*$")
+            trim_type = "ripple"
+        end
         assert(name and edge_type and delta,
-            "ripple_test_runner: can't parse drag: '" .. part .. "' (expected 'ClipName edge delta')")
-        table.insert(edges, {clip_name = name, edge_type = edge_type, delta = tonumber(delta)})
+            "ripple_test_runner: can't parse drag: '" .. part ..
+            "' (expected 'ClipName edge [roll|ripple] delta')")
+        assert(trim_type == "roll" or trim_type == "ripple",
+            "ripple_test_runner: trim_type must be 'roll' or 'ripple', got '" .. trim_type .. "'")
+        table.insert(edges, {
+            clip_name = name,
+            edge_type = edge_type,
+            trim_type = trim_type,
+            delta = tonumber(delta),
+        })
     end
     assert(#edges > 0, "ripple_test_runner: empty drag string")
     -- BatchRippleEdit uses a single delta_frames. All edges must specify the same delta.
@@ -108,6 +136,106 @@ local function build_layout(before_tracks, track_order, db_path)
     })
 
     return layout, clip_to_track
+end
+
+--- Verify clip positions match expected after-state.
+-- @return table Array of failure messages (empty = all passed)
+local function verify_after_state(after_tracks)
+    local failures = {}
+    for track_name, clips in pairs(after_tracks) do
+        for _, clip in ipairs(clips) do
+            local clip_id = "clip_" .. clip.name
+            local c = Clip.load_optional(clip_id)
+            if not c then
+                if clip.start ~= clip.end_pos then
+                    table.insert(failures, string.format(
+                        "%s: clip %s not found (expected %d-%d)",
+                        track_name, clip.name, clip.start, clip.end_pos))
+                end
+            else
+                local expected_dur = clip.end_pos - clip.start
+                if c.timeline_start ~= clip.start then
+                    table.insert(failures, string.format(
+                        "%s: %s start expected %d, got %d",
+                        track_name, clip.name, clip.start, c.timeline_start))
+                end
+                if c.duration ~= expected_dur then
+                    table.insert(failures, string.format(
+                        "%s: %s duration expected %d, got %d",
+                        track_name, clip.name, expected_dur, c.duration))
+                end
+            end
+        end
+    end
+    return failures
+end
+
+--- Verify source_in changed correctly for in-edge trims (skip clamped ops).
+local function verify_source_in_changes(failures, drag_edges, before_tracks, before_source_ins, delta)
+    for _, edge in ipairs(drag_edges) do
+        if edge.edge_type == "in" then
+            local c = Clip.load_optional("clip_" .. edge.clip_name)
+            if c and before_source_ins[edge.clip_name] then
+                local before_clip = nil
+                for _, clips in pairs(before_tracks) do
+                    for _, bc in ipairs(clips) do
+                        if bc.name == edge.clip_name then before_clip = bc; break end
+                    end
+                    if before_clip then break end
+                end
+                if before_clip then
+                    local expected_dur = (before_clip.end_pos - before_clip.start) - delta
+                    if c.duration == expected_dur then
+                        local expected_source_in = before_source_ins[edge.clip_name] + delta
+                        if c.source_in ~= expected_source_in then
+                            table.insert(failures, string.format(
+                                "%s: source_in expected %d, got %d (before=%d, delta=%d)",
+                                edge.clip_name, expected_source_in, c.source_in,
+                                before_source_ins[edge.clip_name], delta))
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+--- Execute undo and verify before-state is fully restored.
+-- @return table Array of failure messages (empty = all passed)
+local function verify_undo_round_trip(test_name, before_tracks, before_source_ins, do_validate, layout)
+    local undo_result = command_manager.undo()
+    assert(undo_result.success, test_name .. ": undo failed: " .. tostring(undo_result.error_message))
+
+    if do_validate then
+        validator.assert_valid(layout.db, nil, layout.sequence_id,
+            test_name .. " after undo")
+    end
+
+    local undo_failures = {}
+    for track_name, clips in pairs(before_tracks) do
+        for _, clip in ipairs(clips) do
+            local clip_id = "clip_" .. clip.name
+            local c = Clip.load(clip_id)
+            assert(c, test_name .. ": undo: clip " .. clip.name .. " missing after undo")
+            if c.timeline_start ~= clip.start then
+                table.insert(undo_failures, string.format(
+                    "%s: %s start expected %d, got %d (undo)",
+                    track_name, clip.name, clip.start, c.timeline_start))
+            end
+            local expected_dur = clip.end_pos - clip.start
+            if c.duration ~= expected_dur then
+                table.insert(undo_failures, string.format(
+                    "%s: %s duration expected %d, got %d (undo)",
+                    track_name, clip.name, expected_dur, c.duration))
+            end
+            if before_source_ins[clip.name] and c.source_in ~= before_source_ins[clip.name] then
+                table.insert(undo_failures, string.format(
+                    "%s: source_in expected %d, got %d (undo)",
+                    clip.name, before_source_ins[clip.name], c.source_in))
+            end
+        end
+    end
+    return undo_failures
 end
 
 --- Run a single ripple test case
@@ -179,18 +307,34 @@ function M.run(test)
             table.insert(edge_infos, {
                 clip_id = gap_id,
                 edge_type = gap_edge_type,
-                trim_type = "ripple",
+                trim_type = edge.trim_type,
                 track_id = track_id,
             })
         else
             table.insert(edge_infos, {
                 clip_id = "clip_" .. edge.clip_name,
                 edge_type = edge.edge_type,
-                trim_type = "ripple",
+                trim_type = edge.trim_type,
                 track_id = track_id,
             })
         end
     end
+
+    -- Capture before-state source_in values for undo verification
+    local before_source_ins = {}
+    for _, clips in pairs(before_tracks) do
+        for _, clip in ipairs(clips) do
+            local c = Clip.load("clip_" .. clip.name)
+            if c then
+                before_source_ins[clip.name] = c.source_in
+            end
+        end
+    end
+
+    -- Options (defaults)
+    local verify_undo = test.verify_undo ~= false  -- default true
+    local verify_source_in = test.verify_source_in ~= false  -- default true
+    local do_validate = test.validate ~= false  -- default true
 
     -- Execute
     local result = command_manager.execute("BatchRippleEdit", {
@@ -201,37 +345,36 @@ function M.run(test)
     })
     assert(result.success, test.name .. ": BatchRippleEdit failed: " .. tostring(result.error_message))
 
-    -- Verify after-state
-    local failures = {}
-    for track_name, clips in pairs(after_tracks) do
-        for _, clip in ipairs(clips) do
-            local clip_id = "clip_" .. clip.name
-            local c = Clip.load_optional(clip_id)
-            if not c then
-                -- Clip might have been deleted (trimmed to zero)
-                if clip.start ~= clip.end_pos then
-                    table.insert(failures, string.format(
-                        "%s: clip %s not found (expected %d-%d)", track_name, clip.name, clip.start, clip.end_pos))
-                end
-            else
-                local expected_dur = clip.end_pos - clip.start
-                if c.timeline_start ~= clip.start then
-                    table.insert(failures, string.format(
-                        "%s: %s start expected %d, got %d", track_name, clip.name, clip.start, c.timeline_start))
-                end
-                if c.duration ~= expected_dur then
-                    table.insert(failures, string.format(
-                        "%s: %s duration expected %d, got %d", track_name, clip.name, expected_dur, c.duration))
-                end
-            end
+    -- Run project validator after execute
+    if do_validate then
+        validator.assert_valid(layout.db, nil, layout.sequence_id,
+            test.name .. " after execute")
+    end
+
+    -- Verify after-state: timeline_start and duration match expected
+    local failures = verify_after_state(after_tracks)
+
+    -- Verify source_in changes for edited clips (skip when delta was clamped)
+    if verify_source_in then
+        verify_source_in_changes(failures, drag_edges, before_tracks, before_source_ins, delta)
+    end
+
+    if #failures > 0 then
+        layout:cleanup()
+        error(test.name .. " FAILED:\n  " .. table.concat(failures, "\n  "))
+    end
+
+    -- Undo round-trip: verify before-state is fully restored
+    if verify_undo then
+        local undo_failures = verify_undo_round_trip(
+            test.name, before_tracks, before_source_ins, do_validate, layout)
+        if #undo_failures > 0 then
+            layout:cleanup()
+            error(test.name .. " UNDO FAILED:\n  " .. table.concat(undo_failures, "\n  "))
         end
     end
 
     layout:cleanup()
-
-    if #failures > 0 then
-        error(test.name .. " FAILED:\n  " .. table.concat(failures, "\n  "))
-    end
 end
 
 --- Run all tests in a list, report results

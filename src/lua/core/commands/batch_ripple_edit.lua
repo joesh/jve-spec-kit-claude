@@ -739,29 +739,52 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return clip
     end
 
+    -- Convert timeline-frame delta to source units for a clip.
+    -- Delegates to frame_utils.timeline_to_source (the canonical conversion).
+    local function timeline_delta_to_source(delta_frames_val, clip, seq_fps_num, seq_fps_den)
+        local clip_num = clip.fps_numerator or (clip.rate and clip.rate.fps_numerator)
+        local clip_den = clip.fps_denominator or (clip.rate and clip.rate.fps_denominator)
+        assert(clip_num and clip_den, string.format(
+            "apply_edge_ripple: clip %s missing fps", tostring(clip.id)))
+        return frame_utils.timeline_to_source(delta_frames_val, clip_num, clip_den, seq_fps_num, seq_fps_den)
+    end
+
 -- Apply the requested trim delta to clip edges and return the ripple start.
 -- Gap clips and media clips use the same logic. The only difference:
 -- - Gap clips have nil source_in/source_out (no source modification)
 -- - Gap clips can reach duration 0; media clips have minimum duration 1
-	local function apply_edge_ripple(clip, edge_type, delta_frames, trim_type)
+--
+-- Source coordinate rules:
+-- - "in" edge: source_in moves by source_delta, source_out STAYS (trim start)
+-- - "out" edge: source_out moves by source_delta, source_in STAYS (trim end)
+-- This preserves the clip's speed ratio for non-unity-speed clips.
+	local function apply_edge_ripple(clip, edge_type, delta_frames, trim_type, seq_fps_num, seq_fps_den)
 	        assert(type(clip.duration) == "number", "apply_edge_ripple: clip.duration must be integer")
 	        assert(type(clip.timeline_start) == "number", "apply_edge_ripple: clip.timeline_start must be integer")
 	        assert(type(delta_frames) == "number", "apply_edge_ripple: delta_frames must be integer")
 
 	        local new_duration_timeline = clip.duration
 	        local new_source_in = clip.source_in  -- nil for gap clips
+	        local new_source_out = clip.source_out  -- nil for gap clips
 	        local is_gap = clip.clip_kind == "gap"
 
         if edge_type == "in" then
             new_duration_timeline = clip.duration - delta_frames
             if new_source_in then
-                new_source_in = clip.source_in + delta_frames
+                local source_delta = timeline_delta_to_source(delta_frames, clip, seq_fps_num, seq_fps_den)
+                new_source_in = clip.source_in + source_delta
+                -- source_out unchanged: we're moving the left edge, right edge stays
             end
             if trim_type == "roll" then
                 clip.timeline_start = clip.timeline_start + delta_frames
             end
         elseif edge_type == "out" then
             new_duration_timeline = clip.duration + delta_frames
+            if new_source_out then
+                local source_delta = timeline_delta_to_source(delta_frames, clip, seq_fps_num, seq_fps_den)
+                new_source_out = clip.source_out + source_delta
+                -- source_in unchanged: we're moving the right edge, left edge stays
+            end
         else
             error(string.format("apply_edge_ripple: Unsupported edge_type '%s'", edge_type))
         end
@@ -774,18 +797,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	            if new_duration_timeline < 1 then
 	                clip.duration = 0
 	                clip.source_in = new_source_in
-	                if new_source_in then
-	                    clip.source_out = new_source_in + clip.duration
-	                end
+	                clip.source_out = new_source_out
 	                return clip.timeline_start, true, true
 	            end
 	        end
 
 	        clip.duration = new_duration_timeline
 	        clip.source_in = new_source_in
-	        if new_source_in then
-	            clip.source_out = new_source_in + clip.duration
-	        end
+	        clip.source_out = new_source_out
 	        return clip.timeline_start, true, false
 	    end
 
@@ -1279,7 +1298,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local key = build_edge_key(edge_info)
             local applied_delta = compute_applied_delta(ctx, key, edge_info)
 
-            local _, success, deleted_clip = apply_edge_ripple(clip, normalized_edge, applied_delta, edge_info.trim_type)
+            local _, success, deleted_clip = apply_edge_ripple(clip, normalized_edge, applied_delta, edge_info.trim_type, ctx.seq_fps_num, ctx.seq_fps_den)
             if not success then
                 log.error("Ripple failed for clip %s (edge=%s trim=%s delta=%s)",
                     tostring(clip.id),
@@ -2138,7 +2157,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if not ctx.dry_run then
-            log.event("Executing BatchRippleEdit command")
+            for ei, edge in ipairs(ctx.edge_infos) do
+                log.event("BatchRippleEdit edge[%d]: clip=%s edge=%s trim=%s track=%s",
+                    ei, tostring(edge.clip_id):sub(1, 12),
+                    tostring(edge.edge_type), tostring(edge.trim_type),
+                    tostring(edge.track_id):sub(1, 12))
+            end
+            log.event("BatchRippleEdit delta=%s frames", tostring(ctx.delta_frames))
         end
 
         return batch_pipeline.run(ctx, db, {
