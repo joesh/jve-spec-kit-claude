@@ -296,7 +296,9 @@ function PlaybackEngine:_create_tmb()
     -- Max output resolution for SW-decoded frames. Frames larger than the
     -- sequence resolution are downscaled during decode to avoid caching
     -- oversized CPU buffers (33MB at 4K vs 8MB at 1080p per frame).
-    if self.sequence and self.sequence.width > 0 and self.sequence.height > 0 then
+    if self.sequence and self.sequence.width and self.sequence.height
+        and self.sequence.width > 0 and self.sequence.height > 0
+        and EMP.TMB_SET_SEQUENCE_RESOLUTION then
         EMP.TMB_SET_SEQUENCE_RESOLUTION(self._tmb, self.sequence.width, self.sequence.height)
     end
 

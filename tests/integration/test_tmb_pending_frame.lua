@@ -72,9 +72,9 @@ end
 --------------------------------------------------------------------------------
 -- 3. Play mode also returns frames immediately (sync decode on miss)
 --------------------------------------------------------------------------------
-section("3. Play mode sync decode (pool_threads=2)")
+section("3. Play mode sync decode (pool_threads=3)")
 do
-    local tmb = ienv.create_single_clip_tmb({ pool_threads = 2 })
+    local tmb = ienv.create_single_clip_tmb({ pool_threads = 3 })
 
     EMP.TMB_SET_PLAYHEAD(tmb, 0, 1, 1.0)
 

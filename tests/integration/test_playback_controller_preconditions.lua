@@ -56,7 +56,7 @@ end
 section("1. Valid usage: full setup sequence")
 do
     local pc = PLAYBACK.CREATE()
-    local tmb = EMP.TMB_CREATE(2)
+    local tmb = EMP.TMB_CREATE(3)
     EMP.TMB_SET_SEQUENCE_RATE(tmb, 24, 1)
 
     -- Proper sequence: TMB → bounds → surface → play
@@ -79,7 +79,7 @@ end
 section("2. Seek with bounds set")
 do
     local pc = PLAYBACK.CREATE()
-    local tmb = EMP.TMB_CREATE(2)
+    local tmb = EMP.TMB_CREATE(3)
     EMP.TMB_SET_SEQUENCE_RATE(tmb, 30, 1)
 
     -- Full setup required for Seek: TMB, bounds, surface
@@ -123,7 +123,7 @@ end
 section("4. Play validates parameters")
 do
     local pc = PLAYBACK.CREATE()
-    local tmb = EMP.TMB_CREATE(2)
+    local tmb = EMP.TMB_CREATE(3)
     EMP.TMB_SET_SEQUENCE_RATE(tmb, 24, 1)
 
     PLAYBACK.SET_TMB(pc, tmb)
@@ -158,7 +158,7 @@ end
 section("5. Shuttle mode boundary latch")
 do
     local pc = PLAYBACK.CREATE()
-    local tmb = EMP.TMB_CREATE(2)
+    local tmb = EMP.TMB_CREATE(3)
     EMP.TMB_SET_SEQUENCE_RATE(tmb, 24, 1)
 
     PLAYBACK.SET_TMB(pc, tmb)

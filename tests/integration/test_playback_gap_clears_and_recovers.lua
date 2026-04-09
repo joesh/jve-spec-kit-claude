@@ -43,7 +43,7 @@ local RATE_DEN = 1001
 
 --- Create TMB with two clips separated by a gap on the same track.
 local function create_gap_tmb(opts)
-    local tmb = EMP.TMB_CREATE(opts.pool_threads or 2)
+    local tmb = EMP.TMB_CREATE(opts.pool_threads or 3)
     assert(tmb, "create_gap_tmb: TMB_CREATE returned nil")
     EMP.TMB_SET_SEQUENCE_RATE(tmb, RATE_NUM, RATE_DEN)
 

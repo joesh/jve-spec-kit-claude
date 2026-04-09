@@ -204,7 +204,7 @@ end
 --------------------------------------------------------------------------------
 -- TMB setup (2 pool threads for async decode)
 --------------------------------------------------------------------------------
-local tmb = EMP.TMB_CREATE(2)
+local tmb = EMP.TMB_CREATE(3)
 assert(tmb, "TMB_CREATE returned nil")
 EMP.TMB_SET_SEQUENCE_RATE(tmb, SEQ_FPS_NUM, SEQ_FPS_DEN)
 EMP.TMB_SET_TRACK_CLIPS(tmb, "video", 1, v1_clips)

@@ -93,14 +93,19 @@ end
 --------------------------------------------------------------------------------
 -- 4. TMB_CREATE validation: pool_threads must be 0 or >= 2
 --------------------------------------------------------------------------------
-section("4. TMB_CREATE rejects pool_threads=1")
+section("4. TMB_CREATE rejects pool_threads < 3 (except 0)")
 do
-    -- pool_threads=1 would create 0 video workers + 1 audio worker = broken.
+    -- pool_threads=1 or 2 can't satisfy 1 prep + N-2 video + 1 audio.
     -- Binding returns luaL_error (catchable with pcall).
-    local ok, err = pcall(EMP.TMB_CREATE, 1)
-    check(not ok, "TMB_CREATE(1) should error")
-    check(type(err) == "string" and err:match("pool_threads"),
+    local ok1, err1 = pcall(EMP.TMB_CREATE, 1)
+    check(not ok1, "TMB_CREATE(1) should error")
+    check(type(err1) == "string" and err1:match("pool_threads"),
         "TMB_CREATE(1) error mentions pool_threads")
+
+    local ok2, err2 = pcall(EMP.TMB_CREATE, 2)
+    check(not ok2, "TMB_CREATE(2) should error")
+    check(type(err2) == "string" and err2:match("pool_threads"),
+        "TMB_CREATE(2) error mentions pool_threads")
 end
 
 section("4b. TMB_CREATE rejects negative pool_threads")
@@ -118,10 +123,10 @@ do
     check(tmb0 ~= nil, "TMB_CREATE(0) should succeed")
     EMP.TMB_CLOSE(tmb0)
 
-    -- 2 = minimum valid worker count (1 video + 1 audio)
-    local tmb2 = EMP.TMB_CREATE(2)
-    check(tmb2 ~= nil, "TMB_CREATE(2) should succeed")
-    EMP.TMB_CLOSE(tmb2)
+    -- 3 = minimum valid worker count (1 prep + 1 video + 1 audio)
+    local tmb3 = EMP.TMB_CREATE(3)
+    check(tmb3 ~= nil, "TMB_CREATE(3) should succeed")
+    EMP.TMB_CLOSE(tmb3)
 end
 
 --------------------------------------------------------------------------------

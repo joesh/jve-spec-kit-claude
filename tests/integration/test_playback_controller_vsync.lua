@@ -38,7 +38,7 @@ print("  ✓ Created PlaybackController")
 
 -- Create TMB for frame delivery
 local EMP = qt_constants.EMP
-local tmb = EMP.TMB_CREATE(2)
+local tmb = EMP.TMB_CREATE(3)
 assert(tmb, "Failed to create TMB")
 EMP.TMB_SET_SEQUENCE_RATE(tmb, 24, 1)
 print("  ✓ Created TMB")

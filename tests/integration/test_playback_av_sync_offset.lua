@@ -128,7 +128,7 @@ local WINDOW_HI = TL_START + 185  -- total timeline extent
 --------------------------------------------------------------------------------
 -- TMB + PlaybackController setup
 --------------------------------------------------------------------------------
-local tmb = EMP.TMB_CREATE(2)
+local tmb = EMP.TMB_CREATE(3)
 EMP.TMB_SET_SEQUENCE_RATE(tmb, SEQ_FPS_NUM, SEQ_FPS_DEN)
 EMP.TMB_SET_TRACK_CLIPS(tmb, "video", 1, v1_clips)
 EMP.TMB_SET_TRACK_CLIPS(tmb, "audio", 1, a1_clips)

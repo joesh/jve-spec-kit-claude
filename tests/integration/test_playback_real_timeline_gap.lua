@@ -77,7 +77,7 @@ local RATE_DEN = 1
 --
 -- Offset everything to start at 0 for simplicity. The relative layout is identical.
 
-local tmb = EMP.TMB_CREATE(2)
+local tmb = EMP.TMB_CREATE(3)
 assert(tmb, "TMB_CREATE failed")
 EMP.TMB_SET_SEQUENCE_RATE(tmb, RATE_NUM, RATE_DEN)
 
