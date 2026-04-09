@@ -143,6 +143,7 @@ local function get_preview_clip(state_module, preview_clip_cache, preview_entry)
 end
 
 local PREVIEW_RECT_COLOR = "#ffff00"
+local SHIFT_BLOCK_COLOR = "#88aaff"  -- blue tint distinguishes bulk shift from edited clips
 
 local function draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height, viewport_duration)
     if not clip or not clip.track_id or not start_value or not duration_value then
@@ -241,6 +242,80 @@ local function lower_bound_start_frames(clips, start_frames)
     return lo
 end
 
+--- Compute the bounding box (in frames) of all clips in a shift block on one track.
+-- Returns min_start, max_end (both shifted by delta) or nil if no clips found.
+-- This is the "opaque block" that shifts as a unit — the bounded edit region
+-- only needs to know its extent, not its individual clips.
+local function compute_shift_block_bounds(track_clips, block_start, delta_frames, excluded)
+    local min_start = math.huge
+    local max_end = -math.huge
+    local found = false
+
+    local start_index = lower_bound_start_frames(track_clips, block_start)
+    if start_index > 1 then
+        start_index = start_index - 1
+    end
+
+    for i = start_index, #track_clips do
+        local clip = track_clips[i]
+        if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
+            goto continue_bounds
+        end
+        if clip.timeline_start < block_start then
+            goto continue_bounds
+        end
+        if clip.clip_kind == "gap" then
+            goto continue_bounds
+        end
+        if clip.id and excluded[clip.id] then
+            goto continue_bounds
+        end
+
+        local shifted_start = clip.timeline_start + delta_frames
+        if shifted_start < 0 then shifted_start = 0 end
+        local shifted_end = shifted_start + clip.duration
+
+        if shifted_start < min_start then min_start = shifted_start end
+        if shifted_end > max_end then max_end = shifted_end end
+        found = true
+
+        ::continue_bounds::
+    end
+
+    if not found then return nil, nil end
+    return min_start, max_end
+end
+
+--- Draw a single bounding outline for a shift block on one track.
+-- Instead of per-clip outlines, this draws one rectangle around the entire
+-- region that shifts as a unit. Visually communicates "opaque block."
+local function draw_shift_block_outline(view, track_id, block_start_frames, block_end_frames,
+                                        state_module, width, height, viewport_duration)
+    local track_y = view.get_track_y_by_id(track_id, height)
+    if track_y < 0 then return end
+    local track_height = view.get_track_visual_height(track_id)
+    if not track_height or track_height <= 0 then return end
+
+    local start_px = state_module.time_to_pixel(block_start_frames, width)
+    local end_px = state_module.time_to_pixel(block_end_frames, width)
+
+    -- Viewport cull + clip-to-viewport
+    if start_px > width or end_px < 0 then return end
+    if start_px < 0 then start_px = 0 end
+    if end_px > width then end_px = width end
+
+    local block_width = end_px - start_px
+    if block_width < 1 then return end
+
+    local block_y = track_y + 5
+    local block_h = track_height - 10
+    -- Single outline: top, bottom, left, right
+    timeline.add_rect(view.widget, start_px, block_y, block_width, 2, SHIFT_BLOCK_COLOR)
+    timeline.add_rect(view.widget, start_px, block_y + block_h - 2, block_width, 2, SHIFT_BLOCK_COLOR)
+    timeline.add_rect(view.widget, start_px, block_y, 2, block_h, SHIFT_BLOCK_COLOR)
+    timeline.add_rect(view.widget, start_px + block_width - 2, block_y, 2, block_h, SHIFT_BLOCK_COLOR)
+end
+
 local function render_shift_block_outlines(view, preview_data, state_module, width, height, viewport_duration, viewport_start, viewport_end)
     if not preview_data or type(preview_data.shift_blocks) ~= "table" or #preview_data.shift_blocks == 0 then
         return
@@ -281,45 +356,13 @@ local function render_shift_block_outlines(view, preview_data, state_module, wid
         if track_id then
             local block = per_track[track_id] or global_block
             if block and block.start_frames and block.delta_frames and block.delta_frames ~= 0 then
-                local delta_frames = block.delta_frames
-                local min_old_start = viewport_start - delta_frames
-                local max_old_start = viewport_end - delta_frames
-                if min_old_start < block.start_frames then
-                    min_old_start = block.start_frames
-                end
-
                 local track_clips = state_module.get_track_clip_index(track_id) or {}
                 if #track_clips > 0 then
-                    local start_index = lower_bound_start_frames(track_clips, min_old_start)
-                    if start_index > 1 then
-                        start_index = start_index - 1 -- include previous clip for potential overlap
-                    end
-
-                    for i = start_index, #track_clips do
-                        local clip = track_clips[i]
-                        -- All coords are integer frames
-                        if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
-                            goto continue_shift_clip
-                        end
-
-                        local old_start = clip.timeline_start
-                        if old_start > max_old_start then
-                            break
-                        end
-                        if old_start < block.start_frames then
-                            goto continue_shift_clip
-                        end
-                        if clip.id and excluded[clip.id] then
-                            goto continue_shift_clip
-                        end
-
-                        local new_start = clip.timeline_start + delta_frames
-                        if new_start < 0 then
-                            new_start = 0
-                        end
-                        draw_preview_outline(view, clip, new_start, clip.duration, state_module, width, height, viewport_duration)
-
-                        ::continue_shift_clip::
+                    local min_start, max_end = compute_shift_block_bounds(
+                        track_clips, block.start_frames, block.delta_frames, excluded)
+                    if min_start then
+                        draw_shift_block_outline(view, track_id, min_start, max_end,
+                            state_module, width, height, viewport_duration)
                     end
                 end
             end
