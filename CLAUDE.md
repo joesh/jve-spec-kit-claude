@@ -77,6 +77,8 @@ Tests are LuaJIT scripts in `tests/` with `test_*.lua` naming. Each test:
 - **Non-trivial values**: parameters that happen to be zero (source_in=0, offset=0) don't catch real bugs. Use values that exercise unit conversion, coordinate spaces, boundary conditions.
 - **Interesting configurations**: muted clips, reversed clips, non-unity speed, BWF offsets, boundary-spanning segments. These are what break.
 - A test that can't catch a real bug is **worse than no test** — it gives false confidence.
+- **Test DOMAIN BEHAVIOR, not implementation.** Describe expected behavior without naming any function, variable, or module. If you can't, you're testing implementation. GOOD: "After relinking to a trimmed file, the clip plays the same content." BAD: "adjust_source_range returns source_in + offset." Derive expected values from domain requirements (timecode math, NLE conventions, what the user sees/hears), NEVER by tracing the code. If you computed the expected value by reading the implementation, the test just verifies the code does what the code does — worthless.
+- **WARNING**: You WILL read code, form a model, and write tests that verify your model. You will believe you're testing behavior when you're testing implementation. The tell: if you derived the expected value by tracing the code, the test is worthless. Ask Joe "what should happen here?" rather than deciding yourself.
 
 ## Integration Testing with --test Mode
 For features that need real C++ bindings (Qt widgets, XML parser, EMP/TMB, audio pipeline), use `--test` to run a Lua script inside the full JVEEditor process:
@@ -170,6 +172,16 @@ Format:
 - bullets, no prose paragraphs
 - end with a **NOW:** section listing the next 3 actions
 
+
+## **⚠️ WARNINGS TO FUTURE CLAUDE — YOU WILL DO THESE THINGS. STOP.**
+
+1. **"Pre-existing" label.** You will see test failures and call them pre-existing. You will use that word to skip investigation. Read every error message. Fix every failure. The word "pre-existing" is a stop sign in your head — override it.
+
+2. **Tests that verify code, not behavior.** You will read the code, form a model, and write tests that confirm your model. The test will pass. The code will be wrong. Litmus: if you derived the expected value by tracing the code, the test is worthless. Expected values come from domain knowledge or from Joe.
+
+3. **Proving innocence.** When a bug appears, you will try to prove your changes didn't cause it. Stop. Look at what's happening and fix it. Blame is irrelevant.
+
+4. **"Fallback" values.** You will add `or 0`, `or default`, `or nil` to avoid a crash. Every one of those hides a real bug. Assert instead.
 
 ## **🚫 ABSOLUTE PROHIBITIONS**
 

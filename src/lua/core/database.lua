@@ -523,6 +523,16 @@ function M.get_path()
     return db_path
 end
 
+--- Get the peak cache directory for the current project.
+--- Returns <project>.jvp-cache/peaks/ and ensures the directory exists.
+--- @return string absolute path to peaks cache directory
+function M.get_peak_cache_dir()
+    assert(db_path, "database.get_peak_cache_dir: no project open (db_path is nil)")
+    local cache_dir = db_path .. "-cache/peaks"
+    os.execute(string.format("mkdir -p %q", cache_dir))
+    return cache_dir
+end
+
 -- SQL ISOLATION ENFORCEMENT - ACTIVE
 -- Models (models/*.lua) = ONLY SQL layer
 -- Commands (core/commands/*.lua) = call models

@@ -200,6 +200,46 @@ function M.parse_timecode(timecode, frame_rate)
 end
 
 -- ============================================================================
+-- Timeline ↔ Source unit conversion
+-- ============================================================================
+
+--- Convert a timeline-frame count to source units for a clip.
+-- For video clips where clip_rate == seq_rate, this is identity.
+-- For audio clips (48000 samples/sec at 25fps), this scales by clip_rate/seq_rate.
+--
+-- Formula: source_units = timeline_frames × clip_num × seq_den / (clip_den × seq_num)
+--
+-- @param timeline_frames number Delta or duration in timeline frames
+-- @param clip_fps_num number Clip's fps_numerator (e.g., 48000 for audio, 25 for video)
+-- @param clip_fps_den number Clip's fps_denominator (typically 1)
+-- @param seq_fps_num number Sequence fps_numerator (e.g., 25)
+-- @param seq_fps_den number Sequence fps_denominator (typically 1)
+-- @return number Source units (integer, rounded to nearest)
+function M.timeline_to_source(timeline_frames, clip_fps_num, clip_fps_den, seq_fps_num, seq_fps_den)
+    assert(type(timeline_frames) == "number", "timeline_to_source: timeline_frames must be number")
+    assert(type(clip_fps_num) == "number" and clip_fps_num > 0, "timeline_to_source: clip_fps_num must be positive")
+    assert(type(clip_fps_den) == "number" and clip_fps_den > 0, "timeline_to_source: clip_fps_den must be positive")
+    assert(type(seq_fps_num) == "number" and seq_fps_num > 0, "timeline_to_source: seq_fps_num must be positive")
+    assert(type(seq_fps_den) == "number" and seq_fps_den > 0, "timeline_to_source: seq_fps_den must be positive")
+    return math.floor(timeline_frames * clip_fps_num * seq_fps_den / (clip_fps_den * seq_fps_num) + 0.5)
+end
+
+--- Compute source_out from source_in and timeline duration.
+-- Canonical formula: source_out = source_in + timeline_to_source(duration, ...)
+--
+-- @param source_in number Source in-point (in clip's native units)
+-- @param timeline_duration number Duration in timeline frames
+-- @param clip_fps_num number Clip's fps_numerator
+-- @param clip_fps_den number Clip's fps_denominator
+-- @param seq_fps_num number Sequence fps_numerator
+-- @param seq_fps_den number Sequence fps_denominator
+-- @return number source_out (integer)
+function M.compute_source_out(source_in, timeline_duration, clip_fps_num, clip_fps_den, seq_fps_num, seq_fps_den)
+    local source_duration = M.timeline_to_source(timeline_duration, clip_fps_num, clip_fps_den, seq_fps_num, seq_fps_den)
+    return source_in + source_duration
+end
+
+-- ============================================================================
 -- Display helpers
 -- ============================================================================
 

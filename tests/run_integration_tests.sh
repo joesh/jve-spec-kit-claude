@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Integration test runner — runs Lua test scripts inside JVEEditor binary
-# so they get real C++ EMP bindings (no mocks).
+# Integration test runner — uses batch mode (single JVEEditor process per group)
+# for most tests. UI tests that need isolated Qt windows run in separate processes.
 #
-# Tests run in parallel for speed. Each gets its own JVEEditor process.
+# Batch groups (single process each):
+#   batch_playback  — 13 TMB/playback tests
+#   batch_codec     — 4 codec/media tests
+#   batch_waveform  — 3 waveform/peak tests
+#   batch_editing   — 2 editing operation tests
+#
+# Separate processes:
+#   test_layout_sanity, test_widget_lifecycle, test_keyboard_qshortcut_integration,
+#   test_tab_order_restore, test_codec_status_on_startup
 #
 # Usage: ./tests/run_integration_tests.sh
-#   RUN_SLOW_TESTS=1 to include tests marked SLOW_TEST
+#   RUN_SLOW_TESTS=1 to include slow tests (test_tmb_bwf_offset)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="$ROOT_DIR/build/bin/JVEEditor"
@@ -19,69 +27,70 @@ if [[ ! -x "$BINARY" ]]; then
   exit 2
 fi
 
-mapfile -t TESTS < <(
-  find "$INTEG_DIR" -maxdepth 1 -type f -name 'test_*.lua' \
-    -print | sort
-)
-
-TOTAL=${#TESTS[@]}
-
-if [[ $TOTAL -eq 0 ]]; then
-  echo "No integration tests found in $INTEG_DIR" >&2
-  exit 2
-fi
-
 RUN_SLOW="${RUN_SLOW_TESTS:-0}"
 RESULTS_DIR="$(mktemp -d -t integ_results.XXXXXX)"
-
-# Determine which tests to run vs skip
-SKIP=0
-RUN_TESTS=()
-for t in "${TESTS[@]}"; do
-  if [[ "$RUN_SLOW" != "1" ]] && head -3 "$t" | grep -q SLOW_TEST; then
-    SKIP=$((SKIP+1))
-    continue
-  fi
-  RUN_TESTS+=("$t")
-done
-
-echo "[integration] Running ${#RUN_TESTS[@]} integration test(s) in parallel..."
-
-# Launch all tests in parallel
-for t in "${RUN_TESTS[@]}"; do
-  base="$(basename "$t")"
-  (
-    tmp_out="$RESULTS_DIR/$base.out"
-    if "$BINARY" --test "$t" >"$tmp_out" 2>&1; then
-      echo "PASS" > "$RESULTS_DIR/$base.status"
-    else
-      echo "FAIL" > "$RESULTS_DIR/$base.status"
-    fi
-  ) &
-done
-
-wait
-
-# Collect results
 PASS=0
 FAIL=0
+SKIP=0
 FAILED_NAMES=()
 
-for t in "${RUN_TESTS[@]}"; do
-  base="$(basename "$t")"
-  status="$(cat "$RESULTS_DIR/$base.status" 2>/dev/null || echo "FAIL")"
-  if [[ "$status" == "PASS" ]]; then
-    echo "[integration] ✓ $base"
+run_test() {
+  local name="$1"
+  shift
+  local tmp_out="$RESULTS_DIR/$name.out"
+
+  if "$@" >"$tmp_out" 2>&1; then
+    echo "[integration] ✓ $name"
     PASS=$((PASS+1))
   else
-    echo "[integration] ✗ $base"
+    echo "[integration] ✗ $name"
     FAIL=$((FAIL+1))
-    FAILED_NAMES+=("$base")
-    cat "$RESULTS_DIR/$base.out" >&2
+    FAILED_NAMES+=("$name")
+    cat "$tmp_out" >&2
+  fi
+}
+
+# ─── Batch groups (single JVEEditor process each) ─────────────────────
+
+echo "[integration] Running batch groups..."
+
+run_test "batch_playback" "$BINARY" --test "$INTEG_DIR/batch_playback.lua"
+run_test "batch_codec"    "$BINARY" --test "$INTEG_DIR/batch_codec.lua"
+run_test "batch_waveform" "$BINARY" --test "$INTEG_DIR/batch_waveform.lua"
+run_test "batch_editing"  "$BINARY" --test "$INTEG_DIR/batch_editing.lua"
+
+# ─── Tests that need isolated processes (FFI conflicts, etc) ──────────
+
+run_test "test_playback_av_sync_offset" "$BINARY" --test "$INTEG_DIR/test_playback_av_sync_offset.lua"
+
+# ─── Slow tests (optional) ────────────────────────────────────────────
+
+if [[ "$RUN_SLOW" == "1" ]]; then
+  if [[ -f "$INTEG_DIR/test_tmb_bwf_offset.lua" ]]; then
+    run_test "test_tmb_bwf_offset" "$BINARY" --test "$INTEG_DIR/test_tmb_bwf_offset.lua"
+  fi
+else
+  SKIP=$((SKIP+1))
+fi
+
+# ─── UI tests (separate process each — need isolated Qt windows) ──────
+
+echo "[integration] Running UI tests (separate processes)..."
+
+for t in \
+  test_layout_sanity.lua \
+  test_widget_lifecycle.lua \
+  test_keyboard_qshortcut_integration.lua \
+  test_tab_order_restore.lua \
+  test_codec_status_on_startup.lua
+do
+  if [[ -f "$INTEG_DIR/$t" ]]; then
+    run_test "$t" "$BINARY" --test "$INTEG_DIR/$t"
   fi
 done
 
-# Cleanup temp dir
+# ─── Results ──────────────────────────────────────────────────────────
+
 rm -rf "$RESULTS_DIR"
 
 echo "------------------------------------"

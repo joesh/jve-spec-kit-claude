@@ -103,3 +103,6 @@ tests/tests/
 
 # Test output
 test-errors.txt
+
+# Large media fixtures (real project media, not for VCS)
+tests/fixtures/media/anamnesis/
