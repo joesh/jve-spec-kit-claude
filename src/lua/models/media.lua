@@ -417,6 +417,46 @@ function M.load(media_id)
     return media
 end
 
+--- Find media ID by file path.
+--- @param file_path string absolute path to media file
+--- @return string|nil media_id
+function M.find_id_by_path(file_path)
+    assert(file_path and file_path ~= "", "Media.find_id_by_path: file_path required")
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Media.find_id_by_path: no database connection")
+    local stmt = assert(db:prepare("SELECT id FROM media WHERE file_path = ?"),
+        "Media.find_id_by_path: failed to prepare query")
+    stmt:bind_value(1, file_path)
+    local media_id = nil
+    if stmt:exec() and stmt:next() then
+        media_id = stmt:value(0)
+    end
+    stmt:finalize()
+    return media_id
+end
+
+--- Get all audio media records for a project (id + file_path).
+--- Returns records with audio_sample_rate > 0.
+--- @param project_id string
+--- @return table array of {id=string, file_path=string}
+function M.get_audio_for_project(project_id)
+    assert(project_id and project_id ~= "", "Media.get_audio_for_project: project_id required")
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Media.get_audio_for_project: no database connection")
+    local stmt = assert(db:prepare(
+        "SELECT id, file_path FROM media WHERE audio_sample_rate > 0 AND project_id = ?"),
+        "Media.get_audio_for_project: failed to prepare query")
+    stmt:bind_value(1, project_id)
+    assert(stmt:exec(),
+        string.format("Media.get_audio_for_project: query failed for project_id=%s", project_id))
+    local result = {}
+    while stmt:next() do
+        result[#result + 1] = { id = stmt:value(0), file_path = stmt:value(1) }
+    end
+    stmt:finalize()
+    return result
+end
+
 -- Save a media item to the database
 function M:save()
     local database = require("core.database")

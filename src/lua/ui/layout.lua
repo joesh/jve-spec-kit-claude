@@ -140,6 +140,10 @@ local function open_and_init_project(path)
     local recent_projects = require("core.recent_projects")
     recent_projects.add(project.name, path)
 
+    -- Initialize peak cache and queue waveform generation for all audio media
+    local peak_cache = require("core.media.peak_cache")
+    peak_cache.init_for_project(pid)
+
     -- Initialize bug reporter (continuous background capture)
     local bug_reporter = require("bug_reporter.init")
     bug_reporter.init()

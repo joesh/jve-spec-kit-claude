@@ -23,6 +23,18 @@ local color_utils = require("ui.color_utils")
 local Command = require("command")
 local command_manager = require("core.command_manager")
 local log = require("core.logger").for_area("timeline")
+local waveform_color = require("core.media.waveform_color")
+local waveform_utils = require("core.media.waveform_utils")
+local track_state = require("ui.timeline.state.track_state")
+local peak_cache = require("core.media.peak_cache")
+local peak_constants = require("core.media.peak_constants")
+local Signals = require("core.signals")
+
+-- Throttle waveform TC mismatch warnings: once per media_id per project session.
+local waveform_drift_warned = {}
+Signals.connect("project_changed", function()
+    waveform_drift_warned = {}
+end, 99)  -- low priority: cosmetic, after all model updates
 
 local function build_edge_signature(edges)
     local parts = {}
@@ -668,12 +680,59 @@ function M.render(view)
 
         if not outline_only then
             timeline.add_rect(view.widget, visible_x, y, draw_width, clip_height, body_color)
+
+            -- Layout: label at bottom (16px), waveform in remaining upper area
+            local LABEL_RESERVE = 16
+            local has_waveform = false
+
+            -- Waveform display (audio clips only, when enabled and peaks available)
+            if is_audio and not clip.offline
+                    and track_state.get_waveform_enabled(render_track_id)
+                    and clip.media_id and draw_width > 1 and clip_width > 0 then
+                local vis_src_in, vis_src_out = waveform_utils.visible_source_range(
+                    clip.source_in, clip.source_out, x, visible_x, clip_width, draw_width)
+
+                if vis_src_out > vis_src_in then
+                    local peaks, count, actual_start, actual_end = peak_cache.get_visible_peaks(
+                        clip.media_id, vis_src_in, vis_src_out, draw_width)
+                    if peaks and count > 0 then
+                        -- TC alignment check: actual range from peak data must match requested range
+                        -- within one peak bin. Threshold scales with mipmap level — at higher
+                        -- levels (1024/2048 spp), legitimate bin-alignment drift is larger.
+                        local samples_per_pixel = (vis_src_out - vis_src_in) / draw_width
+                        local mip_level = peak_constants.select_level(samples_per_pixel)
+                        local max_drift = peak_constants.SAMPLES_PER_LEVEL[mip_level]
+                        local start_drift = math.abs(actual_start - vis_src_in)
+                        local end_drift = math.abs(actual_end - vis_src_out)
+                        if start_drift > max_drift or end_drift > max_drift then
+                            if not waveform_drift_warned[clip.media_id] then
+                                waveform_drift_warned[clip.media_id] = true
+                                log.warn("waveform TC mismatch: requested=[%d,%d] actual=[%d,%d] drift=[%d,%d] threshold=%d clip=%s",
+                                    vis_src_in, vis_src_out, actual_start, actual_end,
+                                    start_drift, end_drift, max_drift, clip.media_id)
+                            end
+                        end
+
+                        local wave_col = waveform_color.derive(body_color)
+                        local wave_height = math.max(4, clip_height - LABEL_RESERVE)
+                        timeline.add_waveform(view.widget, visible_x, y, draw_width, wave_height, peaks, count, wave_col)
+                        has_waveform = true
+                    end
+                end
+            end
+
+            -- Text label: at bottom of clip if waveform present, else original position
             local label_padding = 10
             local max_label_width = visible_width - label_padding
             if max_label_width > 35 then
                 local display_label = truncate_label(label_prefix .. (clip.label or clip.name or clip.id or ""), max_label_width)
                 if display_label ~= "" then
-                    local label_baseline = y + math.min(clip_height - 10, 22)
+                    local label_baseline
+                    if has_waveform then
+                        label_baseline = y + clip_height - 4
+                    else
+                        label_baseline = y + math.min(clip_height - 10, 22)
+                    end
                     timeline.add_text(view.widget, visible_x + 5, label_baseline, display_label, text_color)
                 end
             end

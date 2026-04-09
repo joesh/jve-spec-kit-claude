@@ -89,6 +89,24 @@ void TimelineRenderer::addTriangle(int x1, int y1, int x2, int y2, int x3, int y
     drawing_commands_.push_back(cmd);
 }
 
+void TimelineRenderer::addWaveform(int x, int y, int width, int height,
+                                    const float* peaks, int peak_count,
+                                    const QString& color)
+{
+    DrawCommand cmd;
+    cmd.type = DrawCommand::WAVEFORM;
+    cmd.x = x;
+    cmd.y = y;
+    cmd.width = width;
+    cmd.height = height;
+    cmd.color = QColor(color);
+    cmd.peak_count = peak_count;
+    if (peaks && peak_count > 0) {
+        cmd.peak_data.assign(peaks, peaks + peak_count * 2);
+    }
+    drawing_commands_.push_back(std::move(cmd));
+}
+
 void TimelineRenderer::renderTestTimeline()
 {
     clearCommands();
@@ -169,6 +187,26 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
                 painter.setPen(Qt::NoPen);
                 painter.setBrush(cmd.color);
                 painter.drawPolygon(triangle);
+                break;
+            }
+
+            case DrawCommand::WAVEFORM: {
+                if (cmd.peak_count <= 0 || cmd.width <= 0) break;
+                if (static_cast<int>(cmd.peak_data.size()) < cmd.peak_count * 2) break;
+                painter.setPen(QPen(cmd.color, 1));
+                float center_y = cmd.y + cmd.height * 0.5f;
+                float half_h = cmd.height * 0.5f;
+                float px_step = static_cast<float>(cmd.width) / cmd.peak_count;
+                for (int i = 0; i < cmd.peak_count; ++i) {
+                    float mn = cmd.peak_data[i * 2];
+                    float mx = cmd.peak_data[i * 2 + 1];
+                    int px = cmd.x + static_cast<int>(i * px_step);
+                    int y0 = static_cast<int>(center_y - mx * half_h);
+                    int y1 = static_cast<int>(center_y - mn * half_h);
+                    if (y1 > y0) {
+                        painter.drawLine(px, y0, px, y1);
+                    }
+                }
                 break;
             }
         }
@@ -509,6 +547,9 @@ void registerTimelineBindings(lua_State* L)
     lua_pushcfunction(L, lua_timeline_add_triangle);
     lua_setfield(L, -2, "add_triangle");
 
+    lua_pushcfunction(L, lua_timeline_add_waveform);
+    lua_setfield(L, -2, "add_waveform");
+
     lua_pushcfunction(L, lua_timeline_get_dimensions);
     lua_setfield(L, -2, "get_dimensions");
 
@@ -619,6 +660,30 @@ int lua_timeline_add_triangle(lua_State* L)
 
     if (timeline && color) {
         timeline->addTriangle(x1, y1, x2, y2, x3, y3, QString(color));
+        lua_pushboolean(L, 1);
+    } else {
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_timeline_add_waveform(lua_State* L)
+{
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
+    int x = lua_tointeger(L, 2);
+    int y = lua_tointeger(L, 3);
+    int width = lua_tointeger(L, 4);
+    int height = lua_tointeger(L, 5);
+    // Arg 6: lightuserdata pointer to float array [min0,max0,min1,max1,...]
+    const float* peaks = nullptr;
+    if (lua_islightuserdata(L, 6)) {
+        peaks = static_cast<const float*>(lua_touserdata(L, 6));
+    }
+    int peak_count = lua_tointeger(L, 7);
+    const char* color = lua_tostring(L, 8);
+
+    if (timeline && peaks && peak_count > 0 && color) {
+        timeline->addWaveform(x, y, width, height, peaks, peak_count, QString(color));
         lua_pushboolean(L, 1);
     } else {
         lua_pushboolean(L, 0);

@@ -77,6 +77,8 @@ set(EMP_SOURCES
     src/editor_media_platform/src/impl/qtrle_decode.cpp
     src/editor_media_platform/src/impl/braw_decode.cpp
     src/editor_media_platform/src/impl/braw_dispatch.cpp
+    src/editor_media_platform/src/emp_peak_file.cpp
+    src/editor_media_platform/src/emp_peak_generator.cpp
 )
 
 add_library(EditorMediaPlatform STATIC ${EMP_SOURCES})

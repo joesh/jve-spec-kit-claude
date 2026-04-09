@@ -8,6 +8,8 @@
 #include <editor_media_platform/emp_errors.h>
 #include <editor_media_platform/emp_time.h>
 #include <editor_media_platform/emp_timeline_media_buffer.h>
+#include <editor_media_platform/emp_peak_file.h>
+#include <editor_media_platform/emp_peak_generator.h>
 
 #include "../../editor_media_platform/src/impl/braw_decode.h"
 #include "gpu_video_surface.h"
@@ -426,9 +428,9 @@ static int lua_emp_pcm_gc(lua_State* L) {
 
 // EMP.TMB_CREATE(pool_threads) -> tmb | nil, err
 static int lua_emp_tmb_create(lua_State* L) {
-    int pool_threads = static_cast<int>(luaL_optinteger(L, 1, 2));
-    if (pool_threads == 1 || pool_threads < 0) {
-        return luaL_error(L, "TMB_CREATE: pool_threads must be 0 (no workers) or >= 2 (video + audio), got %d", pool_threads);
+    int pool_threads = static_cast<int>(luaL_optinteger(L, 1, 3));
+    if (pool_threads < 0 || (pool_threads != 0 && pool_threads < 3)) {
+        return luaL_error(L, "TMB_CREATE: pool_threads must be 0 (sync) or >= 3 (1 prep + 1 video + 1 audio), got %d", pool_threads);
     }
 
     auto tmb = emp::TimelineMediaBuffer::Create(pool_threads);
@@ -1819,6 +1821,214 @@ static int lua_emp_codec_probe_cancel(lua_State*) {
 } // anonymous namespace
 
 // ============================================================================
+// Peak Generator + Peak File bindings
+// ============================================================================
+
+static emp::PeakGenerator* s_peak_generator = nullptr;
+
+static emp::PeakGenerator* get_peak_generator() {
+    if (!s_peak_generator) {
+        s_peak_generator = new emp::PeakGenerator();
+    }
+    return s_peak_generator;
+}
+
+// EMP.PEAK_REQUEST(media_id, media_path, output_path) -> nil
+static int lua_emp_peak_request(lua_State* L) {
+    const char* media_id = luaL_checkstring(L, 1);
+    const char* media_path = luaL_checkstring(L, 2);
+    const char* output_path = luaL_checkstring(L, 3);
+    get_peak_generator()->RequestPeaks(media_id, media_path, output_path);
+    return 0;
+}
+
+// EMP.PEAK_CANCEL(media_id) -> nil
+static int lua_emp_peak_cancel(lua_State* L) {
+    const char* media_id = luaL_checkstring(L, 1);
+    get_peak_generator()->CancelPeaks(media_id);
+    return 0;
+}
+
+// EMP.PEAK_CANCEL_ALL() -> nil
+static int lua_emp_peak_cancel_all(lua_State* L) {
+    (void)L;
+    if (s_peak_generator) {
+        s_peak_generator->CancelAll();
+    }
+    return 0;
+}
+
+// EMP.PEAK_STATUS(media_id) -> {state, progress_samples, total_samples} | nil
+static int lua_emp_peak_status(lua_State* L) {
+    const char* media_id = luaL_checkstring(L, 1);
+    if (!s_peak_generator) {
+        lua_pushnil(L);
+        return 1;
+    }
+    auto status = s_peak_generator->GetStatus(media_id);
+    if (status.state == emp::PeakGenerator::JobStatus::None) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_newtable(L);
+    const char* state_str = "none";
+    switch (status.state) {
+        case emp::PeakGenerator::JobStatus::Queued:   state_str = "queued"; break;
+        case emp::PeakGenerator::JobStatus::Running:  state_str = "generating"; break;
+        case emp::PeakGenerator::JobStatus::Complete: state_str = "complete"; break;
+        case emp::PeakGenerator::JobStatus::Failed:   state_str = "failed"; break;
+        default: break;
+    }
+    lua_pushstring(L, state_str);
+    lua_setfield(L, -2, "state");
+    lua_pushinteger(L, static_cast<lua_Integer>(status.progress_samples));
+    lua_setfield(L, -2, "progress_samples");
+    lua_pushinteger(L, static_cast<lua_Integer>(status.total_samples));
+    lua_setfield(L, -2, "total_samples");
+    return 1;
+}
+
+// Peak file reader handles
+static const char* EMP_PEAK_METATABLE = "emp_peak";
+static std::unordered_map<void*, std::unique_ptr<emp::PeakFileReader>> g_peak_readers;
+
+// EMP.PEAK_LOAD(file_path) -> peak_handle | nil, err
+static int lua_emp_peak_load(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    auto reader = emp::PeakFileReader::Open(path);
+    if (!reader) {
+        lua_pushnil(L);
+        lua_pushstring(L, "failed to open peak file");
+        return 2;
+    }
+
+    void* ud = lua_newuserdata(L, sizeof(void*));
+    luaL_getmetatable(L, EMP_PEAK_METATABLE);
+    lua_setmetatable(L, -2);
+
+    g_peak_readers[ud] = std::move(reader);
+    return 1;
+}
+
+// EMP.PEAK_QUERY(peak_handle, start_sample, end_sample, pixel_width)
+//   -> peaks_ptr, count, actual_start_sample, actual_end_sample
+//   or nil, 0, 0, 0 on failure
+static int lua_emp_peak_query(lua_State* L) {
+    void* key = luaL_checkudata(L, 1, EMP_PEAK_METATABLE);
+    auto it = g_peak_readers.find(key);
+    if (it == g_peak_readers.end()) {
+        return luaL_error(L, "EMP.PEAK_QUERY: invalid peak handle");
+    }
+
+    int64_t start = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    int64_t end = static_cast<int64_t>(luaL_checkinteger(L, 3));
+    int pixel_width = static_cast<int>(luaL_checkinteger(L, 4));
+
+    auto result = it->second->Query(start, end, pixel_width);
+
+    if (!result.peaks || result.count <= 0) {
+        lua_pushnil(L);
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 0);
+        return 4;
+    }
+
+    lua_pushlightuserdata(L, const_cast<float*>(result.peaks));
+    lua_pushinteger(L, result.count);
+    lua_pushinteger(L, static_cast<lua_Integer>(result.actual_start));
+    lua_pushinteger(L, static_cast<lua_Integer>(result.actual_end));
+    return 4;
+}
+
+// EMP.PEAK_QUERY_PROGRESS(media_id, start_sample, end_sample, pixel_width)
+//   -> lightuserdata(float*), count, actual_start_sample, actual_end_sample
+//   or nil, 0, 0, 0 if no in-progress data
+//
+// Queries partially-generated peak data for progressive waveform display.
+// The returned pointer is valid until the next call to PEAK_QUERY_PROGRESS.
+static emp::PeakGenerator::ProgressQueryResult s_progress_result;
+
+static int lua_emp_peak_query_progress(lua_State* L) {
+    const char* media_id = luaL_checkstring(L, 1);
+    int64_t start = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    int64_t end_sample = static_cast<int64_t>(luaL_checkinteger(L, 3));
+    int pixel_width = static_cast<int>(luaL_checkinteger(L, 4));
+
+    if (!s_peak_generator) {
+        lua_pushnil(L);
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 0);
+        return 4;
+    }
+
+    s_progress_result = s_peak_generator->QueryInProgress(
+        media_id, start, end_sample, pixel_width);
+
+    if (s_progress_result.count <= 0 || s_progress_result.peaks.empty()) {
+        lua_pushnil(L);
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 0);
+        return 4;
+    }
+
+    lua_pushlightuserdata(L, s_progress_result.peaks.data());
+    lua_pushinteger(L, s_progress_result.count);
+    lua_pushinteger(L, static_cast<lua_Integer>(s_progress_result.actual_start));
+    lua_pushinteger(L, static_cast<lua_Integer>(s_progress_result.actual_end));
+    return 4;
+}
+
+// EMP.PEAK_HEADER(peak_handle) -> table
+static int lua_emp_peak_header(lua_State* L) {
+    void* key = luaL_checkudata(L, 1, EMP_PEAK_METATABLE);
+    auto it = g_peak_readers.find(key);
+    if (it == g_peak_readers.end()) {
+        return luaL_error(L, "EMP.PEAK_HEADER: invalid peak handle");
+    }
+
+    const auto& hdr = it->second->header();
+    lua_newtable(L);
+    lua_pushinteger(L, hdr.version);
+    lua_setfield(L, -2, "version");
+    lua_pushinteger(L, static_cast<lua_Integer>(hdr.source_mtime));
+    lua_setfield(L, -2, "source_mtime");
+    lua_pushinteger(L, hdr.sample_rate);
+    lua_setfield(L, -2, "sample_rate");
+    lua_pushinteger(L, hdr.channels);
+    lua_setfield(L, -2, "channels");
+    lua_pushinteger(L, hdr.base_spp);
+    lua_setfield(L, -2, "base_spp");
+    lua_pushinteger(L, hdr.num_levels);
+    lua_setfield(L, -2, "num_levels");
+
+    lua_newtable(L);
+    for (int i = 0; i < emp::MIPMAP_LEVELS; ++i) {
+        lua_pushinteger(L, static_cast<lua_Integer>(hdr.bins_per_level[i]));
+        lua_rawseti(L, -2, i + 1);
+    }
+    lua_setfield(L, -2, "bins_per_level");
+
+    return 1;
+}
+
+// EMP.PEAK_RELEASE(peak_handle) -> nil
+static int lua_emp_peak_release(lua_State* L) {
+    void* key = luaL_checkudata(L, 1, EMP_PEAK_METATABLE);
+    g_peak_readers.erase(key);
+    return 0;
+}
+
+// Peak handle __gc
+static int lua_emp_peak_gc(lua_State* L) {
+    void* key = luaL_checkudata(L, 1, EMP_PEAK_METATABLE);
+    g_peak_readers.erase(key);
+    return 0;
+}
+
+// ============================================================================
 // Registration
 // ============================================================================
 
@@ -1851,6 +2061,11 @@ void register_emp_bindings(lua_State* L) {
 
     luaL_newmetatable(L, PLAYBACK_CONTROLLER_METATABLE);
     lua_pushcfunction(L, lua_playback_gc);
+    lua_setfield(L, -2, "__gc");
+    lua_pop(L, 1);
+
+    luaL_newmetatable(L, EMP_PEAK_METATABLE);
+    lua_pushcfunction(L, lua_emp_peak_gc);
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
@@ -1972,6 +2187,28 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "CODEC_PROBE_START");
     lua_pushcfunction(L, lua_emp_codec_probe_cancel);
     lua_setfield(L, -2, "CODEC_PROBE_CANCEL");
+
+    // Peak generator functions
+    lua_pushcfunction(L, lua_emp_peak_request);
+    lua_setfield(L, -2, "PEAK_REQUEST");
+    lua_pushcfunction(L, lua_emp_peak_cancel);
+    lua_setfield(L, -2, "PEAK_CANCEL");
+    lua_pushcfunction(L, lua_emp_peak_cancel_all);
+    lua_setfield(L, -2, "PEAK_CANCEL_ALL");
+    lua_pushcfunction(L, lua_emp_peak_status);
+    lua_setfield(L, -2, "PEAK_STATUS");
+    lua_pushcfunction(L, lua_emp_peak_query_progress);
+    lua_setfield(L, -2, "PEAK_QUERY_PROGRESS");
+
+    // Peak file reader functions
+    lua_pushcfunction(L, lua_emp_peak_load);
+    lua_setfield(L, -2, "PEAK_LOAD");
+    lua_pushcfunction(L, lua_emp_peak_query);
+    lua_setfield(L, -2, "PEAK_QUERY");
+    lua_pushcfunction(L, lua_emp_peak_header);
+    lua_setfield(L, -2, "PEAK_HEADER");
+    lua_pushcfunction(L, lua_emp_peak_release);
+    lua_setfield(L, -2, "PEAK_RELEASE");
 
     lua_setfield(L, -2, "EMP");
 

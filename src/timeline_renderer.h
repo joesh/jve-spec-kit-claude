@@ -47,7 +47,9 @@ public:
     void addText(int x, int y, const QString& text, const QString& color);
     void addLine(int x1, int y1, int x2, int y2, const QString& color, int width = 1);
     void addTriangle(int x1, int y1, int x2, int y2, int x3, int y3, const QString& color);
-    
+    void addWaveform(int x, int y, int width, int height,
+                     const float* peaks, int peak_count, const QString& color);
+
     // Test method to demonstrate command system
     void renderTestTimeline();
     
@@ -85,13 +87,15 @@ protected:
 private:
     // Drawing command structure
     struct DrawCommand {
-        enum Type { RECT, TEXT, LINE, TRIANGLE } type;
+        enum Type { RECT, TEXT, LINE, TRIANGLE, WAVEFORM } type;
         int x, y, width, height;
         int x2, y2; // For lines
         int x3, y3; // For triangles (third point)
         QString text;
         QColor color;
         int line_width = 1;
+        std::vector<float> peak_data; // For WAVEFORM: [min0, max0, min1, max1, ...]
+        int peak_count = 0;           // Number of min/max pairs
     };
 
     // Execute all drawing commands
@@ -129,6 +133,7 @@ extern "C" {
     int lua_timeline_add_text(lua_State* L);
     int lua_timeline_add_line(lua_State* L);
     int lua_timeline_add_triangle(lua_State* L);
+    int lua_timeline_add_waveform(lua_State* L);
     int lua_timeline_get_dimensions(lua_State* L);
     int lua_timeline_set_playhead(lua_State* L);
     int lua_timeline_get_playhead(lua_State* L);

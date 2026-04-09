@@ -85,4 +85,24 @@ function M.get_by_id(track_id)
     return nil
 end
 
+--- Get whether waveform display is enabled for a track.
+--- Audio tracks default to true; video tracks always return false.
+function M.get_waveform_enabled(track_id)
+    local track = M.get_by_id(track_id)
+    if not track then return false end
+    if track.track_type ~= "AUDIO" then return false end
+    if track.waveform_enabled == nil then return true end
+    return track.waveform_enabled
+end
+
+--- Set waveform display enabled state for a track. Notifies listeners.
+function M.set_waveform_enabled(track_id, enabled)
+    local track = M.get_by_id(track_id)
+    assert(track, "track_state.set_waveform_enabled: track not found: " .. tostring(track_id))
+    assert(track.track_type == "AUDIO",
+        "track_state.set_waveform_enabled: only audio tracks have waveform toggle")
+    track.waveform_enabled = enabled
+    data.notify_listeners()
+end
+
 return M
