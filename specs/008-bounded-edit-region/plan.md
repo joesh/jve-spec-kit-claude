@@ -61,30 +61,33 @@ Complete — see [research.md](research.md).
 
 ## Phase 1: Design
 
-### Component 1: Bounded Clip Set (batch_ripple_edit.lua)
+### Key Insight: Two Distinct Scopes
 
-A **BoundedClipSet** wraps the clip cache and asserts on access. Created by `build_clip_cache`, it contains only the clips the edit is permitted to examine.
+An edit has two scopes with fundamentally different needs:
 
-```
-BoundedClipSet:
-  - registered_clips: {[clip_id] = clip}     -- clips the edit may access
-  - affected_track_ids: {[track_id] = true}  -- tracks the edit touches
-  
-  - get(clip_id) → clip or ASSERT            -- access outside set = bug
-  - register(clip_id, clip)                   -- add clip during cache build
-  - get_track_clips(track_id) → clips or ASSERT
-  - contains(clip_id) → bool                  -- for conditional checks without assert
-```
+1. **Edit region** — the directly edited clips and their neighbors. `compute_shift_bounds` applies here because multi-edge selections can squeeze intermediate clips/gaps. Gaps participate as clips (the gap-as-clip abstraction holds).
 
-**build_clip_cache bounded path** (for execute, not dry_run):
-1. From `edge_infos`, collect clip IDs being edited
-2. Load those clips from DB (or timeline_state cache)
-3. For each, load immediate neighbors on same track (prev/next by timeline_start)
-4. For multitrack ripple: at each boundary position, load clips on other tracks at that position
-5. Register all into BoundedClipSet
-6. Pipeline steps access clips through the set — any unregistered access asserts
+2. **Downstream block** — everything after the edit region on affected tracks. Shifts as one opaque unit by a uniform delta. No per-clip constraint checking needed. The only constraint is one number: the **max allowable shift** = minimum available space at the boundary across all affected tracks.
 
-**Downstream shifts** (ripple): The bulk_shift mutation already carries `clip_ids` or `first_clip_id + anchor_start_frame`. On execute, `compute_downstream_shifts` collects these IDs. On redo, the persisted `bulk_shifts` mutation carries them. No need to scan all_clips.
+The current code conflates these two scopes: it feeds downstream clips into `compute_shift_bounds` (per-clip constraint checking for clips that all shift by the same amount) and special-cases gaps throughout (`clip_kind ~= "gap"` in `collect_downstream_clips`, excluded from `prime_neighbor_bounds_cache`). This breaks the gap-as-clip abstraction and creates O(all clips) work for an O(edit region) operation.
+
+### Component 1: Scoped Pipeline (batch_ripple_edit.lua)
+
+**Edit region scope:**
+- `build_clip_cache` loads only the edited clips + their immediate neighbors (including gaps — no special-casing)
+- `prime_neighbor_bounds_cache` includes gaps (they constrain multi-edge edits)
+- `compute_shift_bounds` runs only on the edit region clips — never on downstream
+- `inject_implicit_gap_edges` checks boundary position on other tracks — one lookup per track
+
+**Downstream scope:**
+- Replaced by a single **max shift check**: for each affected track, compute the space between the last non-shifting clip and the first shifting clip at the boundary. The minimum across all tracks is the max allowable shift. One number, one pass.
+- Downstream mutation is a **bulk shift per track**: `UPDATE clips SET timeline_start = timeline_start + delta WHERE track_id = ? AND timeline_start >= boundary`. No per-clip enumeration.
+- `collect_downstream_clips` and per-clip downstream shift logic are eliminated.
+
+**Gap abstraction restored:**
+- Remove all `clip_kind ~= "gap"` checks from the pipeline
+- Gaps participate in neighbor bounds, constraints, edge injection — same as media clips
+- `post_boundary_first_clip` naturally points to media clips because the boundary lookup finds the first clip at/after the boundary (gap or media), and the max shift check handles both uniformly
 
 ### Component 2: Scoped Gap Recomputation (timeline_core_state.lua)
 
@@ -123,32 +126,43 @@ Incremented by `command_manager` after any successful mutation on a sequence. Re
   updates = { { clip_id, start_value, duration_value, source_in_value, source_out_value, track_id } },
   deletes = { clip_id, ... },
   inserts = { { full clip record }, ... },
-  bulk_shifts = { { track_id, shift_frames, clip_ids = {...} }, ... },
+  bulk_shifts = { { track_id, shift_frames, start_frame } },
   -- NEW: affected_track_ids (derived, not persisted — computed from above)
 }
 ```
+
+### What Gets Removed
+
+- `collect_downstream_clips` — replaced by per-track bulk shift
+- Per-clip `compute_shift_bounds` on downstream clips — replaced by per-track max shift check
+- `clip_kind ~= "gap"` checks in `prime_neighbor_bounds_cache`, `collect_downstream_clips`, `build_clip_cache`
+- `bulk_shift_anchor_clips`, `bulk_shift_anchor_lookup` — downstream is handled uniformly
+- `track_clip_positions` — never read by anything
 
 ## Phase 2: Task Planning Approach
 
 **Strategy**: TDD order. Tests first, then implementation.
 
-1. **Tests for invariants** — bounded clip set access assert, scoped gap recompute, generation counter
-2. **BoundedClipSet** module — the clip access proxy with assert enforcement
-3. **Bounded build_clip_cache** — execute/redo path loads only participating clips
-4. **Scoped recompute_gap_clips** — accept affected_track_ids parameter
-5. **Mutation track propagation** — clip_state returns affected tracks, timeline_state forwards to gap recompute
-6. **Sequence generation counter** — schema + model + increment logic
-7. **Remove dead code** — `track_clip_positions` (never read)
-8. **Integration validation** — verify with real project, measure redo timing
+1. **Tests for max shift check** — multi-track scenarios with varying gap sizes at boundary, verify correct max shift computed
+2. **Tests for gap-as-clip in constraints** — multi-edge selection with gaps between, verify gaps constrain properly
+3. **Max shift check** — one pass through affected tracks, compute available space at boundary
+4. **Bounded build_clip_cache** — load only edit region clips + neighbors, gaps included
+5. **Remove gap special-casing** — `prime_neighbor_bounds_cache` includes gaps, no `clip_kind` checks
+6. **Bulk downstream shift** — per-track SQL update replaces per-clip enumeration
+7. **Scoped recompute_gap_clips** — accept affected_track_ids parameter
+8. **Mutation track propagation** — clip_state returns affected tracks, timeline_state forwards
+9. **Remove dead code** — `collect_downstream_clips`, `bulk_shift_anchor_*`, `track_clip_positions`
+10. **Sequence generation counter** — schema + model + increment logic
+11. **Integration validation** — verify with real project, measure redo timing
 
-**Ordering**: Tasks 1-2 are parallel. 3 depends on 2. 4-5 are parallel. 6-7 are independent. 8 depends on all.
+**Ordering**: 1-2 parallel (tests first). 3-6 sequential (core refactor). 7-8 parallel. 9-10 independent. 11 last.
 
-**Estimated**: ~12 tasks
+**Estimated**: ~11 tasks
 
 ## Unresolved Questions
 
-- `inject_implicit_gap_edges` scans all tracks at a boundary position for multitrack ripple — should we load just the clips at that position (SQL WHERE track_id IN (...) AND timeline_start <= pos AND timeline_start + duration > pos), or is it acceptable to load the full track at that position? The former is more correct but requires a new DB query pattern.
-- `compute_downstream_shifts` on execute currently scans all_clips. With bounded set, it needs the downstream clip IDs. On first execute these aren't known yet — should we do a targeted DB query (clips on track X with timeline_start >= boundary)?
+- The bulk downstream shift uses SQL `UPDATE ... WHERE track_id = ? AND timeline_start >= boundary`. Does `clip_state.apply_mutations` need a new mutation type for this, or can the existing `bulk_shifts` format handle it? Currently `bulk_shifts` carries either explicit `clip_ids` or `first_clip_id + anchor_start_frame`. A track-wide shift-from-boundary is simpler — just `{ track_id, shift_frames, start_frame }`.
+- Multi-edge selection across multiple tracks with different gap sizes at boundaries — does the max shift check need to be per-track (some tracks can shift more than others) or is one global max correct? Currently all tracks shift by the same delta, so one global max is correct. But if we ever support per-track deltas, this needs revisiting.
 
 ## Progress Tracking
 
