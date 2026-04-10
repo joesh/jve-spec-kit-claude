@@ -88,8 +88,18 @@ function M.hydrate_executed_mutations_if_missing(command)
         return append_bulk_shifts(executed)
     end
 
+    -- Bulk-shift-only commands: gap-only edits (or pure downstream shifts
+    -- on unselected tracks) produce no per-clip mutations and no persisted
+    -- original states — every persisted-state entry was a gap and got
+    -- filtered out in finalize_execution. The bulk_shift entries are
+    -- fully undoable on their own.
     local originals = command:get_parameter("original_states")
+    local bulk = command:get_parameter("bulk_shifts")
+    local has_bulk = type(bulk) == "table" and #bulk > 0
     if type(originals) ~= "table" or next(originals) == nil then
+        if has_bulk then
+            return append_bulk_shifts({})
+        end
         error("BatchRippleEdit undo: command missing executed_mutations and original_states")
     end
     local ordered = command:get_parameter("executed_mutation_order")

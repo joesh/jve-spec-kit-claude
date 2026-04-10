@@ -1431,19 +1431,67 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        return blocks
 	    end
 
+    -- Locate the first non-edited media clip at/after a track boundary, and the
+    -- end-frame of the last non-edited media clip ending at/before that boundary.
+    -- Gap clips are transparent (they represent empty space, not solid content)
+    -- and are skipped for both upstream and downstream lookups.
+    local function find_track_boundary_neighbors(ctx, track_id, boundary_frame)
+        local clips = ctx.track_clip_map and ctx.track_clip_map[track_id]
+        if not clips then return nil, 0 end
+        local upstream_end = 0
+        local upstream_id = nil
+        local first_downstream = nil
+        for _, clip in ipairs(clips) do
+            if clip.clip_kind ~= "gap" and clip.id and not ctx.edited_clip_lookup[clip.id] then
+                if clip.timeline_start >= boundary_frame then
+                    if not first_downstream then
+                        first_downstream = clip
+                    end
+                elseif clip.timeline_start + clip.duration > upstream_end then
+                    upstream_end = clip.timeline_start + clip.duration
+                    upstream_id = clip.id
+                end
+            end
+        end
+        return first_downstream, upstream_end, upstream_id
+    end
+
+    -- Max-shift check: for each affected track, compute how far its first
+    -- downstream clip can shift LEFT before colliding with its upstream
+    -- neighbor. Positive ripples have no upstream collision (everything
+    -- moves right together). The tightest per-track limit is the global
+    -- max leftward shift. Skips tracks whose upstream neighbor is itself
+    -- being edited — those shift with the edit, not against it.
+    local function compute_downstream_max_left_shift(ctx)
+        local max_left = -math.huge
+        local blocker_key = nil
+        for track_id in pairs(ctx.affected_tracks or {}) do
+            local boundary = (ctx.track_ripple_start_frames and ctx.track_ripple_start_frames[track_id])
+                or ctx.earliest_ripple_time
+            if boundary then
+                local first_ds, upstream_end, upstream_id = find_track_boundary_neighbors(ctx, track_id, boundary)
+                if first_ds and upstream_id and not ctx.edited_clip_lookup[upstream_id] then
+                    local room = first_ds.timeline_start - upstream_end
+                    local track_max_left = -room  -- most-negative shift this track tolerates
+                    if track_max_left > max_left then
+                        max_left = track_max_left
+                        blocker_key = tostring(first_ds.id) .. ":in"
+                    end
+                end
+            end
+        end
+        return max_left, blocker_key
+    end
+
     local function compute_downstream_shifts(ctx)
-        -- Roll-only operations do not ripple-shift downstream clips. Avoid scanning the
-        -- entire timeline to build a no-op shift list (can be thousands of clips).
+        -- Pure roll: no downstream shift.
         if not ctx.has_ripple_edge then
             ctx.clips_to_shift = {}
             ctx.shift_lookup = {}
-            if ctx.dry_run and type(ctx.preloaded_clip_snapshot) == "table" then
-                ctx.shift_blocks = {}
-            end
             return true
         end
 
-        -- If nothing is shifting (all shift vectors are zero), skip downstream enumeration.
+        -- All track shifts zero → nothing to do.
         local downstream_shift = ctx.downstream_shift_frames or 0
         local has_nonzero = downstream_shift ~= 0
         if not has_nonzero and ctx.track_shift_amounts then
@@ -1454,66 +1502,34 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
             end
         end
-	        if not has_nonzero then
-	            ctx.clips_to_shift = {}
-	            ctx.shift_lookup = {}
-	            if ctx.dry_run and type(ctx.preloaded_clip_snapshot) == "table" then
-	                ctx.shift_blocks = {}
-	            end
-	            return true
-	        end
-
-        ctx.bulk_shift_anchor_lookup = nil
-        if type(ctx.preloaded_clip_snapshot) == "table" and type(ctx.preloaded_clip_snapshot.post_boundary_first_clip) == "table" then
-            ctx.bulk_shift_anchor_lookup = {}
-            for _, clip_id in pairs(ctx.preloaded_clip_snapshot.post_boundary_first_clip) do
-                if clip_id then
-                    ctx.bulk_shift_anchor_lookup[clip_id] = true
-                end
-            end
+        if not has_nonzero then
+            ctx.clips_to_shift = {}
+            ctx.shift_lookup = {}
+            return true
         end
 
-	        collect_downstream_clips(ctx)
+        -- Max-shift check across affected tracks. Positive ripples are
+        -- unconstrained upstream; negative ripples clamp to the tightest
+        -- leftward room on any track.
+        local max_left, min_blocker_key = compute_downstream_max_left_shift(ctx)
+        local desired = ctx.downstream_shift_frames
+        local adjusted = desired
 
-	        if type(ctx.preloaded_clip_snapshot) == "table" and type(ctx.preloaded_clip_snapshot.post_boundary_first_clip) == "table" then
-	            ctx.bulk_shift_anchor_clips = {}
-	            for _, clip_id in pairs(ctx.preloaded_clip_snapshot.post_boundary_first_clip) do
-	                if clip_id then
-	                    ctx.shift_lookup[clip_id] = true
-                        local anchor = ctx.clip_lookup and ctx.clip_lookup[clip_id] or nil
-                        assert(anchor, "compute_downstream_shifts: missing bulk shift anchor clip " .. tostring(clip_id))
-                        table.insert(ctx.bulk_shift_anchor_clips, anchor)
-	                end
-	            end
-	        end
-
-	        assert(ctx.clips_to_shift, "compute_downstream_shifts: clips_to_shift is nil")
-	        local min_shift_frames, max_shift_frames, min_blocker_key, max_blocker_key = compute_shift_bounds(ctx)
-	        local desired_shift_frames = ctx.downstream_shift_frames
-	        local adjusted_frames = desired_shift_frames
-
-        if min_shift_frames ~= -math.huge and desired_shift_frames < min_shift_frames then
-            adjusted_frames = min_shift_frames
-            -- Record the blocking edge for red display in UI
+        if max_left ~= -math.huge and desired < max_left then
+            adjusted = max_left
             if min_blocker_key then
                 ctx.forced_clamped_edges = ctx.forced_clamped_edges or {}
                 ctx.forced_clamped_edges[min_blocker_key] = true
             end
         end
-        if max_shift_frames ~= math.huge and desired_shift_frames > max_shift_frames then
-            adjusted_frames = max_shift_frames
-            if max_blocker_key then
-                ctx.forced_clamped_edges = ctx.forced_clamped_edges or {}
-                ctx.forced_clamped_edges[max_blocker_key] = true
-            end
-        end
+
         local forced_retry = ctx.args.__force_retry_delta
         if forced_retry then
-            adjusted_frames = forced_retry
+            adjusted = forced_retry
         end
 
-        if adjusted_frames ~= desired_shift_frames then
-            -- Persist blocker edge keys through retry so UI can show them red
+        if adjusted ~= desired then
+            -- Persist blocker edge keys through retry so UI can show them red.
             if ctx.forced_clamped_edges then
                 local blocker_keys = {}
                 for key in pairs(ctx.forced_clamped_edges) do
@@ -1523,77 +1539,63 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     ctx.command:set_parameter("__shift_blocker_keys", blocker_keys)
                 end
             end
-            return false, adjusted_frames
+            return false, adjusted
         end
 
-        local snapshot_preview = ctx.dry_run and type(ctx.preloaded_clip_snapshot) == "table"
-        for _, shift_clip_data in ipairs(ctx.clips_to_shift) do
-            local shift_clip = nil
+        -- Emit one bulk_shift mutation per affected track. The SQL substrate
+        -- (command_helper.apply_mutations / revert_mutations) handles the
+        -- per-track UPDATE and undo by reversing the shift.
+        ctx.clips_to_shift = {}
+        ctx.shift_lookup = {}
+        for track_id in pairs(ctx.affected_tracks or {}) do
+            local boundary = (ctx.track_ripple_start_frames and ctx.track_ripple_start_frames[track_id])
+                or ctx.earliest_ripple_time
+            if boundary then
+                local track_shift = (ctx.track_shift_amounts and ctx.track_shift_amounts[track_id])
+                    or ctx.downstream_shift_frames
+                if track_shift and track_shift ~= 0 then
+                    local first_ds = find_track_boundary_neighbors(ctx, track_id, boundary)
+                    if first_ds then
+                        table.insert(ctx.bulk_shift_mutations, {
+                            type = "bulk_shift",
+                            track_id = track_id,
+                            shift_frames = track_shift,
+                            first_clip_id = first_ds.id,
+                            anchor_start_frame = first_ds.timeline_start,
+                            start_frames = first_ds.timeline_start,
+                        })
 
-            if snapshot_preview then
-                local base_clip = ctx.clip_lookup and ctx.clip_lookup[shift_clip_data.id] or shift_clip_data
-                if base_clip then
-                    if not ctx.original_states_map[base_clip.id] then
-                        ctx.original_states_map[base_clip.id] = command_helper.capture_clip_state(base_clip)
+                        -- Dry-run: populate per-clip preview data for UI and tests.
+                        -- Not needed for commit (apply_mutations does the work),
+                        -- but preview rendering and test assertions depend on
+                        -- seeing each shifted clip individually.
+                        if ctx.dry_run then
+                            local track_clips = ctx.track_clip_map[track_id]
+                            if track_clips then
+                                for _, clip in ipairs(track_clips) do
+                                    if clip.clip_kind ~= "gap"
+                                        and clip.id
+                                        and clip.timeline_start >= first_ds.timeline_start
+                                        and not ctx.edited_clip_lookup[clip.id] then
+                                        add_preview_shift(ctx,
+                                            clip.id,
+                                            clip.timeline_start + track_shift,
+                                            clip.duration)
+                                    end
+                                end
+                            end
+                        end
                     end
-                    shift_clip = {
-                        id = base_clip.id,
-                        track_id = base_clip.track_id,
-                        timeline_start = base_clip.timeline_start,
-                        duration = base_clip.duration,
-                        source_in = base_clip.source_in,
-                        source_out = base_clip.source_out,
-                        clip_kind = base_clip.clip_kind,
-                        fps_numerator = base_clip.fps_numerator,
-                        fps_denominator = base_clip.fps_denominator,
-                        enabled = base_clip.enabled
-                    }
                 end
-            else
-                shift_clip = load_clip_for_edit(ctx, shift_clip_data.id)
             end
-
-            if not shift_clip then
-                log.warn("BatchRippleEdit: Downstream clip %s not found. Skipping shift.", tostring(shift_clip_data.id))
-                goto continue_shift
-            end
-
-            local track_shift = ctx.track_shift_amounts[shift_clip.track_id] or ctx.downstream_shift_frames
-            assert(type(shift_clip.timeline_start) == "number", "compute_downstream_shifts: shift_clip.timeline_start must be integer")
-            shift_clip.timeline_start = shift_clip.timeline_start + track_shift
-            ctx.modified_clips[shift_clip.id] = shift_clip
-
-            ::continue_shift::
         end
 
-	        if ctx.dry_run and type(ctx.preloaded_clip_snapshot) == "table" then
-	            -- Preview mode: represent *far downstream* movement as shift blocks rather than
-	            -- enumerating every downstream clip. We still shift clips inside the preloaded
-	            -- snapshot so the active interaction region stays accurate.
-	            ctx.shift_blocks = build_preview_shift_blocks(ctx)
-	        elseif type(ctx.preloaded_clip_snapshot) == "table" and type(ctx.preloaded_clip_snapshot.post_boundary_first_clip) == "table" then
-	            assert(type(ctx.timeline_active_region) == "table" and ctx.timeline_active_region.bulk_shift_start_frames,
-	                "compute_downstream_shifts: missing timeline_active_region.bulk_shift_start_frames for bulk shift")
-	            for track_id, clip_id in pairs(ctx.preloaded_clip_snapshot.post_boundary_first_clip) do
-	                local track_shift = ctx.track_shift_amounts[track_id] or ctx.downstream_shift_frames
-	                local frames = track_shift or 0
-	                if clip_id and frames ~= 0 then
-                        local anchor = ctx.clip_lookup and ctx.clip_lookup[clip_id] or nil
-                        assert(anchor and type(anchor.timeline_start) == "number", "compute_downstream_shifts: bulk shift anchor clip.timeline_start must be integer " .. tostring(clip_id))
-	                    table.insert(ctx.bulk_shift_mutations, {
-	                        type = "bulk_shift",
-	                        track_id = track_id,
-	                        shift_frames = frames,
-	                        first_clip_id = clip_id,
-                            anchor_start_frame = anchor.timeline_start,
-	                        start_frames = ctx.timeline_active_region.bulk_shift_start_frames
-	                    })
-	                end
-	            end
-	        end
+        if ctx.dry_run then
+            ctx.shift_blocks = build_preview_shift_blocks(ctx)
+        end
 
-	        return true
-	    end
+        return true
+    end
 
 	    local function retry_with_adjusted_delta(ctx, adjusted_frames)
 	        local retry_count = ctx.args.__retry_delta_count or 0
