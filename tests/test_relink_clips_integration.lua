@@ -161,39 +161,42 @@ do
 end
 
 ---------------------------------------------------------------------------------
--- Test 3: relink_clips_batch with simple filename match (no TC offset)
+-- Test 3: relink_media_batch with simple filename match (no TC offset)
 ---------------------------------------------------------------------------------
 print("\n--- Test 3: Batch relink with filename match (same TC) ---")
 do
-    -- Build clip infos manually (same as dialog would)
+    -- Build media_infos (one per media, clips nested)
     local vm = Media.load(video_media_id)
     local tc_val, tc_rate = vm:get_start_tc()
 
-    local clip_infos = {}
     local video_clips = Clip.find_clips_for_media(video_media_id)
+    local clip_entries = {}
     for _, clip in ipairs(video_clips) do
-        clip_infos[#clip_infos + 1] = {
+        clip_entries[#clip_entries + 1] = {
             clip_id = clip.id,
-            media_id = video_media_id,
             source_in = clip.source_in,
             source_out = clip.source_out,
             fps_num = clip.rate.fps_numerator,
             fps_den = clip.rate.fps_denominator,
-            media_start_tc_value = tc_val,
-            media_start_tc_rate = tc_rate,
-            media_path = vm:get_file_path(),
-            media_name = vm.name,
-            width = vm.width,
-            height = vm.height,
             clip_kind = clip.clip_kind,
             clip_name = clip.name,
         }
     end
 
+    local media_infos = {{
+        media_id = video_media_id,
+        media_path = vm:get_file_path(),
+        media_name = vm.name,
+        media_start_tc_value = tc_val,
+        media_start_tc_rate = tc_rate,
+        width = vm.width,
+        height = vm.height,
+        clips = clip_entries,
+    }}
+
     -- Create a fake search directory with a matching file
     local search_dir = "/tmp/jve/relink_test_media"
     os.execute(string.format("mkdir -p %q", search_dir))
-    -- Create a dummy file
     local dummy_file = search_dir .. "/A026_C007.mov"
     local f = io.open(dummy_file, "w")
     if f then
@@ -214,7 +217,7 @@ do
     }
 
     local progress_calls = 0
-    local results = media_relinker.relink_clips_batch(clip_infos, options, function()
+    local results = media_relinker.relink_media_batch(media_infos, options, function()
         progress_calls = progress_calls + 1
     end)
 

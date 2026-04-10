@@ -7,7 +7,7 @@
 -- - Full undo: restore clip state, media paths, delete new media records
 --
 -- Non-goals:
--- - Scanning/matching (handled by media_relinker.relink_clips_batch)
+-- - Scanning/matching (handled by media_relinker.relink_media_batch)
 -- - UI (handled by ShowRelinkDialog)
 --
 -- Invariants:
@@ -18,12 +18,22 @@
 local M = {}
 local log = require("core.logger").for_area("media")
 
+--- Count keys in a map (for tables where #t is meaningless).
+local function count_keys(t)
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    return n
+end
+
 local SPEC = {
     args = {
-        clip_relink_map = { required = true },
+        clip_relink_map = { required = true, kind = "table" },
         project_id = { required = true },
-        media_path_changes = { required = false },
-        new_media_records = { required = false },
+        -- Optional with a table default: the framework materializes a fresh
+        -- empty table per invocation, so executors can iterate unconditionally
+        -- without fallback guards.
+        media_path_changes = { kind = "table", default = {} },
+        new_media_records = { kind = "table", default = {} },
     }
 }
 
@@ -41,12 +51,12 @@ function M.register(executors, undoers, db)
 
         local old_clip_state  -- set in Phase 3
         local old_media_paths = {}
-        local media_path_changes = args.media_path_changes or {} -- NSF-OK: optional param, empty = no path changes
-        local new_media_records = args.new_media_records or {} -- NSF-OK: optional param, empty = no new media
+        local media_path_changes = args.media_path_changes
+        local new_media_records = args.new_media_records
         local media_count = 0
 
-        -- No transaction here — command_manager provides one
-        local ok, err = pcall(function()
+        -- No transaction here — command_manager provides one.
+        -- Any assert/error unwinds to command_manager which rolls back.
 
         -- Phase 1: Create new media records (for segment files)
         for _, rec in ipairs(new_media_records) do
@@ -104,12 +114,6 @@ function M.register(executors, undoers, db)
         command:set_parameter("old_clip_state", old_clip_state)
         command:set_parameter("old_media_paths", old_media_paths)
 
-        end) -- end pcall
-
-        if not ok then
-            error(err)
-        end
-
         -- Emit media_changed for all affected media_ids so viewers refresh
         local changed_media = {}
         for clip_id, relink in pairs(args.clip_relink_map) do
@@ -123,8 +127,7 @@ function M.register(executors, undoers, db)
         Signals.emit("media_changed", changed_media)
 
         log.event("RelinkClips: relinked %d clip(s), %d media path(s)",
-            (function() local n=0; for _ in pairs(args.clip_relink_map) do n=n+1 end; return n end)(),
-            media_count)
+            count_keys(args.clip_relink_map), media_count)
         return { success = true }
     end
 
@@ -138,8 +141,8 @@ function M.register(executors, undoers, db)
 
         local old_media_paths = args.old_media_paths
 
-        -- No transaction here — command_manager provides one
-        local ok, err = pcall(function()
+        -- No transaction here — command_manager provides one.
+        -- Any assert/error unwinds to command_manager which rolls back.
 
         -- Phase 1: Restore clips via model batch method
         Clip.batch_update_source(args.old_clip_state)
@@ -155,17 +158,11 @@ function M.register(executors, undoers, db)
         Media.end_batch()
 
         -- Phase 3: Delete new media records (and their clips)
-        local new_media_records = args.new_media_records or {} -- NSF-OK: optional, empty = none
-        for _, rec in ipairs(new_media_records) do
+        -- SPEC guarantees args.new_media_records is a table (default = {}).
+        for _, rec in ipairs(args.new_media_records) do
             local media = Media.load(rec.id)
             assert(media, string.format("RelinkClips undo: new media %s not found for deletion", rec.id))
             media:delete()
-        end
-
-        end) -- end pcall
-
-        if not ok then
-            error(err)
         end
 
         -- Emit media_changed so viewers refresh offline status
@@ -179,8 +176,7 @@ function M.register(executors, undoers, db)
         local Signals = require("core.signals")
         Signals.emit("media_changed", changed_media)
 
-        local n = 0; for _ in pairs(args.old_clip_state) do n = n + 1 end
-        log.event("RelinkClips undo: restored %d clip(s)", n)
+        log.event("RelinkClips undo: restored %d clip(s)", count_keys(args.old_clip_state))
         return true
     end
 

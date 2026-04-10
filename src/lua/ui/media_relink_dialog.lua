@@ -20,6 +20,8 @@ local function matching_rules_path()
 end
 
 --- Load matching rules from ~/.jve/ (app-level, persists across projects).
+-- Missing file → defaults (first-run is legitimate).
+-- Corrupt JSON → defaults, but log.warn so a silent "my prefs reset" is traceable.
 local function load_matching_rules()
     local matching_rules_dialog = require("ui.matching_rules_dialog")
     local path = matching_rules_path()
@@ -31,6 +33,7 @@ local function load_matching_rules()
     f:close()
     local decoded = json.decode(content)
     if type(decoded) ~= "table" then
+        log.warn("load_matching_rules: %s is corrupt, reverting to defaults", path)
         return matching_rules_dialog.default_rules()
     end
     return decoded
@@ -46,17 +49,18 @@ local function save_matching_rules(rules)
     f:close()
 end
 
---- Build clip_info structs from media records, pumping Qt events to stay responsive.
--- Updates the media list (not per-clip — too many) and header incrementally.
--- @param media_list table Array of media records to build clip_infos from
+--- Build media_info structs from media records, pumping Qt events to stay responsive.
+-- Each media_info has a .clips sub-array for per-clip data (source ranges, etc.).
+-- @param media_list table Array of media records
 -- @param widgets table {qt, status_label, media_area, header} for live UI updates
-local function build_clip_infos(media_list, widgets)
+local function build_media_infos(media_list, widgets)
     local Clip = require("models.clip")
     local qt = widgets.qt
-    local clip_infos = {}
+    local media_infos = {}
     local media_lines = {}
+    local total_clips = 0
 
-    log.detail("build_clip_infos: gathering clips for %d media", #media_list)
+    log.detail("build_media_infos: gathering clips for %d media", #media_list)
     local t0 = os.clock()
 
     for mi, media in ipairs(media_list) do
@@ -67,35 +71,40 @@ local function build_clip_infos(media_list, widgets)
             mi, #media_list, media.name or media.id:sub(1,8),
             #clips, tostring(tc_value), tostring(tc_rate))
 
-        -- Add media-level line (shown in the list)
         media_lines[#media_lines + 1] = string.format("  %s  —  %d clip(s)  (%s)",
             media.name or media.id:sub(1, 8), #clips, media:get_file_path())
 
+        local clip_entries = {}
         for _, clip in ipairs(clips) do
-            clip_infos[#clip_infos + 1] = {
+            clip_entries[#clip_entries + 1] = {
                 clip_id = clip.id,
-                media_id = media.id,
                 source_in = clip.source_in,
                 source_out = clip.source_out,
                 fps_num = clip.rate.fps_numerator,
                 fps_den = clip.rate.fps_denominator,
-                media_start_tc_value = tc_value,
-                media_start_tc_rate = tc_rate,
-                media_path = media:get_file_path(),
-                media_name = media.name or media.id,
-                width = media.width or 0,
-                height = media.height or 0,
                 clip_kind = clip.clip_kind,
                 clip_name = clip.name,
             }
         end
+        total_clips = total_clips + #clip_entries
+
+        media_infos[#media_infos + 1] = {
+            media_id = media.id,
+            media_path = media:get_file_path(),
+            media_name = media.name or media.id,
+            media_start_tc_value = tc_value,
+            media_start_tc_rate = tc_rate,
+            width = media.width or 0,
+            height = media.height or 0,
+            clips = clip_entries,
+        }
 
         -- Update UI every 20 media
         if mi % 20 == 0 then
             if widgets.status_label then
                 qt.PROPERTIES.SET_TEXT(widgets.status_label,
                     string.format("Loading... %d/%d media (%d clips)",
-                        mi, #media_list, #clip_infos))
+                        mi, #media_list, total_clips))
             end
             if widgets.media_area then
                 qt.PROPERTIES.SET_TEXT(widgets.media_area, table.concat(media_lines, "\n"))
@@ -104,7 +113,7 @@ local function build_clip_infos(media_list, widgets)
             if widgets.header then
                 qt.PROPERTIES.SET_TEXT(widgets.header,
                     string.format("Loading... %d clip(s) from %d/%d media",
-                        #clip_infos, mi, #media_list))
+                        total_clips, mi, #media_list))
             end
             qt.CONTROL.PROCESS_EVENTS()
         end
@@ -117,15 +126,15 @@ local function build_clip_infos(media_list, widgets)
     if widgets.header then
         qt.PROPERTIES.SET_TEXT(widgets.header,
             string.format("Found %d clip(s) across %d media file(s)",
-                #clip_infos, #media_list))
+                total_clips, #media_list))
     end
     if widgets.status_label then
         qt.DISPLAY.SET_VISIBLE(widgets.status_label, false)
     end
 
-    log.event("build_clip_infos: %d clips from %d media in %.1fs",
-        #clip_infos, #media_list, os.clock() - t0)
-    return clip_infos
+    log.event("build_media_infos: %d clips from %d media in %.1fs",
+        total_clips, #media_list, os.clock() - t0)
+    return media_infos
 end
 
 --- Extract unique source volume/location roots from media paths.
@@ -242,9 +251,8 @@ end
 -- Shows dialog immediately, populates clip list asynchronously.
 -- @param media_list table Non-empty array of media records to relink
 -- @param parent_window userdata|nil Parent window for modal
--- @param project_id string Active project ID
 -- @param opts table|nil {on_apply = function(results)} called before dialog closes
-function M.show(media_list, parent_window, project_id, opts)
+function M.show(media_list, parent_window, opts)
     assert(media_list and #media_list > 0,
         "media_relink_dialog.show: media_list must be non-empty")
     opts = opts or {}
@@ -264,7 +272,7 @@ function M.show(media_list, parent_window, project_id, opts)
     local last_dir = file_browser.get_last_directory("relink_media")
     local search_dir = (last_dir and last_dir ~= "") and last_dir or nil
     local relink_results = nil
-    local clip_infos = nil  -- built after dialog appears
+    local media_infos = nil  -- built after dialog appears
     local globals = {}
 
     local matching_rules = load_matching_rules()
@@ -274,7 +282,7 @@ function M.show(media_list, parent_window, project_id, opts)
     local main_layout = qt.LAYOUT.CREATE_VBOX()
 
     -- -----------------------------------------------------------------------
-    -- Header (shows loading count, updated after clip_infos built)
+    -- Header (shows loading count, updated after media_infos built)
     -- -----------------------------------------------------------------------
     local header = qt.WIDGET.CREATE_LABEL(
         string.format("Loading %d media file(s)...", #media_list))
@@ -415,7 +423,7 @@ function M.show(media_list, parent_window, project_id, opts)
             search_paths = { search_dir },
             matching_rules = matching_rules,
         }
-        local results = media_relinker.relink_clips_batch(clip_infos, options, progress.update)
+        local results = media_relinker.relink_media_batch(media_infos, options, progress.update)
         progress.flush()
         results.folder_priority = folder_priority
 
@@ -461,8 +469,8 @@ function M.show(media_list, parent_window, project_id, opts)
 
     qt.DIALOG.SHOW(dialog, false)  -- non-blocking: dialog appears now
 
-    -- Build clip_infos while dialog is visible (updates UI incrementally)
-    clip_infos = build_clip_infos(media_list, {
+    -- Build media_infos while dialog is visible (updates UI incrementally)
+    media_infos = build_media_infos(media_list, {
         qt = qt,
         status_label = loading_label,
         media_area = media_area,

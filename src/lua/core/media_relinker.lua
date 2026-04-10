@@ -1,25 +1,35 @@
---- TODO: one-line summary (human review required)
+--- Media relinker: reconnect offline media files to project clips.
 --
 -- Responsibilities:
--- - TODO
+-- - Enumerate project media (find_offline_media, find_project_media,
+--   find_media_for_clips)
+-- - Scan search directories for candidate files (scan_directory,
+--   build_candidate_cache)
+-- - Probe candidates via ffprobe for TC + media properties (probe_file)
+-- - Per-media candidate matching: filename, TC, resolution, fps
+--   (find_candidates_for_media)
+-- - Per-clip containment check for trimmed media (check_clip_containment)
+-- - Segment-file fan-out for split recordings (build_segment_index,
+--   match_segment_filename)
+-- - Batch orchestration + result classification (relink_media_batch)
 --
 -- Non-goals:
--- - TODO
+-- - Database mutation — handled by the RelinkClips command
+-- - UI — handled by media_relink_dialog
+-- - Adjusting source_in/source_out — source ranges are absolute TC and are
+--   never mutated on relink. The C++ decoder computes
+--   file_pos = source_in - file_tc_origin at decode time.
 --
 -- Invariants:
--- - TODO
---
--- Size: ~417 LOC
--- Volatility: unknown
+-- - One ffprobe call per candidate file across an entire batch (probe_cache
+--   in relink_media_batch). Matching is per-media, not per-clip, so a file
+--   shared by N clips is probed once, not N times.
+-- - Media-level matching runs once per media_info; per-clip containment
+--   only runs when a candidate has a TC mismatch and accept_trimmed_media
+--   is enabled.
+-- - Proxy media (files under ProxyMedia/) are never relinked.
 --
 -- @file media_relinker.lua
--- Original intent (unreviewed):
--- Media Relinking System
--- Reconnects offline media files to clips after files have been moved/renamed
--- Supports three strategies: path-based, filename-based, metadata-based
---
--- Architecture: Command-based relinking for full undo/redo support
--- All relinking operations create RelinkClips commands that can be undone
 local M = {}
 local log = require("core.logger").for_area("media")
 
@@ -62,14 +72,13 @@ local function scan_directory(root_dir, extensions)
     log.event("scan_directory: %s", cmd)
 
     local handle = io.popen(cmd)
-    if handle then
-        for line in handle:lines() do
-            if line and line ~= "" then
-                table.insert(results, line)
-            end
+    assert(handle, string.format("scan_directory: io.popen failed for %s", cmd))
+    for line in handle:lines() do
+        if line and line ~= "" then
+            table.insert(results, line)
         end
-        handle:close()
     end
+    handle:close()
 
     log.event("scan_directory: found %d files", #results)
     return results
@@ -116,29 +125,39 @@ local function tc_to_frames(tc, fps)
     return tonumber(h) * 3600 * fps + tonumber(m) * 60 * fps + tonumber(s) * fps + tonumber(f)
 end
 
---- Probe a candidate file's start TC via ffprobe.
--- Returns (start_frames, rate) — same representation as stored start_tc.
--- For video: reads timecode tag, converts to frames at video fps.
--- For audio (BWF): reads time_reference (samples), returns at sample_rate.
+--- Probe a candidate file for TC and media properties in a single ffprobe call.
+-- Returns a unified result table, or nil on failure.
+-- For video: reads timecode tag → TC in frames at video fps; extracts resolution, fps, duration.
+-- For audio (BWF): reads time_reference → TC in samples at sample_rate; extracts duration.
 -- @param file_path string
--- @return number|nil start_frames
--- @return number|nil rate
-local function probe_start_tc(file_path)
+-- @return table|nil {start_tc_value, start_tc_rate, width, height, fps_num, fps_den, duration_frames}
+local function probe_file(file_path)
     local escaped = string.format('"%s"', file_path:gsub('"', '\\"'))
     local cmd = string.format(
         'ffprobe -v error -print_format json -show_format -show_streams %s 2>/dev/null',
         escaped)
     local handle = io.popen(cmd)
-    if not handle then return nil, nil end
+    if not handle then
+        log.detail("probe_file: io.popen failed for %s", file_path)
+        return nil
+    end
     local output = handle:read("*a")
     handle:close()
-    if not output or output == "" then return nil, nil end
+    if not output or output == "" then
+        log.detail("probe_file: empty ffprobe output for %s", file_path)
+        return nil
+    end
 
-    local json = require("dkjson")
-    local data = json.decode(output)
-    if not data then return nil, nil end
+    local json_mod = require("dkjson")
+    local data = json_mod.decode(output)
+    if not data then
+        log.detail("probe_file: JSON decode failed for %s", file_path)
+        return nil
+    end
 
-    -- Strategy 1: Video TC tag — "HH:MM:SS:FF" in format or stream tags
+    local result = {}
+
+    -- Extract TC: Strategy 1 — Video TC tag "HH:MM:SS:FF"
     local tc_str = nil
     if data.format and data.format.tags then
         tc_str = data.format.tags.timecode or data.format.tags.TIMECODE
@@ -152,49 +171,72 @@ local function probe_start_tc(file_path)
         end
     end
 
-    if tc_str then
-        -- Get fps from video stream to convert TC string to frames
-        local fps = nil
-        if data.streams then
-            for _, stream in ipairs(data.streams) do
-                if stream.codec_type == "video" then
-                    if stream.r_frame_rate then
-                        local num, den = stream.r_frame_rate:match("(%d+)/(%d+)")
-                        if num and den then
-                            fps = math.floor(tonumber(num) / tonumber(den) + 0.5)
+    -- Extract media properties from streams
+    if data.streams then
+        for _, stream in ipairs(data.streams) do
+            if stream.codec_type == "video" then
+                result.width = tonumber(stream.width)
+                result.height = tonumber(stream.height)
+                if stream.r_frame_rate then
+                    local num, den = stream.r_frame_rate:match("(%d+)/(%d+)")
+                    if num and den then
+                        result.fps_num = tonumber(num)
+                        result.fps_den = tonumber(den)
+                    end
+                end
+                if stream.nb_frames then
+                    result.duration_frames = tonumber(stream.nb_frames)
+                elseif stream.duration and result.fps_num and result.fps_den then
+                    result.duration_frames = math.floor(
+                        tonumber(stream.duration) * result.fps_num / result.fps_den + 0.5)
+                end
+                -- Convert TC string using this stream's fps
+                if tc_str and result.fps_num and result.fps_den then
+                    local fps = math.floor(result.fps_num / result.fps_den + 0.5)
+                    if fps > 0 then
+                        local frames = tc_to_frames(tc_str, fps)
+                        if frames then
+                            result.start_tc_value = frames
+                            result.start_tc_rate = fps
                         end
                     end
-                    break
                 end
-            end
-        end
-        if fps and fps > 0 then
-            local frames = tc_to_frames(tc_str, fps)
-            if frames then return frames, fps end
-        end
-    end
-
-    -- Strategy 2: BWF time_reference — sample offset since midnight (audio files)
-    if data.format and data.format.tags then
-        local time_ref = tonumber(data.format.tags.time_reference)
-        if time_ref then
-            -- Find audio sample rate
-            local sample_rate = nil
-            if data.streams then
-                for _, stream in ipairs(data.streams) do
-                    if stream.codec_type == "audio" then
-                        sample_rate = tonumber(stream.sample_rate)
-                        break
+            elseif stream.codec_type == "audio" and not result.width then
+                -- Audio-only file: extract duration in samples at sample_rate
+                local sample_rate = tonumber(stream.sample_rate)
+                if sample_rate and sample_rate > 0 then
+                    result.fps_num = sample_rate
+                    result.fps_den = 1
+                    if stream.duration then
+                        result.duration_frames = math.floor(
+                            tonumber(stream.duration) * sample_rate + 0.5)
+                    elseif stream.nb_frames then
+                        result.duration_frames = tonumber(stream.nb_frames)
                     end
                 end
             end
+        end
+    end
+
+    -- Extract TC: Strategy 2 — BWF time_reference (audio files without video TC)
+    if not result.start_tc_value and data.format and data.format.tags then
+        local time_ref = tonumber(data.format.tags.time_reference)
+        if time_ref then
+            local sample_rate = result.fps_num  -- already extracted from audio stream
             if sample_rate and sample_rate > 0 then
-                return time_ref, sample_rate
+                result.start_tc_value = time_ref
+                result.start_tc_rate = sample_rate
             end
         end
     end
 
-    return nil, nil
+    -- Valid if we got either video dimensions or audio duration
+    if not result.width and not result.duration_frames then
+        log.detail("probe_file: no video dims or audio duration in %s", file_path)
+        return nil
+    end
+
+    return result
 end
 
 
@@ -224,16 +266,16 @@ function M.find_offline_media(db, project_id)
     local offline = {}
     local proxy_count = 0
     stmt:bind_value(1, project_id)
-    if stmt:exec() then
-        while stmt:next() do
-            local media_id = stmt:value(0)
-            local media = Media.load(media_id)
-            if media and not file_exists(media.file_path) then
-                if is_proxy_path(media.file_path) then
-                    proxy_count = proxy_count + 1
-                else
-                    table.insert(offline, media)
-                end
+    assert(stmt:exec(), "find_offline_media: query exec failed")
+    while stmt:next() do
+        local media_id = stmt:value(0)
+        local media = Media.load(media_id)
+        assert(media, string.format("find_offline_media: failed to load media %s", media_id))
+        if not file_exists(media.file_path) then
+            if is_proxy_path(media.file_path) then
+                proxy_count = proxy_count + 1
+            else
+                table.insert(offline, media)
             end
         end
     end
@@ -359,11 +401,52 @@ function M.compute_tc_offset(stored_value, stored_rate, candidate_value, candida
     return candidate_rescaled - stored_value
 end
 
--- adjust_source_range REMOVED: source_in/source_out are absolute TC and must
--- never be modified during relink. The C++ decoder computes file_pos =
--- source_in - first_sample_tc at decode time. Containment validation
--- (does the new file's TC range cover the clip's source range?) happens
--- in find_candidates_for_clip via the accept_trimmed_media check.
+--- Check if a candidate file's TC range contains a clip's absolute source range.
+-- Pure arithmetic — no I/O. Used after per-media matching to verify trimmed candidates.
+-- @param clip table {source_in, source_out, fps_num, fps_den}
+-- @param probe_result table {start_tc_value, start_tc_rate, duration_frames, fps_num, fps_den}
+-- @param stored_rate number The media's stored TC rate (for rescaling)
+-- @return boolean True if candidate range fully contains clip's source range
+function M.check_clip_containment(clip, probe_result, stored_rate)
+    assert(type(clip) == "table", "check_clip_containment: clip required")
+    assert(type(probe_result) == "table", "check_clip_containment: probe_result required")
+    assert(type(stored_rate) == "number" and stored_rate > 0,
+        "check_clip_containment: stored_rate must be positive")
+
+    if not probe_result.start_tc_value or not probe_result.start_tc_rate then
+        return false
+    end
+    if not probe_result.duration_frames then
+        return false
+    end
+
+    -- Rescale clip's absolute source_in/source_out to stored_rate
+    local clip_rate = clip.fps_num / clip.fps_den
+    local abs_start = clip.source_in
+    local abs_end = clip.source_out
+    if math.abs(clip_rate - stored_rate) > 0.01 then
+        abs_start = math.floor(clip.source_in * stored_rate / clip_rate + 0.5)
+        abs_end = math.floor(clip.source_out * stored_rate / clip_rate + 0.5)
+    end
+
+    -- Candidate range at stored_rate
+    local cand_start = probe_result.start_tc_value
+    if stored_rate ~= probe_result.start_tc_rate then
+        cand_start = math.floor(probe_result.start_tc_value * stored_rate / probe_result.start_tc_rate + 0.5)
+    end
+
+    local cand_dur = probe_result.duration_frames
+    if probe_result.fps_num and probe_result.fps_den then
+        local probe_rate = probe_result.fps_num / probe_result.fps_den
+        if math.abs(probe_rate - stored_rate) > 0.01 then
+            cand_dur = math.floor(probe_result.duration_frames * stored_rate * probe_result.fps_den / probe_result.fps_num + 0.5)
+        end
+    end
+
+    local cand_end = cand_start + cand_dur
+
+    return abs_start >= cand_start and abs_end <= cand_end
+end
 
 --- Check if a candidate filename is a segment variant of an original filename.
 -- Segments have a numeric suffix after an underscore (e.g., _001, _002).
@@ -435,18 +518,20 @@ function M.build_segment_index(candidate_index)
     return seg_index
 end
 
---- Find candidate files for a clip based on matching rules.
--- Pure function: uses injectable probe functions instead of real ffprobe.
--- @param clip_info table Clip info struct (see contract)
+--- Find candidate files for a media record based on matching rules.
+-- Pure function: uses injectable probe function instead of real ffprobe.
+-- Media-level matching only — containment (clip-level) is done by caller.
+-- When TC mismatches and accept_trimmed_media is on, candidates are returned
+-- with tc_mismatch=true so the caller can run per-clip containment checks.
+-- @param media_info table {media_path, media_name, media_start_tc_value, media_start_tc_rate, width, height}
 -- @param candidate_index table {basename_lower → [paths]}
 -- @param matching_rules table Matching criteria
--- @param probe_tc_fn function(path) → (value, rate) or (nil, nil)
--- @param probe_media_fn function(path) → {width, height, fps_num, fps_den, duration_frames} or nil
--- @return table Array of {path, start_tc_value, start_tc_rate}
-function M.find_candidates_for_clip(clip_info, candidate_index, matching_rules, probe_tc_fn, probe_media_fn)
-    assert(type(clip_info) == "table", "find_candidates_for_clip: clip_info required")
-    assert(type(candidate_index) == "table", "find_candidates_for_clip: candidate_index required")
-    assert(type(matching_rules) == "table", "find_candidates_for_clip: matching_rules required")
+-- @param probe_fn function(path) → {start_tc_value, start_tc_rate, width, height, fps_num, fps_den, duration_frames} or nil
+-- @return table Array of {path, start_tc_value, start_tc_rate, probe_result, tc_mismatch}
+function M.find_candidates_for_media(media_info, candidate_index, matching_rules, probe_fn)
+    assert(type(media_info) == "table", "find_candidates_for_media: media_info required")
+    assert(type(candidate_index) == "table", "find_candidates_for_media: candidate_index required")
+    assert(type(matching_rules) == "table", "find_candidates_for_media: matching_rules required")
 
     local results = {}
 
@@ -454,8 +539,7 @@ function M.find_candidates_for_clip(clip_info, candidate_index, matching_rules, 
     local paths_to_check = {}
 
     if matching_rules.match_filename then
-        -- Match by basename from the index
-        local basename = get_filename(clip_info.media_path)
+        local basename = get_filename(media_info.media_path)
         local lookup_key = basename and basename:lower() or nil
         if lookup_key and candidate_index[lookup_key] then
             for _, path in ipairs(candidate_index[lookup_key]) do
@@ -463,7 +547,6 @@ function M.find_candidates_for_clip(clip_info, candidate_index, matching_rules, 
             end
         end
     else
-        -- No filename matching — check ALL candidates in the index
         for _, paths in pairs(candidate_index) do
             for _, path in ipairs(paths) do
                 paths_to_check[#paths_to_check + 1] = path
@@ -475,75 +558,54 @@ function M.find_candidates_for_clip(clip_info, candidate_index, matching_rules, 
     for _, cand_path in ipairs(paths_to_check) do
         local passed = true
         local cand_tc_value, cand_tc_rate
+        local tc_mismatch = false
+        local probe_result = nil
 
         -- TC matching
         if passed and matching_rules.match_timecode then
-            local stored_value = clip_info.media_start_tc_value
-            local stored_rate = clip_info.media_start_tc_rate
+            local stored_value = media_info.media_start_tc_value
+            local stored_rate = media_info.media_start_tc_rate
 
             if stored_value and stored_rate then
-                cand_tc_value, cand_tc_rate = probe_tc_fn(cand_path)
+                probe_result = probe_result or probe_fn(cand_path)
+                if probe_result then
+                    cand_tc_value = probe_result.start_tc_value
+                    cand_tc_rate = probe_result.start_tc_rate
+                end
 
                 if cand_tc_value and cand_tc_rate then
-                    -- Check if TC matches (±1 frame tolerance)
                     local offset = M.compute_tc_offset(stored_value, stored_rate, cand_tc_value, cand_tc_rate)
 
                     if math.abs(offset) > 1 then
-                        -- TC doesn't match exactly
                         if matching_rules.accept_trimmed_media then
-                            -- Check containment: clip's absolute TC range must fit in candidate.
-                            -- source_in/source_out are ABSOLUTE TC in clip-rate units.
-                            -- Rescale to stored_rate for comparison with candidate TC.
-                            local clip_rate = clip_info.fps_num / clip_info.fps_den
-                            local abs_start = clip_info.source_in
-                            local abs_end = clip_info.source_out
-                            if math.abs(clip_rate - stored_rate) > 0.01 then
-                                abs_start = math.floor(clip_info.source_in * stored_rate / clip_rate + 0.5)
-                                abs_end = math.floor(clip_info.source_out * stored_rate / clip_rate + 0.5)
-                            end
-
-                            -- Candidate range at stored_rate
-                            local cand_start_rescaled = cand_tc_value
-                            if stored_rate ~= cand_tc_rate then
-                                cand_start_rescaled = math.floor(cand_tc_value * stored_rate / cand_tc_rate + 0.5)
-                            end
-
-                            local media_info = probe_media_fn(cand_path)
-                            if media_info and media_info.duration_frames then
-                                local cand_dur_rescaled = media_info.duration_frames
-                                if media_info.fps_num and media_info.fps_den and stored_rate ~= media_info.fps_num / media_info.fps_den then
-                                    cand_dur_rescaled = math.floor(media_info.duration_frames * stored_rate * media_info.fps_den / media_info.fps_num + 0.5)
-                                end
-                                local cand_end = cand_start_rescaled + cand_dur_rescaled
-
-                                if abs_start < cand_start_rescaled or abs_end > cand_end then
-                                    passed = false  -- clip range not contained
-                                end
-                            else
-                                passed = false  -- can't verify containment without duration
-                            end
+                            -- TC mismatch but trimmed accepted — mark for per-clip containment
+                            tc_mismatch = true
                         else
-                            passed = false  -- TC mismatch and trimmed not accepted
+                            passed = false
                         end
                     end
+                else
+                    log.detail("  %s: no candidate TC — accepting on non-TC criteria",
+                        get_filename(cand_path))
                 end
-                -- If candidate has no TC → accept on other criteria (TC check not applicable)
+            else
+                log.detail("  %s: no stored TC — accepting on non-TC criteria",
+                    get_filename(cand_path))
             end
-            -- If stored TC is nil → can't verify, accept on other criteria
         end
 
-        -- Resolution + frame rate matching (single probe call)
+        -- Resolution + frame rate matching
         if passed and (matching_rules.match_resolution or matching_rules.match_frame_rate) then
-            local media_info = probe_media_fn(cand_path)
-            if media_info then
+            probe_result = probe_result or probe_fn(cand_path)
+            if probe_result then
                 if matching_rules.match_resolution then
-                    if media_info.width ~= clip_info.width or media_info.height ~= clip_info.height then
+                    if probe_result.width ~= media_info.width or probe_result.height ~= media_info.height then
                         passed = false
                     end
                 end
                 if passed and matching_rules.match_frame_rate then
-                    if media_info.fps_num and media_info.fps_den then
-                        if media_info.fps_num ~= clip_info.fps_num or media_info.fps_den ~= clip_info.fps_den then
+                    if probe_result.fps_num and probe_result.fps_den then
+                        if probe_result.fps_num ~= media_info.fps_num or probe_result.fps_den ~= media_info.fps_den then
                             passed = false
                         end
                     end
@@ -556,6 +618,8 @@ function M.find_candidates_for_clip(clip_info, candidate_index, matching_rules, 
                 path = cand_path,
                 start_tc_value = cand_tc_value,
                 start_tc_rate = cand_tc_rate,
+                probe_result = probe_result,
+                tc_mismatch = tc_mismatch,
             }
         end
     end
@@ -567,18 +631,177 @@ end
 -- RelinkClips: Batch Relink (T008)
 -- =============================================================================
 
---- Batch relink clips to candidate files using matching rules.
--- Scans search directories, builds candidate index, matches each clip.
--- @param clips table Array of clip_info structs (see contract)
+--- Bucket candidates into per-clip lists.
+-- Non-TC-mismatch candidates belong to every clip; TC-mismatch candidates
+-- only belong to clips whose source range fits inside the candidate.
+-- @param media_info table Media info with .clips sub-array
+-- @param candidates table Array from find_candidates_for_media
+-- @param stored_rate number|nil Media's stored TC rate (required for containment)
+-- @return table {clip_id → [candidate]}
+local function bucket_candidates_per_clip(media_info, candidates, stored_rate)
+    local clip_candidates = {}
+    for _, clip in ipairs(media_info.clips) do
+        clip_candidates[clip.clip_id] = {}
+    end
+
+    for _, cand in ipairs(candidates) do
+        if cand.tc_mismatch and stored_rate then
+            -- Per-clip containment check (pure arithmetic)
+            for _, clip in ipairs(media_info.clips) do
+                if cand.probe_result and M.check_clip_containment(clip, cand.probe_result, stored_rate) then
+                    local bucket = clip_candidates[clip.clip_id]
+                    bucket[#bucket + 1] = cand
+                end
+            end
+        else
+            for _, clip in ipairs(media_info.clips) do
+                local bucket = clip_candidates[clip.clip_id]
+                bucket[#bucket + 1] = cand
+            end
+        end
+    end
+
+    return clip_candidates
+end
+
+--- Build a result entry for a clip that was uniquely relinked to one candidate.
+-- source_in/source_out are absolute TC and never change on relink — the C++
+-- decoder computes file_pos = source_in - first_sample_tc at decode time.
+local function make_relink_entry(clip, cand, original_media_id)
+    return {
+        clip_id = clip.clip_id,
+        original_media_id = original_media_id,
+        new_media_id = nil,
+        new_source_in = clip.source_in,
+        new_source_out = clip.source_out,
+        new_path = cand.path,
+        strategy = cand.is_segment and "segment" or "filename",
+    }
+end
+
+--- Build a result entry for a clip with multiple candidates (needs user choice).
+local function make_ambiguous_entry(clip, covers)
+    local cand_info = {}
+    for _, c in ipairs(covers) do
+        cand_info[#cand_info + 1] = {
+            path = c.path,
+            start_tc = c.start_tc_value,
+            start_tc_rate = c.start_tc_rate,
+        }
+    end
+    return {
+        clip_id = clip.clip_id,
+        candidates = cand_info,
+    }
+end
+
+--- Classify clips under one media into relinked/failed/ambiguous outcomes.
+-- Pure: no I/O, no mutation of external state, no progress reporting.
+-- @param media_info table Media info with .clips sub-array
+-- @param candidates table Array from find_candidates_for_media
+-- @return table {relinked = [...], failed = [...], ambiguous = [...]}
+local function classify_clips_for_media(media_info, candidates)
+    local stored_rate = media_info.media_start_tc_rate
+    local clip_candidates = bucket_candidates_per_clip(media_info, candidates, stored_rate)
+
+    local out = { relinked = {}, failed = {}, ambiguous = {} }
+
+    for _, clip in ipairs(media_info.clips) do
+        local covers = clip_candidates[clip.clip_id]
+        if #covers == 0 then
+            out.failed[#out.failed + 1] = {
+                clip_id = clip.clip_id,
+                reason = "no matching candidate found",
+            }
+        elseif #covers == 1 then
+            out.relinked[#out.relinked + 1] = make_relink_entry(clip, covers[1], media_info.media_id)
+        else
+            out.ambiguous[#out.ambiguous + 1] = make_ambiguous_entry(clip, covers)
+        end
+    end
+
+    return out
+end
+
+--- Merge one media's classification outputs into the batch accumulator.
+local function merge_media_results(accumulator, media_results)
+    for _, r in ipairs(media_results.relinked) do
+        accumulator.relinked[#accumulator.relinked + 1] = r
+    end
+    for _, f in ipairs(media_results.failed) do
+        accumulator.failed[#accumulator.failed + 1] = f
+    end
+    for _, a in ipairs(media_results.ambiguous) do
+        accumulator.ambiguous[#accumulator.ambiguous + 1] = a
+    end
+end
+
+--- Append segment-file candidates to an existing candidates array.
+-- Segment files are numeric-suffixed variants of the original basename.
+-- Mutates `candidates` in place. No-op if segment_index has no entry for this media.
+local function inject_segment_candidates(media_info, candidates, segment_index, probe_fn)
+    local basename = get_filename(media_info.media_path)
+    local seg_key = basename and basename:lower() or nil
+    if not seg_key or not segment_index[seg_key] then return end
+
+    local seen = {}
+    for _, c in ipairs(candidates) do seen[c.path] = true end
+
+    for _, seg_path in ipairs(segment_index[seg_key]) do
+        if not seen[seg_path] then
+            seen[seg_path] = true
+            local seg_probe = probe_fn(seg_path)
+            candidates[#candidates + 1] = {
+                path = seg_path,
+                start_tc_value = seg_probe and seg_probe.start_tc_value,
+                start_tc_rate = seg_probe and seg_probe.start_tc_rate,
+                probe_result = seg_probe,
+                is_segment = true,
+            }
+        end
+    end
+end
+
+--- Report progress for one processed media to the caller's progress_cb.
+-- Emits one log line per successful relink (matching current UX), plus a
+-- media-level "(no candidates)" line when the media had zero candidates.
+-- Failed and ambiguous clips produce no per-clip progress lines at this
+-- layer; that gap is tracked separately.
+local function report_media_progress(progress_cb, media_idx, total_media, media_info, candidates, media_results)
+    if not progress_cb then return end
+
+    local pct = math.floor(media_idx / total_media * 100)
+    local status_line = string.format("Processing %d of %d media...", media_idx, total_media)
+
+    -- Build clip_id → display-name lookup for log lines
+    local clip_names = {}
+    for _, clip in ipairs(media_info.clips) do
+        clip_names[clip.clip_id] = clip.clip_name or clip.clip_id:sub(1, 8)
+    end
+
+    for _, entry in ipairs(media_results.relinked) do
+        progress_cb(pct, status_line,
+            string.format("[OK] %s → %s", clip_names[entry.clip_id], get_filename(entry.new_path)))
+    end
+
+    if #candidates == 0 then
+        progress_cb(pct, nil,
+            string.format("[--] %s (no candidates)", media_info.media_name))
+    end
+end
+
+--- Batch relink media to candidate files using matching rules.
+-- Matches per-media (not per-clip), then fans out results to all clips.
+-- @param media_infos table Array of media_info structs with .clips sub-arrays
 -- @param options table {search_paths, matching_rules}
 -- @param progress_cb function|nil progress_cb(pct, status, log_line)
 -- @return table {relinked, failed, ambiguous, new_media}
-function M.relink_clips_batch(clips, options, progress_cb)
-    assert(type(clips) == "table", "relink_clips_batch: clips required")
-    assert(type(options) == "table", "relink_clips_batch: options required")
-    assert(options.search_paths, "relink_clips_batch: search_paths required")
+function M.relink_media_batch(media_infos, options, progress_cb)
+    assert(type(media_infos) == "table", "relink_media_batch: media_infos required")
+    assert(type(options) == "table", "relink_media_batch: options required")
+    assert(options.search_paths, "relink_media_batch: search_paths required")
+    assert(options.matching_rules, "relink_media_batch: matching_rules required")
 
-    assert(options.matching_rules, "relink_clips_batch: matching_rules required")
     local matching_rules = options.matching_rules
 
     local results = {
@@ -588,11 +811,14 @@ function M.relink_clips_batch(clips, options, progress_cb)
         new_media = {},
     }
 
-    local total = #clips
-    if total == 0 then return results end
+    local total_media = #media_infos
+    if total_media == 0 then return results end
 
-    log.event("relink_clips_batch: %d clips, search=%s, rules: fn=%s tc=%s res=%s fps=%s trim=%s seg=%s",
-        total, table.concat(options.search_paths, ","),
+    local total_clips = 0
+    for _, mi in ipairs(media_infos) do total_clips = total_clips + #mi.clips end
+
+    log.event("relink_media_batch: %d media (%d clips), search=%s, rules: fn=%s tc=%s res=%s fps=%s trim=%s seg=%s",
+        total_media, total_clips, table.concat(options.search_paths, ","),
         tostring(matching_rules.match_filename), tostring(matching_rules.match_timecode),
         tostring(matching_rules.match_resolution), tostring(matching_rules.match_frame_rate),
         tostring(matching_rules.accept_trimmed_media), tostring(matching_rules.accept_filename_suffixes))
@@ -601,22 +827,21 @@ function M.relink_clips_batch(clips, options, progress_cb)
     if progress_cb then progress_cb(0, "Scanning search directory...") end
     local t_scan = os.clock()
 
-    -- Collect all extensions from clips
     local extensions = {}
-    for _, clip_info in ipairs(clips) do
-        local ext = clip_info.media_path and clip_info.media_path:match("%.([^%.]+)$")
+    for _, media_info in ipairs(media_infos) do
+        local ext = media_info.media_path and media_info.media_path:match("%.([^%.]+)$")
         if ext then extensions[ext:lower()] = true end
     end
 
     local ext_list = {}
-    for ext in pairs(extensions) do ext_list[#ext_list+1] = ext end
-    log.detail("relink_clips_batch: scanning for extensions: %s", table.concat(ext_list, ", "))
+    for ext in pairs(extensions) do ext_list[#ext_list + 1] = ext end
+    log.detail("relink_media_batch: scanning for extensions: %s", table.concat(ext_list, ", "))
 
     local _, candidate_index = build_candidate_cache(options.search_paths, extensions)
 
     local cand_count = 0
     for _, paths in pairs(candidate_index) do cand_count = cand_count + #paths end
-    log.event("relink_clips_batch: scan complete — %d candidate files in %.1fs",
+    log.event("relink_media_batch: scan complete — %d candidate files in %.1fs",
         cand_count, os.clock() - t_scan)
 
     -- Build segment index if enabled
@@ -625,179 +850,51 @@ function M.relink_clips_batch(clips, options, progress_cb)
         segment_index = M.build_segment_index(candidate_index)
     end
 
-    -- Probe caches: each file probed at most once across all clips
-    local tc_cache = {}    -- path → {value, rate} or {nil, nil}
-    local media_cache = {} -- path → info table or false
+    -- Unified probe cache: one ffprobe call per file for both TC and media properties
+    local probe_cache = {}
+    local probe_count = 0
 
-    local tc_probe_count = 0
-    local media_probe_count = 0
-
-    local function cached_probe_tc(path)
-        local cached = tc_cache[path]
-        if cached ~= nil then
-            return cached[1], cached[2]
-        end
-        tc_probe_count = tc_probe_count + 1
-        log.detail("probe_tc[%d]: %s", tc_probe_count, get_filename(path))
-        local val, rate = probe_start_tc(path)
-        tc_cache[path] = {val, rate}
-        log.detail("  → tc=%s @ %s", tostring(val), tostring(rate))
-        return val, rate
-    end
-
-    local function cached_probe_media(path)
-        local cached = media_cache[path]
+    local function cached_probe(path)
+        local cached = probe_cache[path]
         if cached ~= nil then
             return cached ~= false and cached or nil
         end
-        media_probe_count = media_probe_count + 1
-        log.detail("probe_media[%d]: %s", media_probe_count, get_filename(path))
-        local escaped = string.format('"%s"', path:gsub('"', '\\"'))
-        local cmd = string.format(
-            'ffprobe -v error -print_format json -show_streams %s 2>/dev/null', escaped)
-        local handle = io.popen(cmd)
-        if not handle then media_cache[path] = false; return nil end
-        local output = handle:read("*a")
-        handle:close()
-        if not output or output == "" then media_cache[path] = false; return nil end
-        local json_mod = require("dkjson")
-        local data = json_mod.decode(output)
-        if not data or not data.streams then media_cache[path] = false; return nil end
-        local info = {}
-        for _, stream in ipairs(data.streams) do
-            if stream.codec_type == "video" then
-                info.width = tonumber(stream.width)
-                info.height = tonumber(stream.height)
-                if stream.r_frame_rate then
-                    local num, den = stream.r_frame_rate:match("(%d+)/(%d+)")
-                    if num and den then
-                        info.fps_num = tonumber(num)
-                        info.fps_den = tonumber(den)
-                    end
-                end
-                if stream.nb_frames then
-                    info.duration_frames = tonumber(stream.nb_frames)
-                elseif stream.duration and info.fps_num and info.fps_den then
-                    info.duration_frames = math.floor(
-                        tonumber(stream.duration) * info.fps_num / info.fps_den + 0.5)
-                end
-            elseif stream.codec_type == "audio" and not info.width then
-                -- Audio-only file: extract duration in samples at sample_rate
-                local sample_rate = tonumber(stream.sample_rate)
-                if sample_rate and sample_rate > 0 then
-                    info.fps_num = sample_rate
-                    info.fps_den = 1
-                    if stream.duration then
-                        info.duration_frames = math.floor(
-                            tonumber(stream.duration) * sample_rate + 0.5)
-                    elseif stream.nb_frames then
-                        info.duration_frames = tonumber(stream.nb_frames)
-                    end
-                end
-            end
+        probe_count = probe_count + 1
+        log.detail("probe[%d]: %s", probe_count, get_filename(path))
+        local result = probe_file(path)
+        probe_cache[path] = result or false
+        if result then
+            log.detail("  → tc=%s@%s res=%sx%s dur=%s",
+                tostring(result.start_tc_value), tostring(result.start_tc_rate),
+                tostring(result.width), tostring(result.height),
+                tostring(result.duration_frames))
         end
-        -- Valid if we got either video dimensions or audio duration
-        local result = (info.width or info.duration_frames) and info or nil
-        media_cache[path] = result or false
         return result
     end
 
-    -- Step 2: Process each clip
+    -- Step 2: Process each media — find candidates, classify, merge, report
     local t_match = os.clock()
-    for i, clip_info in ipairs(clips) do
-        local clip_name = clip_info.clip_name or clip_info.clip_id:sub(1, 8)
+    for i, media_info in ipairs(media_infos) do
+        log.detail("media %d/%d: %s (%d clips)",
+            i, total_media, media_info.media_name, #media_info.clips)
 
-        log.detail("clip %d/%d: %s (media=%s src=%d..%d)",
-            i, total, clip_name, clip_info.media_name,
-            clip_info.source_in, clip_info.source_out)
-
-        -- Find candidates using the pure algorithm function
-        local candidates = M.find_candidates_for_clip(
-            clip_info, candidate_index, matching_rules,
-            cached_probe_tc,
-            cached_probe_media
-        )
+        local candidates = M.find_candidates_for_media(
+            media_info, candidate_index, matching_rules, cached_probe)
 
         log.detail("  → %d candidate(s)", #candidates)
         for ci, c in ipairs(candidates) do
-            log.detail("    [%d] %s (tc=%s@%s)", ci, c.path, tostring(c.start_tc_value), tostring(c.start_tc_rate))
+            log.detail("    [%d] %s (tc=%s@%s%s)", ci, c.path,
+                tostring(c.start_tc_value), tostring(c.start_tc_rate),
+                c.tc_mismatch and " TC-MISMATCH" or "")
         end
 
-        -- Also check segment files if enabled
         if matching_rules.accept_filename_suffixes and segment_index then
-            local basename = get_filename(clip_info.media_path)
-            local seg_key = basename and basename:lower() or nil
-            if seg_key and segment_index[seg_key] then
-                local seen = {}
-                for _, c in ipairs(candidates) do seen[c.path] = true end
-
-                for _, seg_path in ipairs(segment_index[seg_key]) do
-                    if not seen[seg_path] then
-                        seen[seg_path] = true
-                        local seg_tc_val, seg_tc_rate = cached_probe_tc(seg_path)
-                        candidates[#candidates + 1] = {
-                            path = seg_path,
-                            start_tc_value = seg_tc_val,
-                            start_tc_rate = seg_tc_rate,
-                            is_segment = true,
-                        }
-                    end
-                end
-            end
+            inject_segment_candidates(media_info, candidates, segment_index, cached_probe)
         end
 
-        -- Evaluate results
-        if #candidates == 0 then
-            results.failed[#results.failed + 1] = {
-                clip_id = clip_info.clip_id,
-                reason = "no matching candidate found",
-            }
-            if progress_cb then
-                progress_cb(math.floor(i / total * 100), nil,
-                    string.format("[--] %s", clip_name))
-            end
-        elseif #candidates == 1 then
-            local cand = candidates[1]
-
-            -- source_in/source_out are absolute TC — they identify WHAT content
-            -- to play, not WHERE in a specific file. Relink changes which file
-            -- backs the clip; the C++ decoder computes file_pos = source_in -
-            -- first_sample_tc at decode time. source_in NEVER changes on relink.
-
-            results.relinked[#results.relinked + 1] = {
-                clip_id = clip_info.clip_id,
-                original_media_id = clip_info.media_id,
-                new_media_id = nil,  -- reuse existing unless segment
-                new_source_in = clip_info.source_in,
-                new_source_out = clip_info.source_out,
-                new_path = cand.path,
-                strategy = cand.is_segment and "segment" or "filename",
-            }
-
-            if progress_cb then
-                progress_cb(math.floor(i / total * 100),
-                    string.format("Processing %d of %d...", i, total),
-                    string.format("[OK] %s → %s", clip_name, get_filename(cand.path)))
-            end
-        else
-            -- Multiple candidates — mark ambiguous
-            local cand_info = {}
-            for _, c in ipairs(candidates) do
-                cand_info[#cand_info + 1] = {
-                    path = c.path,
-                    start_tc = c.start_tc_value,
-                    start_tc_rate = c.start_tc_rate,
-                }
-            end
-            results.ambiguous[#results.ambiguous + 1] = {
-                clip_id = clip_info.clip_id,
-                candidates = cand_info,
-            }
-            if progress_cb then
-                progress_cb(math.floor(i / total * 100), nil,
-                    string.format("[??] %s (%d candidates)", clip_name, #candidates))
-            end
-        end
+        local media_results = classify_clips_for_media(media_info, candidates)
+        merge_media_results(results, media_results)
+        report_media_progress(progress_cb, i, total_media, media_info, candidates, media_results)
     end
 
     if progress_cb then
@@ -805,9 +902,9 @@ function M.relink_clips_batch(clips, options, progress_cb)
             #results.relinked, #results.failed, #results.ambiguous))
     end
 
-    log.event("relink_clips_batch: done in %.1fs — %d relinked, %d failed, %d ambiguous (probes: %d tc, %d media)",
+    log.event("relink_media_batch: done in %.1fs — %d relinked, %d failed, %d ambiguous (probes: %d)",
         os.clock() - t_match, #results.relinked, #results.failed, #results.ambiguous,
-        tc_probe_count, media_probe_count)
+        probe_count)
 
     return results
 end

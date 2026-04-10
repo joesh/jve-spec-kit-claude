@@ -176,7 +176,7 @@ function M.register(executors, _undoers, db)
             })
         end
 
-        local results = media_relink_dialog.show(media_list, parent_window, project_id,
+        local results = media_relink_dialog.show(media_list, parent_window,
             { on_apply = do_apply })
 
         if not results then

@@ -138,6 +138,20 @@ local function is_present(v)
     return true
 end
 
+-- Resolve a schema default into a value that is safe to hand to one invocation.
+-- Tables are shallow-copied so separate invocations don't alias (and mutate) a
+-- shared default object. Scalars pass through unchanged.
+local function resolve_default(d)
+    if type(d) ~= "table" then
+        return d
+    end
+    local copy = {}
+    for k, v in pairs(d) do
+        copy[k] = v
+    end
+    return copy
+end
+
 function M.validate_and_normalize(command_name, spec, params, opts)
     opts = opts or {}
     if opts.is_ui_context == nil then
@@ -228,7 +242,7 @@ function M.validate_and_normalize(command_name, spec, params, opts)
             end
 
             if v == nil and opts.apply_defaults and rule.default ~= nil then
-                v = rule.default
+                v = resolve_default(rule.default)
                 out[k] = v
             end
 
@@ -296,7 +310,7 @@ function M.validate_and_normalize(command_name, spec, params, opts)
                         end
 
                         if field_val == nil and opts.apply_defaults and field_rule.default ~= nil then
-                            field_val = field_rule.default
+                            field_val = resolve_default(field_rule.default)
                             v[field_key] = field_val
                         end
 

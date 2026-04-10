@@ -38,25 +38,28 @@ local function cleanup_search_dir()
     os.execute(string.format("rm -rf %q", SEARCH_DIR))
 end
 
-local function make_clip(source_in, source_out, media_tc)
+local function make_media_info(source_in, source_out, media_tc)
+    local clip_id = "test-clip-" .. tostring(math.random(99999))
     return {
-        clip_id = "test-clip-" .. tostring(math.random(99999)),
         media_id = "test-media-001",
-        source_in = source_in,
-        source_out = source_out,
-        fps_num = TC_RATE,
-        fps_den = 1,
-        media_start_tc_value = media_tc,
-        media_start_tc_rate = TC_RATE,
         media_path = FIXTURE_FILE,
         media_name = "SCENE1_WT-T001.WAV",
+        media_start_tc_value = media_tc,
+        media_start_tc_rate = TC_RATE,
         width = 0, height = 0,
-        clip_kind = "timeline",
-        clip_name = "TC-Test",
+        clips = {{
+            clip_id = clip_id,
+            source_in = source_in,
+            source_out = source_out,
+            fps_num = TC_RATE,
+            fps_den = 1,
+            clip_kind = "timeline",
+            clip_name = "TC-Test",
+        }},
     }
 end
 
-local function relink_one(clip_info, rules_override)
+local function relink_one(media_info, rules_override)
     setup_search_dir()
     local rules = {
         match_filename = true,
@@ -69,8 +72,8 @@ local function relink_one(clip_info, rules_override)
     if rules_override then
         for k, v in pairs(rules_override) do rules[k] = v end
     end
-    local results = media_relinker.relink_clips_batch(
-        {clip_info},
+    local results = media_relinker.relink_media_batch(
+        {media_info},
         { search_paths = {SEARCH_DIR}, matching_rules = rules })
     cleanup_search_dir()
     return results
@@ -86,7 +89,7 @@ do
     local source_in = ORIGINAL_TC + 100000
     local source_out = ORIGINAL_TC + 200000
 
-    local results = relink_one(make_clip(source_in, source_out, ORIGINAL_TC))
+    local results = relink_one(make_media_info(source_in, source_out, ORIGINAL_TC))
 
     assert(#results.relinked == 1,
         string.format("expected 1 relinked, got %d", #results.relinked))
@@ -116,7 +119,7 @@ do
     local source_in = FIXTURE_TC + 100000
     local source_out = FIXTURE_TC + 200000
 
-    local results = relink_one(make_clip(source_in, source_out, FIXTURE_TC))
+    local results = relink_one(make_media_info(source_in, source_out, FIXTURE_TC))
 
     assert(#results.relinked == 1, "expected 1 relinked")
     local entry = results.relinked[1]
@@ -144,7 +147,7 @@ do
     local source_out = FIXTURE_TC + 96000  -- 2 seconds into file
 
     local results = relink_one(
-        make_clip(source_in, source_out, FIXTURE_TC),
+        make_media_info(source_in, source_out, FIXTURE_TC),
         { match_timecode = true, accept_trimmed_media = true })
 
     assert(#results.relinked == 1,
@@ -167,7 +170,7 @@ do
     local source_out = 96000    -- 2 seconds absolute TC
 
     local results = relink_one(
-        make_clip(source_in, source_out, 0),
+        make_media_info(source_in, source_out, 0),
         { match_timecode = true, accept_trimmed_media = true })
 
     -- Should NOT relink — clip's TC range is outside the file
