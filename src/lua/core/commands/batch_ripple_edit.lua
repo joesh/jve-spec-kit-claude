@@ -788,90 +788,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		        end
 		    end
 
-	    local function clamp_downstream_overlaps(ctx)
-	        local earliest = ctx.earliest_ripple_hint
-	        if not earliest then
-	            return
-	        end
-	
-	        local function lead_edge_shift_factor()
-	            if not ctx.lead_edge_entry then
-	                return 1
-	            end
-	            local normalized = ctx.lead_edge_entry.normalized_edge
-	                or edge_utils.to_bracket(ctx.lead_edge_entry.edge_type)
-	            if normalized == "in" then
-	                return -1
-	            end
-	            return 1
-	        end
-	        local shift_factor = lead_edge_shift_factor()
-	        assert(ctx.all_clips, "clamp_downstream_overlaps: all_clips is nil")
-	        for _, clip in ipairs(ctx.all_clips) do
-	            if clip.clip_kind ~= "gap"  -- Gap clips are transparent for overlap detection
-	                and clip.id
-	                and not ctx.edited_clip_lookup[clip.id]
-	                and clip.timeline_start then
-                if ctx.selected_tracks[clip.track_id] and earliest and clip.timeline_start >= earliest then
-                    goto continue_clip_scan
-                end
-                if earliest and clip.timeline_start < earliest then
-                    goto continue_clip_scan
-                end
-                local neighbors = ctx.neighbor_bounds_cache and ctx.neighbor_bounds_cache[clip.id]
-                assert(neighbors, "clamp_downstream_overlaps: missing neighbor cache for clip " .. tostring(clip.id))
-                assert(type(clip.timeline_start) == "number", "clamp_downstream_overlaps: clip.timeline_start must be integer")
-                assert(type(clip.duration) == "number", "clamp_downstream_overlaps: clip.duration must be integer")
-                local clip_start_frames = clip.timeline_start
-                local clip_end_frames = clip_start_frames + clip.duration
-
-                local function neighbor_in_shift_region(neighbor_id)
-                    if not neighbor_id or not ctx.clip_lookup then
-                        return false
-                    end
-                    local neighbor = ctx.clip_lookup[neighbor_id]
-                    if not neighbor or not neighbor.timeline_start then
-                        return false
-                    end
-                    return neighbor.timeline_start >= earliest
-                end
-
-	                if neighbors.prev_end_frames and neighbors.prev_id and not ctx.edited_clip_lookup[neighbors.prev_id] then
-	                    if neighbor_in_shift_region(neighbors.prev_id) then
-	                        goto continue_prev_gap
-	                    end
-	                    local prev_gap_frames = clip_start_frames - neighbors.prev_end_frames
-	                    if prev_gap_frames >= 0 then
-	                        local implied_key = build_edge_key({clip_id = clip.id, edge_type = "in"})
-	                        if shift_factor >= 0 then
-	                            update_global_min(ctx, implied_key, -prev_gap_frames)
-	                        else
-	                            update_global_max(ctx, implied_key, prev_gap_frames)
-	                        end
-	                    end
-	                end
-                ::continue_prev_gap::
-
-	                if neighbors.next_start_frames and neighbors.next_id and not ctx.edited_clip_lookup[neighbors.next_id] then
-	                    if neighbor_in_shift_region(neighbors.next_id) then
-	                        goto continue_next_gap
-	                    end
-	                    local next_gap_frames = neighbors.next_start_frames - clip_end_frames
-	                    if next_gap_frames >= 0 then
-	                        local implied_key = build_edge_key({clip_id = clip.id, edge_type = "out"})
-	                        if shift_factor >= 0 then
-	                            update_global_max(ctx, implied_key, next_gap_frames)
-	                        else
-	                            update_global_min(ctx, implied_key, -next_gap_frames)
-	                        end
-	                    end
-	                end
-                ::continue_next_gap::
-                ::continue_clip_scan::
-            end
-        end
-    end
-
     local function clamp_delta(ctx)
         local delta_frames = ctx.clamped_delta_frames
         if ctx.global_min_frames ~= -math.huge and ctx.global_max_frames ~= math.huge and ctx.global_min_frames > ctx.global_max_frames then
@@ -885,11 +801,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
         ctx.clamped_delta_frames = delta_frames
-        if delta_frames ~= ctx.delta_frames then
-            print(string.format("DEBUG_CLAMP2: delta clamped from %s to %s (global_min=%s, global_max=%s)",
-                tostring(ctx.delta_frames), tostring(delta_frames),
-                tostring(ctx.global_min_frames), tostring(ctx.global_max_frames)))
-        end
         ctx.clamp_direction = 0
         if ctx.delta_frames and ctx.clamped_delta_frames then
             local diff = ctx.delta_frames - ctx.clamped_delta_frames
@@ -928,7 +839,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         compute_earliest_ripple_hint(ctx)
-        clamp_downstream_overlaps(ctx)
         if ctx.command:get_parameter('__force_conflict_delta') then
             ctx.global_min_frames = 1
             ctx.global_max_frames = 0
@@ -1273,143 +1183,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return true
     end
 
-    local function collect_downstream_clips(ctx)
-        ctx.clips_to_shift = {}
-        ctx.shift_lookup = {}
-        ctx.edited_lookup_for_shifts = {}
-
-        for id in pairs(ctx.modified_clips or {}) do
-            ctx.edited_lookup_for_shifts[id] = true
-        end
-        for id in pairs(ctx.edited_clip_lookup or {}) do
-            ctx.edited_lookup_for_shifts[id] = true
-        end
-
-        assert(ctx.all_clips, "collect_downstream_clips: all_clips is nil")
-        for _, other_clip in ipairs(ctx.all_clips) do
-            if other_clip.clip_kind ~= "gap"  -- Gap clips recomputed, not shifted
-                and other_clip.id
-                and not ctx.edited_lookup_for_shifts[other_clip.id]
-                and not (ctx.bulk_shift_anchor_lookup and ctx.bulk_shift_anchor_lookup[other_clip.id])
-                and ctx.affected_tracks[other_clip.track_id]
-                and other_clip.timeline_start then
-                -- Use per-track ripple point; fall back to global earliest
-                local track_threshold = (ctx.track_ripple_start_frames and ctx.track_ripple_start_frames[other_clip.track_id])
-                    or ctx.earliest_ripple_time
-                if other_clip.timeline_start >= track_threshold then
-                    table.insert(ctx.clips_to_shift, other_clip)
-                end
-            end
-        end
-
-        table.sort(ctx.clips_to_shift, function(a, b) return a.timeline_start < b.timeline_start end)
-
-        for _, clip_info in ipairs(ctx.clips_to_shift) do
-            ctx.shift_lookup[clip_info.id] = true
-        end
-    end
-
-	    local function compute_shift_bounds(ctx)
-	        assert(ctx.clips_to_shift, "compute_shift_bounds: clips_to_shift is nil")
-	        local min_frames = -math.huge
-	        local max_frames = math.huge
-	        local min_blocker_key = nil
-	        local max_blocker_key = nil
-
-	        local function clip_desired_shift(clip_data)
-	            return ctx.track_shift_amounts[clip_data.track_id] or ctx.downstream_shift_frames
-	        end
-
-	        local function current_start_frames(clip_id)
-	            local clip = ctx.modified_clips[clip_id] or ctx.clip_lookup[clip_id] or ctx.base_clips[clip_id]
-	            if not clip or type(clip.timeline_start) ~= "number" then
-	                return nil
-	            end
-	            return clip.timeline_start
-	        end
-
-	        local function current_end_frames(clip_id)
-	            local clip = ctx.modified_clips[clip_id] or ctx.clip_lookup[clip_id] or ctx.base_clips[clip_id]
-	            if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
-	                return nil
-	            end
-	            return clip.timeline_start + clip.duration
-	        end
-
-        local function accumulate_bounds_for_clip(shift_clip_data)
-            local neighbors = ctx.neighbor_bounds_cache and ctx.neighbor_bounds_cache[shift_clip_data.id]
-            assert(neighbors, "compute_shift_bounds: missing neighbor cache for clip " .. tostring(shift_clip_data.id))
-            assert(type(shift_clip_data.timeline_start) == "number", "compute_shift_bounds: clip.timeline_start must be integer")
-            assert(type(shift_clip_data.duration) == "number", "compute_shift_bounds: clip.duration must be integer")
-
-            local start_frames = shift_clip_data.timeline_start
-            local end_frames = start_frames + shift_clip_data.duration
-            local desired = clip_desired_shift(shift_clip_data)
-
-	            local prev_is_shifting = neighbors.prev_id and ctx.shift_lookup and ctx.shift_lookup[neighbors.prev_id]
-	            if neighbors.prev_end_frames and not prev_is_shifting then
-	                local prev_end = neighbors.prev_end_frames
-	                if neighbors.prev_id and ctx.edited_lookup_for_shifts[neighbors.prev_id] then
-	                    local updated_end = current_end_frames(neighbors.prev_id)
-	                    if updated_end ~= nil then
-	                        prev_end = updated_end
-	                    end
-	                end
-	                local bound = prev_end - start_frames  -- max leftward shift for this clip
-	                -- Only constrain the global shift if this clip's own desired shift
-	                -- exceeds its bound. Clips whose per-track shift fits within their
-	                -- bound are not blockers.
-	                if desired < bound then
-	                    -- This clip's desired shift exceeds its room. Convert the
-	                    -- per-clip bound to a global-shift-equivalent: scale up by
-	                    -- the ratio downstream_shift / desired.
-	                    local ds = ctx.downstream_shift_frames
-	                    local global_bound = (desired ~= 0) and (bound * ds / desired) or bound
-	                    if global_bound > min_frames then
-	                        min_frames = global_bound
-	                        if neighbors.prev_id then
-	                            min_blocker_key = tostring(neighbors.prev_id) .. ":out"
-	                        end
-	                    end
-	                end
-	            end
-
-	            local next_is_shifting = neighbors.next_id and ctx.shift_lookup and ctx.shift_lookup[neighbors.next_id]
-	            if neighbors.next_start_frames and not next_is_shifting then
-	                local next_start = neighbors.next_start_frames
-	                if neighbors.next_id and ctx.edited_lookup_for_shifts[neighbors.next_id] then
-	                    local updated_start = current_start_frames(neighbors.next_id)
-	                    if updated_start ~= nil then
-	                        next_start = updated_start
-	                    end
-	                end
-	                local bound = next_start - end_frames  -- max rightward shift for this clip
-	                if desired > bound then
-	                    local ds = ctx.downstream_shift_frames
-	                    local global_bound = (desired ~= 0) and (bound * ds / desired) or bound
-	                    if global_bound < max_frames then
-	                        max_frames = global_bound
-	                        if neighbors.next_id then
-	                            max_blocker_key = tostring(neighbors.next_id) .. ":in"
-	                        end
-	                    end
-	                end
-	            end
-        end
-
-        for _, shift_clip_data in ipairs(ctx.clips_to_shift) do
-            accumulate_bounds_for_clip(shift_clip_data)
-        end
-
-        if ctx.bulk_shift_anchor_clips then
-            for _, shift_clip_data in ipairs(ctx.bulk_shift_anchor_clips) do
-                accumulate_bounds_for_clip(shift_clip_data)
-            end
-        end
-
-        return min_frames, max_frames, min_blocker_key, max_blocker_key
-    end
-
 	    local function build_preview_shift_blocks(ctx)
 	        local blocks = {}
 	        local global_shift = ctx.downstream_shift_frames or 0
@@ -1486,8 +1259,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     local function compute_downstream_shifts(ctx)
         -- Pure roll: no downstream shift.
         if not ctx.has_ripple_edge then
-            ctx.clips_to_shift = {}
-            ctx.shift_lookup = {}
             return true
         end
 
@@ -1503,8 +1274,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
         if not has_nonzero then
-            ctx.clips_to_shift = {}
-            ctx.shift_lookup = {}
             return true
         end
 
@@ -1545,8 +1314,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Emit one bulk_shift mutation per affected track. The SQL substrate
         -- (command_helper.apply_mutations / revert_mutations) handles the
         -- per-track UPDATE and undo by reversing the shift.
-        ctx.clips_to_shift = {}
-        ctx.shift_lookup = {}
         for track_id in pairs(ctx.affected_tracks or {}) do
             local boundary = (ctx.track_ripple_start_frames and ctx.track_ripple_start_frames[track_id])
                 or ctx.earliest_ripple_time
@@ -1725,30 +1492,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 		            table.insert(ctx.planned_mutations, mut)
 		        end
 
-		        if ctx.dry_run then
-		            ctx.preview_shifted_clips = ctx.preview_shifted_clips or {}
-		            ctx.preview_shifted_lookup = ctx.preview_shifted_lookup or {}
-		            assert(ctx.clips_to_shift, "build_planned_mutations: clips_to_shift is nil")
-		            for _, shift_clip in ipairs(ctx.clips_to_shift) do
-		                local track_shift = ctx.track_shift_amounts[shift_clip.track_id] or ctx.downstream_shift_frames
-		                assert(type(shift_clip.timeline_start) == "number", "build_planned_mutations: shift_clip.timeline_start must be integer")
-		                local new_start = shift_clip.timeline_start + track_shift
-		                if new_start < 0 then
-		                    new_start = 0
-		                end
-		                if not ctx.preview_shifted_lookup[shift_clip.id] then
-		                    add_preview_shift(ctx, shift_clip.id, new_start, shift_clip.duration)
-		                else
-		                    for _, entry in ipairs(ctx.preview_shifted_clips) do
-		                        if entry.clip_id == shift_clip.id then
-		                            entry.new_start_value = new_start
-		                            entry.new_duration = shift_clip.duration
-		                            break
-		                        end
-		                    end
-		                end
-		            end
-		        end
 		    end
 
     local function key_matches_clamp_sources(ctx, original_key, target_key)
@@ -2024,20 +1767,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	            end
 	        end
 
-	        -- DEBUG: dump planned mutations for diagnosis
-	        for _di, _dm in ipairs(ctx.planned_mutations or {}) do
-	            if _dm.type == "update" then
-	                print(string.format("DEBUG_BRE: mut[%d] UPDATE clip=%s start=%s dur=%s", _di, tostring(_dm.clip_id):sub(1,8), tostring(_dm.timeline_start_frame), tostring(_dm.duration_frames)))
-	            elseif _dm.type == "bulk_shift" then
-	                print(string.format("DEBUG_BRE: mut[%d] BULK_SHIFT track=%s shift=%s anchor=%s clip_ids=%s", _di, tostring(_dm.track_id):sub(1,8), tostring(_dm.shift_frames), tostring(_dm.first_clip_id and _dm.first_clip_id:sub(1,8)), tostring(_dm.clip_ids and #_dm.clip_ids or "nil")))
-	            elseif _dm.type == "delete" then
-	                print(string.format("DEBUG_BRE: mut[%d] DELETE clip=%s", _di, tostring(_dm.clip_id):sub(1,8)))
-	            end
-	        end
-	        print(string.format("DEBUG_BRE: downstream_shift=%s clips_to_shift=%d", tostring(ctx.downstream_shift_frames), #(ctx.clips_to_shift or {})))
-
-	        log.event("Batch ripple: processed %d edges, shifted %d downstream clips by %d frames",
-	            #ctx.edge_infos, #(ctx.clips_to_shift or {}), ctx.downstream_shift_frames or 0)
+	        log.event("Batch ripple: processed %d edges, downstream shift %d frames",
+	            #ctx.edge_infos, ctx.downstream_shift_frames or 0)
 
 	        return true
 	    end
