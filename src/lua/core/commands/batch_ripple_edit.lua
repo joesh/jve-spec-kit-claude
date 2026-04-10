@@ -1411,11 +1411,27 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return ctx.track_ripple_start_frames[track_id] or ctx.earliest_ripple_time
     end
 
-    -- Resolve the shift amount for a track. Seeded tracks (those with a
-    -- ripple edge) carry their own accumulated shift; propagated tracks
-    -- inherit the global downstream shift.
+    -- The per-edge propagation delta — the amount every cross-track
+    -- (non-seeded) track shifts in a ripple. This is the ripple
+    -- anchor's applied delta adjusted for its edge orientation, NOT
+    -- the sum of all seeds on the anchor track. For a single-edge
+    -- ripple they're equal; for a multi-edge same-track ripple they
+    -- differ (the sum is used for the anchor track's own downstream).
+    local function cross_track_propagation_shift(ctx)
+        assert(type(ctx.ripple_anchor_applied_delta) == "number",
+            "cross_track_propagation_shift: ripple_anchor_applied_delta must be integer")
+        local shift_factor = (ctx.ripple_anchor_edge_type == "in") and -1 or 1
+        return ctx.ripple_anchor_applied_delta * shift_factor
+    end
+
+    -- Resolve the shift amount for a track.
+    --   Seeded track  → track_shift_amounts[track] (accumulated contributions)
+    --   Non-seeded    → cross-track propagation delta (per-edge, not summed)
     local function track_shift_amount(ctx, track_id)
-        return ctx.track_shift_amounts[track_id] or ctx.downstream_shift_frames
+        if ctx.track_shift_amounts[track_id] then
+            return ctx.track_shift_amounts[track_id]
+        end
+        return cross_track_propagation_shift(ctx)
     end
 
     -- Compute the most-negative shift the affected tracks can tolerate
@@ -1424,6 +1440,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- (everything moves right in lockstep). Tracks whose upstream is
     -- itself being edited are skipped — the upstream shifts along with
     -- the edit, not against it.
+    --
+    -- The check is per-track: each track contributes its own
+    -- track_shift_amount to the comparison, not a single global delta.
+    -- A track with plenty of room doesn't get clamped by another
+    -- track's tighter constraint unless that track would actually
+    -- over-shift under its own amount.
+    --
+    -- Blocker key reports the upstream clip's :out edge — that's the
+    -- surface the downstream clip is running into, which matches the
+    -- UI's "what's in the way" highlighting convention.
     local function compute_downstream_max_left_shift(ctx)
         local max_left = -math.huge
         local blocker_key = nil
@@ -1433,9 +1459,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local first_ds, upstream_end, upstream_id = find_track_boundary_neighbors(ctx, track_id, boundary)
                 if first_ds and upstream_id and not ctx.edited_clip_lookup[upstream_id] then
                     local track_max_left = -(first_ds.timeline_start - upstream_end)
-                    if track_max_left > max_left then
+                    -- Only this track's own shift amount can be blocked
+                    -- here; don't clamp tracks that fit inside their room.
+                    local this_shift = track_shift_amount(ctx, track_id)
+                    if this_shift < track_max_left and track_max_left > max_left then
                         max_left = track_max_left
-                        blocker_key = first_ds.id .. ":in"
+                        blocker_key = upstream_id .. ":out"
                     end
                 end
             end
