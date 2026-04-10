@@ -1,0 +1,89 @@
+#!/usr/bin/env luajit
+
+-- T004: Scoped gap recomputation.
+--
+-- Domain behavior: after a mutation that affects one track, only that
+-- track's gaps should be recomputed. Other tracks' gaps remain unchanged.
+--
+-- This test operates at the timeline_state level — it sets up clips,
+-- modifies one track, and verifies gap recomputation is scoped.
+
+require("test_env")
+
+local database = require("core.database")
+local timeline_core_state = require("ui.timeline.state.timeline_core_state")
+local data = require("ui.timeline.state.timeline_state_data")
+-- Setup: create a DB with 2 tracks, clips on each
+local db_path = "/tmp/jve/test_scoped_gap_recompute.db"
+os.remove(db_path)
+local db = database.open(db_path)
+database.init_schema(db)
+
+-- Create project + sequence
+db:exec("INSERT INTO projects (id, name) VALUES ('proj1', 'test')")
+db:exec("INSERT INTO sequences (id, project_id, name, fps_numerator, fps_denominator) VALUES ('seq1', 'proj1', 'Seq 1', 25, 1)")
+
+-- Create tracks
+db:exec("INSERT INTO tracks (id, sequence_id, name, track_type, track_index) VALUES ('track_v1', 'seq1', 'V1', 'VIDEO', 1)")
+db:exec("INSERT INTO tracks (id, sequence_id, name, track_type, track_index) VALUES ('track_a1', 'seq1', 'A1', 'AUDIO', 2)")
+
+-- Create clips: V1 has clips at 0-100 and 200-400 (gap 100-200). A1 has clip at 0-300 and 400-500 (gap 300-400).
+local function insert_clip(id, track_id, start, dur)
+    db:exec(string.format(
+        "INSERT INTO clips (id, project_id, clip_kind, track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator) " ..
+        "VALUES ('%s', 'proj1', 'timeline', '%s', %d, %d, 0, %d, 25, 1)",
+        id, track_id, start, dur, dur))
+end
+
+insert_clip("clip_v1a", "track_v1", 0, 100)
+insert_clip("clip_v1b", "track_v1", 200, 200)
+insert_clip("clip_a1a", "track_a1", 0, 300)
+insert_clip("clip_a1b", "track_a1", 400, 100)
+
+-- Initialize timeline_state
+local command_manager = require("core.command_manager")
+command_manager.init(db, "proj1")
+timeline_core_state.init("seq1", "proj1")
+
+-- Collect current gap IDs on each track
+local function get_gap_ids_for_track(track_id)
+    local ids = {}
+    for _, clip in ipairs(data.state.clips) do
+        if clip.track_id == track_id and clip.clip_kind == "gap" then
+            table.insert(ids, clip.id)
+        end
+    end
+    table.sort(ids)
+    return ids
+end
+
+local v1_gaps_before = get_gap_ids_for_track("track_v1")
+local a1_gaps_before = get_gap_ids_for_track("track_a1")
+
+assert(#v1_gaps_before > 0, "V1 should have gaps after init")
+assert(#a1_gaps_before > 0, "A1 should have gaps after init")
+
+-- Now call scoped recompute for V1 only
+-- This tests the NEW behavior — passing affected_track_ids.
+-- Until T011 implements the parameter, this will use full recompute.
+local affected = { ["track_v1"] = true }
+timeline_core_state.recompute_gap_clips(affected)
+
+-- V1 gaps should be recomputed (may have new IDs)
+local v1_gaps_after = get_gap_ids_for_track("track_v1")
+assert(#v1_gaps_after > 0, "V1 should still have gaps after scoped recompute")
+
+-- A1 gaps should be UNCHANGED — same IDs
+local a1_gaps_after = get_gap_ids_for_track("track_a1")
+assert(#a1_gaps_after == #a1_gaps_before,
+    string.format("A1 gap count changed: before=%d after=%d", #a1_gaps_before, #a1_gaps_after))
+
+for i, id in ipairs(a1_gaps_before) do
+    assert(a1_gaps_after[i] == id,
+        string.format("A1 gap ID changed: before=%s after=%s", id, tostring(a1_gaps_after[i])))
+end
+
+db:close()
+os.remove(db_path)
+
+print("✅ test_scoped_gap_recompute.lua passed")
