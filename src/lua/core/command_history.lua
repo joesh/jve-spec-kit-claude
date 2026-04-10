@@ -157,8 +157,14 @@ end
 
 function M.increment_sequence_number()
     last_sequence_number = last_sequence_number + 1
-    log.event("Assigned sequence number %d (current=%s)",
-        last_sequence_number, tostring(current_sequence_number))
+    -- `cursor` is the undo-position for the active stack (where the user
+    -- currently sits in the undo history), not the allocator counter.
+    -- These are independent: the allocator only goes up; the cursor moves
+    -- with undo/redo.
+    log.event("Allocated sequence_number %d (stack=%s cursor=%s)",
+        last_sequence_number,
+        tostring(active_stack_id),
+        tostring(current_sequence_number))
     return last_sequence_number
 end
 

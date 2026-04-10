@@ -16,6 +16,7 @@
 local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
+local log = require("core.logger").for_area("commands")
 
 
 local SPEC = {
@@ -31,7 +32,6 @@ local SPEC = {
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["DeleteClip"] = function(command)
         local args = command:get_all_parameters()
-        print("Executing DeleteClip command")
 
         assert(not (type(args.clip_id) == "string" and args.clip_id:find("^gap_")),
             string.format("DeleteClip: gap clip %s — gaps are derived state, not deletable", args.clip_id))
@@ -45,7 +45,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
         if not clip then
-            print(string.format("INFO: DeleteClip: Clip %s already absent during replay; skipping delete", args.clip_id))
+            log.event("DeleteClip: clip %s already absent during replay; skipping",
+                args.clip_id)
             return true
         end
 
@@ -66,7 +67,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         command_helper.delete_properties_for_clip(args.clip_id)
 
         if not clip:delete() then
-            print(string.format("WARNING: DeleteClip: Failed to delete clip %s", args.clip_id))
+            log.warn("DeleteClip: failed to delete clip %s", args.clip_id)
             return false
         end
 
@@ -74,7 +75,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             command_helper.add_delete_mutation(command, sequence_id, clip.id)
         end
 
-        print(string.format("✅ Deleted clip %s from timeline", args.clip_id))
+        log.event("DeleteClip: deleted clip %s", args.clip_id)
         return true
     end
 
@@ -143,10 +144,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 payload and "yes" or "nil",
                 restored_clip and "yes" or "nil"
             )
-            print("ERROR: " .. msg)
+            log.error("%s", msg)
             return false, msg
         end
-        print(string.format("✅ Undo DeleteClip: Restored clip %s", args.deleted_clip_state.id))
+        log.event("DeleteClip undo: restored clip %s", args.deleted_clip_state.id)
         return true
     end
 

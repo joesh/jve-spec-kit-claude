@@ -720,7 +720,7 @@ function M:save(db)
             err = db:last_error()
         end
         log.warn("Command.save: Failed to prepare exists query: %s", err)
-        return false
+        return false, err
     end
 
     exists_query:bind_value(1, self.id)
@@ -791,7 +791,7 @@ function M:save(db)
                 err = db:last_error()
             end
             log.warn("Command.save: Failed to prepare UPDATE query: %s", err)
-            return false
+            return false, err
         end
 
         query:bind_value(1, self.type)
@@ -825,7 +825,7 @@ function M:save(db)
                 err = db:last_error()
             end
             log.warn("Command.save: Failed to prepare INSERT query: %s", err)
-            return false
+            return false, err
         end
 
         query:bind_value(1, self.id)
@@ -852,11 +852,12 @@ function M:save(db)
     end
 
     if not query:exec() then
-        log.warn("Command.save: Failed to save command: %s", query:last_error())
+        local err = query:last_error()
+        log.warn("Command.save: Failed to save command: %s", err)
         query:finalize()
-        return false
+        return false, err
     end
-    
+
     query:finalize()
 
     return true

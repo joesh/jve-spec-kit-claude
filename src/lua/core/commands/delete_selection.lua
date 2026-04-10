@@ -119,11 +119,16 @@ function M.register(executors, undoers, db)
                 clip_ids_to_delete[#clip_ids_to_delete + 1] = clip.id
             end
 
-            -- Group all DeleteClip children into one undo atom
+            -- Group all DeleteClip children into one undo atom. On any
+            -- failure, the whole group must be rolled back so the user's
+            -- selection remains intact and the timeline is unchanged —
+            -- a partial delete with some clips gone and some still
+            -- selected would be confusing and non-atomic.
             command_manager.begin_undo_group("DeleteSelection")
 
             local deleted = 0
-            local failed = 0
+            local failure_reason = nil
+            local failed_clip_id = nil
             for _, clip_id in ipairs(clip_ids_to_delete) do
                 local result = command_manager.execute("DeleteClip", {
                     clip_id = clip_id,
@@ -133,13 +138,30 @@ function M.register(executors, undoers, db)
                 if result.success then
                     deleted = deleted + 1
                 else
-                    failed = failed + 1
+                    failure_reason = result.error_message or "unknown"
+                    failed_clip_id = clip_id
                     log.error("DeleteSelection: DeleteClip failed for %s: %s",
-                        clip_id, result.error_message or "unknown")
+                        clip_id, failure_reason)
+                    break
                 end
             end
 
+            -- end_undo_group detects the aborted flag (set by the nested
+            -- save/execution failure's rollback_transaction) and skips
+            -- the commit path. The savepoint rollback inside
+            -- rollback_transaction has already restored clip_state and
+            -- selection from the snapshot captured in begin_undo_group.
             command_manager.end_undo_group()
+
+            if failure_reason then
+                log.warn("DeleteSelection: aborted after %d successful delete(s); selection preserved. Cause: %s (clip=%s)",
+                    deleted, failure_reason, tostring(failed_clip_id))
+                return {
+                    success = false,
+                    error_message = string.format(
+                        "DeleteSelection aborted: %s", failure_reason),
+                }
+            end
 
             if deleted > 0 then
                 if timeline_state.set_selection then
@@ -147,10 +169,7 @@ function M.register(executors, undoers, db)
                 end
                 log.event("Deleted %d clips (single undo)", deleted)
             end
-            if failed > 0 then
-                log.warn("DeleteSelection: %d of %d delete(s) failed", failed, deleted + failed)
-            end
-            return failed == 0 or deleted > 0
+            return true
         end
 
         -- Ripple delete selected gaps

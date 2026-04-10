@@ -645,6 +645,62 @@ local function mutation_summary_string(mutations)
     return table.concat(parts, "; ")
 end
 
+-- Save a command with collision recovery. When another writer (external
+-- process, prior session's uncommitted WAL, test harness) has inserted
+-- command rows at sequence_numbers our cached allocator doesn't know about,
+-- the SQLite UNIQUE constraint on commands.sequence_number fires. The
+-- recovery is: refresh the allocator from the DB's real MAX, reallocate
+-- a fresh sequence_number, re-chain parent_sequence_number from the
+-- current cursor, and retry the save.
+--
+-- Bounded retries prevent an infinite loop in the pathological case where
+-- the DB is growing faster than we can catch up. Three attempts matches
+-- SQLite's own default retry depth for busy handlers and is more than
+-- enough for realistic concurrent writers.
+local UNIQUE_COLLISION_MAX_ATTEMPTS = 3
+
+local function save_command_with_collision_retry(command, db_conn)
+    local ok, err = command:save(db_conn)
+    if ok then return true, nil end
+
+    -- Only UNIQUE collisions on sequence_number are recoverable by
+    -- reallocation. Any other error (NOT NULL, FK violation, disk full)
+    -- is a real failure — surface it unchanged.
+    local function is_unique_collision(e)
+        return type(e) == "string"
+            and e:match("UNIQUE constraint failed: commands%.sequence_number") ~= nil
+    end
+
+    if not is_unique_collision(err) then
+        return false, err
+    end
+
+    for attempt = 2, UNIQUE_COLLISION_MAX_ATTEMPTS do
+        -- Walk back the allocator (undo this attempt's increment), refresh
+        -- from DB MAX, re-increment, and re-chain parent. The cursor is
+        -- per-session and not affected by external writers, so it stays put.
+        history.decrement_sequence_number()
+        history.refresh_last_sequence_number()
+        local new_seq = history.increment_sequence_number()
+        command.sequence_number = new_seq
+        command.parent_sequence_number = history.get_current_sequence_number()
+            or history.get_global_cursor()
+
+        log.warn("Command.save: UNIQUE collision, retrying at seq=%d (attempt %d/%d)",
+            new_seq, attempt, UNIQUE_COLLISION_MAX_ATTEMPTS)
+
+        ok, err = command:save(db_conn)
+        if ok then return true, nil end
+        if not is_unique_collision(err) then
+            return false, err
+        end
+    end
+
+    return false, string.format(
+        "Command.save: UNIQUE collision unresolved after %d attempts: %s",
+        UNIQUE_COLLISION_MAX_ATTEMPTS, tostring(err))
+end
+
 function M.set_last_error(message)
     if type(message) == "string" and message ~= "" then
         last_error_message = message
@@ -957,7 +1013,8 @@ function M._execute_body(command_or_name, params)
             command.sequence_id = classify_command_sequence_id(command)
 
             -- Save nested command to DB (shares root's transaction)
-            saved = command:save(db)
+            saved = save_command_with_collision_retry(command, db)
+            sequence_number = command.sequence_number  -- retry may have reallocated
             if saved then
                 -- Advance cursor so next nested command chains correctly
                 history.set_current_sequence_number(sequence_number)
@@ -969,10 +1026,34 @@ function M._execute_body(command_or_name, params)
                 result.success = false
                 result.error_message = "Failed to save nested command to database"
                 execution_success = false
+                history.decrement_sequence_number()
+                -- If we're inside an explicit undo group (e.g. a wrapper like
+                -- DeleteSelection that loops over multiple nested commands),
+                -- roll the whole group back NOW so subsequent siblings in the
+                -- wrapper's loop are rejected via is_undo_group_aborted and
+                -- the DB/clip_state both restore to the pre-group snapshot.
+                -- Without this, the wrapper would silently stack partial
+                -- failures on a bad savepoint.
+                --
+                -- When NOT inside an undo group, the nested command is a
+                -- plain sub-call from a parent executor. The parent will see
+                -- our failure return and its own top-level failure path will
+                -- handle the rollback — calling rollback_transaction here
+                -- would double-pop the parent's single mutation snapshot.
+                if history.get_current_undo_group_id() then
+                    rollback_transaction()
+                end
             end
         else
             command.status = "Failed"
             history.decrement_sequence_number()
+            -- Same rationale as the save-failed branch above: only unwind
+            -- the savepoint when an explicit group is active. Otherwise the
+            -- parent's top-level rollback owns the mutation snapshot and
+            -- rolling back here would pop it twice.
+            if history.get_current_undo_group_id() then
+                rollback_transaction()
+            end
         end
 
         exec_scope:finish(execution_success and "success_nested" or "failure_nested")
@@ -1234,7 +1315,8 @@ function M._execute_body(command_or_name, params)
         -- Per-Sequence Undo: classify after execution (executors may set sequence_id)
         command.sequence_id = classify_command_sequence_id(command)
 
-        saved = command:save(db)
+        saved = save_command_with_collision_retry(command, db)
+        sequence_number = command.sequence_number  -- retry may have reallocated
         perf.log("command:save")
         perf.reset()
         if saved then
