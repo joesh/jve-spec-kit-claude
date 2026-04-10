@@ -176,6 +176,43 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
     end
 
+    -- Multitrack roll (a single roll edge on a track) uses per-edge
+    -- constraints independently: each edge clamps its own delta without
+    -- affecting the others. Same-track roll edit points (2+ roll edges
+    -- on one track) and all ripple edges share the global clamped delta.
+    local function is_multitrack_roll_edge(ctx, edge_info)
+        return edge_info.trim_type == "roll"
+            and not (ctx.roll_edit_point_tracks and ctx.roll_edit_point_tracks[edge_info.track_id])
+    end
+
+    -- Record a constraint on one edge and, for non-multitrack-roll edges,
+    -- promote the tightened bound to the global clamp as well. This is
+    -- the pattern every constraint function needs: narrow the per-edge
+    -- envelope, then propagate to global unless this edge is a free
+    -- multitrack roll. Either `min_limit` or `max_limit` may be nil.
+    local function apply_edge_constraint_limits(ctx, edge_info, edge_key, min_limit, max_limit)
+        ctx.per_edge_constraints[edge_key] = ctx.per_edge_constraints[edge_key]
+            or {min = -math.huge, max = math.huge}
+        local bounds = ctx.per_edge_constraints[edge_key]
+        local multitrack_roll = is_multitrack_roll_edge(ctx, edge_info)
+        if min_limit ~= nil then
+            if min_limit > bounds.min then
+                bounds.min = min_limit
+            end
+            if not multitrack_roll then
+                update_global_min(ctx, edge_key, bounds.min)
+            end
+        end
+        if max_limit ~= nil then
+            if max_limit < bounds.max then
+                bounds.max = max_limit
+            end
+            if not multitrack_roll then
+                update_global_max(ctx, edge_key, bounds.max)
+            end
+        end
+    end
+
     local function apply_roll_constraints(ctx, edge_info, clip, neighbors)
         if edge_info.trim_type ~= "roll" then
             return
@@ -222,163 +259,143 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return file_offset
     end
 
-    local function apply_media_limits(ctx, edge_info, clip, will_negate)
-        -- Gap clips have no media — no source limits to apply
-        if clip.clip_kind == "gap" then
-            return
+    -- Resolve a media record for a clip, consulting the per-command
+    -- preloaded cache first so we don't hit the DB twice for the same
+    -- media during one command.
+    local function fetch_media_for_clip(ctx, clip)
+        if not clip.media_id then return nil end
+        if ctx.preloaded_media and ctx.preloaded_media[clip.media_id] then
+            return ctx.preloaded_media[clip.media_id]
         end
-        local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
-        local effective_delta_positive = (ctx.clamped_delta_frames > 0 and not will_negate)
-            or (ctx.clamped_delta_frames < 0 and will_negate)
-        local clip_state = ctx.original_states_map[edge_info.clip_id]
-        if not clip_state then
-            return
+        local media = require("models.media").load(clip.media_id, db)
+        if ctx.preloaded_media then
+            ctx.preloaded_media[clip.media_id] = media
         end
-        local edge_key = build_edge_key(edge_info)
-        -- Multitrack roll uses per-edge constraints; edit points and ripple use global.
-        local is_multitrack_roll = edge_info.trim_type == "roll"
-            and not (ctx.roll_edit_point_tracks and ctx.roll_edit_point_tracks[edge_info.track_id])
-        ctx.per_edge_constraints[edge_key] = ctx.per_edge_constraints[edge_key] or {min = -math.huge, max = math.huge}
-        if normalized_edge == "in" then
-            if not effective_delta_positive and clip_state.source_in then
-                assert(type(clip_state.source_in) == "number", "apply_media_limits: clip_state.source_in must be integer")
-                -- source_in is absolute TC; convert to file-relative for limit calc
-                local media = (ctx.preloaded_media and ctx.preloaded_media[clip.media_id]) or (clip.media_id and require("models.media").load(clip.media_id, db))
-                if ctx.preloaded_media and clip.media_id then
-                    ctx.preloaded_media[clip.media_id] = media
-                end
-                local file_src_in = file_relative_source_in(media, clip_state.source_in)
-                local extend_limit = -file_src_in
-                ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, extend_limit)
-                if not is_multitrack_roll then
-                    update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
-                end
-            end
-        elseif normalized_edge == "out" and effective_delta_positive and clip.media_id then
-            local media = (ctx.preloaded_media and ctx.preloaded_media[clip.media_id]) or require("models.media").load(clip.media_id, db)
-            if ctx.preloaded_media then
-                ctx.preloaded_media[clip.media_id] = media
-            end
-            if media and media.duration and clip_state.source_in and clip_state.duration then
-                assert(type(media.duration) == "number", "apply_media_limits: media.duration must be integer")
-                assert(type(clip_state.source_in) == "number", "apply_media_limits: clip_state.source_in must be integer")
-                assert(type(clip_state.duration) == "number", "apply_media_limits: clip_state.duration must be integer")
-                -- source_in is absolute TC; convert to file-relative for limit calc
-                local file_src_in = file_relative_source_in(media, clip_state.source_in)
-                local available_frames = media.duration - file_src_in - clip_state.duration
-                if will_negate then
-                    local global_constraint = -available_frames
-                    ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, global_constraint)
-                    if not is_multitrack_roll then
-                        update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
-                    end
-                else
-                    ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, available_frames)
-                    if not is_multitrack_roll then
-                        update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
-                    end
-                end
-            end
-        end
+        return media
     end
 
-    -- Gap clips can close to 0 but not go negative.
+    -- True iff the actual applied delta for this edge will be positive —
+    -- i.e., the clamped delta direction after the edge's negate flag is
+    -- taken into account.
+    local function effective_delta_positive(ctx, will_negate)
+        local delta = ctx.clamped_delta_frames
+        return (delta > 0 and not will_negate) or (delta < 0 and will_negate)
+    end
+
+    -- In-edge source limit: trimming the in-point leftward (extending
+    -- the head of the clip) can't go below the file's first frame.
+    -- Returns (min_limit, max_limit) for the edge.
+    local function in_edge_media_limit(ctx, clip, clip_state, will_negate)
+        if effective_delta_positive(ctx, will_negate) then
+            return nil, nil
+        end
+        if not clip_state.source_in then return nil, nil end
+        assert(type(clip_state.source_in) == "number",
+            "apply_media_limits: clip_state.source_in must be integer")
+        local media = fetch_media_for_clip(ctx, clip)
+        local file_src_in = file_relative_source_in(media, clip_state.source_in)
+        return -file_src_in, nil  -- can't extend further left than file start
+    end
+
+    -- Out-edge source limit: growing the out-point rightward (extending
+    -- the tail) can't go past the end of the media. Returns signed
+    -- (min, max) limits, which flip for will_negate edges.
+    local function out_edge_media_limit(ctx, clip, clip_state, will_negate)
+        if not effective_delta_positive(ctx, will_negate) then return nil, nil end
+        local media = fetch_media_for_clip(ctx, clip)
+        if not (media and media.duration and clip_state.source_in and clip_state.duration) then
+            return nil, nil
+        end
+        assert(type(media.duration) == "number", "apply_media_limits: media.duration must be integer")
+        assert(type(clip_state.source_in) == "number", "apply_media_limits: clip_state.source_in must be integer")
+        assert(type(clip_state.duration) == "number", "apply_media_limits: clip_state.duration must be integer")
+        local file_src_in = file_relative_source_in(media, clip_state.source_in)
+        local available = media.duration - file_src_in - clip_state.duration
+        if will_negate then
+            return -available, nil  -- negated edge is constrained on the min side
+        end
+        return nil, available
+    end
+
+    -- Apply source media boundary constraints to an edge. Shrinking past
+    -- the file's beginning (in-edge) or extending past the file's end
+    -- (out-edge) are physically impossible — the media doesn't have
+    -- those frames. Gap clips are skipped (they have no source media).
+    local function apply_media_limits(ctx, edge_info, clip, will_negate)
+        if clip.clip_kind == "gap" then return end
+        local clip_state = ctx.original_states_map[edge_info.clip_id]
+        if not clip_state then return end
+
+        local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
+        local min_limit, max_limit
+        if normalized_edge == "in" then
+            min_limit, max_limit = in_edge_media_limit(ctx, clip, clip_state, will_negate)
+        elseif normalized_edge == "out" then
+            min_limit, max_limit = out_edge_media_limit(ctx, clip, clip_state, will_negate)
+        else
+            return
+        end
+        apply_edge_constraint_limits(ctx, edge_info, build_edge_key(edge_info), min_limit, max_limit)
+    end
+
+    -- The raw (pre-negation) delta limits produced by a "don't shrink
+    -- below zero" clip: trimming the in-edge by at most +duration, or
+    -- the out-edge by at most -duration. Returns (min, max) or nil.
+    local function duration_floor_limits(normalized_edge, duration)
+        if normalized_edge == "in" then
+            return nil, duration
+        end
+        if normalized_edge == "out" then
+            return -duration, nil
+        end
+        return nil, nil
+    end
+
+    -- Apply the will-negate flip to a (min, max) limit pair. When an
+    -- edge's applied delta is the *negation* of the global clamped
+    -- delta, the global clamped delta is constrained by the negated
+    -- range. Either side may be nil going in or coming out.
+    local function negate_limits(min_limit, max_limit)
+        local new_min = max_limit ~= nil and -max_limit or nil
+        local new_max = min_limit ~= nil and -min_limit or nil
+        return new_min, new_max
+    end
+
+    -- Gap clips can shrink to zero-length but not below. Apply that
+    -- floor as a per-edge + global clamp.
     local function apply_gap_min_duration(ctx, edge_info, clip, will_negate)
         if clip.clip_kind ~= "gap" then return end
-
         local clip_state = ctx.original_states_map[edge_info.clip_id]
-        if not clip_state or not clip_state.duration then return end
-        local duration = clip_state.duration
-        if duration <= 0 then return end
+        if not clip_state or not clip_state.duration or clip_state.duration <= 0 then
+            return
+        end
 
         local normalized = edge_info.normalized_edge or edge_info.edge_type
-        local edge_key = build_edge_key(edge_info)
-        ctx.per_edge_constraints[edge_key] = ctx.per_edge_constraints[edge_key] or {min = -math.huge, max = math.huge}
-
-        local min_limit, max_limit
-        if normalized == "in" then
-            max_limit = duration  -- can't shrink gap below 0
-        elseif normalized == "out" then
-            min_limit = -duration  -- can't shrink gap below 0
-        end
-
+        local min_limit, max_limit = duration_floor_limits(normalized, clip_state.duration)
         if will_negate then
-            if min_limit and max_limit then
-                min_limit, max_limit = -max_limit, -min_limit
-            elseif min_limit then
-                max_limit = -min_limit
-                min_limit = nil
-            elseif max_limit then
-                min_limit = -max_limit
-                max_limit = nil
-            end
+            min_limit, max_limit = negate_limits(min_limit, max_limit)
         end
-
-        if min_limit then
-            ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, min_limit)
-            update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
-        end
-        if max_limit then
-            ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, max_limit)
-            update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
-        end
+        apply_edge_constraint_limits(ctx, edge_info, build_edge_key(edge_info), min_limit, max_limit)
     end
 
+    -- Media clips can trim to zero (which triggers delete) but not
+    -- below. Apply that floor as a per-edge + global clamp. Gap clips
+    -- are handled by apply_gap_min_duration.
     local function apply_min_duration_limits(ctx, edge_info, clip, will_negate)
-        if clip.clip_kind == "gap" then
-            return  -- handled by apply_gap_min_duration
-        end
+        if clip.clip_kind == "gap" then return end
+        local clip_state = ctx.original_states_map[edge_info.clip_id]
+        if not clip_state or not clip_state.duration then return end
+        assert(type(clip_state.duration) == "number",
+            "apply_min_duration_limits: clip_state.duration must be integer")
+        if clip_state.duration < 1 then return end
 
         local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
-        if normalized_edge ~= "in" and normalized_edge ~= "out" then
-            return
-        end
-
-        local clip_state = ctx.original_states_map[edge_info.clip_id]
-        if not clip_state or not clip_state.duration then
-            return
-        end
-        assert(type(clip_state.duration) == "number", "apply_min_duration_limits: clip_state.duration must be integer")
-
-        local duration_frames = clip_state.duration
-        if duration_frames < 1 then
-            return
-        end
-
-        local min_applied = -math.huge
-        local max_applied = math.huge
-        if normalized_edge == "in" then
-            max_applied = duration_frames  -- Allow trim to zero (deletes clip)
-        else -- out
-            min_applied = -duration_frames  -- Allow trim to zero (deletes clip)
-        end
-
-        local edge_key = build_edge_key(edge_info)
-        -- Multitrack roll uses per-edge constraints; edit points and ripple use global.
-        local is_multitrack_roll = edge_info.trim_type == "roll"
-            and not (ctx.roll_edit_point_tracks and ctx.roll_edit_point_tracks[edge_info.track_id])
-        ctx.per_edge_constraints[edge_key] = ctx.per_edge_constraints[edge_key] or {min = -math.huge, max = math.huge}
-
-        local global_min = min_applied
-        local global_max = max_applied
+        local min_limit, max_limit = duration_floor_limits(normalized_edge, clip_state.duration)
+        if min_limit == nil and max_limit == nil then return end
         if will_negate then
-            -- applied_delta = -clamped_delta => clamped_delta is constrained by the negated range
-            global_min = (max_applied == math.huge) and -math.huge or -max_applied
-            global_max = (min_applied == -math.huge) and math.huge or -min_applied
+            min_limit, max_limit = negate_limits(min_limit, max_limit)
         end
-
-        if global_min ~= -math.huge then
-            ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, global_min)
-            if not is_multitrack_roll then
-                update_global_min(ctx, edge_key, ctx.per_edge_constraints[edge_key].min)
-            end
-        end
-        if global_max ~= math.huge then
-            ctx.per_edge_constraints[edge_key].max = math.min(ctx.per_edge_constraints[edge_key].max, global_max)
-            if not is_multitrack_roll then
-                update_global_max(ctx, edge_key, ctx.per_edge_constraints[edge_key].max)
-            end
-        end
+        apply_edge_constraint_limits(ctx, edge_info, build_edge_key(edge_info), min_limit, max_limit)
     end
 
     -- Populate the command context's clip caches from the in-memory
@@ -673,60 +690,72 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return frame_utils.timeline_to_source(delta_frames_val, clip_num, clip_den, seq_fps_num, seq_fps_den)
     end
 
--- Apply the requested trim delta to clip edges and return the ripple start.
--- Gap clips and media clips use the same logic. The only difference:
+-- Apply the requested trim delta to clip edges. Gap clips and media
+-- clips share the same logic; the two differences:
 -- - Gap clips have nil source_in/source_out (no source modification)
--- - Gap clips can reach duration 0; media clips have minimum duration 1
+-- - Gap clips can reach duration 0; media clips at duration < 1 are deleted
 --
 -- Source coordinate rules:
--- - "in" edge: source_in moves by source_delta, source_out STAYS (trim start)
--- - "out" edge: source_out moves by source_delta, source_in STAYS (trim end)
--- This preserves the clip's speed ratio for non-unity-speed clips.
+-- - "in" edge:  source_in moves by source_delta, source_out STAYS
+-- - "out" edge: source_out moves by source_delta, source_in STAYS
+-- Preserves the clip's speed ratio for non-unity-speed clips.
+
+    -- Compute the trimmed (duration, source_in, source_out) for an "in"
+    -- edge. Does NOT mutate the clip — returns the new values. Caller
+    -- decides whether the values are legal (non-negative duration).
+    local function compute_in_edge_trim(clip, delta_frames, seq_fps_num, seq_fps_den)
+        local new_duration = clip.duration - delta_frames
+        local new_source_in = clip.source_in
+        if new_source_in then
+            local source_delta = timeline_delta_to_source(delta_frames, clip, seq_fps_num, seq_fps_den)
+            new_source_in = clip.source_in + source_delta
+        end
+        return new_duration, new_source_in, clip.source_out
+    end
+
+    -- Compute the trimmed values for an "out" edge. Timeline start never
+    -- changes for out edges.
+    local function compute_out_edge_trim(clip, delta_frames, seq_fps_num, seq_fps_den)
+        local new_duration = clip.duration + delta_frames
+        local new_source_out = clip.source_out
+        if new_source_out then
+            local source_delta = timeline_delta_to_source(delta_frames, clip, seq_fps_num, seq_fps_den)
+            new_source_out = clip.source_out + source_delta
+        end
+        return new_duration, clip.source_in, new_source_out
+    end
+
     local function apply_edge_ripple(clip, edge_type, delta_frames, trim_type, seq_fps_num, seq_fps_den)
         assert(type(clip.duration) == "number", "apply_edge_ripple: clip.duration must be integer")
         assert(type(clip.timeline_start) == "number", "apply_edge_ripple: clip.timeline_start must be integer")
         assert(type(delta_frames) == "number", "apply_edge_ripple: delta_frames must be integer")
 
-        local new_duration_timeline = clip.duration
-        local new_source_in = clip.source_in  -- nil for gap clips
-        local new_source_out = clip.source_out  -- nil for gap clips
-        local is_gap = clip.clip_kind == "gap"
-
+        local new_duration, new_source_in, new_source_out
         if edge_type == "in" then
-            new_duration_timeline = clip.duration - delta_frames
-            if new_source_in then
-                local source_delta = timeline_delta_to_source(delta_frames, clip, seq_fps_num, seq_fps_den)
-                new_source_in = clip.source_in + source_delta
-                -- source_out unchanged: we're moving the left edge, right edge stays
-            end
+            new_duration, new_source_in, new_source_out =
+                compute_in_edge_trim(clip, delta_frames, seq_fps_num, seq_fps_den)
             if trim_type == "roll" then
                 clip.timeline_start = clip.timeline_start + delta_frames
             end
         elseif edge_type == "out" then
-            new_duration_timeline = clip.duration + delta_frames
-            if new_source_out then
-                local source_delta = timeline_delta_to_source(delta_frames, clip, seq_fps_num, seq_fps_den)
-                new_source_out = clip.source_out + source_delta
-                -- source_in unchanged: we're moving the right edge, left edge stays
-            end
+            new_duration, new_source_in, new_source_out =
+                compute_out_edge_trim(clip, delta_frames, seq_fps_num, seq_fps_den)
         else
             error(string.format("apply_edge_ripple: Unsupported edge_type '%s'", edge_type))
         end
 
+        -- Gaps floor at 0 duration; media clips below 1 frame are deleted.
+        local is_gap = clip.clip_kind == "gap"
         if is_gap then
-            if new_duration_timeline < 0 then
-                new_duration_timeline = 0
-            end
-        else
-            if new_duration_timeline < 1 then
-                clip.duration = 0
-                clip.source_in = new_source_in
-                clip.source_out = new_source_out
-                return clip.timeline_start, true, true
-            end
+            if new_duration < 0 then new_duration = 0 end
+        elseif new_duration < 1 then
+            clip.duration = 0
+            clip.source_in = new_source_in
+            clip.source_out = new_source_out
+            return clip.timeline_start, true, true  -- success, deleted_clip=true
         end
 
-        clip.duration = new_duration_timeline
+        clip.duration = new_duration
         clip.source_in = new_source_in
         clip.source_out = new_source_out
         return clip.timeline_start, true, false
@@ -924,44 +953,55 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         ctx.clips_marked_delete = {}
     end
 
+    -- Multitrack roll delta: start from the raw user delta (not the
+    -- globally clamped one) and clamp it against this edge's own
+    -- per-edge constraint envelope. The edge is free to clamp
+    -- independently of the other edges in the same command.
+    local function compute_multitrack_roll_delta(ctx, edge_key)
+        local delta = ctx.delta_frames
+        if should_negate_edge(ctx, edge_key) then
+            delta = -delta
+        end
+        local bounds = ctx.per_edge_constraints[edge_key]
+        if not bounds then return delta end
+        local before = delta
+        if bounds.min ~= -math.huge and delta < bounds.min then
+            delta = bounds.min
+        end
+        if bounds.max ~= math.huge and delta > bounds.max then
+            delta = bounds.max
+        end
+        if before ~= delta then
+            log.event("Multitrack roll edge %s: requested=%d, clamped to %d (min=%s, max=%s)",
+                edge_key, before, delta,
+                bounds.min == -math.huge and "-inf" or tostring(bounds.min),
+                bounds.max == math.huge and "+inf" or tostring(bounds.max))
+        end
+        return delta
+    end
+
+    -- Globally clamped delta, possibly negated. Used by ripple edges
+    -- and by same-track roll edit points (where all edges share one
+    -- clamped value).
+    local function global_clamped_delta(ctx, edge_key)
+        if should_negate_edge(ctx, edge_key) then
+            return -ctx.clamped_delta_frames
+        end
+        return ctx.clamped_delta_frames
+    end
+
     local function compute_applied_delta(ctx, edge_key, edge_info)
-        local applied_delta
-        -- Multitrack roll (single roll edge per track) uses per-edge constraints independently.
-        -- Roll edit points (multiple roll edges on same track) and ripple use global clamped delta.
-        local is_multitrack_roll = edge_info and edge_info.trim_type == "roll"
-            and not (ctx.roll_edit_point_tracks and ctx.roll_edit_point_tracks[edge_info.track_id])
-        if is_multitrack_roll then
-            -- Multitrack roll: use original delta + per-edge constraints
-            applied_delta = ctx.delta_frames
-            if should_negate_edge(ctx, edge_key) then
-                applied_delta = -ctx.delta_frames
-            end
-            local constraints = ctx.per_edge_constraints[edge_key]
-            if constraints then
-                local before_clamp = applied_delta
-                if constraints.min ~= -math.huge and applied_delta < constraints.min then
-                    applied_delta = constraints.min
-                end
-                if constraints.max ~= math.huge and applied_delta > constraints.max then
-                    applied_delta = constraints.max
-                end
-                if before_clamp ~= applied_delta then
-                    log.event("Multitrack roll edge %s: requested=%d, clamped to %d (min=%s, max=%s)",
-                        edge_key, before_clamp, applied_delta,
-                        constraints.min == -math.huge and "-inf" or tostring(constraints.min),
-                        constraints.max == math.huge and "+inf" or tostring(constraints.max))
-                end
-            end
+        local multitrack_roll = edge_info and is_multitrack_roll_edge(ctx, edge_info)
+        local applied
+        if multitrack_roll then
+            applied = compute_multitrack_roll_delta(ctx, edge_key)
         else
-            -- Ripple edges or same-track roll edit points use global clamped delta
-            applied_delta = ctx.clamped_delta_frames
-            if should_negate_edge(ctx, edge_key) then
-                applied_delta = -ctx.clamped_delta_frames
-            end
+            applied = global_clamped_delta(ctx, edge_key)
         end
         log.event("compute_applied_delta: key=%s, is_multitrack_roll=%s, delta_frames=%s, clamped=%s, result=%s",
-            edge_key, tostring(is_multitrack_roll), tostring(ctx.delta_frames), tostring(ctx.clamped_delta_frames), tostring(applied_delta))
-        return applied_delta
+            edge_key, tostring(multitrack_roll), tostring(ctx.delta_frames),
+            tostring(ctx.clamped_delta_frames), tostring(applied))
+        return applied
     end
 
     local function register_ripple_anchor(ctx, normalized_edge, is_gap_edge_type, applied_delta, track_id, edge_key)
