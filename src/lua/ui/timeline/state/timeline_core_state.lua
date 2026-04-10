@@ -1,21 +1,31 @@
---- TODO: one-line summary (human review required)
+--- Timeline core state: initialization, persistence, reload, and
+--- derived-state (gap clip) recomputation for the active sequence.
 --
 -- Responsibilities:
--- - TODO
+-- - Load the active sequence from SQLite into the in-memory model
+--   (tracks, clips, sequence settings, selection, scroll/zoom state)
+-- - Rebuild in-memory gap clips from media clip positions, either
+--   for all tracks (init/load) or scoped to a set of affected tracks
+--   (after a mutation)
+-- - Migrate edge selections when gap clip ids change (the selected
+--   edge gets redirected to the nearest new gap on the same track)
+-- - Persist pending state to SQLite on sequence switch or app exit
 --
 -- Non-goals:
--- - TODO
+-- - Applying mutations to clip positions (that's timeline_state.apply_mutations)
+-- - Rendering (views pull from this state, per MVC)
+-- - Command execution (goes through command_manager)
 --
 -- Invariants:
--- - TODO
---
--- Size: ~310 LOC
--- Volatility: unknown
+-- - Gap clips are derived state: never mutated directly, always
+--   recomputed from media clip positions via gap_lifecycle.
+-- - Scoped recompute only touches tracks in the affected set; clips
+--   on untouched tracks keep byte-identical ids and positions so
+--   edge selections stay valid without migration.
+-- - Full recompute (nil affected_track_ids) is required on sequence
+--   init/load — there's no baseline gap state to preserve.
 --
 -- @file timeline_core_state.lua
--- Original intent (unreviewed):
--- Timeline Core State
--- Initialization, Persistence, and Reloading logic
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
 local clip_state = require("ui.timeline.state.clip_state")

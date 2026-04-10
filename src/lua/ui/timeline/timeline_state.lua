@@ -1,21 +1,32 @@
---- TODO: one-line summary (human review required)
+--- Timeline state facade: aggregates the per-concern sub-modules
+--- (core, clips, tracks, selection, viewport, geometry) behind a
+--- single API surface.
 --
 -- Responsibilities:
--- - TODO
+-- - Forward reads (get_clips, get_tracks, get_playhead, etc.) to
+--   the appropriate sub-module
+-- - Drive apply_mutations: derive affected track ids from the
+--   mutation payload, delegate to clip_state, then scoped-recompute
+--   gap clips on only the touched tracks
+-- - Emit the timeline_mutations_applied signal for downstream
+--   listeners (renderer, audio engine, etc.)
 --
 -- Non-goals:
--- - TODO
+-- - Owning any state itself (everything lives in sub-modules)
+-- - Command execution (goes through command_manager)
+-- - Direct clip mutation from callers (use commands — the public
+--   update_clip / add_clip / remove_clip wrappers error on purpose)
 --
 -- Invariants:
--- - TODO
---
--- Size: ~203 LOC
--- Volatility: unknown
+-- - Gap recompute is scoped to the affected tracks whenever every
+--   touched track can be identified from the mutation payload; it
+--   falls back to full recompute only when a delete references an
+--   unresolvable clip id.
+-- - Views pull from this facade (per MVC); nothing here pushes to
+--   them. The timeline_mutations_applied signal is purely a
+--   notification, not a payload channel.
 --
 -- @file timeline_state.lua
--- Original intent (unreviewed):
--- Timeline State Module (Facade)
--- Aggregates sub-modules for backward compatibility and API surface
 local M = {}
 
 -- Sub-modules

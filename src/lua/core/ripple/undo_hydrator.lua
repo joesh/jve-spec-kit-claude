@@ -1,16 +1,28 @@
---- TODO: one-line summary (human review required)
+--- Hydrate a full BatchRippleEdit mutation list from the compact
+--- parameters persisted by finalize_execution, so the undoer can
+--- revert without us writing thousands of mutation entries verbatim.
 --
 -- Responsibilities:
--- - TODO
+-- - Rebuild the executed_mutations list from original_states and
+--   executed_mutation_order (the minimal persisted shape)
+-- - Splice bulk_shift mutations around the per-clip entries in the
+--   correct execution order (positive shifts pre-, negative post-)
+-- - Handle bulk-shift-only commands: gap-only edits or pure downstream
+--   shifts on unselected tracks produce no original_states but still
+--   have bulk_shifts — those are fully undoable on their own
 --
 -- Non-goals:
--- - TODO
+-- - Executing the revert (that's command_helper.revert_mutations)
+-- - Capturing new state — we only consume parameters the executor
+--   already persisted
 --
 -- Invariants:
--- - TODO
---
--- Size: ~157 LOC
--- Volatility: unknown
+-- - Positive bulk_shifts execute BEFORE per-clip updates, negative
+--   bulk_shifts execute AFTER — matches the forward order used by
+--   finalize_execution so the reverse is consistent.
+-- - Hydrated mutations are cached back onto the command via
+--   set_parameter("executed_mutations", ...) so subsequent undos
+--   skip the hydration step.
 --
 -- @file undo_hydrator.lua
 local M = {}
