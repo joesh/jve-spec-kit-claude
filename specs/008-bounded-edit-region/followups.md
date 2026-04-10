@@ -79,6 +79,43 @@ Bounding further means either refactoring these consumers or adding on-demand `t
 
 ---
 
+### FU-5: Overlap trigger is the new write-path bottleneck
+
+**Current state (after 008):** Measured on the anamnesis project (20 tracks, 2882 media clips, 598 gap clips). Ripple at start of V1 (~975 downstream clips on that track alone):
+
+| Pipeline phase | Time | Notes |
+|--|--|--|
+| `build_clip_cache` | 0.6ms | Was the 2s stall pre-008 — fixed |
+| `prime_neighbor_bounds_cache` | 1.1ms | |
+| `compute_constraints` | 0.9ms | |
+| `inject_implicit_gap_edges` | 1.2ms | |
+| `compute_downstream_shifts` | 0.4ms | |
+| `build_planned_mutations` | <0.1ms | |
+| `timeline_state.apply_mutations` (UI + scoped gap recompute) | 3.8ms | T011 scoped recompute working |
+| `command_helper.apply_mutations` (SQL) | **85.8ms** | 65% of total |
+| **Total execute** | **~132ms** | |
+
+Raw-SQL isolation benchmarks confirm the SQL cost is structural:
+
+- Per-id `UPDATE` on 1227 audio clips (no trigger): 15.5ms = 0.013ms/row
+- Per-id `UPDATE` on 976 video clips (overlap trigger): 62.7ms = 0.064ms/row
+- Single `WHERE`-clause `UPDATE` on 976 video clips: 56.3ms (same — trigger fires per-row regardless of statement shape)
+
+**Diagnosis:** `trg_prevent_video_overlap_update` runs an `EXISTS` subquery per row that is effectively O(N) because the second overlap condition `(c.timeline_start_frame + c.duration_frames) > NEW.timeline_start_frame` can't be answered by the `(track_id, timeline_start_frame)` index alone — `c.duration_frames` isn't in the index. Bulk-shifting N video clips on one track is therefore O(N²). For N≈1000, that's ~60ms — a hard floor under the current schema.
+
+**Mitigations to explore:**
+
+1. **Drop + recreate the trigger around `BatchRippleEdit` bulk_shift.** Fragile but effective. The Lua pipeline already validates overlaps before committing, so the trigger is a safety net for *other* code paths; we can safely skip it here.
+2. **Make the trigger O(log N).** Add `timeline_end_frame` as a generated column on `clips` with an index, then rewrite the trigger to use it for range overlap detection via the index. Schema migration required.
+3. **Two-pass `UPDATE` with parking offset.** Tried during 008 — does NOT help because the trigger fires per-row in both passes, doubling the cost.
+4. **Single `UPDATE ... WHERE`.** Tried — same trigger cost, also trips the trigger mid-statement on video tracks unless processed in DESC order (which SQLite doesn't guarantee without `ORDER BY` on `UPDATE`, a non-default compile option).
+
+**Perf baseline delivered by 008:** 2000ms → 120ms (17x improvement). The <16ms aspirational target from the spec is not achievable until FU-5 lands.
+
+**Blocker:** none; independent work. Recommended approach = option 2 (generated column + index) for long-term correctness. Option 1 is a pragmatic interim fix.
+
+---
+
 ## Pointers for future work
 
 - **FU-1 starting point:** `build_clip_cache` in `src/lua/core/commands/batch_ripple_edit.lua`. Need to know the ripple boundary before load, which means restructuring the pipeline or introducing a two-phase load.
