@@ -1,13 +1,15 @@
 #!/usr/bin/env luajit
 
--- T005: Sequence generation counter.
+-- Sequence generation counter regression guard (feature 008, FU-2).
 --
--- Domain behavior: each mutation on a sequence increments its generation
--- counter. This enables O(1) staleness detection for nested sequence
--- references (future-proofing for cross-sequence cascade).
+-- Domain behavior: each mutation on a sequence increments its
+-- generation counter. O(1) staleness detection for nested-sequence
+-- references lives on this counter.
 --
--- This test fails until the schema gains a `mutation_generation` column
--- and Sequence.increment_generation() is implemented.
+-- STATUS: fails until FU-2 adds the `mutation_generation` column and
+-- Sequence.increment_generation(). Deferred — see
+-- specs/008-bounded-edit-region/followups.md. Test is landed as the
+-- regression guard that FU-2 will turn green.
 
 require("test_env")
 

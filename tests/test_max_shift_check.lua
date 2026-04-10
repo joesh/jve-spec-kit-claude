@@ -1,6 +1,6 @@
 #!/usr/bin/env luajit
 
--- T002: Max-shift check across multiple tracks.
+-- Multitrack max-shift clamp regression guard (feature 008).
 --
 -- Domain behavior: when rippling on one track, all tracks shift by the
 -- same delta. The constraint is only meaningful for NEGATIVE ripples —

@@ -1,16 +1,15 @@
 #!/usr/bin/env luajit
 
--- T003: Gap-as-clip in roll constraint computation.
+-- Gap-as-clip roll constraint regression guard (feature 008).
 --
--- Domain behavior: when rolling the boundary between a real clip and a gap
--- clip, the gap's duration constrains how far the boundary can roll. The
--- gap cannot go below 0 duration. These tests verify that gaps participate
--- in compute_shift_bounds as first-class clips — after the refactor,
--- prime_neighbor_bounds_cache will include gaps (currently excludes them).
+-- Domain behavior: when rolling the boundary between a real clip and
+-- a gap clip, the gap's duration constrains how far the boundary can
+-- roll. The gap cannot go below zero duration.
 --
--- Scenario: V1: [A 0-100][gap 100-150][B 150-400]
--- Rolling the A/gap boundary (A.out + gap.in) moves the boundary, growing
--- A and shrinking the gap. The roll is bounded by the gap's duration (50).
+-- Scenario: V1: [A 0-100][gap 100-150][B 150-400]. Rolling the A/gap
+-- boundary (A.out + gap.in) moves the boundary, growing A and shrinking
+-- the gap. Rolling the gap/B boundary (gap.out + B.in) shrinks the gap
+-- and extends B leftward. Either roll is bounded by the gap's duration.
 
 require("test_env")
 local runner = require("tests.helpers.ripple_test_runner")

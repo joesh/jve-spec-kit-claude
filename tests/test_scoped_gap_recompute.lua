@@ -1,12 +1,14 @@
 #!/usr/bin/env luajit
 
--- T004: Scoped gap recomputation.
+-- Scoped gap recomputation regression guard (feature 008, T011).
 --
 -- Domain behavior: after a mutation that affects one track, only that
--- track's gaps should be recomputed. Other tracks' gaps remain unchanged.
+-- track's gaps should be recomputed. Other tracks' gap clip IDs and
+-- positions must be byte-identical before and after.
 --
--- This test operates at the timeline_state level — it sets up clips,
--- modifies one track, and verifies gap recomputation is scoped.
+-- Operates at the timeline_state level: sets up clips on two tracks,
+-- calls recompute_gap_clips({[track_id]=true}) with a single-track
+-- scope, and verifies the untouched track's gap list is unchanged.
 
 require("test_env")
 

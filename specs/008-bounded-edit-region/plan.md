@@ -2,6 +2,26 @@
 
 **Branch**: `008-bounded-edit-region` | **Date**: 2026-04-09 | **Spec**: [spec.md](spec.md)
 
+## Status (2026-04-10)
+
+Landed in full: components 1, 2, FU-5 (trigger rewrite).
+
+Deferred: component 3 (sequence generation counter) → FU-2, blocked
+on the schema migration system which is currently a stub.
+
+Perf impact on anamnesis (20 tracks, 2882 clips, worst-case V1 ripple):
+
+  execute  2000ms → 38ms   (~53x)
+  undo     n/a   → 39ms
+  redo     n/a   → 39ms
+
+Remaining gap vs the `<16ms` aspirational target is distributed
+overhead in command_manager (state hashing, command save, UI sync) —
+documented as FU-6 in [followups.md](followups.md).
+
+Follow-up ledger: see [followups.md](followups.md) for FU-1 through
+FU-6.
+
 ## Summary
 
 Edit operations currently scan all clips on all tracks. This plan introduces a bounded edit region invariant: operations examine only the clips participating in the edit. Downstream shifts become a bulk per-track operation with one max-shift check. Gap special-casing is removed (gaps are clips). Gap recomputation is scoped to affected tracks.
@@ -169,13 +189,19 @@ Incremented by `command_manager` after any successful mutation on a sequence. Re
 **Phase Status**:
 - [x] Phase 0: Research complete
 - [x] Phase 1: Design complete
-- [ ] Phase 2: Task planning (describe approach only — /tasks generates)
-- [ ] Phase 3: Tasks generated
-- [ ] Phase 4: Implementation complete
-- [ ] Phase 5: Validation passed
+- [x] Phase 2: Task planning complete
+- [x] Phase 3: Tasks generated (see tasks.md)
+- [x] Phase 4: Implementation complete (components 1, 2, FU-5)
+- [x] Phase 5: Validation passed — anamnesis ripple 38ms p50, test
+      suite 496/3 (3 pre-existing failures unchanged)
 
 **Gate Status**:
 - [x] Initial Constitution Check: PASS
 - [x] Post-Design Constitution Check: PASS
 - [x] All NEEDS CLARIFICATION resolved
+
+**Deferred**:
+- Component 3 (sequence generation counter) → FU-2 — blocked on
+  schema migration system. Test_sequence_generation.lua is landed
+  as the regression guard that FU-2 will turn green.
 - [x] Complexity deviations documented (none)

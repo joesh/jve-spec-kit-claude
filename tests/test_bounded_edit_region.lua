@@ -1,25 +1,21 @@
 #!/usr/bin/env luajit
 
--- T006: Bounded clip access — verify edit operations don't load all clips.
+-- Regression guard for the bounded edit region refactor (feature 008).
 --
--- Domain behavior: a roll edit on 2 clips should load only those clips
--- plus their neighbors, not the entire sequence. A ripple edit should
--- load only the edit region clips and use bulk shift for downstream.
+-- Each scenario exercises one of the edit-region patterns that 008
+-- restructured the pipeline to handle: a pure roll that touches no
+-- downstream clips, a single-edge ripple that pushes downstream, and
+-- a multi-edge ripple where the inter-edge gap participates in the
+-- constraint math. The DSL runner verifies that every clip lands at
+-- its expected timeline position and duration after execute + undo +
+-- redo.
 --
--- These tests verify the bounded access invariant by checking that
--- the pipeline operates on a small subset of clips.
---
--- NOTE: Until the implementation bounds build_clip_cache, these tests
--- may pass vacuously (the current code loads everything but the tests
--- only check positions). The key assertions are on clip ACCESS COUNTS
--- which require instrumentation added in T007.
+-- These are black-box correctness checks, not perf assertions — the
+-- perf win is validated separately against the anamnesis project via
+-- the --test mode script in /tmp/jve/perf_008_ripple.lua.
 
 require("test_env")
 local runner = require("tests.helpers.ripple_test_runner")
-
--- These tests use the DSL runner to verify correctness of bounded edits.
--- The bounded access counting will be added as asserts inside the
--- implementation (T007) and verified via integration test (T014).
 
 local _, failed = runner.run_all({
     -- Roll edit: only 2 clips participate. Downstream untouched.
