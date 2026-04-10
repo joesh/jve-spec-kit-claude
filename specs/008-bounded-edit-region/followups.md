@@ -1,0 +1,86 @@
+# 008 Follow-up Work
+
+Items scoped OUT of the 008 refactor but worth tracking.
+
+## Deferred from 008
+
+### FU-1: Further bound `build_clip_cache` (strict edit region)
+
+**Current state (after 008):** `build_clip_cache` reads ALL tracks' clip indexes from `timeline_state`. In-memory, fast, but not truly bounded.
+
+**Target:** Load only:
+1. Clips whose edges are in `edge_infos`
+2. Their immediate prev/next neighbors on the same track
+3. For multitrack ripple: first downstream clip + upstream on each other track at the boundary
+
+**Why deferred:** Requires pipeline restructuring. Current consumers assume `ctx.all_clips` / `ctx.track_clip_map` contain the whole sequence:
+- `inject_implicit_gap_edges` iterates `track_clip_map` across all tracks (pre-boundary discovery)
+- `pick_gap_anchor_clip_id` needs arbitrary track clip lists for edge_preview payload
+- `compute_neighbor_bounds` scans `all_clips` for arbitrary clips
+
+Bounding further means either refactoring these consumers or adding on-demand `timeline_state.get_*` wrappers.
+
+**Perf cost of deferring:** ~negligible. In-memory iteration over a few hundred clips is microseconds. The 2-second stall was the DB path, which is already gone.
+
+**Blocker:** none; can be done any time as a pure refactor.
+
+---
+
+### FU-2: Sequence generation counter (T012)
+
+**Current state (after 008):** Not implemented. `test_sequence_generation.lua` fails.
+
+**Target:** Add `mutation_generation INTEGER NOT NULL DEFAULT 0` column to `sequences`. `Sequence.increment_generation(id)` bumps it. Enables O(1) staleness detection for nested sequence references.
+
+**Why deferred:** Schema version bump from 6 → 7 requires the schema migration system, which is currently a stub (`database.SCHEMA_VERSION` gate with no migration logic). See `memory/todo_sqlite_strict_integer.md` area.
+
+**Perf cost of deferring:** Zero. The counter is infrastructure for the nested-sequences feature which doesn't exist yet.
+
+**Blocker:** Schema migration system (V6 → V7 migration stub → real migration code). Can land after the migration system is built, or it can bundle with the migration feature itself.
+
+---
+
+### FU-3: 13 pre-existing ripple test failures
+
+**Current state (after 008):** Baseline for 008 was 486 passing, 13 failing. All 13 predate 008.
+
+**Failing files:**
+- `test_batch_ripple_concurrent.lua`
+- `test_batch_ripple_gap_before_expand.lua`
+- `test_batch_ripple_gap_downstream_block.lua`
+- `test_batch_ripple_gap_nested_closure.lua`
+- `test_batch_ripple_handle_ripple.lua`
+- `test_batch_ripple_negative_duration.lua`
+- `test_batch_ripple_regressions.lua`
+- `test_batch_ripple_retry_limit.lua`
+- `test_batch_ripple_upstream_overlap.lua`
+- `test_ripple_in_multitrack_upstream_stable.lua`
+- `test_ripple_multi_edge_no_false_clamp.lua`
+- `test_scoped_gap_recompute.lua` (becomes FU-2 companion; unblocked by T011 but test setup may still need repair)
+- `test_sequence_generation.lua` (blocked on FU-2)
+
+**Classification:** Sampled `test_batch_ripple_gap_before_expand` — fails with `expected 2100, got 2500`, last touched by commit `ed29410 gap-as-clip: more test migrations`. These are leftovers from the **feature 005 gap-as-clip refactor** that were never fully updated. Expected values encode assumptions about how gap edges shift downstream clips that no longer match the current (correct-by-regression-guard) implementation.
+
+**Why deferred:** Not blocking 008. Each test needs individual evaluation — test expected value is wrong vs. real regression — and that triage plus per-test fixes don't fit in the 008 scope.
+
+**Action:** Classify each as "test expectation wrong" or "real bug" and track per-file. Joe's "no pre-existing excuse" rule applies but gets a separate task.
+
+**Blocker:** none; independent cleanup work.
+
+---
+
+### FU-4: `test_scoped_gap_recompute` infrastructure repair
+
+**Current state (after 008):** Test was hand-written in an earlier session with wrong APIs (`database.open` instead of `database.init`, `command_manager.init(db, ...)` instead of `(sequence_id, ...)`). Partial repair in commit `972baf0`. Not yet verified to run end-to-end.
+
+**Target:** After T011 (scoped recompute), verify the test exercises the real behavior — that `recompute_gap_clips(affected_track_ids)` only touches the specified tracks' gaps.
+
+**Blocker:** T011 landing (included in 008 Option A').
+
+---
+
+## Pointers for future work
+
+- **FU-1 starting point:** `build_clip_cache` in `src/lua/core/commands/batch_ripple_edit.lua`. Need to know the ripple boundary before load, which means restructuring the pipeline or introducing a two-phase load.
+- **FU-2 starting point:** `src/lua/schema.sql:68` (sequences table), `src/lua/models/sequence.lua:114` (`Sequence.load`), `src/lua/core/database.lua:26` (`SCHEMA_VERSION`).
+- **FU-3 triage:** run each test, diff expected vs. actual, trace to either outdated assertion or real bug. Do not assume "pre-existing" = "not a real bug."
