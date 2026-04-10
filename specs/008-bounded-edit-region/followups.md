@@ -79,7 +79,49 @@ Bounding further means either refactoring these consumers or adding on-demand `t
 
 ---
 
-### FU-5: Overlap trigger is the new write-path bottleneck
+### FU-5: Overlap trigger — **LANDED** as commit 2a549fc
+
+**Status:** Resolved via option 2 variant (no new column needed — exploited the non-overlap invariant with existing index).
+
+**Approach delivered:** Rewrote `trg_prevent_video_overlap_{insert,update}` to check only the two nearest neighbors (upstream + downstream) via index seeks on `idx_clips_track_start`, rather than scanning all clips on the track with an `EXISTS` subquery. O(log N) per row instead of O(N).
+
+**Measured on anamnesis (same fixture as pre-FU-5):**
+
+- Raw per-id UPDATE on 976 video clips: **62.7ms → 5.9ms (10x)**
+- Single WHERE UPDATE on 976 video clips: **56.3ms → 3.6ms (15x)**
+- Full BatchRippleEdit on V1 start: **118.1ms → 63.0ms (1.9x)**
+
+Pipeline perf improvement is smaller than the SQL win because the remaining budget is distributed overhead in command_manager (state hashing ~15ms/command, command save, undo tree bookkeeping). Those are pre-existing costs unrelated to 008.
+
+**Original 008 + FU-5 combined impact:** 2000ms → 63ms (**32x**).
+
+**Edge case handled:** Negative `timeline_start_frame` (pre-roll clips) previously broke the upstream check because `coalesce(NULL, 0) > -100` returned true. Fixed by coalescing to `NEW.timeline_start_frame` so "no upstream" resolves to the adjacent case regardless of sign.
+
+---
+
+### FU-6: Further command_manager overhead reduction — NEW
+
+**Current state (after 008 + FU-5):** BatchRippleEdit on anamnesis = ~63ms execute, ~107ms undo, ~115ms redo. Of the 63ms execute:
+
+| Phase | Time | Notes |
+|--|--|--|
+| `apply_mutations` (SQL, includes bulk_shift) | 22.5ms | Trigger now cheap; cost is per-id UPDATE overhead + connection round-trips |
+| `calculate_state_hash` (×2) | 15.2ms | NSF invariant check — reads all 2882 clips twice |
+| `<other>` (save, undo tree, UI sync, logs) | ~25ms | Command persistence, `command:save` JSON encode, signal emissions |
+
+**Mitigations to explore:**
+
+1. **Scoped state hash.** `calculate_state_hash` iterates all clips on the sequence to compute a content fingerprint. For commands that only touch a few clips, hashing just the affected tracks (or caching the hash of unchanged tracks) would drop this to <1ms.
+2. **Lazy command JSON encode.** `command:save` JSON-encodes `bulk_shifts` (which contains the captured `clip_ids` arrays — up to thousands of UUIDs). Defer this to background or use a binary format.
+3. **Skip state hash when suppress_if_unchanged is false.** The NSF check is a safety net; for commands with a clear mutation signal, it's redundant.
+
+**Blocker:** none. This is pure `command_manager` / `command.lua` work.
+
+**Why deferred:** Outside 008 scope. 008 + FU-5 delivered 32x improvement and the <16ms target is no longer the ceiling of a single component — it's scattered across many small overheads in the command framework. Hitting it requires a separate focused pass.
+
+---
+
+### FU-5 original entry (for history; see above for resolution):
 
 **Current state (after 008):** Measured on the anamnesis project (20 tracks, 2882 media clips, 598 gap clips). Ripple at start of V1 (~975 downstream clips on that track alone):
 
