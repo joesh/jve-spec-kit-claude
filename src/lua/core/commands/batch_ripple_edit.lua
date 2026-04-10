@@ -15,12 +15,11 @@
 -- @file batch_ripple_edit.lua
 local M = {}
 local Clip = require('models.clip')
-local database = require('core.database')
 local frame_utils = require('core.frame_utils')
 local command_helper = require("core.command_helper")
 local edge_utils = require("core.edge_utils")
 local ui_constants = require("core.ui_constants")
-local clip_mutator = require('core.clip_mutator') -- New dependency
+local clip_mutator = require('core.clip_mutator')
 local log = require("core.logger").for_area("commands")
 local ripple_edge = require("core.ripple.edge_info")
 local ripple_track = require("core.ripple.track_index")
@@ -33,7 +32,6 @@ local compute_edge_boundary_time = ripple_edge.compute_edge_boundary_time
 local build_edge_key = ripple_edge.build_edge_key
 local bracket_for_normalized_edge = ripple_edge.bracket_for_normalized_edge
 local build_neighbor_bounds_cache = ripple_track.build_neighbor_bounds_cache
-local build_track_clip_map = ripple_track.build_track_clip_map
 local hydrate_executed_mutations_if_missing = ripple_undo.hydrate_executed_mutations_if_missing
 local signum
 local infer_implied_normalized_edge
@@ -373,10 +371,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
     end
 
+    -- Populate the command context's clip caches from the in-memory
+    -- timeline_state. timeline_state is the single authoritative source
+    -- for the active sequence: it contains media clips loaded from SQLite
+    -- plus pre-computed gap clips, both exposed via per-track indexes. No
+    -- DB scan, no per-clip loads, no per-clip copies at this layer.
+    -- (Mutable scratch copies are taken by load_clip_for_edit on demand.)
     local function build_clip_cache(ctx)
-        -- Single authoritative source: the in-memory timeline_state for the
-        -- active sequence. Reads media clips + pre-computed gap clips from
-        -- per-track indexes — no DB scan, no per-clip loads.
         local timeline_state = package.loaded["ui.timeline.timeline_state"]
         assert(timeline_state
             and timeline_state.get_sequence_id
@@ -392,18 +393,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         ctx.track_clip_map = {}
 
         for _, track in ipairs(timeline_state.get_all_tracks()) do
-            local tid = track and track.id
-            if tid then
-                local track_clips = timeline_state.get_track_clip_index(tid)
-                if track_clips and #track_clips > 0 then
-                    ctx.track_clip_map[tid] = track_clips
-                    for _, clip in ipairs(track_clips) do
-                        if clip and clip.id then
-                            table.insert(ctx.all_clips, clip)
-                            ctx.clip_lookup[clip.id] = clip
-                            ctx.clip_track_lookup[clip.id] = clip.track_id
-                        end
-                    end
+            assert(track.id and track.id ~= "",
+                "build_clip_cache: timeline_state returned track with empty id")
+            local track_clips = timeline_state.get_track_clip_index(track.id)
+            if track_clips then
+                ctx.track_clip_map[track.id] = track_clips
+                for _, clip in ipairs(track_clips) do
+                    assert(clip.id and clip.id ~= "", string.format(
+                        "build_clip_cache: clip on track %s has empty id", track.id))
+                    table.insert(ctx.all_clips, clip)
+                    ctx.clip_lookup[clip.id] = clip
+                    ctx.clip_track_lookup[clip.id] = clip.track_id
                 end
             end
         end
@@ -1204,51 +1204,73 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 	        return blocks
 	    end
 
-    -- Locate the first non-edited media clip at/after a track boundary, and the
-    -- end-frame of the last non-edited media clip ending at/before that boundary.
-    -- Gap clips are transparent (they represent empty space, not solid content)
-    -- and are skipped for both upstream and downstream lookups.
+    -- Locate the first non-edited, non-gap clip at or after `boundary_frame`
+    -- on a track, plus the last non-edited, non-gap clip ending at or before
+    -- the boundary. Gap clips are transparent — they represent consumable
+    -- empty space, not solid content that can collide with a shift.
+    --
+    -- @return table|nil first_downstream, number upstream_end, string|nil upstream_id
     local function find_track_boundary_neighbors(ctx, track_id, boundary_frame)
-        local clips = ctx.track_clip_map and ctx.track_clip_map[track_id]
-        if not clips then return nil, 0 end
+        local clips = ctx.track_clip_map[track_id]
+        assert(clips, string.format(
+            "find_track_boundary_neighbors: no track_clip_map entry for track %s",
+            tostring(track_id)))
         local upstream_end = 0
         local upstream_id = nil
         local first_downstream = nil
         for _, clip in ipairs(clips) do
-            if clip.clip_kind ~= "gap" and clip.id and not ctx.edited_clip_lookup[clip.id] then
-                if clip.timeline_start >= boundary_frame then
-                    if not first_downstream then
-                        first_downstream = clip
-                    end
-                elseif clip.timeline_start + clip.duration > upstream_end then
-                    upstream_end = clip.timeline_start + clip.duration
+            if clip.clip_kind == "gap" or ctx.edited_clip_lookup[clip.id] then
+                goto continue
+            end
+            if clip.timeline_start >= boundary_frame then
+                if not first_downstream then
+                    first_downstream = clip
+                end
+            else
+                local clip_end = clip.timeline_start + clip.duration
+                if clip_end > upstream_end then
+                    upstream_end = clip_end
                     upstream_id = clip.id
                 end
             end
+            ::continue::
         end
         return first_downstream, upstream_end, upstream_id
     end
 
-    -- Max-shift check: for each affected track, compute how far its first
-    -- downstream clip can shift LEFT before colliding with its upstream
-    -- neighbor. Positive ripples have no upstream collision (everything
-    -- moves right together). The tightest per-track limit is the global
-    -- max leftward shift. Skips tracks whose upstream neighbor is itself
-    -- being edited — those shift with the edit, not against it.
+    -- Resolve the ripple boundary frame for a track. Tracks touched by a
+    -- ripple edge have their own per-track boundary in track_ripple_start_frames;
+    -- tracks that only participate via propagation use the global earliest
+    -- ripple time.
+    local function track_ripple_boundary(ctx, track_id)
+        return ctx.track_ripple_start_frames[track_id] or ctx.earliest_ripple_time
+    end
+
+    -- Resolve the shift amount for a track. Seeded tracks (those with a
+    -- ripple edge) carry their own accumulated shift; propagated tracks
+    -- inherit the global downstream shift.
+    local function track_shift_amount(ctx, track_id)
+        return ctx.track_shift_amounts[track_id] or ctx.downstream_shift_frames
+    end
+
+    -- Compute the most-negative shift the affected tracks can tolerate
+    -- before a non-edited downstream clip collides with its non-edited
+    -- upstream neighbor. Positive ripples have no upstream collision
+    -- (everything moves right in lockstep). Tracks whose upstream is
+    -- itself being edited are skipped — the upstream shifts along with
+    -- the edit, not against it.
     local function compute_downstream_max_left_shift(ctx)
         local max_left = -math.huge
         local blocker_key = nil
-        for track_id in pairs(ctx.affected_tracks or {}) do
-            local boundary = (ctx.track_ripple_start_frames and ctx.track_ripple_start_frames[track_id])
-                or ctx.earliest_ripple_time
+        for track_id in pairs(ctx.affected_tracks) do
+            local boundary = track_ripple_boundary(ctx, track_id)
             if boundary then
                 local first_ds, upstream_end, upstream_id = find_track_boundary_neighbors(ctx, track_id, boundary)
                 if first_ds and upstream_id and not ctx.edited_clip_lookup[upstream_id] then
-                    local room = first_ds.timeline_start - upstream_end
-                    local track_max_left = -room  -- most-negative shift this track tolerates
+                    local track_max_left = -(first_ds.timeline_start - upstream_end)
                     if track_max_left > max_left then
                         max_left = track_max_left
-                        blocker_key = tostring(first_ds.id) .. ":in"
+                        blocker_key = first_ds.id .. ":in"
                     end
                 end
             end
@@ -1256,108 +1278,122 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return max_left, blocker_key
     end
 
-    local function compute_downstream_shifts(ctx)
-        -- Pure roll: no downstream shift.
-        if not ctx.has_ripple_edge then
+    -- True iff at least one affected track would shift by a non-zero amount.
+    -- A ripple with all-zero per-track shifts is a no-op downstream.
+    local function has_nonzero_downstream_shift(ctx)
+        if (ctx.downstream_shift_frames or 0) ~= 0 then
             return true
         end
-
-        -- All track shifts zero → nothing to do.
-        local downstream_shift = ctx.downstream_shift_frames or 0
-        local has_nonzero = downstream_shift ~= 0
-        if not has_nonzero and ctx.track_shift_amounts then
-            for _, shift_frames in pairs(ctx.track_shift_amounts) do
-                if shift_frames and shift_frames ~= 0 then
-                    has_nonzero = true
-                    break
-                end
+        for _, shift_frames in pairs(ctx.track_shift_amounts) do
+            if shift_frames ~= 0 then
+                return true
             end
         end
-        if not has_nonzero then
-            return true
-        end
+        return false
+    end
 
-        -- Max-shift check across affected tracks. Positive ripples are
-        -- unconstrained upstream; negative ripples clamp to the tightest
-        -- leftward room on any track.
-        local max_left, min_blocker_key = compute_downstream_max_left_shift(ctx)
+    -- Persist the forced-clamped-edge keys through a retry so the UI can
+    -- continue to highlight the blocker edges in red after the delta is
+    -- re-computed.
+    local function persist_blocker_keys(ctx)
+        if not ctx.forced_clamped_edges then return end
+        local blocker_keys = {}
+        for key in pairs(ctx.forced_clamped_edges) do
+            table.insert(blocker_keys, key)
+        end
+        if #blocker_keys > 0 then
+            ctx.command:set_parameter("__shift_blocker_keys", blocker_keys)
+        end
+    end
+
+    -- Clamp the desired downstream shift to the tightest leftward room
+    -- across affected tracks. If the clamp is active, mark the blocking
+    -- edge for UI feedback and return `adjusted` != `desired` so the
+    -- pipeline triggers a retry.
+    local function clamp_downstream_shift(ctx)
+        local max_left, blocker_key = compute_downstream_max_left_shift(ctx)
         local desired = ctx.downstream_shift_frames
         local adjusted = desired
-
         if max_left ~= -math.huge and desired < max_left then
             adjusted = max_left
-            if min_blocker_key then
+            if blocker_key then
                 ctx.forced_clamped_edges = ctx.forced_clamped_edges or {}
-                ctx.forced_clamped_edges[min_blocker_key] = true
+                ctx.forced_clamped_edges[blocker_key] = true
             end
         end
-
-        local forced_retry = ctx.args.__force_retry_delta
-        if forced_retry then
-            adjusted = forced_retry
+        if ctx.args.__force_retry_delta then
+            adjusted = ctx.args.__force_retry_delta
         end
+        return adjusted, desired
+    end
 
-        if adjusted ~= desired then
-            -- Persist blocker edge keys through retry so UI can show them red.
-            if ctx.forced_clamped_edges then
-                local blocker_keys = {}
-                for key in pairs(ctx.forced_clamped_edges) do
-                    table.insert(blocker_keys, key)
-                end
-                if #blocker_keys > 0 then
-                    ctx.command:set_parameter("__shift_blocker_keys", blocker_keys)
+    -- Emit one bulk_shift mutation per affected track. The SQL substrate
+    -- (command_helper.apply_mutations + revert_mutations) owns the
+    -- per-track UPDATE and the undo reverse-shift.
+    local function emit_bulk_shift_mutations(ctx)
+        for track_id in pairs(ctx.affected_tracks) do
+            local boundary = track_ripple_boundary(ctx, track_id)
+            local shift_frames = track_shift_amount(ctx, track_id)
+            if boundary and shift_frames and shift_frames ~= 0 then
+                local first_ds = find_track_boundary_neighbors(ctx, track_id, boundary)
+                if first_ds then
+                    table.insert(ctx.bulk_shift_mutations, {
+                        type = "bulk_shift",
+                        track_id = track_id,
+                        shift_frames = shift_frames,
+                        first_clip_id = first_ds.id,
+                        anchor_start_frame = first_ds.timeline_start,
+                        start_frames = first_ds.timeline_start,
+                    })
                 end
             end
-            return false, adjusted
         end
+    end
 
-        -- Emit one bulk_shift mutation per affected track. The SQL substrate
-        -- (command_helper.apply_mutations / revert_mutations) handles the
-        -- per-track UPDATE and undo by reversing the shift.
-        for track_id in pairs(ctx.affected_tracks or {}) do
-            local boundary = (ctx.track_ripple_start_frames and ctx.track_ripple_start_frames[track_id])
-                or ctx.earliest_ripple_time
-            if boundary then
-                local track_shift = (ctx.track_shift_amounts and ctx.track_shift_amounts[track_id])
-                    or ctx.downstream_shift_frames
-                if track_shift and track_shift ~= 0 then
-                    local first_ds = find_track_boundary_neighbors(ctx, track_id, boundary)
-                    if first_ds then
-                        table.insert(ctx.bulk_shift_mutations, {
-                            type = "bulk_shift",
-                            track_id = track_id,
-                            shift_frames = track_shift,
-                            first_clip_id = first_ds.id,
-                            anchor_start_frame = first_ds.timeline_start,
-                            start_frames = first_ds.timeline_start,
-                        })
-
-                        -- Dry-run: populate per-clip preview data for UI and tests.
-                        -- Not needed for commit (apply_mutations does the work),
-                        -- but preview rendering and test assertions depend on
-                        -- seeing each shifted clip individually.
-                        if ctx.dry_run then
-                            local track_clips = ctx.track_clip_map[track_id]
-                            if track_clips then
-                                for _, clip in ipairs(track_clips) do
-                                    if clip.clip_kind ~= "gap"
-                                        and clip.id
-                                        and clip.timeline_start >= first_ds.timeline_start
-                                        and not ctx.edited_clip_lookup[clip.id] then
-                                        add_preview_shift(ctx,
-                                            clip.id,
-                                            clip.timeline_start + track_shift,
-                                            clip.duration)
-                                    end
-                                end
-                            end
+    -- Dry-run only: emit one per-clip preview entry for every clip that
+    -- the bulk_shift would move. The commit path doesn't need this (the
+    -- SQL UPDATE does the work), but the UI preview and test assertions
+    -- expect per-clip entries so they can render/verify each shifted
+    -- clip individually.
+    local function populate_preview_shifts(ctx)
+        for track_id in pairs(ctx.affected_tracks) do
+            local boundary = track_ripple_boundary(ctx, track_id)
+            local shift_frames = track_shift_amount(ctx, track_id)
+            if boundary and shift_frames and shift_frames ~= 0 then
+                local first_ds = find_track_boundary_neighbors(ctx, track_id, boundary)
+                if first_ds then
+                    for _, clip in ipairs(ctx.track_clip_map[track_id]) do
+                        local is_shifted = clip.clip_kind ~= "gap"
+                            and not ctx.edited_clip_lookup[clip.id]
+                            and clip.timeline_start >= first_ds.timeline_start
+                        if is_shifted then
+                            add_preview_shift(ctx, clip.id,
+                                clip.timeline_start + shift_frames, clip.duration)
                         end
                     end
                 end
             end
         end
+    end
+
+    local function compute_downstream_shifts(ctx)
+        if not ctx.has_ripple_edge then
+            return true
+        end
+        if not has_nonzero_downstream_shift(ctx) then
+            return true
+        end
+
+        local adjusted, desired = clamp_downstream_shift(ctx)
+        if adjusted ~= desired then
+            persist_blocker_keys(ctx)
+            return false, adjusted
+        end
+
+        emit_bulk_shift_mutations(ctx)
 
         if ctx.dry_run then
+            populate_preview_shifts(ctx)
             ctx.shift_blocks = build_preview_shift_blocks(ctx)
         end
 
