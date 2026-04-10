@@ -44,7 +44,7 @@ As an editor, when I perform a trim/roll/ripple, the system loads only the parti
 An assert enforces that no pipeline step accesses clips outside this set.
 
 ### FR-2: Downstream Max-Shift Check
-Replace per-clip `compute_shift_bounds` on downstream clips with a single per-track check: for each affected track, compute the space between the last non-shifting clip and the first shifting clip at the boundary. The minimum across all tracks is the max allowable shift.
+Replace per-clip `compute_shift_bounds` on downstream clips with a single per-track check: for each affected track, compute the space between the last non-shifting clip and the first shifting clip at the boundary. The minimum across all tracks is the max allowable shift. If any track has zero space (adjacent clips, zero-length gap), the entire ripple is clamped to zero — all tracks use one global delta.
 
 ### FR-3: Bulk Downstream Shift
 Replace `collect_downstream_clips` + per-clip shift mutations with one SQL-level bulk shift per affected track: `UPDATE ... SET timeline_start = timeline_start + delta WHERE track_id = ? AND timeline_start >= boundary`.
@@ -97,6 +97,9 @@ A: Remove it. The gap-as-clip refactor means gaps ARE clips. `prime_neighbor_bou
 
 **Q: Cross-sequence effects from nested sequences?**  
 A: Future-proofed via sequence generation counter. Cross-sequence cascade deferred to nested sequences feature.
+
+**Q: When max-shift check yields zero available space on a track, what happens?**  
+A: Clamp delta to zero on ALL tracks. The most constrained track determines the global limit. No per-track independent deltas.
 
 ## Technical Dependencies
 
