@@ -4,7 +4,10 @@
 --
 -- Domain behavior: each mutation on a sequence increments its generation
 -- counter. This enables O(1) staleness detection for nested sequence
--- references.
+-- references (future-proofing for cross-sequence cascade).
+--
+-- This test fails until the schema gains a `mutation_generation` column
+-- and Sequence.increment_generation() is implemented.
 
 require("test_env")
 
@@ -13,8 +16,9 @@ local Sequence = require("models.sequence")
 
 local db_path = "/tmp/jve/test_sequence_generation.db"
 os.remove(db_path)
-local db = database.open(db_path)
-database.init_schema(db)
+database.init(db_path)
+local db = database.get_connection()
+db:exec(require('import_schema'))
 
 -- Create project + sequence
 db:exec("INSERT INTO projects (id, name) VALUES ('proj1', 'test')")
@@ -38,7 +42,7 @@ seq = Sequence.load("seq1")
 assert(seq.mutation_generation == 2,
     "mutation_generation should be 2 after second increment, got " .. tostring(seq.mutation_generation))
 
-db:close()
+database.shutdown()
 os.remove(db_path)
 
 print("✅ test_sequence_generation.lua passed")

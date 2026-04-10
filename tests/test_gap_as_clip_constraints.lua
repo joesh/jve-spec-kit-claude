@@ -1,64 +1,64 @@
 #!/usr/bin/env luajit
 
--- T003: Gap-as-clip in constraint computation.
+-- T003: Gap-as-clip in roll constraint computation.
 --
--- Domain behavior: when rolling multiple edges, the gap between them
--- constrains how far you can roll. Gaps participate as clips in
--- compute_shift_bounds — they have position and duration that limit
--- movement.
+-- Domain behavior: when rolling the boundary between a real clip and a gap
+-- clip, the gap's duration constrains how far the boundary can roll. The
+-- gap cannot go below 0 duration. These tests verify that gaps participate
+-- in compute_shift_bounds as first-class clips — after the refactor,
+-- prime_neighbor_bounds_cache will include gaps (currently excludes them).
 --
--- These tests verify that gaps constrain multi-edge rolls correctly.
--- After the refactor, prime_neighbor_bounds_cache will include gaps
--- (currently it excludes them).
+-- Scenario: V1: [A 0-100][gap 100-150][B 150-400]
+-- Rolling the A/gap boundary (A.out + gap.in) moves the boundary, growing
+-- A and shrinking the gap. The roll is bounded by the gap's duration (50).
 
 require("test_env")
 local runner = require("tests.helpers.ripple_test_runner")
 
 local _, failed = runner.run_all({
-    -- Roll A out + B in by +60. Gap between A and B is 50 frames.
-    -- Should clamp to +50.
+    -- Roll the A/gap boundary right by 30: A grows 100→130, gap shrinks 50→20.
     {
-        name = "gap_constrains_roll_outward",
+        name = "roll_at_a_gap_boundary_within_bounds",
         before = [[
             V1: [A 0-100][B 150-400]
         ]],
-        drag = "A out roll 60, B in roll 60",
+        drag = "A out roll 30, A gap_after roll 30",
+        after = [[
+            V1: [A 0-130][B 150-400]
+        ]],
+    },
+
+    -- Roll the A/gap boundary right by 80: clamped to +50 (gap fully consumed).
+    {
+        name = "roll_at_a_gap_boundary_clamps_to_gap_size",
+        before = [[
+            V1: [A 0-100][B 150-400]
+        ]],
+        drag = "A out roll 80, A gap_after roll 80",
         after = [[
             V1: [A 0-150][B 150-400]
         ]],
     },
 
-    -- Roll A out + B in by +50. Gap is exactly 50. Should fit.
+    -- Roll the gap/B boundary left by 30: gap shrinks 50→20, B grows leftward.
     {
-        name = "gap_constrains_roll_exact_fit",
+        name = "roll_at_gap_b_boundary_grows_b_leftward",
         before = [[
             V1: [A 0-100][B 150-400]
         ]],
-        drag = "A out roll 50, B in roll 50",
+        drag = "B gap_before roll -30, B in roll -30",
         after = [[
-            V1: [A 0-150][B 150-400]
+            V1: [A 0-100][B 120-400]
         ]],
     },
 
-    -- Roll A out + B in by -10. Gap grows from 50 to 60.
+    -- Roll the gap/B boundary left by 80: clamped to -50 (gap fully consumed).
     {
-        name = "gap_grows_on_inward_roll",
+        name = "roll_at_gap_b_boundary_clamps_to_gap_size",
         before = [[
             V1: [A 0-100][B 150-400]
         ]],
-        drag = "A out roll -10, B in roll -10",
-        after = [[
-            V1: [A 0-90][B 160-400]
-        ]],
-    },
-
-    -- Adjacent clips (no gap). Roll by +10 should clamp to 0.
-    {
-        name = "adjacent_clips_zero_gap_clamps_roll",
-        before = [[
-            V1: [A 0-100][B 100-400]
-        ]],
-        drag = "A out roll 10, B in roll 10",
+        drag = "B gap_before roll -80, B in roll -80",
         after = [[
             V1: [A 0-100][B 100-400]
         ]],

@@ -16,8 +16,9 @@ local data = require("ui.timeline.state.timeline_state_data")
 -- Setup: create a DB with 2 tracks, clips on each
 local db_path = "/tmp/jve/test_scoped_gap_recompute.db"
 os.remove(db_path)
-local db = database.open(db_path)
-database.init_schema(db)
+database.init(db_path)
+local db = database.get_connection()
+db:exec(require('import_schema'))
 
 -- Create project + sequence
 db:exec("INSERT INTO projects (id, name) VALUES ('proj1', 'test')")
@@ -42,7 +43,7 @@ insert_clip("clip_a1b", "track_a1", 400, 100)
 
 -- Initialize timeline_state
 local command_manager = require("core.command_manager")
-command_manager.init(db, "proj1")
+command_manager.init("seq1", "proj1")
 timeline_core_state.init("seq1", "proj1")
 
 -- Collect current gap IDs on each track
@@ -83,7 +84,7 @@ for i, id in ipairs(a1_gaps_before) do
         string.format("A1 gap ID changed: before=%s after=%s", id, tostring(a1_gaps_after[i])))
 end
 
-db:close()
+database.shutdown()
 os.remove(db_path)
 
 print("✅ test_scoped_gap_recompute.lua passed")
