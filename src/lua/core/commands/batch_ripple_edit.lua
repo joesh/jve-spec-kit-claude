@@ -492,22 +492,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     local function prime_neighbor_bounds_cache(ctx)
         assert(ctx.track_clip_map, "prime_neighbor_bounds_cache: track_clip_map is nil")
-        -- Build neighbor bounds from MEDIA clips only. Gap clips are transparent
-        -- for overlap/constraint computation — they represent empty space, not
-        -- physical content that blocks movement.
-        local media_only_map = {}
-        for track_id, clips in pairs(ctx.track_clip_map) do
-            local media_clips = {}
-            for _, clip in ipairs(clips) do
-                if clip.clip_kind ~= "gap" then
-                    table.insert(media_clips, clip)
-                end
-            end
-            if #media_clips > 0 then
-                media_only_map[track_id] = media_clips
-            end
-        end
-        ctx.neighbor_bounds_cache = build_neighbor_bounds_cache(media_only_map)
+        -- Gaps are clips. Include them in neighbor bounds so multi-edge rolls
+        -- and ripples see gap duration as a real constraint (not an invisible
+        -- transparent region).
+        ctx.neighbor_bounds_cache = build_neighbor_bounds_cache(ctx.track_clip_map)
     end
 
     -- For each ripple edge, find the gap clip on OTHER tracks at the same
