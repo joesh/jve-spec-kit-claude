@@ -146,6 +146,44 @@ M.get_clip_by_id = clips.get_by_id
 M.get_clips_for_track = clips.get_for_track
 M.get_track_clip_index = clips.get_track_clip_index
 M.get_clips_at_time = clips.get_at_time
+-- Derive the set of track_ids touched by a mutation payload. Updates,
+-- inserts, and bulk_shifts carry track_id directly. Deletes carry only
+-- clip_id, so resolve via clip_lookup before clip_state removes the row.
+--
+-- Returns (set, scope_is_known). scope_is_known is false when a delete
+-- references a clip that isn't in the live state — in that case the
+-- caller must fall back to a full gap recompute.
+local function collect_affected_track_ids(mutations)
+    local affected = {}
+    local scope_is_known = true
+
+    local function note(track_id)
+        if track_id and track_id ~= "" then
+            affected[track_id] = true
+        else
+            scope_is_known = false
+        end
+    end
+
+    if mutations.updates then
+        for _, m in ipairs(mutations.updates) do note(m.track_id) end
+    end
+    if mutations.inserts then
+        for _, m in ipairs(mutations.inserts) do note(m.track_id) end
+    end
+    if mutations.bulk_shifts then
+        for _, m in ipairs(mutations.bulk_shifts) do note(m.track_id) end
+    end
+    if mutations.deletes then
+        for _, clip_id in ipairs(mutations.deletes) do
+            local existing = clips.get_by_id(clip_id)
+            note(existing and existing.track_id)
+        end
+    end
+
+    return affected, scope_is_known
+end
+
 local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_callback)
     local mutations = sequence_or_mutations
     local callback = maybe_mutations
@@ -159,45 +197,23 @@ local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_c
     assert(type(mutations) == "table",
         "timeline_state.apply_mutations: mutations must be a table, got " .. type(mutations))
 
-    -- Build the affected-track set from mutation payloads BEFORE applying.
-    -- Updates, inserts, and bulk_shifts carry track_id directly. Deletes
-    -- carry only clip_id; resolve via clip_lookup before clip_state
-    -- removes the row. If any track can't be resolved, fall back to a
-    -- full recompute (correct but slower).
-    local affected_tracks = {}
-    local full_recompute = false
-    local function note_track(tid)
-        if tid and tid ~= "" then affected_tracks[tid] = true
-        else full_recompute = true end
-    end
-    if mutations.updates then
-        for _, m in ipairs(mutations.updates) do note_track(m.track_id) end
-    end
-    if mutations.inserts then
-        for _, m in ipairs(mutations.inserts) do note_track(m.track_id) end
-    end
-    if mutations.bulk_shifts then
-        for _, m in ipairs(mutations.bulk_shifts) do note_track(m.track_id) end
-    end
-    if mutations.deletes then
-        for _, clip_id in ipairs(mutations.deletes) do
-            local existing = clips.get_by_id(clip_id)
-            note_track(existing and existing.track_id)
-        end
-    end
+    local affected_tracks, scope_is_known =
+        collect_affected_track_ids(mutations)
 
     local changed = clips.apply_mutations(mutations, callback)
 
-    -- Recompute gap clips for affected tracks (scoped) after position changes.
     -- Gaps are derived state — always recomputed, never mutated directly.
+    -- Scope the recompute to only the affected tracks when we can identify
+    -- all of them; fall back to a full recompute if any track was
+    -- unidentifiable (e.g., a delete referenced a clip not in the lookup).
     if changed then
         local core_state = require("ui.timeline.state.timeline_core_state")
         assert(core_state.recompute_gap_clips,
             "timeline_state.apply_mutations: core_state.recompute_gap_clips must exist")
-        if full_recompute or next(affected_tracks) == nil then
-            core_state.recompute_gap_clips()
-        else
+        if scope_is_known and next(affected_tracks) ~= nil then
             core_state.recompute_gap_clips(affected_tracks)
+        else
+            core_state.recompute_gap_clips()
         end
         clips.invalidate_indexes()
     end

@@ -47,20 +47,129 @@ end
 
 --- Recompute gap clips for all tracks.
 -- Strips existing gap clips, recomputes from media clip positions, appends.
--- Called after loading clips from DB or after any mutation changes clip positions.
+-- Partition the current clip list into "kept" (unchanged) and
+-- "media_for_scope" (media clips on tracks whose gaps we're rebuilding),
+-- and record the destroyed gap ids so we can migrate selections pointing
+-- at them. When `scoped` is false every gap is destroyed and every media
+-- clip goes into media_for_scope.
+local function partition_clips_for_recompute(clips, scoped, affected_track_ids)
+    local old_gap_tracks = {}
+    local kept = {}
+    local media_for_scope = {}
+    for _, clip in ipairs(clips) do
+        assert(clip.track_id and clip.track_id ~= "",
+            string.format("recompute_gap_clips: clip %s missing track_id", tostring(clip.id)))
+        local in_scope = (not scoped) or affected_track_ids[clip.track_id]
+        if clip.clip_kind == "gap" then
+            if in_scope then
+                old_gap_tracks[clip.id] = clip.track_id
+            else
+                table.insert(kept, clip)
+            end
+        else
+            table.insert(kept, clip)
+            if in_scope then
+                table.insert(media_for_scope, clip)
+            end
+        end
+    end
+    return kept, media_for_scope, old_gap_tracks
+end
+
+-- Group media clips by track_id and sort each track's list by timeline_start
+-- (ties broken by clip id for determinism).
+local function build_sorted_track_media(media_clips)
+    local track_clips = {}
+    for _, clip in ipairs(media_clips) do
+        local list = track_clips[clip.track_id]
+        if not list then
+            list = {}
+            track_clips[clip.track_id] = list
+        end
+        table.insert(list, clip)
+    end
+    for _, list in pairs(track_clips) do
+        table.sort(list, function(a, b)
+            if a.timeline_start == b.timeline_start then
+                return a.id < b.id
+            end
+            return a.timeline_start < b.timeline_start
+        end)
+    end
+    return track_clips
+end
+
+-- Rebuild gap clips for every in-scope track and append them to `clips`.
+-- Returns a per-track map of the new gaps so edge-selection migration can
+-- find a replacement for any destroyed gap.
+local function rebuild_gaps_for_tracks(tracks, track_clips, scoped, affected_track_ids, seq_fr, clips)
+    local new_gaps_by_track = {}
+    for _, track in ipairs(tracks) do
+        assert(track.id and track.id ~= "",
+            "recompute_gap_clips: track has empty id")
+        if (not scoped) or affected_track_ids[track.id] then
+            local sorted = track_clips[track.id] or {}
+            local gaps = gap_lifecycle.compute_gaps_for_track(track.id, sorted, seq_fr)
+            new_gaps_by_track[track.id] = gaps
+            for _, gap in ipairs(gaps) do
+                table.insert(clips, gap)
+            end
+        end
+    end
+    return new_gaps_by_track
+end
+
+-- An edge selection may reference a gap clip that was just destroyed.
+-- Redirect it to the nearest new gap on the same track (closest by
+-- starting frame, parsed out of the old gap id).
+local function migrate_stale_edge_selections(old_gap_tracks, new_gaps_by_track)
+    local selected_edges = data.state.selected_edges
+    if not selected_edges or #selected_edges == 0 then return end
+
+    local migrated = false
+    for _, edge in ipairs(selected_edges) do
+        local old_track = old_gap_tracks[edge.clip_id]
+        if old_track then
+            local new_gaps = new_gaps_by_track[old_track]
+            if new_gaps and #new_gaps > 0 then
+                -- Old gap id format: gap_<track_id>_<start_frame>
+                local old_start = tonumber(edge.clip_id:match("_(%d+)$"))
+                local best_gap = new_gaps[1]
+                if old_start then
+                    local best_dist = math.abs(best_gap.timeline_start - old_start)
+                    for _, g in ipairs(new_gaps) do
+                        local dist = math.abs(g.timeline_start - old_start)
+                        if dist < best_dist then
+                            best_gap = g
+                            best_dist = dist
+                        end
+                    end
+                end
+                edge.clip_id = best_gap.id
+                migrated = true
+            end
+        end
+    end
+    if migrated then
+        log.event("recompute_gap_clips: migrated edge selection to new gap clip IDs")
+    end
+end
+
+-- Rebuild in-memory gap clips from media clip positions.
 --
--- When `affected_track_ids` is nil: rebuild gaps for all tracks (required
--- on sequence init/load). When provided as a set `{[track_id]=true, ...}`:
--- only strip + recompute gaps on those tracks — gaps on other tracks keep
--- their existing IDs and positions, so edge selections pointing at those
--- tracks' gaps stay valid without migration.
+-- Called after loading clips from DB or after any mutation that changes
+-- clip positions. When `affected_track_ids` is nil: rebuild gaps for all
+-- tracks (required on sequence init/load). When provided as a set
+-- `{[track_id]=true, ...}`: only strip + recompute gaps on those tracks
+-- — gaps on other tracks keep their existing IDs and positions, so edge
+-- selections pointing at those tracks' gaps stay valid without migration.
 local function recompute_gap_clips(affected_track_ids)
     local clips = data.state.clips
     local tracks = data.state.tracks
     if not clips or not tracks or #tracks == 0 then return end
 
     local seq_fr = data.state.sequence_frame_rate
-    -- sequence_frame_rate may not be set yet during early init (before sequence load).
+    -- sequence_frame_rate may not be set during early init before sequence load.
     -- Only assert when we have an active sequence — otherwise silent skip is correct.
     if not seq_fr then
         assert(not data.state.sequence_id or data.state.sequence_id == "",
@@ -69,103 +178,14 @@ local function recompute_gap_clips(affected_track_ids)
     end
 
     local scoped = type(affected_track_ids) == "table"
-
-    -- Partition clips:
-    --   kept: clips we're keeping as-is (media clips on any track + gap clips
-    --         on tracks NOT in affected_track_ids)
-    --   media_for_scope: media clips on affected tracks (used to recompute gaps)
-    -- old_gap_tracks remembers gap IDs we're destroying so edge selections
-    -- can be migrated to the nearest replacement.
-    local old_gap_tracks = {}
-    local kept = {}
-    local media_for_scope = {}
-    for _, clip in ipairs(clips) do
-        local in_scope = (not scoped) or (clip.track_id and affected_track_ids[clip.track_id])
-        if clip.clip_kind == "gap" then
-            if in_scope then
-                old_gap_tracks[clip.id] = clip.track_id
-                -- drop: will be rebuilt
-            else
-                table.insert(kept, clip)
-            end
-        else
-            table.insert(kept, clip)
-            if in_scope and clip.track_id then
-                table.insert(media_for_scope, clip)
-            end
-        end
-    end
+    local kept, media_for_scope, old_gap_tracks =
+        partition_clips_for_recompute(clips, scoped, affected_track_ids)
     data.state.clips = kept
-    clips = kept
 
-    -- Build per-track sorted media lists for the tracks we're recomputing.
-    local track_clips = {}
-    for _, clip in ipairs(media_for_scope) do
-        local list = track_clips[clip.track_id]
-        if not list then
-            list = {}
-            track_clips[clip.track_id] = list
-        end
-        table.insert(list, clip)
-    end
-
-    for _, list in pairs(track_clips) do
-        table.sort(list, function(a, b)
-            if a.timeline_start == b.timeline_start then
-                return (a.id or "") < (b.id or "")
-            end
-            return a.timeline_start < b.timeline_start
-        end)
-    end
-
-    -- Recompute gaps for each in-scope track and append.
-    local new_gaps_by_track = {}
-    for _, track in ipairs(tracks) do
-        local tid = track.id
-        if tid and ((not scoped) or affected_track_ids[tid]) then
-            local sorted = track_clips[tid] or {}
-            local gaps = gap_lifecycle.compute_gaps_for_track(tid, sorted, seq_fr)
-            new_gaps_by_track[tid] = gaps
-            for _, gap in ipairs(gaps) do
-                table.insert(clips, gap)
-            end
-        end
-    end
-
-    -- Migrate edge selections: old gap clip IDs → nearest new gap on same track
-    local selected_edges = data.state.selected_edges
-    if selected_edges and #selected_edges > 0 then
-        local migrated = false
-        for _, edge in ipairs(selected_edges) do
-            local old_track = old_gap_tracks[edge.clip_id]
-            if old_track then
-                -- This edge references a gap clip that was just destroyed.
-                -- Find the new gap on the same track.
-                local new_gaps = new_gaps_by_track[old_track]
-                if new_gaps and #new_gaps > 0 then
-                    -- Pick the gap closest to the old one's position.
-                    -- Parse old position from ID: gap_<track_id>_<start>
-                    local old_start = tonumber(edge.clip_id:match("_(%d+)$"))
-                    local best_gap = new_gaps[1]
-                    if old_start then
-                        local best_dist = math.abs(best_gap.timeline_start - old_start)
-                        for _, g in ipairs(new_gaps) do
-                            local dist = math.abs(g.timeline_start - old_start)
-                            if dist < best_dist then
-                                best_gap = g
-                                best_dist = dist
-                            end
-                        end
-                    end
-                    edge.clip_id = best_gap.id
-                    migrated = true
-                end
-            end
-        end
-        if migrated then
-            log.event("recompute_gap_clips: migrated edge selection to new gap clip IDs")
-        end
-    end
+    local track_clips = build_sorted_track_media(media_for_scope)
+    local new_gaps_by_track =
+        rebuild_gaps_for_tracks(tracks, track_clips, scoped, affected_track_ids, seq_fr, kept)
+    migrate_stale_edge_selections(old_gap_tracks, new_gaps_by_track)
 end
 
 local TRACK_HEIGHT_TEMPLATE_KEY = "track_height_template"
