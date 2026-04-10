@@ -20,20 +20,28 @@ database.init(db_path)
 local db = database.get_connection()
 db:exec(require('import_schema'))
 
--- Create project + sequence
-db:exec("INSERT INTO projects (id, name) VALUES ('proj1', 'test')")
-db:exec("INSERT INTO sequences (id, project_id, name, fps_numerator, fps_denominator) VALUES ('seq1', 'proj1', 'Seq 1', 25, 1)")
+-- Create project + sequence (minimum required columns)
+local now = os.time()
+db:exec(string.format(
+    "INSERT INTO projects (id, name, created_at, modified_at) VALUES ('proj1', 'test', %d, %d)",
+    now, now))
+db:exec(string.format([[
+    INSERT INTO sequences (id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_rate, width, height,
+        created_at, modified_at)
+    VALUES ('seq1', 'proj1', 'Seq 1', 'timeline', 25, 1, 48000, 1920, 1080, %d, %d)
+]], now, now))
 
 -- Create tracks
-db:exec("INSERT INTO tracks (id, sequence_id, name, track_type, track_index) VALUES ('track_v1', 'seq1', 'V1', 'VIDEO', 1)")
-db:exec("INSERT INTO tracks (id, sequence_id, name, track_type, track_index) VALUES ('track_a1', 'seq1', 'A1', 'AUDIO', 2)")
+db:exec("INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'seq1', 'V1', 'VIDEO', 1, 1)")
+db:exec("INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_a1', 'seq1', 'A1', 'AUDIO', 2, 1)")
 
 -- Create clips: V1 has clips at 0-100 and 200-400 (gap 100-200). A1 has clip at 0-300 and 400-500 (gap 300-400).
 local function insert_clip(id, track_id, start, dur)
     db:exec(string.format(
-        "INSERT INTO clips (id, project_id, clip_kind, track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator) " ..
-        "VALUES ('%s', 'proj1', 'timeline', '%s', %d, %d, 0, %d, 25, 1)",
-        id, track_id, start, dur, dur))
+        "INSERT INTO clips (id, project_id, clip_kind, track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, created_at, modified_at) " ..
+        "VALUES ('%s', 'proj1', 'timeline', '%s', %d, %d, 0, %d, 25, 1, 1, %d, %d)",
+        id, track_id, start, dur, dur, now, now))
 end
 
 insert_clip("clip_v1a", "track_v1", 0, 100)

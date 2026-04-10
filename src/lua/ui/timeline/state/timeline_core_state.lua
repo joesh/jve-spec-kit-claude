@@ -48,7 +48,13 @@ end
 --- Recompute gap clips for all tracks.
 -- Strips existing gap clips, recomputes from media clip positions, appends.
 -- Called after loading clips from DB or after any mutation changes clip positions.
-local function recompute_gap_clips()
+--
+-- When `affected_track_ids` is nil: rebuild gaps for all tracks (required
+-- on sequence init/load). When provided as a set `{[track_id]=true, ...}`:
+-- only strip + recompute gaps on those tracks — gaps on other tracks keep
+-- their existing IDs and positions, so edge selections pointing at those
+-- tracks' gaps stay valid without migration.
+local function recompute_gap_clips(affected_track_ids)
     local clips = data.state.clips
     local tracks = data.state.tracks
     if not clips or not tracks or #tracks == 0 then return end
@@ -62,33 +68,47 @@ local function recompute_gap_clips()
         return
     end
 
-    -- Strip existing gap clips, remembering old gap IDs for edge selection migration
+    local scoped = type(affected_track_ids) == "table"
+
+    -- Partition clips:
+    --   kept: clips we're keeping as-is (media clips on any track + gap clips
+    --         on tracks NOT in affected_track_ids)
+    --   media_for_scope: media clips on affected tracks (used to recompute gaps)
+    -- old_gap_tracks remembers gap IDs we're destroying so edge selections
+    -- can be migrated to the nearest replacement.
     local old_gap_tracks = {}
-    local media_only = {}
+    local kept = {}
+    local media_for_scope = {}
     for _, clip in ipairs(clips) do
+        local in_scope = (not scoped) or (clip.track_id and affected_track_ids[clip.track_id])
         if clip.clip_kind == "gap" then
-            old_gap_tracks[clip.id] = clip.track_id
-        else
-            table.insert(media_only, clip)
-        end
-    end
-    data.state.clips = media_only
-    clips = media_only
-
-    -- Build per-track sorted clip lists (media clips only)
-    local track_clips = {}
-    for _, clip in ipairs(clips) do
-        if clip.track_id then
-            local list = track_clips[clip.track_id]
-            if not list then
-                list = {}
-                track_clips[clip.track_id] = list
+            if in_scope then
+                old_gap_tracks[clip.id] = clip.track_id
+                -- drop: will be rebuilt
+            else
+                table.insert(kept, clip)
             end
-            table.insert(list, clip)
+        else
+            table.insert(kept, clip)
+            if in_scope and clip.track_id then
+                table.insert(media_for_scope, clip)
+            end
         end
     end
+    data.state.clips = kept
+    clips = kept
 
-    -- Sort each track's clips by timeline_start
+    -- Build per-track sorted media lists for the tracks we're recomputing.
+    local track_clips = {}
+    for _, clip in ipairs(media_for_scope) do
+        local list = track_clips[clip.track_id]
+        if not list then
+            list = {}
+            track_clips[clip.track_id] = list
+        end
+        table.insert(list, clip)
+    end
+
     for _, list in pairs(track_clips) do
         table.sort(list, function(a, b)
             if a.timeline_start == b.timeline_start then
@@ -98,14 +118,14 @@ local function recompute_gap_clips()
         end)
     end
 
-    -- Compute gaps for each track and append to clip list
-    -- Build new gap lookup by track for edge selection migration
+    -- Recompute gaps for each in-scope track and append.
     local new_gaps_by_track = {}
     for _, track in ipairs(tracks) do
-        if track.id then
-            local sorted = track_clips[track.id] or {}
-            local gaps = gap_lifecycle.compute_gaps_for_track(track.id, sorted, seq_fr)
-            new_gaps_by_track[track.id] = gaps
+        local tid = track.id
+        if tid and ((not scoped) or affected_track_ids[tid]) then
+            local sorted = track_clips[tid] or {}
+            local gaps = gap_lifecycle.compute_gaps_for_track(tid, sorted, seq_fr)
+            new_gaps_by_track[tid] = gaps
             for _, gap in ipairs(gaps) do
                 table.insert(clips, gap)
             end
