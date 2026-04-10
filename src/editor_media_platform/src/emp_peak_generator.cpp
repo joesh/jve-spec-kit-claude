@@ -242,6 +242,32 @@ static PeakBuffer AllocatePeakBuffer(int64_t total_samples)
     return buf;
 }
 
+// Shrink an already-populated peak buffer so its level-0 span matches the
+// actual decoded sample count (rather than the duration_us * rate estimate
+// used to allocate the original buffer). Higher mipmap levels are left
+// unpopulated — BuildMipmaps will rebuild them from the copied level-0 data.
+//
+// Rationale: PeakGenerator sizes peak_buf up front from a container duration
+// estimate. For codecs/containers where duration_us overshoots the decoder's
+// real output (e.g. AAC/M4A priming with non-zero start_pts), the tail bins
+// are never written and would otherwise remain at their AllocatePeakBuffer
+// sentinel values (min=1, max=-1), polluting both the mipmap chain and the
+// written peak file.
+static void TrimPeakBufferToActualSamples(PeakBuffer& buf, int64_t actual_samples)
+{
+    PeakBuffer trimmed = AllocatePeakBuffer(actual_samples);
+    assert(trimmed.level_offsets[0] == 0 &&
+        "PeakGenerator: trimmed level 0 must start at offset 0");
+    assert(buf.level_offsets[0] == 0 &&
+        "PeakGenerator: source level 0 must start at offset 0");
+    assert(trimmed.bins_per_level[0] <= buf.bins_per_level[0] &&
+        "PeakGenerator: trim target must not exceed original bin count");
+
+    size_t copy_floats = trimmed.bins_per_level[0] * 2;
+    std::memcpy(trimmed.data.data(), buf.data.data(), copy_floats * sizeof(float));
+    buf = std::move(trimmed);
+}
+
 static void AccumulateSamplesToLevel0(PeakBuffer& buf,
                                        const float* audio,
                                        int64_t decoded_frames,
@@ -391,11 +417,26 @@ bool PeakGenerator::ProcessOneChunk(ChunkedJob& job)
     }
 
     auto pcm = pcm_result.value();
-    assert(pcm->data_f32() && "PeakGenerator::ProcessOneChunk: decoded PCM has null data");
 
     int64_t decoded_frames = static_cast<int64_t>(pcm->frames());
-    assert(decoded_frames > 0 &&
-        "PeakGenerator::ProcessOneChunk: decoder returned 0 frames");
+
+    // Reader contract (emp_reader.h): frames()==0 on a successful Result
+    // means EOF, not an error. Container duration_us routinely overshoots
+    // the decoder's real output (AAC priming, BWF padding, codec rounding),
+    // so this is reachable for normal files. Treat as clean end-of-stream:
+    // leave decode_position and progress_samples at their last-successful
+    // values so FinalizeJob sees the true actual-decoded count and can
+    // trim the peak buffer accordingly.
+    if (decoded_frames == 0) {
+        JVE_LOG_EVENT(Media,
+            "PeakGenerator: early EOF at %lld/%lld for %s",
+            (long long)job.decode_position,
+            (long long)job.total_samples,
+            job.media_id.c_str());
+        return false;
+    }
+
+    assert(pcm->data_f32() && "PeakGenerator::ProcessOneChunk: decoded PCM has null data");
 
     int64_t frames_to_use = std::min(decoded_frames, job.total_samples - job.decode_position);
     assert(frames_to_use > 0 &&
@@ -418,8 +459,21 @@ bool PeakGenerator::ProcessOneChunk(ChunkedJob& job)
 
 void PeakGenerator::FinalizeJob(ChunkedJob& job)
 {
-    assert(job.progress_samples.load() > 0 &&
-        "PeakGenerator::FinalizeJob: no samples were processed");
+    // Authoritative actual-decoded count. decode_position may transiently
+    // exceed total_samples when a chunk over-delivers (clamped via min).
+    // It may also fall short of total_samples when the decoder hits EOF
+    // before the duration estimate predicted (AAC priming etc.).
+    int64_t actual_samples = std::min(job.decode_position, job.total_samples);
+    assert(actual_samples > 0 &&
+        "PeakGenerator::FinalizeJob: no samples were decoded");
+
+    // If the decoder delivered fewer samples than the duration-based
+    // estimate, shrink the peak buffer so mipmaps and the written file
+    // contain no sentinel-init tail bins. See TrimPeakBufferToActualSamples.
+    if (actual_samples < job.total_samples) {
+        TrimPeakBufferToActualSamples(job.peak_buf, actual_samples);
+        job.total_samples = actual_samples;
+    }
 
     BuildMipmaps(job.peak_buf);
 
