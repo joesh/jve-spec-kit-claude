@@ -176,7 +176,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if not value or value == -math.huge then
             return
         end
-        ctx.global_min_edge_keys = ctx.global_min_edge_keys or {}
         if value > ctx.global_min_frames then
             ctx.global_min_frames = value
             ctx.global_min_edge_keys = {}
@@ -190,7 +189,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if not value or value == math.huge then
             return
         end
-        ctx.global_max_edge_keys = ctx.global_max_edge_keys or {}
         if value < ctx.global_max_frames then
             ctx.global_max_frames = value
             ctx.global_max_edge_keys = {}
@@ -204,9 +202,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- constraints independently: each edge clamps its own delta without
     -- affecting the others. Same-track roll edit points (2+ roll edges
     -- on one track) and all ripple edges share the global clamped delta.
+    --
+    -- Relies on analyze_selection having populated ctx.roll_edit_point_tracks;
+    -- every caller runs downstream of analyze_selection in the pipeline.
     local function is_multitrack_roll_edge(ctx, edge_info)
         return edge_info.trim_type == "roll"
-            and not (ctx.roll_edit_point_tracks and ctx.roll_edit_point_tracks[edge_info.track_id])
+            and not ctx.roll_edit_point_tracks[edge_info.track_id]
     end
 
     -- Record a constraint on one edge and, for non-multitrack-roll edges,
@@ -246,7 +247,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local delta_min, delta_max = compute_roll_constraint(edge_info, clip, ctx.original_states_map[edge_info.clip_id], neighbors, ctx.edited_clip_lookup)
         -- Roll edit points (multiple roll edges on same track) use global constraint.
         -- Multitrack roll (single roll edge per track) uses per-edge constraint only.
-        local is_edit_point = ctx.roll_edit_point_tracks and ctx.roll_edit_point_tracks[edge_info.track_id]
+        local is_edit_point = ctx.roll_edit_point_tracks[edge_info.track_id]
         if delta_min then
             ctx.per_edge_constraints[edge_key].min = math.max(ctx.per_edge_constraints[edge_key].min, delta_min)
             if is_edit_point then
@@ -288,13 +289,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- media during one command.
     local function fetch_media_for_clip(ctx, clip)
         if not clip.media_id then return nil end
-        if ctx.preloaded_media and ctx.preloaded_media[clip.media_id] then
-            return ctx.preloaded_media[clip.media_id]
-        end
+        local cached = ctx.preloaded_media[clip.media_id]
+        if cached then return cached end
         local media = require("models.media").load(clip.media_id, db)
-        if ctx.preloaded_media then
-            ctx.preloaded_media[clip.media_id] = media
-        end
+        ctx.preloaded_media[clip.media_id] = media
         return media
     end
 
@@ -605,30 +603,39 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
     end
 
-    local function assign_edge_tracks(ctx)
+    -- Derive the set of tracks that have clips in the bounded cache —
+    -- these are the "affected" tracks the ripple/roll can touch.
+    local function collect_affected_tracks_from_cache(ctx)
         assert(ctx.all_clips, "assign_edge_tracks: all_clips is nil")
-        ctx.clip_track_lookup = ctx.clip_track_lookup or {}
         ctx.affected_tracks = {}
-        ctx.selected_tracks = {}
         for _, clip in ipairs(ctx.all_clips) do
-            if clip.id and ctx.clip_track_lookup[clip.id] == nil then
-                ctx.clip_track_lookup[clip.id] = clip.track_id
-            end
-            if clip.track_id then
-                ctx.affected_tracks[clip.track_id] = true
-            end
+            assert(clip.track_id and clip.track_id ~= "",
+                string.format("assign_edge_tracks: clip %s missing track_id", tostring(clip.id)))
+            ctx.affected_tracks[clip.track_id] = true
         end
+    end
+
+    -- Fill in each edge_info's track_id from the cache if the caller
+    -- didn't provide it, record which tracks have a selected edge, and
+    -- normalize the edge_type bracket. Missing track_ids crash loudly.
+    local function finalize_edge_info_tracks(ctx)
         assert(ctx.edge_infos, "assign_edge_tracks: edge_infos is nil")
+        ctx.selected_tracks = {}
         for _, edge_info in ipairs(ctx.edge_infos) do
             if not edge_info.track_id then
                 edge_info.track_id = ctx.clip_track_lookup[edge_info.clip_id]
             end
-            assert(edge_info.track_id,
-                string.format("assign_edge_tracks: edge %s:%s missing track_id (clip_id=%s not in lookup?)",
-                    tostring(edge_info.clip_id), tostring(edge_info.edge_type), tostring(edge_info.clip_id)))
+            assert(edge_info.track_id, string.format(
+                "assign_edge_tracks: edge %s:%s missing track_id (clip_id=%s not in lookup?)",
+                tostring(edge_info.clip_id), tostring(edge_info.edge_type), tostring(edge_info.clip_id)))
             ctx.selected_tracks[edge_info.track_id] = true
             edge_info.normalized_edge = edge_utils.to_bracket(edge_info.edge_type)
         end
+    end
+
+    local function assign_edge_tracks(ctx)
+        collect_affected_tracks_from_cache(ctx)
+        finalize_edge_info_tracks(ctx)
     end
 
     -- Find the edge in ctx.edge_infos that matches the caller's
@@ -984,15 +991,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if not ctx.dry_run or not clip_id or not new_start then
             return
         end
-        ctx.preview_shifted_lookup = ctx.preview_shifted_lookup or {}
         if ctx.preview_shifted_lookup[clip_id] then
             return
         end
-        ctx.preview_shifted_clips = ctx.preview_shifted_clips or {}
         table.insert(ctx.preview_shifted_clips, {
             clip_id = clip_id,
             new_start_value = new_start,
-            new_duration = new_duration
+            new_duration = new_duration,
         })
         ctx.preview_shifted_lookup[clip_id] = true
     end
@@ -1009,6 +1014,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         ctx.track_ripple_start_frames = {}
         ctx.earliest_ripple_time = nil
         ctx.clips_marked_delete = {}
+        ctx.preview_shifted_lookup = {}
     end
 
     -- Multitrack roll delta: start from the raw user delta (not the
@@ -1121,14 +1127,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if not ctx.dry_run then
             return
         end
-        ctx.preview_affected_clips = ctx.preview_affected_clips or {}
         table.insert(ctx.preview_affected_clips, {
             clip_id = clip.id,
             new_start_value = clip.timeline_start,
             new_duration = clip.duration,
             edge_type = normalized_edge,
             raw_edge_type = edge_info.edge_type,
-            is_gap = clip.clip_kind == "gap"
+            is_gap = clip.clip_kind == "gap",
         })
     end
 
@@ -1353,9 +1358,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if global_shift ~= 0 then
             table.insert(blocks, {start_frames = global_start_frames, delta_frames = global_shift})
         end
-        for track_id, shift_frames in pairs(ctx.track_shift_amounts or {}) do
-            assert(type(shift_frames) == "number", "build_preview_shift_blocks: track shift must be integer for track " .. tostring(track_id))
-            local start_frames = ctx.track_ripple_start_frames and ctx.track_ripple_start_frames[track_id] or global_start_frames
+        for track_id, shift_frames in pairs(ctx.track_shift_amounts) do
+            assert(type(shift_frames) == "number",
+                "build_preview_shift_blocks: track shift must be integer for track " .. tostring(track_id))
+            local start_frames = ctx.track_ripple_start_frames[track_id] or global_start_frames
             if shift_frames ~= 0 and (shift_frames ~= global_shift or start_frames ~= global_start_frames) then
                 table.insert(blocks, {start_frames = start_frames, delta_frames = shift_frames, track_id = track_id})
             end
@@ -1476,7 +1482,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if max_left ~= -math.huge and desired < max_left then
             adjusted = max_left
             if blocker_key then
-                ctx.forced_clamped_edges = ctx.forced_clamped_edges or {}
                 ctx.forced_clamped_edges[blocker_key] = true
             end
         end
@@ -1640,7 +1645,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         duration_frames = clip.duration,
                     })
                 end
-            elseif ctx.clips_marked_delete and ctx.clips_marked_delete[id] then
+            elseif ctx.clips_marked_delete[id] then
                 table.insert(clip_mutations, clip_mutator.plan_delete(original))
             else
                 table.insert(clip_mutations, clip_mutator.plan_update(clip, original))
@@ -1754,7 +1759,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local order = {}
-        for _, mut in ipairs(ctx.planned_mutations or {}) do
+        for _, mut in ipairs(ctx.planned_mutations) do
             if type(mut) == "table" and mut.type and mut.clip_id and mut.type ~= "gap_preview" then
                 table.insert(order, {type = mut.type, clip_id = mut.clip_id})
             end
@@ -1767,7 +1772,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- payloads that CommandManager forwards to timeline_state so the
     -- view can update without a full reload.
     local function emit_timeline_mutations(ctx, seq_id)
-        for _, mut in ipairs(ctx.planned_mutations or {}) do
+        for _, mut in ipairs(ctx.planned_mutations) do
             if mut.type == "update" then
                 command_helper.add_update_mutation(ctx.command, seq_id, {
                     clip_id = mut.clip_id,
@@ -1830,7 +1835,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        for key in pairs(ctx.forced_clamped_edges or {}) do
+        for key in pairs(ctx.forced_clamped_edges) do
             if ctx.restored_blocker_keys[key] or not implicit_edge_keys[key] then
                 clamped_edges[key] = true
             end
@@ -1851,133 +1856,164 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return clamped_edges
     end
 
+    -- Build an accumulator that dedups preview edge entries by key.
+    -- If the same edge is added twice, later calls can only
+    -- upgrade the `is_limiter` flag from false to true.
+    local function make_edge_preview_accumulator()
+        local edges = {}
+        local by_key = {}
+        local function upsert(entry)
+            if not entry or not entry.edge_key then return end
+            local existing = by_key[entry.edge_key]
+            if existing then
+                if entry.is_limiter then existing.is_limiter = true end
+                return
+            end
+            by_key[entry.edge_key] = entry
+            table.insert(edges, entry)
+        end
+        return edges, by_key, upsert
+    end
+
+    -- Emit a preview entry for every edge the caller selected,
+    -- including the implicit gap edges inject_implicit_gap_edges
+    -- added for multitrack propagation.
+    local function preview_entries_for_selected_edges(ctx, upsert, clamped_edges)
+        for _, edge_info in ipairs(ctx.edge_infos) do
+            local raw_edge_type = edge_info.edge_type
+            local anchor_clip_id = edge_info.original_clip_id or edge_info.clip_id
+            if anchor_clip_id and raw_edge_type then
+                local edge_key = string.format("%s:%s",
+                    tostring(anchor_clip_id), tostring(raw_edge_type))
+                local source_key = build_edge_key(edge_info)
+                local applied = compute_applied_delta(ctx, source_key, edge_info)
+                local is_implicit = edge_info.is_implicit_injection == true
+                upsert({
+                    edge_key = edge_key,
+                    clip_id = anchor_clip_id,
+                    track_id = edge_info.track_id,
+                    raw_edge_type = raw_edge_type,
+                    normalized_edge = edge_info.normalized_edge or edge_utils.to_bracket(raw_edge_type),
+                    is_selected = not is_implicit,
+                    is_implied = is_implicit,
+                    is_limiter = clamped_edges[edge_key] == true,
+                    applied_delta_frames = applied or 0,
+                })
+            end
+        end
+    end
+
+    -- Find a clip id to anchor a preview edge on an unselected track
+    -- at the ripple boundary: prefer a gap clip that contains the
+    -- boundary frame, otherwise fall back to the nearest media clip.
+    local function anchor_clip_id_for_propagated_track(track_clips, boundary_frames, raw_edge_type)
+        for _, c in ipairs(track_clips) do
+            if c.clip_kind == "gap"
+                and c.timeline_start <= boundary_frames
+                and (c.timeline_start + c.duration) >= boundary_frames then
+                return c.id
+            end
+        end
+        return pick_gap_anchor_clip_id(track_clips, boundary_frames, raw_edge_type)
+    end
+
+    -- Emit a preview entry per unselected affected track (tracks that
+    -- ripple via propagation rather than a direct edge selection). The
+    -- entry anchors to the gap clip at the ripple boundary on that
+    -- track so the UI can render the implied edge correctly.
+    local function preview_entries_for_propagated_tracks(ctx, upsert, clamped_edges, lead_normalized, global_sign)
+        local boundary_default = ctx.earliest_ripple_time or 0
+        for track_id in pairs(ctx.affected_tracks) do
+            if not ctx.selected_tracks[track_id] then
+                local shift_frames = ctx.track_shift_amounts[track_id]
+                    or ctx.downstream_shift_frames or 0
+                if shift_frames ~= 0 then
+                    local desired = infer_implied_normalized_edge(
+                        lead_normalized, signum(shift_frames), global_sign)
+                    local boundary_frames = ctx.track_ripple_start_frames[track_id] or boundary_default
+                    local track_clips = ctx.track_clip_map[track_id] or {}
+                    local raw_edge_type = desired or "in"
+                    local anchor_clip_id = anchor_clip_id_for_propagated_track(
+                        track_clips, boundary_frames, raw_edge_type)
+                    if anchor_clip_id then
+                        local edge_key = string.format("%s:%s",
+                            tostring(anchor_clip_id), tostring(raw_edge_type))
+                        upsert({
+                            edge_key = edge_key,
+                            clip_id = anchor_clip_id,
+                            track_id = track_id,
+                            raw_edge_type = raw_edge_type,
+                            normalized_edge = desired or "in",
+                            is_selected = false,
+                            is_implied = true,
+                            is_limiter = clamped_edges[edge_key] == true,
+                            applied_delta_frames = shift_frames,
+                        })
+                    end
+                end
+            end
+        end
+    end
+
+    -- Emit preview entries for any limiter edge key that didn't already
+    -- get one via the selected/propagated loops. This catches blocker
+    -- edges recorded via forced_clamped_edges on clips the pipeline
+    -- didn't otherwise visit.
+    local function preview_entries_for_leftover_limiters(ctx, upsert, clamped_edges, edges_by_key)
+        for key in pairs(clamped_edges) do
+            if not edges_by_key[key] and type(key) == "string" then
+                local clip_id, edge_type = key:match("^(.*):([^:]+)$")
+                if clip_id and edge_type and clip_id ~= "" then
+                    local clip = ctx.clip_lookup[clip_id]
+                    local track_id = (clip and clip.track_id) or ctx.clip_track_lookup[clip_id]
+                    local shift_frames = (track_id and ctx.track_shift_amounts[track_id]) or 0
+                    upsert({
+                        edge_key = key,
+                        clip_id = clip_id,
+                        track_id = track_id,
+                        raw_edge_type = edge_type,
+                        normalized_edge = edge_utils.to_bracket(edge_type),
+                        is_selected = false,
+                        is_implied = true,
+                        is_limiter = true,
+                        applied_delta_frames = shift_frames,
+                    })
+                end
+            end
+        end
+    end
+
+    -- Build the full edge_preview payload the dry-run executor returns.
+    -- This is the structure the UI renders to show which edges moved,
+    -- which are implied, and which were clamped in red.
+    local function build_edge_preview_payload(ctx, clamped_edges)
+        local edges, by_key, upsert = make_edge_preview_accumulator()
+        local lead_normalized = nil
+        if ctx.lead_edge_entry then
+            lead_normalized = ctx.lead_edge_entry.normalized_edge
+                or edge_utils.to_bracket(ctx.lead_edge_entry.edge_type)
+        end
+        local global_sign = signum(ctx.clamped_delta_frames or 0)
+
+        preview_entries_for_selected_edges(ctx, upsert, clamped_edges)
+        preview_entries_for_propagated_tracks(ctx, upsert, clamped_edges, lead_normalized, global_sign)
+        preview_entries_for_leftover_limiters(ctx, upsert, clamped_edges, by_key)
+
+        return {
+            requested_delta_frames = ctx.delta_frames or 0,
+            clamped_delta_frames = ctx.clamped_delta_frames or 0,
+            edges = edges,
+            limiter_edge_keys = clamped_edges,
+        }
+    end
+
     local function finalize_execution(ctx)
         persist_undo_parameters(ctx)
 
         if ctx.dry_run then
             local clamped_edges = collect_clamped_edge_keys(ctx)
-
-                local function build_edge_preview_payload()
-                    local edge_preview = {
-                        requested_delta_frames = ctx.delta_frames or 0,
-                        clamped_delta_frames = ctx.clamped_delta_frames or 0,
-                        edges = {},
-                        limiter_edge_keys = clamped_edges
-                    }
-
-                    local edges_by_key = {}
-                    local function upsert(entry)
-                        if not entry or not entry.edge_key then
-                            return
-                        end
-                        local existing = edges_by_key[entry.edge_key]
-                        if existing then
-                            if entry.is_limiter then existing.is_limiter = true end
-                            return
-                        end
-                        edges_by_key[entry.edge_key] = entry
-                        table.insert(edge_preview.edges, entry)
-                    end
-
-                    local lead_normalized = nil
-                    if ctx.lead_edge_entry then
-                        lead_normalized = ctx.lead_edge_entry.normalized_edge
-                            or edge_utils.to_bracket(ctx.lead_edge_entry.edge_type)
-                    end
-                    local global_sign = signum(ctx.clamped_delta_frames or 0)
-
-                    -- Selected edges (and implicit gap edges injected on unselected tracks).
-                    for _, edge_info in ipairs(ctx.edge_infos or {}) do
-                        local raw_edge_type = edge_info.edge_type
-                        local anchor_clip_id = edge_info.original_clip_id or edge_info.clip_id
-                        if anchor_clip_id and raw_edge_type then
-                            local edge_key = string.format("%s:%s", tostring(anchor_clip_id), tostring(raw_edge_type))
-                            local source_key = build_edge_key(edge_info)
-                            local applied = compute_applied_delta(ctx, source_key, edge_info)
-                            local is_implicit = edge_info.is_implicit_injection == true
-                            upsert({
-                                edge_key = edge_key,
-                                clip_id = anchor_clip_id,
-                                track_id = edge_info.track_id,
-                                raw_edge_type = raw_edge_type,
-                                normalized_edge = edge_info.normalized_edge or edge_utils.to_bracket(raw_edge_type),
-                                is_selected = not is_implicit,
-                                is_implied = is_implicit,
-                                is_limiter = clamped_edges[edge_key] == true,
-                                applied_delta_frames = applied or 0
-                            })
-                        end
-                    end
-
-                    -- Implied edges from track shifts (Rule 8.5).
-                    -- With gap-as-clip, find the gap clip at the ripple boundary on each
-                    -- unselected track. Use the gap clip's edge for the implied display.
-                    local boundary_default = ctx.earliest_ripple_time or 0
-                    for track_id in pairs(ctx.affected_tracks or {}) do
-                        if track_id and not (ctx.selected_tracks and ctx.selected_tracks[track_id]) then
-                            local shift_frames = (ctx.track_shift_amounts and ctx.track_shift_amounts[track_id]) or ctx.downstream_shift_frames or 0
-                            if shift_frames ~= 0 then
-                                local desired = infer_implied_normalized_edge(lead_normalized, signum(shift_frames), global_sign)
-                                local boundary_frames = (ctx.track_ripple_start_frames and ctx.track_ripple_start_frames[track_id]) or boundary_default
-                                local track_clips = ctx.track_clip_map and ctx.track_clip_map[track_id] or {}
-                                -- Find gap clip at boundary, or fall back to nearest media clip
-                                local anchor_clip_id = nil
-                                local raw_edge_type = desired or "in"
-                                for _, c in ipairs(track_clips) do
-                                    if c.clip_kind == "gap" and c.timeline_start <= boundary_frames
-                                        and (c.timeline_start + c.duration) >= boundary_frames then
-                                        anchor_clip_id = c.id
-                                        break
-                                    end
-                                end
-                                if not anchor_clip_id then
-                                    anchor_clip_id = pick_gap_anchor_clip_id(track_clips, boundary_frames, raw_edge_type)
-                                end
-                                if anchor_clip_id then
-                                    local edge_key = string.format("%s:%s", tostring(anchor_clip_id), tostring(raw_edge_type))
-                                    upsert({
-                                        edge_key = edge_key,
-                                        clip_id = anchor_clip_id,
-                                        track_id = track_id,
-                                        raw_edge_type = raw_edge_type,
-                                        normalized_edge = desired or "in",
-                                        is_selected = false,
-                                        is_implied = true,
-                                        is_limiter = clamped_edges[edge_key] == true,
-                                        applied_delta_frames = shift_frames
-                                    })
-                                end
-                            end
-                        end
-                    end
-
-                    -- Ensure every limiter edge has a render entry.
-                    for key in pairs(clamped_edges or {}) do
-                        if not edges_by_key[key] and type(key) == "string" then
-                            local clip_id, edge_type = key:match("^(.*):([^:]+)$")
-                            if clip_id and edge_type and clip_id ~= "" then
-                                local clip = (ctx.clip_lookup and ctx.clip_lookup[clip_id]) or nil
-                                local track_id = (clip and clip.track_id) or (ctx.clip_track_lookup and ctx.clip_track_lookup[clip_id]) or nil
-                                local shift_frames = (track_id and ctx.track_shift_amounts and ctx.track_shift_amounts[track_id]) or 0
-                                upsert({
-                                    edge_key = key,
-                                    clip_id = clip_id,
-                                    track_id = track_id,
-                                    raw_edge_type = edge_type,
-                                    normalized_edge = edge_utils.to_bracket(edge_type),
-                                    is_selected = false,
-                                    is_implied = true,
-                                    is_limiter = true,
-                                    applied_delta_frames = shift_frames
-                                })
-                            end
-                        end
-                    end
-
-                    return edge_preview
-                end
-    
-            local clamped_ms = frame_utils.frames_to_ms(ctx.clamped_delta_frames, ctx.seq_fps_num, ctx.seq_fps_den)
+            local clamped_ms = frame_utils.frames_to_ms(
+                ctx.clamped_delta_frames, ctx.seq_fps_num, ctx.seq_fps_den)
             return true, {
                 planned_mutations = ctx.planned_mutations,
                 affected_clips = ctx.preview_affected_clips,
@@ -1987,7 +2023,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 clamped_delta_frames = ctx.clamped_delta_frames,
                 materialized_gaps = ctx.materialized_gap_ids,
                 clamped_edges = clamped_edges,
-                edge_preview = build_edge_preview_payload()
+                edge_preview = build_edge_preview_payload(ctx, clamped_edges),
             }
         end
 
@@ -2214,31 +2250,31 @@ compute_neighbor_bounds = function(all_clips, original_state, clip_id)
 end
 
 ensure_neighbor_bounds = function(ctx, clip_id)
-    ctx.neighbor_bounds_cache = ctx.neighbor_bounds_cache or {}
     if ctx.neighbor_bounds_cache[clip_id] then
         return ctx.neighbor_bounds_cache[clip_id]
     end
 
-    local original = ctx.original_states_map[clip_id] or ctx.base_clips[clip_id] or (ctx.clip_lookup and ctx.clip_lookup[clip_id])
-    if not original then
-        error(string.format("ensure_neighbor_bounds: missing original state for clip %s", tostring(clip_id)))
-    end
-    if not original.track_id then
-        error(string.format("ensure_neighbor_bounds: clip %s missing track_id", tostring(clip_id)))
-    end
+    local original = ctx.original_states_map[clip_id]
+        or ctx.base_clips[clip_id]
+        or ctx.clip_lookup[clip_id]
+    assert(original, string.format(
+        "ensure_neighbor_bounds: missing original state for clip %s", tostring(clip_id)))
+    assert(original.track_id, string.format(
+        "ensure_neighbor_bounds: clip %s missing track_id", tostring(clip_id)))
 
-    local prev_end_frames, next_start_frames, prev_id, next_id = compute_neighbor_bounds(ctx.all_clips, original, clip_id)
+    local prev_end_frames, next_start_frames, prev_id, next_id =
+        compute_neighbor_bounds(ctx.all_clips, original, clip_id)
     ctx.neighbor_bounds_cache[clip_id] = {
         prev_end_frames = prev_end_frames,
         next_start_frames = next_start_frames,
         prev_id = prev_id,
-        next_id = next_id
+        next_id = next_id,
     }
     return ctx.neighbor_bounds_cache[clip_id]
 end
 
 should_negate_edge = function(ctx, edge_key)
-    return ctx.edge_will_negate and ctx.edge_will_negate[edge_key]
+    return ctx.edge_will_negate[edge_key]
 end
 
 return M
