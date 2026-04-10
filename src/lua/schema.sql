@@ -387,6 +387,7 @@ WHEN EXISTS (
 )
 BEGIN
     SELECT CASE
+    -- Upstream neighbor extends into NEW's range?
     -- coalesce to NEW.start so "no upstream" resolves as adjacent (not overlapping)
     WHEN coalesce((
         SELECT (c.timeline_start_frame + c.duration_frames) FROM clips c
@@ -396,6 +397,7 @@ BEGIN
         ORDER BY c.timeline_start_frame DESC LIMIT 1
     ), NEW.timeline_start_frame) > NEW.timeline_start_frame
         THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
+    -- Any clip starts inside NEW's range?
     WHEN EXISTS (
         SELECT 1 FROM clips c
         WHERE c.track_id = NEW.track_id
