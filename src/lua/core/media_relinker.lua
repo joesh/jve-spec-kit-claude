@@ -763,10 +763,13 @@ local function inject_segment_candidates(media_info, candidates, segment_index, 
 end
 
 --- Report progress for one processed media to the caller's progress_cb.
--- Emits one log line per successful relink (matching current UX), plus a
--- media-level "(no candidates)" line when the media had zero candidates.
--- Failed and ambiguous clips produce no per-clip progress lines at this
--- layer; that gap is tracked separately.
+-- Emits one log line per clip outcome so the user can see what happened:
+--   [OK]    clip → file            (relinked)
+--   [FAIL]  clip (reason)          (no candidate fit)
+--   [AMBIG] clip (N candidates)    (multiple candidates — needs user choice)
+-- Also emits a media-level "(no candidates)" summary when the whole media
+-- yielded zero candidates, so the user sees a single line instead of one
+-- [FAIL] line per clip on that media.
 local function report_media_progress(progress_cb, media_idx, total_media, media_info, candidates, media_results)
     if not progress_cb then return end
 
@@ -781,12 +784,27 @@ local function report_media_progress(progress_cb, media_idx, total_media, media_
 
     for _, entry in ipairs(media_results.relinked) do
         progress_cb(pct, status_line,
-            string.format("[OK] %s → %s", clip_names[entry.clip_id], get_filename(entry.new_path)))
+            string.format("[OK] %s → %s",
+                clip_names[entry.clip_id], get_filename(entry.new_path)))
     end
 
+    -- Whole-media miss: one compact line instead of a [FAIL] per clip.
     if #candidates == 0 then
         progress_cb(pct, nil,
             string.format("[--] %s (no candidates)", media_info.media_name))
+        return
+    end
+
+    for _, entry in ipairs(media_results.failed) do
+        progress_cb(pct, status_line,
+            string.format("[FAIL] %s (%s)",
+                clip_names[entry.clip_id], entry.reason))
+    end
+
+    for _, entry in ipairs(media_results.ambiguous) do
+        progress_cb(pct, status_line,
+            string.format("[AMBIG] %s (%d candidates)",
+                clip_names[entry.clip_id], #entry.candidates))
     end
 end
 
