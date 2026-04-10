@@ -11,6 +11,7 @@ local Command = require("command")
 local Clip = require("models.clip")
 local ripple_layout = require("tests.helpers.ripple_layout")
 local validator = require("tests.helpers.project_validator")
+local timeline_state = require("ui.timeline.timeline_state")
 
 local SEQ_FPS_NUM = 25
 local SEQ_FPS_DEN = 1
@@ -51,6 +52,10 @@ local function fix_source_out(layout, clip_id, source_in, duration_frames)
     stmt:bind_value(2, clip_id)
     assert(stmt:exec())
     stmt:finalize()
+    -- Re-sync timeline_state: direct SQL bypassed the in-memory model.
+    -- batch_ripple_edit now reads clips from timeline_state, so stale
+    -- source_out values here would cause unit conversion math to fail.
+    timeline_state.init(layout.sequence_id, layout.project_id)
     return source_out
 end
 

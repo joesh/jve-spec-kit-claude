@@ -347,6 +347,11 @@ function M.create(opts)
 
     command_manager.init(cfg.sequence_id, cfg.project_id)
 
+    -- Timeline state is the authoritative in-memory source for the active
+    -- sequence in production; initialize it here so tests exercise the same
+    -- code path as the running app (batch_ripple_edit reads clips from it).
+    timeline_state.init(cfg.sequence_id, cfg.project_id)
+
     local layout = {
         db = database.get_connection(),  -- Exposed for tests that need raw SQL
         db_path = db_path,

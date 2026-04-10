@@ -253,7 +253,7 @@ function M.run(test)
     local drag_edges, delta = parse_drag(test.drag)
     local after_tracks = parse_timeline(test.after)
 
-    -- Build layout
+    -- Build layout (auto-inits timeline_state — matches production path)
     local layout, clip_to_track = build_layout(before_tracks, track_order, db_path)
 
     -- Verify before-state

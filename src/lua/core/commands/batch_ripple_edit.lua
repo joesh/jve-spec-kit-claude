@@ -374,120 +374,39 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     local function build_clip_cache(ctx)
-        if type(ctx.preloaded_clip_snapshot) == "table" then
-            assert(type(ctx.timeline_active_region) == "table",
-                "build_clip_cache: __preloaded_clip_snapshot requires __timeline_active_region")
-            local snapshot = ctx.preloaded_clip_snapshot
-            assert(type(snapshot.clips) == "table", "build_clip_cache: __preloaded_clip_snapshot.clips is required")
-            assert(type(snapshot.clip_lookup) == "table", "build_clip_cache: __preloaded_clip_snapshot.clip_lookup is required")
-            assert(type(snapshot.track_clip_map) == "table", "build_clip_cache: __preloaded_clip_snapshot.track_clip_map is required")
-            if ctx.dry_run then
-                ctx.all_clips = snapshot.clips
-                -- Shallow-copy clip_lookup so gap registration doesn't
-                -- pollute the shared snapshot across preview/commit cycles.
-                local lookup_copy = {}
-                for k, v in pairs(snapshot.clip_lookup) do lookup_copy[k] = v end
-                ctx.clip_lookup = lookup_copy
-                ctx.clip_track_lookup = snapshot.clip_track_lookup
-                ctx.track_clip_map = snapshot.track_clip_map
-                ctx.track_clip_positions = snapshot.track_clip_positions
-                return
-            end
-
-            -- Execute mode: treat the snapshot as a *clip universe*, not as an
-            -- authoritative source of clip positions. Snapshot clips can reflect
-            -- transient preview shifts; load current persisted clips from the DB.
-            ctx.all_clips = {}
-            ctx.clip_lookup = {}
-            ctx.clip_track_lookup = {}
-            ctx.track_clip_map = {}
-
-            local clip_ids = {}
-            for clip_id, _ in pairs(snapshot.clip_lookup) do
-                if clip_id then
-                    table.insert(clip_ids, clip_id)
-                end
-            end
-            for _, snap_clip in ipairs(snapshot.clips) do
-                local clip_id = snap_clip and snap_clip.id
-                if clip_id and snapshot.clip_lookup[clip_id] == nil then
-                    table.insert(clip_ids, clip_id)
-                end
-            end
-
-            for _, clip_id in ipairs(clip_ids) do
-                local is_gap = type(clip_id) == "string" and clip_id:find("^gap_")
-                local clip = is_gap and snapshot.clip_lookup[clip_id] or Clip.load_optional(clip_id)
-                if clip then
-                    table.insert(ctx.all_clips, clip)
-                    ctx.clip_lookup[clip_id] = clip
-                    ctx.clip_track_lookup[clip_id] = clip.track_id
-                    ctx.track_clip_map[clip.track_id] = ctx.track_clip_map[clip.track_id] or {}
-                    table.insert(ctx.track_clip_map[clip.track_id], clip)
-                end
-            end
-
-            for _, track_clips in pairs(ctx.track_clip_map) do
-                table.sort(track_clips, function(a, b)
-                    assert(type(a.timeline_start) == "number", "build_clip_cache: clip a.timeline_start must be integer")
-                    assert(type(b.timeline_start) == "number", "build_clip_cache: clip b.timeline_start must be integer")
-                    return a.timeline_start < b.timeline_start
-                end)
-            end
-            return
-        end
-
-        -- UI-only optimization: prefer the in-memory timeline state for the
-        -- active sequence to avoid reloading thousands of clips from SQLite.
-        local use_timeline_state_cache = ctx.args.__use_timeline_state_cache == true
-        local timeline_state = use_timeline_state_cache and package.loaded["ui.timeline.timeline_state"] or nil
-        if ctx.dry_run and timeline_state
+        -- Single authoritative source: the in-memory timeline_state for the
+        -- active sequence. Reads media clips + pre-computed gap clips from
+        -- per-track indexes — no DB scan, no per-clip loads.
+        local timeline_state = package.loaded["ui.timeline.timeline_state"]
+        assert(timeline_state
             and timeline_state.get_sequence_id
             and timeline_state.get_sequence_id() == ctx.sequence_id
             and timeline_state.get_all_tracks
-            and timeline_state.get_track_clip_index then
-            ctx.clip_lookup = {}
-            ctx.clip_track_lookup = {}
-            ctx.track_clip_map = {}
-            ctx.all_clips = {}
-            for _, track in ipairs(timeline_state.get_all_tracks()) do
-                local tid = track and track.id
-                if tid then
-                    local track_clips = timeline_state.get_track_clip_index(tid)
-                    if track_clips and #track_clips > 0 then
-                        ctx.track_clip_map[tid] = track_clips
-                        for _, clip in ipairs(track_clips) do
-                            if clip and clip.id then
-                                table.insert(ctx.all_clips, clip)
-                                ctx.clip_lookup[clip.id] = clip
-                                ctx.clip_track_lookup[clip.id] = clip.track_id
-                            end
+            and timeline_state.get_track_clip_index,
+            string.format("build_clip_cache: timeline_state must be active for sequence %s",
+                tostring(ctx.sequence_id)))
+
+        ctx.all_clips = {}
+        ctx.clip_lookup = {}
+        ctx.clip_track_lookup = {}
+        ctx.track_clip_map = {}
+
+        for _, track in ipairs(timeline_state.get_all_tracks()) do
+            local tid = track and track.id
+            if tid then
+                local track_clips = timeline_state.get_track_clip_index(tid)
+                if track_clips and #track_clips > 0 then
+                    ctx.track_clip_map[tid] = track_clips
+                    for _, clip in ipairs(track_clips) do
+                        if clip and clip.id then
+                            table.insert(ctx.all_clips, clip)
+                            ctx.clip_lookup[clip.id] = clip
+                            ctx.clip_track_lookup[clip.id] = clip.track_id
                         end
                     end
                 end
             end
-            return
         end
-
-        ctx.all_clips = database.load_clips(ctx.sequence_id)
-        assert(ctx.all_clips, string.format("build_clip_cache: Failed to load clips for sequence %s", ctx.sequence_id))
-
-        -- Compute and inject gap clips (in-memory only, not persisted)
-        local seq_fps = { fps_numerator = ctx.seq_fps_num, fps_denominator = ctx.seq_fps_den }
-        local track_media = build_track_clip_map(ctx.all_clips)
-        for track_id, sorted_clips in pairs(track_media) do
-            local gaps = gap_lifecycle.compute_gaps_for_track(track_id, sorted_clips, seq_fps)
-            for _, gap in ipairs(gaps) do
-                table.insert(ctx.all_clips, gap)
-                log.detail("build_clip_cache: computed gap %s (start=%d dur=%d)", gap.id, gap.timeline_start, gap.duration)
-            end
-        end
-
-        ctx.clip_lookup = {}
-        for _, clip in ipairs(ctx.all_clips) do
-            ctx.clip_lookup[clip.id] = clip
-        end
-        ctx.track_clip_map = build_track_clip_map(ctx.all_clips)
     end
 
     local function prime_neighbor_bounds_cache(ctx)
@@ -695,33 +614,35 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             ctx.original_states_map[clip_id] = command_helper.capture_clip_state(base)
         end
 
-        if ctx.dry_run then
-            assert(base.rate and base.rate.fps_numerator and base.rate.fps_denominator,
-                "load_clip_for_edit: base clip missing rate metadata")
-            clip = {
-                id = base.id,
-                project_id = base.project_id,
-                clip_kind = base.clip_kind,
-                owner_sequence_id = base.owner_sequence_id or base.track_sequence_id,
-                track_sequence_id = base.track_sequence_id or base.owner_sequence_id,
-                master_clip_id = base.master_clip_id,
-                track_id = base.track_id,
-                media_id = base.media_id,
-                timeline_start = base.timeline_start,
-                duration = base.duration,
-                source_in = base.source_in,
-                source_out = base.source_out,
-                name = base.name,
-                enabled = base.enabled,
-                rate = base.rate,
-                fps_numerator = base.fps_numerator or base.rate.fps_numerator,
-                fps_denominator = base.fps_denominator or base.rate.fps_denominator,
-                created_at = base.created_at,
-                modified_at = base.modified_at,
-            }
-        else
-            clip = base
-        end
+        -- Always copy. The base clip comes from timeline_state (the
+        -- authoritative in-memory model) and must never be mutated
+        -- directly — retries and multi-pass constraint math depend on
+        -- reloading the original state from `base`. The command context
+        -- owns the mutable scratch copy; final mutations persist via
+        -- apply_mutations.
+        assert(base.rate and base.rate.fps_numerator and base.rate.fps_denominator,
+            "load_clip_for_edit: base clip missing rate metadata")
+        clip = {
+            id = base.id,
+            project_id = base.project_id,
+            clip_kind = base.clip_kind,
+            owner_sequence_id = base.owner_sequence_id or base.track_sequence_id,
+            track_sequence_id = base.track_sequence_id or base.owner_sequence_id,
+            master_clip_id = base.master_clip_id,
+            track_id = base.track_id,
+            media_id = base.media_id,
+            timeline_start = base.timeline_start,
+            duration = base.duration,
+            source_in = base.source_in,
+            source_out = base.source_out,
+            name = base.name,
+            enabled = base.enabled,
+            rate = base.rate,
+            fps_numerator = base.fps_numerator or base.rate.fps_numerator,
+            fps_denominator = base.fps_denominator or base.rate.fps_denominator,
+            created_at = base.created_at,
+            modified_at = base.modified_at,
+        }
 
         ctx.modified_clips[clip_id] = clip
         return clip
