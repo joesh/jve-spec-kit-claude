@@ -158,14 +158,47 @@ local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_c
 
     assert(type(mutations) == "table",
         "timeline_state.apply_mutations: mutations must be a table, got " .. type(mutations))
+
+    -- Build the affected-track set from mutation payloads BEFORE applying.
+    -- Updates, inserts, and bulk_shifts carry track_id directly. Deletes
+    -- carry only clip_id; resolve via clip_lookup before clip_state
+    -- removes the row. If any track can't be resolved, fall back to a
+    -- full recompute (correct but slower).
+    local affected_tracks = {}
+    local full_recompute = false
+    local function note_track(tid)
+        if tid and tid ~= "" then affected_tracks[tid] = true
+        else full_recompute = true end
+    end
+    if mutations.updates then
+        for _, m in ipairs(mutations.updates) do note_track(m.track_id) end
+    end
+    if mutations.inserts then
+        for _, m in ipairs(mutations.inserts) do note_track(m.track_id) end
+    end
+    if mutations.bulk_shifts then
+        for _, m in ipairs(mutations.bulk_shifts) do note_track(m.track_id) end
+    end
+    if mutations.deletes then
+        for _, clip_id in ipairs(mutations.deletes) do
+            local existing = clips.get_by_id(clip_id)
+            note_track(existing and existing.track_id)
+        end
+    end
+
     local changed = clips.apply_mutations(mutations, callback)
-    -- Recompute gap clips after any mutation that changes clip positions.
+
+    -- Recompute gap clips for affected tracks (scoped) after position changes.
     -- Gaps are derived state — always recomputed, never mutated directly.
     if changed then
         local core_state = require("ui.timeline.state.timeline_core_state")
         assert(core_state.recompute_gap_clips,
             "timeline_state.apply_mutations: core_state.recompute_gap_clips must exist")
-        core_state.recompute_gap_clips()
+        if full_recompute or next(affected_tracks) == nil then
+            core_state.recompute_gap_clips()
+        else
+            core_state.recompute_gap_clips(affected_tracks)
+        end
         clips.invalidate_indexes()
     end
     Signals.emit("timeline_mutations_applied", mutations, changed)
