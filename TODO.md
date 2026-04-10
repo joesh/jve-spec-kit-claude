@@ -71,6 +71,14 @@ Move remaining if/elseif handlers (arrows, Tab, E, Comma/Period, F9/F10) to TOML
 - [ ] **Edge-release latency** — NOT STARTED. `TimelineActiveRegion` has on-demand snapshot builds but no preloading/caching. Header TODOs unfilled. Needs design decision on when to preload (playhead move vs drag start) and perf target.
 - [ ] **Command isolation enforcement** — PARTIAL (60%). Depth tracking + undo grouping implemented. Missing: hard max-depth assert, re-entrancy guards. Current approach is soft guardrails, not fail-fast.
 
+### Relink Deferred Cleanups (2026-04-09)
+
+Scoped out of the relink review (commits `08ce227`, `bfbb51f`, `28c730f`). Inline `TODO(relink)` / `TODO(command_schema)` markers exist at each code site.
+
+- [ ] **Wrap `relink_media_batch` results instead of mutating** — `media_relink_dialog.lua` (~line 428) tacks `folder_priority` onto the struct returned by `relink_media_batch`, bending that function's documented contract (`{relinked, failed, ambiguous, new_media}`). Cleaner: return `{ relink = results, folder_priority = ... }` from the dialog and update `show_relink_dialog.lua` (the assertion at ~line 73) to unpack. No user-visible bug; schema hygiene only.
+- [ ] **Rational-rate rounding in `compute_tc_offset`** — `media_relinker.lua` (~line 391) converts TC between frame rates via integer frames (`math.floor(... + 0.5)`). At NTSC fractional pairs (23.976 vs 24, 29.97 vs 30) this introduces ±1 frame drift over long durations. The caller's `math.abs(offset) > 1` tolerance absorbs it in practice. Fix: use the Rational library directly instead of math.floor. Flag if users report off-by-one TC mismatches at rational rates.
+- [ ] **Deep-copy or factory defaults in `command_schema.resolve_default`** — `command_schema.lua` (~line 144) currently shallow-copies table defaults, so a SPEC declaring `default = { nested = { key = 1 } }` would still alias the inner `nested` table across invocations. No current caller uses nested table defaults. Fix options: (a) deep copy, (b) support `default = function() return {} end` factory form.
+
 ## Test SQL Isolation Refactoring (2026-01-20)
 
 **Goal**: Refactor tests to prefer model methods over raw SQL.

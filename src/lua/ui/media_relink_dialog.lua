@@ -425,6 +425,12 @@ function M.show(media_list, parent_window, opts)
         }
         local results = media_relinker.relink_media_batch(media_infos, options, progress.update)
         progress.flush()
+        -- TODO(relink): wrap results instead of mutating. Tacking folder_priority
+        -- onto relink_media_batch's return struct bends that function's documented
+        -- contract ({relinked, failed, ambiguous, new_media}). Cleaner: return
+        -- { relink = results, folder_priority = ... } from this dialog and update
+        -- show_relink_dialog.lua (the assertion at ~line 73) to unpack.
+        -- Tracked in TODO.md under "Still Open".
         results.folder_priority = folder_priority
 
         if #results.relinked == 0 then

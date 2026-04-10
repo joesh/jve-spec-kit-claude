@@ -393,7 +393,14 @@ function M.compute_tc_offset(stored_value, stored_rate, candidate_value, candida
     assert(type(candidate_value) == "number", "compute_tc_offset: candidate_value required")
     assert(type(candidate_rate) == "number" and candidate_rate > 0, "compute_tc_offset: candidate_rate must be positive")
 
-    -- Rescale candidate to stored_rate for comparison
+    -- Rescale candidate to stored_rate for comparison.
+    -- TODO(relink): rational-rate rounding. Converting via integer frames at
+    -- NTSC fractional pairs (e.g. 23.976 vs 24, 29.97 vs 30) introduces ±1
+    -- frame drift over long durations. The caller's `math.abs(offset) > 1`
+    -- tolerance in find_candidates_for_media absorbs this in practice, but a
+    -- proper fix would use the Rational library directly instead of going
+    -- through math.floor. Flag if users report off-by-one TC mismatches at
+    -- rational rates. Tracked in TODO.md under "Still Open".
     local candidate_rescaled
     if stored_rate == candidate_rate then
         candidate_rescaled = candidate_value

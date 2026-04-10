@@ -141,6 +141,14 @@ end
 -- Resolve a schema default into a value that is safe to hand to one invocation.
 -- Tables are shallow-copied so separate invocations don't alias (and mutate) a
 -- shared default object. Scalars pass through unchanged.
+--
+-- TODO(command_schema): shallow-copy only. If a future SPEC declares
+-- `default = { nested = { key = 1 } }`, invocations will still share the inner
+-- `nested` table and a mutation in one would bleed into the next. No current
+-- caller uses nested table defaults so this is deferred. Fix options:
+--   (a) deep copy (simple but quietly expensive for large defaults), or
+--   (b) support a factory form: `default = function() return {} end`.
+-- Tracked in TODO.md under "Still Open".
 local function resolve_default(d)
     if type(d) ~= "table" then
         return d
