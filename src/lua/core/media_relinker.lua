@@ -4,7 +4,7 @@
 -- - Enumerate project media (find_offline_media, find_project_media,
 --   find_media_for_clips)
 -- - Scan search directories for candidate files (scan_directory,
---   build_candidate_cache)
+--   build_candidate_index)
 -- - Probe candidates via ffprobe for TC + media properties (probe_file)
 -- - Per-media candidate matching: filename, TC, resolution, fps
 --   (find_candidates_for_media)
@@ -75,7 +75,7 @@ local function scan_directory(root_dir, extensions)
     assert(handle, string.format("scan_directory: io.popen failed for %s", cmd))
     for line in handle:lines() do
         if line and line ~= "" then
-            table.insert(results, line)
+            results[#results + 1] = line
         end
     end
     handle:close()
@@ -84,32 +84,34 @@ local function scan_directory(root_dir, extensions)
     return results
 end
 
-local function build_candidate_cache(search_paths, extensions)
-    local candidate_files = {}
-    local candidate_index = {}
+--- Scan every search path and build a basename-lower → [absolute paths] index.
+-- The index is the only thing the matcher needs; a flat file list is not built.
+-- @param search_paths table Non-empty array of directories to scan
+-- @param extensions table Non-empty set of extensions (e.g., {mov=true, wav=true})
+-- @return table {basename_lower → [path, ...]}
+local function build_candidate_index(search_paths, extensions)
+    assert(type(search_paths) == "table" and #search_paths > 0,
+        "build_candidate_index: search_paths must be a non-empty array")
+    assert(type(extensions) == "table" and next(extensions) ~= nil,
+        "build_candidate_index: extensions must be a non-empty set")
 
-    if not search_paths or not extensions or next(extensions) == nil then
-        return candidate_files, candidate_index
-    end
+    local candidate_index = {}
 
     for _, search_path in ipairs(search_paths) do
         local files = scan_directory(search_path, extensions)
         for _, file_path in ipairs(files) do
-            table.insert(candidate_files, file_path)
             local filename = get_filename(file_path)
-            if filename then
-                local key = filename:lower()
-                local bucket = candidate_index[key]
-                if not bucket then
-                    bucket = {}
-                    candidate_index[key] = bucket
-                end
-                table.insert(bucket, file_path)
+            local key = filename:lower()
+            local bucket = candidate_index[key]
+            if not bucket then
+                bucket = {}
+                candidate_index[key] = bucket
             end
+            bucket[#bucket + 1] = file_path
         end
     end
 
-    return candidate_files, candidate_index
+    return candidate_index
 end
 
 
@@ -254,6 +256,9 @@ end
 -- @param project_id string Project ID to check
 -- @return table Array of offline media records
 function M.find_offline_media(db, project_id)
+    assert(db, "find_offline_media: db required")
+    assert(project_id, "find_offline_media: project_id required")
+
     local Media = require("models.media")
 
     local stmt = db:prepare([[
@@ -275,7 +280,7 @@ function M.find_offline_media(db, project_id)
             if is_proxy_path(media.file_path) then
                 proxy_count = proxy_count + 1
             else
-                table.insert(offline, media)
+                offline[#offline + 1] = media
             end
         end
     end
@@ -371,7 +376,7 @@ function M.find_media_for_clips(db, clip_ids)
 end
 
 -- =============================================================================
--- RelinkClips: Pure Algorithm Functions (T006-T008)
+-- Pure algorithm functions (TC math, containment, segment matching, filtering)
 -- =============================================================================
 
 --- Compute TC offset between stored and candidate start timecodes.
@@ -628,7 +633,7 @@ function M.find_candidates_for_media(media_info, candidate_index, matching_rules
 end
 
 -- =============================================================================
--- RelinkClips: Batch Relink (T008)
+-- Batch orchestration: fan out per-media matching + classification
 -- =============================================================================
 
 --- Bucket candidates into per-clip lists.
@@ -817,8 +822,10 @@ end
 function M.relink_media_batch(media_infos, options, progress_cb)
     assert(type(media_infos) == "table", "relink_media_batch: media_infos required")
     assert(type(options) == "table", "relink_media_batch: options required")
-    assert(options.search_paths, "relink_media_batch: search_paths required")
-    assert(options.matching_rules, "relink_media_batch: matching_rules required")
+    assert(type(options.search_paths) == "table" and #options.search_paths > 0,
+        "relink_media_batch: options.search_paths must be a non-empty array")
+    assert(type(options.matching_rules) == "table",
+        "relink_media_batch: options.matching_rules required")
 
     local matching_rules = options.matching_rules
 
@@ -832,8 +839,16 @@ function M.relink_media_batch(media_infos, options, progress_cb)
     local total_media = #media_infos
     if total_media == 0 then return results end
 
+    -- Each media_info must carry the required fields used by the pipeline.
+    -- Assert once here so downstream helpers can assume them.
     local total_clips = 0
-    for _, mi in ipairs(media_infos) do total_clips = total_clips + #mi.clips end
+    for i, mi in ipairs(media_infos) do
+        assert(type(mi.media_path) == "string" and mi.media_path ~= "",
+            string.format("relink_media_batch: media_infos[%d].media_path required", i))
+        assert(type(mi.clips) == "table",
+            string.format("relink_media_batch: media_infos[%d].clips required", i))
+        total_clips = total_clips + #mi.clips
+    end
 
     log.event("relink_media_batch: %d media (%d clips), search=%s, rules: fn=%s tc=%s res=%s fps=%s trim=%s seg=%s",
         total_media, total_clips, table.concat(options.search_paths, ","),
@@ -847,15 +862,17 @@ function M.relink_media_batch(media_infos, options, progress_cb)
 
     local extensions = {}
     for _, media_info in ipairs(media_infos) do
-        local ext = media_info.media_path and media_info.media_path:match("%.([^%.]+)$")
+        local ext = media_info.media_path:match("%.([^%.]+)$")
         if ext then extensions[ext:lower()] = true end
     end
+    assert(next(extensions) ~= nil,
+        "relink_media_batch: no media_info has a parseable file extension; cannot scan for candidates")
 
     local ext_list = {}
     for ext in pairs(extensions) do ext_list[#ext_list + 1] = ext end
     log.detail("relink_media_batch: scanning for extensions: %s", table.concat(ext_list, ", "))
 
-    local _, candidate_index = build_candidate_cache(options.search_paths, extensions)
+    local candidate_index = build_candidate_index(options.search_paths, extensions)
 
     local cand_count = 0
     for _, paths in pairs(candidate_index) do cand_count = cand_count + #paths end

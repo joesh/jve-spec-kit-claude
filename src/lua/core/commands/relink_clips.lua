@@ -40,11 +40,9 @@ local SPEC = {
 function M.register(executors, undoers, db)
 
     executors["RelinkClips"] = function(command)
+        -- SPEC enforces clip_relink_map (required, kind=table) and project_id
+        -- (required) via command_schema validation; no manual re-check needed.
         local args = command:get_all_parameters()
-        assert(args.clip_relink_map and type(args.clip_relink_map) == "table",
-            "RelinkClips: clip_relink_map table required")
-        assert(args.project_id and args.project_id ~= "",
-            "RelinkClips: project_id required")
 
         local Clip = require("models.clip")
         local Media = require("models.media")
