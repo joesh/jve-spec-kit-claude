@@ -160,12 +160,57 @@ function M.register(executors, _undoers, db)
             ::continue::
         end
 
+        -- Second pass: salvage failed entries by looking for a pre-existing
+        -- media row that points at a valid on-disk file. This handles the
+        -- duplicate-media-row case: two media rows share the same basename,
+        -- one is already at the fixture path (previous session or explicit
+        -- import), but the failing clip still references the other "local"
+        -- row. The relinker's own candidates failed containment against the
+        -- failing media's metadata, but a sibling row's metadata may match.
+        -- Reassign the clip's media_id to the sibling row; no new path write.
+        local dedupe_stmt = db:prepare([[
+            SELECT id, file_path FROM media
+            WHERE project_id = ?
+              AND name = (SELECT name FROM media WHERE id = ?)
+              AND id != ?
+        ]])
+        local dedupe_salvaged = 0
+        for _, entry in ipairs(results.failed or {}) do
+            local mid = entry.original_media_id
+            if mid and not clip_relink_map[entry.clip_id] then
+                dedupe_stmt:bind_value(1, project_id)
+                dedupe_stmt:bind_value(2, mid)
+                dedupe_stmt:bind_value(3, mid)
+                if dedupe_stmt:exec() then
+                    while dedupe_stmt:next() do
+                        local sibling_id = dedupe_stmt:value(0)
+                        local sibling_path = dedupe_stmt:value(1)
+                        local f = sibling_path and io.open(sibling_path, "r")
+                        if f then
+                            f:close()
+                            -- Sibling row points at a file that actually exists.
+                            log.event("dedupe: clip %s media %s salvaged → sibling %s (%s)",
+                                entry.clip_id:sub(1, 8), mid:sub(1, 8), sibling_id:sub(1, 8),
+                                sibling_path:match("([^/]+)$") or sibling_path)
+                            clip_relink_map[entry.clip_id] = {
+                                new_media_id = sibling_id,
+                            }
+                            dedupe_salvaged = dedupe_salvaged + 1
+                            break
+                        end
+                    end
+                end
+                dedupe_stmt:reset()
+            end
+        end
+        dedupe_stmt:finalize()
+
         local path_change_count = 0
         for _ in pairs(media_path_changes) do path_change_count = path_change_count + 1 end
         local clip_change_count = 0
         for _ in pairs(clip_relink_map) do clip_change_count = clip_change_count + 1 end
-        log.event("ShowRelinkDialog: dispatching RelinkClips — %d clip changes, %d media path changes, %d new media",
-            clip_change_count, path_change_count, #(results.new_media))
+        log.event("ShowRelinkDialog: dispatching RelinkClips — %d clip changes, %d media path changes, %d new media, %d salvaged via dedupe",
+            clip_change_count, path_change_count, #(results.new_media), dedupe_salvaged)
 
             local command_manager = require("core.command_manager")
             apply_result = command_manager.execute("RelinkClips", {

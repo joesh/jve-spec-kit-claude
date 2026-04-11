@@ -723,6 +723,7 @@ local function classify_clips_for_media(media_info, candidates)
         if #covers == 0 then
             out.failed[#out.failed + 1] = {
                 clip_id = clip.clip_id,
+                original_media_id = media_info.media_id,
                 reason = "no matching candidate found",
             }
         elseif #covers == 1 then

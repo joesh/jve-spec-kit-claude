@@ -100,10 +100,14 @@ function M.register(executors, undoers, db)
 
         local updates = {}
         for clip_id, relink in pairs(args.clip_relink_map) do
+            local prev = old_clip_state[clip_id]
+            -- new_source_in / new_source_out are nil when the relink is a
+            -- pure media_id reassignment (e.g. dedupe salvage path) — the
+            -- clip keeps its existing source range in that case.
             updates[clip_id] = {
-                media_id = relink.new_media_id or old_clip_state[clip_id].media_id,
-                source_in = relink.new_source_in,
-                source_out = relink.new_source_out,
+                media_id = relink.new_media_id or prev.media_id,
+                source_in = relink.new_source_in or prev.source_in,
+                source_out = relink.new_source_out or prev.source_out,
             }
         end
         Clip.batch_update_source(updates)

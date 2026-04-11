@@ -196,6 +196,42 @@ for _, entry in ipairs(batch.relinked or {}) do
         }
     end
 end
+
+-- Dedupe salvage: for each failed clip, look for a sibling media row with
+-- the same name whose file_path exists on disk, and reassign. Mirrors
+-- show_relink_dialog.lua's second pass so this test exercises the same
+-- salvage logic end-to-end.
+local dedupe_stmt = db:prepare([[
+    SELECT id, file_path FROM media
+    WHERE project_id = ?
+      AND name = (SELECT name FROM media WHERE id = ?)
+      AND id != ?
+]])
+local dedupe_salvaged = 0
+for _, entry in ipairs(batch.failed or {}) do
+    if entry.original_media_id and not clip_relink_map[entry.clip_id] then
+        dedupe_stmt:bind_value(1, proj_id)
+        dedupe_stmt:bind_value(2, entry.original_media_id)
+        dedupe_stmt:bind_value(3, entry.original_media_id)
+        if dedupe_stmt:exec() then
+            while dedupe_stmt:next() do
+                local sibling_id = dedupe_stmt:value(0)
+                local sibling_path = dedupe_stmt:value(1)
+                local f = sibling_path and io.open(sibling_path, "r")
+                if f then
+                    f:close()
+                    clip_relink_map[entry.clip_id] = { new_media_id = sibling_id }
+                    dedupe_salvaged = dedupe_salvaged + 1
+                    break
+                end
+            end
+        end
+        dedupe_stmt:reset()
+    end
+end
+dedupe_stmt:finalize()
+print(string.format("      dedupe salvage: %d clips reassigned to sibling media rows", dedupe_salvaged))
+
 local clip_changes = 0
 for _ in pairs(clip_relink_map) do clip_changes = clip_changes + 1 end
 local media_changes = 0
@@ -273,7 +309,47 @@ local ok_05G = (not err2) and check_no_crash("00.5G-1 ", post_05G) or err2 == ni
 assert(not err1 or ok_333, "01-333-2 would still crash the playback engine")
 assert(not err2 or ok_05G, "00.5G-1 would still crash the playback engine")
 
+-- Count remaining offline clips in the gold master (media not under fixture tree)
+local offline_count
+do
+    local stmt = db:prepare([[
+        SELECT COUNT(*) FROM clips c
+        JOIN tracks t ON c.track_id = t.id
+        LEFT JOIN media m ON c.media_id = m.id
+        WHERE t.sequence_id = ?
+          AND (m.file_path IS NULL OR m.file_path NOT LIKE '%/tests/fixtures/%')
+    ]])
+    stmt:bind_value(1, seq_id)
+    assert(stmt:exec() and stmt:next(), "offline count query failed")
+    offline_count = stmt:value(0)
+    stmt:finalize()
+end
+print(string.format("\n[7/7] Gold master clips still offline after relink + dedupe: %d",
+    offline_count))
+
+-- Per-media breakdown
+do
+    local stmt = db:prepare([[
+        SELECT substr(m.name, 1, 45), COUNT(c.id) FROM clips c
+        JOIN tracks t ON c.track_id = t.id
+        JOIN media m ON c.media_id = m.id
+        WHERE t.sequence_id = ?
+          AND m.file_path NOT LIKE '%/tests/fixtures/%'
+        GROUP BY m.id
+        ORDER BY COUNT(c.id) DESC
+    ]])
+    stmt:bind_value(1, seq_id)
+    if stmt:exec() then
+        while stmt:next() do
+            print(string.format("      %4d × %s", stmt:value(1), stmt:value(0)))
+        end
+    end
+    stmt:finalize()
+end
+
 print("\n✅ test_e2e_retime_relink.lua passed")
 print("   - DRP convert produces correct source_in for retimed clips (111916, 124682)")
 print("   - Both clips relinked to the fixture tree")
 print("   - source_in ≥ first_frame_tc → C++ assertion will not fire")
+print(string.format("   - Dedupe salvage reassigned %d clips to sibling media rows", dedupe_salvaged))
+print(string.format("   - Gold master offline count: %d", offline_count))
