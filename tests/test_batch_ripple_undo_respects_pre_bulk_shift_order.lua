@@ -61,12 +61,15 @@ local function get_row(clip_id)
 end
 
 local mutations = {
-    -- Apply order: pre bulk shift first, then clip update.
+    -- Apply order: pre bulk shift first, then clip update. The forward
+    -- bulk_shift moved clip_b from 150 → 250 (shift +100, start_frame =
+    -- 150, the clip_b pre-shift position). The undo must find clip_b at
+    -- the post-shift position (250) and move it back to 150.
     {
         type = "bulk_shift",
         track_id = "track_v1",
         shift_frames = 100,
-        clip_ids = {"clip_b"},
+        start_frame = 150,
     },
     {
         type = "update",

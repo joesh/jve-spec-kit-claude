@@ -130,11 +130,22 @@ recompute_gap_clips(affected_track_ids)
 
 ### Component 3: Sequence Generation Counter (sequence.lua)
 
+Schema column (added inline in the `sequences` CREATE TABLE, not via
+ALTER — per rule 2.15 we don't maintain backward compat; stale DBs are
+re-imported or one-shot patched):
+
 ```sql
-ALTER TABLE sequences ADD COLUMN mutation_generation INTEGER NOT NULL DEFAULT 0;
+mutation_generation INTEGER NOT NULL DEFAULT 0
 ```
 
-Incremented by `command_manager` after any successful mutation on a sequence. Readable via `Sequence.load(id).mutation_generation`. Used by future nested sequence pre-condition checks: "is the nested sequence still at the generation I expect?"
+`command_manager` bumps the counter once per user-visible action on the
+target sequence — on execute, undo, and redo. Group actions (wrapper
+commands like Insert + nested AddClipsToSequence) dedupe by sequence_id
+so a single group advances the counter exactly once. Readable via
+`Sequence.load(id).mutation_generation`. Used by future nested sequence
+pre-condition checks: "is the nested sequence still at the generation
+I expect?" See [followups.md FU-2](followups.md#fu-2-sequence-generation-counter-t012--landed)
+for the full landing record.
 
 ### Data Model Changes
 
@@ -182,7 +193,14 @@ Incremented by `command_manager` after any successful mutation on a sequence. Re
 
 ## Unresolved Questions
 
-- The bulk downstream shift uses SQL `UPDATE ... WHERE track_id = ? AND timeline_start >= boundary`. Does `clip_state.apply_mutations` need a new mutation type for this, or can the existing `bulk_shifts` format handle it? Currently `bulk_shifts` carries either explicit `clip_ids` or `first_clip_id + anchor_start_frame`. A track-wide shift-from-boundary is simpler — just `{ track_id, shift_frames, start_frame }`.
+- ~~The bulk downstream shift uses SQL `UPDATE ... WHERE track_id = ? AND
+  timeline_start >= boundary`. Does `clip_state.apply_mutations` need a new
+  mutation type for this, or can the existing `bulk_shifts` format handle it?~~
+  **Resolved in cleanup pass**: the canonical shape
+  `{ track_id, shift_frames, start_frame }` now covers both the SQL execute
+  and in-memory sync paths. Both legacy forms (`clip_ids`,
+  `first_clip_id + anchor_start_frame`) are removed from every producer,
+  consumer, test, and the undo hydrator. See `tasks.md` Notes section.
 - Multi-edge selection across multiple tracks with different gap sizes at boundaries — does the max shift check need to be per-track (some tracks can shift more than others) or is one global max correct? Currently all tracks shift by the same delta, so one global max is correct. But if we ever support per-track deltas, this needs revisiting.
 
 ## Progress Tracking

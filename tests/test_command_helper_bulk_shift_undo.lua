@@ -1,5 +1,11 @@
 #!/usr/bin/env luajit
 
+-- Regression: bulk_shift mutations apply forward and revert cleanly.
+-- Canonical shape: { type, track_id, shift_frames, start_frame }. Every
+-- clip on the named track with timeline_start_frame >= start_frame gets
+-- shifted by shift_frames; the undo finds clips at the post-shift
+-- position and moves them back.
+
 require("test_env")
 
 local database = require("core.database")
@@ -59,36 +65,21 @@ local mutations = {
         type = "bulk_shift",
         track_id = "track_v1",
         shift_frames = 100,
-        first_clip_id = "clip_b",
+        start_frame = 1000,  -- clip_b sits here; clip_a at 0 is untouched
     }
 }
 
 local ok, err = command_helper.apply_mutations(db, mutations)
 assert(ok, err or "apply_mutations failed")
-assert(get_start("clip_a") == 0, "bulk_shift should not move clips before anchor")
-assert(get_start("clip_b") == 1100, "bulk_shift should move anchor clip")
-assert(get_start("clip_c") == 2100, "bulk_shift should move downstream clip")
+assert(get_start("clip_a") == 0, "bulk_shift should not move clips before start_frame")
+assert(get_start("clip_b") == 1100, "bulk_shift should move clip_b")
+assert(get_start("clip_c") == 2100, "bulk_shift should move clip_c")
 
 local ok_undo, undo_err = command_helper.revert_mutations(db, mutations, nil, nil)
 assert(ok_undo, undo_err or "revert_mutations failed")
-assert(get_start("clip_a") == 0, "undo should restore clip_a")
+assert(get_start("clip_a") == 0, "undo should leave clip_a")
 assert(get_start("clip_b") == 1000, "undo should restore clip_b")
 assert(get_start("clip_c") == 2000, "undo should restore clip_c")
-
--- Legacy format: bulk_shift recorded explicit clip_ids.
-assert(db:exec("UPDATE clips SET timeline_start_frame = timeline_start_frame + 50 WHERE id IN ('clip_b','clip_c')"))
-local legacy = {
-    {
-        type = "bulk_shift",
-        track_id = "track_v1",
-        shift_frames = 50,
-        clip_ids = {"clip_b", "clip_c"},
-    }
-}
-local ok_legacy, legacy_err = command_helper.revert_mutations(db, legacy, nil, nil)
-assert(ok_legacy, legacy_err or "legacy bulk_shift undo failed")
-assert(get_start("clip_b") == 1000, "legacy undo should restore clip_b")
-assert(get_start("clip_c") == 2000, "legacy undo should restore clip_c")
 
 os.remove(TEST_DB)
 print("✅ command_helper bulk_shift applies and undoes correctly")

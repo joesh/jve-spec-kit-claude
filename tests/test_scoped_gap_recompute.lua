@@ -74,9 +74,9 @@ local a1_gaps_before = get_gap_ids_for_track("track_a1")
 assert(#v1_gaps_before > 0, "V1 should have gaps after init")
 assert(#a1_gaps_before > 0, "A1 should have gaps after init")
 
--- Now call scoped recompute for V1 only
--- This tests the NEW behavior — passing affected_track_ids.
--- Until T011 implements the parameter, this will use full recompute.
+-- Scoped recompute: pass affected_track_ids naming V1 only. The
+-- contract (T011) is that A1's gap clip IDs stay byte-identical
+-- because its track is not in the affected set.
 local affected = { ["track_v1"] = true }
 timeline_core_state.recompute_gap_clips(affected)
 

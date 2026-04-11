@@ -1,7 +1,10 @@
 #!/usr/bin/env luajit
 
 -- Regression: bulk_shift undo must update clips in an order that avoids
--- VIDEO_OVERLAP triggers, even if clip_ids are provided in an arbitrary order.
+-- VIDEO_OVERLAP triggers. For a positive undo delta (original shift was
+-- negative), clips move right — process DESC (highest first). For a
+-- negative undo delta (original shift was positive), clips move left —
+-- process ASC (lowest first). This test exercises the latter case.
 
 require("test_env")
 
@@ -58,13 +61,17 @@ local function get_start(clip_id)
     return value
 end
 
--- clip_ids are intentionally ascending (not the safe order for applying -50).
+-- Forward shift was +50 from start_frame=100 (pre-shift position of
+-- clip_b). DB was then manually set to the post-shift state (clip_b=150,
+-- clip_c=250). The undo must find clips at >= 150 and move them back.
+-- Leftward order requires ASC — otherwise the first UPDATE would land
+-- clip_c at 200 where clip_b still sits, tripping VIDEO_OVERLAP.
 local mutations = {
     {
         type = "bulk_shift",
         track_id = "track_v1",
         shift_frames = 50,
-        clip_ids = {"clip_b", "clip_c"},
+        start_frame = 100,
     }
 }
 

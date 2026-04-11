@@ -172,11 +172,34 @@ T007-T011: sequential chain in batch_ripple_edit.lua → clip_state.lua → time
 - Tests use the DSL test runner where possible (`tests/helpers/ripple_test_runner.lua`)
 - `make -j4` must pass after each task (luacheck + all tests)
 - Commit after each task with proper attribution
-- Old bulk_shift format kept temporarily in clip_state for undo history compat — remove in a future cleanup pass
+- Old bulk_shift formats (`clip_ids` list, `first_clip_id + anchor_start_frame`)
+  landed unified in the cleanup pass: every producer and consumer now uses the
+  canonical `{ track_id, shift_frames, start_frame }` shape. No compat shim —
+  stale persisted undo history from before this change will fail to revert
+  and must be re-executed from the original source.
 
 ## Validation Checklist
-- [ ] All acceptance criteria from spec.md have corresponding test assertions
-- [ ] All tests written before implementation (T002-T006 before T007-T011)
-- [ ] No `clip_kind ~= "gap"` checks remain in edit pipeline after T008+T013
-- [ ] Parallel tasks truly independent (different files)
-- [ ] Each task specifies exact file paths
+_Verified post-landing during the seventh/eighth cleanup passes. This
+is a historical snapshot of the planning phase — current status lives
+in [plan.md](plan.md) and [followups.md](followups.md)._
+
+- [x] All acceptance criteria from spec.md have corresponding test
+      assertions — `test_bounded_edit_region.lua`,
+      `test_gap_as_clip_constraints.lua`, `test_max_shift_check.lua`,
+      `test_scoped_gap_recompute.lua`, `test_sequence_generation.lua`
+      plus the pre-existing ripple regression suite.
+- [x] All tests written before implementation — T002–T006 landed as
+      failing tests before T007–T012 turned them green (see commit
+      history on this branch).
+- [x] No `clip_kind ~= "gap"` checks remain in the constraint/mutation
+      pipeline after T008 + T013 — the 7 remaining checks in
+      `batch_ripple_edit.lua` are all gap-specific domain logic
+      (`apply_gap_min_duration`, `find_first_media`,
+      `record_blocked_gap_edge`, `populate_preview_shifts`,
+      `persist_undo_parameters`, `selection_has_clip_edge` flag), not
+      special-casing that breaks the gap-as-clip abstraction.
+- [x] Parallel tasks truly independent — T002–T006 target five distinct
+      test files; T012 (schema + sequence.lua) touches files disjoint
+      from T007–T011 (batch_ripple_edit + state modules).
+- [x] Each task specifies exact file paths — every T00N entry above
+      lists the absolute source and test paths it modifies.

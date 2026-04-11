@@ -265,6 +265,11 @@ function M.apply_mutations(mutations, persist_callback)
     local deleted_lookup = {}
     local needs_resort = false
 
+    --- Apply in-memory bulk_shift mutations.
+    -- Canonical shape: { track_id, shift_frames, start_frame }. Every
+    -- clip on the named track with timeline_start >= start_frame gets
+    -- shifted by shift_frames. Mirrors the SQL path in
+    -- command_helper.apply_mutations so DB and in-memory stay in sync.
     local function apply_bulk_shifts()
         if not mutations.bulk_shifts then
             return
@@ -272,49 +277,22 @@ function M.apply_mutations(mutations, persist_callback)
         ensure_clip_indexes()
 
         for _, shift in ipairs(mutations.bulk_shifts) do
-            if type(shift) ~= "table" then
-                error("clip_state.apply_mutations: bulk_shift entry must be a table", 2)
-            end
-            assert(shift.track_id and shift.track_id ~= "", "clip_state.apply_mutations: bulk_shift missing track_id")
-            assert(type(shift.shift_frames) == "number", "clip_state.apply_mutations: bulk_shift missing numeric shift_frames")
+            assert(type(shift) == "table",
+                "clip_state.apply_mutations: bulk_shift entry must be a table")
+            assert(shift.track_id and shift.track_id ~= "",
+                "clip_state.apply_mutations: bulk_shift missing track_id")
+            assert(type(shift.shift_frames) == "number",
+                "clip_state.apply_mutations: bulk_shift missing numeric shift_frames")
+            assert(type(shift.start_frame) == "number",
+                "clip_state.apply_mutations: bulk_shift missing numeric start_frame")
 
-            local delta_frames = shift.shift_frames
-            if delta_frames ~= 0 then
-                if type(shift.clip_ids) == "table" then
-                    for _, clip_id in ipairs(shift.clip_ids) do
-                        local clip = clip_lookup[clip_id] or M.hydrate_from_database(clip_id)
-                        if not clip then
-                            error("clip_state.apply_mutations: bulk_shift clip missing from state: " .. tostring(clip_id), 2)
-                        end
-                        if clip.track_id ~= shift.track_id then
-                            error("clip_state.apply_mutations: bulk_shift clip track mismatch: " .. tostring(clip_id), 2)
-                        end
-                        assert(type(clip.timeline_start) == "number",
-                            "clip_state.apply_mutations: bulk_shift clip missing integer timeline_start: " .. tostring(clip_id))
-                        clip.timeline_start = clip.timeline_start + delta_frames
+            if shift.shift_frames ~= 0 then
+                local list = track_clip_index[shift.track_id] or {}
+                for _, clip in ipairs(list) do
+                    if type(clip.timeline_start) == "number"
+                        and clip.timeline_start >= shift.start_frame then
+                        clip.timeline_start = clip.timeline_start + shift.shift_frames
                         changed = true
-                    end
-                else
-                    if not shift.first_clip_id or shift.first_clip_id == "" then
-                        error("clip_state.apply_mutations: bulk_shift missing first_clip_id and clip_ids", 2)
-                    end
-                    local anchor_start = shift.anchor_start_frame
-                    if type(anchor_start) ~= "number" then
-                        local anchor = clip_lookup[shift.first_clip_id] or M.hydrate_from_database(shift.first_clip_id)
-                        if anchor and anchor.track_id ~= shift.track_id then
-                            error("clip_state.apply_mutations: bulk_shift anchor track mismatch", 2)
-                        end
-                        assert(anchor and type(anchor.timeline_start) == "number",
-                            "clip_state.apply_mutations: bulk_shift anchor clip missing integer timeline_start")
-                        anchor_start = anchor.timeline_start
-                    end
-
-                    local list = track_clip_index[shift.track_id] or {}
-                    for _, clip in ipairs(list) do
-                        if type(clip.timeline_start) == "number" and clip.timeline_start >= anchor_start then
-                            clip.timeline_start = clip.timeline_start + delta_frames
-                            changed = true
-                        end
                     end
                 end
             end

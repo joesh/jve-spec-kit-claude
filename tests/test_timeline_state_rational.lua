@@ -151,9 +151,8 @@ local sequence_load_mock = {
         return false
     end,
     value = function(self, idx)
-        -- Sequence.load column order: id, project_id, name, kind, fps_numerator, fps_denominator,
-        -- width, height, playhead_frame, view_start_frame, view_duration_frames,
-        -- mark_in_frame, mark_out_frame, audio_rate, selected_clip_ids, selected_edge_infos
+        -- Keep in sync with Sequence.load's SELECT column order. Indices
+        -- here correspond 1:1 to stmt:value(N) callsites in sequence.lua.
         local values = {
             [0] = "default_sequence",  -- id
             [1] = "default_project",   -- project_id
@@ -174,7 +173,11 @@ local sequence_load_mock = {
             [16] = 0,                  -- start_timecode_frame
             [17] = 0,                  -- video_scroll_offset
             [18] = 0,                  -- audio_scroll_offset
-            [19] = 0.5,               -- video_audio_split_ratio
+            [19] = 0.5,                -- video_audio_split_ratio
+            [20] = nil,                -- selected_gap_infos_json
+            [21] = 0,                  -- created_at
+            [22] = 0,                  -- modified_at
+            [23] = 0,                  -- mutation_generation
         }
         return values[idx]
     end,

@@ -1523,6 +1523,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Emit one bulk_shift mutation per affected track. The SQL substrate
     -- (command_helper.apply_mutations + revert_mutations) owns the
     -- per-track UPDATE and the undo reverse-shift.
+    --
+    -- Canonical shape: { type, track_id, shift_frames, start_frame }.
+    -- start_frame is the pre-shift position of the first clip that
+    -- participates in the shift; every clip on the track with
+    -- timeline_start_frame >= start_frame gets moved by shift_frames.
     local function emit_bulk_shift_mutations(ctx)
         for track_id in pairs(ctx.affected_tracks) do
             local boundary = track_ripple_boundary(ctx, track_id)
@@ -1534,9 +1539,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         type = "bulk_shift",
                         track_id = track_id,
                         shift_frames = shift_frames,
-                        first_clip_id = first_ds.id,
-                        anchor_start_frame = first_ds.timeline_start,
-                        start_frames = first_ds.timeline_start,
+                        start_frame = first_ds.timeline_start,
                     })
                 end
             end
@@ -1825,11 +1828,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             elseif mut.type == "bulk_shift" then
                 command_helper.add_bulk_shift_mutation(ctx.command, seq_id, {
                     track_id = mut.track_id,
-                    first_clip_id = mut.first_clip_id,
-                    anchor_start_frame = mut.anchor_start_frame,
                     shift_frames = mut.shift_frames,
-                    start_frames = mut.start_frames,
-                    clip_ids = mut.clip_ids,
+                    start_frame = mut.start_frame,
                 })
             end
         end

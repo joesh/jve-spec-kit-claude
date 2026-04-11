@@ -180,9 +180,12 @@ function Sequence.load(id)
                 video_audio_split_ratio = assert(stmt:value(19) ~= nil and stmt:value(19),
                     "Sequence.load: video_audio_split_ratio is NULL"),
 
-                created_at = stmt:value(21) or os.time(),
-                modified_at = stmt:value(22) or os.time(),
-                mutation_generation = stmt:value(23) or 0,
+                created_at = assert(stmt:value(21),
+                    "Sequence.load: created_at is NULL"),
+                modified_at = assert(stmt:value(22),
+                    "Sequence.load: modified_at is NULL"),
+                mutation_generation = assert(stmt:value(23),
+                    "Sequence.load: mutation_generation is NULL"),
             }
 
             -- Optional Marks (integer frames or nil)

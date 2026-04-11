@@ -89,14 +89,14 @@ db:exec([[
     VALUES ('v1', 'seq1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 ]])
 
-local media = Media.create({
+local media = assert(Media.create({
     id = "m1", project_id = "proj1",
     file_path = "/tmp/jve/test_sequence_generation.mov", name = "m1.mov",
     duration_frames = 500,
     fps_numerator = 25, fps_denominator = 1,
     width = 1920, height = 1080,
-})
-assert(media and media:save(db), "media save")
+}), "Media.create returned nil")
+assert(media:save(db), "media:save returned false")
 
 local mc_id = test_env.create_test_masterclip_sequence('proj1', 'MC1', 25, 1, 500, "m1")
 

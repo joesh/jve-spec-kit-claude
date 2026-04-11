@@ -30,6 +30,12 @@ local tracks = database.load_tracks(seq.id)
 assert(#tracks > 0, "Need at least one track")
 local track_id = tracks[1].id
 
+-- Clips start at frame 1000 (well past the default playhead=0). The
+-- renderer only decodes clips under the playhead; anything else is not
+-- touched at first paint. Keeping the clips off the playhead prevents
+-- TMB's decode error (fake BRAW content → BRAW SDK FileNotFound) from
+-- calling media_status.update_from_tmb and overwriting the seeded
+-- cache entries before the assertions below.
 for i = 1, 3 do
     local path = string.format("/tmp/jve/codec_test_media/fake_%d.braw", i)
     local f = io.open(path, "w"); f:write("not real braw"); f:close()
@@ -54,7 +60,8 @@ for i = 1, 3 do
             created_at, modified_at)
         VALUES ('%s', '%s', 'timeline', 'BRAW Clip %d', '%s',
             '%s', '%s', %d, 50, 0, 50, 24, 1, 1, 0, %d, %d)
-    ]], clip_id, project_id, i, track_id, mid, seq.id, (i - 1) * 60, now, now)
+    ]], clip_id, project_id, i, track_id, mid, seq.id,
+        1000 + (i - 1) * 60, now, now)
     assert(db:exec(sql2), "clip INSERT failed: " .. tostring(db:last_error()))
 end
 
@@ -62,13 +69,17 @@ end
 local verify_clips = database.load_clips(seq.id)
 print(string.format("  verify: %d clips in seq %s after insert", #verify_clips, seq.id:sub(1,8)))
 
--- Step 3: Persist codec errors (simulating previous session's bg probe discovery)
+-- Step 3: Persist codec errors (simulating previous session's bg probe discovery).
+-- "DecodeFailed" is a persistent codec error: media_status.load_persisted
+-- strips stale "Unsupported" entries on load (codec support can change
+-- between builds — see commit f245d26), so we seed with DecodeFailed to
+-- keep the seed from being cleared before the first-paint check.
 local error_cache = {}
 for _, path in ipairs(fake_paths) do
-    error_cache[path] = { offline = true, error_code = "Unsupported" }
+    error_cache[path] = { offline = true, error_code = "DecodeFailed" }
 end
 database.set_project_setting(project_id, "media_error_cache", error_cache)
-print("  setup: 3 BRAW clips + 3 persisted Unsupported errors in DB")
+print("  setup: 3 BRAW clips + 3 persisted DecodeFailed errors in DB")
 
 -- Flush WAL before re-opening the DB (layout.lua re-inits the DB connection)
 db:exec("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -92,55 +103,43 @@ ffi.C.setenv("JVE_PROJECT_PATH", project_info.db_path, 1)
 local app = require("ui.layout")
 assert(app and app.main_window, "layout.lua must create main_window")
 
--- Pump just enough for layout to render but NOT for the 50ms timer to fire.
--- The bug: load_persisted runs in the 50ms timer, so clips render blue first.
--- With the fix: load_persisted runs in open_and_init_project (before render).
-ui.pump(10)
-
--- Step 5: Check clip state
-local tl_state = require("ui.timeline.state.timeline_core_state")
-local clip_state = require("ui.timeline.state.clip_state")
-local active_seq = tl_state.get_sequence_id and tl_state.get_sequence_id() or "?"
-print(string.format("  active sequence: %s (expected: %s)", active_seq, seq.id))
-local all_db_clips = database.load_clips(seq.id)
-print(string.format("  DB clips for seq: %d", #all_db_clips))
-local clips = clip_state.get_all()
-print(string.format("  clip_state.get_all: %d clips", #clips))
-for i, c in ipairs(clips) do
-    if i <= 5 then
-        print(string.format("    [%d] id=%s name=%s media_path=%s offline=%s",
-            i, tostring(c.id):sub(1,12), tostring(c.name),
-            tostring(c.media_path), tostring(c.offline)))
-    end
+-- Step 5: Check media_status cache state DIRECTLY, before any event
+-- pumping. The regression this test guards: load_persisted used to run
+-- in a post-startup timer, so ensure_clip_status at first paint found
+-- an empty cache → stamped clips online → flashed blue before flipping
+-- to red. The fix moves load_persisted into the project_changed handler,
+-- which runs synchronously during `require("ui.layout")` above.
+--
+-- We check the cache directly instead of rendering + inspecting clip
+-- objects because start_background_probe is also kicked off in
+-- project_changed (on a worker thread) and can deliver partial batches
+-- during any ui.pump() call, racing the test. The cache state *at this
+-- point* reflects exactly what load_persisted populated — no race.
+local media_status = require("core.media.media_status")
+for _, path in ipairs(fake_paths) do
+    local status = media_status.get(path)
+    print(string.format("  cache[%s] = %s",
+        path:match("([^/]+)$"), status and
+        string.format("{offline=%s, error=%s}",
+            tostring(status.offline), tostring(status.error_code)) or "nil"))
 end
 
-local braw_clips = {}
-for _, clip in ipairs(clips) do
-    local mp = clip.media_path or ""
-    for _, path in ipairs(fake_paths) do
-        if mp == path then
-            braw_clips[#braw_clips + 1] = clip
-            break
-        end
-    end
-end
-
-print(string.format("  found %d BRAW clips matching fake paths", #braw_clips))
-assert(#braw_clips == 3, string.format("Expected 3 BRAW clips, got %d", #braw_clips))
-
--- THE KEY ASSERTION: clips must be offline/Unsupported on first paint
 local failures = 0
-for _, clip in ipairs(braw_clips) do
-    if not clip.offline or clip.error_code ~= "Unsupported" then
-        print(string.format("  FAIL: %s offline=%s error=%s — expected offline/Unsupported",
-            clip.name, tostring(clip.offline), tostring(clip.error_code)))
+for _, path in ipairs(fake_paths) do
+    local status = media_status.get(path)
+    if not status or not status.offline or status.error_code ~= "DecodeFailed" then
+        print(string.format("  FAIL: %s cache status=%s — expected offline/DecodeFailed",
+            path:match("([^/]+)$"),
+            status and string.format("{offline=%s, error=%s}",
+                tostring(status.offline), tostring(status.error_code)) or "nil"))
         failures = failures + 1
     else
-        print(string.format("  OK: %s offline=true error_code=Unsupported", clip.name))
+        print(string.format("  OK: %s offline=true error_code=DecodeFailed",
+            path:match("([^/]+)$")))
     end
 end
 assert(failures == 0,
-    string.format("%d clips show wrong status — persisted codec errors not applied before first paint", failures))
+    string.format("%d paths missing from status cache — load_persisted did not run before first paint", failures))
 
 -- Cleanup
 for _, path in ipairs(fake_paths) do os.remove(path) end

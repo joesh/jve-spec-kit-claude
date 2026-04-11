@@ -35,10 +35,63 @@ assert(project_open.open_project_database_or_prompt_cleanup(
     database, qt_constants, dst_path, nil),
     "Failed to open anamnesis project copy")
 
--- Pick the gold master sequence (largest, most complex)
-local SEQUENCE_ID = "f29d6d6a-d173-436c-aba2-991a4078e049"
+local db = database.get_connection()
+assert(db, "No database connection after project open")
+
+--- Pick the gold master sequence: the timeline with the most clips,
+-- breaking ties by modified_at descending. Selecting by clip count
+-- instead of a hardcoded UUID is robust to DRP re-import: sequence IDs
+-- rotate every time the project is re-imported, but the "largest
+-- timeline" is stable.
+local function find_gold_master_sequence_id()
+    local sql = [[
+        SELECT sequences.id
+        FROM sequences
+        LEFT JOIN clips ON clips.owner_sequence_id = sequences.id
+        WHERE sequences.kind = 'timeline'
+        GROUP BY sequences.id
+        ORDER BY COUNT(clips.id) DESC, sequences.modified_at DESC
+        LIMIT 1
+    ]]
+    local stmt = assert(db:prepare(sql),
+        "find_gold_master_sequence_id: prepare failed")
+    assert(stmt:exec(), "find_gold_master_sequence_id: exec failed")
+    assert(stmt:next(), "find_gold_master_sequence_id: no timeline sequences")
+    local id = stmt:value(0)
+    stmt:finalize()
+    assert(id and id ~= "",
+        "find_gold_master_sequence_id: empty sequence id")
+    return id
+end
+
+--- Resolve a track by (sequence_id, track_type, track_index). This
+-- key is stable across DRP re-imports, unlike the raw track UUIDs
+-- that used to be hardcoded in each test case.
+local function lookup_track_id(sequence_id, track_type, track_index)
+    local sql = [[
+        SELECT id FROM tracks
+        WHERE sequence_id = ? AND track_type = ? AND track_index = ?
+    ]]
+    local stmt = assert(db:prepare(sql), "lookup_track_id: prepare failed")
+    stmt:bind_value(1, sequence_id)
+    stmt:bind_value(2, track_type)
+    stmt:bind_value(3, track_index)
+    assert(stmt:exec(), "lookup_track_id: exec failed")
+    assert(stmt:next(), string.format(
+        "lookup_track_id: no %s track at index %d in sequence %s",
+        track_type, track_index, sequence_id))
+    local id = stmt:value(0)
+    stmt:finalize()
+    assert(id and id ~= "", string.format(
+        "lookup_track_id: empty id for %s %d in sequence %s",
+        track_type, track_index, sequence_id))
+    return id
+end
+
+local SEQUENCE_ID = find_gold_master_sequence_id()
 local sequence = Sequence.load(SEQUENCE_ID)
-assert(sequence, "Failed to load gold master sequence")
+assert(sequence, string.format(
+    "Failed to load gold master sequence %s", SEQUENCE_ID))
 
 local PROJECT_ID = sequence.project_id
 assert(PROJECT_ID, "Sequence missing project_id")
@@ -47,7 +100,8 @@ assert(PROJECT_ID, "Sequence missing project_id")
 command_manager.init(SEQUENCE_ID, PROJECT_ID)
 timeline_state.init(SEQUENCE_ID, PROJECT_ID)
 
-local db = database.get_connection()
+local V1_TRACK = lookup_track_id(SEQUENCE_ID, "VIDEO", 1)
+local A3_TRACK = lookup_track_id(SEQUENCE_ID, "AUDIO", 3)
 
 -- =========================================================================
 -- Helpers
@@ -161,7 +215,6 @@ print("[integration] Initial state valid. Running tests...")
 
 run_test("roll_on_v1_doesnt_shift_downstream", function()
     -- Find first adjacent pair on V1
-    local V1_TRACK = "ffb46a96-bcc3-4018-aba3-1145008f026e"
     local clip_a, clip_b = find_adjacent_pair(V1_TRACK)
     assert(clip_a and clip_b, "No adjacent clip pair found on V1")
 
@@ -231,7 +284,6 @@ end)
 -- =========================================================================
 
 run_test("roll_on_audio_doesnt_shift_downstream", function()
-    local A3_TRACK = "a6d9ed8a-9c62-4922-9734-75399023ca2b"
     local clip_a, clip_b = find_adjacent_pair(A3_TRACK)
     assert(clip_a and clip_b, "No adjacent clip pair found on A3")
 
@@ -291,7 +343,6 @@ end)
 -- =========================================================================
 
 run_test("ripple_on_v1_shifts_downstream", function()
-    local V1_TRACK = "ffb46a96-bcc3-4018-aba3-1145008f026e"
     local clip_a, clip_b = find_adjacent_pair(V1_TRACK)
     assert(clip_a and clip_b, "No adjacent clip pair on V1")
 
@@ -346,7 +397,6 @@ end)
 -- =========================================================================
 
 run_test("roll_vs_ripple_produce_different_results", function()
-    local V1_TRACK = "ffb46a96-bcc3-4018-aba3-1145008f026e"
     local clip_a, clip_b = find_adjacent_pair(V1_TRACK)
     assert(clip_a and clip_b, "No adjacent pair on V1")
 
@@ -408,7 +458,6 @@ end)
 -- =========================================================================
 
 run_test("roll_at_gap_boundary", function()
-    local V1_TRACK = "ffb46a96-bcc3-4018-aba3-1145008f026e"
     local clip_a, clip_b = find_gapped_pair(V1_TRACK)
     assert(clip_a and clip_b, "No gapped pair found on V1")
 
@@ -446,7 +495,6 @@ end)
 -- =========================================================================
 
 run_test("undo_redo_cycle_preserves_state", function()
-    local A3_TRACK = "a6d9ed8a-9c62-4922-9734-75399023ca2b"
     -- Use A3 (audio) — fewer undo stack interactions from prior tests
     local clip_a, clip_b = find_adjacent_pair(A3_TRACK)
     assert(clip_a and clip_b, "No adjacent pair on A3 for undo/redo test")
@@ -486,7 +534,6 @@ end)
 -- =========================================================================
 
 run_test("split_clip_preserves_coverage", function()
-    local V1_TRACK = "ffb46a96-bcc3-4018-aba3-1145008f026e"
     -- Find a clip long enough to split
     local all_clips = timeline_state.get_clips()
     local target = nil
@@ -534,7 +581,6 @@ end)
 -- =========================================================================
 
 run_test("toggle_clip_enabled", function()
-    local V1_TRACK = "ffb46a96-bcc3-4018-aba3-1145008f026e"
     local all_clips = timeline_state.get_clips()
     local target = nil
     for _, c in ipairs(all_clips) do
@@ -573,7 +619,6 @@ end)
 -- =========================================================================
 
 run_test("nudge_clip_position", function()
-    local V1_TRACK = "ffb46a96-bcc3-4018-aba3-1145008f026e"
     local all_clips = timeline_state.get_clips()
     -- Find a clip that's NOT at position 0 (so we can nudge left)
     local target = nil
@@ -621,7 +666,6 @@ end)
 -- =========================================================================
 
 run_test("roll_on_large_audio_track", function()
-    local A3_TRACK = "a6d9ed8a-9c62-4922-9734-75399023ca2b"
     local clip_a, clip_b = find_adjacent_pair(A3_TRACK)
     assert(clip_a and clip_b, "No adjacent pair on A3")
 

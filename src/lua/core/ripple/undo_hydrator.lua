@@ -45,7 +45,7 @@ function M.hydrate_executed_mutations_if_missing(command)
         local function key_for(entry)
             return string.format("%s:%s:%s",
                 tostring(entry.track_id or ""),
-                tostring(entry.first_clip_id or ""),
+                tostring(entry.start_frame or ""),
                 tostring(entry.shift_frames or ""))
         end
 

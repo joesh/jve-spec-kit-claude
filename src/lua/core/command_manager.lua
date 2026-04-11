@@ -228,24 +228,30 @@ local function apply_command_mutations(cmd)
     return applied
 end
 
---- Bump the target sequence's mutation_generation counter.
--- Called from every successful sequence-scoped mutation path (execute,
--- undo, redo). The counter is monotonic: undo/redo still increments
--- because a rollback is itself a state transition that invalidates any
--- cached reference to a prior generation.
+--- Bump mutation_generation for every sequence touched by this action.
 --
--- Semantics: one bump per user-visible action. Wrapper commands (Insert,
--- Overwrite) form an undo group with their nested AddClipsToSequence
--- children. The group is a single user action — undoing it unwinds
--- every member, but the sequence's "generation" advances by exactly one.
--- Callers pass the set of commands participating in the action (one for
--- single commands, the full group for grouped undo/redo).
+-- Semantics: one bump per user-visible action, not per command. Wrapper
+-- commands (Insert, Overwrite) form an undo group with their nested
+-- AddClipsToSequence children; the group is a single user action, so
+-- undoing it unwinds every member but the sequence's "generation"
+-- advances by exactly one. Callers pass the set of commands participating
+-- in the action (one-element list for non-grouped paths, full group for
+-- grouped undo/redo). Sequence IDs are de-duped so a group spanning the
+-- same sequence twice still advances that sequence by one.
+--
+-- The counter is monotonic: undo and redo still increment because a
+-- rollback is itself a state transition that invalidates any cached
+-- reference to a prior generation. Commands without a sequence_id
+-- (project-level: CreateSequence, DeleteSequence, etc.) are skipped —
+-- they don't target any sequence's mutation_generation.
 local function increment_sequence_generations_for_commands(cmds)
-    if not cmds or #cmds == 0 then return end
+    assert(type(cmds) == "table" and #cmds > 0,
+        "increment_sequence_generations_for_commands: cmds must be a non-empty list")
     local Sequence = require("models.sequence")
     local bumped = {}
     for _, cmd in ipairs(cmds) do
-        local seq_id = cmd and cmd.sequence_id
+        assert(cmd, "increment_sequence_generations_for_commands: nil command in list")
+        local seq_id = cmd.sequence_id
         if seq_id and seq_id ~= "" and not bumped[seq_id] then
             bumped[seq_id] = true
             Sequence.increment_generation(seq_id)
@@ -254,6 +260,7 @@ local function increment_sequence_generations_for_commands(cmds)
 end
 
 local function increment_sequence_generation_if_scoped(cmd)
+    assert(cmd, "increment_sequence_generation_if_scoped: cmd is required")
     increment_sequence_generations_for_commands({ cmd })
 end
 
@@ -894,6 +901,124 @@ local function execute_non_recording(command)
     }
 end
 
+--- Execute a nested command (one invoked from inside a root command's
+-- executor). Shares the root's transaction, inherits its undo group,
+-- and writes directly to the existing mutation snapshot. The top-level
+-- execute body calls this for every depth > 1 call and returns the
+-- result without touching the top-level ceremony (validation, hashing,
+-- transaction lifecycle, UI refresh, notify) — all of that is owned
+-- by the root command.
+--
+-- The caller owns `exec_scope` so that the scope spans both nested and
+-- top-level paths uniformly; this function calls `:finish` on it
+-- exactly once before returning.
+local function execute_nested_command(command, exec_scope)
+    -- Non-undoable nested commands bypass the recording ceremony entirely.
+    -- Example: a wrapper command invoking a utility that mutates nothing
+    -- the user would want to undo independently.
+    local spec = registry.get_spec(command.type)
+    if spec and spec.undoable == false then
+        local result = execute_non_recording(command)
+        exec_scope:finish("non_recording_nested")
+        return result
+    end
+
+    -- Assign sequence number and chain to the current cursor position.
+    -- After each nested save, set_current_sequence_number advances the
+    -- cursor, so siblings chain linearly: child1→pre-root, child2→child1,
+    -- etc. This is used only for cursor restore after undo — group
+    -- membership is determined by undo_group_id, not parent chain.
+    local sequence_number = history.increment_sequence_number()
+    command.sequence_number = sequence_number
+    command.parent_sequence_number = history.get_current_sequence_number()
+        or root_command_sequence_number
+
+    -- Inherit undo group: explicit group (from begin_undo_group) takes
+    -- precedence over automatic grouping (from recording root).
+    local explicit_group = history.get_current_undo_group_id()
+    command.undo_group_id = explicit_group or root_command_sequence_number
+
+    local exec_result = execute_command_implementation(command)
+    local execution_success, execution_error_message, execution_result_data =
+        normalize_executor_result(exec_result, command)
+
+    local result = {
+        success = execution_success,
+        error_message = execution_error_message ~= "" and execution_error_message
+            or (last_error_message ~= "" and last_error_message or ""),
+        result_data = execution_result_data or "",
+    }
+
+    -- Preserve custom fields the executor attached to its return table
+    -- (anything beyond success/error_message/result_data/cancelled).
+    if type(exec_result) == "table" then
+        for key, value in pairs(exec_result) do
+            if key ~= "success" and key ~= "error_message" and key ~= "result_data" and key ~= "cancelled" then
+                result[key] = value
+            end
+        end
+    end
+
+    -- User cancellation: discard without touching history or DB state.
+    if type(exec_result) == "table" and exec_result.cancelled then
+        return finish_as_noop(db, history, exec_scope, result, { skip_rollback = true, cancelled = true })
+    end
+
+    if execution_success then
+        command.status = "Executed"
+        command.executed_at = os.time()
+
+        -- Inherit playhead/selection context from root — same user
+        -- action, same playhead position. Post-selection is NOT
+        -- inherited because it's captured AFTER the root executor
+        -- completes, but nested commands run DURING the executor.
+        -- redo_group handles that by restoring from root after all
+        -- nested redos complete.
+        command.playhead_value = root_playhead_value
+        command.playhead_rate = root_playhead_rate
+        command.selected_clip_ids_pre = root_selected_clips_pre
+        command.selected_edge_infos_pre = root_selected_edges_pre
+        command.selected_gap_infos_pre = root_selected_gaps_pre
+
+        -- Per-Sequence Undo: classify before persisting.
+        command.sequence_id = classify_command_sequence_id(command)
+
+        local saved = save_command_with_collision_retry(command, db)
+        sequence_number = command.sequence_number  -- retry may have reallocated
+        if saved then
+            history.set_current_sequence_number(sequence_number)
+            log.event("Nested command %s (seq=%d) saved, group=%s",
+                command.type, sequence_number, tostring(root_command_sequence_number))
+            apply_command_mutations(command)
+        else
+            result.success = false
+            result.error_message = "Failed to save nested command to database"
+            execution_success = false
+            history.decrement_sequence_number()
+            -- Roll back only when an explicit undo group owns the
+            -- savepoint. When NOT inside an undo group, the nested
+            -- command is a plain sub-call from a parent executor; the
+            -- parent's top-level failure path will handle rollback.
+            -- Calling rollback_transaction here would double-pop the
+            -- parent's single mutation snapshot.
+            if history.get_current_undo_group_id() then
+                rollback_transaction()
+            end
+        end
+    else
+        command.status = "Failed"
+        history.decrement_sequence_number()
+        -- Same rationale as the save-failed branch: only unwind the
+        -- savepoint when an explicit group is active.
+        if history.get_current_undo_group_id() then
+            rollback_transaction()
+        end
+    end
+
+    exec_scope:finish(execution_success and "success_nested" or "failure_nested")
+    return result
+end
+
 -- Main execute function
 function M.execute(command_or_name, params)
     -- Auto-wrap in command event if none active (avoids requiring every call site to wrap)
@@ -975,121 +1100,12 @@ function M._execute_body(command_or_name, params)
         result_data = ""
     }
 
-    -- This enables automatic undo grouping - all nested commands share root's undo_group_id
+    -- Nested commands (depth > 1) share the root's transaction and undo
+    -- group. The extracted helper owns the whole nested path and the
+    -- exec_scope finalization; the outer body just captures the result
+    -- and drops through to cleanup.
     if is_nested then
-        -- Check for non-undoable commands - execute without recording, even when nested
-        spec = registry.get_spec(command.type)
-        if spec and spec.undoable == false then
-            result = execute_non_recording(command)
-            exec_scope:finish("non_recording_nested")
-            goto cleanup
-        end
-
-        -- Assign sequence number and chain to current cursor position.
-        -- After each nested save, set_current_sequence_number advances the cursor,
-        -- so siblings chain linearly: child1→pre-root, child2→child1, etc.
-        -- This is used only for cursor restore after undo — group membership
-        -- is determined by undo_group_id, not parent chain.
-        sequence_number = history.increment_sequence_number()
-        command.sequence_number = sequence_number
-        command.parent_sequence_number = history.get_current_sequence_number()
-            or root_command_sequence_number
-
-        -- Inherit undo group: explicit group (from begin_undo_group) takes
-        -- precedence over automatic grouping (from recording root)
-        explicit_group = history.get_current_undo_group_id()
-        command.undo_group_id = explicit_group or root_command_sequence_number
-
-        -- Execute the command
-        exec_result = execute_command_implementation(command)
-        execution_success, execution_error_message, execution_result_data = normalize_executor_result(exec_result, command)
-
-        result.success = execution_success
-        result.error_message = execution_error_message ~= "" and execution_error_message
-            or (last_error_message ~= "" and last_error_message or "")
-        if execution_result_data ~= nil then
-            result.result_data = execution_result_data
-        end
-
-        -- Preserve custom fields from executor result
-        if type(exec_result) == "table" then
-            for key, value in pairs(exec_result) do
-                if key ~= "success" and key ~= "error_message" and key ~= "result_data" and key ~= "cancelled" then
-                    result[key] = value
-                end
-            end
-        end
-
-        -- Handle user cancellation in nested command
-        if type(exec_result) == "table" and exec_result.cancelled then
-            result = finish_as_noop(db, history, exec_scope, result, { skip_rollback = true, cancelled = true })
-            goto cleanup
-        end
-
-        if execution_success then
-            command.status = "Executed"
-            command.executed_at = os.time()
-
-            -- Inherit playhead context from root (same user action, same playhead position)
-            command.playhead_value = root_playhead_value
-            command.playhead_rate = root_playhead_rate
-
-            -- Inherit pre-selection from root (for undo).
-            -- Post-selection is NOT inherited because it's captured AFTER executor completes,
-            -- but nested commands run DURING the executor. redo_group handles this by
-            -- restoring from root command after all nested redos complete.
-            command.selected_clip_ids_pre = root_selected_clips_pre
-            command.selected_edge_infos_pre = root_selected_edges_pre
-            command.selected_gap_infos_pre = root_selected_gaps_pre
-
-            -- Per-Sequence Undo: classify before persisting
-            command.sequence_id = classify_command_sequence_id(command)
-
-            -- Save nested command to DB (shares root's transaction)
-            saved = save_command_with_collision_retry(command, db)
-            sequence_number = command.sequence_number  -- retry may have reallocated
-            if saved then
-                -- Advance cursor so next nested command chains correctly
-                history.set_current_sequence_number(sequence_number)
-                log.event("Nested command %s (seq=%d) saved, group=%s",
-                    command.type, sequence_number, tostring(root_command_sequence_number))
-
-                apply_command_mutations(command)
-            else
-                result.success = false
-                result.error_message = "Failed to save nested command to database"
-                execution_success = false
-                history.decrement_sequence_number()
-                -- If we're inside an explicit undo group (e.g. a wrapper like
-                -- DeleteSelection that loops over multiple nested commands),
-                -- roll the whole group back NOW so subsequent siblings in the
-                -- wrapper's loop are rejected via is_undo_group_aborted and
-                -- the DB/clip_state both restore to the pre-group snapshot.
-                -- Without this, the wrapper would silently stack partial
-                -- failures on a bad savepoint.
-                --
-                -- When NOT inside an undo group, the nested command is a
-                -- plain sub-call from a parent executor. The parent will see
-                -- our failure return and its own top-level failure path will
-                -- handle the rollback — calling rollback_transaction here
-                -- would double-pop the parent's single mutation snapshot.
-                if history.get_current_undo_group_id() then
-                    rollback_transaction()
-                end
-            end
-        else
-            command.status = "Failed"
-            history.decrement_sequence_number()
-            -- Same rationale as the save-failed branch above: only unwind
-            -- the savepoint when an explicit group is active. Otherwise the
-            -- parent's top-level rollback owns the mutation snapshot and
-            -- rolling back here would pop it twice.
-            if history.get_current_undo_group_id() then
-                rollback_transaction()
-            end
-        end
-
-        exec_scope:finish(execution_success and "success_nested" or "failure_nested")
+        result = execute_nested_command(command, exec_scope)
         goto cleanup
     end
 
