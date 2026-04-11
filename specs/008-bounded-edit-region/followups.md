@@ -96,6 +96,63 @@ Pipeline perf improvement is smaller than the SQL win because the remaining budg
 
 ---
 
+### FU-7: content_changed triggers redundant full clip reload — NEW
+
+**Symptom:** BatchRippleEdit (and every other sequence-scoped command)
+currently does carefully-targeted in-memory mutation via `__timeline_mutations`
+→ `apply_command_mutations` → `clip_state.apply_mutations`, then immediately
+fires `Signals.emit("content_changed", seq_id)`, which triggers
+`playback_engine:notify_content_changed()` → `PLAYBACK.RELOAD_ALL_CLIPS(pc)`.
+The C++ controller throws away its entire prefetch window and re-fetches
+every clip in range via the clip provider callback (which hits SQLite).
+
+The surgical Lua-side update is preserved in `clip_state` (timeline view
+reads from there), but the C++ playback side does the brute-force reload
+anyway — defeating a large fraction of the 008 + FU-5 engineering win on
+the playback path.
+
+**Evidence:** the FU-6 profile accounts for ~52ms of BatchRippleEdit's
+107ms undo (22.5ms SQL + 30ms state hash × 2). The remaining ~55ms is
+unattributed. Unmeasured hypothesis: most of it is the two
+`RELOAD_ALL_CLIPS` hits on `content_changed` (one from `sequence_monitor`,
+one from `playback_engine` itself — both handlers fire on the same signal
+and both call `notify_content_changed` on the same engine).
+
+**Observed double subscription:**
+- `src/lua/ui/sequence_monitor.lua:122` — `Signals.connect("content_changed", ...)` → `self.engine:notify_content_changed()`
+- `src/lua/core/playback/playback_engine.lua:383` — `Signals.connect("content_changed", ...)` → `engine:notify_content_changed()`
+
+These two handlers fire on the same signal and call the same method on
+the same engine. One of them is redundant.
+
+**Mitigations to explore:**
+
+1. **Carry mutations through the signal.** Change emit shape to
+   `content_changed(seq_id, mutations)` (`mutations` optional, `nil`
+   = legacy "reload everything" semantics). Playback handler applies
+   mutations targetedly to its cached prefetch window mirroring what
+   `clip_state.apply_mutations` does on the Lua side. Fall back to
+   `RELOAD_ALL_CLIPS` only when mutations are nil or the shape is
+   beyond incremental (structural changes outside the prefetch range).
+
+2. **Defer RELOAD_ALL_CLIPS during playback.** If the user is parked,
+   the next frame-fetch will naturally query the provider; no reload
+   needed. During active playback, a reload is unavoidable for frames
+   that were already prefetched past the mutation point.
+
+3. **Drop the duplicate subscription.** One of sequence_monitor or
+   playback_engine should own the content_changed handler, not both.
+
+**Blocker:** none. Pure Lua + optional C++ API extension for incremental
+mutation application.
+
+**Why deferred:** Outside 008 scope. Worth measuring first — add perf
+tracking around the two notify_content_changed calls during a ripple
+execute/undo cycle on the anamnesis project, then attack whichever of
+the three mitigations above gives the most bang for the buck.
+
+---
+
 ### FU-6: Further command_manager overhead reduction — NEW
 
 **Current state (after 008 + FU-5):** BatchRippleEdit on anamnesis = ~63ms execute, ~107ms undo, ~115ms redo. Of the 63ms execute:
