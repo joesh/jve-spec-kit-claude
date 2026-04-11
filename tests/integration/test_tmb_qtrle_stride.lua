@@ -1,11 +1,21 @@
--- Integration test: 4K qtrle playback delivers 25 unique frames per second.
+-- Integration test: 4K qtrle playback delivers near-realtime unique frames.
 --
--- Bug: SPEED_DETECT cold-start measurement (80ms) causes stride=4.
--- Only every 4th frame is unique → animation at ~6fps instead of 25fps.
+-- DOMAIN INVARIANT: When the editor plays a 4K QuickTime RLE file at 25 fps,
+-- the viewer should see ~25 visually distinct frames per second. Anything
+-- drastically less means the decode/prefetch/cache/delivery pipeline is
+-- stalling or collapsing frames (e.g. stride > 1 from inflated decode-speed
+-- measurements, refill worker starvation, reader pool starvation, etc.).
 --
--- BLACK-BOX: Real PlaybackController, TMB, GPUVideoSurface, 4K qtrle file.
--- Plays for 2 seconds, then checks SURFACE_UNIQUE_FRAME_COUNT.
--- At 25fps × 2s = 50 frames. With stride=4, only ~12 unique. Test expects ≥ 35.
+-- This is a COARSE smoke test for the full playback path — NOT a precise
+-- regression guard for any single knob. If 4K qtrle playback breaks in a way
+-- that kills frame delivery (any cause), this should catch it.
+--
+-- BLACK-BOX: real PlaybackController, TMB, GPUVideoSurface, 4K qtrle file.
+-- 120 ticks × 16ms ≈ 2 s of playback. At 25 fps that is 48–50 delivered
+-- frames. Observed baseline: 45–48 unique (variance from startup pre-roll
+-- and boundary stop). Threshold 40 leaves headroom for jitter while still
+-- catching any gross pipeline failure (e.g. ≤ 12 unique under stride = 4,
+-- ≤ 1 under sync-decode cache miss, 0 under total refill collapse).
 
 local env = require("integration.integration_test_env")
 
@@ -44,11 +54,11 @@ print(string.format("  qtrle: %dx%d @ %d/%d fps, %d frames",
     info.width, info.height, info.fps_num, info.fps_den,
     math.floor(info.duration_us * info.fps_num / (1000000 * info.fps_den))))
 
--- Create TMB with pool_threads=0 (sync decode on GetVideoFrame).
--- The stride bug manifests through speed cache → stride_for_clip, which
--- is called regardless of pool_threads. Sync decode just means the
--- decode happens inline instead of via prefetch workers.
-local tmb = assert(EMP.TMB_CREATE(0))
+-- pool_threads=3 is the minimum for playback (1 prep + 1 video + 1 audio).
+-- pool_threads=0 cannot be used: deliverFrame() during Tick calls
+-- GetVideoFrame(cache_only=true), which skips sync decode. Without prefetch
+-- workers the video cache stays empty and no frames arrive during Play.
+local tmb = assert(EMP.TMB_CREATE(3))
 EMP.TMB_SET_SEQUENCE_RATE(tmb, info.fps_num, info.fps_den)
 EMP.TMB_SET_AUDIO_FORMAT(tmb, 48000, 2)
 
@@ -74,10 +84,16 @@ PLAYBACK.SET_CLIP_PROVIDER(pc, function() end)
 PLAYBACK.SET_POSITION_CALLBACK(pc, function() end)
 PLAYBACK.SET_CLIP_TRANSITION_CALLBACK(pc, function() end)
 
--- Seek to frame 0 (park) to prime the surface
-PLAYBACK.SEEK(pc, 0)
-local t0 = os.clock()
-while (os.clock() - t0) < 0.5 do end  -- wait for seek to complete
+-- Park the playhead at frame 0 to prime the surface — mirrors production
+-- playback_engine.lua flow. SET_DECODE_MODE("park") is CRITICAL: in park
+-- mode the reader seeks + flushes + decodes every call and leaves
+-- have_decode_pos=false, so the next Play-mode prefetch re-seeks cleanly.
+-- Without it, the reader stays in Play semantics, the format context is
+-- left positioned past frame 0, and the first prefetch DecodeAt(0) reads
+-- packet 1 — which for qtrle's strict have_frame=(pts<=target) semantics
+-- returns "no frame found at target time" and the track never fills.
+EMP.SET_DECODE_MODE("park")
+PLAYBACK.PARK(pc, 0)
 
 local before_unique = EMP.SURFACE_UNIQUE_FRAME_COUNT(surface)
 local before_total = EMP.SURFACE_FRAME_COUNT(surface)
@@ -91,6 +107,8 @@ local function poll_sleep(pc_h, seconds)
     CONTROL.PROCESS_EVENTS()
 end
 
+-- Match production flow: decode mode must be "play" before PLAY.
+EMP.SET_DECODE_MODE("play")
 PLAYBACK.PLAY(pc, 1, 1.0)
 local NUM_TICKS = 120  -- 120 × 16ms ≈ 2 seconds
 for i = 1, NUM_TICKS do
@@ -108,20 +126,20 @@ local total_during_play = after_total - before_total
 print(string.format("  after play: total=%d unique=%d (delta: total=%d unique=%d)",
     after_total, after_unique, total_during_play, unique_during_play))
 
--- At 25fps × 2s = 50 expected unique frames.
--- Allow for startup lag: ≥ 35 unique frames (70% of ideal).
--- With stride=4 bug: ~12 unique frames → fails clearly.
-local min_unique = 35
+-- At 25 fps × 2 s = 50 expected unique frames. Baseline: 45–48.
+-- Threshold 40 leaves room for jitter but catches gross failure modes
+-- (stride inflation, pipeline collapse, sync/prefetch races).
+local min_unique = 40
 local play_seconds = NUM_TICKS * 0.016  -- approximate
 assert(unique_during_play >= min_unique, string.format(
     "4K qtrle playback: only %d unique frames in %.1fs (expected >= %d). "..
-    "Likely stride > 1 from inflated SPEED_DETECT measurement.",
+    "Gross pipeline failure — check refill workers, reader pool, stride_for_clip.",
     unique_during_play, play_seconds, min_unique))
 
 print(string.format("  PASS: %d unique frames in %.1fs (%.1f unique fps)",
     unique_during_play, play_seconds, unique_during_play / play_seconds))
 
 -- Cleanup
-PLAYBACK.DESTROY(pc)
+PLAYBACK.CLOSE(pc)
 EMP.TMB_CLOSE(tmb)
 print("✅ test_tmb_qtrle_stride.lua passed")
