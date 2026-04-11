@@ -183,6 +183,12 @@ Format:
 
 4. **"Fallback" values.** You will add `or 0`, `or default`, `or nil` to avoid a crash. Every one of those hides a real bug. Assert instead.
 
+5. **Repo-wide destructive git commands that wipe state for other sessions.** You will reach for `git reset --hard`, `git stash -u`, `git clean -fd`, `git checkout .`, or history-rewriting rebases when you want to "clean up" before re-committing your work. **Joe runs multiple parallel Claude sessions on this repo.** Untracked files and uncommitted edits you don't recognize are almost certainly another Claude's in-progress work. If you reset-hard or stash-then-drop, you will destroy it silently — no assert, no warning, and by the time the other session notices, the reflog may already be pruned.
+
+    **Rule: only touch the files you are working on.** If you need to rewrite history for YOUR commits, use file-scoped patch operations (`git diff -- path/to/your/file > /tmp/patch.diff`, `git reset --hard <base> -- path/to/your/file` is not a thing but `git restore --source=<base> -- path/to/your/file` is, and so is `git checkout <base> -- path/to/your/file`). Rebuild history with `git cherry-pick --no-commit` plus per-file `git add path/to/your/file`. NEVER `git reset --hard` the whole branch, NEVER `git stash -u`, NEVER `git clean`, NEVER `git checkout -- .`. If you believe you need to, STOP and ask Joe first.
+
+    **What I did wrong (2026-04-10):** ran `git stash -u` to "save the working tree before rebuilding my 3 commits", which captured another Claude's in-progress `drp_importer.lua` edits and six untracked DRP files into the stash. Ran `git reset --hard b75755d`, cherry-picked + recommitted my work, then `git stash drop` because I thought the stash only contained changes I'd already re-applied. The drop orphaned the other Claude's work. Recovered it because Git's object store hadn't GC'd yet (`git show <dropped-stash-hash>:path/to/file`) — but that's a lucky recovery, not a safe workflow. The correct approach would have been to save ONLY my own files' diffs to patch files (`git diff -- src/mine.cpp`), leave everyone else's state in place, and rebuild by per-file checkout + patch apply.
+
 ## **🚫 ABSOLUTE PROHIBITIONS**
 
 - **Patching over a broken model** — When a bug reveals a design gap, fix the model, don't add a special-case mechanism alongside it. If you're adding a heuristic, threshold, or flag to work around a failure in an existing system, STOP and ask: "Is the underlying abstraction wrong?" Special cases accrete into unmaintainable complexity. Priority flags, polling loops, and "near boundary" heuristics are symptoms of a missing abstraction, not solutions. If the fix doesn't make the system simpler, it's probably wrong.
@@ -200,6 +206,7 @@ Format:
 - **Lazy implementations that skip understanding** — Before modifying ANY subsystem, read 2+ working examples of the same pattern and trace the FULL execution path (execute → mutations → UI refresh → undo → mutations → UI refresh). Use the SAME mechanisms as existing code. Never write a no-op undoer or a `reload_timeline` fallback without understanding why the proper mutation path doesn't work. If you don't understand how something works, READ THE CODE — don't guess.
 - **Blaming data instead of code** — When observed data doesn't match expectations (wrong IDs, missing records, unexpected values), the code that produced or consumed that data has a bug. NEVER theorize "stale data," "previous session," "test data issue," or "user error." Trace the code path that wrote the data. The unexpected data IS the bug symptom — investigate the implementation, not the data.
 - **Trying to prove your changes didn't cause it** — When a bug appears after your changes, don't waste time proving innocence. Look at what's happening — that tells you both how to fix it AND whether your changes caused it. The fix is the main concern; blame is irrelevant.
+- **Repo-wide destructive git commands** — `git reset --hard`, `git stash -u`, `git clean -fd`, `git checkout -- .`, `git restore .`, `git rm -rf`, force-push to main, and any history rewrite that touches files you didn't author. **Joe runs parallel Claude sessions.** Any uncommitted or untracked state you don't recognize belongs to a sibling session and is invisible to you until you destroy it. Scope every destructive operation to the specific files you authored: `git diff -- your/file`, `git checkout <commit> -- your/file`, `git restore --source=<commit> -- your/file`. If you can't accomplish your goal without touching state you didn't write, STOP and ask Joe first. See rule #5 under WARNINGS above for the specific incident and recovery procedure.
 
 ## **✅ SUCCESS PATTERN**
 
@@ -215,7 +222,7 @@ Format:
 
 ## **⚠️ REFACTOR SAFEGUARD**
 
-**Before starting any refactor**: Run `git status` and warn the user if there are uncommitted changes. Refactors should start from a clean working tree so changes can be tracked, reviewed, and reverted if needed. Commit or stash existing work first.
+**Before starting any refactor**: Run `git status`. If there are uncommitted or untracked files you don't recognize, **they belong to a parallel Claude session** — do not touch them, do not stash them, do not reset over them. Ask Joe before proceeding. Scope every subsequent git operation to the specific files you are refactoring. `git stash -u` and `git reset --hard` across the whole tree are forbidden because they silently destroy sibling-session work (see WARNING #5 and ABSOLUTE PROHIBITIONS above).
 
 **Bug ownership**: Don't distinguish between "your" bugs and "pre-existing" bugs. If you find a bug, it becomes yours to fix. We care about fixing things, not about blame. "You" means Claude (any session), not just this specific context. Virtually all the code is written by you so you're the one who should fix it.
 
