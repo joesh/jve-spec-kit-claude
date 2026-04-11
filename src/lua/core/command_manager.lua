@@ -228,6 +228,35 @@ local function apply_command_mutations(cmd)
     return applied
 end
 
+--- Bump the target sequence's mutation_generation counter.
+-- Called from every successful sequence-scoped mutation path (execute,
+-- undo, redo). The counter is monotonic: undo/redo still increments
+-- because a rollback is itself a state transition that invalidates any
+-- cached reference to a prior generation.
+--
+-- Semantics: one bump per user-visible action. Wrapper commands (Insert,
+-- Overwrite) form an undo group with their nested AddClipsToSequence
+-- children. The group is a single user action — undoing it unwinds
+-- every member, but the sequence's "generation" advances by exactly one.
+-- Callers pass the set of commands participating in the action (one for
+-- single commands, the full group for grouped undo/redo).
+local function increment_sequence_generations_for_commands(cmds)
+    if not cmds or #cmds == 0 then return end
+    local Sequence = require("models.sequence")
+    local bumped = {}
+    for _, cmd in ipairs(cmds) do
+        local seq_id = cmd and cmd.sequence_id
+        if seq_id and seq_id ~= "" and not bumped[seq_id] then
+            bumped[seq_id] = true
+            Sequence.increment_generation(seq_id)
+        end
+    end
+end
+
+local function increment_sequence_generation_if_scoped(cmd)
+    increment_sequence_generations_for_commands({ cmd })
+end
+
 -- Forward compatibility for event listeners
 function M.add_listener(listener)
     if type(listener) == "function" then
@@ -927,7 +956,7 @@ function M._execute_body(command_or_name, params)
 
     -- Declare all locals upfront to avoid goto scope issues
     local exec_scope, result, scope_ok, scope_err, stack_id, stack_info, stack_opts
-    local undo_group_active, begin_tx, snapshot_taken, perf, needs_state_hash, pre_hash
+    local undo_group_active, snapshot_taken, perf, needs_state_hash, pre_hash
     local sequence_number, executing_from_root, skip_selection_snapshot
     local exec_result, execution_success, execution_error_message, execution_result_data
     local suppress_noop_after, post_hash, saved
@@ -1176,7 +1205,6 @@ function M._execute_body(command_or_name, params)
         -- Mutation transaction parallels the DB transaction: snapshot in-memory
         -- clip state so rollback_transaction can restore it if the command fails.
         -- (For explicit undo groups, begin_undo_group handles this.)
-        begin_tx = true  -- flag for cleanup to commit/discard on success paths
         -- Commands that only modify sequence/track/project metadata (not
         -- clips) can declare spec.skip_clip_snapshot to avoid cloning every
         -- clip in the active sequence on every execution. For a 3000+ clip
@@ -1224,7 +1252,6 @@ function M._execute_body(command_or_name, params)
         if not executing_from_root and sequence_number > 1 then
             log.error("Command %d has NULL parent but is not first!", sequence_number)
             rollback_transaction()
-            begin_tx = nil
             snapshot_taken = false  -- rollback_mutations already popped it
             history.decrement_sequence_number()
             result.error_message = "FATAL: undo tree corruption"
@@ -1390,7 +1417,6 @@ function M._execute_body(command_or_name, params)
                                     command.type, tostring(mut.clip_id),
                                     orig.duration, abs_delta)
                                 rollback_transaction()
-                                begin_tx = nil  -- mutation snapshot already handled by rollback_transaction
                                 snapshot_taken = false  -- rollback_mutations already popped it
                                 history.decrement_sequence_number()
                                 result.success = false
@@ -1405,14 +1431,10 @@ function M._execute_body(command_or_name, params)
                 end
             end
 
-            -- Sequence mutation generation counter: any sequence-scoped
-            -- command that reaches this point has produced valid mutations
-            -- and is about to commit. Bump the target sequence's generation
-            -- inside the same transaction so nested-sequence references
-            -- observing the counter can detect staleness on next read.
-            if command.sequence_id and command.sequence_id ~= "" then
-                require("models.sequence").increment_generation(command.sequence_id)
-            end
+            -- Bump mutation_generation inside the commit transaction so
+            -- nested-sequence references observing the counter see the
+            -- increment atomically with the mutation itself.
+            increment_sequence_generation_if_scoped(command)
 
             -- COMMIT (skip if undo group is active - savepoint will handle commit)
             if not undo_group_active then
@@ -1427,7 +1449,6 @@ function M._execute_body(command_or_name, params)
                     clip_state.commit_mutation_transaction()
                     snapshot_taken = false
                 end
-                begin_tx = nil  -- prevent double-commit in cleanup
             end
             perf.log("db_commit")
             perf.reset()
@@ -1481,7 +1502,6 @@ function M._execute_body(command_or_name, params)
         else
             result.error_message = "Failed to save command to database"
             rollback_transaction()
-            begin_tx = nil  -- mutation snapshot already handled by rollback_transaction
             snapshot_taken = false  -- rollback_mutations already popped it
             history.decrement_sequence_number()
         end
@@ -1491,7 +1511,6 @@ function M._execute_body(command_or_name, params)
             or (last_error_message ~= "" and last_error_message or "Command execution failed")
         last_error_message = ""
         rollback_transaction()
-        begin_tx = nil  -- mutation snapshot already handled by rollback_transaction
         snapshot_taken = false  -- rollback_mutations already popped it
         history.decrement_sequence_number()
     end
@@ -1511,16 +1530,16 @@ function M._execute_body(command_or_name, params)
 
 ::cleanup::
     -- If we own a mutation snapshot that wasn't committed or rolled back
-    -- (noop, cancel, early exit), discard it. begin_tx tracks the DB
-    -- transaction; snapshot_taken tracks the in-memory clip_state clone.
-    -- They're independent — a command with skip_clip_snapshot sets begin_tx
-    -- but not snapshot_taken.
+    -- (noop, cancel, early exit), discard it by committing it — the
+    -- in-memory clip state is already in the desired post-command shape
+    -- either way. Guarded because skip_clip_snapshot commands never push
+    -- a snapshot, and the success/rollback branches above set this false
+    -- to signal "already handled".
     if snapshot_taken then
         local clip_state = require("ui.timeline.state.clip_state")
         clip_state.commit_mutation_transaction()
         snapshot_taken = false
     end
-    begin_tx = nil
     return result, command
 end
 
@@ -1854,6 +1873,7 @@ function M.undo_group(group_id)
 
     -- Run undoers + apply mutations per child (lean path, no ceremony)
     local earliest_cmd = nil
+    local group_cmds = {}
     for _, seq in ipairs(seq_numbers) do
         local cmd = M.get_command_at_sequence(seq, active_project_id)
         if not cmd then
@@ -1866,7 +1886,12 @@ function M.undo_group(group_id)
             return { success = false, error_message = err_msg }, cmd
         end
         earliest_cmd = cmd
+        table.insert(group_cmds, cmd)
     end
+
+    -- One generation bump per undo (not per member). The group is a
+    -- single user action — wrapper + nested children unwind together.
+    increment_sequence_generations_for_commands(group_cmds)
 
     -- Ceremony once: cursor, selection, playhead, notify
     apply_undo_ceremony(earliest_cmd)
@@ -1954,6 +1979,8 @@ local function execute_redo_command(cmd)
         undo_redo_in_progress = false
         return { success = false, error_message = err_msg }
     end
+    -- Single-command redo: one bump for this user action.
+    increment_sequence_generation_if_scoped(cmd)
     apply_redo_ceremony(cmd)
     undo_redo_in_progress = false
 
@@ -2045,6 +2072,7 @@ function M.redo_group(group_id)
     -- Run executors + apply mutations per child (lean path, no ceremony)
     local last_cmd = nil
     local root_cmd = nil
+    local group_cmds = {}
     for _, seq in ipairs(seq_numbers) do
         local cmd = M.get_command_at_sequence(seq, active_project_id)
         if not cmd then
@@ -2058,7 +2086,12 @@ function M.redo_group(group_id)
             return { success = false, error_message = err_msg }, cmd
         end
         last_cmd = cmd
+        table.insert(group_cmds, cmd)
     end
+
+    -- One generation bump per redo (not per member). Symmetric with
+    -- execute (one wrapper command) and undo_group.
+    increment_sequence_generations_for_commands(group_cmds)
 
     -- Ceremony once: cursor from last command, selection from root
     apply_redo_ceremony(last_cmd)
@@ -2085,6 +2118,8 @@ function M.execute_undo(original_command)
         result.success = true
         local undo_command = original_command:create_undo()
         result.result_data = undo_command:serialize()
+        -- Single-command undo: one bump for this user action.
+        increment_sequence_generation_if_scoped(original_command)
         apply_undo_ceremony(original_command)
         log.event("Undo successful (position=%s)", tostring(history.get_current_sequence_number()))
     else
