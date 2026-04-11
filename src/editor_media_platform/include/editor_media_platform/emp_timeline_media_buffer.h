@@ -524,11 +524,12 @@ private:
     bool m_mix_params_changed = false;
     MixedAudioCache m_mixed_cache;
 
-    // ── Decode speed cache ──
-    // Measured ms-per-frame keyed by media path. Write-once per path.
-    // Populated by SPEED_DETECT jobs (single-frame decode, wall-clock timed).
-    // Protected by m_pool_mutex (colocated with reader pool).
-    std::unordered_map<std::string, float> m_decode_speed_cache;
+    // Measured ms-per-frame per (track, file). Per-track keying is load-
+    // bearing: a shared entry lets one track's cold-start keyframe timing
+    // poison a sibling track's stride_for_clip before the sibling has any
+    // of its own samples, producing a single stride>1 stall on the sibling.
+    // Protected by m_pool_mutex.
+    std::map<std::pair<TrackId, std::string>, float> m_decode_speed_cache;
 
     // ── Diagnostics ──
     std::atomic<int64_t> m_video_cache_misses{0};

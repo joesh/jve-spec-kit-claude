@@ -293,7 +293,8 @@ void TimelineMediaBuffer::AddClips(TrackId track, std::vector<ClipInfo> clips) {
             {
                 std::lock_guard<std::mutex> plock(m_pool_mutex);
                 for (const auto& c : clips_to_warm) {
-                    if (m_decode_speed_cache.find(c.media_path) == m_decode_speed_cache.end()) {
+                    if (m_decode_speed_cache.find(std::make_pair(track, c.media_path))
+                            == m_decode_speed_cache.end()) {
                         PreBufferJob probe;
                         probe.type = PreBufferJob::SPEED_DETECT;
                         probe.track = track;
@@ -438,7 +439,8 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
                         ? (c.timeline_start < scan_end && c.timeline_end() > frame)
                         : (c.timeline_start < frame && c.timeline_end() > scan_end);
                     if (!in_window) continue;
-                    if (m_decode_speed_cache.find(c.media_path) != m_decode_speed_cache.end()) continue;
+                    if (m_decode_speed_cache.find(std::make_pair(tid, c.media_path))
+                            != m_decode_speed_cache.end()) continue;
                     if (m_offline.find(c.media_path) != m_offline.end()) continue;
                     probes.push_back({tid, c.clip_id, c.media_path,
                                       c.source_in, c.rate_num, c.rate_den});
@@ -1337,7 +1339,7 @@ int TimelineMediaBuffer::stride_for_clip(const TrackId& track, const ClipInfo& c
     assert(clip.rate_num > 0 && clip.rate_den > 0 && "stride_for_clip: invalid clip rate");
 
     std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
-    auto dit = m_decode_speed_cache.find(clip.media_path);
+    auto dit = m_decode_speed_cache.find(std::make_pair(track, clip.media_path));
     if (dit == m_decode_speed_cache.end()) return 1;
     if (dit->second <= 0) return 1;  // sentinel: first sample only, need second
 
@@ -2186,8 +2188,9 @@ bool TimelineMediaBuffer::process_next_decode_prep_job() {
                 // stride_for_clip returns 1 for negative values (safe default).
                 {
                     std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
-                    if (m_decode_speed_cache.find(job.media_path) == m_decode_speed_cache.end()) {
-                        m_decode_speed_cache[job.media_path] = -record_ms;
+                    auto key = std::make_pair(job.track, job.media_path);
+                    if (m_decode_speed_cache.find(key) == m_decode_speed_cache.end()) {
+                        m_decode_speed_cache[key] = -record_ms;
                     }
                 }
                 EMP_LOG_DEBUG("SPEED_DETECT: %s clip=%.8s path=%s decode=%.1fms (wall=%.1fms) [sentinel]",
@@ -2464,17 +2467,18 @@ void TimelineMediaBuffer::decode_into_cache(
     float per_frame_ms = held_reader->LastBatchMsPerFrame();
     if (per_frame_ms > 0) {
         std::lock_guard<std::mutex> pool_lock(m_pool_mutex);
-        auto it = m_decode_speed_cache.find(clip->media_path);
+        auto key = std::make_pair(track, clip->media_path);
+        auto it = m_decode_speed_cache.find(key);
         if (it == m_decode_speed_cache.end()) {
             // First measurement — record as sentinel, don't use for stride.
             // Negative value signals "have one sample, need second to confirm."
-            m_decode_speed_cache[clip->media_path] = -per_frame_ms;
+            m_decode_speed_cache[key] = -per_frame_ms;
         } else if (it->second < 0) {
             // Second measurement — record actual speed (replaces sentinel).
-            m_decode_speed_cache[clip->media_path] = per_frame_ms;
+            m_decode_speed_cache[key] = per_frame_ms;
         } else if (per_frame_ms < it->second) {
             // Subsequent: running minimum for steady-state convergence.
-            m_decode_speed_cache[clip->media_path] = per_frame_ms;
+            m_decode_speed_cache[key] = per_frame_ms;
         }
     }
 
