@@ -1401,4 +1401,52 @@ Signals.connect("project_changed", function()
     M._active_schema_id = nil
 end, 45)  -- after timeline_state (40), before timeline_panel/project_browser (50)
 
+--------------------------------------------------------------------------------
+-- Content change: the displayed data was mutated by a command (execute,
+-- undo, or redo). Re-read the current inspectable(s) so the field widgets
+-- show fresh values. Matches on sequence_id: both ClipInspectable and
+-- SequenceInspectable carry a `.sequence_id` field (for a clip, the clip's
+-- owning sequence; for a sequence inspectable, the sequence itself — under
+-- the IS-a refactor a masterclip is a sequence too, so both cases collapse
+-- to a single field match).
+--
+-- This replaces the undo/redo-era backdoor where set_selection({}) was
+-- abused to force a field re-read even when the selection was unchanged.
+-- Views pull from the model on a data-changed notification — per the MVC
+-- rule in CLAUDE.md.
+--------------------------------------------------------------------------------
+local function refresh_current_inspectable_for_sequence(seq_id)
+    if not seq_id or seq_id == "" then return end
+
+    local function matches_and_refresh(inspectable)
+        if inspectable and inspectable.sequence_id == seq_id then
+            if type(inspectable.refresh) == "function" then
+                pcall(inspectable.refresh, inspectable)
+            end
+            return true
+        end
+        return false
+    end
+
+    if M._multi_edit_mode and M._multi_inspectables then
+        local any_matched = false
+        for _, inspectable in ipairs(M._multi_inspectables) do
+            if matches_and_refresh(inspectable) then
+                any_matched = true
+            end
+        end
+        if any_matched then
+            M.load_multi_clip_data(M._multi_inspectables)
+        end
+    elseif M._current_inspectable then
+        if matches_and_refresh(M._current_inspectable) then
+            M.load_clip_data(M._current_inspectable)
+        end
+    end
+end
+
+Signals.connect("content_changed", function(seq_id)
+    refresh_current_inspectable_for_sequence(seq_id)
+end)
+
 return M
