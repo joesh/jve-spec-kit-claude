@@ -67,6 +67,23 @@ Move remaining if/elseif handlers (arrows, Tab, E, Comma/Period, F9/F10) to TOML
 
 ## Still Open
 
+### Pre-existing integration test failures (surfaced 2026-04-10)
+
+Discovered during the command_manager / undo-slowness session but pre-date that work — none are caused by commits in that session. Deferred by Joe's directive to investigate separately.
+
+- [ ] **`tests/integration/test_editor_operations.lua`** — fails at line 41 loading the gold master sequence with a hardcoded UUID `f29d6d6a-d173-436c-aba2-991a4078e049`. The UUID belongs to a prior DRP import; every fresh import generates new UUIDs, so the test is fundamentally incompatible with anyone else's working tree. Either pin to a fixture project or derive the sequence id at runtime (first timeline with `kind='timeline'`).
+- [ ] **`tests/integration/test_tmb_same_file_two_tracks.lua`** — V2 FROZEN: "only 7 distinct source PTS out of 10 frames. Same-file clips on different tracks cause V2 to repeat first frame." TMB decoder state issue when two tracks reference the same media file.
+- [ ] **`tests/integration/test_playback_av_sync.lua`** — 2 of 28 AV sync timing checks fail (specific thresholds). Likely timing tolerance or a real drift bug; needs targeted instrumentation.
+- [ ] **`tests/integration/test_codec_status_on_startup.lua`** — "3 clips show wrong status — persisted codec errors not applied before first paint". BRAW clip status persistence/ordering issue on project open.
+
+Reference in the session transcript: commit context around `f1d4909` and `1228d3c`.
+
+### Follow-ups from this session live in `specs/008-bounded-edit-region/followups.md`
+
+See FU-7 (`content_changed` triggers redundant `RELOAD_ALL_CLIPS` + double subscription between `sequence_monitor` and `playback_engine`) and FU-8 (per-entity watcher module — parallel to `core/signals.lua`, entity-type keys, cascade-up on mutation, replaces broadcast-and-filter pattern for panels watching a specific entity like the inspector).
+
+### Other open items
+
 - [ ] **Media `sample_rate` column** — Media model has no `sample_rate` field. `Sequence.ensure_masterclip()` defaults to 48000. Add `sample_rate INTEGER` to media table, populate from MediaReader probe, use in ensure_masterclip and audio clip creation.
 - [ ] **Edge-release latency** — NOT STARTED. `TimelineActiveRegion` has on-demand snapshot builds but no preloading/caching. Header TODOs unfilled. Needs design decision on when to preload (playhead move vs drag start) and perf target.
 - [ ] **Command isolation enforcement** — PARTIAL (60%). Depth tracking + undo grouping implemented. Missing: hard max-depth assert, re-entrancy guards. Current approach is soft guardrails, not fail-fast.
