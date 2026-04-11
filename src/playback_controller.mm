@@ -13,6 +13,7 @@
 
 #include <editor_media_platform/emp_timeline_media_buffer.h>
 #include <editor_media_platform/emp_frame.h>
+#include <editor_media_platform/emp_reader.h>
 #include <audio_output_platform/aop.h>
 #include <scrub_stretch_engine/sse.h>
 
@@ -865,6 +866,13 @@ void PlaybackController::Play(int direction, float speed) {
     JVE_ASSERT(speed > 0,
         "PlaybackController::Play: speed must be positive");
 
+    // Decode mode follows controller state. If the reader is left in a
+    // stale mode across a Play boundary, the first prefetch decode sees an
+    // unexpected format-context position and qtrle fails hard ("no frame
+    // found at target time") while H.264 silently returns a floor-or-first
+    // frame from the wrong source.
+    emp::SetDecodeMode(emp::DecodeMode::Play);
+
     // Capture before state reset — used to skip backward pre-fill on re-entry
     // (K+J key repeat calls Play() repeatedly while already playing).
     bool was_already_playing = m_playing.load(std::memory_order_relaxed);
@@ -962,6 +970,10 @@ void PlaybackController::Stop() {
     // (sets m_playing=false in displayLinkTick) and explicit Stop() call.
     bool was_playing = m_playing.exchange(false, std::memory_order_relaxed);
 
+    // Leave the reader in Park mode so the next Park/Seek forces a clean
+    // reseek + flush. See Play() above for why this matters.
+    emp::SetDecodeMode(emp::DecodeMode::Park);
+
     // If not playing AND no diagnostic data → nothing to do
     if (!was_playing && m_video_diag.size() == 0) {
         return;
@@ -995,6 +1007,10 @@ void PlaybackController::Park(int64_t frame) {
         "PlaybackController::Park: bounds not set (call SetBounds before Park)");
     JVE_ASSERT(m_tmb,
         "PlaybackController::Park: TMB not set (call SetTMB before Park)");
+
+    // Park mode makes every DecodeAt seek + flush + leave
+    // have_decode_pos=false, so the next Play's prefetch starts clean.
+    emp::SetDecodeMode(emp::DecodeMode::Park);
 
     m_position.store(frame, std::memory_order_relaxed);
     m_direction.store(0, std::memory_order_relaxed);

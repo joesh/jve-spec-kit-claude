@@ -84,15 +84,6 @@ PLAYBACK.SET_CLIP_PROVIDER(pc, function() end)
 PLAYBACK.SET_POSITION_CALLBACK(pc, function() end)
 PLAYBACK.SET_CLIP_TRANSITION_CALLBACK(pc, function() end)
 
--- Park the playhead at frame 0 to prime the surface — mirrors production
--- playback_engine.lua flow. SET_DECODE_MODE("park") is CRITICAL: in park
--- mode the reader seeks + flushes + decodes every call and leaves
--- have_decode_pos=false, so the next Play-mode prefetch re-seeks cleanly.
--- Without it, the reader stays in Play semantics, the format context is
--- left positioned past frame 0, and the first prefetch DecodeAt(0) reads
--- packet 1 — which for qtrle's strict have_frame=(pts<=target) semantics
--- returns "no frame found at target time" and the track never fills.
-EMP.SET_DECODE_MODE("park")
 PLAYBACK.PARK(pc, 0)
 
 local before_unique = EMP.SURFACE_UNIQUE_FRAME_COUNT(surface)
@@ -107,8 +98,6 @@ local function poll_sleep(pc_h, seconds)
     CONTROL.PROCESS_EVENTS()
 end
 
--- Match production flow: decode mode must be "play" before PLAY.
-EMP.SET_DECODE_MODE("play")
 PLAYBACK.PLAY(pc, 1, 1.0)
 local NUM_TICKS = 120  -- 120 × 16ms ≈ 2 seconds
 for i = 1, NUM_TICKS do

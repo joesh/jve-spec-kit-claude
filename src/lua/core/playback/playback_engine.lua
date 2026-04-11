@@ -707,7 +707,6 @@ function PlaybackEngine:shuttle(dir)
         self.state = "playing"
         self.transport_mode = "shuttle"
         self._last_committed_frame = math.floor(self:get_position())
-        qt_constants.EMP.SET_DECODE_MODE("play")
     elseif self.direction == dir then
         if self.speed < 8 then
             self.speed = self.speed * 2
@@ -760,7 +759,6 @@ function PlaybackEngine:slow_play(dir)
     self.transport_mode = "shuttle"
     self._last_committed_frame = math.floor(self:get_position())
 
-    qt_constants.EMP.SET_DECODE_MODE("play")
     self:_try_audio("_configure_and_start_audio")
 
     -- Delegate to C++ PlaybackController
@@ -784,7 +782,6 @@ function PlaybackEngine:play()
     self._last_committed_frame = math.floor(self:get_position())
     self:_clear_latch()
 
-    qt_constants.EMP.SET_DECODE_MODE("play")
     self:_try_audio("_configure_and_start_audio")
 
     -- Delegate to C++ PlaybackController
@@ -810,8 +807,7 @@ function PlaybackEngine:stop()
     self:_clear_latch()
 
     self:_stop_audio()
-    -- TMB stays alive across stop/play — no need to re-create
-    qt_constants.EMP.SET_DECODE_MODE("park")
+    -- TMB stays alive across stop/play — no need to re-create.
     -- Stop all background decode work (REFILL workers + pre-buffer jobs).
     -- Prevents zombie HW decoders from competing for GPU decode engine.
     if self._tmb then
