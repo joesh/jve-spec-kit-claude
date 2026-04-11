@@ -328,9 +328,13 @@ function M.execute_ui(command_name, params)
 end
 
 -- Rollback in-memory clip state to pre-transaction snapshot.
+-- No-op when no snapshot was taken (command opted out via
+-- spec.skip_clip_snapshot because it doesn't modify clips).
 local function rollback_mutations()
     local clip_state = require("ui.timeline.state.clip_state")
-    clip_state.rollback_mutation_transaction()
+    if clip_state.has_active_mutation_snapshot() then
+        clip_state.rollback_mutation_transaction()
+    end
 end
 
 -- Rollback an undo group: DB savepoint, cursor, in-memory mutations, abort flag.
@@ -923,7 +927,7 @@ function M._execute_body(command_or_name, params)
 
     -- Declare all locals upfront to avoid goto scope issues
     local exec_scope, result, scope_ok, scope_err, stack_id, stack_info, stack_opts
-    local undo_group_active, begin_tx, perf, needs_state_hash, pre_hash
+    local undo_group_active, begin_tx, snapshot_taken, perf, needs_state_hash, pre_hash
     local sequence_number, executing_from_root, skip_selection_snapshot
     local exec_result, execution_success, execution_error_message, execution_result_data
     local suppress_noop_after, post_hash, saved
@@ -1173,8 +1177,16 @@ function M._execute_body(command_or_name, params)
         -- clip state so rollback_transaction can restore it if the command fails.
         -- (For explicit undo groups, begin_undo_group handles this.)
         begin_tx = true  -- flag for cleanup to commit/discard on success paths
-        local clip_state = require("ui.timeline.state.clip_state")
-        clip_state.begin_mutation_transaction()
+        -- Commands that only modify sequence/track/project metadata (not
+        -- clips) can declare spec.skip_clip_snapshot to avoid cloning every
+        -- clip in the active sequence on every execution. For a 3000+ clip
+        -- project dragged in a slider, that's the difference between
+        -- smooth and stutter. Default is to snapshot (safe).
+        if not (spec and spec.skip_clip_snapshot) then
+            snapshot_taken = true
+            local clip_state = require("ui.timeline.state.clip_state")
+            clip_state.begin_mutation_transaction()
+        end
     end
 
     perf = create_command_perf_tracker(command)
@@ -1212,6 +1224,8 @@ function M._execute_body(command_or_name, params)
         if not executing_from_root and sequence_number > 1 then
             log.error("Command %d has NULL parent but is not first!", sequence_number)
             rollback_transaction()
+            begin_tx = nil
+            snapshot_taken = false  -- rollback_mutations already popped it
             history.decrement_sequence_number()
             result.error_message = "FATAL: undo tree corruption"
             exec_scope:finish("null_parent")
@@ -1377,6 +1391,7 @@ function M._execute_body(command_or_name, params)
                                     orig.duration, abs_delta)
                                 rollback_transaction()
                                 begin_tx = nil  -- mutation snapshot already handled by rollback_transaction
+                                snapshot_taken = false  -- rollback_mutations already popped it
                                 history.decrement_sequence_number()
                                 result.success = false
                                 result.error_message = string.format(
@@ -1394,9 +1409,15 @@ function M._execute_body(command_or_name, params)
             if not undo_group_active then
                 local db_module = require("core.database")
                 assert(db_module.commit(), "command_manager: post-command commit failed")
-                -- Discard mutation snapshot (commit: in-memory state is now authoritative)
-                local clip_state = require("ui.timeline.state.clip_state")
-                clip_state.commit_mutation_transaction()
+                -- Discard mutation snapshot (commit: in-memory state is now
+                -- authoritative). Guarded on snapshot_taken — a command that
+                -- declared skip_clip_snapshot never pushed a snapshot, so
+                -- there's nothing to commit.
+                if snapshot_taken then
+                    local clip_state = require("ui.timeline.state.clip_state")
+                    clip_state.commit_mutation_transaction()
+                    snapshot_taken = false
+                end
                 begin_tx = nil  -- prevent double-commit in cleanup
             end
             perf.log("db_commit")
@@ -1452,6 +1473,7 @@ function M._execute_body(command_or_name, params)
             result.error_message = "Failed to save command to database"
             rollback_transaction()
             begin_tx = nil  -- mutation snapshot already handled by rollback_transaction
+            snapshot_taken = false  -- rollback_mutations already popped it
             history.decrement_sequence_number()
         end
     else
@@ -1461,6 +1483,7 @@ function M._execute_body(command_or_name, params)
         last_error_message = ""
         rollback_transaction()
         begin_tx = nil  -- mutation snapshot already handled by rollback_transaction
+        snapshot_taken = false  -- rollback_mutations already popped it
         history.decrement_sequence_number()
     end
 
@@ -1478,13 +1501,17 @@ function M._execute_body(command_or_name, params)
     end
 
 ::cleanup::
-    -- If we own a mutation transaction that wasn't committed or rolled back
-    -- (noop, cancel, early exit), discard the snapshot.
-    if begin_tx then
+    -- If we own a mutation snapshot that wasn't committed or rolled back
+    -- (noop, cancel, early exit), discard it. begin_tx tracks the DB
+    -- transaction; snapshot_taken tracks the in-memory clip_state clone.
+    -- They're independent — a command with skip_clip_snapshot sets begin_tx
+    -- but not snapshot_taken.
+    if snapshot_taken then
         local clip_state = require("ui.timeline.state.clip_state")
         clip_state.commit_mutation_transaction()
-        begin_tx = nil
+        snapshot_taken = false
     end
+    begin_tx = nil
     return result, command
 end
 

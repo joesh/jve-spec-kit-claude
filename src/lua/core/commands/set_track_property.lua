@@ -34,6 +34,10 @@ local SPEC = {
     persisted = {
         previous_value = {},
     },
+    -- Modifies tracks, not clips. Skip the per-command clip-state
+    -- snapshot — on a 3000-clip sequence that clone costs several ms
+    -- per slider tick and dominates audio-mix interactivity.
+    skip_clip_snapshot = true,
 }
 
 function M.register(command_executors, command_undoers, _db, set_last_error)

@@ -444,6 +444,14 @@ end
 function M.get_version() return state_version end
 function M.inc_version() state_version = state_version + 1 end
 
+--- Whether any mutation snapshot is currently active on the stack.
+-- Used by command_manager.rollback_mutations to skip no-op rollbacks for
+-- commands that declared skip_clip_snapshot — they never pushed a snapshot,
+-- so there's nothing to pop.
+function M.has_active_mutation_snapshot()
+    return #mutation_snapshot_stack > 0
+end
+
 --- Snapshot current clip + selection state. Called by begin_undo_group.
 function M.begin_mutation_transaction()
     -- Shallow-clone each clip table (mutations modify fields in-place)
