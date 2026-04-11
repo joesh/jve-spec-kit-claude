@@ -175,6 +175,121 @@ the three mitigations above gives the most bang for the buck.
 
 ---
 
+### FU-8: Per-entity watcher module (parallel to Signals) — NEW
+
+**Symptom:** The signal system in `core/signals.lua` is a named-event
+broker with a fixed set of topic names (`content_changed`,
+`track_mix_changed`, `project_changed`, etc.). Panels and views that
+care about a *specific entity* (the inspector showing one clip, a
+master-clip thumbnail panel, etc.) have to subscribe to a broadcast
+signal and filter by id inside their callback. The burden of relevance
+matching lives in every subscriber.
+
+The ad8f1fb inspector fix is a working example of the smell: the
+callback checks `if inspectable.sequence_id == seq_id then refresh end`
+on every `content_changed` emit. For one or two subscribers it's fine;
+for N panels each with their own predicate, every mutation fans out
+through N filter checks. And switching what you're inspecting requires
+updating filter state, not re-subscribing to a different entity.
+
+**What we want — a file-watcher-style API, parallel to Signals:**
+
+```lua
+local watchers = require("core.watchers")
+
+-- Subscribe to a specific entity by key
+local token = watchers.watch("clip:" .. clip_id, function()
+    inspector.refresh()
+end)
+
+-- Mutation site notifies the exact key it touched
+watchers.notify("clip:" .. clip_id)
+
+-- Symmetric release
+watchers.unwatch(token)
+```
+
+The watcher module does the key match internally via a keyed dispatch
+table. Notify walks the key's subscriber list and fires each callback —
+no broadcast, no filter predicate in user code. Switching what the
+inspector is watching becomes `unwatch(old_token); watch(new_key,
+callback)`; no global state to reset.
+
+**Keys are per entity type, not per field.** Supported entity types:
+
+- `clip:<clip_id>` — clip row mutations
+- `sequence:<sequence_id>` — sequence-level content (clip list, metadata, tracks)
+- `track:<track_id>` — track row mutations (muted, soloed, volume, pan)
+- `media:<media_id>` — master clip metadata / online-offline status
+
+Per-field watches are explicitly out of scope — granularity down to
+individual properties is a complexity sink for no observed use case.
+Any change to an entity invalidates the whole inspector view, which is
+what load_clip_data already does.
+
+**Cascade policy:** mutation sites notify the finest-grained key AND
+each containment-hierarchy parent. Updating a clip notifies
+`clip:<id>` AND `sequence:<owner_id>`. A bulk_shift on a track
+notifies `track:<id>` AND `sequence:<owner_id>` (NOT every affected
+clip individually — a bulk shift is a "the sequence's shape changed"
+event and clip-level observers are inspector-style, which looks at one
+clip at a time). A track property change notifies `track:<id>` AND
+`sequence:<owner_id>`.
+
+Cascading up means panels can pick their granularity. Inspector
+watching a single clip registers for `clip:X`. Sequence monitor
+registers for `sequence:Y`. Both fire on a clip mutation because the
+mutator emits both keys.
+
+**Architecture:**
+
+- New module `src/lua/core/watchers.lua`, parallel to `core/signals.lua`.
+  Not a replacement — broadcast signals (`project_changed`, `cancel`)
+  stay on the Signals system; per-entity observation lives in Watchers.
+- Implementation: string-keyed table of subscriber lists, with opaque
+  token handles for unwatch. No complex priorities, no ordering
+  guarantees beyond "subscribers notified in registration order" (same
+  as Signals).
+- Mutation sites (`apply_mutations` in `timeline_state`, `clip_state`,
+  `command_helper`; `Track:save`; `Media` updates) are the notify
+  callers. The containment information needed for the cascade is
+  already local to each call site.
+
+**Migration path:**
+
+1. Ship `core/watchers.lua` with `watch/notify/unwatch`.
+2. Add notify calls to the three or four mutation sites.
+3. Migrate the inspector from the `content_changed` filter predicate
+   to `watch("clip:" .. id)` / `watch("sequence:" .. id)`. Remove the
+   filter callback.
+4. Any other panels with similar filter predicates can migrate
+   incrementally; the two systems coexist cleanly.
+
+**Open questions to resolve during implementation:**
+
+- Multi-inspectable case: does the inspector register N watches, one
+  per inspectable, or register for the common owning sequence?
+  Probably N watches — the multi-edit case is bounded by user
+  selection size, not sequence size.
+- Should notify be synchronous or coalesced? Synchronous matches the
+  current Signals pattern; coalesced might matter if a bulk mutation
+  emits hundreds of per-clip notifies in a tight loop. The cascade
+  policy above mostly avoids that (bulk_shift emits one sequence-level
+  notify, not N clip-level ones).
+- Does unwatch need to be safe to call from inside a notify callback?
+  Yes — inspector might re-subscribe during a refresh.
+
+**Blocker:** none. Independent work.
+
+**Why deferred:** The current broadcast-and-filter pattern works for
+the handful of existing subscribers, and the inspector fix in ad8f1fb
+gets the immediate undo slowness pain off the table. This refactor is
+about putting the right abstraction in place before the pattern
+proliferates; it's a 1-2 day implementation plus migration, best done
+as a standalone pass.
+
+---
+
 ### FU-5 original entry (for history; see above for resolution):
 
 **Current state (after 008):** Measured on the anamnesis project (20 tracks, 2882 media clips, 598 gap clips). Ripple at start of V1 (~975 downstream clips on that track alone):
