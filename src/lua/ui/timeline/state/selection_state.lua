@@ -71,7 +71,24 @@ function M.get_selected_clips()
 end
 
 function M.set_selection(clips, persist_callback)
-    data.state.selected_clips = clips or {}
+    clips = clips or {}
+    -- Idempotent: skip notification when the selection state is already
+    -- equivalent (common case: undo of a metadata command restores the
+    -- pre-snapshot empty selection). A no-op set_selection previously
+    -- cascaded through selection_hub → inspector.update_selection →
+    -- load_clip_data, dominating the undo latency for a user who is
+    -- editing track properties or sequence metadata with no clip
+    -- selected. We only cover the empty→empty case here — non-empty
+    -- element-wise equality is a future optimization if it shows up.
+    local prev_clips = data.state.selected_clips or {}
+    local prev_edges = data.state.selected_edges or {}
+    local prev_gaps = data.state.selected_gaps or {}
+    if #clips == 0 and #prev_clips == 0 and #prev_edges == 0 and #prev_gaps == 0 then
+        if persist_callback then persist_callback() end
+        return
+    end
+
+    data.state.selected_clips = clips
     data.state.selected_edges = {}
     data.state.selected_gaps = {}
 
@@ -180,7 +197,18 @@ local function gaps_equal(a, b)
 end
 
 function M.set_gap_selection(gaps)
-    data.state.selected_gaps = gaps or {}
+    gaps = gaps or {}
+    -- Idempotent: see M.set_selection for rationale. Restoring an empty
+    -- gap selection during undo must not fire the notify/listener chain
+    -- when the state is already empty.
+    local prev_clips = data.state.selected_clips or {}
+    local prev_edges = data.state.selected_edges or {}
+    local prev_gaps = data.state.selected_gaps or {}
+    if #gaps == 0 and #prev_gaps == 0 and #prev_clips == 0 and #prev_edges == 0 then
+        return
+    end
+
+    data.state.selected_gaps = gaps
     data.state.selected_clips = {}
     data.state.selected_edges = {}
     data.notify_listeners()
