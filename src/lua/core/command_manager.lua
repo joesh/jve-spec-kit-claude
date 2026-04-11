@@ -1405,6 +1405,15 @@ function M._execute_body(command_or_name, params)
                 end
             end
 
+            -- Sequence mutation generation counter: any sequence-scoped
+            -- command that reaches this point has produced valid mutations
+            -- and is about to commit. Bump the target sequence's generation
+            -- inside the same transaction so nested-sequence references
+            -- observing the counter can detect staleness on next read.
+            if command.sequence_id and command.sequence_id ~= "" then
+                require("models.sequence").increment_generation(command.sequence_id)
+            end
+
             -- COMMIT (skip if undo group is active - savepoint will handle commit)
             if not undo_group_active then
                 local db_module = require("core.database")

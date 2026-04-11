@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (6);
+INSERT OR IGNORE INTO schema_version (version) VALUES (7);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -105,6 +105,13 @@ CREATE TABLE IF NOT EXISTS sequences (
     -- Undo/Redo State
     current_sequence_number INTEGER DEFAULT 0,
     current_branch_path TEXT DEFAULT '',
+
+    -- Mutation Generation Counter
+    -- Incremented on every successful sequence-scoped mutation. Enables
+    -- O(1) staleness detection for nested-sequence references: a compound
+    -- clip referencing sub-sequence X can check whether X's current
+    -- generation matches the one cached at reference time.
+    mutation_generation INTEGER NOT NULL DEFAULT 0,
 
     created_at INTEGER NOT NULL,
     modified_at INTEGER NOT NULL

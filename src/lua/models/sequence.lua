@@ -125,7 +125,7 @@ function Sequence.load(id)
                        view_duration_frames, mark_in_frame, mark_out_frame, audio_rate,
                        selected_clip_ids, selected_edge_infos, start_timecode_frame,
                        video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
-                       selected_gap_infos, created_at, modified_at
+                       selected_gap_infos, created_at, modified_at, mutation_generation
                 FROM sequences WHERE id = ?
             ]])
     
@@ -181,7 +181,8 @@ function Sequence.load(id)
                     "Sequence.load: video_audio_split_ratio is NULL"),
 
                 created_at = stmt:value(21) or os.time(),
-                modified_at = stmt:value(22) or os.time()
+                modified_at = stmt:value(22) or os.time(),
+                mutation_generation = stmt:value(23) or 0,
             }
 
             -- Optional Marks (integer frames or nil)
@@ -333,6 +334,28 @@ function Sequence.update_scroll_offsets(seq_id, video_offset, audio_offset)
         stmt:exec()
         stmt:finalize()
     end
+end
+
+-- Atomically increment a sequence's mutation_generation counter.
+-- Called after every successful sequence-scoped mutation; cached
+-- generation values held by nested-sequence references become stale
+-- on the next read. O(1) single-row UPDATE, no read-modify-write.
+function Sequence.increment_generation(sequence_id)
+    assert(sequence_id and sequence_id ~= "",
+        "Sequence.increment_generation: sequence_id is required")
+    local db = require("core.database")
+    local conn = assert(db.get_connection(),
+        "Sequence.increment_generation: no database connection")
+    local stmt = assert(
+        conn:prepare("UPDATE sequences SET mutation_generation = mutation_generation + 1 WHERE id = ?"),
+        "Sequence.increment_generation: failed to prepare statement")
+    stmt:bind_value(1, sequence_id)
+    local ok = stmt:exec()
+    local err = ok and nil or conn:last_error()
+    stmt:finalize()
+    assert(ok, string.format(
+        "Sequence.increment_generation: UPDATE failed for %s: %s",
+        tostring(sequence_id), tostring(err)))
 end
 
 -- Count all sequences in the database

@@ -21,9 +21,11 @@ local sqlite3 = require("core.sqlite3")
 local json = require("dkjson")
 local log = require("core.logger").for_area("database")
 
--- Expected schema version. Projects with a different version cannot be opened.
--- TODO: Replace this gate with a proper migration system that upgrades V5→V6, etc.
-M.SCHEMA_VERSION = 6
+-- Expected schema version. Projects with a different version cannot be
+-- opened — per the no-backward-compat rule, incompatible projects must
+-- be re-imported from the original source (.drp) to create a fresh DB
+-- at the current version. No ALTER TABLE migration path.
+M.SCHEMA_VERSION = 7
 local path_utils = require("core.path_utils")
 
 local BIN_NAMESPACE = "bin"
