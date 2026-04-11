@@ -155,7 +155,7 @@ end
 -- Clip B: frames 50-79 (source_in=30)
 ------------------------------------------------------------------------
 local tmb1 = create_gap_tmb({
-    pool_threads = 2,
+    pool_threads = 3,
     clip_a_start = 0,
     clip_a_duration = 30,
     clip_a_source_in = 0,
@@ -175,7 +175,7 @@ EMP.TMB_CLOSE(tmb1)
 -- Clip B: frames 50-79 (source_in=0, fresh start)
 ------------------------------------------------------------------------
 local tmb2 = create_gap_tmb({
-    pool_threads = 2,
+    pool_threads = 3,
     clip_a_start = 0,
     clip_a_duration = 30,
     clip_a_source_in = 95,
