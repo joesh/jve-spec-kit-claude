@@ -5,10 +5,10 @@
 
 ## Status (2026-04-10)
 
-T001–T011, T013, T014 landed. T012 deferred to FU-2 (schema migration
-system dependency). FU-5 (trigger rewrite) landed on top of the
-planned scope. The checkboxes below are retained as the original
-planning snapshot; implementation status is authoritative in plan.md.
+All 14 tasks landed (T001–T014) plus FU-5 (trigger rewrite) on top
+of the planned scope. Implementation status is authoritative in
+[plan.md](plan.md); this file preserves the original task-breakdown
+snapshot for historical reference.
 
 ## Phase 3.1: Setup
 
@@ -52,7 +52,7 @@ planning snapshot; implementation status is authoritative in plan.md.
   - Test full recompute path too: `recompute_gap_clips(nil)` recomputes all tracks
   - Requires `timeline_core_state.recompute_gap_clips` to accept the parameter (will fail until T008 implements it)
 
-- [ ] T005 [P] Test: sequence generation counter in `tests/test_sequence_generation.lua`
+- [x] T005 [P] Test: sequence generation counter in `tests/test_sequence_generation.lua`
   - Create a sequence. Assert `mutation_generation` is 0
   - Execute a command that mutates the sequence. Assert `mutation_generation` incremented to 1
   - Execute another. Assert incremented to 2
@@ -116,7 +116,7 @@ planning snapshot; implementation status is authoritative in plan.md.
     - `timeline_core_state.init` and `reload_clips`: continue passing nil (full recompute)
   - **Depends on**: T010
 
-- [ ] T012 Sequence generation counter in `src/lua/models/sequence.lua` and `src/lua/schema.sql`
+- [x] T012 Sequence generation counter in `src/lua/models/sequence.lua` and `src/lua/schema.sql`
   - Add `mutation_generation INTEGER NOT NULL DEFAULT 0` to sequences table in schema.sql
   - Add field to `Sequence.load()` return value
   - Add `Sequence.increment_generation(sequence_id)` — single SQL `UPDATE sequences SET mutation_generation = mutation_generation + 1 WHERE id = ?`

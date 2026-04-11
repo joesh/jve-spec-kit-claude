@@ -26,56 +26,53 @@ Bounding further means either refactoring these consumers or adding on-demand `t
 
 ---
 
-### FU-2: Sequence generation counter (T012)
+### FU-2: Sequence generation counter (T012) — **LANDED**
 
-**Current state (after 008):** Not implemented. `test_sequence_generation.lua` fails.
+**Status:** Resolved. Dropped the "schema migration system blocker" claim, which was a fiction — the existing version gate already supports the no-backward-compat workflow (re-import from .drp, or one-shot `ALTER TABLE` for in-progress DBs). FU-2 needed ~30 lines across 4 files, not weeks of migration infrastructure.
 
-**Target:** Add `mutation_generation INTEGER NOT NULL DEFAULT 0` column to `sequences`. `Sequence.increment_generation(id)` bumps it. Enables O(1) staleness detection for nested sequence references.
+**What landed:**
+- `schema.sql`: `sequences.mutation_generation INTEGER NOT NULL DEFAULT 0` and `schema_version` bumped 6 → 7
+- `database.lua`: `M.SCHEMA_VERSION = 7`
+- `sequence.lua`: field added to `Sequence.load` return shape, new `Sequence.increment_generation(id)` method
+- `command_manager.lua`: bumps the counter **once per user action** on execute, undo, and redo. Single-command paths (`execute`, `M.execute_undo`, `execute_redo_command`) call an `increment_sequence_generation_if_scoped(cmd)` helper; group paths (`M.undo_group`, `M.redo_group`) call `increment_sequence_generations_for_commands(group_cmds)` which de-dupes sequence_ids across group members. The nested-execute path does not bump — the wrapper (Insert/Overwrite) already counts as one action.
+- `test_sequence_generation.lua`: setup fixed (populated `created_at`/`modified_at` on projects + all NOT NULL columns on sequences), extended with a negative test for the empty-id assert, and extended with an end-to-end Insert → undo → redo case that asserts the counter bumps to exactly 1 / 2 / 3 (proving the one-bump-per-action contract across wrapper + nested).
+- `resources/templates/film_24fps.jvp`: deleted stale V6 template; self-regenerates on next open
 
-**Why deferred:** Schema version bump from 6 → 7 requires the schema migration system, which is currently a stub (`database.SCHEMA_VERSION` gate with no migration logic). See `memory/todo_sqlite_strict_integer.md` area.
+**Semantic correction:** An earlier draft of FU-2 incremented inside `run_undoer` / `run_redo_executor`, which double-counted whenever a wrapper command formed an undo group with a nested child (Insert + AddClipsToSequence → 2 bumps on undo instead of 1). The end-to-end test caught it. The counter now represents "user-visible state transitions", which is what a nested-sequence reference wants: undo rolls the sequence back, but from the reference's point of view the sequence *changed* (one monotonic step), and the cached generation is stale either way.
 
-**Perf cost of deferring:** Zero. The counter is infrastructure for the nested-sequences feature which doesn't exist yet.
-
-**Blocker:** Schema migration system (V6 → V7 migration stub → real migration code). Can land after the migration system is built, or it can bundle with the migration feature itself.
-
----
-
-### FU-3: 13 pre-existing ripple test failures
-
-**Current state (after 008):** Baseline for 008 was 486 passing, 13 failing. All 13 predate 008.
-
-**Failing files:**
-- `test_batch_ripple_concurrent.lua`
-- `test_batch_ripple_gap_before_expand.lua`
-- `test_batch_ripple_gap_downstream_block.lua`
-- `test_batch_ripple_gap_nested_closure.lua`
-- `test_batch_ripple_handle_ripple.lua`
-- `test_batch_ripple_negative_duration.lua`
-- `test_batch_ripple_regressions.lua`
-- `test_batch_ripple_retry_limit.lua`
-- `test_batch_ripple_upstream_overlap.lua`
-- `test_ripple_in_multitrack_upstream_stable.lua`
-- `test_ripple_multi_edge_no_false_clamp.lua`
-- `test_scoped_gap_recompute.lua` (becomes FU-2 companion; unblocked by T011 but test setup may still need repair)
-- `test_sequence_generation.lua` (blocked on FU-2)
-
-**Classification:** Sampled `test_batch_ripple_gap_before_expand` — fails with `expected 2100, got 2500`, last touched by commit `ed29410 gap-as-clip: more test migrations`. These are leftovers from the **feature 005 gap-as-clip refactor** that were never fully updated. Expected values encode assumptions about how gap edges shift downstream clips that no longer match the current (correct-by-regression-guard) implementation.
-
-**Why deferred:** Not blocking 008. Each test needs individual evaluation — test expected value is wrong vs. real regression — and that triage plus per-test fixes don't fit in the 008 scope.
-
-**Action:** Classify each as "test expectation wrong" or "real bug" and track per-file. Joe's "no pre-existing excuse" rule applies but gets a separate task.
-
-**Blocker:** none; independent cleanup work.
+**Consumer status:** No code reads the counter yet. It's infrastructure for the future nested-sequences feature (a compound clip referencing sub-sequence X can cache X's generation at reference time and compare on next read).
 
 ---
 
-### FU-4: `test_scoped_gap_recompute` infrastructure repair
+### FU-3: 13 "pre-existing" ripple test failures — **RESOLVED** (all green)
 
-**Current state (after 008):** Test was hand-written in an earlier session with wrong APIs (`database.open` instead of `database.init`, `command_manager.init(db, ...)` instead of `(sequence_id, ...)`). Partial repair in commit `972baf0`. Not yet verified to run end-to-end.
+I labeled 13 ripple failures "pre-existing" at the start of 008 and carried that label across several cleanup passes without reading the errors. Every single one turned out to be either fixed incidentally by 008's core refactor or caused by 008 itself.
 
-**Target:** After T011 (scoped recompute), verify the test exercises the real behavior — that `recompute_gap_clips(affected_track_ids)` only touches the specified tracks' gaps.
+**Disposition:**
 
-**Blocker:** T011 landing (included in 008 Option A').
+| Test | How it resolved |
+|--|--|
+| `test_batch_ripple_concurrent` | Fixed incidentally by build_clip_cache rewrite to use timeline_state (commit 3180620) |
+| `test_batch_ripple_gap_before_expand` | Same |
+| `test_batch_ripple_gap_downstream_block` | Same |
+| `test_batch_ripple_gap_nested_closure` | Same |
+| `test_batch_ripple_handle_ripple` | Same |
+| `test_batch_ripple_negative_duration` | Same |
+| `test_batch_ripple_retry_limit` | Same |
+| `test_batch_ripple_upstream_overlap` | Same |
+| `test_ripple_in_multitrack_upstream_stable` | Same |
+| `test_batch_ripple_regressions` | 008-caused bug: blocker edge key reported the downstream `:in` instead of the upstream `:out`. Fixed in commit ee16dbf. |
+| `test_ripple_multi_edge_no_false_clamp` | 008-caused bug: cross-track propagation delta used the sum of all seeds on the anchor track instead of the per-edge delta. Fixed in commit ee16dbf. |
+| `test_scoped_gap_recompute` | Infrastructure repair (API fixes) in 972baf0 + T011 scoped recompute. |
+| `test_sequence_generation` | FU-2 landed — see above. |
+
+**Lesson:** The "pre-existing" label is an anti-pattern. It was already in my auto-memory as `feedback_no_preexisting_excuse.md`, and I reinforced it during this session after Joe had to explicitly say "there are ripple tests failing" to get me to read the errors.
+
+---
+
+### FU-4: `test_scoped_gap_recompute` infrastructure repair — **RESOLVED**
+
+Test setup used wrong APIs (`database.open`, `command_manager.init(db, …)`). Repaired during the initial TDD rewrite (972baf0) — correct APIs, proper NOT NULL column population on project + sequence seeding. T011 then turned the test green.
 
 ---
 
@@ -158,8 +155,7 @@ Raw-SQL isolation benchmarks confirm the SQL cost is structural:
 
 ---
 
-## Pointers for future work
+## Pointers for future work (remaining open items)
 
-- **FU-1 starting point:** `build_clip_cache` in `src/lua/core/commands/batch_ripple_edit.lua`. Need to know the ripple boundary before load, which means restructuring the pipeline or introducing a two-phase load.
-- **FU-2 starting point:** `src/lua/schema.sql:68` (sequences table), `src/lua/models/sequence.lua:114` (`Sequence.load`), `src/lua/core/database.lua:26` (`SCHEMA_VERSION`).
-- **FU-3 triage:** run each test, diff expected vs. actual, trace to either outdated assertion or real bug. Do not assume "pre-existing" = "not a real bug."
+- **FU-1 (further bound `build_clip_cache`):** starting point is `build_clip_cache` in `src/lua/core/commands/batch_ripple_edit.lua`. The current implementation reads all tracks from timeline_state (in-memory, fast). Strict "only load edit region + neighbors" needs the ripple boundary known before load, which means restructuring the pipeline or introducing a two-phase load. Marginal perf gain vs effort; deferred indefinitely.
+- **FU-6 (command_manager overhead reduction):** see the breakdown in the FU-6 section above — state hashing (~15ms/command) + command save + undo tree bookkeeping are the new ceiling. No single dominant target.

@@ -4,10 +4,11 @@
 
 ## Status (2026-04-10)
 
-Landed in full: components 1, 2, FU-5 (trigger rewrite).
-
-Deferred: component 3 (sequence generation counter) → FU-2, blocked
-on the schema migration system which is currently a stub.
+Landed in full: components 1, 2, 3 + FU-5 (trigger rewrite). The
+"schema migration blocker" that initially deferred component 3 was
+a fiction on my part — the existing version gate already supports
+the no-backward-compat workflow and component 3 needed ~30 lines
+of straightforward code. Landed as FU-2 in this branch.
 
 Perf impact on anamnesis (20 tracks, 2882 clips, worst-case V1 ripple):
 
@@ -191,17 +192,15 @@ Incremented by `command_manager` after any successful mutation on a sequence. Re
 - [x] Phase 1: Design complete
 - [x] Phase 2: Task planning complete
 - [x] Phase 3: Tasks generated (see tasks.md)
-- [x] Phase 4: Implementation complete (components 1, 2, FU-5)
+- [x] Phase 4: Implementation complete (components 1, 2, 3, FU-5)
 - [x] Phase 5: Validation passed — anamnesis ripple 38ms p50, test
-      suite 496/3 (3 pre-existing failures unchanged)
+      suite 500 / 0
 
 **Gate Status**:
 - [x] Initial Constitution Check: PASS
 - [x] Post-Design Constitution Check: PASS
 - [x] All NEEDS CLARIFICATION resolved
 
-**Deferred**:
-- Component 3 (sequence generation counter) → FU-2 — blocked on
-  schema migration system. Test_sequence_generation.lua is landed
-  as the regression guard that FU-2 will turn green.
+**Deferred**: none. Component 3 (sequence generation counter) landed
+as FU-2 — see [followups.md](followups.md#fu-2-sequence-generation-counter-t012--landed).
 - [x] Complexity deviations documented (none)
