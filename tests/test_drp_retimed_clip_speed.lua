@@ -291,9 +291,10 @@ print(string.format("  ✓ source_in=%d source_out=%d (different trim, same medi
 --   <MediaTimemapBA> blob: YMax=73.28s, XMax=83.28s → speed=0.8799 (CORRECT, 88%)
 --   <Duration>132</Duration>
 --
--- Bug: importer used hex magnitude (0.7273) instead of MTBA magnitude (0.88)
--- Result: source_in = floor(447 * 0.7273) = 325 (wrong)
--- Expected: source_in = floor(447 * 0.88) = 393 (correct, matches Resolve TC)
+-- The importer walks the curve: in_seconds = 447/25 = 17.88s,
+-- y_in = 17.88 × (73.28/83.28) ≈ 15.7322 source seconds
+-- in_offset = ceil(15.7322 × 25) = ceil(393.305) = 394 frames
+-- source_in = 111522 + 394 = 111916, matching Resolve's 01:14:36:16.
 --------------------------------------------------------------------------------
 
 print("\n--- Test 8: Real clip 01-333-2 — MTBA speed must override hex speed magnitude ---")
@@ -322,14 +323,16 @@ local v_333 = drp_importer.parse_resolve_tracks(seq_333, 25)
 local clip_333 = v_333[1].clips[1]
 
 -- Domain: MTBA speed = YMax/XMax = 73.28/83.28 ≈ 0.88 (88% speed).
--- in_offset: 447 DRP × 0.88 ≈ 393 source frames.
+-- Curve walk: in_offset = ceil(447/25 × 0.88 × 25) = ceil(393.305) = 394.
 -- media_tc_origin = floor(4460.88 * 25 + 0.5) = 111522
--- source_in = media_tc_origin + in_offset = 111522 + 393 = 111915
+-- source_in = media_tc_origin + in_offset = 111522 + 394 = 111916
+-- This matches Resolve's source viewer (01:14:36:16 = frame 111916).
 local mst8_origin = math.floor(4460.88 * 25 + 0.5)  -- 111522
-assert(clip_333.source_in == mst8_origin + 393, string.format(
-    "REGRESSION: clip 01-333-2 source_in must be %d (abs TC with MTBA speed 0.88). "..
-    "Got %d.", mst8_origin + 393, clip_333.source_in))
-print(string.format("  ✓ source_in = %d (MTBA speed, not hex 0.7273 → 325)",
+assert(clip_333.source_in == mst8_origin + 394, string.format(
+    "REGRESSION: clip 01-333-2 source_in must be %d (= 01:14:36:16, abs TC with "..
+    "MTBA speed 0.88, ceiling rounded). Got %d.",
+    mst8_origin + 394, clip_333.source_in))
+print(string.format("  ✓ source_in = %d (curve walk through MTBA, not hex 0.7273 → 325)",
     clip_333.source_in))
 
 -- source_duration: 132 DRP × 0.88 ≈ 116 source frames

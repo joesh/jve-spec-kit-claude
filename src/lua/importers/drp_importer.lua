@@ -767,7 +767,180 @@ local function detect_reverse_from_keyframes(kf_bytes)
     return last_y < first_y
 end
 
---- Decode MediaTimemapBA blob → {speed_ratio, is_reverse, y_max, x_max}
+--- Parse one inner keyframe blob → (x, y) doubles in seconds.
+-- Inner blob structure: [BE32 inner_version] [BE32 inner_fc] [TLV fields...]
+-- Fields include interp, YOut, YIn, Y, XOut, XIn, X.
+-- @param bytes string: full KeyframesBA payload bytes
+-- @param start_pos integer: 1-indexed start position of the inner blob
+-- @param max_end integer: 1-indexed inclusive last position the blob can occupy
+-- @return number|nil, number|nil: x, y values in seconds, or nil/nil on parse error
+local function parse_inner_keyframe(bytes, start_pos, max_end)
+    if start_pos + 7 > max_end then return nil, nil end
+    local inner_fc = read_be32(bytes, start_pos + 4)
+    if not inner_fc or inner_fc < 1 or inner_fc > 20 then return nil, nil end
+
+    local ffi = require("ffi")
+    local pos = start_pos + 8
+    local kf_x, kf_y = nil, nil
+
+    for _ = 1, inner_fc do
+        if pos + 3 > max_end then return nil, nil end
+        local name_len = read_be32(bytes, pos)
+        if not name_len then return nil, nil end
+        pos = pos + 4
+        if pos + name_len - 1 > max_end then return nil, nil end
+
+        local name_chars = {}
+        for j = 0, name_len - 1, 2 do
+            local lo = bytes:byte(pos + j + 1)
+            if lo then name_chars[#name_chars + 1] = string.char(lo) end
+        end
+        local field_name = table.concat(name_chars)
+        pos = pos + name_len
+
+        if pos + 3 > max_end then return nil, nil end
+        pos = pos + 2  -- separator
+        local b1, b2 = bytes:byte(pos, pos + 1)
+        local field_type = b1 * 256 + b2
+        pos = pos + 2
+
+        if field_type == 0x0002 or field_type == 0x0003 then
+            pos = pos + 5
+        elseif field_type == 0x0004 then
+            pos = pos + 9
+        elseif field_type == 0x0006 then
+            if pos + 8 > max_end then return nil, nil end
+            pos = pos + 1  -- pad
+            if field_name == "X" or field_name == "Y" then
+                local be_bytes = ffi.new("uint8_t[8]")
+                for j = 0, 7 do
+                    be_bytes[7 - j] = bytes:byte(pos + j)
+                end
+                local v = ffi.cast("double*", be_bytes)[0]
+                if field_name == "X" then kf_x = v
+                else kf_y = v end
+            end
+            pos = pos + 8
+        elseif field_type == 0x000a then
+            if pos + 4 > max_end then return nil, nil end
+            pos = pos + 4
+            if pos > max_end then return nil, nil end
+            local str_len = bytes:byte(pos)
+            pos = pos + 1 + str_len
+        elseif field_type == 0x000c then
+            local aux = read_be32(bytes, pos)
+            if not aux then return nil, nil end
+            pos = pos + 4
+            if pos > max_end then return nil, nil end
+            local val = bytes:byte(pos)
+            pos = pos + 1
+            local payload_len = aux * 256 + val
+            pos = pos + payload_len
+        else
+            return nil, nil
+        end
+    end
+
+    return kf_x, kf_y
+end
+
+--- Parse the KeyframesBA nested payload into an array of {x, y} pairs.
+-- KeyframesBA outer structure:
+--   [BE32 version] [BE32 keyframe_count]
+--   kf_count × [outer TLV field with name="0"/"1"/..., type=0x000c]
+-- Each outer field's 0x000c payload is an inner blob:
+--   [BE32 inner_version] [BE32 inner_fc] [TLV fields including X, Y]
+-- X = master playback timeline seconds, Y = source seconds.
+-- @param kf_bytes string: raw bytes of the KeyframesBA payload
+-- @return table|nil: array of {x=number, y=number} sorted ascending by x
+local function parse_keyframes(kf_bytes)
+    if not kf_bytes or #kf_bytes < 16 then return nil end
+
+    local kf_count = read_be32(kf_bytes, 5)
+    if not kf_count or kf_count < 2 or kf_count > 100 then return nil end
+
+    local keyframes = {}
+    local pos = 9  -- after 8-byte header
+
+    for _ = 1, kf_count do
+        -- Outer TLV field for this keyframe (name "0", "1", etc.)
+        if pos + 3 > #kf_bytes then return nil end
+        local name_len = read_be32(kf_bytes, pos)
+        if not name_len or name_len > 32 then return nil end
+        pos = pos + 4
+        if pos + name_len - 1 > #kf_bytes then return nil end
+        pos = pos + name_len  -- skip name (we don't need it)
+
+        if pos + 3 > #kf_bytes then return nil end
+        pos = pos + 2  -- separator
+        local b1, b2 = kf_bytes:byte(pos, pos + 1)
+        local field_type = b1 * 256 + b2
+        pos = pos + 2
+
+        if field_type ~= 0x000c then return nil end  -- expected nested blob
+
+        -- type 0x000c: 4-byte aux + 1-byte val + payload
+        local aux = read_be32(kf_bytes, pos)
+        if not aux then return nil end
+        pos = pos + 4
+        if pos > #kf_bytes then return nil end
+        local val = kf_bytes:byte(pos)
+        pos = pos + 1
+        local payload_len = aux * 256 + val
+        if payload_len < 8 or pos + payload_len - 1 > #kf_bytes then return nil end
+
+        local kf_x, kf_y = parse_inner_keyframe(kf_bytes, pos, pos + payload_len - 1)
+        if kf_x ~= nil and kf_y ~= nil then
+            keyframes[#keyframes + 1] = { x = kf_x, y = kf_y }
+        end
+
+        pos = pos + payload_len
+    end
+
+    if #keyframes < 2 then return nil end
+    table.sort(keyframes, function(a, b) return a.x < b.x end)
+    return keyframes
+end
+
+--- Evaluate a piecewise-linear retime curve at master-timeline X (seconds).
+-- Returns the corresponding source-time Y (seconds). Clamps to endpoints.
+-- @param keyframes table: array of {x, y} pairs sorted ascending by x
+-- @param x number: query position in master playback timeline seconds
+-- @return number: corresponding source position in seconds
+local function eval_curve(keyframes, x)
+    if not keyframes or #keyframes < 2 then return x end
+    if x <= keyframes[1].x then
+        -- Extrapolate from first segment so that X=0 maps consistently
+        local k0 = keyframes[1]
+        local k1 = keyframes[2]
+        local span = k1.x - k0.x
+        if span <= 0 then return k0.y end
+        local slope = (k1.y - k0.y) / span
+        return k0.y + (x - k0.x) * slope
+    end
+    if x >= keyframes[#keyframes].x then
+        -- Extrapolate from last segment
+        local k0 = keyframes[#keyframes - 1]
+        local k1 = keyframes[#keyframes]
+        local span = k1.x - k0.x
+        if span <= 0 then return k1.y end
+        local slope = (k1.y - k0.y) / span
+        return k1.y + (x - k1.x) * slope
+    end
+    for i = 1, #keyframes - 1 do
+        local k0 = keyframes[i]
+        local k1 = keyframes[i + 1]
+        if x >= k0.x and x <= k1.x then
+            local span = k1.x - k0.x
+            if span <= 0 then return k0.y end
+            local t = (x - k0.x) / span
+            return k0.y + t * (k1.y - k0.y)
+        end
+    end
+    return keyframes[#keyframes].y
+end
+
+--- Decode MediaTimemapBA blob → {speed_ratio, is_reverse, y_max, x_max, keyframes}
 --
 -- Two MTBA formats exist:
 --   Header 0x02 (9 bytes): [1-byte header] [8-byte BE double = media duration]
@@ -775,9 +948,10 @@ end
 --   Header 0x01 (large): [BE32 version=1] [BE32 field_count] [TLV fields]
 --     → YMax (source duration sec), XMax (retimed duration sec), KeyframesBA
 --     → speed_ratio = YMax / XMax, direction from keyframe slope.
+--     → keyframes = parsed (X, Y) pairs from KeyframesBA for curve walking.
 --
 -- @param hex_str string: hex-encoded MediaTimemapBA blob
--- @return table|nil: {speed_ratio=number, is_reverse=boolean, y_max=number, x_max=number}
+-- @return table|nil: {speed_ratio, is_reverse, y_max, x_max, keyframes}
 local function decode_media_timemap(hex_str)
     local bytes = hex_to_bytes(hex_str)
     if not bytes or #bytes <= 9 then return nil end
@@ -799,11 +973,33 @@ local function decode_media_timemap(hex_str)
 
     local speed_ratio = y_max / x_max
 
-    -- Direction detection from KeyframesBA nested blob
+    -- Parse the KeyframesBA nested blob into both reverse-flag and curve.
     local is_reverse = false
+    local keyframes = nil
     local kf_raw = raw_payloads and raw_payloads["KeyframesBA"]
     if kf_raw then
         is_reverse = detect_reverse_from_keyframes(kf_raw)
+        keyframes = parse_keyframes(kf_raw)
+
+        -- Sanity-check the parsed keyframes against the parent YMax/XMax.
+        -- The curve must start at (0, 0) and end at (XMax, YMax). When the
+        -- decoded keyframes don't match (e.g. test fixtures where Resolve
+        -- stores tangent-only data with all-zero anchors), discard them and
+        -- let the importer synthesize a constant-speed linear curve from
+        -- y_max / x_max instead.
+        if keyframes and #keyframes >= 2 then
+            local first = keyframes[1]
+            local last = keyframes[#keyframes]
+            local epsilon = 0.01
+            local origin_ok = math.abs(first.x) < epsilon and math.abs(first.y) < epsilon
+            local end_ok = math.abs(last.x - x_max) < epsilon
+                and math.abs(last.y - y_max) < epsilon
+            if not (origin_ok and end_ok) then
+                log.detail("decode_media_timemap: keyframes inconsistent with YMax/XMax — first=(%.3f,%.3f) last=(%.3f,%.3f) ymax=%.3f xmax=%.3f — discarding curve",
+                    first.x, first.y, last.x, last.y, y_max, x_max)
+                keyframes = nil
+            end
+        end
     end
 
     return {
@@ -811,6 +1007,7 @@ local function decode_media_timemap(hex_str)
         is_reverse = is_reverse,
         y_max = y_max,
         x_max = x_max,
+        keyframes = keyframes,
     }
 end
 
@@ -1655,6 +1852,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             -- Try MediaTimemapBA for authoritative speed/direction on retimed clips.
             -- MTBA is present on all retimed clips; hex speed is unreliable for
             -- variable-speed clips (encodes garbage near-zero values).
+            local retime_keyframes = nil  -- (X, Y) seconds pairs from MTBA, when present
             local mtba_elem = find_element(clip_elem, "MediaTimemapBA")
             if mtba_elem then
                 local mtba_hex = get_text(mtba_elem)
@@ -1674,8 +1872,11 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                             end
                         end
                         clip_speed = mtba_speed
-                        log.event("DRP retime: clip '%s' speed from MTBA: %.4f (YMax=%.2f XMax=%.2f reverse=%s)",
-                                  clip_name, clip_speed, mtba.y_max, mtba.x_max, tostring(mtba.is_reverse))
+                        retime_keyframes = mtba.keyframes  -- may still be nil if parse failed
+                        log.event("DRP retime: clip '%s' speed from MTBA: %.4f (YMax=%.2f XMax=%.2f reverse=%s kf=%d)",
+                                  clip_name, clip_speed, mtba.y_max, mtba.x_max,
+                                  tostring(mtba.is_reverse),
+                                  retime_keyframes and #retime_keyframes or 0)
                     end
                 end
             end
@@ -1692,6 +1893,17 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             local duration_timeline_frames = duration_raw
             local abs_speed = math.abs(clip_speed)
 
+            -- If we have a non-unity speed but no MTBA keyframes (e.g. synthetic
+            -- test data with `<In>NN|hex_speed</In>` and no MediaTimemapBA),
+            -- synthesize a constant-speed curve so all retime math goes through
+            -- the curve-walking code path uniformly.
+            if not retime_keyframes and abs_speed ~= 1.0 then
+                retime_keyframes = {
+                    { x = 0, y = 0 },
+                    { x = 1e9, y = 1e9 * abs_speed },
+                }
+            end
+
             -- Compute media TC origin: <MediaStartTime> converted to clip-rate units.
             -- MST is seconds since midnight. When MST=0 or nil, media_tc_origin=0
             -- (file starts at 00:00:00:00 = file-relative = absolute TC).
@@ -1707,20 +1919,35 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 end
                 in_offset = math.floor(in_value * 48000 / frame_rate * audio_speed + 0.5)
                 source_duration = math.floor(duration_raw * 48000 / frame_rate * audio_speed + 0.5)
-            elseif abs_speed ~= 1.0 then
-                -- Retimed video: in_value and duration_raw are in RETIMED timebase
-                if media_start_time and media_start_time > 0 then
-                    media_tc_origin = math.floor(media_start_time * frame_rate + 0.5)
-                end
-                in_offset = math.floor(in_value * abs_speed + 0.5)
-                source_duration = math.floor(duration_raw * abs_speed + 0.5)
             else
-                -- Non-retimed video: in_value IS the source frame directly
+                -- Video: <In> is in *master playback timeline frames* — the X axis
+                -- of the MediaTimemapBA retime curve. To convert to source frames
+                -- we walk the curve at X=In and read Y. For unretimed clips the
+                -- curve is identity (or absent) and Y=X, so the formula collapses.
                 if media_start_time and media_start_time > 0 then
                     media_tc_origin = math.floor(media_start_time * frame_rate + 0.5)
                 end
-                in_offset = math.floor(in_value)
-                source_duration = duration_raw
+                if retime_keyframes and #retime_keyframes >= 2 then
+                    -- Walk the curve. Inputs are in seconds at clip frame_rate.
+                    -- Use CEILING for both endpoints: the in-point is the first
+                    -- valid source frame ≥ the computed position (so we don't
+                    -- play pre-clip content), and the out-point is treated the
+                    -- same way to keep source_duration consistent with how
+                    -- Resolve rounds — verified empirically against an
+                    -- un-retimed-twin clip whose <In> field Resolve recomputed.
+                    local in_sec = in_value / frame_rate
+                    local out_sec = (in_value + duration_raw) / frame_rate
+                    local y_in_sec = eval_curve(retime_keyframes, in_sec)
+                    local y_out_sec = eval_curve(retime_keyframes, out_sec)
+                    in_offset = math.ceil(y_in_sec * frame_rate)
+                    local out_offset = math.ceil(y_out_sec * frame_rate)
+                    source_duration = out_offset - in_offset
+                else
+                    -- No curve (no MTBA, 9-byte short MTBA, or parse failure):
+                    -- in_value is source frames directly. This is the un-retimed case.
+                    in_offset = math.floor(in_value)
+                    source_duration = duration_raw
+                end
             end
 
             -- Sanity: MST max = 86400s (midnight). At 48kHz = ~4.1B samples.
