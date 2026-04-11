@@ -288,13 +288,31 @@ function M.apply_mutations(mutations, persist_callback)
 
             if shift.shift_frames ~= 0 then
                 local list = track_clip_index[shift.track_id] or {}
+                local shifted = 0
                 for _, clip in ipairs(list) do
                     if type(clip.timeline_start) == "number"
                         and clip.timeline_start >= shift.start_frame then
                         clip.timeline_start = clip.timeline_start + shift.shift_frames
+                        shifted = shifted + 1
                         changed = true
                     end
                 end
+                -- Output invariant: a non-zero shift emitted by any
+                -- producer MUST find at least one clip on the target
+                -- track at or past start_frame. The producer computes
+                -- start_frame from a clip it just looked up on that
+                -- track, so zero affected rows means either (a) the
+                -- producer emitted against a dead track or stale
+                -- position, or (b) clip_state diverged from the DB
+                -- state between the SQL apply and this in-memory sync.
+                -- Both are bugs — crash with context rather than
+                -- silently dropping the edit.
+                assert(shifted > 0, string.format(
+                    "clip_state.apply_mutations: bulk_shift for track %s "
+                    .. "at start_frame %d with delta %d affected zero clips "
+                    .. "(track has %d clips)",
+                    tostring(shift.track_id), shift.start_frame,
+                    shift.shift_frames, #list))
             end
         end
     end

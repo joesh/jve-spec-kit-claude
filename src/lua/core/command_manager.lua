@@ -913,6 +913,18 @@ end
 -- top-level paths uniformly; this function calls `:finish` on it
 -- exactly once before returning.
 local function execute_nested_command(command, exec_scope)
+    assert(command and command.type and command.type ~= "",
+        "execute_nested_command: command with .type is required")
+    assert(exec_scope and type(exec_scope.finish) == "function",
+        "execute_nested_command: exec_scope with :finish method is required")
+    -- Note: root_command_sequence_number may be nil here. That happens
+    -- when a non-recording top-level command (spec.undoable == false,
+    -- e.g. DeleteSelection) spawns nested recording children — the
+    -- non-recording parent bypasses the top-level ceremony that sets
+    -- root_command_sequence_number, but the nested children still run
+    -- under the parent's explicit undo group. The `or`-chains below
+    -- handle the nil case.
+
     -- Non-undoable nested commands bypass the recording ceremony entirely.
     -- Example: a wrapper command invoking a utility that mutates nothing
     -- the user would want to undo independently.

@@ -343,6 +343,11 @@ end
 -- Called after every successful sequence-scoped mutation; cached
 -- generation values held by nested-sequence references become stale
 -- on the next read. O(1) single-row UPDATE, no read-modify-write.
+--
+-- Asserts on unknown sequence_id: a caller reaching this function with
+-- an id that doesn't exist is a bug (stale sequence_id on a command,
+-- or a command targeting a sequence that was deleted out from under
+-- it). Silent zero-rows-affected would hide that bug.
 function Sequence.increment_generation(sequence_id)
     assert(sequence_id and sequence_id ~= "",
         "Sequence.increment_generation: sequence_id is required")
@@ -359,6 +364,10 @@ function Sequence.increment_generation(sequence_id)
     assert(ok, string.format(
         "Sequence.increment_generation: UPDATE failed for %s: %s",
         tostring(sequence_id), tostring(err)))
+    local affected = conn:changes()
+    assert(affected == 1, string.format(
+        "Sequence.increment_generation: no row matched sequence_id %s (changes=%d)",
+        tostring(sequence_id), tonumber(affected) or -1))
 end
 
 -- Count all sequences in the database

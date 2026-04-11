@@ -888,6 +888,19 @@ function M.apply_mutations(db, mutations)
             end
             reset_stmt(select_stmt)
 
+            -- Output invariant: a bulk_shift must find at least one
+            -- clip at or past start_frame. The producer computes
+            -- start_frame from a clip it just looked up on the track,
+            -- so zero affected rows means stale state or a producer
+            -- bug. Surface the silent drop rather than returning OK.
+            if #clip_ids == 0 then
+                finalize_all_stmts()
+                return false, string.format(
+                    "bulk_shift: no clips on track %s at or past start_frame %d "
+                    .. "(producer bug or stale state)",
+                    tostring(mut.track_id), mut.start_frame)
+            end
+
             local update_shift_stmt, update_shift_err = ensure_bulk_shift_by_id_stmt()
             if not update_shift_stmt then
                 finalize_all_stmts()
@@ -1147,6 +1160,19 @@ function M.revert_mutations(db, mutations, command, sequence_id)
                     end
                 end
                 select_stmt:finalize()
+
+                -- Output invariant: the forward shift moved at least one
+                -- clip (apply_mutations asserts that); reverting must find
+                -- the same set at the post-shift position. Zero here means
+                -- the DB state diverged between forward and reverse, or
+                -- a concurrent mutation removed the clips out from under
+                -- the undo — either way it's a bug we want to see loudly.
+                if #clip_ids == 0 then
+                    return false, string.format(
+                        "bulk_shift undo: no clips on track %s at or past "
+                        .. "post_shift_start %d (DB diverged from forward mutation)",
+                        tostring(mut.track_id), post_shift_start)
+                end
 
                 local update_stmt = db:prepare("UPDATE clips SET timeline_start_frame = timeline_start_frame + ?, modified_at = ? WHERE id = ?")
                 if not update_stmt then

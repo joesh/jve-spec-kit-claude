@@ -71,6 +71,13 @@ local ok, err = pcall(Sequence.increment_generation, "")
 assert(not ok and err and err:find("sequence_id is required"),
     "increment_generation should reject empty sequence_id with a clear error")
 
+-- Increment must assert when the sequence_id names a row that does not
+-- exist. Silently running UPDATE ... WHERE id = '<bogus>' with zero rows
+-- affected would hide a caller bug (stale sequence_id on a command).
+local ok_missing, err_missing = pcall(Sequence.increment_generation, "no_such_seq")
+assert(not ok_missing and err_missing and err_missing:find("no row") ~= nil,
+    "increment_generation should assert on nonexistent sequence_id, got: " .. tostring(err_missing))
+
 -- ----------------------------------------------------------------------
 -- Integration: execute → undo → redo must each bump the counter.
 -- ----------------------------------------------------------------------
