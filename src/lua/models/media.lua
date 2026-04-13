@@ -126,6 +126,30 @@ function M:get_audio_start_tc()
     return nil, nil
 end
 
+--- Get the file's original container TC (from DRP's TracksBA.StartTime).
+-- Present only when a Set Timecode override was applied in the authoring NLE,
+-- causing the displayed TC to differ from the file's container TC.
+-- When absent (nil), file TC equals displayed TC (camera footage, no override).
+-- @return number|nil frames at start_tc_rate, number|nil rate
+function M:get_file_original_timecode()
+    local meta = self:_parsed_metadata()
+    if meta and meta.file_original_timecode ~= nil then
+        return meta.file_original_timecode, meta.start_tc_rate
+    end
+    return nil, nil
+end
+
+--- Get the file's original container TC in audio samples.
+-- Same semantics as get_file_original_timecode but in audio sample units.
+-- @return number|nil samples at start_tc_audio_rate, number|nil rate
+function M:get_file_original_timecode_audio()
+    local meta = self:_parsed_metadata()
+    if meta and meta.file_original_timecode_audio ~= nil then
+        return meta.file_original_timecode_audio, meta.start_tc_audio_rate
+    end
+    return nil, nil
+end
+
 --- Explicitly extract TC origin from the media file and store in metadata.
 -- Call this at import time when the file is guaranteed to exist.
 -- Asserts on failure — if you're calling this, the file MUST be readable.
@@ -452,6 +476,86 @@ function M.get_audio_for_project(project_id)
     local result = {}
     while stmt:next() do
         result[#result + 1] = { id = stmt:value(0), file_path = stmt:value(1) }
+    end
+    stmt:finalize()
+    return result
+end
+
+--- Get the source extent (min source_in, max source_out) across all clips on this media,
+--- normalized to a common rate. Each clip's source_in/source_out is in its own native
+--- units (video frames at clip fps, audio samples at sample rate). This function converts
+--- every clip to target_rate before computing min/max.
+--- @param target_rate number Rate to normalize to (typically media_start_tc_rate)
+--- @return number|nil min_source_in, number|nil max_source_out (both in target_rate units)
+function M:get_source_extent(target_rate)
+    assert(target_rate and target_rate > 0,
+        string.format("Media:get_source_extent: target_rate must be positive, got %s (media_id=%s)",
+            tostring(target_rate), tostring(self.id)))
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        string.format("Media:get_source_extent: no database connection (media_id=%s)", tostring(self.id)))
+    local stmt = assert(db:prepare([[
+        SELECT source_in_frame, source_out_frame, fps_numerator, fps_denominator
+        FROM clips WHERE media_id = ? AND clip_kind != 'master'
+    ]]), "Media:get_source_extent: failed to prepare query")
+    stmt:bind_value(1, self.id)
+    assert(stmt:exec(), string.format(
+        "Media:get_source_extent: query failed for media_id=%s", tostring(self.id)))
+
+    local min_in, max_out
+    while stmt:next() do
+        local src_in = stmt:value(0)
+        local src_out = stmt:value(1)
+        local fps_num = stmt:value(2)
+        local fps_den = stmt:value(3) or 1
+        if src_in and src_out and fps_num and fps_num > 0 then
+            local clip_rate = fps_num / fps_den
+            -- Normalize to target_rate
+            if math.abs(clip_rate - target_rate) > 0.01 then
+                src_in = math.floor(src_in * target_rate / clip_rate + 0.5)
+                src_out = math.floor(src_out * target_rate / clip_rate + 0.5)
+            end
+            if not min_in or src_in < min_in then min_in = src_in end
+            if not max_out or src_out > max_out then max_out = src_out end
+        end
+    end
+    stmt:finalize()
+    return min_in, max_out
+end
+
+--- Get media rows with a Set Timecode override (file_original_timecode populated).
+--- Returns the data needed to build a TMB TC override map:
+--- the file path plus the displayed TC (start_tc_value) that should override
+--- whatever EMP probes from the file's container.
+--- @param project_id string
+--- @return table array of {file_path, start_tc_value, start_tc_rate, start_tc_audio_samples, start_tc_audio_rate}
+function M.find_tc_override_media(project_id)
+    assert(project_id and project_id ~= "", "Media.find_tc_override_media: project_id required")
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Media.find_tc_override_media: no database connection")
+    local json = require("dkjson")
+    local stmt = assert(db:prepare(
+        "SELECT file_path, metadata FROM media WHERE project_id = ? AND metadata LIKE '%file_original_timecode%'"),
+        "Media.find_tc_override_media: failed to prepare query")
+    stmt:bind_value(1, project_id)
+    assert(stmt:exec(), string.format(
+        "Media.find_tc_override_media: query failed for project_id=%s", project_id))
+    local result = {}
+    while stmt:next() do
+        local path = stmt:value(0)
+        local meta_str = stmt:value(1)
+        if path and meta_str then
+            local meta = json.decode(meta_str)
+            if meta and meta.file_original_timecode then
+                result[#result + 1] = {
+                    file_path = path,
+                    start_tc_value = meta.start_tc_value,
+                    start_tc_rate = meta.start_tc_rate,
+                    start_tc_audio_samples = meta.start_tc_audio_samples,
+                    start_tc_audio_rate = meta.start_tc_audio_rate,
+                }
+            end
+        end
     end
     stmt:finalize()
     return result

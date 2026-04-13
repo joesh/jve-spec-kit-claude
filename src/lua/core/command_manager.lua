@@ -1084,7 +1084,13 @@ function M._execute_body(command_or_name, params)
         return { success = false, error_message = "Undo group aborted by prior failure" }, nil
     end
 
+    -- A command is truly nested only when there's an active transaction to
+    -- share. A recording command inside a non-recording parent (e.g.,
+    -- RelinkClips inside ShowRelinkDialog) must be promoted to top-level
+    -- so it gets its own transaction and rollback protection.
     local is_nested = execution_depth > 1
+        and (history.get_current_undo_group_id() ~= nil
+             or root_command_sequence_number ~= nil)
 
     local command, normalize_failure = normalize_command(command_or_name, params)
     if not command then

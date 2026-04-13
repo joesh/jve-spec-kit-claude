@@ -74,6 +74,8 @@ function M.register(executors, _undoers, db)
         local folder_priority = results.folder_priority
         local clip_relink_map = {}
         local media_path_changes = {}
+        local new_media_records = {}  -- split-created clone media
+        local clone_path_to_id = {}  -- track clone paths created this session
         local path_to_media = {}     -- new_path → {media_id, priority}
         local media_orig_paths = {}  -- media_id → original file_path
 
@@ -95,69 +97,113 @@ function M.register(executors, _undoers, db)
             return found_id
         end
 
+        -- Relink output is per-media: {media_id, new_path, strategy, needs_split?, split_clip_ids?}.
+        -- Build media_path_changes, handle path conflicts and splits.
+        local Clip = require("models.clip")
+        local uuid = require("uuid")
+        local priority_losers = {}  -- loser_media_id → winner_media_id
+
         for _, entry in ipairs(results.relinked) do
-            local mid = entry.original_media_id
+            local mid = entry.media_id
 
-            if entry.new_path and not entry.new_media_id and mid then
-                if not media_orig_paths[mid] then
-                    local m = Media.load(mid)
-                    assert(m, string.format("ShowRelinkDialog: media not found: %s", mid))
-                    media_orig_paths[mid] = m:get_file_path()
-                end
+            if not media_orig_paths[mid] then
+                local m = Media.load(mid)
+                assert(m, string.format("ShowRelinkDialog: media not found: %s", mid))
+                media_orig_paths[mid] = m:get_file_path()
+            end
 
-                -- Check if path already belongs to an existing media record
-                local db_owner = find_existing_media_by_path(entry.new_path)
-                if db_owner and db_owner ~= mid then
-                    -- Path already taken by existing media — reassign clip to it
-                    log.event("path exists in DB: media %s already at %s — reassigning clip %s",
-                        db_owner:sub(1, 8),
-                        entry.new_path:match("([^/]+)$") or entry.new_path,
-                        entry.clip_id:sub(1, 8))
-                    entry.new_media_id = db_owner
-                    clip_relink_map[entry.clip_id] = {
-                        new_media_id = db_owner,
-                        new_source_in = entry.new_source_in,
-                        new_source_out = entry.new_source_out,
-                    }
-                    goto continue
-                end
-
-                local my_priority = get_folder_priority(media_orig_paths[mid], folder_priority)
-                local existing = path_to_media[entry.new_path]
-
-                if not existing or existing.media_id == mid then
-                    if not existing then
-                        path_to_media[entry.new_path] = {
-                            media_id = mid, priority = my_priority
-                        }
-                        media_path_changes[mid] = entry.new_path
+            -- Split: some clips fit, others don't. Clone media for the fitting clips.
+            if entry.needs_split and entry.split_clip_ids then
+                local original = Media.load(mid)
+                assert(original, "ShowRelinkDialog: split source media not found: " .. mid)
+                -- Check if target path already belongs to an existing or session-created media
+                local existing_at_path = clone_path_to_id[entry.new_path] or find_existing_media_by_path(entry.new_path)
+                if existing_at_path then
+                    -- Path taken — reassign to existing instead of cloning
+                    for _, clip_id in ipairs(entry.split_clip_ids) do
+                        clip_relink_map[clip_id] = { new_media_id = existing_at_path }
                     end
-                elseif my_priority < existing.priority then
-                    log.event("folder priority: %s (%s, pri=%d) beats %s (%s, pri=%d) for %s",
-                        mid:sub(1, 8), media_orig_paths[mid], my_priority,
-                        existing.media_id:sub(1, 8), media_orig_paths[existing.media_id], existing.priority,
-                        entry.new_path:match("([^/]+)$") or entry.new_path)
-                    media_path_changes[existing.media_id] = nil
-                    media_path_changes[mid] = entry.new_path
+                    path_to_media[entry.new_path] = path_to_media[entry.new_path] or
+                        { media_id = existing_at_path, priority = 0 }
+                    log.event("split→existing: media %s → existing %s (%d clips)",
+                        mid:sub(1, 8), existing_at_path:sub(1, 8), #entry.split_clip_ids)
+                    goto continue_relink
+                end
+
+                local dur = original.duration
+                local fps_num = original.frame_rate and original.frame_rate.fps_numerator
+                local fps_den = original.frame_rate and original.frame_rate.fps_denominator
+                if not dur or dur <= 0 or not fps_num or fps_num <= 0 then
+                    goto continue_relink
+                end
+                local clone_id = uuid.generate_with_prefix("media")
+                -- Don't create clone here — RelinkClips Phase 1 creates it
+                -- inside the command transaction (so undo can fully revert).
+                clone_path_to_id[entry.new_path] = clone_id
+                path_to_media[entry.new_path] = { media_id = clone_id, priority = 0 }
+                new_media_records[#new_media_records + 1] = {
+                    id = clone_id, path = entry.new_path, name = original.name,
+                    duration_frames = dur,
+                    fps_num = fps_num, fps_den = fps_den or 1,
+                    audio_sample_rate = original.audio_sample_rate,
+                    audio_channels = original.audio_channels,
+                    width = original.width,
+                    height = original.height,
+                    metadata = original.metadata,
+                }
+                -- Reassign fitting clips to the clone
+                for _, clip_id in ipairs(entry.split_clip_ids) do
+                    clip_relink_map[clip_id] = { new_media_id = clone_id }
+                end
+                log.event("split: media %s → clone %s (%d clips) at %s",
+                    mid:sub(1, 8), clone_id:sub(1, 8), #entry.split_clip_ids,
+                    entry.new_path:match("([^/]+)$") or entry.new_path)
+                goto continue_relink
+            end
+
+            -- Check if path already belongs to an existing or session-created media
+            local db_owner = clone_path_to_id[entry.new_path] or find_existing_media_by_path(entry.new_path)
+            if db_owner and db_owner ~= mid then
+                priority_losers[mid] = db_owner
+                goto continue_relink
+            end
+
+            local my_priority = get_folder_priority(media_orig_paths[mid], folder_priority)
+            local existing = path_to_media[entry.new_path]
+
+            if not existing or existing.media_id == mid then
+                if not existing then
                     path_to_media[entry.new_path] = {
                         media_id = mid, priority = my_priority
                     }
-                else
-                    log.detail("skip: media %s (%s, pri=%d) lost to %s (pri=%d) for %s",
-                        mid:sub(1, 8), media_orig_paths[mid], my_priority,
-                        existing.media_id:sub(1, 8), existing.priority,
-                        entry.new_path:match("([^/]+)$") or entry.new_path)
-                    goto continue
                 end
+                media_path_changes[mid] = entry.new_path
+            elseif my_priority < existing.priority then
+                log.event("folder priority: %s (pri=%d) beats %s (pri=%d) for %s",
+                    mid:sub(1, 8), my_priority,
+                    existing.media_id:sub(1, 8), existing.priority,
+                    entry.new_path:match("([^/]+)$") or entry.new_path)
+                media_path_changes[existing.media_id] = nil
+                priority_losers[existing.media_id] = mid
+                media_path_changes[mid] = entry.new_path
+                path_to_media[entry.new_path] = {
+                    media_id = mid, priority = my_priority
+                }
+            else
+                priority_losers[mid] = existing.media_id
             end
 
-            clip_relink_map[entry.clip_id] = {
-                new_media_id = entry.new_media_id,
-                new_source_in = entry.new_source_in,
-                new_source_out = entry.new_source_out,
-            }
+            ::continue_relink::
+        end
 
-            ::continue::
+        -- Reassign clips from priority-loser media to winners (lazy clip load)
+        for loser_mid, winner_mid in pairs(priority_losers) do
+            local clips = Clip.find_clips_for_media(loser_mid)
+            for _, clip in ipairs(clips) do
+                clip_relink_map[clip.id] = { new_media_id = winner_mid }
+            end
+            log.event("priority reassign: %d clips from media %s → winner %s",
+                #clips, loser_mid:sub(1, 8), winner_mid:sub(1, 8))
         end
 
         -- Second pass: salvage failed entries by looking for a pre-existing
@@ -168,6 +214,8 @@ function M.register(executors, _undoers, db)
         -- row. The relinker's own candidates failed containment against the
         -- failing media's metadata, but a sibling row's metadata may match.
         -- Reassign the clip's media_id to the sibling row; no new path write.
+        -- Dedupe salvage: for failed media, check for sibling media rows
+        -- with the same name whose file_path exists on disk. Reassign all clips.
         local dedupe_stmt = db:prepare([[
             SELECT id, file_path FROM media
             WHERE project_id = ?
@@ -176,8 +224,8 @@ function M.register(executors, _undoers, db)
         ]])
         local dedupe_salvaged = 0
         for _, entry in ipairs(results.failed or {}) do
-            local mid = entry.original_media_id
-            if mid and not clip_relink_map[entry.clip_id] then
+            local mid = entry.media_id
+            if mid then
                 dedupe_stmt:bind_value(1, project_id)
                 dedupe_stmt:bind_value(2, mid)
                 dedupe_stmt:bind_value(3, mid)
@@ -188,14 +236,17 @@ function M.register(executors, _undoers, db)
                         local f = sibling_path and io.open(sibling_path, "r")
                         if f then
                             f:close()
-                            -- Sibling row points at a file that actually exists.
-                            log.event("dedupe: clip %s media %s salvaged → sibling %s (%s)",
-                                entry.clip_id:sub(1, 8), mid:sub(1, 8), sibling_id:sub(1, 8),
+                            -- Sibling row points at a file that exists — reassign all clips
+                            local clips = Clip.find_clips_for_media(mid)
+                            for _, clip in ipairs(clips) do
+                                if not clip_relink_map[clip.id] then
+                                    clip_relink_map[clip.id] = { new_media_id = sibling_id }
+                                end
+                            end
+                            log.event("dedupe: media %s → sibling %s (%d clips, %s)",
+                                mid:sub(1, 8), sibling_id:sub(1, 8), #clips,
                                 sibling_path:match("([^/]+)$") or sibling_path)
-                            clip_relink_map[entry.clip_id] = {
-                                new_media_id = sibling_id,
-                            }
-                            dedupe_salvaged = dedupe_salvaged + 1
+                            dedupe_salvaged = dedupe_salvaged + #clips
                             break
                         end
                     end
@@ -210,13 +261,13 @@ function M.register(executors, _undoers, db)
         local clip_change_count = 0
         for _ in pairs(clip_relink_map) do clip_change_count = clip_change_count + 1 end
         log.event("ShowRelinkDialog: dispatching RelinkClips — %d clip changes, %d media path changes, %d new media, %d salvaged via dedupe",
-            clip_change_count, path_change_count, #(results.new_media), dedupe_salvaged)
+            clip_change_count, path_change_count, #new_media_records, dedupe_salvaged)
 
             local command_manager = require("core.command_manager")
             apply_result = command_manager.execute("RelinkClips", {
                 clip_relink_map = clip_relink_map,
                 media_path_changes = media_path_changes,
-                new_media_records = results.new_media,
+                new_media_records = new_media_records,
                 project_id = project_id,
             })
         end

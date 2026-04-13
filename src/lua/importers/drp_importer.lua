@@ -573,11 +573,11 @@ local function decode_bt_video_time(hex_str)
     }
 end
 
---- Decode BtAudioInfo/TracksBA blob → {duration_samples, sample_rate}
+--- Decode BtAudioInfo/TracksBA blob → {duration_samples, sample_rate, start_time_seconds}
 -- Header: 31 bytes (version, track metadata, field_count at byte offset 27)
 -- Fields: UniqueId, StartTime, SampleRate, NumChannels, IdxTrack, Duration, DbType, ...
 -- @param hex_str string: hex-encoded TracksBA blob
--- @return table|nil: {duration_samples=int, sample_rate=int} or nil
+-- @return table|nil: {duration_samples=int, sample_rate=int, start_time_seconds=number|nil} or nil
 local function decode_bt_audio_duration(hex_str)
     local bytes = hex_to_bytes(hex_str)
     if not bytes or #bytes < 40 then return nil end
@@ -597,6 +597,7 @@ local function decode_bt_audio_duration(hex_str)
     return {
         duration_samples = duration,
         sample_rate = sample_rate,
+        start_time_seconds = fields["StartTime"],  -- file container TC origin (seconds since midnight); nil if field absent
     }
 end
 
@@ -909,23 +910,14 @@ end
 -- @return number: corresponding source position in seconds
 local function eval_curve(keyframes, x)
     if not keyframes or #keyframes < 2 then return x end
+    -- Clamp to curve domain: source position outside the media's range is
+    -- physically meaningless. Extrapolation past bounds (especially with
+    -- reverse slopes) produces negative source positions.
     if x <= keyframes[1].x then
-        -- Extrapolate from first segment so that X=0 maps consistently
-        local k0 = keyframes[1]
-        local k1 = keyframes[2]
-        local span = k1.x - k0.x
-        if span <= 0 then return k0.y end
-        local slope = (k1.y - k0.y) / span
-        return k0.y + (x - k0.x) * slope
+        return keyframes[1].y
     end
     if x >= keyframes[#keyframes].x then
-        -- Extrapolate from last segment
-        local k0 = keyframes[#keyframes - 1]
-        local k1 = keyframes[#keyframes]
-        local span = k1.x - k0.x
-        if span <= 0 then return k1.y end
-        local slope = (k1.y - k0.y) / span
-        return k1.y + (x - k1.x) * slope
+        return keyframes[#keyframes].y
     end
     for i = 1, #keyframes - 1 do
         local k0 = keyframes[i]
@@ -982,19 +974,23 @@ local function decode_media_timemap(hex_str)
         keyframes = parse_keyframes(kf_raw)
 
         -- Sanity-check the parsed keyframes against the parent YMax/XMax.
-        -- The curve must start at (0, 0) and end at (XMax, YMax). When the
-        -- decoded keyframes don't match (e.g. test fixtures where Resolve
-        -- stores tangent-only data with all-zero anchors), discard them and
-        -- let the importer synthesize a constant-speed linear curve from
-        -- y_max / x_max instead.
+        -- Valid curves span the full master clip:
+        --   Forward: first≈(0, 0)         last≈(XMax, YMax)
+        --   Reverse: first≈(0, YMax)      last≈(XMax, 0)
+        -- Discard only when keyframes look like garbage (all-zero anchors from
+        -- tangent-only test fixtures).
         if keyframes and #keyframes >= 2 then
             local first = keyframes[1]
             local last = keyframes[#keyframes]
-            local epsilon = 0.01
-            local origin_ok = math.abs(first.x) < epsilon and math.abs(first.y) < epsilon
-            local end_ok = math.abs(last.x - x_max) < epsilon
+            local epsilon = 0.1  -- seconds; 0.01 was too tight for Resolve's rounding
+            local x_ok = math.abs(first.x) < epsilon
+                and math.abs(last.x - x_max) < epsilon
+            -- Y endpoints: forward (0→YMax) or reverse (YMax→0)
+            local forward_ok = math.abs(first.y) < epsilon
                 and math.abs(last.y - y_max) < epsilon
-            if not (origin_ok and end_ok) then
+            local reverse_ok = math.abs(first.y - y_max) < epsilon
+                and math.abs(last.y) < epsilon
+            if not (x_ok and (forward_ok or reverse_ok)) then
                 log.detail("decode_media_timemap: keyframes inconsistent with YMax/XMax — first=(%.3f,%.3f) last=(%.3f,%.3f) ymax=%.3f xmax=%.3f — discarding curve",
                     first.x, first.y, last.x, last.y, y_max, x_max)
                 keyframes = nil
@@ -1087,6 +1083,21 @@ local function extract_media_duration(clip_elem)
     end
 
     return nil
+end
+
+--- Extract the file's original container TC origin from BtAudioInfo.TracksBA.StartTime.
+-- This is the file's real TC, unaffected by Resolve's Set Timecode override.
+-- Returns seconds since midnight, or nil if TracksBA is missing/unparseable.
+-- @param clip_elem table: Sm2MpVideoClip or Sm2MpAudioClip XML element
+-- @return number|nil: start_time in seconds, or nil
+local function extract_file_tc_seconds(clip_elem)
+    local bt_audio = find_element(clip_elem, "BtAudioInfo")
+    if not bt_audio then return nil end
+    local tracks_elem = find_direct_child(bt_audio, "TracksBA")
+    if not tracks_elem then return nil end
+    local result = decode_bt_audio_duration(get_text(tracks_elem))
+    if not result then return nil end
+    return result.start_time_seconds  -- nil if StartTime field absent from TLV
 end
 
 --- Parse Resolve timecode string to integer frames
@@ -1367,6 +1378,9 @@ local function parse_master_clip_element(clip_elem, folder_id)
     -- Parse authoritative media duration from Time/TracksBA blobs
     local duration_info = extract_media_duration(clip_elem)
 
+    -- Extract file's original container TC from TracksBA.StartTime (FR-001)
+    local file_tc_seconds = extract_file_tc_seconds(clip_elem)
+
     local master_clip = {
         id = db_id,
         name = name_elem and get_text(name_elem) or "Untitled",
@@ -1376,6 +1390,7 @@ local function parse_master_clip_element(clip_elem, folder_id)
         playhead = playhead_elem and tonumber(get_text(playhead_elem)) or nil,
         clip_type = clip_elem.tag == "Sm2MpVideoClip" and "video" or "audio",
         file_path = original_path,
+        file_tc_seconds = file_tc_seconds,  -- file's container TC origin (seconds since midnight)
     }
 
     -- Store duration + rate info from blob
@@ -1929,12 +1944,6 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 end
                 if retime_keyframes and #retime_keyframes >= 2 then
                     -- Walk the curve. Inputs are in seconds at clip frame_rate.
-                    -- Use CEILING for both endpoints: the in-point is the first
-                    -- valid source frame ≥ the computed position (so we don't
-                    -- play pre-clip content), and the out-point is treated the
-                    -- same way to keep source_duration consistent with how
-                    -- Resolve rounds — verified empirically against an
-                    -- un-retimed-twin clip whose <In> field Resolve recomputed.
                     local in_sec = in_value / frame_rate
                     local out_sec = (in_value + duration_raw) / frame_rate
                     local y_in_sec = eval_curve(retime_keyframes, in_sec)
@@ -1942,6 +1951,14 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                     in_offset = math.ceil(y_in_sec * frame_rate)
                     local out_offset = math.ceil(y_out_sec * frame_rate)
                     source_duration = out_offset - in_offset
+                    -- Reverse-keyframe curves (Y decreases as X increases) produce
+                    -- negative source_duration. Normalize: swap so source_in < source_out
+                    -- and mark clip_speed negative for the later in/out swap.
+                    if source_duration < 0 then
+                        in_offset = in_offset + source_duration  -- swap: old out_offset
+                        source_duration = -source_duration
+                        clip_speed = -math.abs(clip_speed)
+                    end
                 else
                     -- No curve (no MTBA, 9-byte short MTBA, or parse failure):
                     -- in_value is source frames directly. This is the un-retimed case.
@@ -1960,6 +1977,10 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
 
             -- source_in is ABSOLUTE TC = media_tc_origin + file-relative offset
             local source_in_native = media_tc_origin + in_offset
+            log.detail("  source_in: %s MST=%.4f tc_origin=%d in_val=%s in_off=%d src_in=%d dur=%d spd=%.3f %s",
+                clip_name, media_start_time or 0, media_tc_origin,
+                tostring(in_value), in_offset, source_in_native, source_duration or 0,
+                abs_speed or 1, retime_keyframes and string.format("retime(%d kf)", #retime_keyframes) or "no-retime")
 
             -- Source extent in VIDEO FRAMES (for media duration tracking).
             -- File-relative (excludes media_tc_origin — file length, not TC space).
@@ -2612,6 +2633,11 @@ function M.parse_drp_file(drp_path, progress_cb)
                 entry.duration = pmc.audio_duration.samples
                 entry.audio_sample_rate = pmc.audio_duration.sample_rate
                 entry.frame_rate = pmc.audio_duration.sample_rate
+            end
+
+            -- Propagate file container TC origin from TracksBA.StartTime (FR-001)
+            if pmc.file_tc_seconds then
+                entry.file_tc_seconds = pmc.file_tc_seconds
             end
         end
     end

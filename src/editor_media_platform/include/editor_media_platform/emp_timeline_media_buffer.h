@@ -54,6 +54,15 @@ struct TrackIdHash {
     }
 };
 
+// TC origin override for a media file (FR-004).
+// When a media file's container TC doesn't match the displayed TC
+// (Resolve "Set Timecode" override), the caller provides the correct
+// first_frame_tc and first_sample_tc to use instead of the probed values.
+struct TcOverride {
+    int64_t first_frame_tc;   // video: frames at media rate
+    int64_t first_sample_tc;  // audio: samples at sample rate
+};
+
 // Clip layout entry (passed from Lua per track)
 struct ClipInfo {
     std::string clip_id;
@@ -169,6 +178,12 @@ public:
     // Returns nullptr if no mix params set.
     std::shared_ptr<PcmChunk> GetMixedAudio(TimeUS t0, TimeUS t1);
 
+    // Set TC origin overrides for specific media paths (FR-004).
+    // Call after SetTrackClips, before first SetPlayhead.
+    // When acquire_reader opens a file whose path is in the map,
+    // it calls set_tc_origin_override before Reader::Create.
+    void SetTcOverrides(std::unordered_map<std::string, TcOverride> overrides);
+
     // Configuration
     void SetMaxReaders(int max);
 
@@ -252,6 +267,9 @@ private:
 
     // Paths that failed to open (offline media)
     std::unordered_map<std::string, Error> m_offline;
+
+    // TC origin overrides: path → TcOverride (FR-004)
+    std::unordered_map<std::string, TcOverride> m_tc_overrides;
 
     // ── Per-track state ──
     struct TrackState {

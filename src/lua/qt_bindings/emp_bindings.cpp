@@ -182,6 +182,19 @@ static int lua_emp_media_file_info(lua_State* L) {
     return 1;
 }
 
+// EMP.MEDIA_FILE_SET_TC_ORIGIN_OVERRIDE(media_file, first_frame_tc, first_sample_tc)
+static int lua_emp_media_file_set_tc_origin_override(lua_State* L) {
+    void* key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
+    auto it = g_media_files.find(key);
+    if (it == g_media_files.end()) {
+        return luaL_error(L, "MEDIA_FILE_SET_TC_ORIGIN_OVERRIDE: invalid media file handle");
+    }
+    int64_t first_frame_tc = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    int64_t first_sample_tc = static_cast<int64_t>(luaL_checkinteger(L, 3));
+    it->second->set_tc_origin_override(first_frame_tc, first_sample_tc);
+    return 0;
+}
+
 // MediaFile __gc metamethod
 static int lua_emp_media_file_gc(lua_State* L) {
     void* key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
@@ -474,6 +487,39 @@ static emp::TrackType parse_track_type(lua_State* L, int idx) {
     if (strcmp(type_str, "audio") == 0) return emp::TrackType::Audio;
     luaL_error(L, "invalid track type: '%s' (expected 'video' or 'audio')", type_str);
     return emp::TrackType::Video; // unreachable
+}
+
+// EMP.TMB_SET_TC_OVERRIDES(tmb, overrides_table)
+// overrides_table = { [path_string] = { video = int64, audio = int64 }, ... }
+static int lua_emp_tmb_set_tc_overrides(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+
+    std::unordered_map<std::string, emp::TcOverride> overrides;
+
+    lua_pushnil(L);
+    while (lua_next(L, 2)) {
+        // key at -2 (path string), value at -1 (table with video, audio)
+        if (!lua_isstring(L, -2) || !lua_istable(L, -1)) {
+            lua_pop(L, 1);
+            continue;
+        }
+        std::string path = lua_tostring(L, -2);
+
+        lua_getfield(L, -1, "video");
+        int64_t video_tc = lua_isnumber(L, -1) ? static_cast<int64_t>(lua_tointeger(L, -1)) : 0;
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "audio");
+        int64_t audio_tc = lua_isnumber(L, -1) ? static_cast<int64_t>(lua_tointeger(L, -1)) : 0;
+        lua_pop(L, 1);
+
+        overrides[path] = emp::TcOverride{video_tc, audio_tc};
+        lua_pop(L, 1);  // pop value, keep key for next iteration
+    }
+
+    tmb->SetTcOverrides(std::move(overrides));
+    return 0;
 }
 
 // EMP.TMB_SET_MAX_READERS(tmb, max)
@@ -2087,6 +2133,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "MEDIA_FILE_CLOSE");
     lua_pushcfunction(L, lua_emp_media_file_info);
     lua_setfield(L, -2, "MEDIA_FILE_INFO");
+    lua_pushcfunction(L, lua_emp_media_file_set_tc_origin_override);
+    lua_setfield(L, -2, "MEDIA_FILE_SET_TC_ORIGIN_OVERRIDE");
 
     // Reader functions
     lua_pushcfunction(L, lua_emp_reader_create);
@@ -2131,6 +2179,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "TMB_CLOSE");
     lua_pushcfunction(L, lua_emp_tmb_set_max_readers);
     lua_setfield(L, -2, "TMB_SET_MAX_READERS");
+    lua_pushcfunction(L, lua_emp_tmb_set_tc_overrides);
+    lua_setfield(L, -2, "TMB_SET_TC_OVERRIDES");
     lua_pushcfunction(L, lua_emp_tmb_set_sequence_rate);
     lua_setfield(L, -2, "TMB_SET_SEQUENCE_RATE");
     lua_pushcfunction(L, lua_emp_tmb_set_sequence_resolution);

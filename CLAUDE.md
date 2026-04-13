@@ -14,6 +14,8 @@ This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Re
 - SQLite for media clips (unchanged). Gaps are in-memory only — not persisted. (005-gap-as-clip-refactor)
 - Lua (LuaJIT) + C++ (Qt6) + command_manager.lua, command_history.lua, SQLite (schema.sql) (006-per-sequence-undo)
 - SQLite `.jvp` project files (006-per-sequence-undo)
+- Lua (LuaJIT) + C++ (Qt6) + EMP (editor_media_platform), SQLite, ffprobe (TC probing), dkjson (JSON) (009-drp-importer-must)
+- SQLite `.jvp` project files — new field in existing `metadata` JSON blob (no schema change) (009-drp-importer-must)
 
 READ ENGINEERING.md
 

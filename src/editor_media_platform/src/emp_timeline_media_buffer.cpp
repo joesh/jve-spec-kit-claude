@@ -1736,6 +1736,14 @@ Result<MediaFileInfo> TimelineMediaBuffer::ProbeFile(const std::string& path) {
 // Configuration
 // ============================================================================
 
+void TimelineMediaBuffer::SetTcOverrides(std::unordered_map<std::string, TcOverride> overrides) {
+    std::lock_guard<std::mutex> lock(m_pool_mutex);
+    m_tc_overrides = std::move(overrides);
+    if (!m_tc_overrides.empty()) {
+        EMP_LOG_DEBUG("TMB: %zu TC origin override(s) set", m_tc_overrides.size());
+    }
+}
+
 void TimelineMediaBuffer::SetMaxReaders(int max) {
     std::lock_guard<std::mutex> lock(m_pool_mutex);
     m_max_readers = max;
@@ -1912,6 +1920,16 @@ TimelineMediaBuffer::ReaderHandle TimelineMediaBuffer::acquire_reader(
         return ReaderHandle{};
     }
     auto mf = mf_result.value();
+
+    // Apply TC origin override if caller provided one for this path (FR-004).
+    // Must happen before Reader::Create (which calls mark_decode_started).
+    {
+        auto tc_it = m_tc_overrides.find(path);
+        if (tc_it != m_tc_overrides.end()) {
+            mf->set_tc_origin_override(tc_it->second.first_frame_tc,
+                                        tc_it->second.first_sample_tc);
+        }
+    }
 
     auto reader_result = Reader::Create(mf);
     if (reader_result.is_error()) {
@@ -2153,6 +2171,14 @@ bool TimelineMediaBuffer::process_next_decode_prep_job() {
         auto mf_result = MediaFile::Open(job.media_path);
         if (mf_result.is_error()) return true;  // skip — will be caught by prefetch
         auto probe_mf = mf_result.value();
+        // Apply TC origin override (same as acquire_reader)
+        {
+            auto tc_it = m_tc_overrides.find(job.media_path);
+            if (tc_it != m_tc_overrides.end()) {
+                probe_mf->set_tc_origin_override(tc_it->second.first_frame_tc,
+                                                  tc_it->second.first_sample_tc);
+            }
+        }
         auto reader_result = Reader::Create(probe_mf);
         if (reader_result.is_error()) return true;
         auto probe_reader = reader_result.value();

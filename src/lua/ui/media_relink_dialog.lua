@@ -54,57 +54,39 @@ end
 -- @param media_list table Array of media records
 -- @param widgets table {qt, status_label, media_area, header} for live UI updates
 local function build_media_infos(media_list, widgets)
-    local Clip = require("models.clip")
     local qt = widgets.qt
     local media_infos = {}
     local media_lines = {}
-    local total_clips = 0
 
-    log.detail("build_media_infos: gathering clips for %d media", #media_list)
+    log.detail("build_media_infos: gathering source extents for %d media", #media_list)
     local t0 = os.clock()
 
     for mi, media in ipairs(media_list) do
         local tc_value, tc_rate = media:get_start_tc()
-        local clips = Clip.find_clips_for_media(media.id)
+        local extent_start, extent_end = media:get_source_extent(tc_rate or 25)
 
-        log.detail("  media %d/%d: %s — %d clips (tc=%s@%s)",
-            mi, #media_list, media.name or media.id:sub(1,8),
-            #clips, tostring(tc_value), tostring(tc_rate))
+        media_lines[#media_lines + 1] = string.format("  %s  (%s)",
+            media.name or media.id:sub(1, 8), media:get_file_path())
 
-        media_lines[#media_lines + 1] = string.format("  %s  —  %d clip(s)  (%s)",
-            media.name or media.id:sub(1, 8), #clips, media:get_file_path())
-
-        local clip_entries = {}
-        for _, clip in ipairs(clips) do
-            clip_entries[#clip_entries + 1] = {
-                clip_id = clip.id,
-                source_in = clip.source_in,
-                source_out = clip.source_out,
-                fps_num = clip.rate.fps_numerator,
-                fps_den = clip.rate.fps_denominator,
-                clip_kind = clip.clip_kind,
-                clip_name = clip.name,
-            }
-        end
-        total_clips = total_clips + #clip_entries
-
+        local file_orig_tc = media:get_file_original_timecode()
         media_infos[#media_infos + 1] = {
             media_id = media.id,
             media_path = media:get_file_path(),
             media_name = media.name or media.id,
             media_start_tc_value = tc_value,
             media_start_tc_rate = tc_rate,
+            media_file_original_tc = file_orig_tc,
             width = media.width or 0,
             height = media.height or 0,
-            clips = clip_entries,
+            source_extent_start = extent_start,
+            source_extent_end = extent_end,
         }
 
         -- Update UI every 20 media
         if mi % 20 == 0 then
             if widgets.status_label then
                 qt.PROPERTIES.SET_TEXT(widgets.status_label,
-                    string.format("Loading... %d/%d media (%d clips)",
-                        mi, #media_list, total_clips))
+                    string.format("Loading... %d/%d media", mi, #media_list))
             end
             if widgets.media_area then
                 qt.PROPERTIES.SET_TEXT(widgets.media_area, table.concat(media_lines, "\n"))
@@ -112,8 +94,7 @@ local function build_media_infos(media_list, widgets)
             end
             if widgets.header then
                 qt.PROPERTIES.SET_TEXT(widgets.header,
-                    string.format("Loading... %d clip(s) from %d/%d media",
-                        total_clips, mi, #media_list))
+                    string.format("Loading... %d/%d media", mi, #media_list))
             end
             qt.CONTROL.PROCESS_EVENTS()
         end
@@ -125,15 +106,13 @@ local function build_media_infos(media_list, widgets)
     end
     if widgets.header then
         qt.PROPERTIES.SET_TEXT(widgets.header,
-            string.format("Found %d clip(s) across %d media file(s)",
-                total_clips, #media_list))
+            string.format("Found %d media file(s)", #media_list))
     end
     if widgets.status_label then
         qt.DISPLAY.SET_VISIBLE(widgets.status_label, false)
     end
 
-    log.event("build_media_infos: %d clips from %d media in %.1fs",
-        total_clips, #media_list, os.clock() - t0)
+    log.event("build_media_infos: %d media in %.1fs", #media_list, os.clock() - t0)
     return media_infos
 end
 
@@ -419,9 +398,25 @@ function M.show(media_list, parent_window, opts)
         progress.show()
         qt.CONTROL.PROCESS_EVENTS()
 
+        local Clip = require("models.clip")
         local options = {
             search_paths = { search_dir },
             matching_rules = matching_rules,
+            clip_loader = function(media_id)
+                local clips = Clip.find_clips_for_media(media_id)
+                local entries = {}
+                for _, clip in ipairs(clips) do
+                    entries[#entries + 1] = {
+                        clip_id = clip.id,
+                        clip_kind = clip.clip_kind,
+                        source_in = clip.source_in,
+                        source_out = clip.source_out,
+                        fps_num = clip.rate.fps_numerator,
+                        fps_den = clip.rate.fps_denominator,
+                    }
+                end
+                return entries
+            end,
         }
         local results = media_relinker.relink_media_batch(media_infos, options, progress.update)
         progress.flush()

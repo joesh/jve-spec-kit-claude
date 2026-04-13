@@ -210,13 +210,24 @@ function M.import_into_project(project_id, parse_result, opts)
                 goto continue_media
             end
 
-            -- Skip if we already created a record for this file_path
+            -- Skip if we already created a record for this (file_path, media_start_time).
+            -- Two master clips pointing at the same file but with different Set Timecode
+            -- overrides (different media_start_time) produce separate media rows (FR-003a).
+            -- Same file + same TC still dedupes to one row (camera footage, unchanged).
             if media_item.file_path and media_by_path[media_item.file_path] then
                 local existing = media_by_path[media_item.file_path]
-                if media_item.file_uuid then
-                    media_by_uuid[media_item.file_uuid] = existing
+                local existing_mst = existing._media_start_time
+                local this_mst = media_item.media_start_time
+                local same_tc = (existing_mst == nil or this_mst == nil) or
+                    (existing_mst == this_mst) or
+                    (math.abs(existing_mst - this_mst) < 0.001)
+                if same_tc then
+                    if media_item.file_uuid then
+                        media_by_uuid[media_item.file_uuid] = existing
+                    end
+                    goto continue_media
                 end
-                goto continue_media
+                -- Different TC for same file → fall through to create a second row
             end
 
             -- Convert media_start_time (seconds since midnight) to native units
@@ -226,12 +237,30 @@ function M.import_into_project(project_id, parse_result, opts)
                 local json = require("dkjson")
                 local mst = media_item.media_start_time
                 local audio_sr = media_item.audio_sample_rate or 48000
-                media_metadata = json.encode({
-                    start_tc_value = math.floor(mst * native_rate + 0.5),
+                local start_tc_value = math.floor(mst * native_rate + 0.5)
+                local meta = {
+                    start_tc_value = start_tc_value,
                     start_tc_rate = native_rate,
                     start_tc_audio_samples = math.floor(mst * audio_sr + 0.5),
                     start_tc_audio_rate = audio_sr,
-                })
+                }
+
+                -- FR-001: Store file_original_timecode when file's container TC
+                -- differs from the displayed TC (Set Timecode override detected).
+                if media_item.file_tc_seconds then
+                    local file_tc_video = math.floor(media_item.file_tc_seconds * native_rate + 0.5)
+                    if file_tc_video ~= start_tc_value then
+                        meta.file_original_timecode = file_tc_video
+                        meta.file_original_timecode_audio = math.floor(media_item.file_tc_seconds * audio_sr + 0.5)
+                        log.event("  Set Timecode override: start_tc=%d file_tc=%d (delta=%d frames)",
+                            start_tc_value, file_tc_video, start_tc_value - file_tc_video)
+                    end
+                end
+                -- file_tc_seconds nil is normal: encrypted blobs, stock footage without
+                -- decodable TracksBA, unmatched PMC enrichment. No override detection for
+                -- this row — pre-feature behavior (file_original_timecode absent).
+
+                media_metadata = json.encode(meta)
             end
 
             -- Track type determines video presence:
@@ -256,6 +285,9 @@ function M.import_into_project(project_id, parse_result, opts)
             assert(media:save(), string.format(
                 "importer_core: failed to save media '%s' (path=%s)",
                 media_item.name, media_item.file_path))
+
+            -- Stash media_start_time for dedup comparison (same file, different TC → separate rows)
+            media._media_start_time = media_item.media_start_time
 
             if media_item.file_uuid then
                 media_by_uuid[media_item.file_uuid] = media

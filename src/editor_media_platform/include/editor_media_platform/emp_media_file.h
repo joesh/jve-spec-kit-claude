@@ -78,6 +78,16 @@ public:
     // Get file information
     const MediaFileInfo& info() const;
 
+    // Override the TC origin that EMP probed from the file's container.
+    // Replaces first_frame_tc and first_sample_tc in the MediaFileInfo.
+    // Must be called AFTER Open and BEFORE any decode operation.
+    // Asserts if decode has already begun.
+    void set_tc_origin_override(int64_t first_frame_tc, int64_t first_sample_tc);
+
+    // Mark that a decode operation has been performed (called by Reader).
+    // After this, set_tc_origin_override will assert.
+    void mark_decode_started();
+
     // Check if the video codec has a decoder available (no VT negotiation, no Reader).
     // Returns Ok if decodable, Error{Unsupported} if no decoder found.
     Result<void> ProbeCodec() const;
@@ -91,6 +101,7 @@ public:
 private:
     std::unique_ptr<MediaFileImpl> m_impl;
     MediaFileInfo m_info;
+    bool m_decode_started = false;
 };
 
 } // namespace emp
