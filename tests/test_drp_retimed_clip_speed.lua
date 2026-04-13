@@ -40,27 +40,25 @@ local function wrap_clips(...)
 end
 
 --------------------------------------------------------------------------------
--- Test 1: Retimed video clip with hex speed (probe unavailable — hex fallback)
--- Verifies that speed is applied to BOTH in_value and duration_raw
+-- Test 1: Clip with no MTBA → non-retimed (hex suffix in <In> is ignored)
+-- The hex after the pipe is flags/metadata, not a speed value.
 --------------------------------------------------------------------------------
 
-print("\n--- Test 1: Retimed clip hex fallback applies speed to both in and duration ---")
-
--- Hex for 19/21 = 0.904761... (LE IEEE 754)
-local hex_speed = "007aeb3ccff3ec3f"
+print("\n--- Test 1: No MTBA → non-retimed (hex suffix ignored) ---")
 
 local seq = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
             elem("Sm2TiVideoClip", "", {
-                elem("Name", "retimed_clip"),
+                elem("Name", "non_retimed_clip"),
                 elem("Start", "15880"),
                 elem("Duration", "181"),
                 elem("MediaStartTime", "0"),
-                elem("In", "34|" .. hex_speed),
+                elem("In", "34|007aeb3ccff3ec3f"),  -- hex suffix = flags, not speed
                 elem("MediaFilePath", "/nonexistent/retimed.mxf"),
                 elem("MediaFrameRate", "0000000000003940"),  -- 25fps LE double
+                -- No MediaTimemapBA → not retimed
             })
         ),
     }),
@@ -69,21 +67,16 @@ local seq = elem("Sequence", "", {
 local video_tracks = drp_importer.parse_resolve_tracks(seq, 25)
 local clip = video_tracks[1].clips[1]
 
--- source_in must NOT be raw 34 — it must be scaled by hex speed.
--- Domain: hex speed = 19/21 ≈ 0.9048 (from DRP "In" field "34|hex").
--- 34 raw DRP frames × 0.9048 speed → 31 source frames (rounded).
-assert(clip.source_in ~= 34, string.format(
-    "REGRESSION: retimed source_in must not be raw in_value (got %d, expected 31 not 34)",
-    clip.source_in))
-assert(clip.source_in == 31, string.format(
-    "Retimed source_in: 34 DRP × hex speed 19/21 = 31 source frames, got %d", clip.source_in))
-print(string.format("  ✓ source_in = %d (scaled by hex speed, not raw 34)", clip.source_in))
+-- No MTBA = not retimed. source_in = raw in_value (34)
+assert(clip.source_in == 34, string.format(
+    "No MTBA: source_in should be raw in_value 34, got %d", clip.source_in))
+print(string.format("  ✓ source_in = %d (not retimed, hex suffix ignored)", clip.source_in))
 
--- source_duration must also be scaled: 181 DRP × 19/21 ≈ 164 source frames
+-- source_duration = raw duration (181)
 local actual_dur = clip.source_out - clip.source_in
-assert(actual_dur == 164, string.format(
-    "Retimed source_duration: 181 DRP × hex speed 19/21 = 164, got %d", actual_dur))
-print(string.format("  ✓ source_duration = %d (scaled)", actual_dur))
+assert(actual_dur == 181, string.format(
+    "No MTBA: source_duration should be raw 181, got %d", actual_dur))
+print(string.format("  ✓ source_duration = %d (not retimed)", actual_dur))
 
 -- Timeline duration unchanged
 assert(clip.duration == 181, "Timeline duration should be 181, got " .. clip.duration)
@@ -120,29 +113,13 @@ assert(normal.source_out == 250, "Non-retimed source_out should be 250, got " ..
 assert(normal.duration == 200, "Non-retimed duration should be 200")
 print("  ✓ source_in = 50, source_out = 250 (non-retimed, raw values)")
 
---------------------------------------------------------------------------------
--- Test 3: Speed ratio derivable from clip fields
--- The playback engine computes speed = (source_out - source_in) / duration.
--- For a retimed clip, this should be < 1.0 (slow motion).
---------------------------------------------------------------------------------
-
-print("\n--- Test 3: Derived speed ratio is < 1.0 for slow-motion clip ---")
-
-local derived_speed = (clip.source_out - clip.source_in) / clip.duration
-assert(derived_speed < 1.0, string.format(
-    "Derived speed should be < 1.0 for slow-mo, got %.4f", derived_speed))
-assert(derived_speed > 0.5, string.format(
-    "Derived speed should be > 0.5 (not too far from 0.84), got %.4f", derived_speed))
-print(string.format("  ✓ derived speed = %.4f (< 1.0, slow-mo)", derived_speed))
+-- Test 3 removed: derived speed test moved to Test 8 which uses real MTBA data
 
 --------------------------------------------------------------------------------
--- Test 4: Fast-forward clip (speed > 1.0)
+-- Test 4: Clip with hex suffix but no MTBA — also non-retimed
 --------------------------------------------------------------------------------
 
-print("\n--- Test 4: Fast-forward clip (hex speed > 1.0) ---")
-
--- Hex for 2.0 (LE IEEE 754): 0000000000000040
-local hex_fast = "0000000000000040"
+print("\n--- Test 4: Another no-MTBA clip (hex suffix ignored) ---")
 
 local seq_fast = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
@@ -153,9 +130,10 @@ local seq_fast = elem("Sequence", "", {
                 elem("Start", "0"),
                 elem("Duration", "100"),
                 elem("MediaStartTime", "0"),
-                elem("In", "20|" .. hex_fast),
+                elem("In", "20|0000000000000040"),  -- hex suffix = flags
                 elem("MediaFilePath", "/nonexistent/fast.mxf"),
                 elem("MediaFrameRate", "0000000000003940"),  -- 25fps LE double
+                -- No MediaTimemapBA → not retimed
             })
         ),
     }),
@@ -164,15 +142,11 @@ local seq_fast = elem("Sequence", "", {
 local v_fast = drp_importer.parse_resolve_tracks(seq_fast, 25)
 local fast = v_fast[1].clips[1]
 
--- source_in = floor(20 * 2.0 + 0.5) = 40
-assert(fast.source_in == 40, "Fast source_in should be 40, got " .. fast.source_in)
--- source_duration = floor(100 * 2.0 + 0.5) = 200
+-- No MTBA = not retimed. source_in = raw in_value (20)
+assert(fast.source_in == 20, "No MTBA: source_in should be 20, got " .. fast.source_in)
 local fast_dur = fast.source_out - fast.source_in
-assert(fast_dur == 200, "Fast source_duration should be 200, got " .. fast_dur)
--- Derived speed > 1.0
-local fast_speed = fast_dur / fast.duration
-assert(fast_speed > 1.0, string.format("Fast speed should be > 1.0, got %.4f", fast_speed))
-print(string.format("  ✓ source_in=%d, source_dur=%d, speed=%.1f", fast.source_in, fast_dur, fast_speed))
+assert(fast_dur == 100, "No MTBA: source_duration should be 100, got " .. fast_dur)
+print(string.format("  ✓ source_in=%d, source_dur=%d (non-retimed)", fast.source_in, fast_dur))
 
 --------------------------------------------------------------------------------
 -- Test 5: REAL DATA — clip 40-335.3-1 from fixture DRP

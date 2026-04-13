@@ -1793,20 +1793,29 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             assert(duration_elem, string.format(
                 "parse_resolve_tracks: clip '%s' missing Duration element", clip_name))
 
-            -- DRP format: some values use "frames|metadata" format (e.g., "2699|00e0401cd451d83f")
-            -- Extract numeric portion before pipe
-            local function parse_drp_numeric(text, field_name)
-                if not text then return nil end
-                local num_str = text:match("^(%d+)") -- extract leading digits
-                local num = tonumber(num_str)
+            -- DRP format: "frames" or "frames|hex_subframe" where hex is an
+            -- LE IEEE 754 double encoding a fractional-frame offset (0.0–1.0).
+            -- Used for sub-frame audio positioning on the timeline.
+            -- Returns integer_frames, subframe_fraction (0.0 if no hex suffix).
+            local function parse_drp_frame_value(text, field_name)
+                if not text then return nil, 0 end
+                local num_str, hex_part = text:match("^(%d+)|?(%x*)")
+                local num = num_str and tonumber(num_str)
                 assert(num, string.format(
                     "parse_resolve_tracks: clip '%s' %s has no numeric value (raw='%s')",
                     clip_name, field_name, text))
-                return num
+                local subframe = 0
+                if hex_part and #hex_part >= 16 then
+                    local decoded = decode_hex_double_at(hex_part, 0)
+                    if decoded and decoded >= 0 and decoded < 1.0 then
+                        subframe = decoded
+                    end
+                end
+                return num, subframe
             end
 
-            local start_frames = parse_drp_numeric(get_text(start_elem), "Start")
-            local duration_raw = parse_drp_numeric(get_text(duration_elem), "Duration")
+            local start_frames, start_subframe = parse_drp_frame_value(get_text(start_elem), "Start")
+            local duration_raw = parse_drp_frame_value(get_text(duration_elem), "Duration")
 
             start_frames = math.floor(start_frames)
             duration_raw = math.floor(duration_raw)
@@ -1840,38 +1849,23 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             --
             -- source_in comes from <In>, NOT <MediaStartTime>.
             -- Empty/missing <In> means untrimmed (source_in = 0).
-            local in_text = in_elem and get_text(in_elem) or ""
-            local in_value
+            local in_value = 0
             local clip_speed = 1.0
-            if in_text == "" then
-                in_value = 0  -- empty/missing <In> = untrimmed
-            else
-                -- DRP <In> can be "12345" or "12345|hexdata" (pipe-delimited
-                -- with hex-encoded speed ratio). Extract integer before pipe.
-                local num_part, hex_part = in_text:match("^(%d+)|?(%x*)")
+            local in_text = in_elem and get_text(in_elem) or ""
+            if in_text ~= "" then
+                -- In field: integer frames only. The hex suffix (if present)
+                -- is not a sub-frame offset — its meaning on In differs from
+                -- Start. Only Start carries sub-frame audio positioning.
+                local num_part = in_text:match("^(%d+)")
                 in_value = assert(num_part and tonumber(num_part), string.format(
                     "parse_resolve_tracks: clip '%s' <In> has no numeric prefix: '%s'",
                     clip_name, in_text))
-                -- Hex part encodes speed ratio as LE IEEE 754 double
-                if hex_part and #hex_part >= 16 then
-                    local speed = decode_hex_double_at(hex_part, 0)
-                    if speed and math.abs(speed) >= 0.05 and math.abs(speed) < 100 then
-                        -- Accept hex speed if it's in a plausible range (5%-10000%).
-                        -- Below 0.05 (5%) is almost certainly garbage — Resolve's hex
-                        -- field encodes internal values that don't match user-visible
-                        -- speed for variable-speed and some constant-speed clips.
-                        clip_speed = speed
-                    else
-                        log.detail("DRP retime: clip '%s' hex speed unusable (decoded=%s from '%s'), will use MTBA or 1.0",
-                                 clip_name, tostring(speed), hex_part:sub(1, 16))
-                    end
-                end
             end
 
-            -- Try MediaTimemapBA for authoritative speed/direction on retimed clips.
-            -- MTBA is present on all retimed clips; hex speed is unreliable for
-            -- variable-speed clips (encodes garbage near-zero values).
-            local retime_keyframes = nil  -- (X, Y) seconds pairs from MTBA, when present
+            -- MediaTimemapBA: authoritative speed/direction for retimed clips.
+            -- MTBA is present on all retimed clips. Clips without MTBA are not
+            -- retimed (the hex suffix in <In> is flags, not a speed value).
+            local retime_keyframes = nil
             local mtba_elem = find_element(clip_elem, "MediaTimemapBA")
             if mtba_elem then
                 local mtba_hex = get_text(mtba_elem)
@@ -1880,18 +1874,8 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 if #mtba_hex > 18 then
                     local mtba = decode_media_timemap(mtba_hex)
                     if mtba then
-                        local mtba_speed = mtba.is_reverse and -mtba.speed_ratio or mtba.speed_ratio
-                        -- MTBA is authoritative — hex speed is unreliable
-                        -- (encodes internal Resolve values that don't match user-visible speed)
-                        if clip_speed ~= 1.0 then
-                            local hex_abs = math.abs(clip_speed)
-                            if math.abs(hex_abs - mtba.speed_ratio) / mtba.speed_ratio > 0.05 then
-                                log.detail("DRP retime: clip '%s' hex speed %.4f → MTBA %.4f (YMax/XMax=%.2f/%.2f)",
-                                         clip_name, clip_speed, mtba_speed, mtba.y_max, mtba.x_max)
-                            end
-                        end
-                        clip_speed = mtba_speed
-                        retime_keyframes = mtba.keyframes  -- may still be nil if parse failed
+                        clip_speed = mtba.is_reverse and -mtba.speed_ratio or mtba.speed_ratio
+                        retime_keyframes = mtba.keyframes
                         log.event("DRP retime: clip '%s' speed from MTBA: %.4f (YMax=%.2f XMax=%.2f reverse=%s kf=%d)",
                                   clip_name, clip_speed, mtba.y_max, mtba.x_max,
                                   tostring(mtba.is_reverse),
@@ -1900,22 +1884,13 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 end
             end
 
-            -- Final guard: if clip_speed is still implausibly low after hex + MTBA,
-            -- it's garbage. Reset to 1.0 (non-retimed). This catches clips where
-            -- hex speed was garbage AND MTBA was absent or had no speed data.
-            if math.abs(clip_speed) > 0 and math.abs(clip_speed) < 0.05 then
-                log.warn("DRP retime: clip '%s' final speed %.6f implausibly low — treating as non-retimed",
-                    clip_name, clip_speed)
-                clip_speed = 1.0
-            end
-
             local duration_timeline_frames = duration_raw
             local abs_speed = math.abs(clip_speed)
 
-            -- If we have a non-unity speed but no MTBA keyframes (e.g. synthetic
-            -- test data with `<In>NN|hex_speed</In>` and no MediaTimemapBA),
-            -- synthesize a constant-speed curve so all retime math goes through
-            -- the curve-walking code path uniformly.
+            -- Synthesize a constant-speed curve when MTBA exists but keyframes
+            -- were discarded (parsed but failed sanity check). Without the curve,
+            -- the no-retime path would treat in_value as source frames, ignoring
+            -- the speed change entirely.
             if not retime_keyframes and abs_speed ~= 1.0 then
                 retime_keyframes = {
                     { x = 0, y = 0 },
@@ -1989,15 +1964,8 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             else
                 -- No curve: in_value is source frames at sequence rate.
                 -- Convert to native_rate units.
-                if track_type == "AUDIO" then
-                    local audio_speed = (abs_speed ~= 1.0) and abs_speed or 1.0
-                    in_offset = math.floor(in_value * native_rate / frame_rate * audio_speed + 0.5)
-                    source_duration = math.floor(duration_raw * native_rate / frame_rate * audio_speed + 0.5)
-                else
-                    -- Video: rescale from sequence fps to media fps
-                    in_offset = math.floor(in_value * native_rate / frame_rate + 0.5)
-                    source_duration = math.floor(duration_raw * native_rate / frame_rate + 0.5)
-                end
+                in_offset = math.floor(in_value * native_rate / frame_rate + 0.5)
+                source_duration = math.floor(duration_raw * native_rate / frame_rate + 0.5)
             end
 
             -- Sanity: MST max = 86400s (midnight). At 48kHz = ~4.1B samples.
@@ -2051,6 +2019,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             local clip = {
                 name = clip_name,
                 start_value = start_frames,        -- timeline position (integer frames)
+                start_subframe = start_subframe,   -- fractional frame offset (0.0–1.0, for sub-frame audio)
                 duration = duration_timeline_frames,  -- duration on timeline (integer frames)
                 -- Absolute timecode addressing for source selection:
                 source_in_tc = source_in_native,   -- native units (samples for audio, frames for video)
