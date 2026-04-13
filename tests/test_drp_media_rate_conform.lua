@@ -93,9 +93,10 @@ print(string.format("  ✓ source_out - source_in = %d file frames (4s × 24fps)
 -- Test 2: 24fps media on 25fps sequence — trimmed
 --------------------------------------------------------------------------------
 -- <In>N</In> is expressed by DRP in master-playback-timeline frames at the
--- clip's native rate. For an un-retimed 24fps clip, In=48 means "start 48
--- file frames (= 2.0 sec) into the file". Expected source_in:
---   media_tc_origin_frames + 48 = 86400 + 48 = 86448.
+-- SEQUENCE rate. For an un-retimed 24fps clip on a 25fps sequence, In=48
+-- means "start 48/25 = 1.92 sec into the file" = floor(1.92 * 24 + 0.5) = 46
+-- file frames. Expected source_in:
+--   media_tc_origin_frames + 46 = 86400 + 46 = 86446.
 
 print("\n--- Test 2: 24fps media on 25fps sequence, In=48 ---")
 
@@ -119,16 +120,19 @@ local seq2 = elem("Sequence", "", {
 local v2 = drp_importer.parse_resolve_tracks(seq2, 25)
 local clip2 = v2[1].clips[1]
 
-assert(clip2.source_in == 86400 + 48, string.format(
-    "trimmed source_in should be %d (media-native TC + In), got %d",
-    86400 + 48, clip2.source_in))
-print(string.format("  ✓ source_in = %d (TC origin 86400 + In 48)", clip2.source_in))
+-- In=48 at 25fps seq → 48*24/25 = 46.08 → floor(46.08+0.5) = 46 file frames
+local expected_in_offset = math.floor(48 * 24 / 25 + 0.5)  -- 46
+assert(clip2.source_in == 86400 + expected_in_offset, string.format(
+    "trimmed source_in should be %d (media-native TC + In converted to file rate), got %d",
+    86400 + expected_in_offset, clip2.source_in))
+print(string.format("  ✓ source_in = %d (TC origin 86400 + In→%d file frames)", clip2.source_in, expected_in_offset))
 
--- 2s on the timeline consumes 2.0 * 24 = 48 file frames of natural-speed content
-assert(clip2.source_out - clip2.source_in == 48, string.format(
-    "trimmed source range should be 48 file frames, got %d",
-    clip2.source_out - clip2.source_in))
-print(string.format("  ✓ source range = 48 file frames (2s × 24fps)"))
+-- 50 timeline frames at 25fps = 2.0s. Source duration = floor(50*24/25+0.5) = 48 file frames
+local expected_src_dur2 = math.floor(50 * 24 / 25 + 0.5)  -- 48
+assert(clip2.source_out - clip2.source_in == expected_src_dur2, string.format(
+    "trimmed source range should be %d file frames, got %d",
+    expected_src_dur2, clip2.source_out - clip2.source_in))
+print(string.format("  ✓ source range = %d file frames (2s × 24fps)", expected_src_dur2))
 
 --------------------------------------------------------------------------------
 -- Test 3: 30fps media on 25fps sequence — untrimmed
@@ -208,26 +212,25 @@ print("  ✓ Matched-rate case unchanged")
 --------------------------------------------------------------------------------
 -- Test 5: clip.rate stamp on the timeline-level clip (post-import)
 --------------------------------------------------------------------------------
--- At the parse_resolve_tracks layer clips carry a `frame_rate` field that
--- flows into clip.rate at DB insert time (drp_importer.lua:3207). For a
--- 24fps file, that field MUST be 24, not 25 — otherwise every downstream
--- consumer of clip.rate (inspector, match-frame, retime math, audio conform
--- speed_ratio) reads the wrong unit.
+-- At the parse_resolve_tracks layer clips carry two rate fields:
+--   frame_rate  = sequence rate (for timeline position math)
+--   native_rate = media's native fps (source coords are in this rate)
+-- For downstream consumers that need the file's actual fps (inspector,
+-- match-frame, retime math, audio conform speed_ratio), native_rate is used.
 
-print("\n--- Test 5: clip frame_rate field = media's native rate ---")
+print("\n--- Test 5: clip native_rate field = media's native rate ---")
 
-assert(clip1.frame_rate == 24, string.format(
-    "24-on-25 clip.frame_rate should be 24 (media-native), got %s. " ..
-    "If this is 25, the parser is stamping sequence rate instead of media rate.",
-    tostring(clip1.frame_rate)))
-print(string.format("  ✓ 24-on-25 clip.frame_rate = %s", tostring(clip1.frame_rate)))
+assert(clip1.native_rate == 24, string.format(
+    "24-on-25 clip.native_rate should be 24 (media-native), got %s",
+    tostring(clip1.native_rate)))
+print(string.format("  ✓ 24-on-25 clip.native_rate = %s", tostring(clip1.native_rate)))
 
-assert(clip3.frame_rate == 30,
-    "30-on-25 clip.frame_rate should be 30")
-print(string.format("  ✓ 30-on-25 clip.frame_rate = %s", tostring(clip3.frame_rate)))
+assert(clip3.native_rate == 30,
+    "30-on-25 clip.native_rate should be 30")
+print(string.format("  ✓ 30-on-25 clip.native_rate = %s", tostring(clip3.native_rate)))
 
-assert(clip4.frame_rate == 25,
-    "25-on-25 clip.frame_rate should be 25")
-print(string.format("  ✓ 25-on-25 clip.frame_rate = %s", tostring(clip4.frame_rate)))
+assert(clip4.native_rate == 25,
+    "25-on-25 clip.native_rate should be 25")
+print(string.format("  ✓ 25-on-25 clip.native_rate = %s", tostring(clip4.native_rate)))
 
 print("\n✅ test_drp_media_rate_conform.lua passed")

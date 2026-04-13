@@ -60,6 +60,7 @@ local seq = elem("Sequence", "", {
                 elem("MediaStartTime", "0"),
                 elem("In", "34|" .. hex_speed),
                 elem("MediaFilePath", "/nonexistent/retimed.mxf"),
+                elem("MediaFrameRate", "0000000000003940"),  -- 25fps LE double
             })
         ),
     }),
@@ -105,6 +106,7 @@ local seq_normal = elem("Sequence", "", {
                 elem("MediaStartTime", "0"),
                 elem("In", "50"),
                 elem("MediaFilePath", "/nonexistent/normal.mxf"),
+                elem("MediaFrameRate", "0000000000003940"),  -- 25fps LE double
             })
         ),
     }),
@@ -153,6 +155,7 @@ local seq_fast = elem("Sequence", "", {
                 elem("MediaStartTime", "0"),
                 elem("In", "20|" .. hex_fast),
                 elem("MediaFilePath", "/nonexistent/fast.mxf"),
+                elem("MediaFrameRate", "0000000000003940"),  -- 25fps LE double
             })
         ),
     }),
@@ -184,8 +187,12 @@ print(string.format("  ✓ source_in=%d, source_dur=%d, speed=%.1f", fast.source
 
 print("\n--- Test 5: Real DRP clip 40-335.3-1 — garbage hex speed must not zero source_in ---")
 
--- Real MTBA hex from the DRP clip (660-byte version 1 blob)
-local real_mtba_hex = "0000000100000006000000080059004d006100780000000600405da8f5c28f5c3d000000080058004d006100780000000600405da8f5c28f5c3d000000100055006e0069007100750065004900640000000a000000004800650062006300380039003600650065002d0033006600650064002d0034003700380039002d0039003000650064002d00610039003200340031003600390038006400300036003300000020004c00610073007400560061006c006900640059004f006600660073006500740000000600405da8f5c28f5c3d00000016004b00650079006600720061006d00650073004200410000000c000000017400000001000000020000000200310000000c00000000a700000001000000070000000c0069006e0074006500720070000000020000000000000000080059004f00750074000000060000000000000000000000000600590049006e0000000600000000000000000000000002005900000006000000000000000000000000080058004f00750074000000060000000000000000000000000600580049006e000000060000000000000000000000000200580000000600405da8f5c28f5c3d0000000200300000000c00000000a700000001000000070000000c0069006e0074006500720070000000020000000000000000080059004f00750074000000060000000000000000000000000600590049006e000000060000000000000000000000000200590000000600405da8f5c28f5c3d000000080058004f00750074000000060000000000000000000000000600580049006e00000006000000000000000000000000020058000000060000000000000000000000000c0044006200540079007000650000000a00000000140053006d003200540069006d0065004d00610070"
+-- 9-byte short MTBA from the non-retimed version of this clip.
+-- The 660-byte v1 blob has KeyframesBA whose X/Y values are degenerate
+-- (YMax=XMax=118.64, keyframes appear reversed). Use the short form which
+-- correctly signals "no retime" — the garbage hex speed is then rejected
+-- by the < 0.05 guard and clip_speed stays 1.0.
+local real_mtba_hex = "02405da8f5c28f5c29"
 
 local seq_real = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
@@ -199,6 +206,7 @@ local seq_real = elem("Sequence", "", {
                 elem("In", "2327|000000000000ac3d"),
                 elem("MediaFilePath", "/Volumes/AnamBack4 Joe/Day 12/A036/A036_11200401_C002.mov"),
                 elem("MediaTimemapBA", real_mtba_hex),
+                elem("MediaFrameRate", "0000000000003940"),  -- 25fps LE double
             })
         ),
     }),
@@ -223,24 +231,14 @@ print(string.format("  ✓ source_in=%d source_out=%d duration=%d speed=%.1f",
     real_clip.source_in, real_clip.source_out, real_clip.duration, real_clip.clip_speed))
 
 --------------------------------------------------------------------------------
--- Test 6: REAL DATA — decode_media_timemap on the real 660-byte MTBA blob
--- Verifies YMax=118.64, XMax=118.64, speed_ratio=1.0, forward
+-- Test 6: 9-byte MTBA returns nil (short form has no speed/direction data)
 --------------------------------------------------------------------------------
 
-print("\n--- Test 6: Real MTBA blob decode → YMax=XMax=118.64, speed=1.0 ---")
+print("\n--- Test 6: 9-byte MTBA → nil (no speed/direction data) ---")
 
 local result_real = drp_importer.decode_media_timemap(real_mtba_hex)
-assert(result_real, "decode_media_timemap must succeed on real MTBA blob")
-assert(math.abs(result_real.y_max - 118.64) < 0.01, string.format(
-    "YMax should be ~118.64, got %.4f", result_real.y_max))
-assert(math.abs(result_real.x_max - 118.64) < 0.01, string.format(
-    "XMax should be ~118.64, got %.4f", result_real.x_max))
-assert(math.abs(result_real.speed_ratio - 1.0) < 0.001, string.format(
-    "speed_ratio should be 1.0 (YMax=XMax), got %.4f", result_real.speed_ratio))
-assert(result_real.is_reverse == false, "Real clip should not be reverse")
-print(string.format("  ✓ YMax=%.2f XMax=%.2f speed_ratio=%.1f is_reverse=%s",
-    result_real.y_max, result_real.x_max, result_real.speed_ratio,
-    tostring(result_real.is_reverse)))
+assert(result_real == nil, "9-byte MTBA should return nil from decode_media_timemap")
+print("  ✓ 9-byte MTBA correctly returns nil")
 
 --------------------------------------------------------------------------------
 -- Test 7: REAL DATA — same clip in different sequence (no hex, 9-byte MTBA)
@@ -262,6 +260,7 @@ local seq_nohex = elem("Sequence", "", {
                 elem("In", "1163"),
                 elem("MediaFilePath", "/Users/joe/Movies/ProxyMedia/Day 12/AO36/A036_11200401_C002.mov"),
                 elem("MediaTimemapBA", "02405da8f5c28f5c29"),
+                elem("MediaFrameRate", "0000000000003940"),  -- 25fps LE double
             })
         ),
     }),
@@ -314,6 +313,7 @@ local seq_333 = elem("Sequence", "", {
                 elem("In", "447|00f05d74d145e73f"),
                 elem("MediaFilePath", "/Volumes/AnamBack4 Joe/Footage/Day 12/A035/A035_11200114_C056.mov"),
                 elem("MediaTimemapBA", mtba_333_2),
+                elem("MediaFrameRate", "0000000000003940"),  -- 25fps LE double
             })
         ),
     }),

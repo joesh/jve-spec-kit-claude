@@ -32,6 +32,13 @@ local function wrap_clips(...)
     return elem("Items", "", elements)
 end
 
+-- LE hex-encoded IEEE 754 doubles for <MediaFrameRate>
+local MFR_25  = "0000000000003940"  -- 25.0fps
+local MFR_24  = "0000000000003840"  -- 24.0fps
+
+-- Audio sample rate map: MediaRef → sample_rate (simulates pool master clip data)
+local AUDIO_SR_MAP = { ["test-audio-ref"] = 48000 }
+
 --------------------------------------------------------------------------------
 -- Test 1: Video with MST > 0 → source_in = media_tc_origin + in_offset
 --------------------------------------------------------------------------------
@@ -50,10 +57,11 @@ do
                 elem("MediaStartTime", "3600"),
                 elem("In", "100"),
                 elem("MediaFilePath", "/test/v.mov"),
+                elem("MediaFrameRate", MFR_25),
             })),
         }),
     })
-    local tracks = drp_importer.parse_resolve_tracks(seq, 25)
+    local tracks = drp_importer.parse_resolve_tracks(seq, 25, nil, nil, AUDIO_SR_MAP)
     local clip = tracks[1].clips[1]
     assert(clip.source_in == 90100, string.format(
         "video source_in should be 90100 (abs TC), got %d", clip.source_in))
@@ -81,10 +89,11 @@ do
                 elem("MediaStartTime", "3600"),
                 elem("In", "250"),
                 elem("MediaFilePath", "/test/a.wav"),
+                elem("MediaRef", "test-audio-ref"),
             })),
         }),
     })
-    local _, a_tracks = drp_importer.parse_resolve_tracks(seq, 25)
+    local _, a_tracks = drp_importer.parse_resolve_tracks(seq, 25, nil, nil, AUDIO_SR_MAP)
     local clip = a_tracks[1].clips[1]
     assert(clip.source_in == 173280000, string.format(
         "audio source_in should be 173280000, got %d", clip.source_in))
@@ -106,10 +115,11 @@ do
                 elem("MediaStartTime", "0"),
                 elem("In", "42"),
                 elem("MediaFilePath", "/test/z.mov"),
+                elem("MediaFrameRate", MFR_24),
             })),
         }),
     })
-    local tracks = drp_importer.parse_resolve_tracks(seq, 24)
+    local tracks = drp_importer.parse_resolve_tracks(seq, 24, nil, nil, AUDIO_SR_MAP)
     local clip = tracks[1].clips[1]
     assert(clip.source_in == 42, string.format(
         "MST=0: source_in should be 42, got %d", clip.source_in))
@@ -131,10 +141,11 @@ do
                 -- No MediaStartTime element
                 elem("In", "77"),
                 elem("MediaFilePath", "/test/n.mov"),
+                elem("MediaFrameRate", MFR_25),
             })),
         }),
     })
-    local tracks = drp_importer.parse_resolve_tracks(seq, 25)
+    local tracks = drp_importer.parse_resolve_tracks(seq, 25, nil, nil, AUDIO_SR_MAP)
     local clip = tracks[1].clips[1]
     assert(clip.source_in == 77, string.format(
         "missing MST: source_in should be 77, got %d", clip.source_in))
@@ -158,10 +169,11 @@ do
                 elem("MediaStartTime", "86399"),
                 elem("In", "10"),
                 elem("MediaFilePath", "/test/m.mov"),
+                elem("MediaFrameRate", MFR_25),
             })),
         }),
     })
-    local tracks = drp_importer.parse_resolve_tracks(seq, 25)
+    local tracks = drp_importer.parse_resolve_tracks(seq, 25, nil, nil, AUDIO_SR_MAP)
     local clip = tracks[1].clips[1]
     local expected = math.floor(86399 * 25 + 0.5) + 10
     assert(clip.source_in == expected, string.format(
@@ -184,10 +196,11 @@ do
                 elem("MediaStartTime", "3600"),
                 elem("In", "100"),
                 elem("MediaFilePath", "/test/f.mov"),
+                elem("MediaFrameRate", MFR_25),
             })),
         }),
     })
-    local tracks = drp_importer.parse_resolve_tracks(seq, 25)
+    local tracks = drp_importer.parse_resolve_tracks(seq, 25, nil, nil, AUDIO_SR_MAP)
     local clip = tracks[1].clips[1]
     assert(clip.source_in_tc == clip.source_in, string.format(
         "source_in_tc should equal source_in (%d), got %d",

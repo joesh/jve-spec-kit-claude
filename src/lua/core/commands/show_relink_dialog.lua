@@ -79,9 +79,15 @@ function M.register(executors, _undoers, db)
         local path_to_media = {}     -- new_path → {media_id, priority}
         local media_orig_paths = {}  -- media_id → original file_path
 
-        -- Helper: check if a path is already owned by an existing media record in the DB
+        -- Unified path ownership check: session clones, session path claims, DB.
+        -- Returns media_id of owner, or nil if unclaimed.
         local db_path_cache = {}  -- path → media_id or false
-        local function find_existing_media_by_path(path)
+        local function find_path_owner(path)
+            -- 1. Clone created this session
+            if clone_path_to_id[path] then return clone_path_to_id[path] end
+            -- 2. Non-split media claiming this path this session
+            if path_to_media[path] then return path_to_media[path].media_id end
+            -- 3. Existing DB record
             if db_path_cache[path] ~= nil then
                 return db_path_cache[path] ~= false and db_path_cache[path] or nil
             end
@@ -117,7 +123,7 @@ function M.register(executors, _undoers, db)
                 local original = Media.load(mid)
                 assert(original, "ShowRelinkDialog: split source media not found: " .. mid)
                 -- Check if target path already belongs to an existing or session-created media
-                local existing_at_path = clone_path_to_id[entry.new_path] or find_existing_media_by_path(entry.new_path)
+                local existing_at_path = find_path_owner(entry.new_path)
                 if existing_at_path then
                     -- Path taken — reassign to existing instead of cloning
                     for _, clip_id in ipairs(entry.split_clip_ids) do
@@ -162,7 +168,7 @@ function M.register(executors, _undoers, db)
             end
 
             -- Check if path already belongs to an existing or session-created media
-            local db_owner = clone_path_to_id[entry.new_path] or find_existing_media_by_path(entry.new_path)
+            local db_owner = find_path_owner(entry.new_path)
             if db_owner and db_owner ~= mid then
                 priority_losers[mid] = db_owner
                 goto continue_relink

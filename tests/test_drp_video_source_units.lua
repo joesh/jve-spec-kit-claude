@@ -53,6 +53,7 @@ local seq_elem = elem("Sequence", "", {
                 elem("MediaStartTime", "45274"),  -- 12:34:34 in seconds (file TC origin)
                 elem("In", ""),                    -- empty = untrimmed, start at file beginning
                 elem("MediaFilePath", "/test/C095.mov"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24fps LE double
             })
         ),
     }),
@@ -93,6 +94,7 @@ local seq_trim = elem("Sequence", "", {
                 elem("MediaStartTime", "45274"),
                 elem("In", "100"),  -- starts 100 frames into the file
                 elem("MediaFilePath", "/test/C095.mov"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24fps LE double
             })
         ),
     }),
@@ -127,12 +129,13 @@ local seq_audio = elem("Sequence", "", {
                 elem("MediaStartTime", "45845"),  -- file TC origin (12:44:05 seconds)
                 elem("In", ""),                    -- empty = start at file beginning
                 elem("MediaFilePath", "/test/audio.wav"),
+                elem("MediaRef", "test-audio-ref"),
             })
         ),
     }),
 })
 
-local _, a_tracks = drp_importer.parse_resolve_tracks(seq_audio, 24)
+local _, a_tracks = drp_importer.parse_resolve_tracks(seq_audio, 24, nil, nil, { ["test-audio-ref"] = 48000 })
 
 assert(#a_tracks == 1, "Expected 1 audio track, got " .. #a_tracks)
 local audio_clip = a_tracks[1].clips[1]
@@ -168,12 +171,13 @@ local seq_audio_trim = elem("Sequence", "", {
                 elem("MediaStartTime", "45845"),
                 elem("In", "73794"),  -- 73794 timeline frames into the audio file
                 elem("MediaFilePath", "/test/audio.wav"),
+                elem("MediaRef", "test-audio-ref"),
             })
         ),
     }),
 })
 
-local _, a_trim = drp_importer.parse_resolve_tracks(seq_audio_trim, 24)
+local _, a_trim = drp_importer.parse_resolve_tracks(seq_audio_trim, 24, nil, nil, { ["test-audio-ref"] = 48000 })
 local audio_trim_clip = a_trim[1].clips[1]
 
 -- in_offset = floor(73794 * 48000 / 24 + 0.5) = 147588000 samples
@@ -201,6 +205,7 @@ local seq_regression = elem("Sequence", "", {
                 elem("MediaStartTime", "45274"),  -- TC 12:34:34
                 elem("In", ""),
                 elem("MediaFilePath", "/test/a.mov"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24fps LE double
             }),
             elem("Sm2TiVideoClip", "", {
                 elem("Name", "clip_b"),
@@ -209,6 +214,7 @@ local seq_regression = elem("Sequence", "", {
                 elem("MediaStartTime", "99999"),  -- completely different TC
                 elem("In", ""),
                 elem("MediaFilePath", "/test/b.mov"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24fps LE double
             })
         ),
     }),
@@ -240,6 +246,7 @@ local seq_mst = elem("Sequence", "", {
                 elem("MediaStartTime", "45274.12"),  -- 12:34:34 + fractional
                 elem("In", ""),
                 elem("MediaFilePath", "/test/mst_test.mov"),
+                elem("MediaFrameRate", "0000000000003940"),  -- 25fps LE double
             })
         ),
     })
@@ -283,6 +290,7 @@ local seq_zero_mst = elem("Sequence", "", {
                 elem("MediaStartTime", "0"),
                 elem("In", ""),
                 elem("MediaFilePath", "/test/zero_mst.mov"),
+                elem("MediaFrameRate", "0000000000003940"),  -- 25fps LE double
             })
         ),
     })

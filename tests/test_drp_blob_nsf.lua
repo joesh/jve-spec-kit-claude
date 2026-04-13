@@ -121,6 +121,7 @@ local seq = elem("Sequence", "", {
                 elem("Duration", "100"),
                 elem("In", "400"),
                 elem("MediaFilePath", "/vol/media/test.mov"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24fps LE double
             })
         ),
     }),
@@ -157,6 +158,7 @@ local seq_path = elem("Sequence", "", {
                 elem("In", "0"),
                 elem("MediaFilePath", "/correct/path/video.mov"),
                 elem("MediaRef", "ref_001"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24fps LE double
             })
         ),
     }),
@@ -191,6 +193,7 @@ local seq_no_mfp = elem("Sequence", "", {
                 elem("In", "0"),
                 elem("MediaFilePath", ""),
                 elem("MediaRef", "ref_002"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24fps LE double
             })
         ),
     }),
@@ -222,6 +225,7 @@ local seq_name = elem("Sequence", "", {
                 elem("In", "0"),
                 elem("MediaFilePath", "/vol/media/A001_C001.mov"),
                 elem("MediaRef", "ref_mc1"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24fps LE double
             })
         ),
     }),
@@ -245,7 +249,7 @@ assert(vt6[1].clips[1].name == "My Custom Label",
 print("  ✓ media_lookup.name = MC name, clip.name = timeline label")
 
 -- Test 6b: Without MC name map, falls through to clip.name
-local _, _, ml6b = drp_importer.parse_resolve_tracks(seq_name, 24)
+local _, _, ml6b = drp_importer.parse_resolve_tracks(seq_name, 24, nil, nil)
 -- Without name map, key is still UUID (ref_mc1 from MediaRef)
 local media6b = ml6b["ref_mc1"]
 assert(media6b, "media_lookup should have entry without name map")

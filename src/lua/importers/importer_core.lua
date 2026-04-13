@@ -465,12 +465,14 @@ function M.import_into_project(project_id, parse_result, opts)
                             goto continue_clip
                         end
 
-                        local clip_rate_num, clip_rate_den
-                        if track_data.type == "VIDEO" then
-                            clip_rate_num, clip_rate_den = fps_num, fps_den
-                        else
-                            clip_rate_num, clip_rate_den = 48000, 1
-                        end
+                        -- Clip rate = media's native rate. Source coordinates
+                        -- (source_in, source_out) are in native units set by the
+                        -- parser (parse_resolve_tracks). The rate must match.
+                        assert(clip_data.native_rate, string.format(
+                            "import_into_project: clip '%s' missing native_rate (media_id=%s)",
+                            clip_data.name or "unnamed", media_id))
+                        local clip_rate_num = clip_data.native_rate
+                        local clip_rate_den = 1
 
                         local source_out = clip_data.source_out
                         local is_reverse = (clip_data.clip_speed or 1) < 0
