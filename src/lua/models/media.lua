@@ -507,17 +507,30 @@ function M:get_source_extent(target_rate)
         local src_in = stmt:value(0)
         local src_out = stmt:value(1)
         local fps_num = stmt:value(2)
-        local fps_den = stmt:value(3) or 1
-        if src_in and src_out and fps_num and fps_num > 0 then
-            local clip_rate = fps_num / fps_den
-            -- Normalize to target_rate
-            if math.abs(clip_rate - target_rate) > 0.01 then
-                src_in = math.floor(src_in * target_rate / clip_rate + 0.5)
-                src_out = math.floor(src_out * target_rate / clip_rate + 0.5)
-            end
-            if not min_in or src_in < min_in then min_in = src_in end
-            if not max_out or src_out > max_out then max_out = src_out end
+        local fps_den = stmt:value(3)
+        -- All four columns are NOT NULL with CHECK constraints in schema.sql
+        -- (source_in_frame/out_frame NOT NULL; fps_num/den NOT NULL CHECK > 0).
+        -- Nil/zero here means data corruption that bypassed the schema —
+        -- assert with media context so the bad row is identifiable.
+        assert(src_in, string.format(
+            "Media:get_source_extent: clip on media %s has NULL source_in_frame", tostring(self.id)))
+        assert(src_out, string.format(
+            "Media:get_source_extent: clip on media %s has NULL source_out_frame", tostring(self.id)))
+        assert(fps_num and fps_num > 0, string.format(
+            "Media:get_source_extent: clip on media %s has invalid fps_numerator=%s",
+            tostring(self.id), tostring(fps_num)))
+        assert(fps_den and fps_den > 0, string.format(
+            "Media:get_source_extent: clip on media %s has invalid fps_denominator=%s",
+            tostring(self.id), tostring(fps_den)))
+
+        local clip_rate = fps_num / fps_den
+        -- Normalize to target_rate
+        if math.abs(clip_rate - target_rate) > 0.01 then
+            src_in = math.floor(src_in * target_rate / clip_rate + 0.5)
+            src_out = math.floor(src_out * target_rate / clip_rate + 0.5)
         end
+        if not min_in or src_in < min_in then min_in = src_in end
+        if not max_out or src_out > max_out then max_out = src_out end
     end
     stmt:finalize()
     return min_in, max_out

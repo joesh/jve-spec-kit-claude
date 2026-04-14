@@ -490,7 +490,16 @@ static emp::TrackType parse_track_type(lua_State* L, int idx) {
 }
 
 // EMP.TMB_SET_TC_OVERRIDES(tmb, overrides_table)
-// overrides_table = { [path_string] = { video = int64, audio = int64 }, ... }
+// overrides_table = { [path_string] = { video = int64, audio = int64 | nil }, ... }
+//
+// `video` is required (the override applies to the file's video TC).
+// `audio` is optional — absent for video-only media, where the audio side
+// of the override is never consulted. When absent we store 0 as a no-op
+// sentinel; if a file has audio AND needs an override, the Lua caller must
+// supply a real audio sample count.
+//
+// Schema violations (non-string key, non-table value, missing/non-numeric
+// `video`) are programming errors and fail loud per the fail-fast policy.
 static int lua_emp_tmb_set_tc_overrides(lua_State* L) {
     auto tmb = get_tmb(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
@@ -499,19 +508,38 @@ static int lua_emp_tmb_set_tc_overrides(lua_State* L) {
 
     lua_pushnil(L);
     while (lua_next(L, 2)) {
-        // key at -2 (path string), value at -1 (table with video, audio)
-        if (!lua_isstring(L, -2) || !lua_istable(L, -1)) {
-            lua_pop(L, 1);
-            continue;
+        if (!lua_isstring(L, -2)) {
+            return luaL_error(L,
+                "TMB_SET_TC_OVERRIDES: override map key must be a string path");
+        }
+        if (!lua_istable(L, -1)) {
+            return luaL_error(L,
+                "TMB_SET_TC_OVERRIDES: override map value for '%s' must be a table",
+                lua_tostring(L, -2));
         }
         std::string path = lua_tostring(L, -2);
 
         lua_getfield(L, -1, "video");
-        int64_t video_tc = lua_isnumber(L, -1) ? static_cast<int64_t>(lua_tointeger(L, -1)) : 0;
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L,
+                "TMB_SET_TC_OVERRIDES: '%s'.video must be an integer (got %s)",
+                path.c_str(), luaL_typename(L, -1));
+        }
+        int64_t video_tc = static_cast<int64_t>(lua_tointeger(L, -1));
         lua_pop(L, 1);
 
+        // audio is optional: absent → 0 sentinel (audio path won't be consulted
+        // for video-only media). Present-but-non-numeric is a schema violation.
         lua_getfield(L, -1, "audio");
-        int64_t audio_tc = lua_isnumber(L, -1) ? static_cast<int64_t>(lua_tointeger(L, -1)) : 0;
+        int64_t audio_tc = 0;
+        if (!lua_isnil(L, -1)) {
+            if (!lua_isnumber(L, -1)) {
+                return luaL_error(L,
+                    "TMB_SET_TC_OVERRIDES: '%s'.audio must be an integer or nil (got %s)",
+                    path.c_str(), luaL_typename(L, -1));
+            }
+            audio_tc = static_cast<int64_t>(lua_tointeger(L, -1));
+        }
         lua_pop(L, 1);
 
         overrides[path] = emp::TcOverride{video_tc, audio_tc};
