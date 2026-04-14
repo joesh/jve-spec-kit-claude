@@ -32,6 +32,7 @@
 -- @file media_relinker.lua
 local M = {}
 local log = require("core.logger").for_area("media")
+local shell_capture = require("core.fs_utils").shell_capture
 
 --- Check if file exists at given path
 -- @param file_path string Absolute path to check
@@ -52,7 +53,6 @@ local function get_filename(file_path)
     return file_path:match("([^/\\]+)$") or file_path
 end
 
-
 --- Search directory recursively for media files
 -- @param root_dir string Directory to search
 -- @param extensions table Set of extensions to include (e.g., {mov=true, mp4=true})
@@ -67,18 +67,15 @@ local function scan_directory(root_dir, extensions)
     end
     local ext_pattern = table.concat(ext_list, " -o ")
 
-    local cmd = string.format('find "%s" -type f \\( %s \\) 2>/dev/null',
-        root_dir, ext_pattern)
+    local cmd = string.format('find "%s" -type f \\( %s \\)', root_dir, ext_pattern)
     log.event("scan_directory: %s", cmd)
 
-    local handle = io.popen(cmd)
-    assert(handle, string.format("scan_directory: io.popen failed for %s", cmd))
-    for line in handle:lines() do
-        if line and line ~= "" then
+    local output = shell_capture(cmd, "scan_directory")
+    for line in output:gmatch("[^\n]+") do
+        if line ~= "" then
             results[#results + 1] = line
         end
     end
-    handle:close()
 
     log.event("scan_directory: found %d files", #results)
     return results
@@ -114,8 +111,6 @@ local function build_candidate_index(search_paths, extensions)
     return candidate_index
 end
 
-
-
 --- Convert TC string "HH:MM:SS:FF" to total frames.
 -- @param tc string Timecode like "00:40:33:02"
 -- @param fps number Frames per second (integer)
@@ -136,17 +131,11 @@ end
 local function probe_file(file_path)
     local escaped = string.format('"%s"', file_path:gsub('"', '\\"'))
     local cmd = string.format(
-        'ffprobe -v error -print_format json -show_format -show_streams %s 2>/dev/null',
+        'ffprobe -v error -print_format json -show_format -show_streams %s',
         escaped)
-    local handle = io.popen(cmd)
-    if not handle then
-        log.detail("probe_file: io.popen failed for %s", file_path)
-        return nil
-    end
-    local output = handle:read("*a")
-    handle:close()
-    if not output or output == "" then
-        log.detail("probe_file: empty ffprobe output for %s", file_path)
+    local ok, output = pcall(shell_capture, cmd, "probe_file")
+    if not ok or not output or output == "" then
+        log.detail("probe_file: ffprobe failed for %s", file_path)
         return nil
     end
 

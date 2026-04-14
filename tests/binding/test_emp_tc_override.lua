@@ -13,15 +13,18 @@ assert(EMP, "EMP bindings not available — run via: ./build/bin/JVEEditor --tes
 
 print("=== test_emp_tc_override.lua ===")
 
--- Find a fixture file with a known TC
+-- Find a fixture file with a known TC.
+-- Use shell_capture (temp-file pattern) instead of io.popen to avoid the
+-- EINTR risk that LuaJIT pipes have under Qt signals/timers in --test mode.
 local fixture_dir = "tests/fixtures/media/anamnesis"
+local fs_utils = require("core.fs_utils")
 local test_file = nil
 
--- Use any available .mov or .mxf in the fixture tree
-local f = io.popen('find "' .. fixture_dir .. '" -name "*.mov" -o -name "*.mxf" 2>/dev/null | head -1')
-if f then
-    test_file = f:read("*l")
-    f:close()
+local find_ok, output = pcall(fs_utils.shell_capture,
+    'find "' .. fixture_dir .. '" \\( -name "*.mov" -o -name "*.mxf" \\) | head -1',
+    "test_emp_tc_override:find_fixture")
+if find_ok and output then
+    test_file = output:match("[^\n]+")
 end
 
 if not test_file or test_file == "" then
