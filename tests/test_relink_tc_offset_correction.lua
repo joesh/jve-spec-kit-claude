@@ -80,9 +80,10 @@ local function relink_one(media_info, rules_override)
 end
 
 ---------------------------------------------------------------------------------
--- Test 1: Relink to file with DIFFERENT TC start — source_in stays unchanged
+-- Test 1: Relink to file with DIFFERENT TC start — relink succeeds,
+--         source coordinates are NOT in the result (never mutated)
 ---------------------------------------------------------------------------------
-print("\n--- Test 1: different TC start — source_in unchanged ---")
+print("\n--- Test 1: different TC start — relinked, no source coord mutation ---")
 do
     -- Clip was made from a file starting at TC 2383776000 (different from fixture's 2384442240)
     local ORIGINAL_TC = 2383776000
@@ -95,26 +96,19 @@ do
         string.format("expected 1 relinked, got %d", #results.relinked))
 
     local entry = results.relinked[1]
-    assert(entry.new_source_in == source_in,
-        string.format("source_in must not change: expected %d, got %d",
-            source_in, entry.new_source_in))
-    assert(entry.new_source_out == source_out,
-        string.format("source_out must not change: expected %d, got %d",
-            source_out, entry.new_source_out))
-
-    -- Verify the decoder would compute a valid file_pos with the NEW file
-    local file_pos = entry.new_source_in - FIXTURE_TC
-    print(string.format("  file_pos = %d (old file TC=%d, new file TC=%d)",
-        file_pos, ORIGINAL_TC, FIXTURE_TC))
-    -- file_pos may be negative if the clip's content falls before the new file's start.
-    -- That's a containment issue, not a relink issue. The point is source_in didn't change.
-    print("  ✓ source_in/source_out unchanged despite different file TC")
+    -- Relink result contains media_id + new_path + strategy.
+    -- Source coordinates are absolute TC — relink NEVER mutates them.
+    -- The C++ decoder computes file_pos = source_in - first_sample_tc at decode time.
+    assert(entry.new_path, "relinked entry must have new_path")
+    assert(not entry.new_source_in, "relink must NOT include new_source_in (absolute TC is immutable)")
+    assert(not entry.new_source_out, "relink must NOT include new_source_out (absolute TC is immutable)")
+    print("  ✓ relinked with no source coordinate mutation")
 end
 
 ---------------------------------------------------------------------------------
--- Test 2: Relink to file with SAME TC start — source_in stays unchanged
+-- Test 2: Relink to file with SAME TC start — relinked, same verification
 ---------------------------------------------------------------------------------
-print("\n--- Test 2: same TC start — source_in unchanged ---")
+print("\n--- Test 2: same TC start — relinked ---")
 do
     local source_in = FIXTURE_TC + 100000
     local source_out = FIXTURE_TC + 200000
@@ -123,18 +117,9 @@ do
 
     assert(#results.relinked == 1, "expected 1 relinked")
     local entry = results.relinked[1]
-    assert(entry.new_source_in == source_in,
-        string.format("source_in unchanged: expected %d, got %d",
-            source_in, entry.new_source_in))
-    assert(entry.new_source_out == source_out,
-        string.format("source_out unchanged: expected %d, got %d",
-            source_out, entry.new_source_out))
-
-    local file_pos = entry.new_source_in - FIXTURE_TC
-    assert(file_pos >= 0,
-        string.format("file_pos should be >= 0 when TCs match: got %d", file_pos))
-    print(string.format("  file_pos = %d (valid ✓)", file_pos))
-    print("  ✓ source_in/source_out unchanged, file_pos valid")
+    assert(entry.new_path, "relinked entry must have new_path")
+    assert(not entry.new_source_in, "no source coord mutation")
+    print("  ✓ relinked to same-TC file")
 end
 
 ---------------------------------------------------------------------------------
@@ -154,9 +139,9 @@ do
         string.format("clip within file range should be accepted, got %d relinked, %d failed",
             #results.relinked, #results.failed))
     local entry = results.relinked[1]
-    assert(entry.new_source_in == source_in, "source_in unchanged")
-    assert(entry.new_source_out == source_out, "source_out unchanged")
-    print("  ✓ trimmed file containing clip range accepted, source coords unchanged")
+    assert(entry.new_path, "relinked entry must have new_path")
+    assert(not entry.new_source_in, "no source coord mutation")
+    print("  ✓ trimmed file containing clip range accepted")
 end
 
 ---------------------------------------------------------------------------------
