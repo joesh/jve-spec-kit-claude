@@ -236,14 +236,20 @@ function M.import_into_project(project_id, parse_result, opts)
             if media_item.media_start_time then
                 local json = require("dkjson")
                 local mst = media_item.media_start_time
-                local audio_sr = media_item.audio_sample_rate or 48000
                 local start_tc_value = math.floor(mst * native_rate + 0.5)
                 local meta = {
                     start_tc_value = start_tc_value,
                     start_tc_rate = native_rate,
-                    start_tc_audio_samples = math.floor(mst * audio_sr + 0.5),
-                    start_tc_audio_rate = audio_sr,
                 }
+
+                -- Audio TC fields only when the media actually has audio.
+                -- Video-only media (no audio_sample_rate) gets video TC only —
+                -- audio TC fields are omitted, not faked.
+                local audio_sr = media_item.audio_sample_rate
+                if audio_sr and audio_sr > 0 then
+                    meta.start_tc_audio_samples = math.floor(mst * audio_sr + 0.5)
+                    meta.start_tc_audio_rate = audio_sr
+                end
 
                 -- FR-001: Store file_original_timecode when file's container TC
                 -- differs from the displayed TC (Set Timecode override detected).
@@ -251,7 +257,10 @@ function M.import_into_project(project_id, parse_result, opts)
                     local file_tc_video = math.floor(media_item.file_tc_seconds * native_rate + 0.5)
                     if file_tc_video ~= start_tc_value then
                         meta.file_original_timecode = file_tc_video
-                        meta.file_original_timecode_audio = math.floor(media_item.file_tc_seconds * audio_sr + 0.5)
+                        if audio_sr and audio_sr > 0 then
+                            meta.file_original_timecode_audio =
+                                math.floor(media_item.file_tc_seconds * audio_sr + 0.5)
+                        end
                         log.event("  Set Timecode override: start_tc=%d file_tc=%d (delta=%d frames)",
                             start_tc_value, file_tc_video, start_tc_value - file_tc_video)
                     end

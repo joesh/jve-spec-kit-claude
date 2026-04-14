@@ -20,36 +20,9 @@ local M = {}
 
 local log = require("core.logger").for_area("media")
 local importer_core = require("importers.importer_core")
-
---- Run a shell command, capture output to a temp file, read that file.
--- Avoids io.popen pipes entirely — LuaJIT's pipe reads are susceptible to
--- EINTR from Qt signals/timers, and there's no portable way to mask signals
--- in Lua. Writing to a temp file and reading it back sidesteps the issue.
--- @param cmd string: shell command to execute
--- @param context string: caller name for assert message
--- @return string: command output (asserts on failure)
-local function shell_capture(cmd, context)
-    local tmp = os.tmpname()
-    local ok, err = pcall(function()
-        local exit_code = os.execute(cmd .. " > " .. tmp .. " 2>/dev/null")
-        assert(exit_code == 0,
-            string.format("%s: command failed (exit %s): %s", context, tostring(exit_code), cmd))
-    end)
-    if not ok then
-        os.remove(tmp)
-        error(err, 2)
-    end
-    local handle, open_err = io.open(tmp, "r")
-    if not handle then
-        os.remove(tmp)
-        error(string.format("%s: failed to open temp file %s: %s", context, tmp, tostring(open_err)), 2)
-    end
-    local data, read_err = handle:read("*all")
-    handle:close()
-    os.remove(tmp)
-    assert(data, string.format("%s: failed to read temp file %s: %s", context, tmp, tostring(read_err)))
-    return data
-end
+local drp_binary = require("importers.drp_binary")
+local fs_utils = require("core.fs_utils")
+local shell_capture = fs_utils.shell_capture
 
 --- Read all data from a local file handle (io.open), asserting on failure.
 -- @param handle file: open file handle from io.open
@@ -198,814 +171,20 @@ local function get_text(elem)
     return elem.text:match("^%s*(.-)%s*$")  -- Trim whitespace
 end
 
---- Decode a big-endian IEEE 754 double from hex string at given offset
--- @param hex_str string: Hex string containing doubles
--- @param offset number: Character offset (0 = first double, 16 = second double)
--- @return number|nil: Decoded double value, or nil if invalid
-local function decode_hex_double_at(hex_str, offset)
-    if not hex_str or #hex_str < offset + 16 then return nil end
+-- Local aliases for frequently-used drp_binary functions
+local decode_hex_double_at = drp_binary.decode_hex_double_at
+local decode_hex_double = drp_binary.decode_hex_double
+local decode_hex_resolution = drp_binary.decode_hex_resolution
+local extract_ui_state_double = drp_binary.extract_ui_state_double
+local decode_bt_video_time = drp_binary.decode_bt_video_time
+local decode_bt_audio_duration = drp_binary.decode_bt_audio_duration
+local decode_effect_filters_volume_db = drp_binary.decode_effect_filters_volume_db
+local decode_media_timemap = drp_binary.decode_media_timemap
+local decode_bt_clip_path = drp_binary.decode_bt_clip_path
+local eval_curve = drp_binary.eval_curve
 
-    local ffi = require("ffi")
 
-    -- Parse 16 hex chars (8 bytes) into byte array starting at offset
-    -- DRP stores doubles in little-endian byte order (x86 native), no reversal needed
-    local bytes = ffi.new("uint8_t[8]")
-    for i = 0, 7 do
-        local hex_byte = hex_str:sub(offset + i * 2 + 1, offset + i * 2 + 2)
-        local byte_val = tonumber(hex_byte, 16)
-        if not byte_val then return nil end
-        bytes[i] = byte_val
-    end
 
-    -- Cast directly to double (already little-endian)
-    local double_ptr = ffi.cast("double*", bytes)
-    return double_ptr[0]
-end
-
---- Decode a big-endian IEEE 754 double from 16-char hex string
--- DRP stores fps/resolution as 128-bit hex: two doubles, we take the first
--- Example: "00000000000038400000000000000000" = 24.0 (fps)
--- @param hex_str string: 32-char hex string (first 16 chars used)
--- @return number|nil: Decoded double value, or nil if invalid
-local function decode_hex_double(hex_str)
-    return decode_hex_double_at(hex_str, 0)
-end
-
---- Decode a big-endian IEEE 754 double from hex at a BYTE offset.
--- UIElementsState uses BE encoding (unlike FieldsBlob which is LE).
-local function decode_hex_double_be_at(hex_str, byte_offset)
-    if not hex_str or #hex_str < byte_offset * 2 + 16 then return nil end
-    local ffi = require("ffi")
-    local bytes = ffi.new("uint8_t[8]")
-    for i = 0, 7 do
-        local hex_byte = hex_str:sub(byte_offset * 2 + i * 2 + 1, byte_offset * 2 + i * 2 + 2)
-        local byte_val = tonumber(hex_byte, 16)
-        if not byte_val then return nil end
-        bytes[7 - i] = byte_val  -- reverse for BE→LE
-    end
-    return ffi.cast("double*", bytes)[0]
-end
-
---- Extract a named double from a UIElementsState hex blob.
--- UIElementsState TLV format: 4B version, 4B count, then entries:
---   4B name_byte_count, N bytes UTF-16BE name, 4B type_tag, 1B pad, value
--- @param hex_str string: Full UIElementsState hex
--- @param key_name string: ASCII key name (e.g. "UI_SEQUENCE_SCALE")
--- @return number|nil: The double value, or nil if not found
-local function extract_ui_state_double(hex_str, key_name)
-    if not hex_str or hex_str == "" then return nil end
-    -- Build UTF-16 BE search pattern for the key name
-    local pattern_parts = {}
-    for i = 1, #key_name do
-        pattern_parts[#pattern_parts + 1] = string.format("00%02x", key_name:byte(i))
-    end
-    local pattern = table.concat(pattern_parts)
-    local pos = hex_str:find(pattern, 1, true)
-    if not pos then return nil end
-    -- All offsets in hex char positions (1-based Lua string indices)
-    -- After name pattern: type tag (8 hex) + pad (2 hex) + double (16 hex)
-    local type_hex_start = pos + #pattern
-    local type_hex = hex_str:sub(type_hex_start, type_hex_start + 7)
-    if type_hex ~= "00000026" then return nil end
-    -- Double value starts after type (8 hex) + pad (2 hex) = 10 hex chars
-    local double_hex_start = type_hex_start + 10
-    -- Convert to 0-based byte offset for decode function
-    local double_byte_off = (double_hex_start - 1) / 2
-    return decode_hex_double_be_at(hex_str, double_byte_off)
-end
-
---- Decode resolution from 32-char hex string (two doubles: width, height)
--- Example: "00000000000087400000000000e08640" = 1920×1080
--- @param hex_str string: 32-char hex string
--- @return number|nil, number|nil: width, height (or nil if invalid)
-local function decode_hex_resolution(hex_str)
-    if not hex_str or #hex_str < 32 then return nil, nil end
-    local width = decode_hex_double_at(hex_str, 0)
-    local height = decode_hex_double_at(hex_str, 16)
-    return width, height
-end
-
---- Decode a protobuf varint from raw byte string
--- @param bytes string: raw byte string
--- @param pos number: 1-indexed start position
--- @return number|nil: decoded value
--- @return number: next position after varint
-local function decode_protobuf_varint(bytes, pos)
-    local value = 0
-    local mult = 1
-    while pos <= #bytes do
-        local b = bytes:byte(pos)
-        value = value + (b % 128) * mult
-        pos = pos + 1
-        if b < 128 then
-            return value, pos
-        end
-        mult = mult * 128
-    end
-    return nil, pos
-end
-
---- Decode BtVideoInfo/BtAudioInfo Clip binary blob to extract original source path.
--- DaVinci Resolve encodes the original media file path in a protobuf-like binary
--- structure inside <Clip> elements under BtVideoInfo and BtAudioInfo.
---
--- Binary layout:
---   [4B version=2] [4B payload_len] [2B marker 0x81,0x28] [8B entry_id]
---   [2B video_prefix (video only)] [protobuf fields...]
---
--- Detection: byte at offset 18 (0-indexed) == 0x0a means audio (no prefix);
---            otherwise video (2-byte prefix before protobuf).
---
--- Protobuf field 1 (tag 0x0a) = directory path
--- Protobuf field 2 (tag 0x12) = filename
--- Full path = field1 .. "/" .. field2
---
--- @param hex_str string: hex-encoded binary blob from <Clip> element
--- @return string|nil: decoded file path, or nil if unparseable
-local function decode_bt_clip_path(hex_str)
-    if not hex_str or #hex_str < 40 then return nil end
-
-    -- Hex decode to raw bytes
-    local parts = {}
-    local clean = hex_str:gsub("%s+", "")
-    if #clean % 2 ~= 0 then return nil end  -- odd-length hex = corrupt
-    for i = 1, #clean, 2 do
-        local h = clean:sub(i, i + 1)
-        local n = tonumber(h, 16)
-        if not n then return nil end
-        parts[#parts + 1] = string.char(n)
-    end
-    local bytes = table.concat(parts)
-
-    if #bytes < 21 then return nil end
-
-    -- Determine protobuf start (1-indexed)
-    -- Audio: byte at 0-indexed offset 18 (pos 19) is 0x0a, protobuf starts there
-    -- Video: 2-byte prefix at pos 19-20, protobuf starts at pos 21
-    local proto_start
-    if bytes:byte(19) == 0x0a then
-        proto_start = 19  -- audio: field 1 tag is the first byte
-    else
-        proto_start = 21  -- video: skip 2-byte prefix
-    end
-
-    if proto_start > #bytes then return nil end
-
-    -- Field 1: directory (tag 0x0a = field 1, wire type LEN)
-    if bytes:byte(proto_start) ~= 0x0a then return nil end
-    local dir_len, dir_data_pos = decode_protobuf_varint(bytes, proto_start + 1)
-    if not dir_len or dir_data_pos + dir_len - 1 > #bytes then return nil end
-    local directory = bytes:sub(dir_data_pos, dir_data_pos + dir_len - 1)
-
-    -- Field 2: filename (tag 0x12 = field 2, wire type LEN)
-    local f2_pos = dir_data_pos + dir_len
-    if f2_pos > #bytes or bytes:byte(f2_pos) ~= 0x12 then return nil end
-    local fname_len, fname_data_pos = decode_protobuf_varint(bytes, f2_pos + 1)
-    if not fname_len or fname_data_pos + fname_len - 1 > #bytes then return nil end
-    local filename = bytes:sub(fname_data_pos, fname_data_pos + fname_len - 1)
-
-    -- Both components must be non-empty to form a valid path
-    if #directory == 0 or #filename == 0 then return nil, nil end
-
-    -- Reject garbled directories (protobuf field data leak). Valid paths never contain control chars.
-    if directory:find("[%z\1-\31]") then
-        log.warn("decode_bt_clip_path: garbled directory in blob (raw=%s), skipping",
-            directory:sub(1, 30))
-        return nil, nil
-    end
-
-    -- Filename may contain control chars (protobuf date fields leaking into
-    -- the filename field — common in audio clip blobs). When this happens,
-    -- the full path is unreliable. Return nil for path but provide the
-    -- directory so the caller can construct the path using the XML <Name>.
-    if filename:find("[%z\1-\31]") then
-        log.detail("decode_bt_clip_path: garbled filename in blob (dir=%s, raw=%s), returning dir only",
-            directory, filename:sub(1, 30))
-        return nil, directory
-    end
-
-    return directory .. "/" .. filename, directory
-end
-
---- Decode hex string to raw byte string.
--- @param hex_str string: hex-encoded data (whitespace stripped)
--- @return string|nil: raw bytes, or nil if invalid
-local function hex_to_bytes(hex_str)
-    if not hex_str then return nil end
-    local clean = hex_str:gsub("%s+", "")
-    if #clean < 2 or #clean % 2 ~= 0 then return nil end
-    local parts = {}
-    for i = 1, #clean, 2 do
-        local n = tonumber(clean:sub(i, i + 1), 16)
-        if not n then return nil end
-        parts[#parts + 1] = string.char(n)
-    end
-    return table.concat(parts)
-end
-
---- Read a big-endian uint32 from a raw byte string at 1-indexed position.
-local function read_be32(bytes, pos)
-    if pos + 3 > #bytes then return nil end
-    local b1, b2, b3, b4 = bytes:byte(pos, pos + 3)
-    return b1 * 16777216 + b2 * 65536 + b3 * 256 + b4
-end
-
---- Read a big-endian uint64 from a raw byte string at 1-indexed position.
-local function read_be64(bytes, pos)
-    if pos + 7 > #bytes then return nil end
-    local hi = read_be32(bytes, pos)
-    local lo = read_be32(bytes, pos + 4)
-    if not hi or not lo then return nil end
-    return hi * 4294967296 + lo  -- hi * 2^32 + lo
-end
-
---- Decode TLV fields from a DRP binary blob.
--- Each field: [BE32 name_byte_len] [UTF-16BE name] [BE16 sep=0] [BE16 type] [value...]
---
--- Type encodings:
---   0x0002: 4-byte aux + 1-byte val → aux*256 + val (small/medium int)
---   0x0003: 4-byte aux + 1-byte val → aux*256 + val (same encoding)
---   0x0004: 8-byte aux + 1-byte val → aux*256 + val (large int, e.g. audio samples)
---   0x0006: 1-byte pad + 8-byte BE double
---   0x000a: 4-byte aux + 1-byte len → len bytes UTF-16BE string
---   0x000c: 4-byte aux + 1-byte val → aux*256+val bytes payload; LE double from first 8
---
--- @param bytes string: raw bytes of the blob
--- @param header_size number: bytes to skip before first field
--- @param field_count number: number of fields to decode
--- @return table|nil: {field_name = value, ...} or nil on decode error
--- @return table|nil: {field_name = raw_bytes, ...} for 0x000c blob payloads
-local function decode_tlv_fields(bytes, header_size, field_count)
-    if not bytes or #bytes < header_size + 8 then return nil end
-    if field_count <= 0 or field_count > 20 then return nil end
-
-    local ffi = require("ffi")
-    local fields = {}
-    local raw_payloads = {}
-    local pos = header_size + 1  -- 1-indexed
-
-    for _ = 1, field_count do
-        -- Field name: [BE32 name_byte_len] [UTF-16BE name bytes]
-        local name_len = read_be32(bytes, pos)
-        if not name_len then return nil end
-        pos = pos + 4
-
-        if pos + name_len - 1 > #bytes then return nil end
-        -- Decode UTF-16BE name to ASCII (field names are all ASCII)
-        local name_chars = {}
-        for j = 0, name_len - 1, 2 do
-            local lo = bytes:byte(pos + j + 1)
-            if lo then name_chars[#name_chars + 1] = string.char(lo) end
-        end
-        local field_name = table.concat(name_chars)
-        pos = pos + name_len
-
-        -- Separator (BE16, always 0) + type (BE16)
-        if pos + 3 > #bytes then return nil end
-        pos = pos + 2  -- skip separator
-        local b1, b2 = bytes:byte(pos, pos + 1)
-        local field_type = b1 * 256 + b2
-        pos = pos + 2
-
-        -- Value encoding depends on type
-        if field_type == 0x0002 or field_type == 0x0003 then
-            -- 4-byte aux + 1-byte val → aux*256 + val
-            local aux = read_be32(bytes, pos)
-            if not aux then return nil end
-            pos = pos + 4
-            if pos > #bytes then return nil end
-            local val = bytes:byte(pos)
-            pos = pos + 1
-            fields[field_name] = aux * 256 + val
-
-        elseif field_type == 0x0004 then
-            -- 8-byte aux + 1-byte val → aux*256 + val
-            local aux = read_be64(bytes, pos)
-            if not aux then return nil end
-            pos = pos + 8
-            if pos > #bytes then return nil end
-            local val = bytes:byte(pos)
-            pos = pos + 1
-            fields[field_name] = aux * 256 + val
-
-        elseif field_type == 0x0006 then
-            -- 1-byte pad + 8-byte BE double
-            if pos + 8 > #bytes then return nil end
-            pos = pos + 1  -- skip pad
-            -- Read 8 bytes, reverse for LE, cast to double
-            local be_bytes = ffi.new("uint8_t[8]")
-            for j = 0, 7 do
-                be_bytes[7 - j] = bytes:byte(pos + j)
-            end
-            fields[field_name] = ffi.cast("double*", be_bytes)[0]
-            pos = pos + 8
-
-        elseif field_type == 0x000a then
-            -- 4-byte aux + 1-byte string_len → string_len bytes UTF-16BE
-            if pos + 4 > #bytes then return nil end
-            pos = pos + 4  -- skip aux
-            if pos > #bytes then return nil end
-            local str_len = bytes:byte(pos)
-            pos = pos + 1
-            if pos + str_len - 1 > #bytes then return nil end
-            -- Decode UTF-16BE to ASCII
-            local chars = {}
-            for j = 0, str_len - 1, 2 do
-                local lo = bytes:byte(pos + j + 1)
-                if lo then chars[#chars + 1] = string.char(lo) end
-            end
-            fields[field_name] = table.concat(chars)
-            pos = pos + str_len
-
-        elseif field_type == 0x000c then
-            -- 4-byte aux + 1-byte val → payload_len = aux*256 + val (consistent
-            -- with types 0x0002/0x0003). Handles payloads > 255 bytes (e.g. KeyframesBA).
-            local aux = read_be32(bytes, pos)
-            if not aux then return nil end
-            pos = pos + 4
-            if pos > #bytes then return nil end
-            local val = bytes:byte(pos)
-            pos = pos + 1
-            local payload_len = aux * 256 + val
-            if payload_len < 8 or pos + payload_len - 1 > #bytes then return nil end
-            -- First 8 bytes of payload = LE double (native x86 order)
-            local le_bytes = ffi.new("uint8_t[8]")
-            for j = 0, 7 do
-                le_bytes[j] = bytes:byte(pos + j)
-            end
-            fields[field_name] = ffi.cast("double*", le_bytes)[0]
-            -- Store raw payload bytes for nested blob parsing (e.g. KeyframesBA)
-            raw_payloads[field_name] = bytes:sub(pos, pos + payload_len - 1)
-            pos = pos + payload_len
-
-        else
-            -- Unknown type — stop decoding but return what we have
-            log.warn("decode_tlv_fields: unknown type 0x%04x for field '%s'", field_type, field_name)
-            break
-        end
-    end
-
-    return fields, raw_payloads
-end
-
---- Decode BtVideoInfo/Time blob → {num_frames, frame_rate, unique_id}
--- Header: 8 bytes [BE32 version=1] [BE32 field_count]
--- Fields: UniqueId, [Timecode], StartFrame, NumFrames, FrameRate, DbType
--- @param hex_str string: hex-encoded Time blob
--- @return table|nil: {num_frames=int, frame_rate=number, unique_id=string} or nil
-local function decode_bt_video_time(hex_str)
-    local bytes = hex_to_bytes(hex_str)
-    if not bytes or #bytes < 16 then return nil end
-
-    local field_count = read_be32(bytes, 5)  -- offset 4 (0-indexed) = pos 5 (1-indexed)
-    if not field_count or field_count < 4 or field_count > 8 then return nil end
-
-    local fields = decode_tlv_fields(bytes, 8, field_count)
-    if not fields then return nil end
-
-    local num_frames = fields["NumFrames"]
-    if not num_frames or num_frames <= 0 then return nil end
-
-    return {
-        num_frames = num_frames,
-        frame_rate = fields["FrameRate"],
-        unique_id = fields["UniqueId"],
-    }
-end
-
---- Decode BtAudioInfo/TracksBA blob → {duration_samples, sample_rate, start_time_seconds}
--- Header: 31 bytes (version, track metadata, field_count at byte offset 27)
--- Fields: UniqueId, StartTime, SampleRate, NumChannels, IdxTrack, Duration, DbType, ...
--- @param hex_str string: hex-encoded TracksBA blob
--- @return table|nil: {duration_samples=int, sample_rate=int, start_time_seconds=number|nil} or nil
-local function decode_bt_audio_duration(hex_str)
-    local bytes = hex_to_bytes(hex_str)
-    if not bytes or #bytes < 40 then return nil end
-
-    local field_count = read_be32(bytes, 28)  -- offset 27 (0-indexed) = pos 28 (1-indexed)
-    if not field_count or field_count < 5 or field_count > 15 then return nil end
-
-    local fields = decode_tlv_fields(bytes, 31, field_count)
-    if not fields then return nil end
-
-    local duration = fields["Duration"]
-    local sample_rate = fields["SampleRate"]
-    if not duration or not sample_rate then return nil end
-    if sample_rate <= 0 then return nil end
-    if duration <= 0 then return nil end
-
-    return {
-        duration_samples = duration,
-        sample_rate = sample_rate,
-        start_time_seconds = fields["StartTime"],  -- file container TC origin (seconds since midnight); nil if field absent
-    }
-end
-
---- Decode a LE IEEE 754 double from 16 hex chars without FFI.
--- Pure Lua implementation safe for high-frequency calls (125K+ clips in large DRPs).
--- decode_hex_double_at uses ffi.new/ffi.cast which corrupts LuaJIT state at scale.
--- @param hex16 string: 16 hex characters representing 8 LE bytes
--- @return number|nil: decoded double, or nil if invalid
-local function decode_le_double_pure(hex16)
-    if #hex16 ~= 16 then return nil end
-    -- Parse 8 bytes (LE order)
-    local b = {}
-    for i = 1, 8 do
-        local byte = tonumber(hex16:sub(i * 2 - 1, i * 2), 16)
-        if not byte then return nil end
-        b[i] = byte
-    end
-    -- IEEE 754 double: sign(1) exponent(11) mantissa(52), big-endian bit layout
-    -- LE bytes: b[1]=LSB .. b[8]=MSB
-    local sign = (b[8] >= 128) and -1 or 1
-    local exp = ((b[8] % 128) * 16) + math.floor(b[7] / 16)
-    -- Mantissa: 52 bits from b[7](low 4 bits) .. b[1]
-    local mantissa = (b[7] % 16) * 2^48
-                   + b[6] * 2^40 + b[5] * 2^32
-                   + b[4] * 2^24 + b[3] * 2^16
-                   + b[2] * 2^8  + b[1]
-    if exp == 0 and mantissa == 0 then return 0.0 end
-    if exp == 0x7FF then return nil end  -- Inf/NaN
-    if exp == 0 then
-        -- Subnormal
-        return sign * 2^(-1022) * (mantissa / 2^52)
-    end
-    return sign * 2^(exp - 1023) * (1 + mantissa / 2^52)
-end
-
---- Decode clip volume from EffectFiltersBA hex blob.
--- EffectFiltersBA contains per-clip audio effects (volume, EQ, reverb, etc.) in a
--- variable-length TLV binary. The volume double (LE IEEE 754, dB) always follows
--- the marker "0f085f1a0b0a0911" — a TLV field ID that precedes the volume value
--- in both short (40-byte, volume-only) and long (92+ byte, multi-effect) blobs.
--- @param hex_str string|nil: hex-encoded EffectFiltersBA content
--- @return number|nil: volume in dB (0.0 = unity, negative = quieter), nil if no volume found
-local function decode_effect_filters_volume_db(hex_str)
-    if not hex_str or hex_str == "" then return nil end
-    -- Find the volume marker in the hex string
-    local marker = "0f085f1a0b0a0911"
-    local marker_pos = hex_str:find(marker, 1, true)
-    if not marker_pos then return nil end
-    -- Volume double starts immediately after the 8-byte (16 hex char) marker
-    local vol_start = marker_pos + #marker
-    if vol_start + 15 > #hex_str then return nil end  -- need 16 hex chars for the double
-    local hex16 = hex_str:sub(vol_start, vol_start + 15)
-    local db_val = decode_le_double_pure(hex16)
-    if not db_val then return nil end
-    -- Sanity: Resolve volume range is -inf..+12dB fader.
-    -- Anything outside [-100, +24] is corrupt blob data, not volume.
-    if db_val < -100 or db_val > 24 then return nil end
-    return db_val
-end
-
---- Detect reverse playback from KeyframesBA raw payload.
--- KeyframesBA contains nested keyframe data where each keyframe has:
---   {interp, YOut, YIn, Y, XOut, XIn, X}
--- Y = source time (seconds), X = retimed time (seconds).
--- If last keyframe's Y < first keyframe's Y → reverse playback (negative slope).
---
--- The nested structure uses the same TLV encoding as the parent blob.
--- We extract Y values from the first and last keyframes.
---
--- @param kf_bytes string: raw bytes of KeyframesBA payload
--- @return boolean: true if reverse playback detected
-local function detect_reverse_from_keyframes(kf_bytes)
-    if not kf_bytes or #kf_bytes < 16 then return false end
-
-    -- KeyframesBA header: [BE32 version] [BE32 keyframe_count]
-    local version = read_be32(kf_bytes, 1)
-    if not version then return false end
-    local kf_count = read_be32(kf_bytes, 5)
-    if not kf_count or kf_count < 2 then return false end
-
-    -- Each keyframe is a nested TLV block with its own field_count header.
-    -- Parse first keyframe to get its Y value, then skip to last.
-    local ffi = require("ffi")
-    local pos = 9  -- after 8-byte header
-
-    local first_y, last_y
-
-    for kf_idx = 1, kf_count do
-        -- Each keyframe: [BE32 field_count] [TLV fields...]
-        local fc = read_be32(kf_bytes, pos)
-        if not fc or fc < 1 or fc > 10 then return false end
-        pos = pos + 4
-
-        -- Parse this keyframe's TLV fields to find Y
-        local kf_y = nil
-        for _ = 1, fc do
-            -- Field name: [BE32 name_byte_len] [UTF-16BE name]
-            local name_len = read_be32(kf_bytes, pos)
-            if not name_len then return false end
-            pos = pos + 4
-            if pos + name_len - 1 > #kf_bytes then return false end
-            -- Decode name
-            local name_chars = {}
-            for j = 0, name_len - 1, 2 do
-                local lo = kf_bytes:byte(pos + j + 1)
-                if lo then name_chars[#name_chars + 1] = string.char(lo) end
-            end
-            local field_name = table.concat(name_chars)
-            pos = pos + name_len
-
-            -- Separator (BE16) + type (BE16)
-            if pos + 3 > #kf_bytes then return false end
-            pos = pos + 2
-            local b1, b2 = kf_bytes:byte(pos, pos + 1)
-            local field_type = b1 * 256 + b2
-            pos = pos + 2
-
-            -- Read value and advance pos
-            if field_type == 0x0002 or field_type == 0x0003 then
-                pos = pos + 5  -- 4-byte aux + 1-byte val
-            elseif field_type == 0x0004 then
-                pos = pos + 9  -- 8-byte aux + 1-byte val
-            elseif field_type == 0x0006 then
-                -- 1-byte pad + 8-byte BE double
-                if pos + 8 > #kf_bytes then return false end
-                if field_name == "Y" then
-                    pos = pos + 1  -- skip pad
-                    local be_bytes = ffi.new("uint8_t[8]")
-                    for j = 0, 7 do
-                        be_bytes[7 - j] = kf_bytes:byte(pos + j)
-                    end
-                    kf_y = ffi.cast("double*", be_bytes)[0]
-                    pos = pos + 8
-                else
-                    pos = pos + 9  -- pad + 8 bytes
-                end
-            elseif field_type == 0x000a then
-                if pos + 4 > #kf_bytes then return false end
-                pos = pos + 4  -- skip aux
-                if pos > #kf_bytes then return false end
-                local str_len = kf_bytes:byte(pos)
-                pos = pos + 1 + str_len
-            elseif field_type == 0x000c then
-                local aux = read_be32(kf_bytes, pos)
-                if not aux then return false end
-                pos = pos + 4
-                if pos > #kf_bytes then return false end
-                local val = kf_bytes:byte(pos)
-                pos = pos + 1
-                local payload_len = aux * 256 + val
-                pos = pos + payload_len
-            else
-                return false  -- unknown type, bail
-            end
-
-            if pos > #kf_bytes + 1 then return false end
-        end
-
-        if kf_idx == 1 then
-            first_y = kf_y
-        end
-        if kf_idx == kf_count then
-            last_y = kf_y
-        end
-    end
-
-    if not first_y or not last_y then return false end
-    return last_y < first_y
-end
-
---- Parse one inner keyframe blob → (x, y) doubles in seconds.
--- Inner blob structure: [BE32 inner_version] [BE32 inner_fc] [TLV fields...]
--- Fields include interp, YOut, YIn, Y, XOut, XIn, X.
--- @param bytes string: full KeyframesBA payload bytes
--- @param start_pos integer: 1-indexed start position of the inner blob
--- @param max_end integer: 1-indexed inclusive last position the blob can occupy
--- @return number|nil, number|nil: x, y values in seconds, or nil/nil on parse error
-local function parse_inner_keyframe(bytes, start_pos, max_end)
-    if start_pos + 7 > max_end then return nil, nil end
-    local inner_fc = read_be32(bytes, start_pos + 4)
-    if not inner_fc or inner_fc < 1 or inner_fc > 20 then return nil, nil end
-
-    local ffi = require("ffi")
-    local pos = start_pos + 8
-    local kf_x, kf_y = nil, nil
-
-    for _ = 1, inner_fc do
-        if pos + 3 > max_end then return nil, nil end
-        local name_len = read_be32(bytes, pos)
-        if not name_len then return nil, nil end
-        pos = pos + 4
-        if pos + name_len - 1 > max_end then return nil, nil end
-
-        local name_chars = {}
-        for j = 0, name_len - 1, 2 do
-            local lo = bytes:byte(pos + j + 1)
-            if lo then name_chars[#name_chars + 1] = string.char(lo) end
-        end
-        local field_name = table.concat(name_chars)
-        pos = pos + name_len
-
-        if pos + 3 > max_end then return nil, nil end
-        pos = pos + 2  -- separator
-        local b1, b2 = bytes:byte(pos, pos + 1)
-        local field_type = b1 * 256 + b2
-        pos = pos + 2
-
-        if field_type == 0x0002 or field_type == 0x0003 then
-            pos = pos + 5
-        elseif field_type == 0x0004 then
-            pos = pos + 9
-        elseif field_type == 0x0006 then
-            if pos + 8 > max_end then return nil, nil end
-            pos = pos + 1  -- pad
-            if field_name == "X" or field_name == "Y" then
-                local be_bytes = ffi.new("uint8_t[8]")
-                for j = 0, 7 do
-                    be_bytes[7 - j] = bytes:byte(pos + j)
-                end
-                local v = ffi.cast("double*", be_bytes)[0]
-                if field_name == "X" then kf_x = v
-                else kf_y = v end
-            end
-            pos = pos + 8
-        elseif field_type == 0x000a then
-            if pos + 4 > max_end then return nil, nil end
-            pos = pos + 4
-            if pos > max_end then return nil, nil end
-            local str_len = bytes:byte(pos)
-            pos = pos + 1 + str_len
-        elseif field_type == 0x000c then
-            local aux = read_be32(bytes, pos)
-            if not aux then return nil, nil end
-            pos = pos + 4
-            if pos > max_end then return nil, nil end
-            local val = bytes:byte(pos)
-            pos = pos + 1
-            local payload_len = aux * 256 + val
-            pos = pos + payload_len
-        else
-            return nil, nil
-        end
-    end
-
-    return kf_x, kf_y
-end
-
---- Parse the KeyframesBA nested payload into an array of {x, y} pairs.
--- KeyframesBA outer structure:
---   [BE32 version] [BE32 keyframe_count]
---   kf_count × [outer TLV field with name="0"/"1"/..., type=0x000c]
--- Each outer field's 0x000c payload is an inner blob:
---   [BE32 inner_version] [BE32 inner_fc] [TLV fields including X, Y]
--- X = master playback timeline seconds, Y = source seconds.
--- @param kf_bytes string: raw bytes of the KeyframesBA payload
--- @return table|nil: array of {x=number, y=number} sorted ascending by x
-local function parse_keyframes(kf_bytes)
-    if not kf_bytes or #kf_bytes < 16 then return nil end
-
-    local kf_count = read_be32(kf_bytes, 5)
-    if not kf_count or kf_count < 2 or kf_count > 100 then return nil end
-
-    local keyframes = {}
-    local pos = 9  -- after 8-byte header
-
-    for _ = 1, kf_count do
-        -- Outer TLV field for this keyframe (name "0", "1", etc.)
-        if pos + 3 > #kf_bytes then return nil end
-        local name_len = read_be32(kf_bytes, pos)
-        if not name_len or name_len > 32 then return nil end
-        pos = pos + 4
-        if pos + name_len - 1 > #kf_bytes then return nil end
-        pos = pos + name_len  -- skip name (we don't need it)
-
-        if pos + 3 > #kf_bytes then return nil end
-        pos = pos + 2  -- separator
-        local b1, b2 = kf_bytes:byte(pos, pos + 1)
-        local field_type = b1 * 256 + b2
-        pos = pos + 2
-
-        if field_type ~= 0x000c then return nil end  -- expected nested blob
-
-        -- type 0x000c: 4-byte aux + 1-byte val + payload
-        local aux = read_be32(kf_bytes, pos)
-        if not aux then return nil end
-        pos = pos + 4
-        if pos > #kf_bytes then return nil end
-        local val = kf_bytes:byte(pos)
-        pos = pos + 1
-        local payload_len = aux * 256 + val
-        if payload_len < 8 or pos + payload_len - 1 > #kf_bytes then return nil end
-
-        local kf_x, kf_y = parse_inner_keyframe(kf_bytes, pos, pos + payload_len - 1)
-        if kf_x ~= nil and kf_y ~= nil then
-            keyframes[#keyframes + 1] = { x = kf_x, y = kf_y }
-        end
-
-        pos = pos + payload_len
-    end
-
-    if #keyframes < 2 then return nil end
-    table.sort(keyframes, function(a, b) return a.x < b.x end)
-    return keyframes
-end
-
---- Evaluate a piecewise-linear retime curve at master-timeline X (seconds).
--- Returns the corresponding source-time Y (seconds). Clamps to endpoints.
--- @param keyframes table: array of {x, y} pairs sorted ascending by x
--- @param x number: query position in master playback timeline seconds
--- @return number: corresponding source position in seconds
-local function eval_curve(keyframes, x)
-    if not keyframes or #keyframes < 2 then return x end
-    -- Clamp to curve domain: source position outside the media's range is
-    -- physically meaningless. Extrapolation past bounds (especially with
-    -- reverse slopes) produces negative source positions.
-    if x <= keyframes[1].x then
-        return keyframes[1].y
-    end
-    if x >= keyframes[#keyframes].x then
-        return keyframes[#keyframes].y
-    end
-    for i = 1, #keyframes - 1 do
-        local k0 = keyframes[i]
-        local k1 = keyframes[i + 1]
-        if x >= k0.x and x <= k1.x then
-            local span = k1.x - k0.x
-            if span <= 0 then return k0.y end
-            local t = (x - k0.x) / span
-            return k0.y + t * (k1.y - k0.y)
-        end
-    end
-    return keyframes[#keyframes].y
-end
-
---- Decode MediaTimemapBA blob → {speed_ratio, is_reverse, y_max, x_max, keyframes}
---
--- Two MTBA formats exist:
---   Header 0x02 (9 bytes): [1-byte header] [8-byte BE double = media duration]
---     → No speed/direction info, return nil.
---   Header 0x01 (large): [BE32 version=1] [BE32 field_count] [TLV fields]
---     → YMax (source duration sec), XMax (retimed duration sec), KeyframesBA
---     → speed_ratio = YMax / XMax, direction from keyframe slope.
---     → keyframes = parsed (X, Y) pairs from KeyframesBA for curve walking.
---
--- @param hex_str string: hex-encoded MediaTimemapBA blob
--- @return table|nil: {speed_ratio, is_reverse, y_max, x_max, keyframes}
-local function decode_media_timemap(hex_str)
-    local bytes = hex_to_bytes(hex_str)
-    if not bytes or #bytes <= 9 then return nil end
-
-    -- Large MTBA: [BE32 version=1] [BE32 field_count] + TLV fields
-    local version = read_be32(bytes, 1)
-    if version ~= 1 then return nil end
-
-    local field_count = read_be32(bytes, 5)
-    if not field_count or field_count < 2 or field_count > 10 then return nil end
-
-    local fields, raw_payloads = decode_tlv_fields(bytes, 8, field_count)
-    if not fields then return nil end
-
-    local y_max = fields["YMax"]
-    local x_max = fields["XMax"]
-    if not y_max or not x_max then return nil end
-    if x_max <= 0 or y_max <= 0 then return nil end
-
-    local speed_ratio = y_max / x_max
-
-    -- Parse the KeyframesBA nested blob into both reverse-flag and curve.
-    local is_reverse = false
-    local keyframes = nil
-    local kf_raw = raw_payloads and raw_payloads["KeyframesBA"]
-    if kf_raw then
-        is_reverse = detect_reverse_from_keyframes(kf_raw)
-        keyframes = parse_keyframes(kf_raw)
-
-        -- Sanity-check the parsed keyframes against the parent YMax/XMax.
-        -- Valid curves span the full master clip:
-        --   Forward: first≈(0, 0)         last≈(XMax, YMax)
-        --   Reverse: first≈(0, YMax)      last≈(XMax, 0)
-        -- Discard only when keyframes look like garbage (all-zero anchors from
-        -- tangent-only test fixtures).
-        if keyframes and #keyframes >= 2 then
-            local first = keyframes[1]
-            local last = keyframes[#keyframes]
-            local epsilon = 0.1  -- seconds; 0.01 was too tight for Resolve's rounding
-            local x_ok = math.abs(first.x) < epsilon
-                and math.abs(last.x - x_max) < epsilon
-            -- Y endpoints: forward (0→YMax) or reverse (YMax→0)
-            local forward_ok = math.abs(first.y) < epsilon
-                and math.abs(last.y - y_max) < epsilon
-            local reverse_ok = math.abs(first.y - y_max) < epsilon
-                and math.abs(last.y) < epsilon
-            if not (x_ok and (forward_ok or reverse_ok)) then
-                log.detail("decode_media_timemap: keyframes inconsistent with YMax/XMax — first=(%.3f,%.3f) last=(%.3f,%.3f) ymax=%.3f xmax=%.3f — discarding curve",
-                    first.x, first.y, last.x, last.y, y_max, x_max)
-                keyframes = nil
-            end
-        end
-    end
-
-    return {
-        speed_ratio = speed_ratio,
-        is_reverse = is_reverse,
-        y_max = y_max,
-        x_max = x_max,
-        keyframes = keyframes,
-    }
-end
 
 --- Extract original source file path from a MediaPool master clip element.
 -- Searches BtVideoInfo and BtAudioInfo children for Clip binary blobs.
@@ -1728,6 +907,31 @@ local function extract_sequence_ref_id(seq_container_elem)
     return nil
 end
 
+--- Parse a DRP frame value string: "frames" or "frames|hex_subframe".
+-- The hex suffix is an LE IEEE 754 double encoding a fractional-frame
+-- offset (0.0–1.0), used for sub-frame audio positioning on the timeline.
+-- @param text string|nil: raw DRP field text
+-- @param clip_name string: clip name for error messages
+-- @param field_name string: field name for error messages
+-- @return number|nil: integer frames
+-- @return number: subframe fraction (0.0 if no hex suffix)
+local function parse_drp_frame_value(text, clip_name, field_name)
+    if not text then return nil, 0 end
+    local num_str, hex_part = text:match("^(%d+)|?(%x*)")
+    local num = num_str and tonumber(num_str)
+    assert(num, string.format(
+        "parse_resolve_tracks: clip '%s' %s has no numeric value (raw='%s')",
+        clip_name, field_name, text))
+    local subframe = 0
+    if hex_part and #hex_part >= 16 then
+        local decoded = decode_hex_double_at(hex_part, 0)
+        if decoded and decoded >= 0 and decoded < 1.0 then
+            subframe = decoded
+        end
+    end
+    return num, subframe
+end
+
 --- Parse Resolve tracks from sequence element
 -- NSF: frame_rate is REQUIRED - DRP reliably encodes fps in metadata
 -- @param seq_elem table: XML sequence element
@@ -1793,29 +997,8 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             assert(duration_elem, string.format(
                 "parse_resolve_tracks: clip '%s' missing Duration element", clip_name))
 
-            -- DRP format: "frames" or "frames|hex_subframe" where hex is an
-            -- LE IEEE 754 double encoding a fractional-frame offset (0.0–1.0).
-            -- Used for sub-frame audio positioning on the timeline.
-            -- Returns integer_frames, subframe_fraction (0.0 if no hex suffix).
-            local function parse_drp_frame_value(text, field_name)
-                if not text then return nil, 0 end
-                local num_str, hex_part = text:match("^(%d+)|?(%x*)")
-                local num = num_str and tonumber(num_str)
-                assert(num, string.format(
-                    "parse_resolve_tracks: clip '%s' %s has no numeric value (raw='%s')",
-                    clip_name, field_name, text))
-                local subframe = 0
-                if hex_part and #hex_part >= 16 then
-                    local decoded = decode_hex_double_at(hex_part, 0)
-                    if decoded and decoded >= 0 and decoded < 1.0 then
-                        subframe = decoded
-                    end
-                end
-                return num, subframe
-            end
-
-            local start_frames, start_subframe = parse_drp_frame_value(get_text(start_elem), "Start")
-            local duration_raw = parse_drp_frame_value(get_text(duration_elem), "Duration")
+            local start_frames, start_subframe = parse_drp_frame_value(get_text(start_elem), clip_name, "Start")
+            local duration_raw = parse_drp_frame_value(get_text(duration_elem), clip_name, "Duration")
 
             start_frames = math.floor(start_frames)
             duration_raw = math.floor(duration_raw)
@@ -1905,26 +1088,28 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             -- lossy cross-rate rounding (e.g. 25fps sequence + 120fps media,
             -- or 25fps sequence + 44100Hz audio).
             -- Video: use <MediaFrameRate> (media's fps), fall back to sequence fps.
-            -- Audio: use pool master clip's sample_rate, fall back to 48000.
+            -- Audio: use pool master clip's sample_rate (no fallback).
             local native_rate
             if track_type == "AUDIO" then
                 local media_ref = get_text(find_element(clip_elem, "MediaRef"))
                 native_rate = media_ref_sample_rate_map and media_ref ~= ""
                     and media_ref_sample_rate_map[media_ref]
                 if not native_rate then
-                    -- MediaRef not in sample rate map. If it's also not in the
-                    -- path map, this is a nested sequence (compound/synced/multicam
-                    -- clip), not a media file — skip it.
                     local is_media = media_ref_path_map and media_ref ~= ""
                         and media_ref_path_map[media_ref]
                     if not is_media then
+                        -- Not in path map → nested sequence (compound/synced/multicam
+                        -- clip), not a media file — skip it.
                         log.detail("skipping nested sequence audio clip '%s' (MediaRef=%s)",
                             clip_name, media_ref)
                         goto continue_clip
                     end
-                    assert(false, string.format(
-                        "parse_resolve_tracks: media clip '%s' has no audio sample rate (MediaRef=%s)",
-                        clip_name, tostring(media_ref)))
+                    -- In path map but no sample rate → video-only media with
+                    -- linked audio track (silent companion clip). No audio
+                    -- coordinates to compute — skip.
+                    log.detail("skipping audio clip '%s' for video-only media (MediaRef=%s, no sample rate)",
+                        clip_name, media_ref)
+                    goto continue_clip
                 end
             else
                 assert(media_frame_rate, string.format(
@@ -2325,12 +1510,10 @@ function M.parse_drp_file(drp_path, progress_cb)
         end
         if pmc.id and pmc.audio_duration and pmc.audio_duration.sample_rate then
             media_ref_sample_rate_map[pmc.id] = pmc.audio_duration.sample_rate
-        elseif pmc.id and pmc.file_path then
-            -- Media file with no audio blob (e.g. video-only VFX renders with
-            -- empty EmbeddedAudioVec). Linked audio clips exist on the timeline
-            -- but are silent. Use project audio rate for coordinate computation.
-            media_ref_sample_rate_map[pmc.id] = 48000
         end
+        -- Video-only media (no audio blob) is intentionally NOT in the
+        -- sample rate map. Audio clips linking to such media are skipped
+        -- in parse_resolve_tracks (silent companion clips).
     end
 
     pump(70, "Parsing sequences…")
