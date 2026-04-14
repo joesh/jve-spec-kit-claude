@@ -167,17 +167,22 @@ local function check_fps_positive(db, result)
     end
 end
 
---- Check source_out >= source_in for timeline clips that have both set.
+--- Check source range validity for timeline clips.
+-- Reverse clips legitimately have source_in > source_out (JVE convention:
+-- playback direction is derived from the sign of source_out - source_in).
+-- This check flags clips where source_in == source_out (zero source range)
+-- which is always invalid — even freeze frames have at least 1 frame.
 local function check_source_range(db, result)
     each_row(db,
         [[SELECT id, name, source_in_frame, source_out_frame
           FROM clips
-          WHERE source_in_frame IS NOT NULL
+          WHERE clip_kind = 'timeline'
+            AND source_in_frame IS NOT NULL
             AND source_out_frame IS NOT NULL
-            AND source_out_frame < source_in_frame]],
+            AND source_out_frame = source_in_frame]],
         function(stmt)
             fail(result, string.format(
-                "BAD_SOURCE_RANGE: clip %s (%s) has source_in=%d > source_out=%d",
+                "ZERO_SOURCE_RANGE: clip %s (%s) has source_in=%d == source_out=%d",
                 tostring(stmt:value(0)), tostring(stmt:value(1)),
                 stmt:value(2), stmt:value(3)))
         end)
@@ -208,7 +213,7 @@ local function check_source_out_speed_ratio(db, result, sequence_id_filter)
           %s
     ]], where_clause)
 
-    local MIN_SPEED = 0.01   -- 1/100x slowmo
+    local MIN_SPEED = 0.001  -- 1/1000x (Resolve allows down to ~0.1% via Change Clip Speed)
     local MAX_SPEED = 100.0  -- 100x fast-forward
 
     each_row(db, sql, function(stmt)
