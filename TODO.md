@@ -341,28 +341,12 @@ Optimization Preserved:
 - [x] Created full-stack integration test
 - [x] Restore ripple handle semantics
 
-## Importer Rate-Mismatch Bug (2026-04-11)
+## Importer Rate-Mismatch Bug — RESOLVED
 
-**Symptom:** `OldFashionedFilmLeaderCountdownVidevo.mov` (24fps) imported from DRP onto a 25fps sequence plays ~4% too fast. Root cause: DRP parser computes all source-unit values using the **sequence** frame rate instead of each media file's **native** rate.
-
-**Concrete bugs in `src/lua/importers/drp_importer.lua::parse_resolve_tracks`:**
-- L1918: `media_tc_origin = floor(media_start_time * 48000 + 0.5)` — audio uses hardcoded 48000, not media's actual sample rate.
-- L1920-1921: `in_offset` / `source_duration` compute via `48000 / frame_rate` where `frame_rate` is the sequence's video rate, not audio sample rate of the file.
-- L1928: `media_tc_origin = floor(media_start_time * frame_rate + 0.5)` — video uses sequence fps, not media's native fps.
-- L1942-1943: `in_offset = ceil(y_in_sec * frame_rate)` — retime curve converted back to frames at sequence rate, not media rate.
-- L3207: `clip_rate = (fps_num, fps_den)` — stamps clip.rate with sequence fps for video.
-- L3209: `clip_rate = (48000, 1)` — hardcoded for audio instead of media's sample rate.
-- `<MediaFrameRate>` IS decoded per-clip at L1804-1814 (into `media_frame_rate`) but NOT used in any source-unit math; only flows into the media record at L2038.
-- Audio sample rate is not parseable from the DRP clip XML — it must come from the media pool record (`media.audio_sample_rate` exists on the model). Parser layer needs restructuring or a per-clip rate lookup.
-
-**Tasks (TDD — test before fix):**
-- [ ] T-RATE-1: Failing regression test — video 24-on-25 via parse_resolve_tracks with `<MediaFrameRate>` stamped as 24.0. Asserts source_in = MST × 24 (file-native absolute TC), not MST × 25.
-- [ ] T-RATE-2: Failing regression test — audio with non-48k sample rate (e.g., 44100 or 96000). Asserts source_in/source_out are in the media's actual sample rate.
-- [ ] T-RATE-3: Enumerate every reader of `clip.rate` — grep `clip\.rate`, `clip_fps_num`, `rate_num`. Categorize: (a) assumes clip.rate == seq.rate, (b) treats clip.rate as unit-of-source_in (correct), (c) should be reading media.rate. Document in todo.md.
-- [ ] T-RATE-4: Enforce invariant at `Clip.create`: video clip.rate MUST equal its media's frame_rate; audio clip.rate MUST equal media's audio_sample_rate. Assert loudly, no fallback.
-- [ ] T-RATE-5: Fix `parse_resolve_tracks` video path — use per-clip `media_frame_rate` (already decoded) for MST conversion, in_offset, source_duration, retime curve evaluation. Decide architectural approach for audio (parser takes media-rate lookup, or source-unit math moves to clip-creation layer).
-- [ ] T-RATE-6: Fix `parse_resolve_tracks` audio path — use media's actual sample rate.
-- [ ] T-RATE-7: Fix DRP importer clip creation (L3205-3210) — stamp clip.rate with media.frame_rate (video) / media.audio_sample_rate (audio).
-- [ ] T-RATE-8: Audit other importers (FCP7 XML, FCPX, EDL, drag-to-timeline) for the same bug. Clip.create invariant should trip them.
-- [ ] T-RATE-9: Migration / handling for existing broken `.jvp` projects — decide with Joe (migrate in place on open, require re-import, or ignore).
-- [ ] T-RATE-10: Manual validation — import a known 24-on-25 DRP, verify playback speed is correct and A/V stays in sync.
+24fps-on-25fps (`OldFashionedFilmLeaderCountdownVidevo.mov`) played ~4% too fast because DRP parser stamped every source-unit value with sequence rate. Landed on branch `009-drp-importer-must`:
+- `cf7b9c3` native-rate source coords: video from `<MediaFrameRate>`, audio from pool TracksBA sample_rate; both assert if absent. Clip carries separate `frame_rate` (sequence) and `native_rate` (media).
+- `c27dc65` dropped audio-rate fallbacks; 48000 hardcode gone.
+- `3b8e40d` NSF asserts for required invariants in media model + EMP binding.
+- Regression lock: `tests/test_drp_media_rate_conform.lua` (24/25/30 on 25, untrimmed/trimmed, native_rate stamp).
+- Dual-TC override-relink (FR-001..FR-019) landed via `specs/009-drp-importer-must/tasks.md` T001-T016 all marked done.
+- Outstanding: commit `cf7b9c3` notes 9 "0-clip" cases remain after relink; 201 files still fail match. Separate thread from the rate bug.
