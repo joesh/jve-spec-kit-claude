@@ -581,9 +581,23 @@ if not initial_sequence_id and #sequences > 0 then
     initial_sequence_id = sequences[1].id
 end
 
--- Background tabs are created AFTER layout settles (see 50ms timer below).
--- Creating many tab widgets during initial layout causes Qt splitter state corruption.
+-- Tabs for the remaining open sequences. The initial tab was created by
+-- timeline_panel.create(); open_tab skips it. After all tabs exist, reorder
+-- to match the saved order so the first paint shows the right layout.
 local open_ids = db_module.get_project_setting(project_id, "open_sequence_ids")
+if open_ids and #open_ids > 0 then
+    for _, seq_id in ipairs(open_ids) do
+        if seq_id ~= initial_sequence_id then
+            local tab_ok, tab_err = pcall(timeline_panel_mod.open_tab, seq_id)
+            if not tab_ok then
+                log.error("Failed to create tab for sequence %s: %s",
+                    seq_id, tostring(tab_err))
+            end
+        end
+    end
+    timeline_panel_mod.restore_tab_order(open_ids)
+    log.event("Restored %d tabs in saved order", #open_ids)
+end
 
 if initial_sequence_id and project_browser_mod.focus_sequence then
     project_browser_mod.focus_sequence(initial_sequence_id)
@@ -709,20 +723,10 @@ qt_create_single_shot_timer(50, function()
         log.event("Splitter sizes initialized to defaults")
     end
 
-    -- Restore saved tabs. The initial sequence already has a tab (from create),
-    -- so open_tab skips it. After all tabs exist, reorder to match saved order.
-    if open_ids and #open_ids > 0 then
-        for _, seq_id in ipairs(open_ids) do
-            if seq_id ~= initial_sequence_id then
-                local tab_ok, tab_err = pcall(timeline_panel_mod.open_tab, seq_id)
-                if not tab_ok then
-                    log.error("Failed to create tab for sequence %s: %s", seq_id, tostring(tab_err))
-                end
-            end
-        end
-        timeline_panel_mod.restore_tab_order(open_ids)
-        log.event("Restored %d tabs in saved order", #open_ids)
-    end
+    -- Tab restoration now happens synchronously before window SHOW — see
+    -- "Restored %d tabs in saved order" above. Splitter restoration stays
+    -- deferred because Qt needs post-layout widget sizes.
+
     -- Restore edit history window if it was open last session
     local edit_history_ok, edit_history = pcall(require, "ui.edit_history_window")
     if edit_history_ok and edit_history.restore_if_open then

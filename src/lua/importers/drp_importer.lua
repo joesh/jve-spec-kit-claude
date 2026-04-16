@@ -471,15 +471,83 @@ local function parse_project_metadata(project_elem)
     project.settings.width = numeric_from(width_elem, 1920)
     project.settings.height = numeric_from(height_elem, 1080)
 
-    -- Parse open timeline tabs from FieldsBlob > SequenceTabsData.
-    -- NOT from TimelineHandleVec (that's the full MRU history, not open tabs).
+    -- Collect raw inputs for tab/active-timeline resolution. Final resolution
+    -- happens in parse_drp_file after build_timeline_metadata_map exists,
+    -- because priority 2 (TimelineHandleVec) needs Sm2Timeline → Sm2Sequence
+    -- translation via the metadata map.
+    --
+    -- Priority 1 input: FieldsBlob > SequenceTabsData — authoritative tab
+    -- workspace saved by some Resolve versions. UUIDs are Sm2Sequence.DbIds.
     local fields_blob_elem = find_direct_child(project_elem, "FieldsBlob")
     local blob_hex = fields_blob_elem and get_text(fields_blob_elem) or nil
-    local tabs_data = parse_fields_blob_tabs(blob_hex)
-    project.open_timeline_ids = tabs_data.tab_ids
-    project.active_timeline_id = tabs_data.active_id
+    project.sequence_tabs_data = parse_fields_blob_tabs(blob_hex)
+
+    -- Priority 2 input: <TimelineHandleVec> + <CurrentTimelineIndex>.
+    -- Element UUIDs are Sm2Timeline.DbIds (NOT Sm2Sequence.DbIds) — they must
+    -- be mapped through timeline_id_map to get the sequence id.
+    project.timeline_handle_vec_ids = {}
+    local handle_vec_elem = find_direct_child(project_elem, "TimelineHandleVec")
+    if handle_vec_elem then
+        for _, child in ipairs(handle_vec_elem.children or {}) do
+            if child.tag == "Element" then
+                local id = get_text(child)
+                if id and id ~= "" then
+                    table.insert(project.timeline_handle_vec_ids, id)
+                end
+            end
+        end
+    end
+    local cti_elem = find_direct_child(project_elem, "CurrentTimelineIndex")
+    if cti_elem then
+        project.current_timeline_index = tonumber(get_text(cti_elem))
+        assert(project.current_timeline_index,
+            "parse_project_metadata: non-numeric <CurrentTimelineIndex>: "
+            .. tostring(get_text(cti_elem)))
+    end
+
+    -- Final resolved outputs (populated by resolve_project_tab_ids).
+    project.open_timeline_ids = {}
+    project.active_timeline_id = nil
 
     return project
+end
+
+--- Resolve which sequence ids are open tabs / which is active, using the
+-- inputs collected during parse_project_metadata plus the Sm2Timeline-to-
+-- Sm2Sequence map built from the MediaPool XML.
+--
+-- Priority:
+--   1. FieldsBlob SequenceTabsData non-empty (newer Resolve saves)
+--   2. TimelineHandleVec[CurrentTimelineIndex] via timeline_id_map
+--      (older / archive-export saves; yields a single active tab)
+-- If neither is available, leaves project.open_timeline_ids empty and the
+-- import settles for whatever find_most_recent produces at open time.
+--
+-- @param project table: project produced by parse_project_metadata
+-- @param timeline_id_map table: Sm2Timeline.DbId → {name, seq_id}
+local function resolve_project_tab_ids(project, timeline_id_map)
+    local tabs_data = project.sequence_tabs_data
+    if tabs_data and tabs_data.tab_ids and #tabs_data.tab_ids > 0 then
+        project.open_timeline_ids = tabs_data.tab_ids
+        project.active_timeline_id = tabs_data.active_id
+        return
+    end
+
+    local handle_ids = project.timeline_handle_vec_ids
+    local cti = project.current_timeline_index
+    if handle_ids and #handle_ids > 0 and cti and cti >= 0 and cti < #handle_ids then
+        -- Lua arrays are 1-based; CurrentTimelineIndex is 0-based.
+        local tl_db_id = handle_ids[cti + 1]
+        local mapped = tl_db_id and timeline_id_map[tl_db_id]
+        if mapped and mapped.seq_id then
+            project.open_timeline_ids = { mapped.seq_id }
+            project.active_timeline_id = mapped.seq_id
+            return
+        end
+        log.warn("DRP: TimelineHandleVec[%d]=%s has no Sm2Sequence mapping — "
+            .. "active timeline unresolved", cti, tostring(tl_db_id))
+    end
+    -- No resolution possible; leave empty and let opener fall back.
 end
 
 --- Parse MediaPool XML to extract media items
@@ -1518,11 +1586,18 @@ function M.parse_drp_file(drp_path, progress_cb)
         media_pool_items = parse_media_pool(media_pool_root)
     end
 
-    -- Build timeline metadata map by scanning all MediaPool folders
-    -- This maps Sequence IDs to {name, fps} from Sm2Timeline/Sm2Sequence elements
-    local timeline_metadata_map = build_timeline_metadata_map(tmp_dir, function(sub_pct)
-        pump(10 + math.floor(sub_pct * 0.15), "Scanning timeline metadata…")
-    end)
+    -- Build timeline metadata map by scanning all MediaPool folders.
+    -- metadata_map: Sm2Sequence.DbId → {name, fps, width, height, folder_id, …}
+    -- timeline_id_map: Sm2Timeline.DbId → {name, seq_id} — needed for
+    --                  TimelineHandleVec resolution.
+    local timeline_metadata_map, timeline_id_map = build_timeline_metadata_map(tmp_dir,
+        function(sub_pct)
+            pump(10 + math.floor(sub_pct * 0.15), "Scanning timeline metadata…")
+        end)
+
+    -- Now that we have Sm2Timeline→Sm2Sequence translation, resolve the
+    -- project's tab/active ids (fills project.open_timeline_ids + active_id).
+    resolve_project_tab_ids(project, timeline_id_map)
 
     pump(25, "Parsing media pool hierarchy…")
 
@@ -1600,6 +1675,11 @@ function M.parse_drp_file(drp_path, progress_cb)
                     goto continue_seq
                 end
                 local timeline = parse_sequence(seq_elem, fps_for_parsing, media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map)
+
+                -- Carry the Sm2Sequence.DbId through so the importer can emit
+                -- a tab-uuid → sequence-id map for post-import tab restoration
+                -- without falling back to fragile name matching.
+                timeline.tab_uuid = seq_ref_id
 
                 -- Apply timeline name from metadata
                 if metadata and metadata.name then
@@ -1885,29 +1965,12 @@ function M.parse_drp_file(drp_path, progress_cb)
         end
     end
 
-    -- Resolve open timeline tab names from SequenceTabsData + timeline_metadata_map
-    -- SequenceTabsData UUIDs are Sm2Sequence.DbId (= BlobOwner in project.xml),
-    -- which is the same key used by timeline_metadata_map
-    local open_timeline_names = {}
-    local active_timeline_name = nil
-    if #project.open_timeline_ids > 0 then
-        for _, tid in ipairs(project.open_timeline_ids) do
-            local tl_info = timeline_metadata_map[tid]
-            if tl_info then
-                table.insert(open_timeline_names, tl_info.name)
-            end
-        end
-        -- Active tab is identified directly by UUID (not by index)
-        if project.active_timeline_id then
-            local active_info = timeline_metadata_map[project.active_timeline_id]
-            if active_info then
-                active_timeline_name = active_info.name
-            end
-        end
-    end
-
     os.execute("rm -rf " .. tmp_dir)
 
+    -- parse_result.project.open_timeline_ids + active_timeline_id are the
+    -- authoritative Sm2Sequence.DbIds (resolved by resolve_project_tab_ids).
+    -- parse_result.timelines[i].tab_uuid carries the same id per timeline
+    -- so importer_core can emit a tab-uuid → sequence-id map.
     return {
         success = true,
         project = project,
@@ -1917,9 +1980,6 @@ function M.parse_drp_file(drp_path, progress_cb)
         folders = media_pool_hierarchy.folders,
         pool_master_clips = media_pool_hierarchy.master_clips,
         folder_map = media_pool_hierarchy.folder_map,
-        -- Open timeline state from Resolve
-        active_timeline_name = active_timeline_name,
-        open_timeline_names = open_timeline_names,
     }
 end
 
@@ -2189,7 +2249,7 @@ function M.convert(drp_path, jvp_path, progress_cb)
         project.name, settings.width, settings.height, tostring(settings.frame_rate))
 
     report(40, "Importing media…")
-    M.import_into_project(project.id, parse_result, {
+    local import_result = M.import_into_project(project.id, parse_result, {
         project_settings = settings,
         progress_cb = progress_cb and function(sub_pct, text)
             -- Map sub_pct 0-100 → overall range 40-90
@@ -2197,44 +2257,51 @@ function M.convert(drp_path, jvp_path, progress_cb)
         end or nil,
     })
 
-    -- Store open timeline state as project settings for layout.lua
+    -- Store open timeline state as project settings for layout.lua.
+    --
+    -- UUID-keyed join: parse_result.project.open_timeline_ids are DRP
+    -- Sm2Sequence.DbIds; import_result.tab_uuid_to_sequence_id maps each to
+    -- the newly-created Sequence.id. We fail loudly on any unresolved UUID —
+    -- a missing mapping means a timeline the DRP marked open was silently
+    -- dropped during import, which is a real bug to fix (not hide).
     report(95, "Setting active timeline…")
     local pid = database.get_current_project_id()
-    if parse_result.active_timeline_name or
-       (parse_result.open_timeline_names and #parse_result.open_timeline_names > 0) then
-        local sequences = database.load_sequences(pid)
+    local open_tab_uuids = parse_result.project.open_timeline_ids or {}
+    local active_tab_uuid = parse_result.project.active_timeline_id
+    local tab_uuid_to_sequence_id = import_result.tab_uuid_to_sequence_id or {}
 
-        -- Build name → sequence ID lookup
-        local name_to_seq = {}
-        for _, seq in ipairs(sequences) do
-            name_to_seq[seq.name] = seq
+    if #open_tab_uuids > 0 then
+        local open_sequence_ids = {}
+        local active_sequence_id = nil
+        for _, tab_uuid in ipairs(open_tab_uuids) do
+            local seq_id = tab_uuid_to_sequence_id[tab_uuid]
+            assert(seq_id, string.format(
+                "drp_importer: open timeline tab UUID %s has no corresponding "
+                .. "sequence. Timeline was present in project.xml open-tab list "
+                .. "but never created during import (check for parse_drp_file "
+                .. "skips or a mismatch between Sm2Sequence.DbId and the id "
+                .. "used in SequenceTabsData / TimelineHandleVec).",
+                tostring(tab_uuid)))
+            table.insert(open_sequence_ids, seq_id)
+            if tab_uuid == active_tab_uuid then
+                active_sequence_id = seq_id
+            end
         end
 
-        -- Resolve open timeline names → JVE sequence IDs
-        if parse_result.open_timeline_names and #parse_result.open_timeline_names > 0 then
-            local open_sequence_ids = {}
-            local active_sequence_id = nil
-            for _, tl_name in ipairs(parse_result.open_timeline_names) do
-                local seq = name_to_seq[tl_name]
-                if seq then
-                    table.insert(open_sequence_ids, seq.id)
-                    if tl_name == parse_result.active_timeline_name then
-                        active_sequence_id = seq.id
-                    end
-                end
-            end
-            if #open_sequence_ids > 0 then
-                database.set_project_setting(pid, "open_sequence_ids", open_sequence_ids)
-            end
-            if active_sequence_id then
-                database.set_project_setting(pid, "last_open_sequence_id", active_sequence_id)
-            end
-        elseif parse_result.active_timeline_name then
-            local seq = name_to_seq[parse_result.active_timeline_name]
-            if seq then
-                database.set_project_setting(pid, "last_open_sequence_id", seq.id)
-            end
-        end
+        -- If open tabs are known, an active tab MUST also be known.
+        -- Both Phase A priorities (SequenceTabsData, TimelineHandleVec+Index)
+        -- emit active_tab_uuid whenever they emit open_tab_uuids. Any violation
+        -- means a parser returned inconsistent state — fail loud.
+        assert(active_tab_uuid, string.format(
+            "drp_importer: %d open tab UUIDs but active_tab_uuid is nil — "
+            .. "parser returned inconsistent tab state", #open_tab_uuids))
+        assert(active_sequence_id, string.format(
+            "drp_importer: active timeline UUID %s was not in the open-tab "
+            .. "list %s — project.xml inconsistency",
+            tostring(active_tab_uuid), table.concat(open_tab_uuids, ",")))
+
+        database.set_project_setting(pid, "open_sequence_ids", open_sequence_ids)
+        database.set_project_setting(pid, "last_open_sequence_id", active_sequence_id)
     end
 
     -- Record provenance: insert a synthetic command so the history shows

@@ -112,6 +112,10 @@ function M.import_into_project(project_id, parse_result, opts)
         sequence_ids = {},
         track_ids = {},
         clip_ids = {},
+        -- Maps the source format's per-timeline UUID (e.g. DRP Sm2Sequence.DbId)
+        -- to the newly-created JVE Sequence.id. Populated when timeline_data
+        -- carries a tab_uuid — used to restore open tabs post-import.
+        tab_uuid_to_sequence_id = {},
     }
 
     -- Import folder hierarchy as bins
@@ -425,6 +429,9 @@ function M.import_into_project(project_id, parse_result, opts)
             "importer_core: failed to save timeline '%s'", timeline_data.name))
         do
             table.insert(result.sequence_ids, sequence.id)
+            if timeline_data.tab_uuid and timeline_data.tab_uuid ~= "" then
+                result.tab_uuid_to_sequence_id[timeline_data.tab_uuid] = sequence.id
+            end
             log.event("  Created timeline: %s @ %d/%d fps, %dx%d, viewport [%d..%d]",
                     timeline_data.name, fps_num, fps_den, seq_width, seq_height, view_start, view_start + view_duration)
 
