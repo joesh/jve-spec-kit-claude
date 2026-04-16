@@ -1,0 +1,35 @@
+TITLE: RETIME_MATRIX_TEST
+FCM: NON-DROP FRAME
+
+0001  AX       V     C        15:10:03:17 15:10:08:17 01:00:00:00 01:00:05:00
+* FROM CLIP NAME: A040_12031506_C003.mov
+* COMMENT: clip1 100pct offset000 baseline
+
+0002  AX       V     C        15:10:03:17 15:10:08:17 01:00:06:00 01:00:11:00
+M2   AX             012.5                15:10:03:17
+* FROM CLIP NAME: A040_12031506_C003.mov
+* COMMENT: clip2 050pct offset000
+
+0003  AX       V     C        15:10:03:17 15:10:08:17 01:00:12:00 01:00:17:00
+M2   AX             037.5                15:10:03:17
+* FROM CLIP NAME: A040_12031506_C003.mov
+* COMMENT: clip3 150pct offset000 reproduces_40-393-3
+
+0004  AX       V     C        15:10:03:17 15:10:08:17 01:00:18:00 01:00:23:00
+M2   AX             050.0                15:10:03:17
+* FROM CLIP NAME: A040_12031506_C003.mov
+* COMMENT: clip4 200pct offset000
+
+0005  AX       V     C        15:10:09:17 15:10:14:17 01:00:24:00 01:00:29:00
+* FROM CLIP NAME: A040_12031506_C003.mov
+* COMMENT: clip5 100pct offset150f
+
+0006  AX       V     C        15:10:09:17 15:10:14:17 01:00:30:00 01:00:35:00
+M2   AX             012.5                15:10:09:17
+* FROM CLIP NAME: A040_12031506_C003.mov
+* COMMENT: clip6 050pct offset150f
+
+0007  AX       V     C        15:10:09:17 15:10:14:17 01:00:36:00 01:00:41:00
+M2   AX             037.5                15:10:09:17
+* FROM CLIP NAME: A040_12031506_C003.mov
+* COMMENT: clip7 150pct offset150f

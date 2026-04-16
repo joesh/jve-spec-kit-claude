@@ -1,0 +1,16 @@
+TITLE: A007_RETIME_TEST
+FCM: NON-DROP FRAME
+
+0001  AX       V     C        20:55:11:23 20:55:16:23 01:00:00:00 01:00:05:00
+* FROM CLIP NAME: A007_05202055_C007.mov
+* COMMENT: clip1 100pct srcin20:55:11:23 baseline
+
+0002  AX       V     C        20:55:11:23 20:55:16:23 01:00:06:00 01:00:11:00
+M2   AX             012.5                20:55:11:23
+* FROM CLIP NAME: A007_05202055_C007.mov
+* COMMENT: clip2 050pct srcin20:55:11:23
+
+0003  AX       V     C        20:55:11:23 20:55:16:23 01:00:12:00 01:00:17:00
+M2   AX             037.5                20:55:11:23
+* FROM CLIP NAME: A007_05202055_C007.mov
+* COMMENT: clip3 150pct srcin20:55:11:23
