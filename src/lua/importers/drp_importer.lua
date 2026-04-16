@@ -206,13 +206,18 @@ local function extract_original_path(clip_elem)
         end
     end
 
-    -- Try BtAudioInfo (audio master clips — blob filename is unreliable,
-    -- use blob directory + XML <Name> which has the correct filename)
+    -- Try BtAudioInfo (audio master clips). Trust the blob's full path when
+    -- decode_bt_clip_path returns a non-nil path — it already rejects blobs
+    -- where the filename contains control characters (the "unreliable" case).
+    -- The blob preserves filename whitespace that the XML parser strips from
+    -- <Name>, so paths like '/…/Temp Tracks/ Return 2 - Max Richter.mp3' only
+    -- survive the import when sourced from the blob.
     local bt_audio = find_element(clip_elem, "BtAudioInfo")
     if bt_audio then
         local blob_elem = find_direct_child(bt_audio, "Clip")
         if blob_elem then
-            local _, directory = decode_bt_clip_path(get_text(blob_elem))
+            local path, directory = decode_bt_clip_path(get_text(blob_elem))
+            if path then return path end
             if directory and xml_name then return directory .. "/" .. xml_name end
         end
     end
@@ -1033,21 +1038,44 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             -- source_in comes from <In>, NOT <MediaStartTime>.
             -- Empty/missing <In> means untrimmed (source_in = 0).
             local in_value = 0
+            local in_sub_frame = 0.0
             local clip_speed = 1.0
             local in_text = in_elem and get_text(in_elem) or ""
             if in_text ~= "" then
-                -- In field: integer frames only. The hex suffix (if present)
-                -- is not a sub-frame offset — its meaning on In differs from
-                -- Start. Only Start carries sub-frame audio positioning.
-                local num_part = in_text:match("^(%d+)")
+                -- <In> is 'NN' or 'NN|<hex>'. NN is the whole-frame offset;
+                -- the hex is a little-endian IEEE-754 double in [0, 1)
+                -- representing the sub-frame fractional position within that
+                -- frame. The fraction is applied only on unretimed clips —
+                -- retimed clips get sub-frame precision from the MTBA curve's
+                -- own keyframes, and adding the <In> fraction on top would
+                -- double-count and produce rounding errors at frame boundaries.
+                local num_part, hex_part = in_text:match("^(%d+)|?(%x*)")
                 in_value = assert(num_part and tonumber(num_part), string.format(
                     "parse_resolve_tracks: clip '%s' <In> has no numeric prefix: '%s'",
                     clip_name, in_text))
+                if hex_part and hex_part ~= "" then
+                    if #hex_part < 16 then
+                        log.warn("parse_resolve_tracks: clip '%s' <In> hex suffix too short (%d chars): '%s'",
+                            clip_name, #hex_part, hex_part)
+                    else
+                        local frac = decode_hex_double_at(hex_part, 0)
+                        if not frac then
+                            log.warn("parse_resolve_tracks: clip '%s' <In> hex suffix failed to decode: '%s'",
+                                clip_name, hex_part:sub(1, 16))
+                        elseif frac >= 0.0 and frac < 1.0 then
+                            in_sub_frame = frac
+                        end
+                        -- Values outside [0, 1) are not sub-frame offsets;
+                        -- they occur on retimed clips where the hex is a
+                        -- speed-ratio remnant (MTBA is authoritative). Leave
+                        -- in_sub_frame at 0 — the retimed branch won't use it.
+                    end
+                end
             end
 
             -- MediaTimemapBA: authoritative speed/direction for retimed clips.
             -- MTBA is present on all retimed clips. Clips without MTBA are not
-            -- retimed (the hex suffix in <In> is flags, not a speed value).
+            -- retimed; <In>'s integer+sub-frame fully specifies the in-point.
             local retime_keyframes = nil
             local mtba_elem = find_element(clip_elem, "MediaTimemapBA")
             if mtba_elem then
@@ -1158,8 +1186,8 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 source_duration = math.floor((y_last - y_first) * native_rate)
             else
                 -- No curve: in_value is source frames at sequence rate.
-                -- Convert to native_rate units.
-                in_offset = math.floor(in_value * native_rate / frame_rate + 0.5)
+                -- Convert to native_rate units, folding in the <In> sub-frame.
+                in_offset = math.floor((in_value + in_sub_frame) * native_rate / frame_rate + 0.5)
                 source_duration = math.floor(duration_raw * native_rate / frame_rate + 0.5)
             end
 
@@ -1897,6 +1925,7 @@ end
 
 -- Parsing kernel exports (stable public API for testing + extension)
 M.parse_resolve_tracks = parse_resolve_tracks
+M.extract_original_path = extract_original_path
 M.parse_fields_blob_tabs = parse_fields_blob_tabs
 M.decode_bt_video_time = decode_bt_video_time
 M.decode_bt_audio_duration = decode_bt_audio_duration

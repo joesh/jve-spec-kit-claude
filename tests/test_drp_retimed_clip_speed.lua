@@ -40,11 +40,15 @@ local function wrap_clips(...)
 end
 
 --------------------------------------------------------------------------------
--- Test 1: Clip with no MTBA → non-retimed (hex suffix in <In> is ignored)
--- The hex after the pipe is flags/metadata, not a speed value.
+-- Test 1: Clip with no MTBA → non-retimed. Hex suffix on <In> is a sub-frame
+-- fractional offset (IEEE-754 LE double in [0, 1)) that rounds the in-point
+-- up when the fraction puts playback past the mid-frame boundary.
+--
+-- Hex '007aeb3ccff3ec3f' decodes to 0.9047619… — a fraction ≥ 0.5 bumps the
+-- effective in-point to the next whole frame: 34 + 0.9047… rounds to 35.
 --------------------------------------------------------------------------------
 
-print("\n--- Test 1: No MTBA → non-retimed (hex suffix ignored) ---")
+print("\n--- Test 1: No MTBA → non-retimed (sub-frame rounds to next frame) ---")
 
 local seq = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
@@ -55,7 +59,7 @@ local seq = elem("Sequence", "", {
                 elem("Start", "15880"),
                 elem("Duration", "181"),
                 elem("MediaStartTime", "0"),
-                elem("In", "34|007aeb3ccff3ec3f"),  -- hex suffix = flags, not speed
+                elem("In", "34|007aeb3ccff3ec3f"),  -- integer 34 + sub-frame ≈ 0.9048
                 elem("MediaFilePath", "/nonexistent/retimed.mxf"),
                 elem("MediaFrameRate", "0000000000003940"),  -- 25fps LE double
                 -- No MediaTimemapBA → not retimed
@@ -67,10 +71,11 @@ local seq = elem("Sequence", "", {
 local video_tracks = drp_importer.parse_resolve_tracks(seq, 25)
 local clip = video_tracks[1].clips[1]
 
--- No MTBA = not retimed. source_in = raw in_value (34)
-assert(clip.source_in == 34, string.format(
-    "No MTBA: source_in should be raw in_value 34, got %d", clip.source_in))
-print(string.format("  ✓ source_in = %d (not retimed, hex suffix ignored)", clip.source_in))
+-- No MTBA = not retimed. Sub-frame 0.9048 + integer 34 = 34.9048 → rounds to 35.
+assert(clip.source_in == 35, string.format(
+    "No MTBA: source_in should be 35 (34 + 0.9048 sub-frame, rounded), got %d",
+    clip.source_in))
+print(string.format("  ✓ source_in = %d (not retimed, sub-frame rounded)", clip.source_in))
 
 -- source_duration = raw duration (181)
 local actual_dur = clip.source_out - clip.source_in
