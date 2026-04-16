@@ -172,157 +172,32 @@ local command_manager = require("core.command_manager")
 command_manager.init(seq_id, proj_id)
 
 -- Apply the relinker output as RelinkClips. Two different project-media rows
--- can resolve to the same fixture-tree path (e.g. AnamBack1 vs AnamBack4 dupes)
--- — the production dialog handles this with folder-priority resolution; for
--- this end-to-end smoke test we just keep the first writer per path.
--- Relink output is per-media: {media_id, new_path}.
--- Build media_path_changes; handle path conflicts with first-writer-wins.
--- Losers' clips get reassigned to winner's media row.
-local clip_relink_map = {}
-local media_path_changes = {}
-local path_owner = {}          -- new_path → media_id (first writer wins)
-local priority_losers = {}     -- loser_media_id → winner_media_id
+-- can resolve to the same fixture-tree path (e.g. AnamBack1 vs AnamBack4 dupes).
+-- The shared planner handles DB-owner collisions, priority tiebreaks, splits,
+-- and dedupe salvage — same code production uses via show_relink_dialog.
+-- relink_media_batch's contract guarantees .relinked and .failed arrays; the
+-- planner asserts types so a missing field surfaces as an actionable error.
+assert(type(batch.relinked) == "table",
+    "relink_media_batch must return .relinked array")
+assert(type(batch.failed) == "table",
+    "relink_media_batch must return .failed array")
 
-local new_media_records = {}
-local split_count = 0
-local clone_path_to_id = {}  -- track clones created this session
+local relink_planner = require("core.relink_planner")
+local plan = relink_planner.build_plan(
+    db, batch.relinked, batch.failed,
+    {},  -- no folder priority in this smoke test — first-writer-wins ties
+    proj_id)
 
-for _, entry in ipairs(batch.relinked or {}) do
-    local mid = entry.media_id
-
-    -- Split: partial fit — create clone media for fitting clips
-    if entry.needs_split and entry.split_clip_ids then
-        local Media = require("models.media")
-        local uuid = require("uuid")
-        local original = Media.load(mid)
-        assert(original, "split: source media not found: " .. mid)
-        local clone_id = uuid.generate_with_prefix("media")
-        -- Check if the target path already belongs to an existing or session-created media
-        local existing_at_path = clone_path_to_id[entry.new_path] or Media.find_id_by_path(entry.new_path)
-        if existing_at_path then
-            -- Path already taken — reassign clips to existing media instead of cloning
-            for _, clip_id in ipairs(entry.split_clip_ids) do
-                clip_relink_map[clip_id] = { new_media_id = existing_at_path }
-            end
-            path_owner[entry.new_path] = existing_at_path
-        else
-            local dur = original.duration
-            local fps_num = original.frame_rate and original.frame_rate.fps_numerator
-            local fps_den = original.frame_rate and original.frame_rate.fps_denominator
-            if not dur or dur <= 0 or not fps_num or fps_num <= 0 then
-                goto continue_relink
-            end
-            local clone = Media.create({
-                id = clone_id,
-                project_id = proj_id,
-                name = original.name,
-                file_path = entry.new_path,
-                duration_frames = dur,
-                fps_numerator = fps_num,
-                fps_denominator = fps_den or 1,
-                audio_sample_rate = original.audio_sample_rate,
-                audio_channels = original.audio_channels,
-                width = original.width,
-                height = original.height,
-                metadata = original.metadata,
-            })
-            assert(clone:save(), string.format(
-                "split: failed to save clone %s (dur=%s fps=%s/%s)",
-                clone_id, tostring(dur), tostring(fps_num), tostring(fps_den)))
-            clone_path_to_id[entry.new_path] = clone_id
-            path_owner[entry.new_path] = clone_id  -- prevent full-fit entries from claiming this path
-            new_media_records[#new_media_records + 1] = {
-                id = clone_id, path = entry.new_path, name = original.name,
-                duration_frames = dur,
-                fps_num = fps_num, fps_den = fps_den or 1,
-            }
-            for _, clip_id in ipairs(entry.split_clip_ids) do
-                clip_relink_map[clip_id] = { new_media_id = clone_id }
-            end
-        end
-        split_count = split_count + 1
-        print(string.format("      split: media %s → clone %s (%d clips)",
-            tostring(mid):sub(1,8), clone_id:sub(1,8), #entry.split_clip_ids))
-        goto continue_relink
-    end
-
-    local existing = path_owner[entry.new_path]
-    if not existing or existing == mid then
-        path_owner[entry.new_path] = mid
-        media_path_changes[mid] = entry.new_path
-    else
-        priority_losers[mid] = existing
-    end
-
-    ::continue_relink::
-end
-
--- Diagnostic: count needs_split entries
-local needs_split_count = 0
-for _, entry in ipairs(batch.relinked or {}) do
-    if entry.needs_split then needs_split_count = needs_split_count + 1 end
-end
-print(string.format("      splits: %d created, %d needs_split entries in batch", split_count, needs_split_count))
-
--- Reassign loser clips (lazy load only for affected media)
-for loser_mid, winner_mid in pairs(priority_losers) do
-    local clips = Clip.find_clips_for_media(loser_mid)
-    for _, clip in ipairs(clips) do
-        clip_relink_map[clip.id] = { new_media_id = winner_mid }
-    end
-end
-
--- Dedupe salvage: for failed media, look for sibling media row with same
--- name whose file_path exists on disk. Reassign all clips.
-local dedupe_stmt = db:prepare([[
-    SELECT id, file_path FROM media
-    WHERE project_id = ?
-      AND name = (SELECT name FROM media WHERE id = ?)
-      AND id != ?
-]])
-local dedupe_salvaged = 0
-for _, entry in ipairs(batch.failed or {}) do
-    local mid = entry.media_id
-    if mid then
-        dedupe_stmt:bind_value(1, proj_id)
-        dedupe_stmt:bind_value(2, mid)
-        dedupe_stmt:bind_value(3, mid)
-        if dedupe_stmt:exec() then
-            while dedupe_stmt:next() do
-                local sibling_id = dedupe_stmt:value(0)
-                local sibling_path = dedupe_stmt:value(1)
-                local f = sibling_path and io.open(sibling_path, "r")
-                if f then
-                    f:close()
-                    local clips = Clip.find_clips_for_media(mid)
-                    for _, clip in ipairs(clips) do
-                        if not clip_relink_map[clip.id] then
-                            clip_relink_map[clip.id] = { new_media_id = sibling_id }
-                        end
-                    end
-                    dedupe_salvaged = dedupe_salvaged + #clips
-                    break
-                end
-            end
-        end
-        dedupe_stmt:reset()
-    end
-end
-dedupe_stmt:finalize()
-print(string.format("      dedupe salvage: %d clips reassigned to sibling media rows", dedupe_salvaged))
-
-local clip_changes = 0
-for _ in pairs(clip_relink_map) do clip_changes = clip_changes + 1 end
-local media_changes = 0
-for _ in pairs(media_path_changes) do media_changes = media_changes + 1 end
-print(string.format("      dispatching RelinkClips: %d clip changes, %d media path changes",
-    clip_changes, media_changes))
+print(string.format("      planner: %d clip changes, %d media path changes, %d new media, %d salvaged",
+    (function() local n=0 for _ in pairs(plan.clip_relink_map) do n=n+1 end return n end)(),
+    (function() local n=0 for _ in pairs(plan.media_path_changes) do n=n+1 end return n end)(),
+    #plan.new_media_records, plan.salvaged_count))
 
 local apply_result = command_manager.execute("RelinkClips", {
-    clip_relink_map = clip_relink_map,
-    media_path_changes = media_path_changes,
-    new_media_records = new_media_records,
-    project_id = proj_id,
+    clip_relink_map    = plan.clip_relink_map,
+    media_path_changes = plan.media_path_changes,
+    new_media_records  = plan.new_media_records,
+    project_id         = proj_id,
 })
 assert(apply_result and apply_result.success, "RelinkClips failed")
 print("      ✓ RelinkClips committed")
@@ -492,6 +367,6 @@ print("\n✅ test_e2e_retime_relink.lua passed")
 print("   - DRP convert produces correct source_in for retimed clips (111916, 124682)")
 print("   - Both clips relinked to the fixture tree")
 print("   - source_in ≥ first_frame_tc → C++ assertion will not fire")
-print(string.format("   - Dedupe salvage reassigned %d clips to sibling media rows", dedupe_salvaged))
+print(string.format("   - Dedupe salvage reassigned %d clips to sibling media rows", plan.salvaged_count))
 print(string.format("   - VFX override clips online: %d/%d", vfx_online, vfx_total_clips))
 print(string.format("   - Gold master offline count: %d", offline_count))

@@ -5,7 +5,13 @@
 -- - "Matching Rules..." and "Folder Priority..." buttons
 -- - Run clip-level batch relink with live progress
 -- - Two-phase button: Relink → Apply
--- - Return relink results + folder priority on confirm, nil on cancel
+--
+-- The apply callback receives a wrapper struct:
+--   { relink = <media_relinker.relink_media_batch return>,
+--     folder_priority = <array of folder roots in priority order> }
+-- Keeping folder_priority separate from the relink struct preserves
+-- media_relinker's documented return contract ({relinked, failed, ambiguous,
+-- new_media}) — no mutation of a neighboring module's data shape.
 --
 -- @file media_relink_dialog.lua
 local M = {}
@@ -158,7 +164,10 @@ local function extract_folder_roots(media_list)
     return result
 end
 
---- Show folder priority dialog (single dialog, all folders).
+--- Show folder priority dialog — drag-to-reorder list.
+-- Items appear top-to-bottom in priority order: top row = highest priority.
+-- The user drags rows to reorder. OK returns the resulting order;
+-- Cancel returns nil (caller keeps the prior order).
 local function show_folder_priority_dialog(folder_roots, parent_window)
     local qt = require("core.qt_constants")
 
@@ -167,26 +176,25 @@ local function show_folder_priority_dialog(folder_roots, parent_window)
 
     local header = qt.WIDGET.CREATE_LABEL(
         "When the same filename exists in multiple source folders,\n" ..
-        "higher-priority folders win. Set priority 1 = highest.")
+        "higher-priority folders win.\n\n" ..
+        "Drag rows to reorder — top = highest priority.")
     qt.LAYOUT.ADD_WIDGET(layout, header)
     qt.LAYOUT.ADD_SPACING(layout, 8)
 
-    local combos = {}
-    for i, root in ipairs(folder_roots) do
-        local row = qt.LAYOUT.CREATE_HBOX()
-        local combo = qt.WIDGET.CREATE_COMBOBOX()
-        for p = 1, #folder_roots do
-            qt.PROPERTIES.ADD_COMBOBOX_ITEM(combo, tostring(p))
-        end
-        qt.PROPERTIES.SET_COMBOBOX_CURRENT_INDEX(combo, i - 1)
-        qt.LAYOUT.ADD_WIDGET(row, combo)
-        qt.LAYOUT.ADD_WIDGET(row, qt.WIDGET.CREATE_LABEL("  " .. root))
-        qt.LAYOUT.ADD_STRETCH(row)
-        qt.LAYOUT.ADD_LAYOUT(layout, row)
-        combos[#combos + 1] = {combo = combo, root = root}
-    end
+    -- QTreeWidget in InternalMove drag-drop mode gives us drag-reorder
+    -- natively. One column → reads as a flat list.
+    local tree = qt.WIDGET.CREATE_TREE()
+    qt.CONTROL.SET_TREE_HEADERS(tree, { "Source Folder (drag to reorder)" })
+    qt.CONTROL.SET_TREE_DRAG_DROP_MODE(tree, "internal")
 
-    qt.LAYOUT.ADD_STRETCH(layout)
+    -- Map the tree-item id (assigned by add_tree_item) → folder root string,
+    -- so we can reconstruct order after the user drags things around.
+    local id_to_root = {}
+    for _, root in ipairs(folder_roots) do
+        local item_id = qt.CONTROL.ADD_TREE_ITEM(tree, { root })
+        id_to_root[item_id] = root
+    end
+    qt.LAYOUT.ADD_WIDGET(layout, tree)
 
     local button_box = qt.CONTROL.CREATE_BUTTON_BOX()
     qt.CONTROL.BUTTON_BOX_ADD(button_box, "OK", "accept")
@@ -197,15 +205,15 @@ local function show_folder_priority_dialog(folder_roots, parent_window)
 
     local ok_name = "__folder_priority_ok"
     _G[ok_name] = function()
-        local assignments = {}
-        for _, entry in ipairs(combos) do
-            local idx = qt.PROPERTIES.GET_COMBOBOX_CURRENT_INDEX(entry.combo)
-            assignments[#assignments + 1] = {priority = (idx or 0) + 1, root = entry.root}
-        end
-        table.sort(assignments, function(a, b) return a.priority < b.priority end)
+        -- Read visual top-to-bottom order from the tree after any drags.
+        local ordered_ids = qt.CONTROL.GET_TREE_ITEMS_IN_ORDER(tree)
         result_order = {}
-        for _, a in ipairs(assignments) do
-            result_order[#result_order + 1] = a.root
+        for _, item_id in ipairs(ordered_ids) do
+            local root = id_to_root[item_id]
+            assert(root, string.format(
+                "folder priority dialog: tree returned unknown item id %s",
+                tostring(item_id)))
+            result_order[#result_order + 1] = root
         end
         qt.DIALOG.CLOSE(dialog, true)
     end
@@ -230,7 +238,9 @@ end
 -- Shows dialog immediately, populates clip list asynchronously.
 -- @param media_list table Non-empty array of media records to relink
 -- @param parent_window userdata|nil Parent window for modal
--- @param opts table|nil {on_apply = function(results)} called before dialog closes
+-- @param opts table|nil {on_apply = function(results)} called before dialog
+--   closes, where results = { relink = <relink_media_batch return>,
+--   folder_priority = <array of folder roots> }
 function M.show(media_list, parent_window, opts)
     assert(media_list and #media_list > 0,
         "media_relink_dialog.show: media_list must be non-empty")
@@ -420,13 +430,6 @@ function M.show(media_list, parent_window, opts)
         }
         local results = media_relinker.relink_media_batch(media_infos, options, progress.update)
         progress.flush()
-        -- TODO(relink): wrap results instead of mutating. Tacking folder_priority
-        -- onto relink_media_batch's return struct bends that function's documented
-        -- contract ({relinked, failed, ambiguous, new_media}). Cleaner: return
-        -- { relink = results, folder_priority = ... } from this dialog and update
-        -- show_relink_dialog.lua (the assertion at ~line 73) to unpack.
-        -- Tracked in TODO.md under "Still Open".
-        results.folder_priority = folder_priority
 
         if #results.relinked == 0 then
             -- No matches — re-enable everything so user can retry
@@ -453,7 +456,10 @@ function M.show(media_list, parent_window, opts)
             qt.PROPERTIES.SET_TEXT(header, "Applying relink changes…")
             qt.CONTROL.PROCESS_EVENTS()
             if opts.on_apply then
-                opts.on_apply(relink_results)
+                opts.on_apply({
+                    relink          = relink_results,
+                    folder_priority = folder_priority,
+                })
             end
             qt.DIALOG.CLOSE(dialog, true)
         end
