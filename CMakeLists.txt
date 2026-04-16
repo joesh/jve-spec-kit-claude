@@ -138,6 +138,7 @@ set(CORE_SOURCES
     src/qt_bindings.cpp
     src/assert_handler.cpp
     src/jve_log.cpp
+    src/jve_lua_callback.cpp
 
     # Bug reporter system
     src/bug_reporter/gesture_logger.cpp

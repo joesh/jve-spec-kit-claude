@@ -23,9 +23,7 @@ static void ensure_watcher() {
                     lua_rawgeti(s_L, LUA_REGISTRYINDEX, s_file_changed_ref);
                     lua_pushstring(s_L, path.toUtf8().constData());
                     if (lua_pcall(s_L, 1, 0, 0) != 0) {
-                        const char* err = lua_tostring(s_L, -1);
-                        JVE_LOG_ERROR(Ui, "FS file_changed callback error: %s", err ? err : "(unknown)");
-                        lua_pop(s_L, 1);
+                        jve_handle_lua_callback_error(s_L, "fs.file_changed");
                     }
                 }
             });
@@ -36,9 +34,7 @@ static void ensure_watcher() {
                     lua_rawgeti(s_L, LUA_REGISTRYINDEX, s_dir_changed_ref);
                     lua_pushstring(s_L, path.toUtf8().constData());
                     if (lua_pcall(s_L, 1, 0, 0) != 0) {
-                        const char* err = lua_tostring(s_L, -1);
-                        JVE_LOG_ERROR(Ui, "FS dir_changed callback error: %s", err ? err : "(unknown)");
-                        lua_pop(s_L, 1);
+                        jve_handle_lua_callback_error(s_L, "fs.dir_changed");
                     }
                 }
             });

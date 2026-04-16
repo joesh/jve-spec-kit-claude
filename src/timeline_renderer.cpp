@@ -2,6 +2,7 @@
 #include "qt_bindings.h"
 #include "jve_log.h"
 #include "assert_handler.h"
+#include "jve_lua_callback.h"
 #include <QPaintEvent>
 #include <QResizeEvent>
 #include <QApplication>
@@ -91,7 +92,7 @@ void TimelineRenderer::addTriangle(int x1, int y1, int x2, int y2, int x3, int y
 
 void TimelineRenderer::addWaveform(int x, int y, int width, int height,
                                     const float* peaks, int peak_count,
-                                    const QString& color)
+                                    const QString& color, bool reversed)
 {
     DrawCommand cmd;
     cmd.type = DrawCommand::WAVEFORM;
@@ -101,6 +102,7 @@ void TimelineRenderer::addWaveform(int x, int y, int width, int height,
     cmd.height = height;
     cmd.color = QColor(color);
     cmd.peak_count = peak_count;
+    cmd.reversed = reversed;
     if (peaks && peak_count > 0) {
         cmd.peak_data.assign(peaks, peaks + peak_count * 2);
     }
@@ -198,8 +200,12 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
                 float half_h = cmd.height * 0.5f;
                 float px_step = static_cast<float>(cmd.width) / cmd.peak_count;
                 for (int i = 0; i < cmd.peak_count; ++i) {
-                    float mn = cmd.peak_data[i * 2];
-                    float mx = cmd.peak_data[i * 2 + 1];
+                    // Reverse clips: peak[0] is still the earliest source sample
+                    // but the leftmost pixel should show the LATEST source sample,
+                    // so walk the peak array backward.
+                    int pi = cmd.reversed ? (cmd.peak_count - 1 - i) : i;
+                    float mn = cmd.peak_data[pi * 2];
+                    float mx = cmd.peak_data[pi * 2 + 1];
                     int px = cmd.x + static_cast<int>(i * px_step);
                     int y0 = static_cast<int>(center_y - mx * half_h);
                     int y1 = static_cast<int>(center_y - mn * half_h);
@@ -289,11 +295,11 @@ void TimelineRenderer::mousePressEvent(QMouseEvent* event)
             {
                 JveLuaStateGuard guard(lua_state_);
                 if (lua_pcall(lua_state_, 1, 0, 0) != LUA_OK) {
-                    lua_error(lua_state_);
+                    jve_handle_lua_callback_error(lua_state_, "TimelineRenderer.mouse_press");
                 }
             }
         } else {
-            lua_pop(lua_state_, 1);
+            jve_discard_non_function_handler(lua_state_, mouse_event_handler_.c_str(), "TimelineRenderer.mouse_press");
         }
     }
     QWidget::mousePressEvent(event);
@@ -342,11 +348,11 @@ void TimelineRenderer::mouseReleaseEvent(QMouseEvent* event)
             {
                 JveLuaStateGuard guard(lua_state_);
                 if (lua_pcall(lua_state_, 1, 0, 0) != LUA_OK) {
-                    lua_error(lua_state_);
+                    jve_handle_lua_callback_error(lua_state_, "TimelineRenderer.mouse_release");
                 }
             }
         } else {
-            lua_pop(lua_state_, 1);
+            jve_discard_non_function_handler(lua_state_, mouse_event_handler_.c_str(), "TimelineRenderer.mouse_release");
         }
     }
     QWidget::mouseReleaseEvent(event);
@@ -395,11 +401,11 @@ void TimelineRenderer::mouseMoveEvent(QMouseEvent* event)
             {
                 JveLuaStateGuard guard(lua_state_);
                 if (lua_pcall(lua_state_, 1, 0, 0) != LUA_OK) {
-                    lua_error(lua_state_);
+                    jve_handle_lua_callback_error(lua_state_, "TimelineRenderer.mouse_move");
                 }
             }
         } else {
-            lua_pop(lua_state_, 1);
+            jve_discard_non_function_handler(lua_state_, mouse_event_handler_.c_str(), "TimelineRenderer.mouse_move");
         }
     }
     QWidget::mouseMoveEvent(event);
@@ -452,11 +458,11 @@ void TimelineRenderer::wheelEvent(QWheelEvent* event)
             {
                 JveLuaStateGuard guard(lua_state_);
                 if (lua_pcall(lua_state_, 1, 0, 0) != LUA_OK) {
-                    lua_error(lua_state_);
+                    jve_handle_lua_callback_error(lua_state_, "TimelineRenderer.wheel");
                 }
             }
         } else {
-            lua_pop(lua_state_, 1);
+            jve_discard_non_function_handler(lua_state_, mouse_event_handler_.c_str(), "TimelineRenderer.wheel");
         }
     }
 
@@ -485,11 +491,11 @@ void TimelineRenderer::keyPressEvent(QKeyEvent* event)
             {
                 JveLuaStateGuard guard(lua_state_);
                 if (lua_pcall(lua_state_, 1, 0, 0) != LUA_OK) {
-                    lua_error(lua_state_);
+                    jve_handle_lua_callback_error(lua_state_, "TimelineRenderer.key_press");
                 }
             }
         } else {
-            lua_pop(lua_state_, 1);
+            jve_discard_non_function_handler(lua_state_, key_event_handler_.c_str(), "TimelineRenderer.key_press");
         }
     }
     QWidget::keyPressEvent(event);
@@ -513,11 +519,11 @@ void TimelineRenderer::resizeEvent(QResizeEvent* event)
             {
                 JveLuaStateGuard guard(lua_state_);
                 if (lua_pcall(lua_state_, 1, 0, 0) != LUA_OK) {
-                    lua_error(lua_state_);
+                    jve_handle_lua_callback_error(lua_state_, "TimelineRenderer.resize");
                 }
             }
         } else {
-            lua_pop(lua_state_, 1);
+            jve_discard_non_function_handler(lua_state_, resize_event_handler_.c_str(), "TimelineRenderer.resize");
         }
     }
     QWidget::resizeEvent(event);
@@ -681,9 +687,11 @@ int lua_timeline_add_waveform(lua_State* L)
     }
     int peak_count = lua_tointeger(L, 7);
     const char* color = lua_tostring(L, 8);
+    // Arg 9 (optional): boolean — draw peaks right-to-left for reverse clips.
+    bool reversed = lua_toboolean(L, 9) != 0;
 
     if (timeline && peaks && peak_count > 0 && color) {
-        timeline->addWaveform(x, y, width, height, peaks, peak_count, QString(color));
+        timeline->addWaveform(x, y, width, height, peaks, peak_count, QString(color), reversed);
         lua_pushboolean(L, 1);
     } else {
         lua_pushboolean(L, 0);

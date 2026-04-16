@@ -53,12 +53,10 @@ int lua_connect_shortcut(lua_State* L) {
         lua_getglobal(L, handler_str.c_str());
         if (lua_isfunction(L, -1)) {
             if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                const char* err = lua_tostring(L, -1);
-                fprintf(stderr, "QShortcut handler '%s' error: %s\n", handler_str.c_str(), err ? err : "unknown");
-                lua_pop(L, 1);
+                jve_handle_lua_callback_error(L, "shortcut.activated");
             }
         } else {
-            lua_pop(L, 1);
+            jve_discard_non_function_handler(L, handler_str.c_str(), "shortcut.activated");
         }
     });
 

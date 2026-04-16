@@ -110,7 +110,8 @@ protected:
 
                 JveLuaStateGuard guard(lua_state);
                 if (lua_pcall(lua_state, 1, 1, 0) != LUA_OK) {
-                    lua_error(lua_state);
+                    jve_handle_lua_callback_error(lua_state, "view.drop_handler");
+                    event->ignore();
                 } else {
                     bool handled = lua_toboolean(lua_state, -1);
                     lua_pop(lua_state, 1);
@@ -122,7 +123,8 @@ protected:
                     }
                 }
             } else {
-                lua_pop(lua_state, 1);
+                jve_discard_non_function_handler(lua_state, drop_handler.c_str(),
+                    "view.drop_handler");
                 event->ignore();
             }
         } else {
@@ -147,11 +149,12 @@ protected:
                             return;
                         }
                     } else {
-                        lua_error(lua_state);
+                        jve_handle_lua_callback_error(lua_state, "view.tree_key_press");
                     }
                 }
             } else {
-                lua_pop(lua_state, 1);
+                jve_discard_non_function_handler(lua_state, key_handler.c_str(),
+                    "view.tree_key_press");
             }
         }
         QTreeWidget::keyPressEvent(event);
@@ -436,7 +439,8 @@ int lua_set_tree_selection_changed_handler(lua_State* L) {
         QObject::connect(tree, &QTreeWidget::itemSelectionChanged, [L, handler, tree]() {
             lua_getglobal(L, handler.c_str());
             if (!lua_isfunction(L, -1)) {
-                lua_pop(L, 1);
+                jve_discard_non_function_handler(L, handler.c_str(),
+                    "view.tree_selection_changed");
                 return;
             }
             
@@ -458,14 +462,12 @@ int lua_set_tree_selection_changed_handler(lua_State* L) {
                 lua_setfield(L, -2, "items");
 
                 if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                    JVE_LOG_WARN(Ui, "Error in selection handler: %s", lua_tostring(L, -1));
-                    lua_pop(L, 1);
+                    jve_handle_lua_callback_error(L, "view.tree_selection_changed");
                 }
             } else {
                 lua_pushnil(L);
                 if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                    JVE_LOG_WARN(Ui, "Error in selection handler: %s", lua_tostring(L, -1));
-                    lua_pop(L, 1);
+                    jve_handle_lua_callback_error(L, "view.tree_selection_changed");
                 }
             }
         });
@@ -484,7 +486,10 @@ int lua_set_tree_item_changed_handler(lua_State* L) {
         std::string handler(handler_name);
         QObject::connect(tree, &QTreeWidget::itemChanged, [L, handler](QTreeWidgetItem* item, int column) {
             lua_getglobal(L, handler.c_str());
-            if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return; }
+            if (!lua_isfunction(L, -1)) {
+                jve_discard_non_function_handler(L, handler.c_str(), "view.tree_item_changed");
+                return;
+            }
             
             lua_newtable(L);
             lua_pushstring(L, "item_id");
@@ -498,8 +503,7 @@ int lua_set_tree_item_changed_handler(lua_State* L) {
             lua_settable(L, -3);
             
             if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                JVE_LOG_WARN(Ui, "Error in item changed handler: %s", lua_tostring(L, -1));
-                lua_pop(L, 1);
+                jve_handle_lua_callback_error(L, "view.tree_item_changed");
             }
         });
         lua_pushboolean(L, 1);
@@ -519,7 +523,10 @@ int lua_set_tree_close_editor_handler(lua_State* L) {
     QObject::connect(tree->itemDelegate(), &QAbstractItemDelegate::closeEditor,
         [L, handler_str, tree](QWidget* editor, QAbstractItemDelegate::EndEditHint hint) {
             lua_getglobal(L, handler_str.c_str());
-            if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return; }
+            if (!lua_isfunction(L, -1)) {
+                jve_discard_non_function_handler(L, handler_str.c_str(), "view.close_editor");
+                return;
+            }
 
             lua_newtable(L);
             // Get the item being edited
@@ -547,9 +554,7 @@ int lua_set_tree_close_editor_handler(lua_State* L) {
             lua_settable(L, -3);
 
             if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                const char* err = lua_tostring(L, -1);
-                fprintf(stderr, "closeEditor handler error: %s\n", err ? err : "unknown");
-                lua_pop(L, 1);
+                jve_handle_lua_callback_error(L, "view.close_editor");
             }
         });
     return 0;
@@ -645,13 +650,15 @@ int lua_set_tree_item_double_click_handler(lua_State* L) {
         std::string handler(handler_name);
         QObject::connect(tree, &QTreeWidget::itemDoubleClicked, [L, handler](QTreeWidgetItem* item, int col) {
             lua_getglobal(L, handler.c_str());
-            if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return; }
+            if (!lua_isfunction(L, -1)) {
+                jve_discard_non_function_handler(L, handler.c_str(), "view.tree_double_clicked");
+                return;
+            }
             
             lua_pushinteger(L, makeTreeItemId(item));
             lua_pushinteger(L, col);
             if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
-                JVE_LOG_WARN(Ui, "Error in double click handler: %s", lua_tostring(L, -1));
-                lua_pop(L, 1);
+                jve_handle_lua_callback_error(L, "view.tree_double_clicked");
             }
         });
         lua_pushboolean(L, 1);
@@ -790,14 +797,17 @@ int lua_set_tree_header_click_handler(lua_State* L) {
         header->setSectionsClickable(true);
         QObject::connect(header, &QHeaderView::sectionClicked, [L, handler](int logicalIndex) {
             lua_getglobal(L, handler.c_str());
-            if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return; }
+            if (!lua_isfunction(L, -1)) {
+                jve_discard_non_function_handler(L, handler.c_str(), "view.tree_header_clicked");
+                return;
+            }
 
             lua_pushinteger(L, logicalIndex);
             bool cmd_held = (QApplication::keyboardModifiers() & Qt::ControlModifier) != 0;
             lua_pushboolean(L, cmd_held);
             JveLuaStateGuard guard(L);
             if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
-                lua_error(L);
+                jve_handle_lua_callback_error(L, "view.tree_header_clicked");
             }
         });
         lua_pushboolean(L, 1);
@@ -815,7 +825,10 @@ int lua_set_tree_expand_collapse_handler(lua_State* L) {
         std::string handler(handler_name);
         QObject::connect(tree, &QTreeWidget::itemExpanded, [L, handler](QTreeWidgetItem* item) {
             lua_getglobal(L, handler.c_str());
-            if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return; }
+            if (!lua_isfunction(L, -1)) {
+                jve_discard_non_function_handler(L, handler.c_str(), "view.tree_item_expanded");
+                return;
+            }
 
             lua_newtable(L);
             lua_pushinteger(L, makeTreeItemId(item));
@@ -825,12 +838,15 @@ int lua_set_tree_expand_collapse_handler(lua_State* L) {
 
             JveLuaStateGuard guard(L);
             if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                lua_error(L);
+                jve_handle_lua_callback_error(L, "view.tree_item_expanded");
             }
         });
         QObject::connect(tree, &QTreeWidget::itemCollapsed, [L, handler](QTreeWidgetItem* item) {
             lua_getglobal(L, handler.c_str());
-            if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return; }
+            if (!lua_isfunction(L, -1)) {
+                jve_discard_non_function_handler(L, handler.c_str(), "view.tree_item_collapsed");
+                return;
+            }
 
             lua_newtable(L);
             lua_pushinteger(L, makeTreeItemId(item));
@@ -840,7 +856,7 @@ int lua_set_tree_expand_collapse_handler(lua_State* L) {
 
             JveLuaStateGuard guard(L);
             if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                lua_error(L);
+                jve_handle_lua_callback_error(L, "view.tree_item_collapsed");
             }
         });
         lua_pushboolean(L, 1);

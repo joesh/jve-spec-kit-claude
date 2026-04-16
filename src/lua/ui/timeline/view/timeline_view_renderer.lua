@@ -737,39 +737,51 @@ function M.render(view)
             local LABEL_RESERVE = 16
             local has_waveform = false
 
-            -- Waveform display (audio clips only, when enabled and peaks available)
+            -- Waveform display (audio clips only, when enabled and peaks available).
+            -- Required-data invariants (source_in/source_out presence, non-zero range)
+            -- are enforced by waveform_utils.visible_source_range via asserts —
+            -- surfacing a bug is preferable to a silent skip.
             if is_audio and not clip.offline
                     and track_state.get_waveform_enabled(render_track_id)
                     and clip.media_id and draw_width > 1 and clip_width > 0 then
                 local vis_src_in, vis_src_out = waveform_utils.visible_source_range(
                     clip.source_in, clip.source_out, x, visible_x, clip_width, draw_width)
 
-                if vis_src_out > vis_src_in then
-                    local peaks, count, actual_start, actual_end = peak_cache.get_visible_peaks(
-                        clip.media_id, vis_src_in, vis_src_out, draw_width)
-                    if peaks and count > 0 then
-                        -- TC alignment check: actual range from peak data must match requested range
-                        -- within one peak bin. Threshold scales with mipmap level — at higher
-                        -- levels (1024/2048 spp), legitimate bin-alignment drift is larger.
-                        local samples_per_pixel = (vis_src_out - vis_src_in) / draw_width
-                        local mip_level = peak_constants.select_level(samples_per_pixel)
-                        local max_drift = peak_constants.SAMPLES_PER_LEVEL[mip_level]
-                        local start_drift = math.abs(actual_start - vis_src_in)
-                        local end_drift = math.abs(actual_end - vis_src_out)
-                        if start_drift > max_drift or end_drift > max_drift then
-                            if not waveform_drift_warned[clip.media_id] then
-                                waveform_drift_warned[clip.media_id] = true
-                                log.warn("waveform TC mismatch: requested=[%d,%d] actual=[%d,%d] drift=[%d,%d] threshold=%d clip=%s",
-                                    vis_src_in, vis_src_out, actual_start, actual_end,
-                                    start_drift, end_drift, max_drift, clip.media_id)
-                            end
-                        end
+                -- Reverse clips: vis_src_in > vis_src_out. Peak cache always expects
+                -- forward-ordered [start, end] sample range; normalize for the query
+                -- and set reversed flag so the renderer draws peaks right-to-left.
+                -- waveform_utils asserts non-zero source range, so vis_src_in ~=
+                -- vis_src_out here and peak_end > peak_start is guaranteed.
+                local reversed = vis_src_in > vis_src_out
+                local peak_start = reversed and vis_src_out or vis_src_in
+                local peak_end = reversed and vis_src_in or vis_src_out
 
-                        local wave_col = waveform_color.derive(body_color)
-                        local wave_height = math.max(4, clip_height - LABEL_RESERVE)
-                        timeline.add_waveform(view.widget, visible_x, y, draw_width, wave_height, peaks, count, wave_col)
-                        has_waveform = true
+                local peaks, count, actual_start, actual_end = peak_cache.get_visible_peaks(
+                    clip.media_id, peak_start, peak_end, draw_width)
+                -- peaks == nil is legitimate: peak generation is async, peaks may
+                -- not yet be available for a freshly-loaded media.
+                if peaks and count > 0 then
+                    -- TC alignment check: actual range from peak data must match requested range
+                    -- within one peak bin. Threshold scales with mipmap level — at higher
+                    -- levels (1024/2048 spp), legitimate bin-alignment drift is larger.
+                    local samples_per_pixel = (peak_end - peak_start) / draw_width
+                    local mip_level = peak_constants.select_level(samples_per_pixel)
+                    local max_drift = peak_constants.SAMPLES_PER_LEVEL[mip_level]
+                    local start_drift = math.abs(actual_start - peak_start)
+                    local end_drift = math.abs(actual_end - peak_end)
+                    if start_drift > max_drift or end_drift > max_drift then
+                        if not waveform_drift_warned[clip.media_id] then
+                            waveform_drift_warned[clip.media_id] = true
+                            log.warn("waveform TC mismatch: requested=[%d,%d] actual=[%d,%d] drift=[%d,%d] threshold=%d clip=%s",
+                                peak_start, peak_end, actual_start, actual_end,
+                                start_drift, end_drift, max_drift, clip.media_id)
+                        end
                     end
+
+                    local wave_col = waveform_color.derive(body_color)
+                    local wave_height = math.max(4, clip_height - LABEL_RESERVE)
+                    timeline.add_waveform(view.widget, visible_x, y, draw_width, wave_height, peaks, count, wave_col, reversed)
+                    has_waveform = true
                 end
             end
 

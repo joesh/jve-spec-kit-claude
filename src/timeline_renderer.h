@@ -48,7 +48,8 @@ public:
     void addLine(int x1, int y1, int x2, int y2, const QString& color, int width = 1);
     void addTriangle(int x1, int y1, int x2, int y2, int x3, int y3, const QString& color);
     void addWaveform(int x, int y, int width, int height,
-                     const float* peaks, int peak_count, const QString& color);
+                     const float* peaks, int peak_count, const QString& color,
+                     bool reversed = false);
 
     // Test method to demonstrate command system
     void renderTestTimeline();
@@ -96,6 +97,7 @@ private:
         int line_width = 1;
         std::vector<float> peak_data; // For WAVEFORM: [min0, max0, min1, max1, ...]
         int peak_count = 0;           // Number of min/max pairs
+        bool reversed = false;        // For WAVEFORM: if true, draw peaks right-to-left (reverse clip)
     };
 
     // Execute all drawing commands

@@ -1340,10 +1340,10 @@ static int lua_emp_surface_on_ready(lua_State* L) {
         if (lua_isfunction(main_L, -1)) {
             JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 0, 0, 0) != 0) {
-                lua_error(main_L);
+                jve_handle_lua_callback_error(main_L, "emp.surface_on_ready");
             }
         } else {
-            lua_pop(main_L, 1);
+            jve_discard_non_function_handler(main_L, "<registry ref>", "emp.surface_on_ready");
         }
     });
 
@@ -1375,10 +1375,10 @@ static int lua_emp_surface_on_error(lua_State* L) {
             lua_pushstring(main_L, error.c_str());
             JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 1, 0, 0) != 0) {
-                lua_error(main_L);
+                jve_handle_lua_callback_error(main_L, "emp.surface_on_error");
             }
         } else {
-            lua_pop(main_L, 1);
+            jve_discard_non_function_handler(main_L, "<registry ref>", "emp.surface_on_error");
         }
     });
 
@@ -1627,10 +1627,10 @@ static int lua_playback_set_position_callback(lua_State* L) {
             lua_pushboolean(main_L, stopped ? 1 : 0);
             JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 2, 0, 0) != 0) {
-                lua_error(main_L);
+                jve_handle_lua_callback_error(main_L, "emp.position_callback");
             }
         } else {
-            lua_pop(main_L, 1);
+            jve_discard_non_function_handler(main_L, "<registry ref>", "emp.position_callback");
         }
     });
 
@@ -1661,10 +1661,10 @@ static int lua_playback_set_clip_provider(lua_State* L) {
             lua_pushstring(main_L, type == emp::TrackType::Video ? "video" : "audio");
             JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 3, 0, 0) != 0) {
-                lua_error(main_L);
+                jve_handle_lua_callback_error(main_L, "emp.clip_provider");
             }
         } else {
-            lua_pop(main_L, 1);
+            jve_discard_non_function_handler(main_L, "<registry ref>", "emp.clip_provider");
         }
     });
 
@@ -1758,10 +1758,10 @@ static int lua_playback_set_clip_transition_callback(lua_State* L) {
             lua_pushinteger(main_L, static_cast<lua_Integer>(frame));
             JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 7, 0, 0) != 0) {
-                lua_error(main_L);
+                jve_handle_lua_callback_error(main_L, "emp.clip_transition");
             }
         } else {
-            lua_pop(main_L, 1);
+            jve_discard_non_function_handler(main_L, "<registry ref>", "emp.clip_transition");
         }
     });
 
@@ -1872,12 +1872,10 @@ static int lua_emp_codec_probe_start(lua_State* L) {
             lua_pushboolean(L, is_final);
 
             if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
-                if (is_final) {
-                    luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
-                }
-                handle_lua_callback_error(L);
+                jve_handle_lua_callback_error(L, "emp.codec_probe_batch");
             }
-
+            // Drain does not unwind — release the ref on both success and
+            // error paths when this is the final batch.
             if (is_final) {
                 luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
             }

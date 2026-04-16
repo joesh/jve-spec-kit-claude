@@ -95,7 +95,7 @@ int lua_connect_menu_action(lua_State* L) {
         lua_rawgeti(L, LUA_REGISTRYINDEX, callback_ref);
         JveLuaStateGuard guard(L);
         if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-            lua_error(L);
+            jve_handle_lua_callback_error(L, "menu.action_triggered");
         }
     });
     return 0;

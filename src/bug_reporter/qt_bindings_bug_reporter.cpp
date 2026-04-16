@@ -1,5 +1,6 @@
 #include "qt_bindings_bug_reporter.h"
 #include "../jve_log.h"
+#include "../jve_lua_callback.h"
 #include "gesture_logger.h"
 #include <QWidget>
 #include <QPixmap>
@@ -84,9 +85,7 @@ static int lua_install_gesture_logger(lua_State* L) {
 
         // Call Lua callback with gesture table
         if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-            const char* error = lua_tostring(L, -1);
-            JVE_LOG_WARN(Ui, "Gesture callback error: %s", error);
-            lua_pop(L, 1);
+            jve_handle_lua_callback_error(L, "bug_reporter.gesture");
         }
     });
 
@@ -195,13 +194,18 @@ static int lua_create_timer(lua_State* L) {
     timer->setInterval(interval_ms);
     timer->setSingleShot(!repeat_mode);
 
-    // Connect to Lua callback
-    QObject::connect(timer, &QTimer::timeout, [L, callbackRef]() {
+    // Connect to Lua callback. Single-shot timers must release the registry
+    // ref after firing; repeating timers hold the ref for their lifetime
+    // (released when the Lua GC finalizes the QTimer userdata).
+    bool single_shot = !repeat_mode;
+    QObject::connect(timer, &QTimer::timeout, [L, callbackRef, single_shot, timer]() {
         lua_rawgeti(L, LUA_REGISTRYINDEX, callbackRef);
         if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-            const char* error = lua_tostring(L, -1);
-            JVE_LOG_WARN(Ui, "Timer callback error: %s", error);
-            lua_pop(L, 1);
+            jve_handle_lua_callback_error(L, "bug_reporter.timer");
+        }
+        if (single_shot) {
+            luaL_unref(L, LUA_REGISTRYINDEX, callbackRef);
+            timer->deleteLater();
         }
     });
 
@@ -427,7 +431,7 @@ static int lua_sleep_ms(lua_State* L) {
  * lua_process_events()
  * Process pending Qt events (useful during replay).
  */
-static int lua_process_events(lua_State* L) {
+static int lua_process_events(lua_State* /*L*/) {
     QApplication::processEvents();
     return 0;
 }

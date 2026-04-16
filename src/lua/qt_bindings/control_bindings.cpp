@@ -254,13 +254,11 @@ int lua_set_combobox_change_handler(lua_State* L) {
             lua_getglobal(L, handler_str.c_str());
             if (lua_isfunction(L, -1)) {
                 if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                    const char* err = lua_tostring(L, -1);
-                    fprintf(stderr, "combobox change handler '%s' error: %s\n",
-                        handler_str.c_str(), err ? err : "unknown");
-                    lua_pop(L, 1);
+                    jve_handle_lua_callback_error(L, "combobox.current_index_changed");
                 }
             } else {
-                lua_pop(L, 1);
+                jve_discard_non_function_handler(L, handler_str.c_str(),
+                    "combobox.current_index_changed");
             }
         });
     return 0;
@@ -333,11 +331,10 @@ int lua_button_box_set_handler(lua_State* L) {
             lua_getglobal(gL, handler_name);
             if (lua_isfunction(gL, -1)) {
                 if (lua_pcall(gL, 0, 0, 0) != 0) {
-                    fprintf(stderr, "BUTTON_BOX accepted handler error: %s\n", lua_tostring(gL, -1));
-                    lua_pop(gL, 1);
+                    jve_handle_lua_callback_error(gL, "button_box.accepted");
                 }
             } else {
-                lua_pop(gL, 1);
+                jve_discard_non_function_handler(gL, handler_name, "button_box.accepted");
             }
         });
     } else if (strcmp(signal, "rejected") == 0) {
@@ -345,11 +342,10 @@ int lua_button_box_set_handler(lua_State* L) {
             lua_getglobal(gL, handler_name);
             if (lua_isfunction(gL, -1)) {
                 if (lua_pcall(gL, 0, 0, 0) != 0) {
-                    fprintf(stderr, "BUTTON_BOX rejected handler error: %s\n", lua_tostring(gL, -1));
-                    lua_pop(gL, 1);
+                    jve_handle_lua_callback_error(gL, "button_box.rejected");
                 }
             } else {
-                lua_pop(gL, 1);
+                jve_discard_non_function_handler(gL, handler_name, "button_box.rejected");
             }
         });
     } else {
