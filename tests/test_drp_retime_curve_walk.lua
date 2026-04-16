@@ -75,6 +75,7 @@ local seq = elem("Sequence", "", {
                 elem("In", "447|00f05d74d145e73f"),
                 elem("MediaFilePath", "/Volumes/AnamBack4 Joe/Footage/Day 12/A035/A035_11200114_C056.mov"),
                 elem("MediaTimemapBA", mtba_retimed),
+                elem("MediaFrameRate", "0000000000003940"),  -- 25fps LE double
             }),
             -- Clip 2: same content, retiming removed
             elem("Sm2TiVideoClip", "", {
@@ -85,6 +86,7 @@ local seq = elem("Sequence", "", {
                 elem("In", "394"),
                 elem("MediaFilePath", "/Volumes/AnamBack4 Joe/Footage/Day 12/A035/A035_11200114_C056.mov"),
                 elem("MediaTimemapBA", mtba_no_retime),
+                elem("MediaFrameRate", "0000000000003940"),  -- 25fps LE double
             })
         ),
     }),

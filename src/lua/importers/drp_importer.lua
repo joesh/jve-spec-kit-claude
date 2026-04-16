@@ -20,36 +20,9 @@ local M = {}
 
 local log = require("core.logger").for_area("media")
 local importer_core = require("importers.importer_core")
-
---- Run a shell command, capture output to a temp file, read that file.
--- Avoids io.popen pipes entirely — LuaJIT's pipe reads are susceptible to
--- EINTR from Qt signals/timers, and there's no portable way to mask signals
--- in Lua. Writing to a temp file and reading it back sidesteps the issue.
--- @param cmd string: shell command to execute
--- @param context string: caller name for assert message
--- @return string: command output (asserts on failure)
-local function shell_capture(cmd, context)
-    local tmp = os.tmpname()
-    local ok, err = pcall(function()
-        local exit_code = os.execute(cmd .. " > " .. tmp .. " 2>/dev/null")
-        assert(exit_code == 0,
-            string.format("%s: command failed (exit %s): %s", context, tostring(exit_code), cmd))
-    end)
-    if not ok then
-        os.remove(tmp)
-        error(err, 2)
-    end
-    local handle, open_err = io.open(tmp, "r")
-    if not handle then
-        os.remove(tmp)
-        error(string.format("%s: failed to open temp file %s: %s", context, tmp, tostring(open_err)), 2)
-    end
-    local data, read_err = handle:read("*all")
-    handle:close()
-    os.remove(tmp)
-    assert(data, string.format("%s: failed to read temp file %s: %s", context, tmp, tostring(read_err)))
-    return data
-end
+local drp_binary = require("importers.drp_binary")
+local fs_utils = require("core.fs_utils")
+local shell_capture = fs_utils.shell_capture
 
 --- Read all data from a local file handle (io.open), asserting on failure.
 -- @param handle file: open file handle from io.open
@@ -198,818 +171,20 @@ local function get_text(elem)
     return elem.text:match("^%s*(.-)%s*$")  -- Trim whitespace
 end
 
---- Decode a big-endian IEEE 754 double from hex string at given offset
--- @param hex_str string: Hex string containing doubles
--- @param offset number: Character offset (0 = first double, 16 = second double)
--- @return number|nil: Decoded double value, or nil if invalid
-local function decode_hex_double_at(hex_str, offset)
-    if not hex_str or #hex_str < offset + 16 then return nil end
+-- Local aliases for frequently-used drp_binary functions
+local decode_hex_double_at = drp_binary.decode_hex_double_at
+local decode_hex_double = drp_binary.decode_hex_double
+local decode_hex_resolution = drp_binary.decode_hex_resolution
+local extract_ui_state_double = drp_binary.extract_ui_state_double
+local decode_bt_video_time = drp_binary.decode_bt_video_time
+local decode_bt_audio_duration = drp_binary.decode_bt_audio_duration
+local decode_effect_filters_volume_db = drp_binary.decode_effect_filters_volume_db
+local decode_media_timemap = drp_binary.decode_media_timemap
+local decode_bt_clip_path = drp_binary.decode_bt_clip_path
+local eval_curve = drp_binary.eval_curve
 
-    local ffi = require("ffi")
 
-    -- Parse 16 hex chars (8 bytes) into byte array starting at offset
-    -- DRP stores doubles in little-endian byte order (x86 native), no reversal needed
-    local bytes = ffi.new("uint8_t[8]")
-    for i = 0, 7 do
-        local hex_byte = hex_str:sub(offset + i * 2 + 1, offset + i * 2 + 2)
-        local byte_val = tonumber(hex_byte, 16)
-        if not byte_val then return nil end
-        bytes[i] = byte_val
-    end
 
-    -- Cast directly to double (already little-endian)
-    local double_ptr = ffi.cast("double*", bytes)
-    return double_ptr[0]
-end
-
---- Decode a big-endian IEEE 754 double from 16-char hex string
--- DRP stores fps/resolution as 128-bit hex: two doubles, we take the first
--- Example: "00000000000038400000000000000000" = 24.0 (fps)
--- @param hex_str string: 32-char hex string (first 16 chars used)
--- @return number|nil: Decoded double value, or nil if invalid
-local function decode_hex_double(hex_str)
-    return decode_hex_double_at(hex_str, 0)
-end
-
---- Decode a big-endian IEEE 754 double from hex at a BYTE offset.
--- UIElementsState uses BE encoding (unlike FieldsBlob which is LE).
-local function decode_hex_double_be_at(hex_str, byte_offset)
-    if not hex_str or #hex_str < byte_offset * 2 + 16 then return nil end
-    local ffi = require("ffi")
-    local bytes = ffi.new("uint8_t[8]")
-    for i = 0, 7 do
-        local hex_byte = hex_str:sub(byte_offset * 2 + i * 2 + 1, byte_offset * 2 + i * 2 + 2)
-        local byte_val = tonumber(hex_byte, 16)
-        if not byte_val then return nil end
-        bytes[7 - i] = byte_val  -- reverse for BE→LE
-    end
-    return ffi.cast("double*", bytes)[0]
-end
-
---- Extract a named double from a UIElementsState hex blob.
--- UIElementsState TLV format: 4B version, 4B count, then entries:
---   4B name_byte_count, N bytes UTF-16BE name, 4B type_tag, 1B pad, value
--- @param hex_str string: Full UIElementsState hex
--- @param key_name string: ASCII key name (e.g. "UI_SEQUENCE_SCALE")
--- @return number|nil: The double value, or nil if not found
-local function extract_ui_state_double(hex_str, key_name)
-    if not hex_str or hex_str == "" then return nil end
-    -- Build UTF-16 BE search pattern for the key name
-    local pattern_parts = {}
-    for i = 1, #key_name do
-        pattern_parts[#pattern_parts + 1] = string.format("00%02x", key_name:byte(i))
-    end
-    local pattern = table.concat(pattern_parts)
-    local pos = hex_str:find(pattern, 1, true)
-    if not pos then return nil end
-    -- All offsets in hex char positions (1-based Lua string indices)
-    -- After name pattern: type tag (8 hex) + pad (2 hex) + double (16 hex)
-    local type_hex_start = pos + #pattern
-    local type_hex = hex_str:sub(type_hex_start, type_hex_start + 7)
-    if type_hex ~= "00000026" then return nil end
-    -- Double value starts after type (8 hex) + pad (2 hex) = 10 hex chars
-    local double_hex_start = type_hex_start + 10
-    -- Convert to 0-based byte offset for decode function
-    local double_byte_off = (double_hex_start - 1) / 2
-    return decode_hex_double_be_at(hex_str, double_byte_off)
-end
-
---- Decode resolution from 32-char hex string (two doubles: width, height)
--- Example: "00000000000087400000000000e08640" = 1920×1080
--- @param hex_str string: 32-char hex string
--- @return number|nil, number|nil: width, height (or nil if invalid)
-local function decode_hex_resolution(hex_str)
-    if not hex_str or #hex_str < 32 then return nil, nil end
-    local width = decode_hex_double_at(hex_str, 0)
-    local height = decode_hex_double_at(hex_str, 16)
-    return width, height
-end
-
---- Decode a protobuf varint from raw byte string
--- @param bytes string: raw byte string
--- @param pos number: 1-indexed start position
--- @return number|nil: decoded value
--- @return number: next position after varint
-local function decode_protobuf_varint(bytes, pos)
-    local value = 0
-    local mult = 1
-    while pos <= #bytes do
-        local b = bytes:byte(pos)
-        value = value + (b % 128) * mult
-        pos = pos + 1
-        if b < 128 then
-            return value, pos
-        end
-        mult = mult * 128
-    end
-    return nil, pos
-end
-
---- Decode BtVideoInfo/BtAudioInfo Clip binary blob to extract original source path.
--- DaVinci Resolve encodes the original media file path in a protobuf-like binary
--- structure inside <Clip> elements under BtVideoInfo and BtAudioInfo.
---
--- Binary layout:
---   [4B version=2] [4B payload_len] [2B marker 0x81,0x28] [8B entry_id]
---   [2B video_prefix (video only)] [protobuf fields...]
---
--- Detection: byte at offset 18 (0-indexed) == 0x0a means audio (no prefix);
---            otherwise video (2-byte prefix before protobuf).
---
--- Protobuf field 1 (tag 0x0a) = directory path
--- Protobuf field 2 (tag 0x12) = filename
--- Full path = field1 .. "/" .. field2
---
--- @param hex_str string: hex-encoded binary blob from <Clip> element
--- @return string|nil: decoded file path, or nil if unparseable
-local function decode_bt_clip_path(hex_str)
-    if not hex_str or #hex_str < 40 then return nil end
-
-    -- Hex decode to raw bytes
-    local parts = {}
-    local clean = hex_str:gsub("%s+", "")
-    if #clean % 2 ~= 0 then return nil end  -- odd-length hex = corrupt
-    for i = 1, #clean, 2 do
-        local h = clean:sub(i, i + 1)
-        local n = tonumber(h, 16)
-        if not n then return nil end
-        parts[#parts + 1] = string.char(n)
-    end
-    local bytes = table.concat(parts)
-
-    if #bytes < 21 then return nil end
-
-    -- Determine protobuf start (1-indexed)
-    -- Audio: byte at 0-indexed offset 18 (pos 19) is 0x0a, protobuf starts there
-    -- Video: 2-byte prefix at pos 19-20, protobuf starts at pos 21
-    local proto_start
-    if bytes:byte(19) == 0x0a then
-        proto_start = 19  -- audio: field 1 tag is the first byte
-    else
-        proto_start = 21  -- video: skip 2-byte prefix
-    end
-
-    if proto_start > #bytes then return nil end
-
-    -- Field 1: directory (tag 0x0a = field 1, wire type LEN)
-    if bytes:byte(proto_start) ~= 0x0a then return nil end
-    local dir_len, dir_data_pos = decode_protobuf_varint(bytes, proto_start + 1)
-    if not dir_len or dir_data_pos + dir_len - 1 > #bytes then return nil end
-    local directory = bytes:sub(dir_data_pos, dir_data_pos + dir_len - 1)
-
-    -- Field 2: filename (tag 0x12 = field 2, wire type LEN)
-    local f2_pos = dir_data_pos + dir_len
-    if f2_pos > #bytes or bytes:byte(f2_pos) ~= 0x12 then return nil end
-    local fname_len, fname_data_pos = decode_protobuf_varint(bytes, f2_pos + 1)
-    if not fname_len or fname_data_pos + fname_len - 1 > #bytes then return nil end
-    local filename = bytes:sub(fname_data_pos, fname_data_pos + fname_len - 1)
-
-    -- Both components must be non-empty to form a valid path
-    if #directory == 0 or #filename == 0 then return nil, nil end
-
-    -- Reject garbled directories (protobuf field data leak). Valid paths never contain control chars.
-    if directory:find("[%z\1-\31]") then
-        log.warn("decode_bt_clip_path: garbled directory in blob (raw=%s), skipping",
-            directory:sub(1, 30))
-        return nil, nil
-    end
-
-    -- Filename may contain control chars (protobuf date fields leaking into
-    -- the filename field — common in audio clip blobs). When this happens,
-    -- the full path is unreliable. Return nil for path but provide the
-    -- directory so the caller can construct the path using the XML <Name>.
-    if filename:find("[%z\1-\31]") then
-        log.detail("decode_bt_clip_path: garbled filename in blob (dir=%s, raw=%s), returning dir only",
-            directory, filename:sub(1, 30))
-        return nil, directory
-    end
-
-    return directory .. "/" .. filename, directory
-end
-
---- Decode hex string to raw byte string.
--- @param hex_str string: hex-encoded data (whitespace stripped)
--- @return string|nil: raw bytes, or nil if invalid
-local function hex_to_bytes(hex_str)
-    if not hex_str then return nil end
-    local clean = hex_str:gsub("%s+", "")
-    if #clean < 2 or #clean % 2 ~= 0 then return nil end
-    local parts = {}
-    for i = 1, #clean, 2 do
-        local n = tonumber(clean:sub(i, i + 1), 16)
-        if not n then return nil end
-        parts[#parts + 1] = string.char(n)
-    end
-    return table.concat(parts)
-end
-
---- Read a big-endian uint32 from a raw byte string at 1-indexed position.
-local function read_be32(bytes, pos)
-    if pos + 3 > #bytes then return nil end
-    local b1, b2, b3, b4 = bytes:byte(pos, pos + 3)
-    return b1 * 16777216 + b2 * 65536 + b3 * 256 + b4
-end
-
---- Read a big-endian uint64 from a raw byte string at 1-indexed position.
-local function read_be64(bytes, pos)
-    if pos + 7 > #bytes then return nil end
-    local hi = read_be32(bytes, pos)
-    local lo = read_be32(bytes, pos + 4)
-    if not hi or not lo then return nil end
-    return hi * 4294967296 + lo  -- hi * 2^32 + lo
-end
-
---- Decode TLV fields from a DRP binary blob.
--- Each field: [BE32 name_byte_len] [UTF-16BE name] [BE16 sep=0] [BE16 type] [value...]
---
--- Type encodings:
---   0x0002: 4-byte aux + 1-byte val → aux*256 + val (small/medium int)
---   0x0003: 4-byte aux + 1-byte val → aux*256 + val (same encoding)
---   0x0004: 8-byte aux + 1-byte val → aux*256 + val (large int, e.g. audio samples)
---   0x0006: 1-byte pad + 8-byte BE double
---   0x000a: 4-byte aux + 1-byte len → len bytes UTF-16BE string
---   0x000c: 4-byte aux + 1-byte val → aux*256+val bytes payload; LE double from first 8
---
--- @param bytes string: raw bytes of the blob
--- @param header_size number: bytes to skip before first field
--- @param field_count number: number of fields to decode
--- @return table|nil: {field_name = value, ...} or nil on decode error
--- @return table|nil: {field_name = raw_bytes, ...} for 0x000c blob payloads
-local function decode_tlv_fields(bytes, header_size, field_count)
-    if not bytes or #bytes < header_size + 8 then return nil end
-    if field_count <= 0 or field_count > 20 then return nil end
-
-    local ffi = require("ffi")
-    local fields = {}
-    local raw_payloads = {}
-    local pos = header_size + 1  -- 1-indexed
-
-    for _ = 1, field_count do
-        -- Field name: [BE32 name_byte_len] [UTF-16BE name bytes]
-        local name_len = read_be32(bytes, pos)
-        if not name_len then return nil end
-        pos = pos + 4
-
-        if pos + name_len - 1 > #bytes then return nil end
-        -- Decode UTF-16BE name to ASCII (field names are all ASCII)
-        local name_chars = {}
-        for j = 0, name_len - 1, 2 do
-            local lo = bytes:byte(pos + j + 1)
-            if lo then name_chars[#name_chars + 1] = string.char(lo) end
-        end
-        local field_name = table.concat(name_chars)
-        pos = pos + name_len
-
-        -- Separator (BE16, always 0) + type (BE16)
-        if pos + 3 > #bytes then return nil end
-        pos = pos + 2  -- skip separator
-        local b1, b2 = bytes:byte(pos, pos + 1)
-        local field_type = b1 * 256 + b2
-        pos = pos + 2
-
-        -- Value encoding depends on type
-        if field_type == 0x0002 or field_type == 0x0003 then
-            -- 4-byte aux + 1-byte val → aux*256 + val
-            local aux = read_be32(bytes, pos)
-            if not aux then return nil end
-            pos = pos + 4
-            if pos > #bytes then return nil end
-            local val = bytes:byte(pos)
-            pos = pos + 1
-            fields[field_name] = aux * 256 + val
-
-        elseif field_type == 0x0004 then
-            -- 8-byte aux + 1-byte val → aux*256 + val
-            local aux = read_be64(bytes, pos)
-            if not aux then return nil end
-            pos = pos + 8
-            if pos > #bytes then return nil end
-            local val = bytes:byte(pos)
-            pos = pos + 1
-            fields[field_name] = aux * 256 + val
-
-        elseif field_type == 0x0006 then
-            -- 1-byte pad + 8-byte BE double
-            if pos + 8 > #bytes then return nil end
-            pos = pos + 1  -- skip pad
-            -- Read 8 bytes, reverse for LE, cast to double
-            local be_bytes = ffi.new("uint8_t[8]")
-            for j = 0, 7 do
-                be_bytes[7 - j] = bytes:byte(pos + j)
-            end
-            fields[field_name] = ffi.cast("double*", be_bytes)[0]
-            pos = pos + 8
-
-        elseif field_type == 0x000a then
-            -- 4-byte aux + 1-byte string_len → string_len bytes UTF-16BE
-            if pos + 4 > #bytes then return nil end
-            pos = pos + 4  -- skip aux
-            if pos > #bytes then return nil end
-            local str_len = bytes:byte(pos)
-            pos = pos + 1
-            if pos + str_len - 1 > #bytes then return nil end
-            -- Decode UTF-16BE to ASCII
-            local chars = {}
-            for j = 0, str_len - 1, 2 do
-                local lo = bytes:byte(pos + j + 1)
-                if lo then chars[#chars + 1] = string.char(lo) end
-            end
-            fields[field_name] = table.concat(chars)
-            pos = pos + str_len
-
-        elseif field_type == 0x000c then
-            -- 4-byte aux + 1-byte val → payload_len = aux*256 + val (consistent
-            -- with types 0x0002/0x0003). Handles payloads > 255 bytes (e.g. KeyframesBA).
-            local aux = read_be32(bytes, pos)
-            if not aux then return nil end
-            pos = pos + 4
-            if pos > #bytes then return nil end
-            local val = bytes:byte(pos)
-            pos = pos + 1
-            local payload_len = aux * 256 + val
-            if payload_len < 8 or pos + payload_len - 1 > #bytes then return nil end
-            -- First 8 bytes of payload = LE double (native x86 order)
-            local le_bytes = ffi.new("uint8_t[8]")
-            for j = 0, 7 do
-                le_bytes[j] = bytes:byte(pos + j)
-            end
-            fields[field_name] = ffi.cast("double*", le_bytes)[0]
-            -- Store raw payload bytes for nested blob parsing (e.g. KeyframesBA)
-            raw_payloads[field_name] = bytes:sub(pos, pos + payload_len - 1)
-            pos = pos + payload_len
-
-        else
-            -- Unknown type — stop decoding but return what we have
-            log.warn("decode_tlv_fields: unknown type 0x%04x for field '%s'", field_type, field_name)
-            break
-        end
-    end
-
-    return fields, raw_payloads
-end
-
---- Decode BtVideoInfo/Time blob → {num_frames, frame_rate, unique_id}
--- Header: 8 bytes [BE32 version=1] [BE32 field_count]
--- Fields: UniqueId, [Timecode], StartFrame, NumFrames, FrameRate, DbType
--- @param hex_str string: hex-encoded Time blob
--- @return table|nil: {num_frames=int, frame_rate=number, unique_id=string} or nil
-local function decode_bt_video_time(hex_str)
-    local bytes = hex_to_bytes(hex_str)
-    if not bytes or #bytes < 16 then return nil end
-
-    local field_count = read_be32(bytes, 5)  -- offset 4 (0-indexed) = pos 5 (1-indexed)
-    if not field_count or field_count < 4 or field_count > 8 then return nil end
-
-    local fields = decode_tlv_fields(bytes, 8, field_count)
-    if not fields then return nil end
-
-    local num_frames = fields["NumFrames"]
-    if not num_frames or num_frames <= 0 then return nil end
-
-    return {
-        num_frames = num_frames,
-        frame_rate = fields["FrameRate"],
-        unique_id = fields["UniqueId"],
-    }
-end
-
---- Decode BtAudioInfo/TracksBA blob → {duration_samples, sample_rate}
--- Header: 31 bytes (version, track metadata, field_count at byte offset 27)
--- Fields: UniqueId, StartTime, SampleRate, NumChannels, IdxTrack, Duration, DbType, ...
--- @param hex_str string: hex-encoded TracksBA blob
--- @return table|nil: {duration_samples=int, sample_rate=int} or nil
-local function decode_bt_audio_duration(hex_str)
-    local bytes = hex_to_bytes(hex_str)
-    if not bytes or #bytes < 40 then return nil end
-
-    local field_count = read_be32(bytes, 28)  -- offset 27 (0-indexed) = pos 28 (1-indexed)
-    if not field_count or field_count < 5 or field_count > 15 then return nil end
-
-    local fields = decode_tlv_fields(bytes, 31, field_count)
-    if not fields then return nil end
-
-    local duration = fields["Duration"]
-    local sample_rate = fields["SampleRate"]
-    if not duration or not sample_rate then return nil end
-    if sample_rate <= 0 then return nil end
-    if duration <= 0 then return nil end
-
-    return {
-        duration_samples = duration,
-        sample_rate = sample_rate,
-    }
-end
-
---- Decode a LE IEEE 754 double from 16 hex chars without FFI.
--- Pure Lua implementation safe for high-frequency calls (125K+ clips in large DRPs).
--- decode_hex_double_at uses ffi.new/ffi.cast which corrupts LuaJIT state at scale.
--- @param hex16 string: 16 hex characters representing 8 LE bytes
--- @return number|nil: decoded double, or nil if invalid
-local function decode_le_double_pure(hex16)
-    if #hex16 ~= 16 then return nil end
-    -- Parse 8 bytes (LE order)
-    local b = {}
-    for i = 1, 8 do
-        local byte = tonumber(hex16:sub(i * 2 - 1, i * 2), 16)
-        if not byte then return nil end
-        b[i] = byte
-    end
-    -- IEEE 754 double: sign(1) exponent(11) mantissa(52), big-endian bit layout
-    -- LE bytes: b[1]=LSB .. b[8]=MSB
-    local sign = (b[8] >= 128) and -1 or 1
-    local exp = ((b[8] % 128) * 16) + math.floor(b[7] / 16)
-    -- Mantissa: 52 bits from b[7](low 4 bits) .. b[1]
-    local mantissa = (b[7] % 16) * 2^48
-                   + b[6] * 2^40 + b[5] * 2^32
-                   + b[4] * 2^24 + b[3] * 2^16
-                   + b[2] * 2^8  + b[1]
-    if exp == 0 and mantissa == 0 then return 0.0 end
-    if exp == 0x7FF then return nil end  -- Inf/NaN
-    if exp == 0 then
-        -- Subnormal
-        return sign * 2^(-1022) * (mantissa / 2^52)
-    end
-    return sign * 2^(exp - 1023) * (1 + mantissa / 2^52)
-end
-
---- Decode clip volume from EffectFiltersBA hex blob.
--- EffectFiltersBA contains per-clip audio effects (volume, EQ, reverb, etc.) in a
--- variable-length TLV binary. The volume double (LE IEEE 754, dB) always follows
--- the marker "0f085f1a0b0a0911" — a TLV field ID that precedes the volume value
--- in both short (40-byte, volume-only) and long (92+ byte, multi-effect) blobs.
--- @param hex_str string|nil: hex-encoded EffectFiltersBA content
--- @return number|nil: volume in dB (0.0 = unity, negative = quieter), nil if no volume found
-local function decode_effect_filters_volume_db(hex_str)
-    if not hex_str or hex_str == "" then return nil end
-    -- Find the volume marker in the hex string
-    local marker = "0f085f1a0b0a0911"
-    local marker_pos = hex_str:find(marker, 1, true)
-    if not marker_pos then return nil end
-    -- Volume double starts immediately after the 8-byte (16 hex char) marker
-    local vol_start = marker_pos + #marker
-    if vol_start + 15 > #hex_str then return nil end  -- need 16 hex chars for the double
-    local hex16 = hex_str:sub(vol_start, vol_start + 15)
-    local db_val = decode_le_double_pure(hex16)
-    if not db_val then return nil end
-    -- Sanity: Resolve volume range is -inf..+12dB fader.
-    -- Anything outside [-100, +24] is corrupt blob data, not volume.
-    if db_val < -100 or db_val > 24 then return nil end
-    return db_val
-end
-
---- Detect reverse playback from KeyframesBA raw payload.
--- KeyframesBA contains nested keyframe data where each keyframe has:
---   {interp, YOut, YIn, Y, XOut, XIn, X}
--- Y = source time (seconds), X = retimed time (seconds).
--- If last keyframe's Y < first keyframe's Y → reverse playback (negative slope).
---
--- The nested structure uses the same TLV encoding as the parent blob.
--- We extract Y values from the first and last keyframes.
---
--- @param kf_bytes string: raw bytes of KeyframesBA payload
--- @return boolean: true if reverse playback detected
-local function detect_reverse_from_keyframes(kf_bytes)
-    if not kf_bytes or #kf_bytes < 16 then return false end
-
-    -- KeyframesBA header: [BE32 version] [BE32 keyframe_count]
-    local version = read_be32(kf_bytes, 1)
-    if not version then return false end
-    local kf_count = read_be32(kf_bytes, 5)
-    if not kf_count or kf_count < 2 then return false end
-
-    -- Each keyframe is a nested TLV block with its own field_count header.
-    -- Parse first keyframe to get its Y value, then skip to last.
-    local ffi = require("ffi")
-    local pos = 9  -- after 8-byte header
-
-    local first_y, last_y
-
-    for kf_idx = 1, kf_count do
-        -- Each keyframe: [BE32 field_count] [TLV fields...]
-        local fc = read_be32(kf_bytes, pos)
-        if not fc or fc < 1 or fc > 10 then return false end
-        pos = pos + 4
-
-        -- Parse this keyframe's TLV fields to find Y
-        local kf_y = nil
-        for _ = 1, fc do
-            -- Field name: [BE32 name_byte_len] [UTF-16BE name]
-            local name_len = read_be32(kf_bytes, pos)
-            if not name_len then return false end
-            pos = pos + 4
-            if pos + name_len - 1 > #kf_bytes then return false end
-            -- Decode name
-            local name_chars = {}
-            for j = 0, name_len - 1, 2 do
-                local lo = kf_bytes:byte(pos + j + 1)
-                if lo then name_chars[#name_chars + 1] = string.char(lo) end
-            end
-            local field_name = table.concat(name_chars)
-            pos = pos + name_len
-
-            -- Separator (BE16) + type (BE16)
-            if pos + 3 > #kf_bytes then return false end
-            pos = pos + 2
-            local b1, b2 = kf_bytes:byte(pos, pos + 1)
-            local field_type = b1 * 256 + b2
-            pos = pos + 2
-
-            -- Read value and advance pos
-            if field_type == 0x0002 or field_type == 0x0003 then
-                pos = pos + 5  -- 4-byte aux + 1-byte val
-            elseif field_type == 0x0004 then
-                pos = pos + 9  -- 8-byte aux + 1-byte val
-            elseif field_type == 0x0006 then
-                -- 1-byte pad + 8-byte BE double
-                if pos + 8 > #kf_bytes then return false end
-                if field_name == "Y" then
-                    pos = pos + 1  -- skip pad
-                    local be_bytes = ffi.new("uint8_t[8]")
-                    for j = 0, 7 do
-                        be_bytes[7 - j] = kf_bytes:byte(pos + j)
-                    end
-                    kf_y = ffi.cast("double*", be_bytes)[0]
-                    pos = pos + 8
-                else
-                    pos = pos + 9  -- pad + 8 bytes
-                end
-            elseif field_type == 0x000a then
-                if pos + 4 > #kf_bytes then return false end
-                pos = pos + 4  -- skip aux
-                if pos > #kf_bytes then return false end
-                local str_len = kf_bytes:byte(pos)
-                pos = pos + 1 + str_len
-            elseif field_type == 0x000c then
-                local aux = read_be32(kf_bytes, pos)
-                if not aux then return false end
-                pos = pos + 4
-                if pos > #kf_bytes then return false end
-                local val = kf_bytes:byte(pos)
-                pos = pos + 1
-                local payload_len = aux * 256 + val
-                pos = pos + payload_len
-            else
-                return false  -- unknown type, bail
-            end
-
-            if pos > #kf_bytes + 1 then return false end
-        end
-
-        if kf_idx == 1 then
-            first_y = kf_y
-        end
-        if kf_idx == kf_count then
-            last_y = kf_y
-        end
-    end
-
-    if not first_y or not last_y then return false end
-    return last_y < first_y
-end
-
---- Parse one inner keyframe blob → (x, y) doubles in seconds.
--- Inner blob structure: [BE32 inner_version] [BE32 inner_fc] [TLV fields...]
--- Fields include interp, YOut, YIn, Y, XOut, XIn, X.
--- @param bytes string: full KeyframesBA payload bytes
--- @param start_pos integer: 1-indexed start position of the inner blob
--- @param max_end integer: 1-indexed inclusive last position the blob can occupy
--- @return number|nil, number|nil: x, y values in seconds, or nil/nil on parse error
-local function parse_inner_keyframe(bytes, start_pos, max_end)
-    if start_pos + 7 > max_end then return nil, nil end
-    local inner_fc = read_be32(bytes, start_pos + 4)
-    if not inner_fc or inner_fc < 1 or inner_fc > 20 then return nil, nil end
-
-    local ffi = require("ffi")
-    local pos = start_pos + 8
-    local kf_x, kf_y = nil, nil
-
-    for _ = 1, inner_fc do
-        if pos + 3 > max_end then return nil, nil end
-        local name_len = read_be32(bytes, pos)
-        if not name_len then return nil, nil end
-        pos = pos + 4
-        if pos + name_len - 1 > max_end then return nil, nil end
-
-        local name_chars = {}
-        for j = 0, name_len - 1, 2 do
-            local lo = bytes:byte(pos + j + 1)
-            if lo then name_chars[#name_chars + 1] = string.char(lo) end
-        end
-        local field_name = table.concat(name_chars)
-        pos = pos + name_len
-
-        if pos + 3 > max_end then return nil, nil end
-        pos = pos + 2  -- separator
-        local b1, b2 = bytes:byte(pos, pos + 1)
-        local field_type = b1 * 256 + b2
-        pos = pos + 2
-
-        if field_type == 0x0002 or field_type == 0x0003 then
-            pos = pos + 5
-        elseif field_type == 0x0004 then
-            pos = pos + 9
-        elseif field_type == 0x0006 then
-            if pos + 8 > max_end then return nil, nil end
-            pos = pos + 1  -- pad
-            if field_name == "X" or field_name == "Y" then
-                local be_bytes = ffi.new("uint8_t[8]")
-                for j = 0, 7 do
-                    be_bytes[7 - j] = bytes:byte(pos + j)
-                end
-                local v = ffi.cast("double*", be_bytes)[0]
-                if field_name == "X" then kf_x = v
-                else kf_y = v end
-            end
-            pos = pos + 8
-        elseif field_type == 0x000a then
-            if pos + 4 > max_end then return nil, nil end
-            pos = pos + 4
-            if pos > max_end then return nil, nil end
-            local str_len = bytes:byte(pos)
-            pos = pos + 1 + str_len
-        elseif field_type == 0x000c then
-            local aux = read_be32(bytes, pos)
-            if not aux then return nil, nil end
-            pos = pos + 4
-            if pos > max_end then return nil, nil end
-            local val = bytes:byte(pos)
-            pos = pos + 1
-            local payload_len = aux * 256 + val
-            pos = pos + payload_len
-        else
-            return nil, nil
-        end
-    end
-
-    return kf_x, kf_y
-end
-
---- Parse the KeyframesBA nested payload into an array of {x, y} pairs.
--- KeyframesBA outer structure:
---   [BE32 version] [BE32 keyframe_count]
---   kf_count × [outer TLV field with name="0"/"1"/..., type=0x000c]
--- Each outer field's 0x000c payload is an inner blob:
---   [BE32 inner_version] [BE32 inner_fc] [TLV fields including X, Y]
--- X = master playback timeline seconds, Y = source seconds.
--- @param kf_bytes string: raw bytes of the KeyframesBA payload
--- @return table|nil: array of {x=number, y=number} sorted ascending by x
-local function parse_keyframes(kf_bytes)
-    if not kf_bytes or #kf_bytes < 16 then return nil end
-
-    local kf_count = read_be32(kf_bytes, 5)
-    if not kf_count or kf_count < 2 or kf_count > 100 then return nil end
-
-    local keyframes = {}
-    local pos = 9  -- after 8-byte header
-
-    for _ = 1, kf_count do
-        -- Outer TLV field for this keyframe (name "0", "1", etc.)
-        if pos + 3 > #kf_bytes then return nil end
-        local name_len = read_be32(kf_bytes, pos)
-        if not name_len or name_len > 32 then return nil end
-        pos = pos + 4
-        if pos + name_len - 1 > #kf_bytes then return nil end
-        pos = pos + name_len  -- skip name (we don't need it)
-
-        if pos + 3 > #kf_bytes then return nil end
-        pos = pos + 2  -- separator
-        local b1, b2 = kf_bytes:byte(pos, pos + 1)
-        local field_type = b1 * 256 + b2
-        pos = pos + 2
-
-        if field_type ~= 0x000c then return nil end  -- expected nested blob
-
-        -- type 0x000c: 4-byte aux + 1-byte val + payload
-        local aux = read_be32(kf_bytes, pos)
-        if not aux then return nil end
-        pos = pos + 4
-        if pos > #kf_bytes then return nil end
-        local val = kf_bytes:byte(pos)
-        pos = pos + 1
-        local payload_len = aux * 256 + val
-        if payload_len < 8 or pos + payload_len - 1 > #kf_bytes then return nil end
-
-        local kf_x, kf_y = parse_inner_keyframe(kf_bytes, pos, pos + payload_len - 1)
-        if kf_x ~= nil and kf_y ~= nil then
-            keyframes[#keyframes + 1] = { x = kf_x, y = kf_y }
-        end
-
-        pos = pos + payload_len
-    end
-
-    if #keyframes < 2 then return nil end
-    table.sort(keyframes, function(a, b) return a.x < b.x end)
-    return keyframes
-end
-
---- Evaluate a piecewise-linear retime curve at master-timeline X (seconds).
--- Returns the corresponding source-time Y (seconds). Clamps to endpoints.
--- @param keyframes table: array of {x, y} pairs sorted ascending by x
--- @param x number: query position in master playback timeline seconds
--- @return number: corresponding source position in seconds
-local function eval_curve(keyframes, x)
-    if not keyframes or #keyframes < 2 then return x end
-    if x <= keyframes[1].x then
-        -- Extrapolate from first segment so that X=0 maps consistently
-        local k0 = keyframes[1]
-        local k1 = keyframes[2]
-        local span = k1.x - k0.x
-        if span <= 0 then return k0.y end
-        local slope = (k1.y - k0.y) / span
-        return k0.y + (x - k0.x) * slope
-    end
-    if x >= keyframes[#keyframes].x then
-        -- Extrapolate from last segment
-        local k0 = keyframes[#keyframes - 1]
-        local k1 = keyframes[#keyframes]
-        local span = k1.x - k0.x
-        if span <= 0 then return k1.y end
-        local slope = (k1.y - k0.y) / span
-        return k1.y + (x - k1.x) * slope
-    end
-    for i = 1, #keyframes - 1 do
-        local k0 = keyframes[i]
-        local k1 = keyframes[i + 1]
-        if x >= k0.x and x <= k1.x then
-            local span = k1.x - k0.x
-            if span <= 0 then return k0.y end
-            local t = (x - k0.x) / span
-            return k0.y + t * (k1.y - k0.y)
-        end
-    end
-    return keyframes[#keyframes].y
-end
-
---- Decode MediaTimemapBA blob → {speed_ratio, is_reverse, y_max, x_max, keyframes}
---
--- Two MTBA formats exist:
---   Header 0x02 (9 bytes): [1-byte header] [8-byte BE double = media duration]
---     → No speed/direction info, return nil.
---   Header 0x01 (large): [BE32 version=1] [BE32 field_count] [TLV fields]
---     → YMax (source duration sec), XMax (retimed duration sec), KeyframesBA
---     → speed_ratio = YMax / XMax, direction from keyframe slope.
---     → keyframes = parsed (X, Y) pairs from KeyframesBA for curve walking.
---
--- @param hex_str string: hex-encoded MediaTimemapBA blob
--- @return table|nil: {speed_ratio, is_reverse, y_max, x_max, keyframes}
-local function decode_media_timemap(hex_str)
-    local bytes = hex_to_bytes(hex_str)
-    if not bytes or #bytes <= 9 then return nil end
-
-    -- Large MTBA: [BE32 version=1] [BE32 field_count] + TLV fields
-    local version = read_be32(bytes, 1)
-    if version ~= 1 then return nil end
-
-    local field_count = read_be32(bytes, 5)
-    if not field_count or field_count < 2 or field_count > 10 then return nil end
-
-    local fields, raw_payloads = decode_tlv_fields(bytes, 8, field_count)
-    if not fields then return nil end
-
-    local y_max = fields["YMax"]
-    local x_max = fields["XMax"]
-    if not y_max or not x_max then return nil end
-    if x_max <= 0 or y_max <= 0 then return nil end
-
-    local speed_ratio = y_max / x_max
-
-    -- Parse the KeyframesBA nested blob into both reverse-flag and curve.
-    local is_reverse = false
-    local keyframes = nil
-    local kf_raw = raw_payloads and raw_payloads["KeyframesBA"]
-    if kf_raw then
-        is_reverse = detect_reverse_from_keyframes(kf_raw)
-        keyframes = parse_keyframes(kf_raw)
-
-        -- Sanity-check the parsed keyframes against the parent YMax/XMax.
-        -- The curve must start at (0, 0) and end at (XMax, YMax). When the
-        -- decoded keyframes don't match (e.g. test fixtures where Resolve
-        -- stores tangent-only data with all-zero anchors), discard them and
-        -- let the importer synthesize a constant-speed linear curve from
-        -- y_max / x_max instead.
-        if keyframes and #keyframes >= 2 then
-            local first = keyframes[1]
-            local last = keyframes[#keyframes]
-            local epsilon = 0.01
-            local origin_ok = math.abs(first.x) < epsilon and math.abs(first.y) < epsilon
-            local end_ok = math.abs(last.x - x_max) < epsilon
-                and math.abs(last.y - y_max) < epsilon
-            if not (origin_ok and end_ok) then
-                log.detail("decode_media_timemap: keyframes inconsistent with YMax/XMax — first=(%.3f,%.3f) last=(%.3f,%.3f) ymax=%.3f xmax=%.3f — discarding curve",
-                    first.x, first.y, last.x, last.y, y_max, x_max)
-                keyframes = nil
-            end
-        end
-    end
-
-    return {
-        speed_ratio = speed_ratio,
-        is_reverse = is_reverse,
-        y_max = y_max,
-        x_max = x_max,
-        keyframes = keyframes,
-    }
-end
 
 --- Extract original source file path from a MediaPool master clip element.
 -- Searches BtVideoInfo and BtAudioInfo children for Clip binary blobs.
@@ -1031,13 +206,18 @@ local function extract_original_path(clip_elem)
         end
     end
 
-    -- Try BtAudioInfo (audio master clips — blob filename is unreliable,
-    -- use blob directory + XML <Name> which has the correct filename)
+    -- Try BtAudioInfo (audio master clips). Trust the blob's full path when
+    -- decode_bt_clip_path returns a non-nil path — it already rejects blobs
+    -- where the filename contains control characters (the "unreliable" case).
+    -- The blob preserves filename whitespace that the XML parser strips from
+    -- <Name>, so paths like '/…/Temp Tracks/ Return 2 - Max Richter.mp3' only
+    -- survive the import when sourced from the blob.
     local bt_audio = find_element(clip_elem, "BtAudioInfo")
     if bt_audio then
         local blob_elem = find_direct_child(bt_audio, "Clip")
         if blob_elem then
-            local _, directory = decode_bt_clip_path(get_text(blob_elem))
+            local path, directory = decode_bt_clip_path(get_text(blob_elem))
+            if path then return path end
             if directory and xml_name then return directory .. "/" .. xml_name end
         end
     end
@@ -1056,37 +236,55 @@ end
 -- @param clip_elem table: Sm2MpVideoClip or Sm2MpAudioClip XML element
 -- @return table|nil: duration info, or nil if no blob found/parseable
 local function extract_media_duration(clip_elem)
-    -- Try video Time blob first (BtVideoInfo > Time)
+    local info = {}
+
+    -- Video: BtVideoInfo > Time
     local bt_video = find_element(clip_elem, "BtVideoInfo")
     if bt_video then
         local time_elem = find_direct_child(bt_video, "Time")
         if time_elem then
             local result = decode_bt_video_time(get_text(time_elem))
             if result and result.num_frames and result.num_frames > 0 then
-                return {
-                    num_frames = result.num_frames,
-                    frame_rate = result.frame_rate,
-                }
+                info.num_frames = result.num_frames
+                info.frame_rate = result.frame_rate
             end
         end
     end
 
-    -- Fall back to audio TracksBA blob (BtAudioInfo > TracksBA or EmbeddedAudioVec path)
+    -- Audio: BtAudioInfo > TracksBA (also under EmbeddedAudioVec for BRAW/MOV)
     local bt_audio = find_element(clip_elem, "BtAudioInfo")
     if bt_audio then
         local tracks_elem = find_direct_child(bt_audio, "TracksBA")
         if tracks_elem then
             local result = decode_bt_audio_duration(get_text(tracks_elem))
             if result and result.duration_samples and result.duration_samples > 0 then
-                return { audio_duration = {
+                info.audio_duration = {
                     samples = result.duration_samples,
                     sample_rate = result.sample_rate,
-                } }
+                }
             end
         end
     end
 
-    return nil
+    if not info.num_frames and not info.audio_duration then
+        return nil
+    end
+    return info
+end
+
+--- Extract the file's original container TC origin from BtAudioInfo.TracksBA.StartTime.
+-- This is the file's real TC, unaffected by Resolve's Set Timecode override.
+-- Returns seconds since midnight, or nil if TracksBA is missing/unparseable.
+-- @param clip_elem table: Sm2MpVideoClip or Sm2MpAudioClip XML element
+-- @return number|nil: start_time in seconds, or nil
+local function extract_file_tc_seconds(clip_elem)
+    local bt_audio = find_element(clip_elem, "BtAudioInfo")
+    if not bt_audio then return nil end
+    local tracks_elem = find_direct_child(bt_audio, "TracksBA")
+    if not tracks_elem then return nil end
+    local result = decode_bt_audio_duration(get_text(tracks_elem))
+    if not result then return nil end
+    return result.start_time_seconds  -- nil if StartTime field absent from TLV
 end
 
 --- Parse Resolve timecode string to integer frames
@@ -1273,15 +471,83 @@ local function parse_project_metadata(project_elem)
     project.settings.width = numeric_from(width_elem, 1920)
     project.settings.height = numeric_from(height_elem, 1080)
 
-    -- Parse open timeline tabs from FieldsBlob > SequenceTabsData.
-    -- NOT from TimelineHandleVec (that's the full MRU history, not open tabs).
+    -- Collect raw inputs for tab/active-timeline resolution. Final resolution
+    -- happens in parse_drp_file after build_timeline_metadata_map exists,
+    -- because priority 2 (TimelineHandleVec) needs Sm2Timeline → Sm2Sequence
+    -- translation via the metadata map.
+    --
+    -- Priority 1 input: FieldsBlob > SequenceTabsData — authoritative tab
+    -- workspace saved by some Resolve versions. UUIDs are Sm2Sequence.DbIds.
     local fields_blob_elem = find_direct_child(project_elem, "FieldsBlob")
     local blob_hex = fields_blob_elem and get_text(fields_blob_elem) or nil
-    local tabs_data = parse_fields_blob_tabs(blob_hex)
-    project.open_timeline_ids = tabs_data.tab_ids
-    project.active_timeline_id = tabs_data.active_id
+    project.sequence_tabs_data = parse_fields_blob_tabs(blob_hex)
+
+    -- Priority 2 input: <TimelineHandleVec> + <CurrentTimelineIndex>.
+    -- Element UUIDs are Sm2Timeline.DbIds (NOT Sm2Sequence.DbIds) — they must
+    -- be mapped through timeline_id_map to get the sequence id.
+    project.timeline_handle_vec_ids = {}
+    local handle_vec_elem = find_direct_child(project_elem, "TimelineHandleVec")
+    if handle_vec_elem then
+        for _, child in ipairs(handle_vec_elem.children or {}) do
+            if child.tag == "Element" then
+                local id = get_text(child)
+                if id and id ~= "" then
+                    table.insert(project.timeline_handle_vec_ids, id)
+                end
+            end
+        end
+    end
+    local cti_elem = find_direct_child(project_elem, "CurrentTimelineIndex")
+    if cti_elem then
+        project.current_timeline_index = tonumber(get_text(cti_elem))
+        assert(project.current_timeline_index,
+            "parse_project_metadata: non-numeric <CurrentTimelineIndex>: "
+            .. tostring(get_text(cti_elem)))
+    end
+
+    -- Final resolved outputs (populated by resolve_project_tab_ids).
+    project.open_timeline_ids = {}
+    project.active_timeline_id = nil
 
     return project
+end
+
+--- Resolve which sequence ids are open tabs / which is active, using the
+-- inputs collected during parse_project_metadata plus the Sm2Timeline-to-
+-- Sm2Sequence map built from the MediaPool XML.
+--
+-- Priority:
+--   1. FieldsBlob SequenceTabsData non-empty (newer Resolve saves)
+--   2. TimelineHandleVec[CurrentTimelineIndex] via timeline_id_map
+--      (older / archive-export saves; yields a single active tab)
+-- If neither is available, leaves project.open_timeline_ids empty and the
+-- import settles for whatever find_most_recent produces at open time.
+--
+-- @param project table: project produced by parse_project_metadata
+-- @param timeline_id_map table: Sm2Timeline.DbId → {name, seq_id}
+local function resolve_project_tab_ids(project, timeline_id_map)
+    local tabs_data = project.sequence_tabs_data
+    if tabs_data and tabs_data.tab_ids and #tabs_data.tab_ids > 0 then
+        project.open_timeline_ids = tabs_data.tab_ids
+        project.active_timeline_id = tabs_data.active_id
+        return
+    end
+
+    local handle_ids = project.timeline_handle_vec_ids
+    local cti = project.current_timeline_index
+    if handle_ids and #handle_ids > 0 and cti and cti >= 0 and cti < #handle_ids then
+        -- Lua arrays are 1-based; CurrentTimelineIndex is 0-based.
+        local tl_db_id = handle_ids[cti + 1]
+        local mapped = tl_db_id and timeline_id_map[tl_db_id]
+        if mapped and mapped.seq_id then
+            project.open_timeline_ids = { mapped.seq_id }
+            project.active_timeline_id = mapped.seq_id
+            return
+        end
+        log.warn("DRP: TimelineHandleVec[%d]=%s has no Sm2Sequence mapping — "
+            .. "active timeline unresolved", cti, tostring(tl_db_id))
+    end
+    -- No resolution possible; leave empty and let opener fall back.
 end
 
 --- Parse MediaPool XML to extract media items
@@ -1367,6 +633,9 @@ local function parse_master_clip_element(clip_elem, folder_id)
     -- Parse authoritative media duration from Time/TracksBA blobs
     local duration_info = extract_media_duration(clip_elem)
 
+    -- Extract file's original container TC from TracksBA.StartTime (FR-001)
+    local file_tc_seconds = extract_file_tc_seconds(clip_elem)
+
     local master_clip = {
         id = db_id,
         name = name_elem and get_text(name_elem) or "Untitled",
@@ -1376,6 +645,7 @@ local function parse_master_clip_element(clip_elem, folder_id)
         playhead = playhead_elem and tonumber(get_text(playhead_elem)) or nil,
         clip_type = clip_elem.tag == "Sm2MpVideoClip" and "video" or "audio",
         file_path = original_path,
+        file_tc_seconds = file_tc_seconds,  -- file's container TC origin (seconds since midnight)
     }
 
     -- Store duration + rate info from blob
@@ -1383,7 +653,8 @@ local function parse_master_clip_element(clip_elem, folder_id)
         if duration_info.num_frames then
             master_clip.num_frames = duration_info.num_frames
             master_clip.frame_rate = duration_info.frame_rate
-        elseif duration_info.audio_duration then
+        end
+        if duration_info.audio_duration then
             master_clip.audio_duration = duration_info.audio_duration
         end
     end
@@ -1709,12 +980,37 @@ local function extract_sequence_ref_id(seq_container_elem)
     return nil
 end
 
+--- Parse a DRP frame value string: "frames" or "frames|hex_subframe".
+-- The hex suffix is an LE IEEE 754 double encoding a fractional-frame
+-- offset (0.0–1.0), used for sub-frame audio positioning on the timeline.
+-- @param text string|nil: raw DRP field text
+-- @param clip_name string: clip name for error messages
+-- @param field_name string: field name for error messages
+-- @return number|nil: integer frames
+-- @return number: subframe fraction (0.0 if no hex suffix)
+local function parse_drp_frame_value(text, clip_name, field_name)
+    if not text then return nil, 0 end
+    local num_str, hex_part = text:match("^(%d+)|?(%x*)")
+    local num = num_str and tonumber(num_str)
+    assert(num, string.format(
+        "parse_resolve_tracks: clip '%s' %s has no numeric value (raw='%s')",
+        clip_name, field_name, text))
+    local subframe = 0
+    if hex_part and #hex_part >= 16 then
+        local decoded = decode_hex_double_at(hex_part, 0)
+        if decoded and decoded >= 0 and decoded < 1.0 then
+            subframe = decoded
+        end
+    end
+    return num, subframe
+end
+
 --- Parse Resolve tracks from sequence element
 -- NSF: frame_rate is REQUIRED - DRP reliably encodes fps in metadata
 -- @param seq_elem table: XML sequence element
 -- @param frame_rate number: Frame rate from DRP metadata (required)
 -- @return video_tracks, audio_tracks, media_lookup
-local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, media_ref_name_map)
+local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map)
     -- NSF: frame_rate is required, no fallbacks
     assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
         "parse_resolve_tracks: frame_rate is required (got %s) - DRP must provide fps metadata",
@@ -1774,20 +1070,8 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             assert(duration_elem, string.format(
                 "parse_resolve_tracks: clip '%s' missing Duration element", clip_name))
 
-            -- DRP format: some values use "frames|metadata" format (e.g., "2699|00e0401cd451d83f")
-            -- Extract numeric portion before pipe
-            local function parse_drp_numeric(text, field_name)
-                if not text then return nil end
-                local num_str = text:match("^(%d+)") -- extract leading digits
-                local num = tonumber(num_str)
-                assert(num, string.format(
-                    "parse_resolve_tracks: clip '%s' %s has no numeric value (raw='%s')",
-                    clip_name, field_name, text))
-                return num
-            end
-
-            local start_frames = parse_drp_numeric(get_text(start_elem), "Start")
-            local duration_raw = parse_drp_numeric(get_text(duration_elem), "Duration")
+            local start_frames, start_subframe = parse_drp_frame_value(get_text(start_elem), clip_name, "Start")
+            local duration_raw = parse_drp_frame_value(get_text(duration_elem), clip_name, "Duration")
 
             start_frames = math.floor(start_frames)
             duration_raw = math.floor(duration_raw)
@@ -1821,38 +1105,46 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             --
             -- source_in comes from <In>, NOT <MediaStartTime>.
             -- Empty/missing <In> means untrimmed (source_in = 0).
-            local in_text = in_elem and get_text(in_elem) or ""
-            local in_value
+            local in_value = 0
+            local in_sub_frame = 0.0
             local clip_speed = 1.0
-            if in_text == "" then
-                in_value = 0  -- empty/missing <In> = untrimmed
-            else
-                -- DRP <In> can be "12345" or "12345|hexdata" (pipe-delimited
-                -- with hex-encoded speed ratio). Extract integer before pipe.
+            local in_text = in_elem and get_text(in_elem) or ""
+            if in_text ~= "" then
+                -- <In> is 'NN' or 'NN|<hex>'. NN is the whole-frame offset;
+                -- the hex is a little-endian IEEE-754 double in [0, 1)
+                -- representing the sub-frame fractional position within that
+                -- frame. The fraction is applied only on unretimed clips —
+                -- retimed clips get sub-frame precision from the MTBA curve's
+                -- own keyframes, and adding the <In> fraction on top would
+                -- double-count and produce rounding errors at frame boundaries.
                 local num_part, hex_part = in_text:match("^(%d+)|?(%x*)")
                 in_value = assert(num_part and tonumber(num_part), string.format(
                     "parse_resolve_tracks: clip '%s' <In> has no numeric prefix: '%s'",
                     clip_name, in_text))
-                -- Hex part encodes speed ratio as LE IEEE 754 double
-                if hex_part and #hex_part >= 16 then
-                    local speed = decode_hex_double_at(hex_part, 0)
-                    if speed and math.abs(speed) >= 0.05 and math.abs(speed) < 100 then
-                        -- Accept hex speed if it's in a plausible range (5%-10000%).
-                        -- Below 0.05 (5%) is almost certainly garbage — Resolve's hex
-                        -- field encodes internal values that don't match user-visible
-                        -- speed for variable-speed and some constant-speed clips.
-                        clip_speed = speed
+                if hex_part and hex_part ~= "" then
+                    if #hex_part < 16 then
+                        log.warn("parse_resolve_tracks: clip '%s' <In> hex suffix too short (%d chars): '%s'",
+                            clip_name, #hex_part, hex_part)
                     else
-                        log.detail("DRP retime: clip '%s' hex speed unusable (decoded=%s from '%s'), will use MTBA or 1.0",
-                                 clip_name, tostring(speed), hex_part:sub(1, 16))
+                        local frac = decode_hex_double_at(hex_part, 0)
+                        if not frac then
+                            log.warn("parse_resolve_tracks: clip '%s' <In> hex suffix failed to decode: '%s'",
+                                clip_name, hex_part:sub(1, 16))
+                        elseif frac >= 0.0 and frac < 1.0 then
+                            in_sub_frame = frac
+                        end
+                        -- Values outside [0, 1) are not sub-frame offsets;
+                        -- they occur on retimed clips where the hex is a
+                        -- speed-ratio remnant (MTBA is authoritative). Leave
+                        -- in_sub_frame at 0 — the retimed branch won't use it.
                     end
                 end
             end
 
-            -- Try MediaTimemapBA for authoritative speed/direction on retimed clips.
-            -- MTBA is present on all retimed clips; hex speed is unreliable for
-            -- variable-speed clips (encodes garbage near-zero values).
-            local retime_keyframes = nil  -- (X, Y) seconds pairs from MTBA, when present
+            -- MediaTimemapBA: authoritative speed/direction for retimed clips.
+            -- MTBA is present on all retimed clips. Clips without MTBA are not
+            -- retimed; <In>'s integer+sub-frame fully specifies the in-point.
+            local retime_keyframes = nil
             local mtba_elem = find_element(clip_elem, "MediaTimemapBA")
             if mtba_elem then
                 local mtba_hex = get_text(mtba_elem)
@@ -1861,18 +1153,8 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 if #mtba_hex > 18 then
                     local mtba = decode_media_timemap(mtba_hex)
                     if mtba then
-                        local mtba_speed = mtba.is_reverse and -mtba.speed_ratio or mtba.speed_ratio
-                        -- MTBA is authoritative — hex speed is unreliable
-                        -- (encodes internal Resolve values that don't match user-visible speed)
-                        if clip_speed ~= 1.0 then
-                            local hex_abs = math.abs(clip_speed)
-                            if math.abs(hex_abs - mtba.speed_ratio) / mtba.speed_ratio > 0.05 then
-                                log.detail("DRP retime: clip '%s' hex speed %.4f → MTBA %.4f (YMax/XMax=%.2f/%.2f)",
-                                         clip_name, clip_speed, mtba_speed, mtba.y_max, mtba.x_max)
-                            end
-                        end
-                        clip_speed = mtba_speed
-                        retime_keyframes = mtba.keyframes  -- may still be nil if parse failed
+                        clip_speed = mtba.is_reverse and -mtba.speed_ratio or mtba.speed_ratio
+                        retime_keyframes = mtba.keyframes
                         log.event("DRP retime: clip '%s' speed from MTBA: %.4f (YMax=%.2f XMax=%.2f reverse=%s kf=%d)",
                                   clip_name, clip_speed, mtba.y_max, mtba.x_max,
                                   tostring(mtba.is_reverse),
@@ -1881,22 +1163,13 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 end
             end
 
-            -- Final guard: if clip_speed is still implausibly low after hex + MTBA,
-            -- it's garbage. Reset to 1.0 (non-retimed). This catches clips where
-            -- hex speed was garbage AND MTBA was absent or had no speed data.
-            if math.abs(clip_speed) > 0 and math.abs(clip_speed) < 0.05 then
-                log.warn("DRP retime: clip '%s' final speed %.6f implausibly low — treating as non-retimed",
-                    clip_name, clip_speed)
-                clip_speed = 1.0
-            end
-
             local duration_timeline_frames = duration_raw
             local abs_speed = math.abs(clip_speed)
 
-            -- If we have a non-unity speed but no MTBA keyframes (e.g. synthetic
-            -- test data with `<In>NN|hex_speed</In>` and no MediaTimemapBA),
-            -- synthesize a constant-speed curve so all retime math goes through
-            -- the curve-walking code path uniformly.
+            -- Synthesize a constant-speed curve when MTBA exists but keyframes
+            -- were discarded (parsed but failed sanity check). Without the curve,
+            -- the no-retime path would treat in_value as source frames, ignoring
+            -- the speed change entirely.
             if not retime_keyframes and abs_speed ~= 1.0 then
                 retime_keyframes = {
                     { x = 0, y = 0 },
@@ -1907,47 +1180,83 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             -- Compute media TC origin: <MediaStartTime> converted to clip-rate units.
             -- MST is seconds since midnight. When MST=0 or nil, media_tc_origin=0
             -- (file starts at 00:00:00:00 = file-relative = absolute TC).
+            -- Source coordinates must be at the media's native rate to avoid
+            -- lossy cross-rate rounding (e.g. 25fps sequence + 120fps media,
+            -- or 25fps sequence + 44100Hz audio).
+            -- Video: use <MediaFrameRate> (media's fps), fall back to sequence fps.
+            -- Audio: use pool master clip's sample_rate (no fallback).
+            local native_rate
+            if track_type == "AUDIO" then
+                local media_ref = get_text(find_element(clip_elem, "MediaRef"))
+                native_rate = media_ref_sample_rate_map and media_ref ~= ""
+                    and media_ref_sample_rate_map[media_ref]
+                if not native_rate then
+                    local is_media = media_ref_path_map and media_ref ~= ""
+                        and media_ref_path_map[media_ref]
+                    if not is_media then
+                        -- Not in path map → nested sequence (compound/synced/multicam
+                        -- clip), not a media file — skip it.
+                        log.detail("skipping nested sequence audio clip '%s' (MediaRef=%s)",
+                            clip_name, media_ref)
+                        goto continue_clip
+                    end
+                    -- In path map but no sample rate → video-only media with
+                    -- linked audio track (silent companion clip). No audio
+                    -- coordinates to compute — skip.
+                    log.detail("skipping audio clip '%s' for video-only media (MediaRef=%s, no sample rate)",
+                        clip_name, media_ref)
+                    goto continue_clip
+                end
+            else
+                assert(media_frame_rate, string.format(
+                    "parse_resolve_tracks: clip '%s' has no <MediaFrameRate> — cannot determine native rate",
+                    clip_name))
+                native_rate = media_frame_rate
+            end
+
             local media_tc_origin = 0
             local in_offset  -- <In> converted to native units (file-relative)
             local source_duration
 
-            if track_type == "AUDIO" then
-                -- Audio: convert to samples (48kHz)
-                local audio_speed = (abs_speed ~= 1.0) and abs_speed or 1.0
-                if media_start_time and media_start_time > 0 then
-                    media_tc_origin = math.floor(media_start_time * 48000 + 0.5)
+            -- Compute media TC origin from <MediaStartTime> (seconds since midnight).
+            if media_start_time and media_start_time > 0 then
+                media_tc_origin = math.floor(media_start_time * native_rate + 0.5)
+            end
+
+            -- <In> is in playback timeline frames at sequence rate (the X axis
+            -- of the MTBA retime curve). Walk the curve to get source seconds,
+            -- then convert to native_rate units (media frames or samples).
+            if retime_keyframes and #retime_keyframes >= 2 then
+                local in_sec = in_value / frame_rate
+                local out_sec = (in_value + duration_raw) / frame_rate
+                local y_in_sec = eval_curve(retime_keyframes, in_sec)
+                local y_out_sec = eval_curve(retime_keyframes, out_sec)
+                -- Normalize reverse curves up front: y_first is the lower source
+                -- time (first frame in ascending source order), y_last the higher.
+                -- Mark clip_speed negative so the source_in/source_out swap at the
+                -- end of this function runs.
+                local y_first, y_last = y_in_sec, y_out_sec
+                if y_out_sec < y_in_sec then
+                    y_first, y_last = y_out_sec, y_in_sec
+                    clip_speed = -math.abs(clip_speed)
                 end
-                in_offset = math.floor(in_value * 48000 / frame_rate * audio_speed + 0.5)
-                source_duration = math.floor(duration_raw * 48000 / frame_rate * audio_speed + 0.5)
-            else
-                -- Video: <In> is in *master playback timeline frames* — the X axis
-                -- of the MediaTimemapBA retime curve. To convert to source frames
-                -- we walk the curve at X=In and read Y. For unretimed clips the
-                -- curve is identity (or absent) and Y=X, so the formula collapses.
-                if media_start_time and media_start_time > 0 then
-                    media_tc_origin = math.floor(media_start_time * frame_rate + 0.5)
-                end
-                if retime_keyframes and #retime_keyframes >= 2 then
-                    -- Walk the curve. Inputs are in seconds at clip frame_rate.
-                    -- Use CEILING for both endpoints: the in-point is the first
-                    -- valid source frame ≥ the computed position (so we don't
-                    -- play pre-clip content), and the out-point is treated the
-                    -- same way to keep source_duration consistent with how
-                    -- Resolve rounds — verified empirically against an
-                    -- un-retimed-twin clip whose <In> field Resolve recomputed.
-                    local in_sec = in_value / frame_rate
-                    local out_sec = (in_value + duration_raw) / frame_rate
-                    local y_in_sec = eval_curve(retime_keyframes, in_sec)
-                    local y_out_sec = eval_curve(retime_keyframes, out_sec)
-                    in_offset = math.ceil(y_in_sec * frame_rate)
-                    local out_offset = math.ceil(y_out_sec * frame_rate)
-                    source_duration = out_offset - in_offset
+                -- Source-position rounding matches Resolve's Inspector TC display:
+                --   |slope| > 1 (accel): floor y_first (source frame whose span starts at/before).
+                --   |slope| <= 1 (decel): ceil y_first (source frame whose span starts at/after).
+                -- Consumed source frames always use floor: ceil would claim a partial
+                -- final frame the clip doesn't fully play, putting source_out past the
+                -- end of a zero-padding Media-Managed trim.
+                if abs_speed > 1.0 then
+                    in_offset = math.floor(y_first * native_rate)
                 else
-                    -- No curve (no MTBA, 9-byte short MTBA, or parse failure):
-                    -- in_value is source frames directly. This is the un-retimed case.
-                    in_offset = math.floor(in_value)
-                    source_duration = duration_raw
+                    in_offset = math.ceil(y_first * native_rate)
                 end
+                source_duration = math.floor((y_last - y_first) * native_rate)
+            else
+                -- No curve: in_value is source frames at sequence rate.
+                -- Convert to native_rate units, folding in the <In> sub-frame.
+                in_offset = math.floor((in_value + in_sub_frame) * native_rate / frame_rate + 0.5)
+                source_duration = math.floor(duration_raw * native_rate / frame_rate + 0.5)
             end
 
             -- Sanity: MST max = 86400s (midnight). At 48kHz = ~4.1B samples.
@@ -1960,6 +1269,10 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
 
             -- source_in is ABSOLUTE TC = media_tc_origin + file-relative offset
             local source_in_native = media_tc_origin + in_offset
+            log.detail("  source_in: %s MST=%.4f tc_origin=%d in_val=%s in_off=%d src_in=%d dur=%d spd=%.3f %s",
+                clip_name, media_start_time or 0, media_tc_origin,
+                tostring(in_value), in_offset, source_in_native, source_duration or 0,
+                abs_speed or 1, retime_keyframes and string.format("retime(%d kf)", #retime_keyframes) or "no-retime")
 
             -- Source extent in VIDEO FRAMES (for media duration tracking).
             -- File-relative (excludes media_tc_origin — file length, not TC space).
@@ -1997,6 +1310,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             local clip = {
                 name = clip_name,
                 start_value = start_frames,        -- timeline position (integer frames)
+                start_subframe = start_subframe,   -- fractional frame offset (0.0–1.0, for sub-frame audio)
                 duration = duration_timeline_frames,  -- duration on timeline (integer frames)
                 -- Absolute timecode addressing for source selection:
                 source_in_tc = source_in_native,   -- native units (samples for audio, frames for video)
@@ -2010,10 +1324,10 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 file_path = file_path,
                 file_uuid = get_text(find_element(clip_elem, "MediaRef")),
                 file_id = get_text(find_element(clip_elem, "MediaRef")),
-                frame_rate = frame_rate,
-                media_start_time = media_start_time  -- seconds since midnight (file TC origin)
+                frame_rate = frame_rate,              -- sequence rate (for timeline position)
+                native_rate = native_rate,            -- media's native rate (source coords are in this rate)
+                media_start_time = media_start_time   -- seconds since midnight (file TC origin)
             }
-
             -- Skip degenerate zero-duration clips (Resolve artifacts: speed changes, disabled items)
             if clip.duration <= 0 then
                 log.detail("Skipping zero-duration clip '%s' (duration=%d)", clip_name, clip.duration)
@@ -2062,6 +1376,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                     end
                 end
             end
+            ::continue_clip::
         end
 
         if clip_count > 0 then
@@ -2087,7 +1402,7 @@ local parse_clip_item
 -- @param frame_rate number: Frame rate from DRP metadata (required)
 -- @param media_ref_path_map table|nil: MediaRef DbId → original file path (for stale-path resolution)
 -- @return table: Timeline data
-local function parse_sequence(seq_elem, frame_rate, media_ref_path_map, media_ref_name_map)
+local function parse_sequence(seq_elem, frame_rate, media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map)
     -- NSF: frame_rate is required
     assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
         "parse_sequence: frame_rate is required (got %s) - DRP must provide fps metadata",
@@ -2104,54 +1419,55 @@ local function parse_sequence(seq_elem, frame_rate, media_ref_path_map, media_re
         tracks = {}
     }
 
-    -- Parse video tracks
-    local video_tracks = find_all_elements(seq_elem, "VideoTrack")
-    for i, track_elem in ipairs(video_tracks) do
-        local track = {
-            type = "VIDEO",
-            index = i,
-            clips = {}
-        }
+    -- Primary: Resolve-native format (Sm2TiTrack with Sm2TiVideoClip/AudioClip).
+    -- Has authoritative retime curves (MTBA), MediaFrameRate, native-rate source
+    -- coordinates, and TracksBA TC data. DRP files always contain this format.
+    local resolve_video_tracks, resolve_audio_tracks, media_map = parse_resolve_tracks(
+        seq_elem, frame_rate, media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map)
+    timeline.media_files = media_map
 
-        local clip_items = find_all_elements(track_elem, "ClipItem")
-        for _, clip_elem in ipairs(clip_items) do
-            local clip = parse_clip_item(clip_elem, frame_rate)
-            if clip then
-                table.insert(track.clips, clip)
-            end
-        end
-
+    for _, track in ipairs(resolve_video_tracks) do
+        table.insert(timeline.tracks, track)
+    end
+    for _, track in ipairs(resolve_audio_tracks) do
         table.insert(timeline.tracks, track)
     end
 
-    -- Parse audio tracks
-    local audio_tracks = find_all_elements(seq_elem, "AudioTrack")
-    for i, track_elem in ipairs(audio_tracks) do
-        local track = {
-            type = "AUDIO",
-            index = i,
-            clips = {}
-        }
-
-        local clip_items = find_all_elements(track_elem, "ClipItem")
-        for _, clip_elem in ipairs(clip_items) do
-            local clip = parse_clip_item(clip_elem, frame_rate)
-            if clip then
-                table.insert(track.clips, clip)
-            end
-        end
-
-        table.insert(timeline.tracks, track)
-    end
-
+    -- Fallback: FCP XML format (VideoTrack/AudioTrack with ClipItem).
+    -- Used by non-DRP imports (FCP XML, Premiere XML). DRP files also contain
+    -- this as a compatibility layer, but Resolve-native is preferred above.
     if #timeline.tracks == 0 then
-        local resolve_video_tracks, resolve_audio_tracks, media_map = parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, media_ref_name_map)
-        timeline.media_files = media_map
-
-        for _, track in ipairs(resolve_video_tracks) do
+        local video_tracks = find_all_elements(seq_elem, "VideoTrack")
+        for i, track_elem in ipairs(video_tracks) do
+            local track = {
+                type = "VIDEO",
+                index = i,
+                clips = {}
+            }
+            local clip_items = find_all_elements(track_elem, "ClipItem")
+            for _, clip_elem in ipairs(clip_items) do
+                local clip = parse_clip_item(clip_elem, frame_rate)
+                if clip then
+                    table.insert(track.clips, clip)
+                end
+            end
             table.insert(timeline.tracks, track)
         end
-        for _, track in ipairs(resolve_audio_tracks) do
+
+        local audio_tracks = find_all_elements(seq_elem, "AudioTrack")
+        for i, track_elem in ipairs(audio_tracks) do
+            local track = {
+                type = "AUDIO",
+                index = i,
+                clips = {}
+            }
+            local clip_items = find_all_elements(track_elem, "ClipItem")
+            for _, clip_elem in ipairs(clip_items) do
+                local clip = parse_clip_item(clip_elem, frame_rate)
+                if clip then
+                    table.insert(track.clips, clip)
+                end
+            end
             table.insert(timeline.tracks, track)
         end
     end
@@ -2270,11 +1586,18 @@ function M.parse_drp_file(drp_path, progress_cb)
         media_pool_items = parse_media_pool(media_pool_root)
     end
 
-    -- Build timeline metadata map by scanning all MediaPool folders
-    -- This maps Sequence IDs to {name, fps} from Sm2Timeline/Sm2Sequence elements
-    local timeline_metadata_map = build_timeline_metadata_map(tmp_dir, function(sub_pct)
-        pump(10 + math.floor(sub_pct * 0.15), "Scanning timeline metadata…")
-    end)
+    -- Build timeline metadata map by scanning all MediaPool folders.
+    -- metadata_map: Sm2Sequence.DbId → {name, fps, width, height, folder_id, …}
+    -- timeline_id_map: Sm2Timeline.DbId → {name, seq_id} — needed for
+    --                  TimelineHandleVec resolution.
+    local timeline_metadata_map, timeline_id_map = build_timeline_metadata_map(tmp_dir,
+        function(sub_pct)
+            pump(10 + math.floor(sub_pct * 0.15), "Scanning timeline metadata…")
+        end)
+
+    -- Now that we have Sm2Timeline→Sm2Sequence translation, resolve the
+    -- project's tab/active ids (fills project.open_timeline_ids + active_id).
+    resolve_project_tab_ids(project, timeline_id_map)
 
     pump(25, "Parsing media pool hierarchy…")
 
@@ -2290,6 +1613,7 @@ function M.parse_drp_file(drp_path, progress_cb)
     -- may be stale (e.g., proxy path or old volume name from a prior relink).
     local media_ref_path_map = {}
     local media_ref_name_map = {}
+    local media_ref_sample_rate_map = {}  -- MediaRef → audio sample rate
     for _, pmc in ipairs(media_pool_hierarchy.master_clips) do
         if pmc.id and pmc.file_path then
             media_ref_path_map[pmc.id] = pmc.file_path
@@ -2297,6 +1621,12 @@ function M.parse_drp_file(drp_path, progress_cb)
         if pmc.id and pmc.name then
             media_ref_name_map[pmc.id] = pmc.name
         end
+        if pmc.id and pmc.audio_duration and pmc.audio_duration.sample_rate then
+            media_ref_sample_rate_map[pmc.id] = pmc.audio_duration.sample_rate
+        end
+        -- Video-only media (no audio blob) is intentionally NOT in the
+        -- sample rate map. Audio clips linking to such media are skipped
+        -- in parse_resolve_tracks (silent companion clips).
     end
 
     pump(70, "Parsing sequences…")
@@ -2344,7 +1674,12 @@ function M.parse_drp_file(drp_path, progress_cb)
                         tostring(seq_ref_id))
                     goto continue_seq
                 end
-                local timeline = parse_sequence(seq_elem, fps_for_parsing, media_ref_path_map, media_ref_name_map)
+                local timeline = parse_sequence(seq_elem, fps_for_parsing, media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map)
+
+                -- Carry the Sm2Sequence.DbId through so the importer can emit
+                -- a tab-uuid → sequence-id map for post-import tab restoration
+                -- without falling back to fragile name matching.
+                timeline.tab_uuid = seq_ref_id
 
                 -- Apply timeline name from metadata
                 if metadata and metadata.name then
@@ -2613,6 +1948,11 @@ function M.parse_drp_file(drp_path, progress_cb)
                 entry.audio_sample_rate = pmc.audio_duration.sample_rate
                 entry.frame_rate = pmc.audio_duration.sample_rate
             end
+
+            -- Propagate file container TC origin from TracksBA.StartTime (FR-001)
+            if pmc.file_tc_seconds then
+                entry.file_tc_seconds = pmc.file_tc_seconds
+            end
         end
     end
 
@@ -2625,29 +1965,12 @@ function M.parse_drp_file(drp_path, progress_cb)
         end
     end
 
-    -- Resolve open timeline tab names from SequenceTabsData + timeline_metadata_map
-    -- SequenceTabsData UUIDs are Sm2Sequence.DbId (= BlobOwner in project.xml),
-    -- which is the same key used by timeline_metadata_map
-    local open_timeline_names = {}
-    local active_timeline_name = nil
-    if #project.open_timeline_ids > 0 then
-        for _, tid in ipairs(project.open_timeline_ids) do
-            local tl_info = timeline_metadata_map[tid]
-            if tl_info then
-                table.insert(open_timeline_names, tl_info.name)
-            end
-        end
-        -- Active tab is identified directly by UUID (not by index)
-        if project.active_timeline_id then
-            local active_info = timeline_metadata_map[project.active_timeline_id]
-            if active_info then
-                active_timeline_name = active_info.name
-            end
-        end
-    end
-
     os.execute("rm -rf " .. tmp_dir)
 
+    -- parse_result.project.open_timeline_ids + active_timeline_id are the
+    -- authoritative Sm2Sequence.DbIds (resolved by resolve_project_tab_ids).
+    -- parse_result.timelines[i].tab_uuid carries the same id per timeline
+    -- so importer_core can emit a tab-uuid → sequence-id map.
     return {
         success = true,
         project = project,
@@ -2657,14 +1980,12 @@ function M.parse_drp_file(drp_path, progress_cb)
         folders = media_pool_hierarchy.folders,
         pool_master_clips = media_pool_hierarchy.master_clips,
         folder_map = media_pool_hierarchy.folder_map,
-        -- Open timeline state from Resolve
-        active_timeline_name = active_timeline_name,
-        open_timeline_names = open_timeline_names,
     }
 end
 
 -- Parsing kernel exports (stable public API for testing + extension)
 M.parse_resolve_tracks = parse_resolve_tracks
+M.extract_original_path = extract_original_path
 M.parse_fields_blob_tabs = parse_fields_blob_tabs
 M.decode_bt_video_time = decode_bt_video_time
 M.decode_bt_audio_duration = decode_bt_audio_duration
@@ -2855,504 +2176,7 @@ function M.import_into_project(project_id, parse_result, opts)
 
     return result
 end
--- Original import_into_project body (500+ lines) moved to importer_core.lua.
---[=[
-
-    -- Track created entity IDs for undo
-    local result = {
-        media_ids = {},
-        sequence_ids = {},
-        track_ids = {},
-        clip_ids = {},
-    }
-
-    -- Import DRP folder hierarchy as bins
-    -- Create bins from DRP folder hierarchy.
-    -- Sort by depth (parents before children) so each folder's parent bin
-    -- exists when we create it. DRP folders arrive in filesystem scan order
-    -- which doesn't guarantee parent-first.
-    local folders = parse_result.folders or {}
-    local folder_lookup = {}
-    for _, f in ipairs(folders) do folder_lookup[f.id] = f end
-
-    local function folder_depth(f)
-        local d = 0
-        local cur = f
-        while cur and cur.parent_id do
-            d = d + 1
-            cur = folder_lookup[cur.parent_id]
-        end
-        return d
-    end
-    table.sort(folders, function(a, b) return folder_depth(a) < folder_depth(b) end)
-
-    local drp_folder_to_bin = {}  -- DRP folder DbId → JVE bin_id
-    for _, folder in ipairs(folders) do
-        local parent_bin_id = folder.parent_id and drp_folder_to_bin[folder.parent_id] or nil
-        local bin_id = uuid.generate_with_prefix("bin")
-        local ok, def = tag_service.create_bin(project_id, {
-            id = bin_id,
-            name = folder.name,
-            parent_id = parent_bin_id,
-        })
-        if ok and def then
-            drp_folder_to_bin[folder.id] = def.id
-        else
-            log.warn("Failed to create bin: %s", folder.name)
-        end
-    end
-
-    -- Build pool master clip → DRP folder bin mappings.
-    -- Primary: UUID → bin (reliable, handles renames). Fallback: name → bin.
-    local pool_uuid_to_drp_bin = {}  -- pmc.id → JVE bin_id
-    local pool_name_to_drp_bin = {}  -- pmc.name → JVE bin_id (for non-UUID media)
-    for _, pmc in ipairs(parse_result.pool_master_clips or {}) do
-        if pmc.folder_id and drp_folder_to_bin[pmc.folder_id] then
-            if pmc.id then
-                pool_uuid_to_drp_bin[pmc.id] = drp_folder_to_bin[pmc.folder_id]
-            end
-            pool_name_to_drp_bin[pmc.name] = drp_folder_to_bin[pmc.folder_id]
-        end
-    end
-
-    -- Create "Unorganized" bin for orphaned media not in any DRP pool folder
-    local unorganized_bin_id = nil
-    do
-        local bin_id = uuid.generate_with_prefix("bin")
-        local ok, def = tag_service.create_bin(project_id, {
-            id = bin_id,
-            name = "Unorganized",
-        })
-        if ok and def then
-            unorganized_bin_id = def.id
-        end
-    end
-
-    -- Import media items (hash table keyed by uuid or path)
-    local media_by_uuid = {}  -- file_uuid → Media record (primary, for dedup)
-    local media_by_path = {}  -- file_path → Media record (secondary, for path-only lookups)
-    for _, media_item in pairs(parse_result.media_items) do
-        local dur = media_item.duration or 0
-        if dur <= 0 then
-            log.warn("Skipping zero-duration media: %s", media_item.name)
-            goto continue_media
-        end
-
-        -- Proxy path from blob — check alt_paths for a non-proxy original path
-        if media_item.file_path and media_item.file_path:find("/ProxyMedia/") then
-            local original_path = nil
-            for alt_path in pairs(media_item.alt_paths or {}) do
-                if not alt_path:find("/ProxyMedia/") then
-                    original_path = alt_path
-                    break
-                end
-            end
-            if original_path then
-                media_item.file_path = original_path
-                log.event("Proxy media '%s' — using original path: %s", media_item.name, original_path)
-            else
-                log.event("Skipping proxy-only media: %s", media_item.name)
-                goto continue_media
-            end
-        end
-
-        do
-            local fps = media_item.frame_rate
-            if not fps then
-                log.warn("Skipping media without frame_rate: %s (path=%s, uuid=%s)",
-                    media_item.name, tostring(media_item.file_path), tostring(media_item.file_uuid))
-                goto continue_media
-            end
-
-            -- Skip if we already created a record for this file_path
-            -- (multiple master clips can reference the same file)
-            if media_item.file_path and media_by_path[media_item.file_path] then
-                local existing = media_by_path[media_item.file_path]
-                if media_item.file_uuid then
-                    media_by_uuid[media_item.file_uuid] = existing
-                end
-                goto continue_media
-            end
-
-            -- Convert MediaStartTime (seconds since midnight) to native units
-            local media_metadata = '{}'
-            local native_rate = math.floor(fps + 0.5)
-            if media_item.media_start_time then
-                local json = require("dkjson")
-                local mst = media_item.media_start_time
-                local audio_sr = media_item.audio_sample_rate or 48000
-                media_metadata = json.encode({
-                    start_tc_value = math.floor(mst * native_rate + 0.5),
-                    start_tc_rate = native_rate,
-                    start_tc_audio_samples = math.floor(mst * audio_sr + 0.5),
-                    start_tc_audio_rate = audio_sr,
-                })
-            end
-
-            -- DRP track type is authoritative: media only on audio tracks → no video.
-            -- Width/height 0 prevents ensure_masterclip from creating a video track.
-            local media_width = media_item.has_video and project_settings.width or 0
-            local media_height = media_item.has_video and project_settings.height or 0
-
-            local media = Media.create({
-                project_id = project_id,
-                name = media_item.name,
-                file_path = media_item.file_path,
-                file_uuid = media_item.file_uuid,
-                duration_frames = dur,
-                frame_rate = fps,
-                audio_sample_rate = media_item.audio_sample_rate,
-                audio_channels = media_item.audio_channels,
-                width = media_width,
-                height = media_height,
-                metadata = media_metadata,
-            })
-
-            assert(media:save(), string.format(
-                "drp_importer: failed to save media '%s' (path=%s)",
-                media_item.name, media_item.file_path))
-
-            -- Register in both lookup maps
-            if media_item.file_uuid then
-                media_by_uuid[media_item.file_uuid] = media
-            end
-            media_by_path[media_item.file_path] = media
-            for alt in pairs(media_item.alt_paths or {}) do
-                media_by_path[alt] = media
-            end
-
-            table.insert(result.media_ids, media.id)
-            log.event("  Imported media: %s", media.name)
-        end
-        ::continue_media::
-    end
-
-    sub_report(20, "Importing timelines…")
-
-    -- Import timelines
-    local timeline_count = #parse_result.timelines
-    for tl_idx, timeline_data in ipairs(parse_result.timelines) do
-        sub_report(20 + math.floor(tl_idx / timeline_count * 70),
-            string.format("Importing: %s", timeline_data.name))
-        -- STEP 1: Analyze clip positions for viewport + fps inference
-        local min_start_frame = nil
-        local max_end_frame = 0
-        for _, track_data in ipairs(timeline_data.tracks) do
-            for _, clip_data in ipairs(track_data.clips) do
-                local start = clip_data.start_value or 0
-                local dur = clip_data.duration or 0
-                if not min_start_frame or start < min_start_frame then
-                    min_start_frame = start
-                end
-                if (start + dur) > max_end_frame then
-                    max_end_frame = start + dur
-                end
-            end
-        end
-
-        -- STEP 2: Determine frame rate
-        local fps_num, fps_den
-
-        if timeline_data.fps and timeline_data.fps > 0 then
-            fps_num, fps_den = frame_rate_to_rational(timeline_data.fps)
-            log.event("Using explicit fps from DRP metadata: %.3f (%d/%d)",
-                    timeline_data.fps, fps_num, fps_den)
-        else
-            local inferred_fps, inferred_num, inferred_den = infer_fps_from_one_hour_start(min_start_frame)
-
-            if inferred_fps then
-                fps_num, fps_den = inferred_num, inferred_den
-                log.event("Inferred fps from 1-hour TC: %.3f (%d/%d)",
-                        inferred_fps, fps_num, fps_den)
-            else
-                fps_num, fps_den = frame_rate_to_rational(project_settings.frame_rate)
-                log.warn("No fps metadata, no 1-hour TC; using project default: %d/%d",
-                        fps_num, fps_den)
-            end
-        end
-
-        -- STEP 2b: Timeline start timecode from MediaExtents (authoritative).
-        -- MediaExtents[0] on Sm2Sequence is the start TC in seconds.
-        -- Convert to frames; clamps viewport/playhead to prevent dead space.
-        local start_timecode_frame = 0
-        if timeline_data.start_tc_seconds and timeline_data.start_tc_seconds > 0 then
-            local effective_fps = fps_num / fps_den
-            start_timecode_frame = math.floor(timeline_data.start_tc_seconds * effective_fps + 0.5)
-            log.event("Timeline start TC: %.2fs → %d frames (%d/%d fps)",
-                timeline_data.start_tc_seconds, start_timecode_frame, fps_num, fps_den)
-        end
-
-        -- STEP 3: Viewport from Resolve's UI state, or zoom-to-fit fallback
-        local view_start, view_duration
-        local playhead_frame
-
-        local drp_scale = timeline_data.ui_scale
-        local drp_playhead_rel = timeline_data.cur_playhead_relative
-
-        if drp_scale and drp_scale > 0 then
-            -- Resolve stores scale as pixels-per-frame. Convert to viewport duration
-            -- using an estimated panel width (exact width adapts at display time).
-            local ESTIMATED_PANEL_WIDTH = 1200
-            view_duration = math.floor(ESTIMATED_PANEL_WIDTH / drp_scale)
-
-            -- Playhead is relative to start TC in the DRP
-            playhead_frame = start_timecode_frame + (drp_playhead_rel or 0)
-
-            -- Center viewport on playhead
-            view_start = math.max(start_timecode_frame,
-                playhead_frame - math.floor(view_duration / 2))
-
-            log.event("Viewport from DRP: scale=%.4f → dur=%d, playhead=%d (rel=%s)",
-                drp_scale, view_duration, playhead_frame, tostring(drp_playhead_rel))
-        else
-            -- Fallback: zoom-to-fit content
-            view_start = min_start_frame or start_timecode_frame
-            local content_duration = max_end_frame - view_start
-
-            if content_duration > 0 then
-                local ui_constants = require("core.ui_constants")
-                local fit_start, fit_dur = ui_constants.compute_zoom_to_fit(view_start, max_end_frame)
-                view_start = math.max(start_timecode_frame, fit_start)
-                view_duration = fit_dur
-            else
-                local effective_fps = fps_num / fps_den
-                view_duration = math.floor(10 * effective_fps)
-            end
-
-            playhead_frame = min_start_frame or start_timecode_frame
-        end
-
-        -- STEP 4: Create Sequence
-        local seq_width = (timeline_data.width and timeline_data.width > 0)
-            and timeline_data.width or project_settings.width
-        local seq_height = (timeline_data.height and timeline_data.height > 0)
-            and timeline_data.height or project_settings.height
-
-        local sequence = Sequence.create(
-            timeline_data.name,
-            project_id,
-            { fps_numerator = fps_num, fps_denominator = fps_den },
-            seq_width,
-            seq_height,
-            {
-                audio_rate = 48000,
-                start_timecode_frame = start_timecode_frame,
-                view_start_frame = view_start,
-                view_duration_frames = view_duration,
-                playhead_frame = playhead_frame,
-            }
-        )
-
-        assert(sequence:save(), string.format(
-            "drp_importer: failed to save timeline '%s'", timeline_data.name))
-        do
-            table.insert(result.sequence_ids, sequence.id)
-            log.event("  Created timeline: %s @ %d/%d fps, %dx%d, viewport [%d..%d]",
-                    timeline_data.name, fps_num, fps_den, seq_width, seq_height, view_start, view_start + view_duration)
-
-            -- Assign timeline sequence to DRP folder bin
-            local timeline_folder_bin = timeline_data.folder_id and drp_folder_to_bin[timeline_data.folder_id] or nil
-            if timeline_folder_bin then
-                tag_service.add_to_bin(project_id, {sequence.id}, timeline_folder_bin, "sequence")
-            end
-
-            -- Master clips are assigned to DRP folder bins (from pool hierarchy)
-            -- after clip creation. No per-timeline "Master Clips" bin needed.
-
-            local clips_for_linking = {}
-
-            -- STEP 5: Import tracks + clips
-            for _, track_data in ipairs(timeline_data.tracks) do
-                local track_prefix = track_data.type == "VIDEO" and "V" or "A"
-                local track_name = string.format("%s%d", track_prefix, track_data.index)
-
-                local track
-                if track_data.type == "VIDEO" then
-                    track = Track.create_video(track_name, sequence.id, { index = track_data.index })
-                else
-                    track = Track.create_audio(track_name, sequence.id, { index = track_data.index })
-                end
-
-                assert(track:save(), string.format(
-                    "drp_importer: failed to save track '%s' in timeline '%s'",
-                    track_name, timeline_data.name))
-                do
-                    table.insert(result.track_ids, track.id)
-
-                    for _, clip_data in ipairs(track_data.clips) do
-                        -- Prefer UUID lookup (handles cross-volume dedup),
-                        -- fall back to path for clips without MediaRef
-                        local media_id = nil
-                        if clip_data.file_uuid and media_by_uuid[clip_data.file_uuid] then
-                            media_id = media_by_uuid[clip_data.file_uuid].id
-                        elseif clip_data.file_path and media_by_path[clip_data.file_path] then
-                            media_id = media_by_path[clip_data.file_path].id
-                        end
-
-                        -- Skip clips with no resolvable media
-                        if not media_id then
-                            if not clip_data.file_path or clip_data.file_path == "" then
-                                -- No path = nested timeline, compound clip, or adjustment layer
-                                log.detail("Skipping nested/generated clip '%s' (no media path)",
-                                    clip_data.name or "unnamed")
-                            else
-                                log.warn("Skipping clip '%s' - no media record for path: %s",
-                                    clip_data.name or "unnamed", clip_data.file_path)
-                            end
-                            goto continue_clip
-                        end
-
-                        local clip_rate_num, clip_rate_den
-                        if track_data.type == "VIDEO" then
-                            clip_rate_num, clip_rate_den = fps_num, fps_den
-                        else
-                            clip_rate_num, clip_rate_den = 48000, 1
-                        end
-
-                        local source_out = clip_data.source_out
-                        local is_reverse = (clip_data.clip_speed or 1) < 0
-
-                        if not is_reverse then
-                            -- Forward clip: source_out must exceed source_in
-                            if not source_out or source_out <= (clip_data.source_in or 0) then
-                                source_out = (clip_data.source_in or 0) + (clip_data.duration or 0)
-                            end
-                            if source_out <= (clip_data.source_in or 0) then
-                                log.warn("Skipping clip '%s' - zero source range (source_in=%s, source_out=%s)",
-                                    clip_data.name or "unnamed", tostring(clip_data.source_in), tostring(source_out))
-                                goto continue_clip
-                            end
-                        else
-                            -- Reverse clip: source_in > source_out is intentional
-                            if not source_out then
-                                source_out = (clip_data.source_in or 0) - (clip_data.duration or 0)
-                            end
-                            if source_out == (clip_data.source_in or 0) then
-                                log.warn("Skipping reverse clip '%s' - zero source range (source_in=%s, source_out=%s)",
-                                    clip_data.name or "unnamed", tostring(clip_data.source_in), tostring(source_out))
-                                goto continue_clip
-                            end
-                        end
-
-                        local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
-                            project_id = project_id,
-                            owner_sequence_id = sequence.id,
-                            track_id = track.id,
-                            timeline_start = clip_data.start_value,
-                            duration = clip_data.duration,
-                            source_in = clip_data.source_in,
-                            source_out = source_out,
-                            fps_numerator = clip_rate_num,
-                            fps_denominator = clip_rate_den,
-                            enabled = clip_data.enabled,
-                            volume = clip_data.volume,
-                            -- bin assigned after clip creation via DRP folder lookup
-                        })
-
-                        assert(clip:save(), string.format(
-                            "drp_importer: failed to save clip '%s' in track '%s'",
-                            clip_data.name, track_name))
-                        do
-                            table.insert(result.clip_ids, clip.id)
-
-                            -- Assign masterclip sequence to DRP folder bin (many-to-many safe)
-                            -- Match by media name first, then by file path basename
-                            -- (audio-from-video clips have different names than pool master clips)
-                            if clip.master_clip_id then
-                                -- Assign master clip to its DRP pool folder bin.
-                                -- UUID→bin is most reliable, then name, then basename.
-                                local drp_bin = nil
-                                if clip_data.file_uuid and clip_data.file_uuid ~= "" then
-                                    drp_bin = pool_uuid_to_drp_bin[clip_data.file_uuid]
-                                end
-                                if not drp_bin then
-                                    local media = nil
-                                    if clip_data.file_uuid and clip_data.file_uuid ~= "" then
-                                        media = media_by_uuid[clip_data.file_uuid]
-                                    end
-                                    if not media and clip_data.file_path and clip_data.file_path ~= "" then
-                                        media = media_by_path[clip_data.file_path]
-                                    end
-                                    if media then
-                                        drp_bin = pool_name_to_drp_bin[media.name]
-                                    end
-                                end
-                                if not drp_bin and clip_data.file_path then
-                                    local basename = clip_data.file_path:match("([^/\\]+)$")
-                                    drp_bin = basename and pool_name_to_drp_bin[basename]
-                                end
-                                if not drp_bin then
-                                    drp_bin = unorganized_bin_id
-                                end
-                                if drp_bin then
-                                    tag_service.add_to_bin(project_id, {clip.master_clip_id}, drp_bin, "master_clip")
-                                end
-                            end
-
-                            if clip_data.file_uuid or clip_data.file_path then
-                                table.insert(clips_for_linking, {
-                                    clip_id = clip.id,
-                                    -- Use UUID as link key when available (same master clip
-                                    -- at different volume paths should still link A/V)
-                                    link_key = clip_data.file_uuid or clip_data.file_path,
-                                    timeline_start = clip_data.start_value,
-                                    role = track_data.type == "VIDEO" and "video" or "audio",
-                                })
-                            end
-                        end
-                        ::continue_clip::
-                    end
-                end
-            end
-
-            -- STEP 6: Create A/V link groups
-            local link_groups_by_key = {}
-            for _, clip_info in ipairs(clips_for_linking) do
-                local key = clip_info.link_key .. ":" .. tostring(clip_info.timeline_start)
-                link_groups_by_key[key] = link_groups_by_key[key] or {}
-                table.insert(link_groups_by_key[key], clip_info)
-            end
-
-            local link_count = 0
-            for _, group in pairs(link_groups_by_key) do
-                if #group >= 2 then
-                    local clips_to_link = {}
-                    for _, info in ipairs(group) do
-                        table.insert(clips_to_link, {
-                            clip_id = info.clip_id,
-                            role = info.role,
-                            time_offset = 0,
-                        })
-                    end
-
-                    local link_id, link_err = clip_link.create_link_group(clips_to_link)
-                    if link_id then
-                        link_count = link_count + 1
-                    else
-                        log.warn("Failed to create link group: %s", link_err or "unknown error")
-                    end
-                end
-            end
-
-            if link_count > 0 then
-                log.event("Created %d A/V link groups for timeline: %s", link_count, timeline_data.name)
-            end
-        end
-    end
-
-    sub_report(90, "Applying marks…")
-
-    -- STEP 7: Apply pool master clip marks to JVE master clips
-    apply_pool_master_clip_marks(parse_result.pool_master_clips, media_by_path)
-
-    -- Offline detection removed: handled reactively by media_status registry
-
-    log.event("Import complete: %d media, %d sequences, %d tracks, %d clips",
-        #result.media_ids, #result.sequence_ids, #result.track_ids, #result.clip_ids)
-
-    return result
-end
-]=]
+-- Original import_into_project body moved to importer_core.lua.
 
 -- ---------------------------------------------------------------------------
 -- convert: Parse .drp and create new .jvp at target path (Open verb)
@@ -3425,7 +2249,7 @@ function M.convert(drp_path, jvp_path, progress_cb)
         project.name, settings.width, settings.height, tostring(settings.frame_rate))
 
     report(40, "Importing media…")
-    M.import_into_project(project.id, parse_result, {
+    local import_result = M.import_into_project(project.id, parse_result, {
         project_settings = settings,
         progress_cb = progress_cb and function(sub_pct, text)
             -- Map sub_pct 0-100 → overall range 40-90
@@ -3433,44 +2257,51 @@ function M.convert(drp_path, jvp_path, progress_cb)
         end or nil,
     })
 
-    -- Store open timeline state as project settings for layout.lua
+    -- Store open timeline state as project settings for layout.lua.
+    --
+    -- UUID-keyed join: parse_result.project.open_timeline_ids are DRP
+    -- Sm2Sequence.DbIds; import_result.tab_uuid_to_sequence_id maps each to
+    -- the newly-created Sequence.id. We fail loudly on any unresolved UUID —
+    -- a missing mapping means a timeline the DRP marked open was silently
+    -- dropped during import, which is a real bug to fix (not hide).
     report(95, "Setting active timeline…")
     local pid = database.get_current_project_id()
-    if parse_result.active_timeline_name or
-       (parse_result.open_timeline_names and #parse_result.open_timeline_names > 0) then
-        local sequences = database.load_sequences(pid)
+    local open_tab_uuids = parse_result.project.open_timeline_ids or {}
+    local active_tab_uuid = parse_result.project.active_timeline_id
+    local tab_uuid_to_sequence_id = import_result.tab_uuid_to_sequence_id or {}
 
-        -- Build name → sequence ID lookup
-        local name_to_seq = {}
-        for _, seq in ipairs(sequences) do
-            name_to_seq[seq.name] = seq
+    if #open_tab_uuids > 0 then
+        local open_sequence_ids = {}
+        local active_sequence_id = nil
+        for _, tab_uuid in ipairs(open_tab_uuids) do
+            local seq_id = tab_uuid_to_sequence_id[tab_uuid]
+            assert(seq_id, string.format(
+                "drp_importer: open timeline tab UUID %s has no corresponding "
+                .. "sequence. Timeline was present in project.xml open-tab list "
+                .. "but never created during import (check for parse_drp_file "
+                .. "skips or a mismatch between Sm2Sequence.DbId and the id "
+                .. "used in SequenceTabsData / TimelineHandleVec).",
+                tostring(tab_uuid)))
+            table.insert(open_sequence_ids, seq_id)
+            if tab_uuid == active_tab_uuid then
+                active_sequence_id = seq_id
+            end
         end
 
-        -- Resolve open timeline names → JVE sequence IDs
-        if parse_result.open_timeline_names and #parse_result.open_timeline_names > 0 then
-            local open_sequence_ids = {}
-            local active_sequence_id = nil
-            for _, tl_name in ipairs(parse_result.open_timeline_names) do
-                local seq = name_to_seq[tl_name]
-                if seq then
-                    table.insert(open_sequence_ids, seq.id)
-                    if tl_name == parse_result.active_timeline_name then
-                        active_sequence_id = seq.id
-                    end
-                end
-            end
-            if #open_sequence_ids > 0 then
-                database.set_project_setting(pid, "open_sequence_ids", open_sequence_ids)
-            end
-            if active_sequence_id then
-                database.set_project_setting(pid, "last_open_sequence_id", active_sequence_id)
-            end
-        elseif parse_result.active_timeline_name then
-            local seq = name_to_seq[parse_result.active_timeline_name]
-            if seq then
-                database.set_project_setting(pid, "last_open_sequence_id", seq.id)
-            end
-        end
+        -- If open tabs are known, an active tab MUST also be known.
+        -- Both Phase A priorities (SequenceTabsData, TimelineHandleVec+Index)
+        -- emit active_tab_uuid whenever they emit open_tab_uuids. Any violation
+        -- means a parser returned inconsistent state — fail loud.
+        assert(active_tab_uuid, string.format(
+            "drp_importer: %d open tab UUIDs but active_tab_uuid is nil — "
+            .. "parser returned inconsistent tab state", #open_tab_uuids))
+        assert(active_sequence_id, string.format(
+            "drp_importer: active timeline UUID %s was not in the open-tab "
+            .. "list %s — project.xml inconsistency",
+            tostring(active_tab_uuid), table.concat(open_tab_uuids, ",")))
+
+        database.set_project_setting(pid, "open_sequence_ids", open_sequence_ids)
+        database.set_project_setting(pid, "last_open_sequence_id", active_sequence_id)
     end
 
     -- Record provenance: insert a synthetic command so the history shows

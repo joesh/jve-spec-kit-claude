@@ -280,3 +280,64 @@ its container).
   in the importer already checks the keyframe slope sign and sets
   `is_reverse`; the curve walker handles reverse correctly because the
   slope encoding is preserved by sorting keyframes by `X` ascending.
+
+---
+
+## Fix 3: File Original TC for Set Timecode Overrides (009-drp-importer-must)
+
+> **Date**: 2026-04-11–12
+> **Commits**: branch `009-drp-importer-must`
+> **Status**: implemented
+
+### Problem
+
+When a Resolve editor uses "Set Timecode" on a master clip, the DRP carries two
+different TC values: the override TC (in `BtVideoInfo.Time.Timecode` /
+`MediaStartTime`) and the file's original container TC (in
+`BtAudioInfo.TracksBA.StartTime`). The JVE importer stored the override as
+`start_tc_value`, which is correct for display and source-range origin. But the
+relinker only compared against `start_tc_value` — so when a fixture file's
+container TC matched the *original* file TC (not the override), the relinker
+rejected it. This left ~14 VFX clips offline in the gold master.
+
+### Fix
+
+Three changes across DRP import, relink, and EMP playback:
+
+1. **DRP import** (`drp_importer.lua` + `importer_core.lua`): extract
+   `TracksBA.StartTime` from master clips. When it differs from `start_tc_value`,
+   store as `file_original_timecode` in the media metadata JSON.
+
+2. **Relinker** (`media_relinker.lua`): when a candidate's probed TC doesn't
+   match `start_tc_value`, check `file_original_timecode` as a second-chance
+   match. Also remap clip source coordinates to file TC space for the
+   trimmed-media containment check.
+
+3. **EMP playback** (`emp_media_file.h/cpp`, `emp_timeline_media_buffer.h/cpp`):
+   new `set_tc_origin_override` method on `MediaFile`. Playback engine builds a
+   path→override map and passes it to TMB via `SetTcOverrides`. TMB applies the
+   override in `acquire_reader` before `Reader::Create`, so the decoder's
+   `file_frame = source_in - first_frame_tc` arithmetic uses the override TC
+   instead of the probed container TC.
+
+### Re-import required
+
+This fix only benefits projects imported AFTER it lands. Projects imported under
+the old behavior lack `file_original_timecode` in their media metadata. Re-import
+the DRP to populate the field. This is acceptable because the user's workflow
+already involves re-importing.
+
+### Also fixed: path_owner clip reassignment
+
+During investigation, discovered that the relink dialog's `path_owner`
+first-writer-wins logic silently dropped clips when two media rows (same file,
+different volume paths) resolved to the same fixture path. Fixed in both
+`show_relink_dialog.lua` and the e2e test: the loser's clips are now reassigned
+to the winner's media_id instead of being dropped.
+
+### Regression tests
+
+- `tests/test_drp_dual_tc.lua` — TracksBA.StartTime extraction + override detection
+- `tests/test_relink_file_original_tc.lua` — relinker second-chance TC match
+- `tests/binding/test_emp_tc_override.lua` — EMP setter + assert-after-decode
+- `tests/binding/test_e2e_retime_relink.lua` — VFX clips online in gold master

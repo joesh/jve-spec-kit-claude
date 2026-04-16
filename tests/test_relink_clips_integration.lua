@@ -165,24 +165,10 @@ end
 ---------------------------------------------------------------------------------
 print("\n--- Test 3: Batch relink with filename match (same TC) ---")
 do
-    -- Build media_infos (one per media, clips nested)
+    -- Build media_infos (one per media — media-level relink)
     local vm = Media.load(video_media_id)
     local tc_val, tc_rate = vm:get_start_tc()
-
-    local video_clips = Clip.find_clips_for_media(video_media_id)
-    local clip_entries = {}
-    for _, clip in ipairs(video_clips) do
-        clip_entries[#clip_entries + 1] = {
-            clip_id = clip.id,
-            source_in = clip.source_in,
-            source_out = clip.source_out,
-            fps_num = clip.rate.fps_numerator,
-            fps_den = clip.rate.fps_denominator,
-            clip_kind = clip.clip_kind,
-            clip_name = clip.name,
-        }
-    end
-
+    local extent_start, extent_end = vm:get_source_extent(tc_rate or 25)
     local media_infos = {{
         media_id = video_media_id,
         media_path = vm:get_file_path(),
@@ -191,7 +177,8 @@ do
         media_start_tc_rate = tc_rate,
         width = vm.width,
         height = vm.height,
-        clips = clip_entries,
+        source_extent_start = extent_start,
+        source_extent_end = extent_end,
     }}
 
     -- Create a fake search directory with a matching file
@@ -221,21 +208,15 @@ do
         progress_calls = progress_calls + 1
     end)
 
-    assert(#results.relinked == 2, string.format("expected 2 relinked, got %d", #results.relinked))
+    -- Media-level relink: one entry per media, not per clip
+    assert(#results.relinked == 1, string.format("expected 1 relinked (per-media), got %d", #results.relinked))
     assert(#results.failed == 0, string.format("expected 0 failed, got %d", #results.failed))
     assert(progress_calls > 0, "progress callback should have been called")
 
-    -- Verify source ranges unchanged (same TC, no offset)
-    for _, entry in ipairs(results.relinked) do
-        if entry.clip_id == v_clip_1 then
-            assert(entry.new_source_in == 100, "clip1 source_in unchanged")
-            assert(entry.new_source_out == 200, "clip1 source_out unchanged")
-        elseif entry.clip_id == v_clip_2 then
-            assert(entry.new_source_in == 500, "clip2 source_in unchanged")
-            assert(entry.new_source_out == 550, "clip2 source_out unchanged")
-        end
-        assert(entry.new_path == dummy_file, "path should match dummy file")
-    end
+    -- Verify the single media entry points to the correct file
+    local entry = results.relinked[1]
+    assert(entry.media_id == video_media_id, "relinked entry should reference our media")
+    assert(entry.new_path == dummy_file, "path should match dummy file")
 
     -- Cleanup
     os.remove(dummy_file)

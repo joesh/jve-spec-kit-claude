@@ -33,18 +33,19 @@ do
     assert(result.success, "parse_drp_file failed: " .. tostring(result.error))
 
     -- SequenceTabsData should yield exactly 3 tabs, not 125 from TimelineHandleVec
-    assert(result.open_timeline_names and #result.open_timeline_names <= 10,
+    local open_ids = result.project.open_timeline_ids
+    assert(open_ids and #open_ids <= 10,
         string.format("Expected ≤10 open timelines (from tabs), got %d — "
             .. "likely using TimelineHandleVec instead of SequenceTabsData",
-            result.open_timeline_names and #result.open_timeline_names or 0))
-    assert(#result.open_timeline_names == 3,
+            open_ids and #open_ids or 0))
+    assert(#open_ids == 3,
         string.format("Expected 3 open timelines from SequenceTabsData, got %d",
-            #result.open_timeline_names))
-    print(string.format("  PASS: %d open timelines (not 125)", #result.open_timeline_names))
+            #open_ids))
+    print(string.format("  PASS: %d open timelines (not 125)", #open_ids))
 
-    assert(result.active_timeline_name,
-        "Expected active_timeline_name to be set")
-    print(string.format("  PASS: active timeline = '%s'", result.active_timeline_name))
+    assert(result.project.active_timeline_id,
+        "Expected active_timeline_id to be set")
+    print(string.format("  PASS: active timeline = %s", result.project.active_timeline_id))
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════

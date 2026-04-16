@@ -32,6 +32,7 @@
 -- @file media_relinker.lua
 local M = {}
 local log = require("core.logger").for_area("media")
+local shell_capture = require("core.fs_utils").shell_capture
 
 --- Check if file exists at given path
 -- @param file_path string Absolute path to check
@@ -52,7 +53,6 @@ local function get_filename(file_path)
     return file_path:match("([^/\\]+)$") or file_path
 end
 
-
 --- Search directory recursively for media files
 -- @param root_dir string Directory to search
 -- @param extensions table Set of extensions to include (e.g., {mov=true, mp4=true})
@@ -67,18 +67,15 @@ local function scan_directory(root_dir, extensions)
     end
     local ext_pattern = table.concat(ext_list, " -o ")
 
-    local cmd = string.format('find "%s" -type f \\( %s \\) 2>/dev/null',
-        root_dir, ext_pattern)
+    local cmd = string.format('find "%s" -type f \\( %s \\)', root_dir, ext_pattern)
     log.event("scan_directory: %s", cmd)
 
-    local handle = io.popen(cmd)
-    assert(handle, string.format("scan_directory: io.popen failed for %s", cmd))
-    for line in handle:lines() do
-        if line and line ~= "" then
+    local output = shell_capture(cmd, "scan_directory")
+    for line in output:gmatch("[^\n]+") do
+        if line ~= "" then
             results[#results + 1] = line
         end
     end
-    handle:close()
 
     log.event("scan_directory: found %d files", #results)
     return results
@@ -114,8 +111,6 @@ local function build_candidate_index(search_paths, extensions)
     return candidate_index
 end
 
-
-
 --- Convert TC string "HH:MM:SS:FF" to total frames.
 -- @param tc string Timecode like "00:40:33:02"
 -- @param fps number Frames per second (integer)
@@ -136,17 +131,11 @@ end
 local function probe_file(file_path)
     local escaped = string.format('"%s"', file_path:gsub('"', '\\"'))
     local cmd = string.format(
-        'ffprobe -v error -print_format json -show_format -show_streams %s 2>/dev/null',
+        'ffprobe -v error -print_format json -show_format -show_streams %s',
         escaped)
-    local handle = io.popen(cmd)
-    if not handle then
-        log.detail("probe_file: io.popen failed for %s", file_path)
-        return nil
-    end
-    local output = handle:read("*a")
-    handle:close()
-    if not output or output == "" then
-        log.detail("probe_file: empty ffprobe output for %s", file_path)
+    local ok, output = pcall(shell_capture, cmd, "probe_file")
+    if not ok or not output or output == "" then
+        log.detail("probe_file: ffprobe failed for %s", file_path)
         return nil
     end
 
@@ -418,12 +407,16 @@ end
 -- @param clip table {source_in, source_out, fps_num, fps_den}
 -- @param probe_result table {start_tc_value, start_tc_rate, duration_frames, fps_num, fps_den}
 -- @param stored_rate number The media's stored TC rate (for rescaling)
--- @return boolean True if candidate range fully contains clip's source range
-function M.check_clip_containment(clip, probe_result, stored_rate)
-    assert(type(clip) == "table", "check_clip_containment: clip required")
-    assert(type(probe_result) == "table", "check_clip_containment: probe_result required")
+-- @param tc_remap_offset number|nil Optional offset to remap source coordinates to file TC space.
+--   When a Set Timecode override exists, source_in is in override TC space but
+--   the candidate file is in file TC space. Pass (file_original_timecode - start_tc_value)
+--   to remap. Nil = no remap (camera footage).
+-- @return boolean True if candidate range fully contains the source extent
+function M.check_extent_containment(extent_start, extent_end, probe_result, stored_rate, tc_remap_offset)
+    assert(extent_start and extent_end, "check_extent_containment: extent_start and extent_end required")
+    assert(type(probe_result) == "table", "check_extent_containment: probe_result required")
     assert(type(stored_rate) == "number" and stored_rate > 0,
-        "check_clip_containment: stored_rate must be positive")
+        "check_extent_containment: stored_rate must be positive")
 
     if not probe_result.start_tc_value or not probe_result.start_tc_rate then
         return false
@@ -432,14 +425,9 @@ function M.check_clip_containment(clip, probe_result, stored_rate)
         return false
     end
 
-    -- Rescale clip's absolute source_in/source_out to stored_rate
-    local clip_rate = clip.fps_num / clip.fps_den
-    local abs_start = clip.source_in
-    local abs_end = clip.source_out
-    if math.abs(clip_rate - stored_rate) > 0.01 then
-        abs_start = math.floor(clip.source_in * stored_rate / clip_rate + 0.5)
-        abs_end = math.floor(clip.source_out * stored_rate / clip_rate + 0.5)
-    end
+    -- Remap source extent to file TC space if override offset is provided.
+    local abs_start = extent_start + (tc_remap_offset or 0)
+    local abs_end = extent_end + (tc_remap_offset or 0)
 
     -- Candidate range at stored_rate
     local cand_start = probe_result.start_tc_value
@@ -458,6 +446,13 @@ function M.check_clip_containment(clip, probe_result, stored_rate)
     local cand_end = cand_start + cand_dur
 
     return abs_start >= cand_start and abs_end <= cand_end
+end
+
+-- Backward compat shim: check_clip_containment delegates to check_extent_containment
+-- using the clip's source_in/source_out as the extent.
+function M.check_clip_containment(clip, probe_result, stored_rate, tc_remap_offset)
+    return M.check_extent_containment(
+        clip.source_in, clip.source_out, probe_result, stored_rate, tc_remap_offset)
 end
 
 --- Check if a candidate filename is a segment variant of an original filename.
@@ -589,8 +584,23 @@ function M.find_candidates_for_media(media_info, candidate_index, matching_rules
                     local offset = M.compute_tc_offset(stored_value, stored_rate, cand_tc_value, cand_tc_rate)
 
                     if math.abs(offset) > 1 then
-                        if matching_rules.accept_trimmed_media then
-                            -- TC mismatch but trimmed accepted — mark for per-clip containment
+                        -- Primary TC mismatch — check file_original_timecode (FR-008)
+                        local file_orig_tc = media_info.media_file_original_tc
+                        if file_orig_tc then
+                            local orig_offset = M.compute_tc_offset(
+                                file_orig_tc, stored_rate, cand_tc_value, cand_tc_rate)
+                            if math.abs(orig_offset) <= 1 then
+                                -- Candidate matches file_original_timecode: clean accept (FR-009)
+                                log.event("  %s: TC matches file_original_timecode (offset=%.1f)",
+                                    get_filename(cand_path), orig_offset)
+                                -- tc_mismatch stays false — no containment fallback needed
+                            elseif matching_rules.accept_trimmed_media then
+                                tc_mismatch = true
+                            else
+                                passed = false
+                            end
+                        elseif matching_rules.accept_trimmed_media then
+                            -- No file_original_tc → existing trimmed-media containment fallback
                             tc_mismatch = true
                         else
                             passed = false
@@ -643,96 +653,191 @@ end
 -- Batch orchestration: fan out per-media matching + classification
 -- =============================================================================
 
---- Bucket candidates into per-clip lists.
--- Non-TC-mismatch candidates belong to every clip; TC-mismatch candidates
--- only belong to clips whose source range fits inside the candidate.
--- @param media_info table Media info with .clips sub-array
+--- Classify a media into relinked/failed/ambiguous/split based on candidates.
+-- Media-level: uses source_extent for containment, not per-clip iteration.
+-- When extent containment fails but some individual clips fit (partial-fit),
+-- produces a needs_split entry with the fitting clip_ids.
+-- @param media_info table Media info with source_extent_start/end
 -- @param candidates table Array from find_candidates_for_media
--- @param stored_rate number|nil Media's stored TC rate (required for containment)
--- @return table {clip_id → [candidate]}
-local function bucket_candidates_per_clip(media_info, candidates, stored_rate)
-    local clip_candidates = {}
-    for _, clip in ipairs(media_info.clips) do
-        clip_candidates[clip.clip_id] = {}
+-- @param clip_loader function(media_id) → array of {clip_id, source_in, source_out, fps_num, fps_den}
+-- @return table {relinked = [...], failed = [...], ambiguous = [...]}
+local function classify_media(media_info, candidates, clip_loader)
+    local stored_rate = media_info.media_start_tc_rate
+    local out = { relinked = {}, failed = {}, ambiguous = {} }
+
+    -- Compute TC remap offset for override clips
+    local tc_remap_offset = nil
+    if media_info.media_file_original_tc and media_info.media_start_tc_value then
+        local delta = media_info.media_file_original_tc - media_info.media_start_tc_value
+        if delta ~= 0 then
+            tc_remap_offset = delta
+        end
     end
+
+    -- Filter candidates: non-tc_mismatch pass through, tc_mismatch need containment
+    local viable = {}
+    local partial_fit_candidates = {}  -- tc_mismatch candidates that failed extent but may fit some clips
 
     for _, cand in ipairs(candidates) do
         if cand.tc_mismatch and stored_rate then
-            -- Per-clip containment check (pure arithmetic)
-            for _, clip in ipairs(media_info.clips) do
-                if cand.probe_result and M.check_clip_containment(clip, cand.probe_result, stored_rate) then
-                    local bucket = clip_candidates[clip.clip_id]
-                    bucket[#bucket + 1] = cand
+            if media_info.source_extent_start and media_info.source_extent_end
+                and cand.probe_result
+                and M.check_extent_containment(
+                    media_info.source_extent_start, media_info.source_extent_end,
+                    cand.probe_result, stored_rate, tc_remap_offset) then
+                -- Full extent fit — all clips covered
+                viable[#viable + 1] = cand
+            elseif cand.probe_result then
+                -- Extent doesn't fit — check if this is plausibly a trimmed version
+                -- of the same file (TC offset positive and within source extent range).
+                -- Don't waste the clip_loader on completely unrelated TC mismatches.
+                local ref_tc = media_info.media_file_original_tc or media_info.media_start_tc_value
+                if ref_tc and cand.probe_result.start_tc_value then
+                    local cand_tc = cand.probe_result.start_tc_value
+                    if cand.probe_result.start_tc_rate ~= stored_rate then
+                        cand_tc = math.floor(cand_tc * stored_rate / cand.probe_result.start_tc_rate + 0.5)
+                    end
+                    local offset = cand_tc - ref_tc
+                    -- Trimmed file: candidate starts at or after the original file's TC.
+                    -- Plausible if offset is positive and within ~24h (not random TC space).
+                    if offset >= 0 and offset < 90000 * 24 then
+                        partial_fit_candidates[#partial_fit_candidates + 1] = cand
+                    end
                 end
             end
         else
-            for _, clip in ipairs(media_info.clips) do
-                local bucket = clip_candidates[clip.clip_id]
-                bucket[#bucket + 1] = cand
+            viable[#viable + 1] = cand
+        end
+    end
+
+    -- If we have viable candidates (full fit or clean TC match), classify normally
+    if #viable > 0 then
+        if #viable == 1 then
+            out.relinked[#out.relinked + 1] = {
+                media_id = media_info.media_id,
+                new_path = viable[1].path,
+                strategy = viable[1].is_segment and "segment" or "filename",
+            }
+        else
+            local cand_info = {}
+            for _, c in ipairs(viable) do
+                cand_info[#cand_info + 1] = {
+                    path = c.path, start_tc = c.start_tc_value, start_tc_rate = c.start_tc_rate,
+                }
+            end
+            out.ambiguous[#out.ambiguous + 1] = { media_id = media_info.media_id, candidates = cand_info }
+        end
+        return out
+    end
+
+    -- No full-fit candidates. Try partial fit via per-clip containment (lazy clip load).
+    if #partial_fit_candidates > 0 and clip_loader then
+        local raw_clips = clip_loader(media_info.media_id)
+        if raw_clips and #raw_clips > 0 then
+            -- Normalize clip source ranges to stored_rate and exclude master clips.
+            -- clip_loader returns clips in their native rate (48kHz audio, 25fps video, etc.);
+            -- check_extent_containment compares against the candidate range at stored_rate.
+            -- Without normalization, audio clips' sample-based source_in/out are ~1920x larger
+            -- than the frame-based candidate range, so they always fail containment.
+            local clips = {}
+            for _, clip in ipairs(raw_clips) do
+                if clip.clip_kind ~= "master" then
+                    local clip_rate = clip.fps_num / (clip.fps_den or 1)
+                    local src_in = clip.source_in
+                    local src_out = clip.source_out
+                    if clip_rate > 0 and math.abs(clip_rate - stored_rate) > 0.01 then
+                        src_in = math.floor(src_in * stored_rate / clip_rate + 0.5)
+                        src_out = math.floor(src_out * stored_rate / clip_rate + 0.5)
+                    end
+                    clips[#clips + 1] = {
+                        clip_id = clip.clip_id,
+                        source_in = src_in,
+                        source_out = src_out,
+                    }
+                end
+            end
+
+            -- Try each partial candidate — pick the one that covers the most clips
+            local best_cand, best_fits, best_count = nil, nil, 0
+
+            for _, cand in ipairs(partial_fit_candidates) do
+                if cand.probe_result then
+                    local fits = {}
+                    for _, clip in ipairs(clips) do
+                        if M.check_clip_containment(clip, cand.probe_result, stored_rate, tc_remap_offset) then
+                            fits[#fits + 1] = clip.clip_id
+                        end
+                    end
+                    if #fits == 0 and #clips > 0 then
+                        -- Log why zero clips fit: show clip range vs candidate range
+                        local pr = cand.probe_result
+                        local cand_start = pr.start_tc_value or 0
+                        if stored_rate and pr.start_tc_rate and pr.start_tc_rate ~= stored_rate then
+                            cand_start = math.floor(cand_start * stored_rate / pr.start_tc_rate + 0.5)
+                        end
+                        local cand_dur = pr.duration_frames or 0
+                        if pr.fps_num and pr.fps_den then
+                            local probe_rate = pr.fps_num / pr.fps_den
+                            if math.abs(probe_rate - stored_rate) > 0.01 then
+                                cand_dur = math.floor(cand_dur * stored_rate * pr.fps_den / pr.fps_num + 0.5)
+                            end
+                        end
+                        local c0 = clips[1]
+                        log.event("  0-clips detail: cand=[%d,%d]@%s remap=%s first_clip=[%d,%d] (%d clips total) file=%s",
+                            cand_start, cand_start + cand_dur, tostring(stored_rate),
+                            tostring(tc_remap_offset),
+                            c0.source_in, c0.source_out, #clips,
+                            get_filename(cand.path))
+                    end
+                    if #fits > best_count then
+                        best_cand = cand
+                        best_fits = fits
+                        best_count = #fits
+                    end
+                end
+            end
+
+            if best_count > 0 and best_count == #clips then
+                -- Actually ALL clips fit — extent check was overly conservative
+                -- (can happen with rate conversion rounding). Full relink.
+                out.relinked[#out.relinked + 1] = {
+                    media_id = media_info.media_id,
+                    new_path = best_cand.path,
+                    strategy = best_cand.is_segment and "segment" or "filename",
+                }
+                return out
+            elseif best_count > 0 then
+                -- Partial fit: some clips fit, some don't → needs split
+                out.relinked[#out.relinked + 1] = {
+                    media_id = media_info.media_id,
+                    new_path = best_cand.path,
+                    strategy = best_cand.is_segment and "segment" or "filename",
+                    needs_split = true,
+                    split_clip_ids = best_fits,
+                }
+                log.event("  partial fit: %d/%d clips fit in %s → needs split",
+                    best_count, #clips, get_filename(best_cand.path))
+                return out
             end
         end
     end
 
-    return clip_candidates
-end
-
---- Build a result entry for a clip that was uniquely relinked to one candidate.
--- source_in/source_out are absolute TC and never change on relink — the C++
--- decoder computes file_pos = source_in - first_sample_tc at decode time.
-local function make_relink_entry(clip, cand, original_media_id)
-    return {
-        clip_id = clip.clip_id,
-        original_media_id = original_media_id,
-        new_media_id = nil,
-        new_source_in = clip.source_in,
-        new_source_out = clip.source_out,
-        new_path = cand.path,
-        strategy = cand.is_segment and "segment" or "filename",
-    }
-end
-
---- Build a result entry for a clip with multiple candidates (needs user choice).
-local function make_ambiguous_entry(clip, covers)
-    local cand_info = {}
-    for _, c in ipairs(covers) do
-        cand_info[#cand_info + 1] = {
-            path = c.path,
-            start_tc = c.start_tc_value,
-            start_tc_rate = c.start_tc_rate,
-        }
+    -- Nothing viable — log why at event level so failures are diagnosable
+    local reason
+    if #candidates == 0 then
+        reason = "no filename match in search directory"
+    elseif #partial_fit_candidates == 0 and #viable == 0 then
+        reason = string.format("%d candidate(s) found but all rejected by TC/extent filter", #candidates)
+    elseif #partial_fit_candidates > 0 then
+        reason = string.format("%d partial candidate(s) but 0 clips passed containment", #partial_fit_candidates)
+    else
+        reason = "no matching candidate found"
     end
-    return {
-        clip_id = clip.clip_id,
-        candidates = cand_info,
+    log.event("  FAILED: %s — %s", media_info.media_name, reason)
+    out.failed[#out.failed + 1] = {
+        media_id = media_info.media_id,
+        reason = reason,
     }
-end
-
---- Classify clips under one media into relinked/failed/ambiguous outcomes.
--- Pure: no I/O, no mutation of external state, no progress reporting.
--- @param media_info table Media info with .clips sub-array
--- @param candidates table Array from find_candidates_for_media
--- @return table {relinked = [...], failed = [...], ambiguous = [...]}
-local function classify_clips_for_media(media_info, candidates)
-    local stored_rate = media_info.media_start_tc_rate
-    local clip_candidates = bucket_candidates_per_clip(media_info, candidates, stored_rate)
-
-    local out = { relinked = {}, failed = {}, ambiguous = {} }
-
-    for _, clip in ipairs(media_info.clips) do
-        local covers = clip_candidates[clip.clip_id]
-        if #covers == 0 then
-            out.failed[#out.failed + 1] = {
-                clip_id = clip.clip_id,
-                original_media_id = media_info.media_id,
-                reason = "no matching candidate found",
-            }
-        elseif #covers == 1 then
-            out.relinked[#out.relinked + 1] = make_relink_entry(clip, covers[1], media_info.media_id)
-        else
-            out.ambiguous[#out.ambiguous + 1] = make_ambiguous_entry(clip, covers)
-        end
-    end
-
     return out
 end
 
@@ -778,52 +883,9 @@ end
 --- Report progress for one processed media to the caller's progress_cb.
 -- Emits one log line per clip outcome so the user can see what happened:
 --   [OK]    clip → file            (relinked)
---   [FAIL]  clip (reason)          (no candidate fit)
---   [AMBIG] clip (N candidates)    (multiple candidates — needs user choice)
--- Also emits a media-level "(no candidates)" summary when the whole media
--- yielded zero candidates, so the user sees a single line instead of one
--- [FAIL] line per clip on that media.
-local function report_media_progress(progress_cb, media_idx, total_media, media_info, candidates, media_results)
-    if not progress_cb then return end
-
-    local pct = math.floor(media_idx / total_media * 100)
-    local status_line = string.format("Processing %d of %d media...", media_idx, total_media)
-
-    -- Build clip_id → display-name lookup for log lines
-    local clip_names = {}
-    for _, clip in ipairs(media_info.clips) do
-        clip_names[clip.clip_id] = clip.clip_name or clip.clip_id:sub(1, 8)
-    end
-
-    for _, entry in ipairs(media_results.relinked) do
-        progress_cb(pct, status_line,
-            string.format("[OK] %s → %s",
-                clip_names[entry.clip_id], get_filename(entry.new_path)))
-    end
-
-    -- Whole-media miss: one compact line instead of a [FAIL] per clip.
-    if #candidates == 0 then
-        progress_cb(pct, nil,
-            string.format("[--] %s (no candidates)", media_info.media_name))
-        return
-    end
-
-    for _, entry in ipairs(media_results.failed) do
-        progress_cb(pct, status_line,
-            string.format("[FAIL] %s (%s)",
-                clip_names[entry.clip_id], entry.reason))
-    end
-
-    for _, entry in ipairs(media_results.ambiguous) do
-        progress_cb(pct, status_line,
-            string.format("[AMBIG] %s (%d candidates)",
-                clip_names[entry.clip_id], #entry.candidates))
-    end
-end
-
 --- Batch relink media to candidate files using matching rules.
--- Matches per-media (not per-clip), then fans out results to all clips.
--- @param media_infos table Array of media_info structs with .clips sub-arrays
+-- Matches per-media (not per-clip). Output is per-media, not per-clip.
+-- @param media_infos table Array of media_info structs with source_extent_start/end
 -- @param options table {search_paths, matching_rules}
 -- @param progress_cb function|nil progress_cb(pct, status, log_line)
 -- @return table {relinked, failed, ambiguous, new_media}
@@ -848,18 +910,13 @@ function M.relink_media_batch(media_infos, options, progress_cb)
     if total_media == 0 then return results end
 
     -- Each media_info must carry the required fields used by the pipeline.
-    -- Assert once here so downstream helpers can assume them.
-    local total_clips = 0
     for i, mi in ipairs(media_infos) do
         assert(type(mi.media_path) == "string" and mi.media_path ~= "",
             string.format("relink_media_batch: media_infos[%d].media_path required", i))
-        assert(type(mi.clips) == "table",
-            string.format("relink_media_batch: media_infos[%d].clips required", i))
-        total_clips = total_clips + #mi.clips
     end
 
-    log.event("relink_media_batch: %d media (%d clips), search=%s, rules: fn=%s tc=%s res=%s fps=%s trim=%s seg=%s",
-        total_media, total_clips, table.concat(options.search_paths, ","),
+    log.event("relink_media_batch: %d media, search=%s, rules: fn=%s tc=%s res=%s fps=%s trim=%s seg=%s",
+        total_media, table.concat(options.search_paths, ","),
         tostring(matching_rules.match_filename), tostring(matching_rules.match_timecode),
         tostring(matching_rules.match_resolution), tostring(matching_rules.match_frame_rate),
         tostring(matching_rules.accept_trimmed_media), tostring(matching_rules.accept_filename_suffixes))
@@ -915,11 +972,11 @@ function M.relink_media_batch(media_infos, options, progress_cb)
         return result
     end
 
-    -- Step 2: Process each media — find candidates, classify, merge, report
+    -- Step 2: Process each media — find candidates, classify, merge
     local t_match = os.clock()
     for i, media_info in ipairs(media_infos) do
-        log.detail("media %d/%d: %s (%d clips)",
-            i, total_media, media_info.media_name, #media_info.clips)
+        log.detail("media %d/%d: %s",
+            i, total_media, media_info.media_name)
 
         local candidates = M.find_candidates_for_media(
             media_info, candidate_index, matching_rules, cached_probe)
@@ -935,9 +992,18 @@ function M.relink_media_batch(media_infos, options, progress_cb)
             inject_segment_candidates(media_info, candidates, segment_index, cached_probe)
         end
 
-        local media_results = classify_clips_for_media(media_info, candidates)
+        local media_results = classify_media(media_info, candidates, options.clip_loader)
         merge_media_results(results, media_results)
-        report_media_progress(progress_cb, i, total_media, media_info, candidates, media_results)
+
+        if progress_cb then
+            local pct = math.floor(20 + i / total_media * 80)
+            if #media_results.relinked > 0 then
+                progress_cb(pct, string.format("[%d/%d] %s → relinked",
+                    i, total_media, media_info.media_name))
+            elseif #media_results.failed > 0 then
+                progress_cb(pct, string.format("[%d/%d] %s", i, total_media, media_info.media_name))
+            end
+        end
     end
 
     if progress_cb then

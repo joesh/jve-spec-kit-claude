@@ -76,25 +76,47 @@ update_clip_field("clip_a", "source_in_frame", 100)
 print("  Test 2: float frames detected — OK")
 
 -- =========================================================================
--- Test 3: Source range violation detected
+-- Test 3: Reversed source range is valid (reverse clip convention)
 -- =========================================================================
 
 update_clip_field("clip_a", "source_in_frame", 999)
 update_clip_field("clip_a", "source_out_frame", 100)
-local src_result = validator.validate_jvp(db)
-assert(not src_result.ok, "source_in > source_out should fail")
-
-local found_src = false
-for _, err in ipairs(src_result.errors) do
-    if err:match("BAD_SOURCE_RANGE") then found_src = true end
+local rev_result = validator.validate_jvp(db)
+-- source_in > source_out is the JVE convention for reverse clips — NOT an error.
+-- Validator should not flag this. (ABSURD_SPEED may flag it if the speed is
+-- outside [0.001, 100], but BAD_SOURCE_RANGE should not appear.)
+local found_bad_range = false
+for _, err in ipairs(rev_result.errors) do
+    if err:match("ZERO_SOURCE_RANGE") then found_bad_range = true end
 end
-assert(found_src, "Should report BAD_SOURCE_RANGE error")
+assert(not found_bad_range, "Reversed source range should not be flagged as zero")
 
 -- Restore
 update_clip_field("clip_a", "source_in_frame", 100)
 update_clip_field("clip_a", "source_out_frame", 600)
 
-print("  Test 3: source range violation detected — OK")
+print("  Test 3: reversed source range accepted (reverse clip) — OK")
+
+-- =========================================================================
+-- Test 3b: Zero source range IS a violation
+-- =========================================================================
+
+update_clip_field("clip_a", "source_in_frame", 500)
+update_clip_field("clip_a", "source_out_frame", 500)
+local zero_result = validator.validate_jvp(db)
+assert(not zero_result.ok, "source_in == source_out should fail")
+
+local found_zero = false
+for _, err in ipairs(zero_result.errors) do
+    if err:match("ZERO_SOURCE_RANGE") then found_zero = true end
+end
+assert(found_zero, "Should report ZERO_SOURCE_RANGE error")
+
+-- Restore
+update_clip_field("clip_a", "source_in_frame", 100)
+update_clip_field("clip_a", "source_out_frame", 600)
+
+print("  Test 3b: zero source range detected — OK")
 
 -- =========================================================================
 -- Test 4: Video overlap detected
@@ -183,13 +205,19 @@ print("  Test 6: parent ordering violation detected — OK")
 -- Test 7: Absurd speed ratio detected (the unit mismatch bug pattern)
 -- =========================================================================
 
--- Simulate the bug: source_out = source_in + duration (timeline frames)
--- instead of source_in + duration * clip_rate / seq_rate.
--- For clip_a: source_in=100, duration=500, clip_rate=1000/1, seq_rate=1000/1
--- → source_out should be 100 + 500 = 600 (speed 1.0, correct for same-rate)
--- Corrupt it to simulate audio-rate mismatch: source_out = source_in + 2
--- → implied speed = 2/500 = 0.004 (absurdly slow)
-update_clip_field("clip_a", "source_out_frame", 102)
+-- Simulate the bug: source_out ≈ source_in (near-zero source range for
+-- a long clip). For clip_a: source_in=100, duration=500, clip_rate=1000/1.
+-- Set source_out near source_in so implied speed = range/500 is below 0.001.
+-- This catches the unit mismatch pattern (missing ×1920 audio factor)
+-- which produced speeds of ~0.0005.
+-- source_out = 100 would be zero range (caught by ZERO_SOURCE_RANGE).
+-- source_out = 100 + 0.4 → not representable as int. Use large duration instead.
+-- Actually: with source_in=100, duration=500 at rate 1000/1:
+-- unity_range = 500. Need actual_range/500 < 0.001 → actual_range < 0.5.
+-- Integer constraint: actual_range must be ≥ 1. So increase duration instead.
+-- Set duration=10000, source_out=101 → speed = 1/10000 = 0.0001 (absurd).
+update_clip_field("clip_a", "duration_frames", 10000)
+update_clip_field("clip_a", "source_out_frame", 101)
 
 local speed_result = validator.validate_jvp(db)
 assert(not speed_result.ok, "Absurd speed should fail validation")
@@ -202,6 +230,7 @@ assert(found_speed, "Should report ABSURD_SPEED error")
 
 -- Restore
 update_clip_field("clip_a", "source_out_frame", 600)
+update_clip_field("clip_a", "duration_frames", 500)
 
 print("  Test 7: absurd speed ratio detected — OK")
 

@@ -52,15 +52,6 @@ static bool widget_accepts_text_input(QWidget* widget)
     return false;
 }
 
-// Handle Lua pcall failure from C++ callback context (signal handlers, event filters).
-// lua_pcall already caught the error — we log it and continue dispatch.
-// Throwing or calling lua_error here would crash (no protected frame above).
-static void handle_lua_callback_error(lua_State* L) {
-    const char* err = lua_tostring(L, -1);
-    JVE_LOG_ERROR(Ui, "Lua callback error: %s", err ? err : "(unknown)");
-    lua_pop(L, 1);
-}
-
 // Global key event filter class
 class GlobalKeyFilter : public QObject
 {
@@ -192,10 +183,11 @@ protected:
                         return true;  // Event consumed
                     }
                 } else {
-                    handle_lua_callback_error(lua_state);
+                    jve_handle_lua_callback_error(lua_state, "signal.global_key_press");
                 }
             } else {
-                lua_pop(lua_state, 1);
+                jve_discard_non_function_handler(lua_state, handler_name.c_str(),
+                    "signal.global_key_press");
             }
         }
         // Handle key release for K held state (JKL shuttle)
@@ -215,12 +207,13 @@ protected:
                 lua_settable(lua_state, -3);
 
                 if (lua_pcall(lua_state, 1, 1, 0) != LUA_OK) {
-                    handle_lua_callback_error(lua_state);
+                    jve_handle_lua_callback_error(lua_state, "signal.global_key_release");
                 } else {
                     lua_pop(lua_state, 1);  // Pop return value
                 }
             } else {
-                lua_pop(lua_state, 1);
+                jve_discard_non_function_handler(lua_state, "global_key_release_handler",
+                    "signal.global_key_release");
             }
         }
         return QObject::eventFilter(obj, event);
@@ -256,10 +249,11 @@ protected:
                 lua_settable(lua_state, -3);
 
                 if (lua_pcall(lua_state, 1, 0, 0) != LUA_OK) {
-                    handle_lua_callback_error(lua_state);
+                    jve_handle_lua_callback_error(lua_state, "signal.focus_change");
                 }
             } else {
-                lua_pop(lua_state, 1);
+                jve_discard_non_function_handler(lua_state, handler_name.c_str(),
+                    "signal.focus_change");
             }
         }
         return QObject::eventFilter(obj, event);
@@ -292,11 +286,11 @@ protected:
                     lua_pushinteger(lua_state, mouseEvent->pos().y());
 
                     if (lua_pcall(lua_state, 2, 0, 0) != LUA_OK) {
-                        handle_lua_callback_error(lua_state);
+                        jve_handle_lua_callback_error(lua_state, "signal.panel_click");
                     }
                 } else {
-                    JVE_LOG_WARN(Ui, "Lua click handler not found: %s", handler_name.c_str());
-                    lua_pop(lua_state, 1);
+                    jve_discard_non_function_handler(lua_state, handler_name.c_str(),
+                        "signal.panel_click");
                 }
                 return false; // Let the event propagate for other handlers (e.g., splitter)
             }
@@ -370,10 +364,10 @@ int lua_set_button_click_handler(lua_State* L) {
         if (lua_isfunction(L, -1)) {
 
             if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                handle_lua_callback_error(L);
+                jve_handle_lua_callback_error(L, "signal.button_clicked");
             }
         } else {
-            lua_pop(L, 1);
+            jve_discard_non_function_handler(L, handler_str.c_str(), "signal.button_clicked");
         }
     });
     return 0;
@@ -413,7 +407,7 @@ int lua_set_context_menu_handler(lua_State* L) {
             {
     
                 if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                    handle_lua_callback_error(L);
+                    jve_handle_lua_callback_error(L, "signal.context_menu");
                 }
             }
         });
@@ -431,10 +425,10 @@ int lua_set_line_edit_text_changed_handler(lua_State* L) {
         if (lua_isfunction(L, -1)) {
 
             if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                handle_lua_callback_error(L);
+                jve_handle_lua_callback_error(L, "signal.line_edit_text_changed");
             }
         } else {
-            lua_pop(L, 1);
+            jve_discard_non_function_handler(L, handler_str.c_str(), "signal.line_edit_text_changed");
         }
     });
     return 0;
@@ -451,10 +445,10 @@ int lua_set_line_edit_editing_finished_handler(lua_State* L) {
         if (lua_isfunction(L, -1)) {
 
             if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                handle_lua_callback_error(L);
+                jve_handle_lua_callback_error(L, "signal.line_edit_editing_finished");
             }
         } else {
-            lua_pop(L, 1);
+            jve_discard_non_function_handler(L, handler_str.c_str(), "signal.line_edit_editing_finished");
         }
     });
     return 0;
@@ -470,10 +464,10 @@ int lua_set_line_edit_return_pressed_handler(lua_State* L) {
         lua_getglobal(L, handler_str.c_str());
         if (lua_isfunction(L, -1)) {
             if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                handle_lua_callback_error(L);
+                jve_handle_lua_callback_error(L, "signal.line_edit_return_pressed");
             }
         } else {
-            lua_pop(L, 1);
+            jve_discard_non_function_handler(L, handler_str.c_str(), "signal.line_edit_return_pressed");
         }
     });
     return 0;
@@ -644,10 +638,11 @@ protected:
                     if (lua_isfunction(lua_state, -1)) {
                         lua_pushstring(lua_state, panel_ids[i].c_str());
                         if (lua_pcall(lua_state, 1, 0, 0) != LUA_OK) {
-                            handle_lua_callback_error(lua_state);
+                            jve_handle_lua_callback_error(lua_state, "signal.panel_focus_trap_click");
                         }
                     } else {
-                        lua_pop(lua_state, 1);
+                        jve_discard_non_function_handler(lua_state, handler_name.c_str(),
+                            "signal.panel_focus_trap_click");
                     }
                     return QObject::eventFilter(obj, event);
                 }
@@ -724,10 +719,10 @@ int lua_set_splitter_moved_handler(lua_State* L) {
             lua_pushinteger(L, index);
 
             if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
-                handle_lua_callback_error(L);
+                jve_handle_lua_callback_error(L, "signal.splitter_moved");
             }
         } else {
-            lua_pop(L, 1);
+            jve_discard_non_function_handler(L, handler_str.c_str(), "signal.splitter_moved");
         }
     });
     return 0;
@@ -748,10 +743,10 @@ int lua_set_scroll_area_v_scroll_handler(lua_State* L) {
         if (lua_isfunction(L, -1)) {
             lua_pushinteger(L, value);
             if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                handle_lua_callback_error(L);
+                jve_handle_lua_callback_error(L, "signal.scroll_area_vscroll");
             }
         } else {
-            lua_pop(L, 1);
+            jve_discard_non_function_handler(L, handler_str.c_str(), "signal.scroll_area_vscroll");
         }
     });
     return 0;
@@ -772,15 +767,12 @@ int lua_create_single_shot_timer(lua_State* L) {
 
     QObject::connect(timer, &QTimer::timeout, [L, callback_ref, timer]() {
         lua_rawgeti(L, LUA_REGISTRYINDEX, callback_ref);
-        {
-
-            if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                // Unref before re-raising so we don't leak
-                luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
-                timer->deleteLater();
-                handle_lua_callback_error(L);
-            }
+        if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+            jve_handle_lua_callback_error(L, "signal.single_shot_timer");
         }
+        // Single-shot: always release the callback ref and schedule the timer
+        // for deletion. Drain does not unwind, so this runs on both success
+        // and error paths.
         luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
         timer->deleteLater();
     });
@@ -804,10 +796,10 @@ int lua_set_scroll_area_scroll_handler(lua_State* L) {
                 lua_pushinteger(L, value);
     
                 if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                    handle_lua_callback_error(L);
+                    jve_handle_lua_callback_error(L, "signal.scroll_area_scroll_v");
                 }
             } else {
-                lua_pop(L, 1);
+                jve_discard_non_function_handler(L, handler_str.c_str(), "signal.scroll_area_scroll_v");
             }
         });
     }
@@ -828,10 +820,10 @@ int lua_set_scroll_area_h_scroll_handler(lua_State* L) {
                 lua_pushinteger(L, value);
     
                 if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                    handle_lua_callback_error(L);
+                    jve_handle_lua_callback_error(L, "signal.scroll_area_scroll_h");
                 }
             } else {
-                lua_pop(L, 1);
+                jve_discard_non_function_handler(L, handler_str.c_str(), "signal.scroll_area_scroll_h");
             }
         });
     }
@@ -883,10 +875,11 @@ protected:
             lua_getglobal(lua_state, handler_name.c_str());
             if (lua_isfunction(lua_state, -1)) {
                 if (lua_pcall(lua_state, 0, 0, 0) != LUA_OK) {
-                    handle_lua_callback_error(lua_state);
+                    jve_handle_lua_callback_error(lua_state, "signal.geometry_change");
                 }
             } else {
-                lua_pop(lua_state, 1);
+                jve_discard_non_function_handler(lua_state, handler_name.c_str(),
+                    "signal.geometry_change");
             }
         }
         return QObject::eventFilter(obj, event);
@@ -910,10 +903,11 @@ protected:
             lua_getglobal(lua_state, handler_name.c_str());
             if (lua_isfunction(lua_state, -1)) {
                 if (lua_pcall(lua_state, 0, 0, 0) != LUA_OK) {
-                    handle_lua_callback_error(lua_state);
+                    jve_handle_lua_callback_error(lua_state, "signal.close_event");
                 }
             } else {
-                lua_pop(lua_state, 1);
+                jve_discard_non_function_handler(lua_state, handler_name.c_str(),
+                    "signal.close_event");
             }
         }
         return QObject::eventFilter(obj, event);

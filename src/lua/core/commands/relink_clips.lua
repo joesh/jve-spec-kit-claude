@@ -56,7 +56,7 @@ function M.register(executors, undoers, db)
         -- No transaction here — command_manager provides one.
         -- Any assert/error unwinds to command_manager which rolls back.
 
-        -- Phase 1: Create new media records (for segment files)
+        -- Phase 1: Create new media records (split clones, segment files)
         for _, rec in ipairs(new_media_records) do
             assert(rec.id and rec.path and rec.name,
                 "RelinkClips: new_media_record requires id, path, name")
@@ -71,13 +71,11 @@ function M.register(executors, undoers, db)
                 duration_frames = rec.duration_frames,
                 fps_numerator = rec.fps_num,
                 fps_denominator = rec.fps_den,
-                width = rec.width,     -- nil OK for audio-only (Media.create handles)
-                height = rec.height,   -- nil OK for audio-only
-                metadata = rec.start_tc_value and
-                    require("dkjson").encode({
-                        start_tc_value = rec.start_tc_value,
-                        start_tc_rate = rec.start_tc_rate,
-                    }) or "{}",
+                audio_sample_rate = rec.audio_sample_rate,
+                audio_channels = rec.audio_channels,
+                width = rec.width,
+                height = rec.height,
+                metadata = rec.metadata or "{}",
             })
             assert(media:save(), string.format("RelinkClips: failed to save new media %s", rec.id))
             log.event("RelinkClips: created media %s → %s", rec.id, rec.path)

@@ -357,6 +357,7 @@ Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset)
         EMP_LOG_DEBUG("Reader::Create: BRAW decoder %dx%d path=%s",
             asset->info().video_width, asset->info().video_height,
             asset->info().path.c_str());
+        asset->mark_decode_started();
         return std::make_shared<Reader>(std::move(impl), std::move(asset));
     }
 
@@ -424,6 +425,7 @@ Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset)
         }
     }
 
+    asset->mark_decode_started();
     return std::make_shared<Reader>(std::move(impl), std::move(asset));
 }
 

@@ -65,7 +65,9 @@ end
 print("\n--- 1: Video clips with non-zero source_in ---")
 
 -- "resolve audio tracks tutorial" — 6 trimmed clips from same media
--- Known: In=2189 at 24fps on V1, timeline_start=86400
+-- Known: DRP <In>=2189 at 24fps sequence rate, media is 59.94fps (≈60/1).
+-- Source coords are at native media rate: 2189 * 60/24 = 5473 (rounded).
+-- clip rate = native media rate = 60/1 (not sequence rate).
 local video_clips = query_all([[
     SELECT c.timeline_start_frame, c.source_in_frame, c.duration_frames,
            c.fps_numerator, c.fps_denominator
@@ -81,13 +83,14 @@ local video_clips = query_all([[
 assert(#video_clips == 6, string.format("expected 6 V1 clips, got %d", #video_clips))
 
 -- Known-answer: (timeline_start, source_in, duration, fps_num, fps_den)
+-- source_in is at native media rate (60fps), timeline_start/duration at sequence rate (24fps).
 local expected_video = {
-    {86400, 2189, 362, 24, 1},
-    {86762, 2590, 49, 24, 1},
-    {86811, 2649, 45, 24, 1},
-    {86856, 2751, 527, 24, 1},
-    {87383, 3301, 2698, 24, 1},
-    {90084, 5999, 8, 24, 1},
+    {86400, 5473, 362, 60, 1},
+    {86762, 6475, 49, 60, 1},
+    {86811, 6623, 45, 60, 1},
+    {86856, 6878, 527, 60, 1},
+    {87383, 8253, 2698, 60, 1},
+    {90084, 14998, 8, 60, 1},
 }
 
 for i, exp in ipairs(expected_video) do
@@ -119,9 +122,18 @@ local audio_clips = query_all([[
 
 assert(#audio_clips == 6, string.format("expected 6 A1 clips, got %d", #audio_clips))
 
--- First 5 clips are paired V/A from same media at 24fps video / 48kHz audio
--- Relationship: audio_source_in = video_source_in * (48000/24) = video_source_in * 2000
-local samples_per_frame = 48000 / 24  -- = 2000
+-- First 5 clips are paired V/A from same media at ~60fps video / 48kHz audio.
+-- Both source_in values are at their native rates, computed independently
+-- from the same DRP <In> field. Due to independent rounding, the exact ratio
+-- audio/video ≈ 48000/60 = 800 but may differ by a few samples.
+-- Known-answer audio values (from probe):
+local expected_audio = {
+    {86400, 4378000},    -- V/A pair 1
+    {86762, 5180000},    -- V/A pair 2
+    {86811, 5298000},    -- V/A pair 3
+    {86856, 5502000},    -- V/A pair 4
+    {87383, 6602000},    -- V/A pair 5
+}
 
 for i = 1, 5 do
     local v = video_clips[i]
@@ -129,16 +141,15 @@ for i = 1, 5 do
     -- Same timeline position
     assert(v[1] == a[1], string.format(
         "clip %d: V tl_start=%d != A tl_start=%d", i, v[1], a[1]))
-    -- Audio source_in = video source_in * samples_per_frame
-    local expected_audio_src = v[2] * samples_per_frame
-    assert(a[2] == expected_audio_src, string.format(
-        "clip %d: expected audio src_in=%d (video %d * %d), got %d",
-        i, expected_audio_src, v[2], samples_per_frame, a[2]))
+    -- Audio source_in matches known value
+    assert(a[2] == expected_audio[i][2], string.format(
+        "clip %d: expected audio src_in=%d, got %d",
+        i, expected_audio[i][2], a[2]))
     -- Audio fps = 48000/1
     assert(a[4] == 48000 and a[5] == 1, string.format(
         "clip %d: audio fps should be 48000/1, got %d/%d", i, a[4], a[5]))
 end
-print("  PASS: 5 V/A pairs — audio_source_in = video_source_in * 2000")
+print("  PASS: 5 V/A pairs — audio source_in at 48kHz native rate")
 
 -- ═══════════════════════════════════════════════════════════════
 -- 3. Clip 6 is a different DRP clip (speed=0.38, different coordinates)
@@ -146,13 +157,13 @@ print("  PASS: 5 V/A pairs — audio_source_in = video_source_in * 2000")
 print("\n--- 3: Non-unity speed audio clip ---")
 
 local a6 = audio_clips[6]
--- Known: tl=90082, src_in=4559933, dur=6, fps=48000/1
+-- Known (from probe): tl=90082, src_in=12000000, dur=6, fps=48000/1
 assert(a6[1] == 90082, "clip 6 tl_start: " .. tostring(a6[1]))
-assert(a6[2] == 4559933, "clip 6 src_in: " .. tostring(a6[2]))
+assert(a6[2] == 12000000, "clip 6 src_in: " .. tostring(a6[2]))
 assert(a6[4] == 48000, "clip 6 fps_num: " .. tostring(a6[4]))
--- This clip's source_in does NOT follow the V/A * 2000 rule because it's
+-- This clip's source_in does NOT follow the V/A * 800 rule because it's
 -- a different clip with speed=0.38 (the DRP speed affects source mapping)
--- V1 clip 6: tl=90084, src_in=5999 — different timeline_start too
+-- V1 clip 6: tl=90084, src_in=14998 — different timeline_start too
 assert(a6[1] ~= video_clips[6][1], "clip 6 should have different tl_start than V1 clip 6")
 print("  PASS: audio clip 6 has independent coordinates (speed=0.38)")
 

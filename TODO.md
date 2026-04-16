@@ -340,3 +340,13 @@ Optimization Preserved:
 - [x] Refactored monolithic timeline_view into ui/timeline/view/*
 - [x] Created full-stack integration test
 - [x] Restore ripple handle semantics
+
+## Importer Rate-Mismatch Bug — RESOLVED
+
+24fps-on-25fps (`OldFashionedFilmLeaderCountdownVidevo.mov`) played ~4% too fast because DRP parser stamped every source-unit value with sequence rate. Landed on branch `009-drp-importer-must`:
+- `cf7b9c3` native-rate source coords: video from `<MediaFrameRate>`, audio from pool TracksBA sample_rate; both assert if absent. Clip carries separate `frame_rate` (sequence) and `native_rate` (media).
+- `c27dc65` dropped audio-rate fallbacks; 48000 hardcode gone.
+- `3b8e40d` NSF asserts for required invariants in media model + EMP binding.
+- Regression lock: `tests/test_drp_media_rate_conform.lua` (24/25/30 on 25, untrimmed/trimmed, native_rate stamp).
+- Dual-TC override-relink (FR-001..FR-019) landed via `specs/009-drp-importer-must/tasks.md` T001-T016 all marked done.
+- Outstanding: commit `cf7b9c3` notes 9 "0-clip" cases remain after relink; 201 files still fail match. Separate thread from the rate bug.

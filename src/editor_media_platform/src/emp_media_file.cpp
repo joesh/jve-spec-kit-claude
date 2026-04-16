@@ -3,6 +3,7 @@
 #include "impl/media_file_impl.h"
 #include "impl/ffmpeg_context.h"  // av_log_set_level
 #include "impl/braw_decode.h"
+#include "../../assert_handler.h"  // JVE_ASSERT
 #include <cassert>
 #include <climits>  // INT_MAX for av_reduce
 #include <mutex>
@@ -358,6 +359,23 @@ Result<std::shared_ptr<MediaFile>> MediaFile::Open(const std::string& path) {
         "MediaFile::Open: first_sample_tc exceeds 24h — corrupt BWF/stream start_time?");
 
     return std::make_shared<MediaFile>(std::move(impl), std::move(info));
+}
+
+void MediaFile::set_tc_origin_override(int64_t first_frame_tc, int64_t first_sample_tc) {
+    JVE_ASSERT(!m_decode_started,
+        ("MediaFile::set_tc_origin_override: called after decode started on " + m_info.path).c_str());
+    JVE_ASSERT(first_frame_tc >= 0,
+        ("MediaFile::set_tc_origin_override: first_frame_tc must be >= 0, got "
+         + std::to_string(first_frame_tc) + " on " + m_info.path).c_str());
+    JVE_ASSERT(first_sample_tc >= 0,
+        ("MediaFile::set_tc_origin_override: first_sample_tc must be >= 0, got "
+         + std::to_string(first_sample_tc) + " on " + m_info.path).c_str());
+    m_info.first_frame_tc = first_frame_tc;
+    m_info.first_sample_tc = first_sample_tc;
+}
+
+void MediaFile::mark_decode_started() {
+    m_decode_started = true;
 }
 
 } // namespace emp

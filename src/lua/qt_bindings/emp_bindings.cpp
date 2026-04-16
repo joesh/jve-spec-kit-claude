@@ -182,6 +182,19 @@ static int lua_emp_media_file_info(lua_State* L) {
     return 1;
 }
 
+// EMP.MEDIA_FILE_SET_TC_ORIGIN_OVERRIDE(media_file, first_frame_tc, first_sample_tc)
+static int lua_emp_media_file_set_tc_origin_override(lua_State* L) {
+    void* key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
+    auto it = g_media_files.find(key);
+    if (it == g_media_files.end()) {
+        return luaL_error(L, "MEDIA_FILE_SET_TC_ORIGIN_OVERRIDE: invalid media file handle");
+    }
+    int64_t first_frame_tc = static_cast<int64_t>(luaL_checkinteger(L, 2));
+    int64_t first_sample_tc = static_cast<int64_t>(luaL_checkinteger(L, 3));
+    it->second->set_tc_origin_override(first_frame_tc, first_sample_tc);
+    return 0;
+}
+
 // MediaFile __gc metamethod
 static int lua_emp_media_file_gc(lua_State* L) {
     void* key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
@@ -474,6 +487,67 @@ static emp::TrackType parse_track_type(lua_State* L, int idx) {
     if (strcmp(type_str, "audio") == 0) return emp::TrackType::Audio;
     luaL_error(L, "invalid track type: '%s' (expected 'video' or 'audio')", type_str);
     return emp::TrackType::Video; // unreachable
+}
+
+// EMP.TMB_SET_TC_OVERRIDES(tmb, overrides_table)
+// overrides_table = { [path_string] = { video = int64, audio = int64 | nil }, ... }
+//
+// `video` is required (the override applies to the file's video TC).
+// `audio` is optional — absent for video-only media, where the audio side
+// of the override is never consulted. When absent we store 0 as a no-op
+// sentinel; if a file has audio AND needs an override, the Lua caller must
+// supply a real audio sample count.
+//
+// Schema violations (non-string key, non-table value, missing/non-numeric
+// `video`) are programming errors and fail loud per the fail-fast policy.
+static int lua_emp_tmb_set_tc_overrides(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+
+    std::unordered_map<std::string, emp::TcOverride> overrides;
+
+    lua_pushnil(L);
+    while (lua_next(L, 2)) {
+        if (!lua_isstring(L, -2)) {
+            return luaL_error(L,
+                "TMB_SET_TC_OVERRIDES: override map key must be a string path");
+        }
+        if (!lua_istable(L, -1)) {
+            return luaL_error(L,
+                "TMB_SET_TC_OVERRIDES: override map value for '%s' must be a table",
+                lua_tostring(L, -2));
+        }
+        std::string path = lua_tostring(L, -2);
+
+        lua_getfield(L, -1, "video");
+        if (!lua_isnumber(L, -1)) {
+            return luaL_error(L,
+                "TMB_SET_TC_OVERRIDES: '%s'.video must be an integer (got %s)",
+                path.c_str(), luaL_typename(L, -1));
+        }
+        int64_t video_tc = static_cast<int64_t>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        // audio is optional: absent → 0 sentinel (audio path won't be consulted
+        // for video-only media). Present-but-non-numeric is a schema violation.
+        lua_getfield(L, -1, "audio");
+        int64_t audio_tc = 0;
+        if (!lua_isnil(L, -1)) {
+            if (!lua_isnumber(L, -1)) {
+                return luaL_error(L,
+                    "TMB_SET_TC_OVERRIDES: '%s'.audio must be an integer or nil (got %s)",
+                    path.c_str(), luaL_typename(L, -1));
+            }
+            audio_tc = static_cast<int64_t>(lua_tointeger(L, -1));
+        }
+        lua_pop(L, 1);
+
+        overrides[path] = emp::TcOverride{video_tc, audio_tc};
+        lua_pop(L, 1);  // pop value, keep key for next iteration
+    }
+
+    tmb->SetTcOverrides(std::move(overrides));
+    return 0;
 }
 
 // EMP.TMB_SET_MAX_READERS(tmb, max)
@@ -1266,10 +1340,10 @@ static int lua_emp_surface_on_ready(lua_State* L) {
         if (lua_isfunction(main_L, -1)) {
             JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 0, 0, 0) != 0) {
-                lua_error(main_L);
+                jve_handle_lua_callback_error(main_L, "emp.surface_on_ready");
             }
         } else {
-            lua_pop(main_L, 1);
+            jve_discard_non_function_handler(main_L, "<registry ref>", "emp.surface_on_ready");
         }
     });
 
@@ -1301,10 +1375,10 @@ static int lua_emp_surface_on_error(lua_State* L) {
             lua_pushstring(main_L, error.c_str());
             JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 1, 0, 0) != 0) {
-                lua_error(main_L);
+                jve_handle_lua_callback_error(main_L, "emp.surface_on_error");
             }
         } else {
-            lua_pop(main_L, 1);
+            jve_discard_non_function_handler(main_L, "<registry ref>", "emp.surface_on_error");
         }
     });
 
@@ -1553,10 +1627,10 @@ static int lua_playback_set_position_callback(lua_State* L) {
             lua_pushboolean(main_L, stopped ? 1 : 0);
             JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 2, 0, 0) != 0) {
-                lua_error(main_L);
+                jve_handle_lua_callback_error(main_L, "emp.position_callback");
             }
         } else {
-            lua_pop(main_L, 1);
+            jve_discard_non_function_handler(main_L, "<registry ref>", "emp.position_callback");
         }
     });
 
@@ -1587,10 +1661,10 @@ static int lua_playback_set_clip_provider(lua_State* L) {
             lua_pushstring(main_L, type == emp::TrackType::Video ? "video" : "audio");
             JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 3, 0, 0) != 0) {
-                lua_error(main_L);
+                jve_handle_lua_callback_error(main_L, "emp.clip_provider");
             }
         } else {
-            lua_pop(main_L, 1);
+            jve_discard_non_function_handler(main_L, "<registry ref>", "emp.clip_provider");
         }
     });
 
@@ -1684,10 +1758,10 @@ static int lua_playback_set_clip_transition_callback(lua_State* L) {
             lua_pushinteger(main_L, static_cast<lua_Integer>(frame));
             JveLuaStateGuard guard(main_L);
             if (lua_pcall(main_L, 7, 0, 0) != 0) {
-                lua_error(main_L);
+                jve_handle_lua_callback_error(main_L, "emp.clip_transition");
             }
         } else {
-            lua_pop(main_L, 1);
+            jve_discard_non_function_handler(main_L, "<registry ref>", "emp.clip_transition");
         }
     });
 
@@ -1798,12 +1872,10 @@ static int lua_emp_codec_probe_start(lua_State* L) {
             lua_pushboolean(L, is_final);
 
             if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
-                if (is_final) {
-                    luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
-                }
-                handle_lua_callback_error(L);
+                jve_handle_lua_callback_error(L, "emp.codec_probe_batch");
             }
-
+            // Drain does not unwind — release the ref on both success and
+            // error paths when this is the final batch.
             if (is_final) {
                 luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
             }
@@ -2087,6 +2159,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "MEDIA_FILE_CLOSE");
     lua_pushcfunction(L, lua_emp_media_file_info);
     lua_setfield(L, -2, "MEDIA_FILE_INFO");
+    lua_pushcfunction(L, lua_emp_media_file_set_tc_origin_override);
+    lua_setfield(L, -2, "MEDIA_FILE_SET_TC_ORIGIN_OVERRIDE");
 
     // Reader functions
     lua_pushcfunction(L, lua_emp_reader_create);
@@ -2131,6 +2205,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "TMB_CLOSE");
     lua_pushcfunction(L, lua_emp_tmb_set_max_readers);
     lua_setfield(L, -2, "TMB_SET_MAX_READERS");
+    lua_pushcfunction(L, lua_emp_tmb_set_tc_overrides);
+    lua_setfield(L, -2, "TMB_SET_TC_OVERRIDES");
     lua_pushcfunction(L, lua_emp_tmb_set_sequence_rate);
     lua_setfield(L, -2, "TMB_SET_SEQUENCE_RATE");
     lua_pushcfunction(L, lua_emp_tmb_set_sequence_resolution);

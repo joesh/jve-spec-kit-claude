@@ -103,14 +103,64 @@ print("    OK")
 -- Test 9: Input validation
 -- ============================================================================
 print("  test 9: input validation")
-local ok1, _ = pcall(waveform_utils.visible_source_range, 100, 50, 0, 0, 100, 100)
-assert(not ok1, "source_out <= source_in should fail")
+-- Zero-range (source_in == source_out) must fail — a clip cannot be zero-length.
+local okZero, _ = pcall(waveform_utils.visible_source_range, 100, 100, 0, 0, 100, 100)
+assert(not okZero, "source_in == source_out should fail")
 
 local ok2, _ = pcall(waveform_utils.visible_source_range, 0, 100, 0, 0, 0, 100)
 assert(not ok2, "clip_width=0 should fail")
 
 local ok3, _ = pcall(waveform_utils.visible_source_range, 0, 100, 0, 0, 100, 0)
 assert(not ok3, "draw_width=0 should fail")
+print("    OK")
+
+-- ============================================================================
+-- Test 10: Reverse clip (source_in > source_out) — fully visible
+-- ============================================================================
+print("  test 10: reverse clip fully visible")
+-- Reverse of test 1: source_in=5088000, source_out=4608000. Direction preserved.
+local siR1, soR1 = waveform_utils.visible_source_range(5088000, 4608000, 200, 200, 400, 400)
+assert(siR1 == 5088000, "reverse fully visible: vis_in should equal source_in, got " .. siR1)
+assert(soR1 == 4608000, "reverse fully visible: vis_out should equal source_out, got " .. soR1)
+print("    OK")
+
+-- ============================================================================
+-- Test 11: Reverse clip extends past LEFT edge
+-- ============================================================================
+print("  test 11: reverse clip extends past left edge")
+-- Reverse of test 2. source_in=5088000 (upper), source_out=4608000 (lower).
+-- spp = (4608000 - 5088000)/1000 = -480. left_clip=300. Δ = 300 * -480 = -144000.
+-- vis_in = 5088000 + (-144000) = 4944000 (moves down toward source_out).
+-- right_clip=0. vis_out = source_out = 4608000.
+local siR2, soR2 = waveform_utils.visible_source_range(5088000, 4608000, -300, 0, 1000, 700)
+assert(siR2 == 4944000, "reverse left clip: vis_in expected 4944000 got " .. siR2)
+assert(soR2 == 4608000, "reverse left clip: vis_out expected 4608000 got " .. soR2)
+-- Direction preserved: vis_in > vis_out for reverse.
+assert(siR2 > soR2, "reverse: vis_in must be > vis_out (direction preserved)")
+print("    OK")
+
+-- ============================================================================
+-- Test 12: Reverse clip extends past RIGHT edge
+-- ============================================================================
+print("  test 12: reverse clip extends past right edge")
+-- Reverse of test 3. x=1500, visible_x=1500, clip_width=1000, draw_width=420
+-- right_clip = 580. Δ = 580 * -480 = -278400. vis_out = 4608000 - (-278400) = 4886400.
+-- left_clip=0. vis_in = source_in = 5088000.
+local siR3, soR3 = waveform_utils.visible_source_range(5088000, 4608000, 1500, 1500, 1000, 420)
+assert(siR3 == 5088000, "reverse right clip: vis_in expected 5088000 got " .. siR3)
+assert(soR3 == 4886400, "reverse right clip: vis_out expected 4886400 got " .. soR3)
+assert(siR3 > soR3, "reverse: vis_in must be > vis_out")
+print("    OK")
+
+-- ============================================================================
+-- Test 13: Reverse clip clamp — vis positions stay within [min, max]
+-- ============================================================================
+print("  test 13: reverse clip vis_in/vis_out stay within source range")
+local siR4, soR4 = waveform_utils.visible_source_range(5088000, 4608000, -5000, 0, 12000, 1920)
+local lo, hi = 4608000, 5088000
+assert(siR4 >= lo and siR4 <= hi, "reverse vis_in out of range: " .. siR4)
+assert(soR4 >= lo and soR4 <= hi, "reverse vis_out out of range: " .. soR4)
+assert(siR4 > soR4, "reverse: vis_in > vis_out (direction preserved)")
 print("    OK")
 
 print("✅ test_waveform_viewport_clipping.lua passed")

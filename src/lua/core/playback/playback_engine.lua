@@ -304,6 +304,25 @@ function PlaybackEngine:_create_tmb()
 
     -- Audio format: 48kHz stereo F32 (standard output format)
     EMP.TMB_SET_AUDIO_FORMAT(self._tmb, 48000, 2)
+
+    -- TC origin overrides for media with Set Timecode overrides (FR-011).
+    -- When file_original_timecode is populated, the media's start_tc_value
+    -- differs from the file's container TC. Tell TMB to override the probed TC
+    -- with start_tc_value so decode arithmetic lands on the correct frame.
+    if EMP.TMB_SET_TC_OVERRIDES then
+        local Media = require("models.media")
+        local override_media = Media.find_tc_override_media(self.sequence.project_id)
+        if #override_media > 0 then
+            local overrides = {}
+            for _, m in ipairs(override_media) do
+                overrides[m.file_path] = {
+                    video = m.start_tc_value,
+                    audio = m.start_tc_audio_samples,
+                }
+            end
+            EMP.TMB_SET_TC_OVERRIDES(self._tmb, overrides)
+        end
+    end
 end
 
 --- Close TMB instance if active.

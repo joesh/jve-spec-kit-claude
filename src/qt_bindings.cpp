@@ -1,5 +1,6 @@
 #include "qt_bindings.h"
 #include "simple_lua_engine.h" // Needed for SimpleLuaEngine::s_lastCreatedMainWindow
+#include "jve_lua_callback.h" // Shared pcall error drain for all binding callbacks
 #include <QPointer>
 
 // Include all the newly split binding files. These files contain the implementations

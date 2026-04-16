@@ -1,21 +1,14 @@
---- TODO: one-line summary (human review required)
+--- Shared filesystem helpers — file existence, listing, shell capture.
 --
 -- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
+-- - file_exists / file_mtime / list_dir: read-only filesystem queries
+-- - shell_capture: run a shell command, capture stdout via temp file
+--   (avoids io.popen EINTR risk under Qt signals/timers)
 --
 -- Invariants:
--- - TODO
---
--- Size: ~13 LOC
--- Volatility: unknown
+-- - shell_capture errors with caller context on command failure
 --
 -- @file fs_utils.lua
--- Original intent (unreviewed):
--- fs_utils.lua
--- Shared filesystem helpers (pure Lua, no shelling out).
 local M = {}
 
 function M.file_exists(path, mode)
@@ -59,6 +52,35 @@ function M.list_dir(dir)
         result[#result + 1] = filename
     end
     return result
+end
+
+--- Run a shell command, capture output to a temp file, read that file.
+-- Avoids io.popen pipes — LuaJIT's pipe reads are susceptible to EINTR
+-- from Qt signals/timers, and there's no portable way to mask signals
+-- in Lua. Writing to a temp file and reading it back sidesteps the issue.
+-- @param cmd string: shell command to execute
+-- @param context string: caller name for error messages
+-- @return string: command stdout (errors on command failure or read failure)
+function M.shell_capture(cmd, context)
+    local tmp = os.tmpname()
+    local exit_code = os.execute(cmd .. " > " .. tmp .. " 2>/dev/null")
+    if exit_code ~= 0 then
+        os.remove(tmp)
+        error(string.format("%s: command failed (exit %s): %s",
+            context, tostring(exit_code), cmd), 2)
+    end
+    local handle, open_err = io.open(tmp, "r")
+    if not handle then
+        os.remove(tmp)
+        error(string.format("%s: failed to open temp file %s: %s",
+            context, tmp, tostring(open_err)), 2)
+    end
+    local data, read_err = handle:read("*all")
+    handle:close()
+    os.remove(tmp)
+    assert(data, string.format("%s: failed to read temp file %s: %s",
+        context, tmp, tostring(read_err)))
+    return data
 end
 
 return M

@@ -114,36 +114,26 @@ print("      ✓ both retimed clips have correct source_in (curve-walking fix is
 
 print("[4/6] Building media_infos and running relink against fixture tree")
 
--- Use the same pattern as media_relink_dialog: find_project_media → build
--- media_infos with clip arrays via Clip.find_clips_for_media.
+-- Build media_infos with source extents (no per-clip loading).
 local media_list = media_relinker.find_project_media(db, proj_id)
 print(string.format("      project has %d non-proxy media", #media_list))
 
 local media_infos = {}
 for _, media in ipairs(media_list) do
     local tc_value, tc_rate = media:get_start_tc()
-    local clips = Clip.find_clips_for_media(media.id)
-    local clip_entries = {}
-    for _, clip in ipairs(clips) do
-        clip_entries[#clip_entries + 1] = {
-            clip_id = clip.id,
-            source_in = clip.source_in,
-            source_out = clip.source_out,
-            fps_num = clip.rate.fps_numerator,
-            fps_den = clip.rate.fps_denominator,
-            clip_kind = clip.clip_kind,
-            clip_name = clip.name,
-        }
-    end
+    local file_orig_tc = media:get_file_original_timecode()
+    local extent_start, extent_end = media:get_source_extent(tc_rate or 25)
     media_infos[#media_infos + 1] = {
         media_id = media.id,
         media_path = media:get_file_path(),
         media_name = media.name or media.id,
         media_start_tc_value = tc_value,
         media_start_tc_rate = tc_rate,
+        media_file_original_tc = file_orig_tc,
         width = media.width or 0,
         height = media.height or 0,
-        clips = clip_entries,
+        source_extent_start = extent_start,
+        source_extent_end = extent_end,
     }
 end
 print(string.format("      built media_infos for %d media", #media_infos))
@@ -158,6 +148,21 @@ local batch = media_relinker.relink_media_batch(media_infos, {
         accept_trimmed_media = true,
         accept_filename_suffixes = false,
     },
+    clip_loader = function(media_id)
+        local clips = Clip.find_clips_for_media(media_id)
+        local entries = {}
+        for _, clip in ipairs(clips) do
+            entries[#entries + 1] = {
+                clip_id = clip.id,
+                clip_kind = clip.clip_kind,
+                source_in = clip.source_in,
+                source_out = clip.source_out,
+                fps_num = clip.rate.fps_numerator,
+                fps_den = clip.rate.fps_denominator,
+            }
+        end
+        return entries
+    end,
 })
 print(string.format("      relink_media_batch: %d relinked, %d failed, %d ambiguous, %d new media",
     #(batch.relinked or {}), #(batch.failed or {}), #(batch.ambiguous or {}), #(batch.new_media or {})))
@@ -167,83 +172,32 @@ local command_manager = require("core.command_manager")
 command_manager.init(seq_id, proj_id)
 
 -- Apply the relinker output as RelinkClips. Two different project-media rows
--- can resolve to the same fixture-tree path (e.g. AnamBack1 vs AnamBack4 dupes)
--- — the production dialog handles this with folder-priority resolution; for
--- this end-to-end smoke test we just keep the first writer per path.
-local clip_relink_map = {}
-local media_path_changes = {}
-local path_owner = {}  -- new_path → media_id (first writer wins)
-for _, entry in ipairs(batch.relinked or {}) do
-    if entry.new_path and entry.original_media_id then
-        local existing = path_owner[entry.new_path]
-        if not existing or existing == entry.original_media_id then
-            path_owner[entry.new_path] = entry.original_media_id
-            media_path_changes[entry.original_media_id] = entry.new_path
-            -- Only attach the clip change for the winner
-            if entry.clip_id then
-                clip_relink_map[entry.clip_id] = {
-                    new_media_id = entry.new_media_id,
-                    new_source_in = entry.new_source_in,
-                    new_source_out = entry.new_source_out,
-                }
-            end
-        end
-    elseif entry.clip_id then
-        clip_relink_map[entry.clip_id] = {
-            new_media_id = entry.new_media_id,
-            new_source_in = entry.new_source_in,
-            new_source_out = entry.new_source_out,
-        }
-    end
-end
+-- can resolve to the same fixture-tree path (e.g. AnamBack1 vs AnamBack4 dupes).
+-- The shared planner handles DB-owner collisions, priority tiebreaks, splits,
+-- and dedupe salvage — same code production uses via show_relink_dialog.
+-- relink_media_batch's contract guarantees .relinked and .failed arrays; the
+-- planner asserts types so a missing field surfaces as an actionable error.
+assert(type(batch.relinked) == "table",
+    "relink_media_batch must return .relinked array")
+assert(type(batch.failed) == "table",
+    "relink_media_batch must return .failed array")
 
--- Dedupe salvage: for each failed clip, look for a sibling media row with
--- the same name whose file_path exists on disk, and reassign. Mirrors
--- show_relink_dialog.lua's second pass so this test exercises the same
--- salvage logic end-to-end.
-local dedupe_stmt = db:prepare([[
-    SELECT id, file_path FROM media
-    WHERE project_id = ?
-      AND name = (SELECT name FROM media WHERE id = ?)
-      AND id != ?
-]])
-local dedupe_salvaged = 0
-for _, entry in ipairs(batch.failed or {}) do
-    if entry.original_media_id and not clip_relink_map[entry.clip_id] then
-        dedupe_stmt:bind_value(1, proj_id)
-        dedupe_stmt:bind_value(2, entry.original_media_id)
-        dedupe_stmt:bind_value(3, entry.original_media_id)
-        if dedupe_stmt:exec() then
-            while dedupe_stmt:next() do
-                local sibling_id = dedupe_stmt:value(0)
-                local sibling_path = dedupe_stmt:value(1)
-                local f = sibling_path and io.open(sibling_path, "r")
-                if f then
-                    f:close()
-                    clip_relink_map[entry.clip_id] = { new_media_id = sibling_id }
-                    dedupe_salvaged = dedupe_salvaged + 1
-                    break
-                end
-            end
-        end
-        dedupe_stmt:reset()
-    end
-end
-dedupe_stmt:finalize()
-print(string.format("      dedupe salvage: %d clips reassigned to sibling media rows", dedupe_salvaged))
+local relink_planner = require("core.relink_planner")
+local plan = relink_planner.build_plan(
+    db, batch.relinked, batch.failed,
+    {},  -- no folder priority in this smoke test — first-writer-wins ties
+    proj_id)
 
-local clip_changes = 0
-for _ in pairs(clip_relink_map) do clip_changes = clip_changes + 1 end
-local media_changes = 0
-for _ in pairs(media_path_changes) do media_changes = media_changes + 1 end
-print(string.format("      dispatching RelinkClips: %d clip changes, %d media path changes",
-    clip_changes, media_changes))
+print(string.format("      planner: %d clip changes, %d media path changes, %d new media, %d salvaged",
+    (function() local n=0 for _ in pairs(plan.clip_relink_map) do n=n+1 end return n end)(),
+    (function() local n=0 for _ in pairs(plan.media_path_changes) do n=n+1 end return n end)(),
+    #plan.new_media_records, plan.salvaged_count))
 
 local apply_result = command_manager.execute("RelinkClips", {
-    clip_relink_map = clip_relink_map,
-    media_path_changes = media_path_changes,
-    new_media_records = batch.new_media or {},
-    project_id = proj_id,
+    clip_relink_map    = plan.clip_relink_map,
+    media_path_changes = plan.media_path_changes,
+    new_media_records  = plan.new_media_records,
+    project_id         = proj_id,
 })
 assert(apply_result and apply_result.success, "RelinkClips failed")
 print("      ✓ RelinkClips committed")
@@ -347,9 +301,72 @@ do
     stmt:finalize()
 end
 
+-- ─────────────────────────────────────────────────────────────
+-- [8/8] Verify VFX clips with Set Timecode overrides came online (FR-019)
+-- ─────────────────────────────────────────────────────────────
+print("\n[8/8] VFX Set Timecode override verification:")
+
+-- The 3 VFX master clips with overrides (file_original_timecode ≠ start_tc_value):
+--   A001_05191316_C013 VFX_01.mov: override 13:16:12:21, file 00:07:35:08
+--   A003_05191950_C002 VFX_01.mov: override 19:50:33:12, file 00:05:47:14
+--   A001_05191306_C010 VFX_01.mov: override 13:06:17:16, file 00:04:50:06
+local vfx_override_names = {
+    "A001_05191316_C013 VFX_01.mov",
+    "A003_05191950_C002 VFX_01.mov",
+    "A001_05191306_C010 VFX_01.mov",
+}
+
+local vfx_online = 0
+local vfx_total_clips = 0
+for _, vfx_name in ipairs(vfx_override_names) do
+    local stmt_vfx = db:prepare([[
+        SELECT m.id, m.file_path, m.metadata FROM media m
+        WHERE m.name = ? AND m.project_id = ?
+    ]])
+    stmt_vfx:bind_value(1, vfx_name)
+    stmt_vfx:bind_value(2, proj_id)
+    assert(stmt_vfx:exec(), "VFX media query failed for " .. vfx_name)
+
+    while stmt_vfx:next() do
+        local mid = stmt_vfx:value(0)
+        local mpath = stmt_vfx:value(1) or ""
+        local mmeta = stmt_vfx:value(2) or "{}"
+
+        -- Check file_original_timecode is present in metadata
+        local has_fotc = mmeta:find("file_original_timecode") ~= nil
+        local is_fixture = mpath:find("/tests/fixtures/", 1, true) ~= nil
+
+        -- Count clips in gold master on this media
+        local clip_stmt = db:prepare([[
+            SELECT COUNT(*) FROM clips c
+            JOIN tracks t ON c.track_id = t.id
+            WHERE t.sequence_id = ? AND c.media_id = ?
+        ]])
+        clip_stmt:bind_value(1, seq_id)
+        clip_stmt:bind_value(2, mid)
+        assert(clip_stmt:exec() and clip_stmt:next())
+        local clip_count = clip_stmt:value(0)
+        clip_stmt:finalize()
+
+        vfx_total_clips = vfx_total_clips + clip_count
+        if is_fixture then vfx_online = vfx_online + clip_count end
+
+        local status = is_fixture and "✓ ONLINE" or "✗ OFFLINE"
+        print(string.format("      %s %s: fotc=%s clips=%d path=...%s",
+            status, vfx_name, tostring(has_fotc),
+            clip_count, mpath:sub(math.max(1, #mpath - 50))))
+    end
+    stmt_vfx:finalize()
+end
+
+assert(vfx_online > 0, string.format(
+    "VFX override clips must be online after relink (got %d/%d)", vfx_online, vfx_total_clips))
+print(string.format("      ✓ %d/%d VFX override clips online", vfx_online, vfx_total_clips))
+
 print("\n✅ test_e2e_retime_relink.lua passed")
 print("   - DRP convert produces correct source_in for retimed clips (111916, 124682)")
 print("   - Both clips relinked to the fixture tree")
 print("   - source_in ≥ first_frame_tc → C++ assertion will not fire")
-print(string.format("   - Dedupe salvage reassigned %d clips to sibling media rows", dedupe_salvaged))
+print(string.format("   - Dedupe salvage reassigned %d clips to sibling media rows", plan.salvaged_count))
+print(string.format("   - VFX override clips online: %d/%d", vfx_online, vfx_total_clips))
 print(string.format("   - Gold master offline count: %d", offline_count))

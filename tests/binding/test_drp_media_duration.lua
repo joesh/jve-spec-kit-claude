@@ -58,6 +58,7 @@ local seq_multi = elem("Sequence", "", {
                 elem("Duration", "99"),           -- timeline edit = 99 frames
                 elem("In", ""),                    -- source_in = 0
                 elem("MediaFilePath", "/vol/media/interview.mov"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24.0 fps LE hex
             }),
             elem("Sm2TiVideoClip", "", {
                 elem("Name", "second_edit"),
@@ -65,6 +66,7 @@ local seq_multi = elem("Sequence", "", {
                 elem("Duration", "200"),           -- timeline edit = 200 frames
                 elem("In", "1100"),                -- source_in = 1100 frames into file
                 elem("MediaFilePath", "/vol/media/interview.mov"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24.0 fps LE hex
             })
         ),
     }),
@@ -102,6 +104,7 @@ local seq_single = elem("Sequence", "", {
                 elem("Duration", "150"),
                 elem("In", "500"),                 -- starts 500 frames in
                 elem("MediaFilePath", "/vol/media/solo.mov"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24.0 fps LE hex
             })
         ),
     }),
@@ -137,6 +140,7 @@ local seq_av = elem("Sequence", "", {
                 elem("Duration", "100"),
                 elem("In", ""),
                 elem("MediaFilePath", "/vol/media/av_file.mov"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24.0 fps LE hex
             })
         ),
     }),
@@ -151,29 +155,36 @@ local seq_av = elem("Sequence", "", {
                 elem("Duration", "300"),
                 elem("In", "200"),
                 elem("MediaFilePath", "/vol/media/av_file.mov"),
+                elem("MediaRef", "av-media-ref-001"),
             })
         ),
     }),
 })
 
-local v3, a3, ml3 = drp_importer.parse_resolve_tracks(seq_av, 24)
+local av_path_map = { ["av-media-ref-001"] = "/vol/media/av_file.mov" }
+local av_sr_map = { ["av-media-ref-001"] = 48000 }
+local v3, a3, ml3 = drp_importer.parse_resolve_tracks(seq_av, 24, av_path_map, nil, av_sr_map)
 
 assert(#v3 == 1, "Expected 1 video track")
 assert(#a3 == 1, "Expected 1 audio track")
 
-local av_media = ml3["/vol/media/av_file.mov"]
-assert(av_media, "media_lookup should have entry for av_file.mov")
+-- With MediaRef, audio and video clips get separate media_lookup entries:
+-- video keyed by file_path, audio keyed by MediaRef UUID.
+local video_media = ml3["/vol/media/av_file.mov"]
+assert(video_media, "media_lookup should have video entry for av_file.mov")
+assert(video_media.duration == 100, string.format(
+    "Video media duration should be 100, got %d", video_media.duration))
 
+local audio_media = ml3["av-media-ref-001"]
+assert(audio_media, "media_lookup should have audio entry for av-media-ref-001")
 -- Audio extent in frames: in_value(200) + duration_raw(300) = 500
--- Video extent: 0 + 100 = 100
--- Max = 500
-assert(av_media.duration == 500, string.format(
-    "A/V media duration should be 500 (audio extends deeper), got %d", av_media.duration))
-print("  ✓ A/V media duration = 500 (audio extent deeper than video)")
+assert(audio_media.duration == 500, string.format(
+    "Audio media duration should be 500 (in_value + duration_raw), got %d", audio_media.duration))
+print("  ✓ A/V media: video=100, audio=500 (separate entries, each with correct extent)")
 
--- Audio channels should be set since we have an audio track
-assert(av_media.audio_channels == 2, string.format(
-    "audio_channels should be 2, got %s", tostring(av_media.audio_channels)))
+-- Audio channels should be set on the audio entry
+assert(audio_media.audio_channels == 2, string.format(
+    "audio_channels should be 2, got %s", tostring(audio_media.audio_channels)))
 print("  ✓ audio_channels = 2 (from audio track)")
 
 --------------------------------------------------------------------------------
@@ -194,6 +205,7 @@ local seq_match = elem("Sequence", "", {
                 elem("Duration", "99"),            -- short edit
                 elem("In", ""),                    -- source_in=0
                 elem("MediaFilePath", "/vol/media/long_interview.mov"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24.0 fps LE hex
             }),
             elem("Sm2TiVideoClip", "", {
                 elem("Name", "highlight"),
@@ -201,6 +213,7 @@ local seq_match = elem("Sequence", "", {
                 elem("Duration", "50"),
                 elem("In", "1203"),                -- deep into source
                 elem("MediaFilePath", "/vol/media/long_interview.mov"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24.0 fps LE hex
             })
         ),
     }),
@@ -295,6 +308,7 @@ local seq_zero = elem("Sequence", "", {
                 elem("Duration", "0"),           -- zero duration → skipped
                 elem("In", "500"),
                 elem("MediaFilePath", "/vol/media/degenerate.mov"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24.0 fps LE hex
             })
         ),
     }),
@@ -335,6 +349,7 @@ local seq_retime = elem("Sequence", "", {
                 elem("Duration", "50"),           -- timeline edit = 50 frames
                 elem("In", "100|" .. hex_speed_2x),  -- retimed: in=100, speed=2x
                 elem("MediaFilePath", "/vol/media/fast.mov"),
+                elem("MediaFrameRate", "0000000000003840"),  -- 24.0 fps LE hex
             })
         ),
     }),
@@ -348,14 +363,12 @@ assert(#v8[1].clips == 1, "Expected 1 clip")
 local fast_media = ml8["/vol/media/fast.mov"]
 assert(fast_media, "media_lookup should have entry for fast.mov")
 
--- Speed=2.0: source_in_native = floor(100 * 2.0 + 0.5) = 200
--- source_duration = floor(50 * 2.0 + 0.5) = 100
--- source_extent = 200 + 100 = 300
--- Note: actual speed may be probe-adjusted, but without file to probe,
--- hex speed is used as-is
-assert(fast_media.duration == 300, string.format(
-    "Retimed media duration should be 300 (speed-adjusted extent), got %d",
+-- No MTBA element → clip is treated as unity speed.
+-- Hex suffix in <In> is rejected as a speed source (MTBA is authoritative).
+-- source_extent = in_value(100) + duration_raw(50) = 150
+assert(fast_media.duration == 150, string.format(
+    "No-MTBA media duration should be 150 (in_value + duration_raw), got %d",
     fast_media.duration))
-print("  ✓ Retimed clip: media duration = 300 (speed-adjusted source_extent)")
+print("  ✓ No-MTBA clip: media duration = 150 (no speed adjustment without MTBA)")
 
 print("\n✅ test_drp_media_duration.lua passed")

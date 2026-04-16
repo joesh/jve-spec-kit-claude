@@ -112,6 +112,10 @@ function M.import_into_project(project_id, parse_result, opts)
         sequence_ids = {},
         track_ids = {},
         clip_ids = {},
+        -- Maps the source format's per-timeline UUID (e.g. DRP Sm2Sequence.DbId)
+        -- to the newly-created JVE Sequence.id. Populated when timeline_data
+        -- carries a tab_uuid — used to restore open tabs post-import.
+        tab_uuid_to_sequence_id = {},
     }
 
     -- Import folder hierarchy as bins
@@ -210,13 +214,24 @@ function M.import_into_project(project_id, parse_result, opts)
                 goto continue_media
             end
 
-            -- Skip if we already created a record for this file_path
+            -- Skip if we already created a record for this (file_path, media_start_time).
+            -- Two master clips pointing at the same file but with different Set Timecode
+            -- overrides (different media_start_time) produce separate media rows (FR-003a).
+            -- Same file + same TC still dedupes to one row (camera footage, unchanged).
             if media_item.file_path and media_by_path[media_item.file_path] then
                 local existing = media_by_path[media_item.file_path]
-                if media_item.file_uuid then
-                    media_by_uuid[media_item.file_uuid] = existing
+                local existing_mst = existing._media_start_time
+                local this_mst = media_item.media_start_time
+                local same_tc = (existing_mst == nil or this_mst == nil) or
+                    (existing_mst == this_mst) or
+                    (math.abs(existing_mst - this_mst) < 0.001)
+                if same_tc then
+                    if media_item.file_uuid then
+                        media_by_uuid[media_item.file_uuid] = existing
+                    end
+                    goto continue_media
                 end
-                goto continue_media
+                -- Different TC for same file → fall through to create a second row
             end
 
             -- Convert media_start_time (seconds since midnight) to native units
@@ -225,13 +240,40 @@ function M.import_into_project(project_id, parse_result, opts)
             if media_item.media_start_time then
                 local json = require("dkjson")
                 local mst = media_item.media_start_time
-                local audio_sr = media_item.audio_sample_rate or 48000
-                media_metadata = json.encode({
-                    start_tc_value = math.floor(mst * native_rate + 0.5),
+                local start_tc_value = math.floor(mst * native_rate + 0.5)
+                local meta = {
+                    start_tc_value = start_tc_value,
                     start_tc_rate = native_rate,
-                    start_tc_audio_samples = math.floor(mst * audio_sr + 0.5),
-                    start_tc_audio_rate = audio_sr,
-                })
+                }
+
+                -- Audio TC fields only when the media actually has audio.
+                -- Video-only media (no audio_sample_rate) gets video TC only —
+                -- audio TC fields are omitted, not faked.
+                local audio_sr = media_item.audio_sample_rate
+                if audio_sr and audio_sr > 0 then
+                    meta.start_tc_audio_samples = math.floor(mst * audio_sr + 0.5)
+                    meta.start_tc_audio_rate = audio_sr
+                end
+
+                -- FR-001: Store file_original_timecode when file's container TC
+                -- differs from the displayed TC (Set Timecode override detected).
+                if media_item.file_tc_seconds then
+                    local file_tc_video = math.floor(media_item.file_tc_seconds * native_rate + 0.5)
+                    if file_tc_video ~= start_tc_value then
+                        meta.file_original_timecode = file_tc_video
+                        if audio_sr and audio_sr > 0 then
+                            meta.file_original_timecode_audio =
+                                math.floor(media_item.file_tc_seconds * audio_sr + 0.5)
+                        end
+                        log.event("  Set Timecode override: start_tc=%d file_tc=%d (delta=%d frames)",
+                            start_tc_value, file_tc_video, start_tc_value - file_tc_video)
+                    end
+                end
+                -- file_tc_seconds nil is normal: encrypted blobs, stock footage without
+                -- decodable TracksBA, unmatched PMC enrichment. No override detection for
+                -- this row — pre-feature behavior (file_original_timecode absent).
+
+                media_metadata = json.encode(meta)
             end
 
             -- Track type determines video presence:
@@ -256,6 +298,9 @@ function M.import_into_project(project_id, parse_result, opts)
             assert(media:save(), string.format(
                 "importer_core: failed to save media '%s' (path=%s)",
                 media_item.name, media_item.file_path))
+
+            -- Stash media_start_time for dedup comparison (same file, different TC → separate rows)
+            media._media_start_time = media_item.media_start_time
 
             if media_item.file_uuid then
                 media_by_uuid[media_item.file_uuid] = media
@@ -384,6 +429,9 @@ function M.import_into_project(project_id, parse_result, opts)
             "importer_core: failed to save timeline '%s'", timeline_data.name))
         do
             table.insert(result.sequence_ids, sequence.id)
+            if timeline_data.tab_uuid and timeline_data.tab_uuid ~= "" then
+                result.tab_uuid_to_sequence_id[timeline_data.tab_uuid] = sequence.id
+            end
             log.event("  Created timeline: %s @ %d/%d fps, %dx%d, viewport [%d..%d]",
                     timeline_data.name, fps_num, fps_den, seq_width, seq_height, view_start, view_start + view_duration)
 
@@ -433,12 +481,14 @@ function M.import_into_project(project_id, parse_result, opts)
                             goto continue_clip
                         end
 
-                        local clip_rate_num, clip_rate_den
-                        if track_data.type == "VIDEO" then
-                            clip_rate_num, clip_rate_den = fps_num, fps_den
-                        else
-                            clip_rate_num, clip_rate_den = 48000, 1
-                        end
+                        -- Clip rate = media's native rate. Source coordinates
+                        -- (source_in, source_out) are in native units set by the
+                        -- parser (parse_resolve_tracks). The rate must match.
+                        assert(clip_data.native_rate, string.format(
+                            "import_into_project: clip '%s' missing native_rate (media_id=%s)",
+                            clip_data.name or "unnamed", media_id))
+                        local clip_rate_num = clip_data.native_rate
+                        local clip_rate_den = 1
 
                         local source_out = clip_data.source_out
                         local is_reverse = (clip_data.clip_speed or 1) < 0
