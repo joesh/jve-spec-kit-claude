@@ -1135,17 +1135,27 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 local out_sec = (in_value + duration_raw) / frame_rate
                 local y_in_sec = eval_curve(retime_keyframes, in_sec)
                 local y_out_sec = eval_curve(retime_keyframes, out_sec)
-                in_offset = math.ceil(y_in_sec * native_rate)
-                local out_offset = math.ceil(y_out_sec * native_rate)
-                source_duration = out_offset - in_offset
-                -- Reverse-keyframe curves (Y decreases as X increases) produce
-                -- negative source_duration. Normalize: swap so source_in < source_out
-                -- and mark clip_speed negative for the later in/out swap.
-                if source_duration < 0 then
-                    in_offset = in_offset + source_duration  -- swap: old out_offset
-                    source_duration = -source_duration
+                -- Normalize reverse curves up front: y_first is the lower source
+                -- time (first frame in ascending source order), y_last the higher.
+                -- Mark clip_speed negative so the source_in/source_out swap at the
+                -- end of this function runs.
+                local y_first, y_last = y_in_sec, y_out_sec
+                if y_out_sec < y_in_sec then
+                    y_first, y_last = y_out_sec, y_in_sec
                     clip_speed = -math.abs(clip_speed)
                 end
+                -- Source-position rounding matches Resolve's Inspector TC display:
+                --   |slope| > 1 (accel): floor y_first (source frame whose span starts at/before).
+                --   |slope| <= 1 (decel): ceil y_first (source frame whose span starts at/after).
+                -- Consumed source frames always use floor: ceil would claim a partial
+                -- final frame the clip doesn't fully play, putting source_out past the
+                -- end of a zero-padding Media-Managed trim.
+                if abs_speed > 1.0 then
+                    in_offset = math.floor(y_first * native_rate)
+                else
+                    in_offset = math.ceil(y_first * native_rate)
+                end
+                source_duration = math.floor((y_last - y_first) * native_rate)
             else
                 -- No curve: in_value is source frames at sequence rate.
                 -- Convert to native_rate units.
