@@ -39,7 +39,8 @@ local command_modules = {
     "show_relink_dialog",
     "ripple_edit", "select_all", "select_browser_items", "select_clips", "set_clip_property", "set_project_setting",
     "set_sequence_metadata", "set_track_heights", "set_track_property", "setup_project", "split_clip", "step_frame", "toggle_clip_enabled",
-    "toggle_fullscreen_view", "toggle_maximize_panel", "trim_head", "trim_tail",
+    "toggle_fullscreen_view", "toggle_maximize_panel", "toggle_timecode_focus",
+    "trim_head", "trim_tail",
 }
 
 local function register_new_entries(executors, undoers, before_keys)

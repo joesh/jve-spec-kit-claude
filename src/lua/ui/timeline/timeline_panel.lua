@@ -265,7 +265,15 @@ local function install_timecode_entry_handlers()
     timecode_entry.focus_handler_name = register_global_handler("__timeline_timecode_focus_handler", function(event)
         local focus_in = event and event.focus_in
         timecode_entry.has_focus = focus_in and true or false
-        if not focus_in then
+        if focus_in then
+            -- Notify focus_manager that the timeline panel owns focus now —
+            -- the timecode line_edit is a child of timeline_panel but isn't
+            -- in get_focus_widgets() (it has its own dedicated handler).
+            -- Without this, panel-scoped shortcuts (Tab → ToggleTimecodeFocus
+            -- @timeline) wouldn't dispatch when the user clicks straight
+            -- into the timecode field from another panel.
+            require("ui.focus_manager").set_focused_panel("timeline")
+        else
             refresh_timecode_display()
         end
     end)
@@ -294,7 +302,10 @@ local function create_timecode_header()
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(layout, 6, 4, 6, 4)
 
     local line_edit = qt_constants.WIDGET.CREATE_LINE_EDIT("")
-    qt_set_focus_policy(line_edit, "StrongFocus")
+    -- ClickFocus (not StrongFocus) keeps the timecode field out of Qt's Tab
+    -- chain. Tab dispatch in the timeline panel goes through the command
+    -- system (ToggleTimecodeFocus). Click still focuses the field for typing.
+    qt_set_focus_policy(line_edit, "ClickFocus")
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(line_edit, "Expanding", "Fixed")
     qt_constants.PROPERTIES.SET_STYLE(line_edit, build_timecode_field_stylesheet())
 
@@ -397,6 +408,24 @@ end
 
 function M.focus_timeline_view()
     return focus_timeline_view()
+end
+
+--- Toggle keyboard focus between the timecode entry field and the timeline
+-- view. Bound to Tab via the TOML keymap (ToggleTimecodeFocus @timeline)
+-- and remappable from the keyboard customization UI.
+function M.toggle_timecode_focus()
+    assert(timecode_entry.line_edit,
+        "timeline_panel.toggle_timecode_focus: timecode_entry.line_edit not initialized")
+    assert(M.video_widget or M.audio_widget,
+        "timeline_panel.toggle_timecode_focus: no timeline view widget to focus")
+    -- Use the focus handler's authoritative has_focus flag rather than
+    -- comparing widget userdata pointers — Lua's `==` on widget userdata
+    -- compares allocation identity, not the wrapped QWidget*, so two
+    -- userdata wrapping the same widget are NOT equal.
+    if timecode_entry.has_focus then
+        return focus_timeline_view()
+    end
+    return focus_timecode_entry()
 end
 
 
@@ -1488,8 +1517,11 @@ function M.create(opts)
     -- Register video widget → scroll area mapping for coordinate conversion
     widget_to_scroll_area[video_widget] = timeline_video_scroll
     M.video_widget = video_widget
-    -- TabFocus so focusNextPrevChild includes it (timecode ↔ timeline via Tab)
-    if qt_set_focus_policy then qt_set_focus_policy(video_widget, "StrongFocus") end  -- luacheck: globals qt_set_focus_policy
+    -- ClickFocus (not StrongFocus) keeps the timeline view out of Qt's Tab
+    -- chain. The timecode↔timeline toggle is now driven by the command
+    -- system (ToggleTimecodeFocus @timeline). Mouse clicks still focus the
+    -- view.
+    if qt_set_focus_policy then qt_set_focus_policy(video_widget, "ClickFocus") end  -- luacheck: globals qt_set_focus_policy
 
     -- Create audio timeline view
     local audio_widget = qt_constants.WIDGET.CREATE_TIMELINE()

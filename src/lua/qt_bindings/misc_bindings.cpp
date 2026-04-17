@@ -1,6 +1,7 @@
 #include "binding_macros.h"
 #include "../../jve_log.h"
 #include "../../timeline_renderer.h" // For lua_create_timeline_renderer
+#include <QApplication> // For QApplication::focusWidget()
 #include <QRubberBand>
 #include <QCursor>
 #include <QScrollArea>
@@ -401,6 +402,17 @@ int lua_set_focus(lua_State* L) {
     }
     widget->setFocus(Qt::OtherFocusReason);
     return 0;
+}
+
+// Returns the widget that currently has Qt keyboard focus, or nil.
+int lua_get_focus_widget(lua_State* L) {
+    QWidget* fw = QApplication::focusWidget();
+    if (fw) {
+        lua_push_widget(L, fw);
+    } else {
+        lua_pushnil(L);
+    }
+    return 1;
 }
 
 int lua_update_widget(lua_State* L) {

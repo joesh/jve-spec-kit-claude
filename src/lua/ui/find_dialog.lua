@@ -473,6 +473,15 @@ function M.show(opts)
     qt.DISPLAY.RAISE(ws.window)
     qt.DISPLAY.ACTIVATE(ws.window)
 
+    -- Put the caret in the search field on every show (not just first
+    -- creation) and pre-select any existing query text so reopening Find
+    -- replaces the prior term by typing. Without this the dialog comes up
+    -- with focus indeterminate and j/k/l-style keypresses land elsewhere.
+    if ws.find_edit then
+        qt_set_focus(ws.find_edit)  -- luacheck: globals qt_set_focus
+        qt_line_edit_select_all(ws.find_edit)  -- luacheck: globals qt_line_edit_select_all
+    end
+
     -- Enable geometry persistence after layout settles
     qt_create_single_shot_timer(50, function()
         ws.geometry_ready = true

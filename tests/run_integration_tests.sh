@@ -81,6 +81,7 @@ for t in \
   test_layout_sanity.lua \
   test_widget_lifecycle.lua \
   test_keyboard_qshortcut_integration.lua \
+  test_floating_window_key_isolation.lua \
   test_tab_order_restore.lua \
   test_codec_status_on_startup.lua
 do

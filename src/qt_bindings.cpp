@@ -310,6 +310,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_suspend_scroll_area_anchor); lua_setglobal(L, "qt_suspend_scroll_area_anchor");
     lua_pushcfunction(L, lua_set_focus_policy); lua_setglobal(L, "qt_set_focus_policy");
     lua_pushcfunction(L, lua_set_focus); lua_setglobal(L, "qt_set_focus");
+    lua_pushcfunction(L, lua_get_focus_widget); lua_setglobal(L, "qt_get_focus_widget");
     lua_pushcfunction(L, lua_set_global_key_handler); lua_setglobal(L, "qt_set_global_key_handler");
     lua_pushcfunction(L, lua_set_focus_handler); lua_setglobal(L, "qt_set_focus_handler");
     lua_pushcfunction(L, lua_install_panel_focus_filter); lua_setglobal(L, "qt_install_panel_focus_filter");

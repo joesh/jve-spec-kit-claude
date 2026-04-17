@@ -38,6 +38,8 @@
 "Up" = "GoToPrevEdit @timeline @source_monitor"
 "Down" = "GoToNextEdit @timeline @source_monitor"
 # Left/Right handled in keyboard_shortcuts.lua (arrow repeat management)
+"Tab" = "ToggleTimecodeFocus @timeline"
+# Shift+Tab intentionally unbound — user-mappable via the keyboard customization UI
 
 [Marks]
 "I" = "SetMark in @timeline @source_monitor"

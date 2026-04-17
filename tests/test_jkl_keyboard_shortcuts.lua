@@ -152,18 +152,20 @@ handled = keyboard_shortcuts.handle_key({
 assert(not handled, "Cmd+Z must NOT be handled by Lua when focus inside main window (QShortcut handles it)")
 print("  ✓ Cmd+Z not handled by Lua when focus inside main window")
 
-print("\nTest 8: JKL still not handled even with focus_outside_main_window=true")
+print("\nTest 8: JKL still dispatched via TOML fallback when focus_outside_main_window=true")
 reset()
--- JKL are TOML-bound but the TOML fallback should still dispatch them.
--- This verifies the fallback doesn't break when it runs — JKL dispatch is fine
--- when focus is outside the main window (no QShortcut race).
+-- Display-only floating windows like the History panel are transparent to
+-- shortcuts: the user expects J to drive the timeline shuttle as if the
+-- floating window weren't there. focus_outside_main_window routes through
+-- the Lua fallback using focus_manager's last main-window panel — that
+-- "stale" value is the correct semantic for display-only windows.
+-- find_dialog's text input is protected separately by the is_text_editing_key
+-- guard upstream, not here.
 handled = keyboard_shortcuts.handle_key({
     key = QT_KEY_J, modifiers = 0, text = "j",
     focus_widget_is_text_input = 0,
     focus_outside_main_window = true,
 })
--- J IS TOML-bound (ShuttleReverse), so the fallback WILL dispatch it.
--- This is correct — when focus is in the History window, J should still work.
 assert(handled, "J must be dispatched via TOML fallback when focus_outside_main_window")
 assert(find_cmd("ShuttleReverse"), "ShuttleReverse should dispatch via TOML fallback")
 print("  ✓ J dispatches ShuttleReverse via TOML fallback")
