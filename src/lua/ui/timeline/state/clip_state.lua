@@ -198,8 +198,12 @@ function M.get_at_time(time_value, candidate_clips)
             goto continue_clip
         end
 
+        -- Half-open [start, start+duration): clip owns its IN edge (first
+        -- frame), the next clip / empty space owns the OUT boundary. NLE
+        -- convention — also avoids two clips claiming the same boundary
+        -- frame at edits.
         local clip_end = start_val + duration_val
-        if time_value > start_val and time_value < clip_end then
+        if time_value >= start_val and time_value < clip_end then
             table.insert(matches, clip)
         end
         ::continue_clip::
