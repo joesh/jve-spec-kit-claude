@@ -685,8 +685,8 @@ static int lua_emp_tmb_set_track_clips(lua_State* L) {
         if (ci.rate_den <= 0) {
             return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d rate_den must be > 0, got %d", i, ci.rate_den);
         }
-        if (ci.speed_ratio <= 0.0f) {
-            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d speed_ratio must be > 0", i);
+        if (ci.speed_ratio == 0.0f) {
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d speed_ratio must be non-zero", i);
         }
 
         clips.push_back(std::move(ci));
@@ -786,8 +786,8 @@ static int lua_emp_tmb_add_clips(lua_State* L) {
         if (ci.rate_den <= 0) {
             return luaL_error(L, "TMB_ADD_CLIPS: element %d rate_den must be > 0, got %d", i, ci.rate_den);
         }
-        if (ci.speed_ratio <= 0.0f) {
-            return luaL_error(L, "TMB_ADD_CLIPS: element %d speed_ratio must be > 0", i);
+        if (ci.speed_ratio == 0.0f) {
+            return luaL_error(L, "TMB_ADD_CLIPS: element %d speed_ratio must be non-zero", i);
         }
 
         clips.push_back(std::move(ci));
