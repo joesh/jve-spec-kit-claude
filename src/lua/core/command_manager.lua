@@ -201,6 +201,14 @@ end
 local function apply_command_mutations(cmd)
     local mutations = cmd:get_parameter("__timeline_mutations")
     if not mutations then return false end
+    -- Wrapper commands (Insert, Overwrite) forward their nested command's
+    -- mutations onto themselves so downstream inspectors see them; the
+    -- nested command has already applied those mutations to timeline_state,
+    -- so the outer MUST NOT re-apply or it duplicates every inserted clip.
+    -- The flag treats the outer as "applied" without touching state.
+    if cmd:get_parameter("__timeline_mutations_already_applied") then
+        return true
+    end
     local ts = require('ui.timeline.timeline_state')
     if not ts.apply_mutations then return false end
     local fallback_seq = extract_sequence_id(cmd)

@@ -233,10 +233,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if executed_mutations then
                 command:set_parameter("executed_mutations", executed_mutations)
             end
-            -- Forward __timeline_mutations for UI cache updates
+            -- Forward __timeline_mutations so downstream inspectors see them,
+            -- but tag as already-applied: the nested AddClipsToSequence has
+            -- already written these to timeline_state. Without the tag,
+            -- command_manager.apply_command_mutations would re-apply them on
+            -- the outer Overwrite and duplicate every inserted clip in
+            -- timeline_state.state.clips.
             local timeline_mutations = nested_cmd:get_parameter("__timeline_mutations")
             if timeline_mutations then
                 command:set_parameter("__timeline_mutations", timeline_mutations)
+                command:set_parameter("__timeline_mutations_already_applied", true)
             end
         end
 
