@@ -37,8 +37,13 @@ local function emit_marks_changed(sequence_id)
 end
 
 -- Specs
+-- mutates_clips = false: mark commands write mark_in/mark_out on the
+-- sequences row and emit marks_changed; they produce no __timeline_mutations
+-- and don't need clip-level UI refresh. See command_manager's
+-- is_non_clip_mutating_command for how the flag is consulted.
 local SET_MARK_IN_SPEC = {
     undoable = true,
+    mutates_clips = false,
     args = {
         sequence_id = { required = true, kind = "string" },
         frame = { required = true, kind = "number" },
@@ -47,6 +52,7 @@ local SET_MARK_IN_SPEC = {
 
 local SET_MARK_OUT_SPEC = {
     undoable = true,
+    mutates_clips = false,
     args = {
         sequence_id = { required = true, kind = "string" },
         frame = { required = true, kind = "number" },
@@ -55,6 +61,7 @@ local SET_MARK_OUT_SPEC = {
 
 local CLEAR_MARK_IN_SPEC = {
     undoable = true,
+    mutates_clips = false,
     args = {
         sequence_id = { required = true, kind = "string" },
     },
@@ -62,6 +69,7 @@ local CLEAR_MARK_IN_SPEC = {
 
 local CLEAR_MARK_OUT_SPEC = {
     undoable = true,
+    mutates_clips = false,
     args = {
         sequence_id = { required = true, kind = "string" },
     },
@@ -69,6 +77,7 @@ local CLEAR_MARK_OUT_SPEC = {
 
 local CLEAR_MARKS_SPEC = {
     undoable = true,
+    mutates_clips = false,
     args = {
         sequence_id = { required = true, kind = "string" },
     },
@@ -309,6 +318,7 @@ function M.register(executors, undoers)
     ---------------------------------------------------------------------------
     local SET_MARK_SPEC = {
         undoable = true,
+        mutates_clips = false,
         args = {
             _positional = {},
             sequence_id = { required = true, kind = "string" },
@@ -402,6 +412,7 @@ function M.register(executors, undoers)
     ---------------------------------------------------------------------------
     local CLEAR_MARK_SPEC = {
         undoable = true,
+        mutates_clips = false,
         args = {
             _positional = {},
             sequence_id = { required = true, kind = "string" },

@@ -18,6 +18,7 @@ local _database = require("core.database")  -- luacheck: ignore 211 (unused, req
 
 
 local SPEC = {
+    mutates_clips = false,  -- writes a single sequences row field; no clip mutations
     args = {
         field = { required = true },
         previous_value = {},

@@ -597,32 +597,28 @@ local PROJECT_LEVEL_COMMAND_TYPES = {
     DeleteSequence = true,
 }
 
--- Commands that mutate DB rows other than clips and therefore produce no
--- __timeline_mutations. Excluded from the hash-based mutation assertion so
--- undo/redo of these commands doesn't trip "produced no __timeline_mutations".
-local NON_CLIP_COMMAND_TYPES = {
-    -- Sequence lifecycle / metadata.
-    CreateSequence      = true,
-    DeleteSequence      = true,
-    SetSequenceMetadata = true,
-    -- Sequence mark state (mark_in / mark_out columns on `sequences`).
-    SetMark             = true,
-    SetMarkIn           = true,
-    SetMarkOut          = true,
-    ClearMark           = true,
-    ClearMarkIn         = true,
-    ClearMarkOut        = true,
-    ClearMarks          = true,
-}
+-- Commands classified as "non-clip-mutating" in their own spec
+-- (mutates_clips = false). They write to sequence/project-level state and
+-- drive UI refresh through their own signals (marks_changed,
+-- project_changed, …) rather than __timeline_mutations. Consulted by the
+-- hash-based mutation assertion and the clip-level recovery reload.
+--
+-- Keeping classification on each command's spec (rule 2.21: statically
+-- verifiable) means adding a new non-clip command can't silently re-break
+-- the diagnostic — the flag lives with the command it describes, not in a
+-- disconnected allowlist here.
+local function is_non_clip_mutating_command(cmd_type)
+    local spec = registry.get_spec(cmd_type)
+    return spec ~= nil and spec.mutates_clips == false
+end
 
 -- Recovery reload after a command's executor/undoer produced no
 -- __timeline_mutations (delegation, test env, or genuine bug). Skipped for
--- NON_CLIP_COMMAND_TYPES, which mutate sequence-level state only and drive
--- UI refresh via their own signals (marks_changed, project_changed, …) —
--- the clip-level reload would be wasted work and would mask the fact that
--- these commands have a different refresh contract.
+-- non-clip-mutating commands, which drive UI refresh via their own signals
+-- — the clip-level reload would be wasted work and would mask the fact
+-- that these commands have a different refresh contract.
 local function reload_clips_after_no_mutations(cmd_type, seq_id)
-    if NON_CLIP_COMMAND_TYPES[cmd_type] then return end
+    if is_non_clip_mutating_command(cmd_type) then return end
     local ts = require('ui.timeline.timeline_state')
     if ts.reload_clips then ts.reload_clips(seq_id) end
 end
@@ -1582,7 +1578,7 @@ function M._execute_body(command_or_name, params)
                      -- "mutations present but UI cache unavailable (test env)".
                      local has_mutations = command:get_parameter("__timeline_mutations") ~= nil
                      if not has_mutations then
-                         local is_project_level = NON_CLIP_COMMAND_TYPES[command.type]
+                         local is_project_level = is_non_clip_mutating_command(command.type)
                              or not command.sequence_id
                          local has_nested_children = command.undo_group_id
                              and #history.find_group_members(command.undo_group_id, nil, nil) > 1
@@ -1916,7 +1912,7 @@ local function run_undoer(cmd)
             -- which produces the mutations. Only warn for leaf commands.
             local has_nested = cmd.undo_group_id
                 and #history.find_group_members(cmd.undo_group_id, nil, nil) > 1
-            if not NON_CLIP_COMMAND_TYPES[cmd.type] and not has_nested then
+            if not is_non_clip_mutating_command(cmd.type) and not has_nested then
                 log.error("run_undoer: command %s produced no __timeline_mutations for sequence %s\n%s",
                     cmd.type, seq_id, debug.traceback("", 2))
             end
@@ -2035,7 +2031,7 @@ local function run_redo_executor(cmd)
         if seq_id and seq_id ~= "" then
             local has_nested = cmd.undo_group_id
                 and #history.find_group_members(cmd.undo_group_id, nil, nil) > 1
-            if not NON_CLIP_COMMAND_TYPES[cmd.type] and not has_nested then
+            if not is_non_clip_mutating_command(cmd.type) and not has_nested then
                 log.error("run_redo_executor: command %s produced no __timeline_mutations for sequence %s\n%s",
                     cmd.type, seq_id, debug.traceback("", 2))
             end

@@ -22,6 +22,7 @@ local command_helper = require("core.command_helper")
 
 
 local SPEC = {
+    mutates_clips = false,  -- mutates sequences/tracks tables, no clip mutations
     args = {
         frame_rate = {required = true},
         height = {},

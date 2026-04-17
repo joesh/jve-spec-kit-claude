@@ -27,6 +27,7 @@ local restore_sequence_from_payload
 
 
 local SPEC = {
+    mutates_clips = false,  -- mutates sequences table, not clips
     args = {
         delete_sequence_snapshot = {},
         project_id = { required = true },
