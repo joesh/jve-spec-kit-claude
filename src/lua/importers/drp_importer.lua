@@ -535,20 +535,40 @@ local function resolve_project_tab_ids(project, timeline_id_map)
 
     local handle_ids = project.timeline_handle_vec_ids
     local cti = project.current_timeline_index
-    if handle_ids and #handle_ids > 0 and cti and cti >= 0 and cti < #handle_ids then
-        -- Lua arrays are 1-based; CurrentTimelineIndex is 0-based.
-        local tl_db_id = handle_ids[cti + 1]
-        local mapped = tl_db_id and timeline_id_map[tl_db_id]
-        if mapped and mapped.seq_id then
-            project.open_timeline_ids = { mapped.seq_id }
-            project.active_timeline_id = mapped.seq_id
-            return
-        end
-        log.warn("DRP: TimelineHandleVec[%d]=%s has no Sm2Sequence mapping — "
-            .. "active timeline unresolved", cti, tostring(tl_db_id))
+
+    -- Case 1 (legitimate empty): neither source present.
+    if not handle_ids or #handle_ids == 0 then
+        return
     end
-    -- No resolution possible; leave empty and let opener fall back.
+
+    -- Case 4: handle_vec non-empty but CurrentTimelineIndex missing.
+    assert(cti, string.format(
+        "drp_importer.resolve_project_tab_ids: TimelineHandleVec has %d entries "
+        .. "but <CurrentTimelineIndex> is missing — DRP file corruption",
+        #handle_ids))
+
+    -- Case 2: CTI out of range for handle vec.
+    assert(cti >= 0 and cti < #handle_ids, string.format(
+        "drp_importer.resolve_project_tab_ids: CurrentTimelineIndex=%d out of "
+        .. "range for TimelineHandleVec of length %d — DRP file corruption",
+        cti, #handle_ids))
+
+    -- Lua arrays are 1-based; CurrentTimelineIndex is 0-based.
+    local tl_db_id = handle_ids[cti + 1]
+    local mapped = tl_db_id and timeline_id_map[tl_db_id]
+
+    -- Case 3: handle id has no corresponding Sm2Sequence in MediaPool.
+    assert(mapped and mapped.seq_id, string.format(
+        "drp_importer.resolve_project_tab_ids: TimelineHandleVec[%d]=%s has no "
+        .. "corresponding Sm2Sequence in MediaPool — DRP file corruption or "
+        .. "parser bug", cti, tostring(tl_db_id)))
+
+    project.open_timeline_ids = { mapped.seq_id }
+    project.active_timeline_id = mapped.seq_id
 end
+
+-- Exported for black-box testing of the case-1..case-4 assertion set.
+M._resolve_project_tab_ids = resolve_project_tab_ids
 
 --- Parse MediaPool XML to extract media items
 -- @param media_pool_elem table: XML element for <MediaPool>
