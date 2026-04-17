@@ -53,15 +53,16 @@ local command_stack_resolvers = {}
 
 function M.init(database, sequence_id, project_id)
     db = database
-    if not sequence_id or sequence_id == "" then
-        error("CommandHistory.init: sequence_id is required", 2)
-    end
+    -- sequence_id is OPTIONAL: nil/empty means "no active sequence" (feature
+    -- 010). The global stack still tracks project-scoped commands; per-sequence
+    -- stacks exist per sequence and are reachable by name later.
+    if sequence_id == "" then sequence_id = nil end
     if not project_id or project_id == "" then
         error("CommandHistory.init: project_id is required", 2)
     end
     active_sequence_id = sequence_id
     _active_project_id = project_id
-    
+
     M.reset()
 
     -- Query last sequence number from database.
@@ -71,7 +72,7 @@ function M.init(database, sequence_id, project_id)
     M.refresh_last_sequence_number()
 
     local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
-    global_state.sequence_id = active_sequence_id
+    global_state.sequence_id = active_sequence_id  -- may be nil
     M.set_active_stack(GLOBAL_STACK_ID, {sequence_id = active_sequence_id})
     M.load_global_cursor()
 end

@@ -805,10 +805,46 @@ function M.init(sequence_id, project_id)
     end
     
     ensure_command_selection_columns()
-    
+
     log.event("Initialized (last_sequence=%d current_position=%s)",
         history.get_last_sequence_number(),
         tostring(history.get_current_sequence_number()))
+end
+
+--- Initialize CommandManager for a project with NO active sequence.
+--- Used on startup when the project has no saved tab info (feature 010).
+--- The manager is fully operational for project-scoped commands; per-sequence
+--- stacks become reachable once the user opens a sequence (which calls
+--- M.activate_timeline_stack).
+function M.init_project_only(project_id)
+    if not project_id or project_id == "" then
+        error("CommandManager.init_project_only: project_id is required", 2)
+    end
+    active_sequence_id = nil
+    active_project_id = project_id
+
+    db = db_module.get_connection()
+    assert(db, "CommandManager.init_project_only: database connection not available")
+
+    registry.init(db, M.set_last_error)
+    history.init(db, nil, project_id)
+    state_mgr.init(db)
+
+    ensure_command_selection_columns()
+
+    log.event("Initialized (project-only, no active sequence; last_sequence=%d)",
+        history.get_last_sequence_number())
+end
+
+--- Drop the currently-active per-sequence stack without discarding its
+--- persisted commands. Feature 010, FR-014 — undoing a sequence delete must
+--- be able to restore the sequence's undo history intact. Idempotent.
+function M.deactivate()
+    active_sequence_id = nil
+    -- Route subsequent undo/redo through the global stack; per-sequence state
+    -- remains on disk.
+    history.set_active_stack(history.GLOBAL_STACK_ID)
+    log.event("Deactivated (no active sequence; global stack active)")
 end
 
 -- Validate command parameters

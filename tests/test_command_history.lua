@@ -60,13 +60,14 @@ db:exec(string.format(
 -- ============================================================
 print("\n--- init validation ---")
 do
-    expect_error("nil sequence_id", function()
-        command_history.init(db, nil, project_id)
-    end, "sequence_id is required")
+    -- Feature 010: sequence_id is OPTIONAL. nil/empty means "no active
+    -- sequence" (e.g. a project opened with no saved tab info). The global
+    -- stack is still initialised so project-scoped commands can be recorded.
+    local ok_nil = pcall(function() command_history.init(db, nil, project_id) end)
+    check("nil sequence_id permitted (no active sequence)", ok_nil)
 
-    expect_error("empty sequence_id", function()
-        command_history.init(db, "", project_id)
-    end, "sequence_id is required")
+    local ok_empty = pcall(function() command_history.init(db, "", project_id) end)
+    check("empty sequence_id permitted (treated as nil)", ok_empty)
 
     expect_error("nil project_id", function()
         command_history.init(db, sequence_id, nil)
