@@ -1563,7 +1563,12 @@ function M._execute_body(command_or_name, params)
                          end
                      end
                      -- Mutations present but couldn't apply (test env), or no-op, or delegation.
-                     timeline_state.reload_clips(reload_sequence_id)
+                     -- NON_CLIP_COMMAND_TYPES commands don't touch clip state; their own
+                     -- signals (marks_changed, project_changed, …) drive UI refresh, so
+                     -- the clip-level reload would be wasted work.
+                     if not NON_CLIP_COMMAND_TYPES[command.type] then
+                         timeline_state.reload_clips(reload_sequence_id)
+                     end
                  end
                  perf.log("ui_refresh")
                  perf.reset()
@@ -1889,8 +1894,12 @@ local function run_undoer(cmd)
                 log.error("run_undoer: command %s produced no __timeline_mutations for sequence %s\n%s",
                     cmd.type, seq_id, debug.traceback("", 2))
             end
-            local ts = require('ui.timeline.timeline_state')
-            if ts.reload_clips then ts.reload_clips(seq_id) end
+            -- NON_CLIP_COMMAND_TYPES commands don't touch clip state; their own
+            -- signals drive UI refresh. Skip the clip-level reload.
+            if not NON_CLIP_COMMAND_TYPES[cmd.type] then
+                local ts = require('ui.timeline.timeline_state')
+                if ts.reload_clips then ts.reload_clips(seq_id) end
+            end
         end
     end
     return true, nil
@@ -2009,8 +2018,12 @@ local function run_redo_executor(cmd)
                 log.error("run_redo_executor: command %s produced no __timeline_mutations for sequence %s\n%s",
                     cmd.type, seq_id, debug.traceback("", 2))
             end
-            local ts = require('ui.timeline.timeline_state')
-            if ts.reload_clips then ts.reload_clips(seq_id) end
+            -- NON_CLIP_COMMAND_TYPES commands don't touch clip state; their own
+            -- signals drive UI refresh. Skip the clip-level reload.
+            if not NON_CLIP_COMMAND_TYPES[cmd.type] then
+                local ts = require('ui.timeline.timeline_state')
+                if ts.reload_clips then ts.reload_clips(seq_id) end
+            end
         end
     end
     return true, nil
