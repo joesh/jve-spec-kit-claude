@@ -108,7 +108,13 @@ end
 
 function M.notify_listeners()
     if notify_timer then return end
-    notify_timer = create_single_shot_timer(NOTIFY_DEBOUNCE_MS, function()
+    -- Mark scheduled BEFORE creating the timer. With a synchronous timer
+    -- (test stubs), the callback runs inside create_single_shot_timer and
+    -- resets notify_timer to nil; we must not clobber that nil with the
+    -- timer's return value after it fires. Dropping the return handle is
+    -- safe — nothing cancels the timer.
+    notify_timer = true
+    create_single_shot_timer(NOTIFY_DEBOUNCE_MS, function()
         notify_timer = nil
         for _, listener in ipairs(listeners) do
             listener()

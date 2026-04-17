@@ -98,25 +98,29 @@ local function open_and_init_project(path)
     local project = Project.load(pid)
     assert(project, "Failed to load project " .. tostring(pid) .. " from " .. path)
 
-    -- Find best sequence: last-open or most recent
-    local sequence
-    local last_seq_id = db_module.get_project_setting(pid, "last_open_sequence_id")
-    if last_seq_id and last_seq_id ~= "" then
-        sequence = Sequence.load(last_seq_id)
-    end
-    if not sequence then
-        sequence = Sequence.find_most_recent()
-    end
-    assert(sequence, "No sequences in project " .. path)
+    -- Resolve the initial active sequence from saved tab state. If the
+    -- project has no last_open_sequence_id, or it points to a deleted
+    -- sequence, resolve returns nil and the editor opens in the
+    -- no-active-sequence state (feature 010). No silent fallback.
+    local sequence = Sequence.resolve_initial_for_project(pid)
 
     active_project_id = project.id
     project_display_name = project.name
-    active_sequence_id = sequence.id
+    active_sequence_id = sequence and sequence.id
     log.event("Using project: %s", project.name)
-    log.event("Using sequence: %s", sequence.name)
+    if sequence then
+        log.event("Using sequence: %s", sequence.name)
+    else
+        log.event("No active sequence — opening in blank state")
+    end
 
-    -- Initialize CommandManager
-    command_manager.init(active_sequence_id, active_project_id)
+    -- Initialize CommandManager. With no active sequence, use the
+    -- project-only path (no per-sequence stack activated).
+    if active_sequence_id then
+        command_manager.init(active_sequence_id, active_project_id)
+    else
+        command_manager.init_project_only(active_project_id)
+    end
     log.event("CommandManager initialized with database")
 
     -- Pre-populate media status cache from DB BEFORE any clips render.
@@ -576,10 +580,10 @@ if db_module.get_project_setting then
     last_sequence_id = db_module.get_project_setting(project_id, "last_open_sequence_id")
 end
 
+-- No silent fallback: if last_open_sequence_id is unset or refers to a
+-- sequence that no longer exists, initial_sequence_id stays nil and the
+-- editor opens in the no-active-sequence state (feature 010, FR-004).
 local initial_sequence_id = find_sequence_id(last_sequence_id, sequences)
-if not initial_sequence_id and #sequences > 0 then
-    initial_sequence_id = sequences[1].id
-end
 
 -- Tabs for the remaining open sequences. The initial tab was created by
 -- timeline_panel.create(); open_tab skips it. After all tabs exist, reorder

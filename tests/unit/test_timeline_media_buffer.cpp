@@ -595,7 +595,7 @@ private slots:
         // so it works regardless of test video h264 complexity.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // clipA [0,50), clipB [50,100) — both from same file, source_in=0
@@ -747,18 +747,41 @@ private slots:
         QVERIFY(result == nullptr);
     }
 
-    void test_audio_offline_returns_null() {
+    void test_audio_offline_generates_beep() {
+        // Domain: offline audio surfaces as an audible "missing media" beep —
+        // the editor convention for notifying the user without silence
+        // (matches Resolve/Premiere). See ClipInfo::offline comment:
+        // "true = media file not found, generate beep".
         auto tmb = TimelineMediaBuffer::Create(0);
         tmb->SetSequenceRate(24, 1);
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        tmb->SetAudioFormat(fmt);
 
+        // Mark the clip offline (9th init value). Production contract:
+        // Lua stats the media file and sets .offline before handing the
+        // ClipInfo to C++; C++ trusts the flag.
         std::vector<ClipInfo> clips = {
-            {"clip1", "/nonexistent/audio.mp4", 0, 100, 0, 24, 1, 1.0f},
+            {"clip1", "/nonexistent/audio.mp4", 0, 100, 0, 24, 1, 1.0f, true},
         };
         tmb->SetTrackClips(A1, clips);
 
-        auto result = tmb->GetTrackAudio(A1, 0, 100000,
-            AudioFormat{SampleFormat::F32, 48000, 2});
-        QVERIFY(result == nullptr);
+        // Request 100ms of audio — beep is 1kHz, 100ms on / 900ms off, so
+        // a 100ms slice starting at clip_start_us=0 lies entirely in the
+        // "beep on" window and must contain non-zero samples.
+        auto result = tmb->GetTrackAudio(A1, 0, 100000, fmt);
+        QVERIFY(result != nullptr);
+        QVERIFY(result->frames() > 0);
+        QCOMPARE(result->sample_rate(), 48000);
+        QCOMPARE(result->channels(), 2);
+
+        // Audible: some sample in the returned chunk is non-zero.
+        const float* data = result->data_f32();
+        float max_abs = 0.0f;
+        for (int64_t i = 0; i < result->frames() * 2; ++i) {
+            max_abs = std::max(max_abs, std::abs(data[i]));
+        }
+        QVERIFY2(max_abs > 0.001f,
+                 "offline beep must contain audible (non-zero) samples");
     }
 
     void test_audio_basic_decode() {
@@ -1013,22 +1036,50 @@ private slots:
     }
 
     void test_audio_request_clamps_to_clip_start() {
+        // Domain: when a request's t0 lies in a gap before a clip, the
+        // returned chunk is clamped to the clip's range — caller gets audio
+        // for the clip-overlapping portion only, timestamped at clip_start.
+        // Callers that need the gap padded handle it at their layer.
         if (!m_hasTestAudio) QSKIP("No test audio");
 
         auto tmb = TimelineMediaBuffer::Create(0);
         tmb->SetSequenceRate(24, 1);
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        tmb->SetAudioFormat(fmt);
 
-        // Clip starts at timeline frame 24 (1.0s at 24fps)
+        // Clip at timeline frame 24 (1.0s at 24fps), 48 frames (2.0s).
+        // Timeline shape: [0, 1s) gap, [1s, 3s) clip.
+        const int64_t clip_start_us = 1000000;
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 24, 48, 0, 24, 1, 1.0f},
         };
         tmb->SetTrackClips(A1, clips);
 
-        // Request [0.5s, 1.5s) — t0 is before clip start (1.0s)
-        // find_clip_at_us(t0=500000) won't find the clip → nullptr (gap before clip)
-        AudioFormat fmt{SampleFormat::F32, 48000, 2};
-        auto result = tmb->GetTrackAudio(A1, 500000, 1500000, fmt);
-        QVERIFY(result == nullptr);
+        // Request [0.5s, 1.5s) — t0 is in the gap, t1 is inside the clip.
+        const int64_t req_t0 = 500000;
+        const int64_t req_t1 = 1500000;
+        auto result = tmb->GetTrackAudio(A1, req_t0, req_t1, fmt);
+
+        QVERIFY(result != nullptr);
+        QCOMPARE(result->sample_rate(), 48000);
+        QCOMPARE(result->channels(), 2);
+        // Clamped: chunk starts at clip_start, not request start.
+        QCOMPARE(result->start_time_us(), clip_start_us);
+        // Covers [clip_start, req_t1) — the clip-overlapping portion.
+        const int64_t expected_frames =
+            ((req_t1 - clip_start_us) * int64_t(fmt.sample_rate)) / 1000000;
+        QCOMPARE(result->frames(), expected_frames);
+
+        // The returned samples are decoded audio from the clip — at least
+        // one sample must be audibly non-zero.
+        const float* data = result->data_f32();
+        float max_abs = 0.0f;
+        for (int64_t i = 0; i < result->frames() * fmt.channels; ++i) {
+            max_abs = std::max(max_abs, std::abs(data[i]));
+        }
+        QVERIFY2(max_abs > 1e-4f,
+                 qPrintable(QString("clip portion must contain audible "
+                                    "samples, got max=%1").arg(max_abs)));
     }
 
     void test_audio_multiple_clips_correct_selection() {
@@ -1278,7 +1329,7 @@ private slots:
     void test_audio_pre_buffer_fires() {
         if (!m_hasTestAudio) QSKIP("No test audio");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         tmb->SetSequenceRate(24, 1);
 
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
@@ -1309,7 +1360,7 @@ private slots:
     void test_audio_pre_buffer_cleared_on_set_clips() {
         if (!m_hasTestAudio) QSKIP("No test audio");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         tmb->SetSequenceRate(24, 1);
 
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
@@ -1368,7 +1419,7 @@ private slots:
         // Pre-buffer caches 200ms, but GetTrackAudio requests a narrower sub-range
         if (!m_hasTestAudio) QSKIP("No test audio");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         tmb->SetSequenceRate(24, 1);
 
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
@@ -1406,7 +1457,7 @@ private slots:
         // Fill audio cache past MAX_AUDIO_CACHE (4), verify no crash and audio still works
         if (!m_hasTestAudio) QSKIP("No test audio");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         tmb->SetSequenceRate(24, 1);
 
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
@@ -1566,7 +1617,7 @@ private slots:
         // A very short clip (e.g., 5 frames) must not cause over-read.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // clipA [0,50), clipB [50,55) — clipB is only 5 frames
@@ -1665,7 +1716,7 @@ private slots:
         // caches the last N frames of the previous clip.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // clipA [0,50), clipB [50,100) — adjacent
@@ -1701,7 +1752,7 @@ private slots:
         // The worker checks m_shutdown between frame decodes and bails.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // Long clip to ensure worker has many frames to decode
@@ -1793,7 +1844,7 @@ private slots:
         // SetAudioMixParams + GetMixedAudio: set params, clips, playhead → valid PCM
         if (!m_hasTestAudio) QSKIP("No test audio");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         tmb->SetSequenceRate(24, 1);
         tmb->SetAudioFormat(AudioFormat{SampleFormat::F32, 48000, 2});
 
@@ -1825,7 +1876,7 @@ private slots:
         // SetAudioMixParams twice → second GetMixedAudio still works
         if (!m_hasTestAudio) QSKIP("No test audio");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         tmb->SetSequenceRate(24, 1);
         tmb->SetAudioFormat(AudioFormat{SampleFormat::F32, 48000, 2});
 
@@ -1874,7 +1925,7 @@ private slots:
         // Set playhead direction=1, wait, GetMixedAudio → cache hit (no sync)
         if (!m_hasTestAudio) QSKIP("No test audio");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         tmb->SetSequenceRate(24, 1);
         tmb->SetAudioFormat(AudioFormat{SampleFormat::F32, 48000, 2});
 
@@ -2016,7 +2067,7 @@ private slots:
         // the same clips can be re-submitted after resume.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         std::vector<ClipInfo> clips = {
@@ -2053,7 +2104,7 @@ private slots:
         // TMB is a pure data provider — no pending concept.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         std::vector<ClipInfo> clips = {
@@ -2107,7 +2158,7 @@ private slots:
         // (In the real app, prefillVideo in Play() primes the cache.)
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         std::vector<ClipInfo> clips = {
@@ -2128,7 +2179,7 @@ private slots:
         // reflect the CURRENT clip (for clip-switch detection in deliverFrame).
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // Two clips with different rates to distinguish metadata
@@ -2159,7 +2210,7 @@ private slots:
         // during playback — the UI won't show the offline indicator.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // clipA: valid (for priming cache)
@@ -2201,7 +2252,7 @@ private slots:
         // Pending-null return should be <1ms.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         std::vector<ClipInfo> clips = {
@@ -2250,7 +2301,7 @@ private slots:
         // previously-displayed clip. GetVideoFrame sync-decodes immediately.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // Start with clips A and B
@@ -2289,7 +2340,7 @@ private slots:
         // for most frames; sync decode handles initial cold frames.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // V2: clips at 0-40 and 80-120  (gap at 40-80)
@@ -2405,7 +2456,7 @@ private slots:
         // PRE_BUFFER_THRESHOLD and pre-buffers their entry frames.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // V2: clip at [0, 40) — top track
@@ -2904,7 +2955,7 @@ private slots:
         // frames would decode at the wrong position.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // Slow-motion clip: 60 timeline frames, source_in=0, speed_ratio=0.5
@@ -2959,7 +3010,7 @@ private slots:
         // Frames at timeline 12..29 should hold the frame decoded at source 71.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // Clip with duration exceeding decodable range
@@ -3008,7 +3059,7 @@ private slots:
         // Fix: ParkReaders clears clip_eof_frame.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // Clip whose duration far exceeds file: source_in=60, duration=200
@@ -3061,7 +3112,7 @@ private slots:
         // Test: start REFILL, immediately replace clips, verify new clips are cached.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // Initial clip layout: clipA at [0, 100)
@@ -3104,7 +3155,7 @@ private slots:
         // and doesn't trigger a cold reader open.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // Start with clipA playing
@@ -3160,7 +3211,7 @@ private slots:
         // clipB's first frames must be in cache before playhead reaches 80.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // Wide gap (50 frames > VIDEO_REFILL_SIZE=48): first REFILL batch
@@ -3212,7 +3263,7 @@ private slots:
         // No pending concept — sync decode on cache miss in all modes.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         std::vector<ClipInfo> clips = {
@@ -3377,7 +3428,7 @@ private slots:
         // (frame 30, ~1.25s) → GetMixedAudio at B must return valid audio.
         if (!m_hasTestAudio) QSKIP("No test audio");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         tmb->SetSequenceRate(24, 1);
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
         tmb->SetAudioFormat(fmt);
@@ -3431,7 +3482,7 @@ private slots:
         // audio at new position works without underrun.
         if (!m_hasTestAudio) QSKIP("No test audio");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         tmb->SetSequenceRate(24, 1);
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
         tmb->SetAudioFormat(fmt);
@@ -3484,7 +3535,7 @@ private slots:
         // audio must not underrun even when video workers are busy.
         if (!m_hasTestAudio) QSKIP("No test audio");
 
-        auto tmb = TimelineMediaBuffer::Create(2); // only 2 workers
+        auto tmb = TimelineMediaBuffer::Create(); // only 2 workers
         tmb->SetSequenceRate(24, 1);
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
         tmb->SetAudioFormat(fmt);
@@ -3541,7 +3592,7 @@ private slots:
         // Then AddClips with audio → GetMixedAudio must return non-null.
         if (!m_hasTestAudio) QSKIP("No test audio");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         tmb->SetSequenceRate(24, 1);
         AudioFormat fmt{SampleFormat::F32, 48000, 2};
         tmb->SetAudioFormat(fmt);
@@ -3914,7 +3965,7 @@ private slots:
         // source_in=50, speed_ratio=-1.0 → source frames descend from 50.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         std::vector<ClipInfo> clips = {
@@ -4068,7 +4119,7 @@ private slots:
         // V1 and V2 both have clips at the same position.
         // V2 is on top (opaque compositing) → V1 is invisible.
         // REFILL should skip V1 decode for obscured frames.
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
 
         std::vector<ClipInfo> v1_clips = {
             {"v1_clip", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
@@ -4099,7 +4150,7 @@ private slots:
 
         // V2 clip is shorter than V1. After V2 ends, V1 becomes visible.
         // REFILL should decode V1 frames beyond V2's clip boundary.
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
 
         std::vector<ClipInfo> v1_clips = {
             {"v1_long", m_testVideoPath.toStdString(), 0, 100, 0, 24, 1, 1.0f},
@@ -4347,7 +4398,7 @@ private slots:
         // second clip. This exercises fill_prefetch's GAP skip path.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
 
         // Clip A [0,30), gap [30,60), Clip B [60,90)
         auto path = m_testVideoPath.toStdString();
@@ -4375,7 +4426,7 @@ private slots:
         // delivering zero frames during reverse playback.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // Single clip [0, 80) — playhead at 60, playing reverse
@@ -4417,7 +4468,7 @@ private slots:
         // previous clip (gap.start - 1), not forward to gap.end.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // Clip A [0,30), gap [30,60), Clip B [60,90)
@@ -4446,7 +4497,7 @@ private slots:
         // (i.e., in the direction of travel: lower frame numbers).
         if (!m_hasLongAudio) QSKIP("No long audio fixture (countdown_chirp_30s.mp4)");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_longAudioPath.toStdString();
 
         tmb->SetSequenceRate(25, 1);
@@ -4484,7 +4535,7 @@ private slots:
         // and doesn't stall.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         std::vector<ClipInfo> clips = {
@@ -4515,7 +4566,7 @@ private slots:
         // Prefetch must fill behind playhead with wider stride.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         std::vector<ClipInfo> clips = {
@@ -4947,7 +4998,7 @@ private slots:
         // playhead + VIDEO_PREFETCH_MAX (96).
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // Clip A [0,10), gap [10,300), Clip B [300,350)
@@ -4993,7 +5044,7 @@ private slots:
         // lazily as the playhead advances.
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // Clip with 500 timeline frames but only ~12 decodable source frames.
@@ -5054,7 +5105,7 @@ private slots:
         // backward seeks would be much slower).
         if (!m_hasTestVideo) QSKIP("No test video");
 
-        auto tmb = TimelineMediaBuffer::Create(2);
+        auto tmb = TimelineMediaBuffer::Create();
         auto path = m_testVideoPath.toStdString();
 
         // Clip spanning frames 0-99

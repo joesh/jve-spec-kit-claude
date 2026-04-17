@@ -157,9 +157,14 @@ print("  PASS: 5 V/A pairs — audio source_in at 48kHz native rate")
 print("\n--- 3: Non-unity speed audio clip ---")
 
 local a6 = audio_clips[6]
--- Known (from probe): tl=90082, src_in=12000000, dur=6, fps=48000/1
+-- Known-answer (derived from DRP XML, not code tracing):
+-- <In>=6000|00e0401cd451d83f → 6000 whole frames + sub-frame hex that
+-- decodes as LE IEEE-754 double to 0.37999…, i.e. (6000 + 0.38)/24 fps
+-- = 250.01583… sec. At 48 kHz audio native rate:
+-- 250.01583 × 48000 = 12,000,760 samples exact.
+-- tl=90082, src_in=12000760 (sub-frame preserved per f9b306f), dur=6, fps=48000/1
 assert(a6[1] == 90082, "clip 6 tl_start: " .. tostring(a6[1]))
-assert(a6[2] == 12000000, "clip 6 src_in: " .. tostring(a6[2]))
+assert(a6[2] == 12000760, "clip 6 src_in: " .. tostring(a6[2]))
 assert(a6[4] == 48000, "clip 6 fps_num: " .. tostring(a6[4]))
 -- This clip's source_in does NOT follow the V/A * 800 rule because it's
 -- a different clip with speed=0.38 (the DRP speed affects source mapping)

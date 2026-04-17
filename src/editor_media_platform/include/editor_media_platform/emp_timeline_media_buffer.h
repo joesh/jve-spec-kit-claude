@@ -123,7 +123,14 @@ struct VideoResult {
 // provides constant-time access to decoded video frames and audio PCM.
 class TimelineMediaBuffer {
 public:
-    static std::unique_ptr<TimelineMediaBuffer> Create(int pool_threads = 2);
+    // Explicit pool sizing: 0 = synchronous (no workers), or >= 3 (1 prep + 1 video + 1 audio).
+    // See start_workers() for the rationale on the 3-thread minimum.
+    static std::unique_ptr<TimelineMediaBuffer> Create(int pool_threads);
+
+    // No-arg convenience overload: picks the smallest valid async pool. The default lives
+    // in the .cpp next to start_workers() so the invariant and the default update together.
+    // Callers who want sync-mode (tests, headless tooling) must pass 0 explicitly.
+    static std::unique_ptr<TimelineMediaBuffer> Create();
     ~TimelineMediaBuffer();
 
     // Per-track clip layout (call incrementally as playhead moves).
@@ -353,12 +360,15 @@ private:
         TrackState& ts, const std::string& clip_id,
         TimeUS seg_t0, TimeUS seg_t1, const AudioFormat& fmt) const;
 
-    // Build output PcmChunk: trim decoded audio to source range, conform, rebase to timeline
+    // Build output PcmChunk: trim decoded audio to source range, conform, rebase to timeline.
+    // `speed_magnitude` is the absolute conform ratio (seq_fps / media_fps) — positive only.
+    // Direction is encoded upstream in source_in/source_out ordering; this function operates
+    // on a forward source slice and callers pass std::abs(clip.speed_ratio).
     std::shared_ptr<PcmChunk> build_audio_output(
         const std::shared_ptr<PcmChunk>& decoded,
         TimeUS source_t0, TimeUS source_t1,
         TimeUS timeline_t0, TimeUS timeline_t1,
-        float speed_ratio, const AudioFormat& fmt) const;
+        float speed_magnitude, const AudioFormat& fmt) const;
 
     // ── Pre-buffer thread pool ──
     // Decode-preparation jobs: submitted externally (SetPlayhead probe scan,

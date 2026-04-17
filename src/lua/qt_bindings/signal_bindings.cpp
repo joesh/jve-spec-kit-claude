@@ -13,6 +13,7 @@
 #include <QTimer>
 #include <QApplication> // For QApplication::focusWidget()
 #include <QComboBox>    // For PanelFocusTrap Return on combo
+#include <QKeySequence> // For QKeySequence::StandardKey text-editing classification
 #include <QMap>         // For g_panel_traps
 #include <QMetaObject>  // For metaObject()->className()
 #include <QPushButton>  // For PanelFocusTrap (qobject_cast)
@@ -52,6 +53,94 @@ static bool widget_accepts_text_input(QWidget* widget)
     return false;
 }
 
+// Classify a key event as "text-editing" per Qt's canonical standard-key table.
+// A text widget that has focus must be allowed to consume these keys; they
+// must NEVER dispatch as application shortcuts. Examples: bare letters (typing),
+// Shift+letter (typing capitals), arrow keys (caret movement), Shift+arrow
+// (selection extension), Cmd+A (SelectAll), Cmd+C/V/X/Z/Shift+Cmd+Z (macOS
+// clipboard+undo), Delete/Backspace/word-delete variants.
+//
+// Non-text-editing keys — Cmd+S (Save), Cmd+F (Find), F-keys, bare extended
+// keys like Escape — fall through to application shortcut dispatch.
+static bool is_text_editing_key(QKeyEvent* keyEvent)
+{
+    if (!keyEvent) return false;
+
+    const int key = keyEvent->key();
+    const Qt::KeyboardModifiers mods = keyEvent->modifiers();
+
+    // Pure modifier keypresses never count.
+    if (key == Qt::Key_Control || key == Qt::Key_Shift ||
+        key == Qt::Key_Alt     || key == Qt::Key_Meta) {
+        return false;
+    }
+
+    // Bare typing: any printable key (Space through the pre-extended range)
+    // with no Ctrl/Cmd/Alt modifier. Shift alone counts as bare (capital
+    // letters, shifted punctuation).
+    const Qt::KeyboardModifiers nonShiftMods =
+        mods & (Qt::ControlModifier | Qt::MetaModifier | Qt::AltModifier);
+    if (nonShiftMods == Qt::NoModifier && key >= 0x20 && key < 0x01000000) {
+        return true;
+    }
+
+    // Qt's canonical text-editing StandardKey bindings. matches() is
+    // platform-correct (e.g. Cmd on macOS, Ctrl on others) and handles the
+    // Shift-extension variants for caret-selection moves.
+    static const QKeySequence::StandardKey editingKeys[] = {
+        // Caret navigation
+        QKeySequence::MoveToNextChar,
+        QKeySequence::MoveToPreviousChar,
+        QKeySequence::MoveToNextWord,
+        QKeySequence::MoveToPreviousWord,
+        QKeySequence::MoveToNextLine,
+        QKeySequence::MoveToPreviousLine,
+        QKeySequence::MoveToNextPage,
+        QKeySequence::MoveToPreviousPage,
+        QKeySequence::MoveToStartOfLine,
+        QKeySequence::MoveToEndOfLine,
+        QKeySequence::MoveToStartOfBlock,
+        QKeySequence::MoveToEndOfBlock,
+        QKeySequence::MoveToStartOfDocument,
+        QKeySequence::MoveToEndOfDocument,
+        // Selection-extension (Shift + navigation)
+        QKeySequence::SelectNextChar,
+        QKeySequence::SelectPreviousChar,
+        QKeySequence::SelectNextWord,
+        QKeySequence::SelectPreviousWord,
+        QKeySequence::SelectNextLine,
+        QKeySequence::SelectPreviousLine,
+        QKeySequence::SelectNextPage,
+        QKeySequence::SelectPreviousPage,
+        QKeySequence::SelectStartOfLine,
+        QKeySequence::SelectEndOfLine,
+        QKeySequence::SelectStartOfBlock,
+        QKeySequence::SelectEndOfBlock,
+        QKeySequence::SelectStartOfDocument,
+        QKeySequence::SelectEndOfDocument,
+        QKeySequence::SelectAll,
+        // Clipboard / history
+        QKeySequence::Copy,
+        QKeySequence::Cut,
+        QKeySequence::Paste,
+        QKeySequence::Undo,
+        QKeySequence::Redo,
+        // Deletion
+        QKeySequence::Delete,
+        QKeySequence::Backspace,
+        QKeySequence::DeleteStartOfWord,
+        QKeySequence::DeleteEndOfWord,
+        QKeySequence::DeleteCompleteLine,
+        // Line insertion (rich-text widgets)
+        QKeySequence::InsertParagraphSeparator,
+        QKeySequence::InsertLineSeparator,
+    };
+    for (QKeySequence::StandardKey sk : editingKeys) {
+        if (keyEvent->matches(sk)) return true;
+    }
+    return false;
+}
+
 // Global key event filter class
 class GlobalKeyFilter : public QObject
 {
@@ -86,11 +175,23 @@ protected:
                 event->accept();
                 return true;
             }
+            // Text-input priority: when focus is on a text-editing widget and
+            // the key is a canonical text-editing key (typing, caret nav,
+            // selection, clipboard, undo/redo, delete), claim ShortcutOverride
+            // so QShortcut dispatch aborts. The widget's keyPressEvent will
+            // consume the key normally. One rule for main-window and floating-
+            // window text input — replaces the former 5-key residual whitelist.
+            QWidget* focusWidget = QApplication::focusWidget();
+            if (widget_accepts_text_input(focusWidget) &&
+                is_text_editing_key(keyEvent)) {
+                event->accept();
+                return true;
+            }
+
             // When focus is outside the main window (e.g. floating tool panels
             // like History), QShortcuts scoped to panel containers won't match.
             // Claim all keys here so they route through the Lua handler, which
-            // falls back to TOML registry lookup using focus_manager's active panel.
-            QWidget* focusWidget = QApplication::focusWidget();
+            // falls back to TOML registry lookup (globals-only via FLOATING_CONTEXT).
             QWidget* mainWin = SimpleLuaEngine::s_lastCreatedMainWindow;
             if (focusWidget && mainWin
                 && focusWidget != mainWin
@@ -113,13 +214,20 @@ protected:
                 return QObject::eventFilter(obj, event);
             }
 
-            // Skip Tab and Return — let Qt handle natively.
-            // Tab: QWidget::event() → focusNextPrevChild() (focus cycling with highlights)
-            // Return: QShortcut on FocusContainmentWidget (default button) or widget keyPressEvent
-            if (k == Qt::Key_Tab || k == Qt::Key_Backtab ||
-                k == Qt::Key_Return || k == Qt::Key_Enter) {
+            // Return/Enter: let Qt handle natively (default button / widget keyPressEvent).
+            if (k == Qt::Key_Return || k == Qt::Key_Enter) {
                 return QObject::eventFilter(obj, event);
             }
+
+            // Tab/Backtab: forwarded to Lua unconditionally. Qt's native
+            // focusNextPrevChild can't be reached from QShortcut dispatch, so
+            // the Lua handler is the only place Tab can become a remappable
+            // command (e.g. ToggleTimecodeFocus @timeline). Lua decides per
+            // context: floating-window display-only redirects to the focused
+            // main-window panel; floating text input (find_dialog) returns
+            // false to let Qt cycle the dialog's own fields; main window
+            // dispatches via the TOML registry, falling back to false (Qt
+            // native cycling) when nothing is bound.
 
             lua_getglobal(lua_state, handler_name.c_str());
             if (lua_isfunction(lua_state, -1)) {
@@ -164,6 +272,14 @@ protected:
                     lua_pushboolean(lua_state, 0);
                     lua_settable(lua_state, -3);
                 }
+
+                // Qt-canonical classification of the key as a text-editing
+                // operation (typing, caret nav, selection, clipboard, delete,
+                // undo/redo). Lua's text-input guard uses this to decide
+                // whether to defer to the focused widget.
+                lua_pushstring(lua_state, "is_text_editing_key");
+                lua_pushboolean(lua_state, is_text_editing_key(keyEvent));
+                lua_settable(lua_state, -3);
 
                 // Tell Lua whether focus is outside the main window.
                 // When true, QShortcuts can't resolve — Lua must fall back

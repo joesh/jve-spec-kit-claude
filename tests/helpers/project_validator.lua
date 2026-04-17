@@ -344,7 +344,11 @@ local function check_clip_durations_for_sequence(db, sequence_id, result)
         end)
 end
 
---- Check source ranges scoped to a sequence.
+--- Check source range validity scoped to a sequence.
+-- Reverse clips legitimately have source_in > source_out (JVE convention:
+-- playback direction is derived from the sign of source_out - source_in).
+-- Flag only the zero-range case — even freeze frames have ≥ 1 frame.
+-- Mirrors the project-wide check_source_range (fix 197b000).
 local function check_source_range_for_sequence(db, sequence_id, result)
     each_row(db,
         string.format(
@@ -352,14 +356,15 @@ local function check_source_range_for_sequence(db, sequence_id, result)
               FROM clips c
               JOIN tracks t ON c.track_id = t.id
               WHERE t.sequence_id = '%s'
+                AND c.clip_kind = 'timeline'
                 AND c.source_in_frame IS NOT NULL
                 AND c.source_out_frame IS NOT NULL
-                AND c.source_out_frame < c.source_in_frame]], sequence_id),
+                AND c.source_out_frame = c.source_in_frame]], sequence_id),
         function(stmt)
             fail(result, string.format(
-                "BAD_SOURCE_RANGE: clip %s (%s) has source_in=%d > source_out=%d",
+                "ZERO_SOURCE_RANGE: clip %s (%s) has source_in=source_out=%d",
                 tostring(stmt:value(0)), tostring(stmt:value(1)),
-                stmt:value(2), stmt:value(3)))
+                stmt:value(2)))
         end)
 end
 

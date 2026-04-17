@@ -32,6 +32,7 @@ local timecode_input = require("core.timecode_input")
 local Track = require("models.track")
 local Signals = require("core.signals")
 local track_state = require("ui.timeline.state.track_state")
+local drop_naming = require("ui.timeline.drop_naming")
 
 -- luacheck: globals qt_line_edit_select_all qt_scroll_area_h_scroll_by qt_scroll_area_h_scroll_info
 -- luacheck: globals qt_set_scroll_area_h_scroll_handler
@@ -265,7 +266,15 @@ local function install_timecode_entry_handlers()
     timecode_entry.focus_handler_name = register_global_handler("__timeline_timecode_focus_handler", function(event)
         local focus_in = event and event.focus_in
         timecode_entry.has_focus = focus_in and true or false
-        if not focus_in then
+        if focus_in then
+            -- Notify focus_manager that the timeline panel owns focus now —
+            -- the timecode line_edit is a child of timeline_panel but isn't
+            -- in get_focus_widgets() (it has its own dedicated handler).
+            -- Without this, panel-scoped shortcuts (Tab → ToggleTimecodeFocus
+            -- @timeline) wouldn't dispatch when the user clicks straight
+            -- into the timecode field from another panel.
+            require("ui.focus_manager").set_focused_panel("timeline")
+        else
             refresh_timecode_display()
         end
     end)
@@ -294,7 +303,10 @@ local function create_timecode_header()
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(layout, 6, 4, 6, 4)
 
     local line_edit = qt_constants.WIDGET.CREATE_LINE_EDIT("")
-    qt_set_focus_policy(line_edit, "StrongFocus")
+    -- ClickFocus (not StrongFocus) keeps the timecode field out of Qt's Tab
+    -- chain. Tab dispatch in the timeline panel goes through the command
+    -- system (ToggleTimecodeFocus). Click still focuses the field for typing.
+    qt_set_focus_policy(line_edit, "ClickFocus")
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(line_edit, "Expanding", "Fixed")
     qt_constants.PROPERTIES.SET_STYLE(line_edit, build_timecode_field_stylesheet())
 
@@ -399,6 +411,24 @@ function M.focus_timeline_view()
     return focus_timeline_view()
 end
 
+--- Toggle keyboard focus between the timecode entry field and the timeline
+-- view. Bound to Tab via the TOML keymap (ToggleTimecodeFocus @timeline)
+-- and remappable from the keyboard customization UI.
+function M.toggle_timecode_focus()
+    assert(timecode_entry.line_edit,
+        "timeline_panel.toggle_timecode_focus: timecode_entry.line_edit not initialized")
+    assert(M.video_widget or M.audio_widget,
+        "timeline_panel.toggle_timecode_focus: no timeline view widget to focus")
+    -- Use the focus handler's authoritative has_focus flag rather than
+    -- comparing widget userdata pointers — Lua's `==` on widget userdata
+    -- compares allocation identity, not the wrapped QWidget*, so two
+    -- userdata wrapping the same widget are NOT equal.
+    if timecode_entry.has_focus then
+        return focus_timeline_view()
+    end
+    return focus_timecode_entry()
+end
+
 
 --- Cancel timecode entry: restore original display text and exit field.
 -- Called by Escape key handler. Restores text BEFORE focus change so the
@@ -455,6 +485,155 @@ local function remove_from_tab_order(sequence_id)
     end
 end
 
+--- Enter the no-active-sequence state: inverse of load_sequence. Feature 010.
+--- Clears timeline state, deactivates the command stack, clears the selection
+--- hub (inspector pulls empty), and persists the empty tab list + empty
+--- last_open_sequence_id so a crash right after doesn't resurrect a tab.
+--- Views (monitor, timeline widgets) pull from state and auto-render blank.
+--- Idempotent.
+function M.unload_sequence()
+    local project_id = state.get_project_id()
+    state.clear()
+    command_manager.deactivate()
+    selection_hub.update_selection("timeline", {})
+    if project_id and project_id ~= "" then
+        database.set_project_setting(project_id, "last_open_sequence_id", "")
+        -- tab_order is authoritative for persisted open_sequence_ids.
+        database.set_project_setting(project_id, "open_sequence_ids", tab_order)
+    end
+end
+
+-- Assert that `first_clip` carries the metadata the new sequence needs.
+-- The fps / width / height come from the first dropped clip (spec Q2). If
+-- that clip has no usable metadata the caller must substitute project
+-- defaults before calling handle_drop_on_blank_timeline.
+local function assert_clip_metadata_for_new_sequence(first_clip)
+    assert(type(first_clip.name) == "string" and first_clip.name ~= "",
+        "handle_drop_on_blank_timeline: first clip missing name")
+    assert(type(first_clip.fps_numerator) == "number" and first_clip.fps_numerator > 0
+        and type(first_clip.fps_denominator) == "number"
+        and first_clip.fps_denominator > 0,
+        "handle_drop_on_blank_timeline: first clip must carry fps_numerator "
+            .. "and fps_denominator (caller lifts project defaults if media "
+            .. "metadata is unusable)")
+end
+
+-- Create a new sequence for a drop batch and return its id + the id of its
+-- V1 track (for subsequent Overwrite calls).
+local function create_drop_target_sequence(project_id, first_clip, clip_count)
+    local uuid = require("uuid")
+    local new_seq_id = uuid.generate()
+    local name = drop_naming.build_drop_sequence_name(first_clip.name, clip_count - 1)
+
+    local result = command_manager.execute("CreateSequence", {
+        project_id  = project_id,
+        sequence_id = new_seq_id,
+        name        = name,
+        frame_rate  = { fps_numerator = first_clip.fps_numerator,
+                        fps_denominator = first_clip.fps_denominator },
+        width       = first_clip.width,
+        height      = first_clip.height,
+    })
+    assert(result and result.success,
+        "handle_drop_on_blank_timeline: CreateSequence failed: "
+            .. tostring(result and result.error_message))
+
+    local video_tracks = Track.find_by_sequence(new_seq_id, "VIDEO")
+    assert(video_tracks and video_tracks[1] and video_tracks[1].id,
+        "handle_drop_on_blank_timeline: new sequence has no VIDEO track")
+    return new_seq_id, video_tracks[1].id
+end
+
+-- Place `clips` sequentially on `v1_track_id` starting at timeline 0.
+-- Each Overwrite nests inside the current undo group.
+local function insert_clips_sequentially(project_id, seq_id, v1_track_id, clips)
+    local playhead = 0
+    for index, clip in ipairs(clips) do
+        assert(clip.master_clip_id and clip.master_clip_id ~= "",
+            string.format("handle_drop_on_blank_timeline: clip[%d] missing "
+                .. "master_clip_id", index))
+        assert(type(clip.duration) == "number" and clip.duration > 0,
+            string.format("handle_drop_on_blank_timeline: clip[%d] duration "
+                .. "must be a positive integer", index))
+
+        local result = command_manager.execute("Overwrite", {
+            project_id       = project_id,
+            sequence_id      = seq_id,
+            master_clip_id   = clip.master_clip_id,
+            track_id         = v1_track_id,
+            overwrite_time   = playhead,
+            advance_playhead = false,
+        })
+        assert(result and result.success,
+            string.format("handle_drop_on_blank_timeline: Overwrite failed "
+                .. "for clip[%d] at %d: %s",
+                index, playhead,
+                tostring(result and result.error_message)))
+        playhead = playhead + clip.duration
+    end
+end
+
+--- Drop-to-blank handler: called by the drag wiring when the user drops
+--- items from the project browser onto the timeline while no sequence is
+--- active (feature 010, FR-011). Dropped sequences open as tabs; dropped
+--- clips fold into a single new sequence created from the first clip's
+--- metadata (fps / resolution) and named after it.
+---
+--- @param payload table: {
+---     sequences = { {id=...}, ... },   -- existing sequences to open as tabs
+---     clips     = { {master_clip_id=..., name=..., duration=...,
+---                    fps_numerator=..., fps_denominator=...,
+---                    width=..., height=...}, ... },
+--- }
+--- Clips must already be flattened (bins recursed) by the caller. The
+--- first clip supplies the new sequence's fps/resolution/name; if its
+--- fps metadata is missing the caller must lift project defaults before
+--- calling (spec Q2 fallback).
+function M.handle_drop_on_blank_timeline(payload)
+    assert(type(payload) == "table",
+        "timeline_panel.handle_drop_on_blank_timeline: payload table required")
+
+    local project_id = state.get_project_id()
+    assert(project_id and project_id ~= "",
+        "timeline_panel.handle_drop_on_blank_timeline: no project open")
+
+    local active_seq = state.get_sequence_id()
+    assert(not active_seq or active_seq == "",
+        "timeline_panel.handle_drop_on_blank_timeline: must run in the "
+            .. "no-active-sequence state; got active sequence "
+            .. tostring(active_seq))
+
+    local sequences = payload.sequences or {}
+    local clips = payload.clips or {}
+
+    -- Open each dropped existing sequence as a tab in drop order.
+    for _, seq in ipairs(sequences) do
+        assert(seq and seq.id and seq.id ~= "",
+            "handle_drop_on_blank_timeline: sequence entry missing id")
+        M.open_tab(seq.id)
+    end
+
+    -- Sequences-only drop: activate the last one as the active tab.
+    -- Spec: "last activated wins."
+    if #clips == 0 then
+        if #sequences > 0 then
+            M.load_sequence(sequences[#sequences].id)
+        end
+        return
+    end
+
+    assert_clip_metadata_for_new_sequence(clips[1])
+
+    command_manager.begin_undo_group("drop_to_blank_timeline")
+    local new_seq_id, v1_track_id = create_drop_target_sequence(
+        project_id, clips[1], #clips)
+    insert_clips_sequentially(project_id, new_seq_id, v1_track_id, clips)
+    command_manager.end_undo_group()
+
+    -- Make the new sequence the active tab.
+    M.load_sequence(new_seq_id)
+end
+
 local function close_tab(sequence_id)
     local tab = open_tabs[sequence_id]
     if not tab then
@@ -484,10 +663,8 @@ local function close_tab(sequence_id)
         if next_id then
             M.load_sequence(next_id)
         else
-            -- TODO: implement empty timeline state (clear views, monitor, inspector)
-            -- For now, prevent closing the last tab
-            ensure_tab_for_sequence(sequence_id)
-            M.load_sequence(sequence_id)
+            -- Last tab closed — enter the no-active-sequence state.
+            M.unload_sequence()
         end
     else
         update_tab_styles(current_sequence)
@@ -495,6 +672,9 @@ local function close_tab(sequence_id)
     update_tab_scroll_arrows()
     persist_open_tabs()
 end
+
+-- Expose close_tab programmatically (for tests + any future script callers).
+M.close_tab = close_tab
 
 ensure_tab_for_sequence = function(sequence_id)
     if not tab_bar_tabs_layout or not sequence_id or sequence_id == "" then
@@ -1286,9 +1466,15 @@ function M.create(opts)
     elseif type(opts) == "string" then
         sequence_id = opts
     end
-    assert(sequence_id and sequence_id ~= "", "timeline_panel.create: sequence_id is required")
+    -- project_id is always required; sequence_id is optional — nil means the
+    -- editor is opening in the no-active-sequence state (feature 010).
     assert(project_id and project_id ~= "", "timeline_panel.create: project_id is required")
-    state.init(sequence_id, project_id)
+    if sequence_id and sequence_id ~= "" then
+        state.init(sequence_id, project_id)
+    else
+        state.set_project_id(project_id)
+        state.clear()
+    end
 
     -- Set up selection callback for inspector
     state.set_on_selection_changed(function(selected_clips)
@@ -1488,8 +1674,11 @@ function M.create(opts)
     -- Register video widget → scroll area mapping for coordinate conversion
     widget_to_scroll_area[video_widget] = timeline_video_scroll
     M.video_widget = video_widget
-    -- TabFocus so focusNextPrevChild includes it (timecode ↔ timeline via Tab)
-    if qt_set_focus_policy then qt_set_focus_policy(video_widget, "StrongFocus") end  -- luacheck: globals qt_set_focus_policy
+    -- ClickFocus (not StrongFocus) keeps the timeline view out of Qt's Tab
+    -- chain. The timecode↔timeline toggle is now driven by the command
+    -- system (ToggleTimecodeFocus @timeline). Mouse clicks still focus the
+    -- view.
+    if qt_set_focus_policy then qt_set_focus_policy(video_widget, "ClickFocus") end  -- luacheck: globals qt_set_focus_policy
 
     -- Create audio timeline view
     local audio_widget = qt_constants.WIDGET.CREATE_TIMELINE()
@@ -1811,12 +2000,12 @@ function M.create(opts)
 
     log.event("Multi-view timeline panel created successfully")
 
+    -- No initial tab when opening in the no-active-sequence state (feature 010).
     local initial_sequence_id = state.get_sequence_id and state.get_sequence_id() or nil
-    if not initial_sequence_id or initial_sequence_id == "" then
-        error("timeline_panel: missing initial sequence_id from state", 2)
+    if initial_sequence_id and initial_sequence_id ~= "" then
+        ensure_tab_for_sequence(initial_sequence_id)
+        update_tab_styles(initial_sequence_id)
     end
-    ensure_tab_for_sequence(initial_sequence_id)
-    update_tab_styles(initial_sequence_id)
 
     if not tab_command_listener and command_manager and command_manager.add_listener then
         tab_command_listener = command_manager.add_listener(profile_scope.wrap(
@@ -1846,11 +2035,13 @@ function M.create(opts)
         state.set_playhead_position(playhead_frame)
     end)
 
-    -- Load initial sequence into timeline_monitor
-    -- pcall: bad clip data in a sequence must not crash the app
-    local load_ok, load_err = pcall(tl_view.load_sequence, tl_view, initial_sequence_id)
-    if not load_ok then
-        log.error("Failed to load initial sequence %s: %s", tostring(initial_sequence_id), tostring(load_err))
+    -- Load initial sequence into timeline_monitor (skipped when blank).
+    -- pcall: bad clip data in a sequence must not crash the app.
+    if initial_sequence_id and initial_sequence_id ~= "" then
+        local load_ok, load_err = pcall(tl_view.load_sequence, tl_view, initial_sequence_id)
+        if not load_ok then
+            log.error("Failed to load initial sequence %s: %s", tostring(initial_sequence_id), tostring(load_err))
+        end
     end
 
     -- After renderer updates widget content, apply any pending scroll restore.

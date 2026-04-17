@@ -28,6 +28,7 @@ local MOD = kb_constants.MOD
 keyboard_shortcuts.KEY = KEY
 keyboard_shortcuts.MOD = MOD
 
+
 -- Module references (set in init, asserted non-nil)
 local timeline_state = nil
 local command_manager = nil
@@ -132,8 +133,44 @@ local function handle_key_impl(event)
     local panel_active_browser = (focused_panel == "project_browser")
     local focus_is_text_input = event.focus_widget_is_text_input and event.focus_widget_is_text_input ~= 0
 
-    -- Tab/Return: handled entirely by Qt (focusNextPrevChild + QShortcut default buttons).
-    -- No Lua involvement — GlobalKeyFilter skips them.
+    -- Tab/Backtab: GlobalKeyFilter forwards every Tab to us so the user can
+    -- bind it (Qt's native focusNextPrevChild can't be reached via QShortcut).
+    -- Three cases, exclusive:
+    --   1. Floating display-only window (history): redirect focus back to the
+    --      last main-window panel — the window has no useful tab group.
+    --   2. Floating text-input (find_dialog): defer to Qt so the dialog can
+    --      cycle its own fields natively.
+    --   3. Main window (incl. timecode QLineEdit): dispatch via TOML registry
+    --      using focused_panel. ToggleTimecodeFocus is the default @timeline
+    --      binding. No binding → return false → Qt's native cycling (which is
+    --      a no-op inside timeline because every widget there is ClickFocus).
+    if key == KEY.Tab or key == KEY.Backtab then
+        if event.focus_outside_main_window and focus_is_text_input then
+            return false  -- find_dialog: native field cycling
+        end
+        -- Display-only floating window (history): redirect focus AND fire the
+        -- panel's Tab binding in the same press — the floating window is
+        -- transparent, so Tab should behave exactly as if it had been pressed
+        -- with the panel already focused. No "first press to escape" cost.
+        if event.focus_outside_main_window then
+            log.detail("  → Tab in display-only floating window, redirect to focused panel %s",
+                tostring(focused_panel))
+            focus_manager.focus_panel(focused_panel)
+            -- fall through to the dispatch below
+        end
+        -- Dispatch via TOML registry. Tab/Shift+Tab in timeline is fully
+        -- owned by the command system (default Tab → ToggleTimecodeFocus,
+        -- Shift+Tab user-mappable) — never falls back to Qt focusNextPrevChild
+        -- so the user can rely on Tab doing exactly what their keymap says,
+        -- nothing more. Other panels keep native Qt cycling when no binding
+        -- matches — they don't have a ban on dialog-style Tab cycling.
+        local registry = require("core.keyboard_shortcut_registry")
+        local dispatched = registry.handle_key_event(key, modifiers, focused_panel)
+        if dispatched then return true end
+        if event.focus_outside_main_window then return true end  -- redirect already happened
+        if panel_active_timeline then return true end
+        return false
+    end
 
     -- Escape: set global cancel flag — drag/modal handlers consume on next event
     if key == KEY.Escape then
@@ -187,12 +224,14 @@ local function handle_key_impl(event)
     -- Only residual keys below (arrows, Comma/Period, E) need Lua handling.
     -- F9/F10 moved to TOML keymap — Insert/Overwrite resolve context via gather_context.
 
-    -- Text input bypass for residual keys that conflict with typing.
-    if focus_is_text_input
-        and (key == KEY.Left or key == KEY.Right
-            or key == KEY.Comma or key == KEY.Period
-            or key == KEY.E) then
-        log.detail("  → residual key in text input, deferring to widget")
+    -- Text-input priority: when focus is on a text-editing widget and the
+    -- key is a canonical text-editing key (typing, caret nav, selection,
+    -- clipboard, undo/redo, delete), the widget owns it. Return false so Qt
+    -- continues delivery to the widget's keyPressEvent. One rule for main-
+    -- window and floating-window text input — covers Left/Right/Comma/Period/E
+    -- and every macOS editing shortcut (Cmd+A, Shift+Cmd+Z, etc.).
+    if focus_is_text_input and event.is_text_editing_key then
+        log.detail("  → text-editing key in text input, deferring to widget")
         return false
     end
 
@@ -213,6 +252,9 @@ local function handle_key_impl(event)
 
     -- Comma/Period: Nudge clips/edges (context gathering for edges)
     if (key == KEY.Comma or key == KEY.Period) and panel_active_timeline and not modifier_meta and not modifier_alt then
+        -- No-active-sequence state: nudge targets a sequence — silent no-op.
+        if not timeline_state.get_sequence_id() then return true end
+
         local nudge_frames = modifier_shift and 5 or 1
         if key == KEY.Comma then nudge_frames = -nudge_frames end
 
@@ -264,6 +306,9 @@ local function handle_key_impl(event)
 
     -- E: ExtendEdit (needs edge gathering from timeline_state)
     if key == KEY.E and panel_active_timeline and not modifier_meta and not modifier_alt then
+        -- No-active-sequence state: ExtendEdit targets a sequence — silent no-op.
+        if not timeline_state.get_sequence_id() then return true end
+
         local selected_edges = timeline_state.get_selected_edges()
         if not selected_edges or #selected_edges == 0 then
             return true
@@ -298,12 +343,39 @@ local function handle_key_impl(event)
     end
 
     -- Fallback: TOML registry lookup for keys that weren't handled above.
-    -- Only when focus is outside the main window (e.g. floating History window),
-    -- because QShortcuts scoped to panel containers can't resolve there.
-    -- When focus IS inside the main window, QShortcuts handle TOML-bound keys.
+    -- Only when focus is outside the main window (e.g. floating History
+    -- window), because QShortcuts scoped to panel containers can't resolve
+    -- there. When focus IS inside the main window, QShortcuts handle TOML-
+    -- bound keys.
+    --
+    -- Two flavors of floating window, distinguished by focus_widget_is_text_input:
+    --
+    -- * Display-only floating window (focus on a non-text widget like the
+    --   history tree): the window is transparent to shortcuts. Dispatch via
+    --   focus_manager's focused_panel — the last main-window panel that had
+    --   focus — so panel-scoped bindings (J → ShuttleReverse @timeline) fire
+    --   exactly as if the floating window weren't there.
+    --
+    -- * Interactive text-input floating window (focus on a QLineEdit/etc in
+    --   find_dialog): is_text_editing_key already trapped typing keys above.
+    --   Remaining keys (Cmd+S, F-keys, Shift+Cmd+A, …) must NOT dispatch to
+    --   any panel — the user is in a text field, not on a panel. Pass nil as
+    --   the context so the registry's first (panel-match) pass finds nothing
+    --   and only the second (global) pass can fire. Cmd+S still saves;
+    --   panel-scoped @timeline DeselectAll does not leak.
     if event.focus_outside_main_window then
         local registry = require("core.keyboard_shortcut_registry")
-        if registry.handle_key_event(key, modifiers, focused_panel) then
+        -- focus_is_text_input → nil context (globals only — no panel match);
+        -- otherwise → focused_panel (display-only floating window is transparent).
+        -- Cannot use `and`/`or` chain: `true and nil or focused_panel` collapses
+        -- to focused_panel because nil is falsy in Lua's `or`.
+        local fallback_context
+        if focus_is_text_input then
+            fallback_context = nil
+        else
+            fallback_context = focused_panel
+        end
+        if registry.handle_key_event(key, modifiers, fallback_context) then
             return true
         end
     end

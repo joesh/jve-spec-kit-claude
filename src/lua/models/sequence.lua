@@ -443,6 +443,25 @@ end
 
 -- Find the most recently modified sequence in the database
 -- Returns sequence object, or nil if none exist
+--- Resolve the initial active sequence for a project on open.
+--- Reads the project setting `last_open_sequence_id`; if present and
+--- resolves to a real sequence, returns that Sequence. Otherwise returns
+--- nil (no fallback). Feature 010: the editor enters the no-active-
+--- sequence state when this returns nil.
+--- @param project_id string
+--- @return table|nil: Sequence object or nil
+function Sequence.resolve_initial_for_project(project_id)
+    assert(project_id and project_id ~= "",
+        "Sequence.resolve_initial_for_project: project_id is required")
+    local last_seq_id = database.get_project_setting(project_id, "last_open_sequence_id")
+    if not last_seq_id or last_seq_id == "" then
+        return nil
+    end
+    -- Sequence.load returns nil if the stored id no longer resolves
+    -- (deleted sequence); don't resurrect.
+    return Sequence.load(last_seq_id)
+end
+
 function Sequence.find_most_recent()
     local conn = resolve_db()
 

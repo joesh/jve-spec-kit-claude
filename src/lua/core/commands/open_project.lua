@@ -96,16 +96,26 @@ local SPEC = {
     no_project_context = true,  -- Doesn't require active project (it OPENS a project)
 }
 
---- Post-open initialization: wires up UI, emits signals, persists state.
--- Shared by OpenProject and NewProject executors.
--- @param sequence table: loaded Sequence object (must have .id and .project_id)
--- @param project_path string: absolute path to the .jvp file
--- @return table: {success=true, project_id=..., sequence_id=...}
-function M.post_open_init(sequence, project_path)
-    assert(sequence and sequence.id and sequence.project_id,
-        "open_project.post_open_init: valid sequence required")
+--- Post-open wiring shared by OpenProject and NewProject: emits signals,
+--- reinitializes command_manager, restores layout, loads the active
+--- sequence into the timeline.
+--- @param project table: loaded Project (required)
+--- @param sequence table|nil: Sequence object, or nil for the
+---        no-active-sequence state (feature 010: project has no saved tab info)
+--- @param project_path string: filesystem path of the .jvp
+--- @return table {success=true, project_id, sequence_id}
+function M.post_open_init(project, sequence, project_path)
+    assert(project and project.id and project.id ~= "",
+        "open_project.post_open_init: project with id required")
     assert(project_path and project_path ~= "",
         "open_project.post_open_init: project_path required")
+    if sequence then
+        assert(sequence.id and sequence.project_id == project.id,
+            "open_project.post_open_init: sequence must belong to project")
+    end
+
+    local project_id = project.id
+    local sequence_id = sequence and sequence.id
 
     local ui_state = require("ui.ui_state")
     local timeline_panel = ui_state.get_timeline_panel()
@@ -129,17 +139,23 @@ function M.post_open_init(sequence, project_path)
 
     -- Notify all interested modules of project change (stops playback, clears caches)
     local Signals = require("core.signals")
-    Signals.emit("project_changed", sequence.project_id)
+    Signals.emit("project_changed", project_id)
 
-    -- Re-initialize command manager with new database
+    -- Re-initialize command manager with new database. Branch on the active
+    -- sequence: a project with no saved tab info opens in the no-active-
+    -- sequence state (feature 010).
     local command_manager = require("core.command_manager")
-    command_manager.init(sequence.id, sequence.project_id)
+    if sequence_id then
+        command_manager.init(sequence_id, project_id)
+    else
+        command_manager.init_project_only(project_id)
+    end
 
     -- Get UI references
     local project_browser = ui_state.get_project_browser()
 
     -- Restore layout: use new project's saved state, or inherit from outgoing
-    local new_project_id = sequence.project_id
+    local new_project_id = project_id
     local saved_splitters = database.get_project_setting(new_project_id, "splitter_sizes")
     if not saved_splitters and outgoing_splitter_sizes then
         -- New project has no layout → inherit from outgoing and persist
@@ -155,9 +171,10 @@ function M.post_open_init(sequence, project_path)
         database.set_project_setting(new_project_id, "window_geometry", outgoing_geometry)
     end
 
-    -- Load timeline
-    if timeline_panel and timeline_panel.load_sequence then
-        timeline_panel.load_sequence(sequence.id)
+    -- Load timeline only when a sequence is active. With no sequence, the
+    -- timeline panel stays blank (feature 010).
+    if sequence_id and timeline_panel and timeline_panel.load_sequence then
+        timeline_panel.load_sequence(sequence_id)
     end
 
     -- Inherit timeline scroll/splitter from outgoing project if new has defaults
@@ -168,23 +185,18 @@ function M.post_open_init(sequence, project_path)
     -- Refresh project browser (set project_id first to avoid stale cache)
     if project_browser then
         if project_browser.set_project_id then
-            project_browser.set_project_id(sequence.project_id)
+            project_browser.set_project_id(project_id)
         end
         if project_browser.refresh then
             project_browser.refresh()
         end
     end
 
-    if project_browser and project_browser.focus_sequence then
-        project_browser.focus_sequence(sequence.id)
+    if sequence_id and project_browser and project_browser.focus_sequence then
+        project_browser.focus_sequence(sequence_id)
     end
 
     -- Set window title
-    local Project = require("models.project")
-    local project = Project.load(sequence.project_id)
-    assert(project, string.format(
-        "post_open_init: Project.load(%s) returned nil after successful open",
-        tostring(sequence.project_id)))
     if project.name and project.name ~= "" then
         if main_window and qt_constants and qt_constants.PROPERTIES and qt_constants.PROPERTIES.SET_TITLE then
             qt_constants.PROPERTIES.SET_TITLE(main_window, project.name)
@@ -299,27 +311,20 @@ function M.register(executors, undoers, db, set_last_error)
             return { success = false, error_message = "Failed to open project database" }
         end
 
-        -- Find best sequence: last-open if available, else most recent
+        -- Resolve the initial active sequence from saved tab state. nil means
+        -- the project opens in the no-active-sequence state (feature 010).
         local Sequence = require("models.sequence")
-        local sequence
-        local last_id = database.get_project_setting(
-            database.get_current_project_id(), "last_open_sequence_id")
-        if last_id and last_id ~= "" then
-            sequence = Sequence.load(last_id)
-        end
-        if not sequence then
-            sequence = Sequence.find_most_recent()
+        local Project = require("models.project")
+        local project_id = database.get_current_project_id()
+        local project = Project.load(project_id)
+        if not project then
+            return { success = false, error_message = "Project row not found after open" }
         end
 
-        if not sequence then
-            return { success = false, error_message = "No sequences found in project" }
-        end
+        local sequence = Sequence.resolve_initial_for_project(project_id)
+        -- sequence may be nil — post_open_init accepts nil and opens blank.
 
-        if not sequence.project_id or sequence.project_id == "" then
-            return { success = false, error_message = "Sequence missing project_id" }
-        end
-
-        local result = M.post_open_init(sequence, project_path)
+        local result = M.post_open_init(project, sequence, project_path)
         return result
     end
 

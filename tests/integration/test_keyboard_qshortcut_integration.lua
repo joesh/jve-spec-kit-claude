@@ -189,24 +189,28 @@ check("Cmd+Z not handled by residual handler",
     "Cmd+Z was handled by residual handler (should be QShortcut)")
 
 -------------------------------------------------------------------------------
--- 6. Tab is handled by Qt natively (focusNextPrevChild / QShortcut),
--- NOT by the Lua residual handler. GlobalKeyFilter skips Tab entirely.
+-- 6. Tab is now a remappable command in the timeline panel: GlobalKeyFilter
+-- forwards Tab/Backtab to Lua so the TOML registry can dispatch
+-- ToggleTimecodeFocus (default @timeline binding). The Lua handler always
+-- consumes Tab in the timeline panel — even if no binding matches —
+-- specifically to defeat Qt's dialog-style focusNextPrevChild cycling.
 -------------------------------------------------------------------------------
 print("\n--- Tab behavior ---")
 
 focus_manager.set_focused_panel("timeline")
 ui.pump(50)
 
--- Tab should NOT be handled by Lua handler (Qt handles it natively)
+-- Tab in the timeline panel must be handled by the Lua dispatch path
+-- (so it can route through the TOML-bound ToggleTimecodeFocus command).
 handled = keyboard_shortcuts.handle_key({
     key = 16777217,  -- Qt::Key_Tab
     modifiers = 0,
     text = "",
     focus_widget_is_text_input = 0,
 })
-check("Tab not handled by Lua residual handler (Qt handles natively)",
-    not handled,
-    "Tab should not reach Lua handler")
+check("Tab in timeline: consumed by Lua dispatch (ToggleTimecodeFocus path)",
+    handled == true,
+    "Tab should be consumed by the Lua command-dispatch path in @timeline")
 
 -------------------------------------------------------------------------------
 -- 7. Text input bypass for residual keys
@@ -216,34 +220,38 @@ print("\n--- Text input bypass ---")
 focus_manager.set_focused_panel("timeline")
 ui.pump(50)
 
--- Arrow in text field should NOT be handled (cursor movement)
+-- Arrow in text field should NOT be handled (cursor movement).
+-- Left matches QKeySequence::MoveToPreviousChar → is_text_editing_key=true.
 handled = keyboard_shortcuts.handle_key({
     key = 16777234,  -- Qt::Key_Left
     modifiers = 0,
     text = "",
     focus_widget_is_text_input = true,
+    is_text_editing_key = true,
 })
 check("Left arrow passes through in text input",
     not handled,
     "Left arrow was handled in text input (should pass through for cursor)")
 
--- Comma in text field should NOT be handled
+-- Comma in text field should NOT be handled — bare printable, is_text_editing_key=true.
 handled = keyboard_shortcuts.handle_key({
     key = 44,  -- Qt::Key_Comma
     modifiers = 0,
     text = ",",
     focus_widget_is_text_input = true,
+    is_text_editing_key = true,
 })
 check("Comma passes through in text input",
     not handled,
     "Comma was handled in text input")
 
--- E in text field should NOT be handled
+-- E in text field should NOT be handled — bare printable, is_text_editing_key=true.
 handled = keyboard_shortcuts.handle_key({
     key = 69,  -- Qt::Key_E
     modifiers = 0,
     text = "e",
     focus_widget_is_text_input = true,
+    is_text_editing_key = true,
 })
 check("E passes through in text input",
     not handled,

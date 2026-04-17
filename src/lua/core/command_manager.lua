@@ -205,6 +205,14 @@ end
 local function apply_command_mutations(cmd)
     local mutations = cmd:get_parameter("__timeline_mutations")
     if not mutations then return false end
+    -- Wrapper commands (Insert, Overwrite) forward their nested command's
+    -- mutations onto themselves so downstream inspectors see them; the
+    -- nested command has already applied those mutations to timeline_state,
+    -- so the outer MUST NOT re-apply or it duplicates every inserted clip.
+    -- The flag treats the outer as "applied" without touching state.
+    if cmd:get_parameter("__timeline_mutations_already_applied") then
+        return true
+    end
     local ts = require('ui.timeline.timeline_state')
     if not ts.apply_mutations then return false end
     local fallback_seq = extract_sequence_id(cmd)
@@ -593,14 +601,35 @@ local PROJECT_LEVEL_COMMAND_TYPES = {
     DeleteSequence = true,
 }
 
--- Commands that modify DB but don't produce clip-level __timeline_mutations.
--- These change sequences/projects/metadata, not clip positions/durations.
--- Excluded from the NSF hash-based mutation assertion.
+-- Commands that mutate DB rows other than clips and therefore produce no
+-- __timeline_mutations. Excluded from the hash-based mutation assertion so
+-- undo/redo of these commands doesn't trip "produced no __timeline_mutations".
 local NON_CLIP_COMMAND_TYPES = {
-    CreateSequence = true,
-    DeleteSequence = true,
+    -- Sequence lifecycle / metadata.
+    CreateSequence      = true,
+    DeleteSequence      = true,
     SetSequenceMetadata = true,
+    -- Sequence mark state (mark_in / mark_out columns on `sequences`).
+    SetMark             = true,
+    SetMarkIn           = true,
+    SetMarkOut          = true,
+    ClearMark           = true,
+    ClearMarkIn         = true,
+    ClearMarkOut        = true,
+    ClearMarks          = true,
 }
+
+-- Recovery reload after a command's executor/undoer produced no
+-- __timeline_mutations (delegation, test env, or genuine bug). Skipped for
+-- NON_CLIP_COMMAND_TYPES, which mutate sequence-level state only and drive
+-- UI refresh via their own signals (marks_changed, project_changed, …) —
+-- the clip-level reload would be wasted work and would mask the fact that
+-- these commands have a different refresh contract.
+local function reload_clips_after_no_mutations(cmd_type, seq_id)
+    if NON_CLIP_COMMAND_TYPES[cmd_type] then return end
+    local ts = require('ui.timeline.timeline_state')
+    if ts.reload_clips then ts.reload_clips(seq_id) end
+end
 
 local function classify_command_sequence_id(command)
     if PROJECT_LEVEL_COMMAND_TYPES[command.type] then
@@ -800,10 +829,58 @@ function M.init(sequence_id, project_id)
     end
     
     ensure_command_selection_columns()
-    
+
     log.event("Initialized (last_sequence=%d current_position=%s)",
         history.get_last_sequence_number(),
         tostring(history.get_current_sequence_number()))
+end
+
+--- Initialize CommandManager for a project with NO active sequence.
+--- Used on startup when the project has no saved tab info (feature 010).
+--- The manager is fully operational for project-scoped commands; per-sequence
+--- stacks become reachable once the user opens a sequence (which calls
+--- M.activate_timeline_stack).
+function M.init_project_only(project_id)
+    if not project_id or project_id == "" then
+        error("CommandManager.init_project_only: project_id is required", 2)
+    end
+    active_sequence_id = nil
+    active_project_id = project_id
+
+    db = db_module.get_connection()
+    assert(db, "CommandManager.init_project_only: database connection not available")
+
+    registry.init(db, M.set_last_error)
+    history.init(db, nil, project_id)
+    state_mgr.init(db)
+
+    ensure_command_selection_columns()
+
+    log.event("Initialized (project-only, no active sequence; last_sequence=%d)",
+        history.get_last_sequence_number())
+end
+
+--- Drop the currently-active per-sequence stack without discarding its
+--- persisted commands. Feature 010, FR-014 — undoing a sequence delete must
+--- be able to restore the sequence's undo history intact. Idempotent.
+function M.deactivate()
+    local was_active = active_sequence_id
+    active_sequence_id = nil
+    -- Route subsequent undo/redo through the global stack; per-sequence state
+    -- remains on disk.
+    history.set_active_stack(history.GLOBAL_STACK_ID)
+    log.event("Deactivated (no active sequence; global stack active)")
+
+    -- Mirror activate_timeline_stack's "sequence_switched" event with
+    -- sequence_id=nil so menus / panels refresh their enabled state for
+    -- per-sequence commands (feature 010, FR-008).
+    if was_active then
+        notify_command_event({
+            event = "sequence_switched",
+            sequence_id = nil,
+            project_id = active_project_id,
+        })
+    end
 end
 
 -- Validate command parameters
@@ -1577,8 +1654,7 @@ function M._execute_body(command_or_name, params)
                                  command.type, reload_sequence_id))
                          end
                      end
-                     -- Mutations present but couldn't apply (test env), or no-op, or delegation.
-                     timeline_state.reload_clips(reload_sequence_id)
+                     reload_clips_after_no_mutations(command.type, reload_sequence_id)
                  end
                  perf.log("ui_refresh")
                  perf.reset()
@@ -1909,8 +1985,7 @@ local function run_undoer(cmd)
                 log.error("run_undoer: command %s produced no __timeline_mutations for sequence %s\n%s",
                     cmd.type, seq_id, debug.traceback("", 2))
             end
-            local ts = require('ui.timeline.timeline_state')
-            if ts.reload_clips then ts.reload_clips(seq_id) end
+            reload_clips_after_no_mutations(cmd.type, seq_id)
         end
     end
     return true, nil
@@ -2029,8 +2104,7 @@ local function run_redo_executor(cmd)
                 log.error("run_redo_executor: command %s produced no __timeline_mutations for sequence %s\n%s",
                     cmd.type, seq_id, debug.traceback("", 2))
             end
-            local ts = require('ui.timeline.timeline_state')
-            if ts.reload_clips then ts.reload_clips(seq_id) end
+            reload_clips_after_no_mutations(cmd.type, seq_id)
         end
     end
     return true, nil

@@ -279,7 +279,10 @@ handled = keyboard_shortcuts.handle_key({
 })
 assert_false(handled, "Cmd+B must not be handled by residual handler")
 
--- Test 10: Residual key (Left arrow) in text field bypassed for cursor movement
+-- Test 10: Left arrow in text field bypassed for cursor movement.
+-- Left matches QKeySequence::MoveToPreviousChar — the C++ helper
+-- `is_text_editing_key` returns true for it, and the general text-input
+-- guard in the Lua handler defers to the widget.
 reset_environment()
 focus_manager.set_focused_panel("timeline")
 handled = keyboard_shortcuts.handle_key({
@@ -287,6 +290,7 @@ handled = keyboard_shortcuts.handle_key({
     modifiers = QT_MOD_NONE,
     text = "",
     focus_widget_is_text_input = true,
+    is_text_editing_key = true,
 })
 assert_false(handled, "Left arrow must pass through to text field for cursor movement")
 assert_false(find_command("MovePlayhead"), "MovePlayhead must not fire while in text field")

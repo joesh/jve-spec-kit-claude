@@ -28,7 +28,29 @@ local main_window = nil
 
 local actions_by_command = {}
 local undo_listener_token = nil
-local update_undo_redo_actions  -- forward declaration
+local update_undo_redo_actions       -- forward declaration
+local update_per_sequence_actions    -- forward declaration
+
+-- Commands that target the currently-active sequence. When no sequence is
+-- active (feature 010: close last tab, open project without tab info),
+-- these menu items are greyed out — invoking them is a silent no-op.
+-- Source: menus.xml commands that operate on a timeline selection, timeline
+-- playhead, or timeline clips. Non-per-sequence menu items (project/browser/
+-- window management) stay enabled in the no-active-sequence state.
+local PER_SEQUENCE_COMMAND_NAMES = {
+    "Cut", "Copy", "Paste",
+    "DeleteSelection", "SelectAll", "DeselectAll",
+    "RippleDelete",
+    "GoToStart", "GoToEnd", "GoToTimecode",
+    "Insert", "Overwrite",
+    "MatchFrame",
+    "Nudge",
+    "Split",
+    "ToggleClipEnabled",
+    "LinkClips", "UnlinkClips",
+    "CloseGap",
+    "TimelineZoomFit", "TimelineZoomIn", "TimelineZoomOut",
+}
 
 -- Qt bindings (loaded from qt_constants global)
 local qt = {
@@ -72,11 +94,24 @@ function M.init(window, cmd_mgr, proj_browser)
             if event.event == "execute" or event.event == "undo" or event.event == "redo" then
                 update_undo_redo_actions()
             end
+            -- Per-sequence menu grey-out: refresh when the active sequence
+            -- changes (activate_timeline_stack / deactivate both emit this)
+            -- and when any command executes (a new sequence may now exist
+            -- or an existing one may have been deleted).
+            if event.event == "sequence_switched"
+                or event.event == "execute"
+                or event.event == "undo"
+                or event.event == "redo" then
+                update_per_sequence_actions()
+            end
         end)
     end
 
     if update_undo_redo_actions then
         update_undo_redo_actions()
+    end
+    if update_per_sequence_actions then
+        update_per_sequence_actions()
     end
 end
 
@@ -290,6 +325,19 @@ update_undo_redo_actions = function()
     set_actions_text_for_command("Redo", redo_label)
 end
 
+-- Enable or disable the PER_SEQUENCE_COMMAND_NAMES entries based on whether
+-- the timeline has an active sequence. Feature 010 FR-008: in the no-active-
+-- sequence state, per-sequence menu items grey out so it's visible to the
+-- user that nothing can be done to the timeline.
+update_per_sequence_actions = function()
+    local timeline_state = require("ui.timeline.timeline_state")
+    local seq_id = timeline_state.get_sequence_id()
+    local has_active_sequence = seq_id ~= nil and seq_id ~= ""
+    for _, command_name in ipairs(PER_SEQUENCE_COMMAND_NAMES) do
+        set_actions_enabled_for_command(command_name, has_active_sequence)
+    end
+end
+
 --- Get active project ID from timeline or database
 local function get_active_project_id()
     local ui_state_ok, ui_state = pcall(require, "ui.ui_state")
@@ -467,6 +515,7 @@ function M.load_from_file(xml_path)
 
     log.event("Loaded %d menus from %s", #menus_elem.children, tostring(xml_path))
     update_undo_redo_actions()
+    update_per_sequence_actions()
     return true
 end
 
