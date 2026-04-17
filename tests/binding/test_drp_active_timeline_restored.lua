@@ -1,6 +1,11 @@
+-- SLOW_TEST
 -- Regression: after importing a DRP, the resulting project must know which
 -- timeline to open and which tabs to restore — even when the DRP was saved
 -- without a SequenceTabsData binary blob (e.g. anamnesis-gold-timeline.drp).
+--
+-- ~60s wall clock (full Anamnesis DRP import + media probe). Invoke with
+-- RUN_SLOW_TESTS=1 when touching DRP importer, active-tab restore, or
+-- anything in the initial-sequence-selection path.
 --
 -- Domain behavior under test:
 --   1. The project's "active sequence" (last_open_sequence_id) MUST be set

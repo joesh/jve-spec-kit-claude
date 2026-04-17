@@ -16,6 +16,24 @@ static const TrackId V2{TrackType::Video, 2};
 static const TrackId V3{TrackType::Video, 3};
 static const TrackId A1{TrackType::Audio, 1};
 
+// Poll until a given frame is cached (cache_only path, no decode), or
+// until timeout_ms elapses. Returns true if cached, false on timeout.
+// Replaces blind `QThread::msleep(2000)` waits that cost real wall time
+// even when prefetch finishes in <100ms — the common case.
+static bool poll_until_cached(TimelineMediaBuffer* tmb, const TrackId& track,
+                               int64_t frame, int timeout_ms) {
+    const int step_ms = 25;
+    int elapsed = 0;
+    while (elapsed < timeout_ms) {
+        if (tmb->GetVideoFrame(track, frame, /*cache_only=*/true).frame) {
+            return true;
+        }
+        QThread::msleep(step_ms);
+        elapsed += step_ms;
+    }
+    return tmb->GetVideoFrame(track, frame, /*cache_only=*/true).frame != nullptr;
+}
+
 class TestTimelineMediaBuffer : public QObject {
     Q_OBJECT
 
@@ -584,8 +602,8 @@ private slots:
         // Cold-start: first SetPlayhead with direction=1 triggers REFILL from frame 48
         tmb->SetPlayhead(48, 1, 1.0f);
 
-        // Give REFILL worker time to decode frames 48-50+ (includes Reader creation)
-        QThread::msleep(500);
+        // Wait for REFILL worker to decode frames 48-50+ (includes Reader creation)
+        poll_until_cached(tmb.get(), V1, 50, 500);
 
         // Frame 50 (first frame of clipB) should be cached by REFILL
         auto result = tmb->GetVideoFrame(V1, 50);
@@ -2010,8 +2028,8 @@ private slots:
         // REFILL stores each decoded frame immediately.
         tmb->SetPlayhead(48, 1, 1.0f);
 
-        // Give worker time to decode frames 48-50+ (Reader creation + h264 seek)
-        QThread::msleep(500);
+        // Wait for worker to decode frames 48-50+ (Reader creation + h264 seek)
+        poll_until_cached(tmb.get(), V1, 50, 500);
 
         // Read the first frame of clipB. With incremental storage, this should
         // be a TMB cache hit (frame 50 was decoded and stored as the batch ran).
@@ -2055,7 +2073,7 @@ private slots:
         tmb->SetTrackClips(V2, v2_clips);
 
         tmb->SetPlayhead(48, 1, 1.0f);
-        QThread::msleep(1000);
+        poll_until_cached(tmb.get(), V2, 50, 1000);
 
         // V2 (visible): pre-buffered via REFILL — 0 cache misses
         tmb->ResetVideoCacheMissCount();
@@ -2099,7 +2117,7 @@ private slots:
 
         // Resume playback — pre-buffer should work again (not blocked by stale in-flight)
         tmb->SetPlayhead(48, 1, 1.0f);
-        QThread::msleep(500);
+        poll_until_cached(tmb.get(), V1, 50, 500);
 
         auto rb = tmb->GetVideoFrame(V1, 50);
         QVERIFY2(rb.frame != nullptr,
@@ -2491,8 +2509,8 @@ private slots:
         // Gap-aware pre-buffer should submit V1's entry frame (40).
         tmb->SetPlayhead(30, 1, 1.0f);
 
-        // Give worker time to decode V1's entry frame
-        QThread::msleep(1000);
+        // Wait for worker to decode V1's entry frame
+        poll_until_cached(tmb.get(), V1, 40, 1000);
 
         // Verify: V1's clip entry frame (40) is pre-buffered.
         // Query in park mode for a deterministic cache check.
@@ -2604,7 +2622,7 @@ private slots:
 
         // Start play at frame 0 — REFILL should fill across boundary into clipB
         tmb->SetPlayhead(0, 1, 1.0f);
-        QThread::msleep(2000);
+        poll_until_cached(tmb.get(), V1, 30, 2000);
 
         // clipB's first frame (30) should be cached by REFILL spanning the boundary
         tmb->SetPlayhead(30, 0, 1.0f);
@@ -2641,7 +2659,7 @@ private slots:
 
         // Start play — REFILL should fill clipA, skip gap, fill clipB
         tmb->SetPlayhead(0, 1, 1.0f);
-        QThread::msleep(2000);
+        poll_until_cached(tmb.get(), V1, 30, 2000);
 
         // clipB's first frame (30) should be cached despite the gap
         tmb->SetPlayhead(30, 0, 1.0f);
@@ -2674,7 +2692,7 @@ private slots:
 
         // Switch to reverse — buffer_end must reset
         tmb->SetPlayhead(50, -1, 1.0f);
-        QThread::msleep(1000);
+        poll_until_cached(tmb.get(), V1, 40, 1000);
 
         // Frames behind playhead (e.g. 40) should now be cached
         tmb->SetPlayhead(40, 0, 1.0f);
@@ -2710,7 +2728,7 @@ private slots:
         tmb->SetTrackClips(V1, clips2);
 
         // New REFILL should fill with clipB's source positions
-        QThread::msleep(1000);
+        poll_until_cached(tmb.get(), V1, 5, 1000);
 
         tmb->SetPlayhead(5, 0, 1.0f);
         auto r5 = tmb->GetVideoFrame(V1, 5);
@@ -2746,7 +2764,7 @@ private slots:
 
         // Start play — cold-start priming submits REFILL for both tracks
         tmb->SetPlayhead(0, 1, 1.0f);
-        QThread::msleep(2000);
+        poll_until_cached(tmb.get(), V2, 20, 2000);
 
         // V2 (visible): pre-buffered via REFILL
         tmb->ResetVideoCacheMissCount();
@@ -2792,7 +2810,10 @@ private slots:
         }
 
         tmb->SetPlayhead(18, 1, 1.0f);
-        QThread::msleep(2000);
+        {
+            TrackId v6{TrackType::Video, 6};
+            poll_until_cached(tmb.get(), v6, 20, 2000);
+        }
 
         // V6 (topmost, visible): must be pre-buffered (0 cache misses)
         tmb->ResetVideoCacheMissCount();
@@ -3320,7 +3341,7 @@ private slots:
 
         // Start REFILL from frame 0
         tmb->SetPlayhead(0, 1, 1.0f);
-        QThread::msleep(500);  // let REFILL pre-fill
+        poll_until_cached(tmb.get(), V1, 5, 500);
 
         // Reset miss counter, then request a frame that REFILL should have cached
         tmb->ResetVideoCacheMissCount();
@@ -4079,9 +4100,12 @@ private slots:
         tmb->SetPlayhead(0, 0, 1.0f);
         tmb->GetVideoFrame(V1, 0);
 
-        // Start play — REFILL should fill clipA, skip clipB, fill clipC
+        // Start play — REFILL should fill clipA, skip clipB, fill clipC.
+        // Poll for clipC's entry frame (40); REFILL must traverse A and B to
+        // reach it, and if clipC never caches the later assertions will
+        // surface the underlying bug with full detail.
         tmb->SetPlayhead(0, 1, 1.0f);
-        QThread::msleep(2000);
+        poll_until_cached(tmb.get(), V1, 40, 2000);
 
         // clipB must be offline
         tmb->SetPlayhead(25, 0, 1.0f);

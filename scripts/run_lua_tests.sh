@@ -63,18 +63,57 @@ SKIP=0
 
 echo "[lua-tests] Running ${#LUA_TESTS[@]} Lua test(s)..."
 
+# Filter out SLOW tests (unless RUN_SLOW_TESTS=1) before launching.
+RUN_TESTS=()
 for test_file in "${LUA_TESTS[@]}"; do
-  test_name="$(basename "${test_file}")"
-
-  # Skip tests marked -- SLOW unless RUN_SLOW_TESTS=1
   if [[ "$RUN_SLOW" != "1" ]] && head -3 "${test_file}" | grep -q SLOW_TEST; then
     SKIP=$((SKIP+1))
     continue
   fi
-
-  echo "[lua-tests] → ${test_name}"
-  (cd "${TEST_DIR}" && luajit test_harness.lua "${test_name}")
+  RUN_TESTS+=("${test_file}")
 done
+
+# Run tests in parallel — each is a fresh luajit process with isolated
+# state (its own /tmp/jve/test_*.db). Bash 3.2 on macOS doesn't have
+# `wait -n`, so collect exit codes into a file and tally at the end.
+PARALLEL_JOBS="${LUA_TEST_JOBS:-4}"
+RESULTS_DIR="$(mktemp -d -t lua_results.XXXXXX)"
+
+run_one() {
+  local test_file="$1"
+  local test_name
+  test_name="$(basename "${test_file}")"
+  local out_log="${RESULTS_DIR}/${test_name}.log"
+  if (cd "${TEST_DIR}" && luajit test_harness.lua "${test_name}") > "${out_log}" 2>&1; then
+    echo "PASS" > "${RESULTS_DIR}/${test_name}.status"
+  else
+    echo "FAIL" > "${RESULTS_DIR}/${test_name}.status"
+  fi
+  echo "[lua-tests] → ${test_name}"
+}
+export -f run_one
+export TEST_DIR RESULTS_DIR LUA_PATH LUA_CPATH JVE_SQLITE3_PATH
+
+printf '%s\n' "${RUN_TESTS[@]}" \
+  | xargs -P "${PARALLEL_JOBS}" -I '{}' bash -c 'run_one "$@"' _ '{}'
+
+# Tally results
+FAIL_COUNT=0
+for test_file in "${RUN_TESTS[@]}"; do
+  test_name="$(basename "${test_file}")"
+  status="$(cat "${RESULTS_DIR}/${test_name}.status" 2>/dev/null || echo "FAIL")"
+  if [[ "$status" != "PASS" ]]; then
+    FAIL_COUNT=$((FAIL_COUNT+1))
+    echo "[lua-tests] ✗ ${test_name}" >&2
+    cat "${RESULTS_DIR}/${test_name}.log" >&2
+  fi
+done
+rm -rf "${RESULTS_DIR}"
+
+if [[ $FAIL_COUNT -gt 0 ]]; then
+  echo "[lua-tests] ${FAIL_COUNT} Lua test(s) FAILED." >&2
+  exit 1
+fi
 
 if [[ $SKIP -gt 0 ]]; then
   echo "[lua-tests] All Lua tests passed ($SKIP slow tests skipped; set RUN_SLOW_TESTS=1 to include)."

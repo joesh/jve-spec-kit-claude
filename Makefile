@@ -3,13 +3,28 @@
 
 BUILD_DIR = build
 
-.PHONY: all build clean install help configure reconfigure luacheck nav-index
+.PHONY: all build clean install help configure reconfigure luacheck nav-index test
 
-# Default target: lint, build, and run all tests
-all: configure luacheck
-	@$(MAKE) -C $(BUILD_DIR) --no-print-directory
-	@$(MAKE) -C $(BUILD_DIR) lua_tests --no-print-directory
-	@$(MAKE) -C $(BUILD_DIR) binding_tests --no-print-directory
+# Default target: lint, build, and run all tests.
+#
+# Pipeline:
+#   - luacheck runs in the background alongside the C++ build (~8s wall
+#     overlapped, ~0s added).
+#   - Tests run in two phases after build completes:
+#     (A) lua + binding in parallel — both CPU-bound but short; max ≈ 12s.
+#     (B) integration alone — its perf-sensitive batches assert on
+#         wall-clock latency (p95 cadence ≤ 80ms); under parallel load the
+#         thresholds flake. Dedicated CPU keeps them stable.
+#   - Structuring A → B (not everything in parallel) avoids the ~30s
+#     slowdown that N-way parallelism otherwise costs the perf batches.
+all: configure
+	@luacheck src tests > .luacheck.log 2>&1 & \
+	 LUACHECK_PID=$$!; \
+	 $(MAKE) -C $(BUILD_DIR) --no-print-directory; \
+	 wait $$LUACHECK_PID; LUACHECK_RC=$$?; \
+	 if [ $$LUACHECK_RC -ne 0 ]; then cat .luacheck.log; rm -f .luacheck.log; exit $$LUACHECK_RC; fi; \
+	 rm -f .luacheck.log
+	@$(MAKE) -C $(BUILD_DIR) lua_tests binding_tests --no-print-directory -j2
 	@$(MAKE) -C $(BUILD_DIR) integration_tests --no-print-directory
 
 # Build only (C++ compile + link, no tests, no lint)

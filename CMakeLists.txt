@@ -466,12 +466,20 @@ set_target_properties(test_tmb PROPERTIES
 )
 add_test(NAME test_tmb COMMAND test_tmb)
 
+# Test targets:
+#   - Depend on JVEEditor (executable rebuilt if C++ changed — correctness).
+#   - Do NOT depend on each other via add_dependencies: custom targets have
+#     no stamp and re-run unconditionally, so chaining (binding_tests →
+#     lua_tests → JVEEditor) caused Lua tests to run 3× per `make` (~60s
+#     wasted). Each layer now runs exactly once.
+#   - Fail-fast ordering across layers is NOT guaranteed by make -j — if
+#     that matters for a workflow, invoke targets sequentially or use ctest.
+
 add_custom_target(lua_tests
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_lua_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running Lua test suite"
 )
-
 add_dependencies(lua_tests JVEEditor)
 add_test(NAME lua_suite
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_lua_tests.sh
@@ -483,7 +491,7 @@ add_custom_target(binding_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running binding tests (Lua tests requiring C++ bindings)"
 )
-add_dependencies(binding_tests JVEEditor lua_tests)
+add_dependencies(binding_tests JVEEditor)
 add_test(NAME binding_suite
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_binding_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -494,7 +502,7 @@ add_custom_target(integration_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running integration tests (real C++ EMP bindings)"
 )
-add_dependencies(integration_tests JVEEditor binding_tests)
+add_dependencies(integration_tests JVEEditor)
 add_test(NAME integration_suite
     COMMAND ${CMAKE_SOURCE_DIR}/tests/run_integration_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

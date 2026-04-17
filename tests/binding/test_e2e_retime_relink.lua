@@ -1,7 +1,13 @@
+-- SLOW_TEST
 -- End-to-end verification: convert DRP → relink against fixture tree →
 -- verify retimed clip is no longer offline → confirm the clips that
 -- previously crashed (clip 01-333-2 and 00.5G-1) now have correct
 -- source_in values matching their fixture file's first_frame_tc.
+--
+-- Runs the full Anamnesis DRP import + media relink against the real
+-- fixture tree (600+ media files probed). ~2 min wall clock — excluded
+-- from default binding runs. Invoke with RUN_SLOW_TESTS=1 when touching
+-- DRP importer, relink planner, or the TC-origin resolution path.
 --
 -- Drives the editor entirely through model + command APIs (no raw SQL
 -- outside test files), so the SQL isolation guard is satisfied by the
