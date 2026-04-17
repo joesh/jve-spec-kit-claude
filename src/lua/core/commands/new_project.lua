@@ -228,15 +228,20 @@ function M.register(executors, undoers, db, set_last_error)
             return { success = false, error_message = "Failed to open new project database" }
         end
 
-        -- Find sequence in new project
+        -- Resolve initial sequence from the newly-created project's tab state
+        -- (templates save one) and load the project row for post_open_init.
         local Sequence = require("models.sequence")
-        local sequence = Sequence.find_most_recent()
-
-        if not sequence then
-            return { success = false, error_message = "No sequences in new project" }
+        local Project = require("models.project")
+        local pid = database.get_current_project_id()
+        local project = Project.load(pid)
+        if not project then
+            return { success = false, error_message = "Project row not found after new" }
         end
+        local sequence = Sequence.resolve_initial_for_project(pid)
+        -- sequence may be nil — post_open_init opens the editor in the
+        -- no-active-sequence state.
 
-        return open_project.post_open_init(sequence, result.project_path)
+        return open_project.post_open_init(project, sequence, result.project_path)
     end
 
     return {
