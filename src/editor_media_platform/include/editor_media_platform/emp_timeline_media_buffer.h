@@ -123,7 +123,14 @@ struct VideoResult {
 // provides constant-time access to decoded video frames and audio PCM.
 class TimelineMediaBuffer {
 public:
-    static std::unique_ptr<TimelineMediaBuffer> Create(int pool_threads = 2);
+    // Explicit pool sizing: 0 = synchronous (no workers), or >= 3 (1 prep + 1 video + 1 audio).
+    // See start_workers() for the rationale on the 3-thread minimum.
+    static std::unique_ptr<TimelineMediaBuffer> Create(int pool_threads);
+
+    // No-arg convenience overload: picks the smallest valid async pool. The default lives
+    // in the .cpp next to start_workers() so the invariant and the default update together.
+    // Callers who want sync-mode (tests, headless tooling) must pass 0 explicitly.
+    static std::unique_ptr<TimelineMediaBuffer> Create();
     ~TimelineMediaBuffer();
 
     // Per-track clip layout (call incrementally as playhead moves).

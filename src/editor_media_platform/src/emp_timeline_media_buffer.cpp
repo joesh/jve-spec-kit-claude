@@ -115,6 +115,13 @@ std::unique_ptr<TimelineMediaBuffer> TimelineMediaBuffer::Create(int pool_thread
     return tmb;
 }
 
+// Single source of truth for the default async pool size. Lives next to
+// start_workers() — if the thread-role split changes, the minimum updates
+// here in the same diff as the assert.
+std::unique_ptr<TimelineMediaBuffer> TimelineMediaBuffer::Create() {
+    return Create(3);  // 1 prep + 1 video + 1 audio — see start_workers()
+}
+
 // ============================================================================
 // Track clip layout
 // ============================================================================
