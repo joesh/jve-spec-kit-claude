@@ -2,7 +2,6 @@
 #include "qt_bindings.h"
 #include "timeline_renderer.h"
 #include "resource_paths.h"
-#include "bug_reporter/qt_bindings_bug_reporter.h"
 #include "jve_log.h"
 #include "assert_handler.h"
 #include <QDir>
@@ -186,7 +185,4 @@ void SimpleLuaEngine::setupBindings()
     // Register timeline bindings
     registerTimelineBindings(L);
 
-    // Register bug reporter bindings
-    bug_reporter::registerBugReporterBindings(L);
-    JVE_LOG_EVENT(Ui, "Bug reporter bindings registered");
 }

@@ -139,10 +139,6 @@ set(CORE_SOURCES
     src/assert_handler.cpp
     src/jve_log.cpp
 
-    # Bug reporter system
-    src/bug_reporter/gesture_logger.cpp
-    src/bug_reporter/qt_bindings_bug_reporter.cpp
-
     # Audio Output Platform
     src/audio_output_platform/aop.cpp
 

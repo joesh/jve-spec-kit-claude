@@ -1605,17 +1605,6 @@ function M._execute_body(command_or_name, params)
 
     exec_scope:finish(result.success and "success" or "failure")
 
-    -- Capture command execution for bug reporter
-    capture_manager = require("bug_reporter.capture_manager")
-    if capture_manager.capture_enabled then
-        capture_manager:log_command(
-            command.type,
-            command.parameters,
-            result,
-            nil  -- gesture_id not currently tracked - could be added later
-        )
-    end
-
 ::cleanup::
     -- If we own a mutation snapshot that wasn't committed or rolled back
     -- (noop, cancel, early exit), discard it by committing it — the

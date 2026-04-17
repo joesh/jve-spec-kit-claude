@@ -22,4 +22,4 @@ core_models          | src/lua/core/** src/lua/models/**
 ui_inspectable       | src/lua/ui/** src/lua/inspectable/**
 qt_bindings          | src/lua/qt_bindings/**
 importers_media      | src/lua/importers/** src/lua/media/**
-bug_reporter         | src/lua/bug_reporter/** src/bug_reporter/**
+bug_reporter         | src/lua/bug_reporter/**

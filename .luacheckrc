@@ -57,15 +57,6 @@ globals = {
     "qt_show_dialog",
     "timeline",
 
-    -- Bug reporter Qt bindings (from qt_bindings_bug_reporter.cpp)
-    "install_gesture_logger",
-    "set_gesture_logger_enabled",
-    "grab_window",
-    "create_timer",
-    "post_mouse_event",
-    "post_key_event",
-    "sleep_ms",
-    "process_events",
     "database",
 
     -- Runtime globals

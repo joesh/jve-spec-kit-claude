@@ -39,19 +39,20 @@ debug.setmetatable(nil, {
   end
 })
 
--- Global error handler for automatic bug capture
+-- Global error handler — capture DB snapshot on crash for post-mortem
 local function global_error_handler(err)
     local stack_trace = debug.traceback(tostring(err), 2)
     log.error("FATAL ERROR: %s", tostring(err))
     log.error("%s", stack_trace)
 
-    -- Capture bug report automatically on errors
-    local ok, bug_reporter = pcall(require, "bug_reporter.init")
-    if ok and bug_reporter then
-        local test_path = bug_reporter.capture_on_error(tostring(err), stack_trace)
-        if test_path then
-            log.event("Bug report auto-captured: %s", tostring(test_path))
-            log.event("Press F12 to review and submit")
+    local ok_cap, bug_capture = pcall(require, "bug_reporter.bug_capture")
+    if ok_cap then
+        local ok_snap, dir = pcall(bug_capture.capture, {
+            error_message = tostring(err),
+            stack_trace = stack_trace,
+        })
+        if ok_snap and dir then
+            log.event("Bug captured: %s", dir)
         end
     end
 
@@ -144,10 +145,6 @@ local function open_and_init_project(path)
     local peak_cache = require("core.media.peak_cache")
     peak_cache.init_for_project(pid)
 
-    -- Initialize bug reporter (continuous background capture)
-    local bug_reporter = require("bug_reporter.init")
-    bug_reporter.init()
-    log.event("Bug reporter initialized (background capture active)")
 end
 
 -- ---------------------------------------------------------------------------
