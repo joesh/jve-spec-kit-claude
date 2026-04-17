@@ -2756,12 +2756,16 @@ void TimelineMediaBuffer::fill_prefetch(const TrackId& track) {
             if (cursor.ahead_of(playhead) >= VIDEO_PREFETCH_MAX) {
                 if (!decoded_this_call) {
                     // Scanned entire prefetch window without finding decodable
-                    // content (all gaps or obscured by higher tracks). Advance
-                    // buf_end to the scan frontier so pick_video_track sees
-                    // this track as "processed" and doesn't re-select it.
-                    // Without this, workers hot-loop: pick → scan → no work →
-                    // return → pick again (buf_end never moved).
-                    set_already_fetched_video(track, cursor.pos, direction);
+                    // content (all gaps or obscured by higher tracks). Mark
+                    // the track as "processed" up to the window edge so
+                    // pick_video_track doesn't re-select it. Use the window
+                    // edge (not cursor.pos): skip_gap can jump the cursor far
+                    // past the window, and recording buf_end at that jumped
+                    // position would make the track look "filled" for frames
+                    // that aren't cached — users would see black for the gap.
+                    // Matches the unbounded-gap branch below.
+                    int64_t window_edge = playhead + direction * VIDEO_PREFETCH_MAX;
+                    set_already_fetched_video(track, window_edge, direction);
                 }
                 return;
             }
