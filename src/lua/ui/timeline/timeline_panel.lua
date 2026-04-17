@@ -493,7 +493,6 @@ end
 function M.unload_sequence()
     local project_id = state.get_project_id()
     state.clear()
-    local command_manager = require("core.command_manager")
     command_manager.deactivate()
     selection_hub.update_selection("timeline", {})
     if project_id and project_id ~= "" then

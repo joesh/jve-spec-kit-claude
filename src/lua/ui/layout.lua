@@ -106,7 +106,7 @@ local function open_and_init_project(path)
 
     active_project_id = project.id
     project_display_name = project.name
-    active_sequence_id = sequence and sequence.id or nil
+    active_sequence_id = sequence and sequence.id
     log.event("Using project: %s", project.name)
     if sequence then
         log.event("Using sequence: %s", sequence.name)

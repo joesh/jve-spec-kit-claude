@@ -96,16 +96,14 @@ local SPEC = {
     no_project_context = true,  -- Doesn't require active project (it OPENS a project)
 }
 
---- Post-open initialization: wires up UI, emits signals, persists state.
--- Shared by OpenProject and NewProject executors.
--- @param sequence table: loaded Sequence object (must have .id and .project_id)
--- @param project_path string: absolute path to the .jvp file
--- @return table: {success=true, project_id=..., sequence_id=...}
---- Post-open wiring used by both OpenProject and NewProject.
+--- Post-open wiring shared by OpenProject and NewProject: emits signals,
+--- reinitializes command_manager, restores layout, loads the active
+--- sequence into the timeline.
 --- @param project table: loaded Project (required)
---- @param sequence table|nil: Sequence object; nil means "no active sequence"
----        (feature 010: open project has no saved tab info).
+--- @param sequence table|nil: Sequence object, or nil for the
+---        no-active-sequence state (feature 010: project has no saved tab info)
 --- @param project_path string: filesystem path of the .jvp
+--- @return table {success=true, project_id, sequence_id}
 function M.post_open_init(project, sequence, project_path)
     assert(project and project.id and project.id ~= "",
         "open_project.post_open_init: project with id required")
@@ -117,7 +115,7 @@ function M.post_open_init(project, sequence, project_path)
     end
 
     local project_id = project.id
-    local sequence_id = sequence and sequence.id or nil
+    local sequence_id = sequence and sequence.id
 
     local ui_state = require("ui.ui_state")
     local timeline_panel = ui_state.get_timeline_panel()

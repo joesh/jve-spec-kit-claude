@@ -509,23 +509,21 @@ function M.init(sequence_id, project_id)
 end
 
 --- Enter the no-active-sequence state: drop the active-sequence reference
---- and all per-sequence data, but keep the project identity so the editor
---- stays inside the current project. Views pull-read get_sequence_id() == nil
---- and render blank. Idempotent.
+--- and all per-sequence data. The project identity (data.state.project_id)
+--- is untouched — the editor stays inside the current project; only the
+--- timeline becomes blank. Views pull get_sequence_id() == nil and render
+--- blank of their own accord (MVC). Idempotent.
 function M.clear()
-    local project_id = data.state.project_id
-    -- Persist pending state for the outgoing sequence BEFORE we tear it down,
-    -- so unsaved viewport/scroll/selection aren't lost on the round-trip.
+    -- Persist pending per-sequence state BEFORE tearing it down so unsaved
+    -- viewport/scroll/selection aren't lost on the round-trip.
     if persist_dirty then
         M.persist_state_to_db(true)
         persist_dirty = false
     end
 
+    data.state.sequence_id = nil
     data.state.tracks = {}
     data.state.clips = {}
-    data.state.sequence_id = nil
-    -- project_id intentionally preserved.
-    data.state.project_id = project_id
 
     data.state.selected_clips = {}
     data.state.selected_edges = {}
@@ -540,7 +538,6 @@ function M.clear()
     data.state.is_playing = false
 
     clip_state.invalidate_indexes()
-
     data.notify_listeners()
 end
 
