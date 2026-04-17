@@ -850,14 +850,14 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::build_audio_output(
         const std::shared_ptr<PcmChunk>& decoded,
         TimeUS source_t0, TimeUS source_t1,
         TimeUS timeline_t0, TimeUS timeline_t1,
-        float speed_ratio, const AudioFormat& fmt) const {
+        float speed_magnitude, const AudioFormat& fmt) const {
 
     assert(decoded && "build_audio_output: decoded chunk is null");
     assert(source_t1 > source_t0 && "build_audio_output: inverted source range");
     assert(timeline_t1 > timeline_t0 && "build_audio_output: inverted timeline range");
     assert(fmt.sample_rate > 0 && "build_audio_output: sample_rate must be positive");
     assert(fmt.channels > 0 && "build_audio_output: channels must be positive");
-    assert(speed_ratio > 0.0f && "build_audio_output: speed_ratio must be positive (callers pass std::abs)");
+    assert(speed_magnitude > 0.0f && "build_audio_output: speed_magnitude must be positive (direction belongs upstream — pass std::abs)");
 
     const int32_t sr = fmt.sample_rate;
     const int32_t ch = fmt.channels;
@@ -892,7 +892,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::build_audio_output(
 
     std::vector<float> out_data(out_frames * ch);
 
-    if (std::abs(speed_ratio - 1.0f) < 0.001f) {
+    if (std::abs(speed_magnitude - 1.0f) < 0.001f) {
         // No conform — direct copy (trim only)
         int64_t copy_frames = std::min(out_frames, source_sample_count);
         const float* src = src_data + skip * ch;

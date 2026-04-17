@@ -32,6 +32,7 @@ local timecode_input = require("core.timecode_input")
 local Track = require("models.track")
 local Signals = require("core.signals")
 local track_state = require("ui.timeline.state.track_state")
+local drop_naming = require("ui.timeline.drop_naming")
 
 -- luacheck: globals qt_line_edit_select_all qt_scroll_area_h_scroll_by qt_scroll_area_h_scroll_info
 -- luacheck: globals qt_set_scroll_area_h_scroll_handler
@@ -502,6 +503,76 @@ function M.unload_sequence()
     end
 end
 
+-- Assert that `first_clip` carries the metadata the new sequence needs.
+-- The fps / width / height come from the first dropped clip (spec Q2). If
+-- that clip has no usable metadata the caller must substitute project
+-- defaults before calling handle_drop_on_blank_timeline.
+local function assert_clip_metadata_for_new_sequence(first_clip)
+    assert(type(first_clip.name) == "string" and first_clip.name ~= "",
+        "handle_drop_on_blank_timeline: first clip missing name")
+    assert(type(first_clip.fps_numerator) == "number" and first_clip.fps_numerator > 0
+        and type(first_clip.fps_denominator) == "number"
+        and first_clip.fps_denominator > 0,
+        "handle_drop_on_blank_timeline: first clip must carry fps_numerator "
+            .. "and fps_denominator (caller lifts project defaults if media "
+            .. "metadata is unusable)")
+end
+
+-- Create a new sequence for a drop batch and return its id + the id of its
+-- V1 track (for subsequent Overwrite calls).
+local function create_drop_target_sequence(project_id, first_clip, clip_count)
+    local uuid = require("uuid")
+    local new_seq_id = uuid.generate()
+    local name = drop_naming.build_drop_sequence_name(first_clip.name, clip_count - 1)
+
+    local result = command_manager.execute("CreateSequence", {
+        project_id  = project_id,
+        sequence_id = new_seq_id,
+        name        = name,
+        frame_rate  = { fps_numerator = first_clip.fps_numerator,
+                        fps_denominator = first_clip.fps_denominator },
+        width       = first_clip.width,
+        height      = first_clip.height,
+    })
+    assert(result and result.success,
+        "handle_drop_on_blank_timeline: CreateSequence failed: "
+            .. tostring(result and result.error_message))
+
+    local video_tracks = Track.find_by_sequence(new_seq_id, "VIDEO")
+    assert(video_tracks and video_tracks[1] and video_tracks[1].id,
+        "handle_drop_on_blank_timeline: new sequence has no VIDEO track")
+    return new_seq_id, video_tracks[1].id
+end
+
+-- Place `clips` sequentially on `v1_track_id` starting at timeline 0.
+-- Each Overwrite nests inside the current undo group.
+local function insert_clips_sequentially(project_id, seq_id, v1_track_id, clips)
+    local playhead = 0
+    for index, clip in ipairs(clips) do
+        assert(clip.master_clip_id and clip.master_clip_id ~= "",
+            string.format("handle_drop_on_blank_timeline: clip[%d] missing "
+                .. "master_clip_id", index))
+        assert(type(clip.duration) == "number" and clip.duration > 0,
+            string.format("handle_drop_on_blank_timeline: clip[%d] duration "
+                .. "must be a positive integer", index))
+
+        local result = command_manager.execute("Overwrite", {
+            project_id       = project_id,
+            sequence_id      = seq_id,
+            master_clip_id   = clip.master_clip_id,
+            track_id         = v1_track_id,
+            overwrite_time   = playhead,
+            advance_playhead = false,
+        })
+        assert(result and result.success,
+            string.format("handle_drop_on_blank_timeline: Overwrite failed "
+                .. "for clip[%d] at %d: %s",
+                index, playhead,
+                tostring(result and result.error_message)))
+        playhead = playhead + clip.duration
+    end
+end
+
 --- Drop-to-blank handler: called by the drag wiring when the user drops
 --- items from the project browser onto the timeline while no sequence is
 --- active (feature 010, FR-011). Dropped sequences open as tabs; dropped
@@ -542,80 +613,25 @@ function M.handle_drop_on_blank_timeline(payload)
         M.open_tab(seq.id)
     end
 
+    -- Sequences-only drop: activate the last one as the active tab.
+    -- Spec: "last activated wins."
     if #clips == 0 then
-        -- Sequences-only drop. Activate the last one so it becomes the
-        -- active tab (spec: last activated wins).
         if #sequences > 0 then
             M.load_sequence(sequences[#sequences].id)
         end
         return
     end
 
-    -- Build the new sequence's identity from the first dropped clip.
-    local first = clips[1]
-    assert(type(first.name) == "string" and first.name ~= "",
-        "handle_drop_on_blank_timeline: first clip missing name")
-    assert(type(first.fps_numerator) == "number" and first.fps_numerator > 0
-        and type(first.fps_denominator) == "number" and first.fps_denominator > 0,
-        "handle_drop_on_blank_timeline: first clip must carry fps_numerator "
-            .. "and fps_denominator (caller lifts project defaults if media "
-            .. "metadata is unusable)")
-
-    local drop_naming = require("ui.timeline.drop_naming")
-    local uuid = require("uuid")
-    local Track = require("models.track")
-
-    local new_seq_id = uuid.generate()
-    local new_seq_name = drop_naming.build_drop_sequence_name(first.name, #clips - 1)
+    assert_clip_metadata_for_new_sequence(clips[1])
 
     command_manager.begin_undo_group("drop_to_blank_timeline")
-
-    local create_result = command_manager.execute("CreateSequence", {
-        project_id  = project_id,
-        sequence_id = new_seq_id,
-        name        = new_seq_name,
-        frame_rate  = { fps_numerator = first.fps_numerator,
-                        fps_denominator = first.fps_denominator },
-        width       = first.width,
-        height      = first.height,
-    })
-    assert(create_result and create_result.success,
-        "handle_drop_on_blank_timeline: CreateSequence failed: "
-            .. tostring(create_result and create_result.error_message))
-
-    -- Place each clip sequentially on V1 of the new sequence.
-    local video_tracks = Track.find_by_sequence(new_seq_id, "VIDEO")
-    assert(video_tracks and video_tracks[1] and video_tracks[1].id,
-        "handle_drop_on_blank_timeline: new sequence has no VIDEO track")
-    local v1_track_id = video_tracks[1].id
-
-    local playhead = 0
-    for index, clip in ipairs(clips) do
-        assert(clip.master_clip_id and clip.master_clip_id ~= "",
-            string.format("handle_drop_on_blank_timeline: clip[%d] missing "
-                .. "master_clip_id", index))
-        assert(type(clip.duration) == "number" and clip.duration > 0,
-            string.format("handle_drop_on_blank_timeline: clip[%d] duration "
-                .. "must be a positive integer", index))
-
-        local ow_result = command_manager.execute("Overwrite", {
-            project_id     = project_id,
-            sequence_id    = new_seq_id,
-            master_clip_id = clip.master_clip_id,
-            track_id       = v1_track_id,
-            overwrite_time = playhead,
-            advance_playhead = false,
-        })
-        assert(ow_result and ow_result.success,
-            string.format("handle_drop_on_blank_timeline: Overwrite failed "
-                .. "for clip[%d] at %d: %s",
-                index, playhead,
-                tostring(ow_result and ow_result.error_message)))
-        playhead = playhead + clip.duration
-    end
-
+    local new_seq_id, v1_track_id = create_drop_target_sequence(
+        project_id, clips[1], #clips)
+    insert_clips_sequentially(project_id, new_seq_id, v1_track_id, clips)
     command_manager.end_undo_group()
-    M.open_tab(new_seq_id)
+
+    -- Make the new sequence the active tab.
+    M.load_sequence(new_seq_id)
 end
 
 local function close_tab(sequence_id)

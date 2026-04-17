@@ -353,12 +353,15 @@ private:
         TrackState& ts, const std::string& clip_id,
         TimeUS seg_t0, TimeUS seg_t1, const AudioFormat& fmt) const;
 
-    // Build output PcmChunk: trim decoded audio to source range, conform, rebase to timeline
+    // Build output PcmChunk: trim decoded audio to source range, conform, rebase to timeline.
+    // `speed_magnitude` is the absolute conform ratio (seq_fps / media_fps) — positive only.
+    // Direction is encoded upstream in source_in/source_out ordering; this function operates
+    // on a forward source slice and callers pass std::abs(clip.speed_ratio).
     std::shared_ptr<PcmChunk> build_audio_output(
         const std::shared_ptr<PcmChunk>& decoded,
         TimeUS source_t0, TimeUS source_t1,
         TimeUS timeline_t0, TimeUS timeline_t1,
-        float speed_ratio, const AudioFormat& fmt) const;
+        float speed_magnitude, const AudioFormat& fmt) const;
 
     // ── Pre-buffer thread pool ──
     // Decode-preparation jobs: submitted externally (SetPlayhead probe scan,

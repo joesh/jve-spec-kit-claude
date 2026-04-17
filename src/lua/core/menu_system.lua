@@ -330,12 +330,9 @@ end
 -- sequence state, per-sequence menu items grey out so it's visible to the
 -- user that nothing can be done to the timeline.
 update_per_sequence_actions = function()
-    local ok, timeline_state = pcall(require, "ui.timeline.timeline_state")
-    local has_active_sequence = ok
-        and timeline_state
-        and type(timeline_state.get_sequence_id) == "function"
-        and timeline_state.get_sequence_id() ~= nil
-        and timeline_state.get_sequence_id() ~= ""
+    local timeline_state = require("ui.timeline.timeline_state")
+    local seq_id = timeline_state.get_sequence_id()
+    local has_active_sequence = seq_id ~= nil and seq_id ~= ""
     for _, command_name in ipairs(PER_SEQUENCE_COMMAND_NAMES) do
         set_actions_enabled_for_command(command_name, has_active_sequence)
     end
