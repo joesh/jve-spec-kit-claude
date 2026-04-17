@@ -502,6 +502,122 @@ function M.unload_sequence()
     end
 end
 
+--- Drop-to-blank handler: called by the drag wiring when the user drops
+--- items from the project browser onto the timeline while no sequence is
+--- active (feature 010, FR-011). Dropped sequences open as tabs; dropped
+--- clips fold into a single new sequence created from the first clip's
+--- metadata (fps / resolution) and named after it.
+---
+--- @param payload table: {
+---     sequences = { {id=...}, ... },   -- existing sequences to open as tabs
+---     clips     = { {master_clip_id=..., name=..., duration=...,
+---                    fps_numerator=..., fps_denominator=...,
+---                    width=..., height=...}, ... },
+--- }
+--- Clips must already be flattened (bins recursed) by the caller. The
+--- first clip supplies the new sequence's fps/resolution/name; if its
+--- fps metadata is missing the caller must lift project defaults before
+--- calling (spec Q2 fallback).
+function M.handle_drop_on_blank_timeline(payload)
+    assert(type(payload) == "table",
+        "timeline_panel.handle_drop_on_blank_timeline: payload table required")
+
+    local project_id = state.get_project_id()
+    assert(project_id and project_id ~= "",
+        "timeline_panel.handle_drop_on_blank_timeline: no project open")
+
+    local active_seq = state.get_sequence_id()
+    assert(not active_seq or active_seq == "",
+        "timeline_panel.handle_drop_on_blank_timeline: must run in the "
+            .. "no-active-sequence state; got active sequence "
+            .. tostring(active_seq))
+
+    local sequences = payload.sequences or {}
+    local clips = payload.clips or {}
+
+    -- Open each dropped existing sequence as a tab in drop order.
+    for _, seq in ipairs(sequences) do
+        assert(seq and seq.id and seq.id ~= "",
+            "handle_drop_on_blank_timeline: sequence entry missing id")
+        M.open_tab(seq.id)
+    end
+
+    if #clips == 0 then
+        -- Sequences-only drop. Activate the last one so it becomes the
+        -- active tab (spec: last activated wins).
+        if #sequences > 0 then
+            M.load_sequence(sequences[#sequences].id)
+        end
+        return
+    end
+
+    -- Build the new sequence's identity from the first dropped clip.
+    local first = clips[1]
+    assert(type(first.name) == "string" and first.name ~= "",
+        "handle_drop_on_blank_timeline: first clip missing name")
+    assert(type(first.fps_numerator) == "number" and first.fps_numerator > 0
+        and type(first.fps_denominator) == "number" and first.fps_denominator > 0,
+        "handle_drop_on_blank_timeline: first clip must carry fps_numerator "
+            .. "and fps_denominator (caller lifts project defaults if media "
+            .. "metadata is unusable)")
+
+    local drop_naming = require("ui.timeline.drop_naming")
+    local uuid = require("uuid")
+    local Track = require("models.track")
+
+    local new_seq_id = uuid.generate()
+    local new_seq_name = drop_naming.build_drop_sequence_name(first.name, #clips - 1)
+
+    command_manager.begin_undo_group("drop_to_blank_timeline")
+
+    local create_result = command_manager.execute("CreateSequence", {
+        project_id  = project_id,
+        sequence_id = new_seq_id,
+        name        = new_seq_name,
+        frame_rate  = { fps_numerator = first.fps_numerator,
+                        fps_denominator = first.fps_denominator },
+        width       = first.width,
+        height      = first.height,
+    })
+    assert(create_result and create_result.success,
+        "handle_drop_on_blank_timeline: CreateSequence failed: "
+            .. tostring(create_result and create_result.error_message))
+
+    -- Place each clip sequentially on V1 of the new sequence.
+    local video_tracks = Track.find_by_sequence(new_seq_id, "VIDEO")
+    assert(video_tracks and video_tracks[1] and video_tracks[1].id,
+        "handle_drop_on_blank_timeline: new sequence has no VIDEO track")
+    local v1_track_id = video_tracks[1].id
+
+    local playhead = 0
+    for index, clip in ipairs(clips) do
+        assert(clip.master_clip_id and clip.master_clip_id ~= "",
+            string.format("handle_drop_on_blank_timeline: clip[%d] missing "
+                .. "master_clip_id", index))
+        assert(type(clip.duration) == "number" and clip.duration > 0,
+            string.format("handle_drop_on_blank_timeline: clip[%d] duration "
+                .. "must be a positive integer", index))
+
+        local ow_result = command_manager.execute("Overwrite", {
+            project_id     = project_id,
+            sequence_id    = new_seq_id,
+            master_clip_id = clip.master_clip_id,
+            track_id       = v1_track_id,
+            overwrite_time = playhead,
+            advance_playhead = false,
+        })
+        assert(ow_result and ow_result.success,
+            string.format("handle_drop_on_blank_timeline: Overwrite failed "
+                .. "for clip[%d] at %d: %s",
+                index, playhead,
+                tostring(ow_result and ow_result.error_message)))
+        playhead = playhead + clip.duration
+    end
+
+    command_manager.end_undo_group()
+    M.open_tab(new_seq_id)
+end
+
 local function close_tab(sequence_id)
     local tab = open_tabs[sequence_id]
     if not tab then
