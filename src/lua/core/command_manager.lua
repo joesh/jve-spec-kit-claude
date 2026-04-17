@@ -589,13 +589,22 @@ local PROJECT_LEVEL_COMMAND_TYPES = {
     DeleteSequence = true,
 }
 
--- Commands that modify DB but don't produce clip-level __timeline_mutations.
--- These change sequences/projects/metadata, not clip positions/durations.
--- Excluded from the NSF hash-based mutation assertion.
+-- Commands that mutate DB rows other than clips and therefore produce no
+-- __timeline_mutations. Excluded from the hash-based mutation assertion so
+-- undo/redo of these commands doesn't trip "produced no __timeline_mutations".
 local NON_CLIP_COMMAND_TYPES = {
-    CreateSequence = true,
-    DeleteSequence = true,
+    -- Sequence lifecycle / metadata.
+    CreateSequence      = true,
+    DeleteSequence      = true,
     SetSequenceMetadata = true,
+    -- Sequence mark state (mark_in / mark_out columns on `sequences`).
+    SetMark             = true,
+    SetMarkIn           = true,
+    SetMarkOut          = true,
+    ClearMark           = true,
+    ClearMarkIn         = true,
+    ClearMarkOut        = true,
+    ClearMarks          = true,
 }
 
 local function classify_command_sequence_id(command)
