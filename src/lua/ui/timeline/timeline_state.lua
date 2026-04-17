@@ -72,6 +72,8 @@ M.colors = {
 
 -- Core Lifecycle
 M.init = core.init
+M.clear = core.clear
+M.set_project_id = core.set_project_id
 M.reset = data.reset
 M.persist_state_to_db = core.persist_state_to_db
 M.reload_clips = core.reload_clips

@@ -508,6 +508,53 @@ function M.init(sequence_id, project_id)
     return true
 end
 
+--- Enter the no-active-sequence state: drop the active-sequence reference
+--- and all per-sequence data, but keep the project identity so the editor
+--- stays inside the current project. Views pull-read get_sequence_id() == nil
+--- and render blank. Idempotent.
+function M.clear()
+    local project_id = data.state.project_id
+    -- Persist pending state for the outgoing sequence BEFORE we tear it down,
+    -- so unsaved viewport/scroll/selection aren't lost on the round-trip.
+    if persist_dirty then
+        M.persist_state_to_db(true)
+        persist_dirty = false
+    end
+
+    data.state.tracks = {}
+    data.state.clips = {}
+    data.state.sequence_id = nil
+    -- project_id intentionally preserved.
+    data.state.project_id = project_id
+
+    data.state.selected_clips = {}
+    data.state.selected_edges = {}
+    data.state.selected_gaps = {}
+
+    data.state.dragging_playhead = false
+    data.state.dragging_clip = nil
+    data.state.drag_selecting = false
+    data.state.active_edge_drag_state = nil
+
+    data.state.playhead_position = 0
+    data.state.is_playing = false
+
+    clip_state.invalidate_indexes()
+
+    data.notify_listeners()
+end
+
+--- Set the project identity without touching the sequence reference. Used by
+--- timeline_panel.create() when opening a project in the no-active-sequence
+--- state (no initial tab). Complements init(seq, pid) for the
+--- project-only-is-known case.
+function M.set_project_id(project_id)
+    assert(project_id and project_id ~= "",
+        "timeline_core_state.set_project_id: project_id required")
+    data.state.project_id = project_id
+    persist_gen = project_gen.current()
+end
+
 function M.reload_clips(target_sequence_id, opts)
     local active = data.state.sequence_id
     assert(active and active ~= "", "timeline_core_state.reload_clips: missing active sequence_id")
