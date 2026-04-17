@@ -252,6 +252,9 @@ local function handle_key_impl(event)
 
     -- Comma/Period: Nudge clips/edges (context gathering for edges)
     if (key == KEY.Comma or key == KEY.Period) and panel_active_timeline and not modifier_meta and not modifier_alt then
+        -- No-active-sequence state: nudge targets a sequence — silent no-op.
+        if not timeline_state.get_sequence_id() then return true end
+
         local nudge_frames = modifier_shift and 5 or 1
         if key == KEY.Comma then nudge_frames = -nudge_frames end
 
@@ -303,6 +306,9 @@ local function handle_key_impl(event)
 
     -- E: ExtendEdit (needs edge gathering from timeline_state)
     if key == KEY.E and panel_active_timeline and not modifier_meta and not modifier_alt then
+        -- No-active-sequence state: ExtendEdit targets a sequence — silent no-op.
+        if not timeline_state.get_sequence_id() then return true end
+
         local selected_edges = timeline_state.get_selected_edges()
         if not selected_edges or #selected_edges == 0 then
             return true

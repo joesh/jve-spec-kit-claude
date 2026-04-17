@@ -453,7 +453,6 @@ end
 function Sequence.resolve_initial_for_project(project_id)
     assert(project_id and project_id ~= "",
         "Sequence.resolve_initial_for_project: project_id is required")
-    local database = require("core.database")
     local last_seq_id = database.get_project_setting(project_id, "last_open_sequence_id")
     if not last_seq_id or last_seq_id == "" then
         return nil
