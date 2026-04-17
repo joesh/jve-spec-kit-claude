@@ -615,6 +615,18 @@ local NON_CLIP_COMMAND_TYPES = {
     ClearMarks          = true,
 }
 
+-- Recovery reload after a command's executor/undoer produced no
+-- __timeline_mutations (delegation, test env, or genuine bug). Skipped for
+-- NON_CLIP_COMMAND_TYPES, which mutate sequence-level state only and drive
+-- UI refresh via their own signals (marks_changed, project_changed, …) —
+-- the clip-level reload would be wasted work and would mask the fact that
+-- these commands have a different refresh contract.
+local function reload_clips_after_no_mutations(cmd_type, seq_id)
+    if NON_CLIP_COMMAND_TYPES[cmd_type] then return end
+    local ts = require('ui.timeline.timeline_state')
+    if ts.reload_clips then ts.reload_clips(seq_id) end
+end
+
 local function classify_command_sequence_id(command)
     if PROJECT_LEVEL_COMMAND_TYPES[command.type] then
         return nil
@@ -1570,13 +1582,7 @@ function M._execute_body(command_or_name, params)
                                  command.type, reload_sequence_id))
                          end
                      end
-                     -- Mutations present but couldn't apply (test env), or no-op, or delegation.
-                     -- NON_CLIP_COMMAND_TYPES commands don't touch clip state; their own
-                     -- signals (marks_changed, project_changed, …) drive UI refresh, so
-                     -- the clip-level reload would be wasted work.
-                     if not NON_CLIP_COMMAND_TYPES[command.type] then
-                         timeline_state.reload_clips(reload_sequence_id)
-                     end
+                     reload_clips_after_no_mutations(command.type, reload_sequence_id)
                  end
                  perf.log("ui_refresh")
                  perf.reset()
@@ -1902,12 +1908,7 @@ local function run_undoer(cmd)
                 log.error("run_undoer: command %s produced no __timeline_mutations for sequence %s\n%s",
                     cmd.type, seq_id, debug.traceback("", 2))
             end
-            -- NON_CLIP_COMMAND_TYPES commands don't touch clip state; their own
-            -- signals drive UI refresh. Skip the clip-level reload.
-            if not NON_CLIP_COMMAND_TYPES[cmd.type] then
-                local ts = require('ui.timeline.timeline_state')
-                if ts.reload_clips then ts.reload_clips(seq_id) end
-            end
+            reload_clips_after_no_mutations(cmd.type, seq_id)
         end
     end
     return true, nil
@@ -2026,12 +2027,7 @@ local function run_redo_executor(cmd)
                 log.error("run_redo_executor: command %s produced no __timeline_mutations for sequence %s\n%s",
                     cmd.type, seq_id, debug.traceback("", 2))
             end
-            -- NON_CLIP_COMMAND_TYPES commands don't touch clip state; their own
-            -- signals drive UI refresh. Skip the clip-level reload.
-            if not NON_CLIP_COMMAND_TYPES[cmd.type] then
-                local ts = require('ui.timeline.timeline_state')
-                if ts.reload_clips then ts.reload_clips(seq_id) end
-            end
+            reload_clips_after_no_mutations(cmd.type, seq_id)
         end
     end
     return true, nil
