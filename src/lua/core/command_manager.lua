@@ -860,11 +860,23 @@ end
 --- persisted commands. Feature 010, FR-014 — undoing a sequence delete must
 --- be able to restore the sequence's undo history intact. Idempotent.
 function M.deactivate()
+    local was_active = active_sequence_id
     active_sequence_id = nil
     -- Route subsequent undo/redo through the global stack; per-sequence state
     -- remains on disk.
     history.set_active_stack(history.GLOBAL_STACK_ID)
     log.event("Deactivated (no active sequence; global stack active)")
+
+    -- Mirror activate_timeline_stack's "sequence_switched" event with
+    -- sequence_id=nil so menus / panels refresh their enabled state for
+    -- per-sequence commands (feature 010, FR-008).
+    if was_active then
+        notify_command_event({
+            event = "sequence_switched",
+            sequence_id = nil,
+            project_id = active_project_id,
+        })
+    end
 end
 
 -- Validate command parameters

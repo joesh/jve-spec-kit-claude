@@ -26,7 +26,11 @@ local command_manager = require('core.command_manager')
 local Command = require('command')
 local Sequence = require('models.sequence')
 local Media = require('models.media')
-local timeline_state = require('ui.timeline.timeline_state')
+-- Load the facade so command_manager's state init wires the per-module
+-- instance the DB mutation path writes into. We then read the raw state
+-- table directly to bypass get_clips's index rebuild (the rebuild would
+-- filter the fields we care about).
+require('ui.timeline.timeline_state')
 local tsdata = require('ui.timeline.state.timeline_state_data')
 local test_env = require('test_env')
 
