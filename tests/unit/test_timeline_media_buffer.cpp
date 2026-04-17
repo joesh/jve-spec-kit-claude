@@ -1036,22 +1036,50 @@ private slots:
     }
 
     void test_audio_request_clamps_to_clip_start() {
+        // Domain: when a request's t0 lies in a gap before a clip, the
+        // returned chunk is clamped to the clip's range — caller gets audio
+        // for the clip-overlapping portion only, timestamped at clip_start.
+        // Callers that need the gap padded handle it at their layer.
         if (!m_hasTestAudio) QSKIP("No test audio");
 
         auto tmb = TimelineMediaBuffer::Create(0);
         tmb->SetSequenceRate(24, 1);
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        tmb->SetAudioFormat(fmt);
 
-        // Clip starts at timeline frame 24 (1.0s at 24fps)
+        // Clip at timeline frame 24 (1.0s at 24fps), 48 frames (2.0s).
+        // Timeline shape: [0, 1s) gap, [1s, 3s) clip.
+        const int64_t clip_start_us = 1000000;
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 24, 48, 0, 24, 1, 1.0f},
         };
         tmb->SetTrackClips(A1, clips);
 
-        // Request [0.5s, 1.5s) — t0 is before clip start (1.0s)
-        // find_clip_at_us(t0=500000) won't find the clip → nullptr (gap before clip)
-        AudioFormat fmt{SampleFormat::F32, 48000, 2};
-        auto result = tmb->GetTrackAudio(A1, 500000, 1500000, fmt);
-        QVERIFY(result == nullptr);
+        // Request [0.5s, 1.5s) — t0 is in the gap, t1 is inside the clip.
+        const int64_t req_t0 = 500000;
+        const int64_t req_t1 = 1500000;
+        auto result = tmb->GetTrackAudio(A1, req_t0, req_t1, fmt);
+
+        QVERIFY(result != nullptr);
+        QCOMPARE(result->sample_rate(), 48000);
+        QCOMPARE(result->channels(), 2);
+        // Clamped: chunk starts at clip_start, not request start.
+        QCOMPARE(result->start_time_us(), clip_start_us);
+        // Covers [clip_start, req_t1) — the clip-overlapping portion.
+        const int64_t expected_frames =
+            ((req_t1 - clip_start_us) * int64_t(fmt.sample_rate)) / 1000000;
+        QCOMPARE(result->frames(), expected_frames);
+
+        // The returned samples are decoded audio from the clip — at least
+        // one sample must be audibly non-zero.
+        const float* data = result->data_f32();
+        float max_abs = 0.0f;
+        for (int64_t i = 0; i < result->frames() * fmt.channels; ++i) {
+            max_abs = std::max(max_abs, std::abs(data[i]));
+        }
+        QVERIFY2(max_abs > 1e-4f,
+                 qPrintable(QString("clip portion must contain audible "
+                                    "samples, got max=%1").arg(max_abs)));
     }
 
     void test_audio_multiple_clips_correct_selection() {
