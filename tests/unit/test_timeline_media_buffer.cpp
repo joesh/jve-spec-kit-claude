@@ -99,6 +99,16 @@ private slots:
         }
     }
 
+    // Reset global process-state between tests so a test that sets
+    // SetDecodeMode(Park/Scrub) can't leak its mode into the next test.
+    // In Park/Scrub, Reader::DecodeAt forces have_decode_pos=false on every
+    // call, turning steady-forward prefetch into per-frame seek+decode — a
+    // ~70× slowdown that caused test_eof_hold_frame_bounded_by_prefetch_window
+    // to silently time out when run after any Park-setting test in the suite.
+    void cleanup() {
+        emp::SetDecodeMode(emp::DecodeMode::Play);
+    }
+
     // ── Create / Destroy ──
 
     void test_create_default() {
