@@ -484,6 +484,25 @@ local function remove_from_tab_order(sequence_id)
     end
 end
 
+--- Enter the no-active-sequence state: inverse of load_sequence. Feature 010.
+--- Clears timeline state, deactivates the command stack, clears the selection
+--- hub (inspector pulls empty), and persists the empty tab list + empty
+--- last_open_sequence_id so a crash right after doesn't resurrect a tab.
+--- Views (monitor, timeline widgets) pull from state and auto-render blank.
+--- Idempotent.
+function M.unload_sequence()
+    local project_id = state.get_project_id()
+    state.clear()
+    local command_manager = require("core.command_manager")
+    command_manager.deactivate()
+    selection_hub.update_selection("timeline", {})
+    if project_id and project_id ~= "" then
+        database.set_project_setting(project_id, "last_open_sequence_id", "")
+        -- tab_order is authoritative for persisted open_sequence_ids.
+        database.set_project_setting(project_id, "open_sequence_ids", tab_order)
+    end
+end
+
 local function close_tab(sequence_id)
     local tab = open_tabs[sequence_id]
     if not tab then
@@ -513,10 +532,8 @@ local function close_tab(sequence_id)
         if next_id then
             M.load_sequence(next_id)
         else
-            -- TODO: implement empty timeline state (clear views, monitor, inspector)
-            -- For now, prevent closing the last tab
-            ensure_tab_for_sequence(sequence_id)
-            M.load_sequence(sequence_id)
+            -- Last tab closed — enter the no-active-sequence state.
+            M.unload_sequence()
         end
     else
         update_tab_styles(current_sequence)
@@ -524,6 +541,9 @@ local function close_tab(sequence_id)
     update_tab_scroll_arrows()
     persist_open_tabs()
 end
+
+-- Expose close_tab programmatically (for tests + any future script callers).
+M.close_tab = close_tab
 
 ensure_tab_for_sequence = function(sequence_id)
     if not tab_bar_tabs_layout or not sequence_id or sequence_id == "" then
@@ -1315,9 +1335,15 @@ function M.create(opts)
     elseif type(opts) == "string" then
         sequence_id = opts
     end
-    assert(sequence_id and sequence_id ~= "", "timeline_panel.create: sequence_id is required")
+    -- project_id is always required; sequence_id is optional — nil means the
+    -- editor is opening in the no-active-sequence state (feature 010).
     assert(project_id and project_id ~= "", "timeline_panel.create: project_id is required")
-    state.init(sequence_id, project_id)
+    if sequence_id and sequence_id ~= "" then
+        state.init(sequence_id, project_id)
+    else
+        state.set_project_id(project_id)
+        state.clear()
+    end
 
     -- Set up selection callback for inspector
     state.set_on_selection_changed(function(selected_clips)
@@ -1843,12 +1869,12 @@ function M.create(opts)
 
     log.event("Multi-view timeline panel created successfully")
 
+    -- No initial tab when opening in the no-active-sequence state (feature 010).
     local initial_sequence_id = state.get_sequence_id and state.get_sequence_id() or nil
-    if not initial_sequence_id or initial_sequence_id == "" then
-        error("timeline_panel: missing initial sequence_id from state", 2)
+    if initial_sequence_id and initial_sequence_id ~= "" then
+        ensure_tab_for_sequence(initial_sequence_id)
+        update_tab_styles(initial_sequence_id)
     end
-    ensure_tab_for_sequence(initial_sequence_id)
-    update_tab_styles(initial_sequence_id)
 
     if not tab_command_listener and command_manager and command_manager.add_listener then
         tab_command_listener = command_manager.add_listener(profile_scope.wrap(
@@ -1878,11 +1904,13 @@ function M.create(opts)
         state.set_playhead_position(playhead_frame)
     end)
 
-    -- Load initial sequence into timeline_monitor
-    -- pcall: bad clip data in a sequence must not crash the app
-    local load_ok, load_err = pcall(tl_view.load_sequence, tl_view, initial_sequence_id)
-    if not load_ok then
-        log.error("Failed to load initial sequence %s: %s", tostring(initial_sequence_id), tostring(load_err))
+    -- Load initial sequence into timeline_monitor (skipped when blank).
+    -- pcall: bad clip data in a sequence must not crash the app.
+    if initial_sequence_id and initial_sequence_id ~= "" then
+        local load_ok, load_err = pcall(tl_view.load_sequence, tl_view, initial_sequence_id)
+        if not load_ok then
+            log.error("Failed to load initial sequence %s: %s", tostring(initial_sequence_id), tostring(load_err))
+        end
     end
 
     -- After renderer updates widget content, apply any pending scroll restore.
