@@ -2361,25 +2361,6 @@ void TimelineMediaBuffer::decode_into_cache(
     const ClipInfo* clip = seg.clip;
     assert(clip && "decode_into_cache: CLIP segment has null clip pointer");
 
-    // Acquire reader only when clip changes (boundary crossing)
-    if (clip->clip_id != held_clip_id || !held_reader) {
-        held_reader = {};  // release old reader first
-        held_reader = acquire_reader(track, clip->clip_id, clip->media_path);
-
-        if (!held_reader) {
-            // Undecodable clip — skip past clip in direction of travel
-            int64_t skip_to = (direction > 0) ? clip->timeline_end()
-                                               : clip->timeline_start - 1;
-            char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
-            EMP_LOG_WARN("PREFETCH SKIP: %s clip=%.8s undecodable, advancing to %lld",
-                tbuf, clip->clip_id.c_str(), (long long)skip_to);
-            set_already_fetched_video(track, skip_to, direction);
-            held_clip_id.clear();
-            return;
-        }
-        held_clip_id = clip->clip_id;
-    }
-
     assert(clip->rate_num > 0 && "decode_into_cache: clip has zero rate_num");
     assert(clip->rate_den > 0 && "decode_into_cache: clip has zero rate_den");
     assert(clip->speed_ratio != 0.0f && "decode_into_cache: clip has zero speed_ratio");
@@ -2391,6 +2372,13 @@ void TimelineMediaBuffer::decode_into_cache(
     // On first EOF, we record the hold frame in clip_eof_frame. Subsequent
     // iterations fill hold frames directly (stride at a time), bounded by
     // fill_prefetch's window check — no redundant decode attempts.
+    //
+    // Runs BEFORE acquire_reader: hold-frame fill doesn't need a reader, and
+    // fill_prefetch allocates a fresh held_reader on every invocation (locals
+    // are function-scoped, not persistent across yields). If we let
+    // acquire_reader run first, every hold-frame iteration pays full codec
+    // init (~50-100ms for h264), turning a ~1ms cache-fill into a 70ms
+    // stall and throttling prefetch to ~14 frames/sec.
     {
         std::lock_guard<std::mutex> tlock(m_tracks_mutex);
         auto tit = m_tracks.find(track);
@@ -2425,6 +2413,26 @@ void TimelineMediaBuffer::decode_into_cache(
                 return;
             }
         }
+    }
+
+    // Real decode ahead — acquire reader now (skipped above for hold-frame
+    // fills, which don't touch the decoder).
+    if (clip->clip_id != held_clip_id || !held_reader) {
+        held_reader = {};  // release old reader first
+        held_reader = acquire_reader(track, clip->clip_id, clip->media_path);
+
+        if (!held_reader) {
+            // Undecodable clip — skip past clip in direction of travel
+            int64_t skip_to = (direction > 0) ? clip->timeline_end()
+                                               : clip->timeline_start - 1;
+            char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
+            EMP_LOG_WARN("PREFETCH SKIP: %s clip=%.8s undecodable, advancing to %lld",
+                tbuf, clip->clip_id.c_str(), (long long)skip_to);
+            set_already_fetched_video(track, skip_to, direction);
+            held_clip_id.clear();
+            return;
+        }
+        held_clip_id = clip->clip_id;
     }
 
     // Retime duplicate: consecutive timeline frames can map to the same source
@@ -2557,26 +2565,49 @@ void TimelineMediaBuffer::decode_into_cache(
                 clip->clip_id.c_str());
 
         if (is_eof) {
-            std::lock_guard<std::mutex> tlock(m_tracks_mutex);
-            auto tit = m_tracks.find(track);
-            if (tit != m_tracks.end()) {
-                // Recover hold frame from cache if not available (fill_prefetch
-                // resets last_good_frame on each yield, so EOF on first frame
-                // of a re-entry has nullptr). Search backwards from current pos.
-                auto& cache = tit->second.video_cache;
-                if (!last_good_frame) {
-                    auto prev = cache.find(position - direction);
-                    if (prev != cache.end() && prev->second.clip_id == clip->clip_id) {
+            // Recover hold frame before acquiring m_tracks_mutex — cache lookup
+            // is quick (short scoped lock), explicit last-frame decode must not
+            // run under m_tracks_mutex.
+            //
+            // Step 1: cache recovery (fast, scoped lock). Covers the common case
+            // where fill_prefetch decoded frames this invocation or an earlier
+            // one and those are still cached.
+            if (!last_good_frame) {
+                std::lock_guard<std::mutex> tlock(m_tracks_mutex);
+                auto tit = m_tracks.find(track);
+                if (tit != m_tracks.end()) {
+                    auto prev = tit->second.video_cache.find(position - direction);
+                    if (prev != tit->second.video_cache.end() &&
+                            prev->second.clip_id == clip->clip_id) {
                         last_good_frame = prev->second.frame;
                     }
                 }
-                if (!last_good_frame) {
-                    char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
-                    EMP_LOG_WARN("EOF: %s clip=%.8s no hold frame recoverable "
-                                 "at tf=%lld sf=%lld — hold frames will be gaps",
-                                 tbuf, clip->clip_id.c_str(),
-                                 (long long)position, (long long)source_frame);
+            }
+
+            // Step 2: cold-start fallback — explicitly decode the file's last
+            // valid frame. Happens when prefetch enters the clip past EOF with
+            // no cached frames yet (e.g. playhead jumped past clip content).
+            // A single targeted DecodeAt at last_frame_pts replaces the old
+            // pathology where every past-EOF iteration re-decoded the whole
+            // file trying to satisfy an impossible target.
+            if (!last_good_frame && held_reader) {
+                const auto& mf_info = held_reader->media_file()->info();
+                if (mf_info.video_fps_num > 0 && mf_info.video_fps_den > 0
+                        && mf_info.duration_us > 0) {
+                    TimeUS frame_period_us =
+                        (1000000LL * mf_info.video_fps_den) / mf_info.video_fps_num;
+                    TimeUS last_pts_us = mf_info.duration_us - frame_period_us;
+                    auto last_result = held_reader->DecodeAtUS(last_pts_us);
+                    if (last_result.is_ok()) {
+                        last_good_frame = last_result.value();
+                    }
                 }
+            }
+
+            std::lock_guard<std::mutex> tlock(m_tracks_mutex);
+            auto tit = m_tracks.find(track);
+            if (tit != m_tracks.end()) {
+                auto& cache = tit->second.video_cache;
 
                 // Record EOF with hold frame — subsequent iterations use early
                 // EOF check (no decoder interaction), fill stride at a time.

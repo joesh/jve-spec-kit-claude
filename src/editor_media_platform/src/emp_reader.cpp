@@ -631,8 +631,31 @@ static Result<std::shared_ptr<Frame>> decode_qtrle(
 }
 
 Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
-    if (!m_media_file->info().has_video) {
+    const auto& info = m_media_file->info();
+    if (!info.has_video) {
         return Error::unsupported("DecodeAt requires video stream");
+    }
+
+    // Past-EOF clamp. Editor convention: requesting a frame past the file's
+    // content returns the last valid frame (hold-last behavior — matches
+    // Premiere/Resolve/FCP). Implementing that honestly requires clamping
+    // here; without the clamp, av_seek_frame(target, BACKWARD) lands at the
+    // file-start keyframe (no keyframe exists past EOF), and decode_frames_batch
+    // re-decodes every frame in the file trying to reach the impossible
+    // target. At 14fps per iteration for a 3s fixture that turned a 72-frame
+    // prefetch window into a 5s stall.
+    //
+    // Clamping to last_frame_pts makes the first past-EOF request decode one
+    // frame; subsequent past-EOF requests hit the decoder at its exhausted
+    // state, decode_frames_batch returns Error::eof() (via the found_target
+    // check), and callers like TMB take the hold-frame-fast-path.
+    if (info.video_fps_num > 0 && info.video_fps_den > 0 && info.duration_us > 0) {
+        TimeUS frame_period_us = (1000000LL * info.video_fps_den) / info.video_fps_num;
+        TimeUS last_frame_pts_us = info.duration_us - frame_period_us;
+        TimeUS slack_us = frame_period_us / 2;
+        if (t_us > last_frame_pts_us + slack_us) {
+            t_us = last_frame_pts_us;
+        }
     }
 
     // BRAW decode path — uses SDK, no FFmpeg involvement

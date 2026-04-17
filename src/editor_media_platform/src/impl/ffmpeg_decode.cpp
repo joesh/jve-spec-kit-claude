@@ -127,7 +127,14 @@ Result<std::vector<DecodedFrame>> decode_frames_batch(
             if (ret == AVERROR(EAGAIN)) {
                 break;  // Need more packets
             } else if (ret == AVERROR_EOF) {
-                if (frames.empty()) {
+                // Decoder is fully drained. If we never saw a frame >= target,
+                // the target is past the end of the stream — honest EOF, no
+                // "floor frame" fake-success. Callers who want the last valid
+                // frame must request it at its known PTS explicitly.
+                if (frames.empty() || !found_target) {
+                    for (auto& df : frames) {
+                        av_frame_free(&df.frame);
+                    }
                     return Error::eof();
                 }
                 return frames;
@@ -178,8 +185,17 @@ Result<std::vector<DecodedFrame>> decode_frames_batch(
                     av_frame_move_ref(new_frame, temp_frame);
                     TimeUS pts_us = stream_pts_to_us(new_frame->pts, stream);
                     frames.push_back({new_frame, pts_us});
+                    if (pts_us >= target_us) {
+                        found_target = true;
+                    }
                 }
-                if (frames.empty()) {
+                // Packet EOF + full drain complete. If target was never
+                // reached, the target is past end-of-stream — return EOF
+                // rather than faking success with the last real frame.
+                if (frames.empty() || !found_target) {
+                    for (auto& df : frames) {
+                        av_frame_free(&df.frame);
+                    }
                     return Error::eof();
                 }
                 return frames;
