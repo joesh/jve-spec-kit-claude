@@ -747,18 +747,41 @@ private slots:
         QVERIFY(result == nullptr);
     }
 
-    void test_audio_offline_returns_null() {
+    void test_audio_offline_generates_beep() {
+        // Domain: offline audio surfaces as an audible "missing media" beep —
+        // the editor convention for notifying the user without silence
+        // (matches Resolve/Premiere). See ClipInfo::offline comment:
+        // "true = media file not found, generate beep".
         auto tmb = TimelineMediaBuffer::Create(0);
         tmb->SetSequenceRate(24, 1);
+        AudioFormat fmt{SampleFormat::F32, 48000, 2};
+        tmb->SetAudioFormat(fmt);
 
+        // Mark the clip offline (9th init value). Production contract:
+        // Lua stats the media file and sets .offline before handing the
+        // ClipInfo to C++; C++ trusts the flag.
         std::vector<ClipInfo> clips = {
-            {"clip1", "/nonexistent/audio.mp4", 0, 100, 0, 24, 1, 1.0f},
+            {"clip1", "/nonexistent/audio.mp4", 0, 100, 0, 24, 1, 1.0f, true},
         };
         tmb->SetTrackClips(A1, clips);
 
-        auto result = tmb->GetTrackAudio(A1, 0, 100000,
-            AudioFormat{SampleFormat::F32, 48000, 2});
-        QVERIFY(result == nullptr);
+        // Request 100ms of audio — beep is 1kHz, 100ms on / 900ms off, so
+        // a 100ms slice starting at clip_start_us=0 lies entirely in the
+        // "beep on" window and must contain non-zero samples.
+        auto result = tmb->GetTrackAudio(A1, 0, 100000, fmt);
+        QVERIFY(result != nullptr);
+        QVERIFY(result->frames() > 0);
+        QCOMPARE(result->sample_rate(), 48000);
+        QCOMPARE(result->channels(), 2);
+
+        // Audible: some sample in the returned chunk is non-zero.
+        const float* data = result->data_f32();
+        float max_abs = 0.0f;
+        for (int64_t i = 0; i < result->frames() * 2; ++i) {
+            max_abs = std::max(max_abs, std::abs(data[i]));
+        }
+        QVERIFY2(max_abs > 0.001f,
+                 "offline beep must contain audible (non-zero) samples");
     }
 
     void test_audio_basic_decode() {
