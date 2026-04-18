@@ -698,11 +698,14 @@ void PlaybackController::waitForVideoCache(int64_t pos, int timeout_ms) {
         while (clock::now() < deadline) {
             auto r = m_tmb->GetVideoFrame(track, pos, /*cache_only=*/true);
             // Only state worth polling: clip exists (!clip_id.empty) but
-            // decode pending (!frame && !offline). All others are terminal:
+            // decode pending (!frame && !offline && !obscured). All others
+            // are terminal:
             //   frame != null  → cached, ready
             //   offline        → media unavailable, nothing to wait for
             //   clip_id empty  → gap (no clip at this position)
-            bool pending = !r.clip_id.empty() && !r.frame && !r.offline;
+            //   obscured       → covered by higher track; REFILL won't
+            //                    decode and the frame isn't displayed
+            bool pending = !r.clip_id.empty() && !r.frame && !r.offline && !r.obscured;
             if (!pending) {
                 ++ready;
                 got_it = true;

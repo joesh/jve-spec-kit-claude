@@ -117,6 +117,10 @@ struct VideoResult {
     bool offline;
     std::string error_msg;   // populated when offline=true (from m_offline Error)
     std::string error_code;  // structured code: "FileNotFound", "Unsupported", etc.
+    // Terminal state: a higher video track covers this clip at
+    // timeline_frame, so REFILL will not decode it and display does not
+    // need it. Wait paths must treat this like offline — not as pending.
+    bool obscured = false;
 };
 
 // Timeline media buffer — owns readers and clip layout per track,

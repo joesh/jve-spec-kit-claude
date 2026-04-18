@@ -6,6 +6,7 @@ local _, failed = runner.run("playback", runner.resolve_paths(dir, {
     "test_tmb_pending_frame.lua",
     "test_tmb_audio_source_offset.lua",
     "test_tmb_same_file_two_tracks.lua",
+    "test_tmb_obscured_skip.lua",
     "test_playback_seek_delivers_frame.lua",
     "test_seek_gap_clears_frame.lua",
     "test_playback_av_sync.lua",

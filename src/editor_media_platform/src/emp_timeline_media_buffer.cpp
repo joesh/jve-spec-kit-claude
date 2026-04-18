@@ -588,6 +588,9 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
     result.clip_fps_den = clip->rate_den;
     result.clip_start_frame = clip->timeline_start;
     result.clip_end_frame = clip->timeline_end();
+    // Same helper REFILL uses (fill_prefetch), so the wait path and the
+    // decode path agree on what's needed for display.
+    result.obscured = is_video_obscured(track, timeline_frame);
 
     // Compute source frame: source_in + (timeline_offset * speed_ratio)
     // speed_ratio < 1.0 = slow motion (fewer source frames than timeline frames)
