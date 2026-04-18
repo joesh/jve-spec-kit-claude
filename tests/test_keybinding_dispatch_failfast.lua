@@ -66,7 +66,7 @@ local function test_unregistered_command_asserts()
     -- Mock command_manager where get_executor returns nil
     registry.set_command_manager({
         get_executor = function() return nil end,
-        execute_ui = function() error("should not be called") end,
+        execute_interactive = function() error("should not be called") end,
     })
 
     inject_binding("Cmd+3", "SelectPanel", {"timeline"})
@@ -105,7 +105,7 @@ local function test_registered_command_dispatches()
 
     registry.set_command_manager({
         get_executor = function() return function() end end,
-        execute_ui = function(name, params)
+        execute_interactive = function(name, params)
             dispatched_name = name
             dispatched_params = params
             return { success = true }
@@ -131,7 +131,7 @@ local function test_context_mismatch_returns_false()
 
     registry.set_command_manager({
         get_executor = function() return function() end end,
-        execute_ui = function() error("should not dispatch in wrong context") end,
+        execute_interactive = function() error("should not dispatch in wrong context") end,
     })
 
     inject_binding("Cmd+3", "SelectPanel", {"timeline"}, {"@timeline"})

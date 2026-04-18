@@ -377,7 +377,7 @@ local function create_action_callback(command_name, params)
 
         log.event("Menu clicked: %s", tostring(command_name))
 
-        -- Pure command dispatch — all commands go through execute_ui
+        -- Pure command dispatch — all commands go through execute_interactive
         -- Copy params to avoid mutating the closure's table (project_id would become stale)
         local project_id = get_active_project_id()
         local command_params = {}
@@ -388,8 +388,8 @@ local function create_action_callback(command_name, params)
 
 		local result_value
 		-- Headless tests inject a minimal command_manager stub (execute-only).
-		if type(command_manager.execute_ui) == "function" then
-			result_value = command_manager.execute_ui(command_name, command_params)
+		if type(command_manager.execute_interactive) == "function" then
+			result_value = command_manager.execute_interactive(command_name, command_params)
 		else
 			result_value = command_manager.execute(command_name, command_params)
 		end

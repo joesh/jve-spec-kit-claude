@@ -123,7 +123,7 @@ function command_manager_stub.execute(command_arg)
     return {success = true}
 end
 
-function command_manager_stub.execute_ui(command_name)
+function command_manager_stub.execute_interactive(command_name)
     table.insert(command_manager_stub.executed_commands, command_name)
     return {success = true}
 end

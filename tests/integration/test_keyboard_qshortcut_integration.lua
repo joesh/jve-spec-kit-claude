@@ -70,21 +70,21 @@ print("\n--- Handler dispatch ---")
 
 -- Find a handler for a known command and invoke it directly.
 -- This simulates what Qt does when QShortcut::activated fires.
--- QShortcut handlers call command_manager.execute_ui directly.
+-- QShortcut handlers call command_manager.execute_interactive directly.
 -- Test this path through registry.handle_key_event (same dispatch logic).
 
 -- Test dispatch via registry (same code path QShortcut handlers use).
 -- Use Shift+Z (TimelineZoomFit @timeline) — a panel-scoped command that exists.
 local command_manager = require("core.command_manager")
 local zoom_fit_dispatched = false
-local orig_execute_ui = command_manager.execute_ui
+local orig_execute_interactive = command_manager.execute_interactive
 
-command_manager.execute_ui = function(name, params)
+command_manager.execute_interactive = function(name, params)
     if name == "TimelineZoomFit" then
         zoom_fit_dispatched = true
         return { success = true }
     end
-    return orig_execute_ui(name, params)
+    return orig_execute_interactive(name, params)
 end
 
 local shortcut = registry.parse_shortcut("Shift+Z")
@@ -102,7 +102,7 @@ check("Shift+Z dispatches TimelineZoomFit",
     zoom_fit_dispatched,
     "TimelineZoomFit command was not dispatched")
 
-command_manager.execute_ui = orig_execute_ui
+command_manager.execute_interactive = orig_execute_interactive
 
 -------------------------------------------------------------------------------
 -- 3. Residual key: Escape cascade

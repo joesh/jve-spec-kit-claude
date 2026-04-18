@@ -9,7 +9,7 @@ print("=== Test TOML Keybinding Loading ===")
 -- We need command_manager mock for the registry
 local mock_cm = {
     get_executor = function() return function() end end,
-    execute_ui = function() return { success = true } end,
+    execute_interactive = function() return { success = true } end,
 }
 
 -- Load registry fresh

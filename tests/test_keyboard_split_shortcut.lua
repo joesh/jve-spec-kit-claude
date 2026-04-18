@@ -38,7 +38,7 @@ timeline_state.set_playhead_position(10)
 -- Stub command manager — dispatch test only (verify routing, not execution)
 local captured_commands = {}
 local mock_command_manager = {
-    execute_ui = function(command_name, params)
+    execute_interactive = function(command_name, params)
         captured_commands[#captured_commands + 1] = {
             name = command_name,
             params = params or {},

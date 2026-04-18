@@ -3,7 +3,7 @@
 -- Responsibilities:
 -- - Parse TOML keybinding files (keymaps/*.jvekeys)
 -- - Store key combo → command mappings (single registry: M.keybindings)
--- - Dispatch key events to command_manager.execute_ui()
+-- - Dispatch key events to command_manager.execute_interactive()
 -- - Command metadata for shortcut editor UI (register_command)
 -- - Conflict detection, preset management
 --
@@ -533,9 +533,9 @@ function M.handle_key_event(key, modifiers, context)
         params._positional = matched.positional_args
     end
 
-    log.detail("  dispatching %s via execute_ui", matched.command_name)
+    log.detail("  dispatching %s via execute_interactive", matched.command_name)
 
-    local result = command_manager.execute_ui(matched.command_name, params)
+    local result = command_manager.execute_interactive(matched.command_name, params)
     if result and not result.success and result.error_message then
         log.warn("%s: %s", matched.command_name, result.error_message)
     end
@@ -652,7 +652,7 @@ local function create_shortcut_handler(binding)
             params._positional = binding.positional_args
         end
 
-        local ok, err = pcall(command_manager.execute_ui, binding.command_name, params)
+        local ok, err = pcall(command_manager.execute_interactive, binding.command_name, params)
 
         if owns_event then
             command_manager.end_command_event()

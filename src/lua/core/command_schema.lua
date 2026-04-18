@@ -57,7 +57,7 @@ local asserts_module = require("core.asserts")
 local GLOBAL_ALLOWED_KEYS = {
     sequence_id = true,  -- Auto-passed by menu system to all commands
     project_id = true,   -- Auto-passed by menu system to all commands
-    playhead = true,     -- Auto-injected by execute_ui from active sequence monitor
+    playhead = true,     -- Auto-injected by execute_interactive from active sequence monitor
 }
 
 local function is_ephemeral_key(k)

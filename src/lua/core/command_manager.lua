@@ -309,15 +309,20 @@ function M.get_active_sequence_id()
     return active_sequence_id
 end
 
--- UI entrypoint convenience.
+-- Interactive (user-initiated) entry point for dispatching commands.
 --
 -- Contract:
--- - UI code should call execute_ui() (or begin/end_command_event + execute) rather than
---   calling execute() directly.
--- - This ensures a command event exists and threads implicit UI context (active project/
---   sequence) into the params.
--- - If active context is missing, we error (this is a bug, not a case to "defensively" hide).
-function M.execute_ui(command_name, params)
+-- - UI code (keyboard, menu, mouse gestures, TC entry, inspectors, drag/drop)
+--   calls execute_interactive. Nested dispatches from inside a command's
+--   executor call plain execute, which stays a pure model path.
+-- - execute_interactive establishes a "ui" command event and threads implicit
+--   UI context (active project/sequence/playhead) into params.
+-- - Pass 2 will add a viewport-surfacing policy here so interactive user
+--   actions surface the playhead (or undo/redo change region) without every
+--   UI caller having to do it themselves.
+-- - If active context is missing, we error (this is a bug, not a case to
+--   "defensively" hide).
+function M.execute_interactive(command_name, params)
     params = params or {}
 
     -- Establish (or join) a UI command event.
@@ -329,12 +334,12 @@ function M.execute_ui(command_name, params)
         -- We *do not* allow switching origins mid-event.
         if command_event_origin ~= "ui" then
             return false, nil, string.format(
-                "execute_ui(%s): cannot execute UI command inside %s command event",
+                "execute_interactive(%s): cannot execute UI command inside %s command event",
                 tostring(command_name),
                 tostring(command_event_origin)
             )
         end
-        -- Balance begin/end so execute_ui always closes what it opens.
+        -- Balance begin/end so execute_interactive always closes what it opens.
         M.begin_command_event("ui")
     end
 
@@ -2223,6 +2228,24 @@ function M.redo()
     else
         return M.redo_to_sequence_number(target.sequence_number)
     end
+end
+
+-- Interactive (user-initiated) undo/redo entry points.
+--
+-- Contract parallels execute_interactive:
+-- - UI code (keyboard Cmd+Z/Cmd+Shift+Z, menu, meta-commands Undo/Redo)
+--   calls undo_interactive / redo_interactive.
+-- - Internal plumbing inside executors or tests calls plain M.undo() / M.redo()
+--   when they want model mutation without UI post-hooks.
+-- - Pass 2 will add viewport-surfacing policy here so undo/redo surface the
+--   change region of the undone/redone command without every caller having
+--   to do it themselves.
+function M.undo_interactive()
+    return M.undo()
+end
+
+function M.redo_interactive()
+    return M.redo()
 end
 
 function M.redo_group(group_id)

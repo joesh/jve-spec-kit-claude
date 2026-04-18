@@ -1,10 +1,10 @@
 require('test_env')
 
--- Regression: execute_ui injects 'playhead' param from active sequence monitor.
+-- Regression: execute_interactive injects 'playhead' param from active sequence monitor.
 -- Commands that don't declare 'playhead' in their spec must not crash.
 -- Bug: command_schema rejected 'playhead' as unknown param for TogglePlay.
 
-print("=== Test execute_ui playhead injection ===")
+print("=== Test execute_interactive playhead injection ===")
 
 local command_schema = require("core.command_schema")
 
@@ -74,4 +74,4 @@ assert(ok == false, "multiple unknown params should be rejected")
 assert(err:match("unknown param"), "error should say 'unknown param': " .. tostring(err))
 print("  ✓ multiple unknown params correctly rejected")
 
-print("\n✅ test_execute_ui_playhead_injection.lua passed")
+print("\n✅ test_execute_interactive_playhead_injection.lua passed")

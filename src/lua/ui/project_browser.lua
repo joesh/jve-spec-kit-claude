@@ -2062,7 +2062,7 @@ show_browser_context_menu = function(event)
         table.insert(actions, {
             label = "Insert Into Timeline",
             handler = function()
-                command_manager.execute_ui("Insert", {advance_playhead = true})
+                command_manager.execute_interactive("Insert", {advance_playhead = true})
             end
         })
         table.insert(actions, {

@@ -18,7 +18,7 @@ function M.register()
             args = {
                 -- project_id is only required when not invoked from UI.
                 project_id = { required_outside_ui_context = true, type = "uuid" },
-                -- sequence_id is auto-injected by execute_ui() when there's an active sequence.
+                -- sequence_id is auto-injected by execute_interactive() when there's an active sequence.
                 sequence_id = { required = false, type = "uuid" },
             },
         },

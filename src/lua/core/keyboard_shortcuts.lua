@@ -42,9 +42,9 @@ local function has_modifier(modifiers, mod)
 end
 
 local function execute_command(command_name, params)
-    assert(type(command_manager.execute_ui) == "function",
-        "KeyboardShortcuts: command_manager missing execute_ui()")
-    return command_manager.execute_ui(command_name, params)
+    assert(type(command_manager.execute_interactive) == "function",
+        "KeyboardShortcuts: command_manager missing execute_interactive()")
+    return command_manager.execute_interactive(command_name, params)
 end
 
 -------------------------------------------------------------------------------
