@@ -69,6 +69,14 @@ int lua_add_combobox_item(lua_State* L) {
     return 1;
 }
 
+int lua_clear_combobox(lua_State* L) {
+    QComboBox* cb = get_widget<QComboBox>(L, 1);
+    if (cb) {
+        cb->clear();
+    }
+    return 0;
+}
+
 int lua_set_combobox_current_text(lua_State* L) {
     QComboBox* cb = get_widget<QComboBox>(L, 1);
     const char* text = lua_tostring(L, 2);
@@ -210,6 +218,15 @@ int lua_set_progress_bar_range(lua_State* L) {
     int min = luaL_checkinteger(L, 2);
     int max = luaL_checkinteger(L, 3);
     if (pb) pb->setRange(min, max);
+    return 0;
+}
+
+// QLabel word-wrap — lets long command names wrap onto a second line within
+// a fixed-width tile instead of being truncated with an ellipsis.
+int lua_set_word_wrap(lua_State* L) {
+    QLabel* lbl = get_widget<QLabel>(L, 1);
+    bool wrap = lua_toboolean(L, 2);
+    if (lbl) lbl->setWordWrap(wrap);
     return 0;
 }
 

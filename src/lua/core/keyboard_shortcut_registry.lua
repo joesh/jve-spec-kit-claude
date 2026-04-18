@@ -11,6 +11,10 @@
 local M = {}
 local kb_constants = require("core.keyboard_constants")
 local log = require("core.logger").for_area("ui")
+local store = require("core.user_keymap_store")
+
+-- Default preset name (sentinel; not stored on disk — represents the bundled keymap)
+M.DEFAULT_PRESET = "Default"
 
 -- Command registry: all commands that can have shortcuts (for shortcut editor UI)
 -- Format: {id, category, name, description, current_shortcuts}
@@ -21,7 +25,9 @@ M.commands = {}
 -- Single source of truth for all keybindings. Populated by load_keybindings().
 M.keybindings = {}
 
--- Path to the loaded TOML file (for reset_to_defaults)
+-- Path to the bundled default keymap (for reset_to_defaults).
+-- Set ONLY when loading the bundled default, never when loading a preset
+-- (presets are loaded from temp files that get deleted).
 M.loaded_toml_path = nil
 
 -- Reference to command_manager (set via set_command_manager)
@@ -176,9 +182,13 @@ function M.format_shortcut(key, modifiers)
     return table.concat(parts, "+")
 end
 
--- Assign a shortcut to a command (writes to keybindings)
--- Returns: success, error_message
-function M.assign_shortcut(command_id, shortcut_string)
+-- Assign a shortcut to a command (writes to keybindings).
+-- options.force = true overwrites any existing binding on the same combo
+-- (Premiere-style "warn + overwrite"). Default: refuse if conflict exists.
+-- options.contexts = array of context strings (e.g. {"timeline"}); empty/nil = global.
+-- Returns: success, error_message_or_conflict_command_id
+function M.assign_shortcut(command_id, shortcut_string, options)
+    options = options or {}
     local command = M.commands[command_id]
     if not command then
         return false, string.format("Unknown command: %s", command_id)
@@ -191,39 +201,50 @@ function M.assign_shortcut(command_id, shortcut_string)
 
     local combo_key = string.format("%d_%d", shortcut.key, shortcut.modifiers)
 
-    -- Check for conflicts
+    -- Conflict check: refuse unless force=true. Returns conflict id so caller
+    -- can decide how to surface it (e.g. confirmation dialog).
     local conflict = M.find_conflict(shortcut.key, shortcut.modifiers)
-    if conflict and conflict ~= command_id then
-        return false, string.format("Shortcut already assigned to: %s", M.commands[conflict].name)
+    if conflict and conflict ~= command_id and not options.force then
+        local conflict_name = (M.commands[conflict] and M.commands[conflict].name) or conflict
+        return false,
+            string.format("Shortcut already assigned to: %s", conflict_name),
+            conflict
     end
 
-    -- Remove from old mapping
-    if conflict then
-        local old_command = M.commands[conflict]
-        for i, sc in ipairs(old_command.current_shortcuts) do
-            if sc.key == shortcut.key and sc.modifiers == shortcut.modifiers then
-                table.remove(old_command.current_shortcuts, i)
-                break
+    -- Remove the entire combo entry (any prior binding on this combo, regardless
+    -- of which command it pointed at). assign_shortcut is the single-binding
+    -- assignment path; multi-binding setups must call this once per binding.
+    if M.keybindings[combo_key] then
+        for _, prior in ipairs(M.keybindings[combo_key]) do
+            local prior_cmd = M.commands[prior.command_name]
+            if prior_cmd then
+                for i, sc in ipairs(prior_cmd.current_shortcuts) do
+                    if sc.key == shortcut.key and sc.modifiers == shortcut.modifiers then
+                        table.remove(prior_cmd.current_shortcuts, i)
+                        break
+                    end
+                end
             end
         end
+        M.keybindings[combo_key] = nil
     end
 
-    -- Add to command's shortcuts (for UI display)
+    -- Cache shortcut on the command (kept in sync with M.keybindings; the
+    -- derived view M.get_command_shortcuts() reads from M.keybindings and is
+    -- the canonical read path for new code).
     table.insert(command.current_shortcuts, shortcut)
 
-    -- Write to keybindings (the single registry)
-    if not M.keybindings[combo_key] then
-        M.keybindings[combo_key] = {}
-    end
-    M.keybindings[combo_key][#M.keybindings[combo_key] + 1] = {
+    -- Write to keybindings (single source of truth)
+    M.keybindings[combo_key] = {{
         command_name = command_id,
         named_params = {},
         positional_args = {},
-        contexts = {},
-        category = command.category or "",
+        contexts = options.contexts or {},
+        category = command.category,
         shortcut = shortcut,
-    }
+    }}
 
+    M.rebuild_qt_shortcuts()
     return true
 end
 
@@ -278,6 +299,7 @@ function M.remove_shortcut(command_id, shortcut_string)
         end
     end
 
+    M.rebuild_qt_shortcuts()
     return true
 end
 
@@ -303,51 +325,185 @@ function M.get_commands_by_category()
     return by_category
 end
 
--- Save current shortcuts as a preset
-function M.save_preset(preset_name)
-    local preset = {}
+-- ---- TOML serialization (M.keybindings → TOML string) -------------------
+--
+-- Inverse of load_keybindings: produces the same TOML format the on-disk
+-- keymap files use (see keymaps/default.jvekeys), so save→load is a true
+-- round-trip. Bindings are grouped by their category (the [Section] header
+-- they originally lived under).
+local function format_value(binding)
+    local parts = { binding.command_name }
+    for _, arg in ipairs(binding.positional_args or {}) do
+        parts[#parts + 1] = arg
+    end
+    for k, v in pairs(binding.named_params or {}) do
+        parts[#parts + 1] = string.format("%s=%s", k, tostring(v))
+    end
+    for _, ctx in ipairs(binding.contexts or {}) do
+        parts[#parts + 1] = "@" .. ctx
+    end
+    local value = table.concat(parts, " ")
+    assert(not value:find('"'), "format_value: command/context contains a double-quote: " .. value)
+    return value
+end
 
-    for command_id, command in pairs(M.commands) do
-        if #command.current_shortcuts > 0 then
-            preset[command_id] = {}
-            for _, shortcut in ipairs(command.current_shortcuts) do
-                table.insert(preset[command_id], shortcut.string)
+function M.serialize_to_toml()
+    -- Group bindings by category. Each binding stores its shortcut + category;
+    -- the combo string is recovered via format_shortcut() (canonical form).
+    local by_category = {}
+    for _, bindings in pairs(M.keybindings) do
+        for _, binding in ipairs(bindings) do
+            assert(binding.category,
+                "serialize_to_toml: binding for '" .. binding.command_name
+                .. "' has no category (load_keybindings/assign_shortcut must set it)")
+            local cat = binding.category
+            by_category[cat] = by_category[cat] or {}
+            local combo = M.format_shortcut(binding.shortcut.key, binding.shortcut.modifiers)
+            by_category[cat][#by_category[cat] + 1] = {
+                combo = combo,
+                value = format_value(binding),
+            }
+        end
+    end
+
+    -- Stable ordering: alphabetical sections, alphabetical keys within
+    local section_names = {}
+    for name in pairs(by_category) do section_names[#section_names + 1] = name end
+    table.sort(section_names)
+
+    local out = {}
+    for _, section in ipairs(section_names) do
+        out[#out + 1] = string.format("[%s]", section)
+        local entries = by_category[section]
+        table.sort(entries, function(a, b) return a.combo < b.combo end)
+        for _, entry in ipairs(entries) do
+            out[#out + 1] = string.format('"%s" = "%s"', entry.combo, entry.value)
+        end
+        out[#out + 1] = ""  -- blank line between sections
+    end
+    return table.concat(out, "\n")
+end
+
+-- ---- Derived view: shortcuts for a command (single source of truth) ------
+--
+-- Reads from M.keybindings (canonical store). Avoids the staleness bug
+-- where command.current_shortcuts isn't populated by load_keybindings.
+function M.get_command_shortcuts(command_id)
+    local results = {}
+    for _, bindings in pairs(M.keybindings) do
+        for _, binding in ipairs(bindings) do
+            if binding.command_name == command_id then
+                results[#results + 1] = {
+                    key = binding.shortcut.key,
+                    modifiers = binding.shortcut.modifiers,
+                    string = M.format_shortcut(binding.shortcut.key, binding.shortcut.modifiers),
+                    contexts = binding.contexts or {},
+                }
             end
         end
     end
+    table.sort(results, function(a, b) return a.string < b.string end)
+    return results
+end
 
-    M.presets[preset_name] = preset
+-- ---- Disk-backed presets (write through user_keymap_store) ---------------
+
+function M.save_preset(preset_name)
+    assert(type(preset_name) == "string" and preset_name ~= "",
+        "save_preset: preset_name required")
+    assert(preset_name ~= M.DEFAULT_PRESET,
+        "save_preset: cannot overwrite the bundled Default preset; use Save As")
+    store.write(preset_name, M.serialize_to_toml())
     M.current_preset = preset_name
-
-    -- TODO: Persist to database
     return true
 end
 
--- Load a preset
 function M.load_preset(preset_name)
-    local preset = M.presets[preset_name]
-    if not preset then
+    assert(type(preset_name) == "string" and preset_name ~= "",
+        "load_preset: preset_name required")
+
+    if preset_name == M.DEFAULT_PRESET then
+        return M.reset_to_defaults()
+    end
+
+    if not store.exists(preset_name) then
         return false, string.format("Preset not found: %s", preset_name)
     end
 
-    -- Clear all current shortcuts
-    for _, command in pairs(M.commands) do
-        command.current_shortcuts = {}
-    end
-    M.keybindings = {}
+    -- Read into a temp file so we can reuse load_keybindings (which expects a path).
+    -- Preserve loaded_toml_path so reset_to_defaults still points at the bundled default.
+    local saved_default = M.loaded_toml_path
+    local content = store.read(preset_name)
+    local tmp = string.format("/tmp/jve_preset_load_%d.jvekeys", os.time())
+    local f, err = io.open(tmp, "w")
+    assert(f, string.format("load_preset: cannot write temp file: %s", tostring(err)))
+    f:write(content); f:close()
 
-    -- Apply preset
-    for command_id, shortcuts in pairs(preset) do
-        for _, shortcut_string in ipairs(shortcuts) do
-            M.assign_shortcut(command_id, shortcut_string)
-        end
-    end
+    M.keybindings = {}
+    M.load_keybindings(tmp)
+    os.remove(tmp)
+    M.loaded_toml_path = saved_default
 
     M.current_preset = preset_name
+    M.rebuild_qt_shortcuts()
     return true
 end
 
--- Reset to defaults: re-load TOML file
+function M.delete_preset(preset_name)
+    assert(preset_name ~= M.DEFAULT_PRESET,
+        "delete_preset: cannot delete bundled Default preset")
+    store.delete(preset_name)
+    if store.get_active() == preset_name then
+        store.set_active(nil)
+    end
+end
+
+function M.list_presets()
+    local presets = { M.DEFAULT_PRESET }
+    for _, name in ipairs(store.list()) do
+        presets[#presets + 1] = name
+    end
+    return presets
+end
+
+function M.get_active_preset()
+    return store.get_active()
+end
+
+function M.set_active_preset(preset_name)
+    if preset_name == nil or preset_name == M.DEFAULT_PRESET then
+        store.set_active(nil)
+        return
+    end
+    assert(store.exists(preset_name),
+        string.format("set_active_preset: '%s' does not exist on disk", preset_name))
+    store.set_active(preset_name)
+end
+
+-- Convenience: load the active preset if any, otherwise the bundled default.
+-- Caller (keyboard_shortcuts.init) hands us the bundled-default path.
+function M.load_active_or_default(default_path)
+    assert(type(default_path) == "string", "load_active_or_default: default_path required")
+    -- Always set loaded_toml_path to the bundled default so reset_to_defaults works,
+    -- even when an active preset is loaded.
+    local active = store.get_active()
+    if active and store.exists(active) then
+        local content = store.read(active)
+        local tmp = string.format("/tmp/jve_active_preset_%d.jvekeys", os.time())
+        local f = assert(io.open(tmp, "w"))
+        f:write(content); f:close()
+        M.load_keybindings(tmp)
+        os.remove(tmp)
+        M.loaded_toml_path = default_path
+        M.current_preset = active
+    else
+        M.load_keybindings(default_path)
+        M.current_preset = M.DEFAULT_PRESET
+    end
+end
+
+-- Reset to defaults: re-load the bundled default TOML, clear active-preset
+-- pointer, and rewire live QShortcuts.
 function M.reset_to_defaults()
     assert(M.loaded_toml_path, "reset_to_defaults: no TOML file loaded yet")
 
@@ -357,7 +513,9 @@ function M.reset_to_defaults()
     M.keybindings = {}
 
     M.load_keybindings(M.loaded_toml_path)
-    M.current_preset = "Default"
+    M.current_preset = M.DEFAULT_PRESET
+    store.set_active(nil)
+    M.rebuild_qt_shortcuts()
     return true
 end
 
@@ -549,6 +707,11 @@ end
 -- Active QShortcut objects: {shortcut_userdata, handler_name}[]
 M.active_shortcuts = nil
 
+-- Cached panel containers passed to create_qt_shortcuts. Used by
+-- rebuild_qt_shortcuts so the dialog can rewire live QShortcuts after
+-- assign/remove/load_preset without the caller re-supplying widget refs.
+M._panel_containers = nil
+
 -- Handler counter for unique global function names
 local handler_counter = 0
 
@@ -677,6 +840,9 @@ function M.create_qt_shortcuts(panel_containers)
     assert(panel_containers, "create_qt_shortcuts: panel_containers required")
     assert(panel_containers.window, "create_qt_shortcuts: window container required")
 
+    -- Cache so rebuild_qt_shortcuts can rewire after live edits.
+    M._panel_containers = panel_containers
+
     -- Clean up any existing shortcuts first
     M.destroy_qt_shortcuts()
 
@@ -740,6 +906,17 @@ function M.create_qt_shortcuts(panel_containers)
     end
 
     log.event("Created %d QShortcut objects from TOML bindings", count)
+end
+
+--- Rebuild all live QShortcut objects from the current M.keybindings.
+-- Call after assign_shortcut / remove_shortcut / load_preset / reset_to_defaults
+-- so Qt-level dispatch matches the in-memory keymap.
+-- No-op if create_qt_shortcuts was never called (e.g. headless tests).
+function M.rebuild_qt_shortcuts()
+    if not M._panel_containers then
+        return  -- Headless / pre-init: nothing to rewire
+    end
+    M.create_qt_shortcuts(M._panel_containers)
 end
 
 --- Destroy all active QShortcut objects and clean up handler globals.

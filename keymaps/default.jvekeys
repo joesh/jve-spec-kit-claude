@@ -16,6 +16,7 @@
 "Cmd+Shift+S" = "SaveProjectAs"
 "Cmd+I" = "ImportMedia"
 "Cmd+Shift+R" = "ShowRelinkDialog"
+"Cmd+Alt+K" = "ShowKeyboardCustomization"
 "Cmd+Z" = "Undo"
 "Cmd+Shift+Z" = "Redo"
 "Ctrl+G" = "GoToTimecode @timeline"

@@ -1,429 +1,321 @@
---- TODO: one-line summary (human review required)
+--- Keyboard Customization Dialog (Premiere-style)
 --
 -- Responsibilities:
--- - TODO
+-- - Browse all registered commands by category, with search filter
+-- - Show current shortcut(s) for the selected command, including @context scope
+-- - Capture a new shortcut via QKeySequenceEdit (Qt-native, not a global key hook)
+-- - Assign / remove / overwrite-with-confirmation
+-- - Manage disk-backed presets (Save As, Load, Delete, set active for next launch)
+-- - Trigger live QShortcut rewiring on every mutation (registry.rebuild_qt_shortcuts)
 --
--- Non-goals:
--- - TODO
+-- Non-goals (Phase 2):
+-- - Visual keyboard picture (Phase 3)
+-- - Modifier-tile re-coloring (Phase 3)
+-- - Multi-stroke chord sequences (Premiere doesn't have these either)
 --
 -- Invariants:
--- - TODO
---
--- Size: ~473 LOC
--- Volatility: unknown
+-- - registry.M.keybindings is the single source of truth; the dialog reads via
+--   registry.get_command_shortcuts() and writes via assign/remove (which both
+--   call rebuild_qt_shortcuts).
+-- - The dialog never installs a global key handler — capture is via
+--   QKeySequenceEdit, which Qt routes around the QShortcut layer.
 --
 -- @file keyboard_customization_dialog.lua
--- Original intent (unreviewed):
--- Keyboard Customization Dialog
--- Provides a Lua-driven UI for inspecting and editing keyboard shortcuts.
 local M = {}
 
 local qt_constants = require('core.qt_constants')
 local registry = require('core.keyboard_shortcut_registry')
-local kb_constants = require('core.keyboard_constants')
-local bit = require('bit')
+local keyboard_picture = require('ui.keyboard_picture')
 
 local WIDGET = qt_constants.WIDGET
 local LAYOUT = qt_constants.LAYOUT
 local PROP = qt_constants.PROPERTIES
 local CONTROL = qt_constants.CONTROL
 
--- Qt helpers ---------------------------------------------------------------
+-- ---- Lua handler registration helper -------------------------------------
 
 local handler_seq = 0
-
 local function register_handler(callback)
     handler_seq = handler_seq + 1
     local name = string.format("__keyboard_dialog_handler_%d", handler_seq)
-    _G[name] = function(...)
-        callback(...)
-    end
+    _G[name] = function(...) callback(...) end
     return name
 end
 
-local function wrap_layout(layout)
-    local container = WIDGET.CREATE()
-    LAYOUT.SET_ON_WIDGET(container, layout)
-    return container
-end
-
-local function add_layout(parent_layout, layout)
-    LAYOUT.ADD_WIDGET(parent_layout, wrap_layout(layout))
-end
-
 local function connect_button(button, callback)
-    qt_set_button_click_handler(button, register_handler(callback))
+    qt_set_button_click_handler(button, register_handler(callback))  -- luacheck: globals qt_set_button_click_handler
 end
 
 local function connect_line_edit_changed(line_edit, callback)
-    qt_set_line_edit_text_changed_handler(line_edit, register_handler(callback))
+    qt_set_line_edit_text_changed_handler(line_edit, register_handler(callback))  -- luacheck: globals qt_set_line_edit_text_changed_handler
 end
 
-local function connect_focus(widget, callback)
-    qt_set_focus_handler(widget, register_handler(callback))
-end
-
--- Module state -------------------------------------------------------------
+-- ---- Dialog state --------------------------------------------------------
 
 local dialog_widget
 local command_tree
 local shortcuts_list
 local search_box
 local preset_combo
-local apply_button
 local status_label
 local key_capture_edit
+local assign_button
+local conflict_label
 
 local current_command_id = nil
-local pending_shortcut = nil
-local capture_active = false
-local has_unsaved_changes = false
+local pending_key = nil           -- captured key code
+local pending_modifiers = nil     -- captured modifier flags
+local pending_conflict_id = nil   -- command_id this would overwrite (nil = no conflict)
 local active_filter = ""
-local capture_modifiers = 0
+local key_filter = nil            -- {key, modifiers} when filtering by clicked tile
+local picture = nil               -- keyboard_picture handle
 
-local original_global_key_handler = nil
-local capture_hook_installed = false
+-- C++ tree selection callback returns {item_id=N, items={...}} — there is no
+-- event.data field. Maintain our own item_id → command_id map instead.
+-- GET_TREE_SELECTED_INDEX is also a misnomer: it returns the item ID, not a
+-- row index. Same lookup approach for the assigned-shortcuts list.
+local item_id_to_command = {}
+local shortcuts_item_id_to_sc = {}
 
--- Utility functions --------------------------------------------------------
+-- ---- Status / UX feedback ------------------------------------------------
 
 local function set_status(message, is_error)
-    if not status_label then
-        return
-    end
-    local style = is_error and "color: #ff6b6b;" or "color: #aaaaaa;"
-    PROP.SET_STYLE(status_label, "QLabel { " .. style .. " font-size: 11px; }")
+    if not status_label then return end
+    local color = is_error and "#ff8080" or "#a8a8a8"
+    PROP.SET_STYLE(status_label,
+        string.format("QLabel { color: %s; font-size: 11px; }", color))
     PROP.SET_TEXT(status_label, message or "")
 end
 
-local function set_unsaved(value)
-    has_unsaved_changes = value and true or false
-    if apply_button then
-        PROP.SET_ENABLED(apply_button, has_unsaved_changes)
-    end
-end
+-- ---- Command tree population ---------------------------------------------
 
-local function build_shortcut_string(key, modifiers)
-    return registry.format_shortcut(key, modifiers)
-end
-
-local function is_modifier_key(key)
-    local KEY = kb_constants.KEY
-    return key == KEY.Shift or key == KEY.Control or key == KEY.Alt or key == KEY.Meta
-end
-
-local function modifier_flag_for_key(key)
-    local MOD = kb_constants.MOD
-    local KEY = kb_constants.KEY
-    if key == KEY.Shift then
-        return MOD.Shift
-    elseif key == KEY.Control then
-        return MOD.Control
-    elseif key == KEY.Alt then
-        return MOD.Alt
-    elseif key == KEY.Meta then
-        return MOD.Meta
-    end
-    return 0
-end
-
-local function install_global_key_capture()
-    if capture_hook_installed then
-        return
-    end
-
-    original_global_key_handler = _G.global_key_handler
-    _G.global_key_handler = function(event)
-        if capture_active then
-            if not event or not event.key then
-                return true
-            end
-            if is_modifier_key(event.key) then
-                local flag = modifier_flag_for_key(event.key)
-                if flag ~= 0 then
-                    capture_modifiers = bit.bor(event.modifiers or 0, flag)
-                else
-                    capture_modifiers = event.modifiers or capture_modifiers
-                end
-                return true
-            end
-
-            local effective_modifiers = event.modifiers or 0
-            if effective_modifiers == 0 and capture_modifiers ~= 0 then
-                effective_modifiers = capture_modifiers
-            end
-
-            local shortcut_string = build_shortcut_string(event.key, effective_modifiers)
-            if shortcut_string then
-                pending_shortcut = shortcut_string
-                PROP.SET_TEXT(key_capture_edit, shortcut_string)
-                set_status("Press 'Assign Shortcut' to apply", false)
-            end
-            return true
-        end
-
-        if original_global_key_handler then
-            return original_global_key_handler(event)
-        end
-        return false
-    end
-
-    capture_hook_installed = true
-end
-
-local function get_command_by_id(command_id)
-    if not command_id then
-        return nil
-    end
-    return registry.commands[command_id]
-end
-
-local function matches_filter(command, filter_text)
-    if filter_text == "" then
-        return true
-    end
-    local lower = filter_text:lower()
-    if command.name and command.name:lower():find(lower, 1, true) then
-        return true
-    end
-    if command.description and command.description:lower():find(lower, 1, true) then
-        return true
-    end
-    if command.category and command.category:lower():find(lower, 1, true) then
-        return true
-    end
-    for _, shortcut in ipairs(command.current_shortcuts or {}) do
-        if shortcut.string:lower():find(lower, 1, true) then
-            return true
-        end
+local function command_matches_text_filter(cmd, filter)
+    if filter == "" then return true end
+    local needle = filter:lower()
+    if cmd.name and cmd.name:lower():find(needle, 1, true) then return true end
+    if cmd.description and cmd.description:lower():find(needle, 1, true) then return true end
+    if cmd.category and cmd.category:lower():find(needle, 1, true) then return true end
+    for _, sc in ipairs(registry.get_command_shortcuts(cmd.id)) do
+        if sc.string:lower():find(needle, 1, true) then return true end
     end
     return false
 end
 
--- UI population ------------------------------------------------------------
+local function command_matches_key_filter(cmd, kf)
+    if not kf then return true end
+    -- Match if the command has any binding on this key (any modifier combo)
+    for _, sc in ipairs(registry.get_command_shortcuts(cmd.id)) do
+        if sc.key == kf.key then return true end
+    end
+    return false
+end
+
+local function command_matches_filter(cmd, filter)
+    return command_matches_text_filter(cmd, filter)
+        and command_matches_key_filter(cmd, key_filter)
+end
+
+local function format_shortcut_with_context(sc)
+    if not sc.contexts or #sc.contexts == 0 then
+        return sc.string
+    end
+    local ctx_parts = {}
+    for _, c in ipairs(sc.contexts) do ctx_parts[#ctx_parts + 1] = "@" .. c end
+    return string.format("%s  %s", sc.string, table.concat(ctx_parts, " "))
+end
+
+local function shortcuts_summary(cmd_id)
+    local shortcuts = registry.get_command_shortcuts(cmd_id)
+    if #shortcuts == 0 then return "" end
+    local parts = {}
+    for _, sc in ipairs(shortcuts) do
+        parts[#parts + 1] = format_shortcut_with_context(sc)
+    end
+    return table.concat(parts, ", ")
+end
 
 local function populate_command_tree()
     CONTROL.CLEAR_TREE(command_tree)
-    local commands_by_category = registry.get_commands_by_category()
+    item_id_to_command = {}
+    local by_category = registry.get_commands_by_category()
 
-    local categories = {}
-    for category in pairs(commands_by_category) do
-        table.insert(categories, category)
-    end
-    table.sort(categories)
+    local cat_names = {}
+    for cat in pairs(by_category) do cat_names[#cat_names + 1] = cat end
+    table.sort(cat_names)
 
-    for _, category in ipairs(categories) do
-        local commands = commands_by_category[category]
-        local added_category = false
+    for _, category in ipairs(cat_names) do
+        local commands = by_category[category]
         local category_index = nil
-
-        for _, command in ipairs(commands) do
-            if matches_filter(command, active_filter) then
-                if not added_category then
+        for _, cmd in ipairs(commands) do
+            if command_matches_filter(cmd, active_filter) then
+                if not category_index then
                     category_index = CONTROL.ADD_TREE_ITEM(command_tree, {category, ""})
                     CONTROL.SET_TREE_ITEM_EXPANDED(command_tree, category_index, true)
-                    added_category = true
                 end
-
-                local item_text = string.format("  %s", command.name)
-                local child_id = CONTROL.ADD_TREE_CHILD_ITEM(command_tree, category_index, {item_text, category})
-                CONTROL.SET_TREE_ITEM_DATA(command_tree, child_id, command.id)
+                local child = CONTROL.ADD_TREE_CHILD_ITEM(command_tree, category_index,
+                    { "  " .. cmd.name, shortcuts_summary(cmd.id) })
+                item_id_to_command[child] = cmd.id
             end
         end
     end
 end
 
-local function update_command_shortcuts_view()
+-- ---- Right-pane: assigned-shortcuts list for selected command -----------
+
+local function refresh_assigned_list()
     CONTROL.CLEAR_TREE(shortcuts_list)
+    shortcuts_item_id_to_sc = {}
+    if not current_command_id then return end
+    for _, sc in ipairs(registry.get_command_shortcuts(current_command_id)) do
+        local item_id = CONTROL.ADD_TREE_ITEM(shortcuts_list, { format_shortcut_with_context(sc) })
+        shortcuts_item_id_to_sc[item_id] = sc
+    end
+end
 
+-- ---- Capture-widget plumbing --------------------------------------------
+
+local function clear_capture_state()
+    pending_key = nil
+    pending_modifiers = nil
+    pending_conflict_id = nil
+    PROP.SET_TEXT(conflict_label, "")
+    CONTROL.SET_ENABLED(assign_button, false)
+end
+
+-- Read the current value out of the QKeySequenceEdit. If empty, clear state.
+local function on_capture_changed()
+    -- luacheck: globals qt_key_sequence_edit_get
+    local key, mods = qt_key_sequence_edit_get(key_capture_edit)
+    if not key then
+        clear_capture_state()
+        return
+    end
+    pending_key = key
+    pending_modifiers = mods or 0
+
+    -- Check for conflict so we can show "Already assigned to X" inline
+    local conflict_id = registry.find_conflict(pending_key, pending_modifiers)
+    if conflict_id and conflict_id ~= current_command_id then
+        local cmd = registry.commands[conflict_id]
+        assert(cmd, "conflict points at unregistered command: " .. tostring(conflict_id))
+        pending_conflict_id = conflict_id
+        PROP.SET_TEXT(conflict_label,
+            string.format("⚠ Currently assigned to: %s — Assign will overwrite.", cmd.name))
+        PROP.SET_STYLE(conflict_label,
+            "QLabel { color: #ffb86b; font-size: 11px; }")
+    else
+        pending_conflict_id = nil
+        PROP.SET_TEXT(conflict_label, "")
+    end
+    CONTROL.SET_ENABLED(assign_button, current_command_id ~= nil)
+end
+
+local function do_assign()
     if not current_command_id then
-        return
+        set_status("Select a command first", true); return
+    end
+    if not pending_key then
+        set_status("Capture a shortcut first", true); return
     end
 
-    local command = get_command_by_id(current_command_id)
-    if not command then
-        return
+    -- Format via registry so the string round-trips through the TOML parser
+    local shortcut_string = registry.format_shortcut(pending_key, pending_modifiers)
+
+    local ok, err = registry.assign_shortcut(current_command_id, shortcut_string,
+        { force = pending_conflict_id ~= nil })
+    if not ok then
+        set_status(err or "Assignment failed", true); return
     end
 
-    table.sort(command.current_shortcuts, function(a, b)
-        return a.string < b.string
-    end)
-
-    for _, shortcut in ipairs(command.current_shortcuts) do
-        CONTROL.ADD_TREE_ITEM(shortcuts_list, {shortcut.string})
-    end
+    -- luacheck: globals qt_key_sequence_edit_clear
+    qt_key_sequence_edit_clear(key_capture_edit)
+    clear_capture_state()
+    set_status(string.format("Assigned %s to %s", shortcut_string,
+        registry.commands[current_command_id].name), false)
+    refresh_assigned_list()
+    populate_command_tree()  -- shortcut summary in the tree updates
+    if picture then picture.refresh() end
 end
 
-local function populate_preset_combo()
-    if not next(registry.presets) then
-        registry.reset_to_defaults()
+local function do_remove_selected()
+    if not current_command_id then return end
+    -- GET_TREE_SELECTED_INDEX is a misnomer — returns the item ID, not a row index
+    local item_id = CONTROL.GET_TREE_SELECTED_INDEX(shortcuts_list)
+    if not item_id or item_id < 0 then
+        set_status("Select a shortcut to remove", true); return
     end
-
-    for preset_name, _ in pairs(registry.presets) do
-        PROP.ADD_COMBOBOX_ITEM(preset_combo, preset_name)
+    local sc = shortcuts_item_id_to_sc[item_id]
+    if not sc then
+        set_status("Select a shortcut to remove", true); return
     end
-
-    if registry.current_preset then
-        PROP.SET_COMBOBOX_CURRENT_TEXT(preset_combo, registry.current_preset)
-    end
+    registry.remove_shortcut(current_command_id, sc.string)
+    set_status("Removed " .. sc.string, false)
+    refresh_assigned_list()
+    populate_command_tree()
 end
 
--- Event handlers -----------------------------------------------------------
+-- ---- Selection handler ---------------------------------------------------
 
-local function handle_tree_selection(event)
-    current_command_id = nil
-
-    if event and event.data and event.data ~= "" then
-        current_command_id = event.data
+local function on_tree_selection(event)
+    -- C++ payload: {item_id=N, items={...}} (or nil if selection cleared).
+    -- Look up the command via our item_id → command_id map; category headers
+    -- have no entry in the map, so they yield nil (no command selected).
+    if event and event.item_id then
+        current_command_id = item_id_to_command[event.item_id]
+    else
+        current_command_id = nil
+    end
+    clear_capture_state()
+    -- luacheck: globals qt_key_sequence_edit_clear
+    qt_key_sequence_edit_clear(key_capture_edit)
+    refresh_assigned_list()
+    if current_command_id then
+        local cmd = registry.commands[current_command_id]
+        set_status(string.format("Selected: %s — %s",
+            cmd.name, cmd.description or ""), false)
+    else
         set_status("", false)
     end
-
-    update_command_shortcuts_view()
 end
 
-local function apply_filter(text)
-    assert(type(text) == "string", "Filter text must be a string")
-    active_filter = text:lower()
+local function apply_search(text)
+    active_filter = (text or ""):lower()
     populate_command_tree()
-    current_command_id = nil
-    update_command_shortcuts_view()
 end
 
-local function assign_pending_shortcut()
-    if not current_command_id then
-        set_status("Select a command before assigning a shortcut", true)
-        return
-    end
-    if not pending_shortcut or pending_shortcut == "" then
-        set_status("Press keys in the capture box before assigning", true)
-        return
-    end
+-- ---- Preset toolbar handlers ---------------------------------------------
 
-    local success, err = registry.assign_shortcut(current_command_id, pending_shortcut)
-    if not success then
-        set_status(err or "Failed to assign shortcut", true)
-        return
+local function refresh_preset_combo()
+    PROP.CLEAR_COMBOBOX(preset_combo)
+    for _, name in ipairs(registry.list_presets()) do
+        PROP.ADD_COMBOBOX_ITEM(preset_combo, name)
     end
-
-    pending_shortcut = nil
-    PROP.SET_TEXT(key_capture_edit, "")
-    set_status("Shortcut assigned", false)
-    set_unsaved(true)
-    update_command_shortcuts_view()
+    -- current_preset is authoritative: the registry always has one set
+    -- (either DEFAULT_PRESET or the loaded preset's name). The on-disk active
+    -- pointer is its persistence; the in-memory field is what's live now.
+    assert(registry.current_preset,
+        "refresh_preset_combo: registry.current_preset unset")
+    PROP.SET_COMBOBOX_CURRENT_TEXT(preset_combo, registry.current_preset)
 end
 
-local function remove_selected_shortcut()
-    if not current_command_id then
-        return
-    end
-
-    local command = get_command_by_id(current_command_id)
-    if not command then
-        return
-    end
-
-    local idx = CONTROL.GET_TREE_SELECTED_INDEX(shortcuts_list)
-    if not idx or idx < 0 then
-        return
-    end
-
-    local shortcut = command.current_shortcuts[idx + 1]
-    if not shortcut then
-        return
-    end
-
-    registry.remove_shortcut(current_command_id, shortcut.string)
-    set_unsaved(true)
-    update_command_shortcuts_view()
-    set_status("Shortcut removed", false)
-end
-
-local function clear_all_shortcuts()
-    if not current_command_id then
-        return
-    end
-
-    local command = get_command_by_id(current_command_id)
-    if not command then
-        return
-    end
-
-    for i = #command.current_shortcuts, 1, -1 do
-        local shortcut = command.current_shortcuts[i]
-        registry.remove_shortcut(current_command_id, shortcut.string)
-    end
-
-    set_unsaved(true)
-    update_command_shortcuts_view()
-    set_status("Cleared shortcuts for command", false)
-end
-
-local function apply_changes()
-    local preset_name = registry.current_preset or "Custom"
-    registry.save_preset(preset_name)
-    set_unsaved(false)
-    set_status(string.format("Preset '%s' saved", preset_name), false)
-end
-
-local function reset_to_defaults()
-    registry.reset_to_defaults()
+local function do_load_preset()
+    -- luacheck: globals qt_get_combobox_current_text
+    local name = PROP.GET_COMBOBOX_CURRENT_TEXT(preset_combo)
+    if not name or name == "" then return end
+    local ok, err = registry.load_preset(name)
+    if not ok then set_status(err or "Load failed", true); return end
+    registry.set_active_preset(name == registry.DEFAULT_PRESET and nil or name)
     populate_command_tree()
-    current_command_id = nil
-    update_command_shortcuts_view()
-    set_unsaved(true)
-    set_status("Shortcuts reset to defaults", false)
+    refresh_assigned_list()
+    if picture then picture.refresh() end
+    set_status(string.format("Loaded preset '%s'", name), false)
 end
 
-local function handle_capture_focus(event)
-    capture_active = event and event.focus_in
-    if not capture_active then
-        pending_shortcut = nil
-        PROP.SET_TEXT(key_capture_edit, "")
-        capture_modifiers = 0
-    end
-end
-
-local function load_preset(name)
-    local success, err = registry.load_preset(name)
-    if not success then
-        set_status(err or ("Failed to load preset: " .. tostring(name)), true)
-        return
-    end
-
-    registry.current_preset = name
-    if preset_combo then
-        PROP.SET_COMBOBOX_CURRENT_TEXT(preset_combo, name)
-    end
-    populate_command_tree()
-    current_command_id = nil
-    update_command_shortcuts_view()
-    pending_shortcut = nil
-    if key_capture_edit then
-        PROP.SET_TEXT(key_capture_edit, "")
-    end
-    set_unsaved(false)
-    set_status(string.format("Preset '%s' loaded", name), false)
-end
-
-local function save_preset_as(name)
-    if not name or name == "" then
-        set_status("Enter a preset name", true)
-        return
-    end
-
-    registry.save_preset(name)
-    registry.current_preset = name
-    PROP.ADD_COMBOBOX_ITEM(preset_combo, name)
-    PROP.SET_COMBOBOX_CURRENT_TEXT(preset_combo, name)
-    set_unsaved(false)
-    set_status(string.format("Preset saved as '%s'", name), false)
-end
-
--- Preset save prompt -------------------------------------------------------
-
-local function show_save_preset_prompt()
-    local prompt = WIDGET.CREATE_TOOL_WINDOW()
-    PROP.SET_TITLE(prompt, "Save Keyboard Preset")
-    PROP.SET_SIZE(prompt, 320, 140)
+-- Inline "Save preset as…" prompt — child modal QDialog parented to our
+-- main dialog so the application-modal stack works (a tool window would be
+-- blocked by our parent's Qt::ApplicationModal).
+local function show_save_as_prompt()
+    local prompt = qt_constants.DIALOG.CREATE("Save Keyboard Preset", 360, 140, dialog_widget)
 
     local layout = LAYOUT.CREATE_VBOX()
     LAYOUT.ADD_WIDGET(layout, WIDGET.CREATE_LABEL("Preset name:"))
@@ -431,183 +323,235 @@ local function show_save_preset_prompt()
     local name_edit = WIDGET.CREATE_LINE_EDIT()
     LAYOUT.ADD_WIDGET(layout, name_edit)
 
-    local buttons = LAYOUT.CREATE_HBOX()
+    local row = LAYOUT.CREATE_HBOX()
+    LAYOUT.ADD_STRETCH(row, 1)
 
-    local ok_btn = WIDGET.CREATE_BUTTON("Save")
-    connect_button(ok_btn, function()
-        assert(PROP.GET_TEXT ~= nil, "PROP.GET_TEXT not available for preset save")
+    local cancel = WIDGET.CREATE_BUTTON("Cancel")
+    connect_button(cancel, function() qt_constants.DIALOG.CLOSE(prompt, false) end)
+    LAYOUT.ADD_WIDGET(row, cancel)
+
+    local save = WIDGET.CREATE_BUTTON("Save")
+    connect_button(save, function()
         local name = PROP.GET_TEXT(name_edit)
-        assert(type(name) == "string", "PROP.GET_TEXT returned unexpected type")
-        save_preset_as(name)
-        qt_constants.DISPLAY.SET_VISIBLE(prompt, false)
+        if not name or name == "" then return end
+        if name == registry.DEFAULT_PRESET then
+            set_status("Cannot overwrite bundled Default — choose another name", true)
+            return
+        end
+        registry.save_preset(name)
+        registry.set_active_preset(name)
+        refresh_preset_combo()
+        qt_constants.DIALOG.CLOSE(prompt, true)
+        set_status(string.format("Saved preset '%s'", name), false)
     end)
-    LAYOUT.ADD_WIDGET(buttons, ok_btn)
+    LAYOUT.ADD_WIDGET(row, save)
 
-    local cancel_btn = WIDGET.CREATE_BUTTON("Cancel")
-    connect_button(cancel_btn, function()
-        qt_constants.DISPLAY.SET_VISIBLE(prompt, false)
-    end)
-    LAYOUT.ADD_WIDGET(buttons, cancel_btn)
-    LAYOUT.ADD_STRETCH(buttons, 1)
+    local row_widget = WIDGET.CREATE()
+    LAYOUT.SET_ON_WIDGET(row_widget, row)
+    LAYOUT.ADD_WIDGET(layout, row_widget)
 
-    add_layout(layout, buttons)
-    LAYOUT.SET_ON_WIDGET(prompt, layout)
-    qt_constants.DISPLAY.SHOW(prompt)
-    qt_constants.DISPLAY.RAISE(prompt)
-    qt_constants.DISPLAY.ACTIVATE(prompt)
-    qt_set_focus(name_edit)
+    qt_constants.DIALOG.SET_LAYOUT(prompt, layout)
+    qt_constants.DIALOG.SHOW(prompt, false)
+    qt_set_focus(name_edit)  -- luacheck: globals qt_set_focus
 end
 
--- Dialog construction ------------------------------------------------------
+local function do_delete_preset()
+    local name = PROP.GET_COMBOBOX_CURRENT_TEXT(preset_combo)
+    if not name or name == "" or name == registry.DEFAULT_PRESET then
+        set_status("Cannot delete bundled Default", true); return
+    end
+    registry.delete_preset(name)
+    refresh_preset_combo()
+    set_status(string.format("Deleted preset '%s'", name), false)
+end
 
-local function create_dialog()
-    dialog_widget = WIDGET.CREATE_TOOL_WINDOW()
-    PROP.SET_TITLE(dialog_widget, "Keyboard Shortcuts")
-    PROP.SET_SIZE(dialog_widget, 900, 600)
+local function do_reset_to_defaults()
+    registry.reset_to_defaults()
+    refresh_preset_combo()
+    populate_command_tree()
+    refresh_assigned_list()
+    if picture then picture.refresh() end
+    set_status("Reset to bundled defaults", false)
+end
 
-    local main_layout = LAYOUT.CREATE_VBOX()
+-- ---- Dialog construction -------------------------------------------------
 
-    -- Toolbar
+-- Wrap an HBox inside a container widget so it can be added to the outer
+-- VBox (LAYOUT.ADD_WIDGET takes widgets, not layouts).
+local function hbox_as_widget(hbox)
+    local w = WIDGET.CREATE()
+    LAYOUT.SET_ON_WIDGET(w, hbox)
+    return w
+end
+
+-- Preset row: [Preset:] [combo] [Load] [Save As…] [Delete] [Reset to Defaults]
+local function build_preset_toolbar()
     local toolbar = LAYOUT.CREATE_HBOX()
-
-    local preset_label = WIDGET.CREATE_LABEL("Preset:")
-    LAYOUT.ADD_WIDGET(toolbar, preset_label)
+    LAYOUT.ADD_WIDGET(toolbar, WIDGET.CREATE_LABEL("Preset:"))
 
     preset_combo = WIDGET.CREATE_COMBOBOX()
     LAYOUT.ADD_WIDGET(toolbar, preset_combo)
 
-    local load_btn = WIDGET.CREATE_BUTTON("Load")
-    connect_button(load_btn, function()
-        assert(PROP.GET_COMBOBOX_CURRENT_TEXT ~= nil, "PROP.GET_COMBOBOX_CURRENT_TEXT not available")
-        local name = PROP.GET_COMBOBOX_CURRENT_TEXT(preset_combo)
-        assert(type(name) == "string", "PROP.GET_COMBOBOX_CURRENT_TEXT returned unexpected type")
-        if name ~= "" then
-            load_preset(name)
-        end
-    end)
-    LAYOUT.ADD_WIDGET(toolbar, load_btn)
-
-    local save_btn = WIDGET.CREATE_BUTTON("Save As…")
-    connect_button(save_btn, show_save_preset_prompt)
-    LAYOUT.ADD_WIDGET(toolbar, save_btn)
-
-    local reset_btn = WIDGET.CREATE_BUTTON("Reset to Defaults")
-    connect_button(reset_btn, reset_to_defaults)
-    LAYOUT.ADD_WIDGET(toolbar, reset_btn)
+    for _, spec in ipairs({
+        { "Load",              do_load_preset       },
+        { "Save As…",          show_save_as_prompt  },
+        { "Delete",            do_delete_preset     },
+        { "Reset to Defaults", do_reset_to_defaults },
+    }) do
+        local btn = WIDGET.CREATE_BUTTON(spec[1])
+        connect_button(btn, spec[2])
+        LAYOUT.ADD_WIDGET(toolbar, btn)
+    end
 
     LAYOUT.ADD_STRETCH(toolbar, 1)
-    add_layout(main_layout, toolbar)
+    return hbox_as_widget(toolbar)
+end
 
-    -- Search
+-- Visual keyboard (Premiere-style). Click a key tile to filter the command
+-- table to bindings on that key; click a modifier tile to toggle the displayed
+-- modifier overlay. Selection is owned by the picture so tile highlight and
+-- filter stay in lockstep.
+local function build_keyboard_picture_widget()
+    picture = keyboard_picture.create({
+        on_key_click = function(key, _modifiers, is_selected)
+            if is_selected then
+                key_filter = { key = key }
+            else
+                key_filter = nil
+            end
+            populate_command_tree()
+        end,
+    })
+    return picture.widget
+end
+
+local function build_search_box()
     search_box = WIDGET.CREATE_LINE_EDIT()
-    PROP.SET_PLACEHOLDER_TEXT(search_box, "Search commands…")
+    PROP.SET_PLACEHOLDER_TEXT(search_box, "Search commands, descriptions, shortcuts…")
     connect_line_edit_changed(search_box, function()
-        assert(PROP.GET_TEXT ~= nil, "PROP.GET_TEXT not available for search filter")
-        local text = PROP.GET_TEXT(search_box)
-        assert(type(text) == "string", "PROP.GET_TEXT returned unexpected type")
-        apply_filter(text)
+        apply_search(PROP.GET_TEXT(search_box))
     end)
-    LAYOUT.ADD_WIDGET(main_layout, search_box)
+    return search_box
+end
 
-    -- Main splitter
-    local splitter = LAYOUT.CREATE_SPLITTER("horizontal")
-
-    -- Command tree
+local function build_command_tree()
     command_tree = WIDGET.CREATE_TREE()
-    CONTROL.SET_TREE_HEADERS(command_tree, {"Command", "Category"})
+    CONTROL.SET_TREE_HEADERS(command_tree, { "Command", "Shortcut" })
     CONTROL.SET_TREE_COLUMN_WIDTH(command_tree, 0, 320)
-    if CONTROL.SET_TREE_SELECTION_HANDLER then
-        CONTROL.SET_TREE_SELECTION_HANDLER(command_tree, register_handler(handle_tree_selection))
-    end
-    qt_set_focus_policy(command_tree, "StrongFocus")
+    CONTROL.SET_TREE_COLUMN_WIDTH(command_tree, 1, 240)
+    CONTROL.SET_TREE_SELECTION_HANDLER(command_tree, register_handler(on_tree_selection))
+    qt_set_focus_policy(command_tree, "StrongFocus")  -- luacheck: globals qt_set_focus_policy
+    return command_tree
+end
 
-    -- Shortcuts panel
-    local right_panel = WIDGET.CREATE()
-    local right_layout = LAYOUT.CREATE_VBOX()
+-- Right-side detail pane: assigned shortcuts list + capture editor + status.
+local function build_detail_pane()
+    local detail = WIDGET.CREATE()
+    local vbox = LAYOUT.CREATE_VBOX()
 
     local assigned_label = WIDGET.CREATE_LABEL("Assigned Shortcuts")
     PROP.SET_STYLE(assigned_label, "QLabel { font-weight: bold; }")
-    LAYOUT.ADD_WIDGET(right_layout, assigned_label)
+    LAYOUT.ADD_WIDGET(vbox, assigned_label)
 
     shortcuts_list = WIDGET.CREATE_TREE()
-    CONTROL.SET_TREE_HEADERS(shortcuts_list, {"Shortcut"})
-    PROP.SET_MAX_HEIGHT(shortcuts_list, 140)
-    LAYOUT.ADD_WIDGET(right_layout, shortcuts_list)
+    CONTROL.SET_TREE_HEADERS(shortcuts_list, { "Shortcut" })
+    PROP.SET_MAX_HEIGHT(shortcuts_list, 160)
+    LAYOUT.ADD_WIDGET(vbox, shortcuts_list)
 
     local list_buttons = LAYOUT.CREATE_HBOX()
-    local remove_btn = WIDGET.CREATE_BUTTON("Remove")
-    connect_button(remove_btn, remove_selected_shortcut)
+    local remove_btn = WIDGET.CREATE_BUTTON("Remove Selected")
+    connect_button(remove_btn, do_remove_selected)
     LAYOUT.ADD_WIDGET(list_buttons, remove_btn)
-
-    local clear_btn = WIDGET.CREATE_BUTTON("Clear All")
-    connect_button(clear_btn, clear_all_shortcuts)
-    LAYOUT.ADD_WIDGET(list_buttons, clear_btn)
     LAYOUT.ADD_STRETCH(list_buttons, 1)
-    add_layout(right_layout, list_buttons)
+    LAYOUT.ADD_WIDGET(vbox, hbox_as_widget(list_buttons))
 
-    local capture_label = WIDGET.CREATE_LABEL("Capture Shortcut")
+    local capture_label = WIDGET.CREATE_LABEL("Capture New Shortcut")
     PROP.SET_STYLE(capture_label, "QLabel { font-weight: bold; margin-top: 12px; }")
-    LAYOUT.ADD_WIDGET(right_layout, capture_label)
+    LAYOUT.ADD_WIDGET(vbox, capture_label)
 
-    key_capture_edit = WIDGET.CREATE_LINE_EDIT()
-    PROP.SET_PLACEHOLDER_TEXT(key_capture_edit, "Click and press keys…")
-    qt_set_focus_policy(key_capture_edit, "StrongFocus")
-    connect_focus(key_capture_edit, handle_capture_focus)
-    LAYOUT.ADD_WIDGET(right_layout, key_capture_edit)
+    -- luacheck: globals qt_create_key_sequence_edit qt_key_sequence_edit_on_changed
+    key_capture_edit = qt_create_key_sequence_edit()
+    qt_key_sequence_edit_on_changed(key_capture_edit, register_handler(on_capture_changed))
+    LAYOUT.ADD_WIDGET(vbox, key_capture_edit)
 
-    local assign_btn = WIDGET.CREATE_BUTTON("Assign Shortcut")
-    connect_button(assign_btn, assign_pending_shortcut)
-    LAYOUT.ADD_WIDGET(right_layout, assign_btn)
+    conflict_label = WIDGET.CREATE_LABEL("")
+    LAYOUT.ADD_WIDGET(vbox, conflict_label)
+
+    assign_button = WIDGET.CREATE_BUTTON("Assign Shortcut")
+    CONTROL.SET_ENABLED(assign_button, false)
+    connect_button(assign_button, do_assign)
+    LAYOUT.ADD_WIDGET(vbox, assign_button)
 
     status_label = WIDGET.CREATE_LABEL("")
-    LAYOUT.ADD_WIDGET(right_layout, status_label)
-    LAYOUT.ADD_STRETCH(right_layout, 1)
+    LAYOUT.ADD_WIDGET(vbox, status_label)
+    LAYOUT.ADD_STRETCH(vbox, 1)
 
-    LAYOUT.SET_ON_WIDGET(right_panel, right_layout)
-
-    LAYOUT.ADD_WIDGET(splitter, command_tree)
-    LAYOUT.ADD_WIDGET(splitter, right_panel)
-    LAYOUT.ADD_WIDGET(main_layout, splitter)
-
-    -- Bottom buttons
-    local bottom_bar = LAYOUT.CREATE_HBOX()
-    LAYOUT.ADD_STRETCH(bottom_bar, 1)
-
-    apply_button = WIDGET.CREATE_BUTTON("Apply")
-    connect_button(apply_button, apply_changes)
-    LAYOUT.ADD_WIDGET(bottom_bar, apply_button)
-
-    local close_btn = WIDGET.CREATE_BUTTON("Close")
-    connect_button(close_btn, function()
-        qt_constants.DISPLAY.SET_VISIBLE(dialog_widget, false)
-    end)
-    LAYOUT.ADD_WIDGET(bottom_bar, close_btn)
-
-    add_layout(main_layout, bottom_bar)
-
-    local central_widget = WIDGET.CREATE()
-    LAYOUT.SET_ON_WIDGET(central_widget, main_layout)
-    if qt_constants.LAYOUT.SET_CENTRAL_WIDGET then
-        qt_constants.LAYOUT.SET_CENTRAL_WIDGET(dialog_widget, central_widget)
-    else
-        error("qt_constants.LAYOUT.SET_CENTRAL_WIDGET not available for keyboard dialog")
-    end
-
-    populate_preset_combo()
-    populate_command_tree()
-    install_global_key_capture()
+    LAYOUT.SET_ON_WIDGET(detail, vbox)
+    return detail
 end
 
--- Public API ---------------------------------------------------------------
+-- Command tree (left) | detail pane (right), horizontal splitter.
+local function build_command_splitter()
+    local splitter = LAYOUT.CREATE_SPLITTER("horizontal")
+    LAYOUT.ADD_WIDGET(splitter, build_command_tree())
+    LAYOUT.ADD_WIDGET(splitter, build_detail_pane())
+    return splitter
+end
+
+-- Close button at the lower-right. Mutations apply immediately, so no "Apply".
+local function build_bottom_bar()
+    local bottom = LAYOUT.CREATE_HBOX()
+    LAYOUT.ADD_STRETCH(bottom, 1)
+    local close_btn = WIDGET.CREATE_BUTTON("Close")
+    connect_button(close_btn, function()
+        qt_constants.DIALOG.CLOSE(dialog_widget, true)
+    end)
+    LAYOUT.ADD_WIDGET(bottom, close_btn)
+    return hbox_as_widget(bottom)
+end
+
+-- Forward physical key press/release events on the dialog to the picture so
+-- the visual keyboard reflects held modifiers and the tile matching the last
+-- pressed key highlights.
+local function install_physical_key_watcher()
+    -- luacheck: globals qt_install_key_state_watcher
+    qt_install_key_state_watcher(dialog_widget, register_handler(function(event_type, key, mods)
+        assert(picture, "key watcher fired before picture was constructed")
+        picture.handle_physical_key(event_type, key, mods)
+    end))
+end
+
+local function create_dialog()
+    -- Modal QDialog (Qt::ApplicationModal) — isolates from global QShortcuts
+    -- on the main window so Delete, J/K/L, etc. don't leak to the timeline.
+    dialog_widget = qt_constants.DIALOG.CREATE("Keyboard Shortcuts", 1200, 880, nil)
+
+    local main = LAYOUT.CREATE_VBOX()
+    LAYOUT.ADD_WIDGET(main, build_preset_toolbar())
+    LAYOUT.ADD_WIDGET(main, build_keyboard_picture_widget())
+    LAYOUT.ADD_WIDGET(main, build_search_box())
+    LAYOUT.ADD_WIDGET(main, build_command_splitter())
+    LAYOUT.ADD_WIDGET(main, build_bottom_bar())
+
+    qt_constants.DIALOG.SET_LAYOUT(dialog_widget, main)
+    install_physical_key_watcher()
+
+    refresh_preset_combo()
+    populate_command_tree()
+end
+
+-- ---- Public API ---------------------------------------------------------
 
 function M.show()
-    if not dialog_widget then
-        create_dialog()
-    end
-
-    qt_constants.DISPLAY.SHOW(dialog_widget)
-    qt_constants.DISPLAY.RAISE(dialog_widget)
-    qt_constants.DISPLAY.ACTIVATE(dialog_widget)
+    if not dialog_widget then create_dialog() end
+    -- Re-sync state in case bindings changed since last open
+    refresh_preset_combo()
+    populate_command_tree()
+    refresh_assigned_list()
+    if picture then picture.refresh() end
+    -- DIALOG.SHOW(dialog, blocking=false) shows modally without blocking the
+    -- Lua call (we want to return to the menu dispatcher promptly).
+    qt_constants.DIALOG.SHOW(dialog_widget, false)
 end
 
 return M

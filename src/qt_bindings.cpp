@@ -148,6 +148,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_checked); lua_setfield(L, -2, "SET_CHECKED");
     lua_pushcfunction(L, lua_get_checked); lua_setfield(L, -2, "GET_CHECKED");
     lua_pushcfunction(L, lua_add_combobox_item); lua_setfield(L, -2, "ADD_COMBOBOX_ITEM");
+    lua_pushcfunction(L, lua_clear_combobox); lua_setfield(L, -2, "CLEAR_COMBOBOX");
     lua_pushcfunction(L, lua_set_combobox_current_text); lua_setfield(L, -2, "SET_COMBOBOX_CURRENT_TEXT");
     lua_pushcfunction(L, lua_get_combobox_current_text); lua_setfield(L, -2, "GET_COMBOBOX_CURRENT_TEXT");
     lua_pushcfunction(L, lua_set_combobox_current_index); lua_setfield(L, -2, "SET_COMBOBOX_CURRENT_INDEX");
@@ -194,6 +195,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_layout_spacing); lua_setfield(L, -2, "SET_LAYOUT_SPACING");
     lua_pushcfunction(L, lua_set_layout_margins); lua_setfield(L, -2, "SET_LAYOUT_MARGINS");
     lua_pushcfunction(L, lua_set_enabled); lua_setfield(L, -2, "SET_ENABLED");
+    lua_pushcfunction(L, lua_set_word_wrap); lua_setfield(L, -2, "SET_WORD_WRAP");
     lua_pushcfunction(L, lua_set_progress_bar_value); lua_setfield(L, -2, "SET_PROGRESS_BAR_VALUE");
     lua_pushcfunction(L, lua_set_progress_bar_range); lua_setfield(L, -2, "SET_PROGRESS_BAR_RANGE");
     lua_pushcfunction(L, lua_set_text_edit_read_only); lua_setfield(L, -2, "SET_TEXT_EDIT_READ_ONLY");
@@ -259,6 +261,14 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_delete_shortcut); lua_setglobal(L, "qt_delete_shortcut");
     lua_pushcfunction(L, lua_create_focus_container); lua_setglobal(L, "qt_create_focus_container");
     lua_pushcfunction(L, lua_set_container_default_button); lua_setglobal(L, "qt_set_container_default_button");
+
+    // QKeySequenceEdit bindings (keyboard customization dialog capture widget)
+    lua_pushcfunction(L, lua_create_key_sequence_edit); lua_setglobal(L, "qt_create_key_sequence_edit");
+    lua_pushcfunction(L, lua_key_sequence_edit_get); lua_setglobal(L, "qt_key_sequence_edit_get");
+    lua_pushcfunction(L, lua_key_sequence_edit_clear); lua_setglobal(L, "qt_key_sequence_edit_clear");
+    lua_pushcfunction(L, lua_key_sequence_edit_set); lua_setglobal(L, "qt_key_sequence_edit_set");
+    lua_pushcfunction(L, lua_key_sequence_edit_on_changed); lua_setglobal(L, "qt_key_sequence_edit_on_changed");
+    lua_pushcfunction(L, lua_install_key_state_watcher); lua_setglobal(L, "qt_install_key_state_watcher");
     lua_pushcfunction(L, lua_line_edit_select_all); lua_setglobal(L, "qt_line_edit_select_all");
     lua_pushcfunction(L, lua_set_tree_selection_changed_handler); lua_setglobal(L, "qt_set_tree_selection_handler");
     lua_pushcfunction(L, lua_set_tree_selection_mode); lua_setglobal(L, "qt_set_tree_selection_mode");
