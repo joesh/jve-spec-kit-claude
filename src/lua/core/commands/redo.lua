@@ -1,6 +1,10 @@
---- Redo meta-command: calls command_manager.redo() with toggle state machine.
+--- Redo meta-command: dispatches the pure model-level redo.
 --
--- Non-undoable. Uses undo_redo_controller for redo toggle behavior.
+-- Non-undoable. The interactive entry point (Cmd+Shift+Z keyboard, Edit
+-- menu) dispatches "Redo" via execute_interactive, which opens a single
+-- "ui" event. This executor then calls the pure command_manager.redo() —
+-- the Pass 2 viewport policy fires once at the outer execute_interactive
+-- wrapper, seeing the redone command's mutations via forwarding.
 --
 -- @file redo.lua
 local M = {}
@@ -15,8 +19,18 @@ local SPEC = {
 function M.register(executors, undoers, db)
     local function executor(command)
         local command_manager = require("core.command_manager")
-        local undo_redo_controller = require("core.undo_redo_controller")
-        undo_redo_controller.handle_redo_toggle(command_manager)
+        if not command_manager.can_redo() then
+            print("Nothing to redo")
+            return true
+        end
+        local result = command_manager.redo()
+        if result.success then
+            print("Redo complete")
+        elseif result.error_message then
+            print("Nothing to redo (" .. result.error_message .. ")")
+        else
+            print("Nothing to redo")
+        end
         return true
     end
 
