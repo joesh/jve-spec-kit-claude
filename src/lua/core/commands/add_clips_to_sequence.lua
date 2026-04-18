@@ -134,7 +134,17 @@ local function populate_timeline_mutations(command, sequence_id, mutations)
                 source_out_value = mut.source_out_frame,
             })
         elseif mut.type == "delete" then
-            command_helper.add_delete_mutation(command, sequence_id, mut.clip_id)
+            -- Pass a rich record so the viewport policy can derive the
+            -- change region from the mutation itself on both directions.
+            -- mut.previous (from clip_mutator.plan_delete) carries the
+            -- deleted clip's pre-state.
+            local prev = mut.previous
+            command_helper.add_delete_mutation(command, sequence_id, {
+                clip_id = mut.clip_id,
+                track_id = prev and prev.track_id,
+                timeline_start = prev and prev.timeline_start,
+                duration = prev and prev.duration,
+            })
         end
     end
 end

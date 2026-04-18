@@ -64,7 +64,7 @@ end
 -- @return string|nil Resolved sequence_id
 --- Resolve sequence_id for edit commands (Insert/Overwrite).
 -- Uses args.sequence_id if provided AND it's a timeline sequence.
--- Rejects masterclip sequence_ids (execute_ui may inject these when
+-- Rejects masterclip sequence_ids (execute_interactive may inject these when
 -- the source monitor is focused). Falls back to timeline_state.
 function M.resolve_timeline_sequence_id(args, track_id, command)
     local sequence_id = args.sequence_id

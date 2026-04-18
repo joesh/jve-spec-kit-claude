@@ -23,7 +23,7 @@ local QT_KEY_TILDE = kb_constants.KEY.Tilde  -- 126
 local dispatched = {}
 local mock_cm = {
     get_executor = function() return function() end end,
-    execute_ui = function(command_name, params)
+    execute_interactive = function(command_name, params)
         dispatched[#dispatched + 1] = { command = command_name, params = params }
         return { success = true }
     end,

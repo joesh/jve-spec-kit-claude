@@ -66,7 +66,7 @@ end
 -- Mock command_manager for handler invocation test
 local executed_commands = {}
 local mock_cmd_mgr = {
-    execute_ui = function(name, params)
+    execute_interactive = function(name, params)
         executed_commands[#executed_commands + 1] = { name = name, params = params }
         return { success = true }
     end,

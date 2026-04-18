@@ -263,7 +263,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
             if s.id == clicked_clip.id then is_selected = true; break end
         end
         if not is_selected then
-            command_manager.execute("SelectClips", {
+            command_manager.execute_interactive("SelectClips", {
                 project_id = state.get_project_id(),
                 sequence_id = state.get_sequence_id(),
                 target_clip_ids = { clicked_clip.id },
@@ -287,7 +287,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
         table.insert(actions, {
             label = "Reveal in Filesystem",
             handler = function()
-                local result = command_manager.execute("RevealInFilesystem", {
+                local result = command_manager.execute_interactive("RevealInFilesystem", {
                     project_id = state.get_project_id(),
                     sequence_id = state.get_sequence_id(),
                     source = "timeline",
@@ -303,7 +303,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
     table.insert(actions, {
         label = "Match Frame",
         handler = function()
-            command_manager.execute("MatchFrame", {
+            command_manager.execute_interactive("MatchFrame", {
                 project_id = state.get_project_id(),
                 sequence_id = state.get_sequence_id(),
             })
@@ -318,7 +318,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
         label = "Split at Playhead",
         shortcut = "S",
         handler = function()
-            command_manager.execute("Split", {
+            command_manager.execute_interactive("Split", {
                 project_id = state.get_project_id(),
                 sequence_id = state.get_sequence_id(),
             })
@@ -330,7 +330,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
         label = "Delete",
         shortcut = "Delete",
         handler = function()
-            command_manager.execute("DeleteClip", {
+            command_manager.execute_interactive("DeleteClip", {
                 project_id = state.get_project_id(),
                 sequence_id = state.get_sequence_id(),
             })
@@ -342,7 +342,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
         label = "Ripple Delete",
         shortcut = "Shift+Delete",
         handler = function()
-            command_manager.execute("RippleDeleteSelection", {
+            command_manager.execute_interactive("RippleDeleteSelection", {
                 project_id = state.get_project_id(),
                 sequence_id = state.get_sequence_id(),
             })
@@ -356,7 +356,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
         label = "Toggle Enabled",
         shortcut = "D",
         handler = function()
-            command_manager.execute("ToggleClipEnabled", {
+            command_manager.execute_interactive("ToggleClipEnabled", {
                 project_id = state.get_project_id(),
                 sequence_id = state.get_sequence_id(),
             })
@@ -436,7 +436,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             local lead_edge = dragged_edge
 
             -- Execute SelectEdges command (handles Option→linked, Cmd/Shift→toggle)
-            command_manager.execute("SelectEdges", {
+            command_manager.execute_interactive("SelectEdges", {
                 project_id = state.get_project_id(),
                 sequence_id = state.get_sequence_id(),
                 target_edges = target_edges,
@@ -465,7 +465,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             for _, s in ipairs(selected_clips) do if s.id == clicked_clip.id then is_selected = true break end end
 
             -- Execute SelectClips command (handles Option→linked, Cmd→toggle)
-            command_manager.execute("SelectClips", {
+            command_manager.execute_interactive("SelectClips", {
                 project_id = state.get_project_id(),
                 sequence_id = state.get_sequence_id(),
                 target_clip_ids = { clicked_clip.id },
@@ -547,7 +547,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 -- Rubber band: deselect and start panel drag
                 if view.potential_drag.type == "rubber_band" then
                     if not (view.potential_drag.modifiers and view.potential_drag.modifiers.command) then
-                        command_manager.execute("DeselectAll", {
+                        command_manager.execute_interactive("DeselectAll", {
                             project_id = state.get_project_id(),
                             sequence_id = state.get_sequence_id(),
                         })
@@ -678,7 +678,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         elseif state.is_dragging_playhead() then
             local time = state.pixel_to_time(x, width)
             state.set_playhead_position(time)
-            command_manager.execute("SetPlayhead", {
+            command_manager.execute_interactive("SetPlayhead", {
                 project_id = state.get_project_id(),
                 sequence_id = state.get_sequence_id(),
                 playhead_position = time,
@@ -726,7 +726,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             local pd = view.potential_drag
             if pd.gap then
                 -- Click on gap without dragging → select gap
-                command_manager.execute("SelectGaps", {
+                command_manager.execute_interactive("SelectGaps", {
                     project_id = state.get_project_id(),
                     sequence_id = state.get_sequence_id(),
                     target_gaps = { pd.gap },
@@ -735,7 +735,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             else
                 -- Click on empty space without dragging → deselect
                 if not (pd.modifiers and pd.modifiers.command) then
-                    command_manager.execute("DeselectAll", {
+                    command_manager.execute_interactive("DeselectAll", {
                         project_id = state.get_project_id(),
                         sequence_id = state.get_sequence_id(),
                     })

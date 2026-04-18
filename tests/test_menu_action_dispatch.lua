@@ -1,6 +1,6 @@
 #!/usr/bin/env luajit
 
--- Menu action dispatch: all commands route through execute_ui except
+-- Menu action dispatch: all commands route through execute_interactive except
 -- Insert/Overwrite (need project_browser context) and Quit.
 
 require("test_env")
@@ -26,7 +26,7 @@ local mock_cm = {
         table.insert(executed_commands, cmd_name)
         return { success = true }
     end,
-    execute_ui = function(cmd_name, params)
+    execute_interactive = function(cmd_name, params)
         table.insert(executed_commands, cmd_name)
         return { success = true }
     end,
@@ -63,63 +63,63 @@ db_mod.get_current_project_id = function() return "test_proj" end
 local menu_system = require("core.menu_system")
 menu_system.init(nil, mock_cm)
 
--- ─── Test 1: "Undo" → dispatches through execute_ui ───
-print("\n--- Undo → execute_ui ---")
+-- ─── Test 1: "Undo" → dispatches through execute_interactive ───
+print("\n--- Undo → execute_interactive ---")
 do
     executed_commands = {}
     local cb = menu_system._test_get_action_callback("Undo")
     cb()
-    check("Undo dispatched via execute_ui", #executed_commands == 1)
+    check("Undo dispatched via execute_interactive", #executed_commands == 1)
     check("Correct command name", executed_commands[1] == "Undo")
 end
 
--- ─── Test 2: "Redo" → dispatches through execute_ui ───
-print("\n--- Redo → execute_ui ---")
+-- ─── Test 2: "Redo" → dispatches through execute_interactive ───
+print("\n--- Redo → execute_interactive ---")
 do
     executed_commands = {}
     local cb = menu_system._test_get_action_callback("Redo")
     cb()
-    check("Redo dispatched via execute_ui", #executed_commands == 1)
+    check("Redo dispatched via execute_interactive", #executed_commands == 1)
     check("Correct command name", executed_commands[1] == "Redo")
 end
 
--- ─── Test 3: "DeleteSelection" → dispatches through execute_ui ───
-print("\n--- DeleteSelection → execute_ui ---")
+-- ─── Test 3: "DeleteSelection" → dispatches through execute_interactive ───
+print("\n--- DeleteSelection → execute_interactive ---")
 do
     executed_commands = {}
     local cb = menu_system._test_get_action_callback("DeleteSelection")
     cb()
-    check("DeleteSelection dispatched via execute_ui", #executed_commands == 1)
+    check("DeleteSelection dispatched via execute_interactive", #executed_commands == 1)
     check("Correct command name", executed_commands[1] == "DeleteSelection")
 end
 
--- ─── Test 4: Unknown command → falls through to execute_ui ───
-print("\n--- Unknown → execute_ui ---")
+-- ─── Test 4: Unknown command → falls through to execute_interactive ───
+print("\n--- Unknown → execute_interactive ---")
 do
     executed_commands = {}
     local cb = menu_system._test_get_action_callback("SomeOtherCommand")
     cb()
-    check("Unknown command → execute_ui called", #executed_commands == 1)
+    check("Unknown command → execute_interactive called", #executed_commands == 1)
     check("Correct command name passed", executed_commands[1] == "SomeOtherCommand")
 end
 
--- ─── Test 5: Insert menu → execute_ui (no special case) ───
-print("\n--- Insert → execute_ui (pure command dispatch) ---")
+-- ─── Test 5: Insert menu → execute_interactive (no special case) ───
+print("\n--- Insert → execute_interactive (pure command dispatch) ---")
 do
     executed_commands = {}
     local cb = menu_system._test_get_action_callback("Insert")
     cb()
-    check("Insert dispatched via execute_ui", #executed_commands == 1)
+    check("Insert dispatched via execute_interactive", #executed_commands == 1)
     check("Insert command name correct", executed_commands[1] == "Insert")
 end
 
--- ─── Test 6: Overwrite menu → execute_ui (no special case) ───
-print("\n--- Overwrite → execute_ui (pure command dispatch) ---")
+-- ─── Test 6: Overwrite menu → execute_interactive (no special case) ───
+print("\n--- Overwrite → execute_interactive (pure command dispatch) ---")
 do
     executed_commands = {}
     local cb = menu_system._test_get_action_callback("Overwrite")
     cb()
-    check("Overwrite dispatched via execute_ui", #executed_commands == 1)
+    check("Overwrite dispatched via execute_interactive", #executed_commands == 1)
     check("Overwrite command name correct", executed_commands[1] == "Overwrite")
 end
 

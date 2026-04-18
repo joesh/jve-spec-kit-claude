@@ -173,7 +173,7 @@ database.get_connection()  -- verify connection works
 -- DON'T call command_manager.init - simulates no active project
 -- command_manager.init(db, sequence_id, project_id)
 
--- Test that OpenProject can be called via execute_ui pattern
+-- Test that OpenProject can be called via execute_interactive pattern
 do
     -- Start a command event (required by normalize_command)
     command_manager.begin_command_event("ui")

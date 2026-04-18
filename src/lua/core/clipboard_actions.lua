@@ -249,7 +249,7 @@ local function paste_timeline()
     local project_id = (timeline_state.get_project_id and timeline_state.get_project_id()) or nil
     assert(project_id and project_id ~= "", "clipboard_actions.paste_timeline: missing active project_id")
 
-    local result = command_manager.execute("Paste", {
+    local result = command_manager.execute_interactive("Paste", {
         project_id = project_id,
     })
     if not result or not result.success then
@@ -375,7 +375,7 @@ local function paste_browser(payload)
     local failed = 0
     for _, item in ipairs(items) do
         if item.snapshot and item.snapshot.media_id then
-            local result = command_manager.execute("DuplicateMasterClip", {
+            local result = command_manager.execute_interactive("DuplicateMasterClip", {
                 project_id = project_id,
                 clip_snapshot = item.snapshot,
                 bin_id = target_bin_override or item.bin_id,

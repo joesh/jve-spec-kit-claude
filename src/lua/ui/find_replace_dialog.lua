@@ -214,7 +214,7 @@ function M.show(opts)
         if not current_id then return end
         local column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(field_combo)
         local replace_value = qt.PROPERTIES.GET_TEXT(replace_edit)
-        command_manager.execute("ReplaceClipProperty", {
+        command_manager.execute_interactive("ReplaceClipProperty", {
             clip_id = current_id,
             column = column,
             find_value = qt.PROPERTIES.GET_TEXT(find_edit),
@@ -243,7 +243,7 @@ function M.show(opts)
         local find_value = qt.PROPERTIES.GET_TEXT(find_edit)
         local replace_value = qt.PROPERTIES.GET_TEXT(replace_edit)
         local match_ids = find_state.get_matches()
-        command_manager.execute("ReplaceAllClipProperties", {
+        command_manager.execute_interactive("ReplaceAllClipProperties", {
             clip_ids = match_ids,
             column = column,
             find_value = find_value,

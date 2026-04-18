@@ -42,9 +42,9 @@ local function has_modifier(modifiers, mod)
 end
 
 local function execute_command(command_name, params)
-    assert(type(command_manager.execute_ui) == "function",
-        "KeyboardShortcuts: command_manager missing execute_ui()")
-    return command_manager.execute_ui(command_name, params)
+    assert(type(command_manager.execute_interactive) == "function",
+        "KeyboardShortcuts: command_manager missing execute_interactive()")
+    return command_manager.execute_interactive(command_name, params)
 end
 
 -------------------------------------------------------------------------------
@@ -74,7 +74,9 @@ function keyboard_shortcuts.init(state, cmd_mgr, proj_browser, panel)
     end
     assert(f, "keyboard_shortcuts.init: keybinding file not found at keymaps/default.jvekeys or ../keymaps/default.jvekeys")
     f:close()
-    shortcut_registry.load_keybindings(keymap_path)
+    -- Load active user preset if one is set, otherwise the bundled default.
+    -- loaded_toml_path always points at the bundled default so reset_to_defaults works.
+    shortcut_registry.load_active_or_default(keymap_path)
 
     -- Update menu shortcut display text from TOML registry
     -- pcall: menu_system depends on lxp (C library), unavailable in headless tests

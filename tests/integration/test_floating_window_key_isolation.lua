@@ -69,15 +69,15 @@ local MOD_SHIFT = 0x02000000
 local MOD_CTRL  = 0x04000000
 
 ---------------------------------------------------------------------------
--- Intercept command_manager.execute_ui so we can observe which commands
+-- Intercept command_manager.execute_interactive so we can observe which commands
 -- would fire, without actually executing them (avoids state pollution).
 -- Also stub get_executor so the registry's "has executor" assert doesn't
 -- fire for commands whose modules aren't loaded in the headless test env.
 ---------------------------------------------------------------------------
 local dispatched = {}
-local orig_execute_ui = command_manager.execute_ui
+local orig_execute_interactive = command_manager.execute_interactive
 local orig_get_executor = command_manager.get_executor
-command_manager.execute_ui = function(name, params)
+command_manager.execute_interactive = function(name, params)
     dispatched[#dispatched + 1] = { name = name, params = params }
     return { success = true }
 end
@@ -325,7 +325,7 @@ check("Escape from floating text input: no timeline dispatch",
 ---------------------------------------------------------------------------
 -- Cleanup
 ---------------------------------------------------------------------------
-command_manager.execute_ui = orig_execute_ui
+command_manager.execute_interactive = orig_execute_interactive
 command_manager.get_executor = orig_get_executor
 ui.cleanup()
 

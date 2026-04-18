@@ -518,6 +518,35 @@ function M.cancel_background_probe()
     end
 end
 
+--- Re-probe current paths of changed media records so the cache is
+-- authoritative by the time views call ensure_clip_status.
+-- @param media_ids table: set {media_id = true, ...}
+function M.reprobe_media_ids(media_ids)
+    assert(type(media_ids) == "table", string.format(
+        "media_status.reprobe_media_ids: media_ids must be a table, got %s",
+        type(media_ids)))
+    -- Signal handlers must survive invocation without a DB (test mode).
+    if not get_database().has_connection() then return end
+    local Media = require("models.media")
+    for media_id in pairs(media_ids) do
+        assert(type(media_id) == "string" and media_id ~= "", string.format(
+            "media_status.reprobe_media_ids: invalid media_id key %s",
+            tostring(media_id)))
+        local media = Media.load(media_id)
+        assert(media, string.format(
+            "media_status.reprobe_media_ids: media %s not found "
+            .. "(media_changed emitted a stale or unknown id)", media_id))
+        local path = media:get_file_path()
+        assert(path and path ~= "", string.format(
+            "media_status.reprobe_media_ids: media %s has empty file_path",
+            media_id))
+        reprobe_and_notify(path)
+    end
+end
+
+-- Priority 30: prime cache before view refresh handlers (default 100).
+Signals.connect("media_changed", M.reprobe_media_ids, 30)
+
 -- Register for project_changed signal: flush old, clear, load new, start bg probe
 Signals.connect("project_changed", function(project_id)
     M.clear()  -- cancels bg probe, flushes pending writes, clears cache

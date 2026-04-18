@@ -69,6 +69,7 @@ int lua_get_text(lua_State* L);
 int lua_set_checked(lua_State* L);
 int lua_get_checked(lua_State* L);
 int lua_add_combobox_item(lua_State* L);
+int lua_clear_combobox(lua_State* L);
 int lua_set_combobox_current_text(lua_State* L);
 int lua_set_combobox_change_handler(lua_State* L);
 int lua_get_combobox_current_text(lua_State* L);
@@ -141,6 +142,14 @@ int lua_set_shortcut_enabled(lua_State* L);
 int lua_delete_shortcut(lua_State* L);
 int lua_create_focus_container(lua_State* L);
 int lua_set_container_default_button(lua_State* L);
+
+// QKeySequenceEdit (keyboard customization dialog capture widget)
+int lua_create_key_sequence_edit(lua_State* L);
+int lua_key_sequence_edit_get(lua_State* L);
+int lua_key_sequence_edit_clear(lua_State* L);
+int lua_key_sequence_edit_set(lua_State* L);
+int lua_key_sequence_edit_on_changed(lua_State* L);
+int lua_install_key_state_watcher(lua_State* L);
 
 int lua_get_tree_item_at(lua_State* L);
 int lua_get_tree_items_in_order(lua_State* L);

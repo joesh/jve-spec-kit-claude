@@ -322,18 +322,56 @@ function M.add_insert_mutation(command, sequence_id, clip)
     command:set_parameter("__timeline_mutations", command:get_parameter("__timeline_mutations"))
 end
 
-function M.add_delete_mutation(command, sequence_id, clip_ids)
-    assert(clip_ids, "add_delete_mutation: clip_ids is required")
+-- Append delete mutation(s). Each entry may be:
+--   - a clip_id string (minimal, legacy shape), or
+--   - a record {clip_id, track_id, timeline_start, duration} which lets
+--     the viewport policy derive the change region without needing to
+--     reconstruct the deleted clip's position from elsewhere.
+-- Callers with the full clip state available SHOULD pass records so
+-- undo/redo can surface the affected region on both directions.
+-- Walk a command's __timeline_mutations payload (single-bucket or
+-- multi-bucket shape) and return a set of clip_ids the command marks
+-- for deletion. Handles both rich-record entries
+-- ({clip_id, track_id, timeline_start, duration}) and legacy string
+-- entries — this is the read-side dual of add_delete_mutation, so it
+-- has to recognize the same shapes the writer produces.
+function M.collect_deleted_clip_ids(command)
+    local set = {}
+    local mutations = command:get_parameter("__timeline_mutations")
+    if type(mutations) ~= "table" then return set end
+    local function scan_bucket(bucket)
+        if type(bucket) ~= "table" or type(bucket.deletes) ~= "table" then return end
+        for _, entry in ipairs(bucket.deletes) do
+            local cid = type(entry) == "table" and entry.clip_id or entry
+            if type(cid) == "string" and cid ~= "" then set[cid] = true end
+        end
+    end
+    if mutations.inserts or mutations.updates or mutations.deletes or mutations.sequence_id then
+        scan_bucket(mutations)
+    else
+        for _, b in pairs(mutations) do scan_bucket(b) end
+    end
+    return set
+end
+
+function M.add_delete_mutation(command, sequence_id, entries)
+    assert(entries, "add_delete_mutation: entries required")
     local bucket = M.ensure_timeline_mutation_bucket(command, sequence_id)
     if not bucket then
         return
     end
-    if type(clip_ids) == "table" then
-        for _, clip_id in ipairs(clip_ids) do
-            table.insert(bucket.deletes, clip_id)
+    local function is_list(t)
+        if type(t) ~= "table" then return false end
+        -- Record-shaped (clip_id field present) is not a list of entries.
+        if t.clip_id or t.id then return false end
+        return t[1] ~= nil
+    end
+    if is_list(entries) then
+        for _, entry in ipairs(entries) do
+            table.insert(bucket.deletes, entry)
         end
     else
-        table.insert(bucket.deletes, clip_ids)
+        table.insert(bucket.deletes, entries)
     end
     command:set_parameter("__timeline_mutations", command:get_parameter("__timeline_mutations"))
 end

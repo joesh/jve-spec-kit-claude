@@ -20,14 +20,14 @@ end
 
 print("\n=== Menu callback project_id staleness ===")
 
--- Track what execute_ui receives
+-- Track what execute_interactive receives
 local last_params
 local mock_cm = {
     execute = function(cmd_name, params)
         last_params = params
         return { success = true }
     end,
-    execute_ui = function(cmd_name, params)
+    execute_interactive = function(cmd_name, params)
         last_params = params
         return { success = true }
     end,

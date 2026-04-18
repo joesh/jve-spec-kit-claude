@@ -79,12 +79,12 @@ package.loaded["ui.panel_manager"] = {
 
 --------------------------------------------------------------------------------
 -- Test 1: SetMark with source_monitor focused should target masterclip_seq
--- (Current bug: it targets timeline_seq instead because execute_ui fills
+-- (Current bug: it targets timeline_seq instead because execute_interactive fills
 --  sequence_id from active_sequence_id, ignoring focused monitor)
 --------------------------------------------------------------------------------
 print("=== Test 1: SetMark routes to active monitor's sequence ===")
 
-local result = command_manager.execute_ui("SetMark", {
+local result = command_manager.execute_interactive("SetMark", {
     _positional = {"in"},
 })
 assert(type(result) == "table" and result.success,
@@ -114,7 +114,7 @@ active_mock = mock_timeline_monitor
 
 command_manager.undo()
 
-local result2 = command_manager.execute_ui("SetMark", {
+local result2 = command_manager.execute_interactive("SetMark", {
     _positional = {"in"},
 })
 assert(type(result2) == "table" and result2.success,
@@ -137,7 +137,7 @@ print("  PASS: mark_in on masterclip_seq (unfocused): " .. tostring(masterclip2.
 print("=== Test 3: Explicit sequence_id overrides monitor ===")
 
 -- Timeline monitor is active but we explicitly target masterclip
-local result3 = command_manager.execute_ui("SetMark", {
+local result3 = command_manager.execute_interactive("SetMark", {
     _positional = {"out"},
     sequence_id = "masterclip_seq",
     frame = 99,

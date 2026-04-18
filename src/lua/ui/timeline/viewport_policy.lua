@@ -1,0 +1,175 @@
+--- Viewport-surfacing policy applied after an interactive user action.
+--
+-- Responsibilities:
+-- - Provide a single chokepoint that decides how the timeline viewport
+--   should move in response to a completed user action.
+-- - Default (execute): surface the playhead (ensure it's visible,
+--   centered when possible).
+-- - Undo/Redo: surface the "change region" — the time range + track set
+--   affected by the command — so the user sees the thing that moved
+--   instead of wherever the playhead happened to be.
+--
+-- Non-goals:
+-- - This module does not fire on every internal nested dispatch. Pass 2's
+--   single chokepoint is command_manager.execute_interactive (and the
+--   undo/redo ceremonies) — nested dispatches from inside executors call
+--   plain M.execute and never trigger the policy.
+--
+-- Invariants:
+-- - derive_change_region is a pure function. Given the same command, it
+--   returns the same region. It does not consult timeline_state, the DB,
+--   or any other global.
+-- - derive_change_region returns nil when the command carries no
+--   __timeline_mutations payload (marks, playhead moves, non-clip
+--   commands). Callers fall back to surface_playhead in that case.
+--
+-- @file viewport_policy.lua
+local M = {}
+
+-- Union accumulator for region bounds. Grows with each observed clip
+-- extent. Call finish() to get {start_frame, end_frame} or nil if empty.
+local function new_bounds()
+    return {
+        min = nil,
+        max = nil,
+        observe = function(self, start_frame, end_frame)
+            assert(type(start_frame) == "number" and type(end_frame) == "number",
+                "viewport_policy: bounds observe requires numbers")
+            if self.min == nil or start_frame < self.min then self.min = start_frame end
+            if self.max == nil or end_frame > self.max then self.max = end_frame end
+        end,
+        finish = function(self)
+            if self.min == nil then return nil end
+            return { start_frame = self.min, end_frame = self.max }
+        end,
+    }
+end
+
+-- Extract timeline coordinates + track_id from a mutation record when
+-- all three fields are present. Handles two shapes:
+--   - new-state form (inserts, updates): timeline_start_frame / duration_frames
+--   - pre-state form (previous row for updates/deletes): timeline_start /
+--     duration (no _frame suffix; matches the DB row column naming that
+--     clip_mutator.plan_update preserves in `previous`)
+-- Returns nil when the record doesn't carry full extents — the
+-- mutation protocol legitimately ships deletes as raw clip_id strings
+-- in some call paths (timeline_state.apply_mutations delete-by-id,
+-- command_helper.gather_deletes), so region derivation stays best-effort.
+-- A region computed from partial data is still a useful viewport target.
+local function try_read_extent(record)
+    if type(record) ~= "table" then return nil end
+    local start_frame = record.timeline_start_frame or record.timeline_start
+    local dur = record.duration_frames or record.duration
+    local track_id = record.track_id
+    if type(start_frame) ~= "number" then return nil end
+    if type(dur) ~= "number" then return nil end
+    if type(track_id) ~= "string" or track_id == "" then return nil end
+    return start_frame, start_frame + dur, track_id
+end
+
+-- Fold one mutation (insert/update/delete) into the bounds accumulator +
+-- track set. Inserts contribute their extent; updates contribute BOTH
+-- the new state AND `previous` (so track moves surface source +
+-- destination); deletes contribute the record itself (which carries
+-- the deleted clip's track/timeline/duration) OR `previous` when the
+-- caller stored pre-state separately. Entries that aren't tables or
+-- lack full coordinates are skipped — derivation is best-effort.
+local function fold_mutation(kind, record, bounds, tracks)
+    if kind == "insert" or kind == "update" or kind == "delete" then
+        local s, e, t = try_read_extent(record)
+        if s then bounds:observe(s, e); tracks[t] = true end
+    end
+    if kind == "update" or kind == "delete" then
+        local rec = type(record) == "table" and record.previous or nil
+        local ps, pe, pt = try_read_extent(rec)
+        if ps then bounds:observe(ps, pe); tracks[pt] = true end
+    end
+end
+
+-- Walk a single bucket ({sequence_id, inserts, updates, deletes}) and
+-- fold every mutation into bounds + tracks.
+local function fold_bucket(bucket, bounds, tracks)
+    if type(bucket) ~= "table" then return end
+    for _, rec in ipairs(bucket.inserts or {}) do fold_mutation("insert", rec, bounds, tracks) end
+    for _, rec in ipairs(bucket.updates or {}) do fold_mutation("update", rec, bounds, tracks) end
+    for _, rec in ipairs(bucket.deletes or {}) do fold_mutation("delete", rec, bounds, tracks) end
+end
+
+--- Compute the change region for a completed command.
+-- Returns { time_range = {start_frame, end_frame}, track_set = {id=true,…} }
+-- on success, or nil if the command carries no usable timeline mutations
+-- (the caller should fall back to surfacing the playhead).
+--
+-- Reads __timeline_mutations and folds every bucket shape (single or
+-- keyed-by-sequence_id) through try_read_extent. Records carrying full
+-- coordinates contribute to the region; info-poor entries (clip_id
+-- strings, partial records) are skipped silently.
+function M.derive_change_region(command)
+    assert(command and type(command) == "table" and type(command.get_parameter) == "function",
+        "viewport_policy.derive_change_region: command with :get_parameter required")
+    local mutations = command:get_parameter("__timeline_mutations")
+    if type(mutations) ~= "table" then return nil end
+
+    local bounds = new_bounds()
+    local tracks = {}
+
+    if mutations.inserts or mutations.updates or mutations.deletes or mutations.sequence_id then
+        fold_bucket(mutations, bounds, tracks)
+    else
+        for _, bucket in pairs(mutations) do
+            fold_bucket(bucket, bounds, tracks)
+        end
+    end
+
+    local time_range = bounds:finish()
+    if time_range == nil then return nil end
+    return { time_range = time_range, track_set = tracks }
+end
+
+--- Apply the viewport-surfacing policy after a completed user action.
+--
+-- Called from command_manager.execute_interactive (event="execute") and
+-- from the undo/redo ceremonies (event="undo"/"redo"). Executes exactly
+-- once per user-visible action — nested dispatches inside command
+-- executors go through plain M.execute and don't trigger this.
+--
+-- Policy:
+--   - execute → ensure the playhead is visible in the viewport.
+--   - undo/redo → if the command carries a change region (via
+--     __timeline_mutations, including wrapper-forwarded mutations),
+--     surface that region. Otherwise fall back to surfacing the playhead
+--     (covers SetPlayhead, mark commands, and other non-clip actions).
+function M.apply_post_command(event, command)
+    assert(event == "execute" or event == "undo" or event == "redo",
+        "viewport_policy.apply_post_command: unknown event " .. tostring(event))
+    assert(command and type(command.get_parameter) == "function",
+        "viewport_policy.apply_post_command: command with :get_parameter required")
+
+    local ts = require("ui.timeline.timeline_state")
+    local Signals = require("core.signals")
+
+    if event == "undo" or event == "redo" then
+        local region = M.derive_change_region(command)
+        if region and region.time_range then
+            ts.surface_range(region.time_range.start_frame, region.time_range.end_frame)
+            -- Vertical axis: emit a signal so the timeline_view can
+            -- scroll affected tracks into view. The view owns its
+            -- vertical scroll offset as instance state, so we can't
+            -- mutate it from the state layer — pub/sub matches the
+            -- project's MVC rule (views pull, they aren't pushed at).
+            if next(region.track_set) ~= nil then
+                local track_ids = {}
+                for id, _ in pairs(region.track_set) do
+                    table.insert(track_ids, id)
+                end
+                table.sort(track_ids)  -- deterministic order for testability
+                Signals.emit("viewport_surface_tracks", track_ids)
+            end
+            return
+        end
+    end
+
+    ts.surface_playhead()
+end
+
+return M

@@ -5,11 +5,11 @@ require('test_env')
 
 print("=== Test JKL Registry Integration ===")
 
--- Track command_manager.execute_ui calls
+-- Track command_manager.execute_interactive calls
 local executed_commands = {}
 
 local mock_command_manager = {
-    execute_ui = function(command_name, params)
+    execute_interactive = function(command_name, params)
         executed_commands[#executed_commands + 1] = {
             command = command_name,
             params = params or {},
@@ -86,29 +86,29 @@ do
     print("  ✓ ShuttleForward contexts: timeline, source_monitor, timeline_monitor")
 end
 
-print("\n--- Test 3: handle_key_event dispatches JKL to execute_ui ---")
+print("\n--- Test 3: handle_key_event dispatches JKL to execute_interactive ---")
 do
     executed_commands = {}
     local result = registry.handle_key_event(QT_KEY_L, 0, "timeline")
     assert(result == true, "L should be handled")
-    assert(#executed_commands == 1, "should have 1 execute_ui call")
+    assert(#executed_commands == 1, "should have 1 execute_interactive call")
     assert(executed_commands[1].command == "ShuttleForward",
         "L should dispatch ShuttleForward, got: " .. tostring(executed_commands[1].command))
-    print("  ✓ L in timeline → execute_ui(ShuttleForward)")
+    print("  ✓ L in timeline → execute_interactive(ShuttleForward)")
 
     executed_commands = {}
     result = registry.handle_key_event(QT_KEY_J, 0, "source_monitor")
     assert(result == true, "J should be handled")
     assert(executed_commands[1].command == "ShuttleReverse",
         "J should dispatch ShuttleReverse")
-    print("  ✓ J in source_monitor → execute_ui(ShuttleReverse)")
+    print("  ✓ J in source_monitor → execute_interactive(ShuttleReverse)")
 
     executed_commands = {}
     result = registry.handle_key_event(QT_KEY_K, 0, "timeline_monitor")
     assert(result == true, "K should be handled")
     assert(executed_commands[1].command == "ShuttleStop",
         "K should dispatch ShuttleStop")
-    print("  ✓ K in timeline_monitor → execute_ui(ShuttleStop)")
+    print("  ✓ K in timeline_monitor → execute_interactive(ShuttleStop)")
 end
 
 print("\n--- Test 4: JKL rejected in wrong context ---")
@@ -127,7 +127,7 @@ do
     assert(result == true, "Space should be handled")
     assert(executed_commands[1].command == "TogglePlay",
         "Space should dispatch TogglePlay, got: " .. tostring(executed_commands[1].command))
-    print("  ✓ Space in timeline → execute_ui(TogglePlay)")
+    print("  ✓ Space in timeline → execute_interactive(TogglePlay)")
 end
 
 print("\n✅ test_jkl_registry_integration.lua passed")

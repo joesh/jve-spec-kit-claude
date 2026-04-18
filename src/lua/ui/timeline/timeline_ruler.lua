@@ -316,7 +316,7 @@ function M.create(widget, state_module)
                 -- pixel_to_time now returns integer frame, already snapped
                 local snapped_frame = state_module.pixel_to_time(x, width)
                 state_module.set_playhead_position(snapped_frame)
-                command_manager.execute("SetPlayhead", {
+                command_manager.execute_interactive("SetPlayhead", {
                     project_id = state_module.get_project_id(),
                     sequence_id = state_module.get_sequence_id(),
                     playhead_position = snapped_frame,
@@ -338,7 +338,7 @@ function M.create(widget, state_module)
                 -- pixel_to_time returns integer frame, already snapped
                 local snapped_frame = state_module.pixel_to_time(x, width)
                 state_module.set_playhead_position(snapped_frame)
-                command_manager.execute("SetPlayhead", {
+                command_manager.execute_interactive("SetPlayhead", {
                     project_id = state_module.get_project_id(),
                     sequence_id = state_module.get_sequence_id(),
                     playhead_position = snapped_frame,

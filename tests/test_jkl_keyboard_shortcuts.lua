@@ -63,7 +63,7 @@ local QT_KEY_L = 76
 -- Mock command_manager for dispatch tracking (justified: testing routing, not execution)
 local dispatched = {}
 local mock_cm = {
-    execute_ui = function(cmd)
+    execute_interactive = function(cmd)
         dispatched[#dispatched + 1] = cmd
         return { success = true }
     end,

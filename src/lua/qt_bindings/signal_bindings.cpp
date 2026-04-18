@@ -150,6 +150,23 @@ public:
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override {
+        // Modal-dialog isolation: when a modal widget owns focus, it must own
+        // ALL key events. Skip the global filter entirely so Qt delivers the
+        // event to the focused widget normally and our Lua dispatcher's
+        // floating-window pass-through (which redirects to the focused panel)
+        // doesn't fire. Without this, Delete/J/K/L/etc. leak into the timeline
+        // while a modal dialog like the keyboard customization dialog is open.
+        if (event->type() == QEvent::KeyPress
+                || event->type() == QEvent::KeyRelease
+                || event->type() == QEvent::ShortcutOverride) {
+            QWidget* modal = QApplication::activeModalWidget();
+            QWidget* focusW = QApplication::focusWidget();
+            if (modal && focusW
+                    && (focusW == modal || modal->isAncestorOf(focusW))) {
+                return false;  // Qt delivers natively to the modal widget
+            }
+        }
+
         // ShortcutOverride: only claim residual keys that the Lua handler
         // still manages (arrow repeat, context gathering, escape cascade).
         // All other keys pass through to Qt's QShortcut resolution.

@@ -246,7 +246,7 @@ local function apply_timecode_entry_text()
     assert(type(frame) == "number" and frame == math.floor(frame),
         "timeline_panel: timecode parse must yield integer frame, got " .. tostring(frame))
     state.set_playhead_position(frame)
-    command_manager.execute("SetPlayhead", {
+    command_manager.execute_interactive("SetPlayhead", {
         project_id = state.get_project_id(),
         sequence_id = state.get_sequence_id(),
         playhead_position = frame,
@@ -525,7 +525,7 @@ local function create_drop_target_sequence(project_id, first_clip, clip_count)
     local new_seq_id = uuid.generate()
     local name = drop_naming.build_drop_sequence_name(first_clip.name, clip_count - 1)
 
-    local result = command_manager.execute("CreateSequence", {
+    local result = command_manager.execute_interactive("CreateSequence", {
         project_id  = project_id,
         sequence_id = new_seq_id,
         name        = name,
@@ -556,7 +556,7 @@ local function insert_clips_sequentially(project_id, seq_id, v1_track_id, clips)
             string.format("handle_drop_on_blank_timeline: clip[%d] duration "
                 .. "must be a positive integer", index))
 
-        local result = command_manager.execute("Overwrite", {
+        local result = command_manager.execute_interactive("Overwrite", {
             project_id       = project_id,
             sequence_id      = seq_id,
             master_clip_id   = clip.master_clip_id,
@@ -1210,7 +1210,7 @@ local function create_audio_headers()
             assert(t, "Mute handler: track not found: " .. tostring(captured_track_id))
             local project_id = timeline_state.get_project_id()
             assert(project_id, "Mute handler: no project_id")
-            command_manager.execute("SetTrackProperty", {
+            command_manager.execute_interactive("SetTrackProperty", {
                 track_id = captured_track_id,
                 property = "muted",
                 value = not t.muted,
@@ -1238,7 +1238,7 @@ local function create_audio_headers()
             assert(t, "Solo handler: track not found: " .. tostring(captured_track_id))
             local project_id = timeline_state.get_project_id()
             assert(project_id, "Solo handler: no project_id")
-            command_manager.execute("SetTrackProperty", {
+            command_manager.execute_interactive("SetTrackProperty", {
                 track_id = captured_track_id,
                 property = "soloed",
                 value = not t.soloed,
@@ -1839,7 +1839,7 @@ function M.create(opts)
         collect_intersecting_tracks(audio_widget, state.get_audio_tracks(), false)
 
         -- Execute SelectRectangle command (handles Cmd→toggle, time/track intersection)
-        command_manager.execute("SelectRectangle", {
+        command_manager.execute_interactive("SelectRectangle", {
             project_id = state.get_project_id(),
             sequence_id = state.get_sequence_id(),
             time_start = time_start,

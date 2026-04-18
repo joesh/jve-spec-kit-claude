@@ -309,36 +309,51 @@ function M.get_active_sequence_id()
     return active_sequence_id
 end
 
--- UI entrypoint convenience.
+-- Interactive (user-initiated) entry point for dispatching commands.
 --
 -- Contract:
--- - UI code should call execute_ui() (or begin/end_command_event + execute) rather than
---   calling execute() directly.
--- - This ensures a command event exists and threads implicit UI context (active project/
---   sequence) into the params.
--- - If active context is missing, we error (this is a bug, not a case to "defensively" hide).
-function M.execute_ui(command_name, params)
+-- - UI code (keyboard, menu, mouse gestures, TC entry, inspectors, drag/drop)
+--   calls execute_interactive. Nested dispatches from inside a command's
+--   executor call plain execute, which stays a pure model path.
+-- - execute_interactive establishes a "ui" command event and threads implicit
+--   UI context (active project/sequence/playhead) into params.
+-- - Pass 2 will add a viewport-surfacing policy here so interactive user
+--   actions surface the playhead (or undo/redo change region) without every
+--   UI caller having to do it themselves.
+-- - If active context is missing, we error (this is a bug, not a case to
+--   "defensively" hide).
+function M.execute_interactive(command_name, params)
     params = params or {}
 
     -- Establish (or join) a UI command event.
-    local had_event = (command_event_depth > 0)
-    if not had_event then
+    -- When already inside a non-"ui" event (e.g. the test harness establishes
+    -- a "script" event to mark scripted dispatch), delegate straight to
+    -- M.execute — UI-context injection is meaningless in scripted flow, and
+    -- refusing the call here would silently break every UI-exercising test.
+    -- Pass 2 viewport policy likewise runs only when we actually opened our
+    -- own "ui" event (wrapped_ui=true below).
+    local wrapped_ui = false
+    if command_event_depth == 0 then
         M.begin_command_event("ui")
-    else
-        -- Nested UI dispatch while already in an event is allowed.
-        -- We *do not* allow switching origins mid-event.
-        if command_event_origin ~= "ui" then
-            return false, nil, string.format(
-                "execute_ui(%s): cannot execute UI command inside %s command event",
-                tostring(command_name),
-                tostring(command_event_origin)
-            )
-        end
-        -- Balance begin/end so execute_ui always closes what it opens.
+        wrapped_ui = true
+    elseif command_event_origin == "ui" then
+        -- Nested UI dispatch inside a UI event. Balance begin/end so we
+        -- always close what we open.
         M.begin_command_event("ui")
+        wrapped_ui = true
     end
 
+    -- Capture playhead before execute so the post-execute policy can
+    -- tell whether the command actually moved it. A gesture that leaves
+    -- the playhead put (clip selection, property toggle, non-advancing
+    -- insert) must not trigger surface_playhead — otherwise clicking
+    -- a clip off-screen would scroll the viewport back to the playhead,
+    -- away from what the user just clicked on.
+    local ts = require("ui.timeline.timeline_state")
+    local playhead_pre = ts.get_playhead_position()
+
     local result = nil
+    local executed_command = nil
     local status, exec_err = xpcall(function()
         if params.project_id == nil then
             local pid, pid_err = ensure_active_project_id()
@@ -365,13 +380,37 @@ function M.execute_ui(command_name, params)
                 params.playhead = active_monitor.engine:get_position()
             end
         end
-        result = M.execute(command_name, params)
+        result, executed_command = M.execute(command_name, params)
     end, debug.traceback)
 
-    M.end_command_event()
+    if wrapped_ui then
+        M.end_command_event()
+    end
     if not status then
         error(exec_err)
     end
+
+    -- Viewport surfacing policy. Fires only when this call owned the "ui"
+    -- event boundary (wrapped_ui = outermost user action). Nested
+    -- execute_interactive dispatched inside a UI-event-owning caller
+    -- never fires the policy separately; the outer caller owns it.
+    -- Scripted contexts (wrapped_ui=false because the event was already
+    -- open with a non-"ui" origin) also skip — tests opt out of UI
+    -- repainting by design.
+    if wrapped_ui and executed_command and type(result) == "table" and result.success then
+        local spec = executed_command.type and registry.get_spec(executed_command.type) or nil
+        local skip = spec and spec.skip_execute_viewport_policy
+        local playhead_post = ts.get_playhead_position()
+        -- Only surface on execute when the playhead actually moved.
+        -- Gestures that leave the playhead put (selection, property
+        -- toggles, non-advancing inserts) are the user interacting
+        -- with visible content; repainting the viewport to "wherever
+        -- the playhead is" would yank it away from their click.
+        if not skip and playhead_pre ~= playhead_post then
+            require("ui.timeline.viewport_policy").apply_post_command("execute", executed_command)
+        end
+    end
+
     return result
 end
 
@@ -895,9 +934,33 @@ local function capture_pre_selection_for_command(command)
     scope:finish()
 end
 
+local command_helper = require("core.command_helper")
+
+-- Drop any clip_ids from a JSON-encoded selection list that appear in
+-- the exclude set. Used to prune the post-selection capture so clips
+-- the command just deleted don't appear in the stored snapshot.
+local function prune_selection_json(clips_json, exclude_set)
+    if not clips_json or clips_json == "" or clips_json == "[]" then return clips_json end
+    if next(exclude_set) == nil then return clips_json end
+    local ok, ids = pcall(json.decode, clips_json)
+    if not ok or type(ids) ~= "table" then return clips_json end
+    local filtered = {}
+    for _, id in ipairs(ids) do
+        if not exclude_set[id] then table.insert(filtered, id) end
+    end
+    return json.encode(filtered)
+end
+
 local function capture_post_selection_for_command(command)
     local scope = profile_scope.begin("command_manager.capture_selection_post")
     local clips_json, edges_json, gaps_json = state_mgr.capture_selection_snapshot()
+    -- apply_command_mutations runs later (DB commits first, UI updates
+    -- second), which means the live selection state still contains any
+    -- clips this command is deleting. Prune them from the captured
+    -- post-selection so redo-time selection restore doesn't try to load
+    -- a clip the redo itself just deleted.
+    local deleted = command_helper.collect_deleted_clip_ids(command)
+    clips_json = prune_selection_json(clips_json, deleted)
     command.selected_clip_ids = clips_json
     command.selected_edge_infos = edges_json
     command.selected_gap_infos = gaps_json
@@ -2008,16 +2071,18 @@ local function apply_undo_ceremony(cmd)
         history.save_undo_position()
     end
     state_mgr.restore_selection_from_serialized(
-        cmd.selected_clip_ids_pre, cmd.selected_edge_infos_pre, cmd.selected_gap_infos_pre)
+        cmd.selected_clip_ids_pre, cmd.selected_edge_infos_pre, cmd.selected_gap_infos_pre,
+        command_helper.collect_deleted_clip_ids(cmd))
     if cmd.playhead_value ~= nil then
         local ts = require('ui.timeline.timeline_state')
         if ts.set_playhead_position then
             ts.set_playhead_position(cmd.playhead_value)
         end
-        if ts.surface_playhead then
-            ts.surface_playhead()
-        end
     end
+    -- Viewport surfacing policy: surface the change region of the undone
+    -- command (from __timeline_mutations), falling back to the playhead
+    -- when no region is present (e.g. non-clip-mutating commands).
+    require("ui.timeline.viewport_policy").apply_post_command("undo", cmd)
     notify_command_event({
         event = "undo",
         command = cmd,
@@ -2126,16 +2191,19 @@ local function apply_redo_ceremony(cmd)
         history.save_undo_position()
     end
     state_mgr.restore_selection_from_serialized(
-        cmd.selected_clip_ids, cmd.selected_edge_infos, cmd.selected_gap_infos)
+        cmd.selected_clip_ids, cmd.selected_edge_infos, cmd.selected_gap_infos,
+        command_helper.collect_deleted_clip_ids(cmd))
     local skip_playhead = cmd:get_parameter("__skip_sequence_replay_on_undo")
     if cmd.playhead_value_post ~= nil and not skip_playhead then
         local ts = require('ui.timeline.timeline_state')
         if ts.set_playhead_position then
             ts.set_playhead_position(cmd.playhead_value_post)
         end
-        if ts.surface_playhead then
-            ts.surface_playhead()
-        end
+    end
+    -- Viewport surfacing policy: surface the change region of the redone
+    -- command, falling back to the playhead when no region is present.
+    if not skip_playhead then
+        require("ui.timeline.viewport_policy").apply_post_command("redo", cmd)
     end
     notify_command_event({
         event = "redo",
@@ -2152,7 +2220,8 @@ local function execute_redo_command(cmd)
     -- redo fails when selection has changed since the original execution
     -- (e.g., history panel jump after user interaction).
     state_mgr.restore_selection_from_serialized(
-        cmd.selected_clip_ids_pre, cmd.selected_edge_infos_pre, cmd.selected_gap_infos_pre)
+        cmd.selected_clip_ids_pre, cmd.selected_edge_infos_pre, cmd.selected_gap_infos_pre,
+        command_helper.collect_deleted_clip_ids(cmd))
 
     undo_redo_in_progress = true
     local success, err_msg = run_redo_executor(cmd)
@@ -2225,6 +2294,24 @@ function M.redo()
     end
 end
 
+-- Interactive (user-initiated) undo/redo entry points.
+--
+-- Contract parallels execute_interactive:
+-- - UI code (keyboard Cmd+Z/Cmd+Shift+Z, menu, meta-commands Undo/Redo)
+--   calls undo_interactive / redo_interactive.
+-- - Internal plumbing inside executors or tests calls plain M.undo() / M.redo()
+--   when they want model mutation without UI post-hooks.
+-- - Pass 2 will add viewport-surfacing policy here so undo/redo surface the
+--   change region of the undone/redone command without every caller having
+--   to do it themselves.
+function M.undo_interactive()
+    return M.undo()
+end
+
+function M.redo_interactive()
+    return M.redo()
+end
+
 function M.redo_group(group_id)
     assert(db, "redo_group: no database connection")
 
@@ -2279,7 +2366,8 @@ function M.redo_group(group_id)
     apply_redo_ceremony(last_cmd)
     if root_cmd and root_cmd ~= last_cmd then
         state_mgr.restore_selection_from_serialized(
-            root_cmd.selected_clip_ids, root_cmd.selected_edge_infos, root_cmd.selected_gap_infos)
+            root_cmd.selected_clip_ids, root_cmd.selected_edge_infos, root_cmd.selected_gap_infos,
+            command_helper.collect_deleted_clip_ids(root_cmd))
     end
     undo_redo_in_progress = false
 

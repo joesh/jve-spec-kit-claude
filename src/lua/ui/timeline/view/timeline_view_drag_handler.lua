@@ -108,7 +108,7 @@ function M.handle_release(view, drag_state, modifiers)
                 goto cleanup
             end
 
-            local result = command_manager.execute("DuplicateClips", {
+            local result = command_manager.execute_interactive("DuplicateClips", {
                 ["project_id"] = active_proj,
                 ["sequence_id"] = active_seq,
                 ["clip_ids"] = ids,
@@ -206,7 +206,7 @@ function M.handle_release(view, drag_state, modifiers)
             if active_seq and not params.sequence_id then
                 params.sequence_id = active_seq
             end
-            local result = command_manager.execute(spec.command_type, params)
+            local result = command_manager.execute_interactive(spec.command_type, params)
             if not result.success then
                 log.error("%s failed: %s", spec.command_type, result.error_message or "unknown")
             end
@@ -221,7 +221,7 @@ function M.handle_release(view, drag_state, modifiers)
                 if active_seq and not params.sequence_id then
                     params.sequence_id = active_seq
                 end
-                local result = command_manager.execute(spec.command_type, params)
+                local result = command_manager.execute_interactive(spec.command_type, params)
                 if not result.success then
                     drag_failed = drag_failed + 1
                     log.error("%s failed: %s", spec.command_type, result.error_message or "unknown")
@@ -318,7 +318,7 @@ function M.handle_release(view, drag_state, modifiers)
         if drag_state.timeline_active_region then
             params.__timeline_active_region = drag_state.timeline_active_region
         end
-        local result = command_manager.execute("BatchRippleEdit", params)
+        local result = command_manager.execute_interactive("BatchRippleEdit", params)
         if not result.success then
             log.error("BatchRippleEdit failed: %s", result.error_message or "unknown")
         end

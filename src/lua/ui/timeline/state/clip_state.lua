@@ -325,7 +325,11 @@ function M.apply_mutations(mutations, persist_callback)
 
     -- Handle Deletes
     if mutations.deletes then
-        for _, clip_id in ipairs(mutations.deletes) do
+        for _, entry in ipairs(mutations.deletes) do
+            -- Entries are either raw clip_id strings (legacy/minimal) or
+            -- records {clip_id, track_id, timeline_start, duration} that
+            -- the viewport policy uses to derive the change region.
+            local clip_id = type(entry) == "table" and entry.clip_id or entry
             -- Remove ALL occurrences (duplicates can exist from nested command mutations)
             for i = #data.state.clips, 1, -1 do
                 if data.state.clips[i].id == clip_id then
