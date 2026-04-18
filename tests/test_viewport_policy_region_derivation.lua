@@ -8,15 +8,13 @@ require('test_env')
 
 local viewport_policy = require("ui.timeline.viewport_policy")
 
--- Helper: build a fake command with a given mutations payload and,
--- optionally, a forward-mutations snapshot. Matches the contract of
--- real Command objects (has :get_parameter).
-local function make_command(mutations, forward_snapshot)
+-- Helper: build a fake command with a given mutations payload.
+-- Matches the contract of real Command objects (has :get_parameter).
+local function make_command(mutations)
     return {
         type = "FakeCommand",
         get_parameter = function(self, key)
             if key == "__timeline_mutations" then return mutations end
-            if key == "__forward_mutations_snapshot" then return forward_snapshot end
             return nil
         end,
     }
@@ -258,43 +256,30 @@ do
 end
 
 -- -----------------------------------------------------------------------
--- 9. The real undo scenario: forward mutations had full inserts with
--- coordinates; reverse mutations (produced by the undoer) are
--- coordinate-less clip_id string deletes. Region must still be derived
--- from the forward snapshot so undo surfaces the actual change region
--- instead of falling back to the playhead.
+-- 9. Rich-record delete mutations carry track/timeline/duration on the
+-- mutation itself (not just clip_id strings), so region derivation
+-- works both on forward execute (write delete) and on redo (re-write
+-- delete). The mutation protocol accepts both shapes; callers with
+-- the clip's full state (DeleteClip, AddClipsToSequence undo path)
+-- pass records.
 -- -----------------------------------------------------------------------
 do
-    -- Mimics run_undoer's state after clearing + undoer-populated reverse:
-    -- reverse deletes (strings) + forward snapshot with full inserts.
-    local cmd = make_command(
-        {
-            sequence_id = "seq1",
-            inserts = {},
-            updates = {},
-            deletes = { "added_clip_A", "added_clip_B" },  -- string-shaped (ID only)
+    local cmd = make_command({
+        sequence_id = "seq1",
+        inserts = {},
+        updates = {},
+        deletes = {
+            { clip_id = "deleted_A", track_id = "v1", timeline_start = 4000, duration = 300 },
+            { clip_id = "deleted_B", track_id = "a1", timeline_start = 4100, duration = 250 },
         },
-        {
-            sequence_id = "seq1",
-            inserts = {
-                { track_id = "v1", timeline_start_frame = 2000, duration_frames = 300 },
-                { track_id = "v1", timeline_start_frame = 2500, duration_frames = 200 },
-            },
-            updates = {},
-            deletes = {},
-        }
-    )
+    })
     local region = viewport_policy.derive_change_region(cmd)
-    assert(region, "undo of AddClipsToSequence must surface a region")
-    assert(region.time_range.start_frame == 2000
-        and region.time_range.end_frame == 2700,
-        string.format("forward-snapshot inserts define the region [2000, 2700], got [%s, %s]",
-            tostring(region.time_range and region.time_range.start_frame),
-            tostring(region.time_range and region.time_range.end_frame)))
-    local set = {}
-    for id, _ in pairs(region.track_set) do set[id] = true end
-    assert(set["v1"], "track from forward snapshot must surface")
-    print("  9. undo with coordinate-less reverse + forward snapshot → region derived ✓")
+    assert(region, "rich delete records must yield a region")
+    assert(region.time_range.start_frame == 4000, "spans earliest delete.timeline_start")
+    assert(region.time_range.end_frame == 4350, "spans latest delete.timeline_start+duration")
+    local set_equal_ok = set_equal(region.track_set, {"v1", "a1"})
+    assert(set_equal_ok, "rich deletes track both affected tracks")
+    print("  9. rich delete records (clip_id + track + timeline + duration) → region ✓")
 end
 
 print("\n✅ test_viewport_policy_region_derivation.lua passed")

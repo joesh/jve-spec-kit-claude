@@ -189,7 +189,8 @@ local function collect_affected_track_ids(mutations)
         for _, m in ipairs(mutations.bulk_shifts) do note(m.track_id) end
     end
     if mutations.deletes then
-        for _, clip_id in ipairs(mutations.deletes) do
+        for _, entry in ipairs(mutations.deletes) do
+            local clip_id = type(entry) == "table" and entry.clip_id or entry
             local existing = clips.get_by_id(clip_id)
             note(existing and existing.track_id)
         end

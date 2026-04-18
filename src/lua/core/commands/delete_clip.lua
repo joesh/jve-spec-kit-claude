@@ -72,7 +72,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if sequence_id then
-            command_helper.add_delete_mutation(command, sequence_id, clip.id)
+            -- Pass a rich record with coords + track so the viewport
+            -- policy can derive the change region from the mutation
+            -- itself, on both forward execute and redo (the clip is
+            -- gone by then, so we can't look it up afterwards).
+            command_helper.add_delete_mutation(command, sequence_id, {
+                clip_id = clip.id,
+                track_id = clip.track_id,
+                timeline_start = clip.timeline_start,
+                duration = clip.duration,
+            })
         end
 
         log.event("DeleteClip: deleted clip %s", args.clip_id)

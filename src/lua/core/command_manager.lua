@@ -2001,13 +2001,6 @@ local function run_undoer(cmd)
         return false, string.format("No undoer registered for %s", tostring(cmd.type))
     end
 
-    -- Snapshot forward mutations before clearing so the viewport policy
-    -- can derive the change region even when the undoer's reverse
-    -- mutations are coordinate-less (e.g. AddClipsToSequence undo ships
-    -- deletes as clip_id strings with no track/timeline_start). The
-    -- region affected is the same either direction — both views of the
-    -- same edit describe the same rectangle on the timeline.
-    cmd:set_parameter("__forward_mutations_snapshot", cmd:get_parameter("__timeline_mutations"))
     -- Clear forward-execution mutations so the undoer writes clean reverse mutations.
     cmd:set_parameter("__timeline_mutations", nil)
 
