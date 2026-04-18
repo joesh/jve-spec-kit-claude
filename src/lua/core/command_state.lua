@@ -191,10 +191,18 @@ function M.capture_selection_snapshot()
     return clips_json, edges_json, gaps_json
 end
 
-function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json)
+-- Restore selection from a serialized snapshot.
+-- `expected_missing` (optional): set of clip_ids the caller already knows
+-- are gone (e.g. the command being redone just deleted them). A missing
+-- clip listed in the set is expected and silently dropped from the
+-- restored selection without a warning — the warning is reserved for
+-- unexpected staleness (DB corruption, orphaned references) that
+-- genuinely needs attention.
+function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json, expected_missing)
     local timeline_state = require('ui.timeline.timeline_state')
     local Clip = require('models.clip')
     local selection_state = require("ui.timeline.state.selection_state")
+    expected_missing = expected_missing or {}
     -- Only bypass persistence when using the real timeline_state module and it has not been initialized
     -- with an active sequence. Test stubs often omit get_sequence_id entirely.
     local bypass_persist = false
@@ -218,7 +226,7 @@ function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json)
         return nil
     end
     local clip = Clip.load_optional(clip_id, db)
-    if not clip then
+    if not clip and not expected_missing[clip_id] then
         log.warn("Failed to restore selection for clip %s (clip not found)", tostring(clip_id))
     end
     return clip
