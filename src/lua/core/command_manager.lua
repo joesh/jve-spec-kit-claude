@@ -343,6 +343,14 @@ function M.execute_interactive(command_name, params)
         wrapped_ui = true
     end
 
+    -- Capture playhead before execute so the post-execute policy can
+    -- tell whether the command actually moved it. A gesture that leaves
+    -- the playhead put (clip selection, property toggle, non-advancing
+    -- insert) must not trigger surface_playhead — otherwise clicking
+    -- a clip off-screen would scroll the viewport back to the playhead,
+    -- away from what the user just clicked on.
+    local playhead_pre = require("ui.timeline.timeline_state").get_playhead_position()
+
     local result = nil
     local executed_command = nil
     local status, exec_err = xpcall(function()
@@ -390,7 +398,14 @@ function M.execute_interactive(command_name, params)
     -- repainting by design.
     if wrapped_ui and executed_command and type(result) == "table" and result.success then
         local spec = executed_command.type and registry.get_spec(executed_command.type) or nil
-        if not (spec and spec.skip_execute_viewport_policy) then
+        local skip = spec and spec.skip_execute_viewport_policy
+        local playhead_post = require("ui.timeline.timeline_state").get_playhead_position()
+        -- Only surface on execute when the playhead actually moved.
+        -- Gestures that leave the playhead put (selection, property
+        -- toggles, non-advancing inserts) are the user interacting
+        -- with visible content; repainting the viewport to "wherever
+        -- the playhead is" would yank it away from their click.
+        if not skip and playhead_pre ~= playhead_post then
             require("ui.timeline.viewport_policy").apply_post_command("execute", executed_command)
         end
     end
