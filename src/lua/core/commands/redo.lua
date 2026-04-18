@@ -11,6 +11,11 @@ local M = {}
 
 local SPEC = {
     undoable = false,
+    -- Viewport policy is owned by the redo ceremony inside
+    -- command_manager.redo() (same reason as Undo — the outer
+    -- execute_interactive must not re-fire generic execute policy and
+    -- overwrite the region scroll).
+    skip_execute_viewport_policy = true,
     args = {
         project_id = {},
     }

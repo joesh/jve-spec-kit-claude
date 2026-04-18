@@ -122,6 +122,7 @@ end
 M.get_playhead_position = viewport.get_playhead_position
 M.set_playhead_position = viewport.set_playhead_position
 M.surface_playhead = viewport.surface_playhead
+M.surface_range = viewport.surface_range
 M.set_is_playing = function(playing) data.state.is_playing = playing end
 M.time_to_pixel = viewport.time_to_pixel
 M.pixel_to_time = viewport.pixel_to_time

@@ -105,6 +105,64 @@ local function ensure_playhead_visible()
     return false
 end
 
+-- Padding applied when a change region must be scrolled into view and
+-- the playhead can't share the frame. Fractional because viewports scale
+-- with zoom; 5% reads as "a bit of space before the change" across zooms.
+local REGION_SCROLL_PADDING_FRACTION = 0.05
+
+--- Scroll the viewport to reveal a timeline range, preferring to keep
+-- the playhead in view. Used by viewport_policy on undo/redo to surface
+-- the change region of the undone/redone command.
+--
+-- Rules:
+--   1. If the union of [start_frame, end_frame] and the playhead fits
+--      inside the viewport, center that union's midpoint. Playhead and
+--      the change region are both visible.
+--   2. Otherwise — the playhead is far from the region, or the region
+--      itself is wider than the viewport — anchor the range's upstream
+--      edge to the viewport's left side plus a small padding. The
+--      playhead may fall outside; region wins.
+-- Viewport-guard-aware (skips when guarded, like surface_playhead).
+-- Coordinates are integer frames.
+function M.surface_range(start_frame, end_frame)
+    assert(type(start_frame) == "number" and start_frame == math.floor(start_frame),
+        "viewport_state.surface_range: start_frame must be integer")
+    assert(type(end_frame) == "number" and end_frame == math.floor(end_frame),
+        "viewport_state.surface_range: end_frame must be integer")
+    assert(end_frame >= start_frame,
+        "viewport_state.surface_range: end_frame must be >= start_frame")
+
+    if viewport_guard_count > 0 then return false end
+    local state = data.state
+    local duration = state.viewport_duration
+    if type(duration) ~= "number" or duration <= 0 then return false end
+
+    local playhead = state.playhead_position
+    local union_start = math.min(start_frame, playhead)
+    local union_end = math.max(end_frame, playhead)
+    local union_width = union_end - union_start
+
+    local desired_start
+    if union_width <= duration then
+        -- Everything fits — center the union so both change region and
+        -- playhead sit inside the viewport with balanced slack.
+        local midpoint = math.floor((union_start + union_end) / 2)
+        desired_start = midpoint - math.floor(duration / 2)
+    else
+        -- Region wins: upstream edge at viewport.start + padding.
+        local padding = math.floor(duration * REGION_SCROLL_PADDING_FRACTION)
+        desired_start = start_frame - padding
+    end
+
+    local clamped = clamp_viewport_start(desired_start, duration)
+    if state.viewport_start_time ~= clamped then
+        state.viewport_start_time = clamped
+        data.notify_listeners()
+        return true
+    end
+    return false
+end
+
 --- Explicitly scroll viewport to center on the playhead.
 -- Unlike ensure_playhead_visible (playback-only auto-scroll),
 -- this works when parked. Used by Find navigate_to_clip.

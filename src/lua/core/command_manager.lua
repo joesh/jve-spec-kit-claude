@@ -344,6 +344,7 @@ function M.execute_interactive(command_name, params)
     end
 
     local result = nil
+    local executed_command = nil
     local status, exec_err = xpcall(function()
         if params.project_id == nil then
             local pid, pid_err = ensure_active_project_id()
@@ -370,7 +371,7 @@ function M.execute_interactive(command_name, params)
                 params.playhead = active_monitor.engine:get_position()
             end
         end
-        result = M.execute(command_name, params)
+        result, executed_command = M.execute(command_name, params)
     end, debug.traceback)
 
     if wrapped_ui then
@@ -379,6 +380,24 @@ function M.execute_interactive(command_name, params)
     if not status then
         error(exec_err)
     end
+
+    -- Viewport surfacing policy. Fires only when this call owned the "ui"
+    -- event boundary (wrapped_ui = outermost user action). Nested
+    -- execute_interactive dispatched inside a UI-event-owning caller
+    -- never fires the policy separately; the outer caller owns it.
+    -- Scripted contexts (wrapped_ui=false because the event was already
+    -- open with a non-"ui" origin) also skip — tests opt out of UI
+    -- repainting by design.
+    if wrapped_ui and executed_command and type(result) == "table" and result.success then
+        local spec = executed_command.type and registry.get_spec(executed_command.type) or nil
+        if not (spec and spec.skip_execute_viewport_policy) then
+            local ok_policy, viewport_policy = pcall(require, "ui.timeline.viewport_policy")
+            if ok_policy and viewport_policy and viewport_policy.apply_post_command then
+                viewport_policy.apply_post_command("execute", executed_command)
+            end
+        end
+    end
+
     return result
 end
 
@@ -2021,9 +2040,13 @@ local function apply_undo_ceremony(cmd)
         if ts.set_playhead_position then
             ts.set_playhead_position(cmd.playhead_value)
         end
-        if ts.surface_playhead then
-            ts.surface_playhead()
-        end
+    end
+    -- Viewport surfacing policy: surface the change region of the undone
+    -- command (from __timeline_mutations), falling back to the playhead
+    -- when no region is present (e.g. non-clip-mutating commands).
+    local ok_policy, viewport_policy = pcall(require, "ui.timeline.viewport_policy")
+    if ok_policy and viewport_policy and viewport_policy.apply_post_command then
+        viewport_policy.apply_post_command("undo", cmd)
     end
     notify_command_event({
         event = "undo",
@@ -2140,8 +2163,13 @@ local function apply_redo_ceremony(cmd)
         if ts.set_playhead_position then
             ts.set_playhead_position(cmd.playhead_value_post)
         end
-        if ts.surface_playhead then
-            ts.surface_playhead()
+    end
+    -- Viewport surfacing policy: surface the change region of the redone
+    -- command, falling back to the playhead when no region is present.
+    if not skip_playhead then
+        local ok_policy, viewport_policy = pcall(require, "ui.timeline.viewport_policy")
+        if ok_policy and viewport_policy and viewport_policy.apply_post_command then
+            viewport_policy.apply_post_command("redo", cmd)
         end
     end
     notify_command_event({

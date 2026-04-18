@@ -11,6 +11,12 @@ local M = {}
 
 local SPEC = {
     undoable = false,
+    -- Viewport policy is owned by the undo ceremony inside
+    -- command_manager.undo(), which surfaces the change region of the
+    -- undone command. execute_interactive must NOT re-fire its generic
+    -- execute policy on top, or it would overwrite the region scroll
+    -- with a surface-playhead call.
+    skip_execute_viewport_policy = true,
     args = {
         project_id = {},
     }
