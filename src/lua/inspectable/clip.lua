@@ -142,7 +142,7 @@ function ClipInspectable:set(field, value)
     cmd.skip_timeline_cache = true
     cmd.skip_timeline_reload = true
 
-    local result = command_manager.execute(cmd)
+    local result = command_manager.execute_interactive(cmd)
     if not result.success then
         return false, result.error_message or "unknown error"
     end

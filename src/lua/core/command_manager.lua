@@ -326,21 +326,21 @@ function M.execute_interactive(command_name, params)
     params = params or {}
 
     -- Establish (or join) a UI command event.
-    local had_event = (command_event_depth > 0)
-    if not had_event then
+    -- When already inside a non-"ui" event (e.g. the test harness establishes
+    -- a "script" event to mark scripted dispatch), delegate straight to
+    -- M.execute — UI-context injection is meaningless in scripted flow, and
+    -- refusing the call here would silently break every UI-exercising test.
+    -- Pass 2 viewport policy likewise runs only when we actually opened our
+    -- own "ui" event (wrapped_ui=true below).
+    local wrapped_ui = false
+    if command_event_depth == 0 then
         M.begin_command_event("ui")
-    else
-        -- Nested UI dispatch while already in an event is allowed.
-        -- We *do not* allow switching origins mid-event.
-        if command_event_origin ~= "ui" then
-            return false, nil, string.format(
-                "execute_interactive(%s): cannot execute UI command inside %s command event",
-                tostring(command_name),
-                tostring(command_event_origin)
-            )
-        end
-        -- Balance begin/end so execute_interactive always closes what it opens.
+        wrapped_ui = true
+    elseif command_event_origin == "ui" then
+        -- Nested UI dispatch inside a UI event. Balance begin/end so we
+        -- always close what we open.
         M.begin_command_event("ui")
+        wrapped_ui = true
     end
 
     local result = nil
@@ -373,7 +373,9 @@ function M.execute_interactive(command_name, params)
         result = M.execute(command_name, params)
     end, debug.traceback)
 
-    M.end_command_event()
+    if wrapped_ui then
+        M.end_command_event()
+    end
     if not status then
         error(exec_err)
     end

@@ -91,11 +91,13 @@ data.state.selected_clips = { clip }
 timeline_state.set_playhead_position(10)  -- integer frames
 
 local captured_command = nil
+local function capture_cmd(cmd)
+    captured_command = cmd
+    return { success = true }
+end
 local mock_command_manager = {
-    execute = function(cmd)
-        captured_command = cmd
-        return { success = true }
-    end,
+    execute = capture_cmd,
+    execute_interactive = capture_cmd,
     add_listener = function() end,
     remove_listener = function() end,
     can_undo = function() return false end,

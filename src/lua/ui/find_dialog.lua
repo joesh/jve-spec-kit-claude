@@ -211,7 +211,7 @@ local function do_replace()
     local current_id = find_state.get_current_match()
     if not current_id then return end
     log.event("do_replace: replacing clip %s", current_id)
-    command_manager.execute("ReplaceClipProperty", {
+    command_manager.execute_interactive("ReplaceClipProperty", {
         clip_id = current_id,
         column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo),
         find_value = qt.PROPERTIES.GET_TEXT(ws.find_edit),
@@ -230,7 +230,7 @@ local function do_replace_all()
     local match_ids = find_state.get_matches()
     log.event("do_replace_all: %d matches to replace", #match_ids)
     if #match_ids == 0 then return end
-    command_manager.execute("ReplaceAllClipProperties", {
+    command_manager.execute_interactive("ReplaceAllClipProperties", {
         clip_ids = match_ids,
         column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo),
         find_value = qt.PROPERTIES.GET_TEXT(ws.find_edit),

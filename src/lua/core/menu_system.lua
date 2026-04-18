@@ -386,13 +386,9 @@ local function create_action_callback(command_name, params)
         end
         command_params.project_id = command_params.project_id or project_id
 
-		local result_value
-		-- Headless tests inject a minimal command_manager stub (execute-only).
-		if type(command_manager.execute_interactive) == "function" then
-			result_value = command_manager.execute_interactive(command_name, command_params)
-		else
-			result_value = command_manager.execute(command_name, command_params)
-		end
+		assert(type(command_manager.execute_interactive) == "function",
+			"menu_system: command_manager missing execute_interactive() — menus dispatch through the interactive entry point")
+		local result_value = command_manager.execute_interactive(command_name, command_params)
 
         if result_value and not result_value.success and not result_value.cancelled then
             log.error("Command '%s' returned error: %s", tostring(command_name), tostring(result_value.error_message or "unknown"))

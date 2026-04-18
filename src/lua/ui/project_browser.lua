@@ -92,7 +92,7 @@ local function select_browser_items(items, context, modifiers)
     context = context or selection_context()
     if not context then return end  -- browser between projects, ignore
 
-    command_manager.execute("SelectBrowserItems", {
+    command_manager.execute_interactive("SelectBrowserItems", {
         project_id = M.project_id or context.project_id or "unknown",
         items = items or {},
         context = context,
@@ -282,7 +282,7 @@ local function finalize_pending_rename(new_name)
     end
 
     local project_id = M.project_id or db.get_current_project_id()
-    local result = command_manager.execute("RenameItem", {
+    local result = command_manager.execute_interactive("RenameItem", {
         ["project_id"] = project_id,
                 ["target_type"] = pending.target_type,
                 ["target_id"] = pending.target_id,
@@ -1219,7 +1219,7 @@ function M.create()
 
         M.selected_item = item_info
         local result
-        result = command_manager.execute(ACTIVATE_COMMAND)
+        result = command_manager.execute_interactive(ACTIVATE_COMMAND)
         if not result.success then
             log.warn("ActivateBrowserSelection failed: %s", tostring(result.error_message or "unknown error"))
         end
@@ -1779,7 +1779,7 @@ handle_tree_drop = function(event)
         cmd:set_parameter("project_id", project_id)
         cmd:set_parameter("entity_ids", bins_to_move)
         cmd:set_parameter("target_bin_id", new_parent_id)
-        local result = command_manager.execute(cmd)
+        local result = command_manager.execute_interactive(cmd)
 
         if not result.success then
             log.warn("Failed to move bin(s): %s", tostring(result.error_message or "unknown error"))
@@ -1822,7 +1822,7 @@ handle_tree_drop = function(event)
         cmd:set_parameter("entity_ids", changed_ids)
         cmd:set_parameter("source_bin_id", source_bin_id)
         cmd:set_parameter("target_bin_id", target_bin_id)
-        local result = command_manager.execute(cmd)
+        local result = command_manager.execute_interactive(cmd)
 
         if not result.success then
             log.warn("Failed to move clips to bin: %s", tostring(result.error_message or "unknown error"))
@@ -1858,7 +1858,7 @@ handle_tree_key_event = function(event)
             return M.selected_item
         end,
         activate_sequence = function()
-            local result = command_manager.execute(ACTIVATE_COMMAND)
+            local result = command_manager.execute_interactive(ACTIVATE_COMMAND)
             if not result or not result.success then
                 log.warn("ActivateBrowserSelection failed: %s", result and result.error_message or "unknown error")
                 return false
@@ -1922,7 +1922,7 @@ local function create_bin_in_root()
     local name_lookup = collect_name_lookup(M.bin_map)
     local temp_name = generate_sequential_label("Bin", name_lookup)
 
-    local result, cmd = command_manager.execute("NewBin", {
+    local result, cmd = command_manager.execute_interactive("NewBin", {
         project_id = project_id,
         name = temp_name,
     })
@@ -1951,7 +1951,7 @@ local function create_sequence_in_project()
     local temp_name = generate_sequential_label("Sequence", name_lookup)
     local defaults = sequence_defaults()
 
-    local result, cmd = command_manager.execute("CreateSequence", {
+    local result, cmd = command_manager.execute_interactive("CreateSequence", {
         project_id = project_id,
         name = temp_name,
         frame_rate = defaults.frame_rate,
@@ -2068,7 +2068,7 @@ show_browser_context_menu = function(event)
         table.insert(actions, {
             label = "Reveal in Filesystem",
             handler = function()
-                local result = command_manager.execute("RevealInFilesystem")
+                local result = command_manager.execute_interactive("RevealInFilesystem")
                 if result and not result.success then
                     log.warn("Reveal in Filesystem failed: %s", result.error_message or "unknown error")
                 end
@@ -2226,7 +2226,7 @@ function M.delete_selected_items()
                     force = true
                 end
 
-                local result = command_manager.execute("DeleteMasterClip", {
+                local result = command_manager.execute_interactive("DeleteMasterClip", {
                     master_clip_id = clip.clip_id,
                     project_id = project_id,
                     force = force,
@@ -2251,7 +2251,7 @@ function M.delete_selected_items()
 
                 local project_id = M.project_id or db.get_current_project_id()
                 assert(project_id and project_id ~= "", "project_browser.delete_selected_items: missing project_id for DeleteSequence " .. tostring(sequence_id))
-                local result = command_manager.execute("DeleteSequence", {
+                local result = command_manager.execute_interactive("DeleteSequence", {
                     sequence_id = sequence_id,
                     project_id = project_id,
                 })
@@ -2266,7 +2266,7 @@ function M.delete_selected_items()
         elseif item.type == "bin" and item.id then
             local project_id = M.project_id or db.get_current_project_id()
             assert(project_id and project_id ~= "", "project_browser.delete_selected_items: missing project_id for DeleteBin " .. tostring(item.id))
-            local result = command_manager.execute("DeleteBin", {
+            local result = command_manager.execute_interactive("DeleteBin", {
                 ["project_id"] = project_id,
                                 ["bin_id"] = item.id,
             })

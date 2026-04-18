@@ -178,21 +178,28 @@ M.enforce_table = enforce_table
 -- Returns: mock table, executed commands array
 function M.mock_command_manager()
     local executed = {}
-    local mock = {
-        execute = function(cmd_or_type, params)
-            local captured
-            if type(cmd_or_type) == "string" then
-                captured = {
-                    type = cmd_or_type,
-                    params = params or {},
-                    get_parameter = function(self, k) return self.params[k] end,
-                }
-            else
-                captured = cmd_or_type
-            end
-            table.insert(executed, captured)
-            return { success = true }
-        end,
+    local mock
+    local function record_exec(cmd_or_type, params)
+        local captured
+        if type(cmd_or_type) == "string" then
+            captured = {
+                type = cmd_or_type,
+                params = params or {},
+                get_parameter = function(self, k) return self.params[k] end,
+            }
+        else
+            captured = cmd_or_type
+        end
+        table.insert(executed, captured)
+        return { success = true }
+    end
+    mock = {
+        execute = record_exec,
+        -- UI callers dispatch through execute_interactive since the naming
+        -- split. In tests we capture identically — the interactive wrapper's
+        -- project_id/sequence_id injection has no meaningful effect on the
+        -- captured record.
+        execute_interactive = record_exec,
         begin_command_event = function() end,
         end_command_event = function() end,
         begin_undo_group = function() return 1 end,
