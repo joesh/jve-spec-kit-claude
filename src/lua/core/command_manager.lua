@@ -52,6 +52,10 @@ local execution_depth = 0
 local root_command_sequence_number = nil
 local root_playhead_value = nil
 local root_playhead_rate = nil
+-- True while an undoable=false / no_persist command is executing. Read by
+-- should_auto_promote to decide whether persisting children should be
+-- auto-promoted to top-level. See that function for the full rationale.
+local parent_is_non_persisting = false
 -- Selection captured at root command start (inherited by nested commands for undo)
 local root_selected_clips_pre = nil
 local root_selected_edges_pre = nil
@@ -974,6 +978,41 @@ local function execute_non_recording(command)
     }
 end
 
+-- Run a non-persisting command (undoable=false or no_persist) with the
+-- parent_is_non_persisting flag set. Nestable via save/restore so a
+-- non-persisting wrapper dispatched from inside another non-persisting
+-- wrapper still restores correctly on return.
+local function execute_as_non_persisting_parent(command)
+    local was_non_persisting = parent_is_non_persisting
+    parent_is_non_persisting = true
+    local result = execute_non_recording(command)
+    parent_is_non_persisting = was_non_persisting
+    return result
+end
+
+-- Should a nested dispatch be auto-promoted to top-level?
+--
+-- Scenario: a non-persisting parent (ShowRelinkDialog, OpenProject, any
+-- modal dialog wrapper) dispatches a persisting child from inside its
+-- executor. Without promotion the child would be saved via
+-- execute_nested_command under a nil root — skipping notify_command_event
+-- and leaving the global cursor stale — so the edit history panel would
+-- never see the command and Cmd+Z would skip it.
+--
+-- A command persists unless its spec explicitly opts out (undoable=false
+-- or no_persist). Commands without a registered spec default to persisting,
+-- matching the _execute_body convention where a nil spec falls through to
+-- the top-level recording path.
+local function should_auto_promote(is_nested, cmd_type)
+    if not is_nested then return false end
+    if not parent_is_non_persisting then return false end
+    assert(type(cmd_type) == "string" and cmd_type ~= "",
+        "should_auto_promote: cmd_type must be a non-empty string")
+    local spec = registry.get_spec(cmd_type)
+    if spec and (spec.undoable == false or spec.no_persist) then return false end
+    return true
+end
+
 --- Execute a nested command (one invoked from inside a root command's
 -- executor). Shares the root's transaction, inherits its undo group,
 -- and writes directly to the existing mutation snapshot. The top-level
@@ -1170,6 +1209,22 @@ function M._execute_body(command_or_name, params)
         return normalize_failure, nil
     end
 
+    -- Auto-promote runs after normalize so it can trust command.type and
+    -- so a normalize failure can return early without leaking the cleared
+    -- parent_is_non_persisting flag. When promoting, clear the flag for
+    -- the duration of the promoted command's execution — otherwise any
+    -- nested children of the promoted command would also promote, opening
+    -- a nested DB transaction inside the promoted parent's open
+    -- transaction. Restored in the ::cleanup:: label so the outer
+    -- non-persisting wrapper's scope is preserved across the promote.
+    local promoted_non_persisting_saved
+    if should_auto_promote(is_nested, command.type) then
+        log.event("Auto-promoting %s to top-level (parent is non-persisting)", command.type)
+        is_nested = false
+        promoted_non_persisting_saved = parent_is_non_persisting
+        parent_is_non_persisting = false
+    end
+
     -- Declare all locals upfront to avoid goto scope issues
     local exec_scope, result, scope_ok, scope_err, stack_id, stack_info, stack_opts
     local undo_group_active, snapshot_taken, perf, needs_state_hash, pre_hash
@@ -1232,16 +1287,21 @@ function M._execute_body(command_or_name, params)
         end
         -- No implicit undo group — commands that need grouping use explicit
         -- begin_undo_group/end_undo_group in their executor (e.g., Blade, DeleteSelection).
-        result = execute_non_recording(command)
+        -- Mark parent as non-persisting so any persisting child commands
+        -- dispatched from this executor get auto-promoted to top-level
+        -- (not silently nested).
+        result = execute_as_non_persisting_parent(command)
 
         exec_scope:finish("non_recording")
         goto cleanup
     end
 
     -- Commands with no_persist skip transaction handling entirely
-    -- (e.g. OpenProject which switches databases mid-execution)
+    -- (e.g. OpenProject which switches databases mid-execution).
+    -- Same rationale as the undoable=false branch: any persisting child
+    -- dispatched from this executor gets auto-promoted to top-level.
     if spec and spec.no_persist then
-        result = execute_non_recording(command)
+        result = execute_as_non_persisting_parent(command)
         exec_scope:finish("no_persist")
         goto cleanup
     end
@@ -1645,6 +1705,11 @@ function M._execute_body(command_or_name, params)
         local clip_state = require("ui.timeline.state.clip_state")
         clip_state.commit_mutation_transaction()
         snapshot_taken = false
+    end
+    -- Restore the parent's non-persisting scope after a promote. See the
+    -- promote block at the top of _execute_body for the rationale.
+    if promoted_non_persisting_saved ~= nil then
+        parent_is_non_persisting = promoted_non_persisting_saved
     end
     return result, command
 end
