@@ -8,6 +8,7 @@
 --
 -- @file undo.lua
 local M = {}
+local log = require("core.logger").for_area("commands")
 
 local SPEC = {
     undoable = false,
@@ -26,16 +27,16 @@ function M.register(executors, undoers, db)
     local function executor(command)
         local command_manager = require("core.command_manager")
         if not command_manager.can_undo() then
-            print("Nothing to undo")
+            log.event("Undo: nothing to undo")
             return true
         end
         local result = command_manager.undo()
         if result.success then
-            print("Undo complete")
+            log.event("Undo: complete")
         elseif result.error_message then
-            print("ERROR: Undo failed - " .. result.error_message)
+            log.error("Undo failed: %s", result.error_message)
         else
-            print("ERROR: Undo failed - event log may be corrupted")
+            log.error("Undo failed: event log may be corrupted")
         end
         return true
     end

@@ -20,6 +20,13 @@ local M = {}
 local renderer = require("ui.timeline.view.timeline_view_renderer")
 local input = require("ui.timeline.view.timeline_view_input")
 local ui_constants = require("core.ui_constants")
+local Signals = require("core.signals")
+
+-- Vertical-scroll padding applied when a track set must be surfaced but
+-- the union of track extents is taller than the widget. Matches the
+-- horizontal REGION_SCROLL_PADDING_FRACTION used by viewport_state so
+-- both axes feel consistent.
+local VERTICAL_SURFACE_PADDING_FRACTION = 0.05
 
 function M.create(widget, state_module, track_filter_fn, options)
     options = options or {}
@@ -149,9 +156,10 @@ function M.create(widget, state_module, track_filter_fn, options)
             local mid = (min_layout_y + max_layout_y) / 2
             new_offset = math.floor(mid - widget_height / 2)
         else
-            -- Union taller than viewport: anchor top of union with a
-            -- bit of padding (5% of widget height).
-            local padding = math.floor(widget_height * 0.05)
+            -- Union taller than viewport: anchor top of union near the
+            -- top edge, leaving a small padding above so the topmost
+            -- track doesn't butt against the ruler.
+            local padding = math.floor(widget_height * VERTICAL_SURFACE_PADDING_FRACTION)
             new_offset = min_layout_y - padding
         end
         if new_offset < 0 then new_offset = 0 end
@@ -193,14 +201,9 @@ function M.create(widget, state_module, track_filter_fn, options)
 
     -- Subscribe to vertical-surface signal from viewport_policy so
     -- undo/redo of multi-track edits scrolls affected tracks into view.
-    do
-        local ok_sig, Signals = pcall(require, "core.signals")
-        if ok_sig and Signals and Signals.connect then
-            Signals.connect("viewport_surface_tracks", function(track_ids)
-                view.ensure_tracks_visible(track_ids)
-            end)
-        end
-    end
+    Signals.connect("viewport_surface_tracks", function(track_ids)
+        view.ensure_tracks_visible(track_ids)
+    end)
 
     -- Initial Render
     view.render()

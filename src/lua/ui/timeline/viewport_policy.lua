@@ -45,41 +45,42 @@ local function new_bounds()
     }
 end
 
--- Extract timeline coordinates + track_id from a mutation record. Handles
--- two shapes:
---   - new-state form (inserts, updates): uses timeline_start_frame / duration_frames
---   - pre-state form (previous row for updates/deletes): uses
---     timeline_start / duration (no _frame suffix; matches the DB row
---     column naming that clip_mutator.plan_update preserves in `previous`)
-local function read_timeline_extent(record)
+-- Extract timeline coordinates + track_id from a mutation record when
+-- all three fields are present. Handles two shapes:
+--   - new-state form (inserts, updates): timeline_start_frame / duration_frames
+--   - pre-state form (previous row for updates/deletes): timeline_start /
+--     duration (no _frame suffix; matches the DB row column naming that
+--     clip_mutator.plan_update preserves in `previous`)
+-- Returns nil when the record doesn't carry full extents — the
+-- mutation protocol legitimately ships deletes as raw clip_id strings
+-- in some call paths (timeline_state.apply_mutations delete-by-id,
+-- command_helper.gather_deletes), so region derivation stays best-effort.
+-- A region computed from partial data is still a useful viewport target.
+local function try_read_extent(record)
+    if type(record) ~= "table" then return nil end
     local start_frame = record.timeline_start_frame or record.timeline_start
     local dur = record.duration_frames or record.duration
-    if type(start_frame) ~= "number" or type(dur) ~= "number" then
-        return nil, nil, nil
-    end
-    return start_frame, start_frame + dur, record.track_id
+    local track_id = record.track_id
+    if type(start_frame) ~= "number" then return nil end
+    if type(dur) ~= "number" then return nil end
+    if type(track_id) ~= "string" or track_id == "" then return nil end
+    return start_frame, start_frame + dur, track_id
 end
 
 -- Fold one mutation (insert/update/delete) into the bounds accumulator +
 -- track set. Updates contribute BOTH the new state AND `previous` so
--- track moves surface both the source and destination. Deletes contribute
--- only `previous`.
+-- track moves surface both source and destination. Deletes contribute
+-- only `previous`. Entries without full extents are skipped — the
+-- derivation is best-effort and returns whatever it could compute.
 local function fold_mutation(kind, record, bounds, tracks)
-    if kind == "insert" then
-        local s, e, t = read_timeline_extent(record)
-        if s then bounds:observe(s, e); if t then tracks[t] = true end end
-    elseif kind == "update" then
-        local s, e, t = read_timeline_extent(record)
-        if s then bounds:observe(s, e); if t then tracks[t] = true end end
-        if record.previous then
-            local ps, pe, pt = read_timeline_extent(record.previous)
-            if ps then bounds:observe(ps, pe); if pt then tracks[pt] = true end end
-        end
-    elseif kind == "delete" then
-        if record.previous then
-            local ps, pe, pt = read_timeline_extent(record.previous)
-            if ps then bounds:observe(ps, pe); if pt then tracks[pt] = true end end
-        end
+    if kind == "insert" or kind == "update" then
+        local s, e, t = try_read_extent(record)
+        if s then bounds:observe(s, e); tracks[t] = true end
+    end
+    if kind == "update" or kind == "delete" then
+        local rec = type(record) == "table" and record.previous or nil
+        local ps, pe, pt = try_read_extent(rec)
+        if ps then bounds:observe(ps, pe); tracks[pt] = true end
     end
 end
 
@@ -142,37 +143,30 @@ function M.apply_post_command(event, command)
         "viewport_policy.apply_post_command: command with :get_parameter required")
 
     local ts = require("ui.timeline.timeline_state")
+    local Signals = require("core.signals")
 
     if event == "undo" or event == "redo" then
         local region = M.derive_change_region(command)
         if region and region.time_range then
-            if ts.surface_range then
-                ts.surface_range(region.time_range.start_frame, region.time_range.end_frame)
-            end
+            ts.surface_range(region.time_range.start_frame, region.time_range.end_frame)
             -- Vertical axis: emit a signal so the timeline_view can
             -- scroll affected tracks into view. The view owns its
             -- vertical scroll offset as instance state, so we can't
-            -- mutate it from the state layer — pub/sub via Signals is
-            -- the plumbing that matches the project's MVC rule (views
-            -- pull, they aren't pushed at).
-            if region.track_set and next(region.track_set) ~= nil then
+            -- mutate it from the state layer — pub/sub matches the
+            -- project's MVC rule (views pull, they aren't pushed at).
+            if next(region.track_set) ~= nil then
                 local track_ids = {}
                 for id, _ in pairs(region.track_set) do
                     table.insert(track_ids, id)
                 end
                 table.sort(track_ids)  -- deterministic order for testability
-                local ok_sig, Signals = pcall(require, "core.signals")
-                if ok_sig and Signals and Signals.emit then
-                    Signals.emit("viewport_surface_tracks", track_ids)
-                end
+                Signals.emit("viewport_surface_tracks", track_ids)
             end
             return
         end
     end
 
-    if ts.surface_playhead then
-        ts.surface_playhead()
-    end
+    ts.surface_playhead()
 end
 
 return M

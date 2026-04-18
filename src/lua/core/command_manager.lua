@@ -391,10 +391,7 @@ function M.execute_interactive(command_name, params)
     if wrapped_ui and executed_command and type(result) == "table" and result.success then
         local spec = executed_command.type and registry.get_spec(executed_command.type) or nil
         if not (spec and spec.skip_execute_viewport_policy) then
-            local ok_policy, viewport_policy = pcall(require, "ui.timeline.viewport_policy")
-            if ok_policy and viewport_policy and viewport_policy.apply_post_command then
-                viewport_policy.apply_post_command("execute", executed_command)
-            end
+            require("ui.timeline.viewport_policy").apply_post_command("execute", executed_command)
         end
     end
 
@@ -2044,10 +2041,7 @@ local function apply_undo_ceremony(cmd)
     -- Viewport surfacing policy: surface the change region of the undone
     -- command (from __timeline_mutations), falling back to the playhead
     -- when no region is present (e.g. non-clip-mutating commands).
-    local ok_policy, viewport_policy = pcall(require, "ui.timeline.viewport_policy")
-    if ok_policy and viewport_policy and viewport_policy.apply_post_command then
-        viewport_policy.apply_post_command("undo", cmd)
-    end
+    require("ui.timeline.viewport_policy").apply_post_command("undo", cmd)
     notify_command_event({
         event = "undo",
         command = cmd,
@@ -2167,10 +2161,7 @@ local function apply_redo_ceremony(cmd)
     -- Viewport surfacing policy: surface the change region of the redone
     -- command, falling back to the playhead when no region is present.
     if not skip_playhead then
-        local ok_policy, viewport_policy = pcall(require, "ui.timeline.viewport_policy")
-        if ok_policy and viewport_policy and viewport_policy.apply_post_command then
-            viewport_policy.apply_post_command("redo", cmd)
-        end
+        require("ui.timeline.viewport_policy").apply_post_command("redo", cmd)
     end
     notify_command_event({
         event = "redo",

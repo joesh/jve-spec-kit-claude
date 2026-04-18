@@ -8,6 +8,7 @@
 --
 -- @file redo.lua
 local M = {}
+local log = require("core.logger").for_area("commands")
 
 local SPEC = {
     undoable = false,
@@ -25,16 +26,16 @@ function M.register(executors, undoers, db)
     local function executor(command)
         local command_manager = require("core.command_manager")
         if not command_manager.can_redo() then
-            print("Nothing to redo")
+            log.event("Redo: nothing to redo")
             return true
         end
         local result = command_manager.redo()
         if result.success then
-            print("Redo complete")
+            log.event("Redo: complete")
         elseif result.error_message then
-            print("Nothing to redo (" .. result.error_message .. ")")
+            log.event("Redo: nothing to redo (%s)", result.error_message)
         else
-            print("Nothing to redo")
+            log.event("Redo: nothing to redo")
         end
         return true
     end

@@ -197,4 +197,62 @@ do
     print("  7. missing mutations → nil ✓")
 end
 
+-- -----------------------------------------------------------------------
+-- 8. Partial/malformed mutations: the mutation protocol legitimately
+-- ships deletes as raw clip_id strings in some paths (timeline_state
+-- delete-by-id; command_helper gather_deletes), and wrappers may forward
+-- partial records. Region derivation is best-effort — it unions
+-- whatever extents it can read and silently skips entries without them.
+-- The result is a smaller-but-correct region, not a failure.
+-- -----------------------------------------------------------------------
+do
+    -- Deletes as raw clip_id strings (timeline_state.apply_mutations shape)
+    -- mixed with a full insert. Region = just the insert.
+    local cmd = make_command({
+        sequence_id = "seq1",
+        inserts = {
+            { track_id = "v1", timeline_start_frame = 100, duration_frames = 200 },
+        },
+        updates = {},
+        deletes = { "clip_id_a", "clip_id_b" },
+    })
+    local region = viewport_policy.derive_change_region(cmd)
+    assert(region, "region derived from the insert alone")
+    assert(region.time_range.start_frame == 100 and region.time_range.end_frame == 300,
+        "string-shaped deletes skipped; region covers only the insert")
+    print("  8a. string-shaped deletes skipped, insert still surfaced ✓")
+end
+
+do
+    -- Update without `previous`: the new-state half still contributes.
+    local cmd = make_command({
+        sequence_id = "seq1",
+        inserts = {},
+        updates = {
+            { track_id = "v1", timeline_start_frame = 500, duration_frames = 100 },
+        },
+        deletes = {},
+    })
+    local region = viewport_policy.derive_change_region(cmd)
+    assert(region and region.time_range.start_frame == 500
+        and region.time_range.end_frame == 600,
+        "update without previous contributes its new state only")
+    print("  8b. update without `previous` → new state still contributes ✓")
+end
+
+do
+    -- All-unreadable payload → derivation returns nil so the policy
+    -- falls back to surface_playhead (same as empty mutations).
+    local cmd = make_command({
+        sequence_id = "seq1",
+        inserts = {},
+        updates = {},
+        deletes = { "clip_a", "clip_b" },
+    })
+    local region = viewport_policy.derive_change_region(cmd)
+    assert(region == nil,
+        "all-unreadable mutations → nil (caller falls back to playhead)")
+    print("  8c. all-unreadable payload → nil ✓")
+end
+
 print("\n✅ test_viewport_policy_region_derivation.lua passed")
