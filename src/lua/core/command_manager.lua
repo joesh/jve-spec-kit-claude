@@ -349,7 +349,8 @@ function M.execute_interactive(command_name, params)
     -- insert) must not trigger surface_playhead — otherwise clicking
     -- a clip off-screen would scroll the viewport back to the playhead,
     -- away from what the user just clicked on.
-    local playhead_pre = require("ui.timeline.timeline_state").get_playhead_position()
+    local ts = require("ui.timeline.timeline_state")
+    local playhead_pre = ts.get_playhead_position()
 
     local result = nil
     local executed_command = nil
@@ -399,7 +400,7 @@ function M.execute_interactive(command_name, params)
     if wrapped_ui and executed_command and type(result) == "table" and result.success then
         local spec = executed_command.type and registry.get_spec(executed_command.type) or nil
         local skip = spec and spec.skip_execute_viewport_policy
-        local playhead_post = require("ui.timeline.timeline_state").get_playhead_position()
+        local playhead_post = ts.get_playhead_position()
         -- Only surface on execute when the playhead actually moved.
         -- Gestures that leave the playhead put (selection, property
         -- toggles, non-advancing inserts) are the user interacting
@@ -933,27 +934,7 @@ local function capture_pre_selection_for_command(command)
     scope:finish()
 end
 
--- Walk __timeline_mutations buckets and return a set of clip_ids the
--- command is about to delete. Handles single-bucket and multi-bucket
--- shapes plus both rich-record and legacy string delete entries.
-local function collect_deleted_clip_ids(command)
-    local set = {}
-    local mutations = command:get_parameter("__timeline_mutations")
-    if type(mutations) ~= "table" then return set end
-    local function scan_bucket(bucket)
-        if type(bucket) ~= "table" or type(bucket.deletes) ~= "table" then return end
-        for _, entry in ipairs(bucket.deletes) do
-            local cid = type(entry) == "table" and entry.clip_id or entry
-            if type(cid) == "string" and cid ~= "" then set[cid] = true end
-        end
-    end
-    if mutations.inserts or mutations.updates or mutations.deletes or mutations.sequence_id then
-        scan_bucket(mutations)
-    else
-        for _, b in pairs(mutations) do scan_bucket(b) end
-    end
-    return set
-end
+local command_helper = require("core.command_helper")
 
 -- Drop any clip_ids from a JSON-encoded selection list that appear in
 -- the exclude set. Used to prune the post-selection capture so clips
@@ -978,7 +959,7 @@ local function capture_post_selection_for_command(command)
     -- clips this command is deleting. Prune them from the captured
     -- post-selection so redo-time selection restore doesn't try to load
     -- a clip the redo itself just deleted.
-    local deleted = collect_deleted_clip_ids(command)
+    local deleted = command_helper.collect_deleted_clip_ids(command)
     clips_json = prune_selection_json(clips_json, deleted)
     command.selected_clip_ids = clips_json
     command.selected_edge_infos = edges_json
@@ -2091,7 +2072,7 @@ local function apply_undo_ceremony(cmd)
     end
     state_mgr.restore_selection_from_serialized(
         cmd.selected_clip_ids_pre, cmd.selected_edge_infos_pre, cmd.selected_gap_infos_pre,
-        collect_deleted_clip_ids(cmd))
+        command_helper.collect_deleted_clip_ids(cmd))
     if cmd.playhead_value ~= nil then
         local ts = require('ui.timeline.timeline_state')
         if ts.set_playhead_position then
@@ -2211,7 +2192,7 @@ local function apply_redo_ceremony(cmd)
     end
     state_mgr.restore_selection_from_serialized(
         cmd.selected_clip_ids, cmd.selected_edge_infos, cmd.selected_gap_infos,
-        collect_deleted_clip_ids(cmd))
+        command_helper.collect_deleted_clip_ids(cmd))
     local skip_playhead = cmd:get_parameter("__skip_sequence_replay_on_undo")
     if cmd.playhead_value_post ~= nil and not skip_playhead then
         local ts = require('ui.timeline.timeline_state')
@@ -2240,7 +2221,7 @@ local function execute_redo_command(cmd)
     -- (e.g., history panel jump after user interaction).
     state_mgr.restore_selection_from_serialized(
         cmd.selected_clip_ids_pre, cmd.selected_edge_infos_pre, cmd.selected_gap_infos_pre,
-        collect_deleted_clip_ids(cmd))
+        command_helper.collect_deleted_clip_ids(cmd))
 
     undo_redo_in_progress = true
     local success, err_msg = run_redo_executor(cmd)
@@ -2386,7 +2367,7 @@ function M.redo_group(group_id)
     if root_cmd and root_cmd ~= last_cmd then
         state_mgr.restore_selection_from_serialized(
             root_cmd.selected_clip_ids, root_cmd.selected_edge_infos, root_cmd.selected_gap_infos,
-            collect_deleted_clip_ids(root_cmd))
+            command_helper.collect_deleted_clip_ids(root_cmd))
     end
     undo_redo_in_progress = false
 
