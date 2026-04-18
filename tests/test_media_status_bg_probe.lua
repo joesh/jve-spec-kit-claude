@@ -134,4 +134,96 @@ do
     media_status.clear()
 end
 
+-- ============================================================
+-- Regression: bg probe batch with no changes must not schedule a persist
+--
+-- Bug: start_background_probe called schedule_persist() unconditionally on
+-- every batch callback, regardless of whether any entry actually changed.
+-- During a large probe this triggered a full-cache rewrite (~1115 entries)
+-- roughly once per second, producing wasted disk I/O and DB churn whenever
+-- the persisted cache already matched reality.
+--
+-- Domain contract: persisting status to disk is only warranted when cached
+-- state actually changed. A probe that confirms the existing cache should
+-- perform no persistence work.
+-- ============================================================
+
+print("\n--- media_status: no-change probe batch does not schedule persist ---")
+do
+    local TEST_DB = "/tmp/jve/test_bg_probe_no_change.db"
+    os.remove(TEST_DB); os.remove(TEST_DB .. "-wal"); os.remove(TEST_DB .. "-shm")
+    os.execute("mkdir -p /tmp/jve")
+    assert(database.init(TEST_DB))
+    local db = database.get_connection()
+    db:exec(require("import_schema"))
+
+    local now = os.time()
+    db:exec(string.format(
+        "INSERT INTO projects (id, name, created_at, modified_at) VALUES ('proj1', 'Test', %d, %d)",
+        now, now))
+
+    local file_a = "/tmp/jve/bg_probe_nochange_a.txt"
+    local file_b = "/tmp/jve/bg_probe_nochange_b.txt"
+    local fa = io.open(file_a, "w"); fa:write("x"); fa:close()
+    local fb = io.open(file_b, "w"); fb:write("x"); fb:close()
+
+    for i, p in ipairs({file_a, file_b}) do
+        db:exec(string.format([[
+            INSERT INTO media (id, project_id, name, file_path, duration_frames,
+                              fps_numerator, fps_denominator, width, height, audio_channels,
+                              created_at, modified_at)
+            VALUES ('m%d', 'proj1', 'n%d', '%s', 100, 24, 1, 1920, 1080, 0, %d, %d)
+        ]], i, i, p, now, now))
+    end
+
+    -- Persist cache that matches reality: both files online
+    local persist_map = {
+        [file_a] = { offline = false, error_code = nil },
+        [file_b] = { offline = false, error_code = nil },
+    }
+    database.set_project_setting("proj1", "media_error_cache", persist_map)
+
+    media_status.clear()
+    media_status.load_persisted("proj1")
+
+    -- Count persist-timer schedulings via the qt single-shot timer hook
+    -- (schedule_persist is the only user of qt_create_single_shot_timer in
+    -- media_status.lua; a scheduling => a pending disk write).
+    local persist_schedules = 0
+    _G.qt_create_single_shot_timer = function(_delay_ms, cb)
+        persist_schedules = persist_schedules + 1
+        -- Don't fire cb — we only care that a persist was scheduled.
+    end
+
+    -- Mock probe: emit a non-final batch that matches the cache exactly
+    -- (no changes), then a final batch that also matches.
+    _G.qt_constants = {
+        EMP = {
+            CODEC_PROBE_START = function(paths, callback)
+                local results = {}
+                for _, p in ipairs(paths) do
+                    results[p] = { offline = false, error_code = nil }
+                end
+                -- Non-final batch: this is the path that previously leaked a persist
+                callback(results, false)
+                -- Final batch: persist_now fires directly (not via schedule_persist)
+                callback({}, true)
+            end,
+            CODEC_PROBE_CANCEL = function() end,
+        },
+        FS = nil,
+    }
+
+    media_status.start_background_probe(nil)
+
+    check("no-change probe batch did not schedule a persist (got "
+        .. tostring(persist_schedules) .. ")", persist_schedules == 0)
+
+    _G.qt_constants = nil
+    _G.qt_create_single_shot_timer = nil
+    os.remove(file_a); os.remove(file_b)
+    os.remove(TEST_DB); os.remove(TEST_DB .. "-wal"); os.remove(TEST_DB .. "-shm")
+    media_status.clear()
+end
+
 print("\n✅ test_media_status_bg_probe.lua passed")

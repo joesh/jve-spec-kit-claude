@@ -500,8 +500,8 @@ function M.start_background_probe(active_sequence_id)
 
         if changed_count > 0 then
             log.event("media_status: probe batch — %d changed", changed_count)
+            schedule_persist()
         end
-        schedule_persist()
 
         if is_final then
             log.event("media_status: bg probe complete")
