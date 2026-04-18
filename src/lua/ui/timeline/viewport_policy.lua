@@ -149,6 +149,23 @@ function M.apply_post_command(event, command)
             if ts.surface_range then
                 ts.surface_range(region.time_range.start_frame, region.time_range.end_frame)
             end
+            -- Vertical axis: emit a signal so the timeline_view can
+            -- scroll affected tracks into view. The view owns its
+            -- vertical scroll offset as instance state, so we can't
+            -- mutate it from the state layer — pub/sub via Signals is
+            -- the plumbing that matches the project's MVC rule (views
+            -- pull, they aren't pushed at).
+            if region.track_set and next(region.track_set) ~= nil then
+                local track_ids = {}
+                for id, _ in pairs(region.track_set) do
+                    table.insert(track_ids, id)
+                end
+                table.sort(track_ids)  -- deterministic order for testability
+                local ok_sig, Signals = pcall(require, "core.signals")
+                if ok_sig and Signals and Signals.emit then
+                    Signals.emit("viewport_surface_tracks", track_ids)
+                end
+            end
             return
         end
     end
