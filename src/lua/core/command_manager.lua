@@ -990,7 +990,7 @@ local function execute_as_non_persisting_parent(command)
     return result
 end
 
--- Should a nested dispatch be auto-promoted to top-level?
+-- Should a dispatch inside a non-persisting parent be promoted to top-level?
 --
 -- Scenario: a non-persisting parent (ShowRelinkDialog, OpenProject, any
 -- modal dialog wrapper) dispatches a persisting child from inside its
@@ -999,12 +999,25 @@ end
 -- and leaving the global cursor stale — so the edit history panel would
 -- never see the command and Cmd+Z would skip it.
 --
+-- Two dispatch shapes reach here with parent_is_non_persisting set:
+--   (a) is_nested=true — truly nested under an open undo_group (e.g. the
+--       non-persisting parent has already opened a recording group and
+--       this child comes in deeper).
+--   (b) is_nested=false at execution_depth>1 — dispatched inside a
+--       non-persisting wrapper that hasn't opened any shared scope, so
+--       _execute_body's is_nested ternary (requires an active undo_group
+--       or root_command_sequence_number) evaluates to false even though
+--       we're architecturally nested.
+-- Both must run top-level AND clear parent_is_non_persisting for the
+-- duration, so their own nested children nest normally instead of
+-- re-promoting and colliding on the open transaction. parent_is_non_persisting
+-- is the correct gate; is_nested alone misses case (b).
+--
 -- A command persists unless its spec explicitly opts out (undoable=false
 -- or no_persist). Commands without a registered spec default to persisting,
 -- matching the _execute_body convention where a nil spec falls through to
 -- the top-level recording path.
-local function should_auto_promote(is_nested, cmd_type)
-    if not is_nested then return false end
+local function should_auto_promote(cmd_type)
     if not parent_is_non_persisting then return false end
     assert(type(cmd_type) == "string" and cmd_type ~= "",
         "should_auto_promote: cmd_type must be a non-empty string")
@@ -1218,7 +1231,7 @@ function M._execute_body(command_or_name, params)
     -- transaction. Restored in the ::cleanup:: label so the outer
     -- non-persisting wrapper's scope is preserved across the promote.
     local promoted_non_persisting_saved
-    if should_auto_promote(is_nested, command.type) then
+    if should_auto_promote(command.type) then
         log.event("Auto-promoting %s to top-level (parent is non-persisting)", command.type)
         is_nested = false
         promoted_non_persisting_saved = parent_is_non_persisting
