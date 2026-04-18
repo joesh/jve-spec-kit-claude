@@ -38,6 +38,7 @@ local uuid = require("uuid")
 local project_gen = require("core.project_generation")
 local path_utils = require("core.path_utils")
 local browser_sort = require("ui.browser_sort")
+local media_status = require("core.media.media_status")
 
 local handler_seq = 0
 
@@ -821,6 +822,8 @@ local function populate_tree()
 
     local function add_master_clip_item(parent_id, clip)
         local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
+        -- Pull offline state from authoritative cache (same as timeline renderer).
+        media_status.ensure_clip_status(clip)
         local duration_ms = clip.duration or media.duration
         local duration_str = format_duration(duration_ms, clip.frame_rate or (media and media.frame_rate))
         local display_width = clip.width or media.width
