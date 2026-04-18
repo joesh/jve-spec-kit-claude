@@ -119,5 +119,56 @@ assert(meta_gap.obscured == false,
 
 print("  OK: gap position reports no clip")
 
+-- ------------------------------------------------------------------
+-- Contract 5: boundary — inclusive start of the higher track's clip.
+-- A frame exactly AT the higher clip's timeline_start is covered.
+-- ------------------------------------------------------------------
+local V5_START = 50
+local _, meta_start = EMP.TMB_GET_VIDEO_FRAME(tmb, 1, V5_START, true)
+assert(meta_start.obscured == true, string.format(
+    "V5 starts at frame %d (inclusive). V1 at that frame must be obscured. "..
+    "Got obscured=%s", V5_START, tostring(meta_start.obscured)))
+
+print("  OK: lower track reports obscured=true at higher track's inclusive start")
+
+-- ------------------------------------------------------------------
+-- Contract 6: boundary — last frame covered by the higher clip.
+-- timeline_end is exclusive, so the last covered frame is end - 1.
+-- ------------------------------------------------------------------
+local V5_LAST_COVERED = 50 + 100 - 1  -- timeline_start + duration - 1 = 149
+local _, meta_last = EMP.TMB_GET_VIDEO_FRAME(tmb, 1, V5_LAST_COVERED, true)
+assert(meta_last.obscured == true, string.format(
+    "V5 last covered frame is %d (end-exclusive). V1 at that frame must be "..
+    "obscured. Got obscured=%s", V5_LAST_COVERED, tostring(meta_last.obscured)))
+
+print("  OK: lower track reports obscured=true at higher track's last covered frame")
+
+-- ------------------------------------------------------------------
+-- Contract 7: boundary — first frame past the higher clip's end.
+-- timeline_end is exclusive, so this frame is NOT covered and V1 is visible.
+-- ------------------------------------------------------------------
+local V5_FIRST_UNCOVERED = 50 + 100  -- timeline_end = 150
+local _, meta_past = EMP.TMB_GET_VIDEO_FRAME(tmb, 1, V5_FIRST_UNCOVERED, true)
+assert(meta_past.clip_id == "lower-track-clip",
+    string.format("V1 still spans frame %d", V5_FIRST_UNCOVERED))
+assert(meta_past.obscured == false, string.format(
+    "V5 ends exclusive at frame %d; V1 must be visible (not obscured) at that "..
+    "frame. Got obscured=%s", V5_FIRST_UNCOVERED, tostring(meta_past.obscured)))
+
+print("  OK: lower track reports obscured=false at higher track's exclusive end")
+
+-- ------------------------------------------------------------------
+-- Contract 8: obscurement is reported consistently regardless of query
+-- mode. The sync-decode path (cache_only=false) reports the same
+-- obscured value as the cache-only path — so any consumer gets a
+-- consistent answer without needing to know which mode was used.
+-- ------------------------------------------------------------------
+local _, meta_sync = EMP.TMB_GET_VIDEO_FRAME(tmb, 1, COVERED_FRAME, false)
+assert(meta_sync.obscured == true, string.format(
+    "obscured must be the same under cache_only=false as under cache_only=true. "..
+    "Got obscured=%s at frame %d", tostring(meta_sync.obscured), COVERED_FRAME))
+
+print("  OK: obscurement is consistent across cache_only true/false")
+
 EMP.TMB_CLOSE(tmb)
 print("  test_tmb_obscured_skip.lua passed")
