@@ -93,23 +93,11 @@ local function fold_bucket(bucket, bounds, tracks)
     for _, rec in ipairs(bucket.deletes or {}) do fold_mutation("delete", rec, bounds, tracks) end
 end
 
---- Compute the change region for a completed command.
--- Returns { time_range = {start_frame, end_frame}, track_set = {id=true,…} }
--- on success, or nil if the command carries no timeline mutations (the
--- caller should fall back to surfacing the playhead).
-function M.derive_change_region(command)
-    assert(command and type(command) == "table" and type(command.get_parameter) == "function",
-        "viewport_policy.derive_change_region: command with :get_parameter required")
-    local mutations = command:get_parameter("__timeline_mutations")
-    if type(mutations) ~= "table" then return nil end
-
-    local bounds = new_bounds()
-    local tracks = {}
-
-    -- Single-bucket shape: the mutations table itself is one bucket, with
-    -- top-level inserts/updates/deletes keys. Multi-bucket shape: each
-    -- value is itself a bucket keyed by sequence_id. Distinguish by the
-    -- presence of any top-level bucket fields.
+-- Fold every bucket in a mutations payload (either single-bucket
+-- {inserts, updates, deletes, sequence_id} or multi-bucket keyed by
+-- sequence_id) into the bounds accumulator + track set.
+local function fold_mutations_payload(mutations, bounds, tracks)
+    if type(mutations) ~= "table" then return end
     if mutations.inserts or mutations.updates or mutations.deletes or mutations.sequence_id then
         fold_bucket(mutations, bounds, tracks)
     else
@@ -117,6 +105,30 @@ function M.derive_change_region(command)
             fold_bucket(bucket, bounds, tracks)
         end
     end
+end
+
+--- Compute the change region for a completed command.
+-- Returns { time_range = {start_frame, end_frame}, track_set = {id=true,…} }
+-- on success, or nil if the command carries no usable timeline mutations
+-- (the caller should fall back to surfacing the playhead).
+--
+-- On undo, run_undoer clears __timeline_mutations before the undoer runs
+-- and the undoer writes its own reverse mutations. Many undoers (e.g.
+-- AddClipsToSequence undo = "delete these clip_ids") ship reverse
+-- mutations as coordinate-less clip_id strings — unusable for region
+-- derivation. run_undoer snapshots the forward mutations onto the
+-- command as __forward_mutations_snapshot before clearing; the region
+-- affected by the command is the same whether you execute or undo it,
+-- so either source yields the same answer. We union both.
+function M.derive_change_region(command)
+    assert(command and type(command) == "table" and type(command.get_parameter) == "function",
+        "viewport_policy.derive_change_region: command with :get_parameter required")
+
+    local bounds = new_bounds()
+    local tracks = {}
+
+    fold_mutations_payload(command:get_parameter("__timeline_mutations"), bounds, tracks)
+    fold_mutations_payload(command:get_parameter("__forward_mutations_snapshot"), bounds, tracks)
 
     local time_range = bounds:finish()
     if time_range == nil then return nil end
