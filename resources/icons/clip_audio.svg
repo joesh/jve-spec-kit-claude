@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- Speaker cone: pixel-aligned polygon (back at x=2..5, mouth at x=9) -->
+  <path d="M2 6 L5 6 L9 3 L9 13 L5 10 L2 10 Z" fill="#32986b" shape-rendering="crispEdges"/>
+  <!-- Sound waves (curves render smooth by default) -->
+  <path d="M10 5.5 Q11.5 8 10 10.5" stroke="#32986b" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+  <path d="M12 4 Q14.5 8 12 12" stroke="#32986b" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+</svg>

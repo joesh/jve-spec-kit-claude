@@ -63,6 +63,8 @@ function M.register(executors, undoers, db)
             assert(rec.duration_frames, "RelinkClips: new_media_record requires duration_frames")
             assert(rec.fps_num, "RelinkClips: new_media_record requires fps_num")
             assert(rec.fps_den, "RelinkClips: new_media_record requires fps_den")
+            local rec_codec = rec.codec
+            local rec_width = rec.width
             local media = Media.create({
                 id = rec.id,
                 project_id = args.project_id,
@@ -73,8 +75,10 @@ function M.register(executors, undoers, db)
                 fps_denominator = rec.fps_den,
                 audio_sample_rate = rec.audio_sample_rate,
                 audio_channels = rec.audio_channels,
-                width = rec.width,
+                width = rec_width,
                 height = rec.height,
+                codec = rec_codec,
+                is_still = Media.classify_is_still(rec_codec, rec_width, rec.duration_frames),
                 metadata = rec.metadata or "{}",
             })
             assert(media:save(), string.format("RelinkClips: failed to save new media %s", rec.id))

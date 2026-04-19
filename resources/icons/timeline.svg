@@ -1,6 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-  <rect fill="#4DB8B8" x="1" y="3" width="14" height="10" rx="1"/>
-  <rect fill="#3A9A9A" x="3" y="5" width="2" height="6"/>
-  <rect fill="#3A9A9A" x="7" y="5" width="2" height="6"/>
-  <rect fill="#3A9A9A" x="11" y="5" width="2" height="6"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" shape-rendering="crispEdges">
+  <!-- Near-black bg -->
+  <rect x="1" y="2" width="14" height="12" fill="#111111"/>
+  <!-- Track 1 (video, blue) -->
+  <rect x="3" y="3" width="10" height="1" fill="#548bb5"/>
+  <!-- Track 2 (video, blue) -->
+  <rect x="4" y="6" width="10" height="1" fill="#548bb5"/>
+  <!-- Track 3 (audio, green) -->
+  <rect x="2" y="9" width="10" height="1" fill="#32986b"/>
+  <!-- Track 4 (audio, green) -->
+  <rect x="3" y="12" width="10" height="1" fill="#32986b"/>
 </svg>

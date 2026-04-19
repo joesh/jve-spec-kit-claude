@@ -302,6 +302,7 @@ function M.import_media(file_path, db, project_id, existing_media_id)
     end
 
     local Media = require("models.media")
+    local media_width = metadata.video and metadata.video.width or 0
     local media = Media.create({
         id = media_id,
         project_id = project_id,
@@ -309,11 +310,12 @@ function M.import_media(file_path, db, project_id, existing_media_id)
         file_path = file_path,
         duration_frames = duration_frames,
         frame_rate = fps,
-        width = metadata.video and metadata.video.width or 0,
+        width = media_width,
         height = metadata.video and metadata.video.height or 0,
         rotation = metadata.video and metadata.video.rotation or 0,
         audio_channels = metadata.audio and metadata.audio.channels or 0,
         codec = primary_codec,
+        is_still = Media.classify_is_still(primary_codec, media_width, duration_frames),
         created_at = os.time(),
         modified_at = os.time()
     })

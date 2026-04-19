@@ -203,6 +203,7 @@ local function build_snapshot_payload(db, sequence_id, clips)
                     height = media.height,
                     audio_channels = media.audio_channels,
                     codec = media.codec,
+                    is_still = media.is_still,
                     metadata = media.metadata,
                     created_at = media.created_at,
                     modified_at = media.modified_at
@@ -349,6 +350,7 @@ local function deserialize_snapshot_payload(json_str)
                 height = media_data.height,
                 audio_channels = media_data.audio_channels,
                 codec = media_data.codec,
+                is_still = media_data.is_still,
                 metadata = media_data.metadata,
                 created_at = media_data.created_at,
                 modified_at = media_data.modified_at

@@ -25,7 +25,7 @@ local log = require("core.logger").for_area("database")
 -- opened — per the no-backward-compat rule, incompatible projects must
 -- be re-imported from the original source (.drp) to create a fresh DB
 -- at the current version. No ALTER TABLE migration path.
-M.SCHEMA_VERSION = 7
+M.SCHEMA_VERSION = 8
 local path_utils = require("core.path_utils")
 
 local BIN_NAMESPACE = "bin"
@@ -1098,7 +1098,8 @@ function M.load_master_clips(project_id)
             m.codec,
             m.metadata,
             m.created_at,
-            m.modified_at
+            m.modified_at,
+            m.is_still
         FROM sequences s
         LEFT JOIN clips c ON c.owner_sequence_id = s.id
         LEFT JOIN media m ON c.media_id = m.id
@@ -1142,6 +1143,13 @@ function M.load_master_clips(project_id)
             local media_metadata = query:value(21)
             local media_created_at = query:value(22)
             local media_modified_at = query:value(23)
+            -- LEFT JOIN: if no media row, keep is_still nil (not false) so the
+            -- browser classifier can distinguish "no media" from "has media, not still".
+            local media_is_still_raw = query:value(24)
+            local media_is_still
+            if media_is_still_raw ~= nil then
+                media_is_still = tonumber(media_is_still_raw) == 1
+            end
 
             local media_info = {
                 id = media_id,
@@ -1158,6 +1166,7 @@ function M.load_master_clips(project_id)
                 metadata = media_metadata,
                 created_at = media_created_at,
                 modified_at = media_modified_at,
+                is_still = media_is_still,
             }
 
             -- The masterclip sequence IS the masterclip (IS-a relationship)
@@ -1202,6 +1211,8 @@ function M.load_master_clips(project_id)
             clip_entry.width = media_width or seq_width
             clip_entry.height = media_height or seq_height
             clip_entry.codec = media_codec
+            clip_entry.is_still = media_is_still
+            clip_entry.audio_channels = media_channels
 
             table.insert(clips, clip_entry)
         end

@@ -45,11 +45,38 @@ local handler_seq = 0
 -- Icon file paths resolved from repo root
 local icon_dir = path_utils.resolve_repo_root() .. "/resources/icons"
 local ICONS = {
-    bin          = icon_dir .. "/bin.svg",
-    timeline     = icon_dir .. "/timeline.svg",
-    clip         = icon_dir .. "/clip.svg",
-    clip_offline = icon_dir .. "/clip_offline.svg",
+    bin                 = icon_dir .. "/bin.svg",
+    timeline            = icon_dir .. "/timeline.svg",
+    clip_video          = icon_dir .. "/clip_video.svg",
+    clip_audio          = icon_dir .. "/clip_audio.svg",
+    clip_still          = icon_dir .. "/clip_still.svg",
+    clip_video_offline  = icon_dir .. "/clip_video_offline.svg",
+    clip_audio_offline  = icon_dir .. "/clip_audio_offline.svg",
+    clip_still_offline  = icon_dir .. "/clip_still_offline.svg",
 }
+
+-- Classify a master-clip row into a media-kind icon bucket.
+-- Priority: still > video > audio. Compound masterclip-sequences (no media row,
+-- no width/audio_channels) resolve to "video" — they read as clips to the user
+-- and video is the common case (deliberate domain choice, not a fallback).
+local function classify_clip_media_kind(clip, media)
+    assert(clip, "classify_clip_media_kind: clip required")
+    media = media or {}
+    if clip.is_still or media.is_still then return "still" end
+    local width = clip.width or media.width
+    if width and width > 0 then return "video" end
+    local audio_channels = media.audio_channels or clip.audio_channels
+    if audio_channels and audio_channels > 0 then return "audio" end
+    return "video"  -- compound masterclip / unknown → video (domain choice)
+end
+
+-- Map (media_kind, offline?) → ICONS key path.
+local function pick_clip_icon(media_kind, offline)
+    assert(media_kind, "pick_clip_icon: media_kind required")
+    local suffix = offline and "_offline" or ""
+    local key = "clip_" .. media_kind .. suffix
+    return assert(ICONS[key], "pick_clip_icon: unknown icon key: " .. key)
+end
 
 -- Column indices (0-based)
 local COL_NAME       = 0
@@ -113,6 +140,7 @@ local REFRESH_COMMANDS = {
     DuplicateMasterClip = true,
     RenameItem = true,
     ImportResolveProject = true,
+    ImportResolveTimeline = true,
     ImportResolveDatabase = true,
     CreateSequence = true,
 }
@@ -857,6 +885,7 @@ local function populate_tree()
             tree_id = qt_constants.CONTROL.ADD_TREE_ITEM(M.tree, columns)
         end
 
+        local media_kind = classify_clip_media_kind(clip, media)
         store_tree_item(M.tree, tree_id, {
             type = "master_clip",
             clip_id = clip.clip_id,
@@ -871,11 +900,11 @@ local function populate_tree()
             height = display_height,
             codec = codec_str,
             metadata = media.metadata,
-            offline = clip.offline
+            offline = clip.offline,
+            media_kind = media_kind,
         })
         -- Icon updated reactively via media_status_changed signal (lazy eval)
-        local icon = clip.offline and ICONS.clip_offline or ICONS.clip
-        qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, icon)
+        qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, pick_clip_icon(media_kind, clip.offline))
         clip.tree_id = tree_id
     end
 
@@ -2592,8 +2621,11 @@ Signals.connect("media_status_changed", function(media_path, status)
     for _, info in pairs(M.item_lookup) do
         if info.type == "master_clip" and info.file_path == media_path then
             info.offline = status.offline
-            local icon = status.offline and ICONS.clip_offline or ICONS.clip
-            qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, info.tree_id, icon)
+            assert(info.media_kind, string.format(
+                "media_status_changed: master_clip info missing media_kind (tree_id=%s file_path=%s)",
+                tostring(info.tree_id), tostring(info.file_path)))
+            qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, info.tree_id,
+                pick_clip_icon(info.media_kind, status.offline))
         end
     end
 end)

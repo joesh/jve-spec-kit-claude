@@ -887,6 +887,8 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             reuse_id = media_info.id
         end
 
+        local codec = media_info.codec or ""
+        local width = media_info.width or 0
         local media = Media.create({
             id = reuse_id,
             project_id = project_id,
@@ -894,9 +896,11 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             name = media_info.name or tostring(key or file_path),
             duration_frames = duration,  -- already integer frames from XML parsing
             frame_rate = frame_rate,
-            width = media_info.width,
+            width = width,
             height = media_info.height,
-            audio_channels = media_info.audio_channels or 0
+            audio_channels = media_info.audio_channels or 0,
+            codec = codec,
+            is_still = Media.classify_is_still(codec, width, duration),
         })
 
         if not media then

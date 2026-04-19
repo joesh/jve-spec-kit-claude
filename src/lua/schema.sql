@@ -1,4 +1,4 @@
--- JVE Database Schema V6.0
+-- JVE Database Schema V8
 -- "Scorched Earth" - Frame-Accurate, Rational Timebase
 -- No backward compatibility with legacy schemas.
 
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (7);
+INSERT OR IGNORE INTO schema_version (version) VALUES (8);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -55,8 +55,11 @@ CREATE TABLE IF NOT EXISTS media (
     rotation INTEGER DEFAULT 0, -- 0, 90, 180, 270 from display matrix
     audio_channels INTEGER DEFAULT 0,
     codec TEXT DEFAULT '',
+    -- Still-image flag: 1 = still (JPEG/PNG/TIFF/etc. or single-frame), 0 = motion or audio.
+    -- Set at import time by Media.classify_is_still(). Used by the browser to pick icon.
+    is_still INTEGER NOT NULL DEFAULT 0 CHECK(is_still IN (0, 1)),
     metadata TEXT DEFAULT '{}', -- JSON
-    
+
     created_at INTEGER NOT NULL,
     modified_at INTEGER NOT NULL
 );

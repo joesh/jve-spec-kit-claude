@@ -306,6 +306,37 @@ end
 -- Helpers
 -- ---------------------------------------------------------------------------
 
+-- Image codecs known to represent single-frame still media.
+local STILL_IMAGE_CODECS = {
+    mjpeg = true, jpeg = true, jpg = true,
+    png = true, apng = true,
+    tiff = true, tif = true,
+    bmp = true, gif = true,
+    webp = true, heic = true, heif = true,
+}
+
+--- Classify a media file as a still image.
+-- Rule: codec is a known image codec, OR the media has video dimensions
+-- and exactly one frame of duration. Pure function, no side effects.
+-- @param codec string|nil codec name (nil/"" means unknown codec)
+-- @param width number|nil pixel width (nil/0 means no video — audio-only, compound, or unknown)
+-- @param duration_frames number integer frames in native timebase (must be > 0)
+-- @return boolean
+function M.classify_is_still(codec, width, duration_frames)
+    assert(type(duration_frames) == "number" and duration_frames > 0, string.format(
+        "Media.classify_is_still: duration_frames must be a positive number, got %s",
+        tostring(duration_frames)))
+    assert(width == nil or type(width) == "number", string.format(
+        "Media.classify_is_still: width must be a number or nil, got %s", type(width)))
+    if codec and codec ~= "" and STILL_IMAGE_CODECS[codec:lower()] then
+        return true
+    end
+    if width and width > 0 and duration_frames == 1 then
+        return true
+    end
+    return false
+end
+
 -- Helper to decompose float rate to num/den (simplified for migration)
 local function rate_from_float(fps)
     assert(fps, "rate_from_float: fps must not be nil")
@@ -376,6 +407,7 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
         audio_sample_rate = tonumber(params.audio_sample_rate) or 0, -- NSF-OK: 0 = no audio or unknown
         audio_channels = tonumber(params.audio_channels) or 0, -- NSF-OK: 0 = unknown/not applicable
         codec = params.codec or "", -- NSF-OK: "" = unknown codec
+        is_still = params.is_still and true or false, -- NSF-OK: nil = not still (default)
         created_at = params.created_at or os.time(),
         modified_at = params.modified_at or os.time(),
         metadata = params.metadata or '{}',
@@ -395,7 +427,7 @@ function M.load(media_id)
     local query = assert(db:prepare([[
         SELECT id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
                width, height, rotation, audio_sample_rate, audio_channels, codec,
-               created_at, modified_at, metadata, file_uuid
+               created_at, modified_at, metadata, file_uuid, is_still
         FROM media WHERE id = ?
     ]]), string.format("Media.load: failed to prepare query for media_id=%s", media_id))
 
@@ -434,6 +466,11 @@ function M.load(media_id)
         metadata = query:value(15),
         file_uuid = query:value(16),  -- may be nil for non-DRP media
     }
+    local is_still_raw = query:value(17)
+    assert(is_still_raw ~= nil, string.format(
+        "Media.load: is_still is NULL for media_id=%s (column is NOT NULL — schema corruption)",
+        tostring(media_id)))
+    media.is_still = tonumber(is_still_raw) == 1
 
     query:finalize()
 
@@ -595,8 +632,8 @@ function M:save()
 
     local query = db:prepare([[
         INSERT INTO media (id, project_id, name, file_path, file_uuid, duration_frames, fps_numerator, fps_denominator,
-            width, height, rotation, audio_sample_rate, audio_channels, codec, created_at, modified_at, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            width, height, rotation, audio_sample_rate, audio_channels, codec, is_still, created_at, modified_at, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             project_id = excluded.project_id,
             name = excluded.name,
@@ -611,6 +648,7 @@ function M:save()
             audio_sample_rate = excluded.audio_sample_rate,
             audio_channels = excluded.audio_channels,
             codec = excluded.codec,
+            is_still = excluded.is_still,
             modified_at = excluded.modified_at,
             metadata = excluded.metadata
     ]])
@@ -631,9 +669,13 @@ function M:save()
     query:bind_value(12, self.audio_sample_rate or 0)
     query:bind_value(13, self.audio_channels)
     query:bind_value(14, self.codec)
-    query:bind_value(15, self.created_at)
-    query:bind_value(16, self.modified_at)
-    query:bind_value(17, self.metadata)
+    assert(type(self.is_still) == "boolean", string.format(
+        "Media:save: is_still must be boolean, got %s (media_id=%s)",
+        type(self.is_still), tostring(self.id)))
+    query:bind_value(15, self.is_still and 1 or 0)
+    query:bind_value(16, self.created_at)
+    query:bind_value(17, self.modified_at)
+    query:bind_value(18, self.metadata)
 
     if not query:exec() then
         log.warn("Media:save: Query execution failed: %s", query:last_error())

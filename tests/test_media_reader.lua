@@ -171,6 +171,13 @@ local mock_saved_media = {}
 
 -- Mock Media model
 package.loaded["models.media"] = {
+    classify_is_still = function(codec, width, duration_frames)
+        local IMG = { mjpeg=true, jpeg=true, jpg=true, png=true, tiff=true,
+                      tif=true, bmp=true, gif=true, webp=true, heic=true, heif=true, apng=true }
+        if codec and codec ~= "" and IMG[codec:lower()] then return true end
+        if (width or 0) > 0 and (duration_frames or 0) == 1 then return true end
+        return false
+    end,
     create = function(params)
         return {
             id = params.id,
@@ -182,6 +189,7 @@ package.loaded["models.media"] = {
             width = params.width,
             height = params.height,
             audio_channels = params.audio_channels,
+            is_still = params.is_still,
             created_at = params.created_at,
             modified_at = params.modified_at,
             save = function(self)

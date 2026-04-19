@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" shape-rendering="crispEdges">
+  <!-- Solid filmstrip body, square corners -->
+  <rect x="1" y="2" width="14" height="12" fill="#548bb5"/>
+  <!-- Top sprockets -->
+  <rect x="2" y="3" width="2" height="2" fill="#000000"/>
+  <rect x="5" y="3" width="2" height="2" fill="#000000"/>
+  <rect x="8" y="3" width="2" height="2" fill="#000000"/>
+  <rect x="11" y="3" width="2" height="2" fill="#000000"/>
+  <!-- Bottom sprockets -->
+  <rect x="2" y="11" width="2" height="2" fill="#000000"/>
+  <rect x="5" y="11" width="2" height="2" fill="#000000"/>
+  <rect x="8" y="11" width="2" height="2" fill="#000000"/>
+  <rect x="11" y="11" width="2" height="2" fill="#000000"/>
+</svg>

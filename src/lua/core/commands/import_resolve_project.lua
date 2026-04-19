@@ -271,14 +271,18 @@ function M.register(executors, undoers, db)
 
         local media_id_map = {}
         for _, media_item in ipairs(import_result_raw.media_items) do
+            local ir_codec = media_item.codec
+            local ir_width = import_result_raw.project.width
             local media = Media.create({
                 project_id = project.id,
                 name = media_item.name,
                 file_path = media_item.file_path,
                 duration_frames = media_item.duration,
                 frame_rate = media_item.frame_rate or import_result_raw.project.frame_rate,
-                width = import_result_raw.project.width,
+                width = ir_width,
                 height = import_result_raw.project.height,
+                codec = ir_codec,
+                is_still = Media.classify_is_still(ir_codec, ir_width, media_item.duration),
             })
 
             if media:save() then

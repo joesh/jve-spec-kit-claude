@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <g shape-rendering="crispEdges">
+    <rect x="1" y="2" width="14" height="12" fill="#548bb5"/>
+    <rect x="2" y="3" width="2" height="2" fill="#000000"/>
+    <rect x="5" y="3" width="2" height="2" fill="#000000"/>
+    <rect x="8" y="3" width="2" height="2" fill="#000000"/>
+    <rect x="11" y="3" width="2" height="2" fill="#000000"/>
+    <rect x="2" y="11" width="2" height="2" fill="#000000"/>
+    <rect x="5" y="11" width="2" height="2" fill="#000000"/>
+    <rect x="8" y="11" width="2" height="2" fill="#000000"/>
+    <rect x="11" y="11" width="2" height="2" fill="#000000"/>
+  </g>
+  <!-- Offline slash: smooth-rendered so the diagonal doesn't stairstep -->
+  <line x1="2" y1="14" x2="14" y2="2" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round"/>
+  <line x1="2" y1="14" x2="14" y2="2" stroke="#E53935" stroke-width="2" stroke-linecap="round"/>
+</svg>

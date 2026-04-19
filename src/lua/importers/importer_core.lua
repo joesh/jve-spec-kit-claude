@@ -281,6 +281,7 @@ function M.import_into_project(project_id, parse_result, opts)
             local media_width = media_item.has_video and project_settings.width or 0
             local media_height = media_item.has_video and project_settings.height or 0
 
+            local media_codec = media_item.codec
             local media = Media.create({
                 project_id = project_id,
                 name = media_item.name,
@@ -292,6 +293,8 @@ function M.import_into_project(project_id, parse_result, opts)
                 audio_channels = media_item.audio_channels,
                 width = media_width,
                 height = media_height,
+                codec = media_codec,
+                is_still = Media.classify_is_still(media_codec, media_width, dur),
                 metadata = media_metadata,
             })
 
