@@ -25,6 +25,7 @@ local Media = require("models.media")
 local Sequence = require("models.sequence")
 local Track = require("models.track")
 local Clip = require("models.clip")
+local Property = require("models.property")
 local clip_link = require("models.clip_link")
 
 -- ---------------------------------------------------------------------------
@@ -536,6 +537,19 @@ function M.import_into_project(project_id, parse_result, opts)
                         do
                             table.insert(result.clip_ids, clip.id)
 
+                            -- Persist substitution history (OriginalClip) when
+                            -- the source format carried one. Rare (replace/
+                            -- relink events only) and archival, so this uses
+                            -- the properties table rather than adding a
+                            -- column to clips.
+                            if clip_data.original_clip then
+                                Property.save_for_clip(clip.id, {{
+                                    property_name = "original_clip",
+                                    property_value = clip_data.original_clip,
+                                    property_type = "json",
+                                }})
+                            end
+
                             -- Assign masterclip to folder bin
                             if clip.master_clip_id then
                                 local bin = nil
@@ -616,6 +630,17 @@ function M.import_into_project(project_id, parse_result, opts)
     end
 
     sub_report(90, "Finalizing…")
+
+    -- Masterclip sequences are created as a side effect of Clip.create via
+    -- Sequence.ensure_masterclip. They're real sequence rows that belong to
+    -- this import — track them so undoers can remove them. Newly-created
+    -- media (result.media_ids) implies a newly-created masterclip.
+    for _, media_id in ipairs(result.media_ids) do
+        local masterclip_id = Sequence.find_masterclip_for_media(media_id)
+        if masterclip_id then
+            table.insert(result.sequence_ids, masterclip_id)
+        end
+    end
 
     log.event("Import complete: %d media, %d sequences, %d tracks, %d clips",
         #result.media_ids, #result.sequence_ids, #result.track_ids, #result.clip_ids)

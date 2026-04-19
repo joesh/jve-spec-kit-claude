@@ -32,6 +32,7 @@ local module_aliases = {
 
     -- Resolve import commands
     ImportResolveProject = "core.commands.import_resolve_project",
+    ImportResolveTimeline = "core.commands.import_resolve_project",
     ImportResolveDatabase = "core.commands.import_resolve_project",
 
     -- Project open

@@ -737,6 +737,49 @@ ensure_tab_for_sequence = function(sequence_id)
     update_tab_scroll_arrows()
 end
 
+--- Read a parameter off a command, tolerating both API shapes.
+local function command_param(command, name)
+    if command.get_parameter then return command:get_parameter(name) end
+    if command.parameters then return command.parameters[name] end
+    return nil
+end
+
+--- Load the first still-open sequence, or the first sequence on the project.
+-- Used when undoing an import whose active tab was just deleted.
+local function load_fallback_sequence()
+    local fallback = tab_order[#tab_order]
+    if fallback and fallback ~= "" then
+        M.load_sequence(fallback)
+        return
+    end
+    local project_id = state.get_project_id and state.get_project_id() or nil
+    if not project_id or project_id == "" then return end
+    local sequences = database.load_sequences(project_id) or {}
+    local fallback_id = sequences[1] and sequences[1].id or nil
+    if fallback_id and fallback_id ~= "" then
+        M.load_sequence(fallback_id)
+    end
+end
+
+--- Undo-side cleanup for commands that create sequences:
+-- close any tabs opened for the about-to-be-deleted sequences, and if the
+-- currently active sequence was among them, switch to a surviving one.
+local function close_created_tabs_on_undo(created_sequence_ids)
+    local active = state.get_sequence_id and state.get_sequence_id() or nil
+    local active_deleted = false
+    for _, sequence_id in ipairs(created_sequence_ids) do
+        if open_tabs[sequence_id] then
+            close_tab(sequence_id)
+        end
+        if active and active == sequence_id then
+            active_deleted = true
+        end
+    end
+    if active_deleted then
+        load_fallback_sequence()
+    end
+end
+
 local function handle_tab_command_event(event)
     if not event or not event.event then
         return
@@ -748,54 +791,29 @@ local function handle_tab_command_event(event)
     end
 
     if command.type == "ImportFCP7XML" then
-        local created_sequence_ids = nil
-        if command.get_parameter then
-            created_sequence_ids = command:get_parameter("created_sequence_ids")
-        elseif command.parameters then
-            created_sequence_ids = command.parameters.created_sequence_ids
-        end
-
-        if type(created_sequence_ids) ~= "table" then
-            return
-        end
+        local created_sequence_ids = command_param(command, "created_sequence_ids")
+        if type(created_sequence_ids) ~= "table" then return end
 
         if event.event == "undo" then
-            local active = state.get_sequence_id and state.get_sequence_id() or nil
-            local active_deleted = false
-            for _, sequence_id in ipairs(created_sequence_ids) do
-                if open_tabs[sequence_id] then
-                    close_tab(sequence_id)
-                end
-                if active and active == sequence_id then
-                    active_deleted = true
-                end
-            end
-
-            if active_deleted then
-                local fallback = nil
-                if #tab_order > 0 then
-                    fallback = tab_order[#tab_order]
-                end
-                if fallback and fallback ~= "" then
-                    M.load_sequence(fallback)
-                else
-                    local project_id = state.get_project_id and state.get_project_id() or nil
-                    if project_id and project_id ~= "" then
-                        local sequences = database.load_sequences(project_id) or {}
-                        local fallback_id = sequences[1] and sequences[1].id or nil
-                        if fallback_id and fallback_id ~= "" then
-                            M.load_sequence(fallback_id)
-                        end
-                    end
-                end
-            end
+            close_created_tabs_on_undo(created_sequence_ids)
         elseif event.event == "execute" or event.event == "redo" then
             local seq_id = created_sequence_ids[1]
             if seq_id then
                 M.load_sequence(seq_id)
             end
         end
+        return
+    end
 
+    if command.type == "ImportResolveTimeline" then
+        local created_sequence_ids = command_param(command, "created_sequence_ids")
+        if type(created_sequence_ids) ~= "table" then return end
+
+        if event.event == "undo" then
+            close_created_tabs_on_undo(created_sequence_ids)
+        end
+        -- Execute/redo: imported sequences appear in the browser; the user
+        -- chooses when to open one. No auto-switch.
         return
     end
 

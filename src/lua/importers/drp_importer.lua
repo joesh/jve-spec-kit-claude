@@ -225,6 +225,42 @@ local function extract_original_path(clip_elem)
     return nil
 end
 
+--- Extract <OriginalClip> substitution history attached to a timeline clip.
+-- Resolve records the pre-substitution state (e.g., pre-relink path, pre-
+-- replace clip) as a nested <OriginalClip> containing an Sm2Ti*Clip element.
+-- These aren't playable on the timeline — they're archival — so the data is
+-- captured here as structured metadata for the active clip rather than
+-- promoted into the media list.
+-- @param clip_elem table: the active clip XML element
+-- @return table|nil: {name, file_path, file_uuid, media_start_time} or nil
+local function extract_original_clip(clip_elem)
+    local oc = find_direct_child(clip_elem, "OriginalClip")
+    if not oc then return nil end
+
+    -- The OriginalClip wraps a single Sm2TiVideoClip or Sm2TiAudioClip child
+    -- describing the previous state. Its fields use the same tag names as a
+    -- regular clip.
+    local inner = find_direct_child(oc, "Sm2TiVideoClip")
+        or find_direct_child(oc, "Sm2TiAudioClip")
+    if not inner then return nil end
+
+    local function text_or_nil(tag)
+        local s = get_text(find_direct_child(inner, tag))
+        return (s and s ~= "") and s or nil
+    end
+
+    local file_path = text_or_nil("MediaFilePath")
+    local file_uuid = text_or_nil("MediaRef")
+    if not file_path and not file_uuid then return nil end  -- nothing to record
+
+    return {
+        name = text_or_nil("Name"),
+        file_path = file_path,
+        file_uuid = file_uuid,
+        media_start_time = tonumber(get_text(find_direct_child(inner, "MediaStartTime"))),
+    }
+end
+
 --- Extract media duration from a MediaPool master clip's binary blobs.
 -- Video master clips: BtVideoInfo > Time → NumFrames (video frame count)
 -- Audio-only clips: BtAudioInfo > TracksBA or EmbeddedAudioVec > ... > TracksBA
@@ -1271,6 +1307,17 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 else
                     in_offset = math.ceil(y_first * native_rate)
                 end
+                -- Resolve writes retime keyframes whose first-anchor Y is
+                -- occasionally sub-frame negative (observed Y in [-0.01, 0)
+                -- seconds with zero bezier tangents — a direct Resolve
+                -- encoding, not float noise). Resolve's Inspector shows
+                -- Source In = media frame 0 for these clips; a frame before
+                -- the file doesn't exist. Snap in_offset from -1 to 0 when
+                -- y_first is within one frame of zero. Beyond that magnitude
+                -- is a real parser bug: the assert below still fires.
+                if in_offset < 0 and (y_first * native_rate) > -1.0 then
+                    in_offset = 0
+                end
                 source_duration = math.floor((y_last - y_first) * native_rate)
             else
                 -- No curve: in_value is source frames at sequence rate.
@@ -1346,7 +1393,8 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 file_id = get_text(find_element(clip_elem, "MediaRef")),
                 frame_rate = frame_rate,              -- sequence rate (for timeline position)
                 native_rate = native_rate,            -- media's native rate (source coords are in this rate)
-                media_start_time = media_start_time   -- seconds since midnight (file TC origin)
+                media_start_time = media_start_time,  -- seconds since midnight (file TC origin)
+                original_clip = extract_original_clip(clip_elem),  -- nil unless substituted
             }
             -- Skip degenerate zero-duration clips (Resolve artifacts: speed changes, disabled items)
             if clip.duration <= 0 then
@@ -1827,12 +1875,17 @@ function M.parse_drp_file(drp_path, progress_cb)
         end
     end
 
-    -- Pass 4: raw XML grep for orphaned paths not found in structured parse
+    -- Pass 4: raw XML grep for orphaned paths not found in structured parse.
+    -- Strip <OriginalClip> blocks first — those record a clip's pre-replace
+    -- state (e.g., a Windows path before the user relinked to Mac) and aren't
+    -- referenced by any active timeline clip. Harvesting them creates phantom
+    -- zero-duration media items.
     for _, seq_file in ipairs(sequence_file_list) do
         local handle = assert(io.open(seq_file, "r"),
             string.format("parse_drp_file: failed to open %s", seq_file))
         local content = file_read_all(handle, "drp_importer:seq_xml:" .. seq_file)
         handle:close()
+        content = content:gsub("<OriginalClip>.-</OriginalClip>", "")
         for raw_path in content:gmatch("<MediaFilePath>(.-)</MediaFilePath>") do
             local cleaned = raw_path:match("^%s*(.-)%s*$")
             if cleaned ~= "" and not media_get(nil, cleaned) then

@@ -1,15 +1,19 @@
---- Import Resolve Commands - Import Resolve projects and databases
+--- Import Resolve Commands - Import Resolve projects, timelines and databases
 --
 -- Responsibilities:
--- - ImportResolveProject: Import .drp file with optional interactive dialog
--- - ImportResolveDatabase: Import Resolve database with optional interactive dialog
+-- - ImportResolveProject: Import .drp file — creates a NEW project
+-- - ImportResolveTimeline: Import .drt file — adds sequences to the CURRENT project
+-- - ImportResolveDatabase: Import Resolve database — creates a NEW project
 --
 -- Non-goals:
 -- - Direct Resolve API integration (file-based import only)
 --
 -- Invariants:
 -- - Commands must receive file paths (or gather from dialog)
--- - Undo deletes all created entities
+-- - Project-creating commands (Project, Database): undo deletes the created
+--   project and everything it contained
+-- - Timeline command: undo deletes only the imported sequences/media/etc.;
+--   the host project is preserved
 --
 -- @file import_resolve_project.lua
 local M = {}
@@ -32,6 +36,22 @@ local SPEC_DRP = {
     },
 }
 
+-- Schema for .drt timeline import command (imports into existing project)
+local SPEC_TIMELINE = {
+    args = {
+        project_id = { required = true },  -- target project (must already exist)
+        interactive = { kind = "boolean" },
+        drt_path = {},
+    },
+    persisted = {
+        created_clip_ids = {},
+        created_media_ids = {},
+        created_sequence_ids = {},
+        created_track_ids = {},
+        target_project_id = {},
+    },
+}
+
 -- Schema for database import command
 local SPEC_DB = {
     args = {
@@ -48,15 +68,12 @@ local SPEC_DB = {
     },
 }
 
---- Shared undoer: delete all entities created by an import command.
--- Works for both ImportResolveProject and ImportResolveDatabase.
-local function import_undoer(command_name, command, db)
-    local args = command:get_all_parameters()
-    assert(args.result_project_id,
-        command_name .. ": missing result_project_id")
-
-    -- Delete in dependency order: properties/links → clips → tracks → sequences → media → project
-    -- Properties and clip_links have no FK cascade — must delete explicitly
+--- Delete entities created by an import command.
+-- Shared dependency-ordered teardown: properties/links → clips → tracks → sequences → media.
+-- @param command_name string: label for assert context
+-- @param args table: command parameters with created_* id arrays
+-- @param db: database connection
+local function delete_imported_entities(command_name, args, db)
     for _, clip_id in ipairs(args.created_clip_ids or {}) do
         local prop_stmt = db:prepare("DELETE FROM properties WHERE clip_id = ?")
         if prop_stmt then
@@ -103,6 +120,16 @@ local function import_undoer(command_name, command, db)
         assert(stmt:exec(), command_name .. ": media DELETE failed for " .. tostring(media_id))
         stmt:finalize()
     end
+end
+
+--- Undoer for project-creating imports: delete entities + the project itself.
+-- Used by ImportResolveProject and ImportResolveDatabase.
+local function import_undoer(command_name, command, db)
+    local args = command:get_all_parameters()
+    assert(args.result_project_id,
+        command_name .. ": missing result_project_id")
+
+    delete_imported_entities(command_name, args, db)
 
     local proj_stmt = db:prepare("DELETE FROM projects WHERE id = ?")
     assert(proj_stmt, command_name .. ": projects DELETE prepare failed")
@@ -111,6 +138,20 @@ local function import_undoer(command_name, command, db)
     proj_stmt:finalize()
 
     log.event("Undo: Deleted imported project and all associated data")
+    return true
+end
+
+--- Undoer for timeline-into-existing-project imports.
+-- Removes imported entities but preserves the host project row.
+local function import_timeline_undoer(command_name, command, db)
+    local args = command:get_all_parameters()
+    assert(args.target_project_id,
+        command_name .. ": missing target_project_id")
+
+    delete_imported_entities(command_name, args, db)
+
+    log.event("Undo: Removed imported timeline entities from project %s",
+        tostring(args.target_project_id))
     return true
 end
 
@@ -139,9 +180,15 @@ local function gather_file_path(command, args, dialog_key, dialog_title, dialog_
 end
 
 --- Persist import results and refresh UI.
-local function persist_and_refresh(command, project_id, import_result)
+-- @param command: command being executed
+-- @param project_id_key string: parameter name for storing the project id
+--        ("result_project_id" for project-creating imports, "target_project_id"
+--        for imports into an existing project)
+-- @param project_id string: project id value
+-- @param import_result table: {media_ids, sequence_ids, track_ids, clip_ids}
+local function persist_and_refresh(command, project_id_key, project_id, import_result)
     command:set_parameters({
-        ["result_project_id"] = project_id,
+        [project_id_key] = project_id,
         ["created_media_ids"] = import_result.media_ids,
         ["created_sequence_ids"] = import_result.sequence_ids,
         ["created_track_ids"] = import_result.track_ids,
@@ -206,13 +253,56 @@ function M.register(executors, undoers, db)
             project_settings = settings,
         })
 
-        persist_and_refresh(command, project.id, import_result)
+        persist_and_refresh(command, "result_project_id", project.id, import_result)
 
         return { success = true, project_id = project.id }
     end
 
     undoers["ImportResolveProject"] = function(command)
         return import_undoer("UndoImportResolveProject", command, db)
+    end
+
+    -- =========================================================================
+    -- ImportResolveTimeline (.drt file → current project)
+    -- =========================================================================
+    -- A Resolve Timeline export (.drt) carries sequence(s) + referenced media
+    -- without enclosing project settings. Import attaches them to the project
+    -- the user is currently working in.
+    executors["ImportResolveTimeline"] = function(command)
+        local args = command:get_all_parameters()
+        assert(args.project_id and args.project_id ~= "",
+            "ImportResolveTimeline: Missing project_id (target)")
+
+        local drt_path, cancel = gather_file_path(
+            command, args,
+            "import_resolve_drt", "Import Resolve Timeline (.drt)",
+            "Resolve Timeline Files (*.drt);;All Files (*)",
+            "drt_path")
+        if not drt_path then return cancel end
+
+        log.event("Importing Resolve timeline into project %s: %s",
+            tostring(args.project_id), tostring(drt_path))
+
+        local drp_importer = require("importers.drp_importer")
+        local parse_result = drp_importer.parse_drp_file(drt_path)
+        if not parse_result.success then
+            return { success = false, error_message = parse_result.error }
+        end
+
+        local import_result = drp_importer.import_into_project(
+            args.project_id, parse_result, {})
+
+        persist_and_refresh(command, "target_project_id", args.project_id, import_result)
+
+        return {
+            success = true,
+            project_id = args.project_id,
+            sequence_ids = import_result.sequence_ids,
+        }
+    end
+
+    undoers["ImportResolveTimeline"] = function(command)
+        return import_timeline_undoer("UndoImportResolveTimeline", command, db)
     end
 
     -- =========================================================================
@@ -375,7 +465,7 @@ function M.register(executors, undoers, db)
         log.event("Imported Resolve database: %d media, %d sequences, %d tracks, %d clips",
             #created_media_ids, #created_sequence_ids, #created_track_ids, #created_clip_ids)
 
-        persist_and_refresh(command, project.id, {
+        persist_and_refresh(command, "result_project_id", project.id, {
             media_ids = created_media_ids,
             sequence_ids = created_sequence_ids,
             track_ids = created_track_ids,
@@ -394,6 +484,11 @@ function M.register(executors, undoers, db)
             executor = executors["ImportResolveProject"],
             undoer = undoers["ImportResolveProject"],
             spec = SPEC_DRP,
+        },
+        ["ImportResolveTimeline"] = {
+            executor = executors["ImportResolveTimeline"],
+            undoer = undoers["ImportResolveTimeline"],
+            spec = SPEC_TIMELINE,
         },
         ["ImportResolveDatabase"] = {
             executor = executors["ImportResolveDatabase"],

@@ -27,6 +27,7 @@ local overrides = {
     RippleDeleteSelection = "Ripple Delete",
     ImportFCP7XML = "Import FCP7 XML",
     ImportResolveProject = "Import Resolve Project",
+    ImportResolveTimeline = "Import Resolve Timeline",
     ImportResolveDatabase = "Import Resolve Database",
     SetMarkIn = "Set Mark In",
     SetMarkOut = "Set Mark Out",
@@ -94,6 +95,10 @@ function M.detail_for_params(command_type, params)
         local name = params.source_name
         local path = params.drp_path
         if name then return name end
+        if path then return basename(path) end
+
+    elseif command_type == "ImportResolveTimeline" then
+        local path = params.drt_path
         if path then return basename(path) end
 
     elseif command_type == "ImportResolveDatabase" then

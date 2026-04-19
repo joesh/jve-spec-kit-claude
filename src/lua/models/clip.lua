@@ -457,18 +457,10 @@ local function save_internal(self, _opts)
         string.format("Clip.save: playhead_frame must be number (got %s) for clip %s",
             type(self.playhead_frame), tostring(self.id)))
 
-    -- Sanity check: source_out must be >= source_in for forward clips.
-    -- (Reverse clips have source_out < source_in, which is valid.)
-    -- Full source_out consistency is validated by project_validator between operations.
-    if self.source_in and self.source_out and self.clip_kind == "timeline" then
-        local source_range = self.source_out - self.source_in
-        if source_range < 0 then
-            -- Might be a reverse clip — check if that's intentional
-            local clip_log = require("core.logger").for_area("database")
-            clip_log.warn("Clip:save: clip %s has source_out(%d) < source_in(%d) — reverse clip?",
-                tostring(self.id), self.source_out, self.source_in)
-        end
-    end
+    -- Source ordering convention: source_out >= source_in is forward;
+    -- source_out < source_in is a reverse clip. Both are valid states.
+    -- Full cross-operation source_out consistency is validated by
+    -- project_validator, not here.
 
     ensure_project_context(self, db)
     assert(self.clip_kind, "Clip.save: clip_kind is required for clip " .. tostring(self.id))

@@ -8,6 +8,7 @@
     <menu name="Import">
       <item name="Media Files..." command="ImportMedia"/>
       <item name="Resolve Project (.drp)..." command="ImportResolveProject"/>
+      <item name="Resolve Timeline (.drt)..." command="ImportResolveTimeline"/>
       <item name="Resolve Database..." command="ImportResolveDatabase"/>
       <item name="FCP7 XML..." command="ImportFCP7XML"/>
       <item name="Premiere XML..." command="ImportPremiereXML"/>
