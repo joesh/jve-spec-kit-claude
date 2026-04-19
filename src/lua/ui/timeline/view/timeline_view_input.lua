@@ -60,7 +60,7 @@ local function discard_drag(view, state)
     view.panel_drag_move = nil
     view.panel_drag_end = nil
     state.set_dragging_playhead(false)
-    view.render()
+    state.flush_pending_notify()
 end
 
 local function edges_match(a, b)
@@ -197,7 +197,7 @@ function M.handle_wheel(view, delta_x, delta_y, modifiers)
             local delta_time = (-horizontal / width) * viewport_duration
             local new_start = math.floor(view.state.get_viewport_start_time() + delta_time)
             view.state.set_viewport_start_time(new_start)
-            view.render()
+            view.state.flush_pending_notify()
         end
     end
 end
@@ -613,7 +613,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 end
                 view.potential_drag = nil
                 if view.drag_state.type ~= "edges" then
-                    view.render()
+                    state.flush_pending_notify()
                 end
             end
         elseif view.drag_state then
@@ -742,7 +742,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 end
             end
             view.potential_drag = nil
-            view.render()
+            state.flush_pending_notify()
             return
         end
         if view.potential_drag then
@@ -755,7 +755,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 local target = pd.picker_target_edges
                 if #target > 0 and #target < #current then
                     state.set_edge_selection(target)
-                    view.render()
+                    state.flush_pending_notify()
                 end
             end
             view.potential_drag = nil
@@ -773,7 +773,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             view.drag_state = nil
             snapping_state.reset_drag()
             if drag.type ~= "edges" then
-                view.render()
+                state.flush_pending_notify()
             end
         elseif view.panel_drag_end then
             view.panel_drag_end(view.widget, x, y)
@@ -783,7 +783,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         -- Legacy pending_gap_click cleanup (gap clicks now handled via rubber_band potential_drag)
         view.pending_gap_click = nil
         state.set_dragging_playhead(false)
-        view.render()
+        state.flush_pending_notify()
     end
 end
 

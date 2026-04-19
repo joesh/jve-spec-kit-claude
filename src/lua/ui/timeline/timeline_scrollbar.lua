@@ -215,6 +215,11 @@ function M.create(widget, state_module)
             scrollbar.dragging_right_edge = false
         end
 
+        -- Sync subscribers before the trailing render() — render() paints the
+        -- scrollbar's view-local drag flags, which don't flow through shared
+        -- state and therefore wouldn't trigger a notify.
+        state_module.flush_pending_notify()
+
         render()
     end
 

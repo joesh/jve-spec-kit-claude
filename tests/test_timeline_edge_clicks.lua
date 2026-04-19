@@ -115,6 +115,7 @@ local function new_state(clips)
     state.clear_gap_selection = function() end
     state.set_selection = function() end
     state.set_dragging_playhead = function() end
+    state.flush_pending_notify = function() end
     state.get_project_id = function() return "proj1" end
     state.get_sequence_id = function() return "seq1" end
 

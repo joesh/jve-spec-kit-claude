@@ -366,7 +366,7 @@ function M.create(widget, state_module)
             end
         end
 
-        render()
+        state_module.flush_pending_notify()
     end
 
     local function on_wheel_event(delta_x, delta_y, modifiers)
@@ -382,7 +382,7 @@ function M.create(widget, state_module)
                 local delta_time = (-horizontal / width) * viewport_duration
                 local new_start = math.floor(state_module.get_viewport_start_time() + delta_time)
                 state_module.set_viewport_start_time(new_start)
-                render()
+                state_module.flush_pending_notify()
             end
         end
     end

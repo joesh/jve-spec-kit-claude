@@ -106,20 +106,40 @@ function M.remove_listener(callback)
     end
 end
 
+local function run_listeners()
+    for _, listener in ipairs(listeners) do
+        listener()
+    end
+end
+
 function M.notify_listeners()
     if notify_timer then return end
     -- Mark scheduled BEFORE creating the timer. With a synchronous timer
     -- (test stubs), the callback runs inside create_single_shot_timer and
     -- resets notify_timer to nil; we must not clobber that nil with the
     -- timer's return value after it fires. Dropping the return handle is
-    -- safe — nothing cancels the timer.
-    notify_timer = true
+    -- safe — nothing cancels the timer. Each scheduling uses a fresh token
+    -- so that flush_pending_notify() can neutralise a pending timer by
+    -- replacing the token without needing to cancel the Qt timer itself.
+    local token = {}
+    notify_timer = token
     create_single_shot_timer(NOTIFY_DEBOUNCE_MS, function()
+        if notify_timer ~= token then return end  -- flushed early or superseded
         notify_timer = nil
-        for _, listener in ipairs(listeners) do
-            listener()
-        end
+        run_listeners()
     end)
+end
+
+-- Run pending listeners synchronously on the current tick. Used by interactive
+-- viewport mutations (wheel, scrollbar, ruler scrub) so that every subscribed
+-- widget repaints on the same frame instead of the input-receiving widget
+-- rendering now and everyone else catching up ~NOTIFY_DEBOUNCE_MS later. The
+-- pending Qt timer, if any, becomes a no-op when it fires because we clear
+-- notify_timer here; the in-flight closure compares against its captured token.
+function M.flush_pending_notify()
+    if not notify_timer then return end
+    notify_timer = nil
+    run_listeners()
 end
 
 return M

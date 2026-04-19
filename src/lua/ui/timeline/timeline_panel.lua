@@ -2147,6 +2147,7 @@ local function zoom_to_fit_if_first_open(sequence)
     state.set_viewport_duration(fit_duration)
     state.set_viewport_start_time(fit_start)
     state.set_playhead_position(min_start)
+    state.flush_pending_notify()
 end
 
 --- Create a tab button for a sequence without activating it.
