@@ -7,7 +7,7 @@
 -- Between every operation, the project validator runs to catch corruption.
 -- Per-operation assertions verify correct behavior (not just valid state).
 
-require("test_env")
+local test_env = require("test_env")
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
@@ -16,24 +16,34 @@ local Clip = require("models.clip")
 local Sequence = require("models.sequence")
 local Command = require("command")
 local validator = require("tests.helpers.project_validator")
+local drp = require("importers.drp_importer")
 
 -- =========================================================================
--- Setup: copy anamnesis project to /tmp
+-- Setup: import the anamnesis gold-timeline DRP fixture into a fresh .jvp.
+-- Using the committed fixture keeps the test reproducible across machines
+-- and robust to schema changes (re-import produces the current schema).
 -- =========================================================================
 
-local home = os.getenv("HOME")
-local src_path = home .. "/Documents/JVE Projects/anamnesis joe edit.jvp"
+local drp_path = test_env.require_fixture(
+    "tests/fixtures/resolve/anamnesis-gold-timeline.drp")
 local dst_path = "/tmp/jve/integ_editor_ops.jvp"
 
 os.execute("mkdir -p /tmp/jve")
-os.execute(string.format("cp %q %q", src_path, dst_path))
-os.execute(string.format("rm -f %q", dst_path .. "-shm"))
+os.remove(dst_path)
+os.remove(dst_path .. "-wal")
+os.remove(dst_path .. "-shm")
 
--- Open project database
+local convert_ok, convert_err = drp.convert(drp_path, dst_path)
+assert(convert_ok, "DRP convert failed: " .. tostring(convert_err))
+-- drp.convert leaves the database open on the freshly-imported project.
+-- Close it so the production open path (which is what the editor uses
+-- when the user picks a .jvp) is exercised end-to-end.
+database.shutdown()
+
 local project_open = require("core.project_open")
 assert(project_open.open_project_database_or_prompt_cleanup(
     database, qt_constants, dst_path, nil),
-    "Failed to open anamnesis project copy")
+    "Failed to open imported project")
 
 local db = database.get_connection()
 assert(db, "No database connection after project open")
