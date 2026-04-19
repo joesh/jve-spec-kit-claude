@@ -79,6 +79,7 @@ M.persist_state_to_db = core.persist_state_to_db
 M.reload_clips = core.reload_clips
 M.add_listener = data.add_listener
 M.remove_listener = data.remove_listener
+M.flush_pending_notify = data.flush_pending_notify
 
 -- Active Edge Drag State (shared across panes; not persisted)
 M.get_active_edge_drag_state = function()
@@ -121,8 +122,12 @@ M.set_viewport_duration = function(duration_obj)
 end
 M.get_playhead_position = viewport.get_playhead_position
 M.set_playhead_position = viewport.set_playhead_position
-M.surface_playhead = viewport.surface_playhead
-M.surface_range = viewport.surface_range
+M.surface_playhead = function()
+    return viewport.surface_playhead(core.persist_state_to_db)
+end
+M.surface_range = function(start_frame, end_frame)
+    return viewport.surface_range(start_frame, end_frame, core.persist_state_to_db)
+end
 M.set_is_playing = function(playing) data.state.is_playing = playing end
 M.time_to_pixel = viewport.time_to_pixel
 M.pixel_to_time = viewport.pixel_to_time

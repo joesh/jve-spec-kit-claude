@@ -124,7 +124,7 @@ local REGION_SCROLL_PADDING_FRACTION = 0.05
 --      playhead may fall outside; region wins.
 -- Viewport-guard-aware (skips when guarded, like surface_playhead).
 -- Coordinates are integer frames.
-function M.surface_range(start_frame, end_frame)
+function M.surface_range(start_frame, end_frame, persist_callback)
     assert(type(start_frame) == "number" and start_frame == math.floor(start_frame),
         "viewport_state.surface_range: start_frame must be integer")
     assert(type(end_frame) == "number" and end_frame == math.floor(end_frame),
@@ -158,6 +158,7 @@ function M.surface_range(start_frame, end_frame)
     if state.viewport_start_time ~= clamped then
         state.viewport_start_time = clamped
         data.notify_listeners()
+        if persist_callback then persist_callback() end
         return true
     end
     return false
@@ -166,7 +167,7 @@ end
 --- Explicitly scroll viewport to center on the playhead.
 -- Unlike ensure_playhead_visible (playback-only auto-scroll),
 -- this works when parked. Used by Find navigate_to_clip.
-function M.surface_playhead()
+function M.surface_playhead(persist_callback)
     local state = data.state
     local duration = state.viewport_duration
     if type(duration) ~= "number" or duration <= 0 then return false end
@@ -182,6 +183,7 @@ function M.surface_playhead()
         if state.viewport_start_time ~= clamped then
             state.viewport_start_time = clamped
             data.notify_listeners()
+            if persist_callback then persist_callback() end
             return true
         end
     end

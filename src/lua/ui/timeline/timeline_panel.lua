@@ -241,17 +241,14 @@ local function apply_timecode_entry_text()
         set_timecode_text_if_changed(get_formatted_playhead_timecode())
         return false
     end
-    -- timecode_input.parse returns Rational; extract integer frames for playhead
     local frame = parsed.frames
     assert(type(frame) == "number" and frame == math.floor(frame),
         "timeline_panel: timecode parse must yield integer frame, got " .. tostring(frame))
-    state.set_playhead_position(frame)
     command_manager.execute_interactive("SetPlayhead", {
         project_id = state.get_project_id(),
         sequence_id = state.get_sequence_id(),
         playhead_position = frame,
     })
-    set_timecode_text_if_changed(get_formatted_playhead_timecode())
     return true
 end
 
