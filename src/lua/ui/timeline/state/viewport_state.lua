@@ -210,22 +210,75 @@ function M.set_viewport_start_time(time_obj, persist_callback)
     end
 end
 
-function M.set_viewport_duration(duration_obj, persist_callback)
+--- Resolve the anchor frame for a duration change.
+-- Returns the frame in the OLD viewport whose pixel fraction should be
+-- preserved in the new viewport. See set_viewport_duration for the opts
+-- contract.
+local function resolve_anchor_frame(opts, old_start, old_duration, playhead)
+    if opts == nil then
+        -- Auto: playhead if it lies inside the current viewport, else center.
+        local old_end = old_start + old_duration
+        if playhead >= old_start and playhead <= old_end then
+            return playhead
+        end
+        return old_start + math.floor(old_duration / 2)
+    end
+
+    assert(type(opts) == "table",
+        "viewport_state.set_viewport_duration: opts must be a table or nil")
+
+    local mode = opts.zoom_around
+    if mode == "playhead" then
+        return playhead
+    elseif mode == "center" then
+        return old_start + math.floor(old_duration / 2)
+    elseif mode == "frame" then
+        local anchor = opts.anchor_frame
+        assert(type(anchor) == "number" and anchor == math.floor(anchor),
+            "viewport_state.set_viewport_duration: zoom_around='frame' requires integer anchor_frame")
+        return anchor
+    end
+
+    assert(false, string.format(
+        "viewport_state.set_viewport_duration: unknown zoom_around %q (expected 'playhead', 'center', or 'frame')",
+        tostring(mode)))
+end
+
+--- Change the viewport duration while holding an anchor point's pixel
+-- fraction fixed within the viewport.
+--
+-- @param duration_obj  integer frames — new viewport duration
+-- @param opts          optional table:
+--                        zoom_around  = "playhead" | "center" | "frame"
+--                        anchor_frame = integer (required iff zoom_around="frame")
+--                      When nil: auto (playhead if visible, else center).
+-- @param persist_callback  optional function called after the state change
+function M.set_viewport_duration(duration_obj, opts, persist_callback)
     local state = data.state
     assert(type(duration_obj) == "number" and duration_obj == math.floor(duration_obj),
         "viewport_state.set_viewport_duration: duration must be integer, got " .. tostring(duration_obj))
 
-    if state.viewport_duration ~= duration_obj then
-        local playhead = state.playhead_position
-        local half = math.floor(duration_obj / 2)
-        local desired_start = playhead - half
-        local clamped_start = clamp_viewport_start(desired_start, duration_obj)
+    if state.viewport_duration == duration_obj then return end
 
-        state.viewport_duration = duration_obj
-        state.viewport_start_time = clamped_start
-        data.notify_listeners()
-        if persist_callback then persist_callback() end
-    end
+    local old_start = state.viewport_start_time
+    local old_duration = state.viewport_duration
+    local playhead = state.playhead_position
+    local anchor = resolve_anchor_frame(opts, old_start, old_duration, playhead)
+
+    -- Preserve the anchor's pixel fraction within the viewport.
+    -- Clamp to [0,1] so an anchor outside the current viewport (e.g. the
+    -- playhead after scrolling away) snaps to the nearest edge rather
+    -- than pushing the viewport further away from it.
+    local fraction = (anchor - old_start) / old_duration
+    if fraction < 0 then fraction = 0 end
+    if fraction > 1 then fraction = 1 end
+    local desired_start = math.floor(anchor - fraction * duration_obj + 0.5)
+    local clamped_start = clamp_viewport_start(desired_start, duration_obj)
+
+    state.viewport_duration = duration_obj
+    state.viewport_start_time = clamped_start
+    data.notify_listeners()
+    if persist_callback then persist_callback() end
 end
 
 function M.get_playhead_position()

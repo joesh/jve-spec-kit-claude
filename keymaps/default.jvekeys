@@ -76,10 +76,14 @@
 "F9" = "Insert advance_playhead=true"
 "F10" = "Overwrite advance_playhead=true"
 # Zoom
+# Plain Cmd+=/Cmd+- → zoom around playhead (or viewport center if playhead off-screen).
+# Shift+Cmd+=/Shift+Cmd+- → zoom around the mouse pointer. Under the canonical
+# key model, Cmd+Plus normalizes to Shift+Cmd+Equal, so both forms resolve here.
 "Shift+Z" = "TimelineZoomFit @timeline"
 "Cmd+Equal" = "TimelineZoomIn @timeline"
-"Cmd+Plus" = "TimelineZoomIn @timeline"
+"Shift+Cmd+Equal" = "TimelineZoomInAtMouse @timeline"
 "Cmd+Minus" = "TimelineZoomOut @timeline"
+"Shift+Cmd+Minus" = "TimelineZoomOutAtMouse @timeline"
 # Snapping
 "N" = "ToggleSnapping @timeline"
 # Tools
@@ -91,7 +95,7 @@
 [SourceMonitor]
 # Source viewer mark bar zoom (same keys as timeline zoom, different context)
 "Cmd+Equal" = "SourceZoomIn @source_monitor"
-"Cmd+Plus" = "SourceZoomIn @source_monitor"
+"Shift+Cmd+Equal" = "SourceZoomIn @source_monitor"
 "Cmd+Minus" = "SourceZoomOut @source_monitor"
 "Shift+Z" = "SourceZoomFit @source_monitor"
 

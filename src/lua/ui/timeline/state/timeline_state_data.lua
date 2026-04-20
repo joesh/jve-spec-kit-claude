@@ -72,6 +72,11 @@ local function fresh_state()
 
         -- Active edge drag (shared across timeline panes; not persisted)
         active_edge_drag_state = nil,
+
+        -- Last pointer position in frames (updated by timeline_view_input on
+        -- mouse move). Consumed by zoom-at-pointer commands. Nil until the
+        -- cursor has been over a timeline widget.
+        last_pointer_frame = nil,
     }
 end
 

@@ -50,6 +50,7 @@ local PER_SEQUENCE_COMMAND_NAMES = {
     "LinkClips", "UnlinkClips",
     "CloseGap",
     "TimelineZoomFit", "TimelineZoomIn", "TimelineZoomOut",
+    "TimelineZoomInAtMouse", "TimelineZoomOutAtMouse",
 }
 
 -- Qt bindings (loaded from qt_constants global)

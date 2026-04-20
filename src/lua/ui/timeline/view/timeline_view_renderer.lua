@@ -702,11 +702,24 @@ function M.render(view)
             visible_width = width - visible_x
         end
 
-        if visible_width <= 0 or x + clip_width < 0 or x > width or y + clip_height <= 0 or y >= height then
+        -- Off-widget cull: clip is entirely outside the paint region.
+        -- Frame-level visibility was already verified by draw_visible_clips,
+        -- so a clip that reaches here overlaps the viewport in frame space —
+        -- but independent flooring of start/end pixel positions at extreme
+        -- zoom-out can collapse the clipped-to-widget visible_width to 0.
+        -- We do NOT cull on visible_width <= 0: we snap to 1 px below so the
+        -- clip remains visible during scroll instead of flashing on/off as
+        -- viewport_start crosses whole-pixel boundaries.
+        if x + clip_width < 0 or x > width or y + clip_height <= 0 or y >= height then
             return
         end
 
-        local draw_width = math.max(1, visible_width)
+        if visible_width < 1 then
+            if visible_x >= width then visible_x = width - 1 end
+            visible_width = 1
+        end
+
+        local draw_width = visible_width
         local clip_enabled = clip.enabled ~= false
 
         -- Stamp clip with cached media status (pure reader — no probing)
