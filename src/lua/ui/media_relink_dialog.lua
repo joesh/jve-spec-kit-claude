@@ -65,31 +65,56 @@ local function build_media_infos(media_list, widgets)
     local media_lines = {}
 
     log.detail("build_media_infos: gathering source extents for %d media", #media_list)
-    local t0 = os.clock()
+    local t0 = qt_monotonic_s()
 
-    for mi, media in ipairs(media_list) do
+    -- Phase 1: collect each media's TC. get_start_tc reads hydrated
+    -- metadata; _ensure_tc_extracted short-circuits when the file is
+    -- offline (the relink scenario). Only media with a known TC rate
+    -- participate in the batched extent query — we must NOT invent a
+    -- default rate (rule 1.14). Media without TC will have a nil
+    -- source extent, which the matcher handles (trimmed-media
+    -- containment check returns false for nil extents).
+    local tc_by_id = {}      -- media_id → {value, rate}; rate may be nil
+    local rates_by_id = {}   -- only media with a known rate
+    for _, media in ipairs(media_list) do
         local tc_value, tc_rate = media:get_start_tc()
-        local extent_start, extent_end = media:get_source_extent(tc_rate or 25)
+        tc_by_id[media.id] = { value = tc_value, rate = tc_rate }
+        if tc_rate then
+            rates_by_id[media.id] = tc_rate
+        end
+    end
+
+    -- Phase 2: one SQL query fetches the clip extents for every media
+    -- in the batch. Replaces 1130× per-media get_source_extent calls.
+    local Media = require("models.media")
+    local extents_by_id = Media.batch_get_source_extents(rates_by_id)
+
+    -- Phase 3: assemble media_info structs and pump the UI.
+    for mi, media in ipairs(media_list) do
+        local tc = tc_by_id[media.id]
+        local extent = extents_by_id[media.id]  -- nil for media without TC rate
+        local file_orig_tc = media:get_file_original_timecode()
 
         media_lines[#media_lines + 1] = string.format("  %s  (%s)",
             media.name or media.id:sub(1, 8), media:get_file_path())
 
-        local file_orig_tc = media:get_file_original_timecode()
         media_infos[#media_infos + 1] = {
             media_id = media.id,
             media_path = media:get_file_path(),
             media_name = media.name or media.id,
-            media_start_tc_value = tc_value,
-            media_start_tc_rate = tc_rate,
+            media_start_tc_value = tc.value,
+            media_start_tc_rate = tc.rate,
             media_file_original_tc = file_orig_tc,
             width = media.width or 0,
             height = media.height or 0,
-            source_extent_start = extent_start,
-            source_extent_end = extent_end,
+            source_extent_start = extent and extent[1],
+            source_extent_end = extent and extent[2],
         }
 
-        -- Update UI every 20 media
-        if mi % 20 == 0 then
+        -- Update UI every 100 media — the per-media loop is now mostly
+        -- Lua work, so we can refresh less often than before without
+        -- losing responsiveness.
+        if mi % 100 == 0 then
             if widgets.status_label then
                 qt.PROPERTIES.SET_TEXT(widgets.status_label,
                     string.format("Loading... %d/%d media", mi, #media_list))
@@ -118,7 +143,7 @@ local function build_media_infos(media_list, widgets)
         qt.DISPLAY.SET_VISIBLE(widgets.status_label, false)
     end
 
-    log.event("build_media_infos: %d media in %.1fs", #media_list, os.clock() - t0)
+    log.event("build_media_infos: %d media in %.1fs", #media_list, qt_monotonic_s() - t0)
     return media_infos
 end
 

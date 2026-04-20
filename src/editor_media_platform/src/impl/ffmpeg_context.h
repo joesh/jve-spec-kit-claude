@@ -34,7 +34,11 @@ public:
     FFmpegFormatContext(FFmpegFormatContext&& other) noexcept;
     FFmpegFormatContext& operator=(FFmpegFormatContext&& other) noexcept;
 
-    // Open a file
+    // Open a file. Runs avformat_find_stream_info so duration, codec
+    // params, and stream rates are populated — required by every current
+    // consumer. Empirically, skipping find_stream_info produced wrong
+    // fps for MXF and wrong duration for some MOV/MP4, so there is no
+    // "fast-open" variant at this layer.
     Result<void> open(const std::string& path);
 
     // Find video stream

@@ -124,16 +124,11 @@ static int lua_emp_media_file_close(lua_State* L) {
     return 0;
 }
 
-// EMP.MEDIA_FILE_INFO(media_file) -> { path, has_video, width, height, fps_num, fps_den, duration_us, is_vfr, has_audio, audio_sample_rate, audio_channels }
-static int lua_emp_media_file_info(lua_State* L) {
-    void* key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
-    auto it = g_media_files.find(key);
-    if (it == g_media_files.end()) {
-        return luaL_error(L, "EMP.MEDIA_FILE_INFO: invalid media file handle");
-    }
-
-    const auto& info = it->second->info();
-
+// Build the Lua info table from a MediaFileInfo. Shared by MEDIA_FILE_INFO
+// (handle-based) and MEDIA_PROBE_BATCH (returns info directly without a
+// MediaFile handle). Caller supplies an empty table slot; this function
+// creates a new table on top of the Lua stack and populates it.
+static void push_media_file_info_table(lua_State* L, const emp::MediaFileInfo& info) {
     lua_newtable(L);
     lua_pushstring(L, info.path.c_str());
     lua_setfield(L, -2, "path");
@@ -149,14 +144,22 @@ static int lua_emp_media_file_info(lua_State* L) {
     lua_setfield(L, -2, "fps_den");
     lua_pushinteger(L, static_cast<lua_Integer>(info.duration_us));
     lua_setfield(L, -2, "duration_us");
+    lua_pushboolean(L, info.has_duration);
+    lua_setfield(L, -2, "has_duration");
     lua_pushboolean(L, info.is_vfr);
     lua_setfield(L, -2, "is_vfr");
 
-    // TC origins
+    // TC origins. The has_*_tc_origin booleans distinguish authoritative
+    // values (container metadata) from default-0 "unknown" values; callers
+    // matching on TC should consult the presence bit, not the integer.
     lua_pushinteger(L, static_cast<lua_Integer>(info.first_frame_tc));
     lua_setfield(L, -2, "first_frame_tc");
+    lua_pushboolean(L, info.has_video_tc_origin);
+    lua_setfield(L, -2, "has_video_tc_origin");
     lua_pushinteger(L, static_cast<lua_Integer>(info.first_sample_tc));
     lua_setfield(L, -2, "first_sample_tc");
+    lua_pushboolean(L, info.has_audio_tc_origin);
+    lua_setfield(L, -2, "has_audio_tc_origin");
     // Legacy alias
     lua_pushinteger(L, static_cast<lua_Integer>(info.first_frame_tc));
     lua_setfield(L, -2, "start_tc");
@@ -178,7 +181,96 @@ static int lua_emp_media_file_info(lua_State* L) {
     lua_setfield(L, -2, "audio_sample_rate");
     lua_pushinteger(L, info.audio_channels);
     lua_setfield(L, -2, "audio_channels");
+}
 
+// EMP.MEDIA_FILE_INFO(media_file) -> info table (same shape as MEDIA_PROBE_BATCH entries)
+static int lua_emp_media_file_info(lua_State* L) {
+    void* key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
+    auto it = g_media_files.find(key);
+    if (it == g_media_files.end()) {
+        return luaL_error(L, "EMP.MEDIA_FILE_INFO: invalid media file handle");
+    }
+    push_media_file_info_table(L, it->second->info());
+    return 1;
+}
+
+// EMP.MEDIA_PROBE(path) -> info_table | nil, err
+//
+// Single-shot metadata probe via emp::MediaFile::ProbeMetadata. Returns
+// the same info shape as MEDIA_FILE_OPEN+MEDIA_FILE_INFO but without
+// retaining a MediaFile handle — cheaper for callers that only need
+// the info table and never intend to decode frames. Use MEDIA_FILE_OPEN
+// when you need to feed a Reader / decode path.
+//
+// For batches use MEDIA_PROBE_BATCH — it dispatches probes across a
+// worker pool with hardware_concurrency parallelism.
+static int lua_emp_media_probe(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    auto result = emp::MediaFile::ProbeMetadata(path);
+    if (result.is_error()) {
+        push_emp_error(L, result.error());
+        return 2;
+    }
+    push_media_file_info_table(L, result.value());
+    return 1;
+}
+
+// EMP.MEDIA_PROBE_BATCH({path, path, ...}, parallelism?) -> {info_or_nil, ...}
+//
+// Parallel metadata probe over many files using emp::MediaFile::ProbeMetadata.
+// Dispatches across a worker pool — 8-way on typical hardware — so bulk
+// probing of large media sets (relink scan, importer preflight) runs in
+// wall-clock proportional to single_probe_ms × N / cores, rather than the
+// serial baseline.
+// Returns an array with one entry per input path, in the same order: either
+// a populated info table (success) or nil (probe failed — input file missing,
+// unsupported container, etc). A failure on one path does not abort the batch.
+//
+// parallelism: optional integer. Default = hardware_concurrency. Pass 1 to
+// force serial execution (useful for debugging).
+static int lua_emp_media_probe_batch(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    size_t parallelism = 0;
+    if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) {
+        lua_Integer p = luaL_checkinteger(L, 2);
+        if (p < 0) {
+            return luaL_error(L, "EMP.MEDIA_PROBE_BATCH: parallelism must be >= 0");
+        }
+        parallelism = static_cast<size_t>(p);
+    }
+
+    // Collect paths from Lua array.
+    std::vector<std::string> paths;
+    lua_Integer n = lua_objlen(L, 1);
+    paths.reserve(static_cast<size_t>(n));
+    for (lua_Integer i = 1; i <= n; ++i) {
+        lua_rawgeti(L, 1, i);
+        if (lua_type(L, -1) != LUA_TSTRING) {
+            lua_pop(L, 1);
+            return luaL_error(L,
+                "EMP.MEDIA_PROBE_BATCH: paths[%d] must be a string", (int)i);
+        }
+        size_t len;
+        const char* s = lua_tolstring(L, -1, &len);
+        paths.emplace_back(s, len);
+        lua_pop(L, 1);
+    }
+
+    // Run the parallel probe. This blocks the Lua thread until all workers join.
+    auto results = emp::MediaFile::ProbeMetadataBatch(paths, parallelism);
+    assert(results.size() == paths.size()
+        && "ProbeMetadataBatch must return one result per input path");
+
+    // Build Lua return array — one entry per path, either info table or nil.
+    lua_createtable(L, static_cast<int>(results.size()), 0);
+    for (size_t i = 0; i < results.size(); ++i) {
+        if (results[i].is_ok()) {
+            push_media_file_info_table(L, results[i].value());
+        } else {
+            lua_pushnil(L);
+        }
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
     return 1;
 }
 
@@ -2163,6 +2255,10 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "MEDIA_FILE_INFO");
     lua_pushcfunction(L, lua_emp_media_file_set_tc_origin_override);
     lua_setfield(L, -2, "MEDIA_FILE_SET_TC_ORIGIN_OVERRIDE");
+    lua_pushcfunction(L, lua_emp_media_probe);
+    lua_setfield(L, -2, "MEDIA_PROBE");
+    lua_pushcfunction(L, lua_emp_media_probe_batch);
+    lua_setfield(L, -2, "MEDIA_PROBE_BATCH");
 
     // Reader functions
     lua_pushcfunction(L, lua_emp_reader_create);

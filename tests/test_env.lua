@@ -151,6 +151,16 @@ end
 
 enforce_nil_call_protection()
 
+-- Provide qt_monotonic_s for plain-luajit test runs. The native binding
+-- (misc_bindings.cpp) uses std::chrono::steady_clock; under the editor
+-- it's registered globally at startup. Tests under luajit don't load
+-- the C++ bindings, so we fall back to os.clock(): not wall-time
+-- accurate when parallel C++ code is involved, but tests don't spawn
+-- parallel probe pools (they inject fake probe_fn).
+if not _G.qt_monotonic_s then
+    _G.qt_monotonic_s = os.clock
+end
+
 -- Lightweight dependency guards for tests
 local function enforce(expected, fn)
     if type(fn) ~= "function" then

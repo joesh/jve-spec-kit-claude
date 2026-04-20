@@ -302,6 +302,15 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_json_encode); lua_setglobal(L, "qt_json_encode");
     lua_pushcfunction(L, lua_json_decode); lua_setglobal(L, "qt_json_decode");
 
+    // Monotonic wall-clock seconds (use instead of os.clock() for
+    // measurements that include parallel C++ work — os.clock() returns
+    // process total CPU time, which overcounts wall clock under threading)
+    lua_pushcfunction(L, lua_qt_monotonic_s); lua_setglobal(L, "qt_monotonic_s");
+
+    // Bulk file stat for the media probe disk cache (avoids 500×
+    // io.popen stat calls that would dominate the cache-lookup cost)
+    lua_pushcfunction(L, lua_qt_file_stat_batch); lua_setglobal(L, "qt_file_stat_batch");
+
     // Register other global utility functions
     lua_pushcfunction(L, lua_set_layout_stretch_factor); lua_setglobal(L, "qt_set_layout_stretch_factor");
     lua_pushcfunction(L, lua_set_widget_alignment); lua_setglobal(L, "qt_set_widget_alignment");

@@ -73,16 +73,20 @@ function M.register(executors, _undoers, db)
             assert(type(results.folder_priority) == "table",
                 "ShowRelinkDialog: results.folder_priority must be array")
 
+            local t_plan = qt_monotonic_s()
             local relink_planner = require("core.relink_planner")
             local plan = relink_planner.build_plan(
                 db, results.relink.relinked, results.relink.failed,
                 results.folder_priority, project_id)
+            local plan_seconds = qt_monotonic_s() - t_plan
 
-            log.event("ShowRelinkDialog: dispatching RelinkClips — %d clip changes, %d media path changes, %d new media, %d salvaged via dedupe",
+            log.event("ShowRelinkDialog: plan built in %.2fs — %d clip changes, %d media path changes, %d new media, %d salvaged via dedupe",
+                plan_seconds,
                 count_keys(plan.clip_relink_map),
                 count_keys(plan.media_path_changes),
                 #plan.new_media_records, plan.salvaged_count)
 
+            local t_execute = qt_monotonic_s()
             local command_manager = require("core.command_manager")
             apply_result = command_manager.execute("RelinkClips", {
                 clip_relink_map    = plan.clip_relink_map,
@@ -90,6 +94,8 @@ function M.register(executors, _undoers, db)
                 new_media_records  = plan.new_media_records,
                 project_id         = project_id,
             })
+            log.event("ShowRelinkDialog: RelinkClips executed in %.2fs",
+                qt_monotonic_s() - t_execute)
         end
 
         local results = media_relink_dialog.show(media_list, parent_window,
