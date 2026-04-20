@@ -115,17 +115,15 @@ function M.parse_shortcut(shortcut_string)
         return nil, string.format("Unknown key: %s", key_name)
     end
 
-    -- Normalize shifted symbols: "Shift+Grave" → Tilde (no Shift),
-    -- "Shift+Tilde" → Tilde (no Shift). Canonical = shifted key, no Shift.
+    -- Normalize shifted symbols: a shifted name ("Tilde", "Plus", etc.) is
+    -- sugar for "Shift + unshifted". Demote the key to its unshifted form
+    -- and set the Shift modifier, regardless of whether the user wrote
+    -- "Tilde", "Shift+Grave", or "Shift+Tilde". Canonical = unshifted + Shift.
     local bit = require("bit")
-    if bit.band(modifiers, MOD.Shift) ~= 0 then
-        local promoted = kb_constants.UNSHIFTED_TO_SHIFTED[key_code]
-        if promoted then
-            key_code = promoted
-            modifiers = bit.band(modifiers, bit.bnot(MOD.Shift))
-        elseif kb_constants.SHIFTED_SYMBOL_KEYS[key_code] then
-            modifiers = bit.band(modifiers, bit.bnot(MOD.Shift))
-        end
+    local demoted = kb_constants.SHIFTED_TO_UNSHIFTED[key_code]
+    if demoted then
+        key_code = demoted
+        modifiers = bit.bor(modifiers, MOD.Shift)
     end
 
     return {
@@ -607,6 +605,24 @@ function M.load_keybindings(file_path)
             M.keybindings[combo_key][#M.keybindings[combo_key] + 1] = binding
             log.detail("  loaded: '%s' → combo_key=%s → %s", key_combo_str, combo_key, binding.command_name)
             count = count + 1
+
+            -- Auto-register a stub for any TOML-bound command not already
+            -- registered via menus.xml. Without this, the keyboard-
+            -- customization dialog's lookup (keyboard_picture:170) asserts
+            -- on any TOML-only command (e.g. F2 → StartRename, which has no
+            -- menu entry). Menu registration, when it happens, supplies
+            -- richer metadata — but stubs here guarantee the dialog never
+            -- crashes on orphans.
+            if binding.command_name and not M.commands[binding.command_name] then
+                M.commands[binding.command_name] = {
+                    id = binding.command_name,
+                    category = category,
+                    name = binding.command_name,
+                    description = "",
+                    context = nil,
+                    current_shortcuts = {},
+                }
+            end
         end
     end
 
@@ -635,11 +651,15 @@ function M.handle_key_event(key, modifiers, context)
     modifiers = bit.band(modifiers, kb_constants.SIGNIFICANT_MOD_MASK)
 
     -- Qt6 shifted-symbol normalization: Qt reports Shift+` as key=Tilde+Shift.
-    -- The Shift is redundant — Tilde IS the shifted Grave. Strip it so TOML
-    -- bindings can use "Tilde" without requiring "Shift+Tilde".
-    if kb_constants.SHIFTED_SYMBOL_KEYS[key]
-        and bit.band(modifiers, kb_constants.MOD.Shift) ~= 0 then
-        modifiers = bit.band(modifiers, bit.bnot(kb_constants.MOD.Shift))
+    -- Canonical form is unshifted key + Shift modifier, so demote the key
+    -- and preserve Shift. Only fires when Shift is present — keypad Plus
+    -- (and similar dedicated keys) arrive WITHOUT Shift and stay as-is,
+    -- keeping keypad bindings distinct from Shift+Equal-style bindings.
+    if bit.band(modifiers, kb_constants.MOD.Shift) ~= 0 then
+        local demoted = kb_constants.SHIFTED_TO_UNSHIFTED[key]
+        if demoted then
+            key = demoted
+        end
     end
 
     local combo_key = string.format("%d_%d", key, modifiers)
