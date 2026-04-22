@@ -16,6 +16,8 @@ This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Re
 - SQLite `.jvp` project files (006-per-sequence-undo)
 - Lua (LuaJIT) + C++ (Qt6) + EMP (editor_media_platform), SQLite, ffprobe (TC probing), dkjson (JSON) (009-drp-importer-must)
 - SQLite `.jvp` project files — new field in existing `metadata` JSON blob (no schema change) (009-drp-importer-must)
+- Lua (LuaJIT) + C++ (Qt6) + Qt6 (via `qt_bindings.cpp` → `qt_constants.lua`), SQLite, `core/command_manager`, `core/signals`, `ui/selection_hub`, `ui/collapsible_section`, `inspectable/{clip,sequence}.lua` (012-rewrite-the-inspector)
+- Project DB (SQLite `.jvp` files) for model state; new persistence file for collapse state (format resolved in Phase 0 — see research.md) (012-rewrite-the-inspector)
 
 READ ENGINEERING.md
 
