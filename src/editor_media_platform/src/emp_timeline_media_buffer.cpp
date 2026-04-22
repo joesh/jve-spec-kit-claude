@@ -1208,14 +1208,25 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
 
         auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt);
         if (decode_result.is_error()) {
-            EMP_LOG_WARN("GetTrackAudio: clip %s decode failed at [%lld,%lld]us — returning silence",
+            // Opened reader, but the decoder errored on this range. This
+            // is the "file is there, something in it is corrupt" case —
+            // beep so the user hears there's a problem. Silence would
+            // be a Half-2 NSF violation (pipeline produced no output,
+            // nothing upstream knows).
+            EMP_LOG_WARN("GetTrackAudio: clip %s decode failed at [%lld,%lld]us — beeping",
                 clip_id.c_str(), (long long)source_t0, (long long)source_t1);
-            return nullptr;
+            return generate_offline_beep(t0, t1 - t0, clip_start_us);
         }
 
         auto chunk = decode_result.value();
         if (!chunk || chunk->frames() == 0) {
-            return nullptr;
+            // Reader succeeded but returned 0 frames — canonical tail-
+            // shortfall: the clip's source range extends past the
+            // file's end. Audio equivalent of the video "Not enough
+            // media at tail" offline frame. Beep to match.
+            EMP_LOG_WARN("GetTrackAudio: clip %s decode returned 0 frames at [%lld,%lld]us — beeping (tail shortfall)",
+                clip_id.c_str(), (long long)source_t0, (long long)source_t1);
+            return generate_offline_beep(t0, t1 - t0, clip_start_us);
         }
 
         first_chunk = build_audio_output(chunk, source_t0, source_t1,
