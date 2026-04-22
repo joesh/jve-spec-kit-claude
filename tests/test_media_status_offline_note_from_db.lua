@@ -86,4 +86,23 @@ assert(media_status.get_offline_note(PATH_WITH) == nil,
         tostring(media_status.get_offline_note(PATH_WITH))))
 print("  OK: cache reflects note clearing (successful relink)")
 
+-- 4. project_changed must wipe the cache before priming the new project,
+--    so stale notes from Project A do not bleed into Project B's first
+--    render. media_status registers the project_changed handler at
+--    priority 12; we emit it here with a fresh project_id that has no
+--    media rows — cache should be empty after.
+--    Re-seed a note for Project A's path FIRST to prove the wipe is real.
+assert(conn:exec(string.format(
+    "UPDATE media SET offline_note = '%s' WHERE id = '%s';",
+    NOTE_JSON, M_WITH_NOTE)), "re-seed failed")
+Signals.emit("media_changed", { [M_WITH_NOTE] = true })
+assert(media_status.get_offline_note(PATH_WITH) == NOTE_JSON,
+    "precondition: cache re-holds the note before project_changed")
+
+Signals.emit("project_changed", "prj-B")
+assert(media_status.get_offline_note(PATH_WITH) == nil, string.format(
+    "project_changed must wipe prior-project's offline_notes; got %s",
+    tostring(media_status.get_offline_note(PATH_WITH))))
+print("  OK: project_changed clears the offline_note cache")
+
 print("✅ test_media_status_offline_note_from_db.lua passed")
