@@ -376,6 +376,49 @@ end
 -- Public API
 -- ----------------------------------------------------------------------
 
+-- Reset ui_state to the empty-selection presentation.
+local function show_empty_state(ui_state, items)
+    if ui_state.active_schema_view then
+        ui_state.schema.deactivate(ui_state.active_schema_view)
+    end
+    ui_state.active_schema_view  = nil
+    ui_state.active_schema_id    = nil
+    ui_state.active_inspectables = {}
+    ui_state.mode                = "empty"
+    ui_state.prev_item_ids       = ids_set(items)
+    ui_state.prev_schemas_present = {}
+    ui_state.base_header         = nil
+    set_header(ui_state, "No editable selection")
+    update_apply_button(ui_state)
+end
+
+-- Build the header label for an active selection. Returns
+-- (base_label, full_header); caller stores the base for later mark-
+-- summary refresh via change_listeners.
+local function build_selection_header(ui_state, resolved, mode, active_schema_id,
+                                       active_names, active_count,
+                                       is_heterogeneous, source_panel_id)
+    local base
+    if is_heterogeneous then
+        base = format_split_header(resolved.schema_counts, active_schema_id)
+    elseif mode == "single" then
+        base = format_single_header(active_schema_id, active_names[1])
+    elseif mode == "multi_edit" then
+        base = format_multi_header(active_schema_id, active_count, false)
+    elseif mode == "multi_read_only" then
+        base = format_multi_header(active_schema_id, active_count, true)
+    end
+
+    local full = base
+    if source_panel_id == "timeline" or active_schema_id == "sequence" then
+        local mark_summary = ui_state.build_mark_summary and ui_state.build_mark_summary()
+        if mark_summary and mark_summary ~= "" then
+            full = full .. "\n" .. mark_summary
+        end
+    end
+    return base, full
+end
+
 --- Route a selection update into the Inspector.
 --  @param items            list of selection items
 --  @param source_panel_id  string
@@ -396,18 +439,7 @@ function M.update_selection(items, source_panel_id, ui_state)
     for _, c in pairs(resolved.schema_counts) do size = size + c end
 
     if size == 0 then
-        -- Empty or all-unresolvable selection.
-        if ui_state.active_schema_view then
-            ui_state.schema.deactivate(ui_state.active_schema_view)
-        end
-        ui_state.active_schema_view = nil
-        ui_state.active_schema_id   = nil
-        ui_state.active_inspectables = {}
-        ui_state.mode = "empty"
-        ui_state.prev_item_ids       = ids_set(items)
-        ui_state.prev_schemas_present = {}
-        set_header(ui_state, "No editable selection")
-        update_apply_button(ui_state)
+        show_empty_state(ui_state, items)
         return
     end
 
@@ -428,12 +460,11 @@ function M.update_selection(items, source_panel_id, ui_state)
     local active_names        = resolved.names_by_schema[active_schema_id] or {}
     local supports_multi      = all_support_multi_edit(active_inspectables)
 
-    local summary = {
+    local mode = compute_mode({
         size = #active_inspectables,
         schema_counts = { [active_schema_id] = #active_inspectables },
         all_support_multi_edit = supports_multi,
-    }
-    local mode = compute_mode(summary)
+    })
     local is_heterogeneous = false
     for id in pairs(schemas_present) do
         if id ~= active_schema_id then is_heterogeneous = true; break end
@@ -452,29 +483,14 @@ function M.update_selection(items, source_panel_id, ui_state)
     ui_state.schema.activate(ui_state.active_schema_view)
     ui_state.schema.apply_filter(ui_state.active_schema_view, ui_state.filter_query or "")
 
-    -- Header.
-    local base
-    if is_heterogeneous then
-        base = format_split_header(resolved.schema_counts, active_schema_id)
-    elseif mode == "single" then
-        base = format_single_header(active_schema_id, active_names[1])
-    elseif mode == "multi_edit" then
-        base = format_multi_header(active_schema_id, #active_inspectables, false)
-    elseif mode == "multi_read_only" then
-        base = format_multi_header(active_schema_id, #active_inspectables, true)
-    end
-    -- Store the base label (schema-identity only, no mark summary) so
-    -- change_listeners can reconstruct the header when marks mutate.
+    -- Header: store base separately so change_listeners can refresh just
+    -- the mark-summary line when marks mutate.
+    local base, full = build_selection_header(
+        ui_state, resolved, mode, active_schema_id,
+        active_names, #active_inspectables,
+        is_heterogeneous, source_panel_id)
     ui_state.base_header = base
-    -- Mark summary (FR-018)
-    local header = base
-    if source_panel_id == "timeline" or active_schema_id == "sequence" then
-        local mark_summary = ui_state.build_mark_summary and ui_state.build_mark_summary()
-        if mark_summary and mark_summary ~= "" then
-            header = header .. "\n" .. mark_summary
-        end
-    end
-    set_header(ui_state, header)
+    set_header(ui_state, full)
 
     -- Load values.
     if mode == "single" or mode == "multi_read_only" then

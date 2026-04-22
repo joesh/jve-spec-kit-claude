@@ -19,6 +19,11 @@ SequenceInspectable.__index = SequenceInspectable
 -- different naming conventions for the same columns across the codebase
 -- is the root "four layers of schema drift" Joe flagged; this keeps the
 -- Inspector on the Sequence.load convention.
+-- pcall-swallow is test-friendly: lazy_fill_record and refresh() both
+-- call this; production always has a connected DB, but unit tests
+-- construct inspectables from in-memory fixtures without one. A bare
+-- Sequence.load() would crash those tests before the field lookup
+-- even ran.
 local function load_sequence(sequence_id)
     local Sequence = require("models.sequence")
     local ok, record = pcall(Sequence.load, sequence_id)

@@ -25,12 +25,12 @@ local metadata_schemas = require("ui.metadata_schemas")
 local ClipInspectable = {}
 ClipInspectable.__index = ClipInspectable
 
+-- Lazy loader for the clip's user-metadata properties. Called only when
+-- a field is NOT present on clip_ref, so the DB roundtrip only happens
+-- for genuine custom-metadata reads (unusual in the schema-driven
+-- Inspector — every declared schema field is a clip-row column).
 local function load_clip_properties(clip_id)
-    local ok, props = pcall(database.load_clip_properties, clip_id)
-    if ok and type(props) == "table" then
-        return props
-    end
-    return {}
+    return database.load_clip_properties(clip_id)
 end
 
 function ClipInspectable.new(opts)
@@ -109,23 +109,23 @@ function ClipInspectable:get(field)
         end
     end
 
-    local properties = self:_ensure_properties()
-
+    -- Edit-session overrides win.
     if self.metadata_overrides[field] ~= nil then
         return self.metadata_overrides[field]
     end
 
-    local clip_table = self.clip_ref
-    -- Use explicit nil-check: `clip_table[field] or nil` wrongly coerces a
-    -- legitimate `false` (for BOOLEAN fields like enabled/offline) into nil,
-    -- so the Inspector showed those checkboxes blank.
-    local clip_value = nil
-    if clip_table and clip_table[field] ~= nil then
-        clip_value = clip_table[field]
+    -- When clip_ref is provided, treat it as authoritative for every
+    -- schema field — an explicit nil on clip_ref means "the column has
+    -- no value right now" (e.g. mark_in unset), not "fall back to DB".
+    -- This keeps the Inspector off the DB hot path; custom user-metadata
+    -- fields (not in any current schema) are the only case that needs
+    -- _ensure_properties, and they're accessed only when no clip_ref
+    -- was supplied (rare).
+    if self.clip_ref then
+        return self.clip_ref[field]
     end
 
-    local property_value = properties[field]
-    return coalesce(clip_value, property_value)
+    return self:_ensure_properties()[field]
 end
 
 function ClipInspectable:set(field, value)
