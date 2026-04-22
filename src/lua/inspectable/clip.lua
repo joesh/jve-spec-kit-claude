@@ -74,16 +74,6 @@ function ClipInspectable:_ensure_properties()
     return self._property_cache
 end
 
-local function coalesce(...)
-    for i = 1, select("#", ...) do
-        local value = select(i, ...)
-        if value ~= nil then
-            return value
-        end
-    end
-    return nil
-end
-
 local function format_rate_display(rate)
     if type(rate) ~= "table" then return nil end
     local num, den = rate.fps_numerator, rate.fps_denominator
