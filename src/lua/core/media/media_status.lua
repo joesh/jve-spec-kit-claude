@@ -23,6 +23,7 @@ local log = require("core.logger").for_area("media")
 local offline_note = require("core.media.offline_note")
 local peak_cache = require("core.media.peak_cache")
 local Media = require("models.media")
+local runtime_mode = require("core.runtime_mode")
 local ffi = require("ffi")
 ffi.cdef("int access(const char *pathname, int mode);")
 
@@ -33,6 +34,19 @@ local _database = nil
 local function get_database()
     if not _database then _database = require("core.database") end
     return _database
+end
+
+-- Guard for handlers where "DB must be open" is a production invariant.
+-- Production: no connection is an upstream bug (project_changed handler
+-- firing before set_path, etc.) → loud assert. Tests: pure-Lua logic
+-- tests that don't stand up a DB reach these handlers via signal emits;
+-- those return false and the caller skips the body.
+local function db_available(caller)
+    if get_database().has_connection() then return true end
+    runtime_mode.assert_production(false,
+        caller .. ": no DB connection in production — DB must be open "
+        .. "by the time this path runs")
+    return false
 end
 
 -- status_cache[media_path] = { offline = bool, error_code = string|nil }
@@ -208,7 +222,7 @@ end
 --- relinker writes new notes via media_changed — `reprobe_media_ids`
 --- keeps the cache in sync after that.
 function M.read_offline_notes_from_db()
-    if not get_database().has_connection() then return end
+    if not db_available("media_status.read_offline_notes_from_db") then return end
     local rows = Media.load_all_offline_notes()
     for _, row in ipairs(rows) do
         local entry = status_cache[row.file_path]
@@ -267,7 +281,7 @@ function M.load_persisted(project_id)
     assert(project_id and project_id ~= "",
         "media_status.load_persisted: project_id required")
     current_project_id = project_id
-    if not get_database().has_connection() then return end
+    if not db_available("media_status.load_persisted") then return end
     local map = get_database().get_project_setting(project_id, DB_SETTING_KEY)
     if map == nil then return end  -- first run: no persisted cache yet
     assert(type(map) == "table", string.format(
@@ -585,8 +599,7 @@ function M.reprobe_media_ids(media_ids)
     assert(type(media_ids) == "table", string.format(
         "media_status.reprobe_media_ids: media_ids must be a table, got %s",
         type(media_ids)))
-    -- Signal handlers must survive invocation without a DB (test mode).
-    if not get_database().has_connection() then return end
+    if not db_available("media_status.reprobe_media_ids") then return end
     for media_id in pairs(media_ids) do
         assert(type(media_id) == "string" and media_id ~= "", string.format(
             "media_status.reprobe_media_ids: invalid media_id key %s",
