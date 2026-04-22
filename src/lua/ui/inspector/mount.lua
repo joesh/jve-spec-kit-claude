@@ -102,10 +102,10 @@ end
 local function build_mark_summary()
     if not (timeline_state and timeline_state.get_mark_in) then return nil end
     local mark_in  = timeline_state.get_mark_in()
-    local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out() or nil
+    local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out()
     local rate = get_frame_rate()
-    local in_text  = mark_in  and frame_utils.format_timecode(mark_in, rate)  or "--"
-    local out_text = mark_out and frame_utils.format_timecode(mark_out - 1, rate) or "--"
+    local in_text  = mark_in  and frame_utils.format_timecode(mark_in, rate)       or "--"
+    local out_text = mark_out and frame_utils.format_timecode(mark_out - 1, rate)  or "--"
     local dur_text = "--"
     if mark_in and mark_out and mark_out >= mark_in then
         dur_text = frame_utils.format_timecode(mark_out - mark_in, rate)
@@ -250,9 +250,10 @@ local function update_error_banner(ui_state, entry, err_message)
     -- Force layout recalc on the Inspector root. Without this the banner
     -- sometimes fails to visually appear when toggled from hidden→shown
     -- (collapsible_section does the same dance at its own toggle sites).
+    -- qt_update_widget is a bound global; absent in headless Lua tests.
     -- luacheck: globals qt_update_widget
     if qt_update_widget and ui_state.root then
-        pcall(qt_update_widget, ui_state.root)
+        qt_update_widget(ui_state.root)
     end
 end
 

@@ -53,7 +53,7 @@ local function on_content_changed(ui_state)
 
         -- Refresh the inspectables' DB cache.
         for _, insp in ipairs(ui_state.active_inspectables) do
-            if insp.refresh then pcall(insp.refresh, insp) end
+            if insp.refresh then insp:refresh() end
         end
 
         -- Re-read non-dirty fields only. Dirty fields keep user's in-flight

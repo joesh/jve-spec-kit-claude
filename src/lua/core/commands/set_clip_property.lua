@@ -1,18 +1,19 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~263 LOC
--- Volatility: unknown
---
--- @file set_clip_property.lua
+--- SetClipProperty: write a single property onto a clip as an
+--- undoable, per-sequence-scoped command.
+---
+--- Two storage paths converge here:
+---   * Clip-row columns (name, enabled, timeline_start, duration,
+---     source_in/out, mark_in/out, volume, playhead_frame): written
+---     via Clip:save. Undo captures the column's pre-mutation value.
+---   * Generic properties (arbitrary string/number/bool metadata):
+---     written to the `properties` table. Undo captures the
+---     properties-table snapshot.
+---
+--- For column-backed fields we also emit __timeline_mutations so
+--- apply_command_mutations patches the Inspector-adjacent clip cache
+--- with a precise delta instead of triggering a full reload.
+---
+--- @file set_clip_property.lua
 local M = {}
 local json = require("dkjson")
 local uuid = require("uuid")
@@ -60,7 +61,7 @@ local NOT_NULL_CLIP_COLUMN = {
 local function build_clip_mutation_payload(clip, property_name, value)
     local mutation_key = MUTATION_KEY[property_name]
     if not mutation_key then return nil end
-    local sequence_id = require("models.clip").get_sequence_id(clip.id)
+    local sequence_id = Clip.get_sequence_id(clip.id)
     local update = { clip_id = clip.id, track_id = clip.track_id }
     -- enabled is stored BOOLEAN in clips.enabled; apply_mutations
     -- compares via ~= so normalize truthy/falsy to true/false here.

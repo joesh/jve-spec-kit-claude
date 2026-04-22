@@ -155,21 +155,25 @@ local function resolve_inspectables(items)
         if inspectable then
             schema_id = inspectable:get_schema_id()
         elseif item.item_type == "timeline_sequence" or item.item_type == "timeline" then
-            local ok, seq = pcall(inspectable_factory.sequence, {
+            -- Factory asserts on missing project_id / sequence_id. Let those
+            -- surface rather than silently dropping the item: a selection
+            -- item that reaches this point without its identifying keys is
+            -- an upstream bug, not an ignorable variant.
+            inspectable = inspectable_factory.sequence({
                 sequence_id = item.sequence_id or item.id,
                 project_id  = item.project_id,
                 sequence    = item.sequence,
             })
-            if ok then inspectable = seq; schema_id = "sequence" end
+            schema_id = "sequence"
         elseif (item.item_type == "timeline_clip" or item.item_type == "master_clip")
             and item.clip_id and item.clip_id ~= "" then
-            local ok, clip = pcall(inspectable_factory.clip, {
+            inspectable = inspectable_factory.clip({
                 clip_id     = item.clip_id,
                 project_id  = item.project_id,
                 sequence_id = item.sequence_id,
                 clip        = item.clip,
             })
-            if ok then inspectable = clip; schema_id = "clip" end
+            schema_id = "clip"
         end
 
         if inspectable and schema_id then
@@ -179,8 +183,7 @@ local function resolve_inspectables(items)
             names_by_schema[schema_id] = names_by_schema[schema_id] or {}
             local display = item.display_name
             if not display and inspectable.get_display_name then
-                local ok, d = pcall(inspectable.get_display_name, inspectable)
-                if ok then display = d end
+                display = inspectable:get_display_name()
             end
             table.insert(names_by_schema[schema_id], display or "")
         end
@@ -201,12 +204,9 @@ local function detect_mixed_values(inspectables, field_key)
         "selection_binding.detect_mixed_values: inspectables required and non-empty")
     assert(field_key and field_key ~= "",
         "selection_binding.detect_mixed_values: field_key required")
-    local first_ok, first_value = pcall(inspectables[1].get, inspectables[1], field_key)
-    if not first_ok then first_value = nil end
+    local first_value = inspectables[1]:get(field_key)
     for i = 2, #inspectables do
-        local ok, v = pcall(inspectables[i].get, inspectables[i], field_key)
-        if not ok then v = nil end
-        if v ~= first_value then
+        if inspectables[i]:get(field_key) ~= first_value then
             return first_value, false
         end
     end
