@@ -93,6 +93,31 @@ assert(data.state.playhead_position == 0,
     .. tostring(data.state.playhead_position))
 assert(data.sequence == nil,
     "after project_changed, cached sequence model must be cleared")
+
+-- Viewport, scroll, and rate must reset to the fresh-state defaults so the
+-- new project's view starts at (0, 300 frames) with 0 scroll. Before the
+-- fix these lingered, so the new project inherited the old viewport.
+assert(data.state.viewport_start_time == 0,
+    "viewport_start_time should reset to 0; got "
+    .. tostring(data.state.viewport_start_time))
+assert(data.state.viewport_duration == 300,
+    "viewport_duration should reset to 300 (fresh-state default); got "
+    .. tostring(data.state.viewport_duration))
+assert(data.state.video_scroll_offset == 0,
+    "video_scroll_offset should reset to 0; got "
+    .. tostring(data.state.video_scroll_offset))
+assert(data.state.audio_scroll_offset == 0,
+    "audio_scroll_offset should reset to 0; got "
+    .. tostring(data.state.audio_scroll_offset))
+-- sequence_frame_rate reverts to fresh-state default (30/1); a project
+-- with a 24fps sequence must not leak that rate into a project that
+-- opens without a sequence loaded.
+assert(data.state.sequence_frame_rate.fps_numerator == 30
+    and data.state.sequence_frame_rate.fps_denominator == 1,
+    "sequence_frame_rate should revert to fresh-state default 30/1; got "
+    .. string.format("%s/%s",
+        tostring(data.state.sequence_frame_rate.fps_numerator),
+        tostring(data.state.sequence_frame_rate.fps_denominator)))
 print("  OK: per-sequence and identity state cleared")
 
 assert(listener_calls > calls_before,

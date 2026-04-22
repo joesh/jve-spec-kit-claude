@@ -157,4 +157,51 @@ assert(command_manager.undo().success, "name undo failed")
 assert(get_cached_name() == "Original", string.format(
     "after name undo: expected 'Original', got %s", tostring(get_cached_name())))
 
+-- ----------------------------------------------------------------------
+-- Check 5: the full MUTATION_KEY set — timeline_start, source_in,
+-- source_out, enabled. set_clip_property.lua maps each of these clip-
+-- column property names onto a specific `_value`-suffixed key in the
+-- __timeline_mutations payload; if ANY mapping regresses, the cache
+-- won't track the DB edit for that column. Without these, a broken
+-- key mapping for (say) source_in would sit undetected until a user
+-- trimmed a clip from the Inspector.
+-- ----------------------------------------------------------------------
+print("Check 5: round-trip every column-backed field")
+
+local function get_cached_field(field)
+    for _, c in ipairs(timeline_state.get_clips()) do
+        if c.id == "c1" then return c[field] end
+    end
+    return nil
+end
+
+local cases = {
+    { field = "timeline_start", type = "NUMBER",  new = 42,    old = 0   },
+    { field = "source_in",      type = "NUMBER",  new = 30,    old = 0   },
+    { field = "source_out",     type = "NUMBER",  new = 200,   old = 120 },
+    { field = "enabled",        type = "BOOLEAN", new = false, old = true},
+}
+
+for _, c in ipairs(cases) do
+    assert(get_cached_field(c.field) == c.old, string.format(
+        "precondition: initial %s should be %s, got %s",
+        c.field, tostring(c.old), tostring(get_cached_field(c.field))))
+
+    local cmd2 = Command.create("SetClipProperty", "p1")
+    cmd2:set_parameter("clip_id", "c1")
+    cmd2:set_parameter("property_name", c.field)
+    cmd2:set_parameter("value", c.new)
+    cmd2:set_parameter("property_type", c.type)
+    local r = command_manager.execute(cmd2)
+    assert(r.success, c.field .. " execute: " .. tostring(r.error_message))
+    assert(get_cached_field(c.field) == c.new, string.format(
+        "after execute, cached %s = %s (want %s) — MUTATION_KEY[%s] probably wrong",
+        c.field, tostring(get_cached_field(c.field)), tostring(c.new), c.field))
+
+    assert(command_manager.undo().success, c.field .. " undo failed")
+    assert(get_cached_field(c.field) == c.old, string.format(
+        "after undo, cached %s = %s (want %s) — undoer's mutation emission wrong",
+        c.field, tostring(get_cached_field(c.field)), tostring(c.old)))
+end
+
 print("✅ test_set_clip_property_undo_column.lua passed")
