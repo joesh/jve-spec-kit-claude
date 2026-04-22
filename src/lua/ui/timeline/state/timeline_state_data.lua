@@ -98,6 +98,17 @@ function M.reset()
     notify_timer = nil
 end
 
+--- Full state reset that preserves listener subscriptions.
+-- Used on project change: views are long-lived and must stay subscribed
+-- across projects so they re-paint when the new model is loaded (or stay
+-- blank when the new project has no active sequence, per feature 010).
+-- Unlike reset(), this does NOT touch the listener list.
+function M.reset_state_preserve_listeners()
+    M.state = fresh_state()
+    M.sequence = nil
+    notify_timer = nil
+end
+
 function M.add_listener(callback)
     table.insert(listeners, callback)
 end

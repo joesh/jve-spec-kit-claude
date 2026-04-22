@@ -541,6 +541,25 @@ function M.clear()
     data.notify_listeners()
 end
 
+--- Full timeline-model reset for a project change. Unlike clear() — which
+--- stays inside the current project and only releases the active sequence —
+--- this drops project identity too and wipes viewport/scroll/rate state so
+--- nothing from the outgoing project bleeds into the new one. Does NOT
+--- persist pending state: by the time project_changed fires, the database
+--- connection has already been swapped to the new project (project_open
+--- calls db.set_path before post_open_init), so a flush here would write
+--- outgoing state into the incoming project's DB. Runs at priority 40 —
+--- project_gen bumped already at priority 1, so current() here stamps
+--- the new generation.
+function M.reset_for_project_change()
+    persist_dirty = false
+    persist_timer = nil
+    data.reset_state_preserve_listeners()
+    persist_gen = project_gen.current()
+    clip_state.invalidate_indexes()
+    data.notify_listeners()
+end
+
 --- Set the project identity without touching the sequence reference. Used by
 --- timeline_panel.create() when opening a project in the no-active-sequence
 --- state (no initial tab). Complements init(seq, pid) for the
@@ -568,7 +587,14 @@ function M.reload_clips(target_sequence_id, opts)
     recompute_gap_clips()
     clip_state.invalidate_indexes()
 
-    -- Refresh selection objects
+    -- Refresh selection objects so anyone holding the stale clip pointers
+    -- (renderer, inspectable caches) gets the freshly-loaded rows. We
+    -- intentionally do NOT re-fire the on_selection_changed callback —
+    -- the Inspector already re-pulls via the content_changed signal
+    -- (see ui/inspector/change_listeners.lua), and an extra selection
+    -- emit during a mutation-driven reload was empirically (TSO
+    -- 2026-04-21) breaking downstream because earlier code nil'd the
+    -- callback here, silencing every subsequent user selection click.
     if #data.state.selected_clips > 0 then
         local refreshed = {}
         for _, c in ipairs(data.state.selected_clips) do
@@ -576,8 +602,6 @@ function M.reload_clips(target_sequence_id, opts)
             if latest then table.insert(refreshed, latest) end
         end
         data.state.selected_clips = refreshed
-        selection_state.set_on_selection_changed(nil) -- Trigger callback?
-        -- Actually selection_state.set_selection(refreshed) would trigger callback
     end
 
     clip_state.inc_version()
