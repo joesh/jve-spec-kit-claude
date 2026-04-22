@@ -428,11 +428,42 @@ function M.build_plan(db, relinked, failed, folder_priority, project_id)
 
     local salvaged = salvage_via_dedupe(state, db, Clip, project_id, failed)
 
+    -- media_offline_notes: JSON-encode coverage info from failed entries
+    -- that described a candidate the relinker rejected for extent.
+    -- Clearing (nil) for successfully-relinked media so a previously-
+    -- written note from an earlier run doesn't linger. RelinkClips
+    -- executor writes these to media.offline_note.
+    -- media_offline_notes pipeline: partial-coverage relinks carry a
+    -- coverage table on the relinked entry; encode it to JSON so the
+    -- RelinkClips executor writes media.offline_note. For clean relinks
+    -- (no coverage info), emit the "__clear__" sentinel so any stale
+    -- note from a previous run gets wiped — a clip that was formerly
+    -- short but is now fully covered shouldn't keep rendering offline.
+    local json = require("dkjson")
+    local media_offline_notes = {}
+    for _, entry in ipairs(relinked) do
+        if entry.coverage then
+            local encoded = assert(json.encode(entry.coverage), string.format(
+                "relink_planner: failed to encode coverage for media %s",
+                tostring(entry.media_id)))
+            media_offline_notes[entry.media_id] = encoded
+        end
+    end
+    for media_id in pairs(state.media_path_changes) do
+        -- Every media in the change set that didn't just get a note
+        -- attached above is a "fully relinked" case: clear any
+        -- lingering offline_note from a prior run.
+        if media_offline_notes[media_id] == nil then
+            media_offline_notes[media_id] = "__clear__"
+        end
+    end
+
     return {
-        clip_relink_map    = state.clip_relink_map,
-        media_path_changes = state.media_path_changes,
-        new_media_records  = state.new_media_records,
-        salvaged_count     = salvaged,
+        clip_relink_map       = state.clip_relink_map,
+        media_path_changes    = state.media_path_changes,
+        new_media_records     = state.new_media_records,
+        media_offline_notes   = media_offline_notes,
+        salvaged_count        = salvaged,
     }
 end
 
