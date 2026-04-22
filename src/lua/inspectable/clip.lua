@@ -1,18 +1,22 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~124 LOC
--- Volatility: unknown
---
--- @file clip.lua
+--- ClipInspectable: Inspector-facing adapter for a single clip.
+---
+--- Three data sources, consulted in this order on get():
+---   1. metadata_overrides — values written during the current edit
+---      session; not yet flushed to the model/DB but authoritative to
+---      the Inspector until Apply commits.
+---   2. clip_ref — the live clip object from timeline_state (columns:
+---      name, enabled, timeline_start, duration, source_in, source_out,
+---      marks, rate, …). Preferred for clip-row fields so the Inspector
+---      stays in sync with timeline edits without a DB roundtrip.
+---   3. properties — rows from the `properties` table loaded via
+---      database.load_clip_properties(). Lazy and cached per instance.
+---
+--- Writes flow through SetClipProperty (always scoped to the clip's
+--- owning sequence for per-sequence undo). TIMECODE payloads are
+--- integer-frames only; rate is single-sourced on the owning entity and
+--- must not be duplicated into the payload.
+---
+--- @file clip.lua
 local database = require("core.database")
 local Command = require("command")
 local command_manager = require("core.command_manager")
@@ -80,9 +84,29 @@ local function coalesce(...)
     return nil
 end
 
+local function format_rate_display(rate)
+    if type(rate) ~= "table" then return nil end
+    local num, den = rate.fps_numerator, rate.fps_denominator
+    if type(num) ~= "number" or type(den) ~= "number" or den == 0 then
+        return nil
+    end
+    if num % den == 0 then
+        return string.format("%d fps", math.floor(num / den + 0.5))
+    end
+    return string.format("%.3f fps", num / den)
+end
+
 function ClipInspectable:get(field)
     if not field or field == "" then
         return nil
+    end
+
+    -- Synthetic display field (no backing column).
+    if field == "rate_display" then
+        local clip_table = self.clip_ref
+        if clip_table and clip_table.rate then
+            return format_rate_display(clip_table.rate)
+        end
     end
 
     local properties = self:_ensure_properties()
@@ -92,7 +116,13 @@ function ClipInspectable:get(field)
     end
 
     local clip_table = self.clip_ref
-    local clip_value = clip_table and clip_table[field] or nil
+    -- Use explicit nil-check: `clip_table[field] or nil` wrongly coerces a
+    -- legitimate `false` (for BOOLEAN fields like enabled/offline) into nil,
+    -- so the Inspector showed those checkboxes blank.
+    local clip_value = nil
+    if clip_table and clip_table[field] ~= nil then
+        clip_value = clip_table[field]
+    end
 
     local property_value = properties[field]
     return coalesce(clip_value, property_value)
@@ -117,14 +147,35 @@ function ClipInspectable:set(field, value)
         return false, "property_type is required"
     end
 
+    -- TIMECODE branch (012 Inspector rewrite, Q3 resolution): integer frames only;
+    -- rate lives on the owning entity and is NEVER carried in the payload.
+    if property_type == "TIMECODE" then
+        assert(type(payload_value) == "number",
+            string.format("ClipInspectable:set(%s): TIMECODE value must be a number, got %s",
+                field, type(payload_value)))
+        assert(payload_value == math.floor(payload_value),
+            string.format("ClipInspectable:set(%s): TIMECODE value must be integer frames, got %s",
+                field, tostring(payload_value)))
+        assert(payload_value >= 0,
+            string.format("ClipInspectable:set(%s): TIMECODE value must be non-negative, got %d",
+                field, payload_value))
+    end
+
     local current = self:get(field)
     if current == payload_value then
         return true
     end
 
+    assert(self.sequence_id and self.sequence_id ~= "",
+        "ClipInspectable:set requires self.sequence_id (per 006-per-sequence-undo " ..
+        "FR-001: SetClipProperty must be scoped to the sequence the clip lives in, " ..
+        "otherwise it lands on the global stack and leaks into other tabs' undo views)")
     local cmd = Command.create("SetClipProperty", self.project_id)
     cmd:set_parameters({
         ["clip_id"] = self.clip_id,
+        -- Route this command onto its owning sequence's undo stack.
+        -- See set_clip_property.lua SPEC.args for rationale.
+        ["sequence_id"] = self.sequence_id,
         ["property_name"] = field,
         ["value"] = payload_value,
         ["property_type"] = property_type,
@@ -132,15 +183,17 @@ function ClipInspectable:set(field, value)
     if default_value ~= nil then
         cmd:set_parameter("default_value", default_value)
     end
-    cmd:set_parameters({
-        ["__skip_selection_snapshot"] = true,
-        ["__skip_timeline_cache"] = true,
-        ["__skip_timeline_reload"] = true,
-    })
-    cmd.stack_id = "global"
+    -- No __skip_timeline_reload: SetClipProperty emits __timeline_mutations
+    -- (see core/commands/set_clip_property.lua) so apply_command_mutations
+    -- patches the timeline's clip cache with a precise delta — no full
+    -- reload. Skipping the UI refresh branch left the cache stale and was
+    -- the root cause of "edit clip name → label stays on timeline".
+    -- __skip_timeline_cache was a dead flag (never read, rule 2.17).
+    -- cmd.stack_id was explicitly "global" — stale and wrong per the
+    -- per-sequence undo design. Stack routing derives from SPEC.args
+    -- (command_manager.lua:1400), not from caller hints.
+    cmd:set_parameter("__skip_selection_snapshot", true)
     cmd.skip_selection_snapshot = true
-    cmd.skip_timeline_cache = true
-    cmd.skip_timeline_reload = true
 
     local result = command_manager.execute_interactive(cmd)
     if not result.success then
