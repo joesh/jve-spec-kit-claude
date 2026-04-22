@@ -7,7 +7,6 @@
 ---
 --- @file set_sequence_metadata.lua
 local M = {}
-local _database = require("core.database")  -- luacheck: ignore 211 (unused, required for module init)
 local log = require("core.logger").for_area("commands")
 
 

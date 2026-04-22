@@ -127,13 +127,11 @@ ui_constants.COLORS = {
     -- Header specific colors
     COLLAPSIBLE_HEADER_HOVER_BACKGROUND_COLOR = COLLAPSIBLE_HEADER_HOVER_BACKGROUND_COLOR,
 
-    -- Inspector-specific (feature 012)
+    -- Inspector-specific (feature 012). Apply/Reset buttons use Qt
+    -- native styling (see mount.lua comment), so no button-color
+    -- constants here.
     INSPECTOR_HEADER_BG           = "#3a3a3a",
     INSPECTOR_CONTENT_BG          = "#2b2b2b",
-    INSPECTOR_APPLY_BTN_BG        = "#4a90e2",
-    INSPECTOR_APPLY_BTN_HOVER     = "#5aa0f2",
-    INSPECTOR_APPLY_BTN_PRESSED   = "#3a80d2",
-    INSPECTOR_APPLY_BTN_DISABLED  = "#606060",
     FIELD_ERROR_BORDER            = "#e64b3d",
     FIELD_READ_ONLY_TEXT          = "#888888",
 }

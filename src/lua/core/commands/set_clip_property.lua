@@ -19,7 +19,6 @@ local json = require("dkjson")
 local uuid = require("uuid")
 local Clip = require("models.clip")
 local log = require("core.logger").for_area("commands")
-local _command_helper = require("core.command_helper")  -- luacheck: ignore 211 (unused, required for module init)
 
 
 -- Mutation key map: translate the Inspector's property_name into the

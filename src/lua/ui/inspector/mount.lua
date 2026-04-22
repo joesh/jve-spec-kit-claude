@@ -39,44 +39,6 @@ local function style_content_widget()
     return string.format([[ QWidget { background: %s; } ]], C.INSPECTOR_CONTENT_BG)
 end
 
-local function style_primary_button()
-    return string.format([[
-        QPushButton {
-            background: %s;
-            color: %s;
-            padding: 8px;
-            font-size: %s;
-            font-weight: bold;
-            border: none;
-            border-radius: 3px;
-        }
-        QPushButton:hover    { background: %s; }
-        QPushButton:pressed  { background: %s; }
-        QPushButton:disabled { background: %s; color: %s; }
-    ]],
-        C.INSPECTOR_APPLY_BTN_BG, C.WHITE_TEXT_COLOR, F.DEFAULT_FONT_SIZE,
-        C.INSPECTOR_APPLY_BTN_HOVER, C.INSPECTOR_APPLY_BTN_PRESSED,
-        C.INSPECTOR_APPLY_BTN_DISABLED, C.FIELD_READ_ONLY_TEXT)
-end
-
-local function style_secondary_button()
-    return string.format([[
-        QPushButton {
-            background: %s;
-            color: %s;
-            padding: 8px;
-            font-size: %s;
-            border: 1px solid %s;
-            border-radius: 3px;
-        }
-        QPushButton:hover    { background: %s; }
-        QPushButton:disabled { color: %s; border-color: %s; }
-    ]],
-        C.INSPECTOR_HEADER_BG, C.FIELD_TEXT_COLOR, F.DEFAULT_FONT_SIZE,
-        C.FIELD_BORDER_COLOR, C.HOVER_BACKGROUND_COLOR,
-        C.FIELD_READ_ONLY_TEXT, C.FIELD_BORDER_COLOR)
-end
-
 local function style_error_banner()
     return string.format([[
         QLabel {
@@ -194,14 +156,12 @@ local function build_bottom_bar(root_layout, ui_state)
     -- to the trailing edge, matching macOS dialog conventions.
     local reset = qt_constants.WIDGET.CREATE_BUTTON("Reset")
     assert(reset, "inspector.mount: CREATE_BUTTON(Reset) returned nil")
-    qt_constants.PROPERTIES.SET_STYLE(reset, style_secondary_button())
     qt_constants.LAYOUT.ADD_WIDGET(hbox, reset)
 
     qt_constants.LAYOUT.ADD_STRETCH(hbox, 1)
 
     local apply = qt_constants.WIDGET.CREATE_BUTTON("Apply Changes")
     assert(apply, "inspector.mount: CREATE_BUTTON(Apply) returned nil")
-    qt_constants.PROPERTIES.SET_STYLE(apply, style_primary_button())
     qt_constants.LAYOUT.ADD_WIDGET(hbox, apply)
 
     qt_constants.LAYOUT.ADD_WIDGET(root_layout, bar)
