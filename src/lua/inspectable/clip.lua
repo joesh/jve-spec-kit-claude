@@ -123,19 +123,15 @@ function ClipInspectable:set(field, value)
         return false, "Field is required"
     end
 
-    local property_type = nil
-    local default_value = nil
-    local payload_value = value
+    assert(type(value) == "table", string.format(
+        "ClipInspectable:set(%s): expected payload table {value, property_type[, default_value]}, got %s",
+        field, type(value)))
+    local payload_value = value.value
+    local property_type = value.property_type
+    local default_value = value.default_value
 
-    if type(value) == "table" then
-        payload_value = value.value
-        property_type = value.property_type or value.field_type
-        default_value = value.default_value
-    end
-
-    if property_type == nil or property_type == "" then
-        return false, "property_type is required"
-    end
+    assert(property_type and property_type ~= "", string.format(
+        "ClipInspectable:set(%s): payload.property_type is required", field))
 
     -- TIMECODE branch (012 Inspector rewrite, Q3 resolution): integer frames only;
     -- rate lives on the owning entity and is NEVER carried in the payload.

@@ -123,7 +123,7 @@ function SequenceInspectable:set(field, value)
         string.format("SequenceInspectable:set(%s): value must be a payload table {value, property_type, ...}",
             field))
     local payload_value = value.value
-    local property_type = value.property_type or value.field_type
+    local property_type = value.property_type
     assert(property_type and property_type ~= "",
         string.format("SequenceInspectable:set(%s): property_type is required", field))
 
