@@ -22,6 +22,13 @@ local SPEC = {
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
+    local function fail(fmt, ...)
+        local message = string.format(fmt, ...)
+        set_last_error(message)
+        log.warn("%s", message)
+        return false
+    end
+
     -- Keys here MUST match actual columns in the `sequences` table (schema.sql).
     -- field is injected directly into SQL (table-scanned from this whitelist
     -- only), so names must be the real column names. Prior bug: keys like
@@ -64,19 +71,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["SetSequenceMetadata"] = function(command)
         local args = command:get_all_parameters()
 
-
-
-
         local column = sequence_metadata_columns[args.field]
         if not column then
-            set_last_error("SetSequenceMetadata: Field not allowed: " .. tostring(args.field))
-            return false
+            return fail("SetSequenceMetadata: Field not allowed: %s", tostring(args.field))
         end
 
         local select_stmt = db:prepare("SELECT " .. args.field .. " FROM sequences WHERE id = ?")
         if not select_stmt then
-            set_last_error("SetSequenceMetadata: Failed to prepare select statement")
-            return false
+            return fail("SetSequenceMetadata: Failed to prepare select statement")
         end
         select_stmt:bind_value(1, args.sequence_id)
         local previous_value = nil
@@ -92,8 +94,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         })
         local update_stmt = db:prepare("UPDATE sequences SET " .. args.field .. " = ? WHERE id = ?")
         if not update_stmt then
-            set_last_error("SetSequenceMetadata: Failed to prepare update statement")
-            return false
+            return fail("SetSequenceMetadata: Failed to prepare update statement")
         end
 
         if normalized_value == nil then
@@ -111,8 +112,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         update_stmt:finalize()
 
         if not ok then
-            set_last_error("SetSequenceMetadata: Update failed")
-            return false
+            return fail("SetSequenceMetadata: Update failed")
         end
 
         log.event("SetSequenceMetadata: %s.%s = %s",
@@ -123,20 +123,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_undoers["SetSequenceMetadata"] = function(command)
         local args = command:get_all_parameters()
 
-
-
-
         local column = sequence_metadata_columns[args.field]
         if not column then
-            set_last_error("UndoSetSequenceMetadata: Field not allowed: " .. tostring(args.field))
-            return false
+            return fail("UndoSetSequenceMetadata: Field not allowed: %s", tostring(args.field))
         end
 
         local normalized = normalize_sequence_value(args.field, args.previous_value)
         local stmt = db:prepare("UPDATE sequences SET " .. args.field .. " = ? WHERE id = ?")
         if not stmt then
-            set_last_error("UndoSetSequenceMetadata: Failed to prepare update statement")
-            return false
+            return fail("UndoSetSequenceMetadata: Failed to prepare update statement")
         end
 
         if normalized == nil then
@@ -154,8 +149,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         stmt:finalize()
 
         if not ok then
-            set_last_error("UndoSetSequenceMetadata: Update failed")
-            return false
+            return fail("UndoSetSequenceMetadata: Update failed")
         end
 
         log.event("UndoSetSequenceMetadata: %s.%s = %s",
