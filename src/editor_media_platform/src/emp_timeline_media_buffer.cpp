@@ -1170,31 +1170,35 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     if (cached) {
         first_chunk = cached;
     } else {
-        // Lua marks clips offline via _build_tmb_clip's io.open check, but
-        // io.open is a weaker probe than EMP's MediaFile::Open — a file
-        // that Lua can stat may still fail to open with FFmpeg (corrupt
-        // container, unsupported codec, path encoding, permission drop
-        // mid-session). Treat this as offline for audio purposes: emit
-        // the offline beep, matching the user's convention that broken
-        // audio makes noise. Silence here would crash-fix the app but
-        // leave the user wondering why a visually-offline clip plays
-        // nothing audible.
+        // Failure modes below return silence (nullptr) rather than
+        // beeping. Rationale: the beep is the audible counterpart of a
+        // visible offline indicator. clip->offline == true (line 1128)
+        // already covers declared-offline paths → beep there is
+        // consistent with the red timeline label + offline frame panel.
+        // The GetTrackAudio failure paths here fire in many legitimate
+        // non-offline conditions (transient decoder hiccup, forward-
+        // seek cache gap, boundary edge), and beeping on those is
+        // user-hostile: they'd hear a beep with no visual offline cue.
+        // Silence + a warn log is the correct graceful degradation.
+        //
+        // The one exception is negative file_pos — clip asking for audio
+        // before the file's first_sample_tc is a hard partial-coverage
+        // head-shortfall that the visual layer SHOULD also be rendering
+        // as offline. Beep there to match.
         auto reader = acquire_reader(track, clip_id, media_path);
         if (!reader) {
-            EMP_LOG_WARN("GetTrackAudio: clip %s reader acquisition failed for %s — beeping (late-discovered offline)",
+            EMP_LOG_WARN("GetTrackAudio: clip %s reader acquisition failed for %s — silent",
                 clip_id.c_str(), media_path.c_str());
-            return generate_offline_beep(t0, t1 - t0, clip_start_us);
+            return nullptr;
         }
 
         // Map timeline us → source us (file-relative via first_sample_tc)
         const auto& file_info = reader->media_file()->info();
         int64_t file_pos = source_in - file_info.first_sample_tc;
-        // Partial-coverage head shortfall on audio: clip's source_in is
-        // earlier than any sample the file actually has (e.g. file_original
-        // _timecode override). The visual layer shows the red "Not enough
-        // media" panel here; audio beeps to match. Matches the video
-        // decode-into-cache boundary behavior (23b5038d + this commit).
         if (file_pos < 0) {
+            // Partial-coverage head shortfall: clip's source_in is before
+            // any sample in the file. Visual: red "Not enough media at
+            // head" panel. Audio: beep to match.
             EMP_LOG_WARN("GetTrackAudio: clip %s source_in=%lld is before first_sample_tc=%lld — beeping (head shortfall)",
                 clip_id.c_str(), (long long)source_in, (long long)file_info.first_sample_tc);
             return generate_offline_beep(t0, t1 - t0, clip_start_us);
@@ -1208,25 +1212,16 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
 
         auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt);
         if (decode_result.is_error()) {
-            // Opened reader, but the decoder errored on this range. This
-            // is the "file is there, something in it is corrupt" case —
-            // beep so the user hears there's a problem. Silence would
-            // be a Half-2 NSF violation (pipeline produced no output,
-            // nothing upstream knows).
-            EMP_LOG_WARN("GetTrackAudio: clip %s decode failed at [%lld,%lld]us — beeping",
+            EMP_LOG_WARN("GetTrackAudio: clip %s decode error at [%lld,%lld]us — silent",
                 clip_id.c_str(), (long long)source_t0, (long long)source_t1);
-            return generate_offline_beep(t0, t1 - t0, clip_start_us);
+            return nullptr;
         }
 
         auto chunk = decode_result.value();
         if (!chunk || chunk->frames() == 0) {
-            // Reader succeeded but returned 0 frames — canonical tail-
-            // shortfall: the clip's source range extends past the
-            // file's end. Audio equivalent of the video "Not enough
-            // media at tail" offline frame. Beep to match.
-            EMP_LOG_WARN("GetTrackAudio: clip %s decode returned 0 frames at [%lld,%lld]us — beeping (tail shortfall)",
-                clip_id.c_str(), (long long)source_t0, (long long)source_t1);
-            return generate_offline_beep(t0, t1 - t0, clip_start_us);
+            // Empty chunk at a boundary — zero-width range, past clip
+            // end, or brief cache gap. Silent degradation.
+            return nullptr;
         }
 
         first_chunk = build_audio_output(chunk, source_t0, source_t1,
