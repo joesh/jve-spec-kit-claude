@@ -413,6 +413,21 @@ function M.apply_mutations(mutations, persist_callback)
                     end
                     if update.name ~= nil and update.name ~= clip.name then
                         clip.name = update.name
+                        -- clip.label is a derived-state cache set at
+                        -- DB-load time (core/database.lua:384-391:
+                        -- clip.name → media_name → filename). The
+                        -- timeline renderer reads `clip.label or
+                        -- clip.name or clip.id` with clip.label taking
+                        -- precedence, so a stale label masks the real
+                        -- name. Keep the cache in sync when name
+                        -- changes: non-empty name wins; empty name
+                        -- leaves clip.label so the existing
+                        -- media_name/filename fallback still shows
+                        -- (Clip.load's derivation: label = name if
+                        -- non-empty, else media_name, else filename).
+                        if update.name ~= "" then
+                            clip.label = update.name
+                        end
                         changed = true
                     end
                 elseif not deleted_lookup[clip_id] then

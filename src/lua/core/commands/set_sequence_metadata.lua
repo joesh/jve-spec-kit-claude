@@ -29,17 +29,24 @@ local SPEC = {
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
+    -- Keys here MUST match actual columns in the `sequences` table (schema.sql).
+    -- field is injected directly into SQL (table-scanned from this whitelist
+    -- only), so names must be the real column names. Prior bug: keys like
+    -- `timecode_start_frame`, `playhead_value`, `mark_in_value` didn't match
+    -- DDL columns (`start_timecode_frame`, `playhead_frame`, `mark_in_frame`)
+    -- so every write failed with "Failed to prepare select statement".
+    -- See tests/test_set_sequence_metadata_columns.lua for the drift check.
     local sequence_metadata_columns = {
-        name = {type = "string"},
-        frame_rate = {type = "number"},
-        width = {type = "number"},
-        height = {type = "number"},
-        timecode_start_frame = {type = "number"},
-        playhead_value = {type = "number"},
-        viewport_start_value = {type = "number"},
-        viewport_duration_frames_value = {type = "number"},
-        mark_in_value = {type = "nullable_number"},
-        mark_out_value = {type = "nullable_number"}
+        name                    = {type = "string"},
+        width                   = {type = "number"},
+        height                  = {type = "number"},
+        audio_rate              = {type = "number"},
+        start_timecode_frame    = {type = "number"},
+        playhead_frame          = {type = "number"},
+        view_start_frame        = {type = "number"},
+        view_duration_frames    = {type = "number"},
+        mark_in_frame           = {type = "nullable_number"},
+        mark_out_frame          = {type = "nullable_number"},
     }
 
     local function normalize_sequence_value(field, value)

@@ -392,10 +392,6 @@ local function apply_tab_style(tab, is_active)
         qt_constants.PROPERTIES.SET_STYLE(tab.close_button, build_close_button_style(text_color))
     end
 end
-function M.set_inspector(_)
-    -- Inspector updates are routed through selection_hub in layout wiring.
-end
-
 function M.get_state()
     return timeline_state  -- Return the module, not the local state variable
 end

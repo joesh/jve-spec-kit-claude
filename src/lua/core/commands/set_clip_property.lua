@@ -17,12 +17,72 @@ local M = {}
 local json = require("dkjson")
 local uuid = require("uuid")
 local Clip = require("models.clip")
+local log = require("core.logger").for_area("commands")
 local _command_helper = require("core.command_helper")  -- luacheck: ignore 211 (unused, required for module init)
 
+
+-- Mutation key map: translate the Inspector's property_name into the
+-- update-key that clip_state.apply_mutations (ui/timeline/state/clip_state.lua)
+-- knows how to patch on an existing cached clip. Keys not in this map
+-- don't touch timeline rendering (volume, mark_in/out, offline, …), so
+-- the executor / undoer skip mutation emission for them — the
+-- safety-net reload in command_manager handles those lazily.
+local MUTATION_KEY = {
+    name           = "name",
+    enabled        = "enabled",
+    timeline_start = "start_value",
+    duration       = "duration_value",
+    source_in      = "source_in_value",
+    source_out     = "source_out_value",
+}
+
+-- Clip columns backed by NOT-NULL / CHECK constraints in schema.sql.
+-- Restoring nil into one of these via Clip.save asserts at models/clip.lua:436
+-- and propagates the error out of the undoer, blocking every subsequent
+-- undo. Legacy command rows (pre-2026-04-21 snapshot fix) persisted
+-- previous_value=nil for these columns because the executor read its
+-- snapshot from an empty properties-table row. We can't recover the
+-- true previous value — we just skip the save in that case and let
+-- the cursor advance. The current value is retained, but the rest of
+-- the undo stack stays usable.
+local NOT_NULL_CLIP_COLUMN = {
+    name           = true,
+    timeline_start = true,
+    duration       = true,
+    source_in      = true,
+    source_out     = true,
+    enabled        = true,
+    offline        = true,
+    volume         = true,
+    playhead_frame = true,
+}
+
+local function build_clip_mutation_payload(clip, property_name, value)
+    local mutation_key = MUTATION_KEY[property_name]
+    if not mutation_key then return nil end
+    local sequence_id = require("models.clip").get_sequence_id(clip.id)
+    local update = { clip_id = clip.id, track_id = clip.track_id }
+    -- enabled is stored BOOLEAN in clips.enabled; apply_mutations
+    -- compares via ~= so normalize truthy/falsy to true/false here.
+    if property_name == "enabled" then
+        update[mutation_key] = value and true or false
+    else
+        update[mutation_key] = value
+    end
+    return { sequence_id = sequence_id, updates = { update } }
+end
 
 local SPEC = {
     args = {
         clip_id = { required = true },
+        -- Sequence-scoped per 006-per-sequence-undo FR-001: declaring
+        -- sequence_id in args routes this command onto its owning
+        -- sequence's undo stack. Without this, the command lands on
+        -- GLOBAL and becomes visible from every other sequence's
+        -- merged undo view — which caused TSO 2026-04-21 15:24:18
+        -- where a Cmd-Z from one timeline tab reached into a clip
+        -- edit on another tab and crashed.
+        sequence_id = {},
         default_value = {},
         project_id = { required = true },
         property_name = { required = true },
@@ -70,6 +130,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             print(string.format("WARNING: SetClipProperty: Clip not found during replay: %s; skipping property update", clip_id))
             return true
         end
+
+        -- Capture the clip's current column value BEFORE mutating. For
+        -- Inspector edits that target real clip columns (name, duration,
+        -- timeline_start, source_in/out, enabled, volume, mark_in/out)
+        -- this is the true previous value — far more reliable than
+        -- reading the `properties` table row, which may not exist at all
+        -- (it never does on the first Inspector edit to a column). When
+        -- this is non-nil it wins; generic properties fall back to the
+        -- properties-table snapshot below. Long-term, storage routing
+        -- belongs to Clip:get_property / Clip:set_property, not here —
+        -- see todo_inspector_command_scope.md and the upcoming metadata
+        -- spec. This is the narrow fix that unblocks column-undo today.
+        local previous_clip_column_value = clip[property_name]
 
         local select_stmt = db:prepare("SELECT id, property_value, property_type, default_value FROM properties WHERE clip_id = ? AND property_name = ?")
         if not select_stmt then
@@ -132,6 +205,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             default_json = encoded_default
         end
 
+        -- Prefer the clip's column value as `previous_value` when the
+        -- property is column-backed (duration, name, …). Only fall back
+        -- to the properties-table snapshot for genuinely-generic keys
+        -- the clip doesn't carry as attributes.
+        if previous_clip_column_value ~= nil then
+            previous_value = previous_clip_column_value
+        end
         command:set_parameters({
             ["previous_value"] = previous_value,
             ["previous_type"] = previous_type,
@@ -210,6 +290,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         if clip:save() then
             print(string.format("Set clip property %s to %s for clip %s", property_name, tostring(args.value), clip_id))
+
+            -- Emit __timeline_mutations so apply_command_mutations can
+            -- patch the timeline's clip cache with a precise delta
+            -- instead of a full reload_clips.
+            local mutations = build_clip_mutation_payload(clip, property_name, args.value)
+            if mutations then
+                command:set_parameter("__timeline_mutations", mutations)
+            end
+
             return true
         else
             local message = "Failed to save clip property change"
@@ -300,8 +389,31 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local clip = Clip.load_optional(args.clip_id)
         if clip then
-            clip:set_property(args.property_name, args.previous_value)
-            clip:save()
+            -- Defense for legacy command rows with nil snapshot:
+            -- if previous_value is nil AND the property maps to a
+            -- NOT-NULL clip column, skip the save entirely. Crashing
+            -- here would block every further undo on the stack.
+            local is_legacy_nil_column =
+                args.previous_value == nil
+                and NOT_NULL_CLIP_COLUMN[args.property_name]
+            if is_legacy_nil_column then
+                log.warn(
+                    "Undo SetClipProperty: legacy command row has no snapshot " ..
+                    "for clip %s column %s (nil previous_value). Skipping clip " ..
+                    "save; current value retained. Undo cursor still advances " ..
+                    "so older records remain undoable.",
+                    tostring(args.clip_id), tostring(args.property_name))
+            else
+                clip:set_property(args.property_name, args.previous_value)
+                clip:save()
+                -- Mirror the executor's mutation emission so the timeline
+                -- cache reverts in lock-step with the DB on undo.
+                local mutations = build_clip_mutation_payload(
+                    clip, args.property_name, args.previous_value)
+                if mutations then
+                    command:set_parameter("__timeline_mutations", mutations)
+                end
+            end
         end
 
         return true

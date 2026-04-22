@@ -18,6 +18,7 @@
 -- Handles drawing logic for tracks, clips, and overlays
 local M = {}
 local media_status = require("core.media.media_status")
+local offline_note = require("core.media.offline_note")
 local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
 local color_utils = require("ui.color_utils")
 local Command = require("command")
@@ -734,6 +735,14 @@ function M.render(view)
             text_color = state_module.colors.clip_offline_text
             local is_codec = (clip.error_code == "Unsupported" or clip.error_code == "DecodeFailed")
             label_prefix = is_codec and "CODEC UNAVAIL - " or "OFFLINE - "
+            -- Offline-AND-disabled: dim the bright red so the clip
+            -- reads as "not participating in the cut right now"
+            -- instead of demanding attention. Matches the standard
+            -- NLE convention where disabled clips draw dimmed.
+            if not clip_enabled then
+                body_color = color_utils.dim_hex(body_color, 0.5)
+                text_color = color_utils.dim_hex(text_color, 0.7)
+            end
         elseif clip_enabled then
             body_color = is_audio and state_module.colors.clip_audio or state_module.colors.clip_video
             text_color = state_module.colors.text
@@ -802,7 +811,31 @@ function M.render(view)
             local label_padding = 10
             local max_label_width = visible_width - label_padding
             if max_label_width > 35 then
-                local display_label = truncate_label(label_prefix .. (clip.label or clip.name or clip.id or ""), max_label_width)
+                -- Append shortfall suffix when the clip's media has a
+                -- partial_coverage offline_note AND this clip actually
+                -- sticks out past what the candidate covers. Empty
+                -- string for the common (no-note / fully-covered) case.
+                --
+                -- Audio clips store source_in/source_out in SAMPLES at
+                -- the media's sample rate (e.g. 48000). A raw shortfall
+                -- of 1524 samples displayed as "1524f" on the timeline
+                -- is misleading — the 'f' reads as video frames.
+                -- display_rate = sequence fps rescales the delta into
+                -- timeline-frame units for both audio and video.
+                local ts = require("ui.timeline.timeline_state")
+                local rate = ts.get_sequence_frame_rate
+                    and ts.get_sequence_frame_rate() or nil
+                local display_rate = nil
+                if rate and rate.fps_numerator and rate.fps_denominator
+                    and rate.fps_denominator > 0 then
+                    display_rate = rate.fps_numerator / rate.fps_denominator
+                end
+                local label_suffix = offline_note.short_suffix(
+                    clip.offline_note, clip.source_in, clip.source_out,
+                    display_rate)
+                local display_label = truncate_label(
+                    label_prefix .. (clip.label or clip.name or clip.id or "") .. label_suffix,
+                    max_label_width)
                 if display_label ~= "" then
                     local label_baseline
                     if has_waveform then

@@ -216,26 +216,61 @@ local function apply_command_mutations(cmd)
     local ts = require('ui.timeline.timeline_state')
     if not ts.apply_mutations then return false end
     local fallback_seq = extract_sequence_id(cmd)
+    local active_seq = ts.get_sequence_id and ts.get_sequence_id() or nil
+
+    -- timeline_state holds exactly one active sequence's clip cache.
+    -- Mutations addressed to a DIFFERENT sequence are valid — two cases:
+    --   1. Cross-sequence commands (per 006-per-sequence-undo FR-012:
+    --      "a command that touches two sequences is one atomic command.
+    --      Undoing from either sequence undoes both sides"). A drag
+    --      from seqA to seqB produces mutations for both; only one
+    --      matches the active cache.
+    --   2. Legacy project-level SetClipProperty rows persisted before
+    --      the sequence_id scoping fix (2026-04-21). They live on the
+    --      GLOBAL cursor and can fire from any tab.
+    -- In both cases the DB write has already been done by the
+    -- executor/undoer. The ACTIVE cache just shouldn't try to hydrate
+    -- an out-of-scope clip (that blows up clip_state's sanity check).
+    -- Return true (treat as "applied") so the safety-net reload doesn't
+    -- fire either; when the user switches to the target sequence,
+    -- timeline_state.init reloads its clips fresh from DB.
+    local function applies_to_active(target_seq)
+        return active_seq ~= nil and active_seq ~= ""
+            and target_seq == active_seq
+    end
 
     if mutations.sequence_id or mutations.inserts or mutations.updates or mutations.deletes then
         -- Single-bucket format
         local target_seq = mutations.sequence_id or fallback_seq
         assert(target_seq and target_seq ~= "",
             string.format("apply_command_mutations: no sequence_id for %s mutations", cmd.type or "unknown"))
+        if not applies_to_active(target_seq) then
+            return true
+        end
         return ts.apply_mutations(target_seq, mutations)
     end
 
     -- Multi-bucket format (keyed by sequence_id)
     local applied = false
+    local any_bucket_seen = false
     for _, bucket in pairs(mutations) do
         if type(bucket) == "table" then
+            any_bucket_seen = true
             local target_seq = bucket.sequence_id or fallback_seq
             assert(target_seq and target_seq ~= "",
                 string.format("apply_command_mutations: no sequence_id in bucket for %s", cmd.type or "unknown"))
-            if ts.apply_mutations(target_seq, bucket) then
-                applied = true
+            if applies_to_active(target_seq) then
+                if ts.apply_mutations(target_seq, bucket) then
+                    applied = true
+                end
             end
         end
+    end
+    -- Any buckets at all → treat as applied, even if none matched the
+    -- active sequence. Cross-sequence buckets' DB writes already
+    -- happened; no need for the safety-net reload here.
+    if any_bucket_seen and not applied then
+        return true
     end
     return applied
 end
