@@ -69,15 +69,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 return
             end
             mutated_clip_ids[clip.id] = true
-            updates_by_clip[clip.id] = {
-                clip_id = clip.id,
-                track_id = clip.track_id,
-                track_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
-                timeline_start = clip.timeline_start,
-                duration = clip.duration,
-                source_in = clip.source_in,
-                source_out = clip.source_out
-            }
+            -- Use canonical *_value payload shape that clip_state.apply_mutations
+            -- consumes — the raw clip-field shape was a schema mismatch that
+            -- silently no-op'd in-memory cache updates while DB writes landed.
+            updates_by_clip[clip.id] = command_helper.clip_update_payload(
+                clip, active_sequence_id)
         end
 
         local function apply_updates_if_needed(default_sequence_id)
