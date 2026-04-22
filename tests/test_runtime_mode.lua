@@ -35,17 +35,20 @@ print("  OK: false + test mode → silent")
 
 -- ----------------------------------------------------------------------
 -- 3. Simulate production: clear both signals, confirm raise.
+-- pcall wraps the assertions so that a failure can't leave the harness
+-- flag dangling nil — subsequent tests would see is_test()==false and
+-- start raising unexpectedly.
 -- ----------------------------------------------------------------------
 local saved_flag = rawget(_G, "__JVE_TEST_HARNESS_RUNNING")
 local saved_env  = os.getenv("JVE_TEST_MODE")
 rawset(_G, "__JVE_TEST_HARNESS_RUNNING", nil)
--- We can't unset env vars from Lua portably, but we can confirm the
--- harness-flag path is the primary gate. If the env var is also set
--- externally, this branch won't be reachable — skip rather than fail.
-if not (saved_env == "1" or saved_env == "true") then
+local body_ok, body_err = pcall(function()
+    if saved_env == "1" or saved_env == "true" then
+        print("  SKIP: JVE_TEST_MODE env set externally — can't simulate production")
+        return
+    end
     assert(runtime_mode.is_test() == false,
         "without harness flag and without JVE_TEST_MODE env, is_test() must be false")
-
     local raised, err = pcall(runtime_mode.assert_production, false,
         "production assert message with context")
     assert(not raised,
@@ -53,11 +56,9 @@ if not (saved_env == "1" or saved_env == "true") then
     assert(tostring(err):find("production assert message"),
         "raised error must include the caller's message: " .. tostring(err))
     print("  OK: false + production mode → raises with actionable message")
-else
-    print("  SKIP: JVE_TEST_MODE env set externally — can't simulate production")
-end
--- Restore harness flag for subsequent tests if any.
+end)
 rawset(_G, "__JVE_TEST_HARNESS_RUNNING", saved_flag)
+assert(body_ok, "production simulation block failed: " .. tostring(body_err))
 
 -- ----------------------------------------------------------------------
 -- 4. assert_production(true, ...) never raises regardless of mode.

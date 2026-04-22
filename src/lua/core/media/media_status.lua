@@ -42,11 +42,11 @@ end
 -- tests that don't stand up a DB reach these handlers via signal emits;
 -- those return false and the caller skips the body.
 local function db_available(caller)
-    if get_database().has_connection() then return true end
-    runtime_mode.assert_production(false,
+    local connected = get_database().has_connection()
+    runtime_mode.assert_production(connected,
         caller .. ": no DB connection in production — DB must be open "
         .. "by the time this path runs")
-    return false
+    return connected
 end
 
 -- status_cache[media_path] = { offline = bool, error_code = string|nil }
