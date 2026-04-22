@@ -405,7 +405,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     tostring(args.clip_id), tostring(args.property_name))
             else
                 clip:set_property(args.property_name, args.previous_value)
-                clip:save()
+                if not clip:save() then
+                    local message = string.format(
+                        "Undo SetClipProperty: Clip.save failed for clip %s column %s",
+                        tostring(args.clip_id), tostring(args.property_name))
+                    set_last_error(message)
+                    log.warn("%s", message)
+                    return false
+                end
                 -- Mirror the executor's mutation emission so the timeline
                 -- cache reverts in lock-step with the DB on undo.
                 local mutations = build_clip_mutation_payload(
