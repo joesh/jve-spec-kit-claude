@@ -34,8 +34,17 @@ local SPEC = {
         -- without fallback guards.
         media_path_changes = { kind = "table", default = {} },
         new_media_records = { kind = "table", default = {} },
+        -- media_id → offline_note JSON string. Sentinel "__clear__"
+        -- means "explicitly clear any existing note" (used when a
+        -- previously-noted media has now been successfully relinked
+        -- and shouldn't carry stale coverage info). Absence = leave
+        -- existing value alone. nil entries in Lua tables are sparse,
+        -- which is why "__clear__" is a string sentinel instead.
+        media_offline_notes = { kind = "table", default = {} },
     }
 }
+
+local OFFLINE_NOTE_CLEAR = "__clear__"
 
 function M.register(executors, undoers, db)
 
@@ -103,6 +112,32 @@ function M.register(executors, undoers, db)
         -- mark_dirty accumulates into the outer begin_batch set.
         old_media_paths = Media.batch_set_file_paths(media_path_changes)
         for _ in pairs(media_path_changes) do media_count = media_count + 1 end
+
+        -- Phase 2b: Apply offline_note changes. Snapshot old values for
+        -- undo, then partition the incoming map into "set to JSON" and
+        -- "clear to NULL" — the "__clear__" string sentinel is how the
+        -- planner encodes clears (command params round-trip through
+        -- JSON, which drops nil-valued keys).
+        local note_changes = args.media_offline_notes
+        local old_offline_notes = {}
+        local note_sets = {}
+        local note_clears = {}
+        for mid, new_note in pairs(note_changes) do
+            local cur = Media.load(mid)
+            if cur then
+                old_offline_notes[mid] = cur.offline_note
+                if new_note == OFFLINE_NOTE_CLEAR then
+                    if cur.offline_note ~= nil then
+                        note_clears[#note_clears + 1] = mid
+                    end
+                else
+                    note_sets[mid] = new_note
+                end
+            end
+        end
+        Media.batch_set_offline_notes(note_sets)
+        Media.batch_clear_offline_notes(note_clears)
+
         local t_p2_core = qt_monotonic_s()
         local t_p2_end = t_p2_core
 
@@ -127,6 +162,7 @@ function M.register(executors, undoers, db)
         -- Persist undo state
         command:set_parameter("old_clip_state", old_clip_state)
         command:set_parameter("old_media_paths", old_media_paths)
+        command:set_parameter("old_offline_notes", old_offline_notes)
 
         -- Clip writes don't call mark_dirty on media rows, but any clip
         -- pointed at a different media_id (new split clone, dedupe
@@ -189,6 +225,31 @@ function M.register(executors, undoers, db)
         -- by the executor. Discards the return value (we're restoring,
         -- not capturing forward-undo state).
         Media.batch_set_file_paths(old_media_paths)
+
+        -- Phase 2b: Restore offline_notes to their pre-execute values.
+        -- old_offline_notes was captured as a {[mid] = string|nil} map.
+        -- After JSON round-trip through command params, nil-valued keys
+        -- drop, so the presence of mid in the incoming map means "set
+        -- to this JSON"; mids that were originally nil are invisible
+        -- here, and the corresponding rows are already pointing at the
+        -- freshly-applied note — we need to re-clear those. The planner
+        -- tracked which mids it applied via media_offline_notes; any
+        -- mid in that set whose old value is absent from the restored
+        -- map must have been originally nil, so clear it.
+        local old_notes = args.old_offline_notes or {}
+        local applied_notes = args.media_offline_notes or {}
+        local restore_sets = {}
+        local restore_clears = {}
+        for mid, old_note in pairs(old_notes) do
+            restore_sets[mid] = old_note
+        end
+        for mid in pairs(applied_notes) do
+            if old_notes[mid] == nil then
+                restore_clears[#restore_clears + 1] = mid
+            end
+        end
+        Media.batch_set_offline_notes(restore_sets)
+        Media.batch_clear_offline_notes(restore_clears)
 
         -- Phase 3: Delete new media records (and their clips)
         -- SPEC guarantees args.new_media_records is a table (default = {}).

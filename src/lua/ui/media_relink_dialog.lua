@@ -18,6 +18,108 @@ local M = {}
 local log = require("core.logger").for_area("media")
 local json = require("dkjson")
 
+--- Pure: build a human-readable rich-text summary of a relink-results
+--- struct ({relinked, failed, ambiguous}). Partitions `failed` into
+--- "partial coverage" (entries with coverage info — the relinker did
+--- find a same-basename candidate but rejected it for extent) and
+--- "not found" (everything else). Exposed so tests exercise the
+--- partitioning + formatting without touching Qt.
+---
+--- media_infos supplies per-media_id labels (name/path) so the summary
+--- is readable — the relinker's failed[] is keyed by media_id only.
+--- @param results {relinked, failed, ambiguous}
+--- @param media_infos table<media_id, {name, path}>
+--- @return string rich-text (HTML) summary
+function M._format_results_summary(results, media_infos)
+    -- Partition relinked[] into "clean" (full cover) and "partial"
+    -- (file moved to a short candidate; clips short of coverage will
+    -- render offline). Partial entries carry a `coverage` table.
+    local clean_relinked, partial = {}, {}
+    for _, r in ipairs(results.relinked or {}) do
+        if r.coverage and r.coverage.kind == "partial_coverage" then
+            partial[#partial + 1] = r
+        else
+            clean_relinked[#clean_relinked + 1] = r
+        end
+    end
+    local n_relinked = #clean_relinked
+    local n_ambiguous = results.ambiguous and #results.ambiguous or 0
+    local unfindable = results.failed or {}
+
+    local function name_for(media_id)
+        local mi = media_infos and media_infos[media_id]
+        if mi and mi.name and mi.name ~= "" then return mi.name end
+        if mi and mi.path then return mi.path:match("[^/]+$") or mi.path end
+        return media_id or "?"
+    end
+    local function basename(path)
+        if type(path) ~= "string" then return "" end
+        return path:match("[^/]+$") or path
+    end
+
+    local parts = {}
+    parts[#parts + 1] = string.format(
+        "<b>%d relinked</b> &nbsp;•&nbsp; <b>%d partial</b> &nbsp;•&nbsp; " ..
+        "<b>%d not found</b>",
+        n_relinked, #partial, #unfindable)
+    if n_ambiguous > 0 then
+        parts[#parts + 1] = string.format("&nbsp;•&nbsp; <b>%d ambiguous</b>",
+            n_ambiguous)
+    end
+
+    if #partial > 0 then
+        parts[#parts + 1] = "<br/><br/><b>Partial coverage — file found but short:</b>"
+        local offline_note_mod = require("core.media.offline_note")
+        for _, f in ipairs(partial) do
+            local cov = f.coverage
+            local nm = name_for(f.media_id)
+            local cand = basename(cov.candidate_path)
+            -- Shortfall against the media's source_extent (min source_in
+            -- across clips, max source_out across clips) gives the
+            -- worst-case head + worst-case tail the user will see
+            -- somewhere in their timeline — the numbers that matter for
+            -- "is this candidate good enough?". Per-clip iteration would
+            -- give max(head+tail) on a single clip, which is a narrower,
+            -- less actionable number for the summary.
+            local mi = media_infos and media_infos[f.media_id]
+            local detail = ""
+            if mi and mi.source_extent_start and mi.source_extent_end then
+                local sf = offline_note_mod.shortfall(
+                    cov, mi.source_extent_start, mi.source_extent_end)
+                if sf then
+                    if sf.head_missing > 0 and sf.tail_missing > 0 then
+                        detail = string.format(" (short %df at head, %df at tail)",
+                            sf.head_missing, sf.tail_missing)
+                    elseif sf.head_missing > 0 then
+                        detail = string.format(" (short %df at head)", sf.head_missing)
+                    else
+                        detail = string.format(" (short %df at tail)", sf.tail_missing)
+                    end
+                end
+            end
+            parts[#parts + 1] = string.format(
+                "<br/>&nbsp;&nbsp;%s &nbsp;→&nbsp; found <tt>%s</tt>%s",
+                nm, cand, detail)
+        end
+    end
+
+    if #unfindable > 0 then
+        parts[#parts + 1] = "<br/><br/><b>Not found in search tree:</b>"
+        for _, f in ipairs(unfindable) do
+            local nm = name_for(f.media_id)
+            local reason = f.reason or "unknown reason"
+            parts[#parts + 1] = string.format(
+                "<br/>&nbsp;&nbsp;%s &nbsp;—&nbsp; %s", nm, reason)
+        end
+    end
+
+    if #partial == 0 and #unfindable == 0 and n_relinked > 0 then
+        parts[#parts + 1] = "<br/><br/><i>All media relinked successfully.</i>"
+    end
+
+    return table.concat(parts)
+end
+
 --- Path to app-level matching rules preferences.
 local function matching_rules_path()
     local home = os.getenv("HOME")
@@ -56,7 +158,10 @@ local function save_matching_rules(rules)
 end
 
 --- Build media_info structs from media records, pumping Qt events to stay responsive.
--- Each media_info has a .clips sub-array for per-clip data (source ranges, etc.).
+-- Each media_info carries media-level identity (id, path, name), TC origin,
+-- and the source_extent (min source_in / max source_out across every clip
+-- using this media). Extent is the input the matcher needs to decide
+-- whether a candidate's covered range is sufficient for ALL dependents.
 -- @param media_list table Array of media records
 -- @param widgets table {qt, status_label, media_area, header} for live UI updates
 local function build_media_infos(media_list, widgets)
@@ -393,6 +498,29 @@ function M.show(media_list, parent_window, opts)
     qt.DISPLAY.SET_VISIBLE(error_label, false)
     qt.LAYOUT.ADD_WIDGET(main_layout, error_label)
 
+    -- Results summary: shown after relink completes. Distinguishes
+    -- three buckets:
+    --   1. relinked — good matches we'll apply
+    --   2. partial — same-basename file found but doesn't cover the
+    --      full clip range; clips will be flagged on the timeline
+    --   3. unfindable — no same-basename file in the search tree
+    -- The user needs to see the per-media list for (2) and (3) so they
+    -- know which clips to expect as offline post-apply and why. Rich-
+    -- text QLabel is fine for a few hundred lines; if the list grows
+    -- past that, promote to a scrollable list widget later.
+    local results_summary = qt.WIDGET.CREATE_LABEL("")
+    qt.PROPERTIES.SET_STYLE(results_summary,
+        "color: #dddddd; font-family: monospace; font-size: 11px; " ..
+        "padding: 6px; background: #1e1e1e; border: 1px solid #333;")
+    if qt.PROPERTIES.SET_WORD_WRAP then
+        qt.PROPERTIES.SET_WORD_WRAP(results_summary, true)
+    end
+    if qt.PROPERTIES.SET_TEXT_FORMAT then
+        qt.PROPERTIES.SET_TEXT_FORMAT(results_summary, "rich")
+    end
+    qt.DISPLAY.SET_VISIBLE(results_summary, false)
+    qt.LAYOUT.ADD_WIDGET(main_layout, results_summary)
+
     qt.LAYOUT.ADD_STRETCH(main_layout)
 
     -- -----------------------------------------------------------------------
@@ -456,16 +584,33 @@ function M.show(media_list, parent_window, opts)
         local results = media_relinker.relink_media_batch(media_infos, options, progress.update)
         progress.flush()
 
+        -- Always show the results summary — user needs to see what the
+        -- relinker found AND what it didn't, broken down by failure
+        -- kind. The distinction between "partial coverage" and "not
+        -- found" is load-bearing: partial means Apply will flag clips
+        -- with a shortfall note (they stay offline but with an
+        -- actionable message); not-found means the user needs to
+        -- locate the file or accept the clips remaining offline.
+        local info_lookup = {}
+        for _, mi in ipairs(media_infos) do
+            info_lookup[mi.media_id] = {
+                name = mi.media_name,
+                path = mi.media_path,
+                source_extent_start = mi.source_extent_start,
+                source_extent_end   = mi.source_extent_end,
+            }
+        end
+        qt.PROPERTIES.SET_TEXT(results_summary,
+            M._format_results_summary(results, info_lookup))
+        qt.DISPLAY.SET_VISIBLE(results_summary, true)
+
         if #results.relinked == 0 then
-            -- No matches — re-enable everything so user can retry
+            -- Nothing to apply — re-enable everything so user can retry
             qt.CONTROL.SET_ENABLED(relink_btn, true)
             qt.CONTROL.SET_ENABLED(browse_btn, true)
             qt.CONTROL.SET_ENABLED(rules_btn, true)
             if priority_btn then qt.CONTROL.SET_ENABLED(priority_btn, true) end
             qt.PROPERTIES.SET_TEXT(relink_btn, "Relink")
-            qt.PROPERTIES.SET_TEXT(error_label,
-                "No clips matched. Try a different directory or matching rules.")
-            qt.DISPLAY.SET_VISIBLE(error_label, true)
             return
         end
 

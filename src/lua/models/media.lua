@@ -769,10 +769,17 @@ function M.load_all_offline_notes()
     return rows
 end
 
-function M.batch_set_offline_notes(note_changes)
-    assert(type(note_changes) == "table",
-        "Media.batch_set_offline_notes: note_changes table required")
-    if next(note_changes) == nil then return end
+--- Batch-assign offline_note JSON strings to a set of media rows.
+--- Only handles non-nil values — `pairs()` skips nil-valued keys, and
+--- callers that need to clear notes (restore a row to "no diagnostic")
+--- must route those media_ids through `batch_clear_offline_notes`
+--- instead. Callers should wrap in Media.begin_batch / end_batch to
+--- coalesce the consequent media_changed signal.
+--- @param note_sets table {[media_id] = json_string}
+function M.batch_set_offline_notes(note_sets)
+    assert(type(note_sets) == "table",
+        "Media.batch_set_offline_notes: note_sets table required")
+    if next(note_sets) == nil then return end
 
     local database = require("core.database")
     local db = assert(database.get_connection(),
@@ -781,9 +788,9 @@ function M.batch_set_offline_notes(note_changes)
     local upd = assert(db:prepare(
         "UPDATE media SET offline_note = ? WHERE id = ?"),
         "Media.batch_set_offline_notes: failed to prepare update query")
-    for mid, note in pairs(note_changes) do
-        assert(note == nil or type(note) == "string", string.format(
-            "Media.batch_set_offline_notes: note must be string or nil for %s, got %s",
+    for mid, note in pairs(note_sets) do
+        assert(type(note) == "string", string.format(
+            "Media.batch_set_offline_notes: note must be string for %s, got %s",
             tostring(mid), type(note)))
         upd:bind_value(1, note)
         upd:bind_value(2, mid)
@@ -793,6 +800,33 @@ function M.batch_set_offline_notes(note_changes)
         mark_dirty(mid)
     end
     upd:finalize()
+end
+
+--- Clear `offline_note` (write SQL NULL) for each media_id in the
+--- array. Counterpart to batch_set_offline_notes for the "this row's
+--- diagnostic is no longer relevant" case (successful relink wiped a
+--- prior partial-coverage note, undo restoring a pre-relink nil).
+--- @param media_ids table array of media_id strings
+function M.batch_clear_offline_notes(media_ids)
+    assert(type(media_ids) == "table",
+        "Media.batch_clear_offline_notes: media_ids table required")
+    if #media_ids == 0 then return end
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.batch_clear_offline_notes: no database connection")
+
+    local stmt = assert(db:prepare(
+        "UPDATE media SET offline_note = NULL WHERE id = ?"),
+        "Media.batch_clear_offline_notes: failed to prepare clear query")
+    for _, mid in ipairs(media_ids) do
+        stmt:bind_value(1, mid)
+        assert(stmt:exec(), string.format(
+            "Media.batch_clear_offline_notes: exec failed for %s", tostring(mid)))
+        stmt:reset()
+        mark_dirty(mid)
+    end
+    stmt:finalize()
 end
 
 --- Batch version of Media:get_source_extent.
