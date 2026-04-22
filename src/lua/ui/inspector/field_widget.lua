@@ -258,12 +258,6 @@ function Entry:set_error(flag)
     self:_restyle()
 end
 
-function Entry:clear_placeholder()
-    if self.widget_type == "line_edit" or self.widget_type == "text_area" then
-        qt_constants.PROPERTIES.SET_PLACEHOLDER_TEXT(self.widget, "")
-    end
-end
-
 function Entry:clear_dirty()
     self.dirty = false
     self.pending_value = nil
