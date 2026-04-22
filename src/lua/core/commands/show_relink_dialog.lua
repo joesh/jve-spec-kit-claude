@@ -89,10 +89,11 @@ function M.register(executors, _undoers, db)
             local t_execute = qt_monotonic_s()
             local command_manager = require("core.command_manager")
             apply_result = command_manager.execute("RelinkClips", {
-                clip_relink_map    = plan.clip_relink_map,
-                media_path_changes = plan.media_path_changes,
-                new_media_records  = plan.new_media_records,
-                project_id         = project_id,
+                clip_relink_map     = plan.clip_relink_map,
+                media_path_changes  = plan.media_path_changes,
+                new_media_records   = plan.new_media_records,
+                media_offline_notes = plan.media_offline_notes,
+                project_id          = project_id,
             })
             log.event("ShowRelinkDialog: RelinkClips executed in %.2fs",
                 qt_monotonic_s() - t_execute)

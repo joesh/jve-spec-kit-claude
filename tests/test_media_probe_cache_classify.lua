@@ -20,10 +20,24 @@ local function check(label, cond)
     end
 end
 
--- Dummy info payload — anything truthy works; we only care about
--- identity for "did the hit return the right cached object?".
-local INFO_A = { tag = "info_a" }
-local INFO_B = { tag = "info_b" }
+-- Dummy info payload. Must include the three presence flags the
+-- classifier requires (has_duration, has_video_tc_origin,
+-- has_audio_tc_origin) — they're what makes an entry "fresh-shape"
+-- versus "pre-c2b2b505 legacy shape that should be re-probed".
+-- We only care about object identity for "did the hit return the
+-- right cached object?", so tag field is the distinguisher.
+local INFO_A = {
+    tag = "info_a",
+    has_duration = true,
+    has_video_tc_origin = true,
+    has_audio_tc_origin = false,
+}
+local INFO_B = {
+    tag = "info_b",
+    has_duration = true,
+    has_video_tc_origin = false,
+    has_audio_tc_origin = true,
+}
 
 -- ---------------------------------------------------------------------------
 -- All hits: every path has a cache entry with matching mtime+size.

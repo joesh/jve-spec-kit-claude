@@ -29,7 +29,36 @@ local log = require("core.logger").for_area("media")
 -- Cache file version. Bump when the MediaFileInfo Lua shape changes
 -- (new fields, renamed fields, changed semantics) so stale caches get
 -- rejected wholesale rather than silently returning wrong data.
-local CACHE_VERSION = 1
+--
+-- v2 (2026-04-21): reject entries missing presence flags. c2b2b505
+-- added has_duration / has_video_tc_origin / has_audio_tc_origin but
+-- kept version=1, so pre-commit caches loaded and silently served
+-- entries with `duration_us` but no `has_duration`. The relinker's
+-- probe_result_from_emp_info gates duration_frames on has_duration,
+-- so those stale hits produced cand_dur=0 and failed every
+-- containment check downstream (TSO 2026-04-21 15:55:19 — 477 of 562
+-- media appeared unrelinkable from cache hits). Bumping the version
+-- forces the whole doc to reload, AND per-entry presence-flag
+-- validation in classify_paths catches any future field-addition
+-- where someone forgets to bump this version.
+local CACHE_VERSION = 2
+
+-- Fields that MUST be present on every cached info to consider the
+-- entry fresh. The relinker's downstream logic gates behavior on
+-- these — a missing field means "unknown" in Lua (nil/falsy), which
+-- is indistinguishable from "probe said no", which breaks matching.
+--
+-- THIS LIST IS THE CONTRACT between the probe cache and the
+-- relinker's `probe_result_from_emp_info` (core/media_relinker.lua,
+-- near `if info.has_video_tc_origin`, `if info.has_audio_tc_origin`,
+-- `if info.has_duration`). If you add a new presence-flag read over
+-- there, add it here AND bump CACHE_VERSION above — otherwise stale
+-- caches will silently serve entries missing the new flag.
+local REQUIRED_INFO_FIELDS = {
+    "has_duration",
+    "has_video_tc_origin",
+    "has_audio_tc_origin",
+}
 
 local function cache_path()
     return assert(os.getenv("HOME"), "HOME env var required") .. "/.jve/probe_cache.json"
@@ -119,6 +148,14 @@ end
 --- classification logic without touching disk or EMP. The underscore
 --- prefix marks it as an implementation-internal entry point — callers
 --- other than tests should go through M.probe_batch.
+local function has_required_shape(info)
+    if type(info) ~= "table" then return false end
+    for _, field in ipairs(REQUIRED_INFO_FIELDS) do
+        if info[field] == nil then return false end
+    end
+    return true
+end
+
 local function classify_paths(paths, entries, stats)
     local results = {}
     local miss_paths, miss_indices = {}, {}
@@ -131,7 +168,8 @@ local function classify_paths(paths, entries, stats)
             miss_indices[#miss_indices + 1] = i
         else
             local cached = entries[path]
-            if cached and cached.mtime == s.mtime and cached.size == s.size then
+            if cached and cached.mtime == s.mtime and cached.size == s.size
+                and has_required_shape(cached.info) then
                 results[i] = cached.info
                 hit_count = hit_count + 1
             else
