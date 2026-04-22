@@ -424,7 +424,6 @@ M.selected_items = {}
 M.pending_rename = nil
 M.ignore_tree_item_change = false
 M.project_id = nil
-M.inspector_view = nil
 M.project_title_widget = nil
 M.pending_project_title = nil
 
@@ -1663,10 +1662,6 @@ function M.set_project_title(name)
     else
         M.pending_project_title = display
     end
-end
-
-function M.set_inspector(inspector_view)
-    M.inspector_view = inspector_view
 end
 
 -- Get selected media item

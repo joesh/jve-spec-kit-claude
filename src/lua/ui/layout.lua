@@ -481,41 +481,23 @@ focus_manager.on_focus_change(function(old_id, new_id)
     end
 end)
 
--- Initialize the Lua inspector content following working reference pattern
-local view = require("ui.inspector.view")
+-- Initialize the rewritten Inspector (feature 012).
+-- Public API: three functions — mount, update_selection, get_focus_widgets.
+local inspector = require("ui.inspector")
 
--- First mount the view on the container
-local mount_result = view.mount(inspector_panel)
-if mount_result and mount_result.success then
-    -- Then create the schema-driven content
-    local inspector_success, inspector_result = pcall(view.create_schema_driven_inspector)
+inspector.mount(inspector_panel)
 
-    if not inspector_success then
-        log.error("Inspector creation failed: %s", tostring(inspector_result))
-    end
+-- Wire project browser to timeline for insert button.
+project_browser_mod.set_timeline_panel(timeline_panel_mod)
 
-    -- Wire up timeline to inspector
-    timeline_panel_mod.set_inspector(view)
+-- Wire menu system to timeline for Split command.
+menu_system.set_timeline_panel(timeline_panel_mod)
 
-    -- Wire up project browser to timeline for insert button
-    project_browser_mod.set_timeline_panel(timeline_panel_mod)
-    project_browser_mod.set_inspector(view)
-
-
-
-    -- Wire up menu system to timeline for Split command
-    menu_system.set_timeline_panel(timeline_panel_mod)
-
-    -- Route active selection through inspector via selection hub
-    selection_hub.register_listener(function(items, panel_id)
-        if view and view.update_selection then
-            view.update_selection(items or {}, panel_id)
-        end
-    end)
-    selection_hub.set_active_panel("timeline")
-else
-    log.error("Inspector mount failed: %s", tostring(mount_result))
-end
+-- Route active selection through inspector via selection hub.
+selection_hub.register_listener(function(items, panel_id)
+    inspector.update_selection(items or {}, panel_id)
+end)
+selection_hub.set_active_panel("timeline")
 
 -- Install global click-to-focus before registering panels
 focus_manager.install_click_to_focus()
@@ -527,7 +509,7 @@ focus_manager.register_panel("project_browser", project_browser, nil, "Project B
 focus_manager.register_panel("source_monitor", source_monitor:get_widget(), source_monitor:get_title_widget(), "Source")
 focus_manager.register_panel("timeline_monitor", timeline_monitor:get_widget(), timeline_monitor:get_title_widget(), "Timeline Monitor")
 focus_manager.register_panel("inspector", inspector_panel, nil, "Inspector", {
-    focus_widgets = view.get_focus_widgets and view.get_focus_widgets() or nil
+    focus_widgets = inspector.get_focus_widgets()
 })
 focus_manager.register_panel("timeline", timeline_panel, nil, "Timeline", {
     focus_widgets = timeline_panel_mod.get_focus_widgets and timeline_panel_mod.get_focus_widgets() or nil
