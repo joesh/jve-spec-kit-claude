@@ -107,7 +107,7 @@ local SPEC = {
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["SetClipProperty"] = function(command)
         local args = command:get_all_parameters()
-        print("Executing SetClipProperty command")
+        log.event("Executing SetClipProperty")
 
         local clip_id = args.clip_id
         local property_name = args.property_name
@@ -119,16 +119,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if not clip or clip.id == "" then
 
             if args.executed_with_clip then
-                print(string.format("INFO: SetClipProperty: Clip %s missing during replay; property update skipped", clip_id))
+                log.event("SetClipProperty: clip %s missing during replay; skipping", clip_id)
                 return true
             end
 
             if args.previous_value ~= nil then
-                print(string.format("INFO: SetClipProperty: Clip %s missing but previous_value present; assuming clip deleted and skipping", clip_id))
+                log.event("SetClipProperty: clip %s missing but previous_value present; assuming deleted, skipping", clip_id)
                 return true
             end
 
-            print(string.format("WARNING: SetClipProperty: Clip not found during replay: %s; skipping property update", clip_id))
+            log.warn("SetClipProperty: clip not found during replay: %s; skipping", clip_id)
             return true
         end
 
@@ -149,7 +149,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if not select_stmt then
             local message = "SetClipProperty: Failed to prepare property lookup query"
             set_last_error(message)
-            print("WARNING: " .. message)
+            log.warn("%s", message)
             return false
         end
         select_stmt:bind_value(1, clip_id)
@@ -190,7 +190,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if not encoded_value then
             local message = "SetClipProperty: Failed to encode property value: " .. tostring(encode_err)
             set_last_error(message)
-            print("WARNING: " .. message)
+            log.warn("%s", message)
             return false
         end
 
@@ -200,7 +200,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not encoded_default then
                 local message = "SetClipProperty: Failed to encode default value: " .. tostring(default_err)
                 set_last_error(message)
-                print("WARNING: " .. message)
+                log.warn("%s", message)
                 return false
             end
             default_json = encoded_default
@@ -232,7 +232,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not update_stmt then
                 local message = "SetClipProperty: Failed to prepare property update"
                 set_last_error(message)
-                print("WARNING: " .. message)
+                log.warn("%s", message)
                 return false
             end
             update_stmt:bind_value(1, encoded_value)
@@ -253,7 +253,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
                 local message = "SetClipProperty: Failed to update property row: " .. tostring(err)
                 set_last_error(message)
-                print("WARNING: " .. message)
+                log.warn("%s", message)
                 return false
             end
             update_stmt:finalize()
@@ -262,7 +262,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not insert_stmt then
                 local message = "SetClipProperty: Failed to prepare property insert"
                 set_last_error(message)
-                print("WARNING: " .. message)
+                log.warn("%s", message)
                 return false
             end
             insert_stmt:bind_value(1, property_id)
@@ -281,7 +281,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
                 local message = "SetClipProperty: Failed to insert property row: " .. tostring(err)
                 set_last_error(message)
-                print("WARNING: " .. message)
+                log.warn("%s", message)
                 return false
             end
             insert_stmt:finalize()
@@ -290,7 +290,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         clip:set_property(property_name, args.value)
 
         if clip:save() then
-            print(string.format("Set clip property %s to %s for clip %s", property_name, tostring(args.value), clip_id))
+            log.event("SetClipProperty: %s = %s (clip %s)", property_name, tostring(args.value), clip_id)
 
             -- Emit __timeline_mutations so apply_command_mutations can
             -- patch the timeline's clip cache with a precise delta
@@ -304,14 +304,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         else
             local message = "Failed to save clip property change"
             set_last_error(message)
-            print("WARNING: " .. message)
+            log.warn("%s", message)
             return false
         end
     end
 
     command_undoers["SetClipProperty"] = function(command)
         local args = command:get_all_parameters()
-        print("Undoing SetClipProperty command")
+        log.event("Undoing SetClipProperty")
 
 
 
@@ -324,7 +324,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if not args.property_id or args.property_id == "" then
             local message = "Undo SetClipProperty: Missing args.property_id parameter"
             set_last_error(message)
-            print("WARNING: " .. message)
+            log.warn("%s", message)
             return false
         end
 
@@ -333,14 +333,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not delete_stmt then
                 local message = "Undo SetClipProperty: Failed to prepare delete statement"
                 set_last_error(message)
-                print("WARNING: " .. message)
+                log.warn("%s", message)
                 return false
             end
             delete_stmt:bind_value(1, args.property_id)
             if not delete_stmt:exec() then
                 local message = "Undo SetClipProperty: Failed to delete newly created property row"
                 set_last_error(message)
-                print("WARNING: " .. message)
+                log.warn("%s", message)
                 return false
             end
             delete_stmt:finalize()
@@ -348,14 +348,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not args.previous_type or args.previous_type == "" then
                 local message = "Undo SetClipProperty: Missing args.previous_type for existing property restore"
                 set_last_error(message)
-                print("WARNING: " .. message)
+                log.warn("%s", message)
                 return false
             end
             local encoded_prev, encode_err = json.encode({ value = args.previous_value })
             if not encoded_prev then
                 local message = "Undo SetClipProperty: Failed to encode previous property value: " .. tostring(encode_err)
                 set_last_error(message)
-                print("WARNING: " .. message)
+                log.warn("%s", message)
                 return false
             end
             local update_sql
@@ -368,7 +368,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not update_stmt then
                 local message = "Undo SetClipProperty: Failed to prepare update statement"
                 set_last_error(message)
-                print("WARNING: " .. message)
+                log.warn("%s", message)
                 return false
             end
             update_stmt:bind_value(1, encoded_prev)
@@ -382,7 +382,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not update_stmt:exec() then
                 local message = "Undo SetClipProperty: Failed to restore property row"
                 set_last_error(message)
-                print("WARNING: " .. message)
+                log.warn("%s", message)
                 return false
             end
             update_stmt:finalize()

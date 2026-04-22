@@ -1,21 +1,11 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~964 LOC
--- Volatility: unknown
---
--- @file timeline_view_renderer.lua
--- Original intent (unreviewed):
--- Timeline View Renderer
--- Handles drawing logic for tracks, clips, and overlays
+--- Timeline view renderer: draws tracks, clips, gaps, selection
+--- highlights, drag previews, and offline/codec overlays into the
+--- timeline widget. Reads model state via an injected state_module
+--- (normally ui.timeline.timeline_state; tests inject a stub) so the
+--- renderer itself has no singleton dependency on live state. Never
+--- mutates the model; pure read → Qt-binding-draw.
+---
+--- @file timeline_view_renderer.lua
 local M = {}
 local media_status = require("core.media.media_status")
 local offline_note = require("core.media.offline_note")
@@ -822,10 +812,12 @@ function M.render(view)
                 -- is misleading — the 'f' reads as video frames.
                 -- display_rate = sequence fps rescales the delta into
                 -- timeline-frame units for both audio and video.
-                local ts = require("ui.timeline.timeline_state")
-                local rate = ts.get_sequence_frame_rate
-                    and ts.get_sequence_frame_rate() or nil
-                local display_rate = nil
+                -- Use the injected state_module (not a fresh require) so
+                -- tests can substitute a mock. state_module.get_sequence_frame_rate
+                -- returns nil in some test stubs — guarded below.
+                local rate = state_module.get_sequence_frame_rate
+                    and state_module.get_sequence_frame_rate()
+                local display_rate
                 if rate and rate.fps_numerator and rate.fps_denominator
                     and rate.fps_denominator > 0 then
                     display_rate = rate.fps_numerator / rate.fps_denominator

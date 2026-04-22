@@ -1,21 +1,12 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~1212 LOC
--- Volatility: unknown
+--- CommandManager: single entry point for command execution, undo/redo,
+--- sequencing, and replay. Delegates storage + cursor arithmetic to
+--- CommandRegistry, CommandHistory, and CommandState; this module owns
+--- the transaction envelope (begin/end_command_event), the per-sequence
+--- / GLOBAL undo-stack routing derived from SPEC.args, and the
+--- `__timeline_mutations` dispatch that keeps the timeline cache in
+--- sync with DB writes without a full reload.
 --
 -- @file command_manager.lua
--- Original intent (unreviewed):
--- CommandManager: Manages command execution, sequencing, and replay
--- Refactored to delegate to CommandRegistry, CommandHistory, and CommandState
 local M = {}
 
 -- Database module for connection checks and transaction management

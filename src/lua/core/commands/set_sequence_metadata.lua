@@ -1,20 +1,14 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~127 LOC
--- Volatility: unknown
---
--- @file set_sequence_metadata.lua
+--- SetSequenceMetadata: update a single column on the sequences row
+--- with undo/redo. Operates on a fixed whitelist of columns — the
+--- column name is interpolated into SQL, so only known-safe names
+--- reach string.format. Inspector-entered TIMECODE values are integer
+--- frames; rate stays on the sequence model and is not duplicated
+--- into the payload (012 Inspector rewrite resolution).
+---
+--- @file set_sequence_metadata.lua
 local M = {}
 local _database = require("core.database")  -- luacheck: ignore 211 (unused, required for module init)
+local log = require("core.logger").for_area("commands")
 
 
 local SPEC = {
@@ -122,7 +116,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        print(string.format("Set sequence %s args.field %s to %s", args.sequence_id, args.field, tostring(normalized_value)))
+        log.event("SetSequenceMetadata: %s.%s = %s",
+            args.sequence_id, args.field, tostring(normalized_value))
         return true
     end
 
@@ -164,7 +159,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        print(string.format("Undo sequence %s args.field %s to %s", args.sequence_id, args.field, tostring(normalized)))
+        log.event("UndoSetSequenceMetadata: %s.%s = %s",
+            args.sequence_id, args.field, tostring(normalized))
         return true
     end
 

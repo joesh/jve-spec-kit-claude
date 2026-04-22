@@ -1,21 +1,10 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~70 LOC
--- Volatility: unknown
---
--- @file timeline_state_data.lua
--- Original intent (unreviewed):
--- Timeline State Data
--- Holds the central state table and notification system
+--- Timeline state data: the module-level state table that every
+--- timeline-state-concern (core, clips, tracks, selection, viewport,
+--- geometry) reads and writes through. Also owns the change-listener
+--- list: subscribers call add_listener / remove_listener and receive
+--- a debounced notification whenever model state changes.
+---
+--- @file timeline_state_data.lua
 local M = {}
 local ui_constants = require("core.ui_constants")
 

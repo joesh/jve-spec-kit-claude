@@ -1,21 +1,13 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~350 LOC
--- Volatility: unknown
---
--- @file clip_state.lua
--- Original intent (unreviewed):
--- Timeline Clips State
--- Manages clip storage, indexing, lookup, and mutation application
+--- Clip state: in-memory clip collection for the active sequence.
+--- Owns the clips list stored in timeline_state_data, plus per-track
+--- clip-index caches for O(log n) lookup. apply_mutations consumes
+--- the `__timeline_mutations` payload emitted by commands and patches
+--- the in-memory cache in lock-step with the DB, avoiding a full
+--- reload_clips on every edit. Gap clips are derived state —
+--- recomputed by timeline_core_state, not stored in this module's
+--- authoritative list.
+---
+--- @file clip_state.lua
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
 local db = require("core.database")
