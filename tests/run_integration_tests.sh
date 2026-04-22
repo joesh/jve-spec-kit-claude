@@ -110,7 +110,8 @@ for t in \
   test_keyboard_qshortcut_integration.lua \
   test_floating_window_key_isolation.lua \
   test_tab_order_restore.lua \
-  test_codec_status_on_startup.lua
+  test_codec_status_on_startup.lua \
+  fs_watcher_media_status.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"

@@ -35,6 +35,46 @@ package.loaded["core.signals"] = {
 print("=== Inspector public API contract (T004 subset) ===")
 
 -- ----------------------------------------------------------------------
+-- Case 0: mount-idempotent-failure.
+-- A second mount() on the same process must raise — not silently
+-- no-op, not clobber ui_state. Silent-replace would leave the prior
+-- mount's widgets + signal handlers dangling (signal_bindings.cpp
+-- keeps them alive; Lua's garbage collector can't reach the Qt
+-- widgets through the bindings). The assertion has been observed
+-- firing in TSO — this test guards that it stays firing.
+-- ----------------------------------------------------------------------
+-- Stub the downstream mount module so the facade's first mount()
+-- succeeds without constructing real Qt widgets. The facade itself
+-- stashes the returned ui_state and checks `ui_state == nil` on
+-- subsequent calls — that's the invariant under test.
+package.loaded["ui.inspector.mount"] = {
+    mount = function(_container)
+        -- Return a stand-in ui_state. Content doesn't matter; the
+        -- facade only asserts non-nil-ness of its stored reference.
+        return { mounted = true }
+    end,
+}
+package.loaded["ui.inspector.selection_binding"] = package.loaded["ui.inspector.selection_binding"] or {
+    update_selection = function() end,
+}
+package.loaded["ui.inspector"] = nil
+local inspector_reloaded = require("ui.inspector")
+
+inspector_reloaded.mount({ _container = "first" })  -- first mount succeeds
+
+local second_ok, second_err = pcall(inspector_reloaded.mount, { _container = "second" })
+assert(not second_ok, "second mount() must raise, not silently no-op")
+assert(tostring(second_err):find("already mounted"), string.format(
+    "second-mount error must explain why (substring 'already mounted'); got: %s",
+    tostring(second_err)))
+print("  OK: second mount() raises 'already mounted'")
+
+-- Reload a clean facade for the remaining cases so they don't inherit
+-- the mounted state above.
+package.loaded["ui.inspector"] = nil
+package.loaded["ui.inspector.mount"] = nil
+
+-- ----------------------------------------------------------------------
 -- Case 1: forbidden-public-exports.
 -- Exactly three functions on the facade. Any extra export reopens the
 -- 012 rewrite's elimination of legacy exposures.
