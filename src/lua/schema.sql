@@ -60,6 +60,19 @@ CREATE TABLE IF NOT EXISTS media (
     is_still INTEGER NOT NULL DEFAULT 0 CHECK(is_still IN (0, 1)),
     metadata TEXT DEFAULT '{}', -- JSON
 
+    -- Last-relink diagnostic note. Populated when the relinker found a
+    -- filename-matching candidate in the search tree but rejected it
+    -- (e.g. the candidate file doesn't cover the clips' full source
+    -- range — "missing a few frames at the end"). JSON shape:
+    --   { kind = "partial_coverage",
+    --     candidate_path = "/fixture/.../X.mov",
+    --     covered_start_tc = <int>, covered_end_tc = <int>, rate = <int> }
+    -- Read at offline-frame composition time to swap the generic
+    -- "File not found" message for the actionable "Found X, short
+    -- by N frames at end" message per-clip. NULL = no diagnostic
+    -- (file truly unreachable, or last relink succeeded).
+    offline_note TEXT,
+
     created_at INTEGER NOT NULL,
     modified_at INTEGER NOT NULL
 );

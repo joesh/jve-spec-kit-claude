@@ -814,6 +814,20 @@ int lua_register_panel_focus_widget(lua_State* L) {
     return 0;
 }
 
+// Returns true iff the widget with Qt keyboard focus is outside the main
+// window's subtree (e.g., a floating tool window). Same predicate used by
+// the global key dispatcher — exposed to Lua for the click-to-focus logic
+// that must distinguish within-main-window clicks from cross-window clicks.
+int lua_focus_outside_main_window(lua_State* L) {
+    QWidget* focus_widget = QApplication::focusWidget();
+    QWidget* mainWin = SimpleLuaEngine::s_lastCreatedMainWindow;
+    bool outside = focus_widget && mainWin
+        && focus_widget != mainWin
+        && !mainWin->isAncestorOf(focus_widget);
+    lua_pushboolean(L, outside);
+    return 1;
+}
+
 // Global key handler
 int lua_set_global_key_handler(lua_State* L) {
     QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1)); // Passed but not used for filter installation

@@ -294,6 +294,15 @@ private:
             int32_t par_num = 1;
             int32_t par_den = 1;
             uint64_t insert_seq = 0;  // monotonic insertion order for LRU eviction
+            // Offline marker: when true, this timeline position is known
+            // to have no decodable content (past EOF, before start TC)
+            // for a file that otherwise opens fine. Play-time cache_only
+            // lookups return offline=true instead of freezing on the
+            // nearest cached decoded frame — user sees the red "Not
+            // enough media for clip" panel through the offline range.
+            bool offline = false;
+            std::string error_code;
+            std::string error_msg;
         };
         std::map<int64_t, CachedFrame> video_cache; // key = timeline_frame
         uint64_t video_cache_seq = 0;               // next insert_seq to assign

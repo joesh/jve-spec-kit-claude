@@ -603,6 +603,16 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
     if (cache_it != ts.video_cache.end() &&
         cache_it->second.clip_id == clip->clip_id &&
         cache_it->second.source_frame == source_frame) {
+        // Offline marker hit: surface the "not enough media" state to
+        // the delivery layer so the red panel renders instead of a
+        // frozen previous frame. Set by the decode path below when
+        // EOFReached / before-start is observed during prefetch.
+        if (cache_it->second.offline) {
+            result.offline = true;
+            result.error_code = cache_it->second.error_code;
+            result.error_msg = cache_it->second.error_msg;
+            return result;
+        }
         result.frame = cache_it->second.frame;
         result.rotation = cache_it->second.rotation;
         result.par_num = cache_it->second.par_num;
@@ -634,15 +644,20 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         int64_t best_dist = INT64_MAX;
         int dir = m_playhead_direction.load(std::memory_order_relaxed);
 
-        // Check entry at or after timeline_frame (preferred for forward play)
-        if (dir >= 0 && lo != ts.video_cache.end() && lo->second.clip_id == cid) {
+        // Check entry at or after timeline_frame (preferred for forward play).
+        // Skip offline markers — they carry no frame. Falling through here
+        // lets the offline-registry / cache_only paths below produce the
+        // correct offline-is-true result so the delivery layer renders
+        // the red "Not enough media" panel instead of a stale neighbor.
+        if (dir >= 0 && lo != ts.video_cache.end()
+            && lo->second.clip_id == cid && !lo->second.offline) {
             int64_t d = lo->first - timeline_frame;
             if (d < best_dist && d <= MAX_NEAREST_DISTANCE) { best = &lo->second; best_dist = d; }
         }
         // Check entry before timeline_frame (preferred for reverse play)
         if (dir <= 0 && lo != ts.video_cache.begin()) {
             auto prev = std::prev(lo);
-            if (prev->second.clip_id == cid) {
+            if (prev->second.clip_id == cid && !prev->second.offline) {
                 int64_t d = timeline_frame - prev->first;
                 if (d < best_dist && d <= MAX_NEAREST_DISTANCE) { best = &prev->second; best_dist = d; }
             }
@@ -744,12 +759,49 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
     result.par_num = info.video_par_num;
     result.par_den = info.video_par_den;
 
-    // source_frame is absolute TC; subtract file's TC origin for file-relative position
+    // source_frame is absolute TC; subtract file's TC origin for file-relative position.
+    // Partial-coverage relink: the file exists but may not cover the entire
+    // clip range. When the clip's source_frame is BEFORE the file's first
+    // frame TC, file_frame is negative — "not enough media at the head".
+    // Return as offline so the renderer composes the "Not enough media for
+    // clip" offline frame (same treatment as EOF past the tail below).
+    // Previously this was a hard assert, which crashed the app as soon as
+    // the playhead entered a short file's head shortfall.
     int64_t file_frame = source_frame - info.first_frame_tc;
-    JVE_ASSERT(file_frame >= 0,
-        ("GetVideoFrame: negative file_frame=" + std::to_string(file_frame)
-         + " source=" + std::to_string(source_frame)
-         + " first_frame_tc=" + std::to_string(info.first_frame_tc)).c_str());
+    if (file_frame < 0) {
+        result.offline = true;
+        result.error_code = "EOFReached";
+        result.error_msg = "Not enough media at head: source frame "
+            + std::to_string(source_frame)
+            + " is before file start TC "
+            + std::to_string(info.first_frame_tc);
+        // Cache the offline marker so cache_only play-time lookups
+        // return offline=true without waiting for prefetch to re-decode.
+        {
+            std::lock_guard<std::mutex> tlock(m_tracks_mutex);
+            auto tit = m_tracks.find(track);
+            if (tit != m_tracks.end()) {
+                auto& cache = tit->second.video_cache;
+                while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
+                    evict_video_cache_entry(tit->second);
+                }
+                TrackState::CachedFrame entry{};
+                entry.clip_id = clip_id;
+                entry.source_frame = source_frame;
+                entry.rotation = result.rotation;
+                entry.par_num = result.par_num;
+                entry.par_den = result.par_den;
+                entry.insert_seq = tit->second.video_cache_seq++;
+                entry.offline = true;
+                entry.error_code = result.error_code;
+                entry.error_msg = result.error_msg;
+                cache[timeline_frame] = std::move(entry);
+            }
+        }
+        EMP_LOG_DEBUG("GetVideoFrame: before-start clip=%.8s tf=%lld file_frame=%lld",
+            clip_id.c_str(), (long long)timeline_frame, (long long)file_frame);
+        return result;
+    }
 
     // Decode at file-relative frame using the file's actual video rate.
     // clip_rate may differ from the file's native rate (e.g., 25fps timeline
@@ -777,13 +829,52 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
                                      tit->second.video_cache_seq++};
         }
     } else {
-        // Decode failure: file exists, reader works, but this frame couldn't be
-        // decoded (corrupt frame, seek failure, codec glitch, slow SW decode).
-        result.error_msg = decode_result.error().message;
-        result.error_code = error_code_to_string(decode_result.error().code);
-        EMP_LOG_WARN("GetVideoFrame: DecodeAt FAILED clip=%.8s frame=%lld file_frame=%lld err=%s",
-            clip_id.c_str(), (long long)timeline_frame, (long long)file_frame,
-            result.error_msg.c_str());
+        // Decode failure. Split by error code:
+        //   EOFReached → file exists, reader works, but the requested
+        //   frame is past the file's end (or unreadable-at-that-position
+        //   in a way FFmpeg signals as EOF). Same user-visible meaning
+        //   as before-start above: "not enough media for clip at this
+        //   position." Mark offline so the renderer composes the
+        //   partial-coverage offline frame (not a black/frozen gap).
+        //   Everything else (codec glitch, seek failure, corrupt frame)
+        //   stays transient — don't poison m_offline, don't mark offline.
+        auto& err = decode_result.error();
+        result.error_msg = err.message;
+        result.error_code = error_code_to_string(err.code);
+        if (err.code == ErrorCode::EOFReached) {
+            result.offline = true;
+            // Cache the offline marker so play-time cache_only lookups
+            // surface offline=true on the same timeline_frame. Without
+            // the marker, the nearest-frame fallback can serve a stale
+            // decoded frame (freeze) or the cache_only early-return
+            // gives a nil frame with offline=false — both appear as
+            // easily-missable black/stale content during playback.
+            std::lock_guard<std::mutex> tlock(m_tracks_mutex);
+            auto tit = m_tracks.find(track);
+            if (tit != m_tracks.end()) {
+                auto& cache = tit->second.video_cache;
+                while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
+                    evict_video_cache_entry(tit->second);
+                }
+                TrackState::CachedFrame entry{};
+                entry.clip_id = clip_id;
+                entry.source_frame = source_frame;
+                entry.rotation = result.rotation;
+                entry.par_num = result.par_num;
+                entry.par_den = result.par_den;
+                entry.insert_seq = tit->second.video_cache_seq++;
+                entry.offline = true;
+                entry.error_code = result.error_code;
+                entry.error_msg = result.error_msg;
+                cache[timeline_frame] = std::move(entry);
+            }
+            EMP_LOG_DEBUG("GetVideoFrame: past-end clip=%.8s tf=%lld file_frame=%lld",
+                clip_id.c_str(), (long long)timeline_frame, (long long)file_frame);
+        } else {
+            EMP_LOG_WARN("GetVideoFrame: DecodeAt FAILED clip=%.8s frame=%lld file_frame=%lld err=%s",
+                clip_id.c_str(), (long long)timeline_frame, (long long)file_frame,
+                result.error_msg.c_str());
+        }
     }
 
     return result;
