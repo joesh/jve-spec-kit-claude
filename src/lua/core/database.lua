@@ -365,8 +365,15 @@ local function build_clip_from_query_row(query, requested_sequence_id)
 
                         media_name = media_name,
 
-                        media_path = media_path
-        
+                        media_path = media_path,
+
+                        -- media.offline_note JSON — relink diagnostic
+                        -- forwarded onto each clip so the timeline
+                        -- renderer can annotate the clip label with
+                        -- a shortfall indicator. Nil when relink
+                        -- succeeded or was never run. See schema.sql.
+                        offline_note = query:value(23)
+
                     }
         
                     if not clip.name or clip.name == "" then
@@ -879,7 +886,8 @@ function M.load_clips(sequence_id)
 	               c.enabled, c.offline, c.fps_numerator, c.fps_denominator, t.sequence_id,
 	               m.name, m.file_path,
 	               c.created_at, c.modified_at,
-	               s.fps_numerator, s.fps_denominator
+	               s.fps_numerator, s.fps_denominator,
+	               m.offline_note
 	        FROM clips c
 	        JOIN tracks t ON c.track_id = t.id
 	        JOIN sequences s ON t.sequence_id = s.id
@@ -928,7 +936,8 @@ function M.load_clip_entry(clip_id)
 	               c.enabled, c.offline, c.fps_numerator, c.fps_denominator,
 	               t.sequence_id, m.name, m.file_path,
 	               c.created_at, c.modified_at,
-	               s.fps_numerator, s.fps_denominator
+	               s.fps_numerator, s.fps_denominator,
+	               m.offline_note
 	        FROM clips c
 	        JOIN tracks t ON c.track_id = t.id
 	        JOIN sequences s ON t.sequence_id = s.id
@@ -1018,7 +1027,8 @@ function M.load_media()
 
     local query = db_connection:prepare([[
         SELECT id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
-               width, height, audio_channels, codec, created_at, modified_at, metadata
+               width, height, audio_channels, codec, created_at, modified_at, metadata,
+               offline_note
         FROM media
         ORDER BY created_at DESC
     ]])
@@ -1051,6 +1061,7 @@ function M.load_media()
                 created_at = query:value(11),
                 modified_at = query:value(12),
                 metadata = query:value(13),
+                offline_note = query:value(14),
                 tags = {}
             })
         end

@@ -434,7 +434,7 @@ end
 local MEDIA_SELECT_COLUMNS = [[
         id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
         width, height, rotation, audio_sample_rate, audio_channels, codec,
-        created_at, modified_at, metadata, file_uuid, is_still
+        created_at, modified_at, metadata, file_uuid, is_still, offline_note
 ]]
 
 -- Hydrate a single Media instance from the current row of a prepared statement
@@ -470,6 +470,8 @@ local function _hydrate_row(query)
     assert(is_still_raw ~= nil, string.format(
         "Media._hydrate_row: is_still is NULL for media_id=%s (schema corruption)", tostring(id)))
     media.is_still = tonumber(is_still_raw) == 1
+    -- NULL when relink succeeded (or was never run) — see schema.sql for shape.
+    media.offline_note = query:value(18)
 
     setmetatable(media, media_mt)
     return media
@@ -733,6 +735,64 @@ function M.batch_set_file_paths(path_changes)
     upd:finalize()
 
     return old_paths
+end
+
+--- Batch-assign offline_note for a set of media rows. Same shape as
+--- batch_set_file_paths: pass {[media_id] = json_string_or_nil}. Values
+--- of nil clear the note (relink succeeded, no diagnostic to display).
+--- Callers should wrap in Media.begin_batch / end_batch if they want
+--- the consequent media_changed signal batched with other mutations.
+--- @param note_changes table {[media_id] = string|nil}
+--- Load every media row's {file_path, offline_note} pair. Used by
+--- media_status to prime its renderer-facing cache at project open.
+--- Skips rows with empty file_path (degenerate records). Order is
+--- unspecified — consumers index by file_path.
+--- @return table array of {file_path, offline_note}
+function M.load_all_offline_notes()
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.load_all_offline_notes: no database connection")
+
+    local q = assert(db:prepare(
+        "SELECT file_path, offline_note FROM media WHERE file_path != ''"),
+        "Media.load_all_offline_notes: prepare failed")
+    local rows = {}
+    if q:exec() then
+        while q:next() do
+            rows[#rows + 1] = {
+                file_path = q:value(0),
+                offline_note = q:value(1),
+            }
+        end
+    end
+    q:finalize()
+    return rows
+end
+
+function M.batch_set_offline_notes(note_changes)
+    assert(type(note_changes) == "table",
+        "Media.batch_set_offline_notes: note_changes table required")
+    if next(note_changes) == nil then return end
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.batch_set_offline_notes: no database connection")
+
+    local upd = assert(db:prepare(
+        "UPDATE media SET offline_note = ? WHERE id = ?"),
+        "Media.batch_set_offline_notes: failed to prepare update query")
+    for mid, note in pairs(note_changes) do
+        assert(note == nil or type(note) == "string", string.format(
+            "Media.batch_set_offline_notes: note must be string or nil for %s, got %s",
+            tostring(mid), type(note)))
+        upd:bind_value(1, note)
+        upd:bind_value(2, mid)
+        assert(upd:exec(), string.format(
+            "Media.batch_set_offline_notes: exec failed for %s", tostring(mid)))
+        upd:reset()
+        mark_dirty(mid)
+    end
+    upd:finalize()
 end
 
 --- Batch version of Media:get_source_extent.

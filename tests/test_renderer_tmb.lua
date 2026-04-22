@@ -105,7 +105,7 @@ do
         },
     }
 
-    local frame, meta = Renderer.get_video_frame(mock_tmb, {1}, 10)
+    local frame, meta = Renderer.get_video_frame(mock_tmb, {1}, 10, {})
     assert(frame == "frame_10", string.format(
         "Expected frame 'frame_10', got %s", tostring(frame)))
     assert(meta, "Expected non-nil metadata")
@@ -135,7 +135,7 @@ do
     reset_mocks()
     -- No entries in track_frame_map → all frames are gaps
 
-    local frame, meta = Renderer.get_video_frame(mock_tmb, {1}, 50)
+    local frame, meta = Renderer.get_video_frame(mock_tmb, {1}, 50, {})
     assert(frame == nil, "Expected nil frame for gap")
     assert(meta == nil, "Expected nil metadata for gap")
 
@@ -149,7 +149,7 @@ print("\n--- empty track list ---")
 do
     reset_mocks()
 
-    local frame, meta = Renderer.get_video_frame(mock_tmb, {}, 10)
+    local frame, meta = Renderer.get_video_frame(mock_tmb, {}, 10, {})
     assert(frame == nil, "Expected nil frame with no tracks")
     assert(meta == nil, "Expected nil metadata with no tracks")
     assert(#tmb_get_video_calls == 0, "No TMB calls with empty track list")
@@ -180,7 +180,7 @@ do
         },
     }
 
-    local frame, meta = Renderer.get_video_frame(mock_tmb, {1}, 20)
+    local frame, meta = Renderer.get_video_frame(mock_tmb, {1}, 20, {})
     assert(frame ~= nil, "Expected non-nil frame for offline (composited)")
     assert(frame == "offline_composed_clip_offline",
         "Expected composited offline frame, got: " .. tostring(frame))
@@ -230,7 +230,7 @@ do
     }
 
     -- Array order: {1, 2} — first element (track 1) wins
-    local frame, meta = Renderer.get_video_frame(mock_tmb, {1, 2}, 30)
+    local frame, meta = Renderer.get_video_frame(mock_tmb, {1, 2}, 30, {})
     assert(frame == "frame_track1", "First element in array should win")
     assert(meta.clip_id == "clip_v1", "Should return track 1's clip_id")
     assert(meta.rotation == 0, "Should return track 1's rotation")
@@ -265,7 +265,7 @@ do
         },
     }
 
-    local frame, meta = Renderer.get_video_frame(mock_tmb, {1, 2}, 40)
+    local frame, meta = Renderer.get_video_frame(mock_tmb, {1, 2}, 40, {})
     assert(frame == "frame_track2", "Should fall through to track 2")
     assert(meta.clip_id == "clip_lower", "Should return track 2's clip")
 
@@ -313,7 +313,7 @@ do
         },
     }
 
-    local frame, meta = Renderer.get_video_frame(mock_tmb, {1, 2}, 50)
+    local frame, meta = Renderer.get_video_frame(mock_tmb, {1, 2}, 50, {})
     assert(frame ~= nil, "Offline should return composited frame")
     assert(meta.offline == true, "Should return offline metadata from track 1")
     assert(meta.clip_id == "clip_offline_top", "Offline track 1 wins")
@@ -353,7 +353,7 @@ do
     }
 
     local ok, err = pcall(function()
-        Renderer.get_video_frame(mock_tmb, {1}, 60)
+        Renderer.get_video_frame(mock_tmb, {1}, 60, {})
     end)
     assert(not ok, "Should assert when offline_frame_cache.get_frame returns nil")
     assert(tostring(err):find("offline_frame_cache"),

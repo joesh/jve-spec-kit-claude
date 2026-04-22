@@ -120,6 +120,11 @@ function PlaybackEngine.new(config)
     self._tmb = nil
     self._video_track_indices = {}   -- track indices for Renderer iteration
     self._audio_track_indices = {}   -- audio track indices for TMB audio path
+    -- Per-clip source range snapshot for the renderer. Populated when
+    -- clips are fed to TMB; the renderer needs {source_in, source_out}
+    -- to compose per-clip partial-coverage offline frames without
+    -- querying the DB on the hot path.
+    self._clip_info_by_id = {}
     -- PlaybackController (C++ CVDisplayLink-driven playback)
     self._playback_controller = nil
     self._video_surface = nil
@@ -333,6 +338,7 @@ function PlaybackEngine:_close_tmb()
     end
     self._video_track_indices = {}
     self._audio_track_indices = {}
+    self._clip_info_by_id = {}
 end
 
 --- Public: invalidate clip cache + re-feed TMB after timeline edits.
@@ -341,6 +347,9 @@ end
 function PlaybackEngine:notify_content_changed()
     self:_refresh_content_bounds()
     if self._playback_controller then
+        -- Drop the renderer's clip-info snapshot; _provide_clips will
+        -- repopulate as C++ requests fresh windows.
+        self._clip_info_by_id = {}
         qt_constants.PLAYBACK.RELOAD_ALL_CLIPS(self._playback_controller)
         self._video_track_indices = self.sequence:get_track_indices("VIDEO")
         table.sort(self._video_track_indices, function(a, b) return a > b end)
@@ -444,6 +453,16 @@ function PlaybackEngine:_provide_clips(from, to, track_type)
         local clip = self:_build_tmb_clip(entry, speed)
         local track_idx = entry.track.track_index
         EMP.TMB_ADD_CLIPS(self._tmb, track_type, track_idx, {clip})
+        -- Snapshot source range for the renderer so it can compose
+        -- per-clip partial-coverage frames without hitting the DB. Only
+        -- video clips need this — audio clips don't compose an offline
+        -- frame on the render path.
+        if track_type == "video" then
+            self._clip_info_by_id[clip.clip_id] = {
+                source_in  = entry.clip.source_in,
+                source_out = entry.clip.source_out,
+            }
+        end
 
         -- Track indices: ensure this track is known
         if track_type == "video" then
@@ -842,7 +861,7 @@ function PlaybackEngine:_display_frame_from_renderer(frame)
     assert(self._tmb, "PlaybackEngine:_display_frame_from_renderer: no TMB")
 
     local frame_handle, metadata = Renderer.get_video_frame(
-        self._tmb, self._video_track_indices, frame)
+        self._tmb, self._video_track_indices, frame, self._clip_info_by_id)
 
     if frame_handle then
         self:_apply_rotation_par(metadata)
