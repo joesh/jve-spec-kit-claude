@@ -160,18 +160,32 @@ local function handle_key_impl(event)
             focus_manager.focus_panel(focused_panel)
             -- fall through to the dispatch below
         end
-        -- Dispatch via TOML registry. Tab/Shift+Tab in timeline is fully
-        -- owned by the command system (default Tab → ToggleTimecodeFocus,
-        -- Shift+Tab user-mappable) — never falls back to Qt focusNextPrevChild
-        -- so the user can rely on Tab doing exactly what their keymap says,
-        -- nothing more. Other panels keep native Qt cycling when no binding
-        -- matches — they don't have a ban on dialog-style Tab cycling.
+        -- Dispatch via TOML registry first. Tab/Shift+Tab in timeline is
+        -- fully owned by the command system (Tab → ToggleTimecodeFocus,
+        -- Shift+Tab user-mappable).
         local registry = require("core.keyboard_shortcut_registry")
         local dispatched = registry.handle_key_event(key, modifiers, focused_panel)
         if dispatched then return true end
         if event.focus_outside_main_window then return true end  -- redirect already happened
-        if panel_active_timeline then return true end
-        return false
+
+        -- No registry binding. Per Joe's rule: Tab NEVER escapes one panel
+        -- to another. Qt's native focusNextPrevChild walks the whole top-
+        -- level window and would jump panels. Cycle focus within the
+        -- focused panel's own descendants instead, then consume.
+        -- A panel-level event filter can't intercept this because
+        -- focusNextPrevChild fires on the focus widget BEFORE the event
+        -- propagates to the panel — handling it here at the app-level
+        -- dispatcher is the only place that works.
+        if focused_panel and focus_manager.focus_panel_widget then
+            local panel_widget = focus_manager.focus_panel_widget(focused_panel)
+            -- luacheck: globals qt_cycle_panel_focus
+            if panel_widget and qt_cycle_panel_focus then
+                local forward = (key == KEY.Tab)
+                qt_cycle_panel_focus(panel_widget, forward)
+                return true
+            end
+        end
+        return true  -- last resort: consume rather than let native cycling escape
     end
 
     -- Escape: set global cancel flag — drag/modal handlers consume on next event
