@@ -66,9 +66,6 @@ local watched_files = {}
 local fs_available = false
 local FS = nil
 
--- TMB handle for ClearOffline (set by playback engine init)
-local tmb_handle = nil
-
 -- Persistence: project_id for debounced DB writes
 local current_project_id = nil
 local persist_timer_active = false
@@ -94,6 +91,16 @@ local function init_fs()
     if qt and qt.FS then
         FS = qt.FS
         fs_available = true
+        -- Wire watcher callbacks the moment FS becomes available. This
+        -- must happen BEFORE any FS.WATCH_FILE/DIR call, or events that
+        -- arrive between first-watch and callback-registration go into
+        -- the void (QFileSystemWatcher has no "missed events" replay).
+        -- Keeping this inside init_fs() means every watch_path() caller
+        -- — including the background-probe callback, which is the ONLY
+        -- path that installs watches in production — wires callbacks
+        -- as a precondition of adding its first path.
+        FS.SET_FILE_CHANGED_CB(function(path) M._on_file_changed(path) end)
+        FS.SET_DIR_CHANGED_CB(function(dir) M._on_dir_changed(dir) end)
         return true
     end
     return false
@@ -392,13 +399,6 @@ function M.update_from_tmb(media_path, offline, error_code)
     end
 end
 
---- Set TMB handle for ClearOffline integration.
--- Called by playback engine init when TMB is created.
--- @param tmb userdata TMB handle (or nil to clear)
-function M.set_tmb(tmb)
-    tmb_handle = tmb
-end
-
 --- Clear all watches and cache. Called on project_changed.
 function M.clear()
     -- Cancel any running background probe before clearing
@@ -416,7 +416,15 @@ function M.clear()
     watched_files = {}
 end
 
---- Re-probe a media path and emit signal if status changed.
+--- Re-probe a media path. Emits media_status_changed ONLY when the
+--- offline/error status actually flipped — `media_content_changed` is
+--- a separate signal emitted from _on_file_changed for in-place
+--- rewrites where the status stays online but bytes moved.
+---
+--- Separating the two lets consumers subscribe to what they actually
+--- care about: views (offline icons, clip.offline flags) listen to
+--- status_changed; path-keyed caches (decoder pools, peak cache,
+--- preview thumbnails) listen to content_changed.
 local function reprobe_and_notify(media_path)
     local old = status_cache[media_path]
     local new_status = probe(media_path)
@@ -426,30 +434,35 @@ local function reprobe_and_notify(media_path)
     unwatch_path(media_path)
     watch_path(media_path, new_status)
 
-    local changed = not old
+    local status_changed = not old
         or old.offline ~= new_status.offline
         or old.error_code ~= new_status.error_code
 
-    if changed then
+    if status_changed then
         schedule_persist()
-        -- File reappeared: purge TMB's offline blacklist so it retries the reader
-        if old and old.offline and not new_status.offline and tmb_handle then
-            local emp = try_emp()
-            if emp and emp.TMB_CLEAR_OFFLINE then
-                emp.TMB_CLEAR_OFFLINE(tmb_handle, media_path)
-            end
-        end
         log.event("media_status changed: %s offline=%s error=%s",
             media_path, tostring(new_status.offline), tostring(new_status.error_code))
+        -- Downstream wiring (TMB_CLEAR_OFFLINE, TMB_INVALIDATE_PATH,
+        -- view refresh) lives in the subscribers — PlaybackEngine and
+        -- SequenceMonitor — keyed off this signal. media_status itself
+        -- owns the cache + signal; nothing else.
         Signals.emit("media_status_changed", media_path, new_status)
     end
+    return status_changed
 end
 
 --- FS callback: a watched file changed (modified/deleted).
 function M._on_file_changed(path)
     assert(path, "media_status._on_file_changed: path required")
     if status_cache[path] then
-        reprobe_and_notify(path)
+        local status_changed = reprobe_and_notify(path)
+        -- In-place byte rewrite of a file that stayed online: status
+        -- didn't flip, but the bytes did. Fire media_content_changed
+        -- so path-keyed caches (decoders, peaks, previews) invalidate.
+        if not status_changed then
+            log.event("media_content_changed: %s", path)
+            Signals.emit("media_content_changed", path)
+        end
     end
 
     -- Invalidate peak cache for this media file (waveform regeneration).
@@ -480,17 +493,12 @@ function M._on_dir_changed(dir)
     end
 end
 
---- Initialize FS callbacks. Call once during app startup.
+--- Initialize FS integration eagerly. Safe to call multiple times.
+-- Called from app startup (layout.lua) so callbacks are live even if
+-- the first watch isn't installed until later. init_fs() is idempotent
+-- and also runs lazily from watch_path() as a safety net.
 function M.init_watcher()
-    if not init_fs() then return end
-
-    FS.SET_FILE_CHANGED_CB(function(path)
-        M._on_file_changed(path)
-    end)
-
-    FS.SET_DIR_CHANGED_CB(function(dir)
-        M._on_dir_changed(dir)
-    end)
+    init_fs()
 end
 
 -- ============================================================

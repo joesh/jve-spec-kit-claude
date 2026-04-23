@@ -127,6 +127,9 @@ local function open_and_init_project(path)
     -- Must happen here so ensure_clip_status finds persisted codec errors
     -- on first paint (not in the 50ms timer which fires after rendering).
     local media_status_init = require("core.media.media_status")
+    -- Wire FS watcher callbacks once at app startup. Must happen before
+    -- any watch_path() adds paths, or early watcher events get dropped.
+    media_status_init.init_watcher()
     media_status_init.load_persisted(project.id)
 
     -- Persist last-opened path (for subsequent launches to skip welcome screen)
