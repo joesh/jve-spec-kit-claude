@@ -51,13 +51,10 @@ end
 -- Schema-level validator: multi_editable must be boolean when provided.
 local metadata_schemas_raw = schemas
 local ok, err = pcall(function()
-    local T = metadata_schemas_raw.FIELD_TYPES
-    -- This mimics the internal helper; we intentionally pass a bad value.
-    -- Can't call `field()` directly (it's module-local), but the schema's
-    -- own fields have already gone through it during module load above —
-    -- so this call checks the assertion site indirectly by constructing a
-    -- field with a bad read_only flag.
-    T = T  -- luacheck quiet
+    -- Touching FIELD_TYPES asserts the schema module exposes it; the
+    -- schema's own fields went through `field()` during module load
+    -- above, so a failure there would have surfaced already.
+    assert(metadata_schemas_raw.FIELD_TYPES, "FIELD_TYPES missing from schema module")
 end)
 check("module-level field construction completed without error", ok,
     err and tostring(err) or "")

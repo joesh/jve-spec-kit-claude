@@ -31,14 +31,9 @@ do
     assert(s, "could not locate Tab branch start in keyboard_shortcuts.lua")
     tab_branch_start = s
     -- Scan forward for `    end` (4-space-aligned) which closes the Tab branch.
-    local pos = s
-    while true do
-        local next_end = src:find("\n    end\n", pos)
-        if not next_end then break end
-        tab_branch_end = next_end + 8  -- include the "    end\n"
-        break
-    end
-    assert(tab_branch_end, "could not locate end of Tab branch")
+    local next_end = src:find("\n    end\n", s)
+    assert(next_end, "could not locate end of Tab branch")
+    tab_branch_end = next_end + 8  -- include the "    end\n"
 end
 
 local tab_branch = src:sub(tab_branch_start, tab_branch_end)

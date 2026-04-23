@@ -44,7 +44,9 @@ local function make_media(params)
     return m
 end
 
-local media_a = make_media({
+-- Three media rows — loaded back from the DB by the queries under test;
+-- the `Media` instances returned here aren't needed locally.
+make_media({
     id = "media_a", project_id = project.id,
     file_path = "/mnt/footage/a.mov", name = "a.mov",
     duration_frames = 1000,
@@ -52,7 +54,7 @@ local media_a = make_media({
     width = 1920, height = 1080,
     codec = "prores", is_still = false,
 })
-local media_b = make_media({
+make_media({
     id = "media_b", project_id = project.id,
     file_path = "/mnt/footage/b.mov", name = "b.mov",
     duration_frames = 2000,
@@ -60,7 +62,7 @@ local media_b = make_media({
     width = 3840, height = 2160,
     codec = "h264", is_still = false,
 })
-local media_c = make_media({
+make_media({
     id = "media_c", project_id = project.id,
     file_path = "/mnt/footage/c.wav", name = "c.wav",
     duration_frames = 48000,
@@ -71,7 +73,7 @@ local media_c = make_media({
 })
 -- A media that belongs to a different project — must never leak into
 -- load_for_project(project.id).
-local media_other = make_media({
+make_media({
     id = "media_other", project_id = other_project.id,
     file_path = "/mnt/footage/other.mov", name = "other.mov",
     duration_frames = 500,

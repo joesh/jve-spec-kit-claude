@@ -10,7 +10,7 @@
 -- bindings, hit StartRename, and asserted in keyboard_picture.lua:170.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
-local test_env = require("test_env")
+require("test_env")
 
 local registry = require("core.keyboard_shortcut_registry")
 
