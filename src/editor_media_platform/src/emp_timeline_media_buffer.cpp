@@ -146,20 +146,14 @@ void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInf
         std::lock_guard<std::mutex> lock(m_tracks_mutex);
         auto& ts = m_tracks[track];
 
-        // Fast path: skip entirely if clip list is unchanged (called every tick)
+        // Fast path: skip entirely if clip list is unchanged (called every
+        // tick). Equality delegates to ClipInfo::has_same_decode_inputs so
+        // every field stays compared in one place — adding a field to
+        // ClipInfo forces its author to update that single comparison.
         if (ts.clips.size() == clips.size()) {
             bool same = true;
             for (size_t i = 0; i < clips.size(); ++i) {
-                const auto& a = ts.clips[i];
-                const auto& b = clips[i];
-                if (a.clip_id != b.clip_id ||
-                    a.timeline_start != b.timeline_start ||
-                    a.duration != b.duration ||
-                    a.source_in != b.source_in ||
-                    a.media_path != b.media_path ||
-                    a.rate_num != b.rate_num ||
-                    a.rate_den != b.rate_den ||
-                    a.speed_ratio != b.speed_ratio) {
+                if (!ts.clips[i].has_same_decode_inputs(clips[i])) {
                     same = false;
                     break;
                 }
@@ -2001,6 +1995,87 @@ void TimelineMediaBuffer::ReleaseAll() {
 void TimelineMediaBuffer::ClearOffline(const std::string& path) {
     std::lock_guard<std::mutex> lock(m_pool_mutex);
     m_offline.erase(path);
+}
+
+void TimelineMediaBuffer::InvalidatePath(const std::string& path) {
+    // Phase 1: reader pool + decode-speed hint (m_pool_mutex).
+    // Move evicted readers out and let them destruct OUTSIDE the lock —
+    // Reader destruction may run VT teardown (slow) and must not block
+    // other pool operations. See evict_lru_reader for the same pattern.
+    std::vector<PoolEntry> evicted_readers;
+    {
+        std::lock_guard<std::mutex> lock(m_pool_mutex);
+        for (auto it = m_readers.begin(); it != m_readers.end(); ) {
+            if (it->second.path == path) {
+                evicted_readers.push_back(std::move(it->second));
+                it = m_readers.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (auto it = m_decode_speed_cache.begin(); it != m_decode_speed_cache.end(); ) {
+            if (it->first.second == path) {
+                it = m_decode_speed_cache.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        // m_offline: leave untouched. Content rewrite of an already-offline
+        // path (unusual) stays offline; ClearOffline handles the "file
+        // reappeared" transition separately.
+    }
+
+    // Phase 2: per-track caches (m_tracks_mutex). Video/audio caches key
+    // on clip_id, so resolve clip_ids whose media_path matches first.
+    {
+        std::lock_guard<std::mutex> lock(m_tracks_mutex);
+        for (auto& kv : m_tracks) {
+            auto& ts = kv.second;
+            std::unordered_set<std::string> matching_clip_ids;
+            for (const auto& c : ts.clips) {
+                if (c.media_path == path) matching_clip_ids.insert(c.clip_id);
+            }
+            if (matching_clip_ids.empty()) continue;
+            for (auto it = ts.video_cache.begin(); it != ts.video_cache.end(); ) {
+                if (matching_clip_ids.count(it->second.clip_id)) {
+                    it = ts.video_cache.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            for (auto it = ts.audio_cache.begin(); it != ts.audio_cache.end(); ) {
+                if (matching_clip_ids.count(it->clip_id)) {
+                    it = ts.audio_cache.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            for (auto it = ts.clip_eof_frame.begin(); it != ts.clip_eof_frame.end(); ) {
+                if (matching_clip_ids.count(it->first)) {
+                    it = ts.clip_eof_frame.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            // New bytes may have different EOF / duration — force prefetch
+            // to re-evaluate from the current playhead rather than trust
+            // the watermark it computed against the old file.
+            ts.video_buffer_end = -1;
+            ts.audio_buffer_end = -1;
+            ts.prefetch_generation++;
+        }
+    }
+
+    // Phase 3: mixed-audio cache (m_mix_mutex). The mix blends PCM across
+    // clips, so it isn't path-keyed — anything that might have sourced
+    // from this path is indistinguishable from anything that didn't.
+    // Simpler and correct: clear all, let the mix thread rebuild on demand.
+    {
+        std::lock_guard<std::mutex> lock(m_mix_mutex);
+        m_mixed_cache.clear();
+        m_mix_cv.notify_one();
+    }
+    // evicted_readers destructs here, outside all TMB locks.
 }
 
 // ============================================================================

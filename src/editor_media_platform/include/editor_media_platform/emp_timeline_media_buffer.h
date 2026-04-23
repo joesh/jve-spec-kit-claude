@@ -81,6 +81,28 @@ struct ClipInfo {
         assert(rate_den > 0 && "ClipInfo::rate: rate_den must be positive");
         return Rate{rate_num, rate_den};
     }
+
+    // True when `other` produces identical decode output for this clip.
+    // Used by SetTrackClips to skip redundant replace cycles when Lua
+    // re-posts the same clip list every tick.
+    //
+    // MUST include every field whose change affects decode or playback:
+    // adding a field to ClipInfo without adding it here silently breaks
+    // the refresh path (Joe's "reconnect → audio keeps beeping" repro
+    // was caused by `offline` and `volume` being omitted). Adding the
+    // field in exactly one place keeps the invariant local.
+    bool has_same_decode_inputs(const ClipInfo& other) const {
+        return clip_id       == other.clip_id
+            && media_path    == other.media_path
+            && timeline_start == other.timeline_start
+            && duration      == other.duration
+            && source_in     == other.source_in
+            && rate_num      == other.rate_num
+            && rate_den      == other.rate_den
+            && speed_ratio   == other.speed_ratio
+            && offline       == other.offline
+            && volume        == other.volume;
+    }
 };
 
 // Segment: a contiguous region of the timeline, either a clip or a gap.
@@ -209,6 +231,16 @@ public:
     // Remove a path from the offline blacklist (called when FS watcher
     // detects a previously-missing file has reappeared).
     void ClearOffline(const std::string& path);
+
+    // Drop all TMB state tied to `path` — the FS watcher detected an
+    // in-place byte rewrite, so any cached decode of the old bytes is
+    // stale. Evicts the reader pool entries (next acquire reopens the
+    // file), all cached video frames / audio PCM / EOF markers for
+    // clips referencing this path, the decode-speed hint, and the
+    // whole pre-mixed audio buffer (can't be partially invalidated —
+    // mix is composed across clips). Safe to call at any time; readers
+    // currently in use stay alive via shared_ptr until callers release.
+    void InvalidatePath(const std::string& path);
 
     // Stop all background decode work (prefetch workers + decode-prep jobs).
     // Called on playback stop to release HW decoder sessions immediately.

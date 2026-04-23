@@ -111,7 +111,14 @@ for t in \
   test_floating_window_key_isolation.lua \
   test_tab_order_restore.lua \
   test_codec_status_on_startup.lua \
-  fs_watcher_media_status.lua
+  fs_watcher_media_status.lua \
+  test_tmb_content_rewrite_invalidation.lua \
+  test_tmb_restore_after_offline.lua \
+  test_tmb_audio_content_rewrite_invalidation.lua \
+  test_tmb_mixed_audio_content_rewrite.lua \
+  test_tmb_invalidate_on_offline_flip.lua \
+  test_monitor_refresh_ordering.lua \
+  test_tmb_audio_unbeeps_on_reconnect.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"
