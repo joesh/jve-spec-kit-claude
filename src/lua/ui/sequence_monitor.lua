@@ -151,7 +151,55 @@ function SequenceMonitor.new(config)
         end
     end, 50)
 
+    -- Media file bytes changed (in-place rewrite) OR status flipped
+    -- (e.g. file came back online). PlaybackEngine already purged TMB
+    -- caches via its own subscribers; what the monitor still owns is
+    -- kicking a fresh pull at the parked playhead so the user sees
+    -- the new frame instead of whatever surface the last decode left
+    -- behind. During playback the tick loop handles this automatically.
+    --
+    -- Priority 110: PlaybackEngine's subscribers run at default 100 —
+    -- we MUST fire after them, or the re-seek pulls from the still-stale
+    -- TMB and the surface keeps the old pixels.
+    local function on_media_event(path) self:_on_media_event(path) end
+    self._media_status_changed_id =
+        Signals.connect("media_status_changed", on_media_event, 110)
+    self._media_content_changed_id =
+        Signals.connect("media_content_changed", on_media_event, 110)
+
     return self
+end
+
+--- True when at least one clip at the current playhead references
+--- `media_path`. Used to filter media_status_changed / content_changed
+--- refreshes — bg probe can fire hundreds of flips per second at
+--- startup, but only flips that touch the displayed frame need a
+--- re-pull.
+function SequenceMonitor:_path_affects_current_frame(media_path)
+    assert(type(media_path) == "string" and media_path ~= "", string.format(
+        "SequenceMonitor:_path_affects_current_frame: media_path must be non-empty string, got %s",
+        type(media_path)))
+    if not self.sequence or not self.playhead then return false end
+    for _, entry in ipairs(self.sequence:get_video_at(self.playhead)) do
+        if entry.media_path == media_path then return true end
+    end
+    for _, entry in ipairs(self.sequence:get_audio_at(self.playhead)) do
+        if entry.media_path == media_path then return true end
+    end
+    return false
+end
+
+--- Shared handler for media_status_changed and media_content_changed.
+--- Priority-110 wiring in `new()` guarantees this fires AFTER
+--- PlaybackEngine has invalidated TMB caches, so on_model_changed
+--- pulls fresh decode output.
+function SequenceMonitor:_on_media_event(media_path)
+    assert(type(media_path) == "string" and media_path ~= "", string.format(
+        "SequenceMonitor:_on_media_event: media_path must be non-empty string, got %s",
+        type(media_path)))
+    if self:_path_affects_current_frame(media_path) then
+        self:on_model_changed()
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -851,6 +899,14 @@ function SequenceMonitor:destroy()
     if self._project_changed_id then
         Signals.disconnect(self._project_changed_id)
         self._project_changed_id = nil
+    end
+    if self._media_status_changed_id then
+        Signals.disconnect(self._media_status_changed_id)
+        self._media_status_changed_id = nil
+    end
+    if self._media_content_changed_id then
+        Signals.disconnect(self._media_content_changed_id)
+        self._media_content_changed_id = nil
     end
 end
 
