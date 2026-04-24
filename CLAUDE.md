@@ -18,6 +18,8 @@ This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Re
 - SQLite `.jvp` project files — new field in existing `metadata` JSON blob (no schema change) (009-drp-importer-must)
 - Lua (LuaJIT) + C++ (Qt6) + Qt6 (via `qt_bindings.cpp` → `qt_constants.lua`), SQLite, `core/command_manager`, `core/signals`, `ui/selection_hub`, `ui/collapsible_section`, `inspectable/{clip,sequence}.lua` (012-rewrite-the-inspector)
 - Project DB (SQLite `.jvp` files) for model state; new persistence file for collapse state (format resolved in Phase 0 — see research.md) (012-rewrite-the-inspector)
+- Lua (LuaJIT) + C++ (Qt6). Lua is the dominant surface for this feature (data model, commands, resolver, overrides). C++ changes limited to the minimum needed for renderer/TMB recursion consumption. + Qt6 (UI + XML parsing), LuaJIT (scripting), SQLite3 (project storage), libzstd (DRP FieldsBlob decode — already landed earlier this session), nlohmann_json, FFmpeg (media decode), lsqlite3. (013-timeline-placements-as)
+- SQLite `.jvp` project files. Schema change is substantial but unconstrained by back-compat requirements (FR-018). (013-timeline-placements-as)
 
 READ ENGINEERING.md
 
