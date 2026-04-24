@@ -188,6 +188,28 @@ function Project.update_identity(old_id, new_id, new_name)
     -- then calls Project.commit_identity_update()
 end
 
+--- Feature 013: read the project's fps-mismatch policy.
+--- Returns 'resample' | 'passthrough'. Asserts loudly if the column value is
+--- missing or unexpected (rule 1.14: projects.fps_mismatch_policy is NOT NULL
+--- per schema V9; encountering anything else is DB corruption).
+function Project.get_fps_mismatch_policy(id, db)
+    assert(id and id ~= "", "Project.get_fps_mismatch_policy: id is required")
+    local conn = resolve_db(db)
+    local stmt = conn:prepare(
+        "SELECT fps_mismatch_policy FROM projects WHERE id = ?")
+    assert(stmt, "Project.get_fps_mismatch_policy: prepare failed")
+    stmt:bind_value(1, id)
+    assert(stmt:exec(), "Project.get_fps_mismatch_policy: exec failed")
+    assert(stmt:next(), string.format(
+        "Project.get_fps_mismatch_policy: project %s not found", id))
+    local policy = stmt:value(0)
+    stmt:finalize()
+    assert(policy == "resample" or policy == "passthrough", string.format(
+        "Project.get_fps_mismatch_policy: project %s has invalid value '%s' "
+        .. "(expected 'resample' or 'passthrough')", id, tostring(policy)))
+    return policy
+end
+
 --- Commit the identity update transaction started by update_identity.
 function Project.commit_identity_update()
     local conn = resolve_db(nil)

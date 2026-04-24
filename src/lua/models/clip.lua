@@ -1174,4 +1174,145 @@ function M.update(id, fields)
     return true
 end
 
+-- ===========================================================================
+-- Feature 013 (T040): ripple + batch operations for Insert's write path.
+-- ===========================================================================
+
+--- Shift every clip on `track_id` whose `timeline_start_frame >= from_frame`
+--- forward by `shift` frames. Returns the list of clip ids actually shifted
+--- (for undo capture). `shift` must be non-zero (rule 2.13).
+function M.ripple_track_forward(track_id, from_frame, shift)
+    assert(track_id and track_id ~= "",
+        "Clip.ripple_track_forward: track_id required")
+    assert(type(from_frame) == "number",
+        "Clip.ripple_track_forward: from_frame must be integer")
+    assert(type(shift) == "number" and shift ~= 0,
+        "Clip.ripple_track_forward: shift must be non-zero integer")
+
+    local db = require("core.database").get_connection()
+    local sel = db:prepare([[
+        SELECT id FROM clips
+        WHERE track_id = ? AND timeline_start_frame >= ?
+    ]])
+    assert(sel, "Clip.ripple_track_forward: select prepare failed")
+    sel:bind_value(1, track_id)
+    sel:bind_value(2, from_frame)
+    assert(sel:exec(), "Clip.ripple_track_forward: select exec failed")
+    local ids = {}
+    while sel:next() do ids[#ids + 1] = sel:value(0) end
+    sel:finalize()
+
+    if #ids == 0 then return ids end
+
+    local upd = db:prepare([[
+        UPDATE clips
+        SET timeline_start_frame = timeline_start_frame + ?,
+            modified_at = strftime('%s','now')
+        WHERE track_id = ? AND timeline_start_frame >= ?
+    ]])
+    assert(upd, "Clip.ripple_track_forward: update prepare failed")
+    upd:bind_value(1, shift)
+    upd:bind_value(2, track_id)
+    upd:bind_value(3, from_frame)
+    assert(upd:exec(), "Clip.ripple_track_forward: update exec failed")
+    upd:finalize()
+    return ids
+end
+
+--- Shift a specific set of clips by `delta` frames. Used by undo to reverse
+--- a previous ripple without re-querying (the insertion point's new clips
+--- would otherwise be swept in). `delta` may be negative.
+function M.shift_many_by(clip_ids, delta)
+    assert(type(clip_ids) == "table",
+        "Clip.shift_many_by: clip_ids table required")
+    assert(type(delta) == "number" and delta ~= 0,
+        "Clip.shift_many_by: delta must be non-zero integer")
+    if #clip_ids == 0 then return end
+
+    local db = require("core.database").get_connection()
+    local upd = db:prepare([[
+        UPDATE clips
+        SET timeline_start_frame = timeline_start_frame + ?,
+            modified_at = strftime('%s','now')
+        WHERE id = ?
+    ]])
+    assert(upd, "Clip.shift_many_by: prepare failed")
+    for _, cid in ipairs(clip_ids) do
+        upd:bind_value(1, delta)
+        upd:bind_value(2, cid)
+        assert(upd:exec(),
+            "Clip.shift_many_by: exec failed for " .. tostring(cid))
+        upd:reset()
+    end
+    upd:finalize()
+end
+
+--- Delete clip rows by id. FK ON DELETE CASCADE covers `clip_links`; the
+--- `properties` table has no FK and is cleaned here for parity with the
+--- instance `:delete()`.
+function M.delete_by_ids(clip_ids)
+    assert(type(clip_ids) == "table",
+        "Clip.delete_by_ids: clip_ids table required")
+    if #clip_ids == 0 then return end
+
+    local db = require("core.database").get_connection()
+    local del_props = db:prepare("DELETE FROM properties WHERE clip_id = ?")
+    local del_clips = db:prepare("DELETE FROM clips WHERE id = ?")
+    assert(del_props and del_clips, "Clip.delete_by_ids: prepare failed")
+    for _, cid in ipairs(clip_ids) do
+        del_props:bind_value(1, cid)
+        del_props:exec()
+        del_props:reset()
+        del_clips:bind_value(1, cid)
+        assert(del_clips:exec(),
+            "Clip.delete_by_ids: DELETE failed for " .. tostring(cid))
+        del_clips:reset()
+    end
+    del_props:finalize()
+    del_clips:finalize()
+end
+
+--- Load a V9 clips row as a plain table (no legacy JOINs — purely this
+--- row's columns). Used by Insert's __timeline_mutations builder to
+--- re-read a freshly-inserted clip for the UI cache.
+function M.load_v13_row(id)
+    assert(id and id ~= "", "Clip.load_v13_row: id required")
+    local db = require("core.database").get_connection()
+    local stmt = db:prepare([[
+        SELECT id, project_id, owner_sequence_id, track_id, nested_sequence_id,
+               name, timeline_start_frame, duration_frames,
+               source_in_frame, source_out_frame,
+               master_layer_track_id, fps_mismatch_policy,
+               enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
+        FROM clips WHERE id = ?
+    ]])
+    assert(stmt, "Clip.load_v13_row: prepare failed")
+    stmt:bind_value(1, id)
+    assert(stmt:exec(), "Clip.load_v13_row: exec failed")
+    local row
+    if stmt:next() then
+        row = {
+            id                    = stmt:value(0),
+            project_id            = stmt:value(1),
+            owner_sequence_id     = stmt:value(2),
+            track_id              = stmt:value(3),
+            nested_sequence_id    = stmt:value(4),
+            name                  = stmt:value(5),
+            timeline_start_frame  = stmt:value(6),
+            duration_frames       = stmt:value(7),
+            source_in_frame       = stmt:value(8),
+            source_out_frame      = stmt:value(9),
+            master_layer_track_id = stmt:value(10),
+            fps_mismatch_policy   = stmt:value(11),
+            enabled               = stmt:value(12) == 1,
+            volume                = stmt:value(13),
+            mark_in_frame         = stmt:value(14),
+            mark_out_frame        = stmt:value(15),
+            playhead_frame        = stmt:value(16),
+        }
+    end
+    stmt:finalize()
+    return row
+end
+
 return M

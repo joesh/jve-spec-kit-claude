@@ -2117,4 +2117,82 @@ function Sequence.update(id, fields)
     return true
 end
 
+--- Feature 013 (T040): native-timebase duration of a sequence restricted to
+--- a single medium. A master's VIDEO duration is in video frames at the
+--- master's fps; its AUDIO duration is in audio samples at its audio_rate —
+--- the two are in different units, so the caller must specify which.
+--- Computed as max(timeline_start_frame + duration_frames) across media_refs
+--- (for a master) OR clips (for a nested sequence) on tracks of the given
+--- type. Returns 0 if no content of that medium exists.
+function Sequence.native_duration_for_medium(id, track_type)
+    assert(id and id ~= "",
+        "Sequence.native_duration_for_medium: id is required")
+    assert(track_type == "VIDEO" or track_type == "AUDIO",
+        "Sequence.native_duration_for_medium: track_type must be VIDEO or AUDIO")
+    local conn = resolve_db()
+    local stmt = conn:prepare([[
+        SELECT COALESCE(MAX(r.timeline_start_frame + r.duration_frames), 0)
+        FROM (
+            SELECT track_id, timeline_start_frame, duration_frames
+              FROM media_refs WHERE owner_sequence_id = ?
+            UNION ALL
+            SELECT track_id, timeline_start_frame, duration_frames
+              FROM clips WHERE owner_sequence_id = ?
+        ) r
+        JOIN tracks t ON r.track_id = t.id
+        WHERE t.track_type = ?
+    ]])
+    assert(stmt, "Sequence.native_duration_for_medium: prepare failed")
+    stmt:bind_value(1, id)
+    stmt:bind_value(2, id)
+    stmt:bind_value(3, track_type)
+    assert(stmt:exec(), "Sequence.native_duration_for_medium: exec failed")
+    assert(stmt:next(),
+        "Sequence.native_duration_for_medium: query returned no rows")
+    local d = stmt:value(0) or 0
+    stmt:finalize()
+    return d
+end
+
+--- Feature 013 (T040): which track types does this sequence contain content on?
+--- Returns a set: { VIDEO = true, AUDIO = true }. A master with a V1
+--- media_ref + A1 media_ref returns both; a master with V1 only returns
+--- VIDEO only. A nested sequence is introspected via its clips. Used by
+--- Insert to decide how many clip rows to write.
+function Sequence.contained_mediums(id)
+    assert(id and id ~= "", "Sequence.contained_mediums: id is required")
+    local conn = resolve_db()
+    local stmt = conn:prepare([[
+        SELECT DISTINCT t.track_type FROM (
+            SELECT track_id FROM media_refs WHERE owner_sequence_id = ?
+            UNION ALL
+            SELECT track_id FROM clips WHERE owner_sequence_id = ?
+        ) r JOIN tracks t ON r.track_id = t.id
+    ]])
+    assert(stmt, "Sequence.contained_mediums: prepare failed")
+    stmt:bind_value(1, id)
+    stmt:bind_value(2, id)
+    assert(stmt:exec(), "Sequence.contained_mediums: exec failed")
+    local mediums = {}
+    while stmt:next() do mediums[stmt:value(0)] = true end
+    stmt:finalize()
+    return mediums
+end
+
+--- Feature 013 (T040): read just the `name` column. Used when Insert needs a
+--- default clip name and no explicit arg was passed (the clip's name column
+--- is NOT NULL, so Insert must source one authoritatively).
+function Sequence.get_name(id)
+    assert(id and id ~= "", "Sequence.get_name: id is required")
+    local conn = resolve_db()
+    local stmt = conn:prepare("SELECT name FROM sequences WHERE id = ?")
+    assert(stmt, "Sequence.get_name: prepare failed")
+    stmt:bind_value(1, id)
+    assert(stmt:exec(), "Sequence.get_name: exec failed")
+    assert(stmt:next(), string.format("Sequence.get_name: id=%s not found", id))
+    local n = stmt:value(0)
+    stmt:finalize()
+    return n
+end
+
 return Sequence
