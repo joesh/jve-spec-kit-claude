@@ -4,6 +4,7 @@
 #include "emp_time.h"
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace emp {
 
@@ -12,8 +13,19 @@ class MediaFileImpl;
 
 // Information about an opened media file
 struct MediaFileInfo {
-    // Duration in microseconds
+    // Duration in microseconds. 0 is ambiguous — it can legitimately
+    // mean "this is a single-frame still image" (TIFF, single-frame
+    // export) or "no duration source was found in the container."
+    // Callers that need to distinguish these cases check has_duration.
     TimeUS duration_us;
+
+    // True when duration_us came from an authoritative container
+    // source (format.duration, video_stream->duration, or
+    // audio_stream->duration). False means no duration source was
+    // present — the stream is either a still image or the container
+    // doesn't encode duration. Mirrors has_video_tc_origin /
+    // has_audio_tc_origin for TC values.
+    bool has_duration = false;
 
     // Video stream info
     bool has_video;
@@ -34,10 +46,22 @@ struct MediaFileInfo {
     // Video path: file_pos = source_frame_tc - first_frame_tc
     int64_t first_frame_tc = 0;
 
+    // True iff first_frame_tc came from an authoritative container source
+    // (MOV tmcd atom, MXF stream start_time, BRAW metadata). False means
+    // no TC source was found and first_frame_tc defaulted to 0 — callers
+    // matching on TC should treat this as "unknown" rather than "zero".
+    bool has_video_tc_origin = false;
+
     // TC of sample 0: start timecode in audio samples.
     // From BWF time_reference (samples since midnight) or stream start_time.
     // Audio path: file_pos = source_sample_tc - first_sample_tc
     int64_t first_sample_tc = 0;
+
+    // True iff first_sample_tc came from an authoritative container
+    // source (BWF time_reference or audio stream start_time >= 1s).
+    // False means no TC source was found and first_sample_tc defaulted
+    // to 0 — same semantics as has_video_tc_origin.
+    bool has_audio_tc_origin = false;
 
     // Rotation in degrees (0, 90, 180, 270) from display matrix metadata
     // Applies to phone footage recorded in portrait/landscape modes
@@ -72,8 +96,37 @@ class MediaFile {
 public:
     ~MediaFile();
 
-    // Open a media file
+    // Open a media file for decoding. Reads the container header AND runs
+    // avformat_find_stream_info (packet analysis to confirm codec parameters).
+    // Use this if you intend to decode frames from the returned handle.
     static Result<std::shared_ptr<MediaFile>> Open(const std::string& path);
+
+    // Probe container metadata only — faster variant of Open() for callers
+    // that only need the fields on MediaFileInfo (TC origin, stream dims,
+    // fps, duration). Skips avformat_find_stream_info, which typically
+    // dominates Open()'s runtime on video files (5-10× speedup for MOV/MP4).
+    //
+    // Returns a MediaFileInfo directly — no MediaFile handle. The returned
+    // info is suitable for relink matching, media browser display, and
+    // import TC extraction, but NOT for starting a decode: use Open() if
+    // you need to read frames.
+    //
+    // Thread-safe — safe to call concurrently from multiple threads on
+    // distinct paths. BRAW path delegates to the SDK's metadata probe;
+    // FFmpeg path creates a dedicated format context per call.
+    static Result<MediaFileInfo> ProbeMetadata(const std::string& path);
+
+    // Parallel ProbeMetadata over a batch of paths. Spawns a worker pool
+    // and dispatches paths round-robin. Results come back in input order,
+    // one Result per input path (each may independently be an error).
+    //
+    // parallelism=0 (default) uses std::thread::hardware_concurrency(),
+    // clamped to the input size. Pass an explicit value to override.
+    //
+    // Intended consumer: relink scan, bulk media browser probes, any
+    // workflow that needs metadata for hundreds of files at once.
+    static std::vector<Result<MediaFileInfo>> ProbeMetadataBatch(
+        const std::vector<std::string>& paths, size_t parallelism = 0);
 
     // Get file information
     const MediaFileInfo& info() const;

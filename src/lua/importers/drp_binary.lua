@@ -681,4 +681,93 @@ function M.decode_media_timemap(hex_str)
     }
 end
 
+-- ---------------------------------------------------------------------------
+-- Sm2Mp*.FieldsBlob decoding (synced-clip support).
+--
+-- On-wire shape:
+--     [BE32 version][BE32 declared_size][0x81 marker][zstd frame]
+--
+-- The zstd frame decompresses to a protobuf-ish payload. For synced-clip
+-- resolution we don't parse the protobuf fully — we only need the ordered
+-- list of embedded MediaRef UUIDs (each one is a `BtAudioInfo` DbId that
+-- resolves to an audio pool item).
+-- ---------------------------------------------------------------------------
+
+--- Decompress a Sm2Mp*.FieldsBlob hex string.
+-- @param hex_str string: full FieldsBlob hex (including 9-byte wrapper)
+-- @return string|nil: decompressed payload bytes on success
+-- @return string|nil: human-readable error on failure
+function M.decode_fields_blob(hex_str)
+    if type(hex_str) ~= "string" or #hex_str < 18 then
+        return nil, "FieldsBlob hex too short (< 9 bytes of wrapper)"
+    end
+
+    local bytes = M.hex_to_bytes(hex_str)
+    if not bytes or #bytes < 9 then
+        return nil, "FieldsBlob hex is not valid hex or decoded < 9 bytes"
+    end
+
+    local marker = bytes:byte(9)
+    if marker ~= 0x81 then
+        return nil, string.format(
+            "FieldsBlob wrapper byte 9 must be 0x81, got 0x%02x", marker)
+    end
+
+    if type(qt_zstd_decompress) ~= "function" then
+        return nil, "FieldsBlob: qt_zstd_decompress binding not available"
+    end
+
+    local frame = bytes:sub(10)
+    return qt_zstd_decompress(frame)
+end
+
+--- Extract all UTF-16BE UUID strings from a decompressed FieldsBlob.
+--
+-- The Sm2MpVideoClip FieldsBlob embeds a `MediaRef` field per audio
+-- stream the pool item claims (own embedded audio, synced external
+-- audio, or both). Each MediaRef's value is a 72-byte UTF-16BE encoding
+-- of a canonical dashed UUID. Rather than walk the protobuf, we scan
+-- the decompressed bytes for the canonical UUID shape — cheap, robust,
+-- and the order matches the protobuf field order (callers rely on that
+-- for source-index ↔ file mapping).
+--
+-- Returns UUIDs in on-wire order, duplicates preserved: callers can
+-- build a distinct set or count occurrences as needed.
+-- @param bytes string: decompressed FieldsBlob payload
+-- @return table: array of lowercase dashed UUID strings
+function M.extract_media_refs(bytes)
+    assert(type(bytes) == "string",
+        "extract_media_refs: bytes string required")
+    local out = {}
+    local n = #bytes
+    local i = 1
+    while i <= n - 71 do
+        -- Cheap filter: UTF-16BE hex digits always have a 0x00 high
+        -- byte; a canonical UUID has '-' at char offset 8 (byte 16).
+        if bytes:byte(i) == 0 and bytes:byte(i + 16) == 0
+            and bytes:byte(i + 17) == 0x2d then
+            local s = bytes:sub(i, i + 71)
+            local chars = {}
+            local ok = true
+            for j = 1, 72, 2 do
+                if s:byte(j) ~= 0 then ok = false; break end
+                chars[#chars + 1] = string.char(s:byte(j + 1))
+            end
+            if ok then
+                local ascii = table.concat(chars)
+                if ascii:match(
+                        "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-"
+                        .. "%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$") then
+                    out[#out + 1] = ascii:lower()
+                    i = i + 72
+                    goto continue
+                end
+            end
+        end
+        i = i + 1
+        ::continue::
+    end
+    return out
+end
+
 return M

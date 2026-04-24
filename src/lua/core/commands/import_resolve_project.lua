@@ -371,6 +371,8 @@ function M.register(executors, undoers, db)
                 frame_rate = media_item.frame_rate or import_result_raw.project.frame_rate,
                 width = ir_width,
                 height = import_result_raw.project.height,
+                audio_channels = media_item.audio_channels or 0,
+                audio_sample_rate = media_item.audio_sample_rate,
                 codec = ir_codec,
                 is_still = Media.classify_is_still(ir_codec, ir_width, media_item.duration),
             })

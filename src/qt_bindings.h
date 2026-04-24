@@ -169,6 +169,7 @@ int lua_set_button_click_handler(lua_State* L);
 	int lua_set_focus_handler(lua_State* L);
 	int lua_install_panel_focus_filter(lua_State* L);
 	int lua_register_panel_focus_widget(lua_State* L);
+	int lua_focus_outside_main_window(lua_State* L);
 	int lua_set_focus_policy(lua_State* L);
 	int lua_set_focus(lua_State* L);
 	int lua_get_focus_widget(lua_State* L);

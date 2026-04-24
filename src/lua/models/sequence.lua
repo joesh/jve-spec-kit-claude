@@ -534,15 +534,19 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
     local duration_frames = media.duration
     local has_video = media.width > 0
     local has_audio = media.audio_channels > 0
-    -- Derive sample_rate: explicit opts > audio-only media fps > fallback 48000
-    -- TODO: add sample_rate column to Media; then require it here (no fallback)
+    -- Sample rate comes from exactly one place: the media record's
+    -- audio_sample_rate column (populated by importers/EMP probe).
+    -- opts.sample_rate is an explicit override for synthetic callers
+    -- (tests, future re-rate flows). No fps_num cross-read, no 48000.
     local sample_rate = opts.sample_rate
-    if not sample_rate and not has_video and has_audio then
-        -- Audio-only media: fps_numerator IS the sample rate (e.g., 48000)
-        sample_rate = fps_num
+    if not sample_rate and has_audio then
+        sample_rate = media.audio_sample_rate
     end
-    -- NSF-NOTED: 48000 fallback for video+audio until Media stores sample_rate
-    sample_rate = sample_rate or 48000
+    assert(not has_audio or (sample_rate and sample_rate > 0), string.format(
+        "Sequence.ensure_masterclip: media %s has audio but no sample rate "
+        .. "(audio_channels=%s, audio_sample_rate=%s, has_video=%s)",
+        tostring(media_id), tostring(media.audio_channels),
+        tostring(media.audio_sample_rate), tostring(has_video)))
 
     -- Compute audio duration in samples from video frames
     local duration_samples = 0

@@ -1,21 +1,10 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~70 LOC
--- Volatility: unknown
---
--- @file timeline_state_data.lua
--- Original intent (unreviewed):
--- Timeline State Data
--- Holds the central state table and notification system
+--- Timeline state data: the module-level state table that every
+--- timeline-state-concern (core, clips, tracks, selection, viewport,
+--- geometry) reads and writes through. Also owns the change-listener
+--- list: subscribers call add_listener / remove_listener and receive
+--- a debounced notification whenever model state changes.
+---
+--- @file timeline_state_data.lua
 local M = {}
 local ui_constants = require("core.ui_constants")
 
@@ -72,6 +61,11 @@ local function fresh_state()
 
         -- Active edge drag (shared across timeline panes; not persisted)
         active_edge_drag_state = nil,
+
+        -- Last pointer position in frames (updated by timeline_view_input on
+        -- mouse move). Consumed by zoom-at-pointer commands. Nil until the
+        -- cursor has been over a timeline widget.
+        last_pointer_frame = nil,
     }
 end
 
@@ -90,6 +84,17 @@ function M.reset()
     M.state = fresh_state()
     M.sequence = nil
     listeners = {}
+    notify_timer = nil
+end
+
+--- Full state reset that preserves listener subscriptions.
+-- Used on project change: views are long-lived and must stay subscribed
+-- across projects so they re-paint when the new model is loaded (or stay
+-- blank when the new project has no active sequence, per feature 010).
+-- Unlike reset(), this does NOT touch the listener list.
+function M.reset_state_preserve_listeners()
+    M.state = fresh_state()
+    M.sequence = nil
     notify_timer = nil
 end
 

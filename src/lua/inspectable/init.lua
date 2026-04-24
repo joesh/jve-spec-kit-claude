@@ -1,18 +1,10 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~10 LOC
--- Volatility: unknown
---
--- @file init.lua
+--- Inspectable factory: constructors for the Inspector's adapter objects
+--- that front either a clip or a sequence. The Inspector queries
+--- inspectables via `:get(field)` / `:set(field, value)` — this module
+--- is the single entry point so callers don't reach into the per-kind
+--- implementation files directly.
+---
+--- @file init.lua
 local ClipInspectable = require("inspectable.clip")
 local SequenceInspectable = require("inspectable.sequence")
 

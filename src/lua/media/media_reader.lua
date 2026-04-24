@@ -303,6 +303,12 @@ function M.import_media(file_path, db, project_id, existing_media_id)
 
     local Media = require("models.media")
     local media_width = metadata.video and metadata.video.width or 0
+    local audio_channels = metadata.audio and metadata.audio.channels or 0
+    local audio_sample_rate = metadata.audio and tonumber(metadata.audio.sample_rate) or nil
+    assert(audio_channels == 0 or (audio_sample_rate and audio_sample_rate > 0),
+        string.format(
+            "import_media: probed audio channels=%d but no sample_rate for %s",
+            audio_channels, file_path))
     local media = Media.create({
         id = media_id,
         project_id = project_id,
@@ -313,7 +319,8 @@ function M.import_media(file_path, db, project_id, existing_media_id)
         width = media_width,
         height = metadata.video and metadata.video.height or 0,
         rotation = metadata.video and metadata.video.rotation or 0,
-        audio_channels = metadata.audio and metadata.audio.channels or 0,
+        audio_channels = audio_channels,
+        audio_sample_rate = audio_sample_rate,
         codec = primary_codec,
         is_still = Media.classify_is_still(primary_codec, media_width, duration_frames),
         created_at = os.time(),

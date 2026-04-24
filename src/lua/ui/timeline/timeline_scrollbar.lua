@@ -21,6 +21,7 @@
 -- - Dragging thumb = scroll
 -- - Stretching thumb edges = zoom
 local profile_scope = require("core.profile_scope")
+local perf_log = require("core.logger").for_area("ui.scroll_perf")
 
 local M = {}
 
@@ -42,19 +43,16 @@ function M.create(widget, state_module)
         drag_start_viewport_duration = 0,
     }
 
-    -- Calculate total timeline duration (based on content)
+    -- Total timeline duration in integer frames. Shared with the clamp
+    -- ceiling used by viewport_state so the scrollbar thumb geometry and
+    -- the scroll limit stay in lockstep — there is only one "end of the
+    -- sequence" in the model.
     local function get_total_duration()
-        local max_time = 60000  -- Minimum 60 seconds
-
-        for _, clip in ipairs(state_module.get_clips()) do
-            local clip_end = clip.start_value + clip.duration
-            if clip_end > max_time then
-                max_time = clip_end
-            end
-        end
-
-        -- Add 10 seconds padding
-        return max_time + 10000
+        local t0 = os.clock()
+        local result = state_module.get_timeline_extent()
+        perf_log.detail("scrollbar.get_total_duration: %.3fms result=%d",
+            (os.clock() - t0) * 1000, result)
+        return result
     end
 
     -- Render the scrollbar
@@ -63,6 +61,7 @@ function M.create(widget, state_module)
             return
         end
 
+        local perf_t0 = os.clock()
         -- Get widget dimensions
         local width = select(1, timeline.get_dimensions(scrollbar.widget))
 
@@ -126,6 +125,7 @@ function M.create(widget, state_module)
 
         -- Trigger Qt repaint
         timeline.update(scrollbar.widget)
+        perf_log.detail("scrollbar.render: %.3fms", (os.clock() - perf_t0) * 1000)
     end
 
     -- Mouse event handler

@@ -22,9 +22,20 @@ namespace emp {
 // progress simultaneously. Multiple worker threads provide parallelism.
 // The main thread can query partially-generated peak data for progressive
 // waveform display via QueryInProgress().
+//
+// FD-admission: only MAX_RUNNING_JOBS jobs hold their media resources
+// (avformat context + decoder) simultaneously. Without this bound, a
+// project with hundreds of audio media exhausts the OS file-descriptor
+// table (default 256 soft on macOS) and cascades into unrelated open()
+// failures elsewhere in the process.
 // ============================================================================
 class PeakGenerator {
 public:
+    // Max concurrent jobs in the Running state (holding open media
+    // resources). Sized to leave ample FD headroom for the rest of the
+    // process under the default macOS soft limit of 256.
+    static constexpr int MAX_RUNNING_JOBS = 8;
+
     PeakGenerator();
     ~PeakGenerator();
 
@@ -49,6 +60,10 @@ public:
         int64_t total_samples = 0;
     };
     JobStatus GetStatus(const std::string& media_id) const;
+
+    // Number of jobs currently in the Running state (holding media
+    // resources). Exposed for tests asserting admission-cap behavior.
+    int GetRunningCount() const;
 
     // Query in-progress peak data for progressive waveform display.
     // Returns level-0 data resampled to pixel_width. Only valid while
@@ -102,12 +117,20 @@ private:
     // Thread pool
     std::vector<std::thread> m_workers;
     mutable std::mutex m_mutex;
-    std::condition_variable m_cv;
+    std::condition_variable m_cv;             // signalled when rotation has work
+    std::condition_variable m_admission_cv;   // signalled when a Running slot frees
     std::atomic<bool> m_shutdown{false};
 
-    // Round-robin rotation: workers pop front, push back after chunk.
-    // A job is only in one worker's hands at a time.
-    std::deque<std::shared_ptr<ChunkedJob>> m_rotation;
+    // Two-queue scheduler: workers prefer jobs that have already been
+    // admitted (m_running_queue) and fall through to the pending pool
+    // only when admission has capacity. This prevents all workers from
+    // blocking on admission while Running jobs sit idle in one queue.
+    std::deque<std::shared_ptr<ChunkedJob>> m_running_queue;  // admitted, mid-chunk rotation
+    std::deque<std::shared_ptr<ChunkedJob>> m_queued_pool;    // awaiting admission
+
+    // Count of jobs currently in Running state (holding media resources).
+    // Bounded by MAX_RUNNING_JOBS via admission control in WorkerLoop.
+    int m_running_count = 0;
 
     // All jobs by media_id (for GetStatus/QueryInProgress/Cancel lookup)
     std::unordered_map<std::string, std::shared_ptr<ChunkedJob>> m_jobs;

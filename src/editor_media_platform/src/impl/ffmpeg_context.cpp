@@ -24,9 +24,19 @@ Error ffmpeg_error(int errnum, const std::string& context) {
     av_strerror(errnum, errbuf, sizeof(errbuf));
     std::string msg = context + ": " + errbuf;
 
-    // Map FFmpeg errors to EMP errors
-    if (errnum == AVERROR(ENOENT) || errnum == AVERROR_EOF) {
+    // Map FFmpeg errors to EMP errors. EOF is NOT the same as
+    // FileNotFound — EOF means "read past end of a file that opened
+    // fine" (trimmed media, short proxy, clip's source_out extends
+    // past the file's actual extent). Conflating the two produced a
+    // "File not found" UI message for files that were right there,
+    // which is actively misleading (TSO 2026-04-21). Keep ENOENT on
+    // the file_not_found path; route EOF to EOFReached so downstream
+    // offline-frame composition can describe the real situation
+    // ("not enough media for clip") instead of lying about presence.
+    if (errnum == AVERROR(ENOENT)) {
         return Error::file_not_found(msg);
+    } else if (errnum == AVERROR_EOF) {
+        return {ErrorCode::EOFReached, msg};
     } else if (errnum == AVERROR_INVALIDDATA || errnum == AVERROR(EINVAL)) {
         return Error::unsupported(msg);
     } else if (errnum == AVERROR_DECODER_NOT_FOUND) {

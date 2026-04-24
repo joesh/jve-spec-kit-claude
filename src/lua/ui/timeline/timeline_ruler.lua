@@ -24,6 +24,7 @@ local frame_utils = require("core.frame_utils")
 local profile_scope = require("core.profile_scope")
 local command_manager = require("core.command_manager")
 local log = require("core.logger").for_area("timeline")
+local perf_log = require("core.logger").for_area("ui.scroll_perf")
 
 M.RULER_HEIGHT = 32
 local MIN_LABEL_SPACING = 20
@@ -77,6 +78,7 @@ function M.create(widget, state_module)
             return
         end
 
+        local perf_t0 = os.clock()
         -- Get widget dimensions
         local width = select(1, timeline.get_dimensions(ruler.widget))
 
@@ -281,6 +283,8 @@ function M.create(widget, state_module)
 
         -- Trigger Qt repaint
         timeline.update(ruler.widget)
+        perf_log.detail("ruler.render: %.3fms viewport_start=%d duration=%d",
+            (os.clock() - perf_t0) * 1000, viewport_start_frames, viewport_duration_frames)
     end
 
     -- Track whether we've entered scrub mode during this drag

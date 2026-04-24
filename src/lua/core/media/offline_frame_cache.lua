@@ -10,6 +10,7 @@ local qt_constants = require("core.qt_constants")
 local path_utils = require("core.path_utils")
 local log = require("core.logger").for_area("video")
 local Signals = require("core.signals")
+local offline_note_mod = require("core.media.offline_note")
 
 local M = {}
 
@@ -58,11 +59,103 @@ local function get_codec_hint(metadata)
     return nil
 end
 
+-- Format helper lives in core.media.offline_note for reuse.
+local format_frame_delta = offline_note_mod.format_frame_delta
+
+-- "candidate_path" basename. candidate_path is a documented invariant
+-- of a partial_coverage note (see schema.sql), so absence is a writer bug.
+local function candidate_basename(note)
+    assert(type(note.candidate_path) == "string" and note.candidate_path ~= "",
+        "offline_frame_cache: partial_coverage note missing candidate_path")
+    local base = note.candidate_path:match("[^/]+$")
+    assert(base, "offline_frame_cache: candidate_path yielded no basename")
+    return base
+end
+
+local function line_header(text)
+    return { text = text, height_pct = 5, color = "#ffaa55", bold = true }
+end
+
+local function line_body(text)
+    return { text = text, height_pct = 4.5, color = "#dddddd", bold = false }
+end
+
+--- Compose "partial coverage" lines from a parsed offline_note and the
+-- clip's own source range. Result describes what the relinker found
+-- and precisely what's missing for THIS clip. Returns nil when the
+-- note isn't a partial_coverage shape. When the per-clip range is
+-- missing, returns a single-line "coverage doesn't match this clip"
+-- message — the renderer can enter this path with no source range if
+-- the clip isn't in the active PlaybackEngine's window (source-viewer
+-- vs timeline crossover). Per-field shape is a writer invariant and
+-- validated by offline_note.shortfall.
+local function build_partial_coverage_lines(note, clip)
+    if type(note) ~= "table" or note.kind ~= "partial_coverage" then
+        return nil
+    end
+    if not clip or not clip.source_in or not clip.source_out then
+        return {line_header(string.format(
+            "Found %s — but coverage doesn't match this clip",
+            candidate_basename(note)))}
+    end
+
+    local cand_name = candidate_basename(note)
+    local out = {line_header("Found " .. cand_name .. " in search tree")}
+
+    local sf = offline_note_mod.shortfall(note, clip.source_in, clip.source_out)
+    if not sf then
+        -- Candidate extent fully covers the clip — relinker rejected it
+        -- for a non-coverage reason (e.g. TC mismatch classified partial).
+        out[#out + 1] = line_body("File exists but wasn't accepted as a match")
+    elseif sf.head_missing > 0 and sf.tail_missing > 0 then
+        out[#out + 1] = line_body(string.format(
+            "Not enough media for clip — short %s at head, %s at tail",
+            format_frame_delta(sf.head_missing, sf.rate),
+            format_frame_delta(sf.tail_missing, sf.rate)))
+    elseif sf.head_missing > 0 then
+        out[#out + 1] = line_body(string.format(
+            "Not enough media for clip — short %s at head",
+            format_frame_delta(sf.head_missing, sf.rate)))
+    else
+        out[#out + 1] = line_body(string.format(
+            "Not enough media for clip — short %s at tail",
+            format_frame_delta(sf.tail_missing, sf.rate)))
+    end
+    return out
+end
+
+-- Exported as underscored helpers so targeted tests can exercise the
+-- pure formatting logic without touching Qt or EMP.
+M._format_frame_delta = format_frame_delta
+M._build_partial_coverage_lines = build_partial_coverage_lines
+
 --- Build the lines table for COMPOSE_OFFLINE_FRAME from offline metadata.
--- @param metadata table with media_path, error_code, error_msg
+-- Caller (get_frame) has asserted metadata.media_path is a non-empty string.
+-- @param metadata table with media_path, error_code, error_msg, offline_note, clip
 -- @return table array of {text, size, color, bold}
 local function build_lines(metadata)
+    local filename = metadata.media_path:match("[^/]+$")
+    assert(filename, "offline_frame_cache.build_lines: media_path has no basename")
     local lines = {}
+
+    -- Partial-coverage branch — supersedes "File not found" when the
+    -- relinker found a same-basename candidate and left us a note.
+    -- Skip the generic error title/msg lines in this case — we have
+    -- more actionable content to show.
+    local note = metadata.offline_note
+    if type(note) == "string" then note = offline_note_mod.parse(note) end
+    local partial_lines = build_partial_coverage_lines(note, metadata.clip)
+    if partial_lines then
+        lines[#lines + 1] = {
+            text = "Media Offline",
+            height_pct = 12, color = "#ffffff", bold = true, gap_after_pct = 3,
+        }
+        lines[#lines + 1] = {
+            text = filename, height_pct = 5, color = "#dddddd", bold = false,
+        }
+        for _, ln in ipairs(partial_lines) do lines[#lines + 1] = ln end
+        return lines
+    end
 
     -- Title: distinguish codec errors from missing files
     local ec = metadata.error_code
@@ -71,10 +164,7 @@ local function build_lines(metadata)
 
     lines[#lines + 1] = {
         text = title,
-        height_pct = 12,
-        color = "#ffffff",
-        bold = true,
-        gap_after_pct = 5,
+        height_pct = 12, color = "#ffffff", bold = true, gap_after_pct = 5,
     }
 
     -- Codec hint (only for codec errors)
@@ -83,49 +173,33 @@ local function build_lines(metadata)
         if hint then
             lines[#lines + 1] = {
                 text = hint,
-                height_pct = 6,
-                color = "#ffcc44",
-                bold = true,
-                gap_after_pct = 2,
+                height_pct = 6, color = "#ffcc44", bold = true, gap_after_pct = 2,
             }
         end
     end
 
-    -- Filename
-    local filename = metadata.media_path and metadata.media_path:match("[^/]+$") or "?"
     lines[#lines + 1] = {
-        text = filename,
-        height_pct = 5,
-        color = "#dddddd",
-        bold = false,
+        text = filename, height_pct = 5, color = "#dddddd", bold = false,
+    }
+    lines[#lines + 1] = {
+        text = metadata.media_path, height_pct = 4.5, color = "#bbbbbb", bold = false,
     }
 
-    -- Full path
-    if metadata.media_path then
-        lines[#lines + 1] = {
-            text = metadata.media_path,
-            height_pct = 4.5,
-            color = "#bbbbbb",
-            bold = false,
-        }
-    end
-
-    -- Error info — show error_msg, strip redundant path (already on its own line)
+    -- Error info — strip redundant path from error_msg (already its own line).
     if metadata.error_msg then
-        local msg = tostring(metadata.error_msg)
-        if metadata.media_path then
-            msg = msg:gsub(": ?" .. metadata.media_path:gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1"), "")
-        end
+        local escaped = metadata.media_path:gsub(
+            "([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1")
+        local msg = tostring(metadata.error_msg):gsub(": ?" .. escaped, "")
         lines[#lines + 1] = {
-            text = msg,
-            height_pct = 4.5,
-            color = "#bbbbbb",
-            bold = false,
+            text = msg, height_pct = 4.5, color = "#bbbbbb", bold = false,
         }
     end
 
     return lines
 end
+
+-- Exported so tests can assert the lines structure without invoking Qt.
+M._build_lines = build_lines
 
 --- Get (or compose) an offline frame for the given metadata.
 -- @param metadata table with media_path, error_code, error_msg
@@ -135,7 +209,15 @@ function M.get_frame(metadata)
     assert(metadata.media_path,
         "offline_frame_cache.get_frame: metadata.media_path is nil")
 
+    -- Partial-coverage frames are per-clip (the "short by N frames"
+    -- number depends on the clip's source range). Fold the clip's
+    -- source_in/out into the key when an offline_note + clip pair is
+    -- supplied so different clips using the same media don't collide.
     local key = metadata.media_path .. ":" .. (metadata.error_code or "offline")
+    if metadata.offline_note and metadata.clip then
+        key = key .. ":" .. tostring(metadata.clip.source_in)
+            .. ":" .. tostring(metadata.clip.source_out)
+    end
     if cache[key] then
         return cache[key]
     end
@@ -166,7 +248,32 @@ function M.clear()
     end
 end
 
+--- Drop cached frames for a specific media path. Cache keys encode
+--- `media_path:error_code[:source_in:source_out]`, so a single path may
+--- occupy several entries; match by prefix.
+function M.invalidate(media_path)
+    assert(media_path and media_path ~= "",
+        "offline_frame_cache.invalidate: media_path required")
+    local prefix = media_path .. ":"
+    local removed = 0
+    for key in pairs(cache) do
+        if key == media_path or key:sub(1, #prefix) == prefix then
+            cache[key] = nil
+            removed = removed + 1
+        end
+    end
+    if removed > 0 then
+        log.event("offline_frame_cache: invalidated %d entries for %s",
+            removed, media_path)
+    end
+end
+
 -- Clear cache on project switch
 Signals.connect("project_changed", M.clear, 15)
+
+-- A file's bytes changed on disk: any composited offline frame built
+-- from the old bytes (e.g. codec-hint text derived from the old probe)
+-- is now stale.
+Signals.connect("media_content_changed", M.invalidate, 15)
 
 return M

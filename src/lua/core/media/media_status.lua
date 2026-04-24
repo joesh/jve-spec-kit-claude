@@ -20,6 +20,11 @@
 -- @file media_status.lua
 local Signals = require("core.signals")
 local log = require("core.logger").for_area("media")
+local offline_note = require("core.media.offline_note")
+local peak_cache = require("core.media.peak_cache")
+local Media = require("models.media")
+local runtime_mode = require("core.runtime_mode")
+local fs_utils = require("core.fs_utils")
 local ffi = require("ffi")
 ffi.cdef("int access(const char *pathname, int mode);")
 
@@ -32,25 +37,41 @@ local function get_database()
     return _database
 end
 
+-- Guard for handlers where "DB must be open" is a production invariant.
+-- Production: no connection is an upstream bug (project_changed handler
+-- firing before set_path, etc.) → loud assert. Tests: pure-Lua logic
+-- tests that don't stand up a DB reach these handlers via signal emits;
+-- those return false and the caller skips the body.
+local function db_available(caller)
+    local connected = get_database().has_connection()
+    runtime_mode.assert_production(connected,
+        caller .. ": no DB connection in production — DB must be open "
+        .. "by the time this path runs")
+    return connected
+end
+
 -- status_cache[media_path] = { offline = bool, error_code = string|nil }
 local status_cache = {}
 
--- pending_paths[parent_dir] = { [media_path] = true, ... }
--- Tracks missing files by their parent directory for dir-change re-probe.
-local pending_paths = {}
+-- path_mtime[media_path] = mtime (seconds). Used by the dir-change
+-- handler to detect in-place byte rewrites — when a file is modified
+-- without being added/removed, status stays online but mtime advances.
+local path_mtime = {}
+
+-- dir_paths[parent_dir] = { [media_path] = true, ... }
+-- All media paths registered under each watched dir (online AND offline).
+-- We never watch individual files — macOS QFileSystemWatcher burns one
+-- kqueue FD per watched file, which exhausts RLIMIT_NOFILE on large
+-- projects. Dir watches are bounded by dir count (~50 for typical
+-- projects vs ~1000 files).
+local dir_paths = {}
 
 -- watched_dirs[dir_path] = true — dirs we've asked FS to watch
 local watched_dirs = {}
 
--- watched_files[file_path] = true — files we've asked FS to watch
-local watched_files = {}
-
 -- Whether FS bindings are available (false in tests without Qt)
 local fs_available = false
 local FS = nil
-
--- TMB handle for ClearOffline (set by playback engine init)
-local tmb_handle = nil
 
 -- Persistence: project_id for debounced DB writes
 local current_project_id = nil
@@ -58,15 +79,31 @@ local persist_timer_active = false
 local PERSIST_DEBOUNCE_MS = 500
 local DB_SETTING_KEY = "media_error_cache"
 
+-- qt_constants is a bound global in the editor; absent in headless Lua
+-- tests. pcall insulates from "attempt to index global 'qt_constants'".
+local function try_qt()
+    local ok, qt = pcall(function() return qt_constants end)
+    if ok then return qt end
+    return nil
+end
+
+local function try_emp()
+    local qt = try_qt()
+    return qt and qt.EMP or nil
+end
+
 local function init_fs()
     if fs_available then return true end
-    local ok, qt = pcall(function() return qt_constants end)
-    if ok and qt and qt.FS then
-        FS = qt.FS
-        fs_available = true
-        return true
-    end
-    return false
+    local qt = try_qt()
+    if not (qt and qt.FS) then return false end
+    FS = qt.FS
+    fs_available = true
+    -- Wire the dir-change callback before the first watch is installed.
+    -- QFileSystemWatcher has no missed-event replay; any event arriving
+    -- between addPath() and callback-registration is lost. No file-level
+    -- callback: we never install file watches (dir-only — see dir_paths).
+    FS.SET_DIR_CHANGED_CB(function(dir) M._on_dir_changed(dir) end)
+    return true
 end
 
 --- Probe a media file's status (file existence only).
@@ -97,61 +134,54 @@ local function path_accessible(path)
     return ffi.C.access(path, 0) == 0
 end
 
---- Start watching a media path for changes.
--- Tracking (pending_paths/watched_files) always happens; actual FS calls only when available.
-local function watch_path(media_path, status)
-    local has_fs = init_fs()
+local function ensure_dir_watched(dir)
+    if watched_dirs[dir] then return end
+    if not init_fs() or not path_accessible(dir) then return end
+    if not FS.WATCH_DIR(dir) then
+        log.warn("media_status: failed to watch dir %s", dir)
+    end
+    watched_dirs[dir] = true
+end
 
-    if status.offline and status.error_code == "FileNotFound" then
-        -- File doesn't exist — watch parent dir for it to appear
-        local dir = parent_dir(media_path)
-        if has_fs and not watched_dirs[dir] and path_accessible(dir) then
-            local ok = FS.WATCH_DIR(dir)
-            if not ok then
-                log.warn("media_status: failed to watch dir %s", dir)
-            end
-            watched_dirs[dir] = true
-        end
-        if not pending_paths[dir] then
-            pending_paths[dir] = {}
-        end
-        pending_paths[dir][media_path] = true
+--- Register a media path for change tracking. Watches the parent
+--- directory (never the file itself) and snapshots the file's mtime
+--- when online so dir-change events can detect in-place rewrites.
+local function watch_path(media_path, status)
+    assert(type(status) == "table",
+        "media_status.watch_path: status table required")
+    local dir = parent_dir(media_path)
+    ensure_dir_watched(dir)
+
+    if not dir_paths[dir] then dir_paths[dir] = {} end
+    dir_paths[dir][media_path] = true
+
+    if status.offline then
+        path_mtime[media_path] = nil
     else
-        -- File exists (online or codec error) — watch the file itself
-        if has_fs and not watched_files[media_path] then
-            local ok = FS.WATCH_FILE(media_path)
-            if not ok then
-                log.warn("media_status: failed to watch file %s", media_path)
-            end
-        end
-        watched_files[media_path] = true
+        path_mtime[media_path] = fs_utils.file_mtime(media_path)
     end
 end
 
---- Unwatch a media path.
-local function unwatch_path(media_path)
-    if watched_files[media_path] then
-        if fs_available then FS.UNWATCH_FILE(media_path) end
-        watched_files[media_path] = nil
-    end
+local function release_dir_watch(dir)
+    dir_paths[dir] = nil
+    if not watched_dirs[dir] then return end
+    if fs_available then FS.UNWATCH_DIR(dir) end
+    watched_dirs[dir] = nil
+end
 
-    -- Remove from pending_paths
+--- Unwatch a media path — drops it from dir_paths; releases the dir
+--- watch when no paths remain under it.
+local function unwatch_path(media_path)
+    path_mtime[media_path] = nil
     local dir = parent_dir(media_path)
-    if pending_paths[dir] then
-        pending_paths[dir][media_path] = nil
-        -- If no more pending paths in this dir, unwatch it
-        if not next(pending_paths[dir]) then
-            pending_paths[dir] = nil
-            if watched_dirs[dir] then
-                if fs_available then FS.UNWATCH_DIR(dir) end
-                watched_dirs[dir] = nil
-            end
-        end
-    end
+    if not dir_paths[dir] then return end
+    dir_paths[dir][media_path] = nil
+    if next(dir_paths[dir]) then return end
+    release_dir_watch(dir)
 end
 
 --- Register a media path for status tracking.
--- Probes, caches, and sets up file watches.
+-- Probes, caches, and adds its parent dir to the FS watch set.
 -- @param media_path string
 -- @return table: {offline=bool, error_code=string|nil}
 function M.register(media_path)
@@ -171,9 +201,37 @@ function M.unregister(media_path)
 end
 
 --- Get cached status for a media path.
--- @return table|nil: {offline, error_code} or nil if not registered
+-- @return table|nil: {offline, error_code, offline_note} or nil if not registered
 function M.get(media_path)
     return status_cache[media_path]
+end
+
+--- Read per-media `offline_note` JSON for a path. Returns nil when the
+--- media row carries no note (file truly unreachable, or last relink
+--- succeeded). Pulled from the in-memory cache — the renderer calls
+--- this per offline frame, so it MUST NOT touch the DB.
+--- @param media_path string
+--- @return string|nil raw note JSON
+function M.get_offline_note(media_path)
+    local entry = status_cache[media_path]
+    return entry and entry.offline_note or nil
+end
+
+--- Populate the offline_note field of every cache entry from the media
+--- table. Called on project open (once, before rendering starts). The
+--- relinker writes new notes via media_changed — `reprobe_media_ids`
+--- keeps the cache in sync after that.
+function M.read_offline_notes_from_db()
+    if not db_available("media_status.read_offline_notes_from_db") then return end
+    local rows = Media.load_all_offline_notes()
+    for _, row in ipairs(rows) do
+        local entry = status_cache[row.file_path]
+        if not entry then
+            entry = { offline = false, error_code = nil }
+            status_cache[row.file_path] = entry
+        end
+        entry.offline_note = row.offline_note
+    end
 end
 
 -- ============================================================
@@ -200,14 +258,9 @@ end
 --- Flush dirty cache to DB immediately.
 function M.persist_now()
     if not current_project_id then return end
+    if not get_database().has_connection() then return end
     local map = build_persist_map()
-    local ok, err = pcall(function()
-        get_database().set_project_setting(current_project_id, DB_SETTING_KEY, map)
-    end)
-    if not ok then
-        log.warn("media_status: persist failed: %s", tostring(err))
-        return
-    end
+    get_database().set_project_setting(current_project_id, DB_SETTING_KEY, map)
     log.detail("media_status: persisted %d entries", M._count_map(map))
 end
 
@@ -228,33 +281,37 @@ function M.load_persisted(project_id)
     assert(project_id and project_id ~= "",
         "media_status.load_persisted: project_id required")
     current_project_id = project_id
-    local ok, map = pcall(function()
-        return get_database().get_project_setting(project_id, DB_SETTING_KEY)
-    end)
-    if not ok then return end  -- no DB connection (test mode)
-    if type(map) ~= "table" then return end
+    if not db_available("media_status.load_persisted") then return end
+    local map = get_database().get_project_setting(project_id, DB_SETTING_KEY)
+    if map == nil then return end  -- first run: no persisted cache yet
+    assert(type(map) == "table", string.format(
+        "media_status.load_persisted: %s setting must be a table, got %s",
+        DB_SETTING_KEY, type(map)))
     local error_count = 0
     local online_count = 0
     local cleared_count = 0
 
     for path, entry in pairs(map) do
-        if type(entry) == "table" then
-            -- Clear stale "Unsupported" codec errors. These may be from a previous
-            -- build that lacked support (e.g. BRAW before SDK integration). The
-            -- background probe will re-check and set the correct status. Only
-            -- "Unsupported" is cleared — "FileNotFound" persists (file really missing).
-            if entry.offline and entry.error_code == "Unsupported" then
-                cleared_count = cleared_count + 1
+        assert(type(entry) == "table", string.format(
+            "media_status.load_persisted: entry for %s must be a table, got %s",
+            path, type(entry)))
+        assert(type(entry.offline) == "boolean", string.format(
+            "media_status.load_persisted: entry.offline for %s must be boolean", path))
+        -- Clear stale "Unsupported" codec errors. These may be from a previous
+        -- build that lacked support (e.g. BRAW before SDK integration). The
+        -- background probe will re-check and set the correct status. Only
+        -- "Unsupported" is cleared — "FileNotFound" persists (file really missing).
+        if entry.offline and entry.error_code == "Unsupported" then
+            cleared_count = cleared_count + 1
+        else
+            status_cache[path] = {
+                offline = entry.offline,
+                error_code = entry.error_code,
+            }
+            if entry.offline then
+                error_count = error_count + 1
             else
-                status_cache[path] = {
-                    offline = entry.offline or false,
-                    error_code = entry.error_code,
-                }
-                if entry.offline then
-                    error_count = error_count + 1
-                else
-                    online_count = online_count + 1
-                end
+                online_count = online_count + 1
             end
         end
     end
@@ -281,10 +338,30 @@ function M.ensure_clip_status(clip)
     if not path or path == "" then return end
 
     local cached = status_cache[path]
-    if not cached then return end
+    if cached then
+        clip.offline = cached.offline
+        clip.error_code = cached.error_code
+    end
 
-    clip.offline = cached.offline
-    clip.error_code = cached.error_code
+    -- Per-clip shortfall: even when the file IS present (media_status
+    -- says online), this specific clip may need frames that the file
+    -- doesn't cover (partial-coverage relink). `offline` is the union
+    -- of "file missing" and "content insufficient for this clip's
+    -- range". The per-clip check depends on clip.source_in/out, which
+    -- status_cache — keyed only on path — cannot know.
+    if not clip.offline and clip.offline_note
+        and clip.source_in and clip.source_out then
+        local sf = offline_note.shortfall(
+            offline_note.parse(clip.offline_note),
+            clip.source_in, clip.source_out)
+        if sf then
+            clip.offline = true
+            -- Distinct from FileNotFound / Unsupported so downstream
+            -- code (offline-frame composer, label styling) can
+            -- recognize "file there, content short" specifically.
+            clip.error_code = clip.error_code or "InsufficientCoverage"
+        end
+    end
 end
 
 --- Update status from TMB error discovery.
@@ -315,13 +392,6 @@ function M.update_from_tmb(media_path, offline, error_code)
     end
 end
 
---- Set TMB handle for ClearOffline integration.
--- Called by playback engine init when TMB is created.
--- @param tmb userdata TMB handle (or nil to clear)
-function M.set_tmb(tmb)
-    tmb_handle = tmb
-end
-
 --- Clear all watches and cache. Called on project_changed.
 function M.clear()
     -- Cancel any running background probe before clearing
@@ -332,14 +402,22 @@ function M.clear()
         FS.CLEAR_ALL()
     end
     status_cache = {}
+    path_mtime = {}
     persist_timer_active = false
     current_project_id = nil
-    pending_paths = {}
+    dir_paths = {}
     watched_dirs = {}
-    watched_files = {}
 end
 
---- Re-probe a media path and emit signal if status changed.
+--- Re-probe a media path. Emits media_status_changed ONLY when the
+--- offline/error status actually flipped — `media_content_changed` is
+--- a separate signal emitted from _on_dir_changed (via mtime compare)
+--- for in-place rewrites where the status stays online but bytes moved.
+---
+--- Separating the two lets consumers subscribe to what they actually
+--- care about: views (offline icons, clip.offline flags) listen to
+--- status_changed; path-keyed caches (decoder pools, peak cache,
+--- preview thumbnails) listen to content_changed.
 local function reprobe_and_notify(media_path)
     local old = status_cache[media_path]
     local new_status = probe(media_path)
@@ -349,74 +427,75 @@ local function reprobe_and_notify(media_path)
     unwatch_path(media_path)
     watch_path(media_path, new_status)
 
-    local changed = not old
+    local status_changed = not old
         or old.offline ~= new_status.offline
         or old.error_code ~= new_status.error_code
 
-    if changed then
+    if status_changed then
         schedule_persist()
-        -- File reappeared: purge TMB's offline blacklist so it retries the reader
-        if old and old.offline and not new_status.offline and tmb_handle then
-            local emp_ok, qt = pcall(function() return qt_constants end)
-            if emp_ok and qt and qt.EMP and qt.EMP.TMB_CLEAR_OFFLINE then
-                qt.EMP.TMB_CLEAR_OFFLINE(tmb_handle, media_path)
-            end
-        end
         log.event("media_status changed: %s offline=%s error=%s",
             media_path, tostring(new_status.offline), tostring(new_status.error_code))
+        -- Downstream wiring (TMB_CLEAR_OFFLINE, TMB_INVALIDATE_PATH,
+        -- view refresh) lives in the subscribers — PlaybackEngine and
+        -- SequenceMonitor — keyed off this signal. media_status itself
+        -- owns the cache + signal; nothing else.
         Signals.emit("media_status_changed", media_path, new_status)
     end
+    return status_changed
 end
 
---- FS callback: a watched file changed (modified/deleted).
-function M._on_file_changed(path)
-    assert(path, "media_status._on_file_changed: path required")
-    if status_cache[path] then
-        reprobe_and_notify(path)
-    end
-
-    -- Invalidate peak cache for this media file (waveform regeneration).
-    -- Guard: FS callback can fire after project close (no DB connection).
-    local database = require("core.database")
-    if not database.has_connection() then return end
-    local Media = require("models.media")
+--- Handle a bytes-only change (status stayed online, mtime advanced).
+local function emit_content_changed(path)
+    log.event("media_content_changed: %s", path)
+    Signals.emit("media_content_changed", path)
+    if not db_available("media_status.emit_content_changed") then return end
     local media_id = Media.find_id_by_path(path)
     if media_id then
-        local peak_cache = require("core.media.peak_cache")
         peak_cache.invalidate(media_id)
     else
-        log.warn("media_status: file changed but no media record for %s — peak cache not invalidated", path)
+        log.warn("media_status: content changed but no media record for %s — peak cache not invalidated", path)
     end
 end
 
---- FS callback: a watched directory changed (file added/removed).
-function M._on_dir_changed(dir)
-    assert(dir, "media_status._on_dir_changed: dir required")
-    local paths = pending_paths[dir]
-    if not paths then return end
-
-    -- Snapshot keys: reprobe_and_notify calls unwatch_path/watch_path which
-    -- modifies pending_paths[dir] — can't iterate and mutate simultaneously.
+-- Snapshot dir_paths[dir] — reprobe_and_notify mutates it via
+-- unwatch_path/watch_path; iterating the live map corrupts.
+local function snapshot_paths(dir)
     local snapshot = {}
-    for media_path in pairs(paths) do
+    for media_path in pairs(dir_paths[dir]) do
         snapshot[#snapshot + 1] = media_path
     end
-    for _, media_path in ipairs(snapshot) do
-        reprobe_and_notify(media_path)
+    return snapshot
+end
+
+-- Re-probe one path after its dir changed. If status flipped,
+-- reprobe_and_notify already emitted status_changed. Otherwise check
+-- mtime to catch in-place byte rewrites that leave status untouched.
+local function reprobe_path_after_dir_change(media_path)
+    local old_mtime = path_mtime[media_path]
+    local status_changed = reprobe_and_notify(media_path)
+    if status_changed then return end
+    local new_mtime = path_mtime[media_path]
+    if old_mtime and new_mtime and old_mtime ~= new_mtime then
+        emit_content_changed(media_path)
     end
 end
 
---- Initialize FS callbacks. Call once during app startup.
+--- FS callback: a watched directory changed (file added / removed /
+--- modified). Re-probes every registered path in the dir.
+function M._on_dir_changed(dir)
+    assert(dir, "media_status._on_dir_changed: dir required")
+    if not dir_paths[dir] then return end
+    for _, media_path in ipairs(snapshot_paths(dir)) do
+        reprobe_path_after_dir_change(media_path)
+    end
+end
+
+--- Initialize FS integration eagerly. Safe to call multiple times.
+-- Called from app startup (layout.lua) so callbacks are live even if
+-- the first watch isn't installed until later. init_fs() is idempotent
+-- and also runs lazily from watch_path() as a safety net.
 function M.init_watcher()
-    if not init_fs() then return end
-
-    FS.SET_FILE_CHANGED_CB(function(path)
-        M._on_file_changed(path)
-    end)
-
-    FS.SET_DIR_CHANGED_CB(function(dir)
-        M._on_dir_changed(dir)
-    end)
+    init_fs()
 end
 
 -- ============================================================
@@ -428,8 +507,8 @@ end
 -- Results arrive in batches on the main thread; views are signalled to repaint.
 -- @param active_sequence_id string|nil: sequence to prioritize (its media probed first)
 function M.start_background_probe(active_sequence_id)
-    local qt_ok, qt = pcall(function() return qt_constants end)
-    if not qt_ok or not qt or not qt.EMP or not qt.EMP.CODEC_PROBE_START then
+    local emp = try_emp()
+    if not emp or not emp.CODEC_PROBE_START then
         log.event("media_status: background probe skipped (no EMP)")
         return
     end
@@ -476,7 +555,7 @@ function M.start_background_probe(active_sequence_id)
     log.event("media_status: bg probe starting (%d to scan, %d active-seq)",
         #all_paths, #active_paths)
 
-    qt.EMP.CODEC_PROBE_START(all_paths, function(results, is_final)
+    emp.CODEC_PROBE_START(all_paths, function(results, is_final)
         -- Main thread callback: update cache, register watches, signal changes
         local changed_count = 0
         for path, result in pairs(results) do
@@ -512,9 +591,9 @@ end
 
 --- Cancel any running background codec probe.
 function M.cancel_background_probe()
-    local qt_ok, qt = pcall(function() return qt_constants end)
-    if qt_ok and qt and qt.EMP and qt.EMP.CODEC_PROBE_CANCEL then
-        qt.EMP.CODEC_PROBE_CANCEL()
+    local emp = try_emp()
+    if emp and emp.CODEC_PROBE_CANCEL then
+        emp.CODEC_PROBE_CANCEL()
     end
 end
 
@@ -525,9 +604,7 @@ function M.reprobe_media_ids(media_ids)
     assert(type(media_ids) == "table", string.format(
         "media_status.reprobe_media_ids: media_ids must be a table, got %s",
         type(media_ids)))
-    -- Signal handlers must survive invocation without a DB (test mode).
-    if not get_database().has_connection() then return end
-    local Media = require("models.media")
+    if not db_available("media_status.reprobe_media_ids") then return end
     for media_id in pairs(media_ids) do
         assert(type(media_id) == "string" and media_id ~= "", string.format(
             "media_status.reprobe_media_ids: invalid media_id key %s",
@@ -541,6 +618,10 @@ function M.reprobe_media_ids(media_ids)
             "media_status.reprobe_media_ids: media %s has empty file_path",
             media_id))
         reprobe_and_notify(path)
+        -- Refresh the cached relink diagnostic alongside file status so
+        -- the next offline frame composes with the updated note.
+        local entry = status_cache[path]
+        if entry then entry.offline_note = media.offline_note end
     end
 end
 
@@ -552,6 +633,7 @@ Signals.connect("project_changed", function(project_id)
     M.clear()  -- cancels bg probe, flushes pending writes, clears cache
     if project_id and project_id ~= "" then
         M.load_persisted(project_id)
+        M.read_offline_notes_from_db()
         -- Start background codec probe (prioritize active sequence)
         local ok, active_seq = pcall(function()
             return get_database().get_project_setting(project_id, "last_open_sequence_id")

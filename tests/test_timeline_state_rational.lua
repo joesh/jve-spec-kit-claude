@@ -240,17 +240,25 @@ timeline_state.set_viewport_start_time(initial_viewport_start)
 local viewport_start_after_set = timeline_state.get_viewport_start_time()
 assert_equal(viewport_start_after_set, initial_viewport_start, "Viewport start should be set directly")
 
--- Test set_viewport_duration and its effect on start time (centers around playhead)
+-- Test set_viewport_duration: default anchor behavior.
+-- When the playhead is inside the current viewport, its pixel fraction is
+-- preserved across the duration change (playhead stays at the same on-screen
+-- horizontal position).
+local old_start = timeline_state.get_viewport_start_time()
+local old_duration = timeline_state.get_viewport_duration()
+local old_playhead_fraction = (48 - old_start) / old_duration
+
 local viewport_duration = 48 -- 2s @24fps
 timeline_state.set_viewport_duration(viewport_duration)
 
 local viewport_duration_after_set = timeline_state.get_viewport_duration()
 assert_equal(viewport_duration_after_set, viewport_duration, "Viewport duration should be set directly")
 
--- Expect viewport start to be centered around the playhead (48 - 48/2 = 24)
-local expected_start_after_duration_set = 24
-local viewport_start_after_duration_set = timeline_state.get_viewport_start_time()
-assert_equal(viewport_start_after_duration_set, expected_start_after_duration_set, "Viewport start should be adjusted to center playhead")
+local new_start = timeline_state.get_viewport_start_time()
+local new_playhead_fraction = (48 - new_start) / viewport_duration
+assert(math.abs(new_playhead_fraction - old_playhead_fraction) < 0.05,
+    string.format("Playhead pixel fraction should be preserved: expected ~%.3f, got %.3f (start=%d)",
+        old_playhead_fraction, new_playhead_fraction, new_start))
 
 -- Coordinate conversions (integer aware)
 local px = timeline_state.time_to_pixel(36, 240) -- midway through 1s..3s window

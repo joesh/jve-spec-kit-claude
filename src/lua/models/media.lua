@@ -46,6 +46,17 @@ local function mark_dirty(media_id)
     end
 end
 
+--- Public entrypoint for callers that change media ownership of a row
+--- without going through set_file_path/save — e.g., commands that retarget
+--- a clip's media_id and want the downstream "media_changed" listeners
+--- (offline probes, viewers, peak caches) to refresh for that media too.
+--- Respects the begin_batch/end_batch wrapper exactly like save does.
+function M.mark_dirty(media_id)
+    assert(media_id and media_id ~= "",
+        "Media.mark_dirty: media_id required")
+    mark_dirty(media_id)
+end
+
 -- ---------------------------------------------------------------------------
 -- Metatable: file_path access control
 -- ---------------------------------------------------------------------------
@@ -417,6 +428,55 @@ function M.create(file_path_or_params, file_name, duration, frame_rate, metadata
     return media
 end
 
+-- Column list for all SELECTs that hydrate Media instances. Keep in the exact
+-- order the _hydrate_row helper reads. Any caller of _hydrate_row MUST use
+-- this SELECT list (or a prefix fully matching these columns).
+local MEDIA_SELECT_COLUMNS = [[
+        id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
+        width, height, rotation, audio_sample_rate, audio_channels, codec,
+        created_at, modified_at, metadata, file_uuid, is_still, offline_note
+]]
+
+-- Hydrate a single Media instance from the current row of a prepared statement
+-- whose SELECT list is MEDIA_SELECT_COLUMNS. Does NOT advance the cursor or
+-- finalize the statement. Asserts on NULL fields that the schema forbids.
+local function _hydrate_row(query)
+    local id = query:value(0)
+    local frames = query:value(4) or 0 -- NSF-OK: 0 = still-image / unknown-duration
+    local num = query:value(5)
+    local den = query:value(6)
+    assert(num, string.format("Media._hydrate_row: fps_numerator is NULL for media_id=%s", tostring(id)))
+    assert(den, string.format("Media._hydrate_row: fps_denominator is NULL for media_id=%s", tostring(id)))
+
+    local media = {
+        id = id,
+        project_id = query:value(1),
+        name = query:value(2),
+        _file_path = query:value(3),
+        duration = frames,
+        frame_rate = { fps_numerator = num, fps_denominator = den },
+        width = tonumber(query:value(7)) or 0,
+        height = tonumber(query:value(8)) or 0,
+        rotation = tonumber(query:value(9)) or 0,
+        audio_sample_rate = tonumber(query:value(10)) or 0,
+        audio_channels = tonumber(query:value(11)) or 0,
+        codec = query:value(12),
+        created_at = query:value(13),
+        modified_at = query:value(14),
+        metadata = query:value(15),
+        file_uuid = query:value(16),
+    }
+    local is_still_raw = query:value(17)
+    assert(is_still_raw ~= nil, string.format(
+        "Media._hydrate_row: is_still is NULL for media_id=%s (schema corruption)", tostring(id)))
+    media.is_still = tonumber(is_still_raw) == 1
+    -- NULL when relink succeeded (or was never run) — see schema.sql for shape.
+    media.offline_note = query:value(18)
+
+    setmetatable(media, media_mt)
+    return media
+end
+
 -- Load a media item from the database
 function M.load(media_id)
     assert(media_id and media_id ~= "", "Media.load: media_id must not be nil or empty")
@@ -424,12 +484,8 @@ function M.load(media_id)
     local database = require("core.database")
     local db = assert(database.get_connection(), "Media.load: no database connection available")
 
-    local query = assert(db:prepare([[
-        SELECT id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
-               width, height, rotation, audio_sample_rate, audio_channels, codec,
-               created_at, modified_at, metadata, file_uuid, is_still
-        FROM media WHERE id = ?
-    ]]), string.format("Media.load: failed to prepare query for media_id=%s", media_id))
+    local query = assert(db:prepare("SELECT " .. MEDIA_SELECT_COLUMNS .. " FROM media WHERE id = ?"),
+        string.format("Media.load: failed to prepare query for media_id=%s", media_id))
 
     query:bind_value(1, media_id)
 
@@ -442,40 +498,75 @@ function M.load(media_id)
         return nil -- NSF-OK: nil = "not found" (distinct from DB error, which asserts above)
     end
 
-    local frames = query:value(4) or 0 -- NSF-OK: 0 frames = still-image or unknown-duration media
-    local num = query:value(5)
-    local den = query:value(6)
-    assert(num, string.format("Media.load: fps_numerator is NULL for media_id=%s", tostring(media_id)))
-    assert(den, string.format("Media.load: fps_denominator is NULL for media_id=%s", tostring(media_id)))
-
-    local media = {
-        id = query:value(0),
-        project_id = query:value(1),
-        name = query:value(2),
-        _file_path = query:value(3),
-        duration = frames,  -- integer frames
-        frame_rate = { fps_numerator = num, fps_denominator = den },
-        width = tonumber(query:value(7)) or 0, -- NSF-OK: 0 = unknown dimension
-        height = tonumber(query:value(8)) or 0, -- NSF-OK: 0 = unknown dimension
-        rotation = tonumber(query:value(9)) or 0, -- NSF-OK: 0 = no rotation
-        audio_sample_rate = tonumber(query:value(10)) or 0, -- NSF-OK: 0 = no audio
-        audio_channels = tonumber(query:value(11)) or 0, -- NSF-OK: 0 = unknown
-        codec = query:value(12),
-        created_at = query:value(13),
-        modified_at = query:value(14),
-        metadata = query:value(15),
-        file_uuid = query:value(16),  -- may be nil for non-DRP media
-    }
-    local is_still_raw = query:value(17)
-    assert(is_still_raw ~= nil, string.format(
-        "Media.load: is_still is NULL for media_id=%s (column is NOT NULL — schema corruption)",
-        tostring(media_id)))
-    media.is_still = tonumber(is_still_raw) == 1
-
+    local media = _hydrate_row(query)
     query:finalize()
-
-    setmetatable(media, media_mt)
     return media
+end
+
+--- Load every media row for a project in one SQL round-trip.
+-- Replaces the per-row Media.load pattern used by the relinker for projects
+-- with hundreds of media — one query instead of N. Caller filters proxies,
+-- offline state, etc.
+-- @param project_id string
+-- @return table array of Media instances (may be empty)
+function M.load_for_project(project_id)
+    assert(project_id and project_id ~= "", "Media.load_for_project: project_id required")
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Media.load_for_project: no database connection")
+
+    local query = assert(db:prepare(
+        "SELECT " .. MEDIA_SELECT_COLUMNS .. " FROM media WHERE project_id = ?"),
+        "Media.load_for_project: failed to prepare query")
+    query:bind_value(1, project_id)
+    assert(query:exec(), string.format(
+        "Media.load_for_project: query execution failed for project_id=%s: %s",
+        project_id, query:last_error()))
+
+    local results = {}
+    while query:next() do
+        results[#results + 1] = _hydrate_row(query)
+    end
+    query:finalize()
+    return results
+end
+
+--- Load a set of media rows by id in one SQL round-trip.
+-- Chunks into IN-clauses of up to SQLITE_MAX_VARIABLE_NUMBER (default 32766
+-- on modern SQLite, but we stay conservative at 500). Asserts on duplicates
+-- in the input; returns results in the order SQLite emits them (unsorted).
+-- @param media_ids table array of media_id strings
+-- @return table array of Media instances (may be shorter than media_ids if
+--         some ids don't exist — caller can compare counts for fail-fast)
+function M.load_many(media_ids)
+    assert(type(media_ids) == "table", "Media.load_many: media_ids array required")
+    if #media_ids == 0 then return {} end
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Media.load_many: no database connection")
+
+    local results = {}
+    local CHUNK = 500
+    for chunk_start = 1, #media_ids, CHUNK do
+        local chunk_end = math.min(chunk_start + CHUNK - 1, #media_ids)
+        local n = chunk_end - chunk_start + 1
+
+        local phs = {}
+        for i = 1, n do phs[i] = "?" end
+        local sql = string.format(
+            "SELECT %s FROM media WHERE id IN (%s)",
+            MEDIA_SELECT_COLUMNS, table.concat(phs, ","))
+
+        local stmt = assert(db:prepare(sql), "Media.load_many: failed to prepare query")
+        for i = 1, n do
+            stmt:bind_value(i, media_ids[chunk_start + i - 1])
+        end
+        assert(stmt:exec(), "Media.load_many: query execution failed")
+        while stmt:next() do
+            results[#results + 1] = _hydrate_row(stmt)
+        end
+        stmt:finalize()
+    end
+    return results
 end
 
 --- Find media ID by file path.
@@ -571,6 +662,257 @@ function M:get_source_extent(target_rate)
     end
     stmt:finalize()
     return min_in, max_out
+end
+
+--- Change file_path for many media in one prepared-statement loop.
+--- Replaces the Media.load + Media:save N+1 pattern inside RelinkClips
+--- Phase 2 (full-row UPSERT per media) with a narrow UPDATE that touches
+--- only file_path. Returns the pre-change paths so the caller can persist
+--- undo state without a second round of per-row loads.
+--- Emits batch-aware media_changed signals via mark_dirty, matching
+--- Media:set_file_path's contract — callers typically wrap the call in
+--- begin_batch/end_batch to coalesce the signal.
+--- Asserts on any requested id that doesn't exist (fail-fast; surfaces
+--- planner bugs that reference a stale media_id).
+--- @param path_changes table {[media_id] = new_path}
+--- @return table {[media_id] = old_path}
+function M.batch_set_file_paths(path_changes)
+    assert(type(path_changes) == "table",
+        "Media.batch_set_file_paths: path_changes table required")
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.batch_set_file_paths: no database connection")
+
+    local ids = {}
+    for mid, new_path in pairs(path_changes) do
+        assert(new_path and new_path ~= "", string.format(
+            "Media.batch_set_file_paths: empty path for %s", tostring(mid)))
+        ids[#ids + 1] = mid
+    end
+    if #ids == 0 then return {} end
+
+    -- Step 1: chunked SELECT captures existing file_paths for undo state.
+    local old_paths = {}
+    local CHUNK = 500
+    for chunk_start = 1, #ids, CHUNK do
+        local chunk_end = math.min(chunk_start + CHUNK - 1, #ids)
+        local n = chunk_end - chunk_start + 1
+        local phs = {}
+        for i = 1, n do phs[i] = "?" end
+        local stmt = assert(db:prepare(string.format(
+            "SELECT id, file_path FROM media WHERE id IN (%s)",
+            table.concat(phs, ","))),
+            "Media.batch_set_file_paths: failed to prepare read query")
+        for i = 1, n do
+            stmt:bind_value(i, ids[chunk_start + i - 1])
+        end
+        assert(stmt:exec(),
+            "Media.batch_set_file_paths: read query execution failed")
+        while stmt:next() do
+            old_paths[stmt:value(0)] = stmt:value(1)
+        end
+        stmt:finalize()
+    end
+    for _, mid in ipairs(ids) do
+        assert(old_paths[mid] ~= nil, string.format(
+            "Media.batch_set_file_paths: media not found: %s", tostring(mid)))
+    end
+
+    -- Step 2: prepared UPDATE, one bind+exec per change. Parse+plan pays
+    -- once; atomicity comes from the enclosing command-manager transaction.
+    local upd = assert(db:prepare(
+        "UPDATE media SET file_path = ? WHERE id = ?"),
+        "Media.batch_set_file_paths: failed to prepare update query")
+    for mid, new_path in pairs(path_changes) do
+        upd:bind_value(1, new_path)
+        upd:bind_value(2, mid)
+        assert(upd:exec(), string.format(
+            "Media.batch_set_file_paths: update exec failed for %s", tostring(mid)))
+        upd:reset()
+        mark_dirty(mid)
+    end
+    upd:finalize()
+
+    return old_paths
+end
+
+--- Batch-assign offline_note for a set of media rows. Same shape as
+--- batch_set_file_paths: pass {[media_id] = json_string_or_nil}. Values
+--- of nil clear the note (relink succeeded, no diagnostic to display).
+--- Callers should wrap in Media.begin_batch / end_batch if they want
+--- the consequent media_changed signal batched with other mutations.
+--- @param note_changes table {[media_id] = string|nil}
+--- Load every media row's {file_path, offline_note} pair. Used by
+--- media_status to prime its renderer-facing cache at project open.
+--- Skips rows with empty file_path (degenerate records). Order is
+--- unspecified — consumers index by file_path.
+--- @return table array of {file_path, offline_note}
+function M.load_all_offline_notes()
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.load_all_offline_notes: no database connection")
+
+    local q = assert(db:prepare(
+        "SELECT file_path, offline_note FROM media WHERE file_path != ''"),
+        "Media.load_all_offline_notes: prepare failed")
+    local rows = {}
+    if q:exec() then
+        while q:next() do
+            rows[#rows + 1] = {
+                file_path = q:value(0),
+                offline_note = q:value(1),
+            }
+        end
+    end
+    q:finalize()
+    return rows
+end
+
+--- Batch-assign offline_note JSON strings to a set of media rows.
+--- Only handles non-nil values — `pairs()` skips nil-valued keys, and
+--- callers that need to clear notes (restore a row to "no diagnostic")
+--- must route those media_ids through `batch_clear_offline_notes`
+--- instead. Callers should wrap in Media.begin_batch / end_batch to
+--- coalesce the consequent media_changed signal.
+--- @param note_sets table {[media_id] = json_string}
+function M.batch_set_offline_notes(note_sets)
+    assert(type(note_sets) == "table",
+        "Media.batch_set_offline_notes: note_sets table required")
+    if next(note_sets) == nil then return end
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.batch_set_offline_notes: no database connection")
+
+    local upd = assert(db:prepare(
+        "UPDATE media SET offline_note = ? WHERE id = ?"),
+        "Media.batch_set_offline_notes: failed to prepare update query")
+    for mid, note in pairs(note_sets) do
+        assert(type(note) == "string", string.format(
+            "Media.batch_set_offline_notes: note must be string for %s, got %s",
+            tostring(mid), type(note)))
+        upd:bind_value(1, note)
+        upd:bind_value(2, mid)
+        assert(upd:exec(), string.format(
+            "Media.batch_set_offline_notes: exec failed for %s", tostring(mid)))
+        upd:reset()
+        mark_dirty(mid)
+    end
+    upd:finalize()
+end
+
+--- Clear `offline_note` (write SQL NULL) for each media_id in the
+--- array. Counterpart to batch_set_offline_notes for the "this row's
+--- diagnostic is no longer relevant" case (successful relink wiped a
+--- prior partial-coverage note, undo restoring a pre-relink nil).
+--- @param media_ids table array of media_id strings
+function M.batch_clear_offline_notes(media_ids)
+    assert(type(media_ids) == "table",
+        "Media.batch_clear_offline_notes: media_ids table required")
+    if #media_ids == 0 then return end
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.batch_clear_offline_notes: no database connection")
+
+    local stmt = assert(db:prepare(
+        "UPDATE media SET offline_note = NULL WHERE id = ?"),
+        "Media.batch_clear_offline_notes: failed to prepare clear query")
+    for _, mid in ipairs(media_ids) do
+        stmt:bind_value(1, mid)
+        assert(stmt:exec(), string.format(
+            "Media.batch_clear_offline_notes: exec failed for %s", tostring(mid)))
+        stmt:reset()
+        mark_dirty(mid)
+    end
+    stmt:finalize()
+end
+
+--- Batch version of Media:get_source_extent.
+--- Takes a map of {[media_id] = target_rate} and returns {[media_id] = {min_in, max_out}}
+--- where each pair is that media's source extent in its target_rate units
+--- (normalized from each clip's native rate, excluding master clips).
+--- Replaces the N+1 pattern of calling get_source_extent per media with a
+--- single chunked IN query — relink-dialog open was dominated by this.
+--- Media with no non-master clips get {nil, nil}.
+--- @param media_rates table {[media_id] = target_rate}
+--- @return table {[media_id] = {min_in, max_out}}
+function M.batch_get_source_extents(media_rates)
+    assert(type(media_rates) == "table",
+        "Media.batch_get_source_extents: media_rates table required")
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.batch_get_source_extents: no database connection")
+
+    local result = {}
+    local ids = {}
+    for mid, rate in pairs(media_rates) do
+        assert(rate and type(rate) == "number" and rate > 0, string.format(
+            "Media.batch_get_source_extents: invalid target_rate for %s: %s",
+            tostring(mid), tostring(rate)))
+        ids[#ids + 1] = mid
+        result[mid] = { nil, nil }
+    end
+    if #ids == 0 then return result end
+
+    -- Chunked IN clause — stay under SQLITE_MAX_VARIABLE_NUMBER comfortably.
+    local CHUNK = 500
+    for chunk_start = 1, #ids, CHUNK do
+        local chunk_end = math.min(chunk_start + CHUNK - 1, #ids)
+        local n = chunk_end - chunk_start + 1
+        local phs = {}
+        for i = 1, n do phs[i] = "?" end
+        local sql = string.format([[
+            SELECT media_id, source_in_frame, source_out_frame,
+                   fps_numerator, fps_denominator
+            FROM clips
+            WHERE media_id IN (%s) AND clip_kind != 'master'
+        ]], table.concat(phs, ","))
+
+        local stmt = assert(db:prepare(sql),
+            "Media.batch_get_source_extents: failed to prepare query")
+        for i = 1, n do
+            stmt:bind_value(i, ids[chunk_start + i - 1])
+        end
+        assert(stmt:exec(),
+            "Media.batch_get_source_extents: query execution failed")
+
+        while stmt:next() do
+            local mid = stmt:value(0)
+            local src_in = stmt:value(1)
+            local src_out = stmt:value(2)
+            local fps_num = stmt:value(3)
+            local fps_den = stmt:value(4)
+            -- Schema enforces NOT NULL + CHECK > 0 on these columns; a nil
+            -- here indicates data corruption — assert with row context so
+            -- the bad row is identifiable.
+            assert(src_in, string.format(
+                "batch_get_source_extents: clip on media %s has NULL source_in_frame", tostring(mid)))
+            assert(src_out, string.format(
+                "batch_get_source_extents: clip on media %s has NULL source_out_frame", tostring(mid)))
+            assert(fps_num and fps_num > 0, string.format(
+                "batch_get_source_extents: clip on media %s has invalid fps_numerator=%s",
+                tostring(mid), tostring(fps_num)))
+            assert(fps_den and fps_den > 0, string.format(
+                "batch_get_source_extents: clip on media %s has invalid fps_denominator=%s",
+                tostring(mid), tostring(fps_den)))
+
+            local target_rate = media_rates[mid]
+            local clip_rate = fps_num / fps_den
+            if math.abs(clip_rate - target_rate) > 0.01 then
+                src_in = math.floor(src_in * target_rate / clip_rate + 0.5)
+                src_out = math.floor(src_out * target_rate / clip_rate + 0.5)
+            end
+            local extent = result[mid]
+            if not extent[1] or src_in < extent[1] then extent[1] = src_in end
+            if not extent[2] or src_out > extent[2] then extent[2] = src_out end
+        end
+        stmt:finalize()
+    end
+
+    return result
 end
 
 --- Get media rows with a Set Timecode override (file_original_timecode populated).

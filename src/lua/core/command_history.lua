@@ -561,56 +561,73 @@ function M.find_merged_undo_target(active_seq_id)
     local seq_cursor = M.get_sequence_cursor(active_seq_id)
     local global_cursor = M.get_global_cursor()
 
-    -- Query the command at each cursor position
-    local seq_cmd = nil
-    local global_cmd = nil
+    -- Fetches are scope-filtered: a sequence cursor can hold a value
+    -- pointing at a global command (move_cursor_for_undo follows
+    -- parent_sequence_number across stacks). Without the filter, that
+    -- cross-stack placeholder would be picked as a sequence-stack target.
+    local function parse_row(q, cursor)
+        local ts = q:value(3)
+        assert(ts, string.format(
+            "find_merged_undo_target: command at seq=%d has NULL timestamp", cursor))
+        return {
+            sequence_number = q:value(0),
+            command_type    = q:value(1),
+            sequence_id     = q:value(2),
+            timestamp       = ts,
+            undo_group_id   = q:value(4),
+        }
+    end
 
-    -- Helper: fetch command at a cursor position
-    local function fetch_command_at(cursor, label)
+    local function fetch_sequence_command_at(cursor)
+        assert(active_seq_id and active_seq_id ~= "",
+            "find_merged_undo_target: sequence fetch requires active_seq_id")
         local q = db:prepare([[
             SELECT sequence_number, command_type, sequence_id, timestamp, undo_group_id
             FROM commands WHERE sequence_number = ?
+              AND sequence_id = ?
               AND command_type NOT LIKE 'Undo%'
         ]])
-        assert(q, string.format("find_merged_undo_target: failed to prepare %s query", label))
+        assert(q, "find_merged_undo_target: failed to prepare sequence query")
         q:bind_value(1, cursor)
-        local cmd = nil
-        if q:exec() and q:next() then
-            local ts = q:value(3)
-            assert(ts, string.format(
-                "find_merged_undo_target: command at seq=%d has NULL timestamp", cursor))
-            cmd = {
-                sequence_number = q:value(0),
-                command_type = q:value(1),
-                sequence_id = q:value(2),
-                timestamp = ts,
-                undo_group_id = q:value(4),
-            }
-        end
+        q:bind_value(2, active_seq_id)
+        local cmd
+        if q:exec() and q:next() then cmd = parse_row(q, cursor) end
         q:finalize()
         return cmd
     end
 
-    if seq_cursor and seq_cursor > 0 then
-        seq_cmd = fetch_command_at(seq_cursor, "sequence")
+    local function fetch_global_command_at(cursor)
+        local q = db:prepare([[
+            SELECT sequence_number, command_type, sequence_id, timestamp, undo_group_id
+            FROM commands WHERE sequence_number = ?
+              AND sequence_id IS NULL
+              AND command_type NOT LIKE 'Undo%'
+        ]])
+        assert(q, "find_merged_undo_target: failed to prepare global query")
+        q:bind_value(1, cursor)
+        local cmd
+        if q:exec() and q:next() then cmd = parse_row(q, cursor) end
+        q:finalize()
+        return cmd
     end
 
+    local seq_cmd, global_cmd
+    if seq_cursor and seq_cursor > 0 and active_seq_id and active_seq_id ~= "" then
+        seq_cmd = fetch_sequence_command_at(seq_cursor)
+    end
     if global_cursor and global_cursor > 0 then
-        global_cmd = fetch_command_at(global_cursor, "global")
+        global_cmd = fetch_global_command_at(global_cursor)
     end
 
-    -- Pick the one with the higher sequence_number (most recent).
-    -- Sequence numbers are monotonically assigned, so higher = more recent.
-    -- Timestamps have only second resolution, so same-second commands
-    -- would tie-break wrong if compared by timestamp alone.
-    if seq_cmd and global_cmd then
-        if seq_cmd.sequence_number >= global_cmd.sequence_number then
-            return seq_cmd
-        else
-            return global_cmd
-        end
+    -- Pick by sequence_number (monotonically assigned; timestamps only
+    -- have second resolution, so same-second commands would tie-break
+    -- wrong if compared by timestamp alone).
+    if not seq_cmd then return global_cmd end
+    if not global_cmd then return seq_cmd end
+    if seq_cmd.sequence_number >= global_cmd.sequence_number then
+        return seq_cmd
     end
-    return seq_cmd or global_cmd
+    return global_cmd
 end
 
 --- Find the next command to redo in the merged view.
@@ -735,6 +752,15 @@ function M.move_cursor_for_redo(cmd)
     else
         M.set_global_cursor(cmd.sequence_number)
     end
+end
+
+--- sequence_number of the most recent done command in the merged view
+--- (active sequence + global), or 0 if nothing can be undone. Uses the
+--- same scope filter as find_merged_undo_target so a jump loop can't
+--- overrun what M.undo() consumes.
+function M.merged_current_sequence_number(active_seq_id)
+    local target = M.find_merged_undo_target(active_seq_id)
+    return target and target.sequence_number or 0
 end
 
 --- Check if undo is possible in the merged view.

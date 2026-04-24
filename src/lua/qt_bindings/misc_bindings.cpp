@@ -1,7 +1,10 @@
 #include "binding_macros.h"
 #include "../../jve_log.h"
 #include "../../timeline_renderer.h" // For lua_create_timeline_renderer
+#include <chrono>
 #include <QApplication> // For QApplication::focusWidget()
+#include <QFileInfo>
+#include <QDateTime>
 #include <QRubberBand>
 #include <QCursor>
 #include <QScrollArea>
@@ -46,6 +49,49 @@ static const QHash<QString, Qt::CursorShape>& getCursorShapeMap() {
         {"size_all", Qt::SizeAllCursor}
     };
     return map;
+}
+
+// Monotonic wall-clock seconds as a double. Use in place of os.clock() when
+// measuring work that dispatches across threads — os.clock() returns process
+// total CPU time (accumulating across all threads), which overcounts
+// wall-clock by the parallelism factor for parallel native code.
+static int lua_qt_monotonic_s(lua_State* L) {
+    auto now = std::chrono::steady_clock::now().time_since_epoch();
+    double seconds = std::chrono::duration<double>(now).count();
+    lua_pushnumber(L, seconds);
+    return 1;
+}
+
+// Bulk stat: qt_file_stat_batch({path1, path2, ...}) -> {[path] = {mtime, size}}
+// Missing files are omitted from the result (so `result[path] == nil` means
+// "doesn't exist"). Uses QFileInfo (Qt's native stat wrapper) — one in-process
+// stat per path, no subprocess fork, no shell quoting. Intended consumer:
+// the media probe disk cache, which needs (path, mtime, size) per candidate
+// to decide whether a cached probe result is still fresh.
+static int lua_qt_file_stat_batch(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    int n = static_cast<int>(lua_objlen(L, 1));
+    lua_createtable(L, 0, n);  // result table
+    for (int i = 1; i <= n; ++i) {
+        lua_rawgeti(L, 1, i);
+        if (!lua_isstring(L, -1)) { lua_pop(L, 1); continue; }
+        const char* path = lua_tostring(L, -1);
+        QFileInfo fi{QString::fromUtf8(path)};
+        if (fi.exists() && !fi.isDir()) {
+            lua_newtable(L);  // info table
+            lua_pushinteger(L,
+                static_cast<lua_Integer>(fi.lastModified().toSecsSinceEpoch()));
+            lua_setfield(L, -2, "mtime");
+            lua_pushinteger(L, static_cast<lua_Integer>(fi.size()));
+            lua_setfield(L, -2, "size");
+            // Stack: [arg_table, result, path, info]
+            // result[path] = info — lua_settable(L,-3) uses key at -2, value at -1.
+            lua_settable(L, -3);
+        } else {
+            lua_pop(L, 1);  // pop path; no entry for missing files
+        }
+    }
+    return 1;
 }
 
 namespace {
@@ -457,6 +503,18 @@ int lua_set_scroll_position(lua_State* L) {
     int position = luaL_checkinteger(L, 2);
     if (!sa) return 0;
     sa->verticalScrollBar()->setValue(position);
+    return 0;
+}
+
+// Scroll the area so the given widget (which must be a descendant) is visible.
+// Wraps QScrollArea::ensureWidgetVisible(widget). Used by the Inspector to
+// keep a focused field visible when Tab cycles past the viewport edge.
+int lua_scroll_area_ensure_widget_visible(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    if (!sa) return luaL_error(L, "qt_scroll_area_ensure_widget_visible: scroll area required");
+    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 2));
+    if (!w) return luaL_error(L, "qt_scroll_area_ensure_widget_visible: widget required");
+    sa->ensureWidgetVisible(w);
     return 0;
 }
 

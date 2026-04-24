@@ -35,6 +35,7 @@ globals = {
     "qt_json_decode",
     "qt_xml_parse",
     "qt_xml_parse_string",
+    "qt_zstd_decompress",
     "qt_set_widget_attribute",
     "qt_update_widget",
     "qt_set_widget_stylesheet",
@@ -56,6 +57,8 @@ globals = {
     "qt_set_global_key_handler",
     "qt_set_layout_stretch_factor",
     "qt_show_dialog",
+    "qt_monotonic_s",
+    "qt_file_stat_batch",
     "timeline",
 
     -- Bug reporter Qt bindings (from qt_bindings_bug_reporter.cpp)

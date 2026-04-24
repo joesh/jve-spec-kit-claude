@@ -258,6 +258,16 @@ function M.show(command_manager, parent_window)
         end)
     end
 
+    -- Refresh on project switch. command_manager.init() rebinds to the
+    -- new DB before project_changed fires, so the stored reference is
+    -- valid. Singleton install — priority 55 runs after timeline_panel
+    -- (50) so DB is settled before the tree re-queries.
+    if not window_state.project_signal_id then
+        local Signals = require("core.signals")
+        window_state.project_signal_id = Signals.connect("project_changed",
+            refresh_tree, 55)
+    end
+
     refresh_tree()
     qt_constants.DISPLAY.SHOW(window_state.window)
     qt_constants.DISPLAY.RAISE(window_state.window)

@@ -148,9 +148,15 @@ function M.detail_for_params(command_type, params)
         end
 
     elseif command_type == "SetClipProperty" then
-        local field = params.field or params.property
-        local value = params.value or params.new_value
-        if field and value then return field .. " = " .. tostring(value) end
+        -- SetClipProperty stores the field as params.property_name (per its
+        -- SPEC); prior lookups for params.field / params.property always
+        -- returned nil so history just showed "Set Property" with no detail.
+        local field = params.property_name or params.field or params.property
+        -- Explicit nil-check: a legitimate BOOLEAN `false` value must render,
+        -- not get dropped by `or`.
+        local value = params.value
+        if value == nil then value = params.new_value end
+        if field and value ~= nil then return field .. " = " .. tostring(value) end
 
     elseif command_type == "DeleteClip" then
         local name = params.clip_name

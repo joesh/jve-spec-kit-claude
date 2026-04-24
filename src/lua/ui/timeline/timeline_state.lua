@@ -117,11 +117,28 @@ M.set_viewport_start_time = function(time_obj)
     return viewport.set_viewport_start_time(time_obj, core.persist_state_to_db)
 end
 M.get_viewport_duration = viewport.get_viewport_duration
-M.set_viewport_duration = function(duration_obj)
-    return viewport.set_viewport_duration(duration_obj, core.persist_state_to_db)
+M.get_timeline_extent = viewport.get_timeline_extent
+M.set_viewport_duration = function(duration_obj, opts)
+    return viewport.set_viewport_duration(duration_obj, opts, core.persist_state_to_db)
 end
 M.get_playhead_position = viewport.get_playhead_position
 M.set_playhead_position = viewport.set_playhead_position
+
+-- Last frame the pointer was over inside a timeline widget.
+-- Updated by timeline_view_input on mouse move; consumed by zoom-at-pointer
+-- commands. Nil when the pointer has never been over a timeline.
+function M.get_last_pointer_frame()
+    return data.state.last_pointer_frame
+end
+function M.set_last_pointer_frame(frame)
+    if frame == nil then
+        data.state.last_pointer_frame = nil
+        return
+    end
+    assert(type(frame) == "number" and frame == math.floor(frame),
+        "set_last_pointer_frame: frame must be integer or nil")
+    data.state.last_pointer_frame = frame
+end
 M.surface_playhead = function()
     return viewport.surface_playhead(core.persist_state_to_db)
 end
@@ -414,11 +431,13 @@ M.detect_roll_between_clips = function(c1, c2, x, w)
     return math.abs(x - mid) <= (ROLL / 2)
 end
 
---- Clear state that shouldn't persist across projects
+--- Clear state that shouldn't persist across projects. Delegates to the
+--- core-state full reset so the new project's views render against an
+--- empty model (MVC pull). Covers the feature 010 case where the new
+--- project has no active sequence and `load_sequence` is never called —
+--- without this, the previous project's tracks/clips keep rendering.
 function M.on_project_change()
-    data.state.sequence_id = nil
-    data.state.project_id = nil
-    data.sequence = nil
+    core.reset_for_project_change()
 end
 
 -- Register for project_changed signal

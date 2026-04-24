@@ -369,6 +369,14 @@ private:
     uint64_t m_last_new_frame_time{0};  // mach_absolute_time of last new frame delivery
     double m_fractional_frames{0.0};   // video clock accumulator (CVDisplayLink elapsed → frames)
     std::string m_current_clip_id;
+    // Offline state of the currently-displayed clip. Tracked alongside
+    // m_current_clip_id so deliverFrame fires the clip_transition
+    // callback on offline-state changes WITHIN the same clip — a
+    // partial-coverage clip transitions online→offline at the coverage
+    // boundary; Lua needs that callback to swap the rendered frame for
+    // the "Not enough media" offline panel. Without this, the surface
+    // would stay frozen on the last decoded frame.
+    bool m_current_offline{false};
 
     int64_t m_repeat_streak{0};         // consecutive frame repeats (deliverFrame early-return logic)
 

@@ -21,6 +21,7 @@
 #include "lua/qt_bindings/fs_watcher_bindings.cpp"
 #include "lua/qt_bindings/shortcut_bindings.cpp"
 #include "lua/qt_bindings/xml_bindings.cpp"
+#include "lua/qt_bindings/zstd_bindings.cpp"
 
 // Define the metatable name (declared extern in qt_bindings.h)
 const char* WIDGET_METATABLE = "JVE.Widget";
@@ -291,6 +292,7 @@ void registerQtBindings(lua_State* L)
     // Register scroll functions globally
     lua_pushcfunction(L, lua_get_scroll_position); lua_setglobal(L, "qt_get_scroll_position");
     lua_pushcfunction(L, lua_set_scroll_position); lua_setglobal(L, "qt_set_scroll_position");
+    lua_pushcfunction(L, lua_scroll_area_ensure_widget_visible); lua_setglobal(L, "qt_scroll_area_ensure_widget_visible");
     lua_pushcfunction(L, lua_set_scroll_area_scroll_handler); lua_setglobal(L, "qt_set_scroll_area_scroll_handler");
     lua_pushcfunction(L, lua_set_scroll_area_h_scroll_handler); lua_setglobal(L, "qt_set_scroll_area_h_scroll_handler");
     lua_pushcfunction(L, lua_scroll_area_h_scroll_by); lua_setglobal(L, "qt_scroll_area_h_scroll_by");
@@ -301,6 +303,15 @@ void registerQtBindings(lua_State* L)
     // Register JSON functions globally
     lua_pushcfunction(L, lua_json_encode); lua_setglobal(L, "qt_json_encode");
     lua_pushcfunction(L, lua_json_decode); lua_setglobal(L, "qt_json_decode");
+
+    // Monotonic wall-clock seconds (use instead of os.clock() for
+    // measurements that include parallel C++ work — os.clock() returns
+    // process total CPU time, which overcounts wall clock under threading)
+    lua_pushcfunction(L, lua_qt_monotonic_s); lua_setglobal(L, "qt_monotonic_s");
+
+    // Bulk file stat for the media probe disk cache (avoids 500×
+    // io.popen stat calls that would dominate the cache-lookup cost)
+    lua_pushcfunction(L, lua_qt_file_stat_batch); lua_setglobal(L, "qt_file_stat_batch");
 
     // Register other global utility functions
     lua_pushcfunction(L, lua_set_layout_stretch_factor); lua_setglobal(L, "qt_set_layout_stretch_factor");
@@ -325,6 +336,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_focus_handler); lua_setglobal(L, "qt_set_focus_handler");
     lua_pushcfunction(L, lua_install_panel_focus_filter); lua_setglobal(L, "qt_install_panel_focus_filter");
     lua_pushcfunction(L, lua_register_panel_focus_widget); lua_setglobal(L, "qt_register_panel_focus_widget");
+    lua_pushcfunction(L, lua_focus_outside_main_window); lua_setglobal(L, "qt_focus_outside_main_window");
     lua_pushcfunction(L, lua_show_confirm_dialog); lua_setglobal(L, "qt_show_confirm_dialog");
     lua_pushcfunction(L, lua_show_dialog); lua_setglobal(L, "qt_show_dialog");
     lua_pushcfunction(L, lua_show_menu_popup); lua_setglobal(L, "qt_show_menu_popup");
@@ -376,6 +388,10 @@ void registerQtBindings(lua_State* L)
 
     // Register XML parsing functions globally
     register_xml_bindings(L);
+
+    // Register zstd decompression (qt_zstd_decompress — used by DRP importer
+    // to decode Sm2Mp FieldsBlob payloads for synced-clip resolution).
+    register_zstd_bindings(L);
 
     // Populate 'qt_constants.SIGNAL' subtable for application-level signal handlers
     lua_newtable(L);

@@ -95,6 +95,7 @@ local media_va = Media.create({
     width = 1920,
     height = 1080,
     audio_channels = 2,
+    audio_sample_rate = 48000,
     codec = "prores",
     metadata = dkjson.encode({
         start_tc_value = 0, start_tc_rate = 24,
@@ -310,6 +311,7 @@ local media_a = Media.create({
     width = 0,
     height = 0,
     audio_channels = 1,
+    audio_sample_rate = 48000,
     codec = "pcm",
     metadata = dkjson.encode({
         start_tc_value = 0, start_tc_rate = 48000,
@@ -379,6 +381,7 @@ local media_replay = Media.create({
     width = 1920,
     height = 1080,
     audio_channels = 1,
+    audio_sample_rate = 48000,
     codec = "prores",
     metadata = dkjson.encode({
         start_tc_value = 0, start_tc_rate = 24,
@@ -553,6 +556,7 @@ local media_ntsc = Media.create({
     width = 1920,
     height = 1080,
     audio_channels = 1,
+    audio_sample_rate = 48000,
     codec = "h264",
     metadata = dkjson.encode({
         start_tc_value = 0, start_tc_rate = 30000,

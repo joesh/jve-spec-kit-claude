@@ -521,7 +521,7 @@ local function install_physical_key_watcher()
     end))
 end
 
-local function create_dialog()
+local function create_dialog_impl()
     -- Modal QDialog (Qt::ApplicationModal) — isolates from global QShortcuts
     -- on the main window so Delete, J/K/L, etc. don't leak to the timeline.
     dialog_widget = qt_constants.DIALOG.CREATE("Keyboard Shortcuts", 1200, 880, nil)
@@ -538,6 +538,21 @@ local function create_dialog()
 
     refresh_preset_combo()
     populate_command_tree()
+end
+
+-- Transactional wrapper: if any build step raises, reset module-scope state
+-- so the next M.show() attempt gets a clean full rebuild rather than re-
+-- entering with a dangling dialog_widget but a never-assigned command_tree
+-- (which would crash in populate_command_tree with "Expected widget userdata
+-- at index 1"). Symptomatic in TSO 2026-04-20 10:57:02/07.
+local function create_dialog()
+    local ok, err = pcall(create_dialog_impl)
+    if not ok then
+        dialog_widget  = nil
+        command_tree   = nil
+        picture        = nil
+        error(err)
+    end
 end
 
 -- ---- Public API ---------------------------------------------------------

@@ -424,7 +424,6 @@ M.selected_items = {}
 M.pending_rename = nil
 M.ignore_tree_item_change = false
 M.project_id = nil
-M.inspector_view = nil
 M.project_title_widget = nil
 M.pending_project_title = nil
 
@@ -1665,10 +1664,6 @@ function M.set_project_title(name)
     end
 end
 
-function M.set_inspector(inspector_view)
-    M.inspector_view = inspector_view
-end
-
 -- Get selected media item
 function M.get_selected_master_clip()
     if not M.selected_items or #M.selected_items == 0 then
@@ -2615,19 +2610,44 @@ end
 local Signals = require("core.signals")
 Signals.connect("project_changed", M.on_project_change, 50)
 
--- Reactive media status: update browser icons when file status changes
-Signals.connect("media_status_changed", function(media_path, status)
+-- Per-row refresh for any media-level change. Called from both
+-- media_status_changed (offline icon flip) and media_content_changed
+-- (bytes rewritten — no status flip, but any cached visual derived
+-- from the file, e.g. thumbnails, is stale). Today only the icon path
+-- exists; the thumbnail invalidation will land alongside thumbnail
+-- rendering and hooks in here.
+local function refresh_row_for_path(media_path, status_hint)
+    assert(type(media_path) == "string" and media_path ~= "", string.format(
+        "project_browser.refresh_row_for_path: media_path must be non-empty string, got %s",
+        type(media_path)))
+    if status_hint ~= nil then
+        assert(type(status_hint) == "table" and type(status_hint.offline) == "boolean",
+            "project_browser.refresh_row_for_path: status_hint must be {offline=bool}")
+    end
     if not M.tree or not M.item_lookup then return end
     for _, info in pairs(M.item_lookup) do
         if info.type == "master_clip" and info.file_path == media_path then
-            info.offline = status.offline
+            if status_hint then info.offline = status_hint.offline end
             assert(info.media_kind, string.format(
-                "media_status_changed: master_clip info missing media_kind (tree_id=%s file_path=%s)",
+                "project_browser: master_clip info missing media_kind (tree_id=%s file_path=%s)",
                 tostring(info.tree_id), tostring(info.file_path)))
             qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, info.tree_id,
-                pick_clip_icon(info.media_kind, status.offline))
+                pick_clip_icon(info.media_kind, info.offline))
+            -- TODO(thumbnails): drop cached thumbnail for info.tree_id here
+            -- once the thumbnail cache is landed.
         end
     end
+end
+
+-- Reactive media status: update browser icons when file status changes
+Signals.connect("media_status_changed", function(media_path, status)
+    refresh_row_for_path(media_path, status)
+end)
+
+-- Reactive content change: bytes rewritten in place. Status unchanged,
+-- but any derived visual (thumbnails when they land) is stale.
+Signals.connect("media_content_changed", function(media_path)
+    refresh_row_for_path(media_path, nil)
 end)
 
 -- Reactive media change: when media records are modified (e.g. relink),

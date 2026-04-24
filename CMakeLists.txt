@@ -48,6 +48,9 @@ pkg_check_modules(FFMPEG REQUIRED
     libswresample
 )
 
+# Zstandard for decompressing Resolve DRP FieldsBlob payloads (synced clips)
+pkg_check_modules(ZSTD REQUIRED libzstd)
+
 # Compiler flags
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0 -DDEBUG")
@@ -190,8 +193,11 @@ target_link_libraries(JVECore
     Qt6::Multimedia
     SQLite::SQLite3
     ${LUAJIT_LIBRARIES}
+    ${ZSTD_LIBRARIES}
     EditorMediaPlatform
 )
+
+target_link_directories(JVECore PUBLIC ${ZSTD_LIBRARY_DIRS})
 
 # Metal video surface + audio latency dependencies (macOS)
 if(APPLE)
@@ -207,6 +213,7 @@ endif()
 target_include_directories(JVECore PUBLIC
     ${CMAKE_SOURCE_DIR}/src
     ${LUAJIT_INCLUDE_DIRS}
+    ${ZSTD_INCLUDE_DIRS}
 )
 
 # Main application executable

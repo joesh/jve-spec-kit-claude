@@ -31,6 +31,7 @@ local Renderer = require("core.renderer")
 local Sequence = require("models.sequence")
 local helpers = require("core.playback.playback_helpers")
 local Signals = require("core.signals")
+local media_status = require("core.media.media_status")
 
 local PlaybackEngine = {}
 PlaybackEngine.__index = PlaybackEngine
@@ -120,6 +121,17 @@ function PlaybackEngine.new(config)
     self._tmb = nil
     self._video_track_indices = {}   -- track indices for Renderer iteration
     self._audio_track_indices = {}   -- audio track indices for TMB audio path
+    -- Per-clip source range snapshot for the renderer. Populated when
+    -- clips are fed to TMB; the renderer needs {source_in, source_out}
+    -- to compose per-clip partial-coverage offline frames without
+    -- querying the DB on the hot path.
+    self._clip_info_by_id = {}
+    -- Set of media paths that have been fed to TMB via _provide_clips.
+    -- Used to filter media_status_changed reloads: during startup the
+    -- background probe can flip hundreds of paths, but we only need to
+    -- rebuild clips for paths that are actually live in TMB. Cleared
+    -- whenever clip info is reset (content_changed, sequence unload).
+    self._active_media_paths = {}
     -- PlaybackController (C++ CVDisplayLink-driven playback)
     self._playback_controller = nil
     self._video_surface = nil
@@ -333,6 +345,17 @@ function PlaybackEngine:_close_tmb()
     end
     self._video_track_indices = {}
     self._audio_track_indices = {}
+    self._clip_info_by_id = {}
+    self._active_media_paths = {}
+end
+
+--- Drop every cache keyed on the current clip list so _provide_clips
+--- will repopulate from scratch on the next C++ request. Pairs with
+--- PLAYBACK.RELOAD_ALL_CLIPS — the Lua-side snapshots and the TMB-side
+--- clip lists must be cleared together or they get out of sync.
+function PlaybackEngine:_reset_clip_snapshots()
+    self._clip_info_by_id = {}
+    self._active_media_paths = {}
 end
 
 --- Public: invalidate clip cache + re-feed TMB after timeline edits.
@@ -340,12 +363,68 @@ end
 -- internal cache invalidation so views never touch engine privates.
 function PlaybackEngine:notify_content_changed()
     self:_refresh_content_bounds()
-    if self._playback_controller then
-        qt_constants.PLAYBACK.RELOAD_ALL_CLIPS(self._playback_controller)
-        self._video_track_indices = self.sequence:get_track_indices("VIDEO")
-        table.sort(self._video_track_indices, function(a, b) return a > b end)
-        self._audio_track_indices = self.sequence:get_track_indices("AUDIO")
+    if not self._playback_controller then return end
+    self:_reset_clip_snapshots()
+    qt_constants.PLAYBACK.RELOAD_ALL_CLIPS(self._playback_controller)
+    self._video_track_indices = self.sequence:get_track_indices("VIDEO")
+    table.sort(self._video_track_indices, function(a, b) return a > b end)
+    self._audio_track_indices = self.sequence:get_track_indices("AUDIO")
+end
+
+--- Handler: timeline edit touched `seq_id`. Only react when it's our
+--- sequence — other sequences' edits are none of our business.
+function PlaybackEngine:_on_content_changed_signal(seq_id)
+    assert(type(seq_id) == "string" and seq_id ~= "", string.format(
+        "PlaybackEngine:_on_content_changed_signal: seq_id must be non-empty string, got %s",
+        type(seq_id)))
+    if seq_id ~= self.sequence_id then return end
+    self:notify_content_changed()
+    log.event("Edit detected: invalidated clip windows")
+end
+
+--- Handler: media file at `path` had its bytes rewritten in place.
+--- Status didn't flip (still online), so the clip list is still valid —
+--- we just need TMB to drop decoder state keyed on this path.
+function PlaybackEngine:_on_media_content_changed_signal(path)
+    assert(type(path) == "string" and path ~= "", string.format(
+        "PlaybackEngine:_on_media_content_changed_signal: path must be non-empty string, got %s",
+        type(path)))
+    if not self._tmb then return end
+    qt_constants.EMP.TMB_INVALIDATE_PATH(self._tmb, path)
+    log.event("TMB invalidated for rewritten path: %s", path)
+end
+
+--- Handler: media_status flipped for `path`. Drop every cache keyed on
+--- this path (InvalidatePath) and, when returning online, also drop
+--- TMB's permanent FileNotFound blacklist (ClearOffline). Then force a
+--- clip rebuild so ClipInfo.offline — baked in at build time — picks
+--- up the new state; without this, an offline→online flip leaves
+--- clip.offline stuck at true and GetTrackAudio keeps beeping. Filter
+--- by _path_is_active_in_tmb so the startup bg-probe storm doesn't
+--- reload for paths we never decoded.
+function PlaybackEngine:_on_media_status_changed_signal(path, status)
+    assert(type(path) == "string" and path ~= "", string.format(
+        "PlaybackEngine:_on_media_status_changed_signal: path must be non-empty string, got %s",
+        type(path)))
+    assert(type(status) == "table", string.format(
+        "PlaybackEngine:_on_media_status_changed_signal: status must be table, got %s",
+        type(status)))
+    assert(type(status.offline) == "boolean", string.format(
+        "PlaybackEngine:_on_media_status_changed_signal: status.offline must be boolean, got %s",
+        type(status.offline)))
+    if not self._tmb then return end
+    if not self:_path_is_active_in_tmb(path) then return end
+    local EMP = qt_constants.EMP
+    EMP.TMB_INVALIDATE_PATH(self._tmb, path)
+    if not status.offline then
+        EMP.TMB_CLEAR_OFFLINE(self._tmb, path)
     end
+    if self._playback_controller then
+        self:_reset_clip_snapshots()
+        qt_constants.PLAYBACK.RELOAD_ALL_CLIPS(self._playback_controller)
+    end
+    log.event("TMB reacted to status change: %s offline=%s",
+        path, tostring(status.offline))
 end
 
 --------------------------------------------------------------------------------
@@ -394,17 +473,22 @@ function PlaybackEngine:_setup_playback_controller()
         engine:_on_clip_transition(clip_id, rotation, par_num, par_den, is_offline, media_path, frame)
     end)
 
-    -- Wire content_changed: invalidate clip windows when timeline edits occur.
-    -- This ensures C++ re-queries clip data after insert/delete/ripple commands.
-    if self._content_changed_conn then
-        Signals.disconnect(self._content_changed_conn)
+    -- Wire signal handlers. Bodies live on PlaybackEngine as named
+    -- methods (_on_*_signal); the lambdas here are thin binders that
+    -- route to the current `engine` — re-wiring on sequence reload
+    -- attaches the handler to the new engine instance.
+    local function rewire(conn_field, signal_name, method_name)
+        if self[conn_field] then Signals.disconnect(self[conn_field]) end
+        self[conn_field] = Signals.connect(signal_name, function(...)
+            engine[method_name](engine, ...)
+        end)
     end
-    self._content_changed_conn = Signals.connect("content_changed", function(seq_id)
-        if seq_id == engine.sequence_id then
-            engine:notify_content_changed()
-            log.event("Edit detected: invalidated clip windows")
-        end
-    end)
+    rewire("_content_changed_conn",        "content_changed",
+           "_on_content_changed_signal")
+    rewire("_media_content_changed_conn",  "media_content_changed",
+           "_on_media_content_changed_signal")
+    rewire("_media_status_changed_conn",   "media_status_changed",
+           "_on_media_status_changed_signal")
 
     log.event("PlaybackController created and configured")
 end
@@ -444,6 +528,19 @@ function PlaybackEngine:_provide_clips(from, to, track_type)
         local clip = self:_build_tmb_clip(entry, speed)
         local track_idx = entry.track.track_index
         EMP.TMB_ADD_CLIPS(self._tmb, track_type, track_idx, {clip})
+        -- Record that this path is live in TMB so the media_status_changed
+        -- listener can skip reloads for paths we never sent to the decoder.
+        self._active_media_paths[entry.media_path] = true
+        -- Snapshot source range for the renderer so it can compose
+        -- per-clip partial-coverage frames without hitting the DB. Only
+        -- video clips need this — audio clips don't compose an offline
+        -- frame on the render path.
+        if track_type == "video" then
+            self._clip_info_by_id[clip.clip_id] = {
+                source_in  = entry.clip.source_in,
+                source_out = entry.clip.source_out,
+            }
+        end
 
         -- Track indices: ensure this track is known
         if track_type == "video" then
@@ -577,11 +674,34 @@ function PlaybackEngine:_on_clip_transition(clip_id, rotation, par_num, par_den,
 end
 
 
+--- True when `path` belongs to a clip that has been fed to TMB via
+--- _provide_clips. media_status_changed handler uses this to skip the
+--- expensive reload for paths that don't intersect our clip list —
+--- the startup bg probe flips hundreds of paths that belong to other
+--- sequences or aren't referenced at all.
+---
+--- Empty active set = TMB has received no clips yet; don't filter in
+--- that case (first clip build will pick up the current status via
+--- media_status.get, so we don't strictly need the reload, but also
+--- it's a no-op on empty tracks — cheap).
+function PlaybackEngine:_path_is_active_in_tmb(path)
+    assert(type(path) == "string" and path ~= "", string.format(
+        "PlaybackEngine:_path_is_active_in_tmb: path must be non-empty string, got %s",
+        type(path)))
+    local active = self._active_media_paths
+    if not active or next(active) == nil then return true end
+    return active[path] == true
+end
+
 --- Build a TMB clip table from a sequence entry (get_video_at/get_audio_at result).
 -- @param entry table: {media_path, clip, track, ...}
 -- @param speed_ratio number: conform ratio (1.0 for video, seq_fps/media_fps for audio)
 -- @return table matching TMB_SET_TRACK_CLIPS format
 function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
+    assert(type(entry) == "table", string.format(
+        "PlaybackEngine:_build_tmb_clip: entry must be table, got %s", type(entry)))
+    assert(type(entry.media_path) == "string" and entry.media_path ~= "",
+        "PlaybackEngine:_build_tmb_clip: entry.media_path must be non-empty string")
     local clip = entry.clip
     assert(clip.rate, string.format(
         "PlaybackEngine:_build_tmb_clip: clip %s missing rate", clip.id))
@@ -589,10 +709,24 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
         "PlaybackEngine:_build_tmb_clip: clip %s speed_ratio must be non-zero (|sr|<100), got %s",
         clip.id, tostring(speed_ratio)))
 
-    -- Check if media file exists — TMB uses this to generate beep for offline clips
-    local f = io.open(entry.media_path, "r")
-    local is_offline = (f == nil)
-    if f then f:close() end
+    -- Resolve offline state from media_status — single source of truth.
+    -- Was a direct io.open check here; that created two sources of
+    -- truth for offline (this ad-hoc stat vs. the media_status cache
+    -- bg probe + FS watcher maintain) and meant ClipInfo.offline
+    -- could disagree with what the browser icon / timeline label
+    -- displayed. If the path isn't registered yet (first clip build
+    -- during sequence load, before bg probe lands), fall back to a
+    -- one-shot stat so we don't default a legitimately-online clip
+    -- to beeping on startup.
+    local cached = media_status.get(entry.media_path)
+    local is_offline
+    if cached then
+        is_offline = cached.offline
+    else
+        local f = io.open(entry.media_path, "r")
+        is_offline = (f == nil)
+        if f then f:close() end
+    end
 
     return {
         clip_id = clip.id,
@@ -842,7 +976,7 @@ function PlaybackEngine:_display_frame_from_renderer(frame)
     assert(self._tmb, "PlaybackEngine:_display_frame_from_renderer: no TMB")
 
     local frame_handle, metadata = Renderer.get_video_frame(
-        self._tmb, self._video_track_indices, frame)
+        self._tmb, self._video_track_indices, frame, self._clip_info_by_id)
 
     if frame_handle then
         self:_apply_rotation_par(metadata)
@@ -1011,6 +1145,14 @@ function PlaybackEngine:destroy()
     if self._content_changed_conn then
         Signals.disconnect(self._content_changed_conn)
         self._content_changed_conn = nil
+    end
+    if self._media_content_changed_conn then
+        Signals.disconnect(self._media_content_changed_conn)
+        self._media_content_changed_conn = nil
+    end
+    if self._media_status_changed_conn then
+        Signals.disconnect(self._media_status_changed_conn)
+        self._media_status_changed_conn = nil
     end
     self:stop()
     self:_close_tmb()

@@ -1,18 +1,22 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~124 LOC
--- Volatility: unknown
---
--- @file clip.lua
+--- ClipInspectable: Inspector-facing adapter for a single clip.
+---
+--- Three data sources, consulted in this order on get():
+---   1. metadata_overrides — values written during the current edit
+---      session; not yet flushed to the model/DB but authoritative to
+---      the Inspector until Apply commits.
+---   2. clip_ref — the live clip object from timeline_state (columns:
+---      name, enabled, timeline_start, duration, source_in, source_out,
+---      marks, rate, …). Preferred for clip-row fields so the Inspector
+---      stays in sync with timeline edits without a DB roundtrip.
+---   3. properties — rows from the `properties` table loaded via
+---      database.load_clip_properties(). Lazy and cached per instance.
+---
+--- Writes flow through SetClipProperty (always scoped to the clip's
+--- owning sequence for per-sequence undo). TIMECODE payloads are
+--- integer-frames only; rate is single-sourced on the owning entity and
+--- must not be duplicated into the payload.
+---
+--- @file clip.lua
 local database = require("core.database")
 local Command = require("command")
 local command_manager = require("core.command_manager")
@@ -21,12 +25,12 @@ local metadata_schemas = require("ui.metadata_schemas")
 local ClipInspectable = {}
 ClipInspectable.__index = ClipInspectable
 
+-- Lazy loader for the clip's user-metadata properties. Called only when
+-- a field is NOT present on clip_ref, so the DB roundtrip only happens
+-- for genuine custom-metadata reads (unusual in the schema-driven
+-- Inspector — every declared schema field is a clip-row column).
 local function load_clip_properties(clip_id)
-    local ok, props = pcall(database.load_clip_properties, clip_id)
-    if ok and type(props) == "table" then
-        return props
-    end
-    return {}
+    return database.load_clip_properties(clip_id)
 end
 
 function ClipInspectable.new(opts)
@@ -53,6 +57,9 @@ end
 
 function ClipInspectable:refresh()
     self._property_cache = nil
+    -- Overrides win in :get() to cover the commit round-trip; on refresh
+    -- clip_ref is authoritative again and leaving them masks undo reverts.
+    self.metadata_overrides = {}
 end
 
 function ClipInspectable:get_display_name()
@@ -70,14 +77,16 @@ function ClipInspectable:_ensure_properties()
     return self._property_cache
 end
 
-local function coalesce(...)
-    for i = 1, select("#", ...) do
-        local value = select(i, ...)
-        if value ~= nil then
-            return value
-        end
+local function format_rate_display(rate)
+    if type(rate) ~= "table" then return nil end
+    local num, den = rate.fps_numerator, rate.fps_denominator
+    if type(num) ~= "number" or type(den) ~= "number" or den == 0 then
+        return nil
     end
-    return nil
+    if num % den == 0 then
+        return string.format("%d fps", math.floor(num / den + 0.5))
+    end
+    return string.format("%.3f fps", num / den)
 end
 
 function ClipInspectable:get(field)
@@ -85,17 +94,31 @@ function ClipInspectable:get(field)
         return nil
     end
 
-    local properties = self:_ensure_properties()
+    -- Synthetic display field (no backing column).
+    if field == "rate_display" then
+        local clip_table = self.clip_ref
+        if clip_table and clip_table.rate then
+            return format_rate_display(clip_table.rate)
+        end
+    end
 
+    -- Edit-session overrides win.
     if self.metadata_overrides[field] ~= nil then
         return self.metadata_overrides[field]
     end
 
-    local clip_table = self.clip_ref
-    local clip_value = clip_table and clip_table[field] or nil
+    -- When clip_ref is provided, treat it as authoritative for every
+    -- schema field — an explicit nil on clip_ref means "the column has
+    -- no value right now" (e.g. mark_in unset), not "fall back to DB".
+    -- This keeps the Inspector off the DB hot path; custom user-metadata
+    -- fields (not in any current schema) are the only case that needs
+    -- _ensure_properties, and they're accessed only when no clip_ref
+    -- was supplied (rare).
+    if self.clip_ref then
+        return self.clip_ref[field]
+    end
 
-    local property_value = properties[field]
-    return coalesce(clip_value, property_value)
+    return self:_ensure_properties()[field]
 end
 
 function ClipInspectable:set(field, value)
@@ -103,18 +126,28 @@ function ClipInspectable:set(field, value)
         return false, "Field is required"
     end
 
-    local property_type = nil
-    local default_value = nil
-    local payload_value = value
+    assert(type(value) == "table", string.format(
+        "ClipInspectable:set(%s): expected payload table {value, property_type[, default_value]}, got %s",
+        field, type(value)))
+    local payload_value = value.value
+    local property_type = value.property_type
+    local default_value = value.default_value
 
-    if type(value) == "table" then
-        payload_value = value.value
-        property_type = value.property_type or value.field_type
-        default_value = value.default_value
-    end
+    assert(property_type and property_type ~= "", string.format(
+        "ClipInspectable:set(%s): payload.property_type is required", field))
 
-    if property_type == nil or property_type == "" then
-        return false, "property_type is required"
+    -- TIMECODE branch (012 Inspector rewrite, Q3 resolution): integer frames only;
+    -- rate lives on the owning entity and is NEVER carried in the payload.
+    if property_type == "TIMECODE" then
+        assert(type(payload_value) == "number",
+            string.format("ClipInspectable:set(%s): TIMECODE value must be a number, got %s",
+                field, type(payload_value)))
+        assert(payload_value == math.floor(payload_value),
+            string.format("ClipInspectable:set(%s): TIMECODE value must be integer frames, got %s",
+                field, tostring(payload_value)))
+        assert(payload_value >= 0,
+            string.format("ClipInspectable:set(%s): TIMECODE value must be non-negative, got %d",
+                field, payload_value))
     end
 
     local current = self:get(field)
@@ -122,9 +155,16 @@ function ClipInspectable:set(field, value)
         return true
     end
 
+    assert(self.sequence_id and self.sequence_id ~= "",
+        "ClipInspectable:set requires self.sequence_id (per 006-per-sequence-undo " ..
+        "FR-001: SetClipProperty must be scoped to the sequence the clip lives in, " ..
+        "otherwise it lands on the global stack and leaks into other tabs' undo views)")
     local cmd = Command.create("SetClipProperty", self.project_id)
     cmd:set_parameters({
         ["clip_id"] = self.clip_id,
+        -- Route this command onto its owning sequence's undo stack.
+        -- See set_clip_property.lua SPEC.args for rationale.
+        ["sequence_id"] = self.sequence_id,
         ["property_name"] = field,
         ["value"] = payload_value,
         ["property_type"] = property_type,
@@ -132,15 +172,6 @@ function ClipInspectable:set(field, value)
     if default_value ~= nil then
         cmd:set_parameter("default_value", default_value)
     end
-    cmd:set_parameters({
-        ["__skip_selection_snapshot"] = true,
-        ["__skip_timeline_cache"] = true,
-        ["__skip_timeline_reload"] = true,
-    })
-    cmd.stack_id = "global"
-    cmd.skip_selection_snapshot = true
-    cmd.skip_timeline_cache = true
-    cmd.skip_timeline_reload = true
 
     local result = command_manager.execute_interactive(cmd)
     if not result.success then

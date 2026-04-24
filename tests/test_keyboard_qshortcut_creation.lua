@@ -249,7 +249,9 @@ end
 
 local function test_symbol_key_conversion()
     reset()
-    -- Tilde (shifted symbol) — no Shift modifier in combo_key
+    -- Tilde: canonical form is Grave + Shift (unshifted key + Shift modifier).
+    -- The Qt key sequence is "Shift+`" — Qt accepts this and treats it as
+    -- identical to "~" in matching.
     local shortcut = registry.parse_shortcut("Tilde")
     local combo_key = string.format("%d_%d", shortcut.key, shortcut.modifiers)
     registry.keybindings[combo_key] = {{
@@ -263,7 +265,7 @@ local function test_symbol_key_conversion()
 
     registry.create_qt_shortcuts(containers)
 
-    assert_equals("tilde key_seq", created_shortcuts[1].key_seq, "~")
+    assert_equals("tilde key_seq", created_shortcuts[1].key_seq, "Shift+`")
 end
 
 local function test_bracket_key_conversion()
@@ -281,10 +283,10 @@ local function test_bracket_key_conversion()
 
     registry.create_qt_shortcuts(containers)
 
-    -- BracketLeft → [, but Shift+BracketLeft → BraceLeft in parse_shortcut
-    -- parse_shortcut promotes Shift+[ to { (BraceLeft, code 123) with no Shift
-    -- So the Qt key seq should be Ctrl+{ not Ctrl+Shift+[
-    assert_equals("bracket key_seq", created_shortcuts[1].key_seq, "Ctrl+{")
+    -- Canonical form: Shift is preserved as a modifier; the key stays
+    -- as the unshifted code. So Cmd+Shift+BracketLeft parses to
+    -- key=BracketLeft, mod=Cmd+Shift, rendered as "Ctrl+Shift+[".
+    assert_equals("bracket key_seq", created_shortcuts[1].key_seq, "Ctrl+Shift+[")
 end
 
 local function test_handler_executes_command()

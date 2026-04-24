@@ -126,6 +126,14 @@ ui_constants.COLORS = {
     
     -- Header specific colors
     COLLAPSIBLE_HEADER_HOVER_BACKGROUND_COLOR = COLLAPSIBLE_HEADER_HOVER_BACKGROUND_COLOR,
+
+    -- Inspector-specific (feature 012). Apply/Reset buttons use Qt
+    -- native styling (see mount.lua comment), so no button-color
+    -- constants here.
+    INSPECTOR_HEADER_BG           = "#3a3a3a",
+    INSPECTOR_CONTENT_BG          = "#2b2b2b",
+    FIELD_ERROR_BORDER            = "#e64b3d",
+    FIELD_READ_ONLY_TEXT          = "#888888",
 }
 
 -- =============================================================================
@@ -321,6 +329,13 @@ ui_constants.TIMELINE = {
     DEFAULT_FPS_DENOMINATOR = 1, -- Default sequence frame rate denominator when not specified
     ACTIVE_REGION_PAD_FRAMES_MULTIPLIER = 2, -- Multiplies sequence FPS to pad TimelineActiveRegion window
     MAX_RIPPLE_CONSTRAINT_RETRIES = 5, -- Maximum retry attempts for ripple constraint resolution
+    -- Scroll axis lock (trackpad hysteresis).
+    -- Once a scroll gesture establishes a dominant axis, orthogonal deltas
+    -- are ignored until the user pauses (SCROLL_GESTURE_GAP_MS of no wheel
+    -- events). An axis is considered dominant when its magnitude exceeds
+    -- the orthogonal magnitude by at least SCROLL_AXIS_LOCK_RATIO.
+    SCROLL_AXIS_LOCK_RATIO = 1.5,
+    SCROLL_GESTURE_GAP_MS = 150,
 }
 
 --- Compute zoom-to-fit viewport from content bounds.

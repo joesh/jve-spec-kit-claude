@@ -1720,6 +1720,7 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
         if (!m_current_clip_id.empty()) {
             // Entering gap from a clip — record transition
             m_current_clip_id.clear();
+            m_current_offline = false;
             m_clip_transitions.push_back({m_diag_tick_index, frame, "", "(gap)"});
         }
         m_last_displayed_frame = frame;
@@ -1731,9 +1732,21 @@ void PlaybackController::deliverFrame(int64_t frame, bool synchronous) {
     // Defer when async cache miss (frame=nullptr, not offline): rotation/PAR
     // aren't populated on cache_only path. Callback fires when REFILL delivers
     // the first cached frame of the new clip.
+    //
+    // Fire ALSO when the offline flag flips within the same clip. Partial-
+    // coverage clips have some timeline range that decodes (covered) and
+    // some that doesn't (past EOF / before start TC). Without watching
+    // offline-state, the surface would stay frozen on the last decoded
+    // frame as the playhead crossed into the uncovered region — Lua's
+    // _on_clip_transition is what swaps the displayed frame for the
+    // "Not enough media for clip" offline panel, and it only runs on
+    // this callback.
     bool has_clip_data = result.frame || result.offline || synchronous;
-    if (result.clip_id != m_current_clip_id && has_clip_data) {
+    bool clip_changed = (result.clip_id != m_current_clip_id);
+    bool offline_changed = (result.offline != m_current_offline);
+    if ((clip_changed || offline_changed) && has_clip_data) {
         m_current_clip_id = result.clip_id;
+        m_current_offline = result.offline;
         if (m_current_tick) m_current_tick->flags |= TickFlags::TRANSITION;
 
         // Record for diag dump — clip name + timecode at transition point

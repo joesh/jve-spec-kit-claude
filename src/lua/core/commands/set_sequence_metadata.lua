@@ -1,20 +1,13 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~127 LOC
--- Volatility: unknown
---
--- @file set_sequence_metadata.lua
+--- SetSequenceMetadata: update a single column on the sequences row
+--- with undo/redo. Operates on a fixed whitelist of columns — the
+--- column name is interpolated into SQL, so only known-safe names
+--- reach string.format. Inspector-entered TIMECODE values are integer
+--- frames; rate stays on the sequence model and is not duplicated
+--- into the payload (012 Inspector rewrite resolution).
+---
+--- @file set_sequence_metadata.lua
 local M = {}
-local _database = require("core.database")  -- luacheck: ignore 211 (unused, required for module init)
+local log = require("core.logger").for_area("commands")
 
 
 local SPEC = {
@@ -29,17 +22,31 @@ local SPEC = {
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
+    local function fail(fmt, ...)
+        local message = string.format(fmt, ...)
+        set_last_error(message)
+        log.warn("%s", message)
+        return false
+    end
+
+    -- Keys here MUST match actual columns in the `sequences` table (schema.sql).
+    -- field is injected directly into SQL (table-scanned from this whitelist
+    -- only), so names must be the real column names. Prior bug: keys like
+    -- `timecode_start_frame`, `playhead_value`, `mark_in_value` didn't match
+    -- DDL columns (`start_timecode_frame`, `playhead_frame`, `mark_in_frame`)
+    -- so every write failed with "Failed to prepare select statement".
+    -- See tests/test_set_sequence_metadata_columns.lua for the drift check.
     local sequence_metadata_columns = {
-        name = {type = "string"},
-        frame_rate = {type = "number"},
-        width = {type = "number"},
-        height = {type = "number"},
-        timecode_start_frame = {type = "number"},
-        playhead_value = {type = "number"},
-        viewport_start_value = {type = "number"},
-        viewport_duration_frames_value = {type = "number"},
-        mark_in_value = {type = "nullable_number"},
-        mark_out_value = {type = "nullable_number"}
+        name                    = {type = "string"},
+        width                   = {type = "number"},
+        height                  = {type = "number"},
+        audio_rate              = {type = "number"},
+        start_timecode_frame    = {type = "number"},
+        playhead_frame          = {type = "number"},
+        view_start_frame        = {type = "number"},
+        view_duration_frames    = {type = "number"},
+        mark_in_frame           = {type = "nullable_number"},
+        mark_out_frame          = {type = "nullable_number"},
     }
 
     local function normalize_sequence_value(field, value)
@@ -64,19 +71,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["SetSequenceMetadata"] = function(command)
         local args = command:get_all_parameters()
 
-
-
-
         local column = sequence_metadata_columns[args.field]
         if not column then
-            set_last_error("SetSequenceMetadata: Field not allowed: " .. tostring(args.field))
-            return false
+            return fail("SetSequenceMetadata: Field not allowed: %s", tostring(args.field))
         end
 
         local select_stmt = db:prepare("SELECT " .. args.field .. " FROM sequences WHERE id = ?")
         if not select_stmt then
-            set_last_error("SetSequenceMetadata: Failed to prepare select statement")
-            return false
+            return fail("SetSequenceMetadata: Failed to prepare select statement")
         end
         select_stmt:bind_value(1, args.sequence_id)
         local previous_value = nil
@@ -92,8 +94,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         })
         local update_stmt = db:prepare("UPDATE sequences SET " .. args.field .. " = ? WHERE id = ?")
         if not update_stmt then
-            set_last_error("SetSequenceMetadata: Failed to prepare update statement")
-            return false
+            return fail("SetSequenceMetadata: Failed to prepare update statement")
         end
 
         if normalized_value == nil then
@@ -111,31 +112,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         update_stmt:finalize()
 
         if not ok then
-            set_last_error("SetSequenceMetadata: Update failed")
-            return false
+            return fail("SetSequenceMetadata: Update failed")
         end
 
-        print(string.format("Set sequence %s args.field %s to %s", args.sequence_id, args.field, tostring(normalized_value)))
+        log.event("SetSequenceMetadata: %s.%s = %s",
+            args.sequence_id, args.field, tostring(normalized_value))
         return true
     end
 
     command_undoers["SetSequenceMetadata"] = function(command)
         local args = command:get_all_parameters()
 
-
-
-
         local column = sequence_metadata_columns[args.field]
         if not column then
-            set_last_error("UndoSetSequenceMetadata: Field not allowed: " .. tostring(args.field))
-            return false
+            return fail("UndoSetSequenceMetadata: Field not allowed: %s", tostring(args.field))
         end
 
         local normalized = normalize_sequence_value(args.field, args.previous_value)
         local stmt = db:prepare("UPDATE sequences SET " .. args.field .. " = ? WHERE id = ?")
         if not stmt then
-            set_last_error("UndoSetSequenceMetadata: Failed to prepare update statement")
-            return false
+            return fail("UndoSetSequenceMetadata: Failed to prepare update statement")
         end
 
         if normalized == nil then
@@ -153,11 +149,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         stmt:finalize()
 
         if not ok then
-            set_last_error("UndoSetSequenceMetadata: Update failed")
-            return false
+            return fail("UndoSetSequenceMetadata: Update failed")
         end
 
-        print(string.format("Undo sequence %s args.field %s to %s", args.sequence_id, args.field, tostring(normalized)))
+        log.event("UndoSetSequenceMetadata: %s.%s = %s",
+            args.sequence_id, args.field, tostring(normalized))
         return true
     end
 

@@ -24,6 +24,19 @@ local focus_manager = require("ui.focus_manager")
 local magnetic_snapping = require("core.magnetic_snapping")
 local TimelineActiveRegion = require("core.timeline_active_region")
 local command_manager = require("core.command_manager")
+local scroll_axis_lock = require("ui.timeline.scroll_axis_lock")
+
+-- luacheck: globals qt_elapsed_ms
+
+-- Monotonic clock in milliseconds for scroll-gesture timing. Prefer Qt's
+-- event timestamp if the runtime exposes one (avoids drift when the process
+-- is starved); otherwise fall back to os.clock() * 1000.
+local function wheel_timestamp_ms()
+    if type(qt_elapsed_ms) == "function" then
+        return qt_elapsed_ms()
+    end
+    return os.clock() * 1000
+end
 
 local cancel = require("core.cancel")
 
@@ -185,9 +198,22 @@ local function find_gap_at_time(view, track_id, time_frame)
 end
 
 function M.handle_wheel(view, delta_x, delta_y, modifiers)
-    local horizontal = delta_x or 0
+    -- Per-view axis-lock state. Lazily created on first wheel event.
+    if not view._scroll_axis_state then
+        view._scroll_axis_state = scroll_axis_lock.new_state()
+    end
+    local dx, dy = scroll_axis_lock.apply(
+        view._scroll_axis_state,
+        delta_x or 0,
+        delta_y or 0,
+        wheel_timestamp_ms())
+
+    -- Shift converts vertical scroll to horizontal (historical Mac convention).
+    -- Applied AFTER axis-lock so a shift-held vertical gesture can still
+    -- scroll horizontally once it has locked to the vertical axis.
+    local horizontal = dx
     if math.abs(horizontal) < 0.0001 and modifiers and modifiers.shift then
-        horizontal = delta_y or 0
+        horizontal = dy
     end
 
     if horizontal and math.abs(horizontal) > 0.0001 then
@@ -537,6 +563,14 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             log.event("Escape cancel consumed during move")
             discard_drag(view, state)
             return
+        end
+        -- Track pointer-over-timeline frame for zoom-at-pointer commands.
+        -- Written on every move so the anchor is fresh regardless of drag state.
+        if state.set_last_pointer_frame then
+            local pointer_frame = state.pixel_to_time(x, width)
+            if type(pointer_frame) == "number" then
+                state.set_last_pointer_frame(pointer_frame)
+            end
         end
         if view.potential_drag then
             local dx = math.abs(x - view.potential_drag.start_x)

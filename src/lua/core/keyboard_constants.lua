@@ -78,61 +78,44 @@ M.SIGNIFICANT_MOD_MASK = 0x1E000000  -- Shift | Control | Alt | Meta
 
 -- Qt6 shifted-symbol normalization (US keyboard layout).
 --
--- Canonical form: shifted key code, NO Shift modifier.
+-- Canonical form: UNSHIFTED key code + Shift modifier (if shift was involved).
 -- All three notations normalize to the same combo_key:
---   "Tilde"        → key=126, mod=0        (already canonical)
---   "Shift+Grave"  → key=126, mod=0        (parse_shortcut promotes key, strips Shift)
---   "Shift+Tilde"  → key=126, mod=0        (parse_shortcut strips redundant Shift)
--- At runtime Qt sends key=126+Shift; handle_key_event strips Shift.
+--   "Tilde"        → key=Grave(96), mod=Shift     (shifted name is sugar; demoted + Shift added)
+--   "Shift+Grave"  → key=Grave(96), mod=Shift     (already canonical)
+--   "Shift+Tilde"  → key=Grave(96), mod=Shift     (demoted; Shift kept)
+-- At runtime Qt sends key=Tilde(126)+Shift for Shift+`; handle_key_event
+-- demotes the key to Grave and preserves Shift.
+--
+-- Why this form: Shift is preserved as a first-class modifier, so bindings
+-- that differ only in Shift (e.g. Cmd+Equal vs Cmd+Shift+Equal) are naturally
+-- distinguishable. Keypad keys (Plus, etc.) arrive WITHOUT Shift and are NOT
+-- demoted, so keypad bindings stay independent from Shift+Equal-style bindings.
 
--- shifted_key_code → true: strip Shift at runtime and parse time
-M.SHIFTED_SYMBOL_KEYS = {
-    [43]  = true,  -- Plus (+)
-    [126] = true,  -- Tilde (~)
-    [33]  = true,  -- Exclam (!)
-    [64]  = true,  -- At (@)
-    [35]  = true,  -- NumberSign (#)
-    [36]  = true,  -- Dollar ($)
-    [37]  = true,  -- Percent (%)
-    [94]  = true,  -- AsciiCircum (^)
-    [38]  = true,  -- Ampersand (&)
-    [42]  = true,  -- Asterisk (*)
-    [40]  = true,  -- ParenLeft (()
-    [41]  = true,  -- ParenRight ())
-    [95]  = true,  -- Underscore (_)
-    [123] = true,  -- BraceLeft ({)
-    [125] = true,  -- BraceRight (})
-    [124] = true,  -- Bar (|)
-    [58]  = true,  -- Colon (:)
-    [34]  = true,  -- QuoteDbl (")
-    [60]  = true,  -- Less (<)
-    [62]  = true,  -- Greater (>)
-    [63]  = true,  -- Question (?)
-}
-
--- unshifted_key_code → shifted_key_code: promote Shift+unshifted at parse time
-M.UNSHIFTED_TO_SHIFTED = {
-    [96]  = 126,   -- Grave (`)    → Tilde (~)
-    [91]  = 123,   -- BracketLeft  → BraceLeft
-    [93]  = 125,   -- BracketRight → BraceRight
-    [44]  = 60,    -- Comma        → Less
-    [46]  = 62,    -- Period       → Greater
-    [45]  = 95,    -- Minus        → Underscore
-    [61]  = 43,    -- Equal        → Plus
-    [47]  = 63,    -- Slash        → Question
-    [59]  = 58,    -- Semicolon    → Colon
-    [39]  = 34,    -- Apostrophe   → QuoteDbl
-    [92]  = 124,   -- Backslash    → Bar
-    [48]  = 41,    -- 0            → ParenRight
-    [49]  = 33,    -- 1            → Exclam
-    [50]  = 64,    -- 2            → At
-    [51]  = 35,    -- 3            → NumberSign
-    [52]  = 36,    -- 4            → Dollar
-    [53]  = 37,    -- 5            → Percent
-    [54]  = 94,    -- 6            → AsciiCircum
-    [55]  = 38,    -- 7            → Ampersand
-    [56]  = 42,    -- 8            → Asterisk
-    [57]  = 40,    -- 9            → ParenLeft
+-- shifted_key_code → unshifted_key_code: demote at parse time and at runtime.
+-- A missing entry means the key has no shift variant (or the demotion is
+-- layout-specific and not supported).
+M.SHIFTED_TO_UNSHIFTED = {
+    [43]  = 61,   -- Plus (+)         → Equal (=)
+    [126] = 96,   -- Tilde (~)        → Grave (`)
+    [123] = 91,   -- BraceLeft ({)    → BracketLeft ([)
+    [125] = 93,   -- BraceRight (})   → BracketRight (])
+    [60]  = 44,   -- Less (<)         → Comma (,)
+    [62]  = 46,   -- Greater (>)      → Period (.)
+    [95]  = 45,   -- Underscore (_)   → Minus (-)
+    [63]  = 47,   -- Question (?)     → Slash (/)
+    [58]  = 59,   -- Colon (:)        → Semicolon (;)
+    [34]  = 39,   -- QuoteDbl (")     → Apostrophe (')
+    [124] = 92,   -- Bar (|)          → Backslash (\)
+    [41]  = 48,   -- ParenRight ())   → 0
+    [33]  = 49,   -- Exclam (!)       → 1
+    [64]  = 50,   -- At (@)           → 2
+    [35]  = 51,   -- NumberSign (#)   → 3
+    [36]  = 52,   -- Dollar ($)       → 4
+    [37]  = 53,   -- Percent (%)      → 5
+    [94]  = 54,   -- AsciiCircum (^)  → 6
+    [38]  = 55,   -- Ampersand (&)    → 7
+    [42]  = 56,   -- Asterisk (*)     → 8
+    [40]  = 57,   -- ParenLeft (()    → 9
 }
 
 return M

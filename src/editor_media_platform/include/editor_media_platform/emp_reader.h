@@ -29,8 +29,19 @@ class Reader {
 public:
     ~Reader();
 
-    // Create a reader for a media file
+    // Create a reader for a media file. By default initializes both
+    // video and audio codec contexts (when present in the file).
     static Result<std::shared_ptr<Reader>> Create(std::shared_ptr<MediaFile> media_file);
+
+    // Create a reader that opens only the audio codec context, skipping
+    // video init even when the file has a video stream. Used by clients
+    // that decode audio only (e.g. peak generation) — saves codec setup
+    // work and keeps the caller off the VideoToolbox init mutex.
+    static Result<std::shared_ptr<Reader>> CreateAudioOnly(std::shared_ptr<MediaFile> media_file);
+
+    // True if the video codec context is initialized in this reader.
+    // False for audio-only readers and for files with no video stream.
+    bool HasVideoCodec() const;
 
     // Seek to a frame time (invalidates current frame)
     Result<void> Seek(FrameTime t);

@@ -74,11 +74,32 @@ end
 function M.install_click_to_focus()
     if not _G.qt_install_panel_focus_filter then return end
 
-    -- Global handler: C++ calls this with the panel widget on any click
-    -- C++ passes panel_id string directly (avoids userdata identity mismatch)
+    -- Global handler: C++ calls this with the panel widget on any click.
+    -- C++ passes panel_id string directly (avoids userdata identity mismatch).
+    --
+    -- Two regimes, distinguished by whether focus was inside the main window
+    -- before this click:
+    --
+    -- * Within-main-window click: Qt's native click-to-focus will move focus
+    --   to the clicked widget (QLineEdit, QCheckBox, etc.) via its own
+    --   mousePressEvent. Calling qt_set_focus on focus_widgets[1] here would
+    --   steal focus away from the click target — which is exactly what Joe
+    --   reported in the Inspector: clicking a field landed focus on the
+    --   scroll_area, so keystrokes went to the application shortcut dispatcher
+    --   instead of the field. Skip the Qt steal; update visual state only.
+    --
+    -- * Cross-window click (focus was in a floating tool window like history):
+    --   Qt's native click-to-focus is unreliable here — activateWindow races,
+    --   focus may not transfer. The steal is required to land focus inside
+    --   the main window. This is the regime commit 29597a85 was fixing.
     _G._panel_click_focus_handler = function(panel_id)
-        if panel_id and registered_panels[panel_id] then
-            M.focus_panel(panel_id)
+        if not (panel_id and registered_panels[panel_id]) then return end
+        -- luacheck: globals qt_focus_outside_main_window
+        local cross_window = qt_focus_outside_main_window and qt_focus_outside_main_window()
+        if cross_window then
+            M.focus_panel(panel_id)        -- steal Qt focus, update visual
+        else
+            M.set_focused_panel(panel_id)  -- update visual only; let Qt handle focus
         end
     end
     _G.qt_install_panel_focus_filter("_panel_click_focus_handler")
@@ -146,8 +167,22 @@ function M.register_panel(panel_id, widget, header_widget, panel_name, options)
         pcall(_G.qt_register_panel_focus_widget, widget, panel_id)
     end
 
+    -- Note: no panel-level Tab event filter. Tab is handled by Qt's
+    -- QWidget::event() → focusNextPrevChild *before* events bubble to
+    -- parent widgets, so a panel event filter never sees Tab. Tab
+    -- containment is enforced at the application-level dispatcher
+    -- (keyboard_shortcuts.lua) which calls qt_cycle_panel_focus with
+    -- the panel widget looked up via focus_panel_widget() below.
+
     log.detail("Focus tracking registered for panel: %s", panel_name or panel_id)
     return true
+end
+
+--- Return the Qt container widget for a registered panel, or nil if unknown.
+--- Used by the Tab dispatcher to bound focus cycling to a single panel.
+function M.focus_panel_widget(panel_id)
+    local panel = registered_panels[panel_id]
+    return panel and panel.widget or nil
 end
 
 -- Handle focus events from Qt

@@ -15,6 +15,12 @@
 #include <objc/objc-runtime.h>
 #endif
 
+#include <cerrno>
+#include <sys/resource.h>
+#ifdef __APPLE__
+#include <sys/syslimits.h>
+#endif
+
 #include "simple_lua_engine.h"
 #include "resource_paths.h"
 #include "assert_handler.h"
@@ -58,6 +64,37 @@ static void printVersion()
     std::cout << "Built with Qt " << QT_VERSION_STR << "\n";
 }
 
+// Raise NOFILE soft limit toward the hard cap. macOS default soft
+// limit is 256, which large projects overrun via QFileSystemWatcher
+// kqueue FDs + FFmpeg handles + transient probes. The Lua media_status
+// layer already watches dirs (not files) to keep its usage bounded;
+// this widens the headroom for everything else.
+static void raiseFileDescriptorLimit()
+{
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_NOFILE, &rl) != 0) {
+        JVE_LOG_WARN(Ui, "getrlimit(NOFILE) failed: %s", std::strerror(errno));
+        return;
+    }
+
+    rlim_t want = rl.rlim_max;
+#ifdef __APPLE__
+    // macOS caps effective RLIMIT_NOFILE at OPEN_MAX even when
+    // rlim_max is RLIM_INFINITY. Clamp explicitly.
+    if (want == RLIM_INFINITY || want > static_cast<rlim_t>(OPEN_MAX)) {
+        want = static_cast<rlim_t>(OPEN_MAX);
+    }
+#endif
+    if (rl.rlim_cur >= want) return;
+
+    rl.rlim_cur = want;
+    if (setrlimit(RLIMIT_NOFILE, &rl) != 0) {
+        JVE_LOG_WARN(Ui, "setrlimit(NOFILE, %llu) failed: %s",
+                     static_cast<unsigned long long>(want),
+                     std::strerror(errno));
+    }
+}
+
 int main(int argc, char *argv[])
 {
     // Install abort handler early to catch all assert()/abort() with stack traces
@@ -65,6 +102,8 @@ int main(int argc, char *argv[])
 
     // Initialize unified logging (parses JVE_LOG env var)
     jve_init_log();
+
+    raiseFileDescriptorLimit();
 
     // Handle --help, --version, and --test before creating QApplication
     const char* testScript = nullptr;

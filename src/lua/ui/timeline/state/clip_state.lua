@@ -1,21 +1,13 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~350 LOC
--- Volatility: unknown
---
--- @file clip_state.lua
--- Original intent (unreviewed):
--- Timeline Clips State
--- Manages clip storage, indexing, lookup, and mutation application
+--- Clip state: in-memory clip collection for the active sequence.
+--- Owns the clips list stored in timeline_state_data, plus per-track
+--- clip-index caches for O(log n) lookup. apply_mutations consumes
+--- the `__timeline_mutations` payload emitted by commands and patches
+--- the in-memory cache in lock-step with the DB, avoiding a full
+--- reload_clips on every edit. Gap clips are derived state —
+--- recomputed by timeline_core_state, not stored in this module's
+--- authoritative list.
+---
+--- @file clip_state.lua
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
 local db = require("core.database")
@@ -413,6 +405,21 @@ function M.apply_mutations(mutations, persist_callback)
                     end
                     if update.name ~= nil and update.name ~= clip.name then
                         clip.name = update.name
+                        -- clip.label is a derived-state cache set at
+                        -- DB-load time (core/database.lua:384-391:
+                        -- clip.name → media_name → filename). The
+                        -- timeline renderer reads `clip.label or
+                        -- clip.name or clip.id` with clip.label taking
+                        -- precedence, so a stale label masks the real
+                        -- name. Keep the cache in sync when name
+                        -- changes: non-empty name wins; empty name
+                        -- leaves clip.label so the existing
+                        -- media_name/filename fallback still shows
+                        -- (Clip.load's derivation: label = name if
+                        -- non-empty, else media_name, else filename).
+                        if update.name ~= "" then
+                            clip.label = update.name
+                        end
                         changed = true
                     end
                 elseif not deleted_lookup[clip_id] then

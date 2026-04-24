@@ -1,28 +1,20 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~964 LOC
--- Volatility: unknown
---
--- @file timeline_view_renderer.lua
--- Original intent (unreviewed):
--- Timeline View Renderer
--- Handles drawing logic for tracks, clips, and overlays
+--- Timeline view renderer: draws tracks, clips, gaps, selection
+--- highlights, drag previews, and offline/codec overlays into the
+--- timeline widget. Reads model state via an injected state_module
+--- (normally ui.timeline.timeline_state; tests inject a stub) so the
+--- renderer itself has no singleton dependency on live state. Never
+--- mutates the model; pure read → Qt-binding-draw.
+---
+--- @file timeline_view_renderer.lua
 local M = {}
 local media_status = require("core.media.media_status")
+local offline_note = require("core.media.offline_note")
 local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
 local color_utils = require("ui.color_utils")
 local Command = require("command")
 local command_manager = require("core.command_manager")
 local log = require("core.logger").for_area("timeline")
+local perf_log = require("core.logger").for_area("ui.scroll_perf")
 local waveform_color = require("core.media.waveform_color")
 local waveform_utils = require("core.media.waveform_utils")
 local track_state = require("ui.timeline.state.track_state")
@@ -626,6 +618,7 @@ end
 
 function M.render(view)
     if not view.widget then return end
+    local perf_t0 = os.clock()
     local state_module = view.state
     local width, height = timeline.get_dimensions(view.widget)
 
@@ -702,11 +695,24 @@ function M.render(view)
             visible_width = width - visible_x
         end
 
-        if visible_width <= 0 or x + clip_width < 0 or x > width or y + clip_height <= 0 or y >= height then
+        -- Off-widget cull: clip is entirely outside the paint region.
+        -- Frame-level visibility was already verified by draw_visible_clips,
+        -- so a clip that reaches here overlaps the viewport in frame space —
+        -- but independent flooring of start/end pixel positions at extreme
+        -- zoom-out can collapse the clipped-to-widget visible_width to 0.
+        -- We do NOT cull on visible_width <= 0: we snap to 1 px below so the
+        -- clip remains visible during scroll instead of flashing on/off as
+        -- viewport_start crosses whole-pixel boundaries.
+        if x + clip_width < 0 or x > width or y + clip_height <= 0 or y >= height then
             return
         end
 
-        local draw_width = math.max(1, visible_width)
+        if visible_width < 1 then
+            if visible_x >= width then visible_x = width - 1 end
+            visible_width = 1
+        end
+
+        local draw_width = visible_width
         local clip_enabled = clip.enabled ~= false
 
         -- Stamp clip with cached media status (pure reader — no probing)
@@ -721,6 +727,14 @@ function M.render(view)
             text_color = state_module.colors.clip_offline_text
             local is_codec = (clip.error_code == "Unsupported" or clip.error_code == "DecodeFailed")
             label_prefix = is_codec and "CODEC UNAVAIL - " or "OFFLINE - "
+            -- Offline-AND-disabled: dim the bright red so the clip
+            -- reads as "not participating in the cut right now"
+            -- instead of demanding attention. Matches the standard
+            -- NLE convention where disabled clips draw dimmed.
+            if not clip_enabled then
+                body_color = color_utils.dim_hex(body_color, 0.5)
+                text_color = color_utils.dim_hex(text_color, 0.7)
+            end
         elseif clip_enabled then
             body_color = is_audio and state_module.colors.clip_audio or state_module.colors.clip_video
             text_color = state_module.colors.text
@@ -789,7 +803,33 @@ function M.render(view)
             local label_padding = 10
             local max_label_width = visible_width - label_padding
             if max_label_width > 35 then
-                local display_label = truncate_label(label_prefix .. (clip.label or clip.name or clip.id or ""), max_label_width)
+                -- Append shortfall suffix when the clip's media has a
+                -- partial_coverage offline_note AND this clip actually
+                -- sticks out past what the candidate covers. Empty
+                -- string for the common (no-note / fully-covered) case.
+                --
+                -- Audio clips store source_in/source_out in SAMPLES at
+                -- the media's sample rate (e.g. 48000). A raw shortfall
+                -- of 1524 samples displayed as "1524f" on the timeline
+                -- is misleading — the 'f' reads as video frames.
+                -- display_rate = sequence fps rescales the delta into
+                -- timeline-frame units for both audio and video.
+                -- Use the injected state_module (not a fresh require) so
+                -- tests can substitute a mock. state_module.get_sequence_frame_rate
+                -- returns nil in some test stubs — guarded below.
+                local rate = state_module.get_sequence_frame_rate
+                    and state_module.get_sequence_frame_rate()
+                local display_rate
+                if rate and rate.fps_numerator and rate.fps_denominator
+                    and rate.fps_denominator > 0 then
+                    display_rate = rate.fps_numerator / rate.fps_denominator
+                end
+                local label_suffix = offline_note.short_suffix(
+                    clip.offline_note, clip.source_in, clip.source_out,
+                    display_rate)
+                local display_label = truncate_label(
+                    label_prefix .. (clip.label or clip.name or clip.id or "") .. label_suffix,
+                    max_label_width)
                 if display_label ~= "" then
                     local label_baseline
                     if has_waveform then
@@ -1130,6 +1170,8 @@ function M.render(view)
     end
 
     timeline.update(view.widget)
+    perf_log.detail("timeline_view.render: %.3fms viewport_start=%d duration=%d",
+        (os.clock() - perf_t0) * 1000, viewport_start, viewport_duration)
 end
 
 return M

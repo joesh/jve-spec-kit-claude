@@ -54,13 +54,31 @@ package.loaded["core.qt_constants"] = {
     },
 }
 
--- Mock offline_frame_cache (uses real module which calls COMPOSE_OFFLINE_FRAME)
--- Actually load the real module — it will use our mocked EMP.COMPOSE_OFFLINE_FRAME
--- For simplicity, mock it directly:
+-- Mock offline_frame_cache — captures the metadata it received on each
+-- call so tests can verify the renderer enriched metadata with
+-- offline_note / clip.source_in / clip.source_out before composing.
+local offline_cache_last_metadata
 package.loaded["core.media.offline_frame_cache"] = {
     get_frame = function(metadata)
-        -- Return a composited frame handle for offline clips
+        offline_cache_last_metadata = metadata
         return "offline_composed_" .. (metadata.clip_id or "unknown")
+    end,
+}
+
+-- Mock media_status — lets tests inject offline_note values per path and
+-- observe the renderer's queries. Defaults to nil notes (no diagnostic),
+-- matching the prime-unfilled-cache state.
+local media_status_notes_by_path = {}
+package.loaded["core.media.media_status"] = {
+    update_from_tmb = function() end,
+    get = function(path)
+        if media_status_notes_by_path[path] ~= nil then
+            return { offline = true, offline_note = media_status_notes_by_path[path] }
+        end
+        return nil
+    end,
+    get_offline_note = function(path)
+        return media_status_notes_by_path[path]
     end,
 }
 
@@ -105,7 +123,7 @@ do
         },
     }
 
-    local frame, meta = Renderer.get_video_frame(mock_tmb, {1}, 10)
+    local frame, meta = Renderer.get_video_frame(mock_tmb, {1}, 10, {})
     assert(frame == "frame_10", string.format(
         "Expected frame 'frame_10', got %s", tostring(frame)))
     assert(meta, "Expected non-nil metadata")
@@ -135,7 +153,7 @@ do
     reset_mocks()
     -- No entries in track_frame_map → all frames are gaps
 
-    local frame, meta = Renderer.get_video_frame(mock_tmb, {1}, 50)
+    local frame, meta = Renderer.get_video_frame(mock_tmb, {1}, 50, {})
     assert(frame == nil, "Expected nil frame for gap")
     assert(meta == nil, "Expected nil metadata for gap")
 
@@ -149,7 +167,7 @@ print("\n--- empty track list ---")
 do
     reset_mocks()
 
-    local frame, meta = Renderer.get_video_frame(mock_tmb, {}, 10)
+    local frame, meta = Renderer.get_video_frame(mock_tmb, {}, 10, {})
     assert(frame == nil, "Expected nil frame with no tracks")
     assert(meta == nil, "Expected nil metadata with no tracks")
     assert(#tmb_get_video_calls == 0, "No TMB calls with empty track list")
@@ -180,7 +198,7 @@ do
         },
     }
 
-    local frame, meta = Renderer.get_video_frame(mock_tmb, {1}, 20)
+    local frame, meta = Renderer.get_video_frame(mock_tmb, {1}, 20, {})
     assert(frame ~= nil, "Expected non-nil frame for offline (composited)")
     assert(frame == "offline_composed_clip_offline",
         "Expected composited offline frame, got: " .. tostring(frame))
@@ -190,6 +208,84 @@ do
     assert(meta.media_path == "/missing/video.mov", "Expected media_path")
 
     print("  offline frame passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 4b: Offline enrichment — renderer must hand the clip source range
+-- (via clip_info_by_id) and the media_status offline_note into the
+-- metadata the offline_frame_cache composes from. Domain: a partial-
+-- coverage relink should reach offline_frame_cache with enough info to
+-- render "short Nf" messaging, not the generic "File not found" panel.
+--------------------------------------------------------------------------------
+print("\n--- offline metadata enrichment ---")
+do
+    reset_mocks()
+    offline_cache_last_metadata = nil
+    media_status_notes_by_path = {}
+    local note_json = '{"kind":"partial_coverage","candidate_path":"/fx/A001.mov",' ..
+        '"covered_start_tc":86400,"covered_end_tc":86500,"rate":25}'
+    media_status_notes_by_path["/missing/A001.mov"] = note_json
+
+    track_frame_map[1] = {
+        [20] = {
+            handle = nil,
+            metadata = {
+                clip_id    = "clip_partial",
+                media_path = "/missing/A001.mov",
+                source_frame = 20,
+                offline = true,
+                error_code = "EOFReached",
+            },
+        },
+    }
+    local clip_info_by_id = {
+        clip_partial = { source_in = 86390, source_out = 86510 },
+    }
+
+    local _, meta = Renderer.get_video_frame(mock_tmb, {1}, 20, clip_info_by_id)
+    assert(meta.offline == true, "metadata still marked offline")
+
+    -- Renderer must have called offline_frame_cache with enriched metadata.
+    local m = offline_cache_last_metadata
+    assert(m, "offline_frame_cache.get_frame was called")
+    assert(m.offline_note == note_json,
+        string.format("renderer must fill metadata.offline_note from media_status; got %s",
+            tostring(m.offline_note)))
+    assert(m.clip, "renderer must populate metadata.clip from clip_info_by_id")
+    assert(m.clip.source_in == 86390,
+        string.format("metadata.clip.source_in=%s (want 86390)", tostring(m.clip.source_in)))
+    assert(m.clip.source_out == 86510,
+        string.format("metadata.clip.source_out=%s (want 86510)", tostring(m.clip.source_out)))
+    print("  offline metadata enrichment passed")
+end
+
+--------------------------------------------------------------------------------
+-- Test 4c: Empty clip_info_by_id — metadata.clip stays nil so the
+-- generic offline frame path runs (no shortfall composition possible).
+--------------------------------------------------------------------------------
+print("\n--- offline with no clip info ---")
+do
+    reset_mocks()
+    offline_cache_last_metadata = nil
+    media_status_notes_by_path = {}
+
+    track_frame_map[1] = {
+        [30] = {
+            handle = nil,
+            metadata = {
+                clip_id = "clip_x", media_path = "/missing/X.mov", offline = true,
+            },
+        },
+    }
+
+    Renderer.get_video_frame(mock_tmb, {1}, 30, {})
+    local m = offline_cache_last_metadata
+    assert(m, "offline_frame_cache.get_frame was called")
+    assert(m.clip == nil,
+        "with empty clip_info_by_id, metadata.clip must stay nil (no shortfall data)")
+    assert(m.offline_note == nil,
+        "with no media_status note, metadata.offline_note must stay nil")
+    print("  offline with no clip info passed")
 end
 
 --------------------------------------------------------------------------------
@@ -230,7 +326,7 @@ do
     }
 
     -- Array order: {1, 2} — first element (track 1) wins
-    local frame, meta = Renderer.get_video_frame(mock_tmb, {1, 2}, 30)
+    local frame, meta = Renderer.get_video_frame(mock_tmb, {1, 2}, 30, {})
     assert(frame == "frame_track1", "First element in array should win")
     assert(meta.clip_id == "clip_v1", "Should return track 1's clip_id")
     assert(meta.rotation == 0, "Should return track 1's rotation")
@@ -265,7 +361,7 @@ do
         },
     }
 
-    local frame, meta = Renderer.get_video_frame(mock_tmb, {1, 2}, 40)
+    local frame, meta = Renderer.get_video_frame(mock_tmb, {1, 2}, 40, {})
     assert(frame == "frame_track2", "Should fall through to track 2")
     assert(meta.clip_id == "clip_lower", "Should return track 2's clip")
 
@@ -313,7 +409,7 @@ do
         },
     }
 
-    local frame, meta = Renderer.get_video_frame(mock_tmb, {1, 2}, 50)
+    local frame, meta = Renderer.get_video_frame(mock_tmb, {1, 2}, 50, {})
     assert(frame ~= nil, "Offline should return composited frame")
     assert(meta.offline == true, "Should return offline metadata from track 1")
     assert(meta.clip_id == "clip_offline_top", "Offline track 1 wins")
@@ -353,7 +449,7 @@ do
     }
 
     local ok, err = pcall(function()
-        Renderer.get_video_frame(mock_tmb, {1}, 60)
+        Renderer.get_video_frame(mock_tmb, {1}, 60, {})
     end)
     assert(not ok, "Should assert when offline_frame_cache.get_frame returns nil")
     assert(tostring(err):find("offline_frame_cache"),
