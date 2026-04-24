@@ -14,6 +14,7 @@ local color_utils = require("ui.color_utils")
 local Command = require("command")
 local command_manager = require("core.command_manager")
 local log = require("core.logger").for_area("timeline")
+local perf_log = require("core.logger").for_area("ui.scroll_perf")
 local waveform_color = require("core.media.waveform_color")
 local waveform_utils = require("core.media.waveform_utils")
 local track_state = require("ui.timeline.state.track_state")
@@ -617,6 +618,7 @@ end
 
 function M.render(view)
     if not view.widget then return end
+    local perf_t0 = os.clock()
     local state_module = view.state
     local width, height = timeline.get_dimensions(view.widget)
 
@@ -1168,6 +1170,8 @@ function M.render(view)
     end
 
     timeline.update(view.widget)
+    perf_log.detail("timeline_view.render: %.3fms viewport_start=%d duration=%d",
+        (os.clock() - perf_t0) * 1000, viewport_start, viewport_duration)
 end
 
 return M

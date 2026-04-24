@@ -18,14 +18,18 @@
 -- Manages viewport position, zoom, playhead, and pixel conversions
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
+local perf_log = require("core.logger").for_area("ui.scroll_perf")
 
 local viewport_guard_count = 0
 
 -- Helper: Compute content length based on clips in state (integer frames)
 local function compute_sequence_content_length()
-    local state = data.state
+    local t0 = os.clock()
+    local clips = data.state.clips
+    assert(type(clips) == "table",
+        "viewport_state.compute_sequence_content_length: data.state.clips is not a table")
     local max_end = 0
-    for _, clip in ipairs(state.clips) do
+    for _, clip in ipairs(clips) do
         if type(clip.timeline_start) == "number" and type(clip.duration) == "number" then
             local clip_end = clip.timeline_start + clip.duration
             if clip_end > max_end then
@@ -33,11 +37,30 @@ local function compute_sequence_content_length()
             end
         end
     end
+    perf_log.detail("compute_sequence_content_length: %.3fms n=%d max_end=%d",
+        (os.clock() - t0) * 1000, #clips, max_end)
     return max_end
 end
 
--- Helper: Calculate timeline extent (content + playhead + buffer) in frames
-local function calculate_timeline_extent()
+-- Helper: Calculate timeline extent (content + playhead + buffer) in frames.
+--
+-- `hypothetical_start` is the viewport start to consider when computing the
+-- ceiling. Clamping callers pass the DESIRED start so the ceiling grows
+-- ahead of the gesture in a single call. Readers (scrollbar) pass nil to
+-- use the current viewport start — "how far can the timeline be scrolled
+-- given where it sits right now".
+--
+-- Why this parameter exists: using the current start in the clamp path
+-- caps each rightward call at (current_start + buffer_frames), throttling
+-- large gestures to one buffer's worth of motion per event — downstream
+-- scrolling felt orders of magnitude slower than upstream because of it.
+local function calculate_timeline_extent(hypothetical_start)
+    assert(hypothetical_start == nil
+        or (type(hypothetical_start) == "number"
+            and hypothetical_start == math.floor(hypothetical_start)),
+        "viewport_state.calculate_timeline_extent: hypothetical_start must be nil or integer, got "
+            .. tostring(hypothetical_start))
+    local t0 = os.clock()
     local state = data.state
     local max_end = compute_sequence_content_length()
 
@@ -49,19 +72,33 @@ local function calculate_timeline_extent()
         max_end = state.playhead_position
     end
 
-    if state.viewport_start_time and state.viewport_duration then
-        local viewport_end = state.viewport_start_time + state.viewport_duration
+    -- Explicit nil-check — hypothetical_start == 0 is a legitimate caller
+    -- value (scrolling to frame 0), not a request for the default.
+    local start_for_extent = hypothetical_start
+    if start_for_extent == nil then
+        start_for_extent = state.viewport_start_time
+    end
+    if start_for_extent and state.viewport_duration then
+        local viewport_end = start_for_extent + state.viewport_duration
         if viewport_end > max_end then
             max_end = viewport_end
         end
     end
 
-    -- Buffer and minimum extent in frames (derived from seconds)
     local fps = seq_fps.fps_numerator / seq_fps.fps_denominator
-    local buffer_frames = math.floor(10 * fps)  -- 10 seconds
-    local min_extent_frames = math.floor(60 * fps)  -- 60 seconds
+    local buffer_frames = math.floor(10 * fps)
+    local min_extent_frames = math.floor(60 * fps)
 
-    return math.max(min_extent_frames, max_end + buffer_frames)
+    local extent = math.max(min_extent_frames, max_end + buffer_frames)
+    perf_log.detail("calculate_timeline_extent: %.3fms extent=%d hypothetical=%s",
+        (os.clock() - t0) * 1000, extent, tostring(hypothetical_start))
+    return extent
+end
+
+local function scroll_direction(delta)
+    if delta > 0 then return "RIGHT" end
+    if delta < 0 then return "LEFT" end
+    return "ZERO"
 end
 
 -- Helper: Clamp viewport start (all integer frames)
@@ -71,7 +108,9 @@ local function clamp_viewport_start(desired_start, duration)
     assert(type(duration) == "number" and duration == math.floor(duration),
         "viewport_state: duration must be integer, got " .. tostring(duration))
 
-    local total_extent = calculate_timeline_extent()
+    -- Pass desired_start so the extent ceiling reflects where the viewport
+    -- WANTS to go, not where it currently sits. See calculate_timeline_extent.
+    local total_extent = calculate_timeline_extent(desired_start)
     -- Floor is start_timecode_frame (prevents scrolling into dead space before content)
     local floor = data.state.sequence_timecode_start_frame or 0
     local max_start = math.max(floor, total_extent - duration)
@@ -194,6 +233,16 @@ function M.get_viewport_start_time()
     return data.state.viewport_start_time
 end
 
+--- Return the timeline extent in integer frames — the total scrollable
+-- range given current content, playhead, and the current viewport
+-- position. Intended for readers like the scrollbar that draw thumb
+-- geometry against a stable total. Callers evaluating a scroll target
+-- must go through set_viewport_start_time, which clamps against an
+-- extent computed from the desired position rather than the current one.
+function M.get_timeline_extent()
+    return calculate_timeline_extent(nil)
+end
+
 function M.get_viewport_duration()
     return data.state.viewport_duration
 end
@@ -202,12 +251,25 @@ function M.set_viewport_start_time(time_obj, persist_callback)
     assert(type(time_obj) == "number" and time_obj == math.floor(time_obj),
         "viewport_state.set_viewport_start_time: time must be integer, got " .. tostring(time_obj))
     local state = data.state
+    assert(type(state.viewport_start_time) == "number",
+        "viewport_state.set_viewport_start_time: viewport_start_time not initialized")
+
+    local prev_start = state.viewport_start_time
+    local t0 = os.clock()
     local clamped = clamp_viewport_start(time_obj, state.viewport_duration)
-    if state.viewport_start_time ~= clamped then
+    local t_after_clamp = os.clock()
+
+    local notified = prev_start ~= clamped
+    if notified then
         state.viewport_start_time = clamped
         data.notify_listeners()
         if persist_callback then persist_callback() end
     end
+
+    perf_log.detail(
+        "set_viewport_start_time: %s desired_delta=%d clamped_to=%d notified=%s clamp=%.3fms total=%.3fms",
+        scroll_direction(time_obj - prev_start), time_obj - prev_start, clamped, tostring(notified),
+        (t_after_clamp - t0) * 1000, (os.clock() - t0) * 1000)
 end
 
 --- Resolve the anchor frame for a duration change.

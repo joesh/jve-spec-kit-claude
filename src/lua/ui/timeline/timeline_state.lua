@@ -117,6 +117,7 @@ M.set_viewport_start_time = function(time_obj)
     return viewport.set_viewport_start_time(time_obj, core.persist_state_to_db)
 end
 M.get_viewport_duration = viewport.get_viewport_duration
+M.get_timeline_extent = viewport.get_timeline_extent
 M.set_viewport_duration = function(duration_obj, opts)
     return viewport.set_viewport_duration(duration_obj, opts, core.persist_state_to_db)
 end
