@@ -1318,12 +1318,29 @@ function Sequence:get_prev_audio(before_frame)
     return results
 end
 
---- Get all video clips overlapping a timeline range [from_frame, to_frame).
--- Returns entries in same format as get_video_at (compatible with _build_tmb_clip).
--- @param from_frame integer: range start (inclusive)
--- @param to_frame integer: range end (exclusive)
--- @return list of {media_path, source_time_us, source_frame, clip, track}
-function Sequence:get_video_in_range(from_frame, to_frame)
+-- T031 (013): thin wrappers over Sequence:resolve_in_range filtered by
+-- media_kind. Shape: ResolvedEntry[] per contracts/resolver.md. Legacy
+-- shape (entry.clip, entry.track, entry.media_fps_*) is dead under V9
+-- because clips.media_id no longer exists; see wrapper-shape-audit.md.
+-- Class-form (first arg is seq_id), NOT instance-form. Consumers
+-- (playback_engine, test_drp_anamnesis_full) are rewritten in T093.
+
+local function filter_by_media_kind(entries, kind)
+    local out = {}
+    for _, e in ipairs(entries) do
+        if e.media_kind == kind then out[#out + 1] = e end
+    end
+    return out
+end
+
+--- Resolve video entries in a frame range.
+-- @param seq_id string: sequence to resolve
+-- @param from_frame integer: inclusive start in seq_id's timebase
+-- @param to_frame integer: exclusive end
+-- @return ResolvedEntry[] with media_kind='video'
+function Sequence:get_video_in_range(seq_id, from_frame, to_frame)
+    assert(type(seq_id) == "string" and seq_id ~= "",
+        "Sequence:get_video_in_range: seq_id must be non-empty string")
     assert(type(from_frame) == "number",
         "Sequence:get_video_in_range: from_frame must be integer")
     assert(type(to_frame) == "number",
@@ -1331,70 +1348,18 @@ function Sequence:get_video_in_range(from_frame, to_frame)
     assert(from_frame < to_frame, string.format(
         "Sequence:get_video_in_range: from_frame %d must be < to_frame %d",
         from_frame, to_frame))
-
-    local Track = require("models.track")
-    local Clip = require("models.clip")
-    local Media = require("models.media")
-    local database = require("core.database") -- luacheck: ignore 431
-
-    local db = database.get_connection()
-    assert(db, "Sequence:get_video_in_range: no database connection")
-
-    local stmt = db:prepare([[
-        SELECT c.id AS clip_id, t.id AS track_id, t.track_index
-        FROM clips c
-        JOIN tracks t ON c.track_id = t.id
-        WHERE t.sequence_id = ? AND t.track_type = 'VIDEO'
-          AND c.timeline_start_frame < ?
-          AND (c.timeline_start_frame + c.duration_frames) > ?
-          AND c.enabled = 1
-        ORDER BY t.track_index, c.timeline_start_frame
-    ]])
-    assert(stmt, "Sequence:get_video_in_range: failed to prepare query")
-    stmt:bind_value(1, self.id)
-    stmt:bind_value(2, to_frame)
-    stmt:bind_value(3, from_frame)
-    assert(stmt:exec(), "Sequence:get_video_in_range: query exec failed")
-
-    local results = {}
-    while stmt:next() do
-        local clip_id = stmt:value(0)
-        local track_id = stmt:value(1)
-        local _ = stmt:value(2)  -- track_index (used by Track.load below)
-
-        local clip = Clip.load(clip_id)
-        assert(clip, string.format(
-            "Sequence:get_video_in_range: clip %s not found", tostring(clip_id)))
-        local media = Media.load(clip.media_id)
-        assert(media, string.format(
-            "Sequence:get_video_in_range: clip %s references missing media %s",
-            clip.id, tostring(clip.media_id)))
-
-        local track = Track.load(track_id)
-        assert(track, string.format(
-            "Sequence:get_video_in_range: track %s not found", tostring(track_id)))
-
-        local source_time_us, source_frame = calc_source_time_us(clip, clip.timeline_start)
-
-        results[#results + 1] = {
-            media_path = media.file_path,
-            source_time_us = source_time_us,
-            source_frame = source_frame,
-            clip = clip,
-            track = track,
-        }
-    end
-    stmt:finalize()
-
-    return results
+    local entries = Sequence:resolve_in_range(seq_id, from_frame, to_frame, {})
+    return filter_by_media_kind(entries, "video")
 end
 
---- Get all audio clips overlapping a timeline range [from_frame, to_frame).
--- Returns entries in same format as get_audio_at (compatible with _build_tmb_clip).
--- @param from_frame integer: range start (inclusive)
--- @param to_frame integer: range end (exclusive)
--- @return list of {media_path, source_time_us, source_frame, clip, track, media_fps_num, media_fps_den}
-function Sequence:get_audio_in_range(from_frame, to_frame)
+--- Resolve audio entries in a frame range.
+-- @param seq_id string: sequence to resolve
+-- @param from_frame integer: inclusive start in seq_id's timebase
+-- @param to_frame integer: exclusive end
+-- @return ResolvedEntry[] with media_kind='audio'
+function Sequence:get_audio_in_range(seq_id, from_frame, to_frame)
+    assert(type(seq_id) == "string" and seq_id ~= "",
+        "Sequence:get_audio_in_range: seq_id must be non-empty string")
     assert(type(from_frame) == "number",
         "Sequence:get_audio_in_range: from_frame must be integer")
     assert(type(to_frame) == "number",
@@ -1402,64 +1367,8 @@ function Sequence:get_audio_in_range(from_frame, to_frame)
     assert(from_frame < to_frame, string.format(
         "Sequence:get_audio_in_range: from_frame %d must be < to_frame %d",
         from_frame, to_frame))
-
-    local Track = require("models.track")
-    local Clip = require("models.clip")
-    local Media = require("models.media")
-    local database = require("core.database") -- luacheck: ignore 431
-
-    local db = database.get_connection()
-    assert(db, "Sequence:get_audio_in_range: no database connection")
-
-    local stmt = db:prepare([[
-        SELECT c.id AS clip_id, t.id AS track_id, t.track_index
-        FROM clips c
-        JOIN tracks t ON c.track_id = t.id
-        WHERE t.sequence_id = ? AND t.track_type = 'AUDIO'
-          AND c.timeline_start_frame < ?
-          AND (c.timeline_start_frame + c.duration_frames) > ?
-          AND c.enabled = 1
-        ORDER BY t.track_index, c.timeline_start_frame
-    ]])
-    assert(stmt, "Sequence:get_audio_in_range: failed to prepare query")
-    stmt:bind_value(1, self.id)
-    stmt:bind_value(2, to_frame)
-    stmt:bind_value(3, from_frame)
-    assert(stmt:exec(), "Sequence:get_audio_in_range: query exec failed")
-
-    local results = {}
-    while stmt:next() do
-        local clip_id = stmt:value(0)
-        local track_id = stmt:value(1)
-        local _ = stmt:value(2)  -- track_index (used by Track.load below)
-
-        local clip = Clip.load(clip_id)
-        assert(clip, string.format(
-            "Sequence:get_audio_in_range: clip %s not found", tostring(clip_id)))
-        local media = Media.load(clip.media_id)
-        assert(media, string.format(
-            "Sequence:get_audio_in_range: clip %s references missing media %s",
-            clip.id, tostring(clip.media_id)))
-
-        local track = Track.load(track_id)
-        assert(track, string.format(
-            "Sequence:get_audio_in_range: track %s not found", tostring(track_id)))
-
-        local source_time_us, source_frame = calc_source_time_us(clip, clip.timeline_start)
-
-        results[#results + 1] = {
-            media_path = media.file_path,
-            source_time_us = source_time_us,
-            source_frame = source_frame,
-            clip = clip,
-            track = track,
-            media_fps_num = media.frame_rate.fps_numerator,
-            media_fps_den = media.frame_rate.fps_denominator,
-        }
-    end
-    stmt:finalize()
-
-    return results
+    local entries = Sequence:resolve_in_range(seq_id, from_frame, to_frame, {})
+    return filter_by_media_kind(entries, "audio")
 end
 
 --- Get sorted list of track indices for a given track type.
@@ -1939,6 +1848,20 @@ local function resolve_nested(db, seq_id, start_frame, end_frame, context, outer
         local inner = resolve_seq_range(
             db, c.nested_sequence_id, c.source_in, c.source_out,
             context, inner_chain, layer_target, gain_factor * c.volume)
+
+        -- Filter inner entries by the outer clip's track role. A clip on a
+        -- VIDEO track materializes only video media; on an AUDIO track,
+        -- only audio. Without this, a linked V+A pair both pointing at the
+        -- same master would each re-emit the master's entire (V+A) medium,
+        -- double-counting. The per-clip track_type IS the medium selector.
+        local want_kind = (c.track_type == "VIDEO") and "video" or "audio"
+        local kind_filtered = {}
+        for _, e in ipairs(inner) do
+            if e.media_kind == want_kind then
+                kind_filtered[#kind_filtered + 1] = e
+            end
+        end
+        inner = kind_filtered
 
         -- Clamp returned entries to the clip's source window.
         inner = clamp_entries_to_clip_window(inner, c.source_in, c.source_out)
