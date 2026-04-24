@@ -1,154 +1,68 @@
-# 013 session state — 2026-04-24 (unsupervised block)
+# 013 session state — 2026-04-24 (second unsupervised block, "go")
 
-## Commits landed this session (11)
+## Commits this session block (resumed from 21116808)
 
 | Commit | Scope |
 |---|---|
-| `80b91587` | sibling's relink + peak self-heal fix |
-| `c64fca24` | sibling's regression tests for that fix |
-| `58420623` | 013 spec-kit artifacts (plan/data-model/contracts/tasks/triage) |
-| `ce1b8b0a` | T001–T008 — V9 schema + 7 schema tests |
-| `bb9ecc1c` | T009–T013d — 6 model-layer failing tests |
-| `53f75983` | T014 + T016 — media_ref.lua + cycle.lua impls |
-| `b007cc2c` | T007a DELETE — 5 tests removed (rescale, DeleteMasterClip, etc.) |
-| `43b2c6d4` | T018–T027 — 6 resolver contract tests |
-| `7119018a` | T022/T025/T029/T029b — 4 more resolver tests (incl. fps-mismatch both paths) |
-| `7f00eca1` | T020/T023/T028 — final Phase 3.3.a resolver tests |
-| (this doc) | session summary |
+| `70ddc2ec` | T015 partial + T017 partial: model layer — Phase 3.2 all green |
+| `7fc4325c` | T030: `Sequence:resolve_in_range` + Phase 3.3.a all green |
+
+Combined with prior block (11 commits): **13 commits total for 013**.
 
 ## What's green
 
-All tests that should be passing are passing:
-- 7 schema tests (T001–T007)
-- 2 model impls green against their tests (T014, T016)
+**25/25 tests green** across Phase 3.1 + 3.2 + 3.3.a:
+- 7 schema tests
+- 6 model-layer INV tests (INV-1, INV-2, INV-3 cycle, INV-4, INV-8, track-delete repoint)
+- 12 resolver contract tests (CT-R1..R11 + T029 dangling layer)
 
-All TDD-gated tests are failing for the right reason (module missing or signature-mismatch):
-- 6 Phase 3.2 model tests
-- 13 Phase 3.3.a resolver tests
+## Code shipped this block
 
-## Key contract changes negotiated mid-session
+`src/lua/models/sequence.lua`:
+- `Sequence.create` now requires explicit `opts.kind ∈ {'master','nested'}` and `opts.audio_rate` (rule 2.13 — no 48000 default, no 'timeline' default).
+- `Sequence.save` writes V9 columns: `default_video_layer_track_id`, `video_start_tc_frame`, `audio_start_tc_samples`, `fps_mismatch_policy`.
+- NEW `Sequence.find(id)` → row table; `Sequence.update(id, fields)` with INV-8 post-condition; `Sequence.assert_inv8(id)` with actionable error (names seq id, actual kind, actual default — rule 1.14).
+- NEW `Sequence:resolve_in_range(seq_id, start, end, context)` — the resolver. 14 named helpers: is_media_online, fetch_kind, fetch_default_video_layer, assert_layer_ref_valid, fetch_master_channel_state, fetch_clip_channel_override, db_to_linear, list_media_refs, list_clips_overlapping, build_provenance, resolve_master_leaf, resolve_nested, clamp_entries_to_clip_window, resolve_seq_range.
 
-1. **`clips.fps_mismatch_policy` is NOT NULL, structural at Insert time** — the big discovery. Because `duration_frames` is in owner timebase and `source_in/out` is in nested timebase, Insert/Overwrite must know the policy to compute duration. Flipping policy later (SetFpsMismatchPolicy, clip scope) is a structural mutation that re-computes duration + ripples downstream. Linked V+A clips flip together. Rounding policy: round-to-nearest under `resample` (accept sub-frame drift).
-2. **Policy settable at project + sequence levels** (both stored), plus optional Insert arg to override per-drop.
-3. **fps_numerator/fps_denominator dropped from clips + media_refs** — dereferences to `nested_sequence_id` / `media_id`. Pure denormalization removed.
-4. **`owner_sequence_id`** kept (existing convention); `ensure_master` rename (was `ensure_masterclip`).
-5. **Sibling's relink fix landed first** as a clean two-commit unit before any 013 schema work — branch was clean for 013 to proceed.
+`src/lua/models/clip.lua`:
+- `Clip.create` overloaded: first-arg-is-table dispatches to new V13 path; positional path untouched (legacy callers keep working).
+- NEW `Clip._create_v13_row(fields)` — INV-2 pre-flight (loud message with clip, owner, kind), INV-4 via assert_window_in_bounds, rule 2.13 required-fields.
+- NEW `Clip.update(id, fields)` with INV-4 post-condition.
 
-## What's blocked on T015 / T017 (big rewrites)
+`src/lua/models/track.lua`:
+- NEW `Track.delete(id)` with INV-6 logic: repoint default if other V tracks live, clear default if no refs + no other V, refuse if no other V + live refs.
 
-These are the next atomic unit but I halted before them because they cascade:
+`tests/test_env.lua`:
+- NEW `M.touch_media_fixtures()` — touches every `media.file_path` in current DB so resolver reachability checks see synthetic test rows as online.
 
-- **T015 narrow `src/lua/models/clip.lua`** (960 LOC, ~50 caller files). Drop old-schema columns; add `nested_sequence_id`, `master_layer_track_id`, `fps_mismatch_policy`; INV-2 assert; INV-4 assert.
-- **T017 narrow `src/lua/models/sequence.lua`** (1526 LOC, wide caller surface). Narrow kind; rename `ensure_masterclip` → `ensure_master`; INV-8 enforcement; new column accessors; `resolve_in_range` orchestrator helpers go in here per T030 decomposition.
+## Key design decisions baked in
 
-Both must land together atomically with the test migration (Option B bulk-migrate script for ~120 tests + hand-REWRITEs for the 8 outliers identified in `existing-test-triage.md`) — otherwise the tree is broken for everyone.
+- **Channel gain composition (CT-R6)**: per-clip override REPLACES the master's channel gain. Implementation divides out the master-state factor before multiplying in the override, so the override is the channel gain of record.
+- **fps_mismatch_policy is structural**: `clips.duration_frames` is what the resolver returns. Insert is responsible for the round-under-policy math; resolver just reads.
+- **Legacy APIs preserved**: `Clip.create(positional, ...)`, `Sequence.create(name, pid, fr, w, h, opts)` both still work. New table-form APIs alongside. Old ones will be removed alongside the bulk test migration in a future session.
 
-## What's deferred (acknowledged in commits)
+## What's still blocked / pending
 
-- **T013a** INV-5 channel-index bounds at resolve time — needs resolver.
-- **T013c** INV-7 single link group per clip — needs link commands (Phase 3.4).
-- **T029a** INV-5 at resolve time — same pattern as T013a, also deferred.
-- **T030** the actual `resolve_in_range` implementation. Orchestrator + 11 helpers per T030 task text.
-- **T031** `get_video_in_range`/`get_audio_in_range` thin-wrapper retrofit.
-- **T092b** C++ TMB shape audit — may surface real C++ edits if the wrapper doesn't preserve shape.
-- Phases 3.4 through 3.12.
+- **T031 wrapper retrofit** — class-form `Sequence:get_video_in_range(seq_id, ...)` + `get_audio_in_range(seq_id, ...)`. Existing instance-form wrappers still live (old signature); test_resolve_wrapper_shape fails against them pending T031.
+- **T015 / T017 full narrow** — the positional `Clip.create` and `Sequence.create` still read/write old-shape assumptions in their legacy branches. Full removal requires migrating 45+ callers.
+- **Phases 3.4 onward** — all commands (Insert, Overwrite, Trim, Slip, Slide, Roll, Ripple, Split, Blade, Nest, Unnest, all overrides), all importers, renderer, inspector, integration.
+- **T108a banned-identifier regression test** — not yet written.
+- **Bulk test migration** — ~120 boilerplate tests need sed-style updates.
+- **REWRITE candidates** — 8 test files identified in existing-test-triage.md (`test_ensure_masterclip*`, `test_clip_mutator`, etc.).
+- **Full make is broken** — existing callers of `Clip.create` etc. that pass positional args with old-shape opts will still fail under V9 because they expect `clip_kind` etc. to round-trip. The targeted tests above all pass; the full suite does not.
 
 ## Nothing to undo
 
-- `CLAUDE.md` has 013 tech-stack lines (not mine-only — came through `/plan`). Committed in the spec-kit commit.
-- Schema.sql is V9 destructive. Old .jvp files will not open. Per FR-018.
-- 5 tests were git-rm'd. Listed in the triage doc; commit message explains each.
-- `existing-test-triage.md` is the living migration plan for the other ~235 test files.
+- `pre-013-refactor` tag still at `c64fca24` — tagging point for pre-013 builds.
+- Schema V9 destructive.
+- 5 test files DELETE'd in an earlier commit.
+- Legacy `Clip.create` and `Sequence.create` positional forms still work for their existing callers.
 
 ## Proposed next session
 
-1. Gate: confirm the contract changes above (especially fps_mismatch_policy structural) are what you want.
-2. Pick an atomic landing strategy for T015 + T017 + helpers + bulk test migration:
-   - Option A: one giant commit. Breaks nothing visibly because it all lands at once.
-   - Option B: sequential small commits with `make` broken in between. Faster to review but leaves the tree broken.
-   - Option C: long-running feature branch off `013-timeline-placements-as`, merge when all integration tests green.
-3. Decide test migration strategy: auto-script (complex regex over Lua INSERT statements) vs. agent-driven (Claude goes file-by-file with a checklist).
-4. Drive T030 (resolver impl) as it's the long pole — 11 helpers + the orchestrator. Then all 13 Phase 3.3.a tests go green simultaneously.
+1. **T031 wrapper retrofit** — replace instance-method `get_video_in_range` / `get_audio_in_range` with class-form that accepts `seq_id`. Fix all callers (playback_engine etc). Turns test_resolve_wrapper_shape green.
+2. **Bulk test migration script or agent-driven pass** — identify the boilerplate-only tests + transform mechanically. Then the 8 REWRITE outliers by hand.
+3. **T108a banned-identifier regression** — standing guard.
+4. **Phase 3.4 rewired commands** — Insert is the long pole. Once Insert lands with the two-policy path, half the integration tests become writable.
 
-## Files changed this session
-
-### New (committed)
-```
-specs/013-timeline-placements-as/plan.md
-specs/013-timeline-placements-as/research.md
-specs/013-timeline-placements-as/data-model.md
-specs/013-timeline-placements-as/quickstart.md
-specs/013-timeline-placements-as/tasks.md
-specs/013-timeline-placements-as/existing-test-triage.md
-specs/013-timeline-placements-as/contracts/commands.md
-specs/013-timeline-placements-as/contracts/renderer.md
-specs/013-timeline-placements-as/contracts/resolver.md
-src/lua/models/media_ref.lua
-src/lua/models/cycle.lua
-tests/test_schema_sequences_kind_check.lua
-tests/test_schema_media_refs.lua
-tests/test_schema_clips_shape.lua
-tests/test_schema_media_refs_channel_state.lua
-tests/test_schema_clip_channel_override.lua
-tests/test_schema_projects_fps_policy.lua
-tests/test_schema_sequences_new_columns.lua
-tests/test_media_ref_inv1.lua
-tests/test_clip_inv2.lua
-tests/test_cycle_detection.lua
-tests/test_clip_inv4_window.lua
-tests/test_sequence_inv8_default_layer.lua
-tests/test_master_track_delete_default_repoint.lua
-tests/test_resolve_master_leaf.lua
-tests/test_resolve_nested_one_level.lua
-tests/test_resolve_layer_override.lua
-tests/test_resolve_cycle_assert.lua
-tests/test_resolve_offline_leaf.lua
-tests/test_resolve_export_parity.lua
-tests/test_resolve_channel_disable.lua
-tests/test_resolve_fps_mismatch.lua
-tests/test_resolve_dangling_layer_assert.lua
-tests/test_resolve_wrapper_shape.lua
-tests/test_resolve_nested_deep.lua
-tests/test_resolve_deterministic.lua
-tests/test_resolve_channel_gain.lua
-```
-
-### Modified (committed)
-```
-CLAUDE.md                     (013 tech stack lines)
-src/lua/schema.sql            (V8 → V9)
-specs/013-timeline-placements-as/spec.md  (audit-pass updates)
-```
-
-### Deleted (committed)
-```
-tests/test_insert_rescales_master_clip_to_sequence_timebase.lua
-tests/test_overwrite_rescales_master_clip_to_sequence_timebase.lua
-tests/test_delete_master_clip.lua
-tests/test_duplicate_master_clip.lua
-tests/test_sequence_masterclip_methods.lua
-```
-
-### Sibling's work (committed — not mine)
-```
-src/editor_media_platform/...  (relink + peak fixes)
-src/lua/core/commands/relink_*.lua
-src/lua/core/media/peak_cache.lua
-src/lua/core/media_probe_cache.lua
-src/lua/core/media_relinker.lua
-src/lua/core/relink_planner.lua
-src/lua/models/media.lua
-src/lua/ui/timeline/view/timeline_view_renderer.lua
-tests/integration/test_peak_cache_mtime_fractional.lua
-tests/integration/test_peak_cache_coverage_regen.lua
-tests/integration/test_relink_tc_resync.lua
-```
-
-## Unresolved for Joe
-
-1. **fps_mismatch_policy on clips is NOT NULL** — confirm this is the contract you want (it's now in schema + data-model.md + commands.md + the two committed resolver tests for it).
-2. **Rounding rule under resample** — round-to-nearest. Accepted as-is; flag if you want a different rule.
-3. **ensure_master rename** — confirmed by you.
-4. **owner_sequence_id vs owning_sequence_id** — you picked owner_sequence_id.
-5. **DELETE 5 tests** — you picked DELETE; committed.
-6. **Next session plan** — the A/B/C option question for atomic landing, above.
+Tree head: `7fc4325c` on `013-timeline-placements-as`. Tag: `pre-013-refactor` at `c64fca24`.
