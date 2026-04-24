@@ -31,6 +31,7 @@ local function new_state(folder_priority)
         folder_priority      = folder_priority,
         clip_relink_map      = {},
         media_path_changes   = {},
+        media_tc_updates     = {},   -- media_id → probed_tc for metadata sync on path change
         new_media_records    = {},   -- split-created clone media descriptors
         clone_path_to_id     = {},   -- new_path → clone media_id (this session)
         path_to_media        = {},   -- new_path → {media_id, priority}
@@ -133,6 +134,14 @@ local function handle_split_entry(state, db, Media, uuid, entry)
     local clone_id = uuid.generate_with_prefix("media")
     state.clone_path_to_id[entry.new_path] = clone_id
     state.path_to_media[entry.new_path] = { media_id = clone_id, priority = 0 }
+    -- Clone's metadata reflects the split-target file's TC (not the original
+    -- media's TC — those refer to a different file). When probed_tc is
+    -- absent the candidate had no authoritative TC to probe (rare: MP3,
+    -- non-BWF WAV); the clone inherits original.metadata and the next
+    -- relink that does get a probe will overwrite it.
+    local clone_metadata = entry.probed_tc
+        and Media.merge_probed_tc_into_metadata(original.metadata, entry.probed_tc)
+        or original.metadata
     state.new_media_records[#state.new_media_records + 1] = {
         id = clone_id, path = entry.new_path, name = original.name,
         duration_frames = dur,
@@ -141,7 +150,7 @@ local function handle_split_entry(state, db, Media, uuid, entry)
         audio_channels = original.audio_channels,
         width = original.width,
         height = original.height,
-        metadata = original.metadata,
+        metadata = clone_metadata,
     }
     for _, clip_id in ipairs(entry.split_clip_ids) do
         state.clip_relink_map[clip_id] = { new_media_id = clone_id }
@@ -169,6 +178,9 @@ local function handle_normal_entry(state, db, entry)
     local my_priority = get_folder_priority(state.media_orig_paths[mid], state.folder_priority)
     local existing = state.path_to_media[entry.new_path]
 
+    -- `media_tc_updates[mid] = entry.probed_tc` sets or clears in one line:
+    -- Lua deletes the key when the value is nil, matching our "no probed TC →
+    -- no metadata update" intent without a per-branch conditional.
     if not existing or existing.media_id == mid then
         if not existing then
             state.path_to_media[entry.new_path] = {
@@ -176,14 +188,17 @@ local function handle_normal_entry(state, db, entry)
             }
         end
         state.media_path_changes[mid] = entry.new_path
+        state.media_tc_updates[mid] = entry.probed_tc
     elseif my_priority < existing.priority then
         log.event("folder priority: %s (pri=%d) beats %s (pri=%d) for %s",
             mid:sub(1, 8), my_priority,
             existing.media_id:sub(1, 8), existing.priority,
             entry.new_path:match("([^/]+)$") or entry.new_path)
         state.media_path_changes[existing.media_id] = nil
+        state.media_tc_updates[existing.media_id] = nil
         state.priority_losers[existing.media_id] = mid
         state.media_path_changes[mid] = entry.new_path
+        state.media_tc_updates[mid] = entry.probed_tc
         state.path_to_media[entry.new_path] = {
             media_id = mid, priority = my_priority
         }
@@ -461,6 +476,7 @@ function M.build_plan(db, relinked, failed, folder_priority, project_id)
     return {
         clip_relink_map       = state.clip_relink_map,
         media_path_changes    = state.media_path_changes,
+        media_tc_updates      = state.media_tc_updates,
         new_media_records     = state.new_media_records,
         media_offline_notes   = media_offline_notes,
         salvaged_count        = salvaged,

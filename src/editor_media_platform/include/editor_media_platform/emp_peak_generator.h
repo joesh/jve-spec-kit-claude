@@ -113,6 +113,11 @@ private:
     bool InitJob(ChunkedJob& job);
     bool ProcessOneChunk(ChunkedJob& job);
     void FinalizeJob(ChunkedJob& job);
+    // Shared tail for FinalizeJob: flip state under m_mutex, decrement
+    // running count, notify admission/work CVs, release media handles.
+    // Called from both the normal write-and-exit path and the truncation-
+    // reject early exit, so the two paths don't drift apart.
+    void MarkJobDone(ChunkedJob& job, bool success);
 
     // Thread pool
     std::vector<std::thread> m_workers;

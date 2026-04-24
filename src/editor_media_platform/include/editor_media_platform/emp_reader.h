@@ -87,6 +87,12 @@ public:
     explicit Reader(std::unique_ptr<ReaderImpl> impl, std::shared_ptr<MediaFile> media_file);
 
 private:
+    // BRAW-specific audio path — synchronous SDK read, no resample.
+    // DecodeAudioRangeUS delegates here when the media uses the BRAW
+    // backend and the clip has an audio track.
+    Result<std::shared_ptr<PcmChunk>> decode_braw_audio_range(
+        TimeUS t0_us, TimeUS t1_us, const AudioFormat& out);
+
     std::unique_ptr<ReaderImpl> m_impl;
     std::shared_ptr<MediaFile> m_media_file;
 };

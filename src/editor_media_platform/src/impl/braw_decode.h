@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace emp {
 
@@ -32,6 +33,13 @@ struct BrawClipInfo {
     uint64_t frame_count = 0;
     TimeUS duration_us = 0;
     int64_t first_frame_tc = 0;  // TC origin in frames at video rate
+
+    // Audio — populated when clip has an audio track.
+    bool has_audio = false;
+    int32_t audio_sample_rate = 0;
+    int32_t audio_channels = 0;
+    int32_t audio_bit_depth = 0;
+    int64_t audio_sample_count = 0;
 };
 
 // Check file extension (case-insensitive). No I/O, no SDK required.
@@ -70,18 +78,39 @@ public:
     int output_width() const { return m_out_w; }
     int output_height() const { return m_out_h; }
 
+    // Audio accessors (zero if clip has no audio track).
+    bool has_audio() const { return m_audio_raw != nullptr; }
+    int32_t audio_sample_rate() const { return m_audio_sample_rate; }
+    int32_t audio_channels() const { return m_audio_channels; }
+    int32_t audio_bit_depth() const { return m_audio_bit_depth; }
+    int64_t audio_sample_count() const { return m_audio_sample_count; }
+
+    // Read [sample_start, sample_start + sample_count) audio sample-frames
+    // into out_f32 (interleaved, size = sample_count * channels). Returns
+    // the number of frames actually read (may be < sample_count at EOF).
+    // Converts native PCM bit depth to float32 in [-1, 1].
+    Result<int64_t> read_audio_f32(int64_t sample_start, int64_t sample_count,
+                                    std::vector<float>& out_f32);
+
 private:
     // SDK COM objects. Typed as void* to avoid pulling the SDK header
     // into callers. Cast to IBlackmagicRaw*/IBlackmagicRawClip* in .cpp.
     void* m_codec_raw = nullptr;
     void* m_clip_raw = nullptr;
     void* m_callback_raw = nullptr;  // BrawCallbackHandler*, owned
+    void* m_audio_raw = nullptr;     // IBlackmagicRawClipAudio*, QI'd from clip
     int m_src_w = 0;
     int m_src_h = 0;
     int m_out_w = 0;   // after resolution scale
     int m_out_h = 0;
     int m_braw_scale = 0;  // BlackmagicRawResolutionScale (stored as int to avoid SDK header)
     float m_last_decode_ms = 0;
+
+    // Audio params (cached at init)
+    int32_t m_audio_sample_rate = 0;
+    int32_t m_audio_channels = 0;
+    int32_t m_audio_bit_depth = 0;
+    int64_t m_audio_sample_count = 0;
 };
 
 } // namespace impl

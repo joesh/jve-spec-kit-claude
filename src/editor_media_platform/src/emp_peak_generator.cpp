@@ -514,6 +514,31 @@ void PeakGenerator::FinalizeJob(ChunkedJob& job)
     assert(actual_samples > 0 &&
         "PeakGenerator::FinalizeJob: no samples were decoded");
 
+    // Refuse to persist a peak file whose decoded coverage falls far
+    // short of the expected total. ProcessOneChunk accepts a zero-frame
+    // read as clean EOF; we have observed this firing mid-stream at
+    // ~50% of expected samples on otherwise-healthy Resolve Media-Manage
+    // MOVs (TSO 2026-04-24, anamnesis-gold-timeline). Root cause is not
+    // understood — the regen on the next project open produced a
+    // complete peak file against the same media. A truncated peak file
+    // whose mtime matches the media's mtime is served as authoritative
+    // by peak_cache across sessions, so dropping the file is the only
+    // way to force a retry. The stricter coverage check in
+    // peak_cache.try_load_existing catches pre-existing truncated
+    // files; this prevents newly-generated ones from joining them.
+    constexpr double TRUNCATION_THRESHOLD = 0.95;
+    const double coverage = static_cast<double>(actual_samples)
+        / static_cast<double>(job.total_samples);
+    if (coverage < TRUNCATION_THRESHOLD) {
+        JVE_LOG_WARN(Media,
+            "PeakGenerator: decoded %lld / %lld samples (%.1f%%) for %s — "
+            "refusing to write truncated peak file; next open will retry",
+            (long long)actual_samples, (long long)job.total_samples,
+            coverage * 100.0, job.media_id.c_str());
+        MarkJobDone(job, /*success=*/false);
+        return;
+    }
+
     // If the decoder delivered fewer samples than the duration-based
     // estimate, shrink the peak buffer so mipmaps and the written file
     // contain no sentinel-init tail bins. See TrimPeakBufferToActualSamples.
@@ -525,23 +550,28 @@ void PeakGenerator::FinalizeJob(ChunkedJob& job)
     BuildMipmaps(job.peak_buf);
 
     bool ok = WriteOutputFile(job.peak_buf, job.info, job.media_path, job.output_path);
-
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        job.state = ok ? JobStatus::Complete : JobStatus::Failed;
-        --m_running_count;
-    }
-    m_admission_cv.notify_one();
-    m_cv.notify_one();  // a pool job can now be admitted
-
-    // Release media resources (reader holds codec state, file handles)
-    job.reader.reset();
-    job.media_file.reset();
-    // Keep peak_buf alive until job is removed from m_jobs (for late queries)
+    MarkJobDone(job, ok);
 
     JVE_LOG_EVENT(Media, "PeakGenerator: %s %s (%lld samples)",
         ok ? "complete" : "FAILED", job.media_id.c_str(),
         (long long)job.total_samples);
+}
+
+// Shared FinalizeJob tail: flip state under m_mutex, free a running
+// slot, notify waiters, release media resources. peak_buf intentionally
+// kept alive — late in-progress queries may still reference it via
+// m_jobs until the job is removed.
+void PeakGenerator::MarkJobDone(ChunkedJob& job, bool success)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        job.state = success ? JobStatus::Complete : JobStatus::Failed;
+        --m_running_count;
+    }
+    m_admission_cv.notify_one();
+    m_cv.notify_one();
+    job.reader.reset();
+    job.media_file.reset();
 }
 
 // ============================================================================

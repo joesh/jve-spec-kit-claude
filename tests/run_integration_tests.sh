@@ -123,7 +123,10 @@ for t in \
   test_inspector_set_value_undo.lua \
   test_inspector_focus_scroll.lua \
   test_peak_gen_admission.lua \
-  test_reader_audio_only.lua
+  test_reader_audio_only.lua \
+  test_peak_cache_mtime_fractional.lua \
+  test_peak_cache_coverage_regen.lua \
+  test_relink_tc_resync.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"

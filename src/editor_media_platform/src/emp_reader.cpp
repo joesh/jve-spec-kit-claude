@@ -358,17 +358,21 @@ static Result<std::shared_ptr<Reader>> CreateImpl(std::shared_ptr<MediaFile> ass
     MediaFileImpl* asset_impl = asset->impl_ptr();
 
     // BRAW: use SDK decoder, bypass FFmpeg entirely. Audio-only callers
-    // shouldn't be peaking BRAW (no audio stream); reject early so the
-    // caller-knows-what-they-asked-for invariant holds.
+    // (PeakGenerator) are supported when the clip has an audio track.
     if (asset_impl->backend == MediaFileBackend::Braw) {
-        if (audio_only) {
-            return Error::unsupported("BRAW has no audio stream — cannot create audio-only Reader");
+        if (audio_only && !asset->info().has_audio) {
+            return Error::unsupported("BRAW clip has no audio track — cannot create audio-only Reader");
         }
         impl->braw = std::make_unique<impl::BrawReaderContext>();
         auto braw_result = impl->braw->init(asset->info().path);
         if (braw_result.is_error()) return braw_result.error();
-        EMP_LOG_DEBUG("Reader::Create: BRAW decoder %dx%d path=%s",
+        // Audio is initialized as part of BrawReaderContext::init when the
+        // clip has an audio track. Mirror audio_initialized so the FFmpeg
+        // path's "has audio but codec failed" check doesn't trip.
+        impl->audio_initialized = asset->info().has_audio && impl->braw->has_audio();
+        EMP_LOG_DEBUG("Reader::Create: BRAW decoder %dx%d audio=%s path=%s",
             asset->info().video_width, asset->info().video_height,
+            impl->audio_initialized ? "yes" : "no",
             asset->info().path.c_str());
         asset->mark_decode_started();
         return std::make_shared<Reader>(std::move(impl), std::move(asset));
@@ -870,6 +874,42 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRange(FrameTime t0, FrameTi
     return DecodeAudioRangeUS(t0.to_us(), t1.to_us(), out);
 }
 
+// BRAW audio: read synchronously from the SDK at native rate/channels.
+// PeakGenerator is the only caller that goes through DecodeAudioRangeUS
+// for BRAW, and it requests source rate — no resample is needed. Future
+// callers that need resampling or stereo downmix must add it explicitly.
+Result<std::shared_ptr<PcmChunk>> Reader::decode_braw_audio_range(
+    TimeUS t0_us, TimeUS t1_us, const AudioFormat& out) {
+    const int32_t src_rate = m_impl->braw->audio_sample_rate();
+    const int32_t src_ch = m_impl->braw->audio_channels();
+    if (out.sample_rate != src_rate) {
+        return Error::unsupported(
+            "BRAW audio: output sample rate must match source rate ("
+            + std::to_string(src_rate) + "Hz)");
+    }
+    if (out.fmt != SampleFormat::F32) {
+        return Error::unsupported("BRAW audio: only F32 output supported");
+    }
+
+    const int64_t start_sample = (t0_us * src_rate) / 1000000;
+    const int64_t end_sample = (t1_us * src_rate) / 1000000;
+    if (end_sample <= start_sample) {
+        return Error::invalid_arg("BRAW audio: empty sample range");
+    }
+
+    std::vector<float> pcm;
+    auto read_result = m_impl->braw->read_audio_f32(
+        start_sample, end_sample - start_sample, pcm);
+    if (read_result.is_error()) return read_result.error();
+    // read_result.value() is the frame count; PcmChunkImpl recomputes
+    // it from pcm.size() / channels so we don't thread it separately.
+
+    const TimeUS start_us = (start_sample * 1000000) / src_rate;
+    auto chunk_impl = std::make_unique<PcmChunkImpl>(
+        src_rate, src_ch, SampleFormat::F32, start_us, std::move(pcm));
+    return std::make_shared<PcmChunk>(std::move(chunk_impl));
+}
+
 Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeUS t1_us,
                                                               const AudioFormat& out) {
     // Resampler ALWAYS outputs stereo (2 channels) regardless of source format
@@ -885,6 +925,12 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
     }
     if (t1_us <= t0_us) {
         return Error::invalid_arg("DecodeAudioRangeUS: t1 must be > t0");
+    }
+
+    // BRAW bypasses the FFmpeg decode + resample path — read synchronously
+    // from the SDK at native rate/channels. See decode_braw_audio_range.
+    if (m_impl->braw && m_impl->braw->has_audio()) {
+        return decode_braw_audio_range(t0_us, t1_us, out);
     }
 
     // ── Decode cache: serve from chunk cache if available ──

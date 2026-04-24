@@ -245,16 +245,22 @@ local ok_nil_rate = pcall(Media.batch_get_source_extents, {media_a = nil})
 check("nil rate via absent key is an empty input (not an error)", ok_nil_rate ~= false)
 
 -- ---------------------------------------------------------------------------
--- batch_set_file_paths: changes persist; returns pre-change paths for undo.
+-- batch_set_file_paths: changes persist; returns pre-change linked-file
+-- state ({file_path, metadata}) for undo. With a tc_updates argument,
+-- metadata's start_tc_* fields move atomically with the path.
 -- ---------------------------------------------------------------------------
 print("\n--- batch_set_file_paths ---")
 
-local old_paths = Media.batch_set_file_paths({
+local old_state = Media.batch_set_file_paths({
     media_a = "/new/a.mov",
     media_b = "/new/b.mov",
 })
-check("returns old path for media_a", old_paths["media_a"] == "/mnt/footage/a.mov")
-check("returns old path for media_b", old_paths["media_b"] == "/mnt/footage/b.mov")
+check("returns old state entry for media_a with file_path",
+    type(old_state["media_a"]) == "table"
+    and old_state["media_a"].file_path == "/mnt/footage/a.mov")
+check("returns old state entry for media_b with file_path",
+    type(old_state["media_b"]) == "table"
+    and old_state["media_b"].file_path == "/mnt/footage/b.mov")
 
 local reloaded_a = Media.load("media_a")
 check("media_a file_path persisted to new value",
@@ -282,12 +288,55 @@ check("nonexistent media_id is a hard error", not ok_bad_id)
 local ok_empty_path = pcall(Media.batch_set_file_paths, {media_a = ""})
 check("empty new_path is a hard error", not ok_empty_path)
 
--- Round-trip: invoking the function with old_paths should restore the
--- prior state. This is exactly how RelinkClips undo uses it.
-Media.batch_set_file_paths(old_paths)
+-- Round-trip: batch_restore_file_state with the captured old state must
+-- put everything back where it was. This is exactly how RelinkClips undo
+-- uses it.
+Media.batch_restore_file_state(old_state)
 local restored_a = Media.load("media_a")
 check("round-trip restores original media_a path",
     restored_a:get_file_path() == "/mnt/footage/a.mov")
+
+-- TC-update co-edit: supplying tc_updates alongside path_changes writes
+-- start_tc_* into the metadata JSON atomically with the path move.
+local probed_tc = {
+    start_tc_value = 2063463,
+    start_tc_rate = 25,
+    start_tc_audio_samples = 3961848960,
+    start_tc_audio_rate = 48000,
+}
+local old_state2 = Media.batch_set_file_paths(
+    { media_a = "/trimmed/a.mov" },
+    { media_a = probed_tc })
+check("returns old file_path in round 2",
+    old_state2.media_a.file_path == "/mnt/footage/a.mov")
+check("captures pre-change metadata string for undo",
+    type(old_state2.media_a.metadata) == "string")
+
+local reloaded_a2 = Media.load("media_a")
+local meta_json = reloaded_a2.metadata
+local json = require("dkjson")
+local meta = json.decode(meta_json)
+check("start_tc_value written from probed_tc",
+    meta and meta.start_tc_value == 2063463)
+check("start_tc_audio_samples written from probed_tc",
+    meta and meta.start_tc_audio_samples == 3961848960)
+
+-- A tc_updates entry that doesn't correspond to any path change is a
+-- planner bug: metadata would never be written, peaks would silently
+-- break. Must surface, not be silently ignored.
+local ok_stray_tc = pcall(Media.batch_set_file_paths,
+    { media_a = "/another/a.mov" },
+    { media_b = probed_tc })
+check("tc_updates key without matching path_changes key is a hard error",
+    not ok_stray_tc)
+
+-- Restoration also reverts metadata to pre-change JSON.
+Media.batch_restore_file_state(old_state2)
+local restored_a2 = Media.load("media_a")
+check("round-trip restores file_path after TC edit",
+    restored_a2:get_file_path() == "/mnt/footage/a.mov")
+check("round-trip restores metadata after TC edit",
+    restored_a2.metadata == old_state2.media_a.metadata)
 
 os.remove(db_path)
 

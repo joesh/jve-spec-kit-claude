@@ -22,11 +22,55 @@ local peak_cache = require("core.media.peak_cache")
 local peak_constants = require("core.media.peak_constants")
 local Signals = require("core.signals")
 
--- Throttle waveform TC mismatch warnings: once per media_id per project session.
-local waveform_drift_warned = {}
+-- Throttle waveform diagnostics: once per media_id per project session.
+-- Two distinct conditions, tracked separately so a coverage gap doesn't
+-- mask a subsequent TC bug on the same media (or vice versa).
+--   waveform_tc_drift_warned  — start_drift > threshold OR actual_end
+--                               overshoots requested_end. Real bug; warn.
+--   waveform_coverage_logged  — actual_end < requested_end by more than
+--                               threshold. Expected after Media-Managed
+--                               trims (Resolve ships a shorter file than
+--                               the DRP claimed); event-level.
+local waveform_tc_drift_warned = {}
+local waveform_coverage_logged = {}
 Signals.connect("project_changed", function()
-    waveform_drift_warned = {}
+    waveform_tc_drift_warned = {}
+    waveform_coverage_logged = {}
 end, 99)  -- low priority: cosmetic, after all model updates
+
+-- Compare the source-sample range the renderer requested against what
+-- peak_cache actually returned, and classify any disagreement. Called
+-- once per clip per render tick after a successful peak fetch; throttled
+-- to once per media_id per session via the module-level flag tables.
+local function log_waveform_range_anomalies(
+        media_id, peak_start, peak_end, actual_start, actual_end, max_drift)
+    local start_drift = math.abs(actual_start - peak_start)
+
+    -- Start-side drift = TC origin bug. Real regression; warn.
+    if start_drift > max_drift and not waveform_tc_drift_warned[media_id] then
+        waveform_tc_drift_warned[media_id] = true
+        log.warn("waveform TC drift: requested_start=%d actual_start=%d drift=%d threshold=%d clip=%s",
+            peak_start, actual_start, start_drift, max_drift, media_id)
+    end
+
+    -- End-side: actual_end < peak_end means the file is shorter than
+    -- the clip's requested range. Expected after a Resolve Media-Manage
+    -- trim (file shipped shorter than DRP claimed). Log at event level.
+    -- actual_end > peak_end is genuinely unexpected — warn.
+    if actual_end < peak_end and (peak_end - actual_end) > max_drift then
+        if not waveform_coverage_logged[media_id] then
+            waveform_coverage_logged[media_id] = true
+            log.event("waveform coverage gap: requested_end=%d actual_end=%d gap=%d clip=%s",
+                peak_end, actual_end, peak_end - actual_end, media_id)
+        end
+    elseif actual_end > peak_end and (actual_end - peak_end) > max_drift then
+        if not waveform_tc_drift_warned[media_id] then
+            waveform_tc_drift_warned[media_id] = true
+            log.warn("waveform end overshoot: requested_end=%d actual_end=%d overshoot=%d threshold=%d clip=%s",
+                peak_end, actual_end, actual_end - peak_end, max_drift, media_id)
+        end
+    end
+end
 
 local function build_edge_signature(edges)
     local parts = {}
@@ -775,22 +819,14 @@ function M.render(view)
                 -- peaks == nil is legitimate: peak generation is async, peaks may
                 -- not yet be available for a freshly-loaded media.
                 if peaks and count > 0 then
-                    -- TC alignment check: actual range from peak data must match requested range
-                    -- within one peak bin. Threshold scales with mipmap level — at higher
-                    -- levels (1024/2048 spp), legitimate bin-alignment drift is larger.
+                    -- Drift threshold scales with mipmap level — at higher
+                    -- levels (1024/2048 spp), legitimate bin-alignment drift
+                    -- is larger.
                     local samples_per_pixel = (peak_end - peak_start) / draw_width
                     local mip_level = peak_constants.select_level(samples_per_pixel)
                     local max_drift = peak_constants.SAMPLES_PER_LEVEL[mip_level]
-                    local start_drift = math.abs(actual_start - peak_start)
-                    local end_drift = math.abs(actual_end - peak_end)
-                    if start_drift > max_drift or end_drift > max_drift then
-                        if not waveform_drift_warned[clip.media_id] then
-                            waveform_drift_warned[clip.media_id] = true
-                            log.warn("waveform TC mismatch: requested=[%d,%d] actual=[%d,%d] drift=[%d,%d] threshold=%d clip=%s",
-                                peak_start, peak_end, actual_start, actual_end,
-                                start_drift, end_drift, max_drift, clip.media_id)
-                        end
-                    end
+                    log_waveform_range_anomalies(clip.media_id,
+                        peak_start, peak_end, actual_start, actual_end, max_drift)
 
                     local wave_col = waveform_color.derive(body_color)
                     local wave_height = math.max(4, clip_height - LABEL_RESERVE)

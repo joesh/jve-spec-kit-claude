@@ -163,6 +163,24 @@ local function probe_result_from_emp_info(info)
                 result.start_tc_value = info.first_frame_tc
                 result.start_tc_rate = fps_int
             end
+            -- Audio TC for video-with-audio files. EMP derives this from
+            -- video_tc on the shared-clock assumption when the audio stream
+            -- lacks its own authoritative TC. Carried alongside video TC so
+            -- downstream metadata writes don't need a second probe.
+            -- Invariant: has_audio_tc_origin implies has_audio AND a valid
+            -- audio_sample_rate — EMP only flips has_audio_tc_origin after
+            -- a successful extract/derive against a >0 rate. Assert rather
+            -- than silently skip so a future EMP regression surfaces here.
+            if info.has_audio_tc_origin then
+                assert(info.has_audio, "probe_result_from_emp_info: "
+                    .. "has_audio_tc_origin without has_audio for " .. tostring(info.path))
+                assert(info.audio_sample_rate and info.audio_sample_rate > 0,
+                    "probe_result_from_emp_info: has_audio_tc_origin requires "
+                    .. "audio_sample_rate > 0, got " .. tostring(info.audio_sample_rate)
+                    .. " for " .. tostring(info.path))
+                result.start_tc_audio_samples = info.first_sample_tc
+                result.start_tc_audio_rate = info.audio_sample_rate
+            end
             -- Only derive duration_frames when EMP reports an
             -- authoritative duration source (has_duration). A
             -- duration_us=0 without has_duration means "unknown" (no
@@ -866,6 +884,23 @@ local function partition_candidates(media_info, candidates, stored_rate, tc_rema
     return viable, partial_fit
 end
 
+-- Pack the TC fields a Media row's metadata needs to be synced with the
+-- newly-linked file. Returns nil when the probe yielded no authoritative TC
+-- (plain MP3, non-BWF WAV, etc.) — Media metadata is left untouched in that
+-- case so the pre-relink values aren't overwritten with blanks.
+local function probed_tc_for_metadata(probe_result)
+    if not probe_result then return nil end
+    if not probe_result.start_tc_value or not probe_result.start_tc_rate then
+        return nil
+    end
+    return {
+        start_tc_value = probe_result.start_tc_value,
+        start_tc_rate = probe_result.start_tc_rate,
+        start_tc_audio_samples = probe_result.start_tc_audio_samples,
+        start_tc_audio_rate = probe_result.start_tc_audio_rate,
+    }
+end
+
 -- Emit a relinked or ambiguous entry for the full-fit case. Single candidate
 -- → relinked; multiple → ambiguous (user must pick).
 local function classify_viable(out, media_info, viable)
@@ -874,6 +909,7 @@ local function classify_viable(out, media_info, viable)
             media_id = media_info.media_id,
             new_path = viable[1].path,
             strategy = viable[1].is_segment and "segment" or "filename",
+            probed_tc = probed_tc_for_metadata(viable[1].probe_result),
         }
         return
     end
@@ -969,6 +1005,7 @@ local function compute_partial_coverage(partial_fit, stored_rate)
     end
     return {
         candidate_path = best.path,
+        probe_result = pr,
         coverage = {
             kind = "partial_coverage",
             candidate_path = best.path,
@@ -1047,6 +1084,7 @@ local function classify_media(media_info, candidates, clip_loader)
                     media_id = media_info.media_id,
                     new_path = best_cand.path,
                     strategy = best_cand.is_segment and "segment" or "filename",
+                    probed_tc = probed_tc_for_metadata(best_cand.probe_result),
                 }
                 return out
             elseif best_count > 0 then
@@ -1056,6 +1094,7 @@ local function classify_media(media_info, candidates, clip_loader)
                     strategy = best_cand.is_segment and "segment" or "filename",
                     needs_split = true,
                     split_clip_ids = best_fits,
+                    probed_tc = probed_tc_for_metadata(best_cand.probe_result),
                 }
                 log.event("  partial fit: %d/%d clips fit in %s → needs split",
                     best_count, #clips, get_filename(best_cand.path))
@@ -1083,6 +1122,7 @@ local function classify_media(media_info, candidates, clip_loader)
             new_path = pc.candidate_path,
             strategy = "partial_coverage",
             coverage = pc.coverage,
+            probed_tc = probed_tc_for_metadata(pc.probe_result),
         }
         return out
     end

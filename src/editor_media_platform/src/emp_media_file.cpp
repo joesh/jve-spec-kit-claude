@@ -175,6 +175,26 @@ static std::pair<int64_t, bool> extract_audio_tc_origin(
     return {0, false};
 }
 
+// Derive audio TC origin from video TC when the file has both streams on a
+// common clock (camera MOVs, BRAW). Fills in info.first_sample_tc /
+// has_audio_tc_origin only when (a) video TC is authoritative, (b) the file
+// has audio, (c) audio TC wasn't already set by a primary source (BWF
+// time_reference, stream start_time ≥ 1s). Primary sources win.
+static void derive_audio_tc_from_video(MediaFileInfo& info) {
+    if (!info.has_video_tc_origin) return;
+    if (!info.has_audio) return;
+    if (info.has_audio_tc_origin) return;
+    if (info.audio_sample_rate <= 0) return;
+    if (info.video_fps_num <= 0 || info.video_fps_den <= 0) return;
+
+    info.first_sample_tc = (info.first_frame_tc
+        * static_cast<int64_t>(info.audio_sample_rate)
+        * static_cast<int64_t>(info.video_fps_den))
+        / static_cast<int64_t>(info.video_fps_num);
+    info.has_audio_tc_origin = true;
+}
+
+
 // Extract BWF time_reference (raw, for diagnostic/relink use).
 // Returns -1 if not a BWF file.
 static int64_t extract_bwf_time_reference(AVFormatContext* fmt) {
@@ -206,17 +226,15 @@ static Result<MediaFileInfo> build_braw_info(const std::string& path) {
     info.rotation = 0;
     info.video_par_num = 1;
     info.video_par_den = 1;
-    info.has_audio = false;  // BRAW audio: deferred
-    info.audio_sample_rate = 0;
-    info.audio_channels = 0;
+    info.has_audio = bi.has_audio;
+    info.audio_sample_rate = bi.audio_sample_rate;
+    info.audio_channels = bi.audio_channels;
     info.duration_us = bi.duration_us;
     // BRAW's SDK probe always returns a duration. The "no duration
     // known" case doesn't arise here — if braw_probe_clip succeeded,
     // duration is authoritative.
     info.has_duration = bi.duration_us > 0;
     info.first_frame_tc = bi.first_frame_tc;
-    info.first_sample_tc = 0;
-    info.has_audio_tc_origin = false;  // BRAW audio TC deferred
     info.bwf_time_reference = -1;
 
     constexpr int64_t MAX_TC_FRAMES = 24LL * 3600 * 120;
@@ -226,6 +244,21 @@ static Result<MediaFileInfo> build_braw_info(const std::string& path) {
         info.has_video_tc_origin = false;    // and mark as unknown
     } else {
         info.has_video_tc_origin = true;     // BRAW metadata is authoritative
+    }
+
+    // BRAW has no separate audio TC source — derive from video TC on the
+    // common-clock assumption. Defaults leave first_sample_tc=0 /
+    // has_audio_tc_origin=false if derivation can't run.
+    // Overflow handling mirrors the video-TC block above: clamp-to-unknown
+    // rather than assert, because the BRAW SDK can surface implausible
+    // values on malformed clips and we'd rather flag "no TC" than reject
+    // the clip entirely (pre-existing pattern for this backend).
+    derive_audio_tc_from_video(info);
+    assert(info.first_sample_tc >= 0 && "build_braw_info: first_sample_tc must be >= 0");
+    constexpr int64_t MAX_TC_SAMPLES = 24LL * 3600 * 96000;
+    if (info.first_sample_tc > MAX_TC_SAMPLES) {
+        info.first_sample_tc = 0;
+        info.has_audio_tc_origin = false;
     }
 
     return info;
@@ -338,6 +371,12 @@ static Result<MediaFileInfo> build_ffmpeg_info(impl::FFmpegFormatContext& fmt_ct
     info.first_sample_tc = audio_tc.first;
     info.has_audio_tc_origin = audio_tc.second;
     info.bwf_time_reference = extract_bwf_time_reference(fmt);
+
+    // When no primary audio TC source (BWF time_reference, audio stream
+    // start_time ≥ 1s) was found, derive from video TC on the assumption
+    // video and audio share a common recording clock (camera MOVs, etc.).
+    // Primary-source audio TC wins when available.
+    derive_audio_tc_from_video(info);
 
     assert(info.first_frame_tc >= 0 && "build_ffmpeg_info: first_frame_tc must be >= 0");
     assert(info.first_sample_tc >= 0 && "build_ffmpeg_info: first_sample_tc must be >= 0");

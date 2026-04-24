@@ -313,6 +313,40 @@ function M:_parsed_metadata()
     return type(meta) == "table" and meta or nil
 end
 
+--- Merge a probed_tc record into an existing metadata JSON string, returning
+--- a new JSON string. probed_tc has the shape produced by
+--- media_relinker.probed_tc_for_metadata: {start_tc_value, start_tc_rate,
+--- start_tc_audio_samples?, start_tc_audio_rate?}. Preserves unrelated
+--- metadata fields (e.g. file_original_timecode) unchanged.
+--- When probed_tc lacks audio fields (e.g. video-only file, or file without
+--- any audio stream), existing audio TC fields are cleared — they referred
+--- to a different file and would be wrong for the newly-linked one.
+function M.merge_probed_tc_into_metadata(existing_metadata_json, probed_tc)
+    assert(type(probed_tc) == "table",
+        "Media.merge_probed_tc_into_metadata: probed_tc table required")
+    assert(probed_tc.start_tc_value and probed_tc.start_tc_rate,
+        "Media.merge_probed_tc_into_metadata: probed_tc must have start_tc_value and start_tc_rate")
+
+    local json = require("dkjson")
+    local meta
+    if existing_metadata_json == nil or existing_metadata_json == ""
+            or existing_metadata_json == "{}" then
+        meta = {}
+    else
+        meta = json.decode(existing_metadata_json)
+        assert(type(meta) == "table", string.format(
+            "Media.merge_probed_tc_into_metadata: malformed metadata JSON: %q",
+            existing_metadata_json))
+    end
+
+    meta.start_tc_value = probed_tc.start_tc_value
+    meta.start_tc_rate = probed_tc.start_tc_rate
+    meta.start_tc_audio_samples = probed_tc.start_tc_audio_samples  -- nil clears
+    meta.start_tc_audio_rate = probed_tc.start_tc_audio_rate
+
+    return json.encode(meta)
+end
+
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
@@ -664,77 +698,166 @@ function M:get_source_extent(target_rate)
     return min_in, max_out
 end
 
---- Change file_path for many media in one prepared-statement loop.
---- Replaces the Media.load + Media:save N+1 pattern inside RelinkClips
---- Phase 2 (full-row UPSERT per media) with a narrow UPDATE that touches
---- only file_path. Returns the pre-change paths so the caller can persist
---- undo state without a second round of per-row loads.
---- Emits batch-aware media_changed signals via mark_dirty, matching
---- Media:set_file_path's contract — callers typically wrap the call in
---- begin_batch/end_batch to coalesce the signal.
---- Asserts on any requested id that doesn't exist (fail-fast; surfaces
---- planner bugs that reference a stale media_id).
---- @param path_changes table {[media_id] = new_path}
---- @return table {[media_id] = old_path}
-function M.batch_set_file_paths(path_changes)
-    assert(type(path_changes) == "table",
-        "Media.batch_set_file_paths: path_changes table required")
+-- ---------------------------------------------------------------------------
+-- batch_set_file_paths helpers (rule 2.5: read-like-an-algorithm decomposition)
+-- ---------------------------------------------------------------------------
 
-    local database = require("core.database")
-    local db = assert(database.get_connection(),
-        "Media.batch_set_file_paths: no database connection")
-
+--- Validate path_changes shape and collect the media_ids into an array.
+local function collect_path_change_ids(path_changes)
     local ids = {}
     for mid, new_path in pairs(path_changes) do
         assert(new_path and new_path ~= "", string.format(
             "Media.batch_set_file_paths: empty path for %s", tostring(mid)))
         ids[#ids + 1] = mid
     end
-    if #ids == 0 then return {} end
+    return ids
+end
 
-    -- Step 1: chunked SELECT captures existing file_paths for undo state.
-    local old_paths = {}
+--- Chunked SELECT of the {file_path, metadata} for each id, returned as
+--- {[media_id] = {file_path, metadata}}. Asserts every requested id exists.
+local function capture_existing_file_state(db, ids)
     local CHUNK = 500
+    local out = {}
     for chunk_start = 1, #ids, CHUNK do
         local chunk_end = math.min(chunk_start + CHUNK - 1, #ids)
         local n = chunk_end - chunk_start + 1
         local phs = {}
         for i = 1, n do phs[i] = "?" end
         local stmt = assert(db:prepare(string.format(
-            "SELECT id, file_path FROM media WHERE id IN (%s)",
+            "SELECT id, file_path, metadata FROM media WHERE id IN (%s)",
             table.concat(phs, ","))),
             "Media.batch_set_file_paths: failed to prepare read query")
-        for i = 1, n do
-            stmt:bind_value(i, ids[chunk_start + i - 1])
-        end
+        for i = 1, n do stmt:bind_value(i, ids[chunk_start + i - 1]) end
         assert(stmt:exec(),
             "Media.batch_set_file_paths: read query execution failed")
         while stmt:next() do
-            old_paths[stmt:value(0)] = stmt:value(1)
+            out[stmt:value(0)] = {
+                file_path = stmt:value(1),
+                metadata = stmt:value(2),
+            }
         end
         stmt:finalize()
     end
     for _, mid in ipairs(ids) do
-        assert(old_paths[mid] ~= nil, string.format(
+        assert(out[mid] ~= nil, string.format(
             "Media.batch_set_file_paths: media not found: %s", tostring(mid)))
     end
+    return out
+end
 
-    -- Step 2: prepared UPDATE, one bind+exec per change. Parse+plan pays
-    -- once; atomicity comes from the enclosing command-manager transaction.
-    local upd = assert(db:prepare(
+--- Apply one path+metadata UPDATE per row. Path always changes; metadata
+--- changes only for rows in tc_updates. Two prepared statements avoid
+--- touching columns the row doesn't need and sidestep per-row branching in
+--- SQL parse/plan cost.
+local function apply_file_state_updates(db, path_changes, tc_updates, old_state)
+    local upd_path = assert(db:prepare(
         "UPDATE media SET file_path = ? WHERE id = ?"),
-        "Media.batch_set_file_paths: failed to prepare update query")
+        "Media.batch_set_file_paths: failed to prepare path-update query")
+    local upd_both = assert(db:prepare(
+        "UPDATE media SET file_path = ?, metadata = ? WHERE id = ?"),
+        "Media.batch_set_file_paths: failed to prepare path+metadata update query")
+
     for mid, new_path in pairs(path_changes) do
-        upd:bind_value(1, new_path)
-        upd:bind_value(2, mid)
+        local probed_tc = tc_updates and tc_updates[mid]
+        if probed_tc then
+            local new_meta = M.merge_probed_tc_into_metadata(
+                old_state[mid].metadata, probed_tc)
+            upd_both:bind_value(1, new_path)
+            upd_both:bind_value(2, new_meta)
+            upd_both:bind_value(3, mid)
+            assert(upd_both:exec(), string.format(
+                "Media.batch_set_file_paths: path+metadata update exec failed for %s",
+                tostring(mid)))
+            upd_both:reset()
+        else
+            upd_path:bind_value(1, new_path)
+            upd_path:bind_value(2, mid)
+            assert(upd_path:exec(), string.format(
+                "Media.batch_set_file_paths: path update exec failed for %s",
+                tostring(mid)))
+            upd_path:reset()
+        end
+        mark_dirty(mid)
+    end
+    upd_path:finalize()
+    upd_both:finalize()
+end
+
+--- Atomically update each Media row's linked-file state (path and, when
+--- supplied, TC metadata). Both fields describe the currently-linked file,
+--- so they must move together: when relink repoints a row at a new file,
+--- the TC metadata from the new file must replace the old file's TC.
+---
+--- tc_updates entries override only the start_tc_* fields in the existing
+--- metadata JSON; unrelated fields (e.g. file_original_timecode) are kept.
+--- Rows in path_changes without a matching tc_updates entry get their path
+--- updated but metadata untouched (caller didn't supply a probed TC, e.g.
+--- candidate had no authoritative TC source).
+---
+--- @param path_changes table {[media_id] = new_path}
+--- @param tc_updates   table|nil {[media_id] = probed_tc}
+--- @return table {[media_id] = {file_path=string, metadata=string}} old state
+function M.batch_set_file_paths(path_changes, tc_updates)
+    assert(type(path_changes) == "table",
+        "Media.batch_set_file_paths: path_changes table required")
+    assert(tc_updates == nil or type(tc_updates) == "table",
+        "Media.batch_set_file_paths: tc_updates must be table or nil")
+
+    -- tc_updates keys must be a subset of path_changes keys. A stray
+    -- tc_updates entry (e.g. planner wrote TC for a media_id whose path
+    -- didn't actually change) would never be applied — metadata would
+    -- silently stay at the pre-relink file's TC and peak_cache would
+    -- compute wrong sample positions with no error surfaced.
+    if tc_updates then
+        for mid in pairs(tc_updates) do
+            assert(path_changes[mid] ~= nil, string.format(
+                "Media.batch_set_file_paths: tc_updates contains %s but "
+                .. "path_changes does not — TC would be orphaned", tostring(mid)))
+        end
+    end
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.batch_set_file_paths: no database connection")
+
+    local ids = collect_path_change_ids(path_changes)
+    if #ids == 0 then return {} end
+
+    local old_state = capture_existing_file_state(db, ids)
+    apply_file_state_updates(db, path_changes, tc_updates, old_state)
+    return old_state
+end
+
+--- Undo counterpart: restore each row's {file_path, metadata} from a table
+--- previously returned by batch_set_file_paths.
+function M.batch_restore_file_state(old_state)
+    assert(type(old_state) == "table",
+        "Media.batch_restore_file_state: old_state table required")
+
+    local ids = {}
+    for mid in pairs(old_state) do ids[#ids + 1] = mid end
+    if #ids == 0 then return end
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.batch_restore_file_state: no database connection")
+
+    local upd = assert(db:prepare(
+        "UPDATE media SET file_path = ?, metadata = ? WHERE id = ?"),
+        "Media.batch_restore_file_state: failed to prepare update query")
+    for mid, row in pairs(old_state) do
+        assert(type(row) == "table" and row.file_path,
+            string.format("Media.batch_restore_file_state: row %s missing file_path",
+                tostring(mid)))
+        upd:bind_value(1, row.file_path)
+        upd:bind_value(2, row.metadata)
+        upd:bind_value(3, mid)
         assert(upd:exec(), string.format(
-            "Media.batch_set_file_paths: update exec failed for %s", tostring(mid)))
+            "Media.batch_restore_file_state: update exec failed for %s", tostring(mid)))
         upd:reset()
         mark_dirty(mid)
     end
     upd:finalize()
-
-    return old_paths
 end
 
 --- Batch-assign offline_note for a set of media rows. Same shape as

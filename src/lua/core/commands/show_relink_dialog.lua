@@ -91,6 +91,7 @@ function M.register(executors, _undoers, db)
             apply_result = command_manager.execute("RelinkClips", {
                 clip_relink_map     = plan.clip_relink_map,
                 media_path_changes  = plan.media_path_changes,
+                media_tc_updates    = plan.media_tc_updates,
                 new_media_records   = plan.new_media_records,
                 media_offline_notes = plan.media_offline_notes,
                 project_id          = project_id,

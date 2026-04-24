@@ -37,6 +37,9 @@ void BrawReaderContext::set_resolution_scale(int, int) {}
 Result<std::shared_ptr<Frame>> BrawReaderContext::decode_frame(uint64_t, TimeUS, std::shared_ptr<FrameBufferPool>) {
     return Error::unsupported("Blackmagic RAW SDK not installed");
 }
+Result<int64_t> BrawReaderContext::read_audio_f32(int64_t, int64_t, std::vector<float>&) {
+    return Error::unsupported("Blackmagic RAW SDK not installed");
+}
 
 } // namespace impl
 } // namespace emp
@@ -129,6 +132,58 @@ static void float_fps_to_rational(float fps, int32_t& num, int32_t& den) {
 }
 
 // ============================================================================
+// Audio interface query — shared by probe + reader-init
+// ============================================================================
+
+// Packed audio properties extracted from an IBlackmagicRawClipAudio.
+struct BrawAudioProps {
+    int32_t sample_rate = 0;
+    int32_t channels = 0;
+    int32_t bit_depth = 0;
+    int64_t sample_count = 0;
+};
+
+// Query `clip` for its audio interface and, when available, read the
+// PCM-LE audio properties. Returns a non-null IBlackmagicRawClipAudio*
+// with `out_props` populated on success; returns nullptr when the clip has
+// no audio track or when the SDK reports a format we don't support (e.g.
+// a future non-PCM codec — logged, not asserted, so probe doesn't refuse
+// the clip outright). Caller owns the returned interface via Release().
+static IBlackmagicRawClipAudio* query_braw_audio(IBlackmagicRawClip* clip,
+                                                   BrawAudioProps& out_props) {
+    IBlackmagicRawClipAudio* audio = nullptr;
+    HRESULT hr = clip->QueryInterface(IID_IBlackmagicRawClipAudio,
+                                       reinterpret_cast<void**>(&audio));
+    if (FAILED(hr) || !audio) return nullptr;  // clip has no audio track
+
+    uint32_t sr = 0, ch = 0, bd = 0;
+    uint64_t sc = 0;
+    BlackmagicRawAudioFormat fmt = 0;
+    audio->GetAudioSampleRate(&sr);
+    audio->GetAudioChannelCount(&ch);
+    audio->GetAudioBitDepth(&bd);
+    audio->GetAudioSampleCount(&sc);
+    audio->GetAudioFormat(&fmt);
+
+    // PCM little-endian is the only audio format the SDK documents. Guard
+    // against future format additions we haven't validated against.
+    const bool is_supported = (fmt == blackmagicRawAudioFormatPCMLittleEndian)
+        && sr > 0 && ch > 0 && bd > 0 && sc > 0;
+    if (!is_supported) {
+        BRAW_LOG_WARN("unsupported audio — fmt=0x%x sr=%u ch=%u bd=%u sc=%llu",
+            fmt, sr, ch, bd, (unsigned long long)sc);
+        audio->Release();
+        return nullptr;
+    }
+
+    out_props.sample_rate = static_cast<int32_t>(sr);
+    out_props.channels = static_cast<int32_t>(ch);
+    out_props.bit_depth = static_cast<int32_t>(bd);
+    out_props.sample_count = static_cast<int64_t>(sc);
+    return audio;
+}
+
+// ============================================================================
 // Probe clip metadata
 // ============================================================================
 
@@ -194,9 +249,24 @@ Result<BrawClipInfo> braw_probe_clip(const std::string& path) {
         CFRelease(tc_str);
     }
 
-    BRAW_LOG_DEBUG("probe: %dx%d @ %d/%d fps, %llu frames, tc=%lld path=%s",
+    // Audio track properties. Probe doesn't need to retain the interface —
+    // it only copies the numbers into info.
+    BrawAudioProps audio_props;
+    if (auto* audio = query_braw_audio(clip, audio_props)) {
+        info.has_audio = true;
+        info.audio_sample_rate = audio_props.sample_rate;
+        info.audio_channels = audio_props.channels;
+        info.audio_bit_depth = audio_props.bit_depth;
+        info.audio_sample_count = audio_props.sample_count;
+        audio->Release();
+    }
+
+    BRAW_LOG_DEBUG("probe: %dx%d @ %d/%d fps, %llu frames, tc=%lld audio=%s(%dch %dHz %dbit %lld samples) path=%s",
         info.width, info.height, info.fps_num, info.fps_den,
         (unsigned long long)frame_count, (long long)info.first_frame_tc,
+        info.has_audio ? "yes" : "no",
+        info.audio_channels, info.audio_sample_rate, info.audio_bit_depth,
+        (long long)info.audio_sample_count,
         path.c_str());
 
     clip->Release();
@@ -307,10 +377,12 @@ public:
 #define CODEC() static_cast<IBlackmagicRaw*>(m_codec_raw)
 #define CLIP()  static_cast<IBlackmagicRawClip*>(m_clip_raw)
 #define CB()    static_cast<BrawCallbackHandler*>(m_callback_raw)
+#define AUDIO() static_cast<IBlackmagicRawClipAudio*>(m_audio_raw)
 
 BrawReaderContext::BrawReaderContext() = default;
 
 BrawReaderContext::~BrawReaderContext() {
+    if (m_audio_raw) { AUDIO()->Release(); m_audio_raw = nullptr; }
     if (m_clip_raw) { CLIP()->Release(); m_clip_raw = nullptr; }
     if (m_codec_raw) { CODEC()->Release(); m_codec_raw = nullptr; }
     delete CB();
@@ -357,7 +429,19 @@ Result<void> BrawReaderContext::init(const std::string& path) {
     m_out_w = m_src_w;
     m_out_h = m_src_h;
 
-    BRAW_LOG_DEBUG("Reader: opened %dx%d path=%s", m_src_w, m_src_h, path.c_str());
+    // Audio interface — retained on the context (unlike probe) because
+    // decode_audio_f32 calls GetAudioSamples on it repeatedly.
+    BrawAudioProps audio_props;
+    if (auto* audio = query_braw_audio(clip, audio_props)) {
+        m_audio_raw = audio;
+        m_audio_sample_rate = audio_props.sample_rate;
+        m_audio_channels = audio_props.channels;
+        m_audio_bit_depth = audio_props.bit_depth;
+        m_audio_sample_count = audio_props.sample_count;
+    }
+
+    BRAW_LOG_DEBUG("Reader: opened %dx%d audio=%s path=%s",
+        m_src_w, m_src_h, m_audio_raw ? "yes" : "no", path.c_str());
 
     return {};
 }
@@ -482,9 +566,107 @@ Result<std::shared_ptr<Frame>> BrawReaderContext::decode_frame(
     return result_frame;
 }
 
+// ============================================================================
+// Audio read — synchronous PCM extraction via SDK GetAudioSamples
+// ============================================================================
+
+// Convert one native-bit-depth PCM sample frame (interleaved over `channels`)
+// to float32 in [-1, 1]. Supported bit depths: 16, 24, 32 (signed PCM LE).
+static void convert_pcm_le_to_f32(const uint8_t* src, float* dst,
+                                   int64_t sample_frames, int channels,
+                                   int bit_depth) {
+    const int64_t count = sample_frames * channels;
+    if (bit_depth == 16) {
+        constexpr float inv = 1.0f / 32768.0f;
+        const int16_t* s = reinterpret_cast<const int16_t*>(src);
+        for (int64_t i = 0; i < count; i++) {
+            dst[i] = static_cast<float>(s[i]) * inv;
+        }
+    } else if (bit_depth == 24) {
+        // 24-bit signed little-endian, tightly packed (3 bytes per sample).
+        constexpr float inv = 1.0f / 8388608.0f;  // 2^23
+        for (int64_t i = 0; i < count; i++) {
+            int32_t v = static_cast<int32_t>(src[i*3])
+                      | (static_cast<int32_t>(src[i*3 + 1]) << 8)
+                      | (static_cast<int32_t>(src[i*3 + 2]) << 16);
+            // Sign-extend 24-bit → 32-bit
+            if (v & 0x800000) v |= 0xFF000000;
+            dst[i] = static_cast<float>(v) * inv;
+        }
+    } else if (bit_depth == 32) {
+        constexpr float inv = 1.0f / 2147483648.0f;  // 2^31
+        const int32_t* s = reinterpret_cast<const int32_t*>(src);
+        for (int64_t i = 0; i < count; i++) {
+            dst[i] = static_cast<float>(s[i]) * inv;
+        }
+    } else {
+        // Should have been rejected at probe/init — fail loud if it slips through.
+        assert(false && "BRAW: unsupported audio bit depth");
+    }
+}
+
+Result<int64_t> BrawReaderContext::read_audio_f32(int64_t sample_start,
+                                                   int64_t sample_count,
+                                                   std::vector<float>& out_f32) {
+    assert(m_audio_raw && "BrawReaderContext::read_audio_f32: no audio track");
+    assert(sample_start >= 0 && "BrawReaderContext::read_audio_f32: negative start");
+    assert(sample_count > 0 && "BrawReaderContext::read_audio_f32: count must be > 0");
+    assert(m_audio_bit_depth == 16 || m_audio_bit_depth == 24 || m_audio_bit_depth == 32);
+
+    auto* audio = AUDIO();
+
+    // Clamp to available sample count.
+    int64_t avail = m_audio_sample_count - sample_start;
+    if (avail <= 0) {
+        out_f32.clear();
+        return int64_t{0};
+    }
+    int64_t want = std::min(sample_count, avail);
+
+    const int bytes_per_frame = (m_audio_bit_depth / 8) * m_audio_channels;
+    const uint32_t buf_bytes = static_cast<uint32_t>(want * bytes_per_frame);
+    std::vector<uint8_t> native_buf(buf_bytes);
+
+    // bytes_read is optional per the SDK header — we derive payload size
+    // from samples_read * bytes_per_frame, so pass nullptr to skip it.
+    uint32_t samples_read = 0;
+    HRESULT hr = audio->GetAudioSamples(
+        sample_start,
+        native_buf.data(),
+        buf_bytes,
+        static_cast<uint32_t>(want),
+        &samples_read,
+        nullptr);
+
+    if (FAILED(hr)) {
+        return Error::internal("BRAW: GetAudioSamples failed at sample "
+                              + std::to_string(sample_start));
+    }
+
+    // `want` is already clamped to `avail`, so the SDK should deliver
+    // exactly `want` sample-frames on success. A short read past that
+    // clamp means the SDK failed in a way its HRESULT didn't report —
+    // surface it rather than propagate a truncated chunk up the peak-gen
+    // pipeline (see todo_peak_gen_mid_stream_eof.md).
+    if (static_cast<int64_t>(samples_read) != want) {
+        return Error::internal(
+            "BRAW: GetAudioSamples short read — requested "
+            + std::to_string(want) + " frames at sample "
+            + std::to_string(sample_start) + ", got "
+            + std::to_string(samples_read));
+    }
+
+    out_f32.resize(static_cast<size_t>(samples_read) * m_audio_channels);
+    convert_pcm_le_to_f32(native_buf.data(), out_f32.data(),
+                          samples_read, m_audio_channels, m_audio_bit_depth);
+
+    return static_cast<int64_t>(samples_read);
+}
+
 #undef CODEC
 #undef CLIP
 #undef CB
+#undef AUDIO
 
 } // namespace impl
 } // namespace emp

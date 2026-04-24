@@ -41,7 +41,18 @@ local log = require("core.logger").for_area("media")
 -- forces the whole doc to reload, AND per-entry presence-flag
 -- validation in classify_paths catches any future field-addition
 -- where someone forgets to bump this version.
-local CACHE_VERSION = 2
+--
+-- v3 (2026-04-24): EMP now derives first_sample_tc /
+-- has_audio_tc_origin from first_frame_tc for video-with-audio files
+-- (MOVs with tmcd atom, BRAW). Pre-v3 caches have has_audio_tc_origin
+-- = false for these files — relink matching is unaffected, but TC
+-- sync at relink time reads `info.has_audio_tc_origin` to decide
+-- whether to emit start_tc_audio_samples in the metadata write. Stale
+-- hits therefore silently CLEAR the audio_samples field the DRP
+-- importer wrote from MediaStartTime, leaving peak_cache with no
+-- authoritative audio tc_origin → waveforms vanish for every
+-- Media-Managed trim.
+local CACHE_VERSION = 3
 
 -- Fields that MUST be present on every cached info to consider the
 -- entry fresh. The relinker's downstream logic gates behavior on

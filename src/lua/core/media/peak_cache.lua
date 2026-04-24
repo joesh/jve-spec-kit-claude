@@ -50,9 +50,33 @@ local function try_finalize_generating(media_id)
     end
 end
 
---- Try loading an existing peak file and validate its mtime.
+-- Minimum fraction of the media's expected audio sample count that a peak
+-- file must cover to be trusted. Legacy/transient truncated peak files
+-- (see PeakGenerator::FinalizeJob) are rejected here and regenerated.
+-- The 95% threshold tolerates normal AAC-priming / container-duration
+-- rounding while catching the ~50% truncations we've observed in the wild.
+-- The cause of those truncations is not understood — the only repro is
+-- "sometimes, on first project-open after a Resolve Media-Manage export,
+-- peak gen's decoder returns zero frames mid-file and we accept it as
+-- EOF". Left as a TODO; this check makes it self-healing across opens.
+local PEAK_COVERAGE_MIN_FRACTION = 0.95
+
+--- Try loading an existing peak file and validate it against the media
+--- it claims to describe.
+---
+--- Two checks must pass for a peak file to be trusted:
+---   1. Header mtime matches the media's current mtime at second resolution.
+---      (Header stores int64_t source_mtime from st.st_mtime; fs_utils
+---      returns nanosecond-precision float, so we floor.)
+---   2. Header's level-0 bin count covers at least PEAK_COVERAGE_MIN_FRACTION
+---      of the media's expected audio sample count. expected_samples nil
+---      means "caller doesn't know"; coverage check is skipped in that
+---      case (preserves callers outside init_for_project).
+---
+--- On failure, releases the handle, deletes the file, returns false so
+--- the caller triggers regeneration.
 --- @return boolean true if loaded and valid
-local function try_load_existing(media_id, source_mtime)
+local function try_load_existing(media_id, source_mtime, expected_samples)
     local path = peak_file_path(media_id)
     local handle = EMP.PEAK_LOAD(path)
     if not handle then return false end
@@ -61,18 +85,53 @@ local function try_load_existing(media_id, source_mtime)
     assert(hdr, string.format(
         "peak_cache: PEAK_HEADER returned nil for valid handle (media_id=%s)", media_id))
 
-    if hdr.source_mtime == source_mtime then
+    local mtime_matches = (hdr.source_mtime == math.floor(source_mtime))
+    local coverage_ok = true
+    if expected_samples and expected_samples > 0 then
+        -- bins_per_level[1] is level 0 (Lua 1-indexed); covered samples
+        -- ≈ bins × base_spp. Last bin may be partial, so this overstates
+        -- coverage slightly — conservative for the <95% rejection test.
+        -- Assert >0 rather than truthy: 0 is truthy in Lua, and a
+        -- corrupt header with bins=0 or spp=0 would silently classify
+        -- every peak file as truncated.
+        assert(hdr.bins_per_level and hdr.bins_per_level[1]
+                and hdr.bins_per_level[1] > 0,
+            string.format("peak_cache: header bins_per_level[1] invalid for %s (got %s)",
+                media_id, tostring(hdr.bins_per_level and hdr.bins_per_level[1])))
+        assert(hdr.base_spp and hdr.base_spp > 0,
+            string.format("peak_cache: header base_spp invalid for %s (got %s)",
+                media_id, tostring(hdr.base_spp)))
+        local peak_samples = hdr.bins_per_level[1] * hdr.base_spp
+        if peak_samples < expected_samples * PEAK_COVERAGE_MIN_FRACTION then
+            coverage_ok = false
+            log.warn("peak_cache: truncated peaks for %s — "
+                .. "peak covers %d samples, media has %d (%.1f%%); regenerating",
+                media_id, peak_samples, expected_samples,
+                100.0 * peak_samples / expected_samples)
+        end
+    end
+
+    if mtime_matches and coverage_ok then
         peak_handles[media_id] = handle
         generation_status[media_id] = "complete"
         return true
     end
 
-    -- Stale — release, delete, and let caller regenerate
+    -- Stale or truncated — release, delete, and let caller regenerate
     EMP.PEAK_RELEASE(handle)
     os.remove(path)
-    log.event("peak_cache: stale peaks for %s (mtime %d vs %d), regenerating",
-        media_id, hdr.source_mtime, source_mtime)
+    if not mtime_matches then
+        log.event("peak_cache: stale peaks for %s (mtime %d vs %s), regenerating",
+            media_id, hdr.source_mtime, tostring(source_mtime))
+    end
     return false
+end
+
+--- Test hook: exposes try_load_existing for integration tests that
+--- install hand-crafted peak files and verify load-time rejection.
+--- Not part of the public API; production callers go through ensure_peaks.
+function M._try_load_existing_for_test(media_id, source_mtime, expected_samples)
+    return try_load_existing(media_id, source_mtime, expected_samples)
 end
 
 -- ============================================================================
@@ -150,7 +209,17 @@ function M.init_for_project(project_id)
     local Media = require("models.media")
     local audio_media = Media.get_audio_for_project(project_id)
 
-    for _, rec in ipairs(audio_media) do
+    -- Batch-probe every audio media's file to get the authoritative
+    -- audio sample count. We can't trust media.duration_frames — after
+    -- a Resolve Media-Manage, the row still carries the DRP's original
+    -- duration while the on-disk file is trimmed (no back-compat path
+    -- updates duration). The probe cache makes this cheap on reopen.
+    local probe_cache = require("core.media_probe_cache")
+    local media_paths = {}
+    for i, rec in ipairs(audio_media) do media_paths[i] = rec.file_path end
+    local probes = probe_cache.probe_batch(media_paths)
+
+    for i, rec in ipairs(audio_media) do
         assert(rec.file_path and rec.file_path ~= "",
             string.format("peak_cache: media %s has nil/empty file_path", tostring(rec.id)))
 
@@ -169,9 +238,20 @@ function M.init_for_project(project_id)
             goto continue_media
         end
 
+        -- Expected audio sample count from the fresh probe. nil when the
+        -- probe failed (e.g. unreadable file) — try_load_existing then
+        -- skips the coverage check and relies on mtime alone.
+        local info = probes[i]
+        local expected_samples = nil
+        if info and info.duration_us and info.duration_us > 0
+                and info.audio_sample_rate and info.audio_sample_rate > 0 then
+            expected_samples = math.floor(
+                info.duration_us / 1e6 * info.audio_sample_rate)
+        end
+
         local mtime = fs_utils.file_mtime(rec.file_path)
         if mtime then
-            M.ensure_peaks(rec.id, rec.file_path, mtime)
+            M.ensure_peaks(rec.id, rec.file_path, mtime, expected_samples)
         else
             log.warn("peak_cache: could not stat %s — skipping peak gen", rec.file_path)
         end
@@ -186,7 +266,11 @@ end
 
 --- Ensure peaks exist for a media file. Triggers background generation if needed.
 --- Idempotent — safe to call on every render frame.
-function M.ensure_peaks(media_id, media_path, source_mtime)
+--- expected_samples is the media's audio sample count from a fresh probe;
+--- when supplied, try_load_existing rejects peak files that cover less
+--- than PEAK_COVERAGE_MIN_FRACTION of it. Nil preserves the pre-coverage
+--- behavior (mtime check only) for callers outside init_for_project.
+function M.ensure_peaks(media_id, media_path, source_mtime, expected_samples)
     assert(media_id, "peak_cache.ensure_peaks: media_id required")
     assert(media_path, "peak_cache.ensure_peaks: media_path required")
     assert(source_mtime, "peak_cache.ensure_peaks: source_mtime required")
@@ -199,7 +283,7 @@ function M.ensure_peaks(media_id, media_path, source_mtime)
         return
     end
 
-    if try_load_existing(media_id, source_mtime) then return end
+    if try_load_existing(media_id, source_mtime, expected_samples) then return end
 
     request_generation(media_id, media_path)
 end

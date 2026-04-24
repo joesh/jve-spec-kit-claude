@@ -33,6 +33,17 @@ local SPEC = {
         -- empty table per invocation, so executors can iterate unconditionally
         -- without fallback guards.
         media_path_changes = { kind = "table", default = {} },
+        -- Probed TC per changed media. media_relinker already probed each
+        -- candidate file (cached in ~/.jve/probe_cache.json); the planner
+        -- threads the matched candidate's TC here so Phase 2 can sync
+        -- each Media row's metadata to the actually-linked file's TC
+        -- (start_tc_value / start_tc_rate plus audio variants). Without
+        -- this sync, metadata carries the pre-relink file's TC and
+        -- peak_cache computes wrong file-relative sample positions.
+        -- Shape: {[media_id] = probed_tc} where probed_tc is
+        -- {start_tc_value, start_tc_rate, start_tc_audio_samples?,
+        --  start_tc_audio_rate?}.
+        media_tc_updates = { kind = "table", default = {} },
         new_media_records = { kind = "table", default = {} },
         -- media_id → offline_note JSON string. Sentinel "__clear__"
         -- means "explicitly clear any existing note" (used when a
@@ -57,8 +68,9 @@ function M.register(executors, undoers, db)
         local Media = require("models.media")
 
         local old_clip_state  -- set in Phase 3
-        local old_media_paths  -- set in Phase 2 from batch_set_file_paths
+        local old_media_file_state  -- set in Phase 2 from batch_set_file_paths
         local media_path_changes = args.media_path_changes
+        local media_tc_updates = args.media_tc_updates
         local new_media_records = args.new_media_records
         local media_count = 0
 
@@ -110,7 +122,15 @@ function M.register(executors, undoers, db)
         -- Phase 2: Update media paths via batch helper — one SELECT for
         -- old paths (undo state), one prepared UPDATE loop for writes.
         -- mark_dirty accumulates into the outer begin_batch set.
-        old_media_paths = Media.batch_set_file_paths(media_path_changes)
+        -- Phase 2: atomically update each row's linked-file state. Path
+        -- always changes; TC metadata moves with it when media_relinker
+        -- supplied a probed TC. Resolve's Media Manage trims file heads,
+        -- which shifts embedded TC forward from the DRP's MediaStartTime
+        -- (the original file's TC) — without syncing metadata, peak_cache
+        -- computes wrong file-relative sample positions and waveforms
+        -- disappear for clips that source content past the trimmed head.
+        old_media_file_state = Media.batch_set_file_paths(
+            media_path_changes, media_tc_updates)
         for _ in pairs(media_path_changes) do media_count = media_count + 1 end
 
         -- Phase 2b: Apply offline_note changes. Snapshot old values for
@@ -161,7 +181,7 @@ function M.register(executors, undoers, db)
 
         -- Persist undo state
         command:set_parameter("old_clip_state", old_clip_state)
-        command:set_parameter("old_media_paths", old_media_paths)
+        command:set_parameter("old_media_file_state", old_media_file_state)
         command:set_parameter("old_offline_notes", old_offline_notes)
 
         -- Clip writes don't call mark_dirty on media rows, but any clip
@@ -204,12 +224,11 @@ function M.register(executors, undoers, db)
     undoers["RelinkClips"] = function(command)
         local args = command:get_all_parameters()
         assert(args.old_clip_state, "RelinkClips undo: old_clip_state missing")
-        assert(type(args.old_media_paths) == "table", "RelinkClips undo: old_media_paths missing")
+        assert(type(args.old_media_file_state) == "table",
+            "RelinkClips undo: old_media_file_state missing")
 
         local Clip = require("models.clip")
         local Media = require("models.media")
-
-        local old_media_paths = args.old_media_paths
 
         -- No transaction here — command_manager provides one.
         -- Any assert/error unwinds to command_manager which rolls back.
@@ -221,10 +240,10 @@ function M.register(executors, undoers, db)
         -- Phase 1: Restore clips via model batch method
         Clip.batch_update_source(args.old_clip_state)
 
-        -- Phase 2: Restore media paths via the same batch helper used
-        -- by the executor. Discards the return value (we're restoring,
-        -- not capturing forward-undo state).
-        Media.batch_set_file_paths(old_media_paths)
+        -- Phase 2: Restore each Media row's linked-file state (file_path +
+        -- metadata) atomically. The single call is symmetric with the
+        -- executor's batch_set_file_paths.
+        Media.batch_restore_file_state(args.old_media_file_state)
 
         -- Phase 2b: Restore offline_notes to their pre-execute values.
         -- old_offline_notes was captured as a {[mid] = string|nil} map.
