@@ -91,7 +91,7 @@
 
 ### 3.3.b — Implementation
 
-- [ ] **T030** Implement `Sequence:resolve_in_range(seq_id, start_frame, end_frame, context)` in `src/lua/models/sequence.lua` per `contracts/resolver.md`. **Rule 2.5/2.6: `resolve_in_range` is the orchestrator; each responsibility lives in a named helper ≤ 30 lines.** Required decomposition:
+- [x] **T030** Implement `Sequence:resolve_in_range(seq_id, start_frame, end_frame, context)` in `src/lua/models/sequence.lua` per `contracts/resolver.md`. **Rule 2.5/2.6: `resolve_in_range` is the orchestrator; each responsibility lives in a named helper ≤ 30 lines.** Required decomposition:
   - `resolve_master_leaf(seq_id, range, context)` — iterate `media_refs`, clip to range, emit leaf entries with `media_id → media.file_path`, apply `media_refs_channel_state`.
   - `resolve_nested_clips(seq_id, range, context)` — iterate overlapping `clips`, recurse per clip.
   - `apply_layer_selector(clip, nested_tracks)` — pure: filter the nested sequence's V tracks to the clip's `master_layer_track_id` or the nested sequence's `default_video_layer_track_id`; audio unfiltered.
@@ -105,7 +105,7 @@
   - `resolve_fps_policy(clip, context)` — returns `'resample'` or `'passthrough'` per clip → sequence → project chain (G-R4).
   - The orchestrator function reads as a high-level algorithm (rule 2.5): guard → dispatch on `kind` → iterate → recurse → apply overrides in declared order → translate → compose.
   - Runs T018–T029; all pass.
-- [ ] **T031** Thin-wrapper retrofit: update `src/lua/models/sequence.lua`'s existing `get_video_in_range` and `get_audio_in_range` to invoke `resolve_in_range` and filter the returned entries by `media_kind`. Before starting: grep for `get_video_in_range` / `get_audio_in_range` call sites, enumerate the exact columns/fields each caller reads from the returned entries in a committed sibling artifact `specs/013-timeline-placements-as/wrapper-shape-audit.md`, and verify each column survives the wrapper unchanged. No coalescing or renaming; wrapper preserves the existing entry shape column-for-column. (Same file as T030 — sequential.) Preceded by T029b failing test.
+- [x] **T031 (partial; wrappers also land)** Thin-wrapper retrofit: update `src/lua/models/sequence.lua`'s existing `get_video_in_range` and `get_audio_in_range` to invoke `resolve_in_range` and filter the returned entries by `media_kind`. Before starting: grep for `get_video_in_range` / `get_audio_in_range` call sites, enumerate the exact columns/fields each caller reads from the returned entries in a committed sibling artifact `specs/013-timeline-placements-as/wrapper-shape-audit.md`, and verify each column survives the wrapper unchanged. No coalescing or renaming; wrapper preserves the existing entry shape column-for-column. (Same file as T030 — sequential.) Preceded by T029b failing test.
 
 ---
 

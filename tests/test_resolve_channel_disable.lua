@@ -48,6 +48,7 @@ assert(db:exec(
     "INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db) "
     .. "VALUES ('c', 2, 0, 0.0)"))
 
+require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
 local entries = Sequence:resolve_in_range("e", 0, 48000, {
     recursing_into = {},

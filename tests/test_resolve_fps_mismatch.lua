@@ -61,6 +61,7 @@ assert(db:exec(
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('c-passthru', 'p1', 'e24', 'e-v1', 'm25', 'B', 200, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)"))
 
+require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
 local entries = Sequence:resolve_in_range("e24", 0, 400, {
     recursing_into = {},

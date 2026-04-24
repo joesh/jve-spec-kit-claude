@@ -65,6 +65,28 @@ function M.resolve_repo_path(relative)
     return repo_root .. "/" .. relative
 end
 
+--- Touch every path in the current DB's `media` table so that reachability
+--- checks (io.open, etc.) see the fixtures as online. Used by tests that
+--- exercise the resolver or renderer with synthetic media rows.
+--- Creates parent directories as needed. Safe to call more than once.
+function M.touch_media_fixtures()
+    local database = require("core.database")
+    local db = database.get_connection()
+    assert(db, "touch_media_fixtures: no database connection")
+    local stmt = db:prepare("SELECT file_path FROM media")
+    assert(stmt and stmt:exec(), "touch_media_fixtures: query failed")
+    while stmt:next() do
+        local path = stmt:value(0)
+        if path and path ~= "" then
+            local dir = path:match("(.*)/")
+            if dir and dir ~= "" then os.execute("mkdir -p " .. dir) end
+            local fh = io.open(path, "a")
+            if fh then fh:close() end
+        end
+    end
+    stmt:finalize()
+end
+
 --- Resolve a fixture path and ASSERT it exists. Tests must not silently pass
 --- when their fixture files are missing.
 function M.require_fixture(relative)

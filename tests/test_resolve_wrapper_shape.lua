@@ -64,6 +64,7 @@ assert(db:exec(
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca', 0, 48000, 0, 48000, 'passthrough', 1, 1.0, 0, 0, 0)"))
 
+require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
 
 local v_entries = Sequence:get_video_in_range("e", 0, 200)

@@ -48,6 +48,7 @@ assert(db:exec(
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('c', 'p1', 'e', 'e-v1', 'm', 'c', 0, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)"))
 
+-- Deliberately NOT touching fixtures — the whole point is the file is offline.
 local Sequence = require("models.sequence")
 local entries = Sequence:resolve_in_range("e", 0, 200, {
     recursing_into = {},

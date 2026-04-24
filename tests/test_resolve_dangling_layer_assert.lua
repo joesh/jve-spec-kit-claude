@@ -53,6 +53,7 @@ assert(db:exec(
 -- Re-enable FK for subsequent ops (the corruption is already in place).
 assert(db:exec("PRAGMA foreign_keys = ON"))
 
+require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
 local ok, err = pcall(function()
     Sequence:resolve_in_range("e", 0, 200, {

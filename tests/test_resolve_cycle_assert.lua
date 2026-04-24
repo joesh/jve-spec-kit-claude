@@ -40,6 +40,7 @@ end
 assert(raw_clip("c-A-in-B", "B", "B-v1", "A"), "raw clip B→A insert")
 assert(raw_clip("c-B-in-A", "A", "A-v1", "B"), "raw clip A→B insert")
 
+require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
 local ok, err = pcall(function()
     Sequence:resolve_in_range("A", 0, 200, {

@@ -64,6 +64,7 @@ assert(db:exec(
     .. "created_at, modified_at) "
     .. "VALUES ('c-B', 'p1', 'e', 'e-v1', 'm', 'B', 200, 100, 0, 100, 'm-V2', 'passthrough', 1, 1.0, 0, 0, 0)"))
 
+require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
 local entries = Sequence:resolve_in_range("e", 0, 400, {
     recursing_into = {},

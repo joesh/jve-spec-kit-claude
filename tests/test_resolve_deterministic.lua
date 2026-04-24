@@ -54,6 +54,7 @@ for i = 1, 3 do
         .. "'passthrough', 1, 1.0, 0, 0, 0)", i, i, i)))
 end
 
+require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
 local function order(entries)
     local ids = {}

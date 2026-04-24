@@ -51,6 +51,7 @@ for _, r in ipairs(refs) do
         r.id, r.track, r.media)))
 end
 
+require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
 local entries = Sequence:resolve_in_range("m", 0, 100, {
     recursing_into = {},
