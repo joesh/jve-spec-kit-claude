@@ -33,7 +33,11 @@ end
 --- @return number|nil mtime
 function M.file_mtime(path)
     if not path or path == "" then return nil end
-    local ok, data = M.try_shell_capture(string.format("stat -f %%m %q", path))
+    -- `%Fm` = nanosecond-fraction mtime ("1745999123.123456789"). Whole-
+    -- second (`%m`) resolution misses same-second rewrites, which breaks
+    -- media_status's in-place-rewrite detection — two writes inside one
+    -- second compare equal, so `media_content_changed` is never emitted.
+    local ok, data = M.try_shell_capture(string.format("stat -f %%Fm %q", path))
     if not ok then return nil end
     local mtime = tonumber((data:gsub("%s+$", "")))
     assert(mtime, string.format(
