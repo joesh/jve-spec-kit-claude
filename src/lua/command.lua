@@ -302,10 +302,9 @@ function M.load_filtered_history_branch(seq_cursor, global_cursor, sequence_id)
     local commands = {}
     local seen = {}
 
-    -- Helper: walk a branch (ancestors + forward) for commands matching a filter
+    -- tip search + spine back-walk, including undone-but-redoable
+    -- commands. `cursor == 0` is handled by the IS NULL branch below.
     local function walk_branch(cursor, filter_sql, bind_values)
-        if cursor == 0 and #bind_values == 0 then return end
-
         -- Find tip by walking forward from cursor
         local tip = cursor
         while true do

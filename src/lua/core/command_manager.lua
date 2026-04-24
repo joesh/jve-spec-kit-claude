@@ -1915,21 +1915,61 @@ function M:list_history_entries()
     return out, visible_current
 end
 
+-- parent_of maps seq→parent_sequence_number (load_parent_tree coerces
+-- top-level NULL to 0, so parent_of[existing_seq] is always defined;
+-- nil means `seq` isn't in the DB, which is a DB inconsistency bug).
+local function next_parent(seq, parent_of)
+    local parent = parent_of[seq]
+    assert(parent, string.format(
+        "jump_to_sequence_number: parent_of[%d] missing — command not in DB", seq))
+    return parent
+end
+
+local function collect_ancestors_into(set, start_seq, parent_of)
+    local seq = start_seq
+    while true do
+        set[seq] = true
+        if seq == 0 then return end
+        seq = next_parent(seq, parent_of)
+    end
+end
+
+local function build_chain_from(start_seq, parent_of)
+    local chain = {}
+    local seq = start_seq
+    while true do
+        table.insert(chain, seq)
+        if seq == 0 then return chain end
+        seq = next_parent(seq, parent_of)
+    end
+end
+
+local function find_lca(chain, ancestor_set)
+    for i, seq in ipairs(chain) do
+        if ancestor_set[seq] then return seq, i end
+    end
+    return nil, nil
+end
+
+-- Uses the same scope-filtered cursor as the history panel (active
+-- sequence stack + global stack); the loop's termination check must
+-- agree with what M.undo() consumes.
 function M:jump_to_sequence_number(target_sequence_number)
     if type(target_sequence_number) ~= "number" or target_sequence_number < 0 then
         return false, "Invalid target sequence number"
     end
-
-    local current = history.get_current_sequence_number() or 0
-    if target_sequence_number == current then
-        return true
-    end
-
     if not db then
         return false, "No database connection"
     end
 
-    -- Load parent tree via Command model (no raw SQL in command_manager)
+    local function merged_current()
+        return history.merged_current_sequence_number(get_effective_sequence_id())
+    end
+
+    if target_sequence_number == merged_current() then
+        return true
+    end
+
     local Command = require("command")
     local parent_of, exists = Command.load_parent_tree()
 
@@ -1937,57 +1977,43 @@ function M:jump_to_sequence_number(target_sequence_number)
         return false, "Unknown sequence number: " .. tostring(target_sequence_number)
     end
 
+    -- Walk from BOTH raw cursors: parent_sequence_number chains can hop
+    -- stacks, so walking only one cursor can miss ancestors on the other.
+    local seq_id = get_effective_sequence_id()
+    local seq_cursor = (seq_id and history.get_sequence_cursor(seq_id)) or 0
+    local global_cursor = history.get_global_cursor() or 0
     local ancestor_set = {}
-    do
-        local seq = current
-        while true do
-            ancestor_set[seq] = true
-            if seq == 0 then
-                break
-            end
-            seq = parent_of[seq] or 0
-        end
-    end
+    collect_ancestors_into(ancestor_set, seq_cursor, parent_of)
+    collect_ancestors_into(ancestor_set, global_cursor, parent_of)
 
-    local target_chain = {}
-    do
-        local seq = target_sequence_number
-        while true do
-            table.insert(target_chain, seq)
-            if seq == 0 then
-                break
-            end
-            seq = parent_of[seq] or 0
-        end
-    end
-
-    local lca = nil
-    local lca_index = nil
-    for i, seq in ipairs(target_chain) do
-        if ancestor_set[seq] then
-            lca = seq
-            lca_index = i
-            break
-        end
-    end
+    local target_chain = build_chain_from(target_sequence_number, parent_of)
+    local lca, lca_index = find_lca(target_chain, ancestor_set)
     if not lca_index then
         return false, "Failed to compute history join point"
     end
 
-    while (history.get_current_sequence_number() or 0) ~= lca do
+    while merged_current() ~= lca do
         local result = M.undo()
-        if not result or not result.success then
-            return false, "Undo failed: " .. tostring((result and result.error_message) or "unknown")
+        if not result.success then
+            return false, "Undo failed: " .. result.error_message
         end
     end
 
     for i = lca_index - 1, 1, -1 do
-        local seq = target_chain[i]
-        local result = M.redo_to_sequence_number(seq)
-        if not result or not result.success then
-            return false, "Redo failed: " .. tostring((result and result.error_message) or "unknown")
+        local result = M.redo_to_sequence_number(target_chain[i])
+        if not result.success then
+            return false, "Redo failed: " .. result.error_message
         end
     end
+
+    -- Postcondition: the undo/redo sequence must have landed exactly at
+    -- the requested target. Silent drift would leave the UI showing the
+    -- wrong history position with no indication a jump went wrong.
+    local landed = merged_current()
+    assert(landed == target_sequence_number, string.format(
+        "jump_to_sequence_number: expected merged cursor at %d after jump, " ..
+        "got %d (lca=%d, chain_len=%d)",
+        target_sequence_number, landed, lca, #target_chain))
 
     return true
 end
