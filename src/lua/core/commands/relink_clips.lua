@@ -57,7 +57,7 @@ function M.register(executors, undoers, db)
         local Media = require("models.media")
 
         local old_clip_state  -- set in Phase 3
-        local old_media_paths = {}
+        local old_media_paths  -- set in Phase 2 from batch_set_file_paths
         local media_path_changes = args.media_path_changes
         local new_media_records = args.new_media_records
         local media_count = 0
