@@ -76,15 +76,15 @@
 
 - [x] **T018 [P]** CT-R1: master resolution (leaf) returns one `ResolvedEntry` per media_ref with correct `media_path` and provenance length 1. Path: `tests/test_resolve_master_leaf.lua`.
 - [x] **T019 [P]** CT-R2: one-level nested resolution through a clip; provenance length 2; `timeline_start` translated through the clip's window. Path: `tests/test_resolve_nested_one_level.lua`.
-- [ ] **T020 [P]** CT-R3: three-level chain (nested → nested → master); provenance length 3. Path: `tests/test_resolve_nested_deep.lua`.
+- [x] **T020 [P]** CT-R3: three-level chain (nested → nested → master); provenance length 3. Path: `tests/test_resolve_nested_deep.lua`.
 - [x] **T021 [P]** CT-R4: multicam layer override — clip's `master_layer_track_id=V2` makes the returned video entry's `media_path` come from V2's media_ref, not V1's. Path: `tests/test_resolve_layer_override.lua`.
 - [x] **T022 [P]** CT-R5: audio channel disable override — `clip_channel_override(channel=2, enabled=0)` yields `enabled=false` only for channel 2. Path: `tests/test_resolve_channel_disable.lua`.
-- [ ] **T023 [P]** CT-R6: channel gain composition — per-clip override (-6 dB) wins over master state (-3 dB). Path: `tests/test_resolve_channel_gain.lua`.
+- [x] **T023 [P]** CT-R6: channel gain composition — per-clip override (-6 dB) wins over master state (-3 dB). Path: `tests/test_resolve_channel_gain.lua`.
 - [x] **T024 [P]** CT-R7: cycle-asserted — direct-SQL create a cycle, call resolver, expect loud assert naming both seq ids and provenance. Path: `tests/test_resolve_cycle_assert.lua`.
 - [x] **T025 [P]** CT-R8: fps-mismatch `resample` vs `passthrough` output differ per the 25/24 ratio. Path: `tests/test_resolve_fps_mismatch.lua`.
 - [x] **T026 [P]** CT-R9: offline leaf yields synthetic entry with `media_path=nil`, `enabled=false`, provenance intact. Path: `tests/test_resolve_offline_leaf.lua`.
 - [x] **T027 [P]** CT-R10: export parity — `export_mode=true` and `export_mode=false` produce byte-identical output for the same DB state. Path: `tests/test_resolve_export_parity.lua`.
-- [ ] **T028 [P]** CT-R11: deterministic ordering across repeated calls on a sequence with overlapping clips. Path: `tests/test_resolve_deterministic.lua`.
+- [x] **T028 [P]** CT-R11: deterministic ordering across repeated calls on a sequence with overlapping clips. Path: `tests/test_resolve_deterministic.lua`.
 - [x] **T029 [P]** NEW (from resolver.md G-R5 fix): dangling `master_layer_track_id` — bypass FK via direct SQL to leave a live-but-dangling id, call resolver, expect loud assert with clip id + dangling track id (defense-in-depth, not a fallback). Path: `tests/test_resolve_dangling_layer_assert.lua`.
 - [ ] **T029a [P]** Write failing test for INV-5 audio-channel-out-of-bounds at resolve time (paired with T013a at the resolver level). Path: `tests/test_resolve_channel_index_oob_assert.lua`.
 - [x] **T029b [P]** Write failing test for the thin-wrapper retrofit (pre-T031): `get_video_in_range` and `get_audio_in_range` return the SAME flat-entry shape the current TMB consumer expects, filtered by `media_kind`. Drives TMB compatibility without forking the resolver. Path: `tests/test_resolve_wrapper_shape.lua`.
