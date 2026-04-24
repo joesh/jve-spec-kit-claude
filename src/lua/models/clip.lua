@@ -1175,6 +1175,110 @@ function M.update(id, fields)
 end
 
 -- ===========================================================================
+-- Feature 013 (T041): source<->timeline frame conversion under a clip's
+-- policy. A single clip stores timeline_start/duration in owner-timebase
+-- frames AND source_in/out in nested-timebase frames; to trim by N owner
+-- frames you have to shift source bounds by the policy-appropriate ratio.
+-- ===========================================================================
+
+--- Convert an owner-timebase delta to the nested-timebase delta for a clip
+--- under its own fps_mismatch_policy.
+---   resample    : scale by nested.fps / owner.fps (so owner-frame trim
+---                 corresponds to the right number of native frames)
+---   passthrough : 1:1 (owner frames ARE counted as-if already in owner fps)
+--- Uses round-nearest on the multiply, matching the round used at Insert.
+--- nested_fps_num/den describe the nested sequence's native timebase.
+function M.owner_delta_to_source(policy, owner_delta,
+                                 owner_fps_num, owner_fps_den,
+                                 nested_fps_num, nested_fps_den)
+    assert(type(owner_delta) == "number",
+        "Clip.owner_delta_to_source: owner_delta must be integer")
+    if policy == "passthrough" then
+        return owner_delta
+    end
+    assert(policy == "resample",
+        "Clip.owner_delta_to_source: unknown policy " .. tostring(policy))
+    assert(owner_fps_num > 0 and owner_fps_den > 0
+       and nested_fps_num > 0 and nested_fps_den > 0,
+        "Clip.owner_delta_to_source: invalid fps")
+    local ratio = (nested_fps_num / nested_fps_den)
+                / (owner_fps_num  / owner_fps_den)
+    if owner_delta >= 0 then
+        return math.floor(owner_delta * ratio + 0.5)
+    end
+    return -math.floor(-owner_delta * ratio + 0.5)
+end
+
+--- Return every clip on `track_id` that overlaps the owner-timebase range
+--- [window_start, window_end), ordered by timeline_start_frame. Each row is
+--- a plain table carrying the fields needed to plan an occlusion mutation.
+--- Used by Overwrite to compute its remove/trim/split plan.
+function M.find_overlapping_on_track(track_id, window_start, window_end)
+    assert(track_id and track_id ~= "",
+        "Clip.find_overlapping_on_track: track_id required")
+    assert(type(window_start) == "number" and type(window_end) == "number",
+        "Clip.find_overlapping_on_track: window must be integer pair")
+    assert(window_end > window_start,
+        "Clip.find_overlapping_on_track: empty/inverted window")
+
+    local db = require("core.database").get_connection()
+    local stmt = db:prepare([[
+        SELECT id, project_id, owner_sequence_id, track_id, nested_sequence_id,
+               name, timeline_start_frame, duration_frames,
+               source_in_frame, source_out_frame,
+               master_layer_track_id, fps_mismatch_policy,
+               enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
+        FROM clips
+        WHERE track_id = ?
+          AND timeline_start_frame < ?
+          AND (timeline_start_frame + duration_frames) > ?
+        ORDER BY timeline_start_frame ASC
+    ]])
+    assert(stmt, "Clip.find_overlapping_on_track: prepare failed")
+    stmt:bind_value(1, track_id)
+    stmt:bind_value(2, window_end)
+    stmt:bind_value(3, window_start)
+    assert(stmt:exec(), "Clip.find_overlapping_on_track: exec failed")
+
+    local rows = {}
+    while stmt:next() do
+        rows[#rows + 1] = {
+            id                    = stmt:value(0),
+            project_id            = stmt:value(1),
+            owner_sequence_id     = stmt:value(2),
+            track_id              = stmt:value(3),
+            nested_sequence_id    = stmt:value(4),
+            name                  = stmt:value(5),
+            timeline_start_frame  = stmt:value(6),
+            duration_frames       = stmt:value(7),
+            source_in_frame       = stmt:value(8),
+            source_out_frame      = stmt:value(9),
+            master_layer_track_id = stmt:value(10),
+            fps_mismatch_policy   = stmt:value(11),
+            enabled               = stmt:value(12) == 1,
+            volume                = stmt:value(13),
+            mark_in_frame         = stmt:value(14),
+            mark_out_frame        = stmt:value(15),
+            playhead_frame        = stmt:value(16),
+        }
+    end
+    stmt:finalize()
+    return rows
+end
+
+--- Low-level UPDATE: set timeline + duration + source bounds on one clip.
+--- INV-4 is re-checked by Clip.update which we delegate to.
+function M.update_bounds(id, timeline_start_frame, duration_frames,
+                        source_in_frame, source_out_frame)
+    return M.update(id, {
+        timeline_start_frame = timeline_start_frame,
+        duration_frames      = duration_frames,
+        source_in_frame      = source_in_frame,
+        source_out_frame     = source_out_frame,
+    })
+end
+
+-- ===========================================================================
 -- Feature 013 (T040): ripple + batch operations for Insert's write path.
 -- ===========================================================================
 

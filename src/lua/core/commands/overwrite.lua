@@ -1,268 +1,363 @@
---- Overwrite command - wrapper for AddClipsToSequence(edit_type="overwrite")
+--- Overwrite command (Feature 013, rewrite per T041).
 --
--- Responsibilities:
--- - Load masterclip sequence and resolve stream timing
--- - Delegate to AddClipsToSequence for actual overwrite
+-- Same placement shape as Insert (writes 1 or 2 V9 clips rows linked by
+-- clip_links; fps_mismatch_policy frozen on the row; per-medium native
+-- durations) — differs only in collision strategy. Existing clips on the
+-- target tracks that overlap the new clip's [start, start + duration) are
+-- removed, trimmed, or split — not rippled.
 --
--- Invariants:
--- - Requires master_clip_id (masterclip sequence ID)
--- - Timing comes from stream clips in native units (frames for video, samples for audio)
+-- Occlusion cases, for each overlapping existing clip E vs the new range
+-- [n_start, n_end):
+--   (a) E fully inside new range              → DELETE E
+--   (b) E's tail overlaps from the right      → trim E to end at n_start
+--   (c) E's head overlaps from the left       → trim E to start at n_end
+--   (d) E straddles new range                 → split E at both edges
+-- The source bounds shift under E's own fps_mismatch_policy, so resample
+-- clips trim by the fps ratio and passthrough clips trim 1:1.
+--
+-- SQL isolation: all DB access goes through models.
 --
 -- @file overwrite.lua
 
 local M = {}
 
-local Sequence = require('models.sequence')
-local Media = require('models.media')
-local rational_helpers = require('core.command_rational_helpers')
-local clip_edit_helper = require('core.clip_edit_helper')
-local log = require('core.logger').for_area("commands")
+local uuid          = require("uuid")
+local Clip          = require("models.clip")
+local place_shared  = require("core.commands._place_shared")
+local log           = require("core.logger").for_area("commands")
+
+-- Plan + apply occlusion against one target track. Returns the capture
+-- used by undo (deleted rows' full prior state, trimmed rows' prior bounds,
+-- newly-written right-half ids from straddle splits).
+local function occlude_track(track_id, owner_seq, n_start, n_end)
+    local overlapping = Clip.find_overlapping_on_track(track_id, n_start, n_end)
+
+    local deleted_rows  = {}
+    local trimmed       = {}
+    local split_new_ids = {}
+
+    local Sequence = require("models.sequence")
+
+    for _, e in ipairs(overlapping) do
+        local e_start = e.timeline_start_frame
+        local e_end   = e_start + e.duration_frames
+
+        -- Need nested's fps to convert owner-frame trim deltas to source
+        -- frames under E's own fps_mismatch_policy. Load per clip.
+        local nested = Sequence.find(e.nested_sequence_id)
+        assert(nested, string.format(
+            "Overwrite: nested %s of clip %s not found",
+            tostring(e.nested_sequence_id), tostring(e.id)))
+
+        if n_start <= e_start and n_end >= e_end then
+            -- (a) fully covered → DELETE
+            deleted_rows[#deleted_rows + 1] = e
+            Clip.delete_by_ids({ e.id })
+
+        elseif n_start > e_start and n_end >= e_end then
+            -- (b) tail-overlap on E: trim E to end at n_start.
+            local new_duration = n_start - e_start
+            local trim_delta   = e.duration_frames - new_duration
+            local source_delta = Clip.owner_delta_to_source(
+                e.fps_mismatch_policy, trim_delta,
+                owner_seq.fps_numerator, owner_seq.fps_denominator,
+                nested.fps_numerator,    nested.fps_denominator)
+            trimmed[#trimmed + 1] = {
+                id = e.id,
+                prior = {
+                    timeline_start_frame = e.timeline_start_frame,
+                    duration_frames      = e.duration_frames,
+                    source_in_frame      = e.source_in_frame,
+                    source_out_frame     = e.source_out_frame,
+                },
+            }
+            Clip.update_bounds(e.id,
+                e.timeline_start_frame,
+                new_duration,
+                e.source_in_frame,
+                e.source_out_frame - source_delta)
+
+        elseif n_start <= e_start and n_end < e_end then
+            -- (c) head-overlap on E: trim E to start at n_end.
+            local shift        = n_end - e_start
+            local new_duration = e.duration_frames - shift
+            local source_delta = Clip.owner_delta_to_source(
+                e.fps_mismatch_policy, shift,
+                owner_seq.fps_numerator, owner_seq.fps_denominator,
+                nested.fps_numerator,    nested.fps_denominator)
+            trimmed[#trimmed + 1] = {
+                id = e.id,
+                prior = {
+                    timeline_start_frame = e.timeline_start_frame,
+                    duration_frames      = e.duration_frames,
+                    source_in_frame      = e.source_in_frame,
+                    source_out_frame     = e.source_out_frame,
+                },
+            }
+            Clip.update_bounds(e.id,
+                n_end,
+                new_duration,
+                e.source_in_frame + source_delta,
+                e.source_out_frame)
+
+        elseif n_start > e_start and n_end < e_end then
+            -- (d) straddle: shrink E to [e_start, n_start), new right-half
+            -- at [n_end, e_end) with source bounds split under E's policy.
+            local left_duration = n_start - e_start
+            local right_duration = e_end - n_end
+            local left_trim_delta = e.duration_frames - left_duration
+            local left_source_delta = Clip.owner_delta_to_source(
+                e.fps_mismatch_policy, left_trim_delta,
+                owner_seq.fps_numerator, owner_seq.fps_denominator,
+                nested.fps_numerator,    nested.fps_denominator)
+            local right_owner_shift = n_end - e_start
+            local right_source_delta = Clip.owner_delta_to_source(
+                e.fps_mismatch_policy, right_owner_shift,
+                owner_seq.fps_numerator, owner_seq.fps_denominator,
+                nested.fps_numerator,    nested.fps_denominator)
+            trimmed[#trimmed + 1] = {
+                id = e.id,
+                prior = {
+                    timeline_start_frame = e.timeline_start_frame,
+                    duration_frames      = e.duration_frames,
+                    source_in_frame      = e.source_in_frame,
+                    source_out_frame     = e.source_out_frame,
+                },
+            }
+            Clip.update_bounds(e.id,
+                e.timeline_start_frame,
+                left_duration,
+                e.source_in_frame,
+                e.source_out_frame - left_source_delta)
+            local right_id = Clip.create({
+                id                    = uuid.generate(),
+                project_id            = e.project_id,
+                owner_sequence_id     = e.owner_sequence_id,
+                track_id              = e.track_id,
+                nested_sequence_id    = e.nested_sequence_id,
+                name                  = e.name,
+                timeline_start_frame  = n_end,
+                duration_frames       = right_duration,
+                source_in_frame       = e.source_in_frame + right_source_delta,
+                source_out_frame      = e.source_out_frame,
+                master_layer_track_id = e.master_layer_track_id,
+                fps_mismatch_policy   = e.fps_mismatch_policy,
+                enabled               = e.enabled,
+                volume                = e.volume,
+                mark_in_frame         = e.mark_in_frame,
+                mark_out_frame        = e.mark_out_frame,
+                playhead_frame        = e.playhead_frame,
+            })
+            split_new_ids[#split_new_ids + 1] = right_id
+
+        else
+            error(string.format(
+                "Overwrite: unreachable occlusion case — clip=%s E=[%d,%d) "
+                .. "N=[%d,%d)", e.id, e_start, e_end, n_start, n_end))
+        end
+    end
+
+    return {
+        deleted       = deleted_rows,
+        trimmed       = trimmed,
+        split_new_ids = split_new_ids,
+    }
+end
+
+function M.execute(args)
+    local plan = place_shared.plan_placement(args)
+    local n_start = plan.start_frame
+    local n_end   = plan.start_frame + plan.owner_duration
+
+    -- Occlude BEFORE inserting the new rows so their INSERT doesn't collide
+    -- with the clip we're about to trim/remove.
+    local occluded = {}
+    for _, track_id in pairs(plan.targets) do
+        occluded[track_id] = occlude_track(
+            track_id, plan.owner, n_start, n_end)
+    end
+
+    local written = place_shared.write_clips(plan)
+
+    log.event("Overwrite: owner=%s nested=%s policy=%s duration=%d clips=%d",
+        plan.owner.id, plan.nested.id, plan.policy,
+        plan.owner_duration, #written.created_clip_ids)
+
+    return {
+        created_clip_ids    = written.created_clip_ids,
+        video_clip_id       = written.video_clip_id,
+        audio_clip_id       = written.audio_clip_id,
+        link_group_id       = written.link_group_id,
+        duration_frames     = plan.owner_duration,
+        fps_mismatch_policy = plan.policy,
+        occluded            = occluded,
+    }
+end
+
+-- ---------------------------------------------------------------------------
+-- M.register — command_manager wiring.
+-- ---------------------------------------------------------------------------
 
 local SPEC = {
     args = {
-        advance_playhead = { kind = "boolean" },
-        clip_id = {},
-        clip_name = {},
-        dry_run = { kind = "boolean" },
-        duration = {},
-        duration_value = {},
-        master_clip_id = {},  -- Masterclip sequence ID
-        media_id = {},
-        overwrite_time = {},
-        project_id = { required = true },
-        sequence_id = {},
-        source_in = {},
-        source_in_value = {},
-        source_out = {},
-        source_out_value = {},
-        track_id = {},
+        sequence_id           = { required = true },
+        nested_sequence_id    = { required = true },
+        timeline_start_frame  = { required = true },
+        target_video_track_id = {},
+        target_audio_track_id = {},
+        fps_mismatch_policy   = {},
+        clip_name             = {},
     },
     persisted = {
-        -- Delegate storage to AddClipsToSequence
+        created_clip_ids       = {},
+        created_link_group_id  = "",
+        occluded_capture       = {},
+        duration_frames        = 0,
+        fps_mismatch_policy    = "",
     },
 }
 
--- luacheck: ignore 211 (_get_timeline_state defined but unused - kept for future use)
-local function _get_timeline_state()
-    local ok, mod = pcall(require, 'ui.timeline.timeline_state')
-    return ok and mod or nil
+local function build_insert_mutation_entry(clip_id)
+    local row = Clip.load_v13_row(clip_id)
+    assert(row, "Overwrite: could not re-read clip " .. tostring(clip_id))
+    return {
+        id                    = row.id,
+        owner_sequence_id     = row.owner_sequence_id,
+        track_sequence_id     = row.owner_sequence_id,
+        track_id              = row.track_id,
+        nested_sequence_id    = row.nested_sequence_id,
+        start_value           = row.timeline_start_frame,
+        timeline_start        = row.timeline_start_frame,
+        duration_value        = row.duration_frames,
+        duration              = row.duration_frames,
+        source_in             = row.source_in_frame,
+        source_out            = row.source_out_frame,
+        master_layer_track_id = row.master_layer_track_id,
+        fps_mismatch_policy   = row.fps_mismatch_policy,
+        name                  = row.name,
+        enabled               = row.enabled,
+        volume                = row.volume,
+        playhead_frame        = row.playhead_frame,
+    }
 end
 
-function M.register(command_executors, command_undoers, db, set_last_error)
-    local command_manager = require('core.command_manager')
-
+function M.register(command_executors, command_undoers, _db, set_last_error)
     command_executors["Overwrite"] = function(command)
         local args = command:get_all_parameters()
-        local _this_func_label = "Overwrite"  -- luacheck: ignore 211 (kept for future error messages)
-
-        if args.dry_run then
-            return true
+        local ok, result_or_err = pcall(M.execute, args)
+        if not ok then
+            set_last_error("Overwrite: " .. tostring(result_or_err))
+            return false, tostring(result_or_err)
         end
+        local result = result_or_err
 
-        log.event("Executing Overwrite command (via AddClipsToSequence)")
+        command:set_parameter("created_clip_ids",      result.created_clip_ids)
+        command:set_parameter("created_link_group_id", result.link_group_id or "")
+        command:set_parameter("occluded_capture",      result.occluded)
+        command:set_parameter("duration_frames",       result.duration_frames)
+        command:set_parameter("fps_mismatch_policy",   result.fps_mismatch_policy)
 
-        local track_id = args.track_id
-
-        -- Resolve sequence_id — Insert/Overwrite always target the TIMELINE sequence,
-        -- not the active monitor (which may be the source viewer showing a masterclip).
-        local sequence_id = clip_edit_helper.resolve_timeline_sequence_id(args, track_id, command)
-        assert(sequence_id and sequence_id ~= "",
-            string.format("Overwrite command: sequence_id required (track_id=%s)", tostring(track_id)))
-
-        -- Resolve track_id
-        local track_err
-        track_id, track_err = clip_edit_helper.resolve_track_id(track_id, sequence_id, command)
-        assert(track_id, string.format("Overwrite command: %s", track_err or "failed to resolve track"))
-
-        -- Resolve overwrite_time from playhead
-        local overwrite_time = clip_edit_helper.resolve_edit_time(args.overwrite_time, command, "overwrite_time")
-
-        -- Load masterclip sequence — resolve from browser selection if not explicit
-        local master_clip_id = args.master_clip_id
-        if not master_clip_id or master_clip_id == "" then
-            master_clip_id = clip_edit_helper.resolve_master_clip_id_from_ui()
-            assert(master_clip_id, "Overwrite command: no master clip selected in browser")
-            command:set_parameter("master_clip_id", master_clip_id)
-        end
-        local source_sequence = Sequence.load(master_clip_id)
-        assert(source_sequence, string.format(
-            "Overwrite command: masterclip %s not found", master_clip_id))
-        assert(source_sequence:is_masterclip(), string.format(
-            "Overwrite command: sequence %s is not a masterclip (kind=%s)",
-            master_clip_id, tostring(source_sequence.kind)))
-
-        -- Get project_id from masterclip sequence
-        local project_id = command.project_id or args.project_id or source_sequence.project_id
-        assert(project_id and project_id ~= "", "Overwrite: missing project_id")
-        command:set_parameter("project_id", project_id)
-        command.project_id = project_id
-
-        -- Get media_id from video or audio stream clip
-        local video_stream = source_sequence:video_stream()
-        local audio_streams = source_sequence:audio_streams()
-        local media_id = (video_stream and video_stream.media_id) or (audio_streams[1] and audio_streams[1].media_id)
-        assert(media_id and media_id ~= "", string.format(
-            "Overwrite command: masterclip %s has no media_id in streams", master_clip_id))
-
-        -- Load media for audio channel info
-        local media = Media.load(media_id)
-
-        -- Resolve timing from source sequence marks + stream clips
-        local video_timing = clip_edit_helper.resolve_video_stream_timing(source_sequence)
-        local audio_timing = clip_edit_helper.resolve_audio_stream_timing(source_sequence)
-
-        -- Must have at least one stream
-        assert(video_timing or audio_timing, string.format(
-            "Overwrite command: masterclip %s has no video or audio streams", master_clip_id))
-
-        -- overwrite_time must be integer
-        assert(overwrite_time == nil or type(overwrite_time) == "number", "Overwrite: overwrite_time must be integer")
-
-        -- Resolve clip name
-        local clip_name = clip_edit_helper.resolve_clip_name_for_sequence(args, source_sequence, media)
-
-        -- Determine audio channels
-        local audio_channels = (media and media.audio_channels) or 0
-
-        -- Build clips for the group
-        local clips = {}
-        local group_duration
-
-        -- Get timeline frame rate for duration conversion
-        -- clip.duration must be in TIMELINE frames (sequence timebase), not source units
-        local seq_fps_num, seq_fps_den = rational_helpers.require_sequence_rate(db, sequence_id)
-
-        -- Video clip (if video stream exists)
-        if video_timing then
-            -- Convert video duration (source frames) to timeline frames
-            local video_fps = video_timing.fps_numerator / video_timing.fps_denominator
-            local timeline_fps = seq_fps_num / seq_fps_den
-            local video_duration_timeline = math.floor(video_timing.duration * timeline_fps / video_fps + 0.5)
-
-            table.insert(clips, {
-                role = "video",
-                media_id = media_id,
-                master_clip_id = master_clip_id,
-                project_id = project_id,
-                name = clip_name,
-                source_in = video_timing.source_in,
-                source_out = video_timing.source_out,
-                duration = video_duration_timeline,  -- Timeline frames, not source frames
-                fps_numerator = video_timing.fps_numerator,
-                fps_denominator = video_timing.fps_denominator,
-                target_track_id = track_id,
-                clip_id = args.clip_id,  -- Preserve clip_id if specified
-            })
-            group_duration = video_duration_timeline
-        end
-
-        -- Audio clips (if audio stream exists)
-        if audio_channels > 0 and audio_timing then
-            -- Convert audio duration (samples) to timeline frames
-            local sample_rate = audio_timing.fps_numerator
-            local timeline_fps = seq_fps_num / seq_fps_den
-            local audio_duration_timeline = math.floor(audio_timing.duration * timeline_fps / sample_rate + 0.5)
-
-            local audio_track_resolver = clip_edit_helper.create_audio_track_resolver(sequence_id)
-            for ch = 0, audio_channels - 1 do
-                local audio_track = audio_track_resolver(nil, ch)
-                table.insert(clips, {
-                    role = "audio",
-                    channel = ch,
-                    media_id = media_id,
-                    master_clip_id = master_clip_id,
-                    project_id = project_id,
-                    name = clip_name .. " (Audio)",
-                    source_in = audio_timing.source_in,
-                    source_out = audio_timing.source_out,
-                    duration = audio_duration_timeline,  -- Timeline frames, not samples
-                    fps_numerator = audio_timing.fps_numerator,
-                    fps_denominator = audio_timing.fps_denominator,
-                    target_track_id = audio_track.id,
-                })
-            end
-            -- For audio-only, use the converted timeline duration
-            if not group_duration then
-                group_duration = audio_duration_timeline
-            end
-        end
-
-        assert(#clips > 0, string.format(
-            "Overwrite command: no clips to insert for masterclip %s", master_clip_id))
-
-        -- Build group
-        local groups = {
-            {
-                clips = clips,
-                duration = group_duration,
-                master_clip_id = master_clip_id,
-            }
+        local bucket = {
+            sequence_id = args.sequence_id,
+            inserts = {},
+            updates = {},
+            deletes = {},
         }
-
-        -- Advance playhead to end of clip (default true for UI-invoked commands)
-        local advance_playhead = args.advance_playhead
-        if advance_playhead == nil then
-            advance_playhead = true
+        for _, cid in ipairs(result.created_clip_ids) do
+            bucket.inserts[#bucket.inserts + 1] = build_insert_mutation_entry(cid)
         end
-
-        -- Execute AddClipsToSequence (will be automatically grouped with parent command)
-        local result, nested_cmd = command_manager.execute("AddClipsToSequence", {
-            groups = groups,
-            position = overwrite_time,
-            sequence_id = sequence_id,
-            project_id = project_id,
-            edit_type = "overwrite",
-            arrangement = "serial",
-            advance_playhead = advance_playhead,
-        })
-
-        if not result or not result.success then
-            local msg = result and result.error_message or "AddClipsToSequence failed"
-            set_last_error("Overwrite: " .. msg)
-            return false, "Overwrite: " .. msg
-        end
-
-        -- Store clip_id and mutations for backward compatibility (tests expect these)
-        if nested_cmd and nested_cmd.get_parameter then
-            local created_clip_ids = nested_cmd:get_parameter("created_clip_ids")
-            if created_clip_ids and #created_clip_ids > 0 then
-                command:set_parameter("clip_id", created_clip_ids[1])
+        for _, cap in pairs(result.occluded) do
+            for _, prev in ipairs(cap.deleted) do
+                bucket.deletes[#bucket.deletes + 1] = {
+                    clip_id        = prev.id,
+                    track_id       = prev.track_id,
+                    timeline_start = prev.timeline_start_frame,
+                    duration       = prev.duration_frames,
+                }
             end
-            -- Forward executed_mutations for tests that inspect them
-            local executed_mutations = nested_cmd:get_parameter("executed_mutations")
-            if executed_mutations then
-                command:set_parameter("executed_mutations", executed_mutations)
+            for _, tr in ipairs(cap.trimmed) do
+                local fresh = Clip.load_v13_row(tr.id)
+                bucket.updates[#bucket.updates + 1] = {
+                    clip_id          = tr.id,
+                    start_value      = fresh.timeline_start_frame,
+                    duration_value   = fresh.duration_frames,
+                    source_in_value  = fresh.source_in_frame,
+                    source_out_value = fresh.source_out_frame,
+                }
             end
-            -- Forward __timeline_mutations so downstream inspectors see them,
-            -- but tag as already-applied: the nested AddClipsToSequence has
-            -- already written these to timeline_state. Without the tag,
-            -- command_manager.apply_command_mutations would re-apply them on
-            -- the outer Overwrite and duplicate every inserted clip in
-            -- timeline_state.state.clips.
-            local timeline_mutations = nested_cmd:get_parameter("__timeline_mutations")
-            if timeline_mutations then
-                command:set_parameter("__timeline_mutations", timeline_mutations)
-                command:set_parameter("__timeline_mutations_already_applied", true)
+            for _, new_id in ipairs(cap.split_new_ids) do
+                bucket.inserts[#bucket.inserts + 1] =
+                    build_insert_mutation_entry(new_id)
             end
         end
+        command:set_parameter("__timeline_mutations", bucket)
 
-        -- Focus timeline: the edit targeted the timeline panel
-        local focus_manager = require("ui.focus_manager")
-        focus_manager.focus_panel("timeline")
-
-        log.event("Overwrote at frame %d", overwrite_time or 0)
+        local Signals = require("core.signals")
+        Signals.emit("sequence_content_changed", args.sequence_id)
         return true
     end
 
-    -- Undo is handled by the nested AddClipsToSequence command via undo group
     command_undoers["Overwrite"] = function(command)
+        local args = command:get_all_parameters()
+        local created_ids   = args.created_clip_ids or {}
+        local link_group_id = args.created_link_group_id
+        local occluded      = args.occluded_capture or {}
+        local _unused_here = link_group_id  -- luacheck: ignore 211
+
+        -- Drop the new clips + any split-right-halves.
+        Clip.delete_by_ids(created_ids)
+        for _, cap in pairs(occluded) do
+            Clip.delete_by_ids(cap.split_new_ids or {})
+        end
+
+        -- Restore trimmed clips to their prior bounds.
+        for _, cap in pairs(occluded) do
+            for _, tr in ipairs(cap.trimmed or {}) do
+                Clip.update_bounds(tr.id,
+                    tr.prior.timeline_start_frame,
+                    tr.prior.duration_frames,
+                    tr.prior.source_in_frame,
+                    tr.prior.source_out_frame)
+            end
+        end
+
+        -- Re-insert fully-deleted clips. Uses Clip.create's V13 path with
+        -- the original id so link-group / override rows referencing the
+        -- clip id remain valid (but link_group on the deleted row did
+        -- already cascade — re-link is a future enhancement if needed).
+        for _, cap in pairs(occluded) do
+            for _, d in ipairs(cap.deleted or {}) do
+                Clip.create({
+                    id                    = d.id,
+                    project_id            = d.project_id,
+                    owner_sequence_id     = d.owner_sequence_id,
+                    track_id              = d.track_id,
+                    nested_sequence_id    = d.nested_sequence_id,
+                    name                  = d.name,
+                    timeline_start_frame  = d.timeline_start_frame,
+                    duration_frames       = d.duration_frames,
+                    source_in_frame       = d.source_in_frame,
+                    source_out_frame      = d.source_out_frame,
+                    master_layer_track_id = d.master_layer_track_id,
+                    fps_mismatch_policy   = d.fps_mismatch_policy,
+                    enabled               = d.enabled,
+                    volume                = d.volume,
+                    mark_in_frame         = d.mark_in_frame,
+                    mark_out_frame        = d.mark_out_frame,
+                    playhead_frame        = d.playhead_frame,
+                })
+            end
+        end
+
+        local Signals = require("core.signals")
+        Signals.emit("sequence_content_changed", args.sequence_id)
         return true
     end
 
     return {
         executor = command_executors["Overwrite"],
-        undoer = command_undoers["Overwrite"],
-        spec = SPEC,
+        undoer   = command_undoers["Overwrite"],
+        spec     = SPEC,
     }
 end
 
