@@ -57,7 +57,7 @@ package.loaded["core.qt_constants"] = {
 -- Mock offline_frame_cache — captures the metadata it received on each
 -- call so tests can verify the renderer enriched metadata with
 -- offline_note / clip.source_in / clip.source_out before composing.
-local offline_cache_last_metadata = nil
+local offline_cache_last_metadata
 package.loaded["core.media.offline_frame_cache"] = {
     get_frame = function(metadata)
         offline_cache_last_metadata = metadata
@@ -242,7 +242,7 @@ do
         clip_partial = { source_in = 86390, source_out = 86510 },
     }
 
-    local _frame, meta = Renderer.get_video_frame(mock_tmb, {1}, 20, clip_info_by_id)
+    local _, meta = Renderer.get_video_frame(mock_tmb, {1}, 20, clip_info_by_id)
     assert(meta.offline == true, "metadata still marked offline")
 
     -- Renderer must have called offline_frame_cache with enriched metadata.
@@ -278,7 +278,7 @@ do
         },
     }
 
-    local _frame, _meta = Renderer.get_video_frame(mock_tmb, {1}, 30, {})
+    Renderer.get_video_frame(mock_tmb, {1}, 30, {})
     local m = offline_cache_last_metadata
     assert(m, "offline_frame_cache.get_frame was called")
     assert(m.clip == nil,

@@ -248,7 +248,32 @@ function M.clear()
     end
 end
 
+--- Drop cached frames for a specific media path. Cache keys encode
+--- `media_path:error_code[:source_in:source_out]`, so a single path may
+--- occupy several entries; match by prefix.
+function M.invalidate(media_path)
+    assert(media_path and media_path ~= "",
+        "offline_frame_cache.invalidate: media_path required")
+    local prefix = media_path .. ":"
+    local removed = 0
+    for key in pairs(cache) do
+        if key == media_path or key:sub(1, #prefix) == prefix then
+            cache[key] = nil
+            removed = removed + 1
+        end
+    end
+    if removed > 0 then
+        log.event("offline_frame_cache: invalidated %d entries for %s",
+            removed, media_path)
+    end
+end
+
 -- Clear cache on project switch
 Signals.connect("project_changed", M.clear, 15)
+
+-- A file's bytes changed on disk: any composited offline frame built
+-- from the old bytes (e.g. codec-hint text derived from the old probe)
+-- is now stale.
+Signals.connect("media_content_changed", M.invalidate, 15)
 
 return M

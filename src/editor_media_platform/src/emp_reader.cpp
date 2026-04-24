@@ -336,12 +336,20 @@ std::shared_ptr<MediaFile> Reader::media_file() const {
     return m_media_file;
 }
 
-Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset) {
+// Internal: shared implementation for Create / CreateAudioOnly. When
+// audio_only is true, the video codec context is not initialized even
+// for files that have a video stream — saves codec setup work and
+// avoids the VideoToolbox init path entirely (used by PeakGenerator).
+static Result<std::shared_ptr<Reader>> CreateImpl(std::shared_ptr<MediaFile> asset,
+                                                   bool audio_only) {
     if (!asset) {
         return Error::invalid_arg("MediaFile is null");
     }
     if (!asset->info().has_video && !asset->info().has_audio) {
         return Error::unsupported("MediaFile has no video or audio stream");
+    }
+    if (audio_only && !asset->info().has_audio) {
+        return Error::unsupported("Audio-only Reader requested but file has no audio stream");
     }
 
     auto impl = std::make_unique<ReaderImpl>();
@@ -349,8 +357,13 @@ Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset)
     // Get format context from asset (requires friend access)
     MediaFileImpl* asset_impl = asset->impl_ptr();
 
-    // BRAW: use SDK decoder, bypass FFmpeg entirely
+    // BRAW: use SDK decoder, bypass FFmpeg entirely. Audio-only callers
+    // shouldn't be peaking BRAW (no audio stream); reject early so the
+    // caller-knows-what-they-asked-for invariant holds.
     if (asset_impl->backend == MediaFileBackend::Braw) {
+        if (audio_only) {
+            return Error::unsupported("BRAW has no audio stream — cannot create audio-only Reader");
+        }
         impl->braw = std::make_unique<impl::BrawReaderContext>();
         auto braw_result = impl->braw->init(asset->info().path);
         if (braw_result.is_error()) return braw_result.error();
@@ -361,8 +374,10 @@ Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset)
         return std::make_shared<Reader>(std::move(impl), std::move(asset));
     }
 
-    // Initialize video codec if asset has video
-    if (asset->info().has_video) {
+    // Initialize video codec if asset has video AND we weren't told to
+    // skip it. Skipping for audio_only avoids the VideoToolbox init
+    // mutex (g_vt_init_mutex) entirely.
+    if (asset->info().has_video && !audio_only) {
         AVCodecParameters* params = asset_impl->fmt_ctx.video_codec_params();
 
         if (params->codec_id == AV_CODEC_ID_QTRLE) {
@@ -427,6 +442,21 @@ Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset)
 
     asset->mark_decode_started();
     return std::make_shared<Reader>(std::move(impl), std::move(asset));
+}
+
+Result<std::shared_ptr<Reader>> Reader::Create(std::shared_ptr<MediaFile> asset) {
+    return CreateImpl(std::move(asset), /*audio_only=*/false);
+}
+
+Result<std::shared_ptr<Reader>> Reader::CreateAudioOnly(std::shared_ptr<MediaFile> asset) {
+    return CreateImpl(std::move(asset), /*audio_only=*/true);
+}
+
+bool Reader::HasVideoCodec() const {
+    if (!m_impl) return false;
+    if (m_impl->braw) return true;
+    if (m_impl->qtrle) return true;
+    return m_impl->codec_ctx.get() != nullptr;
 }
 
 Result<void> Reader::Seek(FrameTime t) {

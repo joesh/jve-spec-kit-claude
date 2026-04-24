@@ -146,20 +146,14 @@ void TimelineMediaBuffer::SetTrackClips(TrackId track, const std::vector<ClipInf
         std::lock_guard<std::mutex> lock(m_tracks_mutex);
         auto& ts = m_tracks[track];
 
-        // Fast path: skip entirely if clip list is unchanged (called every tick)
+        // Fast path: skip entirely if clip list is unchanged (called every
+        // tick). Equality delegates to ClipInfo::has_same_decode_inputs so
+        // every field stays compared in one place — adding a field to
+        // ClipInfo forces its author to update that single comparison.
         if (ts.clips.size() == clips.size()) {
             bool same = true;
             for (size_t i = 0; i < clips.size(); ++i) {
-                const auto& a = ts.clips[i];
-                const auto& b = clips[i];
-                if (a.clip_id != b.clip_id ||
-                    a.timeline_start != b.timeline_start ||
-                    a.duration != b.duration ||
-                    a.source_in != b.source_in ||
-                    a.media_path != b.media_path ||
-                    a.rate_num != b.rate_num ||
-                    a.rate_den != b.rate_den ||
-                    a.speed_ratio != b.speed_ratio) {
+                if (!ts.clips[i].has_same_decode_inputs(clips[i])) {
                     same = false;
                     break;
                 }
@@ -1170,18 +1164,39 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     if (cached) {
         first_chunk = cached;
     } else {
-        // Clip was marked online by Lua — file must exist
+        // Failure modes below return silence (nullptr) rather than
+        // beeping. Rationale: the beep is the audible counterpart of a
+        // visible offline indicator. clip->offline == true (line 1128)
+        // already covers declared-offline paths → beep there is
+        // consistent with the red timeline label + offline frame panel.
+        // The GetTrackAudio failure paths here fire in many legitimate
+        // non-offline conditions (transient decoder hiccup, forward-
+        // seek cache gap, boundary edge), and beeping on those is
+        // user-hostile: they'd hear a beep with no visual offline cue.
+        // Silence + a warn log is the correct graceful degradation.
+        //
+        // The one exception is negative file_pos — clip asking for audio
+        // before the file's first_sample_tc is a hard partial-coverage
+        // head-shortfall that the visual layer SHOULD also be rendering
+        // as offline. Beep there to match.
         auto reader = acquire_reader(track, clip_id, media_path);
-        JVE_ASSERT(reader, ("GetTrackAudio: online clip failed to open: " + media_path).c_str());
+        if (!reader) {
+            EMP_LOG_WARN("GetTrackAudio: clip %s reader acquisition failed for %s — silent",
+                clip_id.c_str(), media_path.c_str());
+            return nullptr;
+        }
 
         // Map timeline us → source us (file-relative via first_sample_tc)
         const auto& file_info = reader->media_file()->info();
         int64_t file_pos = source_in - file_info.first_sample_tc;
-        JVE_ASSERT(file_pos >= 0,
-            ("GetTrackAudio: negative file_pos=" + std::to_string(file_pos)
-             + " source_in=" + std::to_string(source_in)
-             + " first_sample_tc=" + std::to_string(file_info.first_sample_tc)
-             + " clip=" + clip_id.substr(0, 8)).c_str());
+        if (file_pos < 0) {
+            // Partial-coverage head shortfall: clip's source_in is before
+            // any sample in the file. Visual: red "Not enough media at
+            // head" panel. Audio: beep to match.
+            EMP_LOG_WARN("GetTrackAudio: clip %s source_in=%lld is before first_sample_tc=%lld — beeping (head shortfall)",
+                clip_id.c_str(), (long long)source_in, (long long)file_info.first_sample_tc);
+            return generate_offline_beep(t0, t1 - t0, clip_start_us);
+        }
         TimeUS source_origin_us = FrameTime::from_frame(file_pos, clip_rate).to_us();
         double sr = static_cast<double>(speed_ratio);
         source_t0 = source_origin_us + static_cast<int64_t>((clamped_t0 - clip_start_us) * sr);
@@ -1190,11 +1205,16 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         if (reversed) std::swap(source_t0, source_t1);
 
         auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt);
-        JVE_ASSERT(!decode_result.is_error(),
-            ("GetTrackAudio: online clip decode failed: " + clip_id).c_str());
+        if (decode_result.is_error()) {
+            EMP_LOG_WARN("GetTrackAudio: clip %s decode error at [%lld,%lld]us — silent",
+                clip_id.c_str(), (long long)source_t0, (long long)source_t1);
+            return nullptr;
+        }
 
         auto chunk = decode_result.value();
         if (!chunk || chunk->frames() == 0) {
+            // Empty chunk at a boundary — zero-width range, past clip
+            // end, or brief cache gap. Silent degradation.
             return nullptr;
         }
 
@@ -1977,6 +1997,87 @@ void TimelineMediaBuffer::ClearOffline(const std::string& path) {
     m_offline.erase(path);
 }
 
+void TimelineMediaBuffer::InvalidatePath(const std::string& path) {
+    // Phase 1: reader pool + decode-speed hint (m_pool_mutex).
+    // Move evicted readers out and let them destruct OUTSIDE the lock —
+    // Reader destruction may run VT teardown (slow) and must not block
+    // other pool operations. See evict_lru_reader for the same pattern.
+    std::vector<PoolEntry> evicted_readers;
+    {
+        std::lock_guard<std::mutex> lock(m_pool_mutex);
+        for (auto it = m_readers.begin(); it != m_readers.end(); ) {
+            if (it->second.path == path) {
+                evicted_readers.push_back(std::move(it->second));
+                it = m_readers.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (auto it = m_decode_speed_cache.begin(); it != m_decode_speed_cache.end(); ) {
+            if (it->first.second == path) {
+                it = m_decode_speed_cache.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        // m_offline: leave untouched. Content rewrite of an already-offline
+        // path (unusual) stays offline; ClearOffline handles the "file
+        // reappeared" transition separately.
+    }
+
+    // Phase 2: per-track caches (m_tracks_mutex). Video/audio caches key
+    // on clip_id, so resolve clip_ids whose media_path matches first.
+    {
+        std::lock_guard<std::mutex> lock(m_tracks_mutex);
+        for (auto& kv : m_tracks) {
+            auto& ts = kv.second;
+            std::unordered_set<std::string> matching_clip_ids;
+            for (const auto& c : ts.clips) {
+                if (c.media_path == path) matching_clip_ids.insert(c.clip_id);
+            }
+            if (matching_clip_ids.empty()) continue;
+            for (auto it = ts.video_cache.begin(); it != ts.video_cache.end(); ) {
+                if (matching_clip_ids.count(it->second.clip_id)) {
+                    it = ts.video_cache.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            for (auto it = ts.audio_cache.begin(); it != ts.audio_cache.end(); ) {
+                if (matching_clip_ids.count(it->clip_id)) {
+                    it = ts.audio_cache.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            for (auto it = ts.clip_eof_frame.begin(); it != ts.clip_eof_frame.end(); ) {
+                if (matching_clip_ids.count(it->first)) {
+                    it = ts.clip_eof_frame.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            // New bytes may have different EOF / duration — force prefetch
+            // to re-evaluate from the current playhead rather than trust
+            // the watermark it computed against the old file.
+            ts.video_buffer_end = -1;
+            ts.audio_buffer_end = -1;
+            ts.prefetch_generation++;
+        }
+    }
+
+    // Phase 3: mixed-audio cache (m_mix_mutex). The mix blends PCM across
+    // clips, so it isn't path-keyed — anything that might have sourced
+    // from this path is indistinguishable from anything that didn't.
+    // Simpler and correct: clear all, let the mix thread rebuild on demand.
+    {
+        std::lock_guard<std::mutex> lock(m_mix_mutex);
+        m_mixed_cache.clear();
+        m_mix_cv.notify_one();
+    }
+    // evicted_readers destructs here, outside all TMB locks.
+}
+
 // ============================================================================
 // Reader pool — LRU with per-(track, path) isolation
 // ============================================================================
@@ -2292,10 +2393,21 @@ bool TimelineMediaBuffer::process_next_decode_prep_job() {
         {
             const auto& pinfo = probe_reader->media_file()->info();
             int64_t file_frame = job.probe_source_in - pinfo.first_frame_tc;
-            JVE_ASSERT(file_frame >= 0,
-                ("SPEED_DETECT: negative file_frame=" + std::to_string(file_frame)
-                 + " source=" + std::to_string(job.probe_source_in)
-                 + " first_frame_tc=" + std::to_string(pinfo.first_frame_tc)).c_str());
+            // Partial-coverage head shortfall: clip asks for a source
+            // frame before the file starts. SPEED_DETECT is a
+            // performance hint (measures codec decode speed to inform
+            // stride selection); there's no value in probing an
+            // uncovered frame. Skip the probe silently — stride_for_clip
+            // already returns 1 (safe default) when no cache entry
+            // exists for this key.
+            if (file_frame < 0) {
+                char tbuf[8]; track_str(job.track, tbuf, sizeof(tbuf));
+                EMP_LOG_DEBUG("SPEED_DETECT: %s clip=%.8s skip — source=%lld < first_frame_tc=%lld",
+                    tbuf, job.clip_id.c_str(),
+                    (long long)job.probe_source_in,
+                    (long long)pinfo.first_frame_tc);
+                return true;
+            }
             // Use file's native rate for seek (clip rate may differ)
             Rate file_rate = pinfo.video_rate();
             FrameTime pft = FrameTime::from_frame(file_frame, file_rate);
@@ -2581,11 +2693,35 @@ void TimelineMediaBuffer::decode_into_cache(
     assert(held_reader && "decode_into_cache: held_reader is null");
     const auto& info = held_reader->media_file()->info();
     int64_t file_frame = source_frame - info.first_frame_tc;
-    JVE_ASSERT(file_frame >= 0,
-        ("decode_into_cache: negative file_frame=" + std::to_string(file_frame)
-         + " source=" + std::to_string(source_frame)
-         + " first_frame_tc=" + std::to_string(info.first_frame_tc)
-         + " clip=" + clip->clip_id.substr(0, 8)).c_str());
+    // Partial-coverage head shortfall: clip's source_frame is before the
+    // file's first_frame_tc (e.g. file_original_timecode override makes
+    // the clip claim a TC earlier than any frame the file actually has).
+    // Don't assert — cache an offline marker for this position and let
+    // GetVideoFrame's play-time lookup return offline=true so the red
+    // "Not enough media at head" panel renders. Matches the boundary
+    // behavior added for GetVideoFrame in 23b5038d.
+    if (file_frame < 0) {
+        std::lock_guard<std::mutex> tlock(m_tracks_mutex);
+        auto tit = m_tracks.find(track);
+        if (tit != m_tracks.end()) {
+            auto& cache = tit->second.video_cache;
+            while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
+                evict_video_cache_entry(tit->second);
+            }
+            TrackState::CachedFrame cf{};
+            cf.clip_id = clip->clip_id;
+            cf.source_frame = source_frame;
+            cf.insert_seq = tit->second.video_cache_seq++;
+            cf.offline = true;
+            cf.error_code = "EOFReached";
+            cf.error_msg = "Not enough media at head: source frame "
+                + std::to_string(source_frame)
+                + " is before file start TC "
+                + std::to_string(info.first_frame_tc);
+            cache[position] = cf;
+        }
+        return;
+    }
     // Use file's native rate for seek (clip rate may differ from file rate)
     Rate file_rate = info.video_rate();
     FrameTime ft = FrameTime::from_frame(file_frame, file_rate);

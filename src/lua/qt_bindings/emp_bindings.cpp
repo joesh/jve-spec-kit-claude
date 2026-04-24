@@ -319,6 +319,41 @@ static int lua_emp_reader_create(lua_State* L) {
     return 1;
 }
 
+// EMP.READER_CREATE_AUDIO_ONLY(media_file) -> reader | nil, err
+// Skips video codec init even when the file has a video stream. Used
+// by clients that decode audio only (peak generation), to avoid the
+// VideoToolbox init mutex contention path.
+static int lua_emp_reader_create_audio_only(lua_State* L) {
+    void* mf_key = get_map_key(L, 1, EMP_MEDIA_FILE_METATABLE);
+    auto mf_it = g_media_files.find(mf_key);
+    if (mf_it == g_media_files.end()) {
+        push_emp_error(L, emp::Error::invalid_arg("Invalid media file handle"));
+        return 2;
+    }
+
+    auto result = emp::Reader::CreateAudioOnly(mf_it->second);
+    if (result.is_error()) {
+        push_emp_error(L, result.error());
+        return 2;
+    }
+
+    auto reader = result.value();
+    void* key = push_userdata(L, reader, EMP_READER_METATABLE);
+    g_readers[key] = reader;
+    return 1;
+}
+
+// EMP.READER_HAS_VIDEO_CODEC(reader) -> bool
+static int lua_emp_reader_has_video_codec(lua_State* L) {
+    void* key = get_map_key(L, 1, EMP_READER_METATABLE);
+    auto it = g_readers.find(key);
+    if (it == g_readers.end()) {
+        return luaL_error(L, "EMP.READER_HAS_VIDEO_CODEC: invalid reader handle");
+    }
+    lua_pushboolean(L, it->second->HasVideoCodec() ? 1 : 0);
+    return 1;
+}
+
 // EMP.READER_CLOSE(reader)
 static int lua_emp_reader_close(lua_State* L) {
     void* key = get_map_key(L, 1, EMP_READER_METATABLE);
@@ -901,6 +936,16 @@ static int lua_emp_tmb_clear_offline(lua_State* L) {
     auto tmb = get_tmb(L, 1);
     const char* path = luaL_checkstring(L, 2);
     tmb->ClearOffline(path);
+    return 0;
+}
+
+// EMP.TMB_INVALIDATE_PATH(tmb, path) — drop cached readers and decoded
+// frames/PCM for this path after an in-place content rewrite. Wired to
+// the `media_content_changed` signal so FS watcher events flow through.
+static int lua_emp_tmb_invalidate_path(lua_State* L) {
+    auto tmb = get_tmb(L, 1);
+    const char* path = luaL_checkstring(L, 2);
+    tmb->InvalidatePath(path);
     return 0;
 }
 
@@ -2024,6 +2069,19 @@ static int lua_emp_peak_cancel_all(lua_State* L) {
     return 0;
 }
 
+// EMP.PEAK_RUNNING_COUNT() -> int — jobs currently holding media resources.
+static int lua_emp_peak_running_count(lua_State* L) {
+    int n = s_peak_generator ? s_peak_generator->GetRunningCount() : 0;
+    lua_pushinteger(L, n);
+    return 1;
+}
+
+// EMP.PEAK_MAX_RUNNING() -> int — admission cap (constant).
+static int lua_emp_peak_max_running(lua_State* L) {
+    lua_pushinteger(L, emp::PeakGenerator::MAX_RUNNING_JOBS);
+    return 1;
+}
+
 // EMP.PEAK_STATUS(media_id) -> {state, progress_samples, total_samples} | nil
 static int lua_emp_peak_status(lua_State* L) {
     const char* media_id = luaL_checkstring(L, 1);
@@ -2263,6 +2321,10 @@ void register_emp_bindings(lua_State* L) {
     // Reader functions
     lua_pushcfunction(L, lua_emp_reader_create);
     lua_setfield(L, -2, "READER_CREATE");
+    lua_pushcfunction(L, lua_emp_reader_create_audio_only);
+    lua_setfield(L, -2, "READER_CREATE_AUDIO_ONLY");
+    lua_pushcfunction(L, lua_emp_reader_has_video_codec);
+    lua_setfield(L, -2, "READER_HAS_VIDEO_CODEC");
     lua_pushcfunction(L, lua_emp_reader_close);
     lua_setfield(L, -2, "READER_CLOSE");
     lua_pushcfunction(L, lua_emp_reader_seek_frame);
@@ -2319,6 +2381,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "TMB_CLEAR_ALL_CLIPS");
     lua_pushcfunction(L, lua_emp_tmb_clear_offline);
     lua_setfield(L, -2, "TMB_CLEAR_OFFLINE");
+    lua_pushcfunction(L, lua_emp_tmb_invalidate_path);
+    lua_setfield(L, -2, "TMB_INVALIDATE_PATH");
     lua_pushcfunction(L, lua_emp_tmb_set_playhead);
     lua_setfield(L, -2, "TMB_SET_PLAYHEAD");
     lua_pushcfunction(L, lua_emp_tmb_get_video_frame);
@@ -2371,6 +2435,10 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "PEAK_CANCEL_ALL");
     lua_pushcfunction(L, lua_emp_peak_status);
     lua_setfield(L, -2, "PEAK_STATUS");
+    lua_pushcfunction(L, lua_emp_peak_running_count);
+    lua_setfield(L, -2, "PEAK_RUNNING_COUNT");
+    lua_pushcfunction(L, lua_emp_peak_max_running);
+    lua_setfield(L, -2, "PEAK_MAX_RUNNING");
     lua_pushcfunction(L, lua_emp_peak_query_progress);
     lua_setfield(L, -2, "PEAK_QUERY_PROGRESS");
 

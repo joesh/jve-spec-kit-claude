@@ -43,9 +43,11 @@ PeakGenerator::~PeakGenerator()
         for (auto& [id, job] : m_jobs) {
             job->cancel_flag = true;
         }
-        m_rotation.clear();
+        m_running_queue.clear();
+        m_queued_pool.clear();
     }
     m_cv.notify_all();
+    m_admission_cv.notify_all();
     for (auto& w : m_workers) {
         if (w.joinable()) w.join();
     }
@@ -78,7 +80,7 @@ void PeakGenerator::RequestPeaks(const std::string& media_id,
     job->state = JobStatus::Queued;
 
     m_jobs[media_id] = job;
-    m_rotation.push_back(job);
+    m_queued_pool.push_back(job);
     m_cv.notify_one();
 }
 
@@ -93,11 +95,16 @@ void PeakGenerator::CancelPeaks(const std::string& media_id)
 
 void PeakGenerator::CancelAll()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    for (auto& [id, job] : m_jobs) {
-        job->cancel_flag = true;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto& [id, job] : m_jobs) {
+            job->cancel_flag = true;
+        }
+        m_running_queue.clear();
+        m_queued_pool.clear();
     }
-    m_rotation.clear();
+    m_admission_cv.notify_all();
+    m_cv.notify_all();
 }
 
 PeakGenerator::JobStatus PeakGenerator::GetStatus(const std::string& media_id) const
@@ -111,6 +118,12 @@ PeakGenerator::JobStatus PeakGenerator::GetStatus(const std::string& media_id) c
     return JobStatus{job->state, job->progress_samples.load(), job->total_samples};
 }
 
+int PeakGenerator::GetRunningCount() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_running_count;
+}
+
 // ============================================================================
 // WorkerLoop — round-robin chunk scheduler (rule 2.5)
 // ============================================================================
@@ -119,51 +132,82 @@ void PeakGenerator::WorkerLoop()
 {
     while (true) {
         std::shared_ptr<ChunkedJob> job;
+        bool just_admitted = false;
         {
             std::unique_lock<std::mutex> lock(m_mutex);
-            m_cv.wait(lock, [this]() {
-                return m_shutdown.load() || !m_rotation.empty();
-            });
-            if (m_shutdown) return;
-            if (m_rotation.empty()) continue;
 
-            job = m_rotation.front();
-            m_rotation.pop_front();
+            // Wake when something is runnable: shutdown, an already-
+            // admitted job, or a pool job plus admission capacity.
+            m_cv.wait(lock, [this]() {
+                if (m_shutdown.load()) return true;
+                if (!m_running_queue.empty()) return true;
+                return !m_queued_pool.empty()
+                    && m_running_count < MAX_RUNNING_JOBS;
+            });
+            if (m_shutdown.load()) return;
+
+            // Prefer Running jobs — they hold media resources and their
+            // chunks should keep moving to release the admission slot.
+            if (!m_running_queue.empty()) {
+                job = m_running_queue.front();
+                m_running_queue.pop_front();
+            } else if (!m_queued_pool.empty()
+                   && m_running_count < MAX_RUNNING_JOBS) {
+                job = m_queued_pool.front();
+                m_queued_pool.pop_front();
+                if (!job->cancel_flag.load()) {
+                    ++m_running_count;
+                    just_admitted = true;
+                }
+            } else {
+                continue;  // spurious wake
+            }
         }
 
-        // Skip cancelled jobs
-        if (job->cancel_flag) {
+        // Cancel observed before any processing. If we just took an
+        // admission slot, release it before marking the job Failed.
+        if (job->cancel_flag.load()) {
             std::lock_guard<std::mutex> lock(m_mutex);
+            if (just_admitted || job->state == JobStatus::Running) {
+                --m_running_count;
+                m_admission_cv.notify_one();
+                m_cv.notify_one();
+            }
             job->state = JobStatus::Failed;
             continue;
         }
 
-        // First touch: initialize media resources
-        if (job->state == JobStatus::Queued) {
+        // First touch: open media + decoder. InitJob transitions state
+        // to Running on success.
+        if (just_admitted) {
             if (!InitJob(*job)) {
                 std::lock_guard<std::mutex> lock(m_mutex);
+                --m_running_count;
+                m_admission_cv.notify_one();
+                m_cv.notify_one();
                 job->state = JobStatus::Failed;
                 continue;
             }
         }
 
-        // Process one 1-second chunk
         bool more = ProcessOneChunk(*job);
 
-        // Check cancel after chunk
-        if (job->cancel_flag) {
+        if (job->cancel_flag.load()) {
             std::lock_guard<std::mutex> lock(m_mutex);
+            --m_running_count;
+            m_admission_cv.notify_one();
+            m_cv.notify_one();
             job->state = JobStatus::Failed;
             continue;
         }
 
         if (more) {
-            // Return to rotation for next round
             std::lock_guard<std::mutex> lock(m_mutex);
-            m_rotation.push_back(job);
+            m_running_queue.push_back(job);
             m_cv.notify_one();
         } else {
-            // All chunks done — finalize on this worker
+            // FinalizeJob releases media resources and decrements
+            // m_running_count, notifying admission + runnable waiters.
             FinalizeJob(*job);
         }
     }
@@ -200,7 +244,10 @@ static bool OpenMediaAndReader(std::shared_ptr<MediaFile>& out_media,
         return false;
     }
 
-    auto reader_result = Reader::Create(out_media);
+    // Audio-only Reader: skip video codec init for files that have a
+    // video stream (typical of .mov/.mp4 with both A+V). This keeps
+    // PeakGenerator off the VideoToolbox init path entirely.
+    auto reader_result = Reader::CreateAudioOnly(out_media);
     if (reader_result.is_error()) {
         JVE_LOG_WARN(Media, "PeakGenerator: failed to create reader for %s: %s",
             media_path.c_str(), reader_result.error().message.c_str());
@@ -482,7 +529,10 @@ void PeakGenerator::FinalizeJob(ChunkedJob& job)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         job.state = ok ? JobStatus::Complete : JobStatus::Failed;
+        --m_running_count;
     }
+    m_admission_cv.notify_one();
+    m_cv.notify_one();  // a pool job can now be admitted
 
     // Release media resources (reader holds codec state, file handles)
     job.reader.reset();
