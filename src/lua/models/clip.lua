@@ -225,9 +225,22 @@ load_internal = function(clip_id, raise_errors)
     return clip
 end
 
--- Create a new Clip instance
-function M.create(name, media_id, opts)
-    opts = opts or {}
+-- Create a new Clip instance.
+--
+-- Two calling conventions:
+--  1. Positional (legacy, pre-013): Clip.create(name, media_id, opts) →
+--     returns an unpersisted Clip object for :save() chaining.
+--  2. Table form (013, direct DB insert): Clip.create(fields) → inserts a V9
+--     clips row and returns its id as a string. Enforces INV-2 via the
+--     schema trigger + INV-4 via model-layer check.
+function M.create(arg1, media_id_or_nil, opts_or_nil)
+    if type(arg1) == "table" and arg1.nested_sequence_id ~= nil then
+        return M._create_v13_row(arg1)
+    end
+    -- Legacy positional path.
+    local name = arg1
+    local media_id = media_id_or_nil
+    local opts = opts_or_nil or {}
 
     local now = os.time()
 
@@ -955,6 +968,210 @@ function M.batch_update_source(updates)
         stmt:reset()
     end
     stmt:finalize()
+end
+
+-- ===========================================================================
+-- Feature 013: V9 clips row shape
+-- ===========================================================================
+-- Rows in the V9 `clips` table hold references to other sequences via
+-- `nested_sequence_id`. INV-2 says owner_sequence_id must be kind='nested'
+-- (enforced by the schema trigger). INV-4 says the window [source_in,
+-- source_out] must fit inside the nested sequence's effective duration.
+
+local V13_REQUIRED = {
+    "project_id", "owner_sequence_id", "nested_sequence_id",
+    "name",
+    "timeline_start_frame", "duration_frames",
+    "source_in_frame", "source_out_frame",
+    "fps_mismatch_policy",
+    "enabled", "volume", "playhead_frame",
+}
+
+-- Fetch the nested sequence's effective duration in its own timebase. For a
+-- 'nested' sequence, this is the max (timeline_start + duration) across its
+-- clips; for a 'master', the max across its media_refs. 0 if empty — the
+-- INV-4 caller then requires source_in/out to both be 0 (empty window refused
+-- separately below).
+local function nested_sequence_effective_duration(db, seq_id)
+    local stmt = db:prepare([[
+        SELECT COALESCE(MAX(timeline_start_frame + duration_frames), 0)
+          FROM clips WHERE owner_sequence_id = ?
+        UNION ALL
+        SELECT COALESCE(MAX(timeline_start_frame + duration_frames), 0)
+          FROM media_refs WHERE owner_sequence_id = ?
+    ]])
+    assert(stmt, "Clip: nested-duration prepare failed")
+    stmt:bind_value(1, seq_id)
+    stmt:bind_value(2, seq_id)
+    assert(stmt:exec(), "Clip: nested-duration exec failed")
+    local total = 0
+    while stmt:next() do
+        local v = stmt:value(0)
+        if v and v > total then total = v end
+    end
+    stmt:finalize()
+    return total
+end
+
+-- Assert window is in-bounds per INV-4. Loud-fail with the clip id, the
+-- offending bounds, and the nested sequence's duration in its timebase
+-- (rule 1.14: names everything a caller would need to debug).
+local function assert_window_in_bounds(db, clip_id, nested_seq_id, source_in, source_out)
+    assert(type(source_in) == "number" and type(source_out) == "number",
+        "Clip: source_in/out must be numbers")
+    assert(source_in >= 0, string.format(
+        "INV-4 violation: clip %s has source_in=%d < 0 (assert_window_in_bounds)",
+        tostring(clip_id), source_in))
+    assert(source_out > source_in, string.format(
+        "INV-4 violation: clip %s has source_in=%d >= source_out=%d (empty/inverted window)",
+        tostring(clip_id), source_in, source_out))
+    local dur = nested_sequence_effective_duration(db, nested_seq_id)
+    assert(source_out <= dur, string.format(
+        "INV-4 violation: clip %s has source_out=%d > nested_sequence(%s).duration=%d",
+        tostring(clip_id), source_out, tostring(nested_seq_id), dur))
+end
+
+local function to_int_bool(v)
+    if v == true or v == 1 then return 1 end
+    if v == false or v == 0 then return 0 end
+    error("Clip: boolean must be true/false or 1/0; got " .. tostring(v))
+end
+
+-- Model-layer INV-2 pre-flight: fetch the owner_sequence_id's kind and raise a
+-- clear error (rule 1.14) if it isn't 'nested'. This fires BEFORE the schema
+-- trigger's generic RAISE(ABORT, ...) which cannot embed the offending value.
+local function assert_owner_is_nested(db, clip_id, owner_seq_id)
+    local stmt = db:prepare("SELECT kind FROM sequences WHERE id = ?")
+    assert(stmt, "Clip: owner-kind prepare failed")
+    stmt:bind_value(1, owner_seq_id)
+    assert(stmt:exec(), "Clip: owner-kind exec failed")
+    local found, kind
+    if stmt:next() then
+        found = true
+        kind = stmt:value(0)
+    end
+    stmt:finalize()
+    assert(found, string.format(
+        "Clip: owner_sequence_id=%s not found (clip=%s)",
+        tostring(owner_seq_id), tostring(clip_id)))
+    assert(kind == "nested", string.format(
+        "INV-2 violation in Clip.create: clip=%s owner_sequence_id=%s kind='%s' (expected 'nested')",
+        tostring(clip_id), tostring(owner_seq_id), tostring(kind)))
+end
+
+function M._create_v13_row(fields)
+    assert(type(fields) == "table", "Clip.create (v13): fields table required")
+    for _, col in ipairs(V13_REQUIRED) do
+        assert(fields[col] ~= nil, string.format(
+            "Clip.create (v13): '%s' is required (rule 2.13 — no column defaults)", col))
+    end
+    local db = require("core.database").get_connection()
+    local id = fields.id or uuid.generate()
+
+    assert_owner_is_nested(db, id, fields.owner_sequence_id)
+    assert_window_in_bounds(db, id, fields.nested_sequence_id,
+        fields.source_in_frame, fields.source_out_frame)
+
+    local now = fields.created_at or os.time()
+    local stmt = db:prepare([[
+        INSERT INTO clips (
+            id, project_id, owner_sequence_id, track_id, nested_sequence_id,
+            name, timeline_start_frame, duration_frames,
+            source_in_frame, source_out_frame,
+            master_layer_track_id, fps_mismatch_policy,
+            enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
+            created_at, modified_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ]])
+    assert(stmt, "Clip._create_v13_row: prepare failed")
+    stmt:bind_value(1, id)
+    stmt:bind_value(2, fields.project_id)
+    stmt:bind_value(3, fields.owner_sequence_id)
+    stmt:bind_value(4, fields.track_id)
+    stmt:bind_value(5, fields.nested_sequence_id)
+    stmt:bind_value(6, fields.name)
+    stmt:bind_value(7, fields.timeline_start_frame)
+    stmt:bind_value(8, fields.duration_frames)
+    stmt:bind_value(9, fields.source_in_frame)
+    stmt:bind_value(10, fields.source_out_frame)
+    stmt:bind_value(11, fields.master_layer_track_id)  -- nullable
+    stmt:bind_value(12, fields.fps_mismatch_policy)
+    stmt:bind_value(13, to_int_bool(fields.enabled))
+    stmt:bind_value(14, fields.volume)
+    stmt:bind_value(15, fields.mark_in_frame)    -- nullable
+    stmt:bind_value(16, fields.mark_out_frame)   -- nullable
+    stmt:bind_value(17, fields.playhead_frame)
+    stmt:bind_value(18, now)
+    stmt:bind_value(19, fields.modified_at or now)
+
+    local ok = stmt:exec()
+    local err
+    if not ok then err = stmt:last_error() end
+    stmt:finalize()
+    assert(ok, string.format(
+        "Clip._create_v13_row: INSERT failed for id=%s: %s (likely INV-2 trigger or FK)",
+        id, tostring(err)))
+    return id
+end
+
+local CLIP_UPDATABLE_V13 = {
+    name = true, track_id = true,
+    timeline_start_frame = true, duration_frames = true,
+    source_in_frame = true, source_out_frame = true,
+    master_layer_track_id = true, fps_mismatch_policy = true,
+    enabled = true, volume = true,
+    mark_in_frame = true, mark_out_frame = true, playhead_frame = true,
+}
+
+--- Update a V9 clips row. Enforces INV-4 after the write — if
+--- source_in_frame or source_out_frame changes, the new window must still
+--- fit the nested sequence's bounds.
+function M.update(id, fields)
+    assert(type(fields) == "table", "Clip.update: fields table required")
+    local db = require("core.database").get_connection()
+
+    -- Fetch the clip to get the nested_sequence_id for INV-4.
+    local fetch = db:prepare(
+        "SELECT nested_sequence_id, source_in_frame, source_out_frame FROM clips WHERE id = ?")
+    assert(fetch, "Clip.update: fetch prepare failed")
+    fetch:bind_value(1, id)
+    assert(fetch:exec(), "Clip.update: fetch exec failed")
+    assert(fetch:next(), string.format("Clip.update: clip %s not found", tostring(id)))
+    local nested_id = fetch:value(0)
+    local cur_in = fetch:value(1)
+    local cur_out = fetch:value(2)
+    fetch:finalize()
+
+    local new_in  = fields.source_in_frame  ~= nil and fields.source_in_frame  or cur_in
+    local new_out = fields.source_out_frame ~= nil and fields.source_out_frame or cur_out
+    if fields.source_in_frame ~= nil or fields.source_out_frame ~= nil then
+        assert_window_in_bounds(db, id, nested_id, new_in, new_out)
+    end
+
+    local sets, values = {}, {}
+    for k, v in pairs(fields) do
+        assert(CLIP_UPDATABLE_V13[k], string.format(
+            "Clip.update: column '%s' is not updatable (structural)", k))
+        sets[#sets + 1] = k .. " = ?"
+        if k == "enabled" then
+            values[#values + 1] = to_int_bool(v)
+        else
+            values[#values + 1] = v
+        end
+    end
+    if #sets == 0 then return true end
+    sets[#sets + 1] = "modified_at = ?"
+    values[#values + 1] = os.time()
+
+    local stmt = db:prepare(string.format(
+        "UPDATE clips SET %s WHERE id = ?", table.concat(sets, ", ")))
+    assert(stmt, "Clip.update: update prepare failed")
+    for i, v in ipairs(values) do stmt:bind_value(i, v) end
+    stmt:bind_value(#values + 1, id)
+    local ok = stmt:exec()
+    stmt:finalize()
+    assert(ok, string.format("Clip.update: exec failed for id=%s", id))
+    return true
 end
 
 return M

@@ -329,4 +329,104 @@ function Track.ensure_defaults_for_sequence(sequence_id)
     return true
 end
 
+-- ===========================================================================
+-- Feature 013: Track.delete with INV-6 repoint-or-refuse
+-- ===========================================================================
+-- Deleting a video track that's the default_video_layer_track_id of its
+-- sequence requires repointing to another live V track of the same sequence,
+-- OR (if this was the last V track AND no clips reference the sequence)
+-- setting the default to NULL. If there's no viable target AND live clips
+-- reference the sequence, refuse.
+
+--- Delete a track. Enforces INV-6 when the track is a video track and its
+--- sequence's default_video_layer_track_id points at it.
+function Track.delete(track_id)
+    assert(track_id and track_id ~= "", "Track.delete: track_id required")
+    local database = require("core.database")
+    local db = database.get_connection()
+
+    -- Look up the track: its sequence_id and track_type.
+    local fetch = db:prepare(
+        "SELECT sequence_id, track_type FROM tracks WHERE id = ?")
+    assert(fetch, "Track.delete: fetch prepare failed")
+    fetch:bind_value(1, track_id)
+    assert(fetch:exec(), "Track.delete: fetch exec failed")
+    assert(fetch:next(), string.format(
+        "Track.delete: track %s not found", tostring(track_id)))
+    local seq_id = fetch:value(0)
+    local track_type = fetch:value(1)
+    fetch:finalize()
+
+    -- Is the track's sequence pointing at THIS track as its default V layer?
+    local seq_stmt = db:prepare(
+        "SELECT kind, default_video_layer_track_id FROM sequences WHERE id = ?")
+    assert(seq_stmt, "Track.delete: seq prepare failed")
+    seq_stmt:bind_value(1, seq_id)
+    assert(seq_stmt:exec(), "Track.delete: seq exec failed")
+    assert(seq_stmt:next(), string.format(
+        "Track.delete: sequence %s not found for track %s", tostring(seq_id), tostring(track_id)))
+    local seq_kind = seq_stmt:value(0)
+    local default_track = seq_stmt:value(1)
+    seq_stmt:finalize()
+
+    local is_default = (track_type == "VIDEO") and (default_track == track_id)
+
+    if is_default then
+        -- Find another live V track of the same sequence with the lowest index.
+        local other = db:prepare([[
+            SELECT id FROM tracks
+            WHERE sequence_id = ? AND track_type = 'VIDEO' AND id != ?
+            ORDER BY track_index ASC LIMIT 1
+        ]])
+        assert(other, "Track.delete: other-v prepare failed")
+        other:bind_value(1, seq_id)
+        other:bind_value(2, track_id)
+        assert(other:exec(), "Track.delete: other-v exec failed")
+        local replacement
+        if other:next() then replacement = other:value(0) end
+        other:finalize()
+
+        if replacement then
+            -- Repoint default before delete.
+            local rp = db:prepare(
+                "UPDATE sequences SET default_video_layer_track_id = ? WHERE id = ?")
+            assert(rp, "Track.delete: repoint prepare failed")
+            rp:bind_value(1, replacement)
+            rp:bind_value(2, seq_id)
+            assert(rp:exec(), "Track.delete: repoint exec failed")
+            rp:finalize()
+        else
+            -- No other V track. If any clip anywhere references this sequence
+            -- (INV-3 + INV-6: we'd orphan the clip's visual content), refuse.
+            local ref = db:prepare(
+                "SELECT 1 FROM clips WHERE nested_sequence_id = ? LIMIT 1")
+            assert(ref, "Track.delete: ref prepare failed")
+            ref:bind_value(1, seq_id)
+            assert(ref:exec(), "Track.delete: ref exec failed")
+            local referenced = ref:next()
+            ref:finalize()
+            assert(not referenced, string.format(
+                "INV-6 violation in Track.delete: cannot delete last VIDEO track %s of sequence %s "
+                .. "while live clips reference the sequence (kind=%s)",
+                tostring(track_id), tostring(seq_id), tostring(seq_kind)))
+            -- No references: clear default before the FK's ON DELETE SET NULL
+            -- would do so, so INV-8 holds throughout.
+            local cl = db:prepare(
+                "UPDATE sequences SET default_video_layer_track_id = NULL WHERE id = ?")
+            assert(cl, "Track.delete: clear-default prepare failed")
+            cl:bind_value(1, seq_id)
+            assert(cl:exec(), "Track.delete: clear-default exec failed")
+            cl:finalize()
+        end
+    end
+
+    -- Delete the track.
+    local del = db:prepare("DELETE FROM tracks WHERE id = ?")
+    assert(del, "Track.delete: delete prepare failed")
+    del:bind_value(1, track_id)
+    assert(del:exec(), "Track.delete: delete exec failed")
+    del:finalize()
+    return true
+end
+
 return Track

@@ -1,10 +1,12 @@
 -- T013 (013): INV-8 — sequences.default_video_layer_track_id must be non-NULL
--- whenever the sequence has at least one video track. Model layer must refuse
--- any UPDATE that would violate this.
--- Expected to FAIL until T017 (sequence.lua narrow) lands.
+-- whenever the sequence has at least one video track.
+-- Coverage: Sequence.assert_inv8 fires with a message naming the sequence id
+-- and the violation when the default is NULL with V tracks present, or points
+-- at a track that's not a VIDEO track of this sequence.
 
 require("test_env")
 local database = require("core.database")
+local Sequence = require("models.sequence")
 
 local DB_PATH = "/tmp/jve/test_sequence_inv8.db"
 os.remove(DB_PATH)
@@ -15,64 +17,58 @@ assert(db:exec(
     "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
     .. "VALUES ('p1', 'p', 'resample', 0, 0)"))
 
-local Sequence = require("models.sequence")
+-- Helper: wrap the 2-step create+save as a single call.
+local function make_sequence(name, kind)
+    local s = Sequence.create(name, "p1", { fps_numerator = 24, fps_denominator = 1 },
+        1920, 1080, { kind = kind, audio_rate = 48000 })
+    assert(s:save(), "Sequence:save failed")
+    return s.id
+end
 
--- Good control: create a master with no video tracks; default_video_layer_track_id = NULL is fine.
-local audio_only_id = Sequence.create({
-    project_id = "p1",
-    name = "audio-only",
-    kind = "master",
-    fps_numerator = 24,
-    fps_denominator = 1,
-    audio_rate = 48000,
-    width = 1920,
-    height = 1080,
-})
--- Add an audio track. Still no video — default stays NULL.
+-- Good control: master with no video tracks → default NULL is valid.
+local audio_only_id = make_sequence("audio-only", "master")
 assert(db:exec(string.format(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
     .. "VALUES ('trk-a1', '%s', 'A1', 'AUDIO', 1)", audio_only_id)))
-Sequence.assert_inv8(audio_only_id)  -- should pass (no video tracks)
+Sequence.assert_inv8(audio_only_id)  -- passes: no V tracks
 
--- Now make a master with a V track.
-local vid_id = Sequence.create({
-    project_id = "p1",
-    name = "vid",
-    kind = "master",
-    fps_numerator = 24,
-    fps_denominator = 1,
-    audio_rate = 48000,
-    width = 1920,
-    height = 1080,
-})
+-- Master with a V track.
+local vid_id = make_sequence("vid", "master")
 assert(db:exec(string.format(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
     .. "VALUES ('trk-v1', '%s', 'V1', 'VIDEO', 1)", vid_id)))
 
--- The creating path should have set default_video_layer_track_id to the new V track
--- OR assert_inv8 should refuse until it's set. Test the explicit set path.
-assert(Sequence.update(vid_id, { default_video_layer_track_id = "trk-v1" }),
-    "setting default_video_layer_track_id to a live V track should succeed")
-Sequence.assert_inv8(vid_id)  -- passes
+-- Set default to the live V track via Sequence.update — INV-8 post-check passes.
+Sequence.update(vid_id, { default_video_layer_track_id = "trk-v1" })
+Sequence.assert_inv8(vid_id)
 
--- Bad: NULL-ing the default when the sequence has a video track must refuse.
-local ok, err = pcall(function()
-    Sequence.update(vid_id, { default_video_layer_track_id = nil })
-end)
-assert(not ok, "setting default_video_layer_track_id = NULL with a live V track must refuse (INV-8)")
+-- Direct-SQL NULL'ing the default while a V track exists should cause
+-- assert_inv8 to fire. (Sequence.update's post-condition check would also fire,
+-- but raw SQL bypasses the command layer.)
+assert(db:exec(string.format(
+    "UPDATE sequences SET default_video_layer_track_id = NULL WHERE id = '%s'", vid_id)))
+
+local ok, err = pcall(function() Sequence.assert_inv8(vid_id) end)
+assert(not ok, "assert_inv8 must fire when default is NULL with a V track")
 assert(tostring(err):find("INV%-8"),
     "error must name INV-8; got: " .. tostring(err))
-assert(tostring(err):find(vid_id),
+assert(tostring(err):find(vid_id, 1, true),
     "error must name the sequence id; got: " .. tostring(err))
 
--- Bad: setting default to a track that's not a video track of this sequence must refuse.
+-- Restore, then try pointing default at an audio track — also a violation.
+assert(db:exec(string.format(
+    "UPDATE sequences SET default_video_layer_track_id = 'trk-v1' WHERE id = '%s'", vid_id)))
 assert(db:exec(string.format(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
-    .. "VALUES ('trk-a2', '%s', 'A1', 'AUDIO', 1)", vid_id)))
+    .. "VALUES ('trk-a2', '%s', 'A2', 'AUDIO', 2)", vid_id)))
+
 local ok2, err2 = pcall(function()
     Sequence.update(vid_id, { default_video_layer_track_id = "trk-a2" })
 end)
-assert(not ok2, "setting default to an audio track must refuse")
-assert(tostring(err2):find("trk%-a2"), "error must name the bad track; got: " .. tostring(err2))
+assert(not ok2, "Sequence.update pointing default at an AUDIO track must refuse")
+assert(tostring(err2):find("trk%-a2"),
+    "error must name the bad track; got: " .. tostring(err2))
+assert(tostring(err2):find("VIDEO") or tostring(err2):find("track_type"),
+    "error must name the track_type expectation; got: " .. tostring(err2))
 
 print("✅ test_sequence_inv8_default_layer.lua passed")

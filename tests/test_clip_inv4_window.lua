@@ -69,7 +69,7 @@ local ok1, err1 = pcall(function()
     Clip.update(clip_id, { source_in_frame = -1 })
 end)
 assert(not ok1, "source_in_frame < 0 must refuse (INV-4)")
-assert(tostring(err1):find(clip_id), "error must name clip id; got: " .. tostring(err1))
+assert(tostring(err1):find(clip_id, 1, true), "error must name clip id; got: " .. tostring(err1))
 assert(tostring(err1):find("source_in"), "error must name source_in; got: " .. tostring(err1))
 
 -- Bad: source_out_frame > nested master duration (100).
@@ -77,7 +77,7 @@ local ok2, err2 = pcall(function()
     Clip.update(clip_id, { source_out_frame = 101 })
 end)
 assert(not ok2, "source_out_frame > nested.duration must refuse (INV-4)")
-assert(tostring(err2):find(clip_id), "error must name clip id")
+assert(tostring(err2):find(clip_id, 1, true), "error must name clip id")
 assert(tostring(err2):find("source_out"), "error must name source_out")
 assert(tostring(err2):find("100"), "error must name nested duration (100)")
 

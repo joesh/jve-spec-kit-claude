@@ -30,6 +30,17 @@ assert(db:exec(
 assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
     .. "VALUES ('trk-edit-v1', 'seq-edit', 'V1', 'VIDEO', 1)"))
+-- Give the master a 100-frame media_ref so its effective duration = 100.
+-- Without this, INV-4 would fire before INV-2.
+assert(db:exec(
+    "INSERT INTO media (id, project_id, name, file_path, duration_frames, "
+    .. "fps_numerator, fps_denominator, created_at, modified_at) "
+    .. "VALUES ('med', 'p1', 'm', '/tmp/m.mov', 100, 24, 1, 0, 0)"))
+assert(db:exec(
+    "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
+    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "enabled, volume, playhead_frame, created_at, modified_at) "
+    .. "VALUES ('mr', 'p1', 'seq-master', 'trk-master-v1', 'med', 0, 100, 0, 100, 1, 1.0, 0, 0, 0)"))
 
 local Clip = require("models.clip")
 

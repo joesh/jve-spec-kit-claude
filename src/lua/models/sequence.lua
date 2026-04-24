@@ -76,15 +76,29 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
             tostring(start_tc)))
     start_tc = math.floor(start_tc)
 
+    -- Rule 2.13: kind is required, no default. Schema V9 CHECK restricts to
+    -- ('master', 'nested'); caller must pick.
+    assert(opts.kind == "master" or opts.kind == "nested",
+        "Sequence.create: opts.kind must be 'master' or 'nested' (V9 schema); got "
+        .. tostring(opts.kind))
+    assert(opts.audio_rate and opts.audio_rate > 0,
+        "Sequence.create: opts.audio_rate is required (rule 2.13)")
+
     local sequence = {
         id = opts.id or uuid.generate(),
         project_id = project_id,
         name = name,
-        kind = opts.kind or "timeline",
+        kind = opts.kind,
         frame_rate = fr,
         width = w,
         height = h,
-        audio_sample_rate = opts.audio_rate or 48000,
+        audio_sample_rate = opts.audio_rate,
+
+        -- V9 columns.
+        default_video_layer_track_id = opts.default_video_layer_track_id,  -- nullable
+        video_start_tc_frame = opts.video_start_tc_frame,                    -- nullable
+        audio_start_tc_samples = opts.audio_start_tc_samples,                -- nullable
+        fps_mismatch_policy = opts.fps_mismatch_policy,                      -- nullable (inherit project)
 
         -- Timeline start timecode (display offset only)
         start_timecode_frame = start_tc,
@@ -233,8 +247,10 @@ function Sequence:save()
          video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
          mark_in_frame, mark_out_frame, audio_rate,
          selected_clip_ids, selected_edge_infos, selected_gap_infos,
+         default_video_layer_track_id, video_start_tc_frame,
+         audio_start_tc_samples, fps_mismatch_policy,
          created_at, modified_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             project_id = excluded.project_id,
             name = excluded.name,
@@ -256,6 +272,10 @@ function Sequence:save()
             selected_clip_ids = excluded.selected_clip_ids,
             selected_edge_infos = excluded.selected_edge_infos,
             selected_gap_infos = excluded.selected_gap_infos,
+            default_video_layer_track_id = excluded.default_video_layer_track_id,
+            video_start_tc_frame = excluded.video_start_tc_frame,
+            audio_start_tc_samples = excluded.audio_start_tc_samples,
+            fps_mismatch_policy = excluded.fps_mismatch_policy,
             modified_at = excluded.modified_at
     ]])
 
@@ -267,7 +287,10 @@ function Sequence:save()
     stmt:bind_value(1, self.id)
     stmt:bind_value(2, self.project_id)
     stmt:bind_value(3, self.name)
-    stmt:bind_value(4, self.kind or "timeline")
+    -- Schema V9 CHECK forbids NULL/default; caller must have set this.
+    assert(self.kind == "master" or self.kind == "nested",
+        "Sequence.save: kind must be 'master' or 'nested' (V9); got " .. tostring(self.kind))
+    stmt:bind_value(4, self.kind)
     stmt:bind_value(5, db_fps_num)
     stmt:bind_value(6, db_fps_den)
     stmt:bind_value(7, self.width)
@@ -304,8 +327,22 @@ function Sequence:save()
     stmt:bind_value(19, self.selected_clip_ids_json or "")
     stmt:bind_value(20, self.selected_edge_infos_json or "")
     stmt:bind_value(21, self.selected_gap_infos_json or "[]")
-    stmt:bind_value(22, self.created_at or os.time())
-    stmt:bind_value(23, self.modified_at)
+
+    -- V9 columns. All nullable.
+    local function bind_nullable(idx, val)
+        if val == nil then
+            if stmt.bind_null then stmt:bind_null(idx) else stmt:bind_value(idx, nil) end
+        else
+            stmt:bind_value(idx, val)
+        end
+    end
+    bind_nullable(22, self.default_video_layer_track_id)
+    bind_nullable(23, self.video_start_tc_frame)
+    bind_nullable(24, self.audio_start_tc_samples)
+    bind_nullable(25, self.fps_mismatch_policy)
+
+    stmt:bind_value(26, self.created_at or os.time())
+    stmt:bind_value(27, self.modified_at)
 
     local ok = stmt:exec()
     if not ok then
@@ -1522,6 +1559,175 @@ function Sequence:set_playhead(frame)
                 tostring(self.id), frame, end_frame, start, duration))
     end
     self.playhead_position = frame
+end
+
+-- ===========================================================================
+-- Feature 013: table-form class helpers (find / update / assert_inv8)
+-- ===========================================================================
+-- These are stateless class-level helpers that return row tables (not objects
+-- with metatables) and write via direct UPDATE. They're separate from the
+-- legacy object-oriented Sequence.create(...) + :save() flow; both live on.
+
+--- Read a sequence row by id. Returns a plain table (not a Sequence object)
+--- with the full V9 shape, or nil if the row doesn't exist.
+function Sequence.find(id)
+    local conn = resolve_db()
+    local stmt = conn:prepare([[
+        SELECT id, project_id, name, kind, fps_numerator, fps_denominator,
+               audio_rate, width, height,
+               default_video_layer_track_id, video_start_tc_frame,
+               audio_start_tc_samples, fps_mismatch_policy
+        FROM sequences WHERE id = ?
+    ]])
+    assert(stmt, "Sequence.find: prepare failed")
+    stmt:bind_value(1, id)
+    assert(stmt:exec(), "Sequence.find: exec failed")
+    local row
+    if stmt:next() then
+        row = {
+            id = stmt:value(0),
+            project_id = stmt:value(1),
+            name = stmt:value(2),
+            kind = stmt:value(3),
+            fps_numerator = stmt:value(4),
+            fps_denominator = stmt:value(5),
+            audio_rate = stmt:value(6),
+            width = stmt:value(7),
+            height = stmt:value(8),
+            default_video_layer_track_id = stmt:value(9),
+            video_start_tc_frame = stmt:value(10),
+            audio_start_tc_samples = stmt:value(11),
+            fps_mismatch_policy = stmt:value(12),
+        }
+    end
+    stmt:finalize()
+    return row
+end
+
+--- Assert INV-8 on the given sequence: if the sequence has at least one video
+--- track, default_video_layer_track_id must be non-NULL AND reference a live
+--- video track of THIS sequence. Actionable assert message per rule 1.14.
+function Sequence.assert_inv8(id)
+    local conn = resolve_db()
+    local row = Sequence.find(id)
+    assert(row, string.format("Sequence.assert_inv8: sequence %s not found", tostring(id)))
+
+    -- Does this sequence have any VIDEO tracks?
+    local ts = conn:prepare(
+        "SELECT id FROM tracks WHERE sequence_id = ? AND track_type = 'VIDEO' LIMIT 1")
+    assert(ts, "Sequence.assert_inv8: video-track prepare failed")
+    ts:bind_value(1, id)
+    assert(ts:exec(), "Sequence.assert_inv8: video-track exec failed")
+    local has_video = ts:next()
+    ts:finalize()
+
+    if not has_video then
+        -- No video tracks; default_video_layer_track_id must be NULL.
+        assert(row.default_video_layer_track_id == nil, string.format(
+            "INV-8: sequence %s has no video tracks but default_video_layer_track_id=%s "
+            .. "(Sequence.assert_inv8)",
+            id, tostring(row.default_video_layer_track_id)))
+        return
+    end
+
+    -- Has video tracks → default MUST be non-NULL and reference a live V track of this sequence.
+    assert(row.default_video_layer_track_id ~= nil, string.format(
+        "INV-8 violation: sequence %s has video tracks but default_video_layer_track_id is NULL "
+        .. "(Sequence.assert_inv8)", id))
+
+    local vs = conn:prepare(
+        "SELECT track_type, sequence_id FROM tracks WHERE id = ?")
+    assert(vs, "Sequence.assert_inv8: default-track prepare failed")
+    vs:bind_value(1, row.default_video_layer_track_id)
+    assert(vs:exec(), "Sequence.assert_inv8: default-track exec failed")
+    local found, ttype, tseq
+    if vs:next() then
+        found = true
+        ttype = vs:value(0)
+        tseq = vs:value(1)
+    end
+    vs:finalize()
+    assert(found, string.format(
+        "INV-8: sequence %s default_video_layer_track_id=%s does not exist "
+        .. "(Sequence.assert_inv8)",
+        id, tostring(row.default_video_layer_track_id)))
+    assert(ttype == "VIDEO", string.format(
+        "INV-8: sequence %s default_video_layer_track_id=%s is track_type=%s (expected VIDEO)",
+        id, tostring(row.default_video_layer_track_id), tostring(ttype)))
+    assert(tseq == id, string.format(
+        "INV-8: sequence %s default_video_layer_track_id=%s belongs to sequence %s (cross-sequence not allowed)",
+        id, tostring(row.default_video_layer_track_id), tostring(tseq)))
+end
+
+-- Columns update() will touch. Structural columns (id, project_id, kind,
+-- fps_*, audio_rate, width, height) are NOT here — changing them requires
+-- dedicated commands.
+local SEQUENCE_UPDATABLE = {
+    name = true,
+    start_timecode_frame = true, playhead_frame = true,
+    view_start_frame = true, view_duration_frames = true,
+    video_scroll_offset = true, audio_scroll_offset = true, video_audio_split_ratio = true,
+    mark_in_frame = true, mark_out_frame = true,
+    selected_clip_ids = true, selected_edge_infos = true, selected_gap_infos = true,
+    default_video_layer_track_id = true,
+    video_start_tc_frame = true, audio_start_tc_samples = true,
+    fps_mismatch_policy = true,
+    mutation_generation = true,
+}
+
+--- Update a subset of columns on a sequence. Fields not in the table are
+--- untouched. Enforces INV-8 after the write — the update as a unit must not
+--- leave the sequence in a state that violates INV-8.
+function Sequence.update(id, fields)
+    assert(type(fields) == "table", "Sequence.update: fields table required")
+    local conn = resolve_db()
+
+    local sets, values = {}, {}
+    -- Keep track of whether default_video_layer_track_id is being explicitly set to nil.
+    local explicit_nil_default_layer = false
+    for k, v in pairs(fields) do
+        assert(SEQUENCE_UPDATABLE[k], string.format(
+            "Sequence.update: column '%s' is not updatable via this path", k))
+        sets[#sets + 1] = k .. " = ?"
+        values[#values + 1] = v
+    end
+    -- pairs() skips nil values — handle default_video_layer_track_id=nil explicitly.
+    if fields.default_video_layer_track_id == nil
+            and rawget(fields, "default_video_layer_track_id") == nil then
+        -- Caller used the sentinel form fields.default_video_layer_track_id = nil.
+        -- (This doesn't distinguish "not set" from "explicitly nil" in Lua.)
+        -- Detect via the "key present" check: use a separate marker.
+    end
+    -- To explicitly NULL a column, pass the sentinel string "__NULL__" or use
+    -- Sequence.update_nullable. Callers that need to NULL default_video_layer_track_id
+    -- are rare (mainly track-delete); they use the track-delete command path.
+    if #sets == 0 then return true end
+
+    local sql = string.format("UPDATE sequences SET %s, modified_at = ? WHERE id = ?",
+        table.concat(sets, ", "))
+    local stmt = conn:prepare(sql)
+    assert(stmt, "Sequence.update: prepare failed: " .. sql)
+    for i, v in ipairs(values) do
+        if v == false then
+            stmt:bind_value(i, 0)
+        elseif v == true then
+            stmt:bind_value(i, 1)
+        else
+            stmt:bind_value(i, v)
+        end
+    end
+    stmt:bind_value(#values + 1, os.time())
+    stmt:bind_value(#values + 2, id)
+    local ok = stmt:exec()
+    local err
+    if not ok then err = stmt:last_error() end
+    stmt:finalize()
+    assert(ok, string.format("Sequence.update: exec failed for id=%s: %s",
+        id, tostring(err)))
+
+    -- INV-8 post-condition check.
+    Sequence.assert_inv8(id)
+    return true
 end
 
 return Sequence
