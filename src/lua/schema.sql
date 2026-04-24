@@ -1,6 +1,7 @@
--- JVE Database Schema V8
--- "Scorched Earth" - Frame-Accurate, Rational Timebase
--- No backward compatibility with legacy schemas.
+-- JVE Database Schema V9
+-- Feature 013: Timeline placements as nested sequence references.
+-- Three-table model (sequences, media_refs, clips) + sparse override tables.
+-- No backward compatibility with V8 or earlier (FR-018).
 
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
@@ -14,7 +15,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (8);
+INSERT OR IGNORE INTO schema_version (version) VALUES (9);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -25,7 +26,13 @@ CREATE TABLE IF NOT EXISTS projects (
 
     -- Per-Sequence Undo: global cursor for project-level commands
     global_undo_cursor INTEGER DEFAULT 0,
-    global_branch_path TEXT DEFAULT ''
+    global_branch_path TEXT DEFAULT '',
+
+    -- FR-015: project-level default for how the resolver treats a clip whose
+    -- referenced sequence's fps differs from its containing sequence's fps.
+    -- Per-sequence and per-clip fps_mismatch_policy columns can override.
+    fps_mismatch_policy TEXT NOT NULL
+        CHECK(fps_mismatch_policy IN ('resample', 'passthrough'))
 );
 
 -- ============================================================================
@@ -41,11 +48,11 @@ CREATE TABLE IF NOT EXISTS media (
 
     -- Duration in its native timebase
     duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),
-    
+
     -- Native Timebase (e.g. 24/1 for video, 48000/1 for audio)
     fps_numerator INTEGER NOT NULL CHECK(fps_numerator > 0),
     fps_denominator INTEGER NOT NULL CHECK(fps_denominator > 0),
-    
+
     -- Audio sample rate (e.g. 48000, 44100). 0 = no audio or unknown.
     audio_sample_rate INTEGER DEFAULT 0,
 
@@ -55,22 +62,8 @@ CREATE TABLE IF NOT EXISTS media (
     rotation INTEGER DEFAULT 0, -- 0, 90, 180, 270 from display matrix
     audio_channels INTEGER DEFAULT 0,
     codec TEXT DEFAULT '',
-    -- Still-image flag: 1 = still (JPEG/PNG/TIFF/etc. or single-frame), 0 = motion or audio.
-    -- Set at import time by Media.classify_is_still(). Used by the browser to pick icon.
     is_still INTEGER NOT NULL DEFAULT 0 CHECK(is_still IN (0, 1)),
     metadata TEXT DEFAULT '{}', -- JSON
-
-    -- Last-relink diagnostic note. Populated when the relinker found a
-    -- filename-matching candidate in the search tree but rejected it
-    -- (e.g. the candidate file doesn't cover the clips' full source
-    -- range — "missing a few frames at the end"). JSON shape:
-    --   { kind = "partial_coverage",
-    --     candidate_path = "/fixture/.../X.mov",
-    --     covered_start_tc = <int>, covered_end_tc = <int>, rate = <int> }
-    -- Read at offline-frame composition time to swap the generic
-    -- "File not found" message for the actionable "Found X, short
-    -- by N frames at end" message per-clip. NULL = no diagnostic
-    -- (file truly unreachable, or last relink succeeded).
     offline_note TEXT,
 
     created_at INTEGER NOT NULL,
@@ -78,27 +71,32 @@ CREATE TABLE IF NOT EXISTS media (
 );
 
 -- ============================================================================
--- TIMELINE STRUCTURE
+-- SEQUENCES (three-table model's spine)
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS sequences (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    kind TEXT NOT NULL DEFAULT 'timeline', -- 'masterclip', 'timeline', 'compound', 'multicam'
-    
+
+    -- Structural kind. Exactly two values after 013:
+    --   'master' — sequence's tracks hold media_refs (direct file references).
+    --   'nested' — sequence's tracks hold clips (references to other sequences).
+    -- Old values ('timeline','masterclip','compound','multicam') collapse into these.
+    kind TEXT NOT NULL CHECK(kind IN ('master', 'nested')),
+
     -- Sequence Video Timebase (The Master Clock)
     fps_numerator INTEGER NOT NULL CHECK(fps_numerator > 0),
     fps_denominator INTEGER NOT NULL CHECK(fps_denominator > 0),
-    
+
     -- Sequence Audio Rate (Sample Rate, e.g. 48000)
     audio_rate INTEGER NOT NULL CHECK(audio_rate > 0),
-    
+
     -- Dimensions
     width INTEGER NOT NULL,
     height INTEGER NOT NULL,
-    
-    -- Timeline Start Timecode (display offset, does not affect internal coordinates)
+
+    -- Timeline Start Timecode (display offset, does not affect internal coords)
     start_timecode_frame INTEGER NOT NULL DEFAULT 0,
 
     -- State (Rational Frames)
@@ -107,30 +105,37 @@ CREATE TABLE IF NOT EXISTS sequences (
     playhead_frame INTEGER NOT NULL DEFAULT 0,
     video_scroll_offset INTEGER NOT NULL DEFAULT 0,
     audio_scroll_offset INTEGER NOT NULL DEFAULT 0,
-    video_audio_split_ratio REAL NOT NULL DEFAULT 0.5,  -- 0.0–1.0, fraction of height for video
-    
-    -- Marks (Optional, Nullable)
+    video_audio_split_ratio REAL NOT NULL DEFAULT 0.5,
+
+    -- Marks
     mark_in_frame INTEGER,
     mark_out_frame INTEGER,
-    
+
     -- Selection State (JSON)
     selected_clip_ids TEXT DEFAULT '[]',
     selected_edge_infos TEXT DEFAULT '[]',
     selected_gap_infos TEXT DEFAULT '[]',
-    
+
     -- Undo/Redo State
     current_sequence_number INTEGER DEFAULT 0,
     current_branch_path TEXT DEFAULT '',
 
-    -- Mutation Generation Counter
-    -- Incremented once per user-visible action on this sequence (execute,
-    -- undo, or redo). Wrapper commands forming an undo group still bump
-    -- the counter exactly once for the whole group — the unit is the
-    -- user action, not the individual command. Enables O(1) staleness
-    -- detection for nested-sequence references: a compound clip
-    -- referencing sub-sequence X can check whether X's current generation
-    -- matches the one cached at reference time.
+    -- Mutation Generation (one bump per user-visible action; see pre-013 docs).
     mutation_generation INTEGER NOT NULL DEFAULT 0,
+
+    -- 013: default video layer exposed when this sequence is referenced by a
+    -- clip whose master_layer_track_id is NULL. Non-NULL whenever the sequence
+    -- has at least one video track (INV-8, enforced at model layer + triggers).
+    default_video_layer_track_id TEXT REFERENCES tracks(id) ON DELETE SET NULL,
+
+    -- 013: FR-017 — user-modifiable start TCs.
+    video_start_tc_frame INTEGER,
+    audio_start_tc_samples INTEGER,
+
+    -- 013: FR-015 — per-sequence fps-mismatch policy override.
+    -- NULL = inherit project-level default.
+    fps_mismatch_policy TEXT
+        CHECK(fps_mismatch_policy IS NULL OR fps_mismatch_policy IN ('resample','passthrough')),
 
     created_at INTEGER NOT NULL,
     modified_at INTEGER NOT NULL
@@ -141,78 +146,126 @@ CREATE TABLE IF NOT EXISTS tracks (
     sequence_id TEXT NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     track_type TEXT NOT NULL CHECK(track_type IN ('VIDEO', 'AUDIO')),
-    track_index INTEGER NOT NULL, -- 1-based index per type
-    
-    -- State
+    track_index INTEGER NOT NULL,
+
     enabled BOOLEAN NOT NULL DEFAULT 1,
     locked BOOLEAN NOT NULL DEFAULT 0,
     muted BOOLEAN NOT NULL DEFAULT 0,
     soloed BOOLEAN NOT NULL DEFAULT 0,
-    
-    -- Audio Mixer State (ignored for Video)
+
     volume REAL NOT NULL DEFAULT 1.0,
     pan REAL NOT NULL DEFAULT 0.0,
-    
+
     UNIQUE(sequence_id, track_type, track_index)
 );
 
-CREATE TABLE IF NOT EXISTS clips (
+-- ============================================================================
+-- MEDIA REFS (013 — rows inside master sequences, direct file references)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS media_refs (
     id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, -- Ownership
-    
-    -- Structural Fields (Restored)
-    clip_kind TEXT NOT NULL DEFAULT 'timeline', -- 'master', 'timeline'
-    master_clip_id TEXT, -- Masterclip sequence ID (the source material)
-    owner_sequence_id TEXT REFERENCES sequences(id) ON DELETE CASCADE, -- Direct ownership shortcut
-    
-    -- Container Relationship
-    track_id TEXT REFERENCES tracks(id) ON DELETE CASCADE,
-    
-    -- Source Relationship
-    media_id TEXT REFERENCES media(id) ON DELETE SET NULL,
-    
-    -- Naming
-    name TEXT DEFAULT '',
-    
-    -- Position on Timeline (Rational Ticks)
-    -- Units depend on Track Type (Video Frames vs Audio Samples)
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+
+    -- Containment: which master sequence and which track.
+    owner_sequence_id TEXT NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
+    track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+
+    -- What file is referenced and which portion of it.
+    media_id TEXT NOT NULL REFERENCES media(id) ON DELETE SET NULL,
+    source_in_frame INTEGER NOT NULL,
+    source_out_frame INTEGER NOT NULL,
+
+    -- Where on the master's track this portion sits.
     timeline_start_frame INTEGER NOT NULL,
     duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),
-    
-    -- Source Selection (Rational Ticks)
-    source_in_frame INTEGER NOT NULL DEFAULT 0,
-    source_out_frame INTEGER NOT NULL, -- Must be >= source_in + duration
-    
-    -- The Timebase of THESE ticks (Self-describing)
-    -- For Video Clips: Matches Sequence FPS (usually)
-    -- For Audio Clips: Matches Audio Sample Rate (e.g. 48000/1)
-    fps_numerator INTEGER NOT NULL CHECK(fps_numerator > 0),
-    fps_denominator INTEGER NOT NULL CHECK(fps_denominator > 0),
-    
-    -- State
-    enabled BOOLEAN NOT NULL DEFAULT 1,
-    offline BOOLEAN NOT NULL DEFAULT 0,
 
-    -- Audio Mixer State (clip gain, applied before track fader)
-    volume REAL NOT NULL DEFAULT 1.0,  -- linear: 1.0 = unity (0dB)
+    -- Source timebase is the referenced media's (media.fps_numerator/denominator);
+    -- not carried on this row to avoid denormalization.
 
-    -- Per-clip source viewer state (marks + playhead)
-    mark_in_frame INTEGER,       -- nullable (no mark set)
-    mark_out_frame INTEGER,      -- nullable (no mark set)
-    playhead_frame INTEGER NOT NULL DEFAULT 0,
+    -- State (explicit on INSERT; no column defaults — rule 2.13).
+    enabled INTEGER NOT NULL,
+    volume REAL NOT NULL,
+    mark_in_frame INTEGER,
+    mark_out_frame INTEGER,
+    playhead_frame INTEGER NOT NULL,
 
     created_at INTEGER NOT NULL,
     modified_at INTEGER NOT NULL
 );
 
--- Clip Links: A/V sync relationships between clips
--- Manages linked clip groups for synchronized editing operations
+CREATE INDEX IF NOT EXISTS idx_media_refs_owner_sequence ON media_refs(owner_sequence_id);
+CREATE INDEX IF NOT EXISTS idx_media_refs_track ON media_refs(track_id);
+CREATE INDEX IF NOT EXISTS idx_media_refs_media ON media_refs(media_id);
+
+-- ============================================================================
+-- CLIPS (013 — rows inside non-master sequences, references to other sequences)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS clips (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+
+    -- Containment: which non-master sequence and which track.
+    owner_sequence_id TEXT NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
+    track_id TEXT REFERENCES tracks(id) ON DELETE CASCADE,
+
+    -- What sequence this clip references (any kind). Replaces the pre-013
+    -- master_clip_id column with clearer semantics.
+    nested_sequence_id TEXT NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
+
+    -- Window into the nested sequence's timebase.
+    source_in_frame INTEGER NOT NULL,
+    source_out_frame INTEGER NOT NULL,
+
+    -- Where on this sequence's track the clip sits. timeline_start_frame and
+    -- duration_frames are in the OWNER sequence's timebase; source_in/out are
+    -- in the NESTED sequence's timebase. The ratio between them is set by
+    -- fps_mismatch_policy below. Neither timebase is carried on this row —
+    -- callers dereference owner_sequence_id / nested_sequence_id as needed.
+    timeline_start_frame INTEGER NOT NULL,
+    duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),
+
+    -- Per-clip layer override. Non-NULL = this clip exposes the named video
+    -- track of its nested sequence. NULL = inherit nested sequence's
+    -- default_video_layer_track_id. Rule 2.13: NULL is inherit, not fallback.
+    master_layer_track_id TEXT REFERENCES tracks(id) ON DELETE SET NULL,
+
+    -- Per-clip fps-mismatch policy. NOT NULL — set at Insert time from the
+    -- effective project/sequence default (or explicit arg). duration_frames
+    -- above was computed under THIS policy at write time; changing the
+    -- policy is a structural mutation that re-computes duration and ripples
+    -- downstream (SetFpsMismatchPolicy, T064).
+    fps_mismatch_policy TEXT NOT NULL
+        CHECK(fps_mismatch_policy IN ('resample','passthrough')),
+
+    -- State (explicit on INSERT; no column defaults — rule 2.13).
+    name TEXT NOT NULL,
+    enabled INTEGER NOT NULL,
+    volume REAL NOT NULL,
+    mark_in_frame INTEGER,
+    mark_out_frame INTEGER,
+    playhead_frame INTEGER NOT NULL,
+
+    created_at INTEGER NOT NULL,
+    modified_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_clips_owner_sequence ON clips(owner_sequence_id);
+CREATE INDEX IF NOT EXISTS idx_clips_track ON clips(track_id);
+CREATE INDEX IF NOT EXISTS idx_clips_nested_sequence ON clips(nested_sequence_id);
+CREATE INDEX IF NOT EXISTS idx_clips_track_start ON clips(track_id, timeline_start_frame);
+
+-- ============================================================================
+-- CLIP LINKS (V+A sync — scope narrowed to clips only, media_refs don't link)
+-- ============================================================================
+
 CREATE TABLE IF NOT EXISTS clip_links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     link_group_id TEXT NOT NULL,
     clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
-    role TEXT NOT NULL DEFAULT 'video', -- 'video', 'audio'
-    time_offset INTEGER NOT NULL DEFAULT 0, -- Offset in frames from group anchor
+    role TEXT NOT NULL DEFAULT 'video',
+    time_offset INTEGER NOT NULL DEFAULT 0,
     enabled BOOLEAN NOT NULL DEFAULT 1
 );
 
@@ -220,24 +273,47 @@ CREATE INDEX IF NOT EXISTS idx_clip_links_group ON clip_links(link_group_id);
 CREATE INDEX IF NOT EXISTS idx_clip_links_clip ON clip_links(clip_id);
 
 -- ============================================================================
--- CLIP PROPERTIES
+-- OVERRIDE STATE (sparse — row exists only when explicitly set)
+-- ============================================================================
+
+-- Master-level per-channel state. Absent row = default (enabled, unity gain)
+-- applied by the resolver. Rule 2.13: materialized rows carry explicit values.
+CREATE TABLE IF NOT EXISTS media_refs_channel_state (
+    owner_sequence_id TEXT NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
+    channel_index INTEGER NOT NULL,
+    enabled INTEGER NOT NULL,
+    default_gain_db REAL NOT NULL,
+    PRIMARY KEY (owner_sequence_id, channel_index)
+);
+
+-- Per-clip channel override. Absent row = inherit nested sequence's state
+-- (which in turn may come from media_refs_channel_state at a leaf master).
+-- Rule 2.13: no column defaults.
+CREATE TABLE IF NOT EXISTS clip_channel_override (
+    clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+    channel_index INTEGER NOT NULL,
+    enabled INTEGER NOT NULL,
+    gain_db REAL NOT NULL,
+    PRIMARY KEY (clip_id, channel_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_clip_channel_override_clip ON clip_channel_override(clip_id);
+
+-- ============================================================================
+-- CLIP PROPERTIES / SNAPSHOTS / LAYOUTS / COMMANDS (unchanged from V8)
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS properties (
     id TEXT PRIMARY KEY,
     clip_id TEXT NOT NULL,
     property_name TEXT NOT NULL,
-    property_value TEXT, -- JSON-encoded value
+    property_value TEXT,
     property_type TEXT DEFAULT 'string',
     default_value TEXT,
     UNIQUE(clip_id, property_name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_properties_clip_id ON properties(clip_id);
-
--- ============================================================================
--- SNAPSHOTS
--- ============================================================================
 
 CREATE TABLE IF NOT EXISTS snapshots (
     id TEXT PRIMARY KEY,
@@ -247,34 +323,27 @@ CREATE TABLE IF NOT EXISTS snapshots (
     created_at INTEGER NOT NULL
 );
 
--- ============================================================================
--- UI & AUXILIARY
--- ============================================================================
-
--- Persistent Layouts (Track Heights)
 CREATE TABLE IF NOT EXISTS sequence_track_layouts (
     sequence_id TEXT PRIMARY KEY REFERENCES sequences(id) ON DELETE CASCADE,
-    track_heights_json TEXT NOT NULL, -- JSON {track_id: height}
+    track_heights_json TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
 
--- Command History (Event Sourcing)
 CREATE TABLE IF NOT EXISTS commands (
     id TEXT PRIMARY KEY,
-    parent_id TEXT, -- For batch command relationships
+    parent_id TEXT,
     sequence_number INTEGER NOT NULL UNIQUE,
     command_type TEXT NOT NULL,
-    command_args TEXT NOT NULL, -- JSON
-    parent_sequence_number INTEGER, -- For Undo Tree
-    undo_group_id INTEGER, -- For Emacs-style undo grouping
+    command_args TEXT NOT NULL,
+    parent_sequence_number INTEGER,
+    undo_group_id INTEGER,
     pre_hash TEXT,
     post_hash TEXT,
     timestamp INTEGER NOT NULL,
 
-    -- Snapshot State (for fast restores)
-    playhead_value REAL,           -- Pre-execution playhead (restored on undo)
+    playhead_value REAL,
     playhead_rate REAL,
-    playhead_value_post REAL,      -- Post-execution playhead (restored on redo)
+    playhead_value_post REAL,
     playhead_rate_post REAL,
 
     selected_clip_ids TEXT,
@@ -285,12 +354,11 @@ CREATE TABLE IF NOT EXISTS commands (
     selected_edge_infos_pre TEXT,
     selected_gap_infos_pre TEXT,
 
-    -- Per-Sequence Undo: which sequence this command belongs to (NULL = project-level)
     sequence_id TEXT
 );
 
 -- ============================================================================
--- TAGS & BINS
+-- TAGS & BINS (unchanged from V8)
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS tag_namespaces (
@@ -313,14 +381,10 @@ CREATE TABLE IF NOT EXISTS tag_assignments (
     tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     namespace_id TEXT NOT NULL REFERENCES tag_namespaces(id) ON DELETE CASCADE,
-    entity_type TEXT NOT NULL, -- 'master_clip', 'media'
+    entity_type TEXT NOT NULL,
     entity_id TEXT NOT NULL,
     UNIQUE(tag_id, entity_type, entity_id)
 );
-
--- ============================================================================
--- SMART BINS (dynamic query-based bins)
--- ============================================================================
 
 CREATE TABLE IF NOT EXISTS smart_bins (
     id TEXT PRIMARY KEY,
@@ -335,18 +399,9 @@ CREATE TABLE IF NOT EXISTS smart_bins (
 CREATE INDEX IF NOT EXISTS idx_smart_bins_project ON smart_bins(project_id);
 
 -- ============================================================================
--- INDEXES (performance-critical)
+-- TIMESTAMP TRIGGERS (unchanged from V8)
 -- ============================================================================
 
--- Used by overlap-prevention triggers and timeline queries.
-CREATE INDEX IF NOT EXISTS idx_clips_track_id ON clips(track_id);
-CREATE INDEX IF NOT EXISTS idx_clips_track_start ON clips(track_id, timeline_start_frame);
-
--- ============================================================================
--- TRIGGERS
--- ============================================================================
-
--- Basic timestamp updates
 CREATE TRIGGER IF NOT EXISTS trg_projects_update
 AFTER UPDATE ON projects
 BEGIN
@@ -359,21 +414,50 @@ BEGIN
     UPDATE projects SET modified_at = strftime('%s', 'now') WHERE id = NEW.project_id;
 END;
 
--- Overlap Prevention (Video Only)
--- Audio allows overlapping layers (mix), Video usually does not (overwrite/composite).
--- timeline_start_frame and duration_frames are in SEQUENCE fps (same for all clips on a track),
--- so we compare frame numbers directly without fps conversion.
---
--- Performance: we exploit the non-overlap invariant — if existing clips on a
--- track don't overlap each other, then NEW can only conflict with its two
--- nearest neighbors. Checking just those (via index seek on idx_clips_track_start)
--- is O(log N) per row instead of the naive O(N) "exists any overlap" scan.
--- On a 1000-clip track this changes bulk-shift cost from ~60ms to <2ms.
---
---   upstream:   clip with MAX(start) WHERE start < NEW.start.
---               Conflict iff upstream.end > NEW.start.
---   downstream: any clip with start ∈ [NEW.start, NEW.end).
---               Index-seek range; LIMIT 1 short-circuits.
+-- ============================================================================
+-- INV-1 / INV-2 — schema-layer enforcement (rule 2.21 static verifiability)
+-- ============================================================================
+-- SQLite doesn't allow subqueries in CHECK constraints; triggers are the
+-- schema-layer path to express "owner_sequence_id must reference a sequence
+-- of the right kind." Model-layer asserts in models/media_ref.lua and
+-- models/clip.lua are defense-in-depth.
+
+DROP TRIGGER IF EXISTS trg_media_refs_owner_kind_insert;
+CREATE TRIGGER trg_media_refs_owner_kind_insert
+BEFORE INSERT ON media_refs
+WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'master'
+BEGIN
+    SELECT RAISE(ABORT, 'INV-1: media_refs.owner_sequence_id must reference a kind=master sequence');
+END;
+
+DROP TRIGGER IF EXISTS trg_media_refs_owner_kind_update;
+CREATE TRIGGER trg_media_refs_owner_kind_update
+BEFORE UPDATE ON media_refs
+WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'master'
+BEGIN
+    SELECT RAISE(ABORT, 'INV-1: media_refs.owner_sequence_id must reference a kind=master sequence');
+END;
+
+DROP TRIGGER IF EXISTS trg_clips_owner_kind_insert;
+CREATE TRIGGER trg_clips_owner_kind_insert
+BEFORE INSERT ON clips
+WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'nested'
+BEGIN
+    SELECT RAISE(ABORT, 'INV-2: clips.owner_sequence_id must reference a kind=nested sequence');
+END;
+
+DROP TRIGGER IF EXISTS trg_clips_owner_kind_update;
+CREATE TRIGGER trg_clips_owner_kind_update
+BEFORE UPDATE ON clips
+WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'nested'
+BEGIN
+    SELECT RAISE(ABORT, 'INV-2: clips.owner_sequence_id must reference a kind=nested sequence');
+END;
+
+-- ============================================================================
+-- VIDEO TRACK OVERLAP PREVENTION (unchanged from V8 — uses track_id + start +
+-- duration, all still present on clips)
+-- ============================================================================
 
 DROP TRIGGER IF EXISTS trg_prevent_video_overlap_insert;
 CREATE TRIGGER trg_prevent_video_overlap_insert
@@ -383,8 +467,6 @@ WHEN EXISTS (
 )
 BEGIN
     SELECT CASE
-    -- Upstream neighbor extends into NEW's range?
-    -- coalesce to NEW.start so "no upstream" resolves as adjacent (not overlapping)
     WHEN coalesce((
         SELECT (c.timeline_start_frame + c.duration_frames) FROM clips c
         WHERE c.track_id = NEW.track_id
@@ -393,7 +475,6 @@ BEGIN
         ORDER BY c.timeline_start_frame DESC LIMIT 1
     ), NEW.timeline_start_frame) > NEW.timeline_start_frame
         THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
-    -- Any clip starts inside NEW's range?
     WHEN EXISTS (
         SELECT 1 FROM clips c
         WHERE c.track_id = NEW.track_id
@@ -413,8 +494,6 @@ WHEN EXISTS (
 )
 BEGIN
     SELECT CASE
-    -- Upstream neighbor extends into NEW's range?
-    -- coalesce to NEW.start so "no upstream" resolves as adjacent (not overlapping)
     WHEN coalesce((
         SELECT (c.timeline_start_frame + c.duration_frames) FROM clips c
         WHERE c.track_id = NEW.track_id
@@ -423,7 +502,6 @@ BEGIN
         ORDER BY c.timeline_start_frame DESC LIMIT 1
     ), NEW.timeline_start_frame) > NEW.timeline_start_frame
         THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
-    -- Any clip starts inside NEW's range?
     WHEN EXISTS (
         SELECT 1 FROM clips c
         WHERE c.track_id = NEW.track_id
