@@ -51,15 +51,15 @@
 
 ### 3.2.a — Tests first
 
-- [ ] **T009 [P]** Write failing test asserting that any `media_refs` INSERT whose `owner_sequence_id` references a `kind='nested'` sequence is refused at the model layer (INV-1). Path: `tests/test_media_ref_inv1.lua`.
-- [ ] **T010 [P]** Write failing test asserting that any `clips` INSERT whose `owner_sequence_id` references a `kind='master'` sequence is refused at the model layer (INV-2). Path: `tests/test_clip_inv2.lua`.
-- [ ] **T011 [P]** Write failing test for `would_create_cycle(owning_seq, candidate_nested_seq)` DFS (research §3) — self-reference, one-hop, two-hop, unrelated-graph. Path: `tests/test_cycle_detection.lua`.
-- [ ] **T012 [P]** Write failing test for INV-4 (clip window within nested seq duration). Path: `tests/test_clip_inv4_window.lua`.
-- [ ] **T013 [P]** Write failing test for INV-8 — `sequences.default_video_layer_track_id` must be non-NULL whenever the sequence has ≥1 video track. Creating a master with V1 then setting default to NULL must refuse. Path: `tests/test_sequence_inv8_default_layer.lua`.
+- [x] **T009 [P]** Write failing test asserting that any `media_refs` INSERT whose `owner_sequence_id` references a `kind='nested'` sequence is refused at the model layer (INV-1). Path: `tests/test_media_ref_inv1.lua`.
+- [x] **T010 [P]** Write failing test asserting that any `clips` INSERT whose `owner_sequence_id` references a `kind='master'` sequence is refused at the model layer (INV-2). Path: `tests/test_clip_inv2.lua`.
+- [x] **T011 [P]** Write failing test for `would_create_cycle(owning_seq, candidate_nested_seq)` DFS (research §3) — self-reference, one-hop, two-hop, unrelated-graph. Path: `tests/test_cycle_detection.lua`.
+- [x] **T012 [P]** Write failing test for INV-4 (clip window within nested seq duration). Path: `tests/test_clip_inv4_window.lua`.
+- [x] **T013 [P]** Write failing test for INV-8 — `sequences.default_video_layer_track_id` must be non-NULL whenever the sequence has ≥1 video track. Creating a master with V1 then setting default to NULL must refuse. Path: `tests/test_sequence_inv8_default_layer.lua`.
 - [ ] **T013a [P]** Write failing test for INV-5 — `clip_channel_override.channel_index` that points past the nested sequence's current audio channel count is rejected at resolve time with a loud assert naming the clip + channel_index (not a silent skip). Path: `tests/test_inv5_channel_index_bounds.lua`.
 - [ ] **T013b [P]** Write failing test for INV-6 — deleting a master's video track with another live V track remaining: the master's `default_video_layer_track_id` repoints to a live track (or is explicitly re-set by the command) before the delete commits; deleting the last V track on a master with video clips attached refuses. Path: `tests/test_inv6_track_delete_default_repoint.lua`.
 - [ ] **T013c [P]** Write failing test for INV-7 — a `clips` row has at most one row in `clip_links`; linking a clip that's already in a link group must first unlink or refuse. Path: `tests/test_inv7_link_group_single.lua`.
-- [ ] **T013d [P]** Write failing test for master-track-delete repoint-or-refuse behavior (pre-T017): given a master with V1 (default) + V2 live, deleting V1 repoints `default_video_layer_track_id` to a live V track (command chooses V2) before commit; given a master with only V1 and live clips attached, deleting V1 refuses with a clear error. Path: `tests/test_master_track_delete_default_repoint.lua`.
+- [x] **T013d [P]** (+ T013b consolidated — same test) Write failing test for master-track-delete repoint-or-refuse behavior (pre-T017): given a master with V1 (default) + V2 live, deleting V1 repoints `default_video_layer_track_id` to a live V track (command chooses V2) before commit; given a master with only V1 and live clips attached, deleting V1 refuses with a clear error. Path: `tests/test_master_track_delete_default_repoint.lua`.
 
 ### 3.2.b — Implementation
 
