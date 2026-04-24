@@ -21,6 +21,7 @@
 #include "lua/qt_bindings/fs_watcher_bindings.cpp"
 #include "lua/qt_bindings/shortcut_bindings.cpp"
 #include "lua/qt_bindings/xml_bindings.cpp"
+#include "lua/qt_bindings/zstd_bindings.cpp"
 
 // Define the metatable name (declared extern in qt_bindings.h)
 const char* WIDGET_METATABLE = "JVE.Widget";
@@ -386,6 +387,10 @@ void registerQtBindings(lua_State* L)
 
     // Register XML parsing functions globally
     register_xml_bindings(L);
+
+    // Register zstd decompression (qt_zstd_decompress — used by DRP importer
+    // to decode Sm2Mp FieldsBlob payloads for synced-clip resolution).
+    register_zstd_bindings(L);
 
     // Populate 'qt_constants.SIGNAL' subtable for application-level signal handlers
     lua_newtable(L);

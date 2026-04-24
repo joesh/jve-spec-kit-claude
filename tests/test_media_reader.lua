@@ -189,6 +189,7 @@ package.loaded["models.media"] = {
             width = params.width,
             height = params.height,
             audio_channels = params.audio_channels,
+            audio_sample_rate = params.audio_sample_rate,
             is_still = params.is_still,
             created_at = params.created_at,
             modified_at = params.modified_at,
@@ -212,6 +213,9 @@ if #mock_saved_media > 0 then
         string.format("Duration frames stored correctly (got %s)", tostring(saved.duration_frames)))
     assert_eq(saved.width, 1920, "Width stored correctly")
     assert_eq(saved.height, 1080, "Height stored correctly")
+    assert_eq(tonumber(saved.audio_sample_rate), 44100,
+        "Audio sample rate flows from probe into Media record")
+    assert_eq(saved.audio_channels, 1, "Audio channels flows from probe")
 end
 
 -- ============================================================================

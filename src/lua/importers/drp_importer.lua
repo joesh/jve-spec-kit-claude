@@ -715,6 +715,51 @@ local function parse_master_clip_element(clip_elem, folder_id)
         end
     end
 
+    -- Collect BtAudioInfo DbIds this pool item OWNS (so callers can
+    -- reverse-index btai_dbid → owning pool item). A video pool item
+    -- owns the BtAudioInfo(s) under its EmbeddedAudioVec (camera-scratch
+    -- audio); an audio pool item owns the BtAudioInfo(s) under its own
+    -- EmbeddedAudioVec (the external WAV's audio info).
+    master_clip.own_bt_audio_info_ids = {}
+    for _, bai in ipairs(find_all_elements(clip_elem, "BtAudioInfo")) do
+        if bai.attrs and bai.attrs.DbId then
+            master_clip.own_bt_audio_info_ids[#master_clip.own_bt_audio_info_ids + 1]
+                = bai.attrs.DbId
+        end
+    end
+
+    -- Synced-clip linkage (video pool items only).
+    --
+    -- <AudioSource> tells us whether the pool item plays its own
+    -- embedded audio (EMBEDDED) or external synced audio (CUSTOM).
+    -- The FieldsBlob's decompressed payload embeds an ordered list of
+    -- MediaRef UUIDs — each one is a BtAudioInfo DbId that this pool
+    -- item references. For unsynced, all refs land on own_bt_audio_info_ids.
+    -- For synced, refs split between the external WAV's BtAudioInfo and
+    -- the video's own embedded. Callers walk audio_refs + the
+    -- btai_dbid→pool_item index to resolve external audio pool items.
+    if clip_elem.tag == "Sm2MpVideoClip" then
+        local audio_source_elem = find_direct_child(clip_elem, "AudioSource")
+        if audio_source_elem then
+            master_clip.audio_source = get_text(audio_source_elem)
+        end
+
+        local fb_elem = find_direct_child(clip_elem, "FieldsBlob")
+        local fb_hex = fb_elem and get_text(fb_elem)
+        if fb_hex and fb_hex ~= "" then
+            local decoded, fb_err = drp_binary.decode_fields_blob(fb_hex)
+            if decoded then
+                master_clip.audio_refs = drp_binary.extract_media_refs(decoded)
+            else
+                -- Missing zstd binding or malformed blob: surface via log,
+                -- continue without audio_refs so the importer can still
+                -- produce basic (non-synced-aware) media records.
+                log.warn("drp_importer: FieldsBlob decode failed for %s (%s): %s",
+                    master_clip.name or "?", db_id, tostring(fb_err))
+            end
+        end
+    end
+
     return master_clip
 end
 
@@ -1612,6 +1657,47 @@ end
 --     pool_master_clips = { {id, name, folder_id, mark_in, mark_out, playhead}, ... },
 --     folder_map = { [folder_id] = folder, ... },  -- Lookup by ID
 --   }
+--- Merge MediaPool master-clip (pmc) metadata into a media entry.
+--
+-- `pmc.num_frames` (from BtVideoInfo.Time) and `pmc.audio_duration` (from
+-- BtAudioInfo.TracksBA) are independent facts: A/V files carry both, pure
+-- video files carry only num_frames, pure audio files carry only
+-- audio_duration. They must be applied independently — an A/V file must
+-- get both a video-frame duration and an audio sample rate.
+--
+-- `duration`/`frame_rate` are single-valued on the media entry and come
+-- from the video stream when present (timeline-frame domain), otherwise
+-- from the audio stream (sample domain). `audio_sample_rate` is always
+-- recorded when audio_duration is present, regardless of which stream
+-- drove duration.
+local function apply_pmc_metadata(entry, pmc)
+    -- Video stream drives duration/frame_rate when present; otherwise
+    -- the audio stream does (audio-only file, sample domain).
+    if pmc.num_frames and pmc.num_frames > 0 then
+        entry.duration = pmc.num_frames
+        if pmc.frame_rate then
+            entry.frame_rate = pmc.frame_rate
+        end
+    elseif pmc.audio_duration then
+        entry.duration = pmc.audio_duration.samples
+        entry.frame_rate = pmc.audio_duration.sample_rate
+    end
+
+    -- audio_sample_rate is independent of which stream drove duration —
+    -- A/V files have both, and downstream consumers (waveform peaks,
+    -- playback audio math) need the sample rate regardless.
+    if pmc.audio_duration then
+        entry.audio_sample_rate = pmc.audio_duration.sample_rate
+    end
+
+    -- File container TC origin from TracksBA.StartTime (FR-001)
+    if pmc.file_tc_seconds then
+        entry.file_tc_seconds = pmc.file_tc_seconds
+    end
+end
+M._apply_pmc_metadata = apply_pmc_metadata  -- exported for tests
+M._parse_master_clip_element = parse_master_clip_element
+
 function M.parse_drp_file(drp_path, progress_cb)
     local pump = progress_cb or function() end
 
@@ -2011,21 +2097,7 @@ function M.parse_drp_file(drp_path, progress_cb)
                 path_to_key[pmc.file_path] = (entry.file_uuid and entry.file_uuid ~= "") and entry.file_uuid or entry.file_path
             end
 
-            if pmc.num_frames and pmc.num_frames > 0 then
-                entry.duration = pmc.num_frames
-                if pmc.frame_rate then
-                    entry.frame_rate = pmc.frame_rate
-                end
-            elseif pmc.audio_duration then
-                entry.duration = pmc.audio_duration.samples
-                entry.audio_sample_rate = pmc.audio_duration.sample_rate
-                entry.frame_rate = pmc.audio_duration.sample_rate
-            end
-
-            -- Propagate file container TC origin from TracksBA.StartTime (FR-001)
-            if pmc.file_tc_seconds then
-                entry.file_tc_seconds = pmc.file_tc_seconds
-            end
+            apply_pmc_metadata(entry, pmc)
         end
     end
 

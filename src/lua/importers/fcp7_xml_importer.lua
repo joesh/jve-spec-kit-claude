@@ -69,32 +69,38 @@ local function decode_url(url)
     return path
 end
 
--- Extract frame rate from sequence timebase
-local function extract_frame_rate(timebase_node)
-    if not timebase_node then
-        return 30.0  -- Default
-    end
+-- Extract frame rate from a <rate> element (FCP7 XMEML).
+-- Format: <rate><timebase>N</timebase>[<ntsc>TRUE</ntsc>]</rate>. A missing
+-- or un-parseable <timebase> is a malformed XML that would corrupt every
+-- downstream tick→frame conversion — surface it rather than inventing a
+-- default frame rate.
+local function extract_frame_rate(rate_node)
+    assert(rate_node, "extract_frame_rate: rate_node is nil")
 
-    -- <ntsc>TRUE</ntsc> indicates drop-frame 29.97
-    -- <timebase>30</timebase> is the base rate
     local ntsc = false
-    local base_rate = 30.0
+    local base_rate = nil
 
-    for _, child in ipairs(timebase_node.children or {}) do
+    for _, child in ipairs(rate_node.children or {}) do
         if child.tag == "ntsc" then
-            ntsc = (child.text:upper() == "TRUE")
+            ntsc = (child.text and child.text:upper() == "TRUE")
         elseif child.tag == "timebase" then
-            base_rate = tonumber(child.text) or 30.0
+            base_rate = tonumber(child.text)
         end
     end
 
-    -- Apply NTSC adjustment
-    if ntsc and base_rate == 30.0 then
-        return 29.97
-    elseif ntsc and base_rate == 24.0 then
-        return 23.976
-    end
+    assert(base_rate and base_rate > 0, string.format(
+        "extract_frame_rate: <timebase> missing or un-parseable (text=%s)",
+        tostring(rate_node.children and
+            (function()
+                for _, c in ipairs(rate_node.children) do
+                    if c.tag == "timebase" then return c.text end
+                end
+                return "<absent>"
+            end)())))
 
+    -- NTSC adjustment (drop-frame approximations).
+    if ntsc and base_rate == 30.0 then return 29.97 end
+    if ntsc and base_rate == 24.0 then return 23.976 end
     return base_rate
 end
 
@@ -106,9 +112,13 @@ local function parse_file(file_node, frame_rate)
         path = nil,
         duration = 0,
         frame_rate = frame_rate,
-        width = 1920,
-        height = 1080,
+        -- width/height come from <video><samplecharacteristics> when
+        -- present. Initialize to 0 so audio-only files don't fabricate
+        -- video dimensions (has_video = width > 0 downstream).
+        width = 0,
+        height = 0,
         audio_channels = 0,
+        audio_sample_rate = nil,  -- populated when <audio><samplecharacteristics><samplerate> present
         is_compound = false,  -- True if contains nested sequence (compound clip)
     }
 
@@ -134,9 +144,9 @@ local function parse_file(file_node, frame_rate)
                         if video_child.tag == "samplecharacteristics" then
                             for _, char_child in ipairs(video_child.children or {}) do
                                 if char_child.tag == "width" then
-                                    media_info.width = tonumber(char_child.text) or 1920
+                                    media_info.width = tonumber(char_child.text) or 0
                                 elseif char_child.tag == "height" then
-                                    media_info.height = tonumber(char_child.text) or 1080
+                                    media_info.height = tonumber(char_child.text) or 0
                                 end
                             end
                         end
@@ -145,6 +155,12 @@ local function parse_file(file_node, frame_rate)
                     for _, audio_child in ipairs(media_child.children or {}) do
                         if audio_child.tag == "channelcount" then
                             media_info.audio_channels = tonumber(audio_child.text) or 0
+                        elseif audio_child.tag == "samplecharacteristics" then
+                            for _, char_child in ipairs(audio_child.children or {}) do
+                                if char_child.tag == "samplerate" then
+                                    media_info.audio_sample_rate = tonumber(char_child.text)
+                                end
+                            end
                         end
                     end
                 end
@@ -226,6 +242,7 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
                         copy_if_present("width", false)
                         copy_if_present("height", false)
                         copy_if_present("audio_channels", false)
+                        copy_if_present("audio_sample_rate", false)
                         media_info = existing
                     else
                         sequence_info.media_files[media_info.key] = media_info
@@ -899,6 +916,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             width = width,
             height = media_info.height,
             audio_channels = media_info.audio_channels or 0,
+            audio_sample_rate = media_info.audio_sample_rate,
             codec = codec,
             is_still = Media.classify_is_still(codec, width, duration),
         })
@@ -1217,5 +1235,8 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
 
     return result
 end
+
+M._parse_file = parse_file  -- exported for tests
+M._extract_frame_rate = extract_frame_rate
 
 return M

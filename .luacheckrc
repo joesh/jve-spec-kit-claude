@@ -35,6 +35,7 @@ globals = {
     "qt_json_decode",
     "qt_xml_parse",
     "qt_xml_parse_string",
+    "qt_zstd_decompress",
     "qt_set_widget_attribute",
     "qt_update_widget",
     "qt_set_widget_stylesheet",

@@ -57,7 +57,7 @@ for line in source:gmatch("[^\n]+") do
     elseif in_block then
         local key = line:match("^%s*([%w_]+)%s*=%s*{")
         if key then whitelist[key] = true end
-        if line:match("^%s*}") then in_block = false; break end
+        if line:match("^%s*}") then break end
     end
 end
 

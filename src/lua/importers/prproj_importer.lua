@@ -176,6 +176,45 @@ local function clean_file_path(raw_path)
     return raw_path:gsub("^///", "/"):gsub("^//", "/")
 end
 
+--- Count channels in an AudioChannelLayout JSON string.
+-- Layout example: '[{"channellabel":100},{"channellabel":101}]' (2 channels).
+-- We count "channellabel" occurrences rather than running a JSON parser —
+-- the layout is flat and the labels are 1:1 with channels.
+local function count_audio_channels(layout_text)
+    if not layout_text or layout_text == "" then return 0 end
+    local n = 0
+    for _ in layout_text:gmatch('channellabel') do n = n + 1 end
+    return n
+end
+
+--- Resolve <AudioStream ObjectRef="N"/> to its per-stream metadata.
+-- The referenced AudioStream carries FrameRate (ticks-per-sample) and
+-- AudioChannelLayout. <ConformedAudioRate> on the Media is a project-
+-- level conforming target, not per-file, so must not be used as the
+-- authoritative sample rate.
+local function resolve_audio_stream(media_elem, by_id)
+    local ref = find_direct_child(media_elem, "AudioStream")
+    if not ref or not ref.attrs or not ref.attrs.ObjectRef then
+        return nil
+    end
+    local stream = by_id[tonumber(ref.attrs.ObjectRef)]
+    if not stream then return nil end
+
+    local ticks_per_sample = get_child_number(stream, "FrameRate")
+    assert(ticks_per_sample and ticks_per_sample > 0, string.format(
+        "prproj: AudioStream %s missing/invalid FrameRate",
+        tostring(ref.attrs.ObjectRef)))
+    local sample_rate = math.floor(TICKS_PER_SECOND / ticks_per_sample + 0.5)
+
+    local layout_text = get_child_text(stream, "AudioChannelLayout")
+    local channels = count_audio_channels(layout_text)
+    assert(channels > 0, string.format(
+        "prproj: AudioStream %s has no channels in AudioChannelLayout",
+        tostring(ref.attrs.ObjectRef)))
+
+    return { sample_rate = sample_rate, channels = channels }
+end
+
 --- Parse a Media element to extract file metadata.
 local function parse_media_element(media_elem, by_id)
     if is_synthetic_media(media_elem) then return nil end
@@ -188,28 +227,22 @@ local function parse_media_element(media_elem, by_id)
     local file_path = clean_file_path(raw_path)
     local name = get_child_text(media_elem, "Title") or (file_path and file_path:match("([^/]+)$"))
 
-    -- Determine video/audio presence from stream refs
     local has_video = find_direct_child(media_elem, "VideoStream") ~= nil
-    local has_audio = find_direct_child(media_elem, "AudioStream") ~= nil
-
-    -- Duration from VideoMediaSource or AudioMediaSource that references this Media
-    -- (populated later during clip parsing when we encounter Sources)
-    -- For now, store basic metadata
-    local conformed_rate = get_child_number(media_elem, "ConformedAudioRate")
-    local audio_sample_rate = conformed_rate and
-        math.floor(TICKS_PER_SECOND / conformed_rate + 0.5) or nil
+    local audio_info = resolve_audio_stream(media_elem, by_id)
 
     return {
         file_uuid = uuid,
         name = name or "Untitled",
         file_path = file_path,
         has_video = has_video,
-        has_audio = has_audio,
-        audio_sample_rate = audio_sample_rate,
-        audio_channels = 2,  -- Default; Premiere doesn't expose channel count simply
+        has_audio = audio_info ~= nil,
+        audio_sample_rate = audio_info and audio_info.sample_rate or nil,
+        audio_channels = audio_info and audio_info.channels or 0,
         alt_paths = {},
     }
 end
+
+M._parse_media_element = parse_media_element  -- exported for tests
 
 -- ---------------------------------------------------------------------------
 -- Sequence + Track + Clip parsing
@@ -325,9 +358,17 @@ local function parse_track_clips(track_elem, by_id, by_uuid, ticks_per_frame, tr
         local end_frame = ticks_to_frames(end_ticks, ticks_per_frame)
         local duration_frames = end_frame - start_frame
 
-        local source_in = in_point_ticks and ticks_to_frames(in_point_ticks, ticks_per_frame) or 0
-        local source_out = out_point_ticks and ticks_to_frames(out_point_ticks, ticks_per_frame)
-            or (source_in + duration_frames)
+        -- InPoint/OutPoint are authoritative source coords in Premiere's
+        -- model. A TrackItem missing either is malformed .prproj (third-
+        -- party PRPROJ-READER defaults to 0, but Adobe's own scripting
+        -- docs describe these as concrete Time values with no documented
+        -- default — Premiere itself always writes them).
+        assert(in_point_ticks, string.format(
+            "prproj: clip '%s' missing InPoint (malformed TrackItem)", clip_name))
+        assert(out_point_ticks, string.format(
+            "prproj: clip '%s' missing OutPoint (malformed TrackItem)", clip_name))
+        local source_in = ticks_to_frames(in_point_ticks, ticks_per_frame)
+        local source_out = ticks_to_frames(out_point_ticks, ticks_per_frame)
 
         if duration_frames <= 0 then
             log.warn("Skipping zero-duration clip '%s' (start=%d end=%d)",
@@ -528,11 +569,16 @@ local function extract_media_durations(root, by_id, by_uuid, media_items)
                 local uuid = media_ref.attrs.ObjectURef
                 local item = media_items[uuid]
                 if item and not item.duration then
-                    -- Audio duration in samples
-                    local sr = item.audio_sample_rate or 48000
-                    local ticks_per_sample = TICKS_PER_SECOND / sr
+                    -- An AudioMediaSource should only reference a Media whose
+                    -- AudioStream we already parsed — assert to surface any
+                    -- malformed .prproj where that invariant breaks.
+                    assert(item.audio_sample_rate and item.audio_sample_rate > 0,
+                        string.format(
+                            "prproj: AudioMediaSource for Media %s has no audio_sample_rate"
+                            .. " — AudioStream missing or unparsed", tostring(uuid)))
+                    local ticks_per_sample = TICKS_PER_SECOND / item.audio_sample_rate
                     item.duration = ticks_to_frames(dur_ticks, ticks_per_sample)
-                    item.frame_rate = sr  -- audio "fps" = sample rate
+                    item.frame_rate = item.audio_sample_rate
                 end
             end
         end
@@ -611,14 +657,15 @@ function M.parse_prproj_file(prproj_path, progress_cb)
     local sequences = find_all_elements(root, "Sequence")
     for _, seq_elem in ipairs(sequences) do
         if seq_elem.attrs and seq_elem.attrs.ObjectUID then
-            local ok, timeline = pcall(parse_sequence, seq_elem, by_id, by_uuid, media_items)
-            if ok then
-                timelines[#timelines + 1] = timeline
-                log.event("Parsed sequence: %s (%.3f fps, %dx%d, %d tracks)",
-                    timeline.name, timeline.fps, timeline.width, timeline.height, #timeline.tracks)
-            else
-                log.warn("Failed to parse sequence: %s", tostring(timeline))
-            end
+            -- No pcall: a broken <Sequence> element must surface as an
+            -- import failure with the underlying assert, not silently
+            -- drop the sequence and produce a partial project. If real-
+            -- world .prproj files demand partial-import tolerance, re-
+            -- introduce pcall consciously with a surfaced error UI.
+            local timeline = parse_sequence(seq_elem, by_id, by_uuid, media_items)
+            timelines[#timelines + 1] = timeline
+            log.event("Parsed sequence: %s (%.3f fps, %dx%d, %d tracks)",
+                timeline.name, timeline.fps, timeline.width, timeline.height, #timeline.tracks)
         end
     end
 
