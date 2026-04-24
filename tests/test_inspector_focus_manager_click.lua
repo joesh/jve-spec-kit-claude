@@ -41,9 +41,9 @@ package.loaded["ui.selection_hub"] = {
     set_active_panel = function(_) end,
 }
 
-local focus_manager = require("ui.selection_hub")  -- ensure it's cached first
+require("ui.selection_hub")  -- ensure it's cached first
 package.loaded["ui.focus_manager"] = nil
-focus_manager = require("ui.focus_manager")
+local focus_manager = require("ui.focus_manager")
 
 -- ---------------------------------------------------------------
 -- Test setup: register a fake panel, install click handler.

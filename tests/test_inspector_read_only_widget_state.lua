@@ -17,8 +17,11 @@ package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
 
 -- Capture SET_ENABLED + set_focus_policy calls keyed by widget identity.
-local enabled_state     = {}
-local focus_policy_set  = {}
+-- Each test case clears these before running; the variables persist so
+-- the closures below have a stable target.
+local enabled_state    = {}
+local focus_policy_set = {}
+local function clear(t) for k in pairs(t) do t[k] = nil end end
 
 package.loaded["core.qt_constants"] = {
     WIDGET = {
@@ -66,7 +69,7 @@ print("=== Inspector: read-only widget state (disable + NoFocus) ===\n")
 
 -- (a) BOOLEAN read_only → checkbox disabled (click rejected at Qt level) AND NoFocus.
 do
-    enabled_state = {}; focus_policy_set = {}
+    clear(enabled_state); clear(focus_policy_set)
     local entry = field_widget.create_field({}, {
         key = "offline", label = "Offline",
         type = schemas.FIELD_TYPES.BOOLEAN, read_only = true,
@@ -79,7 +82,7 @@ end
 
 -- (b) BOOLEAN editable → neither disabled nor NoFocus.
 do
-    enabled_state = {}; focus_policy_set = {}
+    clear(enabled_state); clear(focus_policy_set)
     local entry = field_widget.create_field({}, {
         key = "enabled", label = "Enabled",
         type = schemas.FIELD_TYPES.BOOLEAN,  -- read_only defaults false
@@ -94,7 +97,7 @@ end
 --     but NoFocus so Tab skips. This is the correct NLE UX: read-only fields
 --     display their value in normal text style, but aren't focus stops.
 do
-    enabled_state = {}; focus_policy_set = {}
+    clear(enabled_state); clear(focus_policy_set)
     local entry = field_widget.create_field({}, {
         key = "media_id", label = "Media ID",
         type = schemas.FIELD_TYPES.STRING, read_only = true,
@@ -110,7 +113,7 @@ end
 
 -- (d) STRING editable → neither disabled nor NoFocus.
 do
-    enabled_state = {}; focus_policy_set = {}
+    clear(enabled_state); clear(focus_policy_set)
     local entry = field_widget.create_field({}, {
         key = "name", label = "Clip Name",
         type = schemas.FIELD_TYPES.STRING,
@@ -123,7 +126,7 @@ end
 
 -- (e) TIMECODE read_only (e.g. playhead_frame) → NoFocus, kept enabled.
 do
-    enabled_state = {}; focus_policy_set = {}
+    clear(enabled_state); clear(focus_policy_set)
     local entry = field_widget.create_field({}, {
         key = "playhead_frame", label = "Source Playhead",
         type = schemas.FIELD_TYPES.TIMECODE, read_only = true,

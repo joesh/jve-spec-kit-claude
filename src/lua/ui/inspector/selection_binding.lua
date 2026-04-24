@@ -254,21 +254,23 @@ M._format_split_header = format_split_header
 
 local function format_single_header(schema_id, display_name)
     if schema_id == "sequence" then
-        return string.format("Timeline: %s", display_name or "")
+        return string.format("Sequence: %s", display_name or "")
     end
     return string.format("Clip: %s", display_name or "")
 end
+M._format_single_header = format_single_header
 
 local function format_multi_header(schema_id, count, read_only)
     local base
     if schema_id == "clip" then
         base = string.format("Clips: %d selected", count)
     else
-        base = string.format("Timelines: %d selected", count)
+        base = string.format("Sequences: %d selected", count)
     end
     if read_only then base = base .. " (read-only)" end
     return base
 end
+M._format_multi_header = format_multi_header
 
 local function set_header(ui_state, text)
     if ui_state.header_label then
@@ -387,37 +389,28 @@ local function show_empty_state(ui_state, items)
     ui_state.mode                = "empty"
     ui_state.prev_item_ids       = ids_set(items)
     ui_state.prev_schemas_present = {}
-    ui_state.base_header         = nil
     set_header(ui_state, "No editable selection")
     update_apply_button(ui_state)
 end
 
--- Build the header label for an active selection. Returns
--- (base_label, full_header); caller stores the base for later mark-
--- summary refresh via change_listeners.
-local function build_selection_header(ui_state, resolved, mode, active_schema_id,
+local function build_selection_header(resolved, mode, active_schema_id,
                                        active_names, active_count,
-                                       is_heterogeneous, source_panel_id)
-    local base
+                                       is_heterogeneous)
     if is_heterogeneous then
-        base = format_split_header(resolved.schema_counts, active_schema_id)
-    elseif mode == "single" then
-        base = format_single_header(active_schema_id, active_names[1])
-    elseif mode == "multi_edit" then
-        base = format_multi_header(active_schema_id, active_count, false)
-    elseif mode == "multi_read_only" then
-        base = format_multi_header(active_schema_id, active_count, true)
+        return format_split_header(resolved.schema_counts, active_schema_id)
     end
-
-    local full = base
-    if source_panel_id == "timeline" or active_schema_id == "sequence" then
-        local mark_summary = ui_state.build_mark_summary and ui_state.build_mark_summary()
-        if mark_summary and mark_summary ~= "" then
-            full = full .. "\n" .. mark_summary
-        end
+    if mode == "single" then
+        return format_single_header(active_schema_id, active_names[1])
     end
-    return base, full
+    if mode == "multi_edit" then
+        return format_multi_header(active_schema_id, active_count, false)
+    end
+    if mode == "multi_read_only" then
+        return format_multi_header(active_schema_id, active_count, true)
+    end
+    error("build_selection_header: unhandled mode " .. tostring(mode))
 end
+M._build_selection_header = build_selection_header
 
 --- Route a selection update into the Inspector.
 --  @param items            list of selection items
@@ -478,19 +471,13 @@ function M.update_selection(items, source_panel_id, ui_state)
     ui_state.active_schema_id    = active_schema_id
     ui_state.active_inspectables = active_inspectables
     ui_state.mode                = mode
-    ui_state.source_panel_id     = source_panel_id
 
     ui_state.schema.activate(ui_state.active_schema_view)
     ui_state.schema.apply_filter(ui_state.active_schema_view, ui_state.filter_query or "")
 
-    -- Header: store base separately so change_listeners can refresh just
-    -- the mark-summary line when marks mutate.
-    local base, full = build_selection_header(
-        ui_state, resolved, mode, active_schema_id,
-        active_names, #active_inspectables,
-        is_heterogeneous, source_panel_id)
-    ui_state.base_header = base
-    set_header(ui_state, full)
+    set_header(ui_state, build_selection_header(
+        resolved, mode, active_schema_id,
+        active_names, #active_inspectables, is_heterogeneous))
 
     -- Load values.
     if mode == "single" or mode == "multi_read_only" then

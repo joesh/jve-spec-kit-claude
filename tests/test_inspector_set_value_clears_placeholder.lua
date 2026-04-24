@@ -14,9 +14,9 @@ package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
 
 -- Record SET_PLACEHOLDER_TEXT / SET_TEXT / SET_STYLE / SET_CHECKED calls
--- on the widget instance.
-local widget_placeholder = nil
-local widget_text        = nil
+-- on the widget instance. Reset before each scenario below.
+local widget_placeholder
+local widget_text
 
 package.loaded["core.qt_constants"] = {
     WIDGET     = {

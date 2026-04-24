@@ -19,9 +19,12 @@ package.loaded["core.command_manager"] = {
     begin_command_event = function() end,
     end_command_event   = function() end,
 }
-local visibility, enabled_state = {}, {}
+-- SET_ENABLED capture is read by case 4. Case 4 reassigns a fresh table
+-- before invoking the code under test, so nil-init here is intentional.
+-- SET_VISIBLE is stubbed as a no-op — visibility isn't tested here.
+local enabled_state
 package.loaded["core.qt_constants"] = {
-    DISPLAY    = { SET_VISIBLE = function(w, v) visibility[w] = v end },
+    DISPLAY    = { SET_VISIBLE = function() end },
     PROPERTIES = { SET_TEXT = function() end },
     CONTROL    = { SET_ENABLED = function(w, v) enabled_state[w] = v end },
 }

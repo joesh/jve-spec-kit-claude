@@ -10,8 +10,11 @@ package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
 
 -- Track SET_VISIBLE / SET_ENABLED on the three button-related widgets.
-local visibility = {}  -- widget → bool
+-- Each test case clears these before running; the variables persist so
+-- the SET_VISIBLE/SET_ENABLED closures below have a stable target.
+local visibility = {}
 local enabled_state = {}
+local function clear(t) for k in pairs(t) do t[k] = nil end end
 
 package.loaded["core.command_manager"] = {
     begin_command_event = function() end,
@@ -73,7 +76,7 @@ end
 --------------------------------------------------------------------------
 do
     local ui_state, bar = make_ui_state("single", {})
-    visibility = {}
+    clear(visibility)
     sb._update_apply_button(ui_state)
     check("mode=single → bottom bar hidden", visibility[bar] == false)
 end
@@ -81,13 +84,13 @@ do
     local ui_state, bar = make_ui_state("multi_edit", {
         a = make_entry(false), b = make_entry(false),
     })
-    visibility = {}
+    clear(visibility)
     sb._update_apply_button(ui_state)
     check("mode=multi_edit → bottom bar visible", visibility[bar] == true)
 end
 do
     local ui_state, bar = make_ui_state("empty", {})
-    visibility = {}
+    clear(visibility)
     sb._update_apply_button(ui_state)
     check("mode=empty → bottom bar hidden", visibility[bar] == false)
 end
@@ -99,7 +102,7 @@ do
     local e1 = make_entry(true, false)   -- dirty, valid
     local e2 = make_entry(false, false)  -- clean
     local ui_state, _, apply, reset = make_ui_state("multi_edit", { e1, e2 })
-    enabled_state = {}
+    clear(enabled_state)
     sb._update_apply_button(ui_state)
     check("dirty+valid: Apply enabled",  enabled_state[apply] == true)
     check("dirty+valid: Reset enabled",  enabled_state[reset] == true)
@@ -107,7 +110,7 @@ end
 do
     local e = make_entry(true, true)  -- dirty + invalid
     local ui_state, _, apply, reset = make_ui_state("multi_edit", { e })
-    enabled_state = {}
+    clear(enabled_state)
     sb._update_apply_button(ui_state)
     check("dirty+invalid: Apply disabled", enabled_state[apply] == false)
     check("dirty+invalid: Reset still enabled (always offerable for dirty)",
@@ -116,7 +119,7 @@ end
 do
     local e = make_entry(false)  -- nothing dirty
     local ui_state, _, apply, reset = make_ui_state("multi_edit", { e })
-    enabled_state = {}
+    clear(enabled_state)
     sb._update_apply_button(ui_state)
     check("no-dirty: Apply disabled", enabled_state[apply] == false)
     check("no-dirty: Reset disabled", enabled_state[reset] == false)
@@ -131,7 +134,7 @@ do
     local e3 = make_entry(false, false, 3000)   -- clean — must NOT revert
     local ui_state, _, _, _, banner = make_ui_state("multi_edit", { e1, e2, e3 })
     ui_state._field_errors = { some_key = "old error" }
-    visibility = {}
+    clear(visibility)
 
     sb.reset_pending(ui_state)
 

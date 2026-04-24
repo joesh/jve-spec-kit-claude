@@ -22,6 +22,7 @@ local qt_constants   = require("core.qt_constants")
 local qt_signals     = require("core.qt_signals")
 local frame_utils    = require("core.frame_utils")
 local timecode_input = require("core.timecode_input")
+local runtime_mode   = require("core.runtime_mode")
 local metadata_schemas = require("ui.metadata_schemas")
 
 local M = {}
@@ -389,6 +390,27 @@ local function install_combobox_handler(entry, callbacks)
         "field_widget: failed to connect combobox change for %q", entry.field_key))
 end
 
+-- qt_set_focus_handler takes a global function name, so each field
+-- needs a distinct slot.
+local focus_handler_seq = 0
+
+local function install_field_focus_handler(entry, on_focused)
+    assert(entry.row_widget,
+        "field_widget.install_field_focus_handler: entry.row_widget required")
+    focus_handler_seq = focus_handler_seq + 1
+    local handler_name = string.format("inspector_field_focus_%d", focus_handler_seq)
+    -- Hand the row widget up so the scroll area can surface the whole
+    -- field row (label + control), not just the control.
+    _G[handler_name] = function(event)
+        assert(event, string.format(
+            "field_widget focus handler %q: event is nil", handler_name))
+        if event.focus_in then
+            on_focused(entry.row_widget)
+        end
+    end
+    qt_set_focus_handler(entry.widget, handler_name)  -- luacheck: globals qt_set_focus_handler
+end
+
 function Entry:blur_revert()
     -- Called by selection_binding when selection changes, to discard invalid
     -- in-flight text per FR-015b. Safe to call even if the entry is not dirty.
@@ -495,6 +517,15 @@ function M.create_field(parent_container, field_def, callbacks)
             install_combobox_handler(entry, callbacks)
         else
             error("field_widget: unhandled widget_type " .. tostring(widget_type))
+        end
+        -- Tab-cycling off-screen: parent scrolls focused field into view.
+        -- luacheck: globals qt_set_focus_handler
+        if callbacks.on_field_focused then
+            runtime_mode.assert_production(qt_set_focus_handler,
+                "field_widget: qt_set_focus_handler binding missing")
+            if qt_set_focus_handler then
+                install_field_focus_handler(entry, callbacks.on_field_focused)
+            end
         end
     end
 

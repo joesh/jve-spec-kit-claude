@@ -15,7 +15,7 @@ local schema              = require("ui.inspector.schema")
 local selection_binding   = require("ui.inspector.selection_binding")
 local change_listeners    = require("ui.inspector.change_listeners")
 local timeline_state      = require("ui.timeline.timeline_state")
-local frame_utils         = require("core.frame_utils")
+local runtime_mode        = require("core.runtime_mode")
 local log                 = require("core.logger").for_area("ui")
 
 local M = {}
@@ -61,20 +61,6 @@ local function get_frame_rate()
     return rate
 end
 
-local function build_mark_summary()
-    if not (timeline_state and timeline_state.get_mark_in) then return nil end
-    local mark_in  = timeline_state.get_mark_in()
-    local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out()
-    local rate = get_frame_rate()
-    local in_text  = mark_in  and frame_utils.format_timecode(mark_in, rate)       or "--"
-    local out_text = mark_out and frame_utils.format_timecode(mark_out - 1, rate)  or "--"
-    local dur_text = "--"
-    if mark_in and mark_out and mark_out >= mark_in then
-        dur_text = frame_utils.format_timecode(mark_out - mark_in, rate)
-    end
-    return string.format("In: %s  Out: %s  Dur: %s", in_text, out_text, dur_text)
-end
-
 local function build_root_layout(container)
     local layout = qt_constants.LAYOUT.CREATE_VBOX()
     assert(layout, "inspector.mount: CREATE_VBOX returned nil")
@@ -107,6 +93,14 @@ end
 local function build_scroll_area(root_layout)
     local scroll_area = qt_constants.WIDGET.CREATE_SCROLL_AREA()
     assert(scroll_area, "inspector.mount: CREATE_SCROLL_AREA returned nil")
+    -- Default QScrollArea focus policy is StrongFocus; leaving it would
+    -- put the area in the Tab chain between search and the first field.
+    -- luacheck: globals qt_set_focus_policy
+    runtime_mode.assert_production(qt_set_focus_policy,
+        "inspector.mount: qt_set_focus_policy binding missing")
+    if qt_set_focus_policy then
+        qt_set_focus_policy(scroll_area, "NoFocus")
+    end
     local content_widget = qt_constants.WIDGET.CREATE()
     assert(content_widget, "inspector.mount: CREATE content widget returned nil")
     qt_constants.PROPERTIES.SET_STYLE(content_widget, style_content_widget())
@@ -232,10 +226,21 @@ local function prebuild_schemas(ui_state, content_layout)
     -- can surface DB-write failures to the error banner — not just parse
     -- failures detected during typing.
     ui_state.on_error = on_error
+    -- Scroll a Tab-focused field into view. Wired here so field_widget
+    -- stays unaware of the scroll area.
+    -- luacheck: globals qt_scroll_area_ensure_widget_visible
+    local on_field_focused = function(row_widget)
+        runtime_mode.assert_production(qt_scroll_area_ensure_widget_visible,
+            "inspector.mount: qt_scroll_area_ensure_widget_visible binding missing")
+        if qt_scroll_area_ensure_widget_visible then
+            qt_scroll_area_ensure_widget_visible(ui_state.scroll_area, row_widget)
+        end
+    end
     local callbacks = {
         frame_rate          = get_frame_rate,
         on_commit           = on_commit,
         on_error            = on_error,
+        on_field_focused    = on_field_focused,
         on_section_toggled  = function(_schema_id, _name, _expanded)
             -- persistent_widget already persists inside schema.lua.
             -- Hook reserved for future analytics.
@@ -292,8 +297,6 @@ function M.mount(container)
         filter_query      = "",
         prev_item_ids     = {},
         prev_schemas_present = {},
-        build_mark_summary = build_mark_summary,
-        base_header       = nil,
         _field_errors     = {},
     }
 

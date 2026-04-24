@@ -57,6 +57,9 @@ end
 
 function ClipInspectable:refresh()
     self._property_cache = nil
+    -- Overrides win in :get() to cover the commit round-trip; on refresh
+    -- clip_ref is authoritative again and leaving them masks undo reverts.
+    self.metadata_overrides = {}
 end
 
 function ClipInspectable:get_display_name()
@@ -169,17 +172,6 @@ function ClipInspectable:set(field, value)
     if default_value ~= nil then
         cmd:set_parameter("default_value", default_value)
     end
-    -- No __skip_timeline_reload: SetClipProperty emits __timeline_mutations
-    -- (see core/commands/set_clip_property.lua) so apply_command_mutations
-    -- patches the timeline's clip cache with a precise delta — no full
-    -- reload. Skipping the UI refresh branch left the cache stale and was
-    -- the root cause of "edit clip name → label stays on timeline".
-    -- __skip_timeline_cache was a dead flag (never read, rule 2.17).
-    -- cmd.stack_id was explicitly "global" — stale and wrong per the
-    -- per-sequence undo design. Stack routing derives from SPEC.args
-    -- (command_manager.lua:1400), not from caller hints.
-    cmd:set_parameter("__skip_selection_snapshot", true)
-    cmd.skip_selection_snapshot = true
 
     local result = command_manager.execute_interactive(cmd)
     if not result.success then

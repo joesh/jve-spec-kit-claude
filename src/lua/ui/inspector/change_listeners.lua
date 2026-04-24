@@ -27,7 +27,6 @@ local function on_project_changed(ui_state)
         ui_state.mode                = "empty"
         ui_state.prev_item_ids       = {}
         ui_state.prev_schemas_present = {}
-        ui_state.base_header         = nil
         if ui_state.header_label then
             qt_constants.PROPERTIES.SET_TEXT(ui_state.header_label, "No editable selection")
         end
@@ -63,19 +62,6 @@ local function on_content_changed(ui_state)
             ui_state.active_inspectables,
             #ui_state.active_inspectables
         )
-
-        -- Mark summary refresh: selection didn't change, so update_selection
-        -- isn't re-entered; rebuild the header line ourselves from the
-        -- stored base (schema-identity label) plus the now-fresh mark
-        -- summary. base_header is set in selection_binding.update on
-        -- every non-empty selection and cleared on project_changed.
-        if ui_state.build_mark_summary and ui_state.header_label
-            and ui_state.base_header then
-            local mark = ui_state.build_mark_summary()
-            local text = ui_state.base_header
-            if mark and mark ~= "" then text = text .. "\n" .. mark end
-            qt_constants.PROPERTIES.SET_TEXT(ui_state.header_label, text)
-        end
     end
 end
 

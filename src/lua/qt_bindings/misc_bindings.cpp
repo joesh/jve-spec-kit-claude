@@ -506,6 +506,18 @@ int lua_set_scroll_position(lua_State* L) {
     return 0;
 }
 
+// Scroll the area so the given widget (which must be a descendant) is visible.
+// Wraps QScrollArea::ensureWidgetVisible(widget). Used by the Inspector to
+// keep a focused field visible when Tab cycles past the viewport edge.
+int lua_scroll_area_ensure_widget_visible(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    if (!sa) return luaL_error(L, "qt_scroll_area_ensure_widget_visible: scroll area required");
+    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 2));
+    if (!w) return luaL_error(L, "qt_scroll_area_ensure_widget_visible: widget required");
+    sa->ensureWidgetVisible(w);
+    return 0;
+}
+
 int lua_hide_splitter_handle(lua_State* L) {
     QSplitter* splitter = get_widget<QSplitter>(L, 1);
     int index = luaL_checkinteger(L, 2);

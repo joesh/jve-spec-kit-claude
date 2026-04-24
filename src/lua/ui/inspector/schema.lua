@@ -38,7 +38,12 @@ end
 --- Build all sections for one schema.
 -- @param schema_id      string "clip" or "sequence"
 -- @param content_layout userdata Qt layout that the sections attach to
--- @param callbacks      { frame_rate=fn, on_commit=fn(entry, value), on_section_toggled=fn(schema_id, section_name, expanded) }
+-- @param callbacks      table with:
+--   frame_rate=fn() → rate           — frame rate for TIMECODE fields
+--   on_commit=fn(entry, value)       — user finished editing a field
+--   on_error=fn(entry, err|nil)      — parse / commit error (or cleared)
+--   on_field_focused=fn(row_widget)  — field received keyboard focus
+--   on_section_toggled=fn(schema_id, section_name, expanded)
 -- @return schema_view   { schema_id, sections[], field_widgets{key→entry}, visible }
 function M.build(schema_id, content_layout, callbacks)
     assert(schema_id and schema_id ~= "", "schema.build: schema_id required")
@@ -63,6 +68,8 @@ function M.build(schema_id, content_layout, callbacks)
             local entry = field_widget.create_field(section_widget, f, {
                 frame_rate = callbacks.frame_rate,
                 on_commit  = callbacks.on_commit,
+                on_error   = callbacks.on_error,
+                on_field_focused = callbacks.on_field_focused,
                 attach_row = function(row)
                     assert(section_obj.addContentWidget,
                         string.format("schema.build: section %q missing addContentWidget",
