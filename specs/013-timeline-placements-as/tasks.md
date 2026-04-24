@@ -105,7 +105,7 @@
   - `resolve_fps_policy(clip, context)` — returns `'resample'` or `'passthrough'` per clip → sequence → project chain (G-R4).
   - The orchestrator function reads as a high-level algorithm (rule 2.5): guard → dispatch on `kind` → iterate → recurse → apply overrides in declared order → translate → compose.
   - Runs T018–T029; all pass.
-- [x] **T031 (partial; wrappers also land)** Thin-wrapper retrofit: update `src/lua/models/sequence.lua`'s existing `get_video_in_range` and `get_audio_in_range` to invoke `resolve_in_range` and filter the returned entries by `media_kind`. Before starting: grep for `get_video_in_range` / `get_audio_in_range` call sites, enumerate the exact columns/fields each caller reads from the returned entries in a committed sibling artifact `specs/013-timeline-placements-as/wrapper-shape-audit.md`, and verify each column survives the wrapper unchanged. No coalescing or renaming; wrapper preserves the existing entry shape column-for-column. (Same file as T030 — sequential.) Preceded by T029b failing test.
+- [x] **T031** Thin-wrapper retrofit (landed 2f85c769): update `src/lua/models/sequence.lua`'s existing `get_video_in_range` and `get_audio_in_range` to invoke `resolve_in_range` and filter the returned entries by `media_kind`. Before starting: grep for `get_video_in_range` / `get_audio_in_range` call sites, enumerate the exact columns/fields each caller reads from the returned entries in a committed sibling artifact `specs/013-timeline-placements-as/wrapper-shape-audit.md`, and verify each column survives the wrapper unchanged. No coalescing or renaming; wrapper preserves the existing entry shape column-for-column. (Same file as T030 — sequential.) Preceded by T029b failing test.
 
 ---
 
@@ -296,7 +296,7 @@ One integration test per spec Acceptance Scenario + the extra quickstart items.
 
 ## Phase 3.12: Legacy cleanup (FR-018)
 
-- [ ] **T108a** Add a standing **banned-identifier regression test** that `grep -R`'s the source tree for legacy identifiers and fails if any reappear: `clip_kind`, `master_clip_id`, `\.media_id` on `clips\.` references, `\.offline` on `clips\.`, and the old `sequences.kind` string literals (`'timeline'`, `'masterclip'`, `'compound'`, `'multicam'`). Enforces FR-018 going forward (rule 2.15). Path: `tests/test_no_legacy_identifiers.lua`.
+- [x] **T108a** Add a standing **banned-identifier regression test** (landed a9f8557b; 376 hits current, red until T109) that `grep -R`'s the source tree for legacy identifiers and fails if any reappear: `clip_kind`, `master_clip_id`, `\.media_id` on `clips\.` references, `\.offline` on `clips\.`, and the old `sequences.kind` string literals (`'timeline'`, `'masterclip'`, `'compound'`, `'multicam'`). Enforces FR-018 going forward (rule 2.15). Path: `tests/test_no_legacy_identifiers.lua`.
 - [ ] **T109** Scoped legacy purge — impl tasks T042/T046/T089 already removed the identifiers from `src/lua/core/commands/` and `src/lua/ui/timeline/view/` by rewriting those files. T109 handles the remainder:
   - Enumerate `tests/fixtures/**/*.jvp` files whose schema predates T008. For each: regenerate via the updated importer under the new shape, OR present the unreferenced-by-current-tests list to Joe and delete only on approval (unreferenced today ≠ safe — may be a planned-use asset).
   - Grep `src/**/*.cpp` and `src/**/*.h` for any C++ reference to the dropped columns; remove.
