@@ -174,17 +174,103 @@ do
         signal_received = true
     end)
 
-    -- Delete the file
     os.remove(tmp)
-
-    -- Simulate file change callback
-    media_status._on_file_changed(tmp)
+    local parent = tmp:match("^(.+)/[^/]+$")
+    media_status._on_dir_changed(parent)
 
     check("signal emitted on disappear", signal_received == true)
     check("now offline", media_status.get(tmp).offline == true)
     check("error is FileNotFound", media_status.get(tmp).error_code == "FileNotFound")
 
     Signals.disconnect(conn_id)
+    media_status.clear()
+end
+
+-- ============================================================
+print("\n--- media_status: in-place rewrite fires media_content_changed ---")
+do
+    media_status.clear()
+
+    local tmp = "/tmp/jve/test_media_rewrite.txt"
+    os.execute("mkdir -p /tmp/jve")
+    local f = io.open(tmp, "w"); f:write("initial"); f:close()
+
+    local status = media_status.register(tmp)
+    check("initially online", status.offline == false)
+
+    local status_fired, content_fired = false, false
+    local c1 = Signals.connect("media_status_changed", function() status_fired = true end)
+    local c2 = Signals.connect("media_content_changed", function() content_fired = true end)
+
+    -- Advance mtime deterministically — filesystem granularity is ~1s.
+    os.execute(string.format("touch -t 202601010000 %q", tmp))
+
+    local parent = tmp:match("^(.+)/[^/]+$")
+    media_status._on_dir_changed(parent)
+
+    check("status_changed NOT emitted (file still online)", status_fired == false)
+    check("content_changed emitted for in-place rewrite", content_fired == true)
+
+    -- Negative case: dir_changed fires again but file wasn't touched —
+    -- no spurious content_changed.
+    content_fired = false
+    media_status._on_dir_changed(parent)
+    check("no spurious content_changed when mtime unchanged", content_fired == false)
+
+    Signals.disconnect(c1)
+    Signals.disconnect(c2)
+    os.remove(tmp)
+    media_status.clear()
+end
+
+-- ============================================================
+print("\n--- media_status: FS watches dirs, never files ---")
+do
+    -- Architectural guarantee: media_status must never install per-file
+    -- watches. Per-file kqueue FDs exhaust RLIMIT_NOFILE on large
+    -- projects. Stub qt_constants.FS and count calls by kind.
+    media_status.clear()
+
+    -- Stub FS: WATCH_FILE aborts the test if ever called (binary
+    -- invariant, no need to count — a single call is already a bug).
+    local dir_watch_calls = 0
+    local saved_qt = rawget(_G, "qt_constants")
+    _G.qt_constants = {
+        FS = {
+            WATCH_FILE = function()
+                error("media_status must not install per-file watches")
+            end,
+            WATCH_DIR = function()
+                dir_watch_calls = dir_watch_calls + 1
+                return true
+            end,
+            UNWATCH_DIR = function() return true end,
+            SET_DIR_CHANGED_CB = function() end,
+            CLEAR_ALL = function() end,
+        },
+    }
+
+    -- Force re-init: media_status caches fs_available. The test env
+    -- above left it false; now with qt_constants set the next
+    -- watch_path call will flip it.
+    local paths = {
+        "/tmp/jve/fs_watch_test_a.txt",
+        "/tmp/jve/fs_watch_test_b.txt",
+        "/tmp/jve/fs_watch_test_c.txt",
+    }
+    os.execute("mkdir -p /tmp/jve")
+    for _, p in ipairs(paths) do
+        local f = io.open(p, "w"); f:write("x"); f:close()
+        media_status.register(p)
+    end
+
+    -- If WATCH_FILE had been called, the stub would have raised and
+    -- the register() above would have propagated the error. Reaching
+    -- here means the binary invariant held.
+    check("at least one dir watch installed", dir_watch_calls >= 1)
+
+    for _, p in ipairs(paths) do os.remove(p) end
+    _G.qt_constants = saved_qt
     media_status.clear()
 end
 
@@ -221,14 +307,6 @@ do
     local clip = {}
     media_status.ensure_clip_status(clip)
     check("ensure_clip_status({}) is safe", clip.offline == nil)
-end
-
--- ============================================================
-print("\n--- media_status: NSF — _on_file_changed(nil) asserts ---")
-do
-    local ok, err = pcall(function() media_status._on_file_changed(nil) end)
-    check("_on_file_changed(nil) asserts", ok == false)
-    check("assert message mentions path", err:find("path") ~= nil)
 end
 
 -- ============================================================
