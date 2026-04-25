@@ -10,10 +10,10 @@
 --   Insert, Overwrite, TrimHead, TrimTail, Slip, Slide, Roll, SplitClip,
 --   Blade, Duplicate, RippleDelete.
 --
--- Phase 3.5+ command classes (SetClipLayer, ToggleClipChannel,
--- SetMasterDefaultLayer, SetMasterChannelState, SetSequenceStartTC, Nest,
--- Unnest, GrowMasterMedium) are noted but not yet implemented; this test
--- will be extended when those land.
+-- Extended after Phase 3.5/3.6/3.7 landed: also drives SetClipLayer,
+-- ToggleClipChannel, SetClipChannelGain, ClearClipOverride,
+-- SetMasterDefaultLayer, SetMasterChannelState, SetSequenceStartTC,
+-- Nest, Unnest. GrowMasterMedium remains a follow-up.
 
 require("test_env")
 local database = require("core.database")
@@ -89,6 +89,26 @@ local function assert_emit_for(label, seq_id, fn)
             "%s: emit had sequence_id=%s; expected %s",
             label, tostring(sid), seq_id))
     end
+    print(string.format("  %s ok (%d emit(s))", label, #events))
+end
+
+-- Variant for commands that legitimately emit on multiple sequence ids
+-- (Nest/Unnest emit on both parent and the nested sequence). Asserts
+-- the expected seq_id is among the events; doesn't require uniqueness.
+local function assert_emit_includes(label, seq_id, fn)
+    local events, conn = make_spy()
+    fn()
+    Signals.disconnect(conn)
+    assert(#events >= 1, string.format(
+        "%s: expected at least one sequence_content_changed emit; got 0",
+        label))
+    local found = false
+    for _, sid in ipairs(events) do
+        if sid == seq_id then found = true; break end
+    end
+    assert(found, string.format(
+        "%s: expected seq_id=%s among emits; got [%s]",
+        label, seq_id, table.concat(events, ",")))
     print(string.format("  %s ok (%d emit(s))", label, #events))
 end
 
@@ -283,6 +303,207 @@ do
     assert_emit_for("RippleDelete", "e", function()
         drive(RippleDelete, "RippleDelete", {
             sequence_id = "e", clip_id = "c",
+        })
+    end)
+end
+
+-- -------------------------------------------------------------------------
+-- Phase 3.5: per-clip override commands.
+--
+-- These mutate clip_channel_override / clip.master_layer_track_id and
+-- emit on the parent (edit) sequence's id.
+-- -------------------------------------------------------------------------
+
+-- Augment the master with V2 + an audio track + media so the override
+-- commands have a domain to operate on.
+local function override_fixture()
+    local db = base_fixture()
+    -- V2 on master + an audio track with a 2-channel media file.
+    assert(db:exec([[
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
+        VALUES ('m-v2', 'm', 'V2', 'VIDEO', 2),
+               ('m-a1', 'm', 'A1', 'AUDIO', 1),
+               ('e-a1', 'e', 'A1', 'AUDIO', 1);
+        INSERT INTO media (id, project_id, name, file_path, duration_frames,
+            fps_numerator, fps_denominator, audio_channels,
+            created_at, modified_at)
+        VALUES ('a-med', 'p1', 'a.wav', '/tmp/a.wav', 48000, 48000, 1, 2, 0, 0);
+        INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
+            media_id, source_in_frame, source_out_frame,
+            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            created_at, modified_at)
+        VALUES ('mr-a', 'p1', 'm', 'm-a1', 'a-med', 0, 48000, 0, 48000,
+                1, 1.0, 0, 0, 0);
+    ]]))
+    return db
+end
+
+do  -- SetClipLayer (T053)
+    local db = override_fixture()
+    seed_clip(db, "c", "e-v1", 0, 100, 0, 100)
+    local SetClipLayer = require("core.commands.set_clip_layer")
+    assert_emit_for("SetClipLayer", "e", function()
+        drive(SetClipLayer, "SetClipLayer", {
+            sequence_id = "e", clip_id = "c", track_id = "m-v2",
+        })
+    end)
+end
+
+do  -- ToggleClipChannel (T054)
+    local db = override_fixture()
+    -- Audio clip in `e` referencing the master.
+    assert(db:exec([[
+        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
+            nested_sequence_id, name,
+            timeline_start_frame, duration_frames,
+            source_in_frame, source_out_frame,
+            master_layer_track_id, fps_mismatch_policy,
+            enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
+                0, 48000, 0, 48000, NULL, 'resample', 1, 1.0, 0, 0, 0);
+    ]]))
+    local ToggleClipChannel = require("core.commands.toggle_clip_channel")
+    assert_emit_for("ToggleClipChannel", "e", function()
+        drive(ToggleClipChannel, "ToggleClipChannel", {
+            sequence_id = "e", clip_id = "ca", channel_index = 0,
+        })
+    end)
+end
+
+do  -- SetClipChannelGain (T055)
+    local db = override_fixture()
+    assert(db:exec([[
+        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
+            nested_sequence_id, name,
+            timeline_start_frame, duration_frames,
+            source_in_frame, source_out_frame,
+            master_layer_track_id, fps_mismatch_policy,
+            enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
+                0, 48000, 0, 48000, NULL, 'resample', 1, 1.0, 0, 0, 0);
+    ]]))
+    local SetClipChannelGain = require("core.commands.set_clip_channel_gain")
+    assert_emit_for("SetClipChannelGain", "e", function()
+        drive(SetClipChannelGain, "SetClipChannelGain", {
+            sequence_id = "e", clip_id = "ca",
+            channel_index = 0, gain_db = -6.0,
+        })
+    end)
+end
+
+do  -- ClearClipOverride (channel + layer) (T056)
+    local db = override_fixture()
+    seed_clip(db, "cv", "e-v1", 0, 100, 0, 100)
+    -- Pre-set V2 layer override on cv so the layer-clear has something to clear.
+    assert(db:exec("UPDATE clips SET master_layer_track_id='m-v2' WHERE id='cv'"))
+    local ClearClipOverride = require("core.commands.clear_clip_override")
+    assert_emit_for("ClearClipOverride(layer)", "e", function()
+        drive(ClearClipOverride, "ClearClipOverride", {
+            sequence_id = "e", clip_id = "cv", kind = "layer",
+        })
+    end)
+
+    -- Channel variant.
+    assert(db:exec([[
+        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
+            nested_sequence_id, name,
+            timeline_start_frame, duration_frames,
+            source_in_frame, source_out_frame,
+            master_layer_track_id, fps_mismatch_policy,
+            enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
+                0, 48000, 0, 48000, NULL, 'resample', 1, 1.0, 0, 0, 0);
+        INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
+        VALUES ('ca', 0, 0, -3.0);
+    ]]))
+    assert_emit_for("ClearClipOverride(channel)", "e", function()
+        drive(ClearClipOverride, "ClearClipOverride", {
+            sequence_id = "e", clip_id = "ca", kind = "channel",
+            channel_index = 0,
+        })
+    end)
+end
+
+-- -------------------------------------------------------------------------
+-- Phase 3.6: master-level + sequence-level commands.
+--
+-- These emit on the MASTER (or affected sequence)'s id, which propagates
+-- to tracking clips via the resolver. The contract is "fires with the
+-- correct sequence_id" — i.e., the sequence whose state changed.
+-- -------------------------------------------------------------------------
+
+do  -- SetMasterDefaultLayer (T061)
+    override_fixture()
+    local SetMasterDefaultLayer = require("core.commands.set_master_default_layer")
+    assert_emit_for("SetMasterDefaultLayer", "m", function()
+        drive(SetMasterDefaultLayer, "SetMasterDefaultLayer", {
+            sequence_id = "m", track_id = "m-v2",
+        })
+    end)
+end
+
+do  -- SetMasterChannelState (T062)
+    override_fixture()
+    local SetMasterChannelState = require("core.commands.set_master_channel_state")
+    assert_emit_for("SetMasterChannelState", "m", function()
+        drive(SetMasterChannelState, "SetMasterChannelState", {
+            sequence_id = "m", channel_index = 0,
+            enabled = true, gain_db = -3.0,
+        })
+    end)
+end
+
+do  -- SetSequenceStartTC (T063)
+    base_fixture()
+    local SetSequenceStartTC = require("core.commands.set_sequence_start_tc")
+    assert_emit_for("SetSequenceStartTC(video)", "m", function()
+        drive(SetSequenceStartTC, "SetSequenceStartTC", {
+            sequence_id = "m", medium = "video", tc_value = 86400,
+        })
+    end)
+end
+
+do  -- SetFpsMismatchPolicy(sequence) emits sequence_content_changed (T064)
+    base_fixture()
+    local SetFpsMismatchPolicy = require("core.commands.set_fps_mismatch_policy")
+    assert_emit_for("SetFpsMismatchPolicy(sequence)", "e", function()
+        drive(SetFpsMismatchPolicy, "SetFpsMismatchPolicy", {
+            scope = "sequence", sequence_id = "e", policy = "passthrough",
+        })
+    end)
+end
+
+-- -------------------------------------------------------------------------
+-- Phase 3.7: Nest / Unnest emit on BOTH parent and the new/old nested.
+-- The contract test asserts the parent emit ("affected sequence_id");
+-- the second emit (on S) is also observable but not under separate
+-- assertion here.
+-- -------------------------------------------------------------------------
+
+do  -- Nest (T068) — emits on parent AND new sequence; we assert parent.
+    local db = base_fixture()
+    seed_clip(db, "c1", "e-v1", 100, 100, 0, 100)
+    local Nest = require("core.commands.nest")
+    assert_emit_includes("Nest(parent)", "e", function()
+        drive(Nest, "Nest", {
+            sequence_id        = "e",
+            selected_clip_ids  = { "c1" },
+        })
+    end)
+end
+
+do  -- Unnest (T069) — emits parent + sequence_deleted/sequence_resurrected.
+    local db = base_fixture()
+    seed_clip(db, "c1", "e-v1", 100, 100, 0, 100)
+    local Nest = require("core.commands.nest")
+    local nest_cap = Nest.execute({
+        sequence_id        = "e",
+        selected_clip_ids  = { "c1" },
+    })
+    local Unnest = require("core.commands.unnest")
+    assert_emit_includes("Unnest(parent)", "e", function()
+        drive(Unnest, "Unnest", {
+            sequence_id = "e", clip_id = nest_cap.new_clip_id,
         })
     end)
 end
