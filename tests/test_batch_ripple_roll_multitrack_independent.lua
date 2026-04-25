@@ -39,19 +39,20 @@ local seed = string.format([[
     INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
     VALUES ('media1', 'proj', 'Stub', '/tmp/test.mp4', 200, 30, 1, 1920, 1080, 2, 'prores', '{}', %d, %d);
 
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id, media_id,
-                       timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, offline,
-                       created_at, modified_at)
-    VALUES
-        -- Track 1: [0..100), no next clip (can extend)
-        ('clip_a', 'proj', 'timeline', 'A', 'track1', 'seq', 'media1',
-         0, 100, 0, 100, 30, 1, 1, 0, %d, %d),
-        -- Track 2: [0..100), has blocking clip at 100
-        ('clip_b', 'proj', 'timeline', 'B', 'track2', 'seq', 'media1',
-         0, 100, 0, 100, 30, 1, 1, 0, %d, %d),
-        -- Blocking clip at [100..150)
-        ('blocking', 'proj', 'timeline', 'Block', 'track2', 'seq', 'media1',
-         100, 50, 0, 50, 30, 1, 1, 0, %d, %d);
+    -- V13 master sequence + track + media_ref for media1
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('master_media1', 'proj', 'media1_master', 'master', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('master_v_media1', 'master_media1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = 'master_v_media1' WHERE id = 'master_media1';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media1', 'proj', 'master_media1', 'master_v_media1', 'media1', 0, 200, 0, 200, 1, 1.0, 0, strftime('%s','now'), strftime('%s','now'));
+
+INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES
+    ('clip_a', 'proj', 'A', 'track1', 'master_media1', 'seq', 0, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_b', 'proj', 'B', 'track2', 'master_media1', 'seq', 0, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('blocking', 'proj', 'Block', 'track2', 'master_media1', 'seq', 100, 50, 0, 50, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now, now, now, now, now, now, now, now, now)
 
 assert(db:exec(seed))

@@ -27,10 +27,24 @@ local function setup_db(path)
 end
 
 local test_env = require("test_env")
+local Sequence = require("models.sequence")
+
+-- Bootstrap a placeholder master sequence so V13 clips can reference it.
+-- The blade test creates 1 media row per clip; we point all clips at one
+-- shared placeholder master with generous duration to satisfy INV-4.
+local function bootstrap_blade_master()
+    local conn = database.get_connection()
+    local exists = conn:prepare("SELECT 1 FROM sequences WHERE id = '_blade_master'")
+    if exists and exists:exec() and exists:next() then exists:finalize(); return end
+    if exists then exists:finalize() end
+    conn:exec("INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at, metadata) VALUES ('_blade_media', 'default_project', 'placeholder', '_placeholder', 100000, 30, 1, 1920, 1080, 0, 'raw', 0, 0, '{\"start_tc_value\":0,\"start_tc_rate\":30}')")
+    Sequence.ensure_master("_blade_media", "default_project", { id = "_blade_master" })
+end
 
 local function create_clip(id, track_id, start_frame, duration_frame)
     local conn = database.get_connection()
     local media_id = id .. "_media"
+    bootstrap_blade_master()
 
     test_env.create_test_media({
         id = media_id,
@@ -45,19 +59,28 @@ local function create_clip(id, track_id, start_frame, duration_frame)
     })
 
     local now = os.time()
+    -- V13 INSERT: nested_sequence_id replaces media_id; placeholder master is
+    -- created at file scope.
     local clip_stmt = conn:prepare([[
-        INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, created_at, modified_at)
-        VALUES (?, 'default_project', 'timeline', 'Clip', ?, ?, 'default_sequence', ?, ?, 0, ?, 30, 1, 1, ?, ?)
+        INSERT INTO clips (id, project_id, name, track_id,
+                            owner_sequence_id, nested_sequence_id,
+                            timeline_start_frame, duration_frames,
+                            source_in_frame, source_out_frame,
+                            master_layer_track_id, master_audio_track_id,
+                            fps_mismatch_policy,
+                            enabled, volume, playhead_frame,
+                            created_at, modified_at)
+        VALUES (?, 'default_project', 'Clip', ?, 'default_sequence', '_blade_master',
+                ?, ?, 0, ?, NULL, NULL, 'resample', 1, 1.0, 0, ?, ?)
     ]])
     assert(clip_stmt, "failed to prepare clip insert: " .. tostring(conn:last_error()))
     assert(clip_stmt:bind_value(1, id))
     assert(clip_stmt:bind_value(2, track_id))
-    assert(clip_stmt:bind_value(3, media_id))
-    assert(clip_stmt:bind_value(4, start_frame))
+    assert(clip_stmt:bind_value(3, start_frame))
+    assert(clip_stmt:bind_value(4, duration_frame))
     assert(clip_stmt:bind_value(5, duration_frame))
-    assert(clip_stmt:bind_value(6, duration_frame))
+    assert(clip_stmt:bind_value(6, now))
     assert(clip_stmt:bind_value(7, now))
-    assert(clip_stmt:bind_value(8, now))
     assert(clip_stmt:exec(), "failed to insert clip: " .. tostring(conn:last_error()))
     clip_stmt:finalize()
 end

@@ -114,31 +114,27 @@ db:exec(string.format([[
          30, 1, 48000, 1920, 1080, 0, 500, 0,
          '[]', '[]', '[]', 0, %d, %d);
 
-    INSERT INTO clips (
-        id, project_id, clip_kind, name, track_id, media_id, master_clip_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at
-    ) VALUES
-        -- Master clip entries (clip_kind='master', owner_sequence_id = self)
-        ('master_clip_a', 'default_project', 'master', 'Master A', NULL, 'media_a', NULL, 'master_clip_a',
-         0, 500, 0, 500, 30, 1, 1, 0, %d, %d),
-        ('master_clip_b', 'default_project', 'master', 'Master B', NULL, 'media_a', NULL, 'master_clip_b',
-         0, 500, 0, 500, 30, 1, 1, 0, %d, %d),
-        ('master_clip_audio_a1', 'default_project', 'master', 'Master Audio A1', NULL, 'media_a', NULL, 'master_clip_audio_a1',
-         0, 500, 0, 500, 30, 1, 1, 0, %d, %d),
-        -- Timeline clips
-        ('clip_v1', 'default_project', 'timeline', 'Clip V1', 'track_v1', 'media_a', 'master_clip_a', 'default_sequence',
-         0, 200, 10, 210, 30, 1, 1, 0, %d, %d),
-        ('clip_v2', 'default_project', 'timeline', 'Clip V2', 'track_v2', 'media_a', 'master_clip_b', 'default_sequence',
-         100, 100, 0, 100, 30, 1, 1, 0, %d, %d),
-        ('clip_no_parent', 'default_project', 'timeline', 'No Parent', 'track_v1', 'media_a', NULL, 'default_sequence',
-         300, 100, 0, 100, 30, 1, 1, 0, %d, %d),
-        ('clip_a1', 'default_project', 'timeline', 'Audio A1', 'track_a1', 'media_a', 'master_clip_audio_a1', 'default_sequence',
-         0, 200, 0, 200, 30, 1, 1, 0, %d, %d),
-        ('clip_a2', 'default_project', 'timeline', 'Audio A2', 'track_a2', 'media_a', 'master_clip_audio_a1', 'default_sequence',
-         0, 200, 0, 200, 30, 1, 1, 0, %d, %d),
-        ('clip_a3', 'default_project', 'timeline', 'Audio A3', 'track_a3', 'media_a', 'master_clip_audio_a1', 'default_sequence',
-         0, 200, 0, 200, 30, 1, 1, 0, %d, %d);
+    -- V13 master sequence + track + media_ref for media_a
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('master_media_a', 'default_project', 'media_a_master', 'master', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('master_v_media_a', 'master_media_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = 'master_v_media_a' WHERE id = 'master_media_a';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media_a', 'default_project', 'master_media_a', 'master_v_media_a', 'media_a', 0, 500, 0, 500, 1, 1.0, 0, strftime('%s','now'), strftime('%s','now'));
+
+INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES
+    
+    ('master_clip_a', 'default_project', 'Master A', NULL, 'master_media_a', 'master_clip_a', 0, 500, 0, 500, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('master_clip_b', 'default_project', 'Master B', NULL, 'master_media_a', 'master_clip_b', 0, 500, 0, 500, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('master_clip_audio_a1', 'default_project', 'Master Audio A1', NULL, 'master_media_a', 'master_clip_audio_a1', 0, 500, 0, 500, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_v1', 'default_project', 'Clip V1', 'track_v1', 'master_media_a', 'default_sequence', 0, 200, 10, 210, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_v2', 'default_project', 'Clip V2', 'track_v2', 'master_media_a', 'default_sequence', 100, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_no_parent', 'default_project', 'No Parent', 'track_v1', 'master_media_a', 'default_sequence', 300, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_a1', 'default_project', 'Audio A1', 'track_a1', 'master_media_a', 'default_sequence', 0, 200, 0, 200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_a2', 'default_project', 'Audio A2', 'track_a2', 'master_media_a', 'default_sequence', 0, 200, 0, 200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_a3', 'default_project', 'Audio A3', 'track_a3', 'master_media_a', 'default_sequence', 0, 200, 0, 200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now,           -- projects
     now, now,               -- sequences (default_sequence)
     now, now,               -- media
