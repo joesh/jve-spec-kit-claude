@@ -3,7 +3,7 @@
 ## TL;DR
 
 Migrated the load-side of the V13 schema (SELECT path) and bulk-migrated test
-fixtures across the suite. Tests went **332 → 439 (+107)** across this session
+fixtures across the suite. Tests went **332 → 450 (+118)** across this session
 block (continuation of prior 285 → 332 pass).
 
 ## Commits this block
@@ -17,8 +17,10 @@ block (continuation of prior 285 → 332 pass).
 | `45c2af54` | strip stray `kind` from frame_rate arg + add kind/audio_rate to opts (20 files) |
 | `e3c61eed` | Clip.create positional → V13 table (53 sites / 21 files) |
 | `1213b053` | Clip.create positional round 2 (concat-name forms; 25 sites / 16 files) |
+| `3bfd534f` | command_helper apply_mutations / restore_deleted_clip / capture+restore V13 |
+| `2b8cdffe` | bulk migration — V8 INSERT INTO clips → V13 + master sequence setup + strftime literal (87 files) |
 
-Total: **7 commits**, ~140 test files touched, ~1500 lines changed.
+Total: **9 commits**, ~230 test files touched, ~3000 lines changed.
 
 ## Architectural changes
 
@@ -82,7 +84,20 @@ file to extract from).
 Migration scripts live in `/tmp/migrate_*.lua` and `/tmp/migrate_*.py` —
 discard after one-shot use; not checked into the repo.
 
-## What's still failing (218 / 657)
+## `command_helper.lua` mutation pipeline — partial V13 migration
+
+`apply_mutations` / `restore_deleted_clip` INSERTs now emit V13 column lists.
+`capture_clip_state` snapshots carry V13 fields plus V8 aliases for JSON
+round-trip. `restore_clip_state` switches the create-path to V13
+`Clip.create({...})` table form.
+
+UPDATE statements in `apply_mutations` were not rewritten this pass — they
+already only touch fields that exist in V13 (track_id, timeline_start_frame,
+duration_frames, source_in_frame, source_out_frame, enabled). bulk_shift
+SQL was not rewritten — it only touches timeline_start_frame which is
+schema-stable across V8/V13.
+
+## What's still failing (207 / 657)
 
 | Bucket | Count | Pattern | Resolution |
 |---|---|---|---|
