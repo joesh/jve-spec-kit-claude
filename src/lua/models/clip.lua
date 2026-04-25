@@ -1376,6 +1376,66 @@ function M.delete_by_ids(clip_ids)
     del_clips:finalize()
 end
 
+--- Copy all clip_channel_override rows from src_clip_id to dst_clip_id.
+--- Used by SplitClip (T045) to preserve per-channel overrides on both
+--- halves. Returns the number of rows copied.
+function M.copy_channel_overrides(src_clip_id, dst_clip_id)
+    assert(src_clip_id and src_clip_id ~= "",
+        "Clip.copy_channel_overrides: src required")
+    assert(dst_clip_id and dst_clip_id ~= "",
+        "Clip.copy_channel_overrides: dst required")
+    assert(src_clip_id ~= dst_clip_id,
+        "Clip.copy_channel_overrides: src and dst must differ")
+    local db = require("core.database").get_connection()
+    local sel = db:prepare([[
+        SELECT channel_index, enabled, gain_db
+        FROM clip_channel_override WHERE clip_id = ?
+    ]])
+    assert(sel, "Clip.copy_channel_overrides: select prepare failed")
+    sel:bind_value(1, src_clip_id)
+    assert(sel:exec(), "Clip.copy_channel_overrides: select exec failed")
+    local rows = {}
+    while sel:next() do
+        rows[#rows + 1] = {
+            channel_index = sel:value(0),
+            enabled       = sel:value(1),
+            gain_db       = sel:value(2),
+        }
+    end
+    sel:finalize()
+    if #rows == 0 then return 0 end
+
+    local ins = db:prepare([[
+        INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
+        VALUES (?, ?, ?, ?)
+    ]])
+    assert(ins, "Clip.copy_channel_overrides: insert prepare failed")
+    for _, r in ipairs(rows) do
+        ins:bind_value(1, dst_clip_id)
+        ins:bind_value(2, r.channel_index)
+        ins:bind_value(3, r.enabled)
+        ins:bind_value(4, r.gain_db)
+        assert(ins:exec(),
+            "Clip.copy_channel_overrides: insert exec failed")
+        ins:reset()
+    end
+    ins:finalize()
+    return #rows
+end
+
+--- Delete a single clip row (and cascade via FK/TRIGGER to clip_links
+--- and clip_channel_override). Loud on failure. Used by SplitClip undo.
+function M.delete_one(clip_id)
+    assert(clip_id and clip_id ~= "", "Clip.delete_one: clip_id required")
+    local db = require("core.database").get_connection()
+    local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
+    assert(stmt, "Clip.delete_one: prepare failed")
+    stmt:bind_value(1, clip_id)
+    local ok = stmt:exec()
+    stmt:finalize()
+    assert(ok, string.format("Clip.delete_one: exec failed for id=%s", clip_id))
+end
+
 --- Load a V9 clips row as a plain table (no legacy JOINs — purely this
 --- row's columns). Used by Insert's __timeline_mutations builder to
 --- re-read a freshly-inserted clip for the UI cache.
