@@ -103,19 +103,21 @@ end
 -- Helper: create a clip
 local function create_clip(id, start_frame, duration_frames, source_in)
     source_in = source_in or 0
-    local clip = Clip.create("Clip " .. id, "media_long", {
+    local clip = Clip.create({
+        name = "Clip " .. id,
         id = id,
         project_id = "project",
         track_id = "track_v1",
         owner_sequence_id = "sequence",
         nested_sequence_id = "mc_test",
-        timeline_start = start_frame,
-        duration = duration_frames,
-        source_in = source_in,
-        source_out = source_in + duration_frames,
+        timeline_start_frame = start_frame,
+        duration_frames = duration_frames,
+        source_in_frame = source_in,
+        source_out_frame = source_in + duration_frames,
         enabled = true,
-        fps_numerator = 30,
-        fps_denominator = 1
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
     })
     assert(clip:save(db), "Failed to save clip " .. id)
     return clip

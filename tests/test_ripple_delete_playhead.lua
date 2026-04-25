@@ -52,20 +52,21 @@ local function create_media(id, duration_value)
 end
 
 local function create_clip(id, track_id, start_value, duration_value, media_id)
-    local clip = Clip.create("Clip " .. id, media_id, {
+    local clip = Clip.create({
+        name = "Clip " .. id,
         id = id,
         project_id = 'default_project',
         track_id = track_id,
         owner_sequence_id = 'default_sequence',
         nested_sequence_id = "mc_test",
-        timeline_start = start_value,
-        duration = duration_value,
-        source_in = 0,
-        source_out = duration_value,
-        fps_numerator = 30,
-        fps_denominator = 1,
+        timeline_start_frame = start_value,
+        duration_frames = duration_value,
+        source_in_frame = 0,
+        source_out_frame = duration_value,
         enabled = true,
-        offline = false
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
     })
     assert(clip, "failed to allocate clip " .. id)
     assert(clip:save(db, {skip_occlusion = true}), "failed to persist clip " .. id)

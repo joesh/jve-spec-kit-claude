@@ -75,32 +75,36 @@ assert(media:save(), "Failed to save media")
 local video_duration_frames = 240
 local audio_duration_samples = 480000  -- 10 * 48000
 
-local video_stream = Clip.create("Video Stream", media.id, {
-    project_id = project_id,
-    clip_kind = "master",
-    track_id = mc_video_track.id,
-    owner_sequence_id = masterclip.id,
-    timeline_start = 0,
-    duration = video_duration_frames,
-    source_in = 0,
-    source_out = video_duration_frames,
-    fps_numerator = 24,
-    fps_denominator = 1,
-})
+local video_stream = Clip.create({
+        name = "Video Stream",
+        project_id = project_id,
+        track_id = mc_video_track.id,
+        owner_sequence_id = masterclip.id,
+        timeline_start_frame = 0,
+        duration_frames = video_duration_frames,
+        source_in_frame = 0,
+        source_out_frame = video_duration_frames,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(video_stream:save({skip_occlusion = true}), "Failed to save video stream")
 
-local audio_stream = Clip.create("Audio Stream", media.id, {
-    project_id = project_id,
-    clip_kind = "master",
-    track_id = mc_audio_track.id,
-    owner_sequence_id = masterclip.id,
-    timeline_start = 0,
-    duration = audio_duration_samples,
-    source_in = 0,
-    source_out = audio_duration_samples,
-    fps_numerator = 48000,
-    fps_denominator = 1,
-})
+local audio_stream = Clip.create({
+        name = "Audio Stream",
+        project_id = project_id,
+        track_id = mc_audio_track.id,
+        owner_sequence_id = masterclip.id,
+        timeline_start_frame = 0,
+        duration_frames = audio_duration_samples,
+        source_in_frame = 0,
+        source_out_frame = audio_duration_samples,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(audio_stream:save({skip_occlusion = true}), "Failed to save audio stream")
 
 -- Initialize command manager

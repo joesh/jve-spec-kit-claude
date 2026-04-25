@@ -151,35 +151,32 @@ local mc_seq_id = require("test_env").create_test_masterclip_sequence(
 
 -- Enabled clip: timeline frames 0..100 (4 seconds at 25fps)
 -- source_in/out in clip rate units (48000/1 = samples)
-local clip_en = Clip.create("enabled_chirp", med.id, {
-    project_id = project_id,
-    owner_sequence_id = seq.id,
-    track_id = track.id,
-    timeline_start = 0,       -- timeline frame 0
-    duration = 100,            -- 100 timeline frames = 4 seconds
-    source_in = 96000,         -- 2 seconds in samples (non-zero!)
-    source_out = 288000,       -- source_in + duration_in_samples
-    fps_numerator = 48000,
-    fps_denominator = 1,
-    enabled = true,
-    nested_sequence_id = mc_seq_id,
-})
+local clip_en = Clip.create({
+        name = "enabled_chirp",
+        project_id = project_id,
+        owner_sequence_id = seq.id,
+        track_id = track.id,
+        timeline_start_frame = 0,
+        enabled = true,
+        nested_sequence_id = mc_seq_id,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(clip_en:save({skip_occlusion = true}))
 
 -- Disabled clip: timeline frames 200..300 (non-adjacent, gap at 100..200)
-local clip_dis = Clip.create("disabled_chirp", med.id, {
-    project_id = project_id,
-    owner_sequence_id = seq.id,
-    track_id = track.id,
-    timeline_start = 200,      -- timeline frame 200
-    duration = 100,             -- 100 timeline frames
-    source_in = 384000,         -- 8 seconds in samples
-    source_out = 576000,
-    fps_numerator = 48000,
-    fps_denominator = 1,
-    enabled = false,  -- MUTED!
-    nested_sequence_id = mc_seq_id,
-})
+local clip_dis = Clip.create({
+        name = "disabled_chirp",
+        project_id = project_id,
+        owner_sequence_id = seq.id,
+        track_id = track.id,
+        timeline_start_frame = 200,
+        enabled = false,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(clip_dis:save({skip_occlusion = true}))
 
 -- Verify in DB

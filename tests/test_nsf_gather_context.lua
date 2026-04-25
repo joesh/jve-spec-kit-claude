@@ -60,16 +60,18 @@ local function test_gather_context_asserts_on_missing_video_dimensions()
     media:save()
 
     -- Create master clip referencing this media (also no dimensions)
-    local master_clip = Clip.create("Test Clip", media.id, {
+    local master_clip = Clip.create({
+        name = "Test Clip",
         id = uuid.generate(),
         project_id = project_id,
-        clip_kind = "master",
-        timeline_start = 0,
-        duration = 240,
-        source_in = 0,
-        source_out = 240,
-        fps_numerator = 24,
-        fps_denominator = 1,
+        timeline_start_frame = 0,
+        duration_frames = 240,
+        source_in_frame = 0,
+        source_out_frame = 240,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
     master_clip:save(db)
 
@@ -158,16 +160,18 @@ local function test_gather_context_valid_video_only_media()
     media:save()
 
     -- Create master clip
-    local master_clip = Clip.create("Video Only Clip", media.id, {
+    local master_clip = Clip.create({
+        name = "Video Only Clip",
         id = uuid.generate(),
         project_id = project_id,
-        clip_kind = "master",
-        timeline_start = 0,
-        duration = 240,
-        source_in = 0,
-        source_out = 240,
-        fps_numerator = 24,
-        fps_denominator = 1,
+        timeline_start_frame = 0,
+        duration_frames = 240,
+        source_in_frame = 0,
+        source_out_frame = 240,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
     master_clip:save(db)
 

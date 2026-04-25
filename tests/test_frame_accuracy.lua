@@ -256,32 +256,40 @@ local function test_ripple_delete_command_func()
     media:save(db)
 
     -- Clip 1: [0, 24) frames (1s)
-    local clip1 = Clip.create("Clip 1", media.id, {
+    local clip1 = Clip.create({
+        name = "Clip 1",
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
         nested_sequence_id = "mc_test",
-        timeline_start = 0,
-        duration = 24,
-        source_in = 0,
-        source_out = 24,
-        fps_numerator = 24, fps_denominator = 1
+        timeline_start_frame = 0,
+        duration_frames = 24,
+        source_in_frame = 0,
+        source_out_frame = 24,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
     clip1:save(db)
 
     -- Gap: [24, 48) frames (1s)
 
     -- Clip 2: [48, 72) frames (1s)
-    local clip2 = Clip.create("Clip 2", media.id, {
+    local clip2 = Clip.create({
+        name = "Clip 2",
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
         nested_sequence_id = "mc_test",
-        timeline_start = 48,
-        duration = 24,
-        source_in = 0,
-        source_out = 24,
-        fps_numerator = 24, fps_denominator = 1
+        timeline_start_frame = 48,
+        duration_frames = 24,
+        source_in_frame = 0,
+        source_out_frame = 24,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
     clip2:save(db)
 
@@ -350,30 +358,38 @@ local function test_ripple_edit_command_func()
     media:save(db)
 
     -- Clip 1: [0, 48) frames (2s). Media In: 0, Out: 48
-    local clip1 = Clip.create("Clip 1", media.id, {
+    local clip1 = Clip.create({
+        name = "Clip 1",
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
         nested_sequence_id = "mc_test",
-        timeline_start = 0,
-        duration = 48,
-        source_in = 0,
-        source_out = 48,
-        fps_numerator = 24, fps_denominator = 1
+        timeline_start_frame = 0,
+        duration_frames = 48,
+        source_in_frame = 0,
+        source_out_frame = 48,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
     clip1:save(db)
 
     -- Clip 2: [48, 96) frames (2s). Media In: 0, Out: 48
-    local clip2 = Clip.create("Clip 2", media.id, {
+    local clip2 = Clip.create({
+        name = "Clip 2",
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
         nested_sequence_id = "mc_test",
-        timeline_start = 48,
-        duration = 48,
-        source_in = 0,
-        source_out = 48,
-        fps_numerator = 24, fps_denominator = 1
+        timeline_start_frame = 48,
+        duration_frames = 48,
+        source_in_frame = 0,
+        source_out_frame = 48,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
     clip2:save(db)
 
@@ -453,16 +469,20 @@ local function test_nudge_command_func()
     media:save(db)
 
     -- Clip 1: [0, 48) frames (2s)
-    local clip1 = Clip.create("Clip 1", media.id, {
+    local clip1 = Clip.create({
+        name = "Clip 1",
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
         nested_sequence_id = "mc_test",
-        timeline_start = 0,
-        duration = 48,
-        source_in = 0,
-        source_out = 48,
-        fps_numerator = 24, fps_denominator = 1
+        timeline_start_frame = 0,
+        duration_frames = 48,
+        source_in_frame = 0,
+        source_out_frame = 48,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
     clip1:save(db)
 
@@ -559,16 +579,20 @@ local function test_move_clip_to_track_command_func()
     media:save(db)
 
     -- Clip on track1: [0, 48) frames (2s)
-    local clip = Clip.create("Clip to Move", media.id, {
+    local clip = Clip.create({
+        name = "Clip to Move",
         project_id = project.id,
         track_id = track1.id,
         owner_sequence_id = sequence.id,
         nested_sequence_id = "mc_test",
-        timeline_start = 0,
-        duration = 48,
-        source_in = 0,
-        source_out = 48,
-        fps_numerator = 24, fps_denominator = 1
+        timeline_start_frame = 0,
+        duration_frames = 48,
+        source_in_frame = 0,
+        source_out_frame = 48,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
     clip:save(db)
 

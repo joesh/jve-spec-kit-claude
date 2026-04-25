@@ -21,18 +21,21 @@ local clips = layout.clips
 local tracks = layout.tracks
 
 -- Insert a downstream clip on V2 before initializing the timeline state
-local downstream = Clip.create("V2 Downstream", clips.v2.media_id, {
-    project_id = layout.project_id,
-    owner_sequence_id = layout.sequence_id,
-    nested_sequence_id = "mc_test",
-    track_id = tracks.v2.id,
-    fps_numerator = 1000,
-    fps_denominator = 1,
-    timeline_start = 2600,
-    duration = 600,
-    source_in = 0,
-    source_out = 600
-})
+local downstream = Clip.create({
+        name = "V2 Downstream",
+        project_id = layout.project_id,
+        owner_sequence_id = layout.sequence_id,
+        nested_sequence_id = "mc_test",
+        track_id = tracks.v2.id,
+        timeline_start_frame = 2600,
+        duration_frames = 600,
+        source_in_frame = 0,
+        source_out_frame = 600,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(downstream:save(layout.db), "Failed to insert downstream clip")
 
 layout:init_timeline_state()

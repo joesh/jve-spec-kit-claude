@@ -53,33 +53,37 @@ local media = Media.create({
 })
 assert(media:save(db))
 
-local master = Clip.create("Master", media.id, {
-    id = "master1",
-    clip_kind = "master",
-    project_id = "proj",
-    timeline_start = 0,
-    duration = 1000,
-    source_in = 0,
-    source_out = 1000,
-    fps_numerator = 30,
-    fps_denominator = 1,
-})
+local master = Clip.create({
+        name = "Master",
+        id = "master1",
+        project_id = "proj",
+        timeline_start_frame = 0,
+        duration_frames = 1000,
+        source_in_frame = 0,
+        source_out_frame = 1000,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(master:save(db, {skip_occlusion = true}))
 
-local t1 = Clip.create("Timeline", media.id, {
-    id = "t1",
-    clip_kind = "nested",
-    project_id = "proj",
-    track_id = "v1",
-    owner_sequence_id = "seq",
-    nested_sequence_id = "mc_test",
-    timeline_start = 0,
-    duration = 100,
-    source_in = 5,
-    source_out = 105,
-    fps_numerator = 30,
-    fps_denominator = 1,
-})
+local t1 = Clip.create({
+        name = "Timeline",
+        id = "t1",
+        project_id = "proj",
+        track_id = "v1",
+        owner_sequence_id = "seq",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 0,
+        duration_frames = 100,
+        source_in_frame = 5,
+        source_out_frame = 105,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(t1:save(db))
 
 local dup = Command.create("DuplicateClips", "proj")

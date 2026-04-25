@@ -263,20 +263,22 @@ for i = 1, 3 do
 
     -- Create clips on each track
     for j = 1, 2 do
-        local clip = Clip.create("Clip " .. i .. "-" .. j, "media_ds", {
-            id = "multi_clip_" .. i .. "_" .. j,
-            project_id = "project",
-            track_id = "multi_track_" .. i,
-            owner_sequence_id = "multi_seq",
-            nested_sequence_id = "mc_test",
-            timeline_start = (j-1) * 100,
-            duration = 100,
-            source_in = 0,
-            source_out = 100,
-            enabled = true,
-            fps_numerator = 30,
-            fps_denominator = 1
-        })
+        local clip = Clip.create({
+        name = "Clip " .. i .. "-" .. j,
+        id = "multi_clip_" .. i .. "_" .. j,
+        project_id = "project",
+        track_id = "multi_track_" .. i,
+        owner_sequence_id = "multi_seq",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = (j-1) * 100,
+        duration_frames = 100,
+        source_in_frame = 0,
+        source_out_frame = 100,
+        enabled = true,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
         assert(clip:save(db), "Failed to save clip")
     end
 end

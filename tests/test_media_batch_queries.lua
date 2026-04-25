@@ -105,16 +105,21 @@ db:exec(
 --- Make a clip on a named track at a specific timeline start so we
 --- don't trip the VIDEO_OVERLAP trigger.
 local function make_clip(params)
-    local c = Clip.create("Clip " .. params.id, params.media_id, {
-        id = params.id, project_id = project.id,
-        clip_kind = params.clip_kind or "timeline",
+    local c = Clip.create({
+        name = "Clip " .. params.id,
+        id = params.id,
+        project_id = project.id,
         track_id = params.track_id,
         nested_sequence_id = "mc_" .. params.media_id,
         owner_sequence_id = "seq1",
-        timeline_start = params.timeline_start,
-        duration = params.source_out - params.source_in,
-        source_in = params.source_in, source_out = params.source_out,
-        fps_numerator = params.fps_num, fps_denominator = params.fps_den,
+        timeline_start_frame = params.timeline_start,
+        duration_frames = params.source_out - params.source_in,
+        source_in_frame = params.source_in,
+        source_out_frame = params.source_out,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
     assert(c:save({skip_occlusion = true}))
     return c

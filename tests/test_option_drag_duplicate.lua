@@ -61,18 +61,21 @@ local function create_clip(params)
     masterclip_ids[params.media_id] = master_clip_id
 
     local Clip = require('models.clip')
-    local clip = Clip.create(params.name or params.clip_id, params.media_id, {
+    local clip = Clip.create({
+        name = params.name or params.clip_id,
         id = params.clip_id,
         track_id = params.track_id,
         project_id = 'default_project',
         owner_sequence_id = 'default_sequence',
-        timeline_start = params.start_value or 0,
-        duration = params.duration_value or 0,
-        source_in = params.source_in_value or 0,
-        source_out = params.source_out_value or params.duration_value or 0,
-        fps_numerator = 30,
-        fps_denominator = 1,
+        timeline_start_frame = params.start_value or 0,
+        duration_frames = params.duration_value or 0,
+        source_in_frame = params.source_in_value or 0,
+        source_out_frame = params.source_out_value or params.duration_value or 0,
         nested_sequence_id = master_clip_id,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
     assert(clip and clip:save(db, {skip_occlusion = true}))
     return clip

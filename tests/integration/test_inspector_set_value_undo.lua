@@ -48,19 +48,21 @@ assert(med:save(), "media save failed")
 local mc_seq_id = test_env.create_test_masterclip_sequence(
     project_id, "test mc", 24, 1, 240, med.id)
 
-local clip = Clip.create(ORIGINAL, med.id, {
-    project_id        = project_id,
-    owner_sequence_id = seq_id,
-    track_id          = v_track.id,
-    timeline_start    = 24,
-    duration          = 60,
-    source_in         = 0,
-    source_out        = 60,
-    fps_numerator     = 24,
-    fps_denominator   = 1,
-    enabled           = true,
-    master_clip_id    = mc_seq_id,
-})
+local clip = Clip.create({
+        name = ORIGINAL,
+        project_id = project_id,
+        owner_sequence_id = seq_id,
+        track_id = v_track.id,
+        timeline_start_frame = 24,
+        duration_frames = 60,
+        source_in_frame = 0,
+        source_out_frame = 60,
+        enabled = true,
+        master_clip_id = mc_seq_id,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(clip:save({skip_occlusion = true}), "clip save failed")
 local clip_id = clip.id
 
