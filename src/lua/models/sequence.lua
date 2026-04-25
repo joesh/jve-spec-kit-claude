@@ -2220,6 +2220,21 @@ function Sequence.get_name(id)
     return n
 end
 
+--- DELETE a sequence row by id. Cascades to tracks/clips/media_refs/
+--- channel-state via FK ON DELETE CASCADE. Used by Nest.undo to drop
+--- the sequence created by Nest.execute, and by Unnest's orphan
+--- cleanup.
+function Sequence.delete_one(id)
+    assert(id and id ~= "", "Sequence.delete_one: id required")
+    local conn = resolve_db()
+    local stmt = conn:prepare("DELETE FROM sequences WHERE id = ?")
+    assert(stmt, "Sequence.delete_one: prepare failed")
+    stmt:bind_value(1, id)
+    local ok = stmt:exec()
+    stmt:finalize()
+    assert(ok, "Sequence.delete_one: exec failed for id=" .. id)
+end
+
 --- Write a sequence's fps_mismatch_policy directly. Nullable (NULL =
 --- inherit project default). Lua's pairs skips nil so this dedicated
 --- setter is required for the NULL-restore path on undo.

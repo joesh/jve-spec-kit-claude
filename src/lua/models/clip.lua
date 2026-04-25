@@ -1194,6 +1194,95 @@ function M.update_bounds(id, timeline_start_frame, duration_frames,
     })
 end
 
+--- List clips on a given owner_sequence_id, ordered by timeline.
+--- Returns plain row tables (V13 shape).
+function M.list_in_sequence(owner_sequence_id)
+    assert(owner_sequence_id and owner_sequence_id ~= "",
+        "Clip.list_in_sequence: owner_sequence_id required")
+    local db = require("core.database").get_connection()
+    local stmt = db:prepare([[
+        SELECT id, project_id, owner_sequence_id, track_id, nested_sequence_id,
+               name, timeline_start_frame, duration_frames,
+               source_in_frame, source_out_frame,
+               master_layer_track_id, fps_mismatch_policy,
+               enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
+        FROM clips WHERE owner_sequence_id = ?
+        ORDER BY timeline_start_frame ASC, id ASC
+    ]])
+    assert(stmt, "Clip.list_in_sequence: prepare failed")
+    stmt:bind_value(1, owner_sequence_id)
+    assert(stmt:exec(), "Clip.list_in_sequence: exec failed")
+    local rows = {}
+    while stmt:next() do
+        rows[#rows + 1] = {
+            id                    = stmt:value(0),
+            project_id            = stmt:value(1),
+            owner_sequence_id     = stmt:value(2),
+            track_id              = stmt:value(3),
+            nested_sequence_id    = stmt:value(4),
+            name                  = stmt:value(5),
+            timeline_start_frame  = stmt:value(6),
+            duration_frames       = stmt:value(7),
+            source_in_frame       = stmt:value(8),
+            source_out_frame      = stmt:value(9),
+            master_layer_track_id = stmt:value(10),
+            fps_mismatch_policy   = stmt:value(11),
+            enabled               = stmt:value(12) == 1,
+            volume                = stmt:value(13),
+            mark_in_frame         = stmt:value(14),
+            mark_out_frame        = stmt:value(15),
+            playhead_frame        = stmt:value(16),
+        }
+    end
+    stmt:finalize()
+    return rows
+end
+
+--- Count clips that reference `nested_sequence_id`, excluding one
+--- (used by Unnest's orphan-cleanup decision).
+function M.count_referencing_nested(nested_sequence_id, exclude_clip_id)
+    assert(nested_sequence_id and nested_sequence_id ~= "",
+        "Clip.count_referencing_nested: nested_sequence_id required")
+    local db = require("core.database").get_connection()
+    local stmt = db:prepare(
+        "SELECT COUNT(*) FROM clips WHERE nested_sequence_id = ? AND id != ?")
+    assert(stmt, "Clip.count_referencing_nested: prepare failed")
+    stmt:bind_value(1, nested_sequence_id)
+    stmt:bind_value(2, exclude_clip_id or "")
+    assert(stmt:exec(), "Clip.count_referencing_nested: exec failed")
+    assert(stmt:next())
+    local n = stmt:value(0) or 0
+    stmt:finalize()
+    return n
+end
+
+--- Move a clip to a different owner sequence (Nest / Unnest). Distinct
+--- from M.update because owner_sequence_id is not in the structural-
+--- protected updatable set there. Re-checks INV-2 via the SQLite
+--- trigger after the UPDATE.
+---
+--- @param id string
+--- @param new_owner_sequence_id string  must reference a kind='nested' seq
+function M.transfer_owner(id, new_owner_sequence_id)
+    assert(id and id ~= "", "Clip.transfer_owner: id required")
+    assert(new_owner_sequence_id and new_owner_sequence_id ~= "",
+        "Clip.transfer_owner: new_owner_sequence_id required")
+    local db = require("core.database").get_connection()
+    local stmt = db:prepare(
+        "UPDATE clips SET owner_sequence_id = ?, modified_at = ? WHERE id = ?")
+    assert(stmt, "Clip.transfer_owner: prepare failed")
+    stmt:bind_value(1, new_owner_sequence_id)
+    stmt:bind_value(2, os.time())
+    stmt:bind_value(3, id)
+    local ok = stmt:exec()
+    local err = (not ok) and stmt:last_error() or nil
+    stmt:finalize()
+    assert(ok, string.format(
+        "Clip.transfer_owner: exec failed for id=%s: %s "
+        .. "(likely INV-2 trigger — new owner must be kind='nested')",
+        id, tostring(err)))
+end
+
 --- Set the per-clip layer override. Distinct from M.update because Lua's
 --- `pairs` skips nil values — passing nil through M.update silently
 --- becomes a no-op rather than UPDATEing the column to NULL. This setter

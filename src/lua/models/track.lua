@@ -195,6 +195,31 @@ function Track.find_by_sequence(sequence_id, track_type)
     return tracks
 end
 
+--- Find a track by (sequence_id, track_type, track_index). Used by
+--- Unnest to locate the parent sequence's matching track for an inner
+--- clip during expansion. Returns the track id or nil.
+function Track.find_at(sequence_id, track_type, track_index)
+    assert(sequence_id and sequence_id ~= "",
+        "Track.find_at: sequence_id required")
+    assert(track_type == "VIDEO" or track_type == "AUDIO",
+        "Track.find_at: track_type must be VIDEO or AUDIO")
+    assert(type(track_index) == "number",
+        "Track.find_at: track_index must be integer")
+    local conn = resolve_db()
+    local stmt = conn:prepare(
+        "SELECT id FROM tracks WHERE sequence_id = ? AND track_type = ? "
+        .. "AND track_index = ?")
+    assert(stmt, "Track.find_at: prepare failed")
+    stmt:bind_value(1, sequence_id)
+    stmt:bind_value(2, track_type)
+    stmt:bind_value(3, track_index)
+    assert(stmt:exec(), "Track.find_at: exec failed")
+    local id
+    if stmt:next() then id = stmt:value(0) end
+    stmt:finalize()
+    return id
+end
+
 function Track.get_sequence_id(track_id)
     assert(track_id and track_id ~= "", "Track.get_sequence_id: track_id is required")
 
