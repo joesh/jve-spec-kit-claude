@@ -145,7 +145,7 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 ### 3.5.a — Tests first
 
 - [x] **T048 [P]** CT-C9 SetClipLayer — NULL ↔ V2; undo restores prior. Args must include `sequence_id` (rule 2.29 regression). Path: `tests/test_set_clip_layer.lua`.
-- [ ] **T049 [P]** CT-C10 ToggleClipChannel — first toggle inserts override row with materialized inherited gain; second toggle flips `enabled`; undo deletes the row. Path: `tests/test_toggle_clip_channel.lua`.
+- [x] **T049 [P]** CT-C10 ToggleClipChannel — first toggle inserts override row with materialized inherited gain; second toggle flips `enabled`; undo deletes the row. Path: `tests/test_toggle_clip_channel.lua`.
 - [ ] **T050 [P]** CT-C11 SetClipChannelGain — insert/update; undo restores row-absence if didn't exist. Path: `tests/test_set_clip_channel_gain.lua`.
 - [ ] **T051 [P]** CT-C12 ClearClipOverride — channel variant deletes row; layer variant NULLs `master_layer_track_id`; playback reflects inherited state. Path: `tests/test_clear_clip_override.lua`.
 - [ ] **T052 [P]** FR-020 coverage: five rapid channel toggles produce five undo steps (no coalescing), each with descriptive label. Path: `tests/test_override_undo_granularity.lua`.
@@ -154,7 +154,7 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 ### 3.5.b — Implementation
 
 - [x] **T053 [P]** Create `src/lua/core/commands/set_clip_layer.lua`.
-- [ ] **T054 [P]** Create `src/lua/core/commands/toggle_clip_channel.lua` — materializes inherited gain on first toggle (rule 2.13 — no DEFAULT-0 sneak-through).
+- [x] **T054 [P]** Create `src/lua/core/commands/toggle_clip_channel.lua` — materializes inherited gain on first toggle (rule 2.13 — no DEFAULT-0 sneak-through).
 - [ ] **T055 [P]** Create `src/lua/core/commands/set_clip_channel_gain.lua`.
 - [ ] **T056 [P]** Create `src/lua/core/commands/clear_clip_override.lua` — accepts `kind='channel'` or `kind='layer'`.
 

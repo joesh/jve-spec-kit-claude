@@ -2220,4 +2220,61 @@ function Sequence.get_name(id)
     return n
 end
 
+--- Count the audio channels exposed by a master sequence's tracks. Sum
+--- of media.audio_channels across the master's A-track media_refs. Used
+--- by ToggleClipChannel/SetClipChannelGain for INV-5 bounds checks.
+---
+--- @param master_id string  must reference a kind='master' sequence
+--- @return integer  total audio channel count
+function Sequence.count_master_audio_channels(master_id)
+    assert(master_id and master_id ~= "",
+        "Sequence.count_master_audio_channels: master_id required")
+    local conn = resolve_db()
+    local stmt = conn:prepare([[
+        SELECT COALESCE(SUM(m.audio_channels), 0)
+        FROM media_refs mr
+        JOIN tracks t ON t.id = mr.track_id
+        JOIN media m  ON m.id = mr.media_id
+        WHERE mr.owner_sequence_id = ? AND t.track_type = 'AUDIO'
+    ]])
+    assert(stmt, "Sequence.count_master_audio_channels: prepare failed")
+    stmt:bind_value(1, master_id)
+    assert(stmt:exec(), "Sequence.count_master_audio_channels: exec failed")
+    assert(stmt:next(),
+        "Sequence.count_master_audio_channels: aggregate returned no row")
+    local n = stmt:value(0) or 0
+    stmt:finalize()
+    return n
+end
+
+--- Read a master's per-channel state from media_refs_channel_state.
+--- Returns (enabled_bool, gain_db_number); on absent row returns the
+--- resolver-default contract (true, 0). Used by ToggleClipChannel /
+--- SetClipChannelGain to materialize inherited state at first override.
+---
+--- @param master_id string
+--- @param channel_index integer  0-based
+function Sequence.get_master_channel_state(master_id, channel_index)
+    assert(master_id and master_id ~= "",
+        "Sequence.get_master_channel_state: master_id required")
+    assert(type(channel_index) == "number",
+        "Sequence.get_master_channel_state: channel_index must be integer")
+    local conn = resolve_db()
+    local stmt = conn:prepare([[
+        SELECT enabled, default_gain_db FROM media_refs_channel_state
+        WHERE owner_sequence_id = ? AND channel_index = ?
+    ]])
+    assert(stmt, "Sequence.get_master_channel_state: prepare failed")
+    stmt:bind_value(1, master_id)
+    stmt:bind_value(2, channel_index)
+    assert(stmt:exec(), "Sequence.get_master_channel_state: exec failed")
+    local enabled, gain_db = true, 0.0   -- resolver default contract
+    if stmt:next() then
+        enabled = stmt:value(0) == 1
+        gain_db = stmt:value(1)
+    end
+    stmt:finalize()
+    return enabled, gain_db
+end
+
 return Sequence
