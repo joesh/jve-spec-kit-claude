@@ -1594,11 +1594,6 @@ local function assert_track_ref_valid(db, clip_id, seq_id, track_id,
     return ttype
 end
 
--- Backward-compat: existing call sites use master_layer_track_id label.
-local function assert_layer_ref_valid(db, clip_id, seq_id, track_id)
-    return assert_track_ref_valid(db, clip_id, seq_id, track_id,
-        "master_layer_track_id")
-end
 
 -- Fetch the effective channel state for a master's channel. Absent row →
 -- resolver default (enabled=true, gain=0). Returns {enabled, gain_db}.
@@ -1892,6 +1887,41 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
             if c.master_audio_track_id then
                 assert_track_ref_valid(db, c.id, c.nested_sequence_id,
                     c.master_audio_track_id, "master_audio_track_id")
+            end
+
+            -- INV-5: clip_channel_override.channel_index must point at an
+            -- existing channel in the referenced sequence's audio layout.
+            -- Iterate the clip's overrides (if any) and assert each is in
+            -- bounds. For first-landing this checks only when the clip
+            -- directly references a master (kind='master') so we have a
+            -- concrete channel count; nested-of-nested defers to the
+            -- master at its leaf via the recursion's downstream INV-5
+            -- check on whatever clips the inner sequence holds.
+            do
+                local kind_stmt = db:prepare(
+                    "SELECT kind FROM sequences WHERE id = ?")
+                assert(kind_stmt, "Sequence.resolve INV-5: kind prepare failed")
+                kind_stmt:bind_value(1, c.nested_sequence_id)
+                assert(kind_stmt:exec(), "Sequence.resolve INV-5: kind exec failed")
+                local nk
+                if kind_stmt:next() then nk = kind_stmt:value(0) end
+                kind_stmt:finalize()
+                if nk == "master" then
+                    local channel_count = Sequence.count_master_audio_channels(
+                        c.nested_sequence_id)
+                    local Override = require("models.clip_channel_override")
+                    for _, ov in ipairs(Override.find_all(c.id)) do
+                        assert(ov.channel_index < channel_count, string.format(
+                            "Sequence.resolve INV-5: clip %s has "
+                            .. "clip_channel_override(channel_index=%d) but "
+                            .. "the referenced master sequence %s has only "
+                            .. "%d audio channel(s). The master likely "
+                            .. "shrank since the override was set; clear "
+                            .. "or migrate the override.",
+                            c.id, ov.channel_index,
+                            c.nested_sequence_id, channel_count))
+                    end
+                end
             end
 
             -- Layer to expose at the level THIS clip directly references.
