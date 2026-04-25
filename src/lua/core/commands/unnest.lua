@@ -115,7 +115,12 @@ function M.execute(args)
     -- (Exclude the just-deleted clip_id, defensively.)
     local refs = Clip.count_referencing_nested(nested_id, clip_id)
     local orphan_deleted = false
+    local nested_state_capture = nil
     if refs == 0 then
+        -- Capture the sequence's full state BEFORE deleting so undo can
+        -- resurrect it (the row + its tracks). Per MEMORY: "no silent
+        -- DB record creation" — the deletion is observable via undo.
+        nested_state_capture = Sequence.capture_full_state(nested_id)
         Sequence.delete_one(nested_id)
         orphan_deleted = true
         log.event("Unnest: orphan-deleted nested sequence %s", nested_id)
@@ -133,19 +138,49 @@ function M.execute(args)
     end
 
     return {
-        sequence_id    = sequence_id,
-        clip_capture   = clip_capture,
-        moved          = moved,
-        nested_id      = nested_id,
-        orphan_deleted = orphan_deleted,
+        sequence_id          = sequence_id,
+        clip_capture         = clip_capture,
+        moved                = moved,
+        nested_id            = nested_id,
+        orphan_deleted       = orphan_deleted,
+        nested_state_capture = nested_state_capture,
     }
 end
 
 function M.undo(capture)
-    error("Unnest.undo: not yet implemented — full restoration of the "
-        .. "deleted clip + moved-clip priors + (if orphaned) the nested "
-        .. "sequence is a follow-up. Forward execution is supported and "
-        .. "tested under CT-C18/C19; undo lands with T067a/T067b.")
+    assert(type(capture) == "table",
+        "Unnest.undo: capture table required")
+    -- (a) If orphan-deleted, resurrect the nested sequence first so the
+    --     inner clips' restored owner_sequence_id resolves.
+    if capture.orphan_deleted then
+        assert(capture.nested_state_capture,
+            "Unnest.undo: nested_state_capture missing on orphan-deleted unnest")
+        Sequence.restore_full_state(capture.nested_state_capture)
+    end
+
+    -- (b) Move each inner clip back to the nested sequence at its prior
+    --     track + timeline_start. Order: update track+start (trigger
+    --     sees nested track empty post-resurrection), then transfer
+    --     owner (INV-2 trigger checks the new owner is kind='nested').
+    for _, m in ipairs(capture.moved) do
+        Clip.update(m.clip_id, {
+            track_id             = m.prior_track_id,
+            timeline_start_frame = m.prior_timeline_start,
+        })
+        Clip.transfer_owner(m.clip_id, m.prior_owner_id)
+    end
+
+    -- (c) Restore the deleted unnested clip via its full V13 capture.
+    Clip.restore_v13_state(capture.clip_capture)
+
+    local Signals = require("core.signals")
+    Signals.emit("sequence_content_changed", capture.sequence_id)
+    if capture.orphan_deleted then
+        -- Companion to the forward-path sequence_deleted signal.
+        Signals.emit("sequence_resurrected", capture.nested_id)
+    else
+        Signals.emit("sequence_content_changed", capture.nested_id)
+    end
 end
 
 local SPEC = {
@@ -154,9 +189,11 @@ local SPEC = {
         clip_id     = { required = true },
     },
     persisted = {
-        moved          = {},
-        nested_id      = "",
-        orphan_deleted = false,
+        moved                = {},
+        nested_id            = "",
+        orphan_deleted       = false,
+        clip_capture         = {},
+        nested_state_capture = {},
     },
 }
 
@@ -169,14 +206,25 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             return false, tostring(capture_or_err)
         end
         local cap = capture_or_err
-        command:set_parameter("moved",          cap.moved)
-        command:set_parameter("nested_id",      cap.nested_id)
-        command:set_parameter("orphan_deleted", cap.orphan_deleted)
+        command:set_parameter("moved",                cap.moved)
+        command:set_parameter("nested_id",            cap.nested_id)
+        command:set_parameter("orphan_deleted",       cap.orphan_deleted)
+        command:set_parameter("clip_capture",         cap.clip_capture)
+        command:set_parameter("nested_state_capture", cap.nested_state_capture)
         return true
     end
 
-    command_undoers["Unnest"] = function(_command)
-        error("Unnest undo: pending T067a/T067b implementation.")
+    command_undoers["Unnest"] = function(command)
+        local args = command:get_all_parameters()
+        M.undo({
+            sequence_id          = args.sequence_id,
+            nested_id            = args.nested_id,
+            orphan_deleted       = args.orphan_deleted and true or false,
+            moved                = args.moved or {},
+            clip_capture         = args.clip_capture,
+            nested_state_capture = args.nested_state_capture,
+        })
+        return true
     end
 
     return {

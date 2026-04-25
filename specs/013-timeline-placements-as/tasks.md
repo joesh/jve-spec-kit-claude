@@ -195,13 +195,13 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 - [x] **T065 [P]** CT-C17 Nest — 3 selected clips in a non-master sequence become 3 clips inside a new `kind='nested'` sequence; parent has one new clip replacing them. Path: `tests/test_nest.lua`. **First-landing scope**: same-track selections only; multi-track nesting is a follow-up.
 - [x] **T066 [P]** CT-C18 Unnest — clip whose `nested_sequence_id.kind='nested'` expands back into parent; nested sequence orphan-deleted if no other references. Path: `tests/test_unnest.lua` (combined with T067). Forward execution complete; **undo deferred to T067a/T067b**.
 - [x] **T067 [P]** CT-C19 Unnest refusal — attempting Unnest on a clip whose `nested_sequence_id.kind='master'` refuses with clear error; no mutation. Path: `tests/test_unnest.lua` (same file as T066).
-- [ ] **T067a [P]** Unnest orphan-delete observability — when Unnest's orphan-cleanup deletes the nested sequence, the command emits a `sequence_deleted(sequence_id)` signal and records the deletion in its undo-capture so that undo resurrects the sequence with its contents. Silent DB deletion is forbidden (MEMORY: "no silent DB record creation"). Path: `tests/test_unnest_orphan_delete_observable.lua`.
-- [ ] **T067b [P]** Nest-and-Unnest undo atomicity — a single undo of `Nest` reverses the entire mutation set (new sequence + all moved clips + new parent clip + link_group); a single undo of `Unnest` restores the deleted clip + all moved clips + the orphan-deleted sequence (if any). Asserts command_manager group semantics (FR-020 is per-override only — multi-row structural commands are atomic). Path: `tests/test_nest_unnest_undo_atomicity.lua`.
+- [x] **T067a [P]** Unnest orphan-delete observability — when Unnest's orphan-cleanup deletes the nested sequence, the command emits a `sequence_deleted(sequence_id)` signal and records the deletion in its undo-capture so that undo resurrects the sequence with its contents. Silent DB deletion is forbidden (MEMORY: "no silent DB record creation"). Combined with T067b in `tests/test_nest_unnest_undo_atomicity.lua` — undo's resurrection is the observability proof.
+- [x] **T067b [P]** Nest-and-Unnest undo atomicity — a single undo of `Nest` reverses the entire mutation set (new sequence + all moved clips + new parent clip + link_group); a single undo of `Unnest` restores the deleted clip + all moved clips + the orphan-deleted sequence (if any). Path: `tests/test_nest_unnest_undo_atomicity.lua`.
 
 ### 3.7.b — Implementation
 
 - [x] **T068 [P]** Create `src/lua/core/commands/nest.lua`. First-landing scope: same-track selections; multi-track nesting deferred.
-- [x] **T069 partial [P]** Create `src/lua/core/commands/unnest.lua` — refuses on masters; performs orphan cleanup. **Undo not yet implemented** (T067a/T067b atomic-undo work). Forward path tested under CT-C18/C19; undo path stubbed with a loud refuse-and-document message.
+- [x] **T069 [P]** Create `src/lua/core/commands/unnest.lua` — refuses on masters; performs orphan cleanup; full undo (resurrects orphan-deleted sequence + tracks via `Sequence.capture_full_state` / `restore_full_state`, restores the deleted clip via `Clip.restore_v13_state`, moves inner clips back via `Clip.transfer_owner`).
 
 ---
 
