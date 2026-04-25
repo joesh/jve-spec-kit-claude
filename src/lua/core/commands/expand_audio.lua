@@ -250,11 +250,30 @@ function M.execute(args)
     }
 end
 
-function M.undo(_capture)
-    error("ExpandAudio.undo: not yet implemented (T056c follow-up). "
-        .. "Forward path lands first; full restoration requires "
-        .. "Clip.restore_v13_state of the source + reverse of expanded "
-        .. "clip / link / track creates.")
+function M.undo(capture)
+    assert(type(capture) == "table",
+        "ExpandAudio.undo: capture table required")
+
+    -- Order:
+    --   1. DELETE every expanded clip. The clip_links rows for them
+    --      cascade away (so the source's link_group is back to whatever
+    --      entries existed pre-expand, e.g. the V clip).
+    --   2. DELETE auto-created owner A tracks. The tracks are empty by
+    --      now (their only clips were the expanded ones, just deleted).
+    --   3. Restore the source via Clip.restore_v13_state — re-INSERTs
+    --      the row + overrides + the source's link_group entry.
+    Clip.delete_by_ids(capture.expanded_clip_ids or {})
+
+    if capture.created_track_ids then
+        for _, tid in ipairs(capture.created_track_ids) do
+            Track.delete(tid)
+        end
+    end
+
+    Clip.restore_v13_state(capture.source_capture)
+
+    local Signals = require("core.signals")
+    Signals.emit("sequence_content_changed", capture.sequence_id)
 end
 
 local SPEC = {
@@ -281,11 +300,19 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local cap = capture_or_err
         command:set_parameter("expanded_clip_ids", cap.expanded_clip_ids)
         command:set_parameter("created_track_ids", cap.created_track_ids)
+        command:set_parameter("source_capture",    cap.source_capture)
         return true
     end
 
-    command_undoers["ExpandAudio"] = function(_command)
-        error("ExpandAudio undo: pending T056c implementation.")
+    command_undoers["ExpandAudio"] = function(command)
+        local args = command:get_all_parameters()
+        M.undo({
+            sequence_id        = args.sequence_id,
+            expanded_clip_ids  = args.expanded_clip_ids or {},
+            created_track_ids  = args.created_track_ids or {},
+            source_capture     = args.source_capture,
+        })
+        return true
     end
 
     return {
