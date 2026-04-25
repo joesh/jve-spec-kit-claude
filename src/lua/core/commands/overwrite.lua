@@ -71,7 +71,7 @@ local SPEC = {
     args = {
         sequence_id           = { required = true },
         nested_sequence_id    = { required = true },
-        timeline_start_frame  = { required = true },
+        timeline_start_frame  = { required = true, default = 0 },
         target_video_track_id = {},
         target_audio_track_id = {},
         fps_mismatch_policy   = {},
