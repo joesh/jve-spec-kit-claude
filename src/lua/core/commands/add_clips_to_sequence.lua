@@ -1,225 +1,116 @@
---- AddClipsToSequence command - THE algorithm for placing clips on timeline
+--- AddClipsToSequence command (Feature 013, rewrite per T042).
 --
--- Responsibilities:
--- - Insert or overwrite clips at a position in a sequence
--- - Handle serial (back-to-back) or stacked (same position, different tracks) arrangement
--- - Cross-track carving: insert ripples ALL tracks, overwrite occludes target tracks only
--- - Link clips within each group
--- - Single undo/redo for entire operation
+-- Batch placement of N clip groups onto an edit sequence in one undo
+-- atom. Each group represents a logical placement unit (e.g. an A+V
+-- master) — clips within a group are linked into a single clip_links
+-- group after placement. Multiple groups can be arranged "serial" (back
+-- to back) or "stacked" (all at the same start position, on different
+-- tracks).
 --
--- Non-goals:
--- - Does not gather UI context (caller uses gather_context_for_command.lua)
--- - Does not resolve track indices (caller provides target_track_id per clip)
+-- Insert/Overwrite (T040/T041) cover the single-master placement path;
+-- this command exists for the multi-master batch path (e.g. dragging
+-- several master clips onto the timeline at once with a single undo).
 --
--- Invariants:
--- - All clips in a group must have valid target_track_id
--- - Position must be an integer frame
--- - Edit type must be "insert" or "overwrite"
--- - Arrangement must be "serial" or "stacked"
+-- Per task T042: clip rows reference sequences only; no media_id /
+-- clip_kind / master_clip_id / offline columns are read or written.
+-- Each clip_desc carries a nested_sequence_id that the new clip row
+-- references; per-clip overrides ride on the clip row directly
+-- (master_layer_track_id, fps_mismatch_policy).
+--
+-- Carving:
+--   insert: ripple every track in the sequence forward by the batch's
+--     total_duration starting at `position`.
+--   overwrite: occlude the union of group ranges on each target track
+--     via the shared place_shared.occlude_track helper.
+--
+-- Refuses (loud): malformed args, conflicting clip_desc fields,
+-- per-clip INV-2/INV-4 violations on insert, target_track_id absent or
+-- in a different sequence.
+--
+-- Atomicity: SAVEPOINT wraps every DB write so a mid-batch failure
+-- unwinds the entire operation.
+--
+-- Undo of the batch is deferred to the broader T046 sweep (it requires
+-- replaying both ripple/occlusion captures and clip restorations across
+-- N groups). The execute path is fully V13.
 --
 -- @file add_clips_to_sequence.lua
 
 local M = {}
 
-local Clip = require('models.clip')
-local uuid = require('uuid')
-local command_helper = require('core.command_helper')
-local clip_mutator = require('core.clip_mutator')
-local clip_link = require('models.clip_link')
-local log = require('core.logger').for_area("commands")
-local _Track = require('models.track')  -- luacheck: ignore 211 (unused, required for model registration)
+local Clip         = require("models.clip")
+local Sequence     = require("models.sequence")
+local Track        = require("models.track")
+local clip_link    = require("models.clip_link")
+local place_shared = require("core.commands._place_shared")
+local database     = require("core.database")
+local uuid         = require("uuid")
+local log          = require("core.logger").for_area("commands")
 
---- Find source stream clip inside a masterclip sequence by role
--- IS-a refactor: master_clip_id is now a sequence ID. This function finds
--- the stream clip (video or audio) inside that sequence.
--- NSF: Asserts on invalid inputs and database errors. Returns nil only if
--- the stream genuinely doesn't exist (e.g., video-only masterclip has no audio).
--- @param db database connection
--- @param masterclip_sequence_id string - the masterclip sequence ID (required)
--- @param role string - "video" or "audio" (required)
--- @return clip_id string, or nil if stream doesn't exist in masterclip
-local function find_source_stream_clip(db, masterclip_sequence_id, role)
-    -- NSF: Assert on invalid inputs - these are programming errors
-    assert(masterclip_sequence_id and masterclip_sequence_id ~= "", string.format(
-        "find_source_stream_clip: masterclip_sequence_id is required (got %s)",
-        tostring(masterclip_sequence_id)))
-    assert(role == "video" or role == "audio", string.format(
-        "find_source_stream_clip: role must be 'video' or 'audio' (got %s)",
-        tostring(role)))
-
-    -- Find the appropriate track in the masterclip sequence
-    local track_type = (role == "video") and "VIDEO" or "AUDIO"
-    local track_stmt = assert(db:prepare([[
-        SELECT id FROM tracks
-        WHERE sequence_id = ? AND track_type = ?
-        ORDER BY track_index ASC LIMIT 1
-    ]]), "find_source_stream_clip: failed to prepare track query")
-    track_stmt:bind_value(1, masterclip_sequence_id)
-    track_stmt:bind_value(2, track_type)
-
-    local exec_ok = track_stmt:exec()
-    assert(exec_ok, string.format(
-        "find_source_stream_clip: track query failed for masterclip=%s role=%s",
-        masterclip_sequence_id, role))
-
-    local track_id = nil
-    if track_stmt:next() then
-        track_id = track_stmt:value(0)
-    end
-    track_stmt:finalize()
-
-    if not track_id then
-        -- No track of this type in masterclip - valid for video-only or audio-only media
-        return nil
-    end
-
-    -- Find the stream clip on that track
-    local clip_stmt = assert(db:prepare([[
-        SELECT id FROM clips
-        WHERE owner_sequence_id = ? AND track_id = ?
-        LIMIT 1
-    ]]), "find_source_stream_clip: failed to prepare clip query")
-    clip_stmt:bind_value(1, masterclip_sequence_id)
-    clip_stmt:bind_value(2, track_id)
-
-    exec_ok = clip_stmt:exec()
-    assert(exec_ok, string.format(
-        "find_source_stream_clip: clip query failed for masterclip=%s track=%s",
-        masterclip_sequence_id, track_id))
-
-    local clip_id = nil
-    if clip_stmt:next() then
-        clip_id = clip_stmt:value(0)
-    end
-    clip_stmt:finalize()
-
-    -- nil if no clip on track (shouldn't happen for well-formed masterclip, but not fatal)
-    return clip_id
-end
-
---- Populate __timeline_mutations from clip_mutator mutations for UI cache updates
--- @param command The command to set mutations on
--- @param sequence_id The sequence being modified
--- @param mutations Array of {type, clip_id, ...} from clip_mutator
-local function populate_timeline_mutations(command, sequence_id, mutations)
-    if not mutations or #mutations == 0 then
-        return
-    end
-
-    for _, mut in ipairs(mutations) do
-        if mut.type == "insert" then
-            command_helper.add_insert_mutation(command, sequence_id, {
-                id = mut.clip_id,
-                track_id = mut.track_id,
-                start_value = mut.timeline_start_frame,
-                duration_value = mut.duration_frames,
-                source_in_value = mut.source_in_frame,
-                source_out_value = mut.source_out_frame,
-                name = mut.name,
-                media_id = mut.media_id,
-                master_clip_id = mut.master_clip_id,
-                owner_sequence_id = mut.owner_sequence_id,
-                enabled = mut.enabled ~= false,
-                clip_kind = mut.clip_kind,
-                fps_numerator = mut.fps_numerator,
-                fps_denominator = mut.fps_denominator,
-            })
-        elseif mut.type == "update" then
-            command_helper.add_update_mutation(command, sequence_id, {
-                clip_id = mut.clip_id,
-                track_id = mut.track_id,
-                start_value = mut.timeline_start_frame,
-                duration_value = mut.duration_frames,
-                source_in_value = mut.source_in_frame,
-                source_out_value = mut.source_out_frame,
-            })
-        elseif mut.type == "delete" then
-            -- Pass a rich record so the viewport policy can derive the
-            -- change region from the mutation itself on both directions.
-            -- mut.previous (from clip_mutator.plan_delete) carries the
-            -- deleted clip's pre-state.
-            local prev = mut.previous
-            command_helper.add_delete_mutation(command, sequence_id, {
-                clip_id = mut.clip_id,
-                track_id = prev and prev.track_id,
-                timeline_start = prev and prev.timeline_start,
-                duration = prev and prev.duration,
-            })
-        end
-    end
-end
+local SAVEPOINT = "add_clips_to_sequence_atomic"
 
 local SPEC = {
     args = {
-        advance_playhead = { kind = "boolean" },  -- Advance playhead to end of clips
-        arrangement = {},           -- "serial" or "stacked"
-        edit_type = { required = true }, -- "insert" or "overwrite"
-        groups = { required = true },     -- array of {clips = [...], duration = integer}
-        position = { required = true },   -- Integer timeline frame
-        project_id = { required = true },
         sequence_id = { required = true },
+        project_id  = { required = true },
+        edit_type   = { required = true },  -- "insert" or "overwrite"
+        arrangement = {},                    -- "serial" (default) or "stacked"
+        position    = { required = true },   -- integer owner-frame
+        groups      = { required = true },   -- list of { duration, clips = [...] }
+        advance_playhead = { kind = "boolean" },
     },
     persisted = {
-        executed_mutations = {},
-        created_clip_ids = {},
+        created_clip_ids       = {},
         created_link_group_ids = {},
     },
 }
 
---- Phase 1: Compute space requirements (all coordinates are integers)
--- @param groups array of clip groups
--- @param arrangement "serial" or "stacked"
--- @param position integer frame position
--- @return total_duration integer, track_map table mapping track_id -> list of {start, ["end"], clip_desc}
+-- Phase 1: compute the total batch duration on the timeline + a track-keyed
+-- list of intervals. Each interval is {start, end_frame, clip_desc, group}.
+-- Coordinates only; no DB access.
 local function compute_space_needs(groups, arrangement, position)
     local total_duration = 0
-    local track_map = {}  -- track_id -> list of intervals
+    local track_map = {}
 
     if arrangement == "serial" then
-        -- Groups placed back-to-back
-        local current_frame = position
+        local cursor = position
         for _, group in ipairs(groups) do
             local group_frames = group.duration
-            assert(type(group_frames) == "number" and group_frames > 0, "AddClipsToSequence: group.duration must be positive integer")
-
-            local start_pos = current_frame
-            local end_pos = current_frame + group_frames
-
+            assert(type(group_frames) == "number" and group_frames > 0,
+                "AddClipsToSequence: group.duration must be positive integer")
+            local start_pos = cursor
+            local end_pos   = cursor + group_frames
             for _, clip_desc in ipairs(group.clips) do
-                local track_id = assert(clip_desc.target_track_id, "AddClipsToSequence: clip missing target_track_id")
+                local track_id = assert(clip_desc.target_track_id,
+                    "AddClipsToSequence: clip_desc missing target_track_id")
                 track_map[track_id] = track_map[track_id] or {}
-                table.insert(track_map[track_id], {
-                    start = start_pos,
-                    ["end"] = end_pos,
-                    clip_desc = clip_desc,
-                    group = group,
-                })
+                track_map[track_id][#track_map[track_id] + 1] = {
+                    start_frame = start_pos,
+                    end_frame   = end_pos,
+                    clip_desc   = clip_desc,
+                    group       = group,
+                }
             end
-
-            current_frame = current_frame + group_frames
-            total_duration = current_frame - position
+            cursor = end_pos
+            total_duration = cursor - position
         end
     else
-        -- Stacked: all groups at same position, different tracks
         local max_frames = 0
         for _, group in ipairs(groups) do
             local group_frames = group.duration
-            assert(type(group_frames) == "number" and group_frames > 0, "AddClipsToSequence: group.duration must be positive integer")
-
-            if group_frames > max_frames then
-                max_frames = group_frames
-            end
-
-            local end_pos = position + group_frames
+            assert(type(group_frames) == "number" and group_frames > 0,
+                "AddClipsToSequence: group.duration must be positive integer")
+            if group_frames > max_frames then max_frames = group_frames end
             for _, clip_desc in ipairs(group.clips) do
-                local track_id = assert(clip_desc.target_track_id, "AddClipsToSequence: clip missing target_track_id")
+                local track_id = assert(clip_desc.target_track_id,
+                    "AddClipsToSequence: clip_desc missing target_track_id")
                 track_map[track_id] = track_map[track_id] or {}
-                table.insert(track_map[track_id], {
-                    start = position,
-                    ["end"] = end_pos,
-                    clip_desc = clip_desc,
-                    group = group,
-                })
+                track_map[track_id][#track_map[track_id] + 1] = {
+                    start_frame = position,
+                    end_frame   = position + group_frames,
+                    clip_desc   = clip_desc,
+                    group       = group,
+                }
             end
         end
         total_duration = max_frames
@@ -228,364 +119,246 @@ local function compute_space_needs(groups, arrangement, position)
     return total_duration, track_map
 end
 
---- Phase 2: Carve space for clips
--- @param db database connection
--- @param edit_type "insert" or "overwrite"
--- @param sequence_id string
--- @param position integer frame
--- @param total_duration integer frames
--- @param track_map table from compute_space_needs
--- @return mutations array, error string|nil
-local function carve_space(db, edit_type, sequence_id, position, total_duration, track_map)
-    local all_mutations = {}
+-- Phase 2: carve space.
+--   insert: ripple every track in the sequence by total_duration starting
+--     at `position`. Insert ripples ALL tracks (not just target tracks)
+--     so the batch's logical "wedge" leaves the timeline consistent.
+--   overwrite: occlude the union of intervals on each target track via
+--     the shared place_shared.occlude_track helper.
+local function carve_space(edit_type, sequence_id, owner_seq,
+                          position, total_duration, track_map)
+    local rippled_capture = {}
+    local occluded_capture = {}
 
     if edit_type == "insert" then
-        -- Insert: ripple ALL tracks in sequence at position
-        local TrackModel = require('models.track')
-        local all_tracks = TrackModel.find_by_sequence(sequence_id)
-
-        for _, track in ipairs(all_tracks) do
-            local ok, err, mutations = clip_mutator.resolve_ripple(db, {
-                track_id = track.id,
-                insert_time = position,
-                shift_amount = total_duration,
-            })
-            if not ok then
-                return nil, string.format("AddClipsToSequence: ripple failed on track %s: %s", tostring(track.id), tostring(err))
+        local tracks = Track.find_by_sequence(sequence_id)
+        assert(tracks, "AddClipsToSequence: Track.find_by_sequence returned nil")
+        for _, t in ipairs(tracks) do
+            local ids = Clip.ripple_track_forward(t.id, position, total_duration)
+            if ids and #ids > 0 then
+                rippled_capture[t.id] = {
+                    shift      = total_duration,
+                    from_frame = position,
+                    clip_ids   = ids,
+                }
             end
-            for _, mut in ipairs(mutations or {}) do
-                table.insert(all_mutations, mut)
+        end
+    elseif edit_type == "overwrite" then
+        for track_id, intervals in pairs(track_map) do
+            local lo = intervals[1].start_frame
+            local hi = intervals[1].end_frame
+            for i = 2, #intervals do
+                if intervals[i].start_frame < lo then lo = intervals[i].start_frame end
+                if intervals[i].end_frame   > hi then hi = intervals[i].end_frame   end
+            end
+            if hi > lo then
+                occluded_capture[track_id] =
+                    place_shared.occlude_track(track_id, owner_seq, lo, hi)
             end
         end
     else
-        -- Overwrite: occlude target tracks only in [position, position+total_duration]
-        for track_id, intervals in pairs(track_map) do
-            -- Merge intervals on this track to get total span
-            local min_start = intervals[1].start
-            local max_end = intervals[1]["end"]
-            for i = 2, #intervals do
-                if intervals[i].start < min_start then
-                    min_start = intervals[i].start
-                end
-                if intervals[i]["end"] > max_end then
-                    max_end = intervals[i]["end"]
-                end
-            end
-
-            local span_duration = max_end - min_start
-            if span_duration > 0 then
-                local ok, err, mutations = clip_mutator.resolve_occlusions(db, {
-                    track_id = track_id,
-                    timeline_start = min_start,
-                    duration = span_duration,
-                })
-                if not ok then
-                    return nil, string.format("AddClipsToSequence: occlusion failed on track %s: %s", tostring(track_id), tostring(err))
-                end
-                for _, mut in ipairs(mutations or {}) do
-                    table.insert(all_mutations, mut)
-                end
-            end
-        end
+        error("AddClipsToSequence: edit_type must be 'insert' or 'overwrite'; got "
+              .. tostring(edit_type))
     end
 
-    return all_mutations, nil
+    return {
+        rippled  = rippled_capture,
+        occluded = occluded_capture,
+    }
 end
 
---- Phase 3: Create and place clips
--- @param db database connection
--- @param track_map table from compute_space_needs
--- @param project_id string
--- @param sequence_id string
--- @param redo_clip_ids array of clip IDs from previous execution (for redo)
--- @return created_clips array of {clip_id, group_index}, mutations array, error string|nil
-local function place_clips(db, track_map, project_id, sequence_id, redo_clip_ids)
-    local created_clips = {}
-    local mutations = {}
-    local redo_idx = 1
-
-    -- Flatten track_map to list for deterministic ordering
-    local all_placements = {}
+-- Phase 3: place the new clip rows. Each clip_desc must carry a V13
+-- nested_sequence_id, source_in/out, duration, fps_mismatch_policy.
+-- Optional: master_layer_track_id, name, role.
+local function place_clips(track_map, project_id, sequence_id)
+    -- Flatten + deterministic order so failure messages are reproducible.
+    local placements = {}
     for track_id, intervals in pairs(track_map) do
         for _, interval in ipairs(intervals) do
-            table.insert(all_placements, {
-                track_id = track_id,
-                interval = interval,
-            })
+            placements[#placements + 1] = {
+                track_id = track_id, interval = interval,
+            }
         end
     end
-
-    -- Sort by track_id then start time for deterministic order
-    table.sort(all_placements, function(a, b)
-        if a.track_id ~= b.track_id then
-            return a.track_id < b.track_id
-        end
-        return a.interval.start < b.interval.start
+    table.sort(placements, function(a, b)
+        if a.track_id ~= b.track_id then return a.track_id < b.track_id end
+        return a.interval.start_frame < b.interval.start_frame
     end)
 
-    for _, placement in ipairs(all_placements) do
-        local interval = placement.interval
-        local clip_desc = interval.clip_desc
+    local created = {}
+    for _, p in ipairs(placements) do
+        local interval = p.interval
+        local d = interval.clip_desc
 
-        -- Determine clip_id: prefer explicit from clip_desc, then redo, then generate
-        local clip_id
-        if clip_desc.clip_id and clip_desc.clip_id ~= "" then
-            clip_id = clip_desc.clip_id
-            if redo_clip_ids and redo_idx <= #redo_clip_ids then
-                redo_idx = redo_idx + 1
-            end
-        elseif redo_clip_ids and redo_idx <= #redo_clip_ids then
-            clip_id = redo_clip_ids[redo_idx]
-            redo_idx = redo_idx + 1
-        else
-            clip_id = uuid.generate()
-        end
+        assert(d.nested_sequence_id and d.nested_sequence_id ~= "",
+            "AddClipsToSequence: clip_desc.nested_sequence_id required (rule 2.13 — V13 row shape)")
+        assert(type(d.source_in) == "number"
+           and type(d.source_out) == "number",
+            "AddClipsToSequence: clip_desc.source_in / source_out must be integers")
+        assert(d.fps_mismatch_policy and d.fps_mismatch_policy ~= "",
+            "AddClipsToSequence: clip_desc.fps_mismatch_policy required (rule 2.13)")
+        assert(type(d.duration) == "number" and d.duration > 0,
+            "AddClipsToSequence: clip_desc.duration must be a positive integer")
 
-        -- Create clip (all coordinates must be integers)
-        assert(type(clip_desc.duration) == "number", "AddClipsToSequence: clip_desc.duration must be integer")
-        assert(type(clip_desc.source_in) == "number", "AddClipsToSequence: clip_desc.source_in must be integer")
-        assert(type(clip_desc.source_out) == "number", "AddClipsToSequence: clip_desc.source_out must be integer")
-
-        local clip = Clip.create(clip_desc.name or "Timeline Clip", clip_desc.media_id, {
-            id = clip_id,
-            project_id = project_id,
-            track_id = placement.track_id,
-            owner_sequence_id = sequence_id,
-            master_clip_id = clip_desc.master_clip_id,
-            timeline_start = interval.start,
-            duration = clip_desc.duration,
-            source_in = clip_desc.source_in,
-            source_out = clip_desc.source_out,
-            enabled = true,
-            fps_numerator = clip_desc.fps_numerator,
-            fps_denominator = clip_desc.fps_denominator,
+        local clip_id = d.clip_id or uuid.generate()
+        Clip._create_v13_row({
+            id                    = clip_id,
+            project_id            = project_id,
+            owner_sequence_id     = sequence_id,
+            track_id              = p.track_id,
+            nested_sequence_id    = d.nested_sequence_id,
+            name                  = d.name or "Timeline Clip",
+            timeline_start_frame  = interval.start_frame,
+            duration_frames       = d.duration,
+            source_in_frame       = d.source_in,
+            source_out_frame      = d.source_out,
+            master_layer_track_id = d.master_layer_track_id,  -- nullable
+            fps_mismatch_policy   = d.fps_mismatch_policy,
+            enabled               = (d.enabled ~= false),
+            volume                = d.volume or 1.0,
+            mark_in_frame         = d.mark_in_frame,
+            mark_out_frame        = d.mark_out_frame,
+            playhead_frame        = d.playhead_frame or 0,
         })
-
-        table.insert(mutations, clip_mutator.plan_insert(clip))
-        table.insert(created_clips, {
+        created[#created + 1] = {
             clip_id = clip_id,
-            clip = clip,
-            group = interval.group,
-            role = clip_desc.role,
-            master_clip_id = clip_desc.master_clip_id,
-        })
+            group   = interval.group,
+            role    = d.role,  -- "video" / "audio" — used for link_group role
+        }
     end
-
-    return created_clips, mutations, nil
+    return created
 end
 
---- Phase 4: Link clips within each group
--- @param db database connection
--- @param created_clips array from place_clips
--- @param groups original groups array
--- @return link_group_ids array
-local function link_groups(db, created_clips, groups)
-    local link_group_ids = {}
-
-    -- Group clips by their source group
+-- Phase 4: link clips within each group (clip_link.create_link_group
+-- requires ≥2 members; single-clip groups are left unlinked).
+local function link_groups(created)
     local clips_by_group = {}
-    for _, created in ipairs(created_clips) do
-        local group = created.group
-        clips_by_group[group] = clips_by_group[group] or {}
-        table.insert(clips_by_group[group], {
-            clip_id = created.clip_id,
-            role = created.role,
+    for _, c in ipairs(created) do
+        clips_by_group[c.group] = clips_by_group[c.group] or {}
+        clips_by_group[c.group][#clips_by_group[c.group] + 1] = {
+            clip_id     = c.clip_id,
+            role        = c.role or "video",
             time_offset = 0,
-        })
+        }
     end
-
-    -- Create link groups for groups with 2+ clips
-    for _, group_clips in pairs(clips_by_group) do
-        if #group_clips >= 2 then
-            local link_id, err = clip_link.create_link_group(group_clips, db)
-            if link_id then
-                table.insert(link_group_ids, link_id)
-            else
-                log.warn("Failed to create link group: %s", tostring(err))
-            end
+    local link_group_ids = {}
+    for _, members in pairs(clips_by_group) do
+        if #members >= 2 then
+            local id, err = clip_link.create_link_group(members)
+            assert(id, string.format(
+                "AddClipsToSequence: link group creation failed: %s",
+                tostring(err)))
+            link_group_ids[#link_group_ids + 1] = id
         end
     end
-
     return link_group_ids
 end
 
-function M.register(command_executors, command_undoers, db, set_last_error)
+function M.execute(args)
+    assert(type(args) == "table", "AddClipsToSequence.execute: args must be table")
+    assert(args.sequence_id and args.sequence_id ~= "",
+        "AddClipsToSequence: sequence_id required (rule 2.29)")
+    assert(args.project_id and args.project_id ~= "",
+        "AddClipsToSequence: project_id required")
+    assert(type(args.position) == "number" and args.position >= 0,
+        "AddClipsToSequence: position must be a non-negative integer frame")
+    assert(type(args.groups) == "table" and #args.groups > 0,
+        "AddClipsToSequence: groups must be a non-empty array")
+
+    local edit_type   = args.edit_type
+    assert(edit_type == "insert" or edit_type == "overwrite", string.format(
+        "AddClipsToSequence: edit_type must be 'insert' or 'overwrite'; got %s",
+        tostring(edit_type)))
+    local arrangement = args.arrangement or "serial"
+    assert(arrangement == "serial" or arrangement == "stacked", string.format(
+        "AddClipsToSequence: arrangement must be 'serial' or 'stacked'; got %s",
+        tostring(arrangement)))
+
+    local owner_seq = Sequence.find(args.sequence_id)
+    assert(owner_seq, string.format(
+        "AddClipsToSequence: sequence %s not found", args.sequence_id))
+    assert(owner_seq.kind == "nested", string.format(
+        "AddClipsToSequence: sequence %s has kind='%s' (expected 'nested') — INV-2",
+        args.sequence_id, tostring(owner_seq.kind)))
+
+    local total_duration, track_map =
+        compute_space_needs(args.groups, arrangement, args.position)
+
+    assert(database.savepoint(SAVEPOINT), "AddClipsToSequence: savepoint failed")
+    local result = {}
+    local ok, err = pcall(function()
+        local carve = carve_space(edit_type, args.sequence_id, owner_seq,
+            args.position, total_duration, track_map)
+        local created = place_clips(track_map, args.project_id, args.sequence_id)
+        local link_group_ids = link_groups(created)
+
+        result.created          = created
+        result.carve            = carve
+        result.link_group_ids   = link_group_ids
+        result.total_duration   = total_duration
+    end)
+    if not ok then
+        database.rollback_to_savepoint(SAVEPOINT)
+        database.release_savepoint(SAVEPOINT)
+        error(err, 0)
+    end
+    assert(database.release_savepoint(SAVEPOINT),
+        "AddClipsToSequence: release savepoint failed")
+
+    log.event("AddClipsToSequence: %d group(s), %d clip(s), %d link group(s) at frame %d (%s, %s)",
+        #args.groups, #result.created, #result.link_group_ids,
+        args.position, edit_type, arrangement)
+
+    return {
+        sequence_id      = args.sequence_id,
+        position         = args.position,
+        total_duration   = total_duration,
+        created_clip_ids = (function()
+            local t = {}
+            for _, c in ipairs(result.created) do t[#t+1] = c.clip_id end
+            return t
+        end)(),
+        link_group_ids   = result.link_group_ids,
+        carve            = result.carve,  -- {rippled, occluded}
+    }
+end
+
+function M.register(command_executors, command_undoers, _db, set_last_error)
     command_executors["AddClipsToSequence"] = function(command)
         local args = command:get_all_parameters()
-        local this_func_label = "AddClipsToSequence"
-
-        -- Validate inputs
-        local groups = assert(args.groups, this_func_label .. ": groups required")
-        assert(#groups > 0, this_func_label .. ": groups must not be empty")
-
-        -- Validate all coordinate fields are integers
-        for _, group in ipairs(groups) do
-            assert(type(group.duration) == "number", this_func_label .. ": group.duration must be integer")
-            for _, clip_desc in ipairs(group.clips or {}) do
-                assert(type(clip_desc.source_in) == "number", this_func_label .. ": clip_desc.source_in must be integer")
-                assert(type(clip_desc.source_out) == "number", this_func_label .. ": clip_desc.source_out must be integer")
-                assert(type(clip_desc.duration) == "number", this_func_label .. ": clip_desc.duration must be integer")
-            end
+        local ok, result_or_err = pcall(M.execute, args)
+        if not ok then
+            set_last_error("AddClipsToSequence: " .. tostring(result_or_err))
+            return false, tostring(result_or_err)
         end
-
-        local position = args.position
-        assert(type(position) == "number", this_func_label .. ": position must be integer frames")
-
-        local sequence_id = assert(args.sequence_id, this_func_label .. ": sequence_id required")
-        local project_id = assert(args.project_id or command.project_id, this_func_label .. ": project_id required")
-        local edit_type = assert(args.edit_type, this_func_label .. ": edit_type required")
-        assert(edit_type == "insert" or edit_type == "overwrite", this_func_label .. ": edit_type must be insert or overwrite")
-
-        local arrangement = args.arrangement or "serial"
-        assert(arrangement == "serial" or arrangement == "stacked", this_func_label .. ": arrangement must be serial or stacked")
-
-        command:set_parameter("project_id", project_id)
-        command.project_id = project_id
-
-        -- Reuse clip IDs from previous execution (for redo)
-        local redo_clip_ids = args.created_clip_ids
-
-        -- Phase 1: Compute space needs
-        local total_duration, track_map = compute_space_needs(groups, arrangement, position)
-
-        -- Phase 2: Carve space
-        local carve_mutations, carve_err = carve_space(db, edit_type, sequence_id, position, total_duration, track_map)
-        if not carve_mutations then
-            set_last_error(carve_err)
-            return false, carve_err
-        end
-
-        -- Phase 3: Place clips
-        local created_clips, place_mutations, place_err = place_clips(db, track_map, project_id, sequence_id, redo_clip_ids)
-        if place_err then
-            set_last_error(place_err)
-            return false, place_err
-        end
-
-        -- Combine all mutations
-        local all_mutations = {}
-        for _, mut in ipairs(carve_mutations) do
-            table.insert(all_mutations, mut)
-        end
-        for _, mut in ipairs(place_mutations) do
-            table.insert(all_mutations, mut)
-        end
-
-        -- Apply all mutations
-        local ok_apply, apply_err = command_helper.apply_mutations(db, all_mutations)
-        if not ok_apply then
-            local msg = this_func_label .. ": failed to apply mutations: " .. tostring(apply_err)
-            set_last_error(msg)
-            return false, msg
-        end
-
-        -- Populate __timeline_mutations for UI cache updates
-        populate_timeline_mutations(command, sequence_id, all_mutations)
-
-        -- Phase 4: Link groups
-        local link_group_ids = link_groups(db, created_clips, groups)
-
-        -- Phase 5: Copy properties from source stream clips
-        -- IS-a refactor: master_clip_id is now a sequence ID. To copy properties,
-        -- we must find the source stream clip (video or audio) inside that sequence.
-        -- NSF: Assert if the stream clip doesn't exist - this indicates a malformed masterclip.
-        for _, created in ipairs(created_clips) do
-            if created.master_clip_id and created.master_clip_id ~= "" then
-                -- Find source stream clip in the masterclip sequence
-                local source_clip_id = find_source_stream_clip(db, created.master_clip_id, created.role)
-                -- NSF: If we're creating a clip of this role, the masterclip MUST have a stream of that role
-                assert(source_clip_id, string.format(
-                    "AddClipsToSequence: masterclip %s has no %s stream clip - malformed masterclip",
-                    created.master_clip_id, created.role))
-
-                local copied_props = command_helper.ensure_copied_properties(command, source_clip_id)
-                if #copied_props > 0 then
-                    command_helper.delete_properties_for_clip(created.clip_id)
-                    local props_ok = command_helper.insert_properties_for_clip(created.clip_id, copied_props)
-                    assert(props_ok, string.format(
-                        "AddClipsToSequence: failed to copy properties from source_clip_id=%s to clip_id=%s",
-                        source_clip_id, created.clip_id))
-                end
-            end
-        end
-
-        -- Store for undo
-        command:set_parameter("executed_mutations", all_mutations)
-        local clip_ids = {}
-        for _, created in ipairs(created_clips) do
-            table.insert(clip_ids, created.clip_id)
-        end
-        command:set_parameter("created_clip_ids", clip_ids)
-        command:set_parameter("created_link_group_ids", link_group_ids)
-
-        -- Advance playhead to end of clips if requested
-        if args.advance_playhead then
-            local new_playhead = position + total_duration
-
-            -- Persist to model + emit signal (same pattern as GoToStart/GoToEnd)
-            local Sequence = require("models.sequence")
-            local sequence = Sequence.load(args.sequence_id)
-            assert(sequence, "AddClipsToSequence: sequence not found: " .. tostring(args.sequence_id))
-            sequence.playhead_position = new_playhead
-            assert(sequence:save(), "AddClipsToSequence: failed to save playhead")
-            local Signals = require("core.signals")
-            Signals.emit("playhead_changed", args.sequence_id, new_playhead)
-
-            -- Update in-memory viewport state + surface if off-screen
-            local ok_ts, timeline_state = pcall(require, 'ui.timeline.timeline_state')
-            if ok_ts and timeline_state then
-                if timeline_state.set_playhead_position then
-                    timeline_state.set_playhead_position(new_playhead)
-                end
-                if timeline_state.surface_playhead then
-                    timeline_state.surface_playhead()
-                end
-            end
-            command.playhead_value_post = new_playhead
-        end
-
-        log.event("Added %d clips at frame %d (%s, %s)",
-            #created_clips, position, edit_type, arrangement)
-
-        return true
+        command:set_parameter("created_clip_ids",       result_or_err.created_clip_ids)
+        command:set_parameter("created_link_group_ids", result_or_err.link_group_ids)
+        local Signals = require("core.signals")
+        Signals.emit("sequence_content_changed", args.sequence_id)
+        return true, {
+            created_clip_ids = result_or_err.created_clip_ids,
+            link_group_ids   = result_or_err.link_group_ids,
+        }
     end
 
-    command_undoers["AddClipsToSequence"] = function(command)
-        local args = command:get_all_parameters()
-        local this_func_label = "UndoAddClipsToSequence"
-
-        local executed_mutations = args.executed_mutations or {}
-        local link_group_ids = args.created_link_group_ids or {}
-        local sequence_id = args.sequence_id
-
-        if #executed_mutations == 0 and #link_group_ids == 0 then
-            return true  -- Nothing to undo
-        end
-
-        -- Delete link groups first
-        for _, link_id in ipairs(link_group_ids) do
-            local query = db:prepare("DELETE FROM clip_links WHERE link_group_id = ?")
-            if query then
-                query:bind_value(1, link_id)
-                query:exec()
-                query:finalize()
-            end
-        end
-
-        -- Revert mutations
-        local ok, err = command_helper.revert_mutations(db, executed_mutations, command, sequence_id)
-        assert(ok, this_func_label .. ": failed to revert mutations: " .. tostring(err))
-
-        log.event("Undo: reverted all changes")
-        return true
+    command_undoers["AddClipsToSequence"] = function(_command)
+        -- TODO(T046 full): full undo. Requires:
+        --   1. Drop the new link_links rows (cascade via clip_links FK on
+        --      DELETE — handled by step 2).
+        --   2. Delete every newly-created clip via Clip.delete_one.
+        --   3. Restore the carve captures (un-ripple insert-mode tracks;
+        --      restore deleted/trimmed/split-new clips for overwrite via
+        --      Clip.restore_v13_state on captured pre-state).
+        -- Deferred until the wider T046 sweep so the carve-undo logic
+        -- can be unified with RippleDelete and the future ripple_edit
+        -- migration.
+        error("AddClipsToSequence: undo not yet implemented (T046 full sweep)", 0)
     end
-
-    command_executors["UndoAddClipsToSequence"] = command_undoers["AddClipsToSequence"]
 
     return {
         executor = command_executors["AddClipsToSequence"],
-        undoer = command_undoers["AddClipsToSequence"],
-        spec = SPEC,
+        undoer   = command_undoers["AddClipsToSequence"],
+        spec     = SPEC,
     }
 end
 

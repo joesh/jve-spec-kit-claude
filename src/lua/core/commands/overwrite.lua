@@ -21,148 +21,17 @@
 
 local M = {}
 
-local uuid          = require("uuid")
 local Clip          = require("models.clip")
 local place_shared  = require("core.commands._place_shared")
 local log           = require("core.logger").for_area("commands")
 
--- Plan + apply occlusion against one target track. Returns the capture
--- used by undo (deleted rows' full prior state, trimmed rows' prior bounds,
--- newly-written right-half ids from straddle splits).
+-- Plan + apply occlusion against one target track. Delegates to the
+-- shared place_shared.occlude_track (used by both Overwrite and
+-- AddClipsToSequence so the four-case occlusion logic lives in one place).
 local function occlude_track(track_id, owner_seq, n_start, n_end)
-    local overlapping = Clip.find_overlapping_on_track(track_id, n_start, n_end)
-
-    local deleted_rows  = {}
-    local trimmed       = {}
-    local split_new_ids = {}
-
-    local Sequence = require("models.sequence")
-
-    for _, e in ipairs(overlapping) do
-        local e_start = e.timeline_start_frame
-        local e_end   = e_start + e.duration_frames
-
-        -- Need nested's fps to convert owner-frame trim deltas to source
-        -- frames under E's own fps_mismatch_policy. Load per clip.
-        local nested = Sequence.find(e.nested_sequence_id)
-        assert(nested, string.format(
-            "Overwrite: nested %s of clip %s not found",
-            tostring(e.nested_sequence_id), tostring(e.id)))
-
-        if n_start <= e_start and n_end >= e_end then
-            -- (a) fully covered → DELETE
-            deleted_rows[#deleted_rows + 1] = e
-            Clip.delete_by_ids({ e.id })
-
-        elseif n_start > e_start and n_end >= e_end then
-            -- (b) tail-overlap on E: trim E to end at n_start.
-            local new_duration = n_start - e_start
-            local trim_delta   = e.duration_frames - new_duration
-            local source_delta = Clip.owner_delta_to_source(
-                e.fps_mismatch_policy, trim_delta,
-                owner_seq.fps_numerator, owner_seq.fps_denominator,
-                nested.fps_numerator,    nested.fps_denominator)
-            trimmed[#trimmed + 1] = {
-                id = e.id,
-                prior = {
-                    timeline_start_frame = e.timeline_start_frame,
-                    duration_frames      = e.duration_frames,
-                    source_in_frame      = e.source_in_frame,
-                    source_out_frame     = e.source_out_frame,
-                },
-            }
-            Clip.update_bounds(e.id,
-                e.timeline_start_frame,
-                new_duration,
-                e.source_in_frame,
-                e.source_out_frame - source_delta)
-
-        elseif n_start <= e_start and n_end < e_end then
-            -- (c) head-overlap on E: trim E to start at n_end.
-            local shift        = n_end - e_start
-            local new_duration = e.duration_frames - shift
-            local source_delta = Clip.owner_delta_to_source(
-                e.fps_mismatch_policy, shift,
-                owner_seq.fps_numerator, owner_seq.fps_denominator,
-                nested.fps_numerator,    nested.fps_denominator)
-            trimmed[#trimmed + 1] = {
-                id = e.id,
-                prior = {
-                    timeline_start_frame = e.timeline_start_frame,
-                    duration_frames      = e.duration_frames,
-                    source_in_frame      = e.source_in_frame,
-                    source_out_frame     = e.source_out_frame,
-                },
-            }
-            Clip.update_bounds(e.id,
-                n_end,
-                new_duration,
-                e.source_in_frame + source_delta,
-                e.source_out_frame)
-
-        elseif n_start > e_start and n_end < e_end then
-            -- (d) straddle: shrink E to [e_start, n_start), new right-half
-            -- at [n_end, e_end) with source bounds split under E's policy.
-            local left_duration = n_start - e_start
-            local right_duration = e_end - n_end
-            local left_trim_delta = e.duration_frames - left_duration
-            local left_source_delta = Clip.owner_delta_to_source(
-                e.fps_mismatch_policy, left_trim_delta,
-                owner_seq.fps_numerator, owner_seq.fps_denominator,
-                nested.fps_numerator,    nested.fps_denominator)
-            local right_owner_shift = n_end - e_start
-            local right_source_delta = Clip.owner_delta_to_source(
-                e.fps_mismatch_policy, right_owner_shift,
-                owner_seq.fps_numerator, owner_seq.fps_denominator,
-                nested.fps_numerator,    nested.fps_denominator)
-            trimmed[#trimmed + 1] = {
-                id = e.id,
-                prior = {
-                    timeline_start_frame = e.timeline_start_frame,
-                    duration_frames      = e.duration_frames,
-                    source_in_frame      = e.source_in_frame,
-                    source_out_frame     = e.source_out_frame,
-                },
-            }
-            Clip.update_bounds(e.id,
-                e.timeline_start_frame,
-                left_duration,
-                e.source_in_frame,
-                e.source_out_frame - left_source_delta)
-            local right_id = Clip.create({
-                id                    = uuid.generate(),
-                project_id            = e.project_id,
-                owner_sequence_id     = e.owner_sequence_id,
-                track_id              = e.track_id,
-                nested_sequence_id    = e.nested_sequence_id,
-                name                  = e.name,
-                timeline_start_frame  = n_end,
-                duration_frames       = right_duration,
-                source_in_frame       = e.source_in_frame + right_source_delta,
-                source_out_frame      = e.source_out_frame,
-                master_layer_track_id = e.master_layer_track_id,
-                fps_mismatch_policy   = e.fps_mismatch_policy,
-                enabled               = e.enabled,
-                volume                = e.volume,
-                mark_in_frame         = e.mark_in_frame,
-                mark_out_frame        = e.mark_out_frame,
-                playhead_frame        = e.playhead_frame,
-            })
-            split_new_ids[#split_new_ids + 1] = right_id
-
-        else
-            error(string.format(
-                "Overwrite: unreachable occlusion case — clip=%s E=[%d,%d) "
-                .. "N=[%d,%d)", e.id, e_start, e_end, n_start, n_end))
-        end
-    end
-
-    return {
-        deleted       = deleted_rows,
-        trimmed       = trimmed,
-        split_new_ids = split_new_ids,
-    }
+    return place_shared.occlude_track(track_id, owner_seq, n_start, n_end)
 end
+
 
 function M.execute(args)
     local plan = place_shared.plan_placement(args)

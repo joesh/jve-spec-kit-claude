@@ -130,7 +130,7 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 
 - [x] **T040 [P]** Rewrite `src/lua/core/commands/insert.lua` — no flattening; insert 1 or 2 `clips` rows with `nested_sequence_id` = the master; cycle check; link-group creation; ripple on target tracks.
 - [x] **T041 [P]** Rewrite `src/lua/core/commands/overwrite.lua` — same shape as Insert, overlap removed/trimmed.
-- [ ] **T042 [P]** Rewrite `src/lua/core/commands/add_clips_to_sequence.lua` — emit clip rows referencing sequences only; no `media_id`/`clip_kind` references.
+- [x] **T042 [P]** Rewrite `src/lua/core/commands/add_clips_to_sequence.lua` — emit clip rows referencing sequences only; no `media_id`/`clip_kind` references.
 - [x] **T043 [P]** Rewrite `src/lua/core/commands/trim_head.lua` and `trim_tail.lua` — units are nested sequence's timebase. (Two files, still [P] with each other.)
 - [x] **T044 [P]** Rewrite `src/lua/core/commands/slip.lua`, `slide.lua`, `roll.lua`. (Three files, [P].)
 - [x] **T045 [P]** Rewrite `src/lua/core/commands/split_clip.lua` — single-clip Split; override copy to both halves; new link_group for each half. Precondition: T036 passes.
