@@ -292,9 +292,29 @@ function M.execute(args)
     }
 end
 
-function M.undo(_capture)
-    error("CollapseAudio.undo: not yet implemented (T056g/T056e cover the "
-        .. "roundtrip cases that exercise undo; lands as a follow-up).")
+function M.undo(capture)
+    assert(type(capture) == "table",
+        "CollapseAudio.undo: capture table required")
+
+    -- Order:
+    --   1. DELETE the composite clip — cascades clip_links + projected
+    --      clip_channel_override rows for the composite.
+    --   2. Restore each captured selected clip via Clip.restore_v13_state
+    --      — re-INSERTs row + overrides + link_links entry. The
+    --      previously-existing link group survives (the V clip and any
+    --      unselected siblings kept their entries through Collapse), so
+    --      restored clips re-attach to the same group via their
+    --      captured link entry.
+    if capture.composite_clip_id and capture.composite_clip_id ~= "" then
+        Clip.delete_by_ids({ capture.composite_clip_id })
+    end
+
+    for _, sc in ipairs(capture.source_captures or {}) do
+        Clip.restore_v13_state(sc)
+    end
+
+    local Signals = require("core.signals")
+    Signals.emit("sequence_content_changed", capture.sequence_id)
 end
 
 local SPEC = {
@@ -319,11 +339,18 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local cap = capture_or_err
         command:set_parameter("composite_clip_id", cap.composite_clip_id)
         command:set_parameter("link_group_id",     cap.link_group_id)
+        command:set_parameter("source_captures",   cap.source_captures)
         return true
     end
 
-    command_undoers["CollapseAudio"] = function(_command)
-        error("CollapseAudio undo: pending follow-up.")
+    command_undoers["CollapseAudio"] = function(command)
+        local args = command:get_all_parameters()
+        M.undo({
+            sequence_id        = args.sequence_id,
+            composite_clip_id  = args.composite_clip_id,
+            source_captures    = args.source_captures or {},
+        })
+        return true
     end
 
     return {

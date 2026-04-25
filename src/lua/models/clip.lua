@@ -1678,6 +1678,7 @@ function M.restore_v13_state(state)
         source_in_frame       = r.source_in_frame,
         source_out_frame      = r.source_out_frame,
         master_layer_track_id = r.master_layer_track_id,
+        master_audio_track_id = r.master_audio_track_id,
         fps_mismatch_policy   = r.fps_mismatch_policy,
         enabled               = r.enabled,
         volume                = r.volume,
