@@ -33,17 +33,6 @@ function M.generate_id()
     return uuid.generate()
 end
 
--- Helper: Validate integer frame value
-local function validate_frame(val, field_name)
-    if val == nil then
-        error(string.format("Clip: %s is required", field_name))
-    end
-    if type(val) ~= "number" then
-        error(string.format("Clip: %s must be an integer (got %s)", field_name, type(val)))
-    end
-    return val
-end
-
 -- Forward-declare so load_masterclip_stream can call it
 local load_internal
 
@@ -233,102 +222,29 @@ end
 --  2. Table form (013, direct DB insert): Clip.create(fields) → inserts a V9
 --     clips row and returns its id as a string. Enforces INV-2 via the
 --     schema trigger + INV-4 via model-layer check.
-function M.create(arg1, media_id_or_nil, opts_or_nil)
-    if type(arg1) == "table" and arg1.nested_sequence_id ~= nil then
-        return M._create_v13_row(arg1)
-    end
-    -- Legacy positional path.
-    local name = arg1
-    local media_id = media_id_or_nil
-    local opts = opts_or_nil or {}
-
-    local now = os.time()
-
-    -- FAIL FAST: fps is required - no silent fallbacks that hide bugs
-    assert(opts.fps_numerator, "Clip.create: fps_numerator is required")
-    assert(opts.fps_denominator, "Clip.create: fps_denominator is required")
-    local fps_numerator = opts.fps_numerator
-    local fps_denominator = opts.fps_denominator
-
-    -- FAIL FAST: Check for legacy keys
-    if opts.start_value or opts.duration_value or opts.source_in_value or opts.source_out_value then
-        error("Clip.create: Legacy field names (start_value, etc.) are NOT allowed. Use Rational objects.")
-    end
-
-    local clip_kind = opts.clip_kind or "timeline"
-
-    -- FAIL FAST: timeline clips require structural fields
-    if clip_kind == "timeline" then
-        assert(opts.track_id and opts.track_id ~= "",
-            "Clip.create: track_id is required for timeline clips")
-        assert(opts.owner_sequence_id and opts.owner_sequence_id ~= "",
-            "Clip.create: owner_sequence_id is required for timeline clips")
-        -- Auto-resolve master_clip_id from media_id if not provided
-        if not opts.master_clip_id or opts.master_clip_id == "" then
-            assert(media_id and media_id ~= "",
-                "Clip.create: media_id is required to auto-resolve master_clip_id")
-            assert(opts.project_id and opts.project_id ~= "",
-                "Clip.create: project_id is required to auto-resolve master_clip_id")
-            local Sequence = require("models.sequence")
-            opts.master_clip_id = Sequence.ensure_masterclip(media_id, opts.project_id, {
-                bin_id = opts.bin_id,
-            })
-        end
-    end
-
-    local clip = {
-        id = opts.id or uuid.generate(),
-        project_id = opts.project_id,
-        clip_kind = clip_kind,
-        name = name,
-        track_id = opts.track_id,
-        media_id = media_id,
-        master_clip_id = opts.master_clip_id,
-        owner_sequence_id = opts.owner_sequence_id,
-        created_at = opts.created_at or now,
-        modified_at = opts.modified_at or now,
-        
-        -- Integer frame coordinates (fps is metadata in clip.rate)
-        timeline_start = validate_frame(opts.timeline_start, "timeline_start"),
-        duration = validate_frame(opts.duration, "duration"),
-        source_in = validate_frame(opts.source_in ~= nil and opts.source_in or 0, "source_in"),
-        source_out = validate_frame(opts.source_out ~= nil and opts.source_out or opts.duration, "source_out"),
-        
-        rate = {
-            fps_numerator = fps_numerator,
-            fps_denominator = fps_denominator
-        },
-        
-        enabled = opts.enabled ~= false,
-        offline = false,  -- transient: recomputed by media_status registry
-
-        -- Audio mixer state (clip gain, applied before track fader)
-        -- Domain default, not a fallback: new clips start at unity gain (0dB).
-        -- DRP import passes explicit volume from parsed data.
-        volume = opts.volume or 1.0,
-
-        -- Source viewer state (nullable marks + playhead)
-        mark_in = opts.mark_in,           -- nil = no mark
-        mark_out = opts.mark_out,         -- nil = no mark
-        playhead_frame = (opts.playhead_frame == nil) and 0 or opts.playhead_frame,
-    }
-
-    -- Validate mark fields: nil is valid (no mark), but non-nil must be integer
-    if clip.mark_in ~= nil then
-        assert(type(clip.mark_in) == "number",
-            string.format("Clip.create: mark_in must be integer or nil (got %s)", type(clip.mark_in)))
-    end
-    if clip.mark_out ~= nil then
-        assert(type(clip.mark_out) == "number",
-            string.format("Clip.create: mark_out must be integer or nil (got %s)", type(clip.mark_out)))
-    end
-    assert(type(clip.playhead_frame) == "number",
-        string.format("Clip.create: playhead_frame must be integer (got %s)", type(clip.playhead_frame)))
-
-    clip.name = derive_display_name(clip.id, clip.name)
-
-    setmetatable(clip, {__index = M})
-    return clip
+--- Create a clip row (V13). Args: a single table with the V13 fields:
+--- id (optional), project_id, owner_sequence_id, track_id,
+--- nested_sequence_id, name, timeline_start_frame, duration_frames,
+--- source_in_frame, source_out_frame, master_layer_track_id (nullable),
+--- fps_mismatch_policy ('resample'|'passthrough'), enabled, volume,
+--- mark_in_frame (nullable), mark_out_frame (nullable), playhead_frame.
+--- Returns the clip id (string). INV-2/INV-4 enforced via the model
+--- helpers + DB triggers.
+---
+--- The legacy positional form (name, media_id, opts) and its V8 column
+--- writes (clip_kind/master_clip_id/media_id/offline) were deleted per
+--- FR-018. Callers that need a master sequence call Sequence.ensure_master
+--- (which writes media_refs, not clips).
+function M.create(fields)
+    assert(type(fields) == "table",
+        "Clip.create: fields table required (V13 table form). Legacy "
+        .. "positional form was removed under FR-018. To create a master "
+        .. "from a media file, use Sequence.ensure_master.")
+    assert(fields.nested_sequence_id ~= nil,
+        "Clip.create: 'nested_sequence_id' is required (V13). Old callers "
+        .. "passing 'media_id' / 'master_clip_id' / 'clip_kind' must "
+        .. "migrate to the V13 model.")
+    return M._create_v13_row(fields)
 end
 
 -- Load clip from database

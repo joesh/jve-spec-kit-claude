@@ -76,10 +76,12 @@ function M.get_template_path(template)
     })
     assert(project:save(), "project_templates: failed to save template project")
 
+    -- The user's edit timeline is kind='nested' (it holds clips referencing
+    -- other sequences). Master sequences are created later by import.
     local sequence = Sequence.create("Sequence 1", project.id,
         { fps_numerator = template.fps_num, fps_denominator = template.fps_den },
         template.width, template.height,
-        { audio_rate = template.audio_rate })
+        { kind = "nested", audio_rate = template.audio_rate })
     assert(sequence:save(), "project_templates: failed to save template sequence")
 
     for i = 1, 3 do

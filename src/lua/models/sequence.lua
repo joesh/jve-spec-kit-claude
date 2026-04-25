@@ -536,19 +536,51 @@ end
 -- @param opts table: Optional replay IDs for redo determinism:
 --   id, video_track_id, video_clip_id, audio_track_ids, audio_clip_ids
 -- @return string: masterclip sequence_id
-function Sequence.ensure_masterclip(media_id, project_id, opts)
+--- V13 master-sequence creation. Replaces ensure_masterclip.
+---
+--- Idempotent: if a kind='master' sequence already references this media_id
+--- via any of its media_refs, returns its id. Otherwise builds one:
+---   * sequences row with kind='master', timebase from media.fps,
+---     audio_rate from media.audio_sample_rate (or opts.sample_rate).
+---   * V1 track + V media_ref pointing at the file (source frames 0..duration).
+---   * One A track per media.audio_channels, each with a media_ref over
+---     samples 0..duration_samples.
+---   * sequences.video_start_tc_frame / audio_start_tc_samples populated
+---     from media TC (FR-017 default-derivation).
+---   * sequences.default_video_layer_track_id = the V1 track when video
+---     present (INV-8).
+---
+--- Per-track unit convention (matching the established CT-R5/CT-R6 fixtures
+--- and pre-013 ensure_masterclip): video media_refs measure timeline_start
+--- and source in master.fps frames; audio media_refs measure timeline_start
+--- and source in samples at the file's audio_sample_rate. The resolver
+--- compares within-track and never crosses tracks in a single arithmetic
+--- expression, so the per-track unit is internally consistent.
+---
+--- Args:
+---   media_id     string  required
+---   project_id   string  required
+---   opts:
+---     id                  — optional sequence id (deterministic for replay).
+---     bin_id              — optional bin to add the master to.
+---     sample_rate         — required when media.audio_sample_rate is missing
+---                           AND the media has audio (rule 2.13: no fallback).
+---     video_track_id      — optional pre-chosen V track id.
+---     video_media_ref_id  — optional pre-chosen V media_ref id (replay).
+---     audio_track_ids     — optional list, indexed by channel (1-based).
+---     audio_media_ref_ids — optional list of media_ref ids per channel.
+---
+--- Returns: master sequence id (string).
+function Sequence.ensure_master(media_id, project_id, opts)
     assert(media_id and media_id ~= "",
-        "Sequence.ensure_masterclip: media_id is required")
+        "Sequence.ensure_master: media_id is required")
     assert(project_id and project_id ~= "",
-        "Sequence.ensure_masterclip: project_id is required")
+        "Sequence.ensure_master: project_id is required")
     opts = opts or {}
 
-    local conn = resolve_db()
-
-    -- LOOKUP PHASE: find existing masterclip by media_id
-    local existing_id = Sequence._find_masterclip_for_media(conn, media_id)
+    -- LOOKUP: existing master that already references this media_id.
+    local existing_id = Sequence.find_master_for_media(media_id)
     if existing_id then
-        -- Add to bin if requested (idempotent — INSERT OR IGNORE)
         if opts.bin_id then
             local tag_service = require("core.tag_service")
             tag_service.add_to_bin(project_id, {existing_id}, opts.bin_id, "master_clip")
@@ -556,14 +588,13 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
         return existing_id
     end
 
-    -- CREATE PHASE: build masterclip from Media metadata
-    local Media = require("models.media")
-    local Track = require("models.track")
-    local Clip = require("models.clip")
+    local Media    = require("models.media")
+    local Track    = require("models.track")
+    local MediaRef = require("models.media_ref")
 
     local media = Media.load(media_id)
     assert(media, string.format(
-        "Sequence.ensure_masterclip: Media record not found for media_id=%s",
+        "Sequence.ensure_master: Media record not found for media_id=%s",
         tostring(media_id)))
 
     local fps_num = media.frame_rate.fps_numerator
@@ -571,118 +602,128 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
     local duration_frames = media.duration
     local has_video = media.width > 0
     local has_audio = media.audio_channels > 0
-    -- Sample rate comes from exactly one place: the media record's
-    -- audio_sample_rate column (populated by importers/EMP probe).
-    -- opts.sample_rate is an explicit override for synthetic callers
-    -- (tests, future re-rate flows). No fps_num cross-read, no 48000.
+
     local sample_rate = opts.sample_rate
     if not sample_rate and has_audio then
         sample_rate = media.audio_sample_rate
     end
     assert(not has_audio or (sample_rate and sample_rate > 0), string.format(
-        "Sequence.ensure_masterclip: media %s has audio but no sample rate "
-        .. "(audio_channels=%s, audio_sample_rate=%s, has_video=%s)",
+        "Sequence.ensure_master: media %s has audio but no sample_rate "
+        .. "(audio_channels=%s, audio_sample_rate=%s)",
         tostring(media_id), tostring(media.audio_channels),
-        tostring(media.audio_sample_rate), tostring(has_video)))
+        tostring(media.audio_sample_rate)))
+    -- Sequence.create requires opts.audio_rate > 0 even for video-only masters
+    -- (the field is on every sequence). Use a project-conventional placeholder
+    -- only when the media has no audio at all — the value is unused by the
+    -- resolver since no audio media_refs will be emitted.
+    local seq_audio_rate = sample_rate or 48000
 
-    -- Compute audio duration in samples from video frames
     local duration_samples = 0
     if has_audio and duration_frames > 0 then
         duration_samples = math.floor(
             duration_frames * sample_rate * fps_den / fps_num + 0.5)
     end
 
-    -- Sequence dimensions: use media dims if video, else 1920x1080
-    local width = has_video and media.width or 1920
+    local width  = has_video and media.width  or 1920
     local height = has_video and media.height or 1080
 
-    -- TC origin: extracted from file via EMP (import path) or from DRP metadata.
-    -- get_start_tc() auto-extracts from file if not already in metadata.
-    local start_tc_frame = media:get_start_tc()
-    assert(start_tc_frame ~= nil, string.format(
-        "Sequence.ensure_masterclip: media %s has no TC origin "
-        .. "(file offline with no TC metadata?)", tostring(media_id)))
-    -- start_tc_frame may be 0 (TC 00:00:00:00) — that's valid
+    -- TC origins (FR-017 defaults).
+    local video_start_tc_frame  = has_video and media:get_start_tc()       or nil
+    local audio_start_tc_samples = has_audio and media:get_audio_start_tc() or nil
+    if has_video then
+        assert(video_start_tc_frame ~= nil, string.format(
+            "Sequence.ensure_master: media %s has no video TC origin",
+            tostring(media_id)))
+    end
+    if has_audio then
+        assert(audio_start_tc_samples ~= nil, string.format(
+            "Sequence.ensure_master: media %s has no audio TC origin",
+            tostring(media_id)))
+    end
 
-    assert(media.name and media.name ~= "",
-        string.format("Sequence.ensure_masterclip: media has no name for media_id=%s", tostring(media_id)))
+    assert(media.name and media.name ~= "", string.format(
+        "Sequence.ensure_master: media has no name for media_id=%s",
+        tostring(media_id)))
+
+    -- Build the master sequence row. default_video_layer_track_id is set
+    -- AFTER the V track is created (INV-8 satisfied below).
     local seq = Sequence.create(media.name, project_id,
         {fps_numerator = fps_num, fps_denominator = fps_den},
         width, height, {
-            id = opts.id,
-            kind = "masterclip",
-            audio_rate = sample_rate,
-            start_timecode_frame = start_tc_frame,
-            playhead_frame = start_tc_frame,
+            id                       = opts.id,
+            kind                     = "master",
+            audio_rate               = seq_audio_rate,
+            start_timecode_frame     = video_start_tc_frame or 0,
+            playhead_frame           = video_start_tc_frame or 0,
+            video_start_tc_frame     = video_start_tc_frame,
+            audio_start_tc_samples   = audio_start_tc_samples,
         })
     assert(seq:save(), string.format(
-        "Sequence.ensure_masterclip: failed to save masterclip sequence for media_id=%s",
+        "Sequence.ensure_master: failed to save master sequence for media_id=%s",
         tostring(media_id)))
 
-    -- Create video track + stream clip
+    local now = os.time()
+
     if has_video then
         local vtrack = Track.create_video("Video 1", seq.id, {
-            id = opts.video_track_id,
+            id    = opts.video_track_id,
             index = 1,
         })
-        assert(vtrack:save(), "Sequence.ensure_masterclip: failed to save video track")
+        assert(vtrack:save(), "Sequence.ensure_master: failed to save video track")
 
-        local vclip = Clip.create(media.name .. " (Video)", media_id, {
-            id = opts.video_clip_id,
-            project_id = project_id,
-            clip_kind = "master",
-            track_id = vtrack.id,
-            owner_sequence_id = seq.id,
-            timeline_start = start_tc_frame,
-            duration = duration_frames,
-            source_in = start_tc_frame,
-            source_out = start_tc_frame + duration_frames,
-            fps_numerator = fps_num,
-            fps_denominator = fps_den,
+        MediaRef.create({
+            id                   = opts.video_media_ref_id,
+            project_id           = project_id,
+            owner_sequence_id    = seq.id,
+            track_id             = vtrack.id,
+            media_id             = media_id,
+            source_in_frame      = 0,
+            source_out_frame     = duration_frames,
+            timeline_start_frame = 0,
+            duration_frames      = duration_frames,
+            enabled              = true,
+            volume               = 1.0,
+            playhead_frame       = 0,
+            created_at           = now,
+            modified_at          = now,
         })
-        assert(vclip:save({skip_occlusion = true}),
-            "Sequence.ensure_masterclip: failed to save video stream clip")
+
+        -- INV-8: master with at least one V track must have a non-NULL
+        -- default_video_layer_track_id.
+        Sequence.update(seq.id,
+            { default_video_layer_track_id = vtrack.id })
     end
 
-    -- Create audio tracks + stream clips
     if has_audio then
-        local replay_audio_track_ids = opts.audio_track_ids or {}
-        local replay_audio_clip_ids = opts.audio_clip_ids or {}
+        local replay_audio_track_ids    = opts.audio_track_ids     or {}
+        local replay_audio_media_ref_ids = opts.audio_media_ref_ids or {}
         for ch = 1, media.audio_channels do
             local atrack = Track.create_audio(
                 string.format("Audio %d", ch), seq.id, {
-                    id = replay_audio_track_ids[ch],
+                    id    = replay_audio_track_ids[ch],
                     index = ch,
                 })
-            assert(atrack:save(), "Sequence.ensure_masterclip: failed to save audio track")
+            assert(atrack:save(), "Sequence.ensure_master: failed to save audio track")
 
-            -- Audio source_in in absolute TC (samples).
-            -- Authoritative audio TC comes from media metadata (DRP MediaStartTime
-            -- converted to samples at audio rate) or extracted from file via EMP.
-            local audio_tc = media:get_audio_start_tc()
-            assert(audio_tc ~= nil, string.format(
-                "Sequence.ensure_masterclip: media %s has no audio TC origin",
-                tostring(media_id)))
-            local aclip = Clip.create(
-                string.format("%s (Audio %d)", media.name, ch), media_id, {
-                    id = replay_audio_clip_ids[ch],
-                    project_id = project_id,
-                    clip_kind = "master",
-                    track_id = atrack.id,
-                    owner_sequence_id = seq.id,
-                    timeline_start = start_tc_frame,
-                    duration = duration_frames,
-                    source_in = audio_tc,
-                    source_out = audio_tc + duration_samples,
-                    fps_numerator = sample_rate,
-                    fps_denominator = 1,
-                })
-            assert(aclip:save({skip_occlusion = true}),
-                "Sequence.ensure_masterclip: failed to save audio stream clip")
+            MediaRef.create({
+                id                   = replay_audio_media_ref_ids[ch],
+                project_id           = project_id,
+                owner_sequence_id    = seq.id,
+                track_id             = atrack.id,
+                media_id             = media_id,
+                source_in_frame      = 0,
+                source_out_frame     = duration_samples,
+                timeline_start_frame = 0,
+                duration_frames      = duration_samples,
+                enabled              = true,
+                volume               = 1.0,
+                playhead_frame       = 0,
+                created_at           = now,
+                modified_at          = now,
+            })
         end
     end
 
-    -- Add to bin if requested (idempotent — INSERT OR IGNORE)
     if opts.bin_id then
         local tag_service = require("core.tag_service")
         tag_service.add_to_bin(project_id, {seq.id}, opts.bin_id, "master_clip")
@@ -691,43 +732,34 @@ function Sequence.ensure_masterclip(media_id, project_id, opts)
     return seq.id
 end
 
---- Migrate a legacy masterclip from relative [0, duration) to absolute TC.
--- Called from Sequence.load() when start_timecode_frame > 0.
-
---- Find the masterclip sequence_id for a given media_id.
--- @param media_id string
--- @return string|nil masterclip sequence_id, or nil if none exists
-function Sequence.find_masterclip_for_media(media_id)
+--- Find the master sequence (kind='master') whose tracks include a
+--- media_ref pointing at the given media_id. Returns the sequence id, or
+--- nil if no master references this media yet.
+function Sequence.find_master_for_media(media_id)
     assert(media_id and media_id ~= "",
-        "Sequence.find_masterclip_for_media: media_id is required")
+        "Sequence.find_master_for_media: media_id is required")
     local conn = resolve_db()
-    return Sequence._find_masterclip_for_media(conn, media_id)
-end
-
---- Internal: find masterclip sequence_id for a media_id (caller provides conn).
--- @param conn database connection
--- @param media_id string
--- @return string|nil masterclip sequence_id, or nil if none exists
-function Sequence._find_masterclip_for_media(conn, media_id)
-    local stmt = assert(conn:prepare([[
+    local stmt = conn:prepare([[
         SELECT s.id FROM sequences s
-        JOIN tracks t ON t.sequence_id = s.id
-        JOIN clips c ON c.track_id = t.id
-        WHERE s.kind = 'masterclip' AND c.media_id = ? AND c.clip_kind = 'master'
+        JOIN media_refs mr ON mr.owner_sequence_id = s.id
+        WHERE s.kind = 'master' AND mr.media_id = ?
+        ORDER BY s.created_at ASC, s.id ASC
         LIMIT 1
-    ]]), "_find_masterclip_for_media: failed to prepare query")
+    ]])
+    assert(stmt, "Sequence.find_master_for_media: prepare failed")
     stmt:bind_value(1, media_id)
-    assert(stmt:exec(), string.format(
-        "_find_masterclip_for_media: query exec failed for media_id=%s",
-        tostring(media_id)))
-    if not stmt:next() then
-        stmt:finalize()
-        return nil
-    end
-    local id = stmt:value(0)
+    assert(stmt:exec(), "Sequence.find_master_for_media: exec failed")
+    local id
+    if stmt:next() then id = stmt:value(0) end
     stmt:finalize()
     return id
 end
+
+-- Sequence.ensure_masterclip / find_masterclip_for_media / _find_masterclip_for_media
+-- were V8-only paths that wrote sequences.kind='masterclip' (banned under V13)
+-- and clips with clip_kind='master'/media_id (columns dropped). Replaced by
+-- Sequence.ensure_master + Sequence.find_master_for_media above. FR-018: no
+-- back-compat — old callers must migrate, no shim.
 
 -- =============================================================================
 -- MASTERCLIP SEQUENCE METHODS (for kind="masterclip")

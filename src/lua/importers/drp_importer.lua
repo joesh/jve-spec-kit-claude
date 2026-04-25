@@ -2255,17 +2255,17 @@ local function apply_pool_master_clip_marks(pool_master_clips, media_by_path)
         local name_marks = marks_by_name[media.name]
         if not name_marks then goto next_media end
 
-        -- Find the masterclip sequence for this media (via Sequence model)
-        local mc_seq_id = Sequence.find_masterclip_for_media(media.id)
+        -- Find the master sequence for this media (V13).
+        local mc_seq_id = Sequence.find_master_for_media(media.id)
         if not mc_seq_id then
-            log.warn("apply_marks: no masterclip sequence for media '%s' (id=%s)",
+            log.warn("apply_marks: no master sequence for media '%s' (id=%s)",
                 media.name, media.id)
             goto next_media
         end
 
         local mc_seq = Sequence.load(mc_seq_id)
         assert(mc_seq, string.format(
-            "apply_marks: Sequence.load failed for masterclip %s (media=%s)",
+            "apply_marks: Sequence.load failed for master %s (media=%s)",
             mc_seq_id, media.name))
 
         -- Apply video marks to video stream clip

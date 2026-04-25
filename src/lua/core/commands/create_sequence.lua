@@ -105,8 +105,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
 
+        -- User-created edit timelines are kind='nested' (they hold clips
+        -- referencing other sequences). Master sequences are created by
+        -- import paths via Sequence.ensure_master.
+        local audio_rate = args.audio_rate or 48000
         local sequence = Sequence.create(name, project_id, args.frame_rate, args.width, args.height, {
-            id = args.sequence_id
+            id         = args.sequence_id,
+            kind       = "nested",
+            audio_rate = audio_rate,
         })
 
         command:set_parameter("sequence_id", sequence.id)

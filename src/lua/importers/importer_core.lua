@@ -632,13 +632,13 @@ function M.import_into_project(project_id, parse_result, opts)
     sub_report(90, "Finalizing…")
 
     -- Masterclip sequences are created as a side effect of Clip.create via
-    -- Sequence.ensure_masterclip. They're real sequence rows that belong to
+    -- Sequence.ensure_master. They're real sequence rows that belong to
     -- this import — track them so undoers can remove them. Newly-created
-    -- media (result.media_ids) implies a newly-created masterclip.
+    -- media (result.media_ids) implies a newly-created master.
     for _, media_id in ipairs(result.media_ids) do
-        local masterclip_id = Sequence.find_masterclip_for_media(media_id)
-        if masterclip_id then
-            table.insert(result.sequence_ids, masterclip_id)
+        local master_id = Sequence.find_master_for_media(media_id)
+        if master_id then
+            table.insert(result.sequence_ids, master_id)
         end
     end
 
