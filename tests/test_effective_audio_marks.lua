@@ -63,9 +63,9 @@ test_env.create_test_media({
 -- Create masterclip sequence: 24fps video, 48kHz audio
 -- Video has absolute TC source_in (like a camera clip starting at 13:09:xx)
 local mc = Sequence.create("TestMC", "project",
-    {fps_numerator = VIDEO_FPS, fps_denominator = 1},
+    {kind = "nested", fps_numerator = VIDEO_FPS, fps_denominator = 1},
     1920, 1080,
-    {kind = "masterclip"})
+    {kind = "master"})
 assert(mc:save(), "Failed to save masterclip sequence")
 
 -- Video track + clip (absolute TC source coordinates)

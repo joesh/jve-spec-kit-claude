@@ -68,7 +68,7 @@ assert(master:save(db, {skip_occlusion = true}))
 
 local t1 = Clip.create("Timeline", media.id, {
     id = "t1",
-    clip_kind = "timeline",
+    clip_kind = "nested",
     project_id = "proj",
     track_id = "v1",
     owner_sequence_id = "seq",

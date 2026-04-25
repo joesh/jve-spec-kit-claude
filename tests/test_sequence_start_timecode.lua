@@ -31,7 +31,7 @@ assert(db:exec([[
 -- Test 1: Default start_timecode_frame is 0
 -- =========================================================================
 local seq1 = Sequence.create("Default TC", "proj",
-    { fps_numerator = 25, fps_denominator = 1 }, 1920, 1080)
+    { kind = "nested",  fps_numerator = 25, fps_denominator = 1 }, 1920, 1080)
 assert(seq1.start_timecode_frame == 0,
     "default: start_timecode_frame should be 0, got " .. tostring(seq1.start_timecode_frame))
 assert(seq1:save())
@@ -46,7 +46,7 @@ print("  ✓ Default start_timecode_frame is 0")
 -- =========================================================================
 local one_hour_25fps = 25 * 60 * 60  -- 90000 frames
 local seq2 = Sequence.create("1-Hour TC", "proj",
-    { fps_numerator = 25, fps_denominator = 1 }, 1920, 1080,
+    { kind = "nested",  fps_numerator = 25, fps_denominator = 1 }, 1920, 1080,
     { start_timecode_frame = one_hour_25fps })
 assert(seq2.start_timecode_frame == one_hour_25fps,
     "create: start_timecode_frame should be 90000, got " .. tostring(seq2.start_timecode_frame))
@@ -105,7 +105,7 @@ print("  ✓ format_ruler_label applies tc_start offset")
 -- =========================================================================
 local ok, err = pcall(function()
     Sequence.create("Bad TC", "proj",
-        { fps_numerator = 25, fps_denominator = 1 }, 1920, 1080,
+        { kind = "nested",  fps_numerator = 25, fps_denominator = 1 }, 1920, 1080,
         { start_timecode_frame = -100 })
 end)
 assert(not ok, "negative start_timecode_frame should fail")

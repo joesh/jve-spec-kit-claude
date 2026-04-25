@@ -25,7 +25,7 @@ local clip = {
     track_id = "v1",
     timeline_start = 120,
     duration = 80,
-    clip_kind = "timeline"
+    clip_kind = "nested"
 }
 
 local track_clips = {gap_clip, clip}

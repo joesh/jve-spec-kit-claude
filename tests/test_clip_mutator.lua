@@ -37,7 +37,7 @@ local ClipMutator = require("core.clip_mutator")
 print("\n--- plan_insert: valid clip ---")
 do
     local row = {
-        id = "c1", project_id = "p1", clip_kind = "timeline", name = "Clip",
+        id = "c1", project_id = "p1", clip_kind = "nested", name = "Clip",
         track_id = "t1", media_id = "m1",
         timeline_start = 0,
         duration = 100,

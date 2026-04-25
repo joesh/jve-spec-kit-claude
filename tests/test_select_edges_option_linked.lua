@@ -66,8 +66,8 @@ command_manager.init("seq1", "proj1")
 -- Mock timeline_state for testing
 local mock_edges = {}
 local mock_clips = {
-    { id = "clip_v", track_id = "trk_v", timeline_start = 0, duration = 100, clip_kind = "timeline" },
-    { id = "clip_a", track_id = "trk_a", timeline_start = 0, duration = 100, clip_kind = "timeline" },
+    { id = "clip_v", track_id = "trk_v", timeline_start = 0, duration = 100, clip_kind = "nested" },
+    { id = "clip_a", track_id = "trk_a", timeline_start = 0, duration = 100, clip_kind = "nested" },
 }
 
 timeline_state.get_selected_edges = function()

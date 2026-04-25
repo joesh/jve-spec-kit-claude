@@ -358,15 +358,22 @@ function M.create_test_masterclip_sequence(project_id, name, fps_num, fps_den, d
     local media = Media.load(media_id)
     assert(media, string.format(
         "create_test_masterclip_sequence: media_id=%s not found", tostring(media_id)))
-    -- Ensure TC origin is set (V13 ensure_master asserts on it).
-    if not media.metadata or media.metadata == "" then
-        media.metadata = json.encode({
-            start_tc_value = 0,
-            start_tc_rate = fps_num,
-            start_tc_audio_samples = 0,
-            start_tc_audio_rate = (media.audio_channels and media.audio_channels > 0)
-                and (media.audio_sample_rate or 48000) or nil,
-        })
+    -- Ensure TC origin is set (V13 ensure_master asserts on it). Synthesize a
+    -- TC=0 metadata blob whenever start_tc_value is absent — file-based
+    -- extraction won't work with the synthetic /tmp paths used in tests.
+    local existing_meta = media.metadata
+    local parsed = nil
+    if existing_meta and existing_meta ~= "" then
+        parsed = json.decode(existing_meta)
+    end
+    if not parsed or parsed.start_tc_value == nil then
+        local merged = parsed or {}
+        merged.start_tc_value = 0
+        merged.start_tc_rate = fps_num
+        merged.start_tc_audio_samples = 0
+        merged.start_tc_audio_rate = (media.audio_channels and media.audio_channels > 0)
+            and (media.audio_sample_rate or 48000) or nil
+        media.metadata = json.encode(merged)
         assert(media:save(), "create_test_masterclip_sequence: failed to update media metadata")
     end
 

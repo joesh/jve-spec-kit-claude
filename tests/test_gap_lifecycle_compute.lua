@@ -16,7 +16,7 @@ local function clip(id, track_id, start, dur)
         track_id = track_id,
         timeline_start = start,
         duration = dur,
-        clip_kind = "timeline",
+        clip_kind = "nested",
         media_id = "media_1",
         source_in = 0,
         source_out = dur,

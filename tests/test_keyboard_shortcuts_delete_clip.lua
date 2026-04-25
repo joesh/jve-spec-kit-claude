@@ -47,7 +47,7 @@ local mc_seq_id = require("test_env").create_test_masterclip_sequence(
     project.id, "MC", 24, 1, 500, "test_media")
 
 local seq = Sequence.create("Seq", project.id,
-    { fps_numerator = 24, fps_denominator = 1 }, 1920, 1080)
+    { kind = "nested",  fps_numerator = 24, fps_denominator = 1 }, 1920, 1080)
 seq:save()
 local track = Track.create_video("V1", seq.id, { index = 1 })
 track:save()

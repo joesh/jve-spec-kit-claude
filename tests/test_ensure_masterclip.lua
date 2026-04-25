@@ -454,7 +454,7 @@ print("\n--- Clip.create auto-resolve ---")
 
 -- Create a timeline sequence + track to put clips on
 local tl_seq = Sequence.create("Timeline", "proj1",
-    {fps_numerator = 24, fps_denominator = 1}, 1920, 1080, {})
+    {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080, {})
 assert(tl_seq:save())
 
 local tl_track = Track.create_video("V1", tl_seq.id, {index = 1})
@@ -463,7 +463,7 @@ assert(tl_track:save())
 -- Create timeline clip WITHOUT explicit master_clip_id
 local auto_clip = Clip.create("AutoResolve", "media_va", {
     project_id = "proj1",
-    clip_kind = "timeline",
+    clip_kind = "nested",
     track_id = tl_track.id,
     owner_sequence_id = tl_seq.id,
     timeline_start = 0,
@@ -482,7 +482,7 @@ check("auto-resolve: master_clip_id matches existing masterclip", auto_clip.mast
 -- Create timeline clip WITH explicit master_clip_id (should skip auto-resolve)
 local explicit_clip = Clip.create("Explicit", "media_va", {
     project_id = "proj1",
-    clip_kind = "timeline",
+    clip_kind = "nested",
     master_clip_id = "custom_mc_id",
     track_id = tl_track.id,
     owner_sequence_id = tl_seq.id,
@@ -504,7 +504,7 @@ print("\n--- Clip.create auto-resolve: error paths ---")
 expect_error("auto-resolve: nil media_id asserts", function()
     Clip.create("Bad", nil, {
         project_id = "proj1",
-        clip_kind = "timeline",
+        clip_kind = "nested",
         track_id = tl_track.id,
         owner_sequence_id = tl_seq.id,
         timeline_start = 100,
@@ -516,7 +516,7 @@ end, "media_id is required to auto%-resolve")
 
 expect_error("auto-resolve: nil project_id asserts", function()
     Clip.create("Bad", "media_va", {
-        clip_kind = "timeline",
+        clip_kind = "nested",
         track_id = tl_track.id,
         owner_sequence_id = tl_seq.id,
         timeline_start = 100,
@@ -529,7 +529,7 @@ end, "project_id is required to auto%-resolve")
 expect_error("auto-resolve: empty project_id asserts", function()
     Clip.create("Bad", "media_va", {
         project_id = "",
-        clip_kind = "timeline",
+        clip_kind = "nested",
         track_id = tl_track.id,
         owner_sequence_id = tl_seq.id,
         timeline_start = 100,

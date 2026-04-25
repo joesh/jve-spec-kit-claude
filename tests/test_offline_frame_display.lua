@@ -135,7 +135,7 @@ package.loaded["models.sequence"] = {
         return {
             id = "seq1",
             name = "Test",
-            kind = "timeline",
+            kind = "nested",
             width = 1920, height = 1080,
             frame_rate = { fps_numerator = 24, fps_denominator = 1 },
             audio_sample_rate = 48000,

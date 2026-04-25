@@ -91,7 +91,7 @@ package.loaded["models.sequence"] = {
             width = 1920,
             height = 1080,
             name = "TestSeq",
-            kind = "timeline",
+            kind = "nested",
             audio_sample_rate = 48000,
         }
     end,

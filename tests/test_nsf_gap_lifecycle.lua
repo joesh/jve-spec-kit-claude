@@ -12,7 +12,7 @@ local SEQ_FPS = { fps_numerator = 24, fps_denominator = 1 }
 local function media_clip(id, track_id, start, dur)
     return {
         id = id, track_id = track_id, timeline_start = start, duration = dur,
-        clip_kind = "timeline", media_id = "m1",
+        clip_kind = "nested", media_id = "m1",
     }
 end
 

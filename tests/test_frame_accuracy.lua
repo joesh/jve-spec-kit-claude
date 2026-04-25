@@ -108,7 +108,7 @@ local function test_split_clip_command_func()
 
     local sequence_fps_num = 24
     local sequence_fps_den = 1
-    local sequence = Sequence.create("Test Sequence Split", project.id, {fps_numerator = sequence_fps_num, fps_denominator = sequence_fps_den}, 1920, 1080)
+    local sequence = Sequence.create("Test Sequence Split", project.id, {kind = "nested", fps_numerator = sequence_fps_num, fps_denominator = sequence_fps_den}, 1920, 1080)
     sequence:save(db)
     assert_not_nil(sequence.id, "Sequence ID should not be nil")
     
@@ -235,7 +235,7 @@ local function test_ripple_delete_command_func()
     local project = Project.create("Test Project Ripple", { fps_mismatch_policy = 'resample' })
     project:save(db)
     
-    local sequence = Sequence.create("Test Sequence Ripple", project.id, {fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
+    local sequence = Sequence.create("Test Sequence Ripple", project.id, {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
     sequence:save(db)
     
     local track = Track.create_video("Video Track Ripple", sequence.id, {index = 1})
@@ -328,7 +328,7 @@ local function test_ripple_edit_command_func()
     local project = Project.create("Test Project RippleEdit", { fps_mismatch_policy = 'resample' })
     project:save(db)
     
-    local sequence = Sequence.create("Test Sequence RippleEdit", project.id, {fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
+    local sequence = Sequence.create("Test Sequence RippleEdit", project.id, {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
     sequence:save(db)
     
     local track = Track.create_video("Video Track RippleEdit", sequence.id, {index = 1})
@@ -430,7 +430,7 @@ local function test_nudge_command_func()
     local project = Project.create("Test Project Nudge", { fps_mismatch_policy = 'resample' })
     project:save(db)
     
-    local sequence = Sequence.create("Test Sequence Nudge", project.id, {fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
+    local sequence = Sequence.create("Test Sequence Nudge", project.id, {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
     sequence:save(db)
     
     local track = Track.create_video("Video Track Nudge", sequence.id, {index = 1})
@@ -532,7 +532,7 @@ local function test_move_clip_to_track_command_func()
     local project = Project.create("Test Project MoveClip", { fps_mismatch_policy = 'resample' })
     project:save(db)
 
-    local sequence = Sequence.create("Test Sequence MoveClip", project.id, {fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
+    local sequence = Sequence.create("Test Sequence MoveClip", project.id, {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
     sequence:save(db)
     command_manager.init(sequence.id, project.id)
     

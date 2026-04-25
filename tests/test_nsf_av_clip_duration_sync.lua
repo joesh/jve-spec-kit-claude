@@ -33,7 +33,7 @@ db:exec(string.format([[
 ]], project_id, now, now))
 
 -- Create timeline sequence at 30fps
-local timeline = Sequence.create("Timeline", project_id, {fps_numerator = 30, fps_denominator = 1}, 1920, 1080)
+local timeline = Sequence.create("Timeline", project_id, {kind = "nested", fps_numerator = 30, fps_denominator = 1}, 1920, 1080)
 assert(timeline:save(), "Failed to save timeline")
 
 local video_track = Track.create_video("V1", timeline.id, {index = 1})
@@ -44,8 +44,8 @@ assert(audio_track:save(), "Failed to save audio track")
 
 -- Create masterclip sequence at 24fps (simulating imported media)
 local masterclip = Sequence.create("TestClip", project_id,
-    {fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
-    {kind = "masterclip", audio_rate = 48000})
+    {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
+    {kind = "master", audio_rate = 48000})
 assert(masterclip:save(), "Failed to save masterclip")
 
 -- Create video track in masterclip

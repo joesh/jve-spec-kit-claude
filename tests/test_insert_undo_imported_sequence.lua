@@ -89,9 +89,9 @@ local Sequence = require("models.sequence")
 local Track = require("models.track")
 
 local masterclip_seq = Sequence.create("Insert Clip Master", "default_project",
-    {fps_numerator = 30, fps_denominator = 1},
+    {kind = "nested", fps_numerator = 30, fps_denominator = 1},
     1920, 1080,
-    {id = "masterclip_insert", kind = "masterclip"})
+    {id = "masterclip_insert", kind = "master"})
 assert(masterclip_seq:save())
 
 local master_video_track = Track.create_video("V1", masterclip_seq.id, {id = "masterclip_insert_v1"})

@@ -114,7 +114,7 @@ local mock_renderer_info = {}
 package.loaded["core.renderer"] = {
     get_sequence_info = function(seq_id)
         if mock_renderer_info[seq_id] then return mock_renderer_info[seq_id] end
-        return { fps_num = 24, fps_den = 1, kind = "masterclip",
+        return { fps_num = 24, fps_den = 1, kind = "master",
                  name = "Test", audio_sample_rate = 48000 }
     end,
     get_video_frame = function() return nil, nil end,
@@ -171,7 +171,7 @@ local mc_id = test_env.create_test_masterclip_sequence(
 
 mock_renderer_info[mc_id] = {
     fps_num = 24, fps_den = 1,
-    kind = "masterclip", name = "TestClip",
+    kind = "master", name = "TestClip",
     audio_sample_rate = 48000,
 }
 

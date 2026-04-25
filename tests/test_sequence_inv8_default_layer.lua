@@ -19,7 +19,7 @@ assert(db:exec(
 
 -- Helper: wrap the 2-step create+save as a single call.
 local function make_sequence(name, kind)
-    local s = Sequence.create(name, "p1", { fps_numerator = 24, fps_denominator = 1 },
+    local s = Sequence.create(name, "p1", { kind = "nested",  fps_numerator = 24, fps_denominator = 1 },
         1920, 1080, { kind = kind, audio_rate = 48000 })
     assert(s:save(), "Sequence:save failed")
     return s.id

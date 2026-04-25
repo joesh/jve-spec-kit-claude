@@ -38,7 +38,7 @@ local project = Project.create("Test Project", { fps_mismatch_policy = 'resample
 project:save()
 
 local seq = Sequence.create("Test Sequence", project.id,
-    { fps_numerator = 30, fps_denominator = 1 }, 1920, 1080)
+    { kind = "nested",  fps_numerator = 30, fps_denominator = 1 }, 1920, 1080)
 seq:save()
 
 local track_v1 = Track.create_video("V1", seq.id, { index = 1 })

@@ -125,7 +125,7 @@ cmd2:set_parameters({
             id = "seq_corrupt",
             project_id = "proj1",
             name = "Corrupt",
-            kind = "timeline",
+            kind = "nested",
             fps_numerator = 24,
             fps_denominator = 1,
             audio_sample_rate = 48000,

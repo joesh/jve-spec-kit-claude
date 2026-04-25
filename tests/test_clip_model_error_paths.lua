@@ -73,7 +73,7 @@ expect_error("missing fps_numerator", function()
     Clip.create("TestClip", "media1", {
         id = "test_clip",
         project_id = "proj1",
-        clip_kind = "timeline",
+        clip_kind = "nested",
         timeline_start = 0,
         duration = 100,
         fps_denominator = 1,
@@ -84,7 +84,7 @@ expect_error("missing fps_denominator", function()
     Clip.create("TestClip", "media1", {
         id = "test_clip",
         project_id = "proj1",
-        clip_kind = "timeline",
+        clip_kind = "nested",
         timeline_start = 0,
         duration = 100,
         fps_numerator = 24,
@@ -100,7 +100,7 @@ print("\n--- create: timeline clip required fields ---")
 expect_error("timeline clip missing media_id for master_clip_id auto-resolve", function()
     Clip.create("TestClip", nil, {
         project_id = "proj1",
-        clip_kind = "timeline",
+        clip_kind = "nested",
         track_id = "track1",
         owner_sequence_id = "seq1",
         timeline_start = 0,
@@ -113,7 +113,7 @@ end, "media_id is required to auto%-resolve master_clip_id")
 expect_error("timeline clip missing track_id", function()
     Clip.create("TestClip", "media1", {
         project_id = "proj1",
-        clip_kind = "timeline",
+        clip_kind = "nested",
         master_clip_id = "mc1",
         owner_sequence_id = "seq1",
         timeline_start = 0,
@@ -126,7 +126,7 @@ end, "track_id")
 expect_error("timeline clip missing owner_sequence_id", function()
     Clip.create("TestClip", "media1", {
         project_id = "proj1",
-        clip_kind = "timeline",
+        clip_kind = "nested",
         track_id = "track1",
         master_clip_id = "mc1",
         timeline_start = 0,
@@ -157,7 +157,7 @@ print("\n--- create: valid integer coordinates ---")
 local clip = Clip.create("ValidClip", "media1", {
     id = "valid_clip_1",
     project_id = "proj1",
-    clip_kind = "timeline",
+    clip_kind = "nested",
     track_id = "track1",
     master_clip_id = "mc1",
     owner_sequence_id = "seq1",
@@ -183,7 +183,7 @@ print("\n--- save: integer validation ---")
 local bad_clip = Clip.create("BadClip", "media1", {
     id = "bad_clip_1",
     project_id = "proj1",
-    clip_kind = "timeline",
+    clip_kind = "nested",
     track_id = "track1",
     master_clip_id = "mc1",
     owner_sequence_id = "seq1",

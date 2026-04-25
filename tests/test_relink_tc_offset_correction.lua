@@ -53,7 +53,7 @@ local function make_media_info(source_in, source_out, media_tc)
             source_out = source_out,
             fps_num = TC_RATE,
             fps_den = 1,
-            clip_kind = "timeline",
+            clip_kind = "nested",
             clip_name = "TC-Test",
         }},
     }

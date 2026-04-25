@@ -34,7 +34,7 @@ local layout = ripple_layout.create({
 
 -- Create sequence B manually
 local frame_rate = {fps_numerator = 1000, fps_denominator = 1}
-local seq_b = Sequence.create("Sequence B", PROJECT_ID, frame_rate, 1920, 1080, {
+local seq_b = Sequence.create("Sequence B", PROJECT_ID, frame_rate, 1920, 1080, { kind = "nested", 
     id = SEQ_B_ID,
     audio_rate = 48000,
 })

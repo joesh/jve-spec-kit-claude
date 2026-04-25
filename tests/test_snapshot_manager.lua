@@ -97,7 +97,7 @@ do
     local clips = {
         {
             id = "clip1",
-            clip_kind = "timeline",
+            clip_kind = "nested",
             name = "My Clip",
             project_id = "proj1",
             track_id = "trk1",
@@ -174,7 +174,7 @@ do
     local clips2 = {
         {
             id = "clip2",
-            clip_kind = "timeline",
+            clip_kind = "nested",
             name = "Clip 2",
             project_id = "proj1",
             track_id = "trk1",
@@ -290,7 +290,7 @@ end
 print("\n--- create_snapshot: clip missing required fields ---")
 do
     expect_error("clip missing id", function()
-        snapshot_manager.create_snapshot(db, "seq1", 200, {{ clip_kind = "timeline" }})
+        snapshot_manager.create_snapshot(db, "seq1", 200, {{ clip_kind = "nested" }})
     end, "missing required field 'id'")
 
     expect_error("clip missing clip_kind", function()
@@ -306,7 +306,7 @@ do
     local clips = {
         {
             id = "clip_r",
-            clip_kind = "timeline",
+            clip_kind = "nested",
             name = "Rational Test",
             project_id = "proj1",
             track_id = "trk1",
@@ -344,7 +344,7 @@ do
     -- Two clips referencing the same media
     local clips = {
         {
-            id = "clip_d1", clip_kind = "timeline", name = "D1",
+            id = "clip_d1", clip_kind = "nested", name = "D1",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
             media_id = "med1",
             timeline_start = 0,
@@ -355,7 +355,7 @@ do
             enabled = true, offline = false,
         },
         {
-            id = "clip_d2", clip_kind = "timeline", name = "D2",
+            id = "clip_d2", clip_kind = "nested", name = "D2",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
             media_id = "med1",
             timeline_start = 50,
@@ -381,7 +381,7 @@ print("\n--- clip with no media ---")
 do
     local clips = {
         {
-            id = "clip_nm", clip_kind = "timeline", name = "No Media",
+            id = "clip_nm", clip_kind = "nested", name = "No Media",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
             media_id = nil,
             timeline_start = 0,
@@ -420,7 +420,7 @@ do
 
     -- Snapshot seq1 at 50, seq2 at 75
     snapshot_manager.create_snapshot(db, "seq1", 50, {
-        { id = "cs1", clip_kind = "timeline", name = "S1C",
+        { id = "cs1", clip_kind = "nested", name = "S1C",
           project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
           media_id = "med1",
           timeline_start = 0, duration = 10,
@@ -429,7 +429,7 @@ do
           enabled = true, offline = false },
     })
     snapshot_manager.create_snapshot(db, "seq2", 75, {
-        { id = "cs2", clip_kind = "timeline", name = "S2C",
+        { id = "cs2", clip_kind = "nested", name = "S2C",
           project_id = "proj1", track_id = "trk2", owner_sequence_id = "seq2",
           media_id = "med1",
           timeline_start = 0, duration = 20,

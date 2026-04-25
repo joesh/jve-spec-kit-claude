@@ -46,9 +46,9 @@ media:save(db)
 
 -- Create masterclip sequence with stream clips at full range
 local mc = Sequence.create("Test MC", "project",
-    {fps_numerator = 24, fps_denominator = 1},
+    {kind = "nested", fps_numerator = 24, fps_denominator = 1},
     1920, 1080,
-    {kind = "masterclip"})
+    {kind = "master"})
 assert(mc:save(), "Failed to save masterclip")
 
 local v_track = Track.create_video("V1", mc.id, {index = 1})
@@ -202,7 +202,7 @@ check("nil mark_out persists after clear+reload", mc_reloaded.mark_out == nil)
 --------------------------------------------------------------------------------
 print("\n--- Marks on timeline (any sequence kind) ---")
 local tl = Sequence.create("Timeline", "project",
-    {fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
+    {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
 assert(tl:save(), "Failed to save timeline")
 
 tl:set_in(10)

@@ -25,7 +25,7 @@ local log = require("core.logger").for_area("database")
 -- opened — per the no-backward-compat rule, incompatible projects must
 -- be re-imported from the original source (.drp) to create a fresh DB
 -- at the current version. No ALTER TABLE migration path.
-M.SCHEMA_VERSION = 8
+M.SCHEMA_VERSION = 9
 local path_utils = require("core.path_utils")
 
 local BIN_NAMESPACE = "bin"
@@ -1111,9 +1111,9 @@ function M.load_media()
 end
 
 function M.load_master_clips(project_id)
-    -- IS-a refactor: masterclips are now Sequences with kind='masterclip'
-    -- (not Clips with clip_kind='master'). Stream clips inside the sequence
-    -- hold the media_id.
+    -- V13: master sequences hold media_refs (not clips). Each master sequence
+    -- represents one media file; the media_ref join carries media_id, with
+    -- media joined for metadata.
     if not project_id or project_id == "" then
         error("FATAL: load_master_clips requires project_id", 2)
     end
@@ -1122,7 +1122,6 @@ function M.load_master_clips(project_id)
         error("FATAL: No database connection - cannot load master clips")
     end
 
-    -- Query masterclip sequences and get media_id from their first stream clip
     local query = db_connection:prepare([[
         SELECT DISTINCT
             s.id,
@@ -1135,7 +1134,7 @@ function M.load_master_clips(project_id)
             s.audio_rate,
             s.created_at,
             s.modified_at,
-            c.media_id,
+            mr.media_id,
             m.project_id,
             m.name,
             m.file_path,
@@ -1151,9 +1150,9 @@ function M.load_master_clips(project_id)
             m.modified_at,
             m.is_still
         FROM sequences s
-        LEFT JOIN clips c ON c.owner_sequence_id = s.id
-        LEFT JOIN media m ON c.media_id = m.id
-        WHERE s.kind = 'masterclip'
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = s.id
+        LEFT JOIN media m ON m.id = mr.media_id
+        WHERE s.kind = 'master'
           AND s.project_id = ?
         GROUP BY s.id
         ORDER BY s.name

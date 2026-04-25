@@ -33,9 +33,9 @@ do
     -- A1 has a gap [1000..2000]
     local a1_clips = {
         { id = "clip_a1_left", track_id = "track_a1", timeline_start = 0, duration = 1000,
-          clip_kind = "timeline", media_id = "media_primary" },
+          clip_kind = "nested", media_id = "media_primary" },
         { id = "clip_a1_right", track_id = "track_a1", timeline_start = 2000, duration = 1000,
-          clip_kind = "timeline", media_id = "media_primary" },
+          clip_kind = "nested", media_id = "media_primary" },
     }
     local a1_gaps = gap_lifecycle.compute_gaps_for_track("track_a1", a1_clips, SEQ_FPS)
     assert(#a1_gaps == 1, "A1 should have 1 gap")

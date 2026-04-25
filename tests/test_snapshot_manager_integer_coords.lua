@@ -59,7 +59,7 @@ print("Test 1: create_snapshot with integer coords")
 local clips = {
     {
         id = "clip1",
-        clip_kind = "timeline",
+        clip_kind = "nested",
         name = "My Clip",
         project_id = "proj1",
         track_id = "trk1",
@@ -127,7 +127,7 @@ db:exec("DELETE FROM snapshots WHERE sequence_id = 'seq1'")
 -- Create corrupt snapshot payload with missing field
 local bad_payload = json.encode({
     sequence = {
-        id = "seq1", project_id = "proj1", name = "T", kind = "timeline",
+        id = "seq1", project_id = "proj1", name = "T", kind = "nested",
         fps_numerator = 24, fps_denominator = 1, audio_rate = 48000,
         width = 1920, height = 1080,
         view_start_frame = 0, view_duration_frames = 240, playhead_frame = 0,
@@ -135,7 +135,7 @@ local bad_payload = json.encode({
     tracks = {},
     clips = {
         {
-            id = "clip_bad", clip_kind = "timeline", name = "Bad",
+            id = "clip_bad", clip_kind = "nested", name = "Bad",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
             -- Missing timeline_start_frame!
             duration_frames = 100,
@@ -162,7 +162,7 @@ db:exec("DELETE FROM snapshots WHERE sequence_id = 'seq1'")
 
 local bad_payload2 = json.encode({
     sequence = {
-        id = "seq1", project_id = "proj1", name = "T", kind = "timeline",
+        id = "seq1", project_id = "proj1", name = "T", kind = "nested",
         fps_numerator = 24, fps_denominator = 1, audio_rate = 48000,
         width = 1920, height = 1080,
         view_start_frame = 0, view_duration_frames = 240, playhead_frame = 0,
@@ -170,7 +170,7 @@ local bad_payload2 = json.encode({
     tracks = {},
     clips = {
         {
-            id = "clip_no_dur", clip_kind = "timeline", name = "No Duration",
+            id = "clip_no_dur", clip_kind = "nested", name = "No Duration",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
             timeline_start_frame = 0,
             -- Missing duration_frames!

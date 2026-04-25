@@ -86,7 +86,7 @@ package.loaded["core.renderer"] = {
     get_sequence_info = function()
         return {
             fps_num = 25, fps_den = 1,
-            kind = "timeline", name = "Test",
+            kind = "nested", name = "Test",
             audio_sample_rate = 48000,
         }
     end,

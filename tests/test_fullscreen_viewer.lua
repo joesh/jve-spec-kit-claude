@@ -238,7 +238,7 @@ package.loaded["models.sequence"] = {
     load = function()
         return {
             name = "test",
-            kind = "timeline",
+            kind = "nested",
             playhead_position = 0,
             mark_in = nil,
             mark_out = nil,

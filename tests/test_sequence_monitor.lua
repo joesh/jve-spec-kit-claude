@@ -162,7 +162,7 @@ package.loaded["core.renderer"] = {
         end
         return {
             fps_num = 24, fps_den = 1,
-            kind = "timeline", name = "Test",
+            kind = "nested", name = "Test",
             audio_sample_rate = 48000,
         }
     end,
@@ -250,7 +250,7 @@ local mc_id = test_env.create_test_masterclip_sequence(
 -- Register renderer info for masterclip
 mock_renderer_info[mc_id] = {
     fps_num = 24, fps_den = 1,
-    kind = "masterclip", name = "TestMaster",
+    kind = "master", name = "TestMaster",
     audio_sample_rate = 48000,
 }
 
@@ -279,7 +279,7 @@ assert(db:exec([[
 
 mock_renderer_info["timeline1"] = {
     fps_num = 24, fps_den = 1,
-    kind = "timeline", name = "MyTimeline",
+    kind = "nested", name = "MyTimeline",
     audio_sample_rate = 48000,
 }
 

@@ -81,8 +81,8 @@ end
 -- Helper: create a timeline sequence with tracks and clips
 local function create_test_sequence(id, name)
     local seq = Sequence.create(name, "project",
-        {fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
-        {id = id, kind = "timeline"})
+        {kind = "nested", fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
+        {id = id, kind = "nested"})
     assert(seq:save(), "Failed to save sequence " .. id)
 
     local track = Track.create_video("V1", id, {id = id .. "_track", index = 1})
@@ -215,7 +215,7 @@ reset_test_sequences()
 
 -- Create a master sequence
 local master_seq = Sequence.create("Master Sequence", "project",
-    {fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
+    {kind = "nested", fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
     {id = "master_seq", kind = "master"})
 assert(master_seq:save(), "Failed to save master sequence")
 
@@ -250,8 +250,8 @@ reset_test_sequences()
 
 -- Create sequence with multiple tracks
 local seq = Sequence.create("Multi Track Seq", "project",
-    {fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
-    {id = "multi_seq", kind = "timeline"})
+    {kind = "nested", fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
+    {id = "multi_seq", kind = "nested"})
 assert(seq:save(), "Failed to save sequence")
 
 -- Create multiple video tracks
