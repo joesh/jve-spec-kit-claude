@@ -103,7 +103,7 @@ db:exec(string.format([[
 ]], now, now))
 
 db:exec(string.format([[
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
+    INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
     VALUES ('seq1', 'proj1', 'Seq', 'nested', 1000, 1, 48000, 1920, 1080,
@@ -111,7 +111,7 @@ db:exec(string.format([[
 ]], now, now))
 
 db:exec([[
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('track1', 'seq1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0)
 ]])
 
@@ -125,12 +125,19 @@ local clip_names = {
 }
 for i, cid in ipairs(clip_ids) do
     db:exec(string.format([[
-        INSERT INTO clips (id, project_id, clip_kind, owner_sequence_id, track_id, name,
-            timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-            fps_numerator, fps_denominator, created_at, modified_at)
-        VALUES ('%s', 'proj1', 'timeline', 'seq1', 'track1', '%s',
-            %d, 100, 0, 100, 1000, 1, %d, %d)
-    ]], cid, clip_names[i], (i - 1) * 100, now, now))
+        -- V13 placeholder master sequence (was V8 NULL media_id)
+INSERT OR IGNORE INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
+VALUES ('_v13_placeholder_media', 'proj1', 'placeholder', '_placeholder', 100, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
+INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('_v13_placeholder_master', 'proj1', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
+INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 100, 0, 100, 1, 1.0, 0, 0, 0);
+
+INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('%s', 'proj1', 'seq1', 'track1', '_v13_placeholder_master', '%s', %d, 100, 0, 100, %d, %d, NULL, NULL, 'resample', 1.0, 0);, cid, clip_names[i], (i - 1) * 100, now, now))
 end
 
 stub_timeline_state()
