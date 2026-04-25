@@ -230,7 +230,7 @@ assert(db:exec(import_schema))
 -- Create project
 assert(db:exec([[
     INSERT INTO projects(id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES('proj', 'TestProject', 'resample', strftime('%s','now'), strftime('%s','now'))
+    VALUES('proj', 'TestProject', 'resample', 0, 0)
 ]]))
 
 -- Create media
@@ -239,7 +239,7 @@ assert(db:exec([[
                      fps_numerator, fps_denominator, width, height,
                      audio_channels, codec, created_at, modified_at, metadata)
     VALUES('media1', 'proj', '/test/clip.mov', 'TestClip', 100, 24, 1,
-           1920, 1080, 2, 'h264', strftime('%s','now'), strftime('%s','now'), '{}')
+           1920, 1080, 2, 'h264', 0, 0, '{}')
 ]]))
 
 -- Create masterclip sequence with stream clip
@@ -260,7 +260,7 @@ assert(db:exec([[
                          audio_rate, width, height, view_start_frame, view_duration_frames,
                          playhead_frame, created_at, modified_at)
     VALUES('timeline1', 'proj', 'MyTimeline', 'nested', 24, 1, 48000, 1920, 1080,
-           0, 2000, 0, strftime('%s','now'), strftime('%s','now'))
+           0, 2000, 0, 0, 0)
 ]]))
 
 -- Add a track + clip to timeline (for _compute_content_end)
@@ -274,7 +274,7 @@ assert(db:exec([[
                      timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                      fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
     VALUES('tclip1', 'proj', 'timeline', 'Clip1', 'tv1', 'media1', 0, 50, 0, 50, 24, 1, 1, 0,
-           strftime('%s','now'), strftime('%s','now'))
+           0, 0)
 ]]))
 
 mock_renderer_info["timeline1"] = {

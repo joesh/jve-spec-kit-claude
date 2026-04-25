@@ -61,7 +61,7 @@ for _, info in ipairs({
 end
 
 -- Two back-to-back clips with no gap: clip_a [0,4000), clip_b [4000,8000)
-local now = "strftime('%s','now')"
+local now = "0"
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, track_id, owner_sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,

@@ -23,7 +23,7 @@ assert(db:exec(import_schema))
 -- Create project + sequence + tracks
 assert(db:exec([[
     INSERT INTO projects(id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES('proj', 'TestProject', 'resample', strftime('%s','now'), strftime('%s','now'))
+    VALUES('proj', 'TestProject', 'resample', 0, 0)
 ]]))
 
 assert(db:exec([[
@@ -31,7 +31,7 @@ assert(db:exec([[
                          audio_rate, width, height, view_start_frame, view_duration_frames,
                          playhead_frame, created_at, modified_at)
     VALUES('seq', 'proj', 'TestTimeline', 'nested', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
-           strftime('%s','now'), strftime('%s','now'))
+           0, 0)
 ]]))
 
 assert(db:exec([[
@@ -44,7 +44,7 @@ assert(db:exec([[
     INSERT INTO media(id, project_id, file_path, name, duration_frames, fps_numerator, fps_denominator,
                      width, height, audio_channels, codec, created_at, modified_at, metadata)
     VALUES('media_a', 'proj', '/test/a.mov', 'a', 100, 24, 1, 1920, 1080, 2, 'h264',
-           strftime('%s','now'), strftime('%s','now'), '{}')
+           0, 0, '{}')
 ]]))
 
 -- Layout on track v1:
@@ -58,10 +58,10 @@ assert(db:exec([[
                      timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                      fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
     VALUES
-        ('clip_1', 'proj', 'timeline', 'Clip1', 'v1', 'media_a', 0,   48,  0, 48,  24, 1, 1, 0, strftime('%s','now'), strftime('%s','now')),
-        ('clip_2', 'proj', 'timeline', 'Clip2', 'v1', 'media_a', 100, 100, 0, 100, 24, 1, 1, 0, strftime('%s','now'), strftime('%s','now')),
-        ('clip_3', 'proj', 'timeline', 'Clip3', 'v1', 'media_a', 200, 100, 0, 100, 24, 1, 0, 0, strftime('%s','now'), strftime('%s','now')),
-        ('clip_4', 'proj', 'timeline', 'Clip4', 'v1', 'media_a', 300, 100, 0, 100, 24, 1, 1, 0, strftime('%s','now'), strftime('%s','now'))
+        ('clip_1', 'proj', 'timeline', 'Clip1', 'v1', 'media_a', 0,   48,  0, 48,  24, 1, 1, 0, 0, 0),
+        ('clip_2', 'proj', 'timeline', 'Clip2', 'v1', 'media_a', 100, 100, 0, 100, 24, 1, 1, 0, 0, 0),
+        ('clip_3', 'proj', 'timeline', 'Clip3', 'v1', 'media_a', 200, 100, 0, 100, 24, 1, 0, 0, 0, 0),
+        ('clip_4', 'proj', 'timeline', 'Clip4', 'v1', 'media_a', 300, 100, 0, 100, 24, 1, 1, 0, 0, 0)
 ]]))
 
 --------------------------------------------------------------------------------

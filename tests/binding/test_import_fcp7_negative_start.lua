@@ -16,7 +16,7 @@ db:exec(require('import_schema'))
 
 assert(db:exec([[
     INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+    VALUES ('default_project', 'Default Project', 0, 0);
 ]]))
 
 -- Ensure the default bin namespace exists for importer bin assignment.

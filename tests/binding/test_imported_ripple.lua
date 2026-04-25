@@ -29,7 +29,7 @@ local function init_database(db_path)
     assert(db:exec(SCHEMA_SQL))
     assert(db:exec([[
         INSERT INTO projects (id, name, created_at, modified_at)
-        VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+        VALUES ('default_project', 'Default Project', 0, 0);
         INSERT INTO sequences (
             id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_rate,
@@ -44,7 +44,7 @@ local function init_database(db_path)
             1920, 1080,
             0, 10000, 0,
             '[]', '[]', '[]',
-            0, strftime('%s','now'), strftime('%s','now')
+            0, 0, 0
         );
     ]]))
     return db

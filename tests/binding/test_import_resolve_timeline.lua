@@ -49,11 +49,11 @@ assert_true("schema creation", db:exec(schema_sql))
 
 assert_true("bootstrap project", db:exec([[
     INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('host_project', 'Host Project', strftime('%s','now'), strftime('%s','now'));
+    VALUES ('host_project', 'Host Project', 0, 0);
 ]]))
 assert_true("bootstrap sequence", db:exec([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-    VALUES ('host_sequence', 'host_project', 'Host Timeline', 'timeline', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
+    VALUES ('host_sequence', 'host_project', 'Host Timeline', 'timeline', 30, 1, 48000, 1920, 1080, 0, 0);
 ]]))
 
 command_manager.init('host_sequence', 'host_project')

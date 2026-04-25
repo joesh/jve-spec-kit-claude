@@ -29,11 +29,11 @@ db:exec(require("import_schema"))
 
 db:exec([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', 'resample', strftime('%s','now'), strftime('%s','now'));
+    VALUES ('default_project', 'Default Project', 'resample', 0, 0);
     INSERT INTO media (id, project_id, name, file_path, duration_frames,
         fps_numerator, fps_denominator, width, height, created_at, modified_at)
     VALUES ('media_test', 'default_project', 'Test Media', 'synthetic://test',
-        1000, 30, 1, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
+        1000, 30, 1, 1920, 1080, 0, 0);
     INSERT INTO sequences (
         id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_rate,
@@ -48,7 +48,7 @@ db:exec([[
         1920, 1080,
         0, 300, 0,
         '[]', '[]', '[]',
-        0, strftime('%s','now'), strftime('%s','now')
+        0, 0, 0
     );
     INSERT INTO sequences (
         id, project_id, name, kind,
@@ -64,7 +64,7 @@ db:exec([[
         1920, 1080,
         0, 300, 0,
         '[]', '[]', '[]',
-        0, strftime('%s','now'), strftime('%s','now')
+        0, 0, 0
     );
     INSERT INTO tracks (
         id, sequence_id, name, track_type, track_index,
@@ -86,7 +86,7 @@ db:exec([[
         'track_v1', 'media_test', 'Test Clip',
         0, 30, 0, 30,
         30, 1, 1, 0,
-        strftime('%s','now'), strftime('%s','now')
+        0, 0
     );
 ]])
 

@@ -66,11 +66,18 @@ for _, c in ipairs({
     {"clip_a2", "trk_a", 100, 50},
 }) do
     db:exec(string.format([[
-        INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id,
-            timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-            fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-        VALUES ('%s', 'proj1', 'timeline', '%s', '%s', 'med1',
-            %d, %d, 0, %d, 24000, 1001, 1, 0, %d, %d);
+        -- V13 master sequence + track + media_ref for med1
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('master_med1', 'proj1', 'med1_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('master_v_med1', 'master_med1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = 'master_v_med1' WHERE id = 'master_med1';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_med1', 'proj1', 'master_med1', 'master_v_med1', 'med1', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+
+INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES
+    ('%s', 'proj1', '%s', '%s', 'master_med1', %d, %d, 0, %d, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
     ]], c[1], c[1], c[2], c[3], c[4], c[4], now, now))
 end
 

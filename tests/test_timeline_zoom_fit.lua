@@ -13,13 +13,13 @@ local function with_db(fn)
     local db = database.get_connection()
     assert(db, "failed to open db connection")
     assert(db:exec(import_schema), "failed to apply schema")
-    assert(db:exec([[INSERT INTO projects(id,name,fps_mismatch_policy, created_at,modified_at,settings) VALUES('proj','Test','resample',strftime('%s','now'),strftime('%s','now'),'{}')]]))
+    assert(db:exec([[INSERT INTO projects(id,name,fps_mismatch_policy, created_at,modified_at,settings) VALUES('proj','Test','resample',0,0,'{}')]]))
     assert(db:exec([[
         INSERT INTO sequences(
             id,project_id,name,kind,fps_numerator,fps_denominator,audio_rate,width,height,
             view_start_frame,view_duration_frames,playhead_frame,
             selected_clip_ids,selected_edge_infos,selected_gap_infos,current_sequence_number,created_at,modified_at)
-        VALUES('seq','proj','Sequence','nested',24,1,48000,1920,1080,0,8000,0,'[]','[]','[]',0,strftime('%s','now'),strftime('%s','now'))
+        VALUES('seq','proj','Sequence','nested',24,1,48000,1920,1080,0,8000,0,'[]','[]','[]',0,0,0)
     ]]))
     assert(db:exec([[INSERT INTO tracks(id,sequence_id,name,track_type,track_index,enabled,locked,muted,soloed,volume,pan) VALUES
         ('v1','seq','V1','VIDEO',1,1,0,0,0,1.0,0.0),
@@ -54,8 +54,8 @@ end
 with_db(function(db)
     -- Seed two clips with gap
     assert(db:exec([[INSERT INTO clips(id,project_id,clip_kind,track_id,media_id,owner_sequence_id,timeline_start_frame,duration_frames,source_in_frame,source_out_frame,fps_numerator,fps_denominator,enabled,offline,created_at,modified_at) VALUES
-        ('c1','proj','timeline','v1',NULL,'seq',0,2000,0,2000,24,1,1,0,strftime('%s','now'),strftime('%s','now')),
-        ('c2','proj','timeline','v1',NULL,'seq',5000,1000,0,1000,24,1,1,0,strftime('%s','now'),strftime('%s','now'))
+        ('c1','proj','timeline','v1',NULL,'seq',0,2000,0,2000,24,1,1,0,0,0),
+        ('c2','proj','timeline','v1',NULL,'seq',5000,1000,0,1000,24,1,1,0,0,0)
     ]]))
 
     timeline_state.reset()

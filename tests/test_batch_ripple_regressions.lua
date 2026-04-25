@@ -54,12 +54,18 @@ local function build_manual_timeline(config)
     end
 
     for _, clip in ipairs(config.clips or {}) do
-        assert(db:exec(string.format([[INSERT INTO clips (
-            id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-            timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-            fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-            VALUES ('%s', 'default_project', 'timeline', '%s', '%s', 'media_main', 'default_sequence',
-                    %d, %d, 0, %d, 1000, 1, 1, 0, %d, %d);]],
+        assert(db:exec(string.format([[-- V13 master sequence + track + media_ref for media_main
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('master_media_main', 'default_project', 'media_main_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('master_v_media_main', 'master_media_main', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = 'master_v_media_main' WHERE id = 'master_media_main';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media_main', 'default_project', 'master_media_main', 'master_v_media_main', 'media_main', 0, 24000, 0, 24000, 1, 1.0, 0, 0, 0);
+
+INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES
+    ('%s', 'default_project', '%s', '%s', 'master_media_main', 'default_sequence', %d, %d, 0, %d, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);]],
             clip.id, clip.name, clip.track_id, clip.timeline_start, clip.duration, clip.source_out or clip.duration,
             now, now)))
     end

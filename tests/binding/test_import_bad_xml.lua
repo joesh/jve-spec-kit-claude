@@ -54,7 +54,7 @@ local function init_db(path)
 
     db:exec(require('import_schema'))
     db:exec([[INSERT OR IGNORE INTO tag_namespaces(id, display_name) VALUES('bin', 'Bins');]])
-    db:exec([[INSERT INTO projects (id, name, created_at, modified_at) VALUES ('test_project', 'Test Project', strftime('%s','now'), strftime('%s','now'));]])
+    db:exec([[INSERT INTO projects (id, name, created_at, modified_at) VALUES ('test_project', 'Test Project', 0, 0);]])
     return db
 end
 

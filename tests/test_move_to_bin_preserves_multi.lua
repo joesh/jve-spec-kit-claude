@@ -27,11 +27,11 @@ assert(db:exec(schema_sql))
 -- Bootstrap project + sequence
 assert(db:exec([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test Project', 'resample', strftime('%s','now'), strftime('%s','now'));
+    VALUES ('proj1', 'Test Project', 'resample', 0, 0);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
                           audio_rate, width, height, created_at, modified_at)
     VALUES ('seq1', 'proj1', 'Timeline', 'nested', 24, 1, 48000, 1920, 1080,
-            strftime('%s','now'), strftime('%s','now'));
+            0, 0);
 ]]))
 
 command_manager.init("seq1", "proj1")

@@ -70,14 +70,14 @@ assert_true("schema creation", db:exec(schema_sql))
 -- Add initial project data
 local bootstrap_ok = db:exec([[
     INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+    VALUES ('default_project', 'Default Project', 0, 0);
 ]])
 assert_true("bootstrap project", bootstrap_ok)
 
 -- Add default sequence
 local seq_ok, seq_err = db:exec([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-    VALUES ('default_sequence', 'default_project', 'Default Timeline', 'timeline', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
+    VALUES ('default_sequence', 'default_project', 'Default Timeline', 'timeline', 30, 1, 48000, 1920, 1080, 0, 0);
 ]])
 if not seq_ok then
     io.stderr:write("Bootstrap sequence error: " .. tostring(seq_err) .. "\n")

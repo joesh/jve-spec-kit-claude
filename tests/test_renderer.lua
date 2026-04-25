@@ -19,7 +19,7 @@ assert(db:exec(import_schema))
 -- Create minimal project/sequence
 assert(db:exec([[
     INSERT INTO projects(id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES('proj', 'TestProject', 'resample', strftime('%s','now'), strftime('%s','now'))
+    VALUES('proj', 'TestProject', 'resample', 0, 0)
 ]]))
 
 assert(db:exec([[
@@ -27,7 +27,7 @@ assert(db:exec([[
                          audio_rate, width, height, view_start_frame, view_duration_frames,
                          playhead_frame, created_at, modified_at)
     VALUES('seq', 'proj', 'TestTimeline', 'nested', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
-           strftime('%s','now'), strftime('%s','now'))
+           0, 0)
 ]]))
 
 -- Create video tracks: V1 (index 1), V2 (index 2)
@@ -50,11 +50,11 @@ assert(db:exec([[
     INSERT INTO media(id, project_id, file_path, name, duration_frames, fps_numerator, fps_denominator,
                      width, height, audio_channels, codec, created_at, modified_at, metadata)
     VALUES('media_a', 'proj', '/test/clip_a.mov', 'clip_a', 100, 24, 1, 1920, 1080, 2, 'h264',
-           strftime('%s','now'), strftime('%s','now'), '{}'),
+           0, 0, '{}'),
           ('media_b', 'proj', '/test/clip_b.mov', 'clip_b', 200, 24, 1, 1920, 1080, 2, 'h264',
-           strftime('%s','now'), strftime('%s','now'), '{}'),
+           0, 0, '{}'),
           ('media_audio', 'proj', '/test/audio.wav', 'audio', 480000, 48000, 1, 0, 0, 2, 'pcm',
-           strftime('%s','now'), strftime('%s','now'), '{}')
+           0, 0, '{}')
 ]]))
 
 -- Create video clips:
@@ -65,9 +65,9 @@ assert(db:exec([[
                      timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                      fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
     VALUES('clip_v2', 'proj', 'timeline', 'ClipV2', 'v2', 'media_b', 0, 48, 0, 48, 24, 1, 1, 0,
-           strftime('%s','now'), strftime('%s','now')),
+           0, 0),
           ('clip_v1', 'proj', 'timeline', 'ClipV1', 'v1', 'media_a', 24, 48, 10, 58, 24, 1, 1, 0,
-           strftime('%s','now'), strftime('%s','now'))
+           0, 0)
 ]]))
 
 -- Create audio clips:
@@ -78,9 +78,9 @@ assert(db:exec([[
                      timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                      fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
     VALUES('clip_a1', 'proj', 'timeline', 'ClipA1', 'a1', 'media_audio', 0, 96, 0, 96000, 48000, 1, 1, 0,
-           strftime('%s','now'), strftime('%s','now')),
+           0, 0),
           ('clip_a2', 'proj', 'timeline', 'ClipA2', 'a2', 'media_b', 48, 96, 0, 96, 24, 1, 1, 0,
-           strftime('%s','now'), strftime('%s','now'))
+           0, 0)
 ]]))
 
 -- Load the sequence

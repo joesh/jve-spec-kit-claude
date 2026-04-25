@@ -69,7 +69,7 @@ exec(db, SCHEMA_SQL)
 exec(db, [[INSERT OR IGNORE INTO tag_namespaces(id, display_name) VALUES('bin', 'Bins');]])
 exec(db, [[
     INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+    VALUES ('default_project', 'Default Project', 0, 0);
     INSERT INTO sequences (
         id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_rate,
@@ -84,7 +84,7 @@ exec(db, [[
         1920, 1080,
         0, 300, 0,
         '[]', '[]', '[]',
-        0, strftime('%s','now'), strftime('%s','now')
+        0, 0, 0
     );
 ]])
 
@@ -103,7 +103,7 @@ do
             'media_existing', 'default_project', 'Existing Media', ?,
             1, 30000, 1001,
             1920, 1080, 0, '',
-            strftime('%s','now'), strftime('%s','now'), '{}'
+            0, 0, '{}'
         );
     ]]))
     stmt:bind_value(1, existing_path)

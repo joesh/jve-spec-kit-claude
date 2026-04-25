@@ -128,7 +128,7 @@ local function ensure_media_record(db, media_id, duration_frames)
     -- V5 Schema Insert
     local stmt = db:prepare([[ 
         INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at, metadata)
-        VALUES (?, 'project', ?, ?, ?, 30, 1, 1920, 1080, 0, 'raw', strftime('%s','now'), strftime('%s','now'), '{}')
+        VALUES (?, 'project', ?, ?, ?, 30, 1, 1920, 1080, 0, 'raw', 0, 0, '{}')
     ]])
     stmt:bind_value(1, media_id)
     stmt:bind_value(2, media_id .. ".mov")

@@ -45,35 +45,36 @@ db:exec(string.format([[
 -- V1: [clip_v1_left 0..1000] [clip_v1_right 1000..2000]
 -- A1: [clip_a1_left 0..1000] [clip_a1_right 1000..2000]
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-    VALUES ('clip_v1_left', 'proj1', 'timeline', 'V Left', 'trk_v', 'med1',
-        0, 1000, 0, 1000, 24000, 1001, 1, 0, %d, %d);
+    -- V13 master sequence + track + media_ref for med1
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('master_med1', 'proj1', 'med1_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('master_v_med1', 'master_med1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = 'master_v_med1' WHERE id = 'master_med1';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_med1', 'proj1', 'master_med1', 'master_v_med1', 'med1', 0, 3000, 0, 3000, 1, 1.0, 0, 0, 0);
+
+INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES
+    ('clip_v1_left', 'proj1', 'V Left', 'trk_v', 'master_med1', 0, 1000, 0, 1000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-    VALUES ('clip_v1_right', 'proj1', 'timeline', 'V Right', 'trk_v', 'med1',
-        1000, 1000, 1000, 2000, 24000, 1001, 1, 0, %d, %d);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES
+    ('clip_v1_right', 'proj1', 'V Right', 'trk_v', 'master_med1', 1000, 1000, 1000, 2000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-    VALUES ('clip_a1_left', 'proj1', 'timeline', 'A Left', 'trk_a', 'med1',
-        0, 1000, 0, 1000, 24000, 1001, 1, 0, %d, %d);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES
+    ('clip_a1_left', 'proj1', 'A Left', 'trk_a', 'master_med1', 0, 1000, 0, 1000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-    VALUES ('clip_a1_right', 'proj1', 'timeline', 'A Right', 'trk_a', 'med1',
-        1000, 1000, 1000, 2000, 24000, 1001, 1, 0, %d, %d);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES
+    ('clip_a1_right', 'proj1', 'A Right', 'trk_a', 'master_med1', 1000, 1000, 1000, 2000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 -- Link left clips together, right clips together

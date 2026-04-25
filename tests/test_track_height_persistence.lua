@@ -21,14 +21,14 @@ local SCHEMA_SQL = require('import_schema')
 
 local BASE_DATA_SQL = [[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
-    VALUES ('default_project', 'Default Project', 'resample', strftime('%s','now'), strftime('%s','now'), '{}');
+    VALUES ('default_project', 'Default Project', 'resample', 0, 0, '{}');
 
     INSERT INTO sequences (
         id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
         width, height, view_start_frame, view_duration_frames, playhead_frame,
         selected_clip_ids, selected_edge_infos, selected_gap_infos, current_sequence_number, created_at, modified_at
     )
-    VALUES ('seq_a', 'default_project', 'Seq A', 'nested', 30, 1, 48000, 1920, 1080, 0, 10000, 0, '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now'));
+    VALUES ('seq_a', 'default_project', 'Seq A', 'nested', 30, 1, 48000, 1920, 1080, 0, 10000, 0, '[]', '[]', '[]', 0, 0, 0);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES
         ('seq_a_v1', 'seq_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0),

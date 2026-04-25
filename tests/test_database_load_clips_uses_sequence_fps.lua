@@ -30,7 +30,7 @@ print("=== database.load_clips Integer Coords Tests ===")
 --------------------------------------------------------------------------------
 assert(db:exec([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
-    VALUES ('proj', 'Project', 'resample', strftime('%s','now'), strftime('%s','now'), '{}');
+    VALUES ('proj', 'Project', 'resample', 0, 0, '{}');
 
     INSERT INTO sequences (
         id, project_id, name, kind,
@@ -46,7 +46,7 @@ assert(db:exec([[
         1920, 1080,
         0, 250, 0,
         '[]', '[]', '[]',
-        0, strftime('%s','now'), strftime('%s','now')
+        0, 0, 0
     );
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
@@ -70,7 +70,7 @@ assert(db:exec([[
         0, 3000,
         1, 0,
         30000, 1001,
-        strftime('%s','now'), strftime('%s','now')
+        0, 0
     );
 ]]))
 

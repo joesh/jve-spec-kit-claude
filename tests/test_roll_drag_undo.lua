@@ -20,28 +20,28 @@ local function init_database(path)
     assert(db:exec(SCHEMA_SQL))
     assert(db:exec([[
         INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('default_project', 'Default Project', 'resample', strftime('%s','now'), strftime('%s','now'));
+        VALUES ('default_project', 'Default Project', 'resample', 0, 0);
         INSERT INTO sequences (
             id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_rate,
             width, height, view_start_frame, view_duration_frames, playhead_frame,
             created_at, modified_at
         )
-        VALUES ('default_sequence', 'default_project', 'Default Sequence', 'nested', 1000, 1, 48000, 1920, 1080, 0, 250, 0, strftime('%s','now'), strftime('%s','now'));
+        VALUES ('default_sequence', 'default_project', 'Default Sequence', 'nested', 1000, 1, 48000, 1920, 1080, 0, 250, 0, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
         VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 0, 0);
         INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at, metadata)
-        VALUES ('media_a', 'default_project', 'A', '/tmp/jve/a.mov', 10000, 1000, 1, 1920, 1080, 2, 'prores', strftime('%s','now'), strftime('%s','now'), '{}');
+        VALUES ('media_a', 'default_project', 'A', '/tmp/jve/a.mov', 10000, 1000, 1, 1920, 1080, 2, 'prores', 0, 0, '{}');
         INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at, metadata)
-        VALUES ('media_b', 'default_project', 'B', '/tmp/jve/b.mov', 10000, 1000, 1, 1920, 1080, 2, 'prores', strftime('%s','now'), strftime('%s','now'), '{}');
+        VALUES ('media_b', 'default_project', 'B', '/tmp/jve/b.mov', 10000, 1000, 1, 1920, 1080, 2, 'prores', 0, 0, '{}');
         INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
                            timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
         VALUES ('clip_a', 'default_project', 'timeline', 'Clip A', 'track_v1', 'media_a', 'default_sequence',
-                0, 3000, 1000, 4000, 1000, 1, 1, 0, strftime('%s','now'), strftime('%s','now'));
+                0, 3000, 1000, 4000, 1000, 1, 1, 0, 0, 0);
         INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
                            timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
         VALUES ('clip_b', 'default_project', 'timeline', 'Clip B', 'track_v1', 'media_b', 'default_sequence',
-                3000, 2000, 500, 2500, 1000, 1, 1, 0, strftime('%s','now'), strftime('%s','now'));
+                3000, 2000, 500, 2500, 1000, 1, 1, 0, 0, 0);
     ]]))
     return db
 end

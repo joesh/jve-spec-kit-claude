@@ -20,14 +20,14 @@ db:exec(require('import_schema'))
 
 db:exec([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', 'resample', strftime('%s','now'), strftime('%s','now'));
+    VALUES ('default_project', 'Default Project', 'resample', 0, 0);
     INSERT INTO sequences (
         id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_rate,
         width, height, view_start_frame, view_duration_frames, playhead_frame,
         created_at, modified_at
     )
-    VALUES ('default_sequence', 'default_project', 'Sequence', 'nested', 30, 1, 48000, 1920, 1080, 0, 240, 0, strftime('%s','now'), strftime('%s','now'));
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'nested', 30, 1, 48000, 1920, 1080, 0, 240, 0, 0, 0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)

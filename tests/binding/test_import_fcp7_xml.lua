@@ -79,7 +79,7 @@ local function bootstrap_schema(conn)
     assert(conn:exec(require('import_schema')), "Failed to create schema tables")
     assert(conn:exec([[
         INSERT INTO projects (id, name, created_at, modified_at)
-        VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+        VALUES ('default_project', 'Default Project', 0, 0);
 
         INSERT INTO sequences (
             id, project_id, name, kind,
@@ -99,7 +99,7 @@ local function bootstrap_schema(conn)
             NULL, NULL,
             '[]', '[]', '[]',
             0,
-            strftime('%s','now'), strftime('%s','now')
+            0, 0
         );
 
         INSERT OR IGNORE INTO tag_namespaces(id, display_name)
@@ -513,7 +513,7 @@ assert(db:exec([[
         NULL, NULL,
         '[]', '[]', '[]',
         0,
-        strftime('%s','now'), strftime('%s','now')
+        0, 0
     );
 ]]), "Failed to clear timeline state before replay")
 

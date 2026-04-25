@@ -23,7 +23,7 @@ assert(db:exec(import_schema))
 -- Project + sequence
 assert(db:exec([[
     INSERT INTO projects(id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES('proj', 'Test', 'resample', strftime('%s','now'), strftime('%s','now'))
+    VALUES('proj', 'Test', 'resample', 0, 0)
 ]]))
 
 assert(db:exec([[
@@ -31,7 +31,7 @@ assert(db:exec([[
                          audio_rate, width, height, view_start_frame, view_duration_frames,
                          playhead_frame, created_at, modified_at)
     VALUES('seq', 'proj', 'Timeline', 'nested', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
-           strftime('%s','now'), strftime('%s','now'))
+           0, 0)
 ]]))
 
 -- Two video tracks, one audio track
@@ -47,9 +47,9 @@ assert(db:exec([[
     INSERT INTO media(id, project_id, file_path, name, duration_frames, fps_numerator, fps_denominator,
                      width, height, audio_channels, codec, created_at, modified_at, metadata)
     VALUES('media_v', 'proj', '/test/v.mov', 'v', 200, 24, 1, 1920, 1080, 2, 'h264',
-           strftime('%s','now'), strftime('%s','now'), '{}'),
+           0, 0, '{}'),
           ('media_a', 'proj', '/test/a.wav', 'a', 960000, 48000, 1, 0, 0, 2, 'pcm',
-           strftime('%s','now'), strftime('%s','now'), '{}')
+           0, 0, '{}')
 ]]))
 
 -- V1: clip_v1a [0, 100), clip_v1b [200, 300)
@@ -60,11 +60,11 @@ assert(db:exec([[
                      timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                      fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
     VALUES
-        ('clip_v1a', 'proj', 'timeline', 'V1a', 'v1', 'media_v', 0,   100, 0,   100, 24, 1, 1, 0, strftime('%s','now'), strftime('%s','now')),
-        ('clip_v1b', 'proj', 'timeline', 'V1b', 'v1', 'media_v', 200, 100, 0,   100, 24, 1, 1, 0, strftime('%s','now'), strftime('%s','now')),
-        ('clip_v2a', 'proj', 'timeline', 'V2a', 'v2', 'media_v', 50,  100, 10,  110, 24, 1, 1, 0, strftime('%s','now'), strftime('%s','now')),
-        ('clip_a1',  'proj', 'timeline', 'A1',  'a1', 'media_a', 0,   100, 0,   200000, 48000, 1, 1, 0, strftime('%s','now'), strftime('%s','now')),
-        ('clip_a2',  'proj', 'timeline', 'A2',  'a1', 'media_a', 200, 100, 200000, 400000, 48000, 1, 1, 0, strftime('%s','now'), strftime('%s','now'))
+        ('clip_v1a', 'proj', 'timeline', 'V1a', 'v1', 'media_v', 0,   100, 0,   100, 24, 1, 1, 0, 0, 0),
+        ('clip_v1b', 'proj', 'timeline', 'V1b', 'v1', 'media_v', 200, 100, 0,   100, 24, 1, 1, 0, 0, 0),
+        ('clip_v2a', 'proj', 'timeline', 'V2a', 'v2', 'media_v', 50,  100, 10,  110, 24, 1, 1, 0, 0, 0),
+        ('clip_a1',  'proj', 'timeline', 'A1',  'a1', 'media_a', 0,   100, 0,   200000, 48000, 1, 1, 0, 0, 0),
+        ('clip_a2',  'proj', 'timeline', 'A2',  'a1', 'media_a', 200, 100, 200000, 400000, 48000, 1, 1, 0, 0, 0)
 ]]))
 
 local seq = Sequence.load("seq")

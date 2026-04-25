@@ -54,7 +54,7 @@ local function ensure_media(id, duration_value)
         INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
             width, height, audio_channels, codec, metadata, created_at, modified_at)
         VALUES (?, 'default_project', ?, ?, ?, 30, 1, 1920, 1080, 0, 'raw', '{}',
-            strftime('%s','now'), strftime('%s','now'))
+            0, 0)
     ]])
     assert(stmt, "failed to prepare media insert")
     assert(stmt:bind_value(1, id))
@@ -73,7 +73,7 @@ local function insert_clip(id, track_id, start_value, duration_value)
                            timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                            fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
         VALUES (?, 'default_project', 'timeline', ?, ?, ?, NULL, 'default_sequence',
-                ?, ?, 0, ?, 30, 1, 1, 0, strftime('%s','now'), strftime('%s','now'))
+                ?, ?, 0, ?, 30, 1, 1, 0, 0, 0)
     ]])
     assert(stmt, "failed to prepare clip insert")
     assert(stmt:bind_value(1, id))

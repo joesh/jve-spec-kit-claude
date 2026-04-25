@@ -19,9 +19,9 @@ local db = database.get_connection()
 assert(db:exec(import_schema))
 
 -- Minimal project/sequence/tracks
-assert(db:exec([[INSERT INTO projects(id,name,fps_mismatch_policy, created_at,modified_at) VALUES('proj','P','resample',strftime('%s','now'),strftime('%s','now'));]]))
+assert(db:exec([[INSERT INTO projects(id,name,fps_mismatch_policy, created_at,modified_at) VALUES('proj','P','resample',0,0);]]))
 assert(db:exec([[INSERT INTO sequences(id,project_id,name,kind,fps_numerator,fps_denominator,audio_rate,width,height,view_start_frame,view_duration_frames,playhead_frame,created_at,modified_at)
-                 VALUES('seq','proj','Seq','nested',24,1,48000,1920,1080,0,2000,0,strftime('%s','now'),strftime('%s','now'));]]))
+                 VALUES('seq','proj','Seq','nested',24,1,48000,1920,1080,0,2000,0,0,0);]]))
 assert(db:exec([[INSERT INTO tracks(id,sequence_id,name,track_type,track_index,enabled,locked,muted,soloed,volume,pan)
                  VALUES('v1','seq','V1','VIDEO',1,1,0,0,0,1.0,0.0),
                         ('v2','seq','V2','VIDEO',2,1,0,0,0,1.0,0.0);]]))
@@ -31,7 +31,7 @@ local function insert_clip(id, track, start_frames, duration_frames)
         id, project_id, clip_kind, name, track_id, media_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
         fps_numerator, fps_denominator, enabled, created_at, modified_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,24,1,1,strftime('%s','now'),strftime('%s','now'))]])
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,24,1,1,0,0)]])
     stmt:bind_value(1, id)
     stmt:bind_value(2, "proj")
     stmt:bind_value(3, "timeline")

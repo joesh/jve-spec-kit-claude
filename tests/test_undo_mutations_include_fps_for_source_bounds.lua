@@ -20,7 +20,7 @@ local SCHEMA_SQL = require("import_schema")
 
 local BASE_DATA_SQL = [[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', 'resample', strftime('%s','now'), strftime('%s','now'));
+    VALUES ('default_project', 'Default Project', 'resample', 0, 0);
 
     INSERT INTO sequences (
         id, project_id, name, kind,
@@ -32,13 +32,13 @@ local BASE_DATA_SQL = [[
     )
     VALUES ('seq1', 'default_project', 'Sequence', 'nested',
             30, 1, 48000, 1920, 1080, 0, 300, 0, '[]', '[]', '[]', 0,
-            strftime('%s','now'), strftime('%s','now'));
+            0, 0);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('v1', 'seq1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 
     INSERT INTO media (id, project_id, file_path, name, duration_frames, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES ('media1', 'default_project', '/tmp/test.mov', 'Test Media', 3000, 30, 1, strftime('%s','now'), strftime('%s','now'));
+    VALUES ('media1', 'default_project', '/tmp/test.mov', 'Test Media', 3000, 30, 1, 0, 0);
 
     -- Clip that will be trimmed by Overwrite
     INSERT INTO clips (
@@ -49,7 +49,7 @@ local BASE_DATA_SQL = [[
         created_at, modified_at
     ) VALUES
         ('clip1', 'default_project', 'timeline', 'Clip 1', 'v1', 'media1', 'seq1',
-         0, 200, 0, 200, 30, 1, 1, strftime('%s','now'), strftime('%s','now'));
+         0, 200, 0, 200, 30, 1, 1, 0, 0);
 ]]
 
 local function setup_database(path)

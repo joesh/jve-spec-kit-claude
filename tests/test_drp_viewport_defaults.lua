@@ -24,7 +24,7 @@ local function with_db(fn)
     assert(db, "failed to open db connection")
     assert(db:exec(import_schema), "failed to apply schema")
     assert(db:exec([[INSERT INTO projects(id, name, fps_mismatch_policy, created_at, modified_at, settings)
-        VALUES('proj', 'Test', 'resample', strftime('%s','now'), strftime('%s','now'), '{}')]]))
+        VALUES('proj', 'Test', 'resample', 0, 0, '{}')]]))
     fn(db)
 end
 

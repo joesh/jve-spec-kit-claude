@@ -17,7 +17,7 @@ local function setup_db()
 
     assert(conn:exec([[
         INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('default_project', 'Default Project', 'resample', strftime('%s','now'), strftime('%s','now'));
+        VALUES ('default_project', 'Default Project', 'resample', 0, 0);
 
     INSERT INTO sequences (
         id, project_id, name, kind,
@@ -28,27 +28,27 @@ local function setup_db()
     )
     VALUES ('default_sequence', 'default_project', 'Timeline', 'nested',
         30, 1, 48000, 1920, 1080, 0, 240, 0,
-        '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now'));
+        '[]', '[]', '[]', 0, 0, 0);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 
     INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
-    VALUES ('media_a', 'default_project', 'Media A', '/tmp/jve/a.mov', 4000, 30, 1, 1920, 1080, 0, 'prores', '{}', strftime('%s','now'), strftime('%s','now'));
+    VALUES ('media_a', 'default_project', 'Media A', '/tmp/jve/a.mov', 4000, 30, 1, 1920, 1080, 0, 'prores', '{}', 0, 0);
     INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
-    VALUES ('media_b', 'default_project', 'Media B', '/tmp/jve/b.mov', 4000, 30, 1, 1920, 1080, 0, 'prores', '{}', strftime('%s','now'), strftime('%s','now'));
+    VALUES ('media_b', 'default_project', 'Media B', '/tmp/jve/b.mov', 4000, 30, 1, 1920, 1080, 0, 'prores', '{}', 0, 0);
 
     INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
         fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
     VALUES ('clip_a', 'default_project', 'timeline', 'Clip A', 'track_v1', 'media_a', 'default_sequence',
-        0, 4000, 0, 4000, 30, 1, 1, 0, strftime('%s','now'), strftime('%s','now'));
+        0, 4000, 0, 4000, 30, 1, 1, 0, 0, 0);
 
     INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
         fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
     VALUES ('clip_b', 'default_project', 'timeline', 'Clip B', 'track_v1', 'media_b', 'default_sequence',
-        4000, 4000, 0, 4000, 30, 1, 1, 0, strftime('%s','now'), strftime('%s','now'));
+        4000, 4000, 0, 4000, 30, 1, 1, 0, 0, 0);
     ]]))
 
 -- command_impl.register_commands({}, {}, conn)
