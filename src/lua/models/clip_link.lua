@@ -270,6 +270,41 @@ function M.enable_link(clip_id, db)
 end
 
 -- Get the link group ID for a clip (or nil if not linked)
+--- Return a clip id in the given link group whose owner is `owner` and
+--- whose track has the given track_type. Used by GrowMasterMedium to
+--- detect when a video clip already has an audio companion in its
+--- link group (so a duplicate isn't created on shape change).
+--- @return string|nil  clip id, or nil if no match in the group.
+function M.find_in_link_group_on_medium(link_group_id, owner, track_type, db)
+    assert(link_group_id and link_group_id ~= "",
+        "clip_link.find_in_link_group_on_medium: link_group_id required")
+    assert(owner and owner ~= "",
+        "clip_link.find_in_link_group_on_medium: owner required")
+    assert(track_type == "VIDEO" or track_type == "AUDIO",
+        "clip_link.find_in_link_group_on_medium: track_type must be "
+        .. "VIDEO or AUDIO")
+    db = db or database.get_connection()
+    local stmt = db:prepare([[
+        SELECT cl.clip_id FROM clip_links cl
+        JOIN clips c ON c.id = cl.clip_id
+        JOIN tracks t ON t.id = c.track_id
+        WHERE cl.link_group_id = ?
+          AND c.owner_sequence_id = ?
+          AND t.track_type = ?
+        LIMIT 1
+    ]])
+    assert(stmt, "clip_link.find_in_link_group_on_medium: prepare failed")
+    stmt:bind_value(1, link_group_id)
+    stmt:bind_value(2, owner)
+    stmt:bind_value(3, track_type)
+    assert(stmt:exec(),
+        "clip_link.find_in_link_group_on_medium: exec failed")
+    local id
+    if stmt:next() then id = stmt:value(0) end
+    stmt:finalize()
+    return id
+end
+
 function M.get_link_group_id(clip_id, db)
     db = db or database.get_connection()
     local query = db:prepare([[
