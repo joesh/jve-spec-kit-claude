@@ -3,7 +3,7 @@
 ## TL;DR
 
 Migrated the load-side of the V13 schema (SELECT path) and bulk-migrated test
-fixtures across the suite. Tests went **332 → 450 (+118)** across this session
+fixtures across the suite. Tests went **332 → 451 (+119)** across this session
 block (continuation of prior 285 → 332 pass).
 
 ## Commits this block
@@ -20,7 +20,13 @@ block (continuation of prior 285 → 332 pass).
 | `3bfd534f` | command_helper apply_mutations / restore_deleted_clip / capture+restore V13 |
 | `2b8cdffe` | bulk migration — V8 INSERT INTO clips → V13 + master sequence setup + strftime literal (87 files) |
 
-Total: **9 commits**, ~230 test files touched, ~3000 lines changed.
+| `65d1fa6e` | "mc_test" → Sequence.ensure_master injection (15 files) |
+| `10bb9ce3` | clip_mutator.load_track_clips V13 + mc_test setup hardening |
+| `d994a305` | clip_mutator.load_clip_for_duplicate_plan V13 + drop clip_kind='timeline' guard |
+| `abc1b56a` | clip_mutator clone_state + plan_insert + resolve_ripple right_clip — V13 fields |
+| `746769f5` | rename body refs master_clip_id → nested_sequence_id (20 files) |
+
+Total: **15 commits** (this session block) + 4 from prior block, ~250 test files touched, ~4500 lines changed.
 
 ## Architectural changes
 
@@ -97,7 +103,19 @@ duration_frames, source_in_frame, source_out_frame, enabled). bulk_shift
 SQL was not rewritten — it only touches timeline_start_frame which is
 schema-stable across V8/V13.
 
-## What's still failing (207 / 657)
+## `clip_mutator.lua` partial V13 migration
+
+`load_track_clips` and `load_clip_for_duplicate_plan` SELECTs migrated to V13
+schema (owner+nested seq joins, media_refs join). Returned rows expose V13
+fields plus compat surfaces. `clone_state`, `plan_insert` mutation entry, and
+`resolve_ripple` right_clip carry V13 fields alongside V8 aliases for JSON
+round-trip + apply_mutations transitional acceptance.
+
+Drop of `clip_kind='timeline'` guard in `plan_duplicate_block` — V13 has no
+clip_kind column; every clip is a sequence reference (master/still/gap
+collapsed into nested refs).
+
+## What's still failing (206 / 657)
 
 | Bucket | Count | Pattern | Resolution |
 |---|---|---|---|
