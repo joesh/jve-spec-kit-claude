@@ -91,6 +91,7 @@ local clip1 = Clip.create({
         owner_sequence_id = "seq",
         track_id = "a1",
         timeline_start_frame = 48000,
+        source_in_frame = 0,
         source_out_frame = 120000,
         volume = 0.501187,
         fps_mismatch_policy = "resample",

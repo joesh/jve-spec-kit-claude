@@ -75,6 +75,7 @@ local clip = Clip.create({
         nested_sequence_id = MC_TEST,
         timeline_start_frame = 0,
         duration_frames = 48,
+        source_in_frame = 0,
         source_out_frame = 48,
         enabled = true,
         fps_mismatch_policy = "resample",

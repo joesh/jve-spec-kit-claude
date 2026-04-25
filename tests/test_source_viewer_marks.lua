@@ -101,6 +101,7 @@ local a_clip = Clip.create({
         owner_sequence_id = mc.id,
         timeline_start_frame = 0,
         duration_frames = 4800000,
+        source_in_frame = 0,
         source_out_frame = 4800000,
         fps_mismatch_policy = "resample",
         volume = 1.0,
