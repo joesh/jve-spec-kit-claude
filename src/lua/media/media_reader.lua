@@ -333,7 +333,7 @@ function M.import_media(file_path, db, project_id, existing_media_id)
 
     -- Extract TC origin from the file via EMP.
     -- File is guaranteed to exist (we just probed it).
-    -- This sets start_tc_value/start_tc_rate in metadata so ensure_masterclip
+    -- This sets start_tc_value/start_tc_rate in metadata so ensure_master
     -- gets the real TC, not a fabricated 0.
     -- In the running app, EMP is always available. In unit tests without EMP,
     -- _ensure_tc_extracted() will lazily extract when the file is first accessed.
