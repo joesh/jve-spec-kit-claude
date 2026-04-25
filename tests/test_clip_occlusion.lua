@@ -403,9 +403,9 @@ local base_clip = Clip.create({
 assert(base_clip:save(db), "failed saving base clip for split test")
 
 local insert_split = Command.create("Insert", "project")
-insert_split:set_parameter("master_clip_id", split_master_clip_id)
+insert_split:set_parameter("nested_sequence_id", split_master_clip_id)
 insert_split:set_parameter("track_id", "track_v3")
-insert_split:set_parameter("insert_time", 60) -- 2000ms
+insert_split:set_parameter("timeline_start_frame", 60) -- 2000ms
 insert_split:set_parameter("duration", 30) -- 1000ms
 insert_split:set_parameter("source_in", 0)
 insert_split:set_parameter("source_out", 30)

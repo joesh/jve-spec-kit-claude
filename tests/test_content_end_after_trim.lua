@@ -88,10 +88,10 @@ assert(mc_seq:save(), "failed to save masterclip marks")
 
 -- Insert clip at timeline position 50
 local insert_cmd = Command.create("Insert", "proj1")
-insert_cmd:set_parameter("master_clip_id", mc_id)
+insert_cmd:set_parameter("nested_sequence_id", mc_id)
 insert_cmd:set_parameter("track_id", "vt1")
 insert_cmd:set_parameter("sequence_id", "seq1")
-insert_cmd:set_parameter("insert_time", 50)
+insert_cmd:set_parameter("timeline_start_frame", 50)
 local result = execute_cmd(insert_cmd)
 assert(result.success, "Insert failed: " .. tostring(result.error_message))
 

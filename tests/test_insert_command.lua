@@ -172,7 +172,7 @@ local insert_cmd = Command.create("Insert", "project")
 insert_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
 insert_cmd:set_parameter("track_id", "track_v1")
 insert_cmd:set_parameter("sequence_id", "sequence")
-insert_cmd:set_parameter("insert_time", 0)
+insert_cmd:set_parameter("timeline_start_frame", 0)
 
 local result = execute_cmd(insert_cmd)
 assert(result.success, "Insert should succeed: " .. tostring(result.error_message))
@@ -193,7 +193,7 @@ local insert_cmd2 = Command.create("Insert", "project")
 insert_cmd2:set_parameter("nested_sequence_id", nested_sequence_id)
 insert_cmd2:set_parameter("track_id", "track_v1")
 insert_cmd2:set_parameter("sequence_id", "sequence")
-insert_cmd2:set_parameter("insert_time", 0)
+insert_cmd2:set_parameter("timeline_start_frame", 0)
 
 result = execute_cmd(insert_cmd2)
 assert(result.success, "Second insert should succeed")
@@ -247,7 +247,7 @@ local insert_cmd3 = Command.create("Insert", "project")
 insert_cmd3:set_parameter("nested_sequence_id", nested_sequence_id)
 insert_cmd3:set_parameter("track_id", "track_v1")
 insert_cmd3:set_parameter("sequence_id", "sequence")
-insert_cmd3:set_parameter("insert_time", 0)
+insert_cmd3:set_parameter("timeline_start_frame", 0)
 -- No marks set — should use full media duration (100 frames)
 
 result = execute_cmd(insert_cmd3)
@@ -274,7 +274,7 @@ local insert_cmd4 = Command.create("Insert", "project")
 insert_cmd4:set_parameter("nested_sequence_id", nested_sequence_id)
 insert_cmd4:set_parameter("track_id", "track_v1")
 insert_cmd4:set_parameter("sequence_id", "sequence")
-insert_cmd4:set_parameter("insert_time", 200)  -- Exactly at downstream start
+insert_cmd4:set_parameter("timeline_start_frame", 200)  -- Exactly at downstream start
 
 result = execute_cmd(insert_cmd4)
 assert(result.success, "Insert at boundary should succeed")
@@ -292,7 +292,7 @@ asserts._set_enabled_for_tests(false)
 local bad_cmd = Command.create("Insert", "project")
 bad_cmd:set_parameter("track_id", "track_v1")
 bad_cmd:set_parameter("sequence_id", "sequence")
-bad_cmd:set_parameter("insert_time", 0)
+bad_cmd:set_parameter("timeline_start_frame", 0)
 bad_cmd:set_parameter("duration", 50)
 -- No media_id
 
@@ -309,7 +309,7 @@ local bad_cmd2 = Command.create("Insert", "project")
 bad_cmd2:set_parameter("nested_sequence_id", nested_sequence_id)
 bad_cmd2:set_parameter("track_id", "track_v1")
 bad_cmd2:set_parameter("sequence_id", "sequence")
-bad_cmd2:set_parameter("insert_time", 0)
+bad_cmd2:set_parameter("timeline_start_frame", 0)
 bad_cmd2:set_parameter("nested_sequence_id", "nonexistent_master")  -- Should fail
 bad_cmd2:set_parameter("duration", 50)
 
@@ -332,7 +332,7 @@ for i = 1, 3 do
     cmd:set_parameter("nested_sequence_id", nested_sequence_id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("sequence_id", "sequence")
-    cmd:set_parameter("insert_time", 0)
+    cmd:set_parameter("timeline_start_frame", 0)
     result = execute_cmd(cmd)
     assert(result.success, string.format("Insert %d should succeed", i))
 end

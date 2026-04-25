@@ -82,7 +82,7 @@ local insert_cmd = Command.create("Insert", "default_project")
 insert_cmd:set_parameter("sequence_id", "seq1")
 insert_cmd:set_parameter("track_id", "v1")
 insert_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
-insert_cmd:set_parameter("insert_time", 0)
+insert_cmd:set_parameter("timeline_start_frame", 0)
 insert_cmd:set_parameter("advance_playhead", true)
 
 print("Step 1: Execute Insert (100 frames at 0, advance_playhead=true)")

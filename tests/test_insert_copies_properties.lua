@@ -189,7 +189,7 @@ insert_cmd:set_parameter("media_id", import_cmd:get_parameter("media_id") or "me
 insert_cmd:set_parameter("track_id", "track_v1")
 insert_cmd:set_parameter("sequence_id", "timeline_seq")
 insert_cmd:set_parameter("project_id", "test_project")
-insert_cmd:set_parameter("insert_time", 0)
+insert_cmd:set_parameter("timeline_start_frame", 0)
 insert_cmd:set_parameter("duration", 4000)
 insert_cmd:set_parameter("source_in", 0)
 insert_cmd:set_parameter("source_out", 4000)

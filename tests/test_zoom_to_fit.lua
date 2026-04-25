@@ -62,9 +62,9 @@ local mc_id = test_env.create_test_masterclip_sequence('proj', 'MC1', 25, 1, 500
 local cmd = Command.create("Insert", "proj")
 cmd:set_parameter("sequence_id", "seq")
 cmd:set_parameter("track_id", "v1")
-cmd:set_parameter("master_clip_id", mc_id)
+cmd:set_parameter("nested_sequence_id", mc_id)
 cmd:set_parameter("clip_id", "clip_a")
-cmd:set_parameter("insert_time", 100)
+cmd:set_parameter("timeline_start_frame", 100)
 local r = command_manager.execute(cmd)
 assert(r and r.success, "Insert failed: " .. tostring(r and r.error_message))
 
