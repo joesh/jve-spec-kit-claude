@@ -75,6 +75,13 @@ local SPEC = {
         fps_mismatch_policy   = {},
         clip_name             = {},
         audio_drop_mode       = {},   -- 'composite' (default) or 'expanded'
+        -- V8 compat: accepted-but-ignored params for tests / older callers.
+        -- V13 derives source bounds from the nested sequence's marks; passing
+        -- explicit source_in/source_out/duration is a no-op.
+        advance_playhead      = {},
+        source_in             = {},
+        source_out            = {},
+        duration              = {},
     },
     persisted = {
         created_clip_ids       = {},

@@ -76,6 +76,11 @@ local SPEC = {
         target_audio_track_id = {},
         fps_mismatch_policy   = {},
         clip_name             = {},
+        -- V8 compat: accepted-but-ignored params for tests / older callers.
+        advance_playhead      = {},
+        source_in             = {},
+        source_out            = {},
+        duration              = {},
     },
     persisted = {
         created_clip_ids       = {},
