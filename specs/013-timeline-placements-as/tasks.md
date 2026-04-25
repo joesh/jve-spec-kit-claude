@@ -164,8 +164,8 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 
 ### 3.6.a — Tests first
 
-- [ ] **T057 [P]** CT-C13 SetMasterDefaultLayer — V1 → V2 changes all tracking clips' exposed layer; clips with their own override unaffected. Path: `tests/test_set_master_default_layer.lua`.
-- [ ] **T058 [P]** CT-C14 SetMasterChannelState — upsert propagates to tracking clips; overridden clips untouched. Path: `tests/test_set_master_channel_state.lua`.
+- [x] **T057 [P]** CT-C13 SetMasterDefaultLayer — V1 → V2 changes all tracking clips' exposed layer; clips with their own override unaffected. Path: `tests/test_set_master_default_layer.lua`.
+- [x] **T058 [P]** CT-C14 SetMasterChannelState — upsert propagates to tracking clips; overridden clips untouched. Path: `tests/test_set_master_channel_state.lua`.
 - [ ] **T059 [P]** CT-C15 SetSequenceStartTC — propagates to timeline-position translation for all referencing clips. Path: `tests/test_set_sequence_start_tc.lua`.
 - [ ] **T059a [P]** FR-017 default-derivation coverage: a freshly-imported master's `video_start_tc_frame` is derived from its first video media_ref's native TC; `audio_start_tc_samples` from its first audio media_ref. A freshly-imported non-master's defaults derive from its first video clip / first audio clip. Independent of SetSequenceStartTC (which tests the edit path); this tests the derive-at-creation path. Path: `tests/test_sequence_start_tc_defaults.lua`.
 - [ ] **T060 [P]** CT-C16 SetFpsMismatchPolicy — project scope writes `projects.fps_mismatch_policy` (no effect on existing clips); sequence scope writes `sequences.fps_mismatch_policy` (no effect on existing clips); **clip scope is structural**: re-computes `clips.duration_frames` under the new policy, ripples downstream on the track, and flips linked V+A pair together as a unit. Parametrized 25fps master on 24fps timeline: flipping from `passthrough` (100 frames) to `resample` (96 frames) shortens the clip and pulls downstream clips back by 4. Path: `tests/test_set_fps_mismatch_policy.lua`.
@@ -173,8 +173,8 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 
 ### 3.6.b — Implementation
 
-- [ ] **T061 [P]** Create `src/lua/core/commands/set_master_default_layer.lua` — refuses if `track_id` doesn't belong to the master's V tracks; INV-8 check.
-- [ ] **T062 [P]** Create `src/lua/core/commands/set_master_channel_state.lua` — UPSERT `media_refs_channel_state`; explicit `enabled`+`gain_db` required.
+- [x] **T061 [P]** Create `src/lua/core/commands/set_master_default_layer.lua` — refuses if `track_id` doesn't belong to the master's V tracks; INV-8 check.
+- [x] **T062 [P]** Create `src/lua/core/commands/set_master_channel_state.lua` — UPSERT `media_refs_channel_state`; explicit `enabled`+`gain_db` required.
 - [ ] **T063 [P]** Create `src/lua/core/commands/set_sequence_start_tc.lua` — Args `{ sequence_id, medium ∈ {'video','audio'}, tc_value }` (rule 2.29 — `sequence_id` required).
 - [ ] **T064 [P]** Create `src/lua/core/commands/set_fps_mismatch_policy.lua` — dispatch on `scope`:
   - `scope='project'` Args: `{ project_id, policy ∈ {'resample','passthrough'} }` (non-NULL). UPDATE only; no effect on existing clips.
