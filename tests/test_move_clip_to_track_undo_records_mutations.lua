@@ -28,11 +28,9 @@ assert(db:exec([[INSERT INTO tracks(id,sequence_id,name,track_type,track_index,e
                         ('v2','seq','V2','VIDEO',2,1,0,0,0,1.0,0.0);]]))
 
 local function insert_clip(id, track, start_frames, duration_frames)
-    local stmt = db:prepare([[INSERT INTO clips(
-        id, project_id, clip_kind, name, track_id, media_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        fps_numerator, fps_denominator, enabled, created_at, modified_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,24,1,1,0,0)]])
+    local stmt = db:prepare([[
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, nested_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    (?, ?, ?, ?, 'seq', '_v13_placeholder_master', ?, ?, ?, ?, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);]])
     stmt:bind_value(1, id)
     stmt:bind_value(2, "proj")
     stmt:bind_value(3, "timeline")
