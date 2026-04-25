@@ -124,7 +124,7 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 - [x] **T037 [P]** CT-C8 Duplicate copies `master_layer_track_id`, `fps_mismatch_policy`, and all `clip_channel_override` rows. Path: `tests/test_duplicate_copies_overrides.lua`.
 - [x] **T038 [P]** Ripple-delete preserves link group (Acceptance Scenario 8 / FR-003). Path: `tests/test_ripple_delete_link_group.lua`.
 - [x] **T039 [P]** Cycle refusal on Insert: attempt to nest a sequence inside itself (direct + transitive) must refuse with a user-visible error; no DB mutation. Path: `tests/test_insert_cycle_refuse.lua`.
-- [ ] **T039a [P]** `sequence_content_changed` signal contract — subscribe a spy, drive one representative from each command class (Insert, Overwrite, Trim, Duplicate, SetClipLayer, ToggleClipChannel, SetMasterDefaultLayer, SetMasterChannelState, SetSequenceStartTC, Nest, Unnest, GrowMasterMedium), assert the signal fires with the correct `sequence_id` for each. Without this, silent omission of the signal in any command would go undetected. Path: `tests/test_signal_sequence_content_changed.lua`.
+- [x] **T039a [P]** `sequence_content_changed` signal contract — subscribe a spy, drive one representative from each command class (Insert, Overwrite, Trim, Duplicate, SetClipLayer, ToggleClipChannel, SetMasterDefaultLayer, SetMasterChannelState, SetSequenceStartTC, Nest, Unnest, GrowMasterMedium), assert the signal fires with the correct `sequence_id` for each. Without this, silent omission of the signal in any command would go undetected. Path: `tests/test_signal_sequence_content_changed.lua`.
 
 ### 3.4.b — Implementation
 
