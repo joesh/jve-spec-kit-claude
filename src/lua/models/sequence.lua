@@ -1561,13 +1561,19 @@ end
 
 -- Assert a track_id exists on the given sequence. Loud message with clip_id
 -- and the dangling track (G-R5). Returns the track_type.
-local function assert_layer_ref_valid(db, clip_id, seq_id, track_id)
+-- Validate a clip's track-selector reference. `selector_label` is
+-- "master_layer_track_id" or "master_audio_track_id" — the column name
+-- whose value is being asserted. Both selectors share the same shape
+-- (FK to tracks(id) with ON DELETE SET NULL); the only difference is
+-- the assert-message label per rule 1.14.
+local function assert_track_ref_valid(db, clip_id, seq_id, track_id,
+                                       selector_label)
     if track_id == nil then return nil end
     local stmt = db:prepare(
         "SELECT track_type, sequence_id FROM tracks WHERE id = ?")
-    assert(stmt, "Sequence.resolve: layer-ref prepare failed")
+    assert(stmt, "Sequence.resolve: track-ref prepare failed")
     stmt:bind_value(1, track_id)
-    assert(stmt:exec(), "Sequence.resolve: layer-ref exec failed")
+    assert(stmt:exec(), "Sequence.resolve: track-ref exec failed")
     local found, ttype, tseq
     if stmt:next() then
         found = true
@@ -1576,14 +1582,22 @@ local function assert_layer_ref_valid(db, clip_id, seq_id, track_id)
     end
     stmt:finalize()
     assert(found, string.format(
-        "Sequence.resolve G-R5: clip %s has master_layer_track_id=%s that does not exist "
-        .. "(dangling — FK ON DELETE SET NULL should have NULLed this; DB corruption?)",
-        tostring(clip_id), tostring(track_id)))
+        "Sequence.resolve G-R5: clip %s has %s=%s that does not exist "
+        .. "(dangling — FK ON DELETE SET NULL should have NULLed this; "
+        .. "DB corruption?)",
+        tostring(clip_id), selector_label, tostring(track_id)))
     assert(tseq == seq_id, string.format(
-        "Sequence.resolve G-R5: clip %s master_layer_track_id=%s belongs to sequence %s, "
+        "Sequence.resolve G-R5: clip %s %s=%s belongs to sequence %s, "
         .. "not the referenced sequence %s",
-        tostring(clip_id), tostring(track_id), tostring(tseq), tostring(seq_id)))
+        tostring(clip_id), selector_label, tostring(track_id),
+        tostring(tseq), tostring(seq_id)))
     return ttype
+end
+
+-- Backward-compat: existing call sites use master_layer_track_id label.
+local function assert_layer_ref_valid(db, clip_id, seq_id, track_id)
+    return assert_track_ref_valid(db, clip_id, seq_id, track_id,
+        "master_layer_track_id")
 end
 
 -- Fetch the effective channel state for a master's channel. Absent row →
@@ -1684,7 +1698,8 @@ local function list_clips_overlapping(db, seq_id, start_frame, end_frame)
         SELECT c.id, c.track_id, c.nested_sequence_id,
                c.timeline_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
-               c.master_layer_track_id, c.fps_mismatch_policy,
+               c.master_layer_track_id, c.master_audio_track_id,
+               c.fps_mismatch_policy,
                c.enabled, c.volume,
                t.track_type, t.track_index
         FROM clips c
@@ -1711,11 +1726,12 @@ local function list_clips_overlapping(db, seq_id, start_frame, end_frame)
             source_in = stmt:value(5),
             source_out = stmt:value(6),
             master_layer_track_id = stmt:value(7),
-            fps_mismatch_policy = stmt:value(8),
-            enabled = stmt:value(9) == 1,
-            volume = stmt:value(10),
-            track_type = stmt:value(11),
-            track_index = stmt:value(12),
+            master_audio_track_id = stmt:value(8),
+            fps_mismatch_policy = stmt:value(9),
+            enabled = stmt:value(10) == 1,
+            volume = stmt:value(11),
+            track_type = stmt:value(12),
+            track_index = stmt:value(13),
         }
     end
     stmt:finalize()
@@ -1744,8 +1760,14 @@ end
 -- composes that into volume/enabled at finalization time, allowing any clip
 -- in the chain to replace the master's channel state with its override
 -- without divide-by-stale-factor math.
+--
+-- Track selectors (symmetric per FR-005 / FR-023):
+--   layer_track_id    — non-nil restricts V media_refs to that track.
+--   audio_track_id    — non-nil restricts A media_refs to that track
+--                       (Expand/Collapse audio path). nil = composite
+--                       (every A media_ref emits, today's behavior).
 local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
-                                   layer_track_id, outer_chain)
+                                   layer_track_id, audio_track_id, outer_chain)
     local entries = {}
     local all = list_media_refs(db, seq_id, nil)
 
@@ -1755,6 +1777,8 @@ local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
         local include
         if r.track_type == "VIDEO" and layer_track_id ~= nil then
             include = (r.track_id == layer_track_id)
+        elseif r.track_type == "AUDIO" and audio_track_id ~= nil then
+            include = (r.track_id == audio_track_id)
         else
             include = true
         end
@@ -1844,20 +1868,30 @@ end
 --   * for audio entries, replace channel_state with this clip's override row
 --     when present (per-channel — sparse table; absent row = inherit).
 local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
-                              outer_chain, layer_filter_for_v)
+                              outer_chain, layer_filter_for_v,
+                              audio_filter_for_a)
     local entries = {}
     local clips = list_clips_overlapping(db, seq_id, outer_lo, outer_hi)
     for _, c in ipairs(clips) do
         -- Layer filter at THIS level: filter clips whose track_type is VIDEO
-        -- to the chosen V track only. Audio clips always pass.
+        -- to the chosen V track only. Symmetrically filter AUDIO clips by
+        -- the audio-track filter when one is in effect (Expand/Collapse).
         local v_filtered = (c.track_type == "VIDEO")
                        and layer_filter_for_v ~= nil
                        and c.track_id ~= layer_filter_for_v
-        if not v_filtered then
-            -- G-R5 layer-ref validation.
+        local a_filtered = (c.track_type == "AUDIO")
+                       and audio_filter_for_a ~= nil
+                       and c.track_id ~= audio_filter_for_a
+        if not v_filtered and not a_filtered then
+            -- G-R5 selector validation: both V layer and A audio track,
+            -- if non-NULL, must point at a live track of c.nested_sequence_id.
             if c.master_layer_track_id then
-                assert_layer_ref_valid(db, c.id, c.nested_sequence_id,
-                    c.master_layer_track_id)
+                assert_track_ref_valid(db, c.id, c.nested_sequence_id,
+                    c.master_layer_track_id, "master_layer_track_id")
+            end
+            if c.master_audio_track_id then
+                assert_track_ref_valid(db, c.id, c.nested_sequence_id,
+                    c.master_audio_track_id, "master_audio_track_id")
             end
 
             -- Layer to expose at the level THIS clip directly references.
@@ -1867,6 +1901,13 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
             if layer_for_inner == nil then
                 layer_for_inner = fetch_default_video_layer(db, c.nested_sequence_id)
             end
+
+            -- Audio-track selector at THIS clip's directly-referenced level.
+            -- NULL = composite (today's behavior — no restriction). Non-NULL
+            -- = single-track (Expand). There is no sequence-level "default
+            -- audio track" symmetric to default_video_layer_track_id;
+            -- composite IS the default.
+            local audio_for_inner = c.master_audio_track_id
 
             -- Compute the source-coord (= nested-timebase) sub-range to
             -- recurse into, derived from the outer-coord intersection.
@@ -1886,7 +1927,8 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
             inner_chain[#inner_chain + 1] = c.id
 
             local inner = resolve_seq_range(db, c.nested_sequence_id,
-                source_lo, source_hi, context, inner_chain, layer_for_inner)
+                source_lo, source_hi, context, inner_chain,
+                layer_for_inner, audio_for_inner)
 
             -- No double-counting: V clips materialize only V media; A only A.
             local want_kind = (c.track_type == "VIDEO") and "video" or "audio"
@@ -1925,8 +1967,14 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
 end
 
 -- The resolver dispatch. Reads as a high-level algorithm (rule 2.5).
+-- `layer_for_directly_referenced` and `audio_for_directly_referenced` are
+-- the V / A track selectors that apply at the directly-referenced level
+-- (master leaf or nested clip filter). NULL = composite/default for that
+-- medium.
 resolve_seq_range = function(db, seq_id, range_lo, range_hi, context,
-                             outer_chain, layer_for_directly_referenced)
+                             outer_chain,
+                             layer_for_directly_referenced,
+                             audio_for_directly_referenced)
     -- Cycle guard (G-R2). Loud assert with provenance chain.
     assert(not context.recursing_into[seq_id], string.format(
         "Sequence.resolve G-R2: cycle detected in chain — sequence %s is already "
@@ -1938,10 +1986,14 @@ resolve_seq_range = function(db, seq_id, range_lo, range_hi, context,
     local entries
     if kind == "master" then
         entries = resolve_master_leaf(db, seq_id, range_lo, range_hi,
-            layer_for_directly_referenced, outer_chain)
+            layer_for_directly_referenced,
+            audio_for_directly_referenced,
+            outer_chain)
     else
         entries = resolve_nested(db, seq_id, range_lo, range_hi,
-            context, outer_chain, layer_for_directly_referenced)
+            context, outer_chain,
+            layer_for_directly_referenced,
+            audio_for_directly_referenced)
     end
 
     context.recursing_into[seq_id] = nil
@@ -1969,7 +2021,7 @@ function Sequence:resolve_in_range(seq_id, start_frame, end_frame, context)
     context.recursing_into = context.recursing_into or {}
     local db = resolve_db()
     local entries = resolve_seq_range(db, seq_id, start_frame, end_frame,
-        context, {}, nil)
+        context, {}, nil, nil)
     return finalize_entries(entries)
 end
 

@@ -10,23 +10,26 @@ All timeline commands rewired to operate on `clips`; new override commands intro
 
 ### `Insert`
 
-**Args**: `{ sequence_id, nested_sequence_id, timeline_start_frame, tracks_mask, fps_mismatch_policy? }`. `fps_mismatch_policy` is optional; when absent, effective policy = `sequences[sequence_id].fps_mismatch_policy` (if non-NULL) else `projects.fps_mismatch_policy`.
+**Args**: `{ sequence_id, nested_sequence_id, timeline_start_frame, tracks_mask, fps_mismatch_policy?, audio_drop_mode? }`. `fps_mismatch_policy` is optional; when absent, effective policy = `sequences[sequence_id].fps_mismatch_policy` (if non-NULL) else `projects.fps_mismatch_policy`. `audio_drop_mode ∈ {'composite','expanded'}` is optional; when absent, importer/caller supplies per FR-025 (default: composite). Composite emits one A clip with `master_audio_track_id=NULL`; expanded emits N A clips, one per audio track of the nested sequence, each with `master_audio_track_id` pointing at its respective track.
 
-**Pre**: `sequence_id` refers to a `kind='nested'` sequence (you can only insert into non-master sequences); `nested_sequence_id` refers to any existing sequence (master or nested); cycle check (`would_create_cycle`) passes; `timeline_start_frame` is valid; `tracks_mask` names the video and/or audio target tracks.
+**Pre**: `sequence_id` refers to a `kind='nested'` sequence (you can only insert into non-master sequences); `nested_sequence_id` refers to any existing sequence (master or nested); cycle check (`would_create_cycle`) passes; `timeline_start_frame` is valid; `tracks_mask` names the video and/or audio target tracks. In expanded mode: if the target sequence has fewer than N consecutive audio tracks at or below the named A target, missing tracks are auto-created as part of the command; if any of the target audio tracks is occupied at the drop's time range, Insert refuses with a named-offender error.
 
 **Mutations**:
 - Compute effective policy per args above; compute `duration_frames` (in owner sequence's timebase) from `nested.duration` (in nested's timebase) per the policy:
   - `resample`: `duration_frames = round(nested.duration * owner.fps / nested.fps)`
   - `passthrough`: `duration_frames = nested.duration` (treated as if already in owner fps; plays faster/slower by the ratio)
-- Insert 1 or 2 rows into `clips` (V entry + A entry, one per track the nested sequence contains) with `nested_sequence_id` set, `source_in_frame=0`, `source_out_frame=nested.duration_in_nested_timebase`, `master_layer_track_id=NULL`, `fps_mismatch_policy` = the computed effective policy.
+- Insert 1 V row + (composite: 1 A row | expanded: N A rows) into `clips`, all with `nested_sequence_id` set, `source_in_frame=0`, `source_out_frame=nested.duration_in_nested_timebase`, `master_layer_track_id=NULL`, `fps_mismatch_policy` = the computed effective policy. Audio rows: composite mode sets `master_audio_track_id=NULL`; expanded mode sets `master_audio_track_id` to a distinct audio track of the nested sequence per row.
+- In expanded mode, auto-create missing audio tracks (insert `tracks` rows) before placing the new A clips.
 - Ripple any clips on the target tracks at or past `timeline_start_frame` forward by the computed `duration_frames`.
-- If 2 rows inserted, insert two `clip_links` rows sharing a new `link_group_id`.
+- Insert all V+A rows into one `clip_links.link_group_id`.
 
-**Undo capture**: inserted row ids + ripple delta + link_group_id.
+**Undo capture**: inserted row ids + ripple delta + link_group_id + any auto-created tracks (so undo also removes them).
 
 **Signals**: `sequence_content_changed(sequence_id)`.
 
-**Contract test (CT-C1)**: Given a master with video and stereo audio, when Insert at frame 100, the `clips` table has exactly 2 new rows (one on V track, one on A track), both with the correct `nested_sequence_id`, NULL `master_layer_track_id`, non-NULL `fps_mismatch_policy`, and one `clip_links.link_group_id` groups them. Parametrized over both policies: a 25fps master dropped onto a 24fps timeline produces `duration_frames = 96` under `resample` and `duration_frames = 100` under `passthrough`; `source_out_frame = 100` in both cases (nested-sequence timebase).
+**Contract test (CT-C1 — composite)**: Given a master with video and stereo audio, when Insert at frame 100 with `audio_drop_mode='composite'`, the `clips` table has exactly 2 new rows (one on V track, one on A track), the A row has `master_audio_track_id=NULL`, both rows have NULL `master_layer_track_id` and non-NULL `fps_mismatch_policy`, and one `clip_links.link_group_id` groups them. Parametrized over both policies: a 25fps master dropped onto a 24fps timeline produces `duration_frames = 96` under `resample` and `duration_frames = 100` under `passthrough`; `source_out_frame = 100` in both cases (nested-sequence timebase).
+
+**Contract test (CT-C1b — expanded)**: Given a master with video and 4 audio tracks, when Insert at frame 100 with `audio_drop_mode='expanded'` onto a target sequence with only 1 audio track, the `clips` table has exactly 5 new rows (1 V + 4 A), the 4 A rows have distinct non-NULL `master_audio_track_id` values covering all 4 of the master's audio tracks, the target sequence has gained 3 auto-created audio tracks below the original, and all 5 rows share one `link_group_id`. Refused (no mutation) if any of A2..A4 already has a clip overlapping `[100, 100+duration_frames)`.
 
 ---
 
@@ -150,6 +153,76 @@ Copies a `clips` row to a new `timeline_start`. Also copies the source clip's `m
 **Label**: `"Revert channel 3 to master default"`.
 
 **Contract test (CT-C12)**: Clearing an override removes the row; subsequent playback reflects master channel state.
+
+---
+
+## New commands — Expand / Collapse audio (FR-023, FR-024)
+
+### `ExpandAudio`
+
+**Args**: `{ sequence_id, clip_id }`. `sequence_id = clip.owner_sequence_id` (rule 2.29).
+
+**Pre**: clip exists; clip is an audio clip (its `track_id` is an audio track of the owner sequence); `clip.master_audio_track_id IS NULL` (already-expanded clips are refused — composite is the source state); the clip's `nested_sequence_id` has at least 2 audio tracks (a 1-track Expand is a no-op refusal); for tracks Ai..Ai+N-1 (where Ai is the source clip's track and N = nested sequence's audio track count), every existing clip on those tracks whose time range overlaps `[clip.timeline_start_frame, clip.timeline_start_frame + clip.duration_frames)` is the source clip itself — otherwise refuse with a named-offender error.
+
+**Mutations**:
+1. Auto-create audio tracks below Ai if fewer than N consecutive audio tracks exist at or below Ai.
+2. DELETE the source composite clip.
+3. INSERT N new audio clips on tracks Ai..Ai+N-1, each with the same `nested_sequence_id`, `source_in_frame`, `source_out_frame`, `timeline_start_frame`, `duration_frames`, `fps_mismatch_policy` as the source; each with a distinct non-NULL `master_audio_track_id` pointing at one audio track of the nested sequence.
+4. Project the source clip's `clip_channel_override` rows onto the new clips: an override on `(source.id, channel_index)` moves to `(new_clip.id, channel_index)` where `new_clip` is the expanded clip whose `master_audio_track_id` corresponds to the master's audio track that contains `channel_index`.
+5. Update the source clip's `clip_links.link_group_id` membership: remove the source clip, add the N new clips. (V clip in the same group survives untouched.)
+
+**Undo capture**: source clip row + its overrides + its link_group membership; the N new clip ids; any auto-created track ids.
+
+**Signals**: `sequence_content_changed(sequence_id)`.
+
+**Contract test (CT-C20)**: Given a clip referencing a master with 4 audio tracks, on a target sequence with only 1 audio track, when ExpandAudio is invoked, 3 new audio tracks are auto-created, the `clips` table loses the source row and gains 4 rows (one per master audio track) with distinct `master_audio_track_id` values, the link_group containing the original V clip now contains V + 4 A clips, and any per-channel overrides on the source clip are projected onto the corresponding expanded clip. Refused if any of A2..A4 has an overlapping clip.
+
+**Contract test (CT-C20b)**: ExpandAudio on a 1-audio-track master refuses with "nothing to expand" and makes no mutation. ExpandAudio on a clip whose `master_audio_track_id` is already non-NULL refuses (already expanded).
+
+---
+
+### `CollapseAudio`
+
+**Args**: `{ sequence_id, clip_ids }`. `sequence_id` is the common owner; `clip_ids` is the user's selection (one or more audio clips).
+
+**Pre**:
+- All clip_ids exist and `clip.owner_sequence_id = sequence_id` for each.
+- All are audio clips with non-NULL `master_audio_track_id`.
+- All share the same `nested_sequence_id`.
+- All share the same `source_in_frame` AND `source_out_frame` (windows identical — divergent windows are the genuine expressiveness Expand buys; refuse).
+- All are members of the same `clip_links.link_group_id`.
+- Selection is non-empty.
+- Each selected clip's `master_audio_track_id` is distinct (no duplicate-track selections).
+
+**Mutations**:
+1. Compute the set of nested-sequence audio tracks NOT covered by the selection (the "unselected tracks").
+2. DELETE the selected clip rows.
+3. INSERT one new composite audio clip on the topmost selected track (lowest track-index among the selection), with `master_audio_track_id=NULL`, same `nested_sequence_id`, `source_in_frame`, `source_out_frame`, `timeline_start_frame`, `duration_frames`, `fps_mismatch_policy` as the selection.
+4. Project per-channel state onto the new composite:
+   - For each unselected track: INSERT `clip_channel_override` rows for every channel of that track with `enabled=0` (per-channel disables — the projected-deletion case from FR-024 / Edge Cases).
+   - For each selected clip's existing per-channel overrides: copy onto the new composite at the same `channel_index`.
+   - For each selected clip with non-unity `volume`: INSERT per-channel gain overrides on the new composite for that clip's channels.
+5. Update `clip_links.link_group_id` membership: remove the selected clip ids, add the new composite clip id. (V clip in the same group survives untouched.)
+
+**Undo capture**: selected clip rows + their overrides + their link_group membership; the new composite clip id and its projected overrides.
+
+**Signals**: `sequence_content_changed(sequence_id)`.
+
+**Refusal cases (named-offender errors)**:
+- Different `nested_sequence_id` across selection
+- Different windows (`source_in_frame` / `source_out_frame` diverge)
+- Not all in one link group
+- Cross-sequence selection
+- Any selected clip already has NULL `master_audio_track_id` (already composite)
+- Empty selection
+
+**Contract test (CT-C21)**: Given V + 4 expanded A clips referencing the same master, when CollapseAudio is invoked on all 4 A clips, the `clips` table loses the 4 A rows and gains 1 composite row on the topmost of the 4 source tracks with `master_audio_track_id=NULL`, the link_group now contains V + 1 A. Audibly identical to pre-collapse (per-channel overrides preserved).
+
+**Contract test (CT-C21b — partial selection)**: Given V + 4 expanded A clips on tracks A1..A4, when CollapseAudio is invoked on only A1+A2, the result is V + composite-on-A1 (with per-channel disables on the 2 audio tracks corresponding to A3+A4's selectors) + A3 + A4 untouched. Audibly identical to pre-collapse.
+
+**Contract test (CT-C21c — divergent windows)**: Given two expanded A clips with different `source_in_frame` (user slipped one independently), CollapseAudio refuses with a named error and makes no mutation.
+
+**Contract test (CT-C21d — projected-deletion roundtrip)**: Given V + 4 expanded A clips, the user deletes A2 (now V + A1+A3+A4). When CollapseAudio is invoked on A1+A3+A4, the result is V + composite-on-A1 with per-channel disables on the audio track that was A2. Subsequent ExpandAudio recreates 4 A clips, with the previously-A2 clip's channels disabled (silent). User clears the disables to re-enable.
 
 ---
 

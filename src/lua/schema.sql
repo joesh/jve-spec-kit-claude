@@ -226,10 +226,19 @@ CREATE TABLE IF NOT EXISTS clips (
     timeline_start_frame INTEGER NOT NULL,
     duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),
 
-    -- Per-clip layer override. Non-NULL = this clip exposes the named video
-    -- track of its nested sequence. NULL = inherit nested sequence's
+    -- Per-clip video-layer override. Non-NULL = this clip exposes the named
+    -- video track of its nested sequence. NULL = inherit nested sequence's
     -- default_video_layer_track_id. Rule 2.13: NULL is inherit, not fallback.
     master_layer_track_id TEXT REFERENCES tracks(id) ON DELETE SET NULL,
+
+    -- Per-clip audio-track selector. NULL = composite (play all of the nested
+    -- sequence's audio tracks together; FR-005). Non-NULL = expose exactly one
+    -- of the nested sequence's audio tracks (FR-023/FR-024 — Expand/Collapse).
+    -- Symmetric to master_layer_track_id but for audio. INV-9: non-NULL only
+    -- on clips whose owner-side track is itself an audio track, and the
+    -- referenced track must belong to nested_sequence_id and have kind='audio'
+    -- (model-layer asserts; FK takes care of dangling-on-delete).
+    master_audio_track_id TEXT REFERENCES tracks(id) ON DELETE SET NULL,
 
     -- Per-clip fps-mismatch policy. NOT NULL — set at Insert time from the
     -- effective project/sequence default (or explicit arg). duration_frames

@@ -21,6 +21,7 @@
 - [x] **T001 [P]** Write failing test for `sequences.kind IN ('master','nested')` CHECK constraint — attempt INSERT with `kind='timeline'`/`'compound'`/`'masterclip'`/`'multicam'`/other string; all must fail. Path: `tests/test_schema_sequences_kind_check.lua`.
 - [x] **T002 [P]** Write failing test for `media_refs` table shape — INSERT a row without each NOT NULL column (`project_id`, `owner_sequence_id`, `track_id`, `media_id`, `source_in_frame`, `source_out_frame`, `timeline_start_frame`, `duration_frames`, `fps_numerator`, `fps_denominator`, `enabled`, `volume`, `playhead_frame`, `created_at`, `modified_at`); each must fail. Also test `duration_frames > 0` CHECK. Path: `tests/test_schema_media_refs.lua`.
 - [x] **T003 [P]** Write failing test for `clips` column changes — assert `clip_kind`, `master_clip_id`, `media_id`, `offline` columns DO NOT exist; assert `nested_sequence_id NOT NULL`, `master_layer_track_id` (nullable, FK ON DELETE SET NULL), `fps_mismatch_policy` (nullable) DO exist. Test that INSERT without `name` fails (no default). Path: `tests/test_schema_clips_shape.lua`.
+- [x] **T003a [P]** Write failing test for `clips.master_audio_track_id` (FR-005/023/024) — column exists, nullable, FK to `tracks(id)` with `ON DELETE SET NULL`. Direct SQL INSERT with non-NULL value succeeds; deleting the referenced track sets the column to NULL. Path: `tests/test_schema_clips_master_audio_track_id.lua`.
 - [x] **T004 [P]** Write failing test for `media_refs_channel_state` table shape — INSERT without `enabled` or `default_gain_db` must fail (no column defaults); PK `(owner_sequence_id, channel_index)` enforced. Path: `tests/test_schema_media_refs_channel_state.lua`.
 - [x] **T005 [P]** Write failing test for `clip_channel_override` table shape — INSERT without `enabled` or `gain_db` must fail; PK `(clip_id, channel_index)`; `ON DELETE CASCADE` on clip delete. Path: `tests/test_schema_clip_channel_override.lua`.
 - [x] **T006 [P]** Write failing test for `projects.fps_mismatch_policy` column (NOT NULL, values in `('resample','passthrough')`). Path: `tests/test_schema_projects_fps_policy.lua`.
@@ -44,6 +45,7 @@
   - **Statically-verifiable INV-1 / INV-2 (rule 2.21)**: add SQLite triggers `trg_media_refs_owner_kind_insert`, `trg_media_refs_owner_kind_update`, `trg_clips_owner_kind_insert`, `trg_clips_owner_kind_update` that `RAISE(ABORT, ...)` when the joined `sequences.kind` is wrong. SQLite cannot express this as a CHECK (no subqueries), so triggers are the schema-layer path; model-layer asserts in T014/T015 are defense-in-depth.
   - Per FR-018: no migration from old schema; dropping old columns is destructive by design.
   - Run T001–T007; they must all pass.
+- [x] **T008a** Additive schema: add `clips.master_audio_track_id TEXT REFERENCES tracks(id) ON DELETE SET NULL` per FR-005 / FR-023 / FR-024. NULL = composite (today's behavior — existing rows unaffected); non-NULL = single audio track of the nested sequence. Drives T003a green. (Already landed in `src/lua/schema.sql` alongside spec edits.)
 
 ---
 
@@ -78,6 +80,7 @@
 - [x] **T019 [P]** CT-R2: one-level nested resolution through a clip; provenance length 2; `timeline_start` translated through the clip's window. Path: `tests/test_resolve_nested_one_level.lua`.
 - [x] **T020 [P]** CT-R3: three-level chain (nested → nested → master); provenance length 3. Path: `tests/test_resolve_nested_deep.lua`.
 - [x] **T021 [P]** CT-R4: multicam layer override — clip's `master_layer_track_id=V2` makes the returned video entry's `media_path` come from V2's media_ref, not V1's. Path: `tests/test_resolve_layer_override.lua`.
+- [x] **T021a [P]** CT-R4b (audio-track selector — FR-005/023): clip's `master_audio_track_id=A2` restricts audio resolution to A2's media_ref only, not all audio tracks. NULL selector returns all audio tracks composited (today's behavior — regression check). Plus G-R5 dangling assert when the selector's track was direct-SQL deleted. Path: `tests/test_resolve_audio_track_selector.lua`.
 - [x] **T022 [P]** CT-R5: audio channel disable override — `clip_channel_override(channel=2, enabled=0)` yields `enabled=false` only for channel 2. Path: `tests/test_resolve_channel_disable.lua`.
 - [x] **T023 [P]** CT-R6: channel gain composition — per-clip override (-6 dB) wins over master state (-3 dB). Path: `tests/test_resolve_channel_gain.lua`.
 - [x] **T024 [P]** CT-R7: cycle-asserted — direct-SQL create a cycle, call resolver, expect loud assert naming both seq ids and provenance. Path: `tests/test_resolve_cycle_assert.lua`.
@@ -160,6 +163,28 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 
 ---
 
+## Phase 3.5.c: Expand / Collapse audio (FR-023, FR-024, FR-025)
+
+### 3.5.c.a — Tests first
+
+- [ ] **T056a [P]** CT-C20 ExpandAudio happy path — given V + composite A clip referencing a 4-audio-track master on a target sequence with only 1 A track, ExpandAudio replaces the source A clip with 4 A clips on tracks A1..A4 (auto-creating A2..A4), each with a distinct non-NULL `master_audio_track_id`; the V clip's link group now contains V + 4 A clips; per-channel overrides on the source clip project onto the corresponding expanded clip. Path: `tests/test_expand_audio.lua`.
+- [ ] **T056b [P]** CT-C20b ExpandAudio refusal cases — refuse on 1-audio-track master ("nothing to expand"); refuse on already-expanded clip (non-NULL `master_audio_track_id`); refuse on collision with an existing clip on A2..A4 in the source's time range (named-offender error); no mutation in any refusal case. Path: `tests/test_expand_audio_refusals.lua`.
+- [ ] **T056c [P]** CT-C20c ExpandAudio undo — single undo restores the source composite clip + its overrides + its link_group membership and removes the N expanded clips and any auto-created tracks. Path: `tests/test_expand_audio_undo.lua`.
+- [ ] **T056d [P]** CT-C21 CollapseAudio happy path — given V + 4 expanded A clips, CollapseAudio on all 4 produces V + 1 composite A clip on the topmost source track with `master_audio_track_id=NULL`; per-channel state preserved. Path: `tests/test_collapse_audio.lua`.
+- [ ] **T056e [P]** CT-C21b CollapseAudio partial selection — given V + 4 expanded A clips (A1..A4), CollapseAudio on {A1, A2} produces V + composite-on-A1 (with per-channel disables on the audio tracks corresponding to A3+A4's selectors) + A3 + A4 untouched. Audibly identical to pre-collapse. Path: `tests/test_collapse_audio_partial.lua`.
+- [ ] **T056f [P]** CT-C21c CollapseAudio refusal cases — divergent windows (one selected clip slipped) refuses; different masters across selection refuses; not-all-in-one-link-group refuses; cross-sequence selection refuses; selection containing an already-composite clip refuses; empty selection refuses. No mutation in any refusal case. Path: `tests/test_collapse_audio_refusals.lua`.
+- [ ] **T056g [P]** CT-C21d Expand→delete→Collapse→Expand roundtrip — given V + 4 expanded A clips, user deletes A2, CollapseAudio on remaining {A1, A3, A4} yields composite with channels-of-A2 disabled; subsequent ExpandAudio on the composite re-creates 4 A clips with the previously-A2 clip's channels still disabled (silent). Clearing those overrides restores audibility. Path: `tests/test_expand_collapse_roundtrip.lua`.
+- [ ] **T056h [P]** CT-C1b (regression on AddClipsToSequence/Insert/Overwrite — FR-002 + FR-025): with `audio_drop_mode='expanded'` arg, Insert of a 4-A-track master onto a 1-A-track sequence emits 1 V + 4 A rows with distinct non-NULL `master_audio_track_id` values, auto-creates 3 audio tracks, all 5 rows in one link_group; refused on collision. Default (no arg) is composite. Path: `tests/test_insert_audio_drop_mode.lua`.
+
+### 3.5.c.b — Implementation
+
+- [ ] **T056i [P]** Create `src/lua/core/commands/expand_audio.lua` — refusals first (rule 1.14 fail-fast); auto-create audio tracks; project overrides; rewrite link_group membership; full undo capture (source row + overrides + link_group + auto-created tracks).
+- [ ] **T056j [P]** Create `src/lua/core/commands/collapse_audio.lua` — refusals first; project per-channel state (unselected tracks → per-channel disables; selected clips' overrides → composite overrides; non-unity volume → per-channel gain); rewrite link_group; full undo capture.
+- [ ] **T056k** Update `src/lua/core/commands/add_clips_to_sequence.lua` (and Insert/Overwrite paths via `place_shared`) to accept optional `audio_drop_mode ∈ {'composite','expanded'}` arg defaulting to composite. Expanded mode: emit N A rows with distinct `master_audio_track_id`, auto-create tracks, refuse on collision. Existing composite-mode tests (CT-C1) remain green; new tests T056h and importer-shape tests (T070-T073) cover expanded mode.
+- [x] **T056l** Extend `Sequence:resolve_in_range` to apply `clip.master_audio_track_id` as an audio-track filter symmetric to `master_layer_track_id` (resolver.md track-selector step). Defense-in-depth: dangling non-NULL value asserts loudly per G-R5. Drives T021a green.
+
+---
+
 ## Phase 3.6: Master-level + sequence-level commands
 
 ### 3.6.a — Tests first
@@ -210,6 +235,7 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 - [ ] **T072 [P]** Premiere .prproj importer integration test: same. Path: `tests/integration/test_prproj_emits_new_shape.lua`.
 - [ ] **T073 [P]** Drag-drop / `media_reader` integration test: dropping a loose file creates a `kind='master'` sequence with media_refs + a clip on the current edit sequence. Path: `tests/integration/test_drag_drop_emits_new_shape.lua`.
 - [ ] **T073a [P]** Importer error-path tests (rule 2.32): malformed DRP (truncated FieldsBlob), FCP7 XMEML with missing media refs, .prproj referencing a file not on disk, drag-drop of a non-media file. Each must fail loudly with a user-visible error and leave no partial rows behind. Path: `tests/integration/test_importer_error_paths.lua`.
+- [ ] **T073b [P]** Importer drop-mode classification (FR-025): synced/multicam sources drop in **composite** mode (1 V + 1 A clip with `master_audio_track_id=NULL`); poly-WAV multitrack and importer-marked traditional multitrack assemblies drop in **expanded** mode (1 V + N A clips with distinct non-NULL `master_audio_track_id`). Covers DRP synced clip → composite, DRP poly-WAV multitrack → expanded, FCP7 multitrack → expanded, .prproj merged-clip → composite, drag-drop loose poly-WAV → expanded, drag-drop loose stereo file → composite. Path: `tests/integration/test_importer_drop_mode_classification.lua`.
 - [ ] **T073b [P]** Importer cycle-refusal test: a source project that (when translated) would produce a cycle must be refused at import time with a clear error; no partial sequences left. Path: `tests/integration/test_importer_cycle_refusal.lua`.
 
 ### 3.8.b — Implementation

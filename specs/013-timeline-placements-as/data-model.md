@@ -139,8 +139,15 @@ CREATE TABLE clips (
     timeline_start_frame INTEGER NOT NULL,
     duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),
 
-    -- Per-clip layer override (NULL = inherit nested sequence's default).
+    -- Per-clip video-layer override (NULL = inherit nested sequence's default).
     master_layer_track_id TEXT REFERENCES tracks(id) ON DELETE SET NULL,
+
+    -- Per-clip audio-track selector. NULL = composite (play all of the nested
+    -- sequence's audio tracks together; FR-005). Non-NULL = expose exactly one
+    -- of the nested sequence's audio tracks (FR-023/FR-024 — Expand/Collapse).
+    -- Symmetric to master_layer_track_id but for audio. Set non-NULL only on
+    -- audio clips; refused on video clips at the model layer.
+    master_audio_track_id TEXT REFERENCES tracks(id) ON DELETE SET NULL,
 
     -- fps-mismatch policy. NOT NULL — set at Insert time from the effective
     -- default (project → sequence → optional Insert arg). Flipping this
@@ -248,6 +255,7 @@ sequences (kind='nested')
 | INV-6 | On master-track deletion, every `clips.master_layer_track_id` pointing at the deleted track is set to NULL by the DB FK (`ON DELETE SET NULL`). The MASTER's own `default_video_layer_track_id` must still refer to a live track, or be NULL-only-if-the-master-has-no-video-tracks (INV-8). | DB FK + model assertion on master after track-delete. |
 | INV-7 | Every `clips` row is in at most one link group (it may have zero or one row in `clip_links`). | `clip_links` table semantics (enforced in link/unlink commands). |
 | INV-8 | `sequences.default_video_layer_track_id` is non-NULL whenever the sequence has at least one video track. | Model-layer assertion on every `sequences` write; cross-checked after track-delete commands. |
+| INV-9 | `clips.master_audio_track_id`, when non-NULL, references a track that (a) belongs to the clip's `nested_sequence_id` and (b) has `kind='audio'`. NULL means composite (play all of the nested sequence's audio tracks). The column is non-NULL only on clips whose `track_id` is itself an audio track of the owner sequence (you cannot put an audio-track selector on a video clip). | Model-layer assertion on every `clips` write; FK + DB CHECK on the audio-only requirement; `ON DELETE SET NULL` falls the column back to composite when the referenced audio track is deleted. |
 
 ## State transitions
 
@@ -323,7 +331,7 @@ Nest and unnest are inverses. "Master" sequences cannot be unnested (unnesting w
 | Table | Change |
 |---|---|
 | `sequences` | `kind` value set narrows to `'master'/'nested'` (was `'timeline'/'masterclip'/'compound'/'multicam'`); add `default_video_layer_track_id`, `video_start_tc_frame`, `audio_start_tc_samples`, `fps_mismatch_policy`. Drop `view_start_frame`, `view_duration_frames`, `video_scroll_offset`, `audio_scroll_offset`, `video_audio_split_ratio` if those are better modeled as UI/view state elsewhere — out of scope for this feature, retained as-is here. |
-| `clips` | **Substantial semantic narrowing.** Drop `clip_kind`, `master_clip_id` (renamed), `media_id`, `offline`. Rename `master_clip_id` → `nested_sequence_id`. Add `master_layer_track_id`, `fps_mismatch_policy`. `source_in/out_frame` units shift from file-native to nested-sequence-timebase. |
+| `clips` | **Substantial semantic narrowing.** Drop `clip_kind`, `master_clip_id` (renamed), `media_id`, `offline`. Rename `master_clip_id` → `nested_sequence_id`. Add `master_layer_track_id`, `master_audio_track_id` (FR-005/023/024 — NULL=composite, non-NULL=single audio track of nested sequence), `fps_mismatch_policy`. `source_in/out_frame` units shift from file-native to nested-sequence-timebase. |
 | (new) `media_refs` | Takes over all responsibility previously held by `clips` rows where `clip_kind='master'`. Structurally near-identical; isolated for type safety (rule 2.21). |
 | (new) `media_refs_channel_state` | Master-level per-channel state. Replaces the `master_channel_state` name from an earlier draft; renamed for parallelism with the `media_refs` table. |
 | (new) `clip_channel_override` | Sparse per-clip channel overrides. |

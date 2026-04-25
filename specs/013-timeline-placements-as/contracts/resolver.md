@@ -68,12 +68,14 @@ On entry to a sequence at a given range:
 
 For each clip encountered while resolving a non-master sequence:
 
-1. **Layer selector** applied first — if `clip.master_layer_track_id` is non-NULL, restrict the recursion into the nested sequence to that specific video track. If NULL, restrict to the nested sequence's `default_video_layer_track_id`. Audio tracks pass through unfiltered (audio is composite, not alternative).
-2. **Recurse** into `clip.nested_sequence_id` with the clamped range and the filtered track set.
-3. **Channel state** applied to the recursion's audio results — for each returned audio entry, look up `(clip.id, channel_index)` in `clip_channel_override`; if present, its `enabled/gain_db` override the inherited state from the nested sequence.
+1. **Track selectors** applied first — symmetric for video and audio:
+   - **Video**: if `clip.master_layer_track_id` is non-NULL, restrict the recursion into the nested sequence to that specific video track. If NULL, restrict to the nested sequence's `default_video_layer_track_id` (alternative-stack semantics — exactly one video track exposed per clip).
+   - **Audio**: if `clip.master_audio_track_id` is non-NULL, restrict the recursion into the nested sequence to that specific audio track (expanded mode — exactly one audio track exposed per clip; FR-023/FR-024). If NULL, all of the nested sequence's audio tracks pass through (composite mode — all tracks composited; FR-005).
+2. **Recurse** into `clip.nested_sequence_id` with the clamped range and the filtered track sets (one V track or none; one A track or all A tracks).
+3. **Channel state** applied to the recursion's audio results — for each returned audio entry, look up `(clip.id, channel_index)` in `clip_channel_override`; if present, its `enabled/gain_db` override the inherited state from the nested sequence. In expanded mode the override applies to channels of the selected audio track only; in composite mode it applies across all returned channels (channel_index addresses the master's full channel layout in either mode).
 4. **Gain composition** — clip's volume × inherited volume (from the nested sequence's resolution) × any media_ref volume at the leaf. Multiply through the chain.
 
-Reversing this order (channel state before layer selection) would apply channel mutes to tracks the layer filter would then discard — incorrect.
+Reversing this order (channel state before track selection) would apply channel mutes to tracks the selector would then discard — incorrect.
 
 ---
 
@@ -105,6 +107,8 @@ The resolver provides the information; the choice of retime vs pass-through is p
 If a clip's `nested_sequence_id` no longer exists, or its leaf media_refs point at media rows whose files are offline, the resolver emits synthetic `ResolvedEntry` rows with `media_path = nil`, `enabled = false`, and a `provenance` chain identifying the broken link. The renderer surfaces these via FR-022's loud-fail overlay.
 
 If `clip.master_layer_track_id` points at a deleted track, the resolver asserts loudly with the clip id and the dangling track id. The FK `ON DELETE SET NULL` already NULL's this column when its referent is deleted through the ordinary command path, so arriving here with a live-but-dangling id means the DB has been corrupted or mutated outside the command layer — a fallback would silently paper over that (rule 2.13 / rule 1.14). NULL is the inherit signal and resolves to the referenced sequence's `default_video_layer_track_id`; that is inheritance, not a fallback.
+
+The same rule applies to `clip.master_audio_track_id`: a live-but-dangling non-NULL value asserts loudly. NULL is the composite signal — explicitly "play all audio tracks" — and is the default state for audio clips that haven't been Expanded.
 
 ### G-R6: Export parity
 
