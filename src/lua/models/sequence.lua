@@ -468,9 +468,13 @@ function Sequence.set_undo_cursor_for_project(project_id, cursor_value)
     assert(type(cursor_value) == "number",
         "Sequence.set_undo_cursor_for_project: cursor_value must be number")
     local conn = resolve_db()
+    -- Per-sequence undo cursor was scoped to non-master sequences (the
+    -- user's edit timelines). V13 narrowed `kind` from {timeline,
+    -- masterclip,compound,multicam} to {master,nested}; the
+    -- non-master set is now exactly kind='nested'.
     local stmt = assert(conn:prepare([[
         UPDATE sequences SET current_sequence_number = ?
-        WHERE project_id = ? AND kind = 'timeline'
+        WHERE project_id = ? AND kind = 'nested'
     ]]), "Sequence.set_undo_cursor_for_project: failed to prepare")
     stmt:bind_value(1, cursor_value)
     stmt:bind_value(2, project_id)
@@ -502,10 +506,12 @@ end
 function Sequence.find_most_recent()
     local conn = resolve_db()
 
-    -- Filter out masterclip sequences - only return timeline sequences
+    -- Filter to non-master sequences (kind='nested'). Per V13 the
+    -- "timeline" kind narrows to 'nested'; masters are not listed in
+    -- the recent-sequences UI surface this serves.
     local stmt = assert(conn:prepare([[
         SELECT id FROM sequences
-        WHERE kind IS NULL OR kind != 'masterclip'
+        WHERE kind = 'nested'
         ORDER BY modified_at DESC, created_at DESC, id ASC
         LIMIT 1
     ]]), "Sequence.find_most_recent: failed to prepare query")
@@ -767,8 +773,18 @@ end
 
 --- Check if this is a masterclip sequence (appears in project browser as source)
 -- @return boolean true if kind == "masterclip"
+--- Whether this sequence is a master (V13 kind='master'). The `kind`
+--- value narrowed from {timeline,masterclip,compound,multicam} to
+--- {master,nested} in V13; this checks the new value.
+function Sequence:is_master()
+    return self.kind == "master"
+end
+
+--- Deprecated alias for is_master(). Pre-V13 callers used this name;
+--- semantics are unchanged under V13 since both check kind=='master'.
+--- Slated for removal once all UI surfaces migrate to is_master().
 function Sequence:is_masterclip()
-    return self.kind == "masterclip"
+    return self:is_master()
 end
 
 --- Ensure stream clips are loaded and cached for this masterclip sequence
@@ -1451,29 +1467,21 @@ function Sequence:compute_content_end()
 end
 
 --- Content duration in frames.
--- For timeline sequences: max(timeline_start + duration) across track clips.
--- For masterclip sequences: the stream clip's duration_frames.
+-- For master sequences (V13 kind='master'): max(timeline_start_frame +
+--   duration_frames) across V media_refs. (Falls back to the audio
+--   media_refs' max if no video.) Computed via the existing
+--   Sequence.native_duration_for_medium helper which already returns
+--   the correct value for either medium.
+-- For non-master sequences (kind='nested'): max(timeline_start +
+--   duration) across track clips, computed by compute_content_end().
 -- @return integer  0 if no content
 function Sequence:content_duration()
-    if self:is_masterclip() then
-        local db = resolve_db()
-        local stmt = db:prepare([[
-            SELECT duration_frames FROM clips
-            WHERE owner_sequence_id = ? AND clip_kind = 'master'
-            LIMIT 1
-        ]])
-        assert(stmt, "Sequence:content_duration: failed to prepare query")
-        stmt:bind_value(1, self.id)
-        assert(stmt:exec(), "Sequence:content_duration: query exec failed")
-        assert(stmt:next(), string.format(
-            "Sequence:content_duration(%s): masterclip has no clip_kind='master' row",
-            tostring(self.id)))
-        local dur = stmt:value(0)
-        assert(dur and dur > 0, string.format(
-            "Sequence:content_duration(%s): duration_frames is %s (expected > 0)",
-            tostring(self.id), tostring(dur)))
-        stmt:finalize()
-        return dur
+    if self:is_master() then
+        -- Prefer video; fall back to audio for video-less masters.
+        local v_dur = Sequence.native_duration_for_medium(self.id, "VIDEO")
+        if v_dur and v_dur > 0 then return v_dur end
+        local a_dur = Sequence.native_duration_for_medium(self.id, "AUDIO")
+        return a_dur or 0
     end
     return self:compute_content_end()
 end
