@@ -237,9 +237,9 @@ assert(db:exec([[
 assert(db:exec([[
     INSERT INTO media(id, project_id, file_path, name, duration_frames,
                      fps_numerator, fps_denominator, width, height,
-                     audio_channels, codec, created_at, modified_at, metadata)
+                     audio_channels, audio_sample_rate, codec, created_at, modified_at, metadata)
     VALUES('media1', 'proj', '/test/clip.mov', 'TestClip', 100, 24, 1,
-           1920, 1080, 2, 'h264', 0, 0, '{}')
+           1920, 1080, 2, 48000, 'h264', 0, 0, '{"start_tc_value":0,"start_tc_rate":24}')
 ]]))
 
 -- Create masterclip sequence with stream clip

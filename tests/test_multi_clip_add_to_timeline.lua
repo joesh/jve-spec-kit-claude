@@ -56,6 +56,8 @@ local media1 = Media.create({
     width = 1920,
     height = 1080,
     audio_channels = 2,
+,
+    audio_sample_rate = 48000
 })
 media1:save(db)
 
@@ -70,6 +72,8 @@ local media2 = Media.create({
     width = 1920,
     height = 1080,
     audio_channels = 2,
+,
+    audio_sample_rate = 48000
 })
 media2:save(db)
 
@@ -84,6 +88,8 @@ local media3 = Media.create({
     width = 1920,
     height = 1080,
     audio_channels = 2,
+,
+    audio_sample_rate = 48000
 })
 media3:save(db)
 

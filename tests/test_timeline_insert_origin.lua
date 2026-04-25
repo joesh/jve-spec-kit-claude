@@ -63,6 +63,8 @@ local media = Media.create({
     height = 1080,
     audio_channels = 2,
     codec = "h264"
+,
+    audio_sample_rate = 48000
 })
 assert(media:save(db), "failed to save media")
 

@@ -108,6 +108,20 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             return false, tostring(result_or_err)
         end
         command:set_parameter("prior_unit", result_or_err.deleted)
+
+        -- Report mutations so command_manager downstream + UI cache invalidate.
+        local bucket = {
+            sequence_id = args.sequence_id,
+            inserts     = {},
+            updates     = {},
+            deletes     = {},
+            bulk_shifts = {},
+        }
+        for _, captured in ipairs(result_or_err.deleted or {}) do
+            bucket.deletes[#bucket.deletes + 1] = captured.row and captured.row.id or captured.id
+        end
+        command:set_parameter("__timeline_mutations", bucket)
+
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
         return true
@@ -131,6 +145,23 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
         assert(database.release_savepoint(SAVEPOINT),
             "Undo DeleteClip: release savepoint failed")
+
+        -- Report restored clips as inserts so command_manager treats undo
+        -- like a real timeline mutation.
+        local bucket = {
+            sequence_id = args.sequence_id,
+            inserts     = {},
+            updates     = {},
+            deletes     = {},
+            bulk_shifts = {},
+        }
+        for _, captured in ipairs(prior) do
+            bucket.inserts[#bucket.inserts + 1] = {
+                id = captured.row and captured.row.id or captured.id,
+            }
+        end
+        command:set_parameter("__timeline_mutations", bucket)
+
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
         return true
