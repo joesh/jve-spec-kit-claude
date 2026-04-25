@@ -39,13 +39,15 @@ assert(db:exec([[
     VALUES('v1', 'seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0)
 ]]))
 
--- Create test media
+-- Create test media + V13 master sequence
 assert(db:exec([[
     INSERT INTO media(id, project_id, file_path, name, duration_frames, fps_numerator, fps_denominator,
-                     width, height, audio_channels, codec, created_at, modified_at, metadata)
-    VALUES('media_a', 'proj', '/test/a.mov', 'a', 100, 24, 1, 1920, 1080, 2, 'h264',
-           0, 0, '{}')
+                     width, height, audio_channels, audio_sample_rate, codec, created_at, modified_at, metadata)
+    VALUES('media_a', 'proj', '/test/a.mov', 'a', 1000, 24, 1, 1920, 1080, 2, 48000, 'h264',
+           0, 0, '{"start_tc_value":0,"start_tc_rate":24}')
 ]]))
+local Sequence = require("models.sequence")
+Sequence.ensure_master("media_a", "proj", { id = "master_a" })
 
 -- Layout on track v1:
 --   clip_1: frames [0, 48)    (timeline_start=0, duration=48)
@@ -54,14 +56,15 @@ assert(db:exec([[
 --   clip_3: frames [200, 300) (timeline_start=200, duration=100, DISABLED)
 --   clip_4: frames [300, 400) (timeline_start=300, duration=100)
 assert(db:exec([[
-    INSERT INTO clips(id, project_id, clip_kind, name, track_id, media_id,
+    INSERT INTO clips(id, project_id, name, track_id, owner_sequence_id, nested_sequence_id,
                      timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-                     fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
+                     master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+                     enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
-        ('clip_1', 'proj', 'timeline', 'Clip1', 'v1', 'media_a', 0,   48,  0, 48,  24, 1, 1, 0, 0, 0),
-        ('clip_2', 'proj', 'timeline', 'Clip2', 'v1', 'media_a', 100, 100, 0, 100, 24, 1, 1, 0, 0, 0),
-        ('clip_3', 'proj', 'timeline', 'Clip3', 'v1', 'media_a', 200, 100, 0, 100, 24, 1, 0, 0, 0, 0),
-        ('clip_4', 'proj', 'timeline', 'Clip4', 'v1', 'media_a', 300, 100, 0, 100, 24, 1, 1, 0, 0, 0)
+        ('clip_1', 'proj', 'Clip1', 'v1', 'seq', 'master_a', 0,   48,  0, 48,  NULL, NULL, 'resample', 1, 1.0, 0, 0, 0),
+        ('clip_2', 'proj', 'Clip2', 'v1', 'seq', 'master_a', 100, 100, 0, 100, NULL, NULL, 'resample', 1, 1.0, 0, 0, 0),
+        ('clip_3', 'proj', 'Clip3', 'v1', 'seq', 'master_a', 200, 100, 0, 100, NULL, NULL, 'resample', 0, 1.0, 0, 0, 0),
+        ('clip_4', 'proj', 'Clip4', 'v1', 'seq', 'master_a', 300, 100, 0, 100, NULL, NULL, 'resample', 1, 1.0, 0, 0, 0)
 ]]))
 
 --------------------------------------------------------------------------------
