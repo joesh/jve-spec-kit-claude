@@ -83,23 +83,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         log.event("ExtendEdit: edge at %d, playhead at %d, delta=%d",
             edge_position, playhead, delta_frames)
 
-        -- Delegate to RippleEdit/BatchRippleEdit
-        local result
-        if #edge_infos > 1 then
-            result = command_manager.execute("BatchRippleEdit", {
-                edge_infos = edge_infos,
-                delta_frames = delta_frames,
-                sequence_id = args.sequence_id,
-                project_id = args.project_id,
-            })
-        else
-            result = command_manager.execute("RippleEdit", {
-                edge_info = edge_infos[1],
-                delta_frames = delta_frames,
-                sequence_id = args.sequence_id,
-                project_id = args.project_id,
-            })
-        end
+        -- Delegate to BatchRippleEdit. Its batch_context.create
+        -- normalizes a 1-element edge_infos array uniformly with the
+        -- multi-edge case, so single-edge extend uses the same dispatch
+        -- path as multi-edge. The standalone RippleEdit command was
+        -- deleted in T046.
+        local result = command_manager.execute("BatchRippleEdit", {
+            edge_infos = edge_infos,
+            delta_frames = delta_frames,
+            sequence_id = args.sequence_id,
+            project_id = args.project_id,
+        })
 
         if not result or not result.success then
             local msg = result and result.error_message or "RippleEdit/BatchRippleEdit failed"

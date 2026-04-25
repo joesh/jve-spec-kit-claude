@@ -298,14 +298,14 @@ local function handle_key_impl(event)
                 end
             end
 
-            if #edge_infos > 1 then
+            -- BatchRippleEdit handles 1+ edges uniformly (its
+            -- batch_context.create normalizes a single edge into a
+            -- 1-element edge_infos array). The standalone RippleEdit
+            -- command was deleted in T046; this is the single dispatch
+            -- path for both single-edge and multi-edge nudges.
+            if #edge_infos > 0 then
                 execute_command("BatchRippleEdit", {
                     edge_infos = edge_infos, delta_frames = nudge_frames,
-                    sequence_id = sequence_id, project_id = project_id,
-                })
-            elseif #edge_infos == 1 then
-                execute_command("RippleEdit", {
-                    edge_info = edge_infos[1], delta_frames = nudge_frames,
                     sequence_id = sequence_id, project_id = project_id,
                 })
             end
