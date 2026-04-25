@@ -39,44 +39,12 @@ local load_internal
 --- IS-a: a masterclip is both a sequence and a clip. When the caller asks for
 --- a clip by masterclip sequence ID, resolve to the first stream clip inside
 --- that sequence. This is the ONE place that handles the dual identity.
-local function load_masterclip_stream(db, seq_id)
-    -- Check if this ID is a masterclip sequence
-    local seq_stmt = db:prepare("SELECT kind FROM sequences WHERE id = ?")
-    if not seq_stmt then return nil end
-    seq_stmt:bind_value(1, seq_id)
-    if not seq_stmt:exec() or not seq_stmt:next() then
-        seq_stmt:finalize()
-        return nil
-    end
-    local kind = seq_stmt:value(0)
-    seq_stmt:finalize()
-    if kind ~= "masterclip" then return nil end
-
-    -- Find the first stream clip in this masterclip sequence
-    local clip_stmt = db:prepare([[
-        SELECT c.id FROM clips c
-        JOIN tracks t ON c.track_id = t.id
-        WHERE t.sequence_id = ? AND c.clip_kind = 'master'
-        ORDER BY t.track_type DESC, t.track_index ASC
-        LIMIT 1
-    ]])
-    if not clip_stmt then return nil end
-    clip_stmt:bind_value(1, seq_id)
-    if not clip_stmt:exec() or not clip_stmt:next() then
-        clip_stmt:finalize()
-        return nil
-    end
-    local stream_clip_id = clip_stmt:value(0)
-    clip_stmt:finalize()
-
-    -- Load the stream clip via the normal path (recursive call is safe —
-    -- the stream clip exists in the clips table, so it won't recurse again).
-    local clip = load_internal(stream_clip_id, false)
-    if clip then
-        -- Override master_clip_id to be the sequence ID (IS-a identity)
-        clip.master_clip_id = seq_id
-    end
-    return clip
+-- V13: master sequences hold media_refs, not stream clips. The pre-013
+-- IS-a alias (clip_id == masterclip_seq_id resolves to the inner stream clip)
+-- has no V13 analogue. Callers that need media metadata for a master sequence
+-- should query media_refs directly.
+local function load_masterclip_stream(_db, _seq_id)
+    return nil
 end
 
 load_internal = function(clip_id, raise_errors)
@@ -96,17 +64,31 @@ load_internal = function(clip_id, raise_errors)
         return nil
     end
 
+    -- V13 SELECT: clips no longer carry clip_kind / media_id / master_clip_id /
+    -- fps_numerator / fps_denominator / offline. The clip's source-side
+    -- timebase comes from its nested sequence; clip_kind is derived from the
+    -- owner-track type; media metadata is resolved through nested→master→
+    -- media_ref→media when nested is a master.
     local query = db:prepare([[
-        SELECT c.id, c.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
-               c.master_clip_id, c.owner_sequence_id,
-               c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
-               c.fps_numerator, c.fps_denominator, c.enabled, c.offline,
-               s.fps_numerator, s.fps_denominator,
-               c.mark_in_frame, c.mark_out_frame, c.playhead_frame,
-               c.volume
+        SELECT c.id, c.project_id, c.name, c.track_id,
+               c.owner_sequence_id, c.nested_sequence_id,
+               c.timeline_start_frame, c.duration_frames,
+               c.source_in_frame, c.source_out_frame,
+               c.master_layer_track_id, c.master_audio_track_id,
+               c.fps_mismatch_policy,
+               c.enabled, c.volume, c.mark_in_frame, c.mark_out_frame,
+               c.playhead_frame, c.created_at, c.modified_at,
+               t.track_type,
+               owner_seq.fps_numerator, owner_seq.fps_denominator,
+               nested_seq.kind, nested_seq.fps_numerator, nested_seq.fps_denominator,
+               mr.media_id, m.name, m.file_path, m.offline_note
         FROM clips c
-        LEFT JOIN tracks t ON c.track_id = t.id
-        LEFT JOIN sequences s ON t.sequence_id = s.id
+        JOIN tracks t ON c.track_id = t.id
+        JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
+        JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+                                AND nested_seq.kind = 'master'
+        LEFT JOIN media m ON m.id = mr.media_id
         WHERE c.id = ?
     ]])
     if not query then
@@ -130,82 +112,82 @@ load_internal = function(clip_id, raise_errors)
 
     if not query:next() then
         query:finalize()
-        -- IS-a: masterclip IS a sequence. If not found in clips table,
-        -- check if it's a masterclip sequence and return its first stream clip.
-        -- This is THE one place that handles the IS-a lookup transparency.
-        local mc_clip = load_masterclip_stream(db, clip_id)
-        if mc_clip then return mc_clip end
         if raise_errors then
             error(string.format("Clip.load_failed: Clip not found: %s", clip_id))
         end
         return nil
     end
 
-    local clip_kind = query:value(2)
-    local fps_numerator = query:value(12)
-    local fps_denominator = query:value(13)
-    local sequence_fps_numerator = query:value(16)
-    local sequence_fps_denominator = query:value(17)
-    
-    -- Enforce Rate existence (Strict V5)
-    if not fps_numerator or fps_numerator <= 0 then 
+    local nested_fps_num = query:value(24)
+    local nested_fps_den = query:value(25)
+    if not nested_fps_num or nested_fps_num <= 0 or not nested_fps_den or nested_fps_den <= 0 then
         query:finalize()
-        error(string.format("Clip.load_failed: Clip %s has invalid frame rate (%s)", clip_id, tostring(fps_numerator)))
+        error(string.format(
+            "Clip.load_failed: clip %s nested-sequence has invalid frame rate (%s/%s)",
+            clip_id, tostring(nested_fps_num), tostring(nested_fps_den)))
     end
-    if not fps_denominator or fps_denominator <= 0 then
+    local owner_fps_num = query:value(21)
+    local owner_fps_den = query:value(22)
+    if not owner_fps_num or owner_fps_num <= 0 or not owner_fps_den or owner_fps_den <= 0 then
         query:finalize()
-        error(string.format("Clip.load_failed: Clip %s has invalid frame rate denominator (%s)", clip_id, tostring(fps_denominator)))
+        error(string.format(
+            "Clip.load_failed: clip %s owner-sequence has invalid frame rate (%s/%s)",
+            clip_id, tostring(owner_fps_num), tostring(owner_fps_den)))
     end
 
-    if clip_kind ~= "master" then
-        if not sequence_fps_numerator or not sequence_fps_denominator then
-            query:finalize()
-            error(string.format("Clip.load_failed: Clip %s missing owning sequence frame rate", clip_id))
-        end
-        if sequence_fps_numerator <= 0 or sequence_fps_denominator <= 0 then
-            query:finalize()
-            error(string.format("Clip.load_failed: Clip %s has invalid owning sequence frame rate (%s/%s)", clip_id, tostring(sequence_fps_numerator), tostring(sequence_fps_denominator)))
-        end
-    end
+    local track_type = query:value(20)
+    local nested_id = query:value(5)
 
     local clip = {
         id = query:value(0),
         project_id = query:value(1),
-        clip_kind = clip_kind,
-        name = query:value(3),
-        track_id = query:value(4),
-        media_id = query:value(5),
-        master_clip_id = query:value(6),
-        owner_sequence_id = query:value(7),
+        name = query:value(2),
+        track_id = query:value(3),
+        owner_sequence_id = query:value(4),
+        nested_sequence_id = nested_id,
 
-        -- Integer frame coordinates (fps is metadata in clip.rate and sequence.frame_rate)
-        timeline_start = assert(query:value(8), "Clip.load: timeline_start_frame is NULL"),
-        duration = assert(query:value(9), "Clip.load: duration_frames is NULL"),
-        source_in = assert(query:value(10), "Clip.load: source_in_frame is NULL"),
-        source_out = assert(query:value(11), "Clip.load: source_out_frame is NULL"),
+        timeline_start = assert(query:value(6), "Clip.load: timeline_start_frame is NULL"),
+        duration = assert(query:value(7), "Clip.load: duration_frames is NULL"),
+        source_in = assert(query:value(8), "Clip.load: source_in_frame is NULL"),
+        source_out = assert(query:value(9), "Clip.load: source_out_frame is NULL"),
 
-        -- Store rate explicitly
+        master_layer_track_id = query:value(10),
+        master_audio_track_id = query:value(11),
+        fps_mismatch_policy   = query:value(12),
+
+        -- Source-side timebase (the nested sequence's rate).
         rate = {
-            fps_numerator = fps_numerator,
-            fps_denominator = fps_denominator
+            fps_numerator = nested_fps_num,
+            fps_denominator = nested_fps_den,
+        },
+        owner_rate = {
+            fps_numerator = owner_fps_num,
+            fps_denominator = owner_fps_den,
         },
 
-        enabled = query:value(14) == 1 or query:value(14) == true,
-        offline = false,  -- transient: recomputed by media_status registry
+        enabled = query:value(13) == 1 or query:value(13) == true,
+        volume = assert(query:value(14),
+            string.format("Clip.load: volume is NULL for clip %s", tostring(clip_id))),
+        mark_in = query:value(15),
+        mark_out = query:value(16),
+        playhead_frame = assert(query:value(17),
+            string.format("Clip.load: playhead_frame is NULL for clip %s", tostring(clip_id))),
+        created_at = query:value(18),
+        modified_at = query:value(19),
 
-        -- Source viewer state (nullable marks + playhead)
-        mark_in = query:value(18),           -- nil when NULL
-        mark_out = query:value(19),          -- nil when NULL
-        playhead_frame = assert(query:value(20) ~= nil and query:value(20),
-            string.format("Clip.load: playhead_frame is NULL for clip %s (NOT NULL column)",
-                tostring(query:value(0)))),
+        track_type = track_type,
+        nested_sequence_kind = query:value(23),
 
-        -- Audio mixer state (clip gain, applied before track fader)
-        volume = assert(query:value(21) ~= nil and query:value(21),
-            string.format("Clip.load: volume is NULL for clip %s (NOT NULL DEFAULT 1.0 column)",
-                tostring(query:value(0)))),
+        -- Compatibility surfaces — see database.build_clip_from_query_row.
+        clip_kind = (track_type == "VIDEO") and "video" or "audio",
+        media_id = query:value(26),
+        media_name = query:value(27),
+        media_path = query:value(28),
+        offline_note = query:value(29),
+        master_clip_id = nested_id,
+        offline = false,
     }
-    
+
     query:finalize()
 
     clip.name = derive_display_name(clip.id, clip.name)

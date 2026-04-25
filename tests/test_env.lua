@@ -344,33 +344,39 @@ end
 -- @param media_id string|nil: Optional media_id for clip
 -- @return string: masterclip sequence ID
 function M.create_test_masterclip_sequence(project_id, name, fps_num, fps_den, duration_frames, media_id)
+    -- V13: a "masterclip" is a kind='master' sequence containing one or more
+    -- media_refs. Sequence.ensure_master does the right thing — assert TC
+    -- metadata is present on the Media row first (callers usually create the
+    -- Media themselves; we synthesize TC=0 if absent so legacy tests keep
+    -- working).
+    assert(media_id and media_id ~= "",
+        "create_test_masterclip_sequence: media_id is required (V13 requires a media to anchor the master)")
     local Sequence = require("models.sequence")
-    local Track = require("models.track")
-    local Clip = require("models.clip")
+    local Media = require("models.media")
+    local json = require("dkjson")
 
-    local seq = Sequence.create(name, project_id,
-        {fps_numerator = fps_num, fps_denominator = fps_den},
-        1920, 1080,
-        {kind = "masterclip"})
-    assert(seq:save(), "create_test_masterclip_sequence: failed to save sequence")
+    local media = Media.load(media_id)
+    assert(media, string.format(
+        "create_test_masterclip_sequence: media_id=%s not found", tostring(media_id)))
+    -- Ensure TC origin is set (V13 ensure_master asserts on it).
+    if not media.metadata or media.metadata == "" then
+        media.metadata = json.encode({
+            start_tc_value = 0,
+            start_tc_rate = fps_num,
+            start_tc_audio_samples = 0,
+            start_tc_audio_rate = (media.audio_channels and media.audio_channels > 0)
+                and (media.audio_sample_rate or 48000) or nil,
+        })
+        assert(media:save(), "create_test_masterclip_sequence: failed to update media metadata")
+    end
 
-    local track = Track.create_video("V1", seq.id, {index = 1})
-    assert(track:save(), "create_test_masterclip_sequence: failed to save track")
+    -- Tolerate fps mismatches between the legacy duration_frames argument and
+    -- the media's actual duration: ensure_master derives duration from the
+    -- media row, so we don't need duration_frames here. Kept in the signature
+    -- for back-compat with existing callers.
+    _ = duration_frames; _ = fps_num; _ = fps_den; _ = name
 
-    local clip = Clip.create(name, media_id, {
-        clip_kind = "master",
-        track_id = track.id,
-        owner_sequence_id = seq.id,
-        timeline_start = 0,
-        duration = duration_frames,
-        source_in = 0,
-        source_out = duration_frames,
-        fps_numerator = fps_num,
-        fps_denominator = fps_den,
-    })
-    assert(clip:save({skip_occlusion = true}), "create_test_masterclip_sequence: failed to save clip")
-
-    return seq.id
+    return Sequence.ensure_master(media_id, project_id)
 end
 
 return M

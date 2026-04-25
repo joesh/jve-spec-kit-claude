@@ -306,47 +306,69 @@ function M.create(opts)
         assert(track and track:save(), "Failed to create track: " .. t.id)
     end
 
-    -- Create media using model
+    -- Create media + master sequences (V13: every clip references a sequence,
+    -- and a master sequence is the leaf that holds the media_ref to the file).
+    local json = require("dkjson")
+    local master_seq_for_media = {}
     for _, key in ipairs(cfg.media.order or {}) do
         local m = cfg.media[key]
+        local fps_num = m.fps_numerator or cfg.fps_numerator
+        local meta = json.encode({
+            start_tc_value = 0,
+            start_tc_rate = fps_num,
+            start_tc_audio_samples = 0,
+            start_tc_audio_rate = (m.audio_channels and m.audio_channels > 0) and cfg.audio_rate or nil,
+        })
         local media = Media.create({
             id = m.id,
             project_id = cfg.project_id,
             name = m.name,
             file_path = m.file_path,
             duration_frames = m.duration_frames,
-            fps_numerator = m.fps_numerator,
-            fps_denominator = m.fps_denominator,
+            fps_numerator = fps_num,
+            fps_denominator = m.fps_denominator or cfg.fps_denominator,
             width = m.width,
             height = m.height,
             audio_channels = m.audio_channels,
-            codec = m.codec
+            audio_sample_rate = (m.audio_channels and m.audio_channels > 0) and cfg.audio_rate or nil,
+            codec = m.codec,
+            metadata = meta,
         })
         assert(media and media:save(), "Failed to create media: " .. m.id)
+
+        -- Create the master sequence + V/A track + media_ref via the canonical
+        -- helper. Override id to keep deterministic test references.
+        local master_seq_id = Sequence.ensure_master(m.id, cfg.project_id, {
+            id = "master_" .. m.id,
+        })
+        master_seq_for_media[m.id] = master_seq_id
     end
 
-    -- Create clips using model (integer frame coordinates)
+    -- Create clips (V13: nested_sequence_id references a master sequence,
+    -- source_in/out are in that master's timebase).
     for _, key in ipairs(cfg.clips.order or {}) do
         local c = cfg.clips[key]
         local track = cfg.tracks[c.track_key]
         local media_cfg = cfg.media[c.media_key]
-        local fps_num = c.fps_numerator or cfg.fps_numerator
-        local fps_den = c.fps_denominator or cfg.fps_denominator
-        local clip = Clip.create(c.name, media_cfg.id, {
+        local nested_seq_id = master_seq_for_media[media_cfg.id]
+        assert(nested_seq_id, "ripple_layout: missing master sequence for media " .. tostring(media_cfg.id))
+        local clip_id = Clip.create({
             id = c.id,
             project_id = cfg.project_id,
-            clip_kind = "timeline",
+            name = c.name,
             track_id = track.id,
-            master_clip_id = c.master_clip_id or ("mc_" .. media_cfg.id),
             owner_sequence_id = cfg.sequence_id,
-            timeline_start = c.timeline_start,  -- integer
-            duration = c.duration,  -- integer
-            source_in = c.source_in,  -- integer
-            source_out = c.source_in + c.duration,  -- integer
-            fps_numerator = fps_num,
-            fps_denominator = fps_den
+            nested_sequence_id = nested_seq_id,
+            timeline_start_frame = c.timeline_start,
+            duration_frames = c.duration,
+            source_in_frame = c.source_in,
+            source_out_frame = c.source_in + c.duration,
+            fps_mismatch_policy = "resample",
+            enabled = (c.enabled == nil) and 1 or c.enabled,
+            volume = 1.0,
+            playhead_frame = 0,
         })
-        assert(clip and clip:save({skip_occlusion = true}), "Failed to create clip: " .. c.id)
+        assert(clip_id, "Failed to create clip: " .. c.id)
     end
 
     command_manager.init(cfg.sequence_id, cfg.project_id)
