@@ -45,12 +45,18 @@ package.loaded["core.krono"] = nil
 
 local Clip = require("models.clip")
 
--- Create a clip with NO project_id and NO track_id — project_id cannot be derived
-local clip = Clip.create({
+-- V13: Clip.create itself enforces project_id (rule 2.13 — no column defaults).
+-- The pre-013 behavior of allowing nil project_id at create-time and
+-- asserting only at save-time is gone. Both create AND save assert; the
+-- regression this test was protecting is therefore expressed at create.
+local ok, err = pcall(function()
+    Clip.create({
         name = "orphan_clip",
         id = "clip_orphan",
         track_id = nil,
         project_id = nil,
+        owner_sequence_id = "owner",
+        nested_sequence_id = "nested",
         timeline_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
@@ -60,15 +66,11 @@ local clip = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
-
--- save should assert because project_id cannot be derived
-local ok, err = pcall(function()
-    clip:save()
 end)
 
-check("save asserts on nil project_id", not ok)
-check("error mentions ensure_project_context or project_id",
-    err and (tostring(err):find("project_id") ~= nil or tostring(err):find("ensure_project_context") ~= nil))
+check("create asserts on nil project_id", not ok)
+check("error mentions project_id",
+    err and tostring(err):find("project_id") ~= nil)
 
 if failed > 0 then
     print(string.format("❌ test_clip_ensure_project_context_asserts.lua: %d passed, %d FAILED", passed, failed))

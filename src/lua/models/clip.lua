@@ -883,6 +883,7 @@ end
 
 local V13_REQUIRED = {
     "project_id", "owner_sequence_id", "nested_sequence_id",
+    "track_id",
     "name",
     "timeline_start_frame", "duration_frames",
     "source_in_frame", "source_out_frame",

@@ -59,9 +59,14 @@ db:exec([[
 
 db:exec(string.format([[
     INSERT INTO media (id, project_id, name, file_path, duration_frames,
-                       fps_numerator, fps_denominator, width, height, created_at, modified_at)
-    VALUES ('media1', 'proj1', 'Test', '/tmp/test.mp4', 1000, 24, 1, 1920, 1080, %d, %d);
+                       fps_numerator, fps_denominator, width, height, created_at, modified_at, metadata)
+    VALUES ('media1', 'proj1', 'Test', '/tmp/test.mp4', 1000, 24, 1, 1920, 1080, %d, %d,
+            '{"start_tc_value":0,"start_tc_rate":24}');
 ]], now, now))
+
+-- V13: build a master sequence wrapping media1 so clips can reference it.
+local Sequence = require("models.sequence")
+Sequence.ensure_master("media1", "proj1", { id = "mc1" })
 
 -- ============================================================================
 -- create(): Required fps fields
@@ -69,54 +74,18 @@ db:exec(string.format([[
 
 print("\n--- create: required fps fields ---")
 
-expect_error("missing fps_numerator", function()
-    Clip.create({
-        name = "TestClip",
-        id = "test_clip",
-        project_id = "proj1",
-        timeline_start_frame = 0,
-        duration_frames = 100,
-        fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-end, "fps_numerator")
-
-expect_error("missing fps_denominator", function()
-    Clip.create({
-        name = "TestClip",
-        id = "test_clip",
-        project_id = "proj1",
-        timeline_start_frame = 0,
-        duration_frames = 100,
-        fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-end, "fps_denominator")
+-- V13 schema dropped fps_numerator/fps_denominator/media_id from clips —
+-- the clip's source-side timebase is read from its nested sequence; media
+-- comes via the master sequence's media_ref. The pre-013 "missing fps"
+-- and "missing media_id auto-resolve master_clip_id" error paths are
+-- therefore no longer applicable. Coverage moved to nested_sequence_id +
+-- INV-2 / INV-4 model assertions.
 
 -- ============================================================================
--- create(): Timeline clips require master_clip_id, track_id, owner_sequence_id
+-- create(): Timeline clips require track_id, owner_sequence_id, etc.
 -- ============================================================================
 
 print("\n--- create: timeline clip required fields ---")
-
-expect_error("timeline clip missing media_id for master_clip_id auto-resolve", function()
-    Clip.create({
-        name = "TestClip",
-        project_id = "proj1",
-        track_id = "track1",
-        owner_sequence_id = "seq1",
-        timeline_start_frame = 0,
-        duration_frames = 100,
-        fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-end, "media_id is required to auto%-resolve master_clip_id")
 
 expect_error("timeline clip missing track_id", function()
     Clip.create({
@@ -126,6 +95,8 @@ expect_error("timeline clip missing track_id", function()
         owner_sequence_id = "seq1",
         timeline_start_frame = 0,
         duration_frames = 100,
+        source_in_frame = 0,
+        source_out_frame = 100,
         fps_mismatch_policy = "resample",
         volume = 1.0,
         playhead_frame = 0,
@@ -141,6 +112,8 @@ expect_error("timeline clip missing owner_sequence_id", function()
         nested_sequence_id = "mc1",
         timeline_start_frame = 0,
         duration_frames = 100,
+        source_in_frame = 0,
+        source_out_frame = 100,
         fps_mismatch_policy = "resample",
         volume = 1.0,
         playhead_frame = 0,
@@ -148,19 +121,9 @@ expect_error("timeline clip missing owner_sequence_id", function()
     })
 end, "owner_sequence_id")
 
--- master clips should NOT require master_clip_id
-local master_clip = Clip.create({
-        name = "MasterClip",
-        project_id = "proj1",
-        owner_sequence_id = "seq1",
-        timeline_start_frame = 0,
-        duration_frames = 100,
-        fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-check("master clip without master_clip_id succeeds", master_clip ~= nil)
+-- V13: master clips no longer exist (master sequences hold media_refs, not
+-- stream clips). The pre-013 "master clip without master_clip_id" path is
+-- gone; that scenario is now Sequence.ensure_master + media_ref insert.
 
 -- ============================================================================
 -- create(): Valid integer coordinates work
@@ -168,7 +131,7 @@ check("master clip without master_clip_id succeeds", master_clip ~= nil)
 
 print("\n--- create: valid integer coordinates ---")
 
-local clip = Clip.create({
+local valid_id = Clip.create({
         name = "ValidClip",
         id = "valid_clip_1",
         project_id = "proj1",
@@ -184,6 +147,7 @@ local clip = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
+local clip = Clip.load(valid_id)
 check("create with integers succeeds", clip ~= nil)
 check("timeline_start is integer", type(clip.timeline_start) == "number")
 check("timeline_start value is 0", clip.timeline_start == 0)
@@ -196,14 +160,14 @@ check("duration value is 100", clip.duration == 100)
 
 print("\n--- save: integer validation ---")
 
-local bad_clip = Clip.create({
+local bad_clip_id = Clip.create({
         name = "BadClip",
         id = "bad_clip_1",
         project_id = "proj1",
         track_id = "track1",
         nested_sequence_id = "mc1",
         owner_sequence_id = "seq1",
-        timeline_start_frame = 0,
+        timeline_start_frame = 200,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -212,6 +176,8 @@ local bad_clip = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
+
+local bad_clip = Clip.load(bad_clip_id)
 
 -- Corrupt the clip by setting a table value
 bad_clip.timeline_start = { frames = 50 }
@@ -232,26 +198,22 @@ end, "must be integer")
 
 print("\n--- load: returns integers ---")
 
--- First save a valid clip via raw SQL
+-- First save a valid clip via raw SQL (mc1 master sequence already exists from earlier ensure_master)
 db:exec(string.format([[
-    -- V13 master sequence + track + media_ref for media1
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-VALUES ('master_media1', 'proj1', 'media1_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
-INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-VALUES ('master_v_media1', 'master_media1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
-UPDATE sequences SET default_video_layer_track_id = 'master_v_media1' WHERE id = 'master_media1';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media1', 'proj1', 'master_media1', 'master_v_media1', 'media1', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
-
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, nested_sequence_id,
+                    timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+                    enabled, created_at, modified_at,
+                    master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+                    volume, playhead_frame)
 VALUES
-    ('load_test_1', 'proj1', 'LoadTest', 'track1', 'master_media1', 100, 50, 10, 60, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
+    ('load_test_1', 'proj1', 'LoadTest', 'track1', 'seq1', 'mc1',
+     500, 50, 10, 60, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 local loaded = Clip.load("load_test_1", db)
 check("load returns clip", loaded ~= nil)
 check("loaded timeline_start is integer", type(loaded.timeline_start) == "number")
-check("loaded timeline_start value", loaded.timeline_start == 100)
+check("loaded timeline_start value", loaded.timeline_start == 500)
 check("loaded duration is integer", type(loaded.duration) == "number")
 check("loaded duration value", loaded.duration == 50)
 check("loaded source_in is integer", type(loaded.source_in) == "number")
