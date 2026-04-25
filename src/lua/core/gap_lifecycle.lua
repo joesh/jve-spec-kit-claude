@@ -31,13 +31,15 @@ local function make_gap_clip(track_id, timeline_start, duration, seq_fps)
     assert(type(seq_fps) == "table" and seq_fps.fps_numerator and seq_fps.fps_denominator,
         "make_gap_clip: seq_fps must have fps_numerator and fps_denominator")
 
+    -- Synthesized in-memory gap. Not a DB row. Marked is_gap=true so readers
+    -- can distinguish from real (DB-backed) clips without resurrecting the
+    -- banned-under-V13 clip_kind discriminator (FR-018).
     return {
         id = string.format("gap_%s_%d", tostring(track_id), timeline_start),
         track_id = track_id,
         timeline_start = timeline_start,
         duration = duration,
-        clip_kind = "gap",
-        media_id = nil,
+        is_gap = true,
         source_in = nil,
         source_out = nil,
         fps_numerator = seq_fps.fps_numerator,
@@ -107,7 +109,7 @@ function M.update_gaps_after_edit(track_id, sorted_all_clips, changed_clip_ids, 
     -- from media clip positions. Local optimization can come later if needed.
     local media_clips = {}
     for _, clip in ipairs(sorted_all_clips) do
-        if clip.clip_kind ~= "gap" then
+        if not clip.is_gap then
             table.insert(media_clips, clip)
         end
     end

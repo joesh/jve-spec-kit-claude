@@ -32,7 +32,7 @@ local function find_clips_in_range(time_start, time_end, track_ids)
     local matching = {}
     for _, clip in ipairs(timeline_state.get_clips() or {}) do
         -- Skip gap clips — they're derived state, not selectable for clip operations
-        if clip.clip_kind ~= "gap" and track_set[clip.track_id] then
+        if not clip.is_gap and track_set[clip.track_id] then
             local clip_end = clip.timeline_start + clip.duration
             -- Check time overlap: NOT (clip ends before range OR clip starts after range)
             local overlaps = not (clip_end <= time_start or clip.timeline_start >= time_end)

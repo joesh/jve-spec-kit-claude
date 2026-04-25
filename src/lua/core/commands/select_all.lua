@@ -66,7 +66,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Filter out gap clips — they're derived state, not selectable for clip operations
         local media_clips = {}
         for _, clip in ipairs(timeline_state.get_clips() or {}) do
-            if clip.clip_kind ~= "gap" then
+            if not clip.is_gap then
                 media_clips[#media_clips + 1] = clip
             end
         end

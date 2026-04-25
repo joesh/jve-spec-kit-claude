@@ -50,7 +50,7 @@ local log = require("core.logger").for_area("timeline")
 local function filter_non_gap_clips(clips)
     local result = {}
     for _, clip in ipairs(clips) do
-        if clip.clip_kind ~= "gap" then
+        if not clip.is_gap then
             table.insert(result, clip)
         end
     end
@@ -149,7 +149,7 @@ local function find_clip_under_cursor(view, x, y, width, height)
         -- Gap clips use the separate gap selection path (selected_gaps),
         -- not the clip selection path. Returning them here would cause
         -- DeleteClip to try deleting an in-memory-only clip from DB.
-        if clip.clip_kind == "gap" then
+        if clip.is_gap then
             goto continue_clip
         end
         local start_frames = clip.timeline_start
@@ -179,7 +179,7 @@ local function find_gap_at_time(view, track_id, time_frame)
     -- With gap-as-clip, gap clips are in the track list. Find the gap clip
     -- at the given time position directly.
     for _, clip in ipairs(clips_on_track) do
-        if clip.clip_kind == "gap"
+        if clip.is_gap
             and type(clip.timeline_start) == "number"
             and type(clip.duration) == "number"
             and clip.duration > 0

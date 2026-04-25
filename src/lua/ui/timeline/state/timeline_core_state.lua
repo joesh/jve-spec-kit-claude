@@ -70,7 +70,7 @@ local function partition_clips_for_recompute(clips, scoped, affected_track_ids)
         assert(clip.track_id and clip.track_id ~= "",
             string.format("recompute_gap_clips: clip %s missing track_id", tostring(clip.id)))
         local in_scope = (not scoped) or affected_track_ids[clip.track_id]
-        if clip.clip_kind == "gap" then
+        if clip.is_gap then
             if in_scope then
                 old_gap_tracks[clip.id] = clip.track_id
             else

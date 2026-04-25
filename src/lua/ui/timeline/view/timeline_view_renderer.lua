@@ -97,7 +97,6 @@ end
 local function is_gap_preview(entry)
     if not entry then return false end
     if entry.is_gap then return true end
-    if entry.clip_kind == "gap" then return true end
     if type(entry.clip_id) == "string" and entry.clip_id:find("^gap_") then return true end
     return false
 end
@@ -299,7 +298,7 @@ local function compute_shift_block_bounds(track_clips, block_start, delta_frames
         if clip.timeline_start < block_start then
             goto continue_bounds
         end
-        if clip.clip_kind == "gap" then
+        if clip.is_gap then
             goto continue_bounds
         end
         if clip.id and excluded[clip.id] then
@@ -926,7 +925,7 @@ function M.render(view)
                             goto continue_clip
                         end
                         -- Gap clips are invisible (empty space) — don't render
-                        if clip.clip_kind == "gap" then
+                        if clip.is_gap then
                             goto continue_clip
                         end
                         local clip_start = clip.timeline_start

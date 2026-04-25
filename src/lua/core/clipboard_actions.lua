@@ -83,7 +83,7 @@ local function copy_mark_range()
 
     for _, clip in ipairs(all_clips) do
         -- Skip gap clips — they have no media to copy
-        if clip.clip_kind == "gap" then goto continue end
+        if clip.is_gap then goto continue end
 
         local clip_start = clip.timeline_start
         local clip_end = clip_start + clip.duration

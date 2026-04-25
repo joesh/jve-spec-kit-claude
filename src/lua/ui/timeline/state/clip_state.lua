@@ -186,7 +186,7 @@ function M.get_at_time(time_value, candidate_clips)
         end
 
         -- Skip gap clips — callers need media clips under playhead
-        if clip.clip_kind == "gap" then
+        if clip.is_gap then
             goto continue_clip
         end
 

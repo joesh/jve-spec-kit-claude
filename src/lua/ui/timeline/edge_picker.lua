@@ -265,7 +265,7 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
 
     local function edge_is_gap(entry)
         if not entry then return false end
-        return entry.clip and entry.clip.clip_kind == "gap"
+        return entry.clip and entry.clip.is_gap == true
     end
 
     -- Calculate element width in pixels for an edge entry

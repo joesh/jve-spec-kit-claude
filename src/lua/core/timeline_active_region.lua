@@ -146,7 +146,7 @@ function M.compute_for_edge_drag(state_module, edges, opts)
             local idx = binary_search_first_start_on_or_after(track_clips, point)
             local prev_clip = (idx > 1) and track_clips[idx - 1] or nil
             local next_clip = (idx <= #track_clips) and track_clips[idx] or nil
-            local is_gap_clip = clip.clip_kind == "gap"
+            local is_gap_clip = clip.is_gap == true
             local force_prev = is_gap_clip and edge.edge_type == "out"
             local force_next = is_gap_clip and edge.edge_type == "in"
             min_frames, max_frames = include_neighbor_if_close(min_frames, max_frames, prev_clip, point, pad_frames, force_prev)

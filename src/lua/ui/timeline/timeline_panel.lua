@@ -2121,7 +2121,7 @@ local function zoom_to_fit_if_first_open(sequence)
 
     local min_start, max_end
     for _, clip in ipairs(clips) do
-        if clip.clip_kind ~= "gap" then
+        if not clip.is_gap then
             local s = clip.timeline_start
             local d = clip.duration
             assert(type(s) == "number", string.format(
