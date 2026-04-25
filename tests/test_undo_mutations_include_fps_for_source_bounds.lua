@@ -103,7 +103,7 @@ end
 local overwrite_cmd = Command.create("Overwrite", "default_project")
 overwrite_cmd:set_parameter("sequence_id", "seq1")
 overwrite_cmd:set_parameter("track_id", "v1")
-overwrite_cmd:set_parameter("master_clip_id", master_clip_id)
+overwrite_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
 overwrite_cmd:set_parameter("overwrite_time", 100)  -- Start at frame 100
 overwrite_cmd:set_parameter("duration", 50)         -- 50 frames
 overwrite_cmd:set_parameter("source_in", 500)       -- Different source range

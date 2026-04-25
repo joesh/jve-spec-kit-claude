@@ -58,7 +58,7 @@ local function create_clip(params)
     -- Create masterclip sequence for this media (required for Overwrite)
     local nested_sequence_id = test_env.create_test_masterclip_sequence(
         'default_project', params.media_id .. ' Master', 30, 1, params.duration_value, params.media_id)
-    masterclip_ids[params.media_id] = master_clip_id
+    masterclip_ids[params.media_id] = nested_sequence_id
 
     local Clip = require('models.clip')
     local clip = Clip.create({
@@ -71,7 +71,7 @@ local function create_clip(params)
         duration_frames = params.duration_value or 0,
         source_in_frame = params.source_in_value or 0,
         source_out_frame = params.source_out_value or params.duration_value or 0,
-        nested_sequence_id = master_clip_id,
+        nested_sequence_id = nested_sequence_id,
         fps_mismatch_policy = "resample",
         volume = 1.0,
         playhead_frame = 0,
@@ -88,7 +88,7 @@ create_clip({clip_id = 'clip_src', media_id = 'media_src', track_id = 'video1', 
 create_clip({clip_id = 'clip_tgt', media_id = 'media_tgt', track_id = 'video2', start_value = 3000, duration_value = 1000})
 
 local overwrite_cmd = Command.create('Overwrite', 'default_project')
-overwrite_cmd:set_parameter('master_clip_id', masterclip_ids['media_src'])
+overwrite_cmd:set_parameter('nested_sequence_id', masterclip_ids['media_src'])
 overwrite_cmd:set_parameter('track_id', 'video2')
 overwrite_cmd:set_parameter('overwrite_time', 1000)
 overwrite_cmd:set_parameter('duration', 1000)

@@ -167,9 +167,9 @@ end
 -- TEST 1: Basic insertion at specific position
 -- =============================================================================
 print("Test 1: Basic insertion at frame 0")
-set_masterclip_marks(master_clip_id, 0, 50)
+set_masterclip_marks(nested_sequence_id, 0, 50)
 local insert_cmd = Command.create("Insert", "project")
-insert_cmd:set_parameter("master_clip_id", master_clip_id)
+insert_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
 insert_cmd:set_parameter("track_id", "track_v1")
 insert_cmd:set_parameter("sequence_id", "sequence")
 insert_cmd:set_parameter("insert_time", 0)
@@ -188,9 +188,9 @@ assert(downstream_start == 250, string.format("Downstream should ripple to 250, 
 -- TEST 2: Insert ripples downstream clips
 -- =============================================================================
 print("Test 2: Second insert at frame 0 ripples everything")
-set_masterclip_marks(master_clip_id, 0, 30)
+set_masterclip_marks(nested_sequence_id, 0, 30)
 local insert_cmd2 = Command.create("Insert", "project")
-insert_cmd2:set_parameter("master_clip_id", master_clip_id)
+insert_cmd2:set_parameter("nested_sequence_id", nested_sequence_id)
 insert_cmd2:set_parameter("track_id", "track_v1")
 insert_cmd2:set_parameter("sequence_id", "sequence")
 insert_cmd2:set_parameter("insert_time", 0)
@@ -242,9 +242,9 @@ db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_cli
 db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
 
 -- Clear marks — no marks = use full clip range
-set_masterclip_marks(master_clip_id, nil, nil)
+set_masterclip_marks(nested_sequence_id, nil, nil)
 local insert_cmd3 = Command.create("Insert", "project")
-insert_cmd3:set_parameter("master_clip_id", master_clip_id)
+insert_cmd3:set_parameter("nested_sequence_id", nested_sequence_id)
 insert_cmd3:set_parameter("track_id", "track_v1")
 insert_cmd3:set_parameter("sequence_id", "sequence")
 insert_cmd3:set_parameter("insert_time", 0)
@@ -269,9 +269,9 @@ print("Test 6: Insert at exact clip start boundary")
 db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_clip'")
 db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
 
-set_masterclip_marks(master_clip_id, 0, 50)
+set_masterclip_marks(nested_sequence_id, 0, 50)
 local insert_cmd4 = Command.create("Insert", "project")
-insert_cmd4:set_parameter("master_clip_id", master_clip_id)
+insert_cmd4:set_parameter("nested_sequence_id", nested_sequence_id)
 insert_cmd4:set_parameter("track_id", "track_v1")
 insert_cmd4:set_parameter("sequence_id", "sequence")
 insert_cmd4:set_parameter("insert_time", 200)  -- Exactly at downstream start
@@ -301,21 +301,21 @@ asserts._set_enabled_for_tests(true)
 assert(not result.success, "Insert without media_id should fail")
 
 -- =============================================================================
--- TEST 8: Error case - nonexistent master_clip_id
+-- TEST 8: Error case - nonexistent nested_sequence_id
 -- =============================================================================
-print("Test 8: Nonexistent master_clip_id fails")
+print("Test 8: Nonexistent nested_sequence_id fails")
 asserts._set_enabled_for_tests(false)
 local bad_cmd2 = Command.create("Insert", "project")
-bad_cmd2:set_parameter("master_clip_id", master_clip_id)
+bad_cmd2:set_parameter("nested_sequence_id", nested_sequence_id)
 bad_cmd2:set_parameter("track_id", "track_v1")
 bad_cmd2:set_parameter("sequence_id", "sequence")
 bad_cmd2:set_parameter("insert_time", 0)
-bad_cmd2:set_parameter("master_clip_id", "nonexistent_master")  -- Should fail
+bad_cmd2:set_parameter("nested_sequence_id", "nonexistent_master")  -- Should fail
 bad_cmd2:set_parameter("duration", 50)
 
 result = execute_cmd(bad_cmd2)
 asserts._set_enabled_for_tests(true)
-assert(not result.success, "Insert with nonexistent master_clip_id should fail")
+assert(not result.success, "Insert with nonexistent nested_sequence_id should fail")
 
 -- =============================================================================
 -- TEST 9: Multiple undo/redo cycle maintains integrity
@@ -326,10 +326,10 @@ db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_cli
 db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
 
 -- Insert 3 clips
-set_masterclip_marks(master_clip_id, 0, 20)
+set_masterclip_marks(nested_sequence_id, 0, 20)
 for i = 1, 3 do
     local cmd = Command.create("Insert", "project")
-    cmd:set_parameter("master_clip_id", master_clip_id)
+    cmd:set_parameter("nested_sequence_id", nested_sequence_id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("sequence_id", "sequence")
     cmd:set_parameter("insert_time", 0)

@@ -89,8 +89,8 @@ local function create_media_and_masterclip(media_id, duration_frames)
     media:save(database.get_connection())
     local nested_sequence_id = test_env.create_test_masterclip_sequence(
         'proj', media_id .. ' MC', 25, 1, duration_frames, media_id)
-    masterclip_cache[media_id] = master_clip_id
-    return master_clip_id
+    masterclip_cache[media_id] = nested_sequence_id
+    return nested_sequence_id
 end
 
 --- Insert a clip directly via Insert command. All values are integer frames.
@@ -101,7 +101,7 @@ local function insert_clip(params)
 
     -- Set in/out marks on the masterclip sequence (the source range)
     if params.source_in or params.source_out then
-        local mc_seq = assert(Sequence.load(master_clip_id), "insert_clip: masterclip not found")
+        local mc_seq = assert(Sequence.load(nested_sequence_id), "insert_clip: masterclip not found")
         mc_seq.mark_in = params.source_in
         mc_seq.mark_out = params.source_out
         assert(mc_seq:save(), "insert_clip: failed to save masterclip marks")
@@ -109,7 +109,7 @@ local function insert_clip(params)
 
     local cmd = Command.create("Insert", "proj")
     cmd:set_parameters({
-        nested_sequence_id = master_clip_id,
+        nested_sequence_id = nested_sequence_id,
         track_id = params.track_id,
         sequence_id = "seq",
         insert_time = params.timeline_start,

@@ -145,7 +145,7 @@ local function test_split_clip_command_func()
             project_id = project.id,
             sequence_id = sequence.id,
             track_id = track.id,
-            nested_sequence_id = master_clip_id,
+            nested_sequence_id = nested_sequence_id,
             insert_time = 0,
             duration = initial_clip_duration_frames,
             source_in = 0,

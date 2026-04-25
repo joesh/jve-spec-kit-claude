@@ -92,7 +92,7 @@ signal_log = {}
 local result = command_manager.execute("Insert", {
     project_id = project.id,
     sequence_id = seq.id,
-    nested_sequence_id = master_clip_id,
+    nested_sequence_id = nested_sequence_id,
     advance_playhead = true,
 })
 assert(result.success, "Insert should succeed: " .. tostring(result.error_message))

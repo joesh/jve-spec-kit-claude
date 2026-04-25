@@ -64,7 +64,7 @@ local nested_sequence_id = test_env.create_test_masterclip_sequence(
 
 -- Set marks on masterclip sequence — Insert reads timing from these
 local Sequence = require("models.sequence")
-local mc_seq = Sequence.load(master_clip_id)
+local mc_seq = Sequence.load(nested_sequence_id)
 assert(mc_seq, "Failed to load masterclip sequence")
 mc_seq:set_in(0)
 mc_seq:set_out(24)
@@ -77,7 +77,7 @@ for _ = 1, interval - 1 do
 end
 
 local cmd = Command.create("Insert", "project")
-cmd:set_parameter("master_clip_id", master_clip_id)
+cmd:set_parameter("nested_sequence_id", nested_sequence_id)
 cmd:set_parameter("track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
 cmd:set_parameter("insert_time", 0)

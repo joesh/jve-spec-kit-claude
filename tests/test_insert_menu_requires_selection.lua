@@ -5,7 +5,7 @@
 --
 -- Scenario: User clicks Timeline > Insert with media selected but without marks set.
 -- The Insert command gets media_id from project browser but cannot infer duration
--- without: duration param, source_out param, or master_clip_id with duration.
+-- without: duration param, source_out param, or nested_sequence_id with duration.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 local test_env = require("test_env")
@@ -55,14 +55,14 @@ command_manager.register_executor("Insert", ret.executor, ret.undoer)
 
 print("\n=== Insert with media_id but no duration/source_out ===")
 
--- Simulate menu dispatch: master_clip_id is known but no duration info provided.
+-- Simulate menu dispatch: nested_sequence_id is known but no duration info provided.
 -- This happens when user clicks Insert without setting in/out marks.
 -- Insert should infer duration from the masterclip's stream clips.
 local cmd = Command.create("Insert", "project")
 cmd:set_parameter("project_id", "project")
 cmd:set_parameter("sequence_id", "sequence")
 cmd:set_parameter("track_id", "track_v1")
-cmd:set_parameter("master_clip_id", master_clip_id)
+cmd:set_parameter("nested_sequence_id", nested_sequence_id)
 -- NOTE: no duration, source_in, source_out provided - should infer from masterclip
 
 command_manager.begin_command_event("script")

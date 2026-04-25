@@ -193,7 +193,7 @@ insert_cmd:set_parameter("insert_time", 0)
 insert_cmd:set_parameter("duration", 4000)
 insert_cmd:set_parameter("source_in", 0)
 insert_cmd:set_parameter("source_out", 4000)
-insert_cmd:set_parameter("master_clip_id", master_clip_id)
+insert_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
 
 local insert_result = command_manager.execute(insert_cmd)
 assert(insert_result.success, "Insert command failed: " .. tostring(insert_result.error_message))

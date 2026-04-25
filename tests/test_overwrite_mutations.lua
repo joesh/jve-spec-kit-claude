@@ -65,7 +65,7 @@ UPDATE sequences SET default_video_layer_track_id = 'master_v_media_stub' WHERE 
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media_stub', 'default_project', 'master_media_stub', 'master_v_media_stub', 'media_stub', 0, 2000, 0, 2000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, master_clip_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_a', 'default_project', 'Clip A', 'track_v1', 'master_media_stub', NULL, 'default_sequence', 0, 1000, 0, 1000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now, now, now, now, now))
@@ -106,7 +106,7 @@ reset_tracking()
 local overwrite_cmd = Command.create("Overwrite", "default_project")
 overwrite_cmd:set_parameter("track_id", "track_v1")
 overwrite_cmd:set_parameter("sequence_id", "default_sequence")
-overwrite_cmd:set_parameter("master_clip_id", master_clip_id)
+overwrite_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
 overwrite_cmd:set_parameter("overwrite_time", 400)
 overwrite_cmd:set_parameter("duration", 300)
 overwrite_cmd:set_parameter("source_in", 0)

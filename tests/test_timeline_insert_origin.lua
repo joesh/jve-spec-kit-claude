@@ -77,7 +77,7 @@ local playhead = timeline_state.get_playhead_position()
 assert(playhead == 0, "playhead should start at frame 0 for new sequence")
 
 local insert_cmd = Command.create("Insert", "default_project")
-insert_cmd:set_parameter("master_clip_id", master_clip_id)
+insert_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
 insert_cmd:set_parameter("sequence_id", "default_sequence")
 insert_cmd:set_parameter("track_id", "video1")
 insert_cmd:set_parameter("insert_time", playhead)

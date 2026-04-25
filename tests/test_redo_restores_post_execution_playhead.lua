@@ -71,7 +71,7 @@ assert(timeline_state.get_playhead_position() == 0, "Precondition: playhead at 0
 
 -- Set marks on masterclip sequence — Insert reads timing from these
 local Sequence = require("models.sequence")
-local mc_seq = Sequence.load(master_clip_id)
+local mc_seq = Sequence.load(nested_sequence_id)
 assert(mc_seq, "Failed to load masterclip sequence")
 mc_seq:set_in(0)
 mc_seq:set_out(100)
@@ -81,7 +81,7 @@ mc_seq:save()
 local insert_cmd = Command.create("Insert", "default_project")
 insert_cmd:set_parameter("sequence_id", "seq1")
 insert_cmd:set_parameter("track_id", "v1")
-insert_cmd:set_parameter("master_clip_id", master_clip_id)
+insert_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
 insert_cmd:set_parameter("insert_time", 0)
 insert_cmd:set_parameter("advance_playhead", true)
 

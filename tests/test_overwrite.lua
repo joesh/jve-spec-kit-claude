@@ -103,15 +103,15 @@ end
 -- Helper: execute command with proper event wrapping
 -- For Insert/Overwrite: reads source_in/source_out from params, sets marks, removes timing params
 local function execute_command(name, params)
-    if (name == "Insert" or name == "Overwrite") and params.master_clip_id then
+    if (name == "Insert" or name == "Overwrite") and params.nested_sequence_id then
         if params.source_in and params.source_out then
-            set_mc_marks(params.master_clip_id, params.source_in, params.source_out)
+            set_mc_marks(params.nested_sequence_id, params.source_in, params.source_out)
             params.source_in = nil
             params.source_out = nil
             params.duration = nil
         else
             -- No timing → clear marks so full duration is used
-            clear_mc_marks(params.master_clip_id)
+            clear_mc_marks(params.nested_sequence_id)
             params.duration = nil
         end
     end
@@ -210,7 +210,7 @@ local result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    nested_sequence_id = master_clip_id,
+    nested_sequence_id = nested_sequence_id,
     overwrite_time = 0,
     duration = 100,
     source_in = 0,
@@ -230,7 +230,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    nested_sequence_id = master_clip_id,
+    nested_sequence_id = nested_sequence_id,
     clip_id = "overwrite_clip",
     overwrite_time = 0,
     duration = 100,
@@ -255,7 +255,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    nested_sequence_id = master_clip_id,
+    nested_sequence_id = nested_sequence_id,
     clip_id = "overwrite_start",
     overwrite_time = 0,
     duration = 50,
@@ -310,7 +310,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    nested_sequence_id = master_clip_id,
+    nested_sequence_id = nested_sequence_id,
     clip_id = "middle_overwrite",
     overwrite_time = 75,
     duration = 50,
@@ -334,10 +334,10 @@ result = execute_command("Overwrite", {
     track_id = "track_v1",
     overwrite_time = 0,
     duration = 100
-    -- No master_clip_id
+    -- No nested_sequence_id
 })
 asserts._set_enabled_for_tests(true)
-assert(not result.success, "Overwrite without master_clip_id should fail")
+assert(not result.success, "Overwrite without nested_sequence_id should fail")
 
 -- =============================================================================
 -- TEST 8: Resolves track_id from sequence when not provided
@@ -348,7 +348,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     -- No track_id - should use first video track
-    nested_sequence_id = master_clip_id,
+    nested_sequence_id = nested_sequence_id,
     overwrite_time = 0,
     duration = 100,
     source_in = 0,
@@ -367,7 +367,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    nested_sequence_id = master_clip_id,
+    nested_sequence_id = nested_sequence_id,
     clip_id = "fallback_dur_clip",
     overwrite_time = 0
     -- No duration - should infer from masterclip stream
@@ -389,7 +389,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    nested_sequence_id = master_clip_id,
+    nested_sequence_id = nested_sequence_id,
     clip_id = "ow_1",
     overwrite_time = 0,
     duration = 100,
@@ -403,7 +403,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    nested_sequence_id = master_clip_id,
+    nested_sequence_id = nested_sequence_id,
     clip_id = "ow_2",
     overwrite_time = 100,
     duration = 100,
@@ -417,7 +417,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    nested_sequence_id = master_clip_id,
+    nested_sequence_id = nested_sequence_id,
     clip_id = "ow_3",
     overwrite_time = 200,
     duration = 100,
@@ -447,7 +447,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v2",  -- Different track
-    nested_sequence_id = master_clip_id,
+    nested_sequence_id = nested_sequence_id,
     clip_id = "v2_clip",
     overwrite_time = 0,
     duration = 100,
@@ -476,7 +476,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     track_id = "track_v1",
-    nested_sequence_id = master_clip_id,  -- Uses the existing video-only masterclip
+    nested_sequence_id = nested_sequence_id,  -- Uses the existing video-only masterclip
     overwrite_time = 0,
     duration = 100,
     source_in = 0,
