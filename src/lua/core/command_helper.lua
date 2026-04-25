@@ -471,33 +471,35 @@ function M.restore_clip_state(state)
     local clip = Clip.load_optional(state.id)
     
     if not clip then
-        -- Create new if missing
-        clip = Clip.create(state.name or 'Restored Clip', state.media_id, {
+        -- V13: Clip.create takes a single fields table. Use state's V13 names
+        -- (nested_sequence_id) with V8 aliases for transitional callers.
+        local nested_id = state.nested_sequence_id or state.master_clip_id
+        assert(nested_id and nested_id ~= "",
+            "restore_clip_state: state missing nested_sequence_id (and no master_clip_id alias)")
+        local new_id = Clip.create({
             id = state.id,
             project_id = state.project_id,
-            clip_kind = state.clip_kind,
+            name = state.name or "Restored Clip",
             track_id = state.track_id,
             owner_sequence_id = state.owner_sequence_id or state.track_sequence_id,
-            master_clip_id = state.master_clip_id,
-            track_sequence_id = state.track_sequence_id or state.owner_sequence_id,
-
-            timeline_start = state.timeline_start,
-            duration = state.duration,
-            source_in = state.source_in,
-            source_out = state.source_out,
-
-            -- Frame rate must match original clip for SQLite overlap triggers
-            fps_numerator = state.fps_numerator,
-            fps_denominator = state.fps_denominator,
-
-            enabled = state.enabled ~= false,
-            offline = state.offline,
-            volume = state.volume,
-            mark_in = state.mark_in,
-            mark_out = state.mark_out,
-            playhead_frame = state.playhead,
+            nested_sequence_id = nested_id,
+            timeline_start_frame = state.timeline_start,
+            duration_frames = state.duration,
+            source_in_frame = state.source_in,
+            source_out_frame = state.source_out,
+            master_layer_track_id = state.master_layer_track_id,
+            master_audio_track_id = state.master_audio_track_id,
+            fps_mismatch_policy = state.fps_mismatch_policy or "resample",
+            enabled = (state.enabled ~= false) and 1 or 0,
+            volume = state.volume or 1.0,
+            mark_in_frame = state.mark_in,
+            mark_out_frame = state.mark_out,
+            playhead_frame = state.playhead or 0,
         })
-        clip:restore_without_occlusion(nil)
+        clip = Clip.load(new_id)
+        if clip and clip.restore_without_occlusion then
+            clip:restore_without_occlusion(nil)
+        end
     else
         -- Update existing
         clip.track_id = state.track_id or clip.track_id
@@ -522,15 +524,23 @@ function M.capture_clip_state(clip)
     if not rate or not rate.fps_numerator or not rate.fps_denominator then
         error(string.format("capture_clip_state: Clip %s missing rate metadata", tostring(clip.id)), 2)
     end
+    -- V13 capture: include nested_sequence_id + structural fields. Keep V8
+    -- compat fields (clip_kind/master_clip_id/media_id) from the loaded clip
+    -- so JSON round-trip preserves them; restore_deleted_clip prefers the
+    -- V13 names but accepts V8 aliases.
     local state = {
         id = clip.id,
         project_id = clip.project_id,
-        clip_kind = clip.clip_kind,
+        clip_kind = clip.clip_kind,                        -- compat surface
         owner_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
         track_sequence_id = clip.track_sequence_id or clip.owner_sequence_id,
-        master_clip_id = clip.master_clip_id,
+        nested_sequence_id = clip.nested_sequence_id or clip.master_clip_id,  -- V13
+        master_clip_id = clip.master_clip_id or clip.nested_sequence_id,      -- compat
+        master_layer_track_id = clip.master_layer_track_id,
+        master_audio_track_id = clip.master_audio_track_id,
+        fps_mismatch_policy = clip.fps_mismatch_policy or "resample",
         track_id = clip.track_id,
-        media_id = clip.media_id,
+        media_id = clip.media_id,                          -- compat (derived)
         timeline_start = clip.timeline_start,
         duration = clip.duration,
         source_in = clip.source_in,
@@ -538,7 +548,6 @@ function M.capture_clip_state(clip)
         name = clip.name,
         enabled = clip.enabled,
         offline = clip.offline,
-        -- Frame rate needed for Rational reconstruction after JSON round-trip
         fps_numerator = rate.fps_numerator,
         fps_denominator = rate.fps_denominator
     }
@@ -730,14 +739,16 @@ function M.apply_mutations(db, mutations)
         end
         insert_stmt = db:prepare([[
             INSERT INTO clips (
-                id, project_id, clip_kind, name, track_id, media_id,
-                master_clip_id, owner_sequence_id,
-                timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-                fps_numerator, fps_denominator, enabled, offline,
-                created_at, modified_at,
-                volume, mark_in_frame, mark_out_frame, playhead_frame
+                id, project_id, name, track_id,
+                owner_sequence_id, nested_sequence_id,
+                timeline_start_frame, duration_frames,
+                source_in_frame, source_out_frame,
+                master_layer_track_id, master_audio_track_id,
+                fps_mismatch_policy,
+                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
+                created_at, modified_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not insert_stmt then
             return nil, "Failed to prepare INSERT statement: " .. tostring(db:last_error() or "unknown")
@@ -843,35 +854,39 @@ function M.apply_mutations(db, mutations)
                 finalize_all_stmts()
                 return false, stmt_err
             end
-            stmt:bind_value(1, mut.clip_id)
-            stmt:bind_value(2, mut.project_id)
-            stmt:bind_value(3, mut.clip_kind)
-            stmt:bind_value(4, mut.name)
-            stmt:bind_value(5, mut.track_id)
-            stmt:bind_value(6, mut.media_id)
-            stmt:bind_value(7, mut.master_clip_id)
-            stmt:bind_value(8, mut.owner_sequence_id)
-            stmt:bind_value(9, mut.timeline_start_frame)
-            stmt:bind_value(10, mut.duration_frames)
-            stmt:bind_value(11, mut.source_in_frame)
-            stmt:bind_value(12, mut.source_out_frame)
-            stmt:bind_value(13, mut.fps_numerator)
-            stmt:bind_value(14, mut.fps_denominator)
-            stmt:bind_value(15, mut.enabled)
-            stmt:bind_value(16, 0)  -- offline is transient, always 0 in DB
+            -- V13 INSERT: callers must provide nested_sequence_id (the
+            -- referenced sequence) and fps_mismatch_policy. Accept legacy
+            -- master_clip_id as an alias for transitional callers.
+            local nested_id = mut.nested_sequence_id or mut.master_clip_id
+            if not nested_id or nested_id == "" then
+                finalize_all_stmts()
+                return false, "INSERT mutation missing nested_sequence_id for clip " .. tostring(mut.clip_id)
+            end
+            local policy = mut.fps_mismatch_policy or "resample"
             if mut.created_at == nil or mut.modified_at == nil then
                 finalize_all_stmts()
                 return false, "INSERT mutation missing created_at/modified_at for clip " .. tostring(mut.clip_id)
             end
-            stmt:bind_value(17, mut.created_at)
-            stmt:bind_value(18, mut.modified_at)
-            -- Per-clip metadata: volume/marks/playhead
-            -- volume and playhead_frame are NOT NULL with defaults; always bind
-            stmt:bind_value(19, mut.volume or 1.0)
-            -- mark_in/mark_out are nullable; only bind when present
-            if mut.mark_in_frame ~= nil then stmt:bind_value(20, mut.mark_in_frame) end
-            if mut.mark_out_frame ~= nil then stmt:bind_value(21, mut.mark_out_frame) end
-            stmt:bind_value(22, mut.playhead_frame or 0)
+            stmt:bind_value(1, mut.clip_id)
+            stmt:bind_value(2, mut.project_id)
+            stmt:bind_value(3, mut.name)
+            stmt:bind_value(4, mut.track_id)
+            stmt:bind_value(5, mut.owner_sequence_id)
+            stmt:bind_value(6, nested_id)
+            stmt:bind_value(7, mut.timeline_start_frame)
+            stmt:bind_value(8, mut.duration_frames)
+            stmt:bind_value(9, mut.source_in_frame)
+            stmt:bind_value(10, mut.source_out_frame)
+            stmt:bind_value(11, mut.master_layer_track_id)  -- nullable
+            stmt:bind_value(12, mut.master_audio_track_id)  -- nullable
+            stmt:bind_value(13, policy)
+            stmt:bind_value(14, mut.enabled)
+            stmt:bind_value(15, mut.volume or 1.0)
+            if mut.mark_in_frame ~= nil then stmt:bind_value(16, mut.mark_in_frame) end
+            if mut.mark_out_frame ~= nil then stmt:bind_value(17, mut.mark_out_frame) end
+            stmt:bind_value(18, mut.playhead_frame or 0)
+            stmt:bind_value(19, mut.created_at)
+            stmt:bind_value(20, mut.modified_at)
             local ok = stmt:exec()
             local err = db:last_error()
             reset_stmt(stmt)
@@ -1047,47 +1062,50 @@ function M.revert_mutations(db, mutations, command, sequence_id)
     local function restore_deleted_clip(mut)
         local prev = mut.previous
         if not prev then return false, "Cannot undo delete: missing previous state" end
-        local fps_num, fps_den = require_rate(prev, "undo delete")
         if prev.created_at == nil or prev.modified_at == nil then
             return false, "undo delete: missing created_at/modified_at for clip " .. tostring(prev.id)
         end
+        local nested_id = prev.nested_sequence_id or prev.master_clip_id
+        if not nested_id or nested_id == "" then
+            return false, "undo delete: missing nested_sequence_id for clip " .. tostring(prev.id)
+        end
+        local policy = prev.fps_mismatch_policy or "resample"
 
         local stmt = db:prepare([[
             INSERT INTO clips (
-                id, project_id, clip_kind, name, track_id, media_id,
-                master_clip_id, owner_sequence_id,
-                timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-                fps_numerator, fps_denominator, enabled, offline,
-                created_at, modified_at,
-                volume, mark_in_frame, mark_out_frame, playhead_frame
+                id, project_id, name, track_id,
+                owner_sequence_id, nested_sequence_id,
+                timeline_start_frame, duration_frames,
+                source_in_frame, source_out_frame,
+                master_layer_track_id, master_audio_track_id,
+                fps_mismatch_policy,
+                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
+                created_at, modified_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not stmt then return false, "Failed to prepare undo delete: " .. tostring(db:last_error()) end
 
         stmt:bind_value(1, prev.id)
         stmt:bind_value(2, prev.project_id)
-        stmt:bind_value(3, prev.clip_kind)
-        stmt:bind_value(4, prev.name)
-        stmt:bind_value(5, prev.track_id)
-        stmt:bind_value(6, prev.media_id)
-        stmt:bind_value(7, prev.master_clip_id)
-        stmt:bind_value(8, prev.owner_sequence_id or prev.track_sequence_id)
-        stmt:bind_value(9, val_frames(prev.timeline_start or prev.start_value, "timeline_start"))
-        stmt:bind_value(10, val_frames(prev.duration, "duration"))
-        stmt:bind_value(11, val_frames(prev.source_in, "source_in"))
-        stmt:bind_value(12, val_frames(prev.source_out, "source_out"))
-        stmt:bind_value(13, fps_num)
-        stmt:bind_value(14, fps_den)
-        stmt:bind_value(15, prev.enabled and 1 or 0)
-        stmt:bind_value(16, 0)  -- offline is transient, always 0 in DB
-        stmt:bind_value(17, prev.created_at)
-        stmt:bind_value(18, prev.modified_at)
-        -- Per-clip metadata (from capture_clip_state)
-        stmt:bind_value(19, prev.volume or 1.0)
-        if prev.mark_in ~= nil then stmt:bind_value(20, prev.mark_in) end
-        if prev.mark_out ~= nil then stmt:bind_value(21, prev.mark_out) end
-        stmt:bind_value(22, prev.playhead or 0)
+        stmt:bind_value(3, prev.name)
+        stmt:bind_value(4, prev.track_id)
+        stmt:bind_value(5, prev.owner_sequence_id or prev.track_sequence_id)
+        stmt:bind_value(6, nested_id)
+        stmt:bind_value(7, val_frames(prev.timeline_start or prev.start_value, "timeline_start"))
+        stmt:bind_value(8, val_frames(prev.duration, "duration"))
+        stmt:bind_value(9, val_frames(prev.source_in, "source_in"))
+        stmt:bind_value(10, val_frames(prev.source_out, "source_out"))
+        stmt:bind_value(11, prev.master_layer_track_id)  -- nullable
+        stmt:bind_value(12, prev.master_audio_track_id)  -- nullable
+        stmt:bind_value(13, policy)
+        stmt:bind_value(14, prev.enabled and 1 or 0)
+        stmt:bind_value(15, prev.volume or 1.0)
+        if prev.mark_in ~= nil then stmt:bind_value(16, prev.mark_in) end
+        if prev.mark_out ~= nil then stmt:bind_value(17, prev.mark_out) end
+        stmt:bind_value(18, prev.playhead or 0)
+        stmt:bind_value(19, prev.created_at)
+        stmt:bind_value(20, prev.modified_at)
 
         local ok = stmt:exec()
         stmt:finalize()
@@ -1100,13 +1118,13 @@ function M.revert_mutations(db, mutations, command, sequence_id)
             M.add_insert_mutation(command, sequence_id, {
                 id = prev.id,
                 track_id = prev.track_id,
+                nested_sequence_id = nested_id,
                 start_value = val_frames(prev.timeline_start or prev.start_value, "timeline_start"),
                 duration_value = val_frames(prev.duration, "duration"),
                 source_in_value = val_frames(prev.source_in, "source_in"),
                 source_out_value = val_frames(prev.source_out, "source_out"),
                 enabled = prev.enabled,
                 name = prev.name,
-                media_id = prev.media_id,
                 volume = prev.volume,
             })
         end
