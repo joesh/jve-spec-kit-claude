@@ -229,6 +229,36 @@ function Project.get_fps_mismatch_policy(id, db)
     return policy
 end
 
+--- Update the project's fps_mismatch_policy column. NOT NULL — caller
+--- must pass 'resample' or 'passthrough' (rule 2.13).
+--- Returns the prior value so undoers can restore.
+function Project.set_fps_mismatch_policy(id, policy)
+    assert(id and id ~= "", "Project.set_fps_mismatch_policy: id required")
+    assert(policy == "resample" or policy == "passthrough", string.format(
+        "Project.set_fps_mismatch_policy: policy must be 'resample' or "
+        .. "'passthrough'; got %s", tostring(policy)))
+    local conn = resolve_db(nil)
+    local fetch = conn:prepare("SELECT fps_mismatch_policy FROM projects WHERE id = ?")
+    assert(fetch, "Project.set_fps_mismatch_policy: fetch prepare failed")
+    fetch:bind_value(1, id)
+    assert(fetch:exec(), "Project.set_fps_mismatch_policy: fetch exec failed")
+    assert(fetch:next(), string.format(
+        "Project.set_fps_mismatch_policy: project %s not found", id))
+    local prior = fetch:value(0)
+    fetch:finalize()
+
+    local upd = conn:prepare(
+        "UPDATE projects SET fps_mismatch_policy = ?, modified_at = ? WHERE id = ?")
+    assert(upd, "Project.set_fps_mismatch_policy: update prepare failed")
+    upd:bind_value(1, policy)
+    upd:bind_value(2, os.time())
+    upd:bind_value(3, id)
+    local ok = upd:exec()
+    upd:finalize()
+    assert(ok, "Project.set_fps_mismatch_policy: exec failed")
+    return prior
+end
+
 --- Commit the identity update transaction started by update_identity.
 function Project.commit_identity_update()
     local conn = resolve_db(nil)

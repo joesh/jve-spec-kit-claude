@@ -2220,6 +2220,30 @@ function Sequence.get_name(id)
     return n
 end
 
+--- Write a sequence's fps_mismatch_policy directly. Nullable (NULL =
+--- inherit project default). Lua's pairs skips nil so this dedicated
+--- setter is required for the NULL-restore path on undo.
+---
+--- @param id string
+--- @param policy string|nil  'resample' / 'passthrough' / nil
+function Sequence.set_fps_mismatch_policy(id, policy)
+    assert(id and id ~= "", "Sequence.set_fps_mismatch_policy: id required")
+    assert(policy == nil or policy == "resample" or policy == "passthrough",
+        "Sequence.set_fps_mismatch_policy: policy must be 'resample', "
+        .. "'passthrough', or nil")
+    local conn = resolve_db()
+    local stmt = conn:prepare(
+        "UPDATE sequences SET fps_mismatch_policy = ?, modified_at = ? "
+        .. "WHERE id = ?")
+    assert(stmt, "Sequence.set_fps_mismatch_policy: prepare failed")
+    stmt:bind_value(1, policy)   -- nil → SQL NULL
+    stmt:bind_value(2, os.time())
+    stmt:bind_value(3, id)
+    local ok = stmt:exec()
+    stmt:finalize()
+    assert(ok, "Sequence.set_fps_mismatch_policy: exec failed")
+end
+
 --- Write a sequence's start-TC column directly. Distinct from
 --- Sequence.update because Lua's `pairs` skips nil values, and the
 --- start-TC columns are nullable (FR-017 default-derivation may leave
