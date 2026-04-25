@@ -3,7 +3,7 @@
 ## TL;DR
 
 Migrated the load-side of the V13 schema (SELECT path) and bulk-migrated test
-fixtures across the suite. Tests went **332 → 466 (+134)** across this session
+fixtures across the suite. Tests went **332 → 467 (+135)** across this session
 block (continuation of prior 285 → 332 pass).
 
 ## Commits this block
@@ -125,7 +125,17 @@ Drop of `clip_kind='timeline'` guard in `plan_duplicate_block` — V13 has no
 clip_kind column; every clip is a sequence reference (master/still/gap
 collapsed into nested refs).
 
-## What's still failing (191 / 657)
+## Insert/Overwrite spec extensions
+
+Accepted-but-no-op params: `advance_playhead`, `source_in`, `source_out`,
+`duration` (V8 callers passed these; V13 derives source bounds from the
+nested sequence's marks). `timeline_start_frame` defaults to 0 instead of
+being strictly required (UI/importers always supply explicit value).
+
+`command_schema.apply_rules` tolerates non-table rule entries — SPEC.persisted
+uses default-value shorthand (`duration_frames = 0`).
+
+## What's still failing (190 / 657)
 
 | Bucket | Count | Pattern | Resolution |
 |---|---|---|---|
