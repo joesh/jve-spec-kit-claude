@@ -29,6 +29,50 @@ local now = os.time()
 db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', %d, %d);
 ]], now, now))
+-- V13: synthesize placeholder media + master sequence for clip references.
+do
+    local _Media = require("models.media")
+    local _json = require("dkjson")
+    local _existing = _Media.load("media_1")
+    if not _existing then
+        local _m = _Media.create({
+            id = "media_1",
+            project_id = "project",
+            file_path = "/tmp/jve/_placeholder.mov",
+            name = "Placeholder",
+            duration_frames = 10000,
+            fps_numerator = 30,
+            fps_denominator = 1,
+            width = 1920,
+            height = 1080,
+            audio_channels = 0,
+            metadata = _json.encode({ start_tc_value = 0, start_tc_rate = 30 }),
+        })
+        assert(_m:save())
+    end
+end
+-- V13: master sequence wrapping the media for clip references.
+do
+    local _Media = require("models.media")
+    local _json = require("dkjson")
+    local _m = _Media.load("media_1")
+    if _m then
+        if not _m.width or _m.width == 0 then _m.width = 1920 end
+        if not _m.height or _m.height == 0 then _m.height = 1080 end
+        local _parsed = _m.metadata and (function() local ok,v = pcall(_json.decode, _m.metadata); return ok and v end)()
+        if not _parsed or _parsed.start_tc_value == nil then
+            _m.metadata = _json.encode({ start_tc_value = 0,
+                start_tc_rate = (_m.frame_rate and _m.frame_rate.fps_numerator) or 24,
+                start_tc_audio_samples = 0,
+                start_tc_audio_rate = (_m.audio_channels and _m.audio_channels > 0)
+                    and (_m.audio_sample_rate or 48000) or nil })
+        end
+        _m:save()
+    end
+end
+local _Sequence_for_master = require("models.sequence")
+local MC_TEST = _Sequence_for_master.ensure_master("media_1", "project")
+
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
     VALUES ('sequence', 'project', 'Test Sequence', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
@@ -137,27 +181,6 @@ local function create_clip(id, track_id, start_frame, duration_frames)
     })
     assert(clip ~= nil and clip ~= "", "Failed to save clip " .. id)
 
--- V13: master sequence wrapping the media for clip references.
-do
-    local _Media = require("models.media")
-    local _json = require("dkjson")
-    local _m = _Media.load("media_1")
-    if _m then
-        if not _m.width or _m.width == 0 then _m.width = 1920 end
-        if not _m.height or _m.height == 0 then _m.height = 1080 end
-        local _parsed = _m.metadata and (function() local ok,v = pcall(_json.decode, _m.metadata); return ok and v end)()
-        if not _parsed or _parsed.start_tc_value == nil then
-            _m.metadata = _json.encode({ start_tc_value = 0,
-                start_tc_rate = (_m.frame_rate and _m.frame_rate.fps_numerator) or 24,
-                start_tc_audio_samples = 0,
-                start_tc_audio_rate = (_m.audio_channels and _m.audio_channels > 0)
-                    and (_m.audio_sample_rate or 48000) or nil })
-        end
-        _m:save()
-    end
-end
-local _Sequence_for_master = require("models.sequence")
-local MC_TEST = _Sequence_for_master.ensure_master("media_1", "project")
     return clip
 end
 

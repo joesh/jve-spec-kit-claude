@@ -38,6 +38,50 @@ local function setup_db(path)
     exec_safe(string.format([[ 
         INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', %d, %d);
     ]], now, now), "Insert Project")
+-- V13: synthesize placeholder media + master sequence for clip references.
+do
+    local _Media = require("models.media")
+    local _json = require("dkjson")
+    local _existing = _Media.load("media_ripple")
+    if not _existing then
+        local _m = _Media.create({
+            id = "media_ripple",
+            project_id = "project",
+            file_path = "/tmp/jve/_placeholder.mov",
+            name = "Placeholder",
+            duration_frames = 10000,
+            fps_numerator = 30,
+            fps_denominator = 1,
+            width = 1920,
+            height = 1080,
+            audio_channels = 0,
+            metadata = _json.encode({ start_tc_value = 0, start_tc_rate = 30 }),
+        })
+        assert(_m:save())
+    end
+end
+-- V13: master sequence wrapping the media for clip references.
+do
+    local _Media = require("models.media")
+    local _json = require("dkjson")
+    local _m = _Media.load("media_ripple")
+    if _m then
+        if not _m.width or _m.width == 0 then _m.width = 1920 end
+        if not _m.height or _m.height == 0 then _m.height = 1080 end
+        local _parsed = _m.metadata and (function() local ok,v = pcall(_json.decode, _m.metadata); return ok and v end)()
+        if not _parsed or _parsed.start_tc_value == nil then
+            _m.metadata = _json.encode({ start_tc_value = 0,
+                start_tc_rate = (_m.frame_rate and _m.frame_rate.fps_numerator) or 24,
+                start_tc_audio_samples = 0,
+                start_tc_audio_rate = (_m.audio_channels and _m.audio_channels > 0)
+                    and (_m.audio_sample_rate or 48000) or nil })
+        end
+        _m:save()
+    end
+end
+local _Sequence_for_master = require("models.sequence")
+local MC_TEST = _Sequence_for_master.ensure_master("media_ripple", "project")
+
 
     -- V5 Schema INSERT
     local seq1_sql = string.format("INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at) VALUES ('sequence', 'project', 'Seq', 'nested', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);", now, now)
@@ -125,10 +169,9 @@ local function assert_no_overlaps(clips)
 end
 
 local function ensure_media_record(db, media_id, duration_frames)
-    -- V5 Schema Insert
-    local stmt = db:prepare([[ 
+    local stmt = db:prepare([[
         INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at, metadata)
-        VALUES (?, 'project', ?, ?, ?, 30, 1, 1920, 1080, 0, 'raw', 0, 0, '{}')
+        VALUES (?, 'project', ?, ?, ?, 30, 1, 1920, 1080, 0, 'raw', 0, 0, '{"start_tc_value":0,"start_tc_rate":30}')
     ]])
     stmt:bind_value(1, media_id)
     stmt:bind_value(2, media_id .. ".mov")
@@ -136,6 +179,10 @@ local function ensure_media_record(db, media_id, duration_frames)
     stmt:bind_value(4, duration_frames)
     assert(stmt:exec(), "media insert failed")
     stmt:finalize()
+    -- V13: also build the master sequence wrapping this media so clips can
+    -- reference it via nested_sequence_id.
+    local Sequence = require("models.sequence")
+    Sequence.ensure_master(media_id, "project", { id = "master_" .. media_id })
 end
 
 print("=== Clip Occlusion Tests ===\n")
@@ -324,27 +371,6 @@ local media_row = Media.create({
 })
 assert(media_row:save(db), "failed saving media for ripple test")
 
--- V13: master sequence wrapping the media for clip references.
-do
-    local _Media = require("models.media")
-    local _json = require("dkjson")
-    local _m = _Media.load("media_ripple")
-    if _m then
-        if not _m.width or _m.width == 0 then _m.width = 1920 end
-        if not _m.height or _m.height == 0 then _m.height = 1080 end
-        local _parsed = _m.metadata and (function() local ok,v = pcall(_json.decode, _m.metadata); return ok and v end)()
-        if not _parsed or _parsed.start_tc_value == nil then
-            _m.metadata = _json.encode({ start_tc_value = 0,
-                start_tc_rate = (_m.frame_rate and _m.frame_rate.fps_numerator) or 24,
-                start_tc_audio_samples = 0,
-                start_tc_audio_rate = (_m.audio_channels and _m.audio_channels > 0)
-                    and (_m.audio_sample_rate or 48000) or nil })
-        end
-        _m:save()
-    end
-end
-local _Sequence_for_master = require("models.sequence")
-local MC_TEST = _Sequence_for_master.ensure_master("media_ripple", "project")
 
 local ripple_clip = Clip.create({
         name = "Ripple Clip",
