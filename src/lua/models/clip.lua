@@ -1376,6 +1376,35 @@ function M.delete_by_ids(clip_ids)
     del_clips:finalize()
 end
 
+--- Return the id of the clip on `track_id` whose timeline range
+--- STRICTLY contains `frame` (i.e. timeline_start < frame < timeline_end).
+--- Used by Blade (T045a) — boundary-touching clips must NOT match because
+--- splitting AT a boundary is a no-op refused by SplitClip.
+--- Returns nil if no such clip exists.
+function M.find_strictly_spanning(track_id, frame)
+    assert(track_id and track_id ~= "",
+        "Clip.find_strictly_spanning: track_id required")
+    assert(type(frame) == "number",
+        "Clip.find_strictly_spanning: frame must be integer")
+    local db = require("core.database").get_connection()
+    local stmt = db:prepare([[
+        SELECT id FROM clips
+        WHERE track_id = ?
+          AND timeline_start_frame < ?
+          AND (timeline_start_frame + duration_frames) > ?
+        LIMIT 1
+    ]])
+    assert(stmt, "Clip.find_strictly_spanning: prepare failed")
+    stmt:bind_value(1, track_id)
+    stmt:bind_value(2, frame)
+    stmt:bind_value(3, frame)
+    assert(stmt:exec(), "Clip.find_strictly_spanning: exec failed")
+    local id
+    if stmt:next() then id = stmt:value(0) end
+    stmt:finalize()
+    return id
+end
+
 --- Copy all clip_channel_override rows from src_clip_id to dst_clip_id.
 --- Used by SplitClip (T045) to preserve per-channel overrides on both
 --- halves. Returns the number of rows copied.

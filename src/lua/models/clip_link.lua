@@ -270,6 +270,7 @@ end
 
 -- Get the link group ID for a clip (or nil if not linked)
 function M.get_link_group_id(clip_id, db)
+    db = db or database.get_connection()
     local query = db:prepare([[
         SELECT link_group_id FROM clip_links WHERE clip_id = ?
     ]])

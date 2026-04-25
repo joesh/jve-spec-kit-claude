@@ -1,82 +1,199 @@
---- Blade command: split clips at playhead (Cmd+B).
+--- Blade command (Feature 013, rewrite per T045a).
 --
--- If clips are selected, only splits selected clips intersecting the playhead.
--- Otherwise splits all clips at the playhead.
--- Executes SplitClip sub-commands via nested command_manager.execute().
+-- Cross-track razor at a single owner-timeline frame. Splits every clip
+-- on `track_ids` whose timeline range strictly contains `blade_frame`
+-- (boundary-touching clips are NOT split — splitting AT a boundary is a
+-- no-op).
+--
+-- Distinct from a single-clip Split (T045) in one important way: link
+-- groups are preserved across the cut. If a set of clips that was bladed
+-- belonged to the SAME original link group, the resulting RIGHT halves
+-- form a NEW link group together — so an A+V pair on the timeline
+-- becomes two A+V pairs after the blade. The LEFT halves keep the
+-- original link group rows (their clip ids are unchanged).
+--
+-- This command does NOT consult selection or playhead state — those live
+-- in the UI layer. Callers (the keyboard binding for Cmd+B etc.) must
+-- supply sequence_id, blade_frame, and the list of armed track_ids.
+--
+-- Refusal modes:
+--   - blade_frame at a clip's exact boundary: that clip is silently
+--     skipped (no-op), per the strict-inside contract of SplitClip.
+--   - any per-clip SplitClip refusal raises and the partial blade unwinds
+--     via SAVEPOINT.
 --
 -- @file blade.lua
+
 local M = {}
-local log = require("core.logger").for_area("commands")
-local command_helper = require("core.command_helper")
 
-local SPEC = {
-    undoable = false,
-    args = {
-        project_id = { required = true },
-        sequence_id = {},
-    }
-}
+local Clip      = require("models.clip")
+local ClipLink  = require("models.clip_link")
+local SplitClip = require("core.commands.split_clip")
+local database  = require("core.database")
+local log       = require("core.logger").for_area("commands")
 
-function M.register(executors)
-    local function executor(command)
-        local command_manager = require("core.command_manager")
+local SAVEPOINT = "blade_atomic"
 
-        local target_clips, playhead_value = command_helper.resolve_clips_at_playhead()
-        if #target_clips == 0 then
-            log.event("Blade: no clips under playhead")
-            return true
+function M.execute(args)
+    assert(type(args) == "table", "Blade.execute: args must be table")
+    assert(args.sequence_id and args.sequence_id ~= "",
+        "Blade: sequence_id required (rule 2.29)")
+    assert(type(args.blade_frame) == "number",
+        "Blade: blade_frame must be integer (owner-timeline frame)")
+    assert(type(args.track_ids) == "table",
+        "Blade: track_ids must be a list of track ids (armed tracks)")
+
+    -- Phase 1 (no DB writes yet): for each armed track, find the clip
+    -- whose timeline strictly contains blade_frame.
+    local targets = {}
+    for _, track_id in ipairs(args.track_ids) do
+        assert(track_id and track_id ~= "",
+            "Blade: track_ids entries must be non-empty strings")
+        local clip_id = Clip.find_strictly_spanning(track_id, args.blade_frame)
+        if clip_id then
+            targets[#targets + 1] = {
+                clip_id             = clip_id,
+                track_id            = track_id,
+                original_link_group = ClipLink.get_link_group_id(clip_id),
+            }
+        end
+    end
+
+    if #targets == 0 then
+        log.event("Blade: no clips intersect frame=%d on armed tracks",
+            args.blade_frame)
+        return { sequence_id = args.sequence_id, splits = {} }
+    end
+
+    -- Phase 2 (atomic): run SplitClip on each target. SAVEPOINT so a
+    -- mid-blade SplitClip refusal unwinds the entire blade — the blade
+    -- is all-or-nothing.
+    assert(database.savepoint(SAVEPOINT), "Blade: savepoint failed")
+    local splits = {}
+    local ok, err = pcall(function()
+        for _, t in ipairs(targets) do
+            local r = SplitClip.execute({
+                sequence_id = args.sequence_id,
+                clip_id     = t.clip_id,
+                split_frame = args.blade_frame,
+            })
+            splits[#splits + 1] = {
+                clip_id             = t.clip_id,            -- left half (id unchanged)
+                second_clip_id      = r.second_clip_id,     -- right half
+                track_id            = t.track_id,
+                original_link_group = t.original_link_group,
+            }
         end
 
-        local args = command:get_all_parameters()
-        local project_id = args.project_id
-        assert(project_id and project_id ~= "", "Blade: missing active project_id")
-
-        -- Group all SplitClip children into one undo atom
-        command_manager.begin_undo_group("Blade")
-
-        local split_count = 0
-        local fail_count = 0
-        for _, clip in ipairs(target_clips) do
-            local start_value = clip.timeline_start
-            local duration_value = clip.duration
-            assert(type(start_value) == "number", "Blade: clip timeline_start must be integer")
-            assert(type(duration_value) == "number", "Blade: clip duration must be integer")
-
-            if duration_value > 0 then
-                local end_time = start_value + duration_value
-                if playhead_value > start_value and playhead_value < end_time then
-                    local result = command_manager.execute("SplitClip", {
-                        clip_id = clip.id,
-                        split_value = playhead_value,
-                        project_id = project_id,
-                        sequence_id = args.sequence_id,
-                    })
-                    if result.success then
-                        split_count = split_count + 1
-                    else
-                        fail_count = fail_count + 1
-                        log.error("Blade: SplitClip failed for %s: %s",
-                            clip.id, result.error_message or "unknown")
-                    end
+        -- Phase 3 (still inside savepoint): for each original link group
+        -- that produced ≥2 right halves, link those right halves into a
+        -- NEW group. Right halves of clips that weren't linked, or whose
+        -- group only contributed one right half, stay unlinked.
+        local right_halves_by_group = {}
+        for _, s in ipairs(splits) do
+            if s.original_link_group then
+                local bucket = right_halves_by_group[s.original_link_group]
+                if not bucket then
+                    bucket = {}
+                    right_halves_by_group[s.original_link_group] = bucket
                 end
+                bucket[#bucket + 1] = {
+                    clip_id     = s.second_clip_id,
+                    -- role must be unique within a group; the source clip's
+                    -- track_id is unique per cut so it serves as the role.
+                    role        = s.track_id,
+                    time_offset = 0,
+                }
             end
         end
-
-        command_manager.end_undo_group()
-
-        if split_count > 0 then
-            log.event("Blade: split %d clip(s) at %s", split_count, tostring(playhead_value))
+        for _, bucket in pairs(right_halves_by_group) do
+            if #bucket >= 2 then
+                local new_group, link_err = ClipLink.create_link_group(bucket)
+                assert(new_group, string.format(
+                    "Blade: failed to create link group for right halves: %s",
+                    tostring(link_err)))
+            end
         end
-        if fail_count > 0 then
-            log.warn("Blade: %d of %d split(s) failed", fail_count, split_count + fail_count)
-        end
+    end)
+    if not ok then
+        database.rollback_to_savepoint(SAVEPOINT)
+        database.release_savepoint(SAVEPOINT)
+        error(err, 0)
+    end
+    assert(database.release_savepoint(SAVEPOINT),
+        "Blade: release savepoint failed")
 
-        return fail_count == 0
+    log.event("Blade: split %d clip(s) at frame=%d", #splits, args.blade_frame)
+    return {
+        sequence_id = args.sequence_id,
+        blade_frame = args.blade_frame,
+        splits      = splits,
+    }
+end
+
+local SPEC = {
+    args = {
+        sequence_id = { required = true },
+        blade_frame = { required = true },
+        track_ids   = { required = true },
+    },
+    persisted = {
+        prior_splits = {},  -- list of {clip_id, second_clip_id, original_link_group}
+    },
+}
+
+function M.register(command_executors, command_undoers, _db, set_last_error)
+    command_executors["Blade"] = function(command)
+        local args = command:get_all_parameters()
+        local ok, result_or_err = pcall(M.execute, args)
+        if not ok then
+            set_last_error("Blade: " .. tostring(result_or_err))
+            return false, tostring(result_or_err)
+        end
+        command:set_parameter("prior_splits", result_or_err.splits)
+        local Signals = require("core.signals")
+        Signals.emit("sequence_content_changed", args.sequence_id)
+        return true, { splits = result_or_err.splits }
+    end
+
+    command_undoers["Blade"] = function(command)
+        local args = command:get_all_parameters()
+        local prior = args.prior_splits or {}
+        -- Undo in reverse order. For each split: delete the right half
+        -- (cascades clip_links rows) and grow the left half back. The
+        -- original link group survives untouched on the left halves.
+        assert(database.savepoint(SAVEPOINT), "Undo Blade: savepoint failed")
+        local ok, err = pcall(function()
+            for i = #prior, 1, -1 do
+                local s = prior[i]
+                local left  = Clip.load_v13_row(s.clip_id)
+                local right = Clip.load_v13_row(s.second_clip_id)
+                assert(left and right,
+                    "Undo Blade: half clip missing — was the DB mutated outside the undo group?")
+                local restored_duration   = left.duration_frames + right.duration_frames
+                local restored_source_out = right.source_out_frame
+                Clip.delete_one(s.second_clip_id)
+                Clip.update_bounds(s.clip_id,
+                    left.timeline_start_frame, restored_duration,
+                    left.source_in_frame, restored_source_out)
+            end
+        end)
+        if not ok then
+            database.rollback_to_savepoint(SAVEPOINT)
+            database.release_savepoint(SAVEPOINT)
+            error(err, 0)
+        end
+        assert(database.release_savepoint(SAVEPOINT),
+            "Undo Blade: release savepoint failed")
+        local Signals = require("core.signals")
+        Signals.emit("sequence_content_changed", args.sequence_id)
+        return true
     end
 
     return {
-        executor = executor,
-        spec = SPEC,
+        executor = command_executors["Blade"],
+        undoer   = command_undoers["Blade"],
+        spec     = SPEC,
     }
 end
 
