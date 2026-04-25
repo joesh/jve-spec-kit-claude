@@ -121,7 +121,7 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 - [x] **T035 [P]** CT-C4/C5/C6 Slip/Slide/Roll — one test per command; all arithmetic in nested-sequence timebase; out-of-bounds loud-fail. Path: `tests/test_slip_slide_roll.lua`.
 - [x] **T036 [P]** CT-C7 Split preserves overrides on both halves. Path: `tests/test_split_preserves_overrides.lua`.
 - [x] **T036a [P]** CT-C7b Blade (razor-at-playhead across linked tracks) — Blade at playhead on armed tracks splits every linked clip at the playhead, preserving the link group on each resulting half-pair (distinct from a single-clip Split). If commands.md treats Blade as a synonym for Split, this test documents that — one failing test forces the distinction decision. Path: `tests/test_blade_across_linked_tracks.lua`.
-- [ ] **T037 [P]** CT-C8 Duplicate copies `master_layer_track_id`, `fps_mismatch_policy`, and all `clip_channel_override` rows. Path: `tests/test_duplicate_copies_overrides.lua`.
+- [x] **T037 [P]** CT-C8 Duplicate copies `master_layer_track_id`, `fps_mismatch_policy`, and all `clip_channel_override` rows. Path: `tests/test_duplicate_copies_overrides.lua`.
 - [ ] **T038 [P]** Ripple-delete preserves link group (Acceptance Scenario 8 / FR-003). Path: `tests/test_ripple_delete_link_group.lua`.
 - [ ] **T039 [P]** Cycle refusal on Insert: attempt to nest a sequence inside itself (direct + transitive) must refuse with a user-visible error; no DB mutation. Path: `tests/test_insert_cycle_refuse.lua`.
 - [ ] **T039a [P]** `sequence_content_changed` signal contract — subscribe a spy, drive one representative from each command class (Insert, Overwrite, Trim, Duplicate, SetClipLayer, ToggleClipChannel, SetMasterDefaultLayer, SetMasterChannelState, SetSequenceStartTC, Nest, Unnest, GrowMasterMedium), assert the signal fires with the correct `sequence_id` for each. Without this, silent omission of the signal in any command would go undetected. Path: `tests/test_signal_sequence_content_changed.lua`.
@@ -144,7 +144,7 @@ Every rewired command's behavior is covered by an existing test suite plus a new
   - `src/lua/core/commands/delete_clip.lua`
   - `src/lua/core/commands/delete_range.lua`
   (Verify these exact filenames against `ls src/lua/core/commands/` before starting; any file not present is dropped from this task and flagged for follow-up.)
-- [ ] **T047 [P]** Rewrite `src/lua/core/commands/duplicate.lua` — copy overrides + `clip_channel_override` rows.
+- [x] **T047 [P]** Rewrite `src/lua/core/commands/duplicate.lua` — copy overrides + `clip_channel_override` rows.
 
 ---
 
