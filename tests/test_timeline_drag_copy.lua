@@ -48,17 +48,21 @@ command_manager.init('seq', 'proj')
 timeline_state.init('seq')
 
 -- Create initial clip on V1
-local clip1 = Clip.create("Clip1", "media1", {
-    project_id = "proj",
-    track_id = "v1",
-    owner_sequence_id = "seq",
-    nested_sequence_id = "mc_test",
-    timeline_start = 0,
-    duration = 100,
-    source_in = 0,
-    source_out = 100,
-    fps_numerator = 30, fps_denominator = 1
-})
+local clip1 = Clip.create({
+        name = "Clip1",
+        project_id = "proj",
+        track_id = "v1",
+        owner_sequence_id = "seq",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 0,
+        duration_frames = 100,
+        source_in_frame = 0,
+        source_out_frame = 100,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 clip1:save(db)
 
 timeline_state.reload_clips("seq")

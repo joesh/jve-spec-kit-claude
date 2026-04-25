@@ -62,18 +62,18 @@ require("test_env").create_test_media({
 -- =========================================================================
 -- Test 1: Create clip with non-unity volume, save, reload, verify
 -- =========================================================================
-local clip1 = Clip.create("Quiet Clip", "media1", {
-    project_id = "proj",
-    owner_sequence_id = "seq",
-    track_id = "a1",
-    timeline_start = 48000,  -- 1 second at 48kHz
-    duration = 24000,        -- 0.5 seconds
-    source_in = 96000,
-    source_out = 120000,
-    fps_numerator = 48000,
-    fps_denominator = 1,
-    volume = 0.501187,  -- -6dB
-})
+local clip1 = Clip.create({
+        name = "Quiet Clip",
+        project_id = "proj",
+        owner_sequence_id = "seq",
+        track_id = "a1",
+        timeline_start_frame = 48000,
+        source_out_frame = 120000,
+        volume = 0.501187,
+        fps_mismatch_policy = "resample",
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(clip1.volume == 0.501187, "create: volume should be 0.501187, got " .. tostring(clip1.volume))
 assert(clip1:save())
 
@@ -86,18 +86,20 @@ print("  ✓ Clip volume persists through save/reload (0.501187 ≈ -6dB)")
 -- =========================================================================
 -- Test 2: Default volume is 1.0 (unity gain)
 -- =========================================================================
-local clip2 = Clip.create("Unity Clip", "media1", {
-    project_id = "proj",
-    owner_sequence_id = "seq",
-    track_id = "a1",
-    timeline_start = 144000,
-    duration = 24000,
-    source_in = 0,
-    source_out = 24000,
-    fps_numerator = 48000,
-    fps_denominator = 1,
-    -- no volume specified
-})
+local clip2 = Clip.create({
+        name = "Unity Clip",
+        project_id = "proj",
+        owner_sequence_id = "seq",
+        track_id = "a1",
+        timeline_start_frame = 144000,
+        duration_frames = 24000,
+        source_in_frame = 0,
+        source_out_frame = 24000,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(clip2.volume == 1.0, "default: volume should be 1.0, got " .. tostring(clip2.volume))
 assert(clip2:save())
 local loaded2 = Clip.load(clip2.id)
@@ -120,18 +122,20 @@ print("  ✓ Volume survives UPDATE")
 local snapshot_manager = require("core.snapshot_manager")
 
 -- Create a clip with interesting volume
-local clip3 = Clip.create("Snapshot Clip", "media1", {
-    project_id = "proj",
-    owner_sequence_id = "seq",
-    track_id = "a1",
-    timeline_start = 240000,
-    duration = 24000,
-    source_in = 48000,
-    source_out = 72000,
-    fps_numerator = 48000,
-    fps_denominator = 1,
-    volume = 0.707946,  -- -3dB
-})
+local clip3 = Clip.create({
+        name = "Snapshot Clip",
+        project_id = "proj",
+        owner_sequence_id = "seq",
+        track_id = "a1",
+        timeline_start_frame = 240000,
+        duration_frames = 24000,
+        source_in_frame = 48000,
+        source_out_frame = 72000,
+        volume = 0.707946,
+        fps_mismatch_policy = "resample",
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(clip3:save())
 
 -- Take snapshot (API: create_snapshot(db, seq_id, seq_number, clips))
@@ -163,17 +167,19 @@ print("  ✓ Volume round-trips through snapshot")
 -- Test 5: Volume validation (negative volume asserts)
 -- =========================================================================
 local ok, err = pcall(function()
-    local bad = Clip.create("Bad Clip", "media1", {
+    local bad = Clip.create({
+        name = "Bad Clip",
         project_id = "proj",
         owner_sequence_id = "seq",
         track_id = "a1",
-        timeline_start = 360000,
-        duration = 24000,
-        source_in = 0,
-        source_out = 24000,
-        fps_numerator = 48000,
-        fps_denominator = 1,
+        timeline_start_frame = 360000,
+        duration_frames = 24000,
+        source_in_frame = 0,
+        source_out_frame = 24000,
         volume = -0.5,
+        fps_mismatch_policy = "resample",
+        playhead_frame = 0,
+        enabled = 1,
     })
     bad:save()
 end)
@@ -184,18 +190,20 @@ print("  ✓ Negative volume fails validation")
 -- =========================================================================
 -- Test 6: Volume = 0.0 (silence) persists and round-trips
 -- =========================================================================
-local clip_silent = Clip.create("Silent Clip", "media1", {
-    project_id = "proj",
-    owner_sequence_id = "seq",
-    track_id = "a1",
-    timeline_start = 480000,
-    duration = 24000,
-    source_in = 0,
-    source_out = 24000,
-    fps_numerator = 48000,
-    fps_denominator = 1,
-    volume = 0.0,
-})
+local clip_silent = Clip.create({
+        name = "Silent Clip",
+        project_id = "proj",
+        owner_sequence_id = "seq",
+        track_id = "a1",
+        timeline_start_frame = 480000,
+        duration_frames = 24000,
+        source_in_frame = 0,
+        source_out_frame = 24000,
+        volume = 0.0,
+        fps_mismatch_policy = "resample",
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(clip_silent.volume == 0.0, "create: volume should be 0.0, got " .. tostring(clip_silent.volume))
 assert(clip_silent:save())
 local loaded_silent = Clip.load(clip_silent.id)

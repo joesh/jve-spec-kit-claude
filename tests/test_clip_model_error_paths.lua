@@ -70,24 +70,30 @@ db:exec(string.format([[
 print("\n--- create: required fps fields ---")
 
 expect_error("missing fps_numerator", function()
-    Clip.create("TestClip", "media1", {
+    Clip.create({
+        name = "TestClip",
         id = "test_clip",
         project_id = "proj1",
-        clip_kind = "nested",
-        timeline_start = 0,
-        duration = 100,
-        fps_denominator = 1,
+        timeline_start_frame = 0,
+        duration_frames = 100,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
 end, "fps_numerator")
 
 expect_error("missing fps_denominator", function()
-    Clip.create("TestClip", "media1", {
+    Clip.create({
+        name = "TestClip",
         id = "test_clip",
         project_id = "proj1",
-        clip_kind = "nested",
-        timeline_start = 0,
-        duration = 100,
-        fps_numerator = 24,
+        timeline_start_frame = 0,
+        duration_frames = 100,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
 end, "fps_denominator")
 
@@ -98,54 +104,62 @@ end, "fps_denominator")
 print("\n--- create: timeline clip required fields ---")
 
 expect_error("timeline clip missing media_id for master_clip_id auto-resolve", function()
-    Clip.create("TestClip", nil, {
+    Clip.create({
+        name = "TestClip",
         project_id = "proj1",
-        clip_kind = "nested",
         track_id = "track1",
         owner_sequence_id = "seq1",
-        timeline_start = 0,
-        duration = 100,
-        fps_numerator = 24,
-        fps_denominator = 1,
+        timeline_start_frame = 0,
+        duration_frames = 100,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
 end, "media_id is required to auto%-resolve master_clip_id")
 
 expect_error("timeline clip missing track_id", function()
-    Clip.create("TestClip", "media1", {
+    Clip.create({
+        name = "TestClip",
         project_id = "proj1",
-        clip_kind = "nested",
         nested_sequence_id = "mc1",
         owner_sequence_id = "seq1",
-        timeline_start = 0,
-        duration = 100,
-        fps_numerator = 24,
-        fps_denominator = 1,
+        timeline_start_frame = 0,
+        duration_frames = 100,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
 end, "track_id")
 
 expect_error("timeline clip missing owner_sequence_id", function()
-    Clip.create("TestClip", "media1", {
+    Clip.create({
+        name = "TestClip",
         project_id = "proj1",
-        clip_kind = "nested",
         track_id = "track1",
         nested_sequence_id = "mc1",
-        timeline_start = 0,
-        duration = 100,
-        fps_numerator = 24,
-        fps_denominator = 1,
+        timeline_start_frame = 0,
+        duration_frames = 100,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
 end, "owner_sequence_id")
 
 -- master clips should NOT require master_clip_id
-local master_clip = Clip.create("MasterClip", "media1", {
-    project_id = "proj1",
-    clip_kind = "master",
-    owner_sequence_id = "seq1",
-    timeline_start = 0,
-    duration = 100,
-    fps_numerator = 24,
-    fps_denominator = 1,
-})
+local master_clip = Clip.create({
+        name = "MasterClip",
+        project_id = "proj1",
+        owner_sequence_id = "seq1",
+        timeline_start_frame = 0,
+        duration_frames = 100,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 check("master clip without master_clip_id succeeds", master_clip ~= nil)
 
 -- ============================================================================
@@ -154,20 +168,22 @@ check("master clip without master_clip_id succeeds", master_clip ~= nil)
 
 print("\n--- create: valid integer coordinates ---")
 
-local clip = Clip.create("ValidClip", "media1", {
-    id = "valid_clip_1",
-    project_id = "proj1",
-    clip_kind = "nested",
-    track_id = "track1",
-    nested_sequence_id = "mc1",
-    owner_sequence_id = "seq1",
-    timeline_start = 0,
-    duration = 100,
-    source_in = 0,
-    source_out = 100,
-    fps_numerator = 24,
-    fps_denominator = 1,
-})
+local clip = Clip.create({
+        name = "ValidClip",
+        id = "valid_clip_1",
+        project_id = "proj1",
+        track_id = "track1",
+        nested_sequence_id = "mc1",
+        owner_sequence_id = "seq1",
+        timeline_start_frame = 0,
+        duration_frames = 100,
+        source_in_frame = 0,
+        source_out_frame = 100,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 check("create with integers succeeds", clip ~= nil)
 check("timeline_start is integer", type(clip.timeline_start) == "number")
 check("timeline_start value is 0", clip.timeline_start == 0)
@@ -180,20 +196,22 @@ check("duration value is 100", clip.duration == 100)
 
 print("\n--- save: integer validation ---")
 
-local bad_clip = Clip.create("BadClip", "media1", {
-    id = "bad_clip_1",
-    project_id = "proj1",
-    clip_kind = "nested",
-    track_id = "track1",
-    nested_sequence_id = "mc1",
-    owner_sequence_id = "seq1",
-    timeline_start = 0,
-    duration = 100,
-    source_in = 0,
-    source_out = 100,
-    fps_numerator = 24,
-    fps_denominator = 1,
-})
+local bad_clip = Clip.create({
+        name = "BadClip",
+        id = "bad_clip_1",
+        project_id = "proj1",
+        track_id = "track1",
+        nested_sequence_id = "mc1",
+        owner_sequence_id = "seq1",
+        timeline_start_frame = 0,
+        duration_frames = 100,
+        source_in_frame = 0,
+        source_out_frame = 100,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 
 -- Corrupt the clip by setting a table value
 bad_clip.timeline_start = { frames = 50 }

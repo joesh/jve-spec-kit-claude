@@ -44,20 +44,21 @@ local media = Media.create({
 })
 assert(media:save(db), "Failed to save media")
 
-local clip = Clip.create("Test Clip", "media_1", {
-    id = "clip_1",
-    project_id = "project",
-    track_id = "track_v1",
-    owner_sequence_id = "sequence",
-    nested_sequence_id = "mc_test",
-    timeline_start = 0,
-    duration = 48,  -- 2 seconds
-    source_in = 0,
-    source_out = 48,
-    fps_numerator = 24,
-    fps_denominator = 1,
-    enabled = true
-})
+local clip = Clip.create({
+        name = "Test Clip",
+        id = "clip_1",
+        project_id = "project",
+        track_id = "track_v1",
+        owner_sequence_id = "sequence",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 0,
+        duration_frames = 48,
+        source_out_frame = 48,
+        enabled = true,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(clip:save(db), "Failed to save clip")
 
 print("\n=== Test 1: Capture includes fps and timestamps ===")

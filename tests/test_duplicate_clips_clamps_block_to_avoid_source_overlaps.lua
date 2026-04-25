@@ -44,32 +44,40 @@ command_manager.init("seq", "proj")
 
 -- Two disjoint clips on the same track with a small gap.
 -- c1: [0, 10)   c2: [12, 22)
-local c1 = Clip.create("C1", "media1", {
-    id = "c1",
-    project_id = "proj",
-    track_id = "v1",
-    owner_sequence_id = "seq",
-    nested_sequence_id = "mc_test",
-    timeline_start = 0,
-    duration = 10,
-    source_in = 0,
-    source_out = 10,
-    fps_numerator = 30, fps_denominator = 1
-})
+local c1 = Clip.create({
+        name = "C1",
+        id = "c1",
+        project_id = "proj",
+        track_id = "v1",
+        owner_sequence_id = "seq",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 0,
+        duration_frames = 10,
+        source_in_frame = 0,
+        source_out_frame = 10,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(c1:save(db))
 
-local c2 = Clip.create("C2", "media1", {
-    id = "c2",
-    project_id = "proj",
-    track_id = "v1",
-    owner_sequence_id = "seq",
-    nested_sequence_id = "mc_test",
-    timeline_start = 12,
-    duration = 10,
-    source_in = 0,
-    source_out = 10,
-    fps_numerator = 30, fps_denominator = 1
-})
+local c2 = Clip.create({
+        name = "C2",
+        id = "c2",
+        project_id = "proj",
+        track_id = "v1",
+        owner_sequence_id = "seq",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 12,
+        duration_frames = 10,
+        source_in_frame = 0,
+        source_out_frame = 10,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(c2:save(db))
 
 -- Duplicate both clips with delta=5. The duplicates should land at [5, 15) and [17, 27).

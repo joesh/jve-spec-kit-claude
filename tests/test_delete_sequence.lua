@@ -88,19 +88,21 @@ local function create_test_sequence(id, name)
     local track = Track.create_video("V1", id, {id = id .. "_track", index = 1})
     assert(track:save(), "Failed to save track")
 
-    local clip = Clip.create("Test Clip", "media_ds", {
+    local clip = Clip.create({
+        name = "Test Clip",
         id = id .. "_clip",
         project_id = "project",
         track_id = track.id,
         owner_sequence_id = id,
         nested_sequence_id = "mc_test",
-        timeline_start = 0,
-        duration = 100,
-        source_in = 0,
-        source_out = 100,
+        timeline_start_frame = 0,
+        duration_frames = 100,
+        source_in_frame = 0,
+        source_out_frame = 100,
         enabled = true,
-        fps_numerator = 30,
-        fps_denominator = 1
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
     })
     assert(clip:save(db), "Failed to save clip")
 

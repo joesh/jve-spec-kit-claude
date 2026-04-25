@@ -77,19 +77,22 @@ assert(media:save())
 -- so the content exists in BOTH the original and the trimmed version.
 local CLIP_SOURCE_IN = TRIMMED_TC + 100   -- absolute TC: 1886692
 local CLIP_SOURCE_OUT = TRIMMED_TC + 200  -- 100 frames of content
-local clip = Clip.create("Test Clip", "media_orig", {
-    id = "clip1",
-    project_id = "proj1",
-    clip_kind = "nested",
-    track_id = "track_v1",
-    nested_sequence_id = "mc_media_orig",
-    owner_sequence_id = "seq1",
-    timeline_start = 0,
-    duration = 100,
-    source_in = CLIP_SOURCE_IN,
-    source_out = CLIP_SOURCE_OUT,
-    fps_numerator = FPS, fps_denominator = 1,
-})
+local clip = Clip.create({
+        name = "Test Clip",
+        id = "clip1",
+        project_id = "proj1",
+        track_id = "track_v1",
+        nested_sequence_id = "mc_media_orig",
+        owner_sequence_id = "seq1",
+        timeline_start_frame = 0,
+        duration_frames = 100,
+        source_in_frame = CLIP_SOURCE_IN,
+        source_out_frame = CLIP_SOURCE_OUT,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(clip:save({skip_occlusion = true}))
 
 command_manager.init("seq1", "proj1")

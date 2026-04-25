@@ -461,18 +461,20 @@ local tl_track = Track.create_video("V1", tl_seq.id, {index = 1})
 assert(tl_track:save())
 
 -- Create timeline clip WITHOUT explicit master_clip_id
-local auto_clip = Clip.create("AutoResolve", "media_va", {
-    project_id = "proj1",
-    clip_kind = "nested",
-    track_id = tl_track.id,
-    owner_sequence_id = tl_seq.id,
-    timeline_start = 0,
-    duration = 50,
-    source_in = 0,
-    source_out = 50,
-    fps_numerator = 24,
-    fps_denominator = 1,
-})
+local auto_clip = Clip.create({
+        name = "AutoResolve",
+        project_id = "proj1",
+        track_id = tl_track.id,
+        owner_sequence_id = tl_seq.id,
+        timeline_start_frame = 0,
+        duration_frames = 50,
+        source_in_frame = 0,
+        source_out_frame = 50,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 
 check("auto-resolve: clip created", auto_clip ~= nil)
 check("auto-resolve: master_clip_id is set", auto_clip.master_clip_id ~= nil and auto_clip.master_clip_id ~= "")
@@ -480,19 +482,21 @@ check("auto-resolve: master_clip_id matches existing masterclip", auto_clip.nest
     string.format("expected %s, got %s", tostring(mc_id), tostring(auto_clip.master_clip_id)))
 
 -- Create timeline clip WITH explicit master_clip_id (should skip auto-resolve)
-local explicit_clip = Clip.create("Explicit", "media_va", {
-    project_id = "proj1",
-    clip_kind = "nested",
-    nested_sequence_id = "custom_mc_id",
-    track_id = tl_track.id,
-    owner_sequence_id = tl_seq.id,
-    timeline_start = 50,
-    duration = 50,
-    source_in = 0,
-    source_out = 50,
-    fps_numerator = 24,
-    fps_denominator = 1,
-})
+local explicit_clip = Clip.create({
+        name = "Explicit",
+        project_id = "proj1",
+        nested_sequence_id = "custom_mc_id",
+        track_id = tl_track.id,
+        owner_sequence_id = tl_seq.id,
+        timeline_start_frame = 50,
+        duration_frames = 50,
+        source_in_frame = 0,
+        source_out_frame = 50,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 check("explicit: master_clip_id preserved", explicit_clip.nested_sequence_id == "custom_mc_id")
 
 --------------------------------------------------------------------------------
@@ -502,40 +506,46 @@ check("explicit: master_clip_id preserved", explicit_clip.nested_sequence_id == 
 print("\n--- Clip.create auto-resolve: error paths ---")
 
 expect_error("auto-resolve: nil media_id asserts", function()
-    Clip.create("Bad", nil, {
+    Clip.create({
+        name = "Bad",
         project_id = "proj1",
-        clip_kind = "nested",
         track_id = tl_track.id,
         owner_sequence_id = tl_seq.id,
-        timeline_start = 100,
-        duration = 50,
-        fps_numerator = 24,
-        fps_denominator = 1,
+        timeline_start_frame = 100,
+        duration_frames = 50,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
 end, "media_id is required to auto%-resolve")
 
 expect_error("auto-resolve: nil project_id asserts", function()
-    Clip.create("Bad", "media_va", {
-        clip_kind = "nested",
+    Clip.create({
+        name = "Bad",
         track_id = tl_track.id,
         owner_sequence_id = tl_seq.id,
-        timeline_start = 100,
-        duration = 50,
-        fps_numerator = 24,
-        fps_denominator = 1,
+        timeline_start_frame = 100,
+        duration_frames = 50,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
 end, "project_id is required to auto%-resolve")
 
 expect_error("auto-resolve: empty project_id asserts", function()
-    Clip.create("Bad", "media_va", {
+    Clip.create({
+        name = "Bad",
         project_id = "",
-        clip_kind = "nested",
         track_id = tl_track.id,
         owner_sequence_id = tl_seq.id,
-        timeline_start = 100,
-        duration = 50,
-        fps_numerator = 24,
-        fps_denominator = 1,
+        timeline_start_frame = 100,
+        duration_frames = 50,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
 end, "project_id is required")
 
@@ -634,18 +644,20 @@ print("\n--- Clip.create: master clips skip auto-resolve ---")
 
 -- Master clips (clip_kind = "master") should not auto-resolve.
 -- They are the stream clips inside masterclip sequences.
-local master_clip = Clip.create("Master", "media_va", {
-    project_id = "proj1",
-    clip_kind = "master",
-    track_id = tl_track.id,
-    owner_sequence_id = tl_seq.id,
-    timeline_start = 200,
-    duration = 50,
-    source_in = 0,
-    source_out = 50,
-    fps_numerator = 24,
-    fps_denominator = 1,
-})
+local master_clip = Clip.create({
+        name = "Master",
+        project_id = "proj1",
+        track_id = tl_track.id,
+        owner_sequence_id = tl_seq.id,
+        timeline_start_frame = 200,
+        duration_frames = 50,
+        source_in_frame = 0,
+        source_out_frame = 50,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 check("master clip: no master_clip_id set", master_clip.nested_sequence_id == nil or master_clip.nested_sequence_id == "")
 
 --------------------------------------------------------------------------------

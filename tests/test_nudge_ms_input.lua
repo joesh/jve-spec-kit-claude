@@ -47,17 +47,21 @@ command_manager.init("seq", "proj")
 reload_state()
 
 -- Seed one clip
-local clip = Clip.create("Clip", nil, {
-    project_id = "proj",
-    track_id = "v1",
-    owner_sequence_id = "seq",
-    nested_sequence_id = "mc_test",
-    timeline_start = 0,
-    duration = 48,
-    source_in = 0,
-    source_out = 48,
-    fps_numerator = 24, fps_denominator = 1
-})
+local clip = Clip.create({
+        name = "Clip",
+        project_id = "proj",
+        track_id = "v1",
+        owner_sequence_id = "seq",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 0,
+        duration_frames = 48,
+        source_in_frame = 0,
+        source_out_frame = 48,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 clip:save(db)
 
 local cmd = Command.create("Nudge", "proj")

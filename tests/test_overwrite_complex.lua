@@ -58,35 +58,39 @@ local nested_sequence_id = test_env.create_test_masterclip_sequence(
     "project", "Media 1 Master", 24, 1, 1000, "media_1")
 
 -- Create Clip A (0-100 frames)
-local clip_a = Clip.create("Clip A", "media_1", {
-    project_id = "project",
-    track_id = "track_v1",
-    owner_sequence_id = "sequence",
-    nested_sequence_id = "mc_test",
-    timeline_start = 0,
-    duration = 100,
-    source_in = 0,
-    source_out = 100,
-    enabled = true,
-    fps_numerator = 24,
-    fps_denominator = 1
-})
+local clip_a = Clip.create({
+        name = "Clip A",
+        project_id = "project",
+        track_id = "track_v1",
+        owner_sequence_id = "sequence",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 0,
+        duration_frames = 100,
+        source_in_frame = 0,
+        source_out_frame = 100,
+        enabled = true,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(clip_a:save(db), "Failed to save Clip A")
 
 -- Create Clip B (100-200 frames)
-local clip_b = Clip.create("Clip B", "media_1", {
-    project_id = "project",
-    track_id = "track_v1",
-    owner_sequence_id = "sequence",
-    nested_sequence_id = "mc_test",
-    timeline_start = 100,
-    duration = 100,
-    source_in = 100,
-    source_out = 200,
-    enabled = true,
-    fps_numerator = 24,
-    fps_denominator = 1
-})
+local clip_b = Clip.create({
+        name = "Clip B",
+        project_id = "project",
+        track_id = "track_v1",
+        owner_sequence_id = "sequence",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 100,
+        duration_frames = 100,
+        source_in_frame = 100,
+        source_out_frame = 200,
+        enabled = true,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(clip_b:save(db), "Failed to save Clip B")
 
 print("Created Clip A (0-100) and Clip B (100-200)")

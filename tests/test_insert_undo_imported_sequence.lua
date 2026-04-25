@@ -97,35 +97,39 @@ assert(masterclip_seq:save())
 local master_video_track = Track.create_video("V1", masterclip_seq.id, {id = "masterclip_insert_v1"})
 assert(master_video_track:save())
 
-local stream_clip = Clip.create("Insert Clip Video", "media_insert", {
-    id = "masterclip_insert_stream",
-    project_id = "default_project",
-    clip_kind = "master",
-    track_id = master_video_track.id,
-    owner_sequence_id = masterclip_seq.id,
-    timeline_start = 0,
-    duration = 4543560,
-    source_in = 0,
-    source_out = 4543560,
-    fps_numerator = 30,
-    fps_denominator = 1,
-})
+local stream_clip = Clip.create({
+        name = "Insert Clip Video",
+        id = "masterclip_insert_stream",
+        project_id = "default_project",
+        track_id = master_video_track.id,
+        owner_sequence_id = masterclip_seq.id,
+        timeline_start_frame = 0,
+        duration_frames = 4543560,
+        source_in_frame = 0,
+        source_out_frame = 4543560,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(stream_clip:save({skip_occlusion = true}))
 
-local base_clip = Clip.create("Existing Clip", "media_existing", {
-    id = "clip_existing",
-    project_id = "default_project",
-    nested_sequence_id = "mc_test",
-    track_id = "imported_v1",
-    owner_sequence_id = "imported_sequence",
-    timeline_start = 0,
-    duration = 5000,
-    source_in = 0,
-    source_out = 5000,
-    fps_numerator = 30,
-    fps_denominator = 1,
-    enabled = 1
-})
+local base_clip = Clip.create({
+        name = "Existing Clip",
+        id = "clip_existing",
+        project_id = "default_project",
+        nested_sequence_id = "mc_test",
+        track_id = "imported_v1",
+        owner_sequence_id = "imported_sequence",
+        timeline_start_frame = 0,
+        duration_frames = 5000,
+        source_in_frame = 0,
+        source_out_frame = 5000,
+        enabled = 1,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(base_clip and base_clip:save(db))
 
 command_manager.init('default_sequence', 'default_project')

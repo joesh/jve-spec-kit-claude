@@ -67,17 +67,19 @@ test_env.create_test_media({
 -- Playhead at 70 intersects clip_b and clip_c.
 
 local function create_clip(id, track_id, media_id, start_frame, dur)
-    local clip = Clip.create(id, media_id, {
-        id = id,  -- explicit ID for test assertions
-        project_id = "proj",
+    local clip = Clip.create({
+        name = id,
+        id = id,
         track_id = track_id,
         owner_sequence_id = "seq",
-        timeline_start = start_frame,
-        duration = dur,
-        source_in = 0,
-        source_out = dur,
-        fps_numerator = 25,
-        fps_denominator = 1,
+        timeline_start_frame = start_frame,
+        duration_frames = dur,
+        source_in_frame = 0,
+        source_out_frame = dur,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
     assert(clip:save({skip_occlusion = true}), "failed to save " .. id)
     return clip

@@ -54,12 +54,19 @@ local track = Track.create_video("V1", seq.id, { index = 1 })
 track:save()
 
 local function make_clip(name, start, dur)
-    local c = Clip.create(name, "test_media", {
-        track_id = track.id, owner_sequence_id = seq.id,
+    local c = Clip.create({
+        name = name,
+        track_id = track.id,
+        owner_sequence_id = seq.id,
         nested_sequence_id = mc_seq_id,
-        timeline_start = start, duration = dur,
-        source_in = 0, source_out = dur,
-        fps_numerator = 24, fps_denominator = 1,
+        timeline_start_frame = start,
+        duration_frames = dur,
+        source_in_frame = 0,
+        source_out_frame = dur,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
     })
     c:save({ skip_occlusion = true })
     return c

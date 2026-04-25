@@ -46,18 +46,20 @@ package.loaded["core.krono"] = nil
 local Clip = require("models.clip")
 
 -- Create a clip with NO project_id and NO track_id — project_id cannot be derived
-local clip = Clip.create("orphan_clip", "media1", {
-    id = "clip_orphan",
-    clip_kind = "master",
-    track_id = nil,
-    project_id = nil,
-    timeline_start = 0,
-    duration = 100,
-    source_in = 0,
-    source_out = 100,
-    fps_numerator = 24,
-    fps_denominator = 1,
-})
+local clip = Clip.create({
+        name = "orphan_clip",
+        id = "clip_orphan",
+        track_id = nil,
+        project_id = nil,
+        timeline_start_frame = 0,
+        duration_frames = 100,
+        source_in_frame = 0,
+        source_out_frame = 100,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 
 -- save should assert because project_id cannot be derived
 local ok, err = pcall(function()

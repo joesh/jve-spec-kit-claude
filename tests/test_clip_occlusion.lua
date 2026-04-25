@@ -152,56 +152,57 @@ ensure_media_record(db, "media_E", 240) -- 8000ms
 ensure_media_record(db, "media_F", 60)  -- 2000ms
 
 -- Seed two clips
-local clip_a = Clip.create("A", "media_A", {
-    id = "A",
-    project_id = "project",
-    track_id = "track_v1",
-    owner_sequence_id = "sequence",
-    nested_sequence_id = "mc_test",
-    timeline_start = 0,
-    duration = 120, -- 4000ms
-    source_in = 0,
-    source_out = 120,
-    fps_numerator = 30,
-    fps_denominator = 1,
-    enabled = true
-})
+local clip_a = Clip.create({
+        name = "A",
+        id = "A",
+        project_id = "project",
+        track_id = "track_v1",
+        owner_sequence_id = "sequence",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 0,
+        duration_frames = 120,
+        source_out_frame = 120,
+        enabled = true,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(clip_a:save(db), "failed saving clip A")
 
-local clip_b = Clip.create("B", "media_B", {
-    id = "B",
-    project_id = "project",
-    track_id = "track_v1",
-    owner_sequence_id = "sequence",
-    nested_sequence_id = "mc_test",
-    timeline_start = 180, -- 6000ms
-    duration = 90, -- 3000ms
-    source_in = 0,
-    source_out = 90,
-    fps_numerator = 30,
-    fps_denominator = 1,
-    enabled = true
-})
+local clip_b = Clip.create({
+        name = "B",
+        id = "B",
+        project_id = "project",
+        track_id = "track_v1",
+        owner_sequence_id = "sequence",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 180,
+        source_out_frame = 90,
+        enabled = true,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(clip_b:save(db), "failed saving clip B")
 
 print("Test 2b: MoveClipToTrack resolves overlaps on destination track")
 db:exec([[INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
           VALUES ('track_v2', 'sequence', 'V2', 'VIDEO', 2, 1)]])
 
-local mover_clip = Clip.create("Mover", "media_C", {
-    id = "Mover",
-    project_id = "project",
-    track_id = "track_v2",
-    owner_sequence_id = "sequence",
-    nested_sequence_id = "mc_test",
-    timeline_start = 60, -- 2000ms
-    duration = 120, -- 4000ms
-    source_in = 0,
-    source_out = 120,
-    fps_numerator = 30,
-    fps_denominator = 1,
-    enabled = true
-})
+local mover_clip = Clip.create({
+        name = "Mover",
+        id = "Mover",
+        project_id = "project",
+        track_id = "track_v2",
+        owner_sequence_id = "sequence",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 60,
+        source_out_frame = 120,
+        enabled = true,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(mover_clip:save(db), "failed saving mover clip")
 
 local move_cmd = Command.create("MoveClipToTrack", "project")
@@ -232,52 +233,52 @@ db:exec([[INSERT OR REPLACE INTO tracks (id, sequence_id, name, track_type, trac
           INSERT OR REPLACE INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
           VALUES ('track_nudge_v2', 'sequence', 'NV2', 'VIDEO', 13, 1);]])
 
-local base_left = Clip.create("Base Left", "media_C", {
-    id = "Base Left",
-    project_id = "project",
-    track_id = "track_nudge_v1",
-    owner_sequence_id = "sequence",
-    nested_sequence_id = "mc_test",
-    timeline_start = 30, -- 1000ms
-    duration = 90, -- 3000ms
-    source_in = 0,
-    source_out = 90,
-    fps_numerator = 30,
-    fps_denominator = 1,
-    enabled = true
-})
+local base_left = Clip.create({
+        name = "Base Left",
+        id = "Base Left",
+        project_id = "project",
+        track_id = "track_nudge_v1",
+        owner_sequence_id = "sequence",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 30,
+        source_out_frame = 90,
+        enabled = true,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(base_left:save(db), "failed saving base_left clip")
 
-local base_right = Clip.create("Base Right", "media_C", {
-    id = "Base Right",
-    project_id = "project",
-    track_id = "track_nudge_v1",
-    owner_sequence_id = "sequence",
-    nested_sequence_id = "mc_test",
-    timeline_start = 180, -- 6000ms
-    duration = 90, -- 3000ms
-    source_in = 90,
-    source_out = 180,
-    fps_numerator = 30,
-    fps_denominator = 1,
-    enabled = true
-})
+local base_right = Clip.create({
+        name = "Base Right",
+        id = "Base Right",
+        project_id = "project",
+        track_id = "track_nudge_v1",
+        owner_sequence_id = "sequence",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 180,
+        source_out_frame = 180,
+        enabled = true,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(base_right:save(db), "failed saving base_right clip")
 
-local mover_for_nudge = Clip.create("Mover Nudge", "media_C", {
-    id = "Mover Nudge",
-    project_id = "project",
-    track_id = "track_nudge_v2",
-    owner_sequence_id = "sequence",
-    nested_sequence_id = "mc_test",
-    timeline_start = 105, -- 3500ms
-    duration = 120, -- 4000ms
-    source_in = 0,
-    source_out = 120,
-    fps_numerator = 30,
-    fps_denominator = 1,
-    enabled = true
-})
+local mover_for_nudge = Clip.create({
+        name = "Mover Nudge",
+        id = "Mover Nudge",
+        project_id = "project",
+        track_id = "track_nudge_v2",
+        owner_sequence_id = "sequence",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 105,
+        source_out_frame = 120,
+        enabled = true,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(mover_for_nudge:save(db), "failed saving mover clip for nudge test")
 
 local move_cmd2 = Command.create("MoveClipToTrack", "project")
@@ -323,19 +324,21 @@ local media_row = Media.create({
 })
 assert(media_row:save(db), "failed saving media for ripple test")
 
-local ripple_clip = Clip.create("Ripple Clip", "media_ripple", {
-    track_id = "track_ripple_test",
-    project_id = "project",
-    owner_sequence_id = "sequence",
-    nested_sequence_id = "mc_test",
-    timeline_start = 0,
-    duration = 120,
-    source_in = 0,
-    source_out = 120,
-    fps_numerator = 30,
-    fps_denominator = 1,
-    enabled = true
-})
+local ripple_clip = Clip.create({
+        name = "Ripple Clip",
+        track_id = "track_ripple_test",
+        project_id = "project",
+        owner_sequence_id = "sequence",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 0,
+        duration_frames = 120,
+        source_in_frame = 0,
+        source_out_frame = 120,
+        enabled = true,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(ripple_clip:save(db), "failed saving ripple clip")
 
 local ripple_cmd = Command.create("RippleEdit", "project")
@@ -361,19 +364,20 @@ assert(new_media:save(db), "failed to save new media")
 local split_nested_sequence_id = test_env.create_test_masterclip_sequence(
     'project', 'Split New Master', 30, 1, 30, 'media_split_new')
 
-local base_clip = Clip.create("Base Split", "media_split_base", {
-    track_id = "track_v3",
-    project_id = "project",
-    owner_sequence_id = "sequence",
-    nested_sequence_id = "mc_test",
-    timeline_start = 0,
-    duration = 180, -- 6000ms
-    source_in = 0,
-    source_out = 180,
-    fps_numerator = 30,
-    fps_denominator = 1,
-    enabled = true
-})
+local base_clip = Clip.create({
+        name = "Base Split",
+        track_id = "track_v3",
+        project_id = "project",
+        owner_sequence_id = "sequence",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 0,
+        duration_frames = 180,
+        source_out_frame = 180,
+        enabled = true,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(base_clip:save(db), "failed saving base clip for split test")
 
 local insert_split = Command.create("Insert", "project")

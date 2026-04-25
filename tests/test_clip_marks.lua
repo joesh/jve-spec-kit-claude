@@ -195,22 +195,23 @@ assert(db:exec([[
 ]]))
 
 local Clip = require("models.clip")
-local clip7 = Clip.create("Marked Clip", "media1", {
-    id = "clip7",
-    project_id = "proj",
-    clip_kind = "master",
-    track_id = "mc_v1",
-    owner_sequence_id = "mc_seq",
-    timeline_start = 0,
-    duration = 500,
-    source_in = 0,
-    source_out = 500,
-    fps_numerator = 24,
-    fps_denominator = 1,
-    mark_in = 10,
-    mark_out = 200,
-    playhead_frame = 50,
-})
+local clip7 = Clip.create({
+        name = "Marked Clip",
+        id = "clip7",
+        project_id = "proj",
+        track_id = "mc_v1",
+        owner_sequence_id = "mc_seq",
+        timeline_start_frame = 0,
+        duration_frames = 500,
+        source_in_frame = 0,
+        source_out_frame = 500,
+        mark_in = 10,
+        mark_out = 200,
+        playhead_frame = 50,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        enabled = 1,
+    })
 assert(clip7.mark_in == 10, "create: mark_in not set, got " .. tostring(clip7.mark_in))
 assert(clip7.mark_out == 200, "create: mark_out not set, got " .. tostring(clip7.mark_out))
 assert(clip7.playhead_frame == 50, "create: playhead_frame not set, got " .. tostring(clip7.playhead_frame))
@@ -227,19 +228,21 @@ print("  OK")
 -- Test 8: Clip.create WITHOUT marks → defaults (nil/nil/0)
 -- ======================================================================
 print("Test 8: Clip model mark defaults...")
-local clip8 = Clip.create("Unmarked Clip", "media1", {
-    id = "clip8",
-    project_id = "proj",
-    clip_kind = "master",
-    track_id = "mc_v1",
-    owner_sequence_id = "mc_seq",
-    timeline_start = 500,
-    duration = 500,
-    source_in = 0,
-    source_out = 500,
-    fps_numerator = 24,
-    fps_denominator = 1,
-})
+local clip8 = Clip.create({
+        name = "Unmarked Clip",
+        id = "clip8",
+        project_id = "proj",
+        track_id = "mc_v1",
+        owner_sequence_id = "mc_seq",
+        timeline_start_frame = 500,
+        duration_frames = 500,
+        source_in_frame = 0,
+        source_out_frame = 500,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(clip8.mark_in == nil, "default mark_in should be nil")
 assert(clip8.mark_out == nil, "default mark_out should be nil")
 assert(clip8.playhead_frame == 0, "default playhead_frame should be 0, got " .. tostring(clip8.playhead_frame))
@@ -378,21 +381,23 @@ print("  OK")
 -- Test 16: mark_in = 0 round-trips correctly (0 is NOT nil)
 -- ======================================================================
 print("Test 16: mark_in=0 round-trips as 0 not nil...")
-local clip16 = Clip.create("Zero Mark", "media1", {
-    id = "clip16",
-    project_id = "proj",
-    clip_kind = "master",
-    track_id = "mc_v1",
-    owner_sequence_id = "mc_seq",
-    timeline_start = 1400,
-    duration = 100,
-    source_in = 0,
-    source_out = 100,
-    fps_numerator = 24,
-    fps_denominator = 1,
-    mark_in = 0,
-    mark_out = 0,
-})
+local clip16 = Clip.create({
+        name = "Zero Mark",
+        id = "clip16",
+        project_id = "proj",
+        track_id = "mc_v1",
+        owner_sequence_id = "mc_seq",
+        timeline_start_frame = 1400,
+        duration_frames = 100,
+        source_in_frame = 0,
+        source_out_frame = 100,
+        mark_in = 0,
+        mark_out = 0,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(clip16.mark_in == 0, "create: mark_in=0 not preserved")
 assert(clip16.mark_out == 0, "create: mark_out=0 not preserved")
 assert(clip16:save({skip_occlusion = true}))
@@ -405,19 +410,21 @@ print("  OK")
 -- Test 17: Clip.save rejects corrupted playhead_frame (set to nil after create)
 -- ======================================================================
 print("Test 17: save rejects nil playhead_frame...")
-local clip17 = Clip.create("Corrupt PH", "media1", {
-    id = "clip17",
-    project_id = "proj",
-    clip_kind = "master",
-    track_id = "mc_v1",
-    owner_sequence_id = "mc_seq",
-    timeline_start = 1500,
-    duration = 100,
-    source_in = 0,
-    source_out = 100,
-    fps_numerator = 24,
-    fps_denominator = 1,
-})
+local clip17 = Clip.create({
+        name = "Corrupt PH",
+        id = "clip17",
+        project_id = "proj",
+        track_id = "mc_v1",
+        owner_sequence_id = "mc_seq",
+        timeline_start_frame = 1500,
+        duration_frames = 100,
+        source_in_frame = 0,
+        source_out_frame = 100,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(clip17:save({skip_occlusion = true}))
 -- Now corrupt it
 clip17.playhead_frame = nil

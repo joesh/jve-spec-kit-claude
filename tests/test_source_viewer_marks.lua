@@ -56,30 +56,33 @@ assert(v_track:save(), "Failed to save video track")
 local a_track = Track.create_audio("A1", mc.id, {index = 1})
 assert(a_track:save(), "Failed to save audio track")
 
-local v_clip = Clip.create("Video Stream", "media_1", {
-    clip_kind = "master",
-    track_id = v_track.id,
-    owner_sequence_id = mc.id,
-    timeline_start = 0,
-    duration = 2400,
-    source_in = 0,
-    source_out = 2400,
-    fps_numerator = 24,
-    fps_denominator = 1,
-})
+local v_clip = Clip.create({
+        name = "Video Stream",
+        track_id = v_track.id,
+        owner_sequence_id = mc.id,
+        timeline_start_frame = 0,
+        duration_frames = 2400,
+        source_in_frame = 0,
+        source_out_frame = 2400,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(v_clip:save({skip_occlusion = true}), "Failed to save video clip")
 
-local a_clip = Clip.create("Audio Stream", "media_1", {
-    clip_kind = "master",
-    track_id = a_track.id,
-    owner_sequence_id = mc.id,
-    timeline_start = 0,
-    duration = 4800000,  -- 2400 frames * 2000 samples/frame
-    source_in = 0,
-    source_out = 4800000,
-    fps_numerator = 48000,
-    fps_denominator = 1,
-})
+local a_clip = Clip.create({
+        name = "Audio Stream",
+        track_id = a_track.id,
+        owner_sequence_id = mc.id,
+        timeline_start_frame = 0,
+        duration_frames = 4800000,
+        source_out_frame = 4800000,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(a_clip:save({skip_occlusion = true}), "Failed to save audio clip")
 
 mc:invalidate_stream_cache()

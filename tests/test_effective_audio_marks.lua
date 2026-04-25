@@ -71,35 +71,39 @@ assert(mc:save(), "Failed to save masterclip sequence")
 -- Video track + clip (absolute TC source coordinates)
 local v_track = Track.create_video("V1", mc.id, {index = 1})
 assert(v_track:save(), "Failed to save video track")
-local v_clip = Clip.create("TestMC", "media_v", {
-    clip_kind = "master",
-    project_id = "project",
-    track_id = v_track.id,
-    owner_sequence_id = mc.id,
-    timeline_start = 0,
-    duration = VIDEO_DURATION,
-    source_in = VIDEO_SOURCE_IN,
-    source_out = VIDEO_SOURCE_OUT,
-    fps_numerator = VIDEO_FPS,
-    fps_denominator = 1,
-})
+local v_clip = Clip.create({
+        name = "TestMC",
+        project_id = "project",
+        track_id = v_track.id,
+        owner_sequence_id = mc.id,
+        timeline_start_frame = 0,
+        duration_frames = VIDEO_DURATION,
+        source_in_frame = VIDEO_SOURCE_IN,
+        source_out_frame = VIDEO_SOURCE_OUT,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(v_clip:save({skip_occlusion = true}), "Failed to save video clip")
 
 -- Audio track + clip (relative source coordinates, sample rate)
 local a_track = Track.create_audio("A1", mc.id, {index = 1})
 assert(a_track:save(), "Failed to save audio track")
-local a_clip = Clip.create("TestMC (Audio)", "media_v", {
-    clip_kind = "master",
-    project_id = "project",
-    track_id = a_track.id,
-    owner_sequence_id = mc.id,
-    timeline_start = 0,
-    duration = AUDIO_DURATION_SAMPLES,
-    source_in = AUDIO_SOURCE_IN,
-    source_out = AUDIO_SOURCE_OUT,
-    fps_numerator = SAMPLE_RATE,
-    fps_denominator = 1,
-})
+local a_clip = Clip.create({
+        name = "TestMC (Audio)",
+        project_id = "project",
+        track_id = a_track.id,
+        owner_sequence_id = mc.id,
+        timeline_start_frame = 0,
+        duration_frames = AUDIO_DURATION_SAMPLES,
+        source_in_frame = AUDIO_SOURCE_IN,
+        source_out_frame = AUDIO_SOURCE_OUT,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+        enabled = 1,
+    })
 assert(a_clip:save({skip_occlusion = true}), "Failed to save audio clip")
 
 -- Reload to get stream caching right

@@ -88,20 +88,22 @@ local nested_sequence_id = test_env.create_test_masterclip_sequence(
     "project", "Video Master", 30, 1, 100, "media_video")
 
 -- Create downstream clip at [200, 300) to test ripple behavior
-local downstream_clip = Clip.create("Downstream", "media_video", {
-    id = "downstream_clip",
-    project_id = "project",
-    track_id = "track_v1",
-    owner_sequence_id = "sequence",
-    nested_sequence_id = "mc_test",
-    timeline_start = 200,
-    duration = 100,
-    source_in = 0,
-    source_out = 100,
-    enabled = true,
-    fps_numerator = 30,
-    fps_denominator = 1
-})
+local downstream_clip = Clip.create({
+        name = "Downstream",
+        id = "downstream_clip",
+        project_id = "project",
+        track_id = "track_v1",
+        owner_sequence_id = "sequence",
+        nested_sequence_id = "mc_test",
+        timeline_start_frame = 200,
+        duration_frames = 100,
+        source_in_frame = 0,
+        source_out_frame = 100,
+        enabled = true,
+        fps_mismatch_policy = "resample",
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 assert(downstream_clip:save(db), "Failed to save downstream clip")
 
 -- Helper: count clips on track
