@@ -492,6 +492,83 @@ do  -- Nest (T068) — emits on parent AND new sequence; we assert parent.
     end)
 end
 
+do  -- ExpandAudio (T056i) — emits on parent.
+    local db = base_fixture()
+    -- Add a 2nd master A track + edit A track + composite A clip.
+    assert(db:exec([[
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
+        VALUES ('m-a1', 'm', 'A1', 'AUDIO', 1),
+               ('m-a2', 'm', 'A2', 'AUDIO', 2),
+               ('e-a1', 'e', 'A1', 'AUDIO', 1);
+        INSERT INTO media (id, project_id, name, file_path, duration_frames,
+            fps_numerator, fps_denominator, audio_channels,
+            created_at, modified_at)
+        VALUES ('a-med', 'p1', 'a.wav', '/tmp/a.wav', 200000, 48000, 1, 1, 0, 0);
+        INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
+            media_id, source_in_frame, source_out_frame,
+            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            created_at, modified_at)
+        VALUES ('mr-a1', 'p1', 'm', 'm-a1', 'a-med', 0, 200000, 0, 200000, 1, 1.0, 0, 0, 0),
+               ('mr-a2', 'p1', 'm', 'm-a2', 'a-med', 0, 200000, 0, 200000, 1, 1.0, 0, 0, 0);
+        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
+            nested_sequence_id, name,
+            timeline_start_frame, duration_frames,
+            source_in_frame, source_out_frame,
+            master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+            enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
+                0, 100, 0, 200000, NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
+    ]]))
+    require("test_env").touch_media_fixtures()
+    local ExpandAudio = require("core.commands.expand_audio")
+    assert_emit_for("ExpandAudio", "e", function()
+        drive(ExpandAudio, "ExpandAudio", {
+            sequence_id = "e", clip_id = "ca",
+        })
+    end)
+end
+
+do  -- CollapseAudio (T056j) — emits on parent.
+    local db = base_fixture()
+    assert(db:exec([[
+        INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
+        VALUES ('m-a1', 'm', 'A1', 'AUDIO', 1),
+               ('m-a2', 'm', 'A2', 'AUDIO', 2),
+               ('e-a1', 'e', 'A1', 'AUDIO', 1),
+               ('e-a2', 'e', 'A2', 'AUDIO', 2);
+        INSERT INTO media (id, project_id, name, file_path, duration_frames,
+            fps_numerator, fps_denominator, audio_channels,
+            created_at, modified_at)
+        VALUES ('a-med', 'p1', 'a.wav', '/tmp/a.wav', 200000, 48000, 1, 1, 0, 0);
+        INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
+            media_id, source_in_frame, source_out_frame,
+            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            created_at, modified_at)
+        VALUES ('mr-a1', 'p1', 'm', 'm-a1', 'a-med', 0, 200000, 0, 200000, 1, 1.0, 0, 0, 0),
+               ('mr-a2', 'p1', 'm', 'm-a2', 'a-med', 0, 200000, 0, 200000, 1, 1.0, 0, 0, 0);
+        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
+            nested_sequence_id, name,
+            timeline_start_frame, duration_frames,
+            source_in_frame, source_out_frame,
+            master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+            enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('ca1', 'p1', 'e', 'e-a1', 'm', 'ca1',
+                0, 100, 0, 200000, NULL, 'm-a1', 'passthrough', 1, 1.0, 0, 0, 0),
+               ('ca2', 'p1', 'e', 'e-a2', 'm', 'ca2',
+                0, 100, 0, 200000, NULL, 'm-a2', 'passthrough', 1, 1.0, 0, 0, 0);
+        INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
+        VALUES ('lg', 'ca1', 'audio', 0, 1),
+               ('lg', 'ca2', 'audio', 0, 1);
+    ]]))
+    require("test_env").touch_media_fixtures()
+    local CollapseAudio = require("core.commands.collapse_audio")
+    assert_emit_for("CollapseAudio", "e", function()
+        drive(CollapseAudio, "CollapseAudio", {
+            sequence_id = "e", clip_ids = { "ca1", "ca2" },
+        })
+    end)
+end
+
 do  -- Unnest (T069) — emits parent + sequence_deleted/sequence_resurrected.
     local db = base_fixture()
     seed_clip(db, "c1", "e-v1", 100, 100, 0, 100)
