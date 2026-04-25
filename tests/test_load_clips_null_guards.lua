@@ -72,51 +72,47 @@ print("\n=== load_clips NULL Guard Tests ===")
 
 -- Schema rejects NULL timeline_start_frame
 local ok_ts = db:exec([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        enabled, offline, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES ('null_ts', 'proj1', 'clip', 'Test', 'v1', 'seq1',
-        NULL, 50, 100, 150, 1, 0, 25, 1, 0, 0);
+    -- V13 placeholder master sequence (was V8 NULL media_id)
+INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
+VALUES ('_v13_placeholder_media', 'proj1', 'placeholder', '_placeholder', 10800000, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('_v13_placeholder_master', 'proj1', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 10800000, 0, 10800000, 1, 1.0, 0, 0, 0);
+
+INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('null_ts', 'proj1', 'Test', 'v1', '_v13_placeholder_master', 'seq1', NULL, 50, 100, 150, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
 ]])
 check("schema rejects NULL timeline_start", ok_ts ~= 0)
 
 -- Schema rejects NULL duration_frames
 local ok_dur = db:exec([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        enabled, offline, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES ('null_dur', 'proj1', 'clip', 'Test', 'v1', 'seq1',
-        100, NULL, 100, 150, 1, 0, 25, 1, 0, 0);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('null_dur', 'proj1', 'Test', 'v1', '_v13_placeholder_master', 'seq1', 100, NULL, 100, 150, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
 ]])
 check("schema rejects NULL duration", ok_dur ~= 0)
 
 -- Schema rejects NULL source_in_frame
 local ok_si = db:exec([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        enabled, offline, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES ('null_si', 'proj1', 'clip', 'Test', 'v1', 'seq1',
-        100, 50, NULL, 150, 1, 0, 25, 1, 0, 0);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('null_si', 'proj1', 'Test', 'v1', '_v13_placeholder_master', 'seq1', 100, 50, NULL, 150, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
 ]])
 check("schema rejects NULL source_in", ok_si ~= 0)
 
 -- Schema rejects NULL source_out_frame
 local ok_so = db:exec([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        enabled, offline, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES ('null_so', 'proj1', 'clip', 'Test', 'v1', 'seq1',
-        100, 50, 100, NULL, 1, 0, 25, 1, 0, 0);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('null_so', 'proj1', 'Test', 'v1', '_v13_placeholder_master', 'seq1', 100, 50, 100, NULL, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
 ]])
 check("schema rejects NULL source_out", ok_so ~= 0)
 
 -- Schema rejects zero duration (CHECK constraint)
 local ok_zero = db:exec([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        enabled, offline, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES ('zero_dur', 'proj1', 'clip', 'Test', 'v1', 'seq1',
-        100, 0, 100, 150, 1, 0, 25, 1, 0, 0);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('zero_dur', 'proj1', 'Test', 'v1', '_v13_placeholder_master', 'seq1', 100, 0, 100, 150, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
 ]])
 check("schema rejects duration=0", ok_zero ~= 0)
 
@@ -129,22 +125,16 @@ expect_error("nil sequence_id",
 
 -- ── Schema rejects NULL project_id ──
 local ok_proj = db:exec([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        enabled, offline, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES ('null_proj', NULL, 'clip', 'Test', 'v1', 'seq1',
-        200, 50, 100, 150, 1, 0, 25, 1, 0, 0);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('null_proj', NULL, 'Test', 'v1', '_v13_placeholder_master', 'seq1', 200, 50, 100, 150, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
 ]])
 check("schema rejects NULL project_id", ok_proj ~= 0)
 
 -- ── Roundtrip: non-trivial integer values survive load_clips ──
 -- Values from real DRP import: 25fps timeline, source coords in absolute TC
 db:exec([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        enabled, offline, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES ('precise', 'proj1', 'clip', 'Precise', 'v1', 'seq1',
-        89849, 12345, 188160, 200505, 1, 0, 25, 1, 0, 0);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('precise', 'proj1', 'Precise', 'v1', '_v13_placeholder_master', 'seq1', 89849, 12345, 188160, 200505, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
 ]])
 local clips = database.load_clips("seq1")
 check("roundtrip count=1", #clips == 1)
@@ -159,11 +149,8 @@ db:exec("DELETE FROM clips")
 
 -- ── Boundary: negative timeline_start (valid — pre-roll) ──
 db:exec([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        enabled, offline, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES ('neg_start', 'proj1', 'clip', 'PreRoll', 'v1', 'seq1',
-        -100, 200, 0, 200, 1, 0, 24, 1, 0, 0);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('neg_start', 'proj1', 'PreRoll', 'v1', '_v13_placeholder_master', 'seq1', -100, 200, 0, 200, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
 ]])
 clips = database.load_clips("seq1")
 check("negative timeline_start loads", #clips == 1)
@@ -173,11 +160,8 @@ db:exec("DELETE FROM clips")
 -- ── Timestamp roundtrip (verify index shift didn't break created_at/modified_at) ──
 db:exec("DELETE FROM clips")
 db:exec([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        enabled, offline, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES ('ts_clip', 'proj1', 'clip', 'Timestamps', 'v1', 'seq1',
-        0, 100, 0, 100, 1, 0, 24, 1, 1700000000, 1700000100);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('ts_clip', 'proj1', 'Timestamps', 'v1', '_v13_placeholder_master', 'seq1', 0, 100, 0, 100, 1, 1700000000, 1700000100, NULL, NULL, 'resample', 1.0, 0);
 ]])
 clips = database.load_clips("seq1")
 check("timestamp count=1", #clips == 1)
@@ -188,11 +172,8 @@ db:exec("DELETE FROM clips")
 -- ── Boundary: large values (near 32-bit limit, hours of content) ──
 -- 86400 frames @ 24fps = 1 hour; 8640000 = 100 hours
 db:exec([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        enabled, offline, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES ('big', 'proj1', 'clip', 'LongForm', 'v1', 'seq1',
-        8640000, 2160000, 8640000, 10800000, 1, 0, 24, 1, 0, 0);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('big', 'proj1', 'LongForm', 'v1', '_v13_placeholder_master', 'seq1', 8640000, 2160000, 8640000, 10800000, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
 ]])
 clips = database.load_clips("seq1")
 check("large values load", #clips == 1)

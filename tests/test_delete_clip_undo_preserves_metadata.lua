@@ -49,16 +49,19 @@ db:exec([[
 
 -- Clip with non-default metadata
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        enabled, offline, fps_numerator, fps_denominator,
-        volume, mark_in_frame, mark_out_frame, playhead_frame,
-        created_at, modified_at)
-    VALUES ('clip1', 'proj1', 'clip', 'TestClip', 'v1', 'seq1',
-        100, 200, 5000, 5200,
-        1, 0, 24, 1,
-        0.42, 30, 170, 85,
-        %d, %d);
+    -- V13 placeholder master sequence (was V8 NULL media_id)
+INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
+VALUES ('_v13_placeholder_media', 'proj1', 'placeholder', '_placeholder', 5200, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('_v13_placeholder_master', 'proj1', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 5200, 0, 5200, 1, 1.0, 0, 0, 0);
+
+INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, volume, mark_in_frame, mark_out_frame, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy) VALUES
+    ('clip1', 'proj1', 'TestClip', 'v1', '_v13_placeholder_master', 'seq1', 100, 200, 5000, 5200, 1, 1.0, 30, 170, 0, %d, %d, NULL, NULL, 'resample');
 ]], now, now))
 
 command_manager.init("seq1", "proj1")

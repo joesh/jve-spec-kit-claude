@@ -99,13 +99,21 @@ command_manager.init("seq1", "proj1")
 -- ── Test 1: Delete middle clip, undo — no overlaps ──
 print("\n--- Delete middle clip + undo ---")
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        enabled, offline, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES
-    ('c1', 'proj1', 'clip', 'A', 'v1', 'seq1', 0, 100, 0, 100, 1, 0, 24, 1, %d, %d),
-    ('c2', 'proj1', 'clip', 'B', 'v1', 'seq1', 100, 100, 0, 100, 1, 0, 24, 1, %d, %d),
-    ('c3', 'proj1', 'clip', 'C', 'v1', 'seq1', 200, 100, 0, 100, 1, 0, 24, 1, %d, %d);
+    -- V13 placeholder master sequence (was V8 NULL media_id)
+INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
+VALUES ('_v13_placeholder_media', 'proj1', 'placeholder', '_placeholder', 100, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('_v13_placeholder_master', 'proj1', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 100, 0, 100, 1, 1.0, 0, 0, 0);
+
+INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('c1', 'proj1', 'A', 'v1', '_v13_placeholder_master', 'seq1', 0, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('c2', 'proj1', 'B', 'v1', '_v13_placeholder_master', 'seq1', 100, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('c3', 'proj1', 'C', 'v1', '_v13_placeholder_master', 'seq1', 200, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now, now, now))
 
 local overlaps = find_overlaps("v1")
@@ -134,12 +142,9 @@ db:exec("DELETE FROM clips")
 -- ── Test 2: Delete first clip then undo — positions preserved ──
 print("\n--- Delete first clip + undo ---")
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        enabled, offline, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES
-    ('d1', 'proj1', 'clip', 'First', 'v1', 'seq1', 0, 100, 0, 100, 1, 0, 24, 1, %d, %d),
-    ('d2', 'proj1', 'clip', 'Second', 'v1', 'seq1', 100, 100, 0, 100, 1, 0, 24, 1, %d, %d);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('d1', 'proj1', 'First', 'v1', '_v13_placeholder_master', 'seq1', 0, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('d2', 'proj1', 'Second', 'v1', '_v13_placeholder_master', 'seq1', 100, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now))
 
 command_manager.init("seq1", "proj1")
@@ -166,13 +171,10 @@ db:exec("DELETE FROM clips")
 -- ── Test 3: Multiple undo/redo cycles — invariant holds throughout ──
 print("\n--- Multiple undo/redo cycles ---")
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        enabled, offline, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES
-    ('m1', 'proj1', 'clip', 'A', 'v1', 'seq1', 0, 50, 0, 50, 1, 0, 24, 1, %d, %d),
-    ('m2', 'proj1', 'clip', 'B', 'v1', 'seq1', 50, 50, 0, 50, 1, 0, 24, 1, %d, %d),
-    ('m3', 'proj1', 'clip', 'C', 'v1', 'seq1', 100, 50, 0, 50, 1, 0, 24, 1, %d, %d);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('m1', 'proj1', 'A', 'v1', '_v13_placeholder_master', 'seq1', 0, 50, 0, 50, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('m2', 'proj1', 'B', 'v1', '_v13_placeholder_master', 'seq1', 50, 50, 0, 50, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('m3', 'proj1', 'C', 'v1', '_v13_placeholder_master', 'seq1', 100, 50, 0, 50, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now, now, now))
 
 command_manager.init("seq1", "proj1")
