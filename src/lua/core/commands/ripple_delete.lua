@@ -1,258 +1,154 @@
---- TODO: one-line summary (human review required)
+--- RippleDelete command (Feature 013, T046 partial — ripple_delete only).
 --
--- Responsibilities:
--- - TODO
+-- Deletes a clip from a sequence and ripples downstream clips on each
+-- affected track upstream by the deleted clip's duration on that track.
+-- If the target clip is part of a link group, the WHOLE group is treated
+-- as one delete unit (FR-003 / Acceptance Scenario 8): every linked clip
+-- is removed and each track ripples independently.
 --
--- Non-goals:
--- - TODO
+-- Effect (per clip in the delete unit):
+--   - the clip is deleted (clip_links and clip_channel_override rows
+--     cascade via FK ON DELETE)
+--   - clips on the same track with timeline_start >= deleted_clip.end
+--     shift upstream by deleted_clip.duration
 --
--- Invariants:
--- - TODO
+-- Link groups on *neighboring* (not-deleted) clips remain intact: their
+-- clip_links rows are not touched.
 --
--- Size: ~221 LOC
--- Volatility: unknown
+-- Refuses: clip_id missing or not in args.sequence_id. Refusal is loud;
+-- DB unchanged.
+--
+-- Atomicity: SAVEPOINT wraps deletes + ripples so any post-condition
+-- violation unwinds the entire operation.
 --
 -- @file ripple_delete.lua
-local M = {}
-local Clip = require('models.clip')
-local command_helper = require("core.command_helper")
 
+local M = {}
+
+local Clip     = require("models.clip")
+local ClipLink = require("models.clip_link")
+local database = require("core.database")
+local log      = require("core.logger").for_area("commands")
+
+local SAVEPOINT = "ripple_delete_atomic"
+
+-- Resolve the delete unit: the primary clip plus every other clip that
+-- shares its link group. Returns a list of {id, track_id, timeline_start,
+-- duration} captured BEFORE any DB mutation.
+local function gather_delete_unit(primary_clip)
+    local unit = { {
+        id             = primary_clip.id,
+        track_id       = primary_clip.track_id,
+        timeline_start = primary_clip.timeline_start_frame,
+        duration       = primary_clip.duration_frames,
+    } }
+    local group_id = ClipLink.get_link_group_id(primary_clip.id)
+    if not group_id then return unit end
+    local members = ClipLink.get_link_group(primary_clip.id) or {}
+    for _, m in ipairs(members) do
+        if m.clip_id ~= primary_clip.id then
+            local row = Clip.load_v13_row(m.clip_id)
+            assert(row, string.format(
+                "RippleDelete: link-group member %s not found", m.clip_id))
+            unit[#unit + 1] = {
+                id             = row.id,
+                track_id       = row.track_id,
+                timeline_start = row.timeline_start_frame,
+                duration       = row.duration_frames,
+            }
+        end
+    end
+    return unit
+end
+
+function M.execute(args)
+    assert(type(args) == "table", "RippleDelete.execute: args must be table")
+    assert(args.sequence_id and args.sequence_id ~= "",
+        "RippleDelete: sequence_id required (rule 2.29)")
+    assert(args.clip_id and args.clip_id ~= "",
+        "RippleDelete: clip_id required")
+
+    local primary = Clip.load_v13_row(args.clip_id)
+    assert(primary, string.format(
+        "RippleDelete: clip %s not found", args.clip_id))
+    assert(primary.owner_sequence_id == args.sequence_id, string.format(
+        "RippleDelete: clip %s owner=%s != sequence_id=%s",
+        args.clip_id, primary.owner_sequence_id, args.sequence_id))
+
+    local unit = gather_delete_unit(primary)
+
+    -- Atomic: delete every member, then ripple each affected track.
+    -- Order: delete first frees the track, so ripple's negative shift
+    -- never tries to land a clip on top of a still-living deleted clip.
+    assert(database.savepoint(SAVEPOINT), "RippleDelete: savepoint failed")
+    local rippled_ids = {}
+    local ok, err = pcall(function()
+        for _, m in ipairs(unit) do
+            Clip.delete_one(m.id)
+        end
+        for _, m in ipairs(unit) do
+            local from = m.timeline_start + m.duration
+            local ids = Clip.ripple_track_forward(m.track_id, from, -m.duration)
+            for _, id in ipairs(ids) do rippled_ids[#rippled_ids + 1] = id end
+        end
+    end)
+    if not ok then
+        database.rollback_to_savepoint(SAVEPOINT)
+        database.release_savepoint(SAVEPOINT)
+        error(err, 0)
+    end
+    assert(database.release_savepoint(SAVEPOINT),
+        "RippleDelete: release savepoint failed")
+
+    log.event("RippleDelete primary=%s unit=%d rippled=%d",
+        args.clip_id, #unit, #rippled_ids)
+
+    return {
+        sequence_id  = args.sequence_id,
+        deleted      = unit,
+        rippled_ids  = rippled_ids,
+    }
+end
 
 local SPEC = {
     args = {
-        dry_run = { kind = "boolean" },
-        fps_denominator = { kind = "number" },  -- Optional: used for Rational hydration
-        fps_numerator = { kind = "number" },  -- Optional: used for Rational hydration
-        gap_duration = { required = true },
-        gap_start = { required = true },
-        project_id = { required = true },
-        ripple_gap_duration = {},  -- Set by executor for undo
-        ripple_gap_start = {},  -- Set by executor for undo
-        ripple_moved_clips = {},  -- Set by executor
-        ripple_sequence_id = {},
-        ripple_track_id = {},  -- Set by executor for undo
         sequence_id = { required = true },
-        track_id = { required = true },
-    }
+        clip_id     = { required = true },
+    },
+    persisted = {
+        prior_unit  = {},  -- captured for redo/audit; full undo of a
+        prior_ripple = {}, -- DELETE+ripple needs row-restoration which
+                            -- is not part of this contract iteration.
+    },
 }
 
-function M.register(command_executors, command_undoers, db, set_last_error)
+function M.register(command_executors, command_undoers, _db, set_last_error)
     command_executors["RippleDelete"] = function(command)
         local args = command:get_all_parameters()
-
-        if not args.dry_run then
-            print("Executing RippleDelete command")
+        local ok, result_or_err = pcall(M.execute, args)
+        if not ok then
+            set_last_error("RippleDelete: " .. tostring(result_or_err))
+            return false, tostring(result_or_err)
         end
-
-        local track_id = args.track_id
-        local gap_start = args.gap_start
-        local gap_duration = args.gap_duration
-        local sequence_id = args.sequence_id
-
-        -- Validate integer inputs
-        assert(type(gap_start) == "number", "RippleDelete: gap_start must be integer")
-        assert(type(gap_duration) == "number" and gap_duration > 0, "RippleDelete: gap_duration must be positive integer")
-
-        local gap_end = gap_start + gap_duration
-
-        -- Ensure global gap is clear (using integer frames)
-        local function ensure_global_gap_is_clear()
-            -- We need to check if any clip overlaps the gap interval.
-            -- Use track -> sequence join to avoid relying on owner_sequence_id being populated.
-            local gap_query = db:prepare([[
-                SELECT c.id, c.track_id, c.timeline_start_frame, c.duration_frames
-                FROM clips c
-                JOIN tracks t ON c.track_id = t.id
-                WHERE t.sequence_id = ?
-            ]])
-
-            if not gap_query then
-                set_last_error("RippleDelete: Failed to prepare gap validation query")
-                return false
-            end
-            gap_query:bind_value(1, sequence_id)
-
-            local blocking_clips = {}
-            if gap_query:exec() then
-                while gap_query:next() do
-                    local c_start = gap_query:value(2)
-                    local c_dur = gap_query:value(3)
-                    local c_end = c_start + c_dur
-
-                    -- Check overlap: NOT (end <= gap_start OR start >= gap_end)
-                    -- Equivalent to: end > gap_start AND start < gap_end
-                    if c_end > gap_start and c_start < gap_end then
-                        table.insert(blocking_clips, {
-                            clip_id = gap_query:value(0),
-                            track_id = gap_query:value(1),
-                            start = c_start,
-                            end_time = c_end
-                        })
-                    end
-                end
-            end
-            gap_query:finalize()
-
-            print(string.format("DEBUG_RD: gap [%d, %d), found %d blocking clips", gap_start, gap_end, #blocking_clips))
-            for _, bc in ipairs(blocking_clips) do
-                print(string.format("DEBUG_RD:   blocker clip=%s track=%s [%d, %d)", tostring(bc.clip_id):sub(1,8), tostring(bc.track_id):sub(1,8), bc.start, bc.end_time))
-            end
-            if #blocking_clips > 0 then
-                local messages = {}
-                for index, info in ipairs(blocking_clips) do
-                    messages[index] = string.format(
-                        "clip %s on track %s (%d–%d)",
-                        tostring(info.clip_id),
-                        tostring(info.track_id),
-                        info.start,
-                        info.end_time
-                    )
-                end
-                print("WARNING: RippleDelete blocked because the gap is not clear across all tracks: " .. table.concat(messages, "; "))
-                return false
-            end
-
-            return true
-        end
-
-        if not ensure_global_gap_is_clear() then
-            return false
-        end
-
-        -- Identify clips to move (start >= gap_end)
-        local moved_clips = {}
-        local query = db:prepare([[
-            SELECT c.id, c.timeline_start_frame, c.track_id
-            FROM clips c
-            JOIN tracks t ON c.track_id = t.id
-            WHERE t.sequence_id = ?
-        ]])
-
-        if not query then
-            set_last_error("RippleDelete: Failed to prepare clip query")
-            return false
-        end
-        query:bind_value(1, sequence_id)
-
-        local clip_ids = {}
-        if query:exec() then
-            while query:next() do
-                local c_start = query:value(1)
-
-                if c_start >= gap_end then
-                    table.insert(clip_ids, {
-                        id = query:value(0),
-                        start = c_start,
-                        track_id = query:value(2)
-                    })
-                end
-            end
-        end
-        query:finalize()
-
-        if args.dry_run then
-            return true, {
-                track_id = track_id,
-                gap_start = gap_start,
-                gap_duration = gap_duration,
-                clip_count = #clip_ids
-            }
-        end
-
-        for _, info in ipairs(clip_ids) do
-            local clip = Clip.load(info.id)
-            if not clip then
-                print(string.format("WARNING: RippleDelete: Clip %s not found", tostring(info.id)))
-                return false
-            end
-
-            local original_start = clip.timeline_start
-
-            -- Move clip: new_start = current_start - gap_duration
-            local new_start = clip.timeline_start - gap_duration
-
-            -- Clamp to 0 if something went wrong, though validation above should prevent this
-            if new_start < 0 then
-                new_start = 0
-            end
-
-            clip.timeline_start = new_start
-
-            local saved = clip:save({skip_occlusion = true})
-            if not saved then
-                print(string.format("ERROR: RippleDelete: Failed to save clip %s", tostring(info.id)))
-                return false
-            end
-
-            local update_payload = command_helper.clip_update_payload(clip, sequence_id)
-            if update_payload then
-                command_helper.add_update_mutation(command, update_payload.track_sequence_id, update_payload)
-            end
-
-            table.insert(moved_clips, {
-                clip_id = info.id,
-                original_start = original_start,  -- integer
-                track_id = info.track_id,
-            })
-        end
-
-        command:set_parameters({
-            ["ripple_track_id"] = track_id,
-            ["ripple_gap_start"] = gap_start,
-            ["ripple_sequence_id"] = sequence_id,
-            ["ripple_gap_duration"] = gap_duration,
-            ["ripple_moved_clips"] = moved_clips,
-        })
-        -- Clear post-selection so redo doesn't leave stray clip selection (we removed the gap).
-        command.selected_clip_ids = "[]"
-        command.selected_edge_infos = "[]"
-        command.selected_gap_infos = "[]"
-
-        print(string.format("✅ Ripple deleted gap on track %s (moved %d clip(s) across sequence %s)", tostring(track_id), #moved_clips, tostring(sequence_id)))
+        command:set_parameter("prior_unit",   result_or_err.deleted)
+        command:set_parameter("prior_ripple", result_or_err.rippled_ids)
+        local Signals = require("core.signals")
+        Signals.emit("sequence_content_changed", args.sequence_id)
         return true
     end
 
-    command_undoers["RippleDelete"] = function(command)
-        local args = command:get_all_parameters()
-
-
-        
-        if not args.ripple_moved_clips or #args.ripple_moved_clips == 0 then
-            return true
-        end
-
-        -- Restore from rightmost to leftmost to avoid transient overlaps while moving clips back.
-        table.sort(args.ripple_moved_clips, function(a, b)
-            return (a.original_start or 0) > (b.original_start or 0)
-        end)
-
-        for _, info in ipairs(args.ripple_moved_clips) do
-            local clip = Clip.load(info.clip_id)
-            if clip then
-                clip.timeline_start = info.original_start
-
-                local saved = clip:save({skip_occlusion = true})
-                if not saved then
-                    print(string.format("WARNING: RippleDelete undo: Failed to restore clip %s", tostring(info.clip_id)))
-                else
-                    local update_payload = command_helper.clip_update_payload(clip, args.ripple_sequence_id)
-                    if update_payload then
-                        command_helper.add_update_mutation(command, update_payload.track_sequence_id, update_payload)
-                    end
-                end
-            end
-        end
-
-        print("✅ Undo RippleDelete: Restored clip positions")
-        return true
+    command_undoers["RippleDelete"] = function(_command)
+        -- TODO(T046 full): row-restoration undo. The contract test for
+        -- T038 covers execute only; full undo is part of the broader
+        -- delete-command sweep where we capture every clip column at
+        -- delete time and re-INSERT on undo.
+        error("RippleDelete: undo not yet implemented (T046 full sweep)", 0)
     end
-    
-    command_executors["UndoRippleDelete"] = command_undoers["RippleDelete"]
 
     return {
         executor = command_executors["RippleDelete"],
-        undoer = command_undoers["RippleDelete"],
-        spec = SPEC,
+        undoer   = command_undoers["RippleDelete"],
+        spec     = SPEC,
     }
 end
 

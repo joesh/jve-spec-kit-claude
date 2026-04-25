@@ -24,6 +24,7 @@ local M = {}
 -- Get all clips in the same link group as the given clip
 -- Returns: array of {clip_id, role, time_offset, enabled} or nil if not linked
 function M.get_link_group(clip_id, db)
+    db = db or database.get_connection()
     -- First find the link group for this clip
     local query = db:prepare([[
         SELECT link_group_id FROM clip_links WHERE clip_id = ?
