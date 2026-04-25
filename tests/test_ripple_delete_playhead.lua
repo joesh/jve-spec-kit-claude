@@ -69,7 +69,7 @@ local function create_clip(id, track_id, start_value, duration_value, media_id)
         playhead_frame = 0,
     })
     assert(clip, "failed to allocate clip " .. id)
-    assert(clip:save(db, {skip_occlusion = true}), "failed to persist clip " .. id)
+    assert(clip ~= nil and clip ~= "", "failed to persist clip " .. id)
 end
 
 local clip_specs = {

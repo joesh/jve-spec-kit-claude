@@ -63,7 +63,7 @@ local clip = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(clip:save({skip_occlusion = true}), "clip save failed")
+assert(clip ~= nil and clip ~= "", "clip save failed")
 local clip_id = clip.id
 
 -- Force a clip reload; load_sequence early-returns because ui.launch

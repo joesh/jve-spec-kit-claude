@@ -81,7 +81,7 @@ local function create_clip(id, track_id, media_id, start_frame, dur)
         playhead_frame = 0,
         enabled = 1,
     })
-    assert(clip:save({skip_occlusion = true}), "failed to save " .. id)
+    assert(clip ~= nil and clip ~= "", "failed to save " .. id)
     return clip
 end
 

@@ -184,17 +184,26 @@ end
 --   track_id, start_value, duration
 --   exclude_clip_id: clip id to ignore while checking overlaps (e.g., the clip being updated)
 local function load_track_clips(db, track_id)
+    -- V13 SELECT: same column set produced by database.load_clips, plus
+    -- fields legacy callers in clip_mutator expect.
     local stmt = db:prepare([[
-        SELECT c.id, c.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
-               c.master_clip_id, c.owner_sequence_id,
-               c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
-               c.fps_numerator, c.fps_denominator,
-               s.fps_numerator, s.fps_denominator,
-               c.enabled, c.offline, c.created_at, c.modified_at,
-               c.volume
+        SELECT c.id, c.project_id, c.name, c.track_id,
+               c.owner_sequence_id, c.nested_sequence_id,
+               c.timeline_start_frame, c.duration_frames,
+               c.source_in_frame, c.source_out_frame,
+               c.master_layer_track_id, c.master_audio_track_id,
+               c.fps_mismatch_policy,
+               c.enabled, c.volume, c.created_at, c.modified_at,
+               t.track_type,
+               owner_seq.fps_numerator, owner_seq.fps_denominator,
+               nested_seq.kind, nested_seq.fps_numerator, nested_seq.fps_denominator,
+               mr.media_id
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
-        JOIN sequences s ON t.sequence_id = s.id
+        JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
+        JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+                                AND nested_seq.kind = 'master'
         WHERE c.track_id = ?
         ORDER BY c.timeline_start_frame
     ]])
@@ -211,39 +220,49 @@ local function load_track_clips(db, track_id)
     end
 
     while stmt:next() do
-        local clip_num = stmt:value(12)
-        local clip_den = stmt:value(13)
-        local seq_num = stmt:value(14)
-        local seq_den = stmt:value(15)
-        assert_fps(clip_num, clip_den, "clip fps")
-        assert_fps(seq_num, seq_den, "sequence fps")
+        local nested_num = stmt:value(21)
+        local nested_den = stmt:value(22)
+        local owner_num = stmt:value(18)
+        local owner_den = stmt:value(19)
+        assert_fps(nested_num, nested_den, "clip (nested-seq) fps")
+        assert_fps(owner_num, owner_den, "owner sequence fps")
+        local track_type = stmt:value(17)
+        local nested_id = stmt:value(5)
         table.insert(results, {
             id = stmt:value(0),
             project_id = stmt:value(1),
-            clip_kind = stmt:value(2),
-            name = stmt:value(3),
-            track_id = stmt:value(4),
-            media_id = stmt:value(5),
-            master_clip_id = stmt:value(6),
-            owner_sequence_id = stmt:value(7),
-            created_at = stmt:value(18),
-            modified_at = stmt:value(19),
+            name = stmt:value(2),
+            track_id = stmt:value(3),
+            owner_sequence_id = stmt:value(4),
+            nested_sequence_id = nested_id,
+            nested_sequence_kind = stmt:value(20),
+            master_layer_track_id = stmt:value(10),
+            master_audio_track_id = stmt:value(11),
+            fps_mismatch_policy = stmt:value(12),
+            created_at = stmt:value(15),
+            modified_at = stmt:value(16),
             -- Integer frame coordinates
-            timeline_start = stmt:value(8),
-            start_value = stmt:value(8),  -- Legacy compat
-            duration = stmt:value(9),
-            source_in = stmt:value(10),
-            source_out = stmt:value(11),
-            -- Rate metadata for source coordinate conversions
-            rate = { fps_numerator = clip_num, fps_denominator = clip_den },
-            fps_numerator = clip_num,
-            fps_denominator = clip_den,
-            -- Sequence rate for reference
-            seq_fps_numerator = seq_num,
-            seq_fps_denominator = seq_den,
-            enabled = stmt:value(16) == 1 or stmt:value(16) == true,
-            offline = false,  -- transient: recomputed by media_status
-            volume = stmt:value(20)
+            timeline_start = stmt:value(6),
+            start_value = stmt:value(6),  -- Legacy compat
+            duration = stmt:value(7),
+            source_in = stmt:value(8),
+            source_out = stmt:value(9),
+            -- Source-side timebase (nested sequence rate).
+            rate = { fps_numerator = nested_num, fps_denominator = nested_den },
+            fps_numerator = nested_num,
+            fps_denominator = nested_den,
+            -- Owner-sequence rate (same as old seq_*).
+            seq_fps_numerator = owner_num,
+            seq_fps_denominator = owner_den,
+            owner_rate = { fps_numerator = owner_num, fps_denominator = owner_den },
+            enabled = stmt:value(13) == 1 or stmt:value(13) == true,
+            volume = stmt:value(14),
+            track_type = track_type,
+            -- Compat surfaces.
+            clip_kind = (track_type == "VIDEO") and "video" or "audio",
+            media_id = stmt:value(23),
+            master_clip_id = nested_id,
+            offline = false,
         })
     end
     stmt:finalize()

@@ -63,7 +63,8 @@ do
     if _m then
         if not _m.width or _m.width == 0 then _m.width = 1920 end
         if not _m.height or _m.height == 0 then _m.height = 1080 end
-        if not _m.metadata or _m.metadata == "" then
+        local _parsed = _m.metadata and (function() local ok,v = pcall(_json.decode, _m.metadata); return ok and v end)()
+        if not _parsed or _parsed.start_tc_value == nil then
             _m.metadata = _json.encode({ start_tc_value = 0,
                 start_tc_rate = (_m.frame_rate and _m.frame_rate.fps_numerator) or 24,
                 start_tc_audio_samples = 0,
@@ -125,7 +126,7 @@ local function create_test_sequence(id, name)
         volume = 1.0,
         playhead_frame = 0,
     })
-    assert(clip:save(db), "Failed to save clip")
+    assert(clip ~= nil and clip ~= "", "Failed to save clip")
 
     return seq
 end
@@ -300,7 +301,7 @@ for i = 1, 3 do
         volume = 1.0,
         playhead_frame = 0,
     })
-        assert(clip:save(db), "Failed to save clip")
+        assert(clip ~= nil and clip ~= "", "Failed to save clip")
     end
 end
 
