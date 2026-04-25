@@ -38,17 +38,31 @@ local function setup_db()
     INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, metadata, created_at, modified_at)
     VALUES ('media_b', 'default_project', 'Media B', '/tmp/jve/b.mov', 4000, 30, 1, 1920, 1080, 0, 'prores', '{}', 0, 0);
 
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-    VALUES ('clip_a', 'default_project', 'timeline', 'Clip A', 'track_v1', 'media_a', 'default_sequence',
-        0, 4000, 0, 4000, 30, 1, 1, 0, 0, 0);
+    -- V13 master sequence + track + media_ref for media_a
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('master_media_a', 'default_project', 'media_a_master', 'master', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('master_v_media_a', 'master_media_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = 'master_v_media_a' WHERE id = 'master_media_a';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media_a', 'default_project', 'master_media_a', 'master_v_media_a', 'media_a', 0, 4000, 0, 4000, 1, 1.0, 0, strftime('%s','now'), strftime('%s','now'));
 
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-    VALUES ('clip_b', 'default_project', 'timeline', 'Clip B', 'track_v1', 'media_b', 'default_sequence',
-        4000, 4000, 0, 4000, 30, 1, 1, 0, 0, 0);
+-- V13 master sequence + track + media_ref for media_b
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('master_media_b', 'default_project', 'media_b_master', 'master', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('master_v_media_b', 'master_media_b', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = 'master_v_media_b' WHERE id = 'master_media_b';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media_b', 'default_project', 'master_media_b', 'master_v_media_b', 'media_b', 0, 4000, 0, 4000, 1, 1.0, 0, strftime('%s','now'), strftime('%s','now'));
+
+INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES
+    ('clip_a', 'default_project', 'Clip A', 'track_v1', 'master_media_a', 'default_sequence', 0, 4000, 0, 4000, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
+
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES
+    ('clip_b', 'default_project', 'Clip B', 'track_v1', 'master_media_b', 'default_sequence', 4000, 4000, 0, 4000, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
     ]]))
 
 -- command_impl.register_commands({}, {}, conn)

@@ -31,15 +31,18 @@ local BASE_DATA_SQL = [[
     INSERT INTO media (id, project_id, file_path, name, duration_frames, fps_numerator, fps_denominator, created_at, modified_at)
     VALUES ('media1', 'default_project', '/tmp/test.mov', 'Test Media', 3000, 30, 1, 0, 0);
 
-    INSERT INTO clips (
-        id, project_id, clip_kind, name, track_id, media_id,
-        owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        fps_numerator, fps_denominator, enabled,
-        created_at, modified_at
-    ) VALUES
-        ('clip1', 'default_project', 'timeline', 'Clip 1', 'v1', 'media1', 'seq1',
-         0, 100, 0, 100, 30, 1, 1, 0, 0);
+    -- V13 master sequence + track + media_ref for media1
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('master_media1', 'default_project', 'media1_master', 'master', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('master_v_media1', 'master_media1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = 'master_v_media1' WHERE id = 'master_media1';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media1', 'default_project', 'master_media1', 'master_v_media1', 'media1', 0, 3000, 0, 3000, 1, 1.0, 0, strftime('%s','now'), strftime('%s','now'));
+
+INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES
+    ('clip1', 'default_project', 'Clip 1', 'v1', 'master_media1', 'seq1', 0, 100, 0, 100, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
 ]]
 
 local function setup_database(path)
