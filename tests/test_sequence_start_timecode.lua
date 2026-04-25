@@ -31,7 +31,8 @@ assert(db:exec([[
 -- Test 1: Default start_timecode_frame is 0
 -- =========================================================================
 local seq1 = Sequence.create("Default TC", "proj",
-    { kind = "nested",  fps_numerator = 25, fps_denominator = 1 }, 1920, 1080)
+    {  fps_numerator = 25, fps_denominator = 1 }, 1920, 1080,
+    { kind = "nested", audio_rate = 48000 })
 assert(seq1.start_timecode_frame == 0,
     "default: start_timecode_frame should be 0, got " .. tostring(seq1.start_timecode_frame))
 assert(seq1:save())

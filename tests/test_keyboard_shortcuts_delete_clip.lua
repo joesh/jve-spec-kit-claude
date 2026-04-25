@@ -47,7 +47,8 @@ local mc_seq_id = require("test_env").create_test_masterclip_sequence(
     project.id, "MC", 24, 1, 500, "test_media")
 
 local seq = Sequence.create("Seq", project.id,
-    { kind = "nested",  fps_numerator = 24, fps_denominator = 1 }, 1920, 1080)
+    {  fps_numerator = 24, fps_denominator = 1 }, 1920, 1080,
+    { kind = "nested", audio_rate = 48000 })
 seq:save()
 local track = Track.create_video("V1", seq.id, { index = 1 })
 track:save()
@@ -55,7 +56,7 @@ track:save()
 local function make_clip(name, start, dur)
     local c = Clip.create(name, "test_media", {
         track_id = track.id, owner_sequence_id = seq.id,
-        master_clip_id = mc_seq_id,
+        nested_sequence_id = mc_seq_id,
         timeline_start = start, duration = dur,
         source_in = 0, source_out = dur,
         fps_numerator = 24, fps_denominator = 1,

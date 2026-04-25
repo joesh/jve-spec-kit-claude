@@ -109,7 +109,7 @@ local function make_clip(params)
         id = params.id, project_id = project.id,
         clip_kind = params.clip_kind or "timeline",
         track_id = params.track_id,
-        master_clip_id = "mc_" .. params.media_id,
+        nested_sequence_id = "mc_" .. params.media_id,
         owner_sequence_id = "seq1",
         timeline_start = params.timeline_start,
         duration = params.source_out - params.source_in,

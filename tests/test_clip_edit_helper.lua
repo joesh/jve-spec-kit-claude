@@ -337,7 +337,7 @@ local so = 100
 
 -- 7a. Video-only (0 audio channels)
 local sc = clip_edit_helper.create_selected_clip({
-    media_id = "med1", master_clip_id = "mc1", project_id = "proj1",
+    media_id = "med1", nested_sequence_id = "mc1", project_id = "proj1",
     duration = dur, source_in = si, source_out = so,
     clip_name = "MyClip", audio_channels = 0,
 })
@@ -351,7 +351,7 @@ check("video.duration", sc.video.duration == dur)
 
 -- 7b. With audio channels
 sc = clip_edit_helper.create_selected_clip({
-    media_id = "med1", master_clip_id = "mc1", project_id = "proj1",
+    media_id = "med1", nested_sequence_id = "mc1", project_id = "proj1",
     duration = dur, source_in = si, source_out = so,
     clip_name = "MyClip", audio_channels = 2,
 })
@@ -380,7 +380,7 @@ end, "invalid audio channel")
 
 -- 7f. Default audio_channels = 0 when nil
 sc = clip_edit_helper.create_selected_clip({
-    media_id = "med1", master_clip_id = "mc1", project_id = "proj1",
+    media_id = "med1", nested_sequence_id = "mc1", project_id = "proj1",
     duration = dur, source_in = si, source_out = so,
     clip_name = "Test",
 })

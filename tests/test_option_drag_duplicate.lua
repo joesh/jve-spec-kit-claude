@@ -56,7 +56,7 @@ local function create_clip(params)
     assert(media:save(db))
 
     -- Create masterclip sequence for this media (required for Overwrite)
-    local master_clip_id = test_env.create_test_masterclip_sequence(
+    local nested_sequence_id = test_env.create_test_masterclip_sequence(
         'default_project', params.media_id .. ' Master', 30, 1, params.duration_value, params.media_id)
     masterclip_ids[params.media_id] = master_clip_id
 
@@ -72,7 +72,7 @@ local function create_clip(params)
         source_out = params.source_out_value or params.duration_value or 0,
         fps_numerator = 30,
         fps_denominator = 1,
-        master_clip_id = master_clip_id,
+        nested_sequence_id = master_clip_id,
     })
     assert(clip and clip:save(db, {skip_occlusion = true}))
     return clip
@@ -131,7 +131,7 @@ local command_specs = {
             duration = 1000,
             source_in = 0,
             source_out = 1000,
-            master_clip_id = masterclip_ids['media_src_a'],
+            nested_sequence_id = masterclip_ids['media_src_a'],
             project_id = 'default_project',
             sequence_id = 'default_sequence',
             advance_playhead = false,
@@ -145,7 +145,7 @@ local command_specs = {
             duration = 1200,
             source_in = 0,
             source_out = 1200,
-            master_clip_id = masterclip_ids['media_src_b'],
+            nested_sequence_id = masterclip_ids['media_src_b'],
             project_id = 'default_project',
             sequence_id = 'default_sequence',
             advance_playhead = false,

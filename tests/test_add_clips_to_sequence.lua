@@ -124,7 +124,7 @@ local function create_clip(id, track_id, start_frame, duration_frames)
         project_id = "project",
         track_id = track_id,
         owner_sequence_id = "sequence",
-        master_clip_id = "mc_test",
+        nested_sequence_id = "mc_test",
         timeline_start = start_frame,
         duration = duration_frames,
         source_in = 0,
@@ -149,7 +149,7 @@ local groups = {
             {
                 role = "video",
                 media_id = "media_1",
-                master_clip_id = nil,
+                nested_sequence_id = nil,
                 project_id = "project",
                 name = "Test Clip",
                 source_in = 0,

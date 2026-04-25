@@ -130,7 +130,7 @@ check("existing clip dur=200", get_clip_field("existing", "duration_frames") == 
 print("\n--- Overwrite ---")
 execute_cmd("Overwrite", {
     sequence_id = "seq1",
-    master_clip_id = "mc_seq",
+    nested_sequence_id = "mc_seq",
     source_in = 0,
     source_out = 50,
     playhead = 50,

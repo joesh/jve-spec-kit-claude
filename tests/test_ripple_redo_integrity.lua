@@ -78,7 +78,7 @@ local media_result = command_manager.execute(media_cmd)
 assert(media_result.success, media_result.error_message or "TestCreateMedia failed")
 
 -- Create masterclip sequence for the media (required for Insert)
-local master_clip_id = test_env.create_test_masterclip_sequence(
+local nested_sequence_id = test_env.create_test_masterclip_sequence(
     'default_project', 'Media Src Master', 30, 1, 10000000, 'media_src')
 
 local function exec(cmd)
@@ -200,7 +200,7 @@ media_result = command_manager.execute(media_cmd)
 assert(media_result.success, media_result.error_message or "TestCreateMedia failed")
 
 -- Create masterclip sequence for the media (required for Insert)
-master_clip_id = test_env.create_test_masterclip_sequence(
+nested_sequence_id = test_env.create_test_masterclip_sequence(
     'default_project', 'Media Src Master', 30, 1, 10000000, 'media_src')
 
 local function insert_clip(start_value, duration, source_in)

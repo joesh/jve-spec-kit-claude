@@ -59,7 +59,7 @@ local media = Media.create({
 assert(media:save(db), "Failed to save media_1")
 
 -- Create masterclip sequence for this media (required for Insert)
-local master_clip_id = test_env.create_test_masterclip_sequence(
+local nested_sequence_id = test_env.create_test_masterclip_sequence(
     "project", "Media 1 Master", 24, 1, 240, "media_1")
 
 -- Set marks on masterclip sequence — Insert reads timing from these

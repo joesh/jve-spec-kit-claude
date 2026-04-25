@@ -33,7 +33,8 @@ db:exec(string.format([[
 ]], project_id, now, now))
 
 -- Create timeline sequence at 30fps
-local timeline = Sequence.create("Timeline", project_id, {kind = "nested", fps_numerator = 30, fps_denominator = 1}, 1920, 1080)
+local timeline = Sequence.create("Timeline", project_id, { fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
+    {kind = "nested", audio_rate = 48000 })
 assert(timeline:save(), "Failed to save timeline")
 
 local video_track = Track.create_video("V1", timeline.id, {index = 1})
@@ -198,7 +199,7 @@ local function test_timeline_clips_visual_sync()
         project_id = project_id,
         sequence_id = timeline.id,
         track_id = video_track.id,
-        master_clip_id = masterclip.id,
+        nested_sequence_id = masterclip.id,
         insert_time = 0,
     })
     assert(result and result.success, "Insert failed: " .. tostring(result and result.error_message))

@@ -67,7 +67,7 @@ local media = Media.create({
 assert(media:save(db), "failed to save media")
 
 -- Create masterclip sequence for this media (required for Insert)
-local master_clip_id = test_env.create_test_masterclip_sequence(
+local nested_sequence_id = test_env.create_test_masterclip_sequence(
     "default_project", "Long Clip Master", 25, 1, 114567, "media_insert_origin")
 
 command_manager.init("default_sequence", "default_project")

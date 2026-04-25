@@ -129,12 +129,12 @@ print("Test: Multi-clip insert (3 clips, serial arrangement)")
 -- Build groups for 3 clips
 local groups = {
     {
-        master_clip_id = master_1,
+        nested_sequence_id = master_1,
         clips = {
             {
                 role = "video",
                 media_id = "media_1",
-                master_clip_id = master_1,
+                nested_sequence_id = master_1,
                 project_id = "project",
                 name = "Video 1",
                 source_in = 0,
@@ -148,12 +148,12 @@ local groups = {
         duration = 100,
     },
     {
-        master_clip_id = master_2,
+        nested_sequence_id = master_2,
         clips = {
             {
                 role = "video",
                 media_id = "media_2",
-                master_clip_id = master_2,
+                nested_sequence_id = master_2,
                 project_id = "project",
                 name = "Video 2",
                 source_in = 0,
@@ -167,12 +167,12 @@ local groups = {
         duration = 50,
     },
     {
-        master_clip_id = master_3,
+        nested_sequence_id = master_3,
         clips = {
             {
                 role = "video",
                 media_id = "media_3",
-                master_clip_id = master_3,
+                nested_sequence_id = master_3,
                 project_id = "project",
                 name = "Video 3",
                 source_in = 0,

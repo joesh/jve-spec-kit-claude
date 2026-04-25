@@ -202,7 +202,8 @@ check("nil mark_out persists after clear+reload", mc_reloaded.mark_out == nil)
 --------------------------------------------------------------------------------
 print("\n--- Marks on timeline (any sequence kind) ---")
 local tl = Sequence.create("Timeline", "project",
-    {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
+    { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
+    {kind = "nested", audio_rate = 48000 })
 assert(tl:save(), "Failed to save timeline")
 
 tl:set_in(10)

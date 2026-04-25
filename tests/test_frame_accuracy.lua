@@ -108,7 +108,8 @@ local function test_split_clip_command_func()
 
     local sequence_fps_num = 24
     local sequence_fps_den = 1
-    local sequence = Sequence.create("Test Sequence Split", project.id, {kind = "nested", fps_numerator = sequence_fps_num, fps_denominator = sequence_fps_den}, 1920, 1080)
+    local sequence = Sequence.create("Test Sequence Split", project.id, { fps_numerator = sequence_fps_num, fps_denominator = sequence_fps_den}, 1920, 1080,
+    {kind = "nested", audio_rate = 48000 })
     sequence:save(db)
     assert_not_nil(sequence.id, "Sequence ID should not be nil")
     
@@ -132,7 +133,7 @@ local function test_split_clip_command_func()
     assert_not_nil(media.id, "Media ID should not be nil")
 
     -- Create masterclip sequence for this media (required for Insert)
-    local master_clip_id = test_env.create_test_masterclip_sequence(
+    local nested_sequence_id = test_env.create_test_masterclip_sequence(
         project.id, "Split Media Master", 24, 1, 240, media.id)
 
     -- Insert an initial clip: 10 seconds (240 frames) from media start
@@ -144,7 +145,7 @@ local function test_split_clip_command_func()
             project_id = project.id,
             sequence_id = sequence.id,
             track_id = track.id,
-            master_clip_id = master_clip_id,
+            nested_sequence_id = master_clip_id,
             insert_time = 0,
             duration = initial_clip_duration_frames,
             source_in = 0,
@@ -235,7 +236,8 @@ local function test_ripple_delete_command_func()
     local project = Project.create("Test Project Ripple", { fps_mismatch_policy = 'resample' })
     project:save(db)
     
-    local sequence = Sequence.create("Test Sequence Ripple", project.id, {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
+    local sequence = Sequence.create("Test Sequence Ripple", project.id, { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
+    {kind = "nested", audio_rate = 48000 })
     sequence:save(db)
     
     local track = Track.create_video("Video Track Ripple", sequence.id, {index = 1})
@@ -258,7 +260,7 @@ local function test_ripple_delete_command_func()
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
-        master_clip_id = "mc_test",
+        nested_sequence_id = "mc_test",
         timeline_start = 0,
         duration = 24,
         source_in = 0,
@@ -274,7 +276,7 @@ local function test_ripple_delete_command_func()
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
-        master_clip_id = "mc_test",
+        nested_sequence_id = "mc_test",
         timeline_start = 48,
         duration = 24,
         source_in = 0,
@@ -328,7 +330,8 @@ local function test_ripple_edit_command_func()
     local project = Project.create("Test Project RippleEdit", { fps_mismatch_policy = 'resample' })
     project:save(db)
     
-    local sequence = Sequence.create("Test Sequence RippleEdit", project.id, {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
+    local sequence = Sequence.create("Test Sequence RippleEdit", project.id, { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
+    {kind = "nested", audio_rate = 48000 })
     sequence:save(db)
     
     local track = Track.create_video("Video Track RippleEdit", sequence.id, {index = 1})
@@ -351,7 +354,7 @@ local function test_ripple_edit_command_func()
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
-        master_clip_id = "mc_test",
+        nested_sequence_id = "mc_test",
         timeline_start = 0,
         duration = 48,
         source_in = 0,
@@ -365,7 +368,7 @@ local function test_ripple_edit_command_func()
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
-        master_clip_id = "mc_test",
+        nested_sequence_id = "mc_test",
         timeline_start = 48,
         duration = 48,
         source_in = 0,
@@ -430,7 +433,8 @@ local function test_nudge_command_func()
     local project = Project.create("Test Project Nudge", { fps_mismatch_policy = 'resample' })
     project:save(db)
     
-    local sequence = Sequence.create("Test Sequence Nudge", project.id, {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
+    local sequence = Sequence.create("Test Sequence Nudge", project.id, { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
+    {kind = "nested", audio_rate = 48000 })
     sequence:save(db)
     
     local track = Track.create_video("Video Track Nudge", sequence.id, {index = 1})
@@ -453,7 +457,7 @@ local function test_nudge_command_func()
         project_id = project.id,
         track_id = track.id,
         owner_sequence_id = sequence.id,
-        master_clip_id = "mc_test",
+        nested_sequence_id = "mc_test",
         timeline_start = 0,
         duration = 48,
         source_in = 0,
@@ -532,7 +536,8 @@ local function test_move_clip_to_track_command_func()
     local project = Project.create("Test Project MoveClip", { fps_mismatch_policy = 'resample' })
     project:save(db)
 
-    local sequence = Sequence.create("Test Sequence MoveClip", project.id, {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
+    local sequence = Sequence.create("Test Sequence MoveClip", project.id, { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
+    {kind = "nested", audio_rate = 48000 })
     sequence:save(db)
     command_manager.init(sequence.id, project.id)
     
@@ -558,7 +563,7 @@ local function test_move_clip_to_track_command_func()
         project_id = project.id,
         track_id = track1.id,
         owner_sequence_id = sequence.id,
-        master_clip_id = "mc_test",
+        nested_sequence_id = "mc_test",
         timeline_start = 0,
         duration = 48,
         source_in = 0,

@@ -43,7 +43,8 @@ local project = Project.create("Test Project", { fps_mismatch_policy = 'resample
 project:save()
 
 local seq = Sequence.create("Test Sequence", project.id,
-    { kind = "nested",  fps_numerator = 30, fps_denominator = 1 }, 1920, 1080)
+    {  fps_numerator = 30, fps_denominator = 1 }, 1920, 1080,
+    { kind = "nested", audio_rate = 48000 })
 seq:save()
 
 Track.create_video("V1", seq.id, { index = 1 }):save()
@@ -62,7 +63,7 @@ local media = Media.create({
 media:save(db)
 
 -- Create masterclip sequence
-local master_clip_id = test_env.create_test_masterclip_sequence(
+local nested_sequence_id = test_env.create_test_masterclip_sequence(
     project.id, "Video Master", 30, 1, 200, "media_video")
 
 -- Init command system + real timeline_state
@@ -91,7 +92,7 @@ signal_log = {}
 local result = command_manager.execute("Insert", {
     project_id = project.id,
     sequence_id = seq.id,
-    master_clip_id = master_clip_id,
+    nested_sequence_id = master_clip_id,
     advance_playhead = true,
 })
 assert(result.success, "Insert should succeed: " .. tostring(result.error_message))

@@ -65,7 +65,7 @@ end
 local db = setup_database("/tmp/jve/test_undo_mutations_fps.db")
 
 -- Create masterclip sequence for the media (required for Overwrite)
-local master_clip_id = test_env.create_test_masterclip_sequence(
+local nested_sequence_id = test_env.create_test_masterclip_sequence(
     'default_project', 'Test Media Master', 30, 1, 3000, 'media1')
 
 -- Helper: execute command with proper event wrapping

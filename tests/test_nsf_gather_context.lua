@@ -26,7 +26,8 @@ local function create_test_project(db)
 end
 
 local function create_test_sequence(db, project_id)
-    local seq = Sequence.create("Test Sequence", project_id, {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
+    local seq = Sequence.create("Test Sequence", project_id, { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
+    {kind = "nested", audio_rate = 48000 })
     seq:save(db)
 
     local track = Track.create_video("V1", seq.id, {index = 1})

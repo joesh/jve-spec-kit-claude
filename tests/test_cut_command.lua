@@ -74,7 +74,7 @@ local function create_clip_via_insert(spec)
     assert(media:save(db), "failed to save media for clip " .. tostring(spec.id))
 
     -- Create masterclip sequence for this media
-    local master_clip_id = test_env.create_test_masterclip_sequence(
+    local nested_sequence_id = test_env.create_test_masterclip_sequence(
         'default_project', spec.id .. ' Master', 30, 1, spec.duration, media_id)
 
     local cmd = Command.create("Insert", "default_project")

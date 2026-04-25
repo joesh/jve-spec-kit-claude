@@ -166,7 +166,7 @@ assert(import_result.success, "ImportMedia command failed: " .. tostring(import_
 -- IS-a refactor: masterclips are now sequences, so the parameter is masterclip_sequence_ids
 local masterclip_sequence_ids = import_cmd:get_parameter("masterclip_sequence_ids")
 assert(masterclip_sequence_ids and type(masterclip_sequence_ids) == "table" and #masterclip_sequence_ids > 0, "ImportMedia did not produce masterclip_sequence_ids")
-local master_clip_id = masterclip_sequence_ids[1]
+local nested_sequence_id = masterclip_sequence_ids[1]
 
 -- IS-a refactor: to set properties, use stream clip IDs (not sequence ID)
 local video_clip_ids = import_cmd:get_parameter("video_clip_ids")

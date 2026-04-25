@@ -87,7 +87,7 @@ local function create_media_and_masterclip(media_id, duration_frames)
         fps_denominator = 1,
     })
     media:save(database.get_connection())
-    local master_clip_id = test_env.create_test_masterclip_sequence(
+    local nested_sequence_id = test_env.create_test_masterclip_sequence(
         'proj', media_id .. ' MC', 25, 1, duration_frames, media_id)
     masterclip_cache[media_id] = master_clip_id
     return master_clip_id
@@ -97,7 +97,7 @@ end
 -- Sets marks on the masterclip sequence to define the source range.
 local function insert_clip(params)
     local Sequence = require("models.sequence")
-    local master_clip_id = create_media_and_masterclip(params.media_id, params.media_duration)
+    local nested_sequence_id = create_media_and_masterclip(params.media_id, params.media_duration)
 
     -- Set in/out marks on the masterclip sequence (the source range)
     if params.source_in or params.source_out then
@@ -109,7 +109,7 @@ local function insert_clip(params)
 
     local cmd = Command.create("Insert", "proj")
     cmd:set_parameters({
-        master_clip_id = master_clip_id,
+        nested_sequence_id = master_clip_id,
         track_id = params.track_id,
         sequence_id = "seq",
         insert_time = params.timeline_start,

@@ -162,7 +162,7 @@ local clip_en = Clip.create("enabled_chirp", med.id, {
     fps_numerator = 48000,
     fps_denominator = 1,
     enabled = true,
-    master_clip_id = mc_seq_id,
+    nested_sequence_id = mc_seq_id,
 })
 assert(clip_en:save({skip_occlusion = true}))
 
@@ -178,7 +178,7 @@ local clip_dis = Clip.create("disabled_chirp", med.id, {
     fps_numerator = 48000,
     fps_denominator = 1,
     enabled = false,  -- MUTED!
-    master_clip_id = mc_seq_id,
+    nested_sequence_id = mc_seq_id,
 })
 assert(clip_dis:save({skip_occlusion = true}))
 

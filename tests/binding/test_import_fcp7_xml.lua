@@ -38,14 +38,14 @@ package.loaded["ui.focus_manager"] = {
 -- Mock project_browser to capture focus_master_clip calls (Qt boundary)
 local focus_calls = {}
 local project_browser = {
-    focused_master_clip_id = nil,
+    focused_nested_sequence_id = nil,
     focus_calls_count = 0,
 }
 
 function project_browser.refresh() end
 
 function project_browser.focus_master_clip(master_clip_id, _opts)
-    project_browser.focused_master_clip_id = master_clip_id
+    project_browser.focused_nested_sequence_id = master_clip_id
     project_browser.focus_calls_count = project_browser.focus_calls_count + 1
     table.insert(focus_calls, {master_id = master_clip_id})
     return true
@@ -607,7 +607,7 @@ local media_ids = fetch_media_ids(1)
 assert(#media_ids >= 1, "Importer should provide media rows for insert operations")
 
 -- Create masterclip sequence for the media (required for Insert after IS-a refactor)
-local insert_master_clip_id = test_env.create_test_masterclip_sequence(
+local insert_nested_sequence_id = test_env.create_test_masterclip_sequence(
     'default_project', 'Test Insert Master', 30, 1, 10000, media_ids[1])
 
 local clip_for_move = fetch_single_clip_id(replayed_sequence_id)

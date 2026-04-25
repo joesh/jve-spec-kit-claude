@@ -476,14 +476,14 @@ local auto_clip = Clip.create("AutoResolve", "media_va", {
 
 check("auto-resolve: clip created", auto_clip ~= nil)
 check("auto-resolve: master_clip_id is set", auto_clip.master_clip_id ~= nil and auto_clip.master_clip_id ~= "")
-check("auto-resolve: master_clip_id matches existing masterclip", auto_clip.master_clip_id == mc_id,
+check("auto-resolve: master_clip_id matches existing masterclip", auto_clip.nested_sequence_id == mc_id,
     string.format("expected %s, got %s", tostring(mc_id), tostring(auto_clip.master_clip_id)))
 
 -- Create timeline clip WITH explicit master_clip_id (should skip auto-resolve)
 local explicit_clip = Clip.create("Explicit", "media_va", {
     project_id = "proj1",
     clip_kind = "nested",
-    master_clip_id = "custom_mc_id",
+    nested_sequence_id = "custom_mc_id",
     track_id = tl_track.id,
     owner_sequence_id = tl_seq.id,
     timeline_start = 50,
@@ -493,7 +493,7 @@ local explicit_clip = Clip.create("Explicit", "media_va", {
     fps_numerator = 24,
     fps_denominator = 1,
 })
-check("explicit: master_clip_id preserved", explicit_clip.master_clip_id == "custom_mc_id")
+check("explicit: master_clip_id preserved", explicit_clip.nested_sequence_id == "custom_mc_id")
 
 --------------------------------------------------------------------------------
 -- Clip.create auto-resolve: error paths
@@ -646,7 +646,7 @@ local master_clip = Clip.create("Master", "media_va", {
     fps_numerator = 24,
     fps_denominator = 1,
 })
-check("master clip: no master_clip_id set", master_clip.master_clip_id == nil or master_clip.master_clip_id == "")
+check("master clip: no master_clip_id set", master_clip.nested_sequence_id == nil or master_clip.nested_sequence_id == "")
 
 --------------------------------------------------------------------------------
 -- Summary

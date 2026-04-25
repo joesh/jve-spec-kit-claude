@@ -151,7 +151,7 @@ end
 local mc = create_mc("med_outside", 500)
 local cmd = Command.create("Overwrite", "proj")
 cmd:set_parameters({
-    master_clip_id = mc, track_id = "v1", sequence_id = "seq",
+    nested_sequence_id = mc, track_id = "v1", sequence_id = "seq",
     overwrite_time = 500, duration = 100,
     source_in = 0, source_out = 100,
     clip_id = "far_clip", advance_playhead = false,

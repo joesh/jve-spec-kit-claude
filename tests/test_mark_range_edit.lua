@@ -84,7 +84,7 @@ local function insert_clip(p)
     mc_seq:save()
     local cmd = Command.create("Overwrite", "proj")
     cmd:set_parameters({
-        master_clip_id = mc, track_id = p.track_id, sequence_id = "seq",
+        nested_sequence_id = mc, track_id = p.track_id, sequence_id = "seq",
         overwrite_time = p.start,
         clip_id = p.id, advance_playhead = false,
     })

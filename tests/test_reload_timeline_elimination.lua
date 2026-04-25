@@ -129,7 +129,7 @@ reset_reload_tracking()
 
 r = command_manager.execute("DeleteMasterClip", {
     project_id = "proj",
-    master_clip_id = mc_id,
+    nested_sequence_id = mc_id,
     force = true,
 })
 assert(r and r.success, "DeleteMasterClip failed: " .. tostring(r and r.error_message))

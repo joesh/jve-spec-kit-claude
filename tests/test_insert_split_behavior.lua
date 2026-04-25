@@ -55,7 +55,7 @@ local media = Media.create({
 media:save(db)
 
 -- Create masterclip sequence for this media (required for Insert)
-local master_clip_id = test_env.create_test_masterclip_sequence(
+local nested_sequence_id = test_env.create_test_masterclip_sequence(
     "project", "Media 1 Master", 24, 1, 1000, "media_1")
 
 -- Create Clip A (0-100 frames)
@@ -63,7 +63,7 @@ local clip_a = Clip.create("Clip A", "media_1", {
     project_id = "project",
     track_id = "track_v1",
     owner_sequence_id = "sequence",
-    master_clip_id = "mc_test",
+    nested_sequence_id = "mc_test",
     timeline_start = 0,
     duration = 100,
     source_in = 0,
@@ -79,7 +79,7 @@ local clip_c = Clip.create("Clip C", "media_1", {
     project_id = "project",
     track_id = "track_v1",
     owner_sequence_id = "sequence",
-    master_clip_id = "mc_test",
+    nested_sequence_id = "mc_test",
     timeline_start = 200,
     duration = 100,
     source_in = 200,

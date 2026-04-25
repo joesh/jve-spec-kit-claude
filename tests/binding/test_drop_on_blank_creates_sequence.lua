@@ -49,7 +49,7 @@ local function seed_clip(media_id, name, dur_frames)
     mc_seq:set_out(dur_frames)
     mc_seq:save()
     return {
-        master_clip_id = mc_seq_id,
+        nested_sequence_id = mc_seq_id,
         name = name,
         duration = dur_frames,
         fps_numerator = 25,

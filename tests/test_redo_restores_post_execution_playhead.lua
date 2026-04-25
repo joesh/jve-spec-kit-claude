@@ -61,7 +61,7 @@ db:exec(string.format([[
 command_manager.init("seq1", "default_project")
 
 -- Create masterclip sequence for the media (required for Insert)
-local master_clip_id = test_env.create_test_masterclip_sequence(
+local nested_sequence_id = test_env.create_test_masterclip_sequence(
     'default_project', 'Test Media Master', 30, 1, 3000, 'media1')
 
 print("=== Redo Playhead Position Regression Test ===")
