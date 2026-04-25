@@ -59,6 +59,27 @@ local media = Media.create({
 })
 media:save(db)
 
+-- V13: master sequence wrapping the media for clip references.
+do
+    local _Media = require("models.media")
+    local _json = require("dkjson")
+    local _m = _Media.load("media_rd")
+    if _m then
+        if not _m.width or _m.width == 0 then _m.width = 1920 end
+        if not _m.height or _m.height == 0 then _m.height = 1080 end
+        if not _m.metadata or _m.metadata == "" then
+            _m.metadata = _json.encode({ start_tc_value = 0,
+                start_tc_rate = (_m.frame_rate and _m.frame_rate.fps_numerator) or 24,
+                start_tc_audio_samples = 0,
+                start_tc_audio_rate = (_m.audio_channels and _m.audio_channels > 0)
+                    and (_m.audio_sample_rate or 48000) or nil })
+        end
+        _m:save()
+    end
+end
+local _Sequence_for_master = require("models.sequence")
+local MC_TEST = _Sequence_for_master.ensure_master("media_rd", "project")
+
 -- Helper: execute command with proper event wrapping
 local function execute_command(name, params)
     command_manager.begin_command_event("script")
@@ -90,7 +111,7 @@ local function create_clip(id, track_id, start_frame, duration_frames)
         project_id = "project",
         track_id = track_id,
         owner_sequence_id = "sequence",
-        nested_sequence_id = "mc_test",
+        nested_sequence_id = MC_TEST,
         timeline_start_frame = start_frame,
         duration_frames = duration_frames,
         source_in_frame = 0,
