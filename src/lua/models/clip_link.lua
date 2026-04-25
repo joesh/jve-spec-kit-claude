@@ -137,6 +137,36 @@ end
 -- Link two clips together (convenience method for clip_insertion)
 -- Creates a new link group if left clip isn't linked, otherwise adds right to left's group
 -- left/right: {id, role, time_offset} - id can be in 'id' or 'clip_id' field
+--- INSERT a clip_links row attaching `clip_id` to an existing
+--- `link_group_id` with the given role + time_offset. Idempotent at the
+--- INV-7 level — caller must not double-add.
+--- Used by ExpandAudio (extend an existing V+A link group with the new
+--- expanded A clips) and CollapseAudio (rewire link group during the
+--- expand→composite collapse).
+function M.add_to_group(link_group_id, clip_id, role, time_offset)
+    assert(link_group_id and link_group_id ~= "",
+        "clip_link.add_to_group: link_group_id required")
+    assert(clip_id and clip_id ~= "",
+        "clip_link.add_to_group: clip_id required")
+    assert(role == "video" or role == "audio",
+        "clip_link.add_to_group: role must be 'video' or 'audio'")
+    local db = assert(database.get_connection(),
+        "clip_link.add_to_group: missing db connection")
+    local stmt = assert(db:prepare([[
+        INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
+        VALUES (?, ?, ?, ?, 1)
+    ]]), "clip_link.add_to_group: prepare failed")
+    stmt:bind_value(1, link_group_id)
+    stmt:bind_value(2, clip_id)
+    stmt:bind_value(3, role)
+    stmt:bind_value(4, time_offset or 0)
+    local ok = stmt:exec()
+    stmt:finalize()
+    assert(ok, string.format(
+        "clip_link.add_to_group: insert failed for clip=%s group=%s",
+        clip_id, link_group_id))
+end
+
 function M.link_two_clips(left, right)
     local db = assert(database.get_connection(), "link_two_clips: missing db connection")
     local left_id = assert(left and (left.id or left.clip_id), "link_two_clips: missing left clip id")

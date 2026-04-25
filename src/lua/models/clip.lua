@@ -1561,7 +1561,7 @@ function M.load_v13_row(id)
         SELECT id, project_id, owner_sequence_id, track_id, nested_sequence_id,
                name, timeline_start_frame, duration_frames,
                source_in_frame, source_out_frame,
-               master_layer_track_id, fps_mismatch_policy,
+               master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
         FROM clips WHERE id = ?
     ]])
@@ -1582,12 +1582,13 @@ function M.load_v13_row(id)
             source_in_frame       = stmt:value(8),
             source_out_frame      = stmt:value(9),
             master_layer_track_id = stmt:value(10),
-            fps_mismatch_policy   = stmt:value(11),
-            enabled               = stmt:value(12) == 1,
-            volume                = stmt:value(13),
-            mark_in_frame         = stmt:value(14),
-            mark_out_frame        = stmt:value(15),
-            playhead_frame        = stmt:value(16),
+            master_audio_track_id = stmt:value(11),
+            fps_mismatch_policy   = stmt:value(12),
+            enabled               = stmt:value(13) == 1,
+            volume                = stmt:value(14),
+            mark_in_frame         = stmt:value(15),
+            mark_out_frame        = stmt:value(16),
+            playhead_frame        = stmt:value(17),
         }
     end
     stmt:finalize()

@@ -26,6 +26,34 @@ local function bool_to_int(v)
 end
 
 --- Find one row by (clip_id, channel_index). Returns table or nil.
+--- List all override rows for a clip, sorted by channel_index. Used
+--- by ExpandAudio (project source overrides onto expanded clips) and
+--- CollapseAudio (gather expanded-clip overrides into composite form).
+function M.find_all(clip_id)
+    assert(clip_id and clip_id ~= "",
+        "clip_channel_override.find_all: clip_id required")
+    local conn = database.get_connection()
+    local stmt = conn:prepare([[
+        SELECT clip_id, channel_index, enabled, gain_db
+        FROM clip_channel_override WHERE clip_id = ?
+        ORDER BY channel_index ASC
+    ]])
+    assert(stmt, "clip_channel_override.find_all: prepare failed")
+    stmt:bind_value(1, clip_id)
+    assert(stmt:exec(), "clip_channel_override.find_all: exec failed")
+    local rows = {}
+    while stmt:next() do
+        rows[#rows + 1] = {
+            clip_id       = stmt:value(0),
+            channel_index = stmt:value(1),
+            enabled       = stmt:value(2) == 1,
+            gain_db       = stmt:value(3),
+        }
+    end
+    stmt:finalize()
+    return rows
+end
+
 function M.find(clip_id, channel_index)
     assert(clip_id and clip_id ~= "", "clip_channel_override.find: clip_id required")
     assert(type(channel_index) == "number",
