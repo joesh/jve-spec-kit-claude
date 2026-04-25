@@ -208,7 +208,7 @@ CREATE TABLE IF NOT EXISTS clips (
 
     -- Containment: which non-master sequence and which track.
     owner_sequence_id TEXT NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
-    track_id TEXT REFERENCES tracks(id) ON DELETE CASCADE,
+    track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
 
     -- What sequence this clip references (any kind). Replaces the pre-013
     -- master_clip_id column with clearer semantics.
