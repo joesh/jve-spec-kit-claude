@@ -1480,14 +1480,26 @@ end
 --
 -- Rule 2.5: orchestrator reads as a high-level algorithm; each piece of
 -- intent is a named helper.
-
--- Determine whether a media file is reachable. File-stat check; true = online.
-local function is_media_online(file_path)
-    if not file_path or file_path == "" then return false end
-    local fh = io.open(file_path, "rb")
-    if fh then fh:close(); return true end
-    return false
-end
+--
+-- Coordinate spaces (read carefully — every bug in the prior implementation
+-- was a unit confusion):
+--   * media_refs.source_in_frame / source_out_frame  — file-native units
+--     (video frames at the file's fps, or audio samples at its rate).
+--   * media_refs.timeline_start_frame                 — master-timebase units.
+--   * clips.source_in_frame / source_out_frame        — nested-sequence units
+--     (i.e. nested.fps frames, sample units for an audio clip).
+--   * clips.timeline_start_frame / duration_frames    — owner-sequence units.
+--   * The fps_mismatch_policy was applied at Insert/Set time, so the ratio
+--     between owner-units and source-units is exactly
+--       owner_per_source = c.duration_frames / (c.source_out - c.source_in)
+--     for every clip — `resample` and `passthrough` differ only in what was
+--     written to c.duration_frames at Insert.
+--
+-- First-landing assumption: `master.fps == media.fps` for each media_ref
+-- (multi-fps masters defer to a later feature). With this assumption the
+-- master-timebase units coincide with file-native units 1:1, and a media_ref
+-- placed at master_lo plays file frames [mr.source_in + (mr_lo - mr.timeline_start),
+-- mr.source_in + (mr_hi - mr.timeline_start)).
 
 -- Fetch a sequence's kind. Asserts it exists.
 local function fetch_kind(db, seq_id)
@@ -1686,69 +1698,85 @@ local function build_provenance(outer_chain, leaf_id)
     return p
 end
 
--- Resolve a master sequence — iterate its media_refs and emit one
--- ResolvedEntry per row. Applies layer filtering (only one V track when a
--- layer override is in effect); all audio media_refs pass through.
-local function resolve_master_leaf(db, seq_id, outer_chain, layer_track_id, gain_factor)
+-- Round-nearest-integer for fractional results from owner/source ratio math.
+-- Matches Insert-time rounding (data-model.md "Decisions settled here").
+local function round_int(x)
+    if x >= 0 then return math.floor(x + 0.5) end
+    return -math.floor(-x + 0.5)
+end
+
+-- Resolve a master sequence over a master-coord range [master_lo, master_hi).
+-- Iterate media_refs that overlap; emit one ResolvedEntry per row (V) or per
+-- channel (A), with master-coord positioning and file-native source range.
+-- Audio entries carry a per-channel `channel_state` table; the outer caller
+-- composes that into volume/enabled at finalization time, allowing any clip
+-- in the chain to replace the master's channel state with its override
+-- without divide-by-stale-factor math.
+local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
+                                   layer_track_id, outer_chain)
     local entries = {}
-    local rows
+    local all = list_media_refs(db, seq_id, nil)
 
-    if layer_track_id then
-        -- Layer override: only the chosen V track contributes; audio unaffected.
-        local v_rows = list_media_refs(db, seq_id, layer_track_id)
-        local a_rows = {}
-        local all = list_media_refs(db, seq_id, nil)
-        for _, r in ipairs(all) do
-            if r.track_type == "AUDIO" then a_rows[#a_rows + 1] = r end
-        end
-        rows = {}
-        for _, r in ipairs(v_rows) do rows[#rows + 1] = r end
-        for _, r in ipairs(a_rows) do rows[#rows + 1] = r end
-    else
-        rows = list_media_refs(db, seq_id, nil)
-    end
-
-    for _, r in ipairs(rows) do
-        if r.track_type == "VIDEO" then
-            local online = is_media_online(r.file_path)
-            local base = {
-                media_path = online and r.file_path or nil,
-                media_id = r.media_id,
-                media_kind = "video",
-                source_in = r.source_in,
-                source_out = r.source_out,
-                timeline_start = r.timeline_start,
-                duration = r.duration,
-                track_role = "video",
-                channel_index = nil,
-                volume = r.volume * gain_factor,
-                enabled = online and r.enabled,
-                effects = {},
-                provenance = build_provenance(outer_chain, r.id),
-            }
-            entries[#entries + 1] = base
+    for _, r in ipairs(all) do
+        local r_lo = r.timeline_start
+        local r_hi = r.timeline_start + r.duration
+        local include
+        if r.track_type == "VIDEO" and layer_track_id ~= nil then
+            include = (r.track_id == layer_track_id)
         else
-            -- AUDIO: emit one entry per channel the media has.
-            local n_ch = r.audio_channels
-            if n_ch == 0 then n_ch = 1 end  -- assume mono if media metadata missing
-            local online = is_media_online(r.file_path)
-            for ch = 0, n_ch - 1 do
-                local ch_enabled, ch_gain_db = fetch_master_channel_state(db, seq_id, ch)
-                entries[#entries + 1] = {
-                    media_path = online and r.file_path or nil,
-                    media_id = r.media_id,
-                    media_kind = "audio",
-                    source_in = r.source_in,
-                    source_out = r.source_out,
-                    timeline_start = r.timeline_start,
-                    duration = r.duration,
-                    track_role = "audio",
-                    channel_index = ch,
-                    volume = r.volume * db_to_linear(ch_gain_db) * gain_factor,
-                    enabled = online and r.enabled and ch_enabled,
-                    effects = {},
-                    provenance = build_provenance(outer_chain, r.id),
-                }
+            include = true
+        end
+        if include and r_hi > master_lo and r_lo < master_hi then
+            local lo = math.max(r_lo, master_lo)
+            local hi = math.min(r_hi, master_hi)
+            local file_in  = r.source_in + (lo - r.timeline_start)
+            local file_out = r.source_in + (hi - r.timeline_start)
+            local online   = require("core.media.media_status").is_online(r.file_path)
+            local base = {
+                media_path     = online and r.file_path or nil,
+                media_id       = r.media_id,
+                source_in      = file_in,
+                source_out     = file_out,
+                timeline_start = lo,            -- master coords; outer translates
+                duration       = hi - lo,       -- master coords
+                volume         = r.volume,      -- leaf media_ref's own volume
+                enabled        = online and r.enabled,
+                effects        = {},
+                provenance     = build_provenance(outer_chain, r.id),
+            }
+            if r.track_type == "VIDEO" then
+                base.media_kind   = "video"
+                base.track_role   = "video"
+                base.channel_index = nil
+                entries[#entries + 1] = base
+            else
+                local n_ch = r.audio_channels
+                if n_ch == 0 then n_ch = 1 end  -- mono fallback when metadata missing
+                for ch = 0, n_ch - 1 do
+                    local ms_enabled, ms_gain_db =
+                        fetch_master_channel_state(db, seq_id, ch)
+                    local e = {
+                        media_path     = base.media_path,
+                        media_id       = base.media_id,
+                        media_kind     = "audio",
+                        source_in      = base.source_in,
+                        source_out     = base.source_out,
+                        timeline_start = base.timeline_start,
+                        duration       = base.duration,
+                        track_role     = "audio",
+                        channel_index  = ch,
+                        volume         = base.volume,
+                        enabled        = base.enabled,
+                        effects        = {},
+                        provenance     = build_provenance(outer_chain, r.id),
+                        -- Channel state stays SEPARATE from volume until the
+                        -- final composition pass — any clip in the chain may
+                        -- replace it via clip_channel_override without
+                        -- needing to divide out a previously-multiplied factor.
+                        channel_state  = { enabled = ms_enabled, gain_db = ms_gain_db },
+                    }
+                    entries[#entries + 1] = e
+                end
             end
         end
     end
@@ -1758,165 +1786,115 @@ end
 -- Forward declaration so resolve_nested can call resolve_seq_range recursively.
 local resolve_seq_range
 
--- Apply a clip's overrides to entries returned by recursing into its nested
--- sequence. For AUDIO entries, check clip_channel_override; non-matching
--- entries pass through. Does NOT translate timeline_start — that's done by
--- translate_window after this.
-local function apply_clip_channel_overrides(db, clip_id, entries)
-    local out = {}
-    for _, e in ipairs(entries) do
-        if e.media_kind == "audio" and e.channel_index ~= nil then
-            local found, ov_enabled, ov_gain_db = fetch_clip_channel_override(db, clip_id, e.channel_index)
-            if found then
-                e.enabled = ov_enabled and e.enabled
-                -- Override replaces the nested sequence's channel gain in the
-                -- chain; ratio: strip the master-state factor that was already
-                -- multiplied in and apply the override instead. Simple: since
-                -- the override is meant to WIN, divide out the inherited
-                -- channel part and re-apply the override.
-                -- Implementation: we don't know the inherited gain exactly at
-                -- this point. Instead: the resolver contract is that the
-                -- CLIP override's gain, when present, fully supersedes the
-                -- master-state gain. Easier path: pass the raw (unchannelized)
-                -- volume through the recursion and apply channel gain HERE.
-                -- That requires master-leaf NOT applying master-state.
-                -- Left simpler for now: multiply the override gain on top and
-                -- trust tests to validate the result via dB back-conversion.
-                -- For the CT-R6 test, master state is -3 dB and override is
-                -- -6 dB; expected result is exactly -6 dB. The cleaner way:
-                -- bypass the master-state factor when a clip override exists.
-                -- Strip the master-state factor out and apply the override.
-                -- We know the master-state factor is the same as what
-                -- fetch_master_channel_state returns for this channel on the
-                -- nested sequence — but we don't have the nested seq id here.
-                -- Workaround: pass an extra flag through recursion.
-            end
-        end
-        out[#out + 1] = e
-    end
-    return out
+-- Translate one in-flight entry's master-coord position to outer-coord using
+-- a clip's own source/owner ratio. Mutates in place and returns the entry.
+local function translate_to_outer(e, c, source_lo)
+    -- Owner-frames-per-source-frame ratio for this clip; defined exactly
+    -- by the row regardless of fps_mismatch_policy (the policy was applied
+    -- at Insert/Set time when c.duration_frames was written).
+    local source_span = c.source_out - c.source_in
+    local owner_per_source = c.duration / source_span
+    local outer_offset_lo = (e.timeline_start - source_lo) * owner_per_source
+    local outer_dur       = e.duration * owner_per_source
+    e.timeline_start = c.timeline_start + round_int(outer_offset_lo
+        + (source_lo - c.source_in) * owner_per_source)
+    e.duration       = round_int(outer_dur)
+    return e
 end
 
--- Translate inner recursion's timeline_start by (clip.timeline_start - clip.source_in).
-local function translate_window(entries, clip_timeline_start, clip_source_in)
-    local delta = clip_timeline_start - clip_source_in
-    for _, e in ipairs(entries) do
-        e.timeline_start = e.timeline_start + delta
-    end
-    return entries
-end
-
--- Clamp each entry to the clip's source window [clip.source_in, clip.source_out].
--- Entries whose media range falls outside are dropped. Entries that straddle
--- have their source range and duration clipped.
-local function clamp_entries_to_clip_window(entries, clip_source_in, clip_source_out)
-    local out = {}
-    for _, e in ipairs(entries) do
-        if e.source_out <= clip_source_in or e.source_in >= clip_source_out then
-            -- Entirely outside the clip's window.
-        else
-            local s_in = math.max(e.source_in, clip_source_in)
-            local s_out = math.min(e.source_out, clip_source_out)
-            e.source_in = s_in
-            e.source_out = s_out
-            out[#out + 1] = e
-        end
-    end
-    return out
-end
-
--- Resolve a nested sequence — for each overlapping clip, recurse + apply
--- overrides + translate range. This is the non-leaf branch.
-local function resolve_nested(db, seq_id, start_frame, end_frame, context, outer_chain, gain_factor)
+-- Resolve a nested sequence over an outer-coord range [outer_lo, outer_hi).
+-- For each overlapping clip:
+--   * compute the master-coord (= nested-coord) sub-range to recurse into;
+--   * recurse, applying any layer override at the directly-referenced level;
+--   * filter inner entries by the clip's own track type (no double counting);
+--   * translate each entry from master-coord positioning to outer-coord;
+--   * fold clip.volume into the entry's volume; AND clip.enabled into enabled;
+--   * for audio entries, replace channel_state with this clip's override row
+--     when present (per-channel — sparse table; absent row = inherit).
+local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
+                              outer_chain, layer_filter_for_v)
     local entries = {}
-    local clips = list_clips_overlapping(db, seq_id, start_frame, end_frame)
+    local clips = list_clips_overlapping(db, seq_id, outer_lo, outer_hi)
     for _, c in ipairs(clips) do
-        -- G-R5 layer-ref validation.
-        if c.master_layer_track_id then
-            assert_layer_ref_valid(db, c.id, c.nested_sequence_id, c.master_layer_track_id)
-        end
-        local layer_target = c.master_layer_track_id  -- may be nil → use referenced seq's default
-        if layer_target == nil then
-            layer_target = fetch_default_video_layer(db, c.nested_sequence_id)
-        end
-
-        -- Recurse over the clip's full source window.
-        local inner_chain = {}
-        for i, v in ipairs(outer_chain) do inner_chain[i] = v end
-        inner_chain[#inner_chain + 1] = c.id
-
-        local inner = resolve_seq_range(
-            db, c.nested_sequence_id, c.source_in, c.source_out,
-            context, inner_chain, layer_target, gain_factor * c.volume)
-
-        -- Filter inner entries by the outer clip's track role. A clip on a
-        -- VIDEO track materializes only video media; on an AUDIO track,
-        -- only audio. Without this, a linked V+A pair both pointing at the
-        -- same master would each re-emit the master's entire (V+A) medium,
-        -- double-counting. The per-clip track_type IS the medium selector.
-        local want_kind = (c.track_type == "VIDEO") and "video" or "audio"
-        local kind_filtered = {}
-        for _, e in ipairs(inner) do
-            if e.media_kind == want_kind then
-                kind_filtered[#kind_filtered + 1] = e
+        -- Layer filter at THIS level: filter clips whose track_type is VIDEO
+        -- to the chosen V track only. Audio clips always pass.
+        local v_filtered = (c.track_type == "VIDEO")
+                       and layer_filter_for_v ~= nil
+                       and c.track_id ~= layer_filter_for_v
+        if not v_filtered then
+            -- G-R5 layer-ref validation.
+            if c.master_layer_track_id then
+                assert_layer_ref_valid(db, c.id, c.nested_sequence_id,
+                    c.master_layer_track_id)
             end
-        end
-        inner = kind_filtered
 
-        -- Clamp returned entries to the clip's source window.
-        inner = clamp_entries_to_clip_window(inner, c.source_in, c.source_out)
+            -- Layer to expose at the level THIS clip directly references.
+            -- NULL → inherit the referenced sequence's default; explicit →
+            -- this clip's per-clip override.
+            local layer_for_inner = c.master_layer_track_id
+            if layer_for_inner == nil then
+                layer_for_inner = fetch_default_video_layer(db, c.nested_sequence_id)
+            end
 
-        -- Apply per-clip audio channel overrides.
-        for _, e in ipairs(inner) do
-            if e.media_kind == "audio" and e.channel_index ~= nil then
-                local found, ov_enabled, _ov_gain_db =
-                    fetch_clip_channel_override(db, c.id, e.channel_index)
-                if found then
-                    -- Override enabled: AND with current.
-                    e.enabled = e.enabled and ov_enabled
-                    -- Override gain: replaces the nested-sequence master-state
-                    -- channel gain, per contract G "override wins." The simple
-                    -- representation: recompute the channel's effective gain
-                    -- as linear(override_gain_db) * (volume_path_up_to_but_not_including_master_state).
-                    -- We don't have that decomposition handy; for CT-R6 we
-                    -- take the documented answer: the override's gain is the
-                    -- channel gain of record. Replace:
-                    local base_linear = e.volume  -- includes master's channel gain already
-                    -- Remove master's channel gain from the product and substitute override's.
-                    local master_enabled, master_gain_db =
-                        fetch_master_channel_state(db, c.nested_sequence_id, e.channel_index)
-                    local without_master_ch = base_linear / db_to_linear(master_gain_db)
-                    e.volume = without_master_ch * db_to_linear(_ov_gain_db)
-                    -- quiet unused-var linters
-                    _ = master_enabled
+            -- Compute the source-coord (= nested-timebase) sub-range to
+            -- recurse into, derived from the outer-coord intersection.
+            local source_span = c.source_out - c.source_in
+            local owner_span  = c.duration
+            local source_per_owner = source_span / owner_span
+            local clip_outer_lo = math.max(c.timeline_start, outer_lo)
+            local clip_outer_hi = math.min(c.timeline_start + owner_span, outer_hi)
+            local source_lo = c.source_in
+                + round_int((clip_outer_lo - c.timeline_start) * source_per_owner)
+            local source_hi = c.source_in
+                + round_int((clip_outer_hi - c.timeline_start) * source_per_owner)
+
+            -- Cycle-guarded recurse.
+            local inner_chain = {}
+            for i, v in ipairs(outer_chain) do inner_chain[i] = v end
+            inner_chain[#inner_chain + 1] = c.id
+
+            local inner = resolve_seq_range(db, c.nested_sequence_id,
+                source_lo, source_hi, context, inner_chain, layer_for_inner)
+
+            -- No double-counting: V clips materialize only V media; A only A.
+            local want_kind = (c.track_type == "VIDEO") and "video" or "audio"
+            for _, e in ipairs(inner) do
+                if e.media_kind == want_kind then
+                    -- Translate master-coord -> outer-coord; the inner
+                    -- entry's timeline_start/duration are in this clip's
+                    -- nested-timebase, so we use this clip's source ratio.
+                    translate_to_outer(e, c, c.source_in)
+
+                    -- Fold this clip's own volume + enabled into the chain.
+                    e.volume  = e.volume * c.volume
+                    e.enabled = e.enabled and c.enabled
+
+                    -- Per-clip audio channel override: if this clip has a
+                    -- row for the entry's channel, REPLACE the channel_state
+                    -- (the override is the channel state of record at this
+                    -- level — no divide-out gymnastics, no master-leaf
+                    -- divisor problem at depth > 1).
+                    if e.media_kind == "audio" and e.channel_index ~= nil then
+                        local found, ov_enabled, ov_gain_db =
+                            fetch_clip_channel_override(db, c.id, e.channel_index)
+                        if found then
+                            e.channel_state = {
+                                enabled = ov_enabled, gain_db = ov_gain_db,
+                            }
+                        end
+                    end
+
+                    entries[#entries + 1] = e
                 end
             end
         end
-
-        -- Override each entry's duration/timeline_start in OUTER sequence's
-        -- timebase: the inner.timeline_start was set using inner (nested)
-        -- coordinates; translate to outer using the clip's declared
-        -- timeline_start + duration (which were computed under the clip's
-        -- fps_mismatch_policy at Insert time).
-        -- Convention: replace each entry's timeline_start/duration with the
-        -- clip's own, scaled by the entry's portion of the clip. For single-
-        -- media-ref-per-track masters, each entry maps 1:1 to one clip hit,
-        -- so just use clip's timeline_start + duration directly.
-        for _, e in ipairs(inner) do
-            e.timeline_start = c.timeline_start
-            e.duration = c.duration
-        end
-
-        for _, e in ipairs(inner) do entries[#entries + 1] = e end
     end
-    -- apply_clip_channel_overrides path is unused for now (we inlined above).
-    _ = apply_clip_channel_overrides
     return entries
 end
 
 -- The resolver dispatch. Reads as a high-level algorithm (rule 2.5).
-resolve_seq_range = function(db, seq_id, start_frame, end_frame, context,
-                             outer_chain, layer_override_for_master, gain_factor)
+resolve_seq_range = function(db, seq_id, range_lo, range_hi, context,
+                             outer_chain, layer_for_directly_referenced)
     -- Cycle guard (G-R2). Loud assert with provenance chain.
     assert(not context.recursing_into[seq_id], string.format(
         "Sequence.resolve G-R2: cycle detected in chain — sequence %s is already "
@@ -1927,14 +1905,27 @@ resolve_seq_range = function(db, seq_id, start_frame, end_frame, context,
     local kind = fetch_kind(db, seq_id)
     local entries
     if kind == "master" then
-        entries = resolve_master_leaf(db, seq_id, outer_chain,
-            layer_override_for_master, gain_factor)
+        entries = resolve_master_leaf(db, seq_id, range_lo, range_hi,
+            layer_for_directly_referenced, outer_chain)
     else
-        entries = resolve_nested(db, seq_id, start_frame, end_frame,
-            context, outer_chain, gain_factor)
+        entries = resolve_nested(db, seq_id, range_lo, range_hi,
+            context, outer_chain, layer_for_directly_referenced)
     end
 
     context.recursing_into[seq_id] = nil
+    return entries
+end
+
+-- Compose channel_state into the final volume/enabled for audio entries,
+-- then strip the internal field. Called once at the public boundary.
+local function finalize_entries(entries)
+    for _, e in ipairs(entries) do
+        if e.channel_state ~= nil then
+            e.volume  = e.volume * db_to_linear(e.channel_state.gain_db)
+            e.enabled = e.enabled and e.channel_state.enabled
+            e.channel_state = nil
+        end
+    end
     return entries
 end
 
@@ -1945,7 +1936,9 @@ function Sequence:resolve_in_range(seq_id, start_frame, end_frame, context)
     assert(type(context) == "table", "context table required")
     context.recursing_into = context.recursing_into or {}
     local db = resolve_db()
-    return resolve_seq_range(db, seq_id, start_frame, end_frame, context, {}, nil, 1.0)
+    local entries = resolve_seq_range(db, seq_id, start_frame, end_frame,
+        context, {}, nil)
+    return finalize_entries(entries)
 end
 
 -- ===========================================================================

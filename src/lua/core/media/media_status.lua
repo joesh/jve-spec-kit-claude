@@ -206,6 +206,22 @@ function M.get(media_path)
     return status_cache[media_path]
 end
 
+--- Resolver-facing online check. Single canonical truth source for
+--- "is this file online right now". Registers (probes + caches) on
+--- first call per path; subsequent calls read the cache. Filesystem
+--- watcher init is best-effort (skipped when Qt bindings absent —
+--- e.g., headless tests).
+--- @param media_path string|nil
+--- @return boolean true iff the path is reachable
+function M.is_online(media_path)
+    if not media_path or media_path == "" then return false end
+    local cached = status_cache[media_path]
+    if not cached then
+        cached = M.register(media_path)
+    end
+    return not cached.offline
+end
+
 --- Read per-media `offline_note` JSON for a path. Returns nil when the
 --- media row carries no note (file truly unreachable, or last relink
 --- succeeded). Pulled from the in-memory cache — the renderer calls
