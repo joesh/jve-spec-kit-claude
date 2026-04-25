@@ -994,10 +994,10 @@ function M._create_v13_row(fields)
             id, project_id, owner_sequence_id, track_id, nested_sequence_id,
             name, timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
-            master_layer_track_id, fps_mismatch_policy,
+            master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
             created_at, modified_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
     assert(stmt, "Clip._create_v13_row: prepare failed")
     stmt:bind_value(1, id)
@@ -1011,14 +1011,15 @@ function M._create_v13_row(fields)
     stmt:bind_value(9, fields.source_in_frame)
     stmt:bind_value(10, fields.source_out_frame)
     stmt:bind_value(11, fields.master_layer_track_id)  -- nullable
-    stmt:bind_value(12, fields.fps_mismatch_policy)
-    stmt:bind_value(13, to_int_bool(fields.enabled))
-    stmt:bind_value(14, fields.volume)
-    stmt:bind_value(15, fields.mark_in_frame)    -- nullable
-    stmt:bind_value(16, fields.mark_out_frame)   -- nullable
-    stmt:bind_value(17, fields.playhead_frame)
-    stmt:bind_value(18, now)
-    stmt:bind_value(19, fields.modified_at or now)
+    stmt:bind_value(12, fields.master_audio_track_id)  -- nullable (Expand/Collapse)
+    stmt:bind_value(13, fields.fps_mismatch_policy)
+    stmt:bind_value(14, to_int_bool(fields.enabled))
+    stmt:bind_value(15, fields.volume)
+    stmt:bind_value(16, fields.mark_in_frame)    -- nullable
+    stmt:bind_value(17, fields.mark_out_frame)   -- nullable
+    stmt:bind_value(18, fields.playhead_frame)
+    stmt:bind_value(19, now)
+    stmt:bind_value(20, fields.modified_at or now)
 
     local ok = stmt:exec()
     local err

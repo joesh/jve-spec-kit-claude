@@ -154,9 +154,97 @@ function M.plan_placement(args)
         targets.VIDEO = M.pick_target_track(
             owner.id, "VIDEO", args.target_video_track_id)
     end
+
+    -- Audio drop-mode (FR-002 + FR-025).
+    --   'composite' (default): one A clip with master_audio_track_id=NULL.
+    --   'expanded': one A clip per nested A track, each with a distinct
+    --     non-NULL master_audio_track_id; auto-creates owner A tracks
+    --     where missing. Refused if any target A track has an existing
+    --     clip overlapping [start_frame, start_frame + owner_duration).
+    local audio_drop_mode = args.audio_drop_mode or "composite"
+    assert(audio_drop_mode == "composite" or audio_drop_mode == "expanded",
+        string.format(
+        "place_shared: audio_drop_mode must be 'composite' or 'expanded'; "
+        .. "got %s", tostring(audio_drop_mode)))
+
+    -- audio_targets is a list of { track_id, master_audio_track_id, source_out }
+    -- — one entry per A clip to create. Composite: 1 entry, NULL selector.
+    -- Expanded: N entries, one per nested A track.
+    local audio_targets = {}
     if mediums.AUDIO then
-        targets.AUDIO = M.pick_target_track(
-            owner.id, "AUDIO", args.target_audio_track_id)
+        if audio_drop_mode == "composite" then
+            audio_targets[#audio_targets + 1] = {
+                track_id              = M.pick_target_track(
+                    owner.id, "AUDIO", args.target_audio_track_id),
+                master_audio_track_id = nil,
+                source_out            = audio_native_dur,
+            }
+        else
+            -- Expanded: enumerate nested A tracks (sorted by index).
+            local nested_a = Track.find_by_sequence(nested.id, "AUDIO") or {}
+            assert(#nested_a > 0, string.format(
+                "place_shared: expanded audio_drop_mode requires nested %s "
+                .. "to have at least one A track; got 0", nested.id))
+
+            -- Walk nested A tracks; for each, ensure an owner A track at
+            -- the same track_index exists (auto-create if not).
+            local owner_a = Track.find_by_sequence(owner.id, "AUDIO") or {}
+            local owner_a_by_index = {}
+            for _, t in ipairs(owner_a) do
+                owner_a_by_index[t.track_index] = t.id
+            end
+
+            for _, nt in ipairs(nested_a) do
+                local owner_track_id = owner_a_by_index[nt.track_index]
+                if not owner_track_id then
+                    -- Auto-create the owner A track.
+                    local newt = Track.create_audio(
+                        string.format("Audio %d", nt.track_index),
+                        owner.id,
+                        { id = uuid.generate(), index = nt.track_index })
+                    assert(newt:save(), string.format(
+                        "place_shared: failed to auto-create owner A track "
+                        .. "at index %d on sequence %s",
+                        nt.track_index, owner.id))
+                    owner_track_id = newt.id
+                    owner_a_by_index[nt.track_index] = owner_track_id
+                end
+
+                -- Per-track source range: each nested A track has its own
+                -- media_ref; their durations may differ. Use the maximum
+                -- A-medium native duration we already computed for the
+                -- timeline duration; the per-track source_out is the
+                -- audio media_ref's duration on THAT track.
+                -- For first landing we use audio_native_dur uniformly —
+                -- multi-track masters typically share duration. Tracks
+                -- whose media_ref is shorter would get clamped at INV-4.
+                audio_targets[#audio_targets + 1] = {
+                    track_id              = owner_track_id,
+                    master_audio_track_id = nt.id,
+                    source_out            = audio_native_dur,
+                }
+            end
+
+            -- Collision check: every owner A target track must be empty
+            -- across [start_frame, start_frame + owner_duration). A
+            -- collision is destructive (rule 1.14) — refuse loudly with
+            -- the offending clip id.
+            local hi = args.timeline_start_frame + owner_duration
+            for _, tgt in ipairs(audio_targets) do
+                local overlapping = Clip.find_overlapping_on_track(
+                    tgt.track_id, args.timeline_start_frame, hi)
+                if #overlapping > 0 then
+                    error(string.format(
+                        "place_shared: expanded-audio collision on owner "
+                        .. "track %s — existing clip %s overlaps [%d, %d). "
+                        .. "Auto-creating tracks is non-destructive but "
+                        .. "overwriting an existing clip is. Clear the "
+                        .. "track or pick another start frame.",
+                        tgt.track_id, overlapping[1].id,
+                        args.timeline_start_frame, hi))
+                end
+            end
+        end
     end
 
     local base_name = args.clip_name
@@ -173,53 +261,87 @@ function M.plan_placement(args)
         audio_native_dur = audio_native_dur,
         owner_duration   = owner_duration,
         targets          = targets,
+        audio_targets    = audio_targets,
+        audio_drop_mode  = audio_drop_mode,
         base_name        = base_name,
         start_frame      = args.timeline_start_frame,
     }
 end
 
 --- Insert the new clip rows dictated by `plan`. Returns the ids.
+---
+--- Audio: one clip per `plan.audio_targets[i]`. Composite mode produces
+--- 1 entry with master_audio_track_id=NULL; expanded mode produces N
+--- entries with distinct selectors and pre-validated/auto-created
+--- target tracks (see plan_placement).
+---
+--- Link group: created with V + every A clip when both mediums land.
 function M.write_clips(plan)
     local created_list = {}
-    local v_clip_id, a_clip_id
+    local v_clip_id
+    local a_clip_ids = {}
 
-    local function insert_one(track_id, source_out)
-        return Clip.create({
+    local function insert_clip(fields)
+        return Clip.create(fields)
+    end
+
+    if plan.targets.VIDEO then
+        v_clip_id = insert_clip({
             id                    = uuid.generate(),
             project_id            = plan.owner.project_id,
             owner_sequence_id     = plan.owner.id,
-            track_id              = track_id,
+            track_id              = plan.targets.VIDEO,
             nested_sequence_id    = plan.nested.id,
             name                  = plan.base_name,
             timeline_start_frame  = plan.start_frame,
             duration_frames       = plan.owner_duration,
             source_in_frame       = 0,
-            source_out_frame      = source_out,
+            source_out_frame      = plan.video_native_dur,
             master_layer_track_id = nil,
+            master_audio_track_id = nil,
             fps_mismatch_policy   = plan.policy,
             enabled               = true,
             volume                = 1.0,
-            mark_in_frame         = nil,
-            mark_out_frame        = nil,
             playhead_frame        = 0,
         })
-    end
-
-    if plan.targets.VIDEO then
-        v_clip_id = insert_one(plan.targets.VIDEO, plan.video_native_dur)
         created_list[#created_list + 1] = v_clip_id
     end
-    if plan.targets.AUDIO then
-        a_clip_id = insert_one(plan.targets.AUDIO, plan.audio_native_dur)
-        created_list[#created_list + 1] = a_clip_id
+
+    for _, tgt in ipairs(plan.audio_targets or {}) do
+        local id = insert_clip({
+            id                    = uuid.generate(),
+            project_id            = plan.owner.project_id,
+            owner_sequence_id     = plan.owner.id,
+            track_id              = tgt.track_id,
+            nested_sequence_id    = plan.nested.id,
+            name                  = plan.base_name,
+            timeline_start_frame  = plan.start_frame,
+            duration_frames       = plan.owner_duration,
+            source_in_frame       = 0,
+            source_out_frame      = tgt.source_out,
+            master_layer_track_id = nil,
+            master_audio_track_id = tgt.master_audio_track_id,
+            fps_mismatch_policy   = plan.policy,
+            enabled               = true,
+            volume                = 1.0,
+            playhead_frame        = 0,
+        })
+        a_clip_ids[#a_clip_ids + 1] = id
+        created_list[#created_list + 1] = id
     end
 
+    -- Link group: V + every A clip when both mediums land.
     local link_group_id
-    if v_clip_id and a_clip_id then
-        link_group_id = clip_link.create_link_group({
+    if v_clip_id and #a_clip_ids > 0 then
+        local entries = {
             { clip_id = v_clip_id, role = "video", time_offset = 0 },
-            { clip_id = a_clip_id, role = "audio", time_offset = 0 },
-        })
+        }
+        for _, aid in ipairs(a_clip_ids) do
+            entries[#entries + 1] = {
+                clip_id = aid, role = "audio", time_offset = 0,
+            }
+        end
+        link_group_id = clip_link.create_link_group(entries)
         assert(link_group_id and link_group_id ~= "",
             "place_shared: clip_link.create_link_group returned empty id")
     end
@@ -227,7 +349,8 @@ function M.write_clips(plan)
     return {
         created_clip_ids = created_list,
         video_clip_id    = v_clip_id,
-        audio_clip_id    = a_clip_id,
+        audio_clip_id    = a_clip_ids[1],   -- first/only A in composite
+        audio_clip_ids   = a_clip_ids,      -- all A clips (1 in composite, N in expanded)
         link_group_id    = link_group_id,
     }
 end

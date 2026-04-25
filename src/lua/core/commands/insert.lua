@@ -74,6 +74,7 @@ local SPEC = {
         target_audio_track_id = {},
         fps_mismatch_policy   = {},
         clip_name             = {},
+        audio_drop_mode       = {},   -- 'composite' (default) or 'expanded'
     },
     persisted = {
         created_clip_ids       = {},
