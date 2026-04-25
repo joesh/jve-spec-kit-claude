@@ -1194,6 +1194,30 @@ function M.update_bounds(id, timeline_start_frame, duration_frames,
     })
 end
 
+--- Set the per-clip layer override. Distinct from M.update because Lua's
+--- `pairs` skips nil values — passing nil through M.update silently
+--- becomes a no-op rather than UPDATEing the column to NULL. This setter
+--- always writes the column regardless.
+---
+--- @param id string
+--- @param track_id string|nil  NULL = clear override (inherit nested
+---                              sequence's default_video_layer_track_id)
+function M.set_master_layer_track_id(id, track_id)
+    assert(id and id ~= "", "Clip.set_master_layer_track_id: id required")
+    local db = require("core.database").get_connection()
+    local stmt = db:prepare(
+        "UPDATE clips SET master_layer_track_id = ?, modified_at = ? WHERE id = ?")
+    assert(stmt, "Clip.set_master_layer_track_id: prepare failed")
+    stmt:bind_value(1, track_id)   -- nil → SQL NULL
+    stmt:bind_value(2, os.time())
+    stmt:bind_value(3, id)
+    local ok = stmt:exec()
+    stmt:finalize()
+    assert(ok, string.format(
+        "Clip.set_master_layer_track_id: exec failed for id=%s", id))
+    return true
+end
+
 -- ===========================================================================
 -- Feature 013 (T040): ripple + batch operations for Insert's write path.
 -- ===========================================================================
