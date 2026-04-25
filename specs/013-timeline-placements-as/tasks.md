@@ -146,8 +146,8 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 
 - [x] **T048 [P]** CT-C9 SetClipLayer — NULL ↔ V2; undo restores prior. Args must include `sequence_id` (rule 2.29 regression). Path: `tests/test_set_clip_layer.lua`.
 - [x] **T049 [P]** CT-C10 ToggleClipChannel — first toggle inserts override row with materialized inherited gain; second toggle flips `enabled`; undo deletes the row. Path: `tests/test_toggle_clip_channel.lua`.
-- [ ] **T050 [P]** CT-C11 SetClipChannelGain — insert/update; undo restores row-absence if didn't exist. Path: `tests/test_set_clip_channel_gain.lua`.
-- [ ] **T051 [P]** CT-C12 ClearClipOverride — channel variant deletes row; layer variant NULLs `master_layer_track_id`; playback reflects inherited state. Path: `tests/test_clear_clip_override.lua`.
+- [x] **T050 [P]** CT-C11 SetClipChannelGain — insert/update; undo restores row-absence if didn't exist. Path: `tests/test_set_clip_channel_gain.lua`.
+- [x] **T051 [P]** CT-C12 ClearClipOverride — channel variant deletes row; layer variant NULLs `master_layer_track_id`; playback reflects inherited state. Path: `tests/test_clear_clip_override.lua`.
 - [ ] **T052 [P]** FR-020 coverage: five rapid channel toggles produce five undo steps (no coalescing), each with descriptive label. Path: `tests/test_override_undo_granularity.lua`.
 - [ ] **T052a [P]** Insert/Overwrite atomic-undo (multi-row commands): a single undo of Insert reverses all rows the command wrote (V clip + A clip + link_group). A single undo of Overwrite restores trimmed/removed clips and removes the new clip. Distinct from T052 (per-override granularity); this one asserts multi-row structural commands stay atomic. Path: `tests/test_insert_overwrite_atomic_undo.lua`.
 
@@ -155,8 +155,8 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 
 - [x] **T053 [P]** Create `src/lua/core/commands/set_clip_layer.lua`.
 - [x] **T054 [P]** Create `src/lua/core/commands/toggle_clip_channel.lua` — materializes inherited gain on first toggle (rule 2.13 — no DEFAULT-0 sneak-through).
-- [ ] **T055 [P]** Create `src/lua/core/commands/set_clip_channel_gain.lua`.
-- [ ] **T056 [P]** Create `src/lua/core/commands/clear_clip_override.lua` — accepts `kind='channel'` or `kind='layer'`.
+- [x] **T055 [P]** Create `src/lua/core/commands/set_clip_channel_gain.lua`.
+- [x] **T056 [P]** Create `src/lua/core/commands/clear_clip_override.lua` — accepts `kind='channel'` or `kind='layer'`.
 
 ---
 
