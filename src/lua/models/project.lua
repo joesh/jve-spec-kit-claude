@@ -45,9 +45,18 @@ function Project.create(name, opts)
     opts = opts or {}
     local now = os.time()
 
+    -- Rule 2.13 / data-model.md: projects.fps_mismatch_policy is NOT NULL
+    -- with no schema default. Caller must pick a valid value at create time.
+    assert(opts.fps_mismatch_policy == "resample"
+        or opts.fps_mismatch_policy == "passthrough", string.format(
+        "Project.create: opts.fps_mismatch_policy must be 'resample' or "
+        .. "'passthrough' (V13 NOT NULL); got %s",
+        tostring(opts.fps_mismatch_policy)))
+
     local project = {
         id = opts.id or uuid.generate(),
         name = name,
+        fps_mismatch_policy = opts.fps_mismatch_policy,
         settings = ensure_settings_json(opts.settings),
         created_at = opts.created_at or now,
         modified_at = opts.modified_at or now
@@ -70,7 +79,9 @@ function Project.load(id, db)
         return nil
     end
 
-    local stmt = conn:prepare("SELECT id, name, created_at, modified_at, settings FROM projects WHERE id = ?")
+    local stmt = conn:prepare(
+        "SELECT id, name, fps_mismatch_policy, created_at, modified_at, settings "
+        .. "FROM projects WHERE id = ?")
     assert(stmt, "Project.load: failed to prepare query")
 
     stmt:bind_value(1, id)
@@ -89,9 +100,10 @@ function Project.load(id, db)
     local project = {
         id = stmt:value(0),
         name = stmt:value(1),
-        created_at = stmt:value(2),
-        modified_at = stmt:value(3),
-        settings = ensure_settings_json(stmt:value(4))
+        fps_mismatch_policy = stmt:value(2),
+        created_at = stmt:value(3),
+        modified_at = stmt:value(4),
+        settings = ensure_settings_json(stmt:value(5))
     }
 
     stmt:finalize()
@@ -102,6 +114,11 @@ end
 function Project:save(db)
     assert(self and self.id and self.id ~= "", "Project.save: invalid project or missing id")
     assert(self.name and self.name ~= "", "Project.save: name is required")
+    assert(self.fps_mismatch_policy == "resample"
+        or self.fps_mismatch_policy == "passthrough", string.format(
+        "Project.save: fps_mismatch_policy must be 'resample' or 'passthrough' "
+        .. "(V13 NOT NULL); got %s on project %s",
+        tostring(self.fps_mismatch_policy), tostring(self.id)))
 
     local conn = resolve_db(db)
     if not conn then
@@ -115,10 +132,11 @@ function Project:save(db)
     -- CRITICAL: Use ON CONFLICT DO UPDATE instead of INSERT OR REPLACE
     -- INSERT OR REPLACE triggers DELETE first, which cascades to delete sequences/clips via foreign keys!
     local stmt = conn:prepare([[
-        INSERT INTO projects (id, name, created_at, modified_at, settings)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
+            fps_mismatch_policy = excluded.fps_mismatch_policy,
             modified_at = excluded.modified_at,
             settings = excluded.settings
     ]])
@@ -127,9 +145,10 @@ function Project:save(db)
 
     stmt:bind_value(1, self.id)
     stmt:bind_value(2, self.name)
-    stmt:bind_value(3, self.created_at)
-    stmt:bind_value(4, self.modified_at)
-    stmt:bind_value(5, self.settings)
+    stmt:bind_value(3, self.fps_mismatch_policy)
+    stmt:bind_value(4, self.created_at)
+    stmt:bind_value(5, self.modified_at)
+    stmt:bind_value(6, self.settings)
 
     local ok = stmt:exec()
     if not ok then

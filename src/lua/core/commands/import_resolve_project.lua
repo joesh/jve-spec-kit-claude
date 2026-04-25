@@ -240,6 +240,7 @@ function M.register(executors, undoers, db)
 
         local project = Project.create(parse_result.project.name, {
             settings = json.encode(settings),
+            fps_mismatch_policy = "resample",
         })
 
         if not project:save(db) then
@@ -343,6 +344,7 @@ function M.register(executors, undoers, db)
 
         local project = Project.create(import_result_raw.project.name, {
             settings = json.encode(db_settings),
+            fps_mismatch_policy = "resample",
         })
 
         if not project:save(db) then

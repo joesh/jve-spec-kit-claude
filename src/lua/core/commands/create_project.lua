@@ -31,7 +31,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local name = args.name
         local project_id = args.project_id
-        local project = Project.create(name, {id = project_id})
+        -- Project-level fps-mismatch policy default for new projects.
+        -- Conventional first-landing default per spec FR-015 commentary;
+        -- editable later via SetFpsMismatchPolicy (T064, scope='project').
+        local fps_policy = args.fps_mismatch_policy or "resample"
+        local project = Project.create(name, {
+            id = project_id,
+            fps_mismatch_policy = fps_policy,
+        })
 
         command:set_parameter("project_id", project.id)
 

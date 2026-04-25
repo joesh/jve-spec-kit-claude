@@ -768,6 +768,7 @@ function M.convert(prproj_path, jvp_path, progress_cb)
 
     local project = Project.create(parse_result.project.name, {
         settings = json.encode(settings),
+        fps_mismatch_policy = "resample",
     })
     assert(project:save(), "Failed to save project record")
 

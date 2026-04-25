@@ -70,7 +70,10 @@ function M.get_template_path(template)
 
     database.set_path(path)
 
-    local project = Project.create(template.name, { id = "template_project" })
+    local project = Project.create(template.name, {
+        id = "template_project",
+        fps_mismatch_policy = "resample",
+    })
     assert(project:save(), "project_templates: failed to save template project")
 
     local sequence = Sequence.create("Sequence 1", project.id,
