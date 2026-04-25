@@ -2220,6 +2220,36 @@ function Sequence.get_name(id)
     return n
 end
 
+--- Write a sequence's start-TC column directly. Distinct from
+--- Sequence.update because Lua's `pairs` skips nil values, and the
+--- start-TC columns are nullable (FR-017 default-derivation may leave
+--- them NULL when no media is present yet). Always writes the column.
+---
+--- @param id string
+--- @param medium string  'video' or 'audio'
+--- @param value number|nil  integer; nil writes SQL NULL
+function Sequence.set_start_tc(id, medium, value)
+    assert(id and id ~= "", "Sequence.set_start_tc: id required")
+    assert(medium == "video" or medium == "audio",
+        "Sequence.set_start_tc: medium must be 'video' or 'audio'")
+    if value ~= nil then
+        assert(type(value) == "number" and value == math.floor(value),
+            "Sequence.set_start_tc: value must be integer or nil")
+    end
+    local conn = resolve_db()
+    local field = (medium == "video")
+        and "video_start_tc_frame" or "audio_start_tc_samples"
+    local stmt = conn:prepare(string.format(
+        "UPDATE sequences SET %s = ?, modified_at = ? WHERE id = ?", field))
+    assert(stmt, "Sequence.set_start_tc: prepare failed")
+    stmt:bind_value(1, value)   -- nil → SQL NULL
+    stmt:bind_value(2, os.time())
+    stmt:bind_value(3, id)
+    local ok = stmt:exec()
+    stmt:finalize()
+    assert(ok, string.format("Sequence.set_start_tc: exec failed for id=%s", id))
+end
+
 --- Count the audio channels exposed by a master sequence's tracks. Sum
 --- of media.audio_channels across the master's A-track media_refs. Used
 --- by ToggleClipChannel/SetClipChannelGain for INV-5 bounds checks.
