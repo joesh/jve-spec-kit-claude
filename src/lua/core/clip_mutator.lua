@@ -50,11 +50,15 @@ end
 	    return {
 	        id = row.id,
 	        project_id = row.project_id,
-	        clip_kind = row.clip_kind,
+	        clip_kind = row.clip_kind,                          -- compat surface
 	        name = row.name,
 	        track_id = row.track_id,
-	        media_id = row.media_id,
-            master_clip_id = row.master_clip_id,
+	        media_id = row.media_id,                            -- compat surface
+            master_clip_id = row.master_clip_id,                -- compat surface (= nested_sequence_id)
+            nested_sequence_id = row.nested_sequence_id or row.master_clip_id,
+            master_layer_track_id = row.master_layer_track_id,
+            master_audio_track_id = row.master_audio_track_id,
+            fps_mismatch_policy = row.fps_mismatch_policy or "resample",
             owner_sequence_id = row.owner_sequence_id,
 	        created_at = row.created_at,
 	        modified_at = row.modified_at,
@@ -68,7 +72,8 @@ end
 	        rate = row.rate,
 	        enabled = row.enabled,
             offline = row.offline,
-            volume = row.volume
+            volume = row.volume,
+            track_type = row.track_type,
 	    }
 	end
 
@@ -151,24 +156,29 @@ local function plan_insert(row)
     assert(row.duration, "clip_mutator: insert mutation missing duration")
     assert(row.source_in, "clip_mutator: insert mutation missing source_in")
     assert(row.source_out, "clip_mutator: insert mutation missing source_out")
+    -- V13: nested_sequence_id replaces master_clip_id; clip_kind/media_id/
+    -- offline are gone from clips. command_helper apply_mutations accepts
+    -- master_clip_id as a transitional alias.
+    local nested_id = row.nested_sequence_id or row.master_clip_id
+    assert(nested_id and nested_id ~= "",
+        "clip_mutator.plan_insert: missing nested_sequence_id (or master_clip_id alias) for clip " .. tostring(row.id))
     return {
         type = "insert",
         clip_id = row.id,
         project_id = row.project_id,
-        clip_kind = assert(row.clip_kind, "clip_mutator.plan_insert: missing clip_kind for clip " .. tostring(row.id)),
         name = row.name or "",
         track_id = row.track_id,
-        media_id = row.media_id,
-        master_clip_id = row.master_clip_id,
+        nested_sequence_id = nested_id,
+        master_clip_id = nested_id,                                 -- compat alias
+        master_layer_track_id = row.master_layer_track_id,
+        master_audio_track_id = row.master_audio_track_id,
+        fps_mismatch_policy = row.fps_mismatch_policy or "resample",
         owner_sequence_id = row.owner_sequence_id,
         timeline_start_frame = get_frames(row.timeline_start or row.start_value),
         duration_frames = get_frames(row.duration),
         source_in_frame = get_frames(row.source_in),
         source_out_frame = get_frames(row.source_out),
-        fps_numerator = fps_num,
-        fps_denominator = fps_den,
         enabled = row.enabled and 1 or 0,
-        offline = 0,  -- transient: always 0 in DB
         created_at = assert(row.created_at, "clip_mutator: insert mutation missing created_at for clip " .. tostring(row.id)),
         modified_at = assert(row.modified_at, "clip_mutator: insert mutation missing modified_at for clip " .. tostring(row.id)),
         -- Per-clip metadata (may be nil for new clips — DB uses defaults)
@@ -709,11 +719,15 @@ function ClipMutator.resolve_ripple(db, params)
             local right_clip = {
                 id = uuid.generate(),
                 project_id = row.project_id,
-                clip_kind = row.clip_kind,
+                clip_kind = row.clip_kind,                                -- compat
                 name = row.name .. " (2)",
                 track_id = row.track_id,
-                media_id = row.media_id,
-                master_clip_id = original.master_clip_id,
+                media_id = row.media_id,                                  -- compat
+                master_clip_id = original.master_clip_id or original.nested_sequence_id,  -- compat
+                nested_sequence_id = original.nested_sequence_id or original.master_clip_id,
+                master_layer_track_id = original.master_layer_track_id,
+                master_audio_track_id = original.master_audio_track_id,
+                fps_mismatch_policy = original.fps_mismatch_policy or "resample",
                 owner_sequence_id = original.owner_sequence_id,
                 timeline_start = right_start,
                 duration = right_dur,
@@ -723,7 +737,7 @@ function ClipMutator.resolve_ripple(db, params)
                 fps_denominator = row_fps_den,
                 enabled = row.enabled,
                 volume = original.volume,
-                offline = false,  -- transient
+                offline = false,
                 created_at = os.time(),
                 modified_at = os.time()
             }
