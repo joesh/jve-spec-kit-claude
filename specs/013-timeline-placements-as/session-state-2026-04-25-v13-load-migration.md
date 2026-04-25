@@ -3,7 +3,7 @@
 ## TL;DR
 
 Migrated the load-side of the V13 schema (SELECT path) and bulk-migrated test
-fixtures across the suite. Tests went **332 → 451 (+119)** across this session
+fixtures across the suite. Tests went **332 → 466 (+134)** across this session
 block (continuation of prior 285 → 332 pass).
 
 ## Commits this block
@@ -26,7 +26,17 @@ block (continuation of prior 285 → 332 pass).
 | `abc1b56a` | clip_mutator clone_state + plan_insert + resolve_ripple right_clip — V13 fields |
 | `746769f5` | rename body refs master_clip_id → nested_sequence_id (20 files) |
 
-Total: **15 commits** (this session block) + 4 from prior block, ~250 test files touched, ~4500 lines changed.
+| `eae2b688` | inject MC_TEST setup for tests with bare Clip.create (5 files) |
+| `3d25646e` | set_parameter Insert/Overwrite V8 → V13 names (17 files) |
+| `168b09f9` | V8 INSERT INTO clips → V13 round-2 (7 more files) |
+| `6926a38d` | V8 INSERT INTO clips with NULL media_id → V13 placeholder master (18 files) |
+| `4a087802` | V8 INSERT INTO clips without media_id column → V13 placeholder (12 files) |
+| `5e25f414` | V8 INSERT INTO clips inside Lua heredoc → V13 + INSERT OR IGNORE (4 files) |
+| `7af3249a` | hand-fix `]]))` heredoc termination + inject `name` value (2 files) |
+| `0f592496` | Insert/Overwrite track_id → target_video_track_id (scoped, 23 files) |
+| `62afd3cc` | Insert/Overwrite clip_id → nested_sequence_id (scoped, 7 files) |
+
+Total: **23 commits** (this session block) + 4 from prior block, ~280 test files touched, ~5500 lines changed.
 
 ## Architectural changes
 
@@ -115,7 +125,7 @@ Drop of `clip_kind='timeline'` guard in `plan_duplicate_block` — V13 has no
 clip_kind column; every clip is a sequence reference (master/still/gap
 collapsed into nested refs).
 
-## What's still failing (206 / 657)
+## What's still failing (191 / 657)
 
 | Bucket | Count | Pattern | Resolution |
 |---|---|---|---|
