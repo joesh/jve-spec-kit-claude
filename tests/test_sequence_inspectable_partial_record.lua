@@ -31,13 +31,13 @@ db:exec(string.format([[
 -- Insert a sequence row with real values for marks, playhead, start tc.
 db:exec(string.format([[
     INSERT INTO sequences
-        (id, project_id, name, fps_numerator, fps_denominator, audio_rate,
+        (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
          width, height, playhead_frame, view_start_frame, view_duration_frames,
          mark_in_frame, mark_out_frame, start_timecode_frame,
          video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
          created_at, modified_at)
     VALUES
-        ('seq', 'proj', 'TestSeq', 25, 1, 48000,
+        ('seq', 'proj', 'TestSeq', 'nested', 25, 1, 48000,
          1920, 1080, 42, 0, 1000,
          91500, 93000, 90000,
          0, 0, 0.5,

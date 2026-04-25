@@ -29,9 +29,9 @@ db:exec(string.format([[
     VALUES ('proj', 'ResolveTest', 'resample', %d, %d);
 ]], now, now))
 db:exec(string.format([[
-    INSERT INTO sequences (id, project_id, name, fps_numerator, fps_denominator,
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_rate, width, height, created_at, modified_at)
-    VALUES ('seq', 'proj', 'Seq', 25, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('seq', 'proj', 'Seq', 'nested', 25, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)

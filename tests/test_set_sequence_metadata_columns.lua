@@ -100,9 +100,9 @@ db:exec(string.format([[
     VALUES ('proj', 'Test', 'resample', %d, %d);
 ]], now, now))
 db:exec(string.format([[
-    INSERT INTO sequences (id, project_id, name, fps_numerator, fps_denominator,
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
                            audio_rate, width, height, created_at, modified_at)
-    VALUES ('seq', 'proj', 'OldName', 24, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('seq', 'proj', 'OldName', 'nested', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 
 command_manager.init_project_only("proj")

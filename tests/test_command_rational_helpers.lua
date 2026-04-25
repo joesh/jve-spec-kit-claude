@@ -35,8 +35,8 @@ local ok, err = db:exec(string.format(
 assert(ok, "Failed to insert project: " .. tostring(err))
 
 ok, err = db:exec(string.format(
-    [[INSERT INTO sequences (id, project_id, name, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-      VALUES (%q, %q, 'Test Seq', 24000, 1001, 48000, 1920, 1080, %d, %d)]],
+    [[INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+      VALUES (%q, %q, 'Test Seq', 'nested', 24000, 1001, 48000, 1920, 1080, %d, %d)]],
     seq_id, project_id, now, now
 ))
 assert(ok, "Failed to insert sequence: " .. tostring(err))

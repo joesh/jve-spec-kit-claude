@@ -28,8 +28,8 @@ db:exec(string.format([[
     VALUES ('project', 'InsertMenuTest', 'resample', %d, %d);
 ]], now, now))
 db:exec(string.format([[
-    INSERT INTO sequences (id, project_id, name, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Seq', 30, 1, 48000, 1920, 1080, %d, %d);
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+    VALUES ('sequence', 'project', 'Seq', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
