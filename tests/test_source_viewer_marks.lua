@@ -46,9 +46,9 @@ media:save(db)
 
 -- Create masterclip sequence with stream clips at full range
 local mc = Sequence.create("Test MC", "project",
-    {kind = "nested", fps_numerator = 24, fps_denominator = 1},
+    { fps_numerator = 24, fps_denominator = 1},
     1920, 1080,
-    {kind = "master"})
+    { audio_rate = 48000,kind = "master"})
 assert(mc:save(), "Failed to save masterclip")
 
 local v_track = Track.create_video("V1", mc.id, {index = 1})

@@ -454,7 +454,7 @@ print("\n--- Clip.create auto-resolve ---")
 
 -- Create a timeline sequence + track to put clips on
 local tl_seq = Sequence.create("Timeline", "proj1",
-    {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080, {})
+    { fps_numerator = 24, fps_denominator = 1}, 1920, 1080, { kind = "nested", audio_rate = 48000 })
 assert(tl_seq:save())
 
 local tl_track = Track.create_video("V1", tl_seq.id, {index = 1})

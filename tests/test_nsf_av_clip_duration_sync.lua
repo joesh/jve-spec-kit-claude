@@ -45,7 +45,7 @@ assert(audio_track:save(), "Failed to save audio track")
 
 -- Create masterclip sequence at 24fps (simulating imported media)
 local masterclip = Sequence.create("TestClip", project_id,
-    {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
+    { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
     {kind = "master", audio_rate = 48000})
 assert(masterclip:save(), "Failed to save masterclip")
 

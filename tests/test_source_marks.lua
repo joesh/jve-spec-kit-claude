@@ -26,7 +26,7 @@ db:exec(string.format([[
 
 -- Create a masterclip sequence to prove marks work on masterclips too
 local seq = Sequence.create("Test MC", "project",
-    {kind = "nested", fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
+    { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
     {id = "mc_1", kind = "master", audio_rate = 48000})
 assert(seq:save(), "setup: failed to save sequence")
 
