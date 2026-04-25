@@ -120,6 +120,7 @@ local master_video_track = Track.create_video("V1", masterclip_seq.id, {id = "ma
 assert(master_video_track:save())
 
 local stream_clip = Clip.create({
+        nested_sequence_id = MC_TEST,
         name = "Insert Clip Video",
         id = "masterclip_insert_stream",
         project_id = "default_project",

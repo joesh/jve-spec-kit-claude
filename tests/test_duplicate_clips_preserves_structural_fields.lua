@@ -76,6 +76,7 @@ local _Sequence_for_master = require("models.sequence")
 local MC_TEST = _Sequence_for_master.ensure_master("media1", "proj")
 
 local master = Clip.create({
+        nested_sequence_id = MC_TEST,
         name = "Master",
         id = "master1",
         project_id = "proj",
