@@ -854,16 +854,23 @@ end
 
 local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_num, seq_fps_den)
     local stmt = db:prepare([[
-        SELECT c.id, c.project_id, c.clip_kind, c.name, c.track_id, c.media_id,
-               c.master_clip_id, c.owner_sequence_id,
-               c.timeline_start_frame, c.duration_frames, c.source_in_frame, c.source_out_frame,
-               c.fps_numerator, c.fps_denominator,
-               c.enabled, c.offline, c.created_at, c.modified_at,
-               s.id, s.fps_numerator, s.fps_denominator,
-               c.volume
+        SELECT c.id, c.project_id, c.name, c.track_id,
+               c.owner_sequence_id, c.nested_sequence_id,
+               c.timeline_start_frame, c.duration_frames,
+               c.source_in_frame, c.source_out_frame,
+               c.master_layer_track_id, c.master_audio_track_id,
+               c.fps_mismatch_policy,
+               c.enabled, c.volume, c.created_at, c.modified_at,
+               t.track_type,
+               owner_seq.fps_numerator, owner_seq.fps_denominator,
+               nested_seq.kind, nested_seq.fps_numerator, nested_seq.fps_denominator,
+               mr.media_id
         FROM clips c
-        LEFT JOIN tracks t ON c.track_id = t.id
-        LEFT JOIN sequences s ON t.sequence_id = s.id
+        JOIN tracks t ON c.track_id = t.id
+        JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
+        JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+                                AND nested_seq.kind = 'master'
         WHERE c.id = ?
     ]])
     assert(stmt, "clip_mutator.plan_duplicate_block: failed to prepare clip query")
@@ -875,45 +882,53 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         return nil
     end
 
-    local owning_sequence_id = stmt:value(18)
-    assert(owning_sequence_id, "clip_mutator.plan_duplicate_block: clip missing owning sequence via track_id (clip_id=" .. tostring(clip_id) .. ")")
+    local owning_sequence_id = stmt:value(4)
     assert(owning_sequence_id == sequence_id,
         string.format("clip_mutator.plan_duplicate_block: clip %s belongs to sequence %s, not %s",
             tostring(clip_id), tostring(owning_sequence_id), tostring(sequence_id)))
 
-    local owning_fps_num = stmt:value(19)
-    local owning_fps_den = stmt:value(20)
+    local owning_fps_num = stmt:value(18)
+    local owning_fps_den = stmt:value(19)
     assert(owning_fps_num == seq_fps_num and owning_fps_den == seq_fps_den,
         string.format("clip_mutator.plan_duplicate_block: clip %s owning sequence rate mismatch (%s/%s vs %s/%s)",
             tostring(clip_id), tostring(owning_fps_num), tostring(owning_fps_den), tostring(seq_fps_num), tostring(seq_fps_den)))
 
-    local clip_fps_num = stmt:value(12)
-    local clip_fps_den = stmt:value(13)
-    assert_fps(clip_fps_num, clip_fps_den, "clip fps")
+    local nested_fps_num = stmt:value(21)
+    local nested_fps_den = stmt:value(22)
+    assert_fps(nested_fps_num, nested_fps_den, "clip (nested-seq) fps")
+
+    local track_type = stmt:value(17)
+    local nested_id = stmt:value(5)
 
     local clip = {
         id = stmt:value(0),
         project_id = stmt:value(1),
-        clip_kind = stmt:value(2),
-        name = stmt:value(3),
-        track_id = stmt:value(4),
-        media_id = stmt:value(5),
-        master_clip_id = stmt:value(6),
-        owner_sequence_id = stmt:value(7),
-        -- Integer frame coordinates
-        timeline_start = stmt:value(8),
-        duration = stmt:value(9),
-        source_in = stmt:value(10),
-        source_out = stmt:value(11),
-        -- Fps metadata (for storage/passthrough only)
-        fps_numerator = clip_fps_num,
-        fps_denominator = clip_fps_den,
-        rate = {fps_numerator = clip_fps_num, fps_denominator = clip_fps_den},
-        enabled = stmt:value(14) == 1 or stmt:value(14) == true,
-        offline = false,  -- transient: recomputed by media_status
-        created_at = stmt:value(16),
-        modified_at = stmt:value(17),
-        volume = stmt:value(21),
+        name = stmt:value(2),
+        track_id = stmt:value(3),
+        owner_sequence_id = owning_sequence_id,
+        nested_sequence_id = nested_id,
+        master_layer_track_id = stmt:value(10),
+        master_audio_track_id = stmt:value(11),
+        fps_mismatch_policy = stmt:value(12),
+        timeline_start = stmt:value(6),
+        duration = stmt:value(7),
+        source_in = stmt:value(8),
+        source_out = stmt:value(9),
+        fps_numerator = nested_fps_num,
+        fps_denominator = nested_fps_den,
+        rate = {fps_numerator = nested_fps_num, fps_denominator = nested_fps_den},
+        owner_rate = {fps_numerator = owning_fps_num, fps_denominator = owning_fps_den},
+        enabled = stmt:value(13) == 1 or stmt:value(13) == true,
+        volume = stmt:value(14),
+        created_at = stmt:value(15),
+        modified_at = stmt:value(16),
+        track_type = track_type,
+        nested_sequence_kind = stmt:value(20),
+        -- Compat surfaces.
+        clip_kind = (track_type == "VIDEO") and "video" or "audio",
+        media_id = stmt:value(23),
+        master_clip_id = nested_id,
+        offline = false,
     }
     stmt:finalize()
     return clip
@@ -971,9 +986,10 @@ function ClipMutator.plan_duplicate_block(db, params)
         if not clip then
             return false, "clip_mutator.plan_duplicate_block: source clip not found: " .. tostring(clip_id)
         end
-        if clip.clip_kind ~= "timeline" then
-            return false, "clip_mutator.plan_duplicate_block: can only duplicate timeline clips (clip_kind=" .. tostring(clip.clip_kind) .. ")"
-        end
+        -- V13: every clip is a timeline reference (kind='nested' owner). The
+        -- pre-013 clip_kind='timeline' guard rejected master/still/gap. Master
+        -- clips are gone (sequences with kind='master' don't expose stream
+        -- clips), gaps are in-memory only, stills collapse into nested refs.
 
         table.insert(source_clips, clip)
 
