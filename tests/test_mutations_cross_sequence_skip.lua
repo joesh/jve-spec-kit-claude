@@ -74,18 +74,19 @@ for _, row in ipairs({
     {id="cB", tid="tB", tl=0,   dur=60 },
 }) do
     local stmt = db:prepare([[
-        INSERT INTO clips (id, project_id, clip_kind, owner_sequence_id,
-            track_id, media_id, name,
-            timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-            fps_numerator, fps_denominator, enabled, created_at, modified_at)
-        VALUES (?, 'p1', 'timeline', ?, ?, NULL, ?,
-            ?, ?, 0, ?, 24000, 1001, 1, ?, ?)
-    ]])
-    stmt:bind_value(1, row.id)
-    stmt:bind_value(2, row.tid == "tA" and "seqA" or "seqB")
-    stmt:bind_value(3, row.tid)
-    stmt:bind_value(4, row.id .. "-name")
-    stmt:bind_value(5, row.tl); stmt:bind_value(6, row.dur); stmt:bind_value(7, row.dur)
+        -- V13 placeholder master sequence (was V8 NULL media_id)
+INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
+VALUES ('_v13_placeholder_media', 'p1', 'placeholder', '_placeholder', 1, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('_v13_placeholder_master', 'p1', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('_v13_placeholder_mr', 'p1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 1, 0, 1, 1, 1.0, 0, 0, 0);
+
+INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    (?, 'p1', ?, ?, '_v13_placeholder_master', ?, ?, ?, 0, ?, 1, ?, ?, NULL, NULL, 'resample', 1.0, 0); stmt:bind_value(6, row.dur); stmt:bind_value(7, row.dur)
     stmt:bind_value(8, now); stmt:bind_value(9, now)
     assert(stmt:exec(), "clip insert failed for " .. row.id)
     stmt:finalize()

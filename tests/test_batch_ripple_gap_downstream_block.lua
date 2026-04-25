@@ -36,15 +36,23 @@ assert(db:exec(string.format([[
     INSERT INTO tracks(id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES('track_v2', 'default_sequence', 'V2', 'VIDEO', 2, 1, 0, 0, 0, 1.0, 0.0);
 
-    INSERT INTO clips(id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-                      timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-                      fps_numerator, fps_denominator, enabled, created_at, modified_at)
-    VALUES
-        ('v1_anchor',    'default_project', 'timeline', 'V1 Anchor',    'track_v1', NULL, 'default_sequence', 1000, 2000, 0, 2000, 1000, 1, 1, %d, %d),
-        ('v1_middle',    'default_project', 'timeline', 'V1 Middle',    'track_v1', NULL, 'default_sequence', 7000, 2000, 0, 2000, 1000, 1, 1, %d, %d),
-        ('v1_downstream','default_project', 'timeline', 'V1 Downstream','track_v1', NULL, 'default_sequence',11000, 2000, 0, 2000, 1000, 1, 1, %d, %d),
-        ('v2_left',      'default_project', 'timeline', 'V2 Left',      'track_v2', NULL, 'default_sequence', 1000, 2200, 0, 2200, 1000, 1, 1, %d, %d),
-        ('v2_right',     'default_project', 'timeline', 'V2 Right',     'track_v2', NULL, 'default_sequence', 7200, 2000, 0, 2000, 1000, 1, 1, %d, %d);
+    -- V13 placeholder master sequence (was V8 NULL media_id)
+INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
+VALUES ('_v13_placeholder_media', 'default_project', 'placeholder', '_placeholder', 2200, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('_v13_placeholder_master', 'default_project', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('_v13_placeholder_mr', 'default_project', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 2200, 0, 2200, 1, 1.0, 0, 0, 0);
+
+INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('v1_anchor', 'default_project', 'V1 Anchor', 'track_v1', '_v13_placeholder_master', 'default_sequence', 1000, 2000, 0, 2000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('v1_middle', 'default_project', 'V1 Middle', 'track_v1', '_v13_placeholder_master', 'default_sequence', 7000, 2000, 0, 2000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('v1_downstream', 'default_project', 'V1 Downstream', 'track_v1', '_v13_placeholder_master', 'default_sequence', 11000, 2000, 0, 2000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('v2_left', 'default_project', 'V2 Left', 'track_v2', '_v13_placeholder_master', 'default_sequence', 1000, 2200, 0, 2200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('v2_right', 'default_project', 'V2 Right', 'track_v2', '_v13_placeholder_master', 'default_sequence', 7200, 2000, 0, 2000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now, now, now, now, now, now, now, now, now, now, now))
 )
 
