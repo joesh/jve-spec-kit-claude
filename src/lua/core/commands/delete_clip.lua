@@ -16,9 +16,9 @@
 -- Atomicity: SAVEPOINT wraps the delete unit so a mid-delete failure
 -- (e.g. a missing link group member) unwinds the entire operation.
 --
--- Undo deferred: full row restoration (clip + overrides + link_links) is
--- a model-level concern that lands with the broader undo-capture sweep
--- in the rest of T046. The contract test exercises execute-only.
+-- Undo restores every captured clip via Clip.restore_v13_state — the
+-- row, its clip_channel_override rows, and its clip_links membership.
+-- Atomic via SAVEPOINT so a partial restore unwinds.
 --
 -- @file delete_clip.lua
 
@@ -32,29 +32,17 @@ local log      = require("core.logger").for_area("commands")
 local SAVEPOINT = "delete_clip_atomic"
 
 -- Resolve the delete unit: the primary clip plus every other clip that
--- shares its link group. Returns a list of {id, track_id, timeline_start,
--- duration} captured BEFORE any DB mutation.
+-- shares its link group. Returns a list of full V13 capture states
+-- (row + overrides + link membership) so undo can restore each clip
+-- exactly. Captures BEFORE any DB mutation.
 local function gather_delete_unit(primary_clip)
-    local unit = { {
-        id             = primary_clip.id,
-        track_id       = primary_clip.track_id,
-        timeline_start = primary_clip.timeline_start_frame,
-        duration       = primary_clip.duration_frames,
-    } }
+    local unit = { Clip.capture_v13_state(primary_clip.id) }
     local group_id = ClipLink.get_link_group_id(primary_clip.id)
     if not group_id then return unit end
     local members = ClipLink.get_link_group(primary_clip.id) or {}
     for _, m in ipairs(members) do
         if m.clip_id ~= primary_clip.id then
-            local row = Clip.load_v13_row(m.clip_id)
-            assert(row, string.format(
-                "DeleteClip: link-group member %s not found", m.clip_id))
-            unit[#unit + 1] = {
-                id             = row.id,
-                track_id       = row.track_id,
-                timeline_start = row.timeline_start_frame,
-                duration       = row.duration_frames,
-            }
+            unit[#unit + 1] = Clip.capture_v13_state(m.clip_id)
         end
     end
     return unit
@@ -82,8 +70,8 @@ function M.execute(args)
 
     assert(database.savepoint(SAVEPOINT), "DeleteClip: savepoint failed")
     local ok, err = pcall(function()
-        for _, m in ipairs(unit) do
-            Clip.delete_one(m.id)
+        for _, captured in ipairs(unit) do
+            Clip.delete_one(captured.row.id)
         end
     end)
     if not ok then
@@ -125,11 +113,27 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         return true
     end
 
-    command_undoers["DeleteClip"] = function(_command)
-        -- TODO(T046 full): row-restoration undo. Requires capturing the
-        -- full clip row + clip_channel_override rows + clip_links rows
-        -- at delete time, then re-INSERTing on undo.
-        error("DeleteClip: undo not yet implemented (T046 full sweep)", 0)
+    command_undoers["DeleteClip"] = function(command)
+        local args = command:get_all_parameters()
+        local prior = args.prior_unit
+        assert(type(prior) == "table" and #prior > 0,
+            "Undo DeleteClip: prior_unit missing or empty")
+        assert(database.savepoint(SAVEPOINT), "Undo DeleteClip: savepoint failed")
+        local ok, err = pcall(function()
+            for _, captured in ipairs(prior) do
+                Clip.restore_v13_state(captured)
+            end
+        end)
+        if not ok then
+            database.rollback_to_savepoint(SAVEPOINT)
+            database.release_savepoint(SAVEPOINT)
+            error(err, 0)
+        end
+        assert(database.release_savepoint(SAVEPOINT),
+            "Undo DeleteClip: release savepoint failed")
+        local Signals = require("core.signals")
+        Signals.emit("sequence_content_changed", args.sequence_id)
+        return true
     end
 
     return {

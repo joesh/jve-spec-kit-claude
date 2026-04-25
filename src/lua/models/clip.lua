@@ -1294,10 +1294,21 @@ function M.ripple_track_forward(track_id, from_frame, shift)
         "Clip.ripple_track_forward: shift must be non-zero integer")
 
     local db = require("core.database").get_connection()
-    local sel = db:prepare([[
+    -- Order matters for the video-overlap trigger:
+    --   negative shift: process clips in ASC order (lowest-start first
+    --     moves left into now-empty space), no transient overlap.
+    --   positive shift: process clips in DESC order (highest-start first
+    --     moves right into now-empty space).
+    -- A bulk UPDATE without ORDER would let SQLite pick row order
+    -- arbitrarily; if it shifts a clip into a slot still occupied by
+    -- the next-up clip, the trigger raises VIDEO_OVERLAP. Selecting
+    -- ids first + UPDATE-by-id in the right order avoids that.
+    local order = (shift > 0) and "DESC" or "ASC"
+    local sel = db:prepare(string.format([[
         SELECT id FROM clips
         WHERE track_id = ? AND timeline_start_frame >= ?
-    ]])
+        ORDER BY timeline_start_frame %s
+    ]], order))
     assert(sel, "Clip.ripple_track_forward: select prepare failed")
     sel:bind_value(1, track_id)
     sel:bind_value(2, from_frame)
@@ -1312,13 +1323,15 @@ function M.ripple_track_forward(track_id, from_frame, shift)
         UPDATE clips
         SET timeline_start_frame = timeline_start_frame + ?,
             modified_at = strftime('%s','now')
-        WHERE track_id = ? AND timeline_start_frame >= ?
+        WHERE id = ?
     ]])
     assert(upd, "Clip.ripple_track_forward: update prepare failed")
-    upd:bind_value(1, shift)
-    upd:bind_value(2, track_id)
-    upd:bind_value(3, from_frame)
-    assert(upd:exec(), "Clip.ripple_track_forward: update exec failed")
+    for _, cid in ipairs(ids) do
+        upd:bind_value(1, shift)
+        upd:bind_value(2, cid)
+        assert(upd:exec(), "Clip.ripple_track_forward: update exec failed")
+        upd:reset()
+    end
     upd:finalize()
     return ids
 end
@@ -1506,6 +1519,134 @@ function M.load_v13_row(id)
     end
     stmt:finalize()
     return row
+end
+
+--- Capture the FULL V13 state of a clip for undo: the row, its
+--- clip_channel_override rows, and its clip_links membership (if any).
+--- The returned table can be passed to Clip.restore_v13_state to
+--- recreate the clip exactly as it was. Loud-fail if clip is missing
+--- (capturing a non-existent clip is always a caller bug).
+function M.capture_v13_state(clip_id)
+    assert(clip_id and clip_id ~= "", "Clip.capture_v13_state: clip_id required")
+    local row = M.load_v13_row(clip_id)
+    assert(row, string.format(
+        "Clip.capture_v13_state: clip %s not found", clip_id))
+
+    local db = require("core.database").get_connection()
+
+    local overrides = {}
+    do
+        local stmt = db:prepare([[
+            SELECT channel_index, enabled, gain_db
+            FROM clip_channel_override WHERE clip_id = ?
+            ORDER BY channel_index ASC
+        ]])
+        assert(stmt, "Clip.capture_v13_state: override prepare failed")
+        stmt:bind_value(1, clip_id)
+        assert(stmt:exec(), "Clip.capture_v13_state: override exec failed")
+        while stmt:next() do
+            overrides[#overrides + 1] = {
+                channel_index = stmt:value(0),
+                enabled       = stmt:value(1),
+                gain_db       = stmt:value(2),
+            }
+        end
+        stmt:finalize()
+    end
+
+    local link
+    do
+        local stmt = db:prepare([[
+            SELECT link_group_id, role, time_offset, enabled
+            FROM clip_links WHERE clip_id = ?
+            LIMIT 1
+        ]])
+        assert(stmt, "Clip.capture_v13_state: link prepare failed")
+        stmt:bind_value(1, clip_id)
+        assert(stmt:exec(), "Clip.capture_v13_state: link exec failed")
+        if stmt:next() then
+            link = {
+                link_group_id = stmt:value(0),
+                role          = stmt:value(1),
+                time_offset   = stmt:value(2),
+                enabled       = stmt:value(3) == 1,
+            }
+        end
+        stmt:finalize()
+    end
+
+    return {
+        row       = row,
+        overrides = overrides,
+        link      = link,
+    }
+end
+
+--- Restore a clip from the state captured by Clip.capture_v13_state.
+--- Re-INSERTs the clip row (INV-2 + INV-4 fire), the
+--- clip_channel_override rows, and the clip_links row (if it had one).
+--- The clip is assumed to be ABSENT before this call — restoring over
+--- a live clip is a caller bug.
+function M.restore_v13_state(state)
+    assert(type(state) == "table", "Clip.restore_v13_state: state table required")
+    assert(type(state.row) == "table", "Clip.restore_v13_state: state.row required")
+    local r = state.row
+
+    M._create_v13_row({
+        id                    = r.id,
+        project_id            = r.project_id,
+        owner_sequence_id     = r.owner_sequence_id,
+        track_id              = r.track_id,
+        nested_sequence_id    = r.nested_sequence_id,
+        name                  = r.name,
+        timeline_start_frame  = r.timeline_start_frame,
+        duration_frames       = r.duration_frames,
+        source_in_frame       = r.source_in_frame,
+        source_out_frame      = r.source_out_frame,
+        master_layer_track_id = r.master_layer_track_id,
+        fps_mismatch_policy   = r.fps_mismatch_policy,
+        enabled               = r.enabled,
+        volume                = r.volume,
+        mark_in_frame         = r.mark_in_frame,
+        mark_out_frame        = r.mark_out_frame,
+        playhead_frame        = r.playhead_frame,
+    })
+
+    if state.overrides and #state.overrides > 0 then
+        local db = require("core.database").get_connection()
+        local stmt = db:prepare([[
+            INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
+            VALUES (?, ?, ?, ?)
+        ]])
+        assert(stmt, "Clip.restore_v13_state: override prepare failed")
+        for _, o in ipairs(state.overrides) do
+            stmt:bind_value(1, r.id)
+            stmt:bind_value(2, o.channel_index)
+            stmt:bind_value(3, o.enabled)
+            stmt:bind_value(4, o.gain_db)
+            assert(stmt:exec(),
+                "Clip.restore_v13_state: override exec failed")
+            stmt:reset()
+        end
+        stmt:finalize()
+    end
+
+    if state.link then
+        local db = require("core.database").get_connection()
+        local stmt = db:prepare([[
+            INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
+            VALUES (?, ?, ?, ?, ?)
+        ]])
+        assert(stmt, "Clip.restore_v13_state: link prepare failed")
+        stmt:bind_value(1, state.link.link_group_id)
+        stmt:bind_value(2, r.id)
+        stmt:bind_value(3, state.link.role)
+        stmt:bind_value(4, state.link.time_offset)
+        stmt:bind_value(5, state.link.enabled and 1 or 0)
+        assert(stmt:exec(),
+            "Clip.restore_v13_state: link exec failed")
+        stmt:finalize()
+    end
 end
 
 return M

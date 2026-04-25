@@ -164,4 +164,96 @@ do
     print("  ok")
 end
 
+-- Drive the registered executor + undoer through a minimal command shim
+-- (matches the pattern used in test_013_signal_sequence_content_changed).
+local function make_cmd(params)
+    return {
+        params = params,
+        get_all_parameters = function(self) return self.params end,
+        get_parameter      = function(self, k) return self.params[k] end,
+        set_parameter      = function(self, k, v) self.params[k] = v end,
+        set_parameters     = function(self, t)
+            for k, v in pairs(t) do self.params[k] = v end
+        end,
+    }
+end
+local function register(module, name)
+    local executors, undoers, last_err = {}, {}, nil
+    module.register(executors, undoers, nil, function(e) last_err = e end)
+    return executors[name], undoers[name], function() return last_err end
+end
+
+-- -------------------------------------------------------------------------
+-- Undo of an unlinked-clip delete restores the row, its overrides, and
+-- (since none existed) leaves clip_links untouched.
+-- -------------------------------------------------------------------------
+print("-- Undo DeleteClip unlinked: row + overrides restored --")
+do
+    local db = build_fixture()
+    seed_clip(db, "v1", "e-v1", 100, 50, 0, 50)
+    -- Two channel overrides that must survive the round trip.
+    assert(db:exec([[
+        INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
+        VALUES ('v1', 0, 1, -3.0), ('v1', 1, 0, 0.0);
+    ]]))
+
+    local exec, undo = register(DeleteClip, "DeleteClip")
+    local cmd = make_cmd({ sequence_id = "e", clip_id = "v1" })
+    assert(exec(cmd))
+    assert(not clip_exists(db, "v1"), "v1 deleted after execute")
+
+    assert(undo(cmd))
+    assert(clip_exists(db, "v1"), "v1 restored after undo")
+    local v1 = load_clip(db, "v1")
+    assert(v1.timeline_start == 100 and v1.duration == 50,
+        "v1 timeline restored")
+
+    local stmt = db:prepare(
+        "SELECT channel_index, enabled, gain_db FROM clip_channel_override WHERE clip_id = ? ORDER BY channel_index")
+    stmt:bind_value(1, "v1")
+    assert(stmt:exec())
+    local ovs = {}
+    while stmt:next() do
+        ovs[#ovs+1] = { ch = stmt:value(0), en = stmt:value(1), g = stmt:value(2) }
+    end
+    stmt:finalize()
+    assert(#ovs == 2, string.format("expected 2 overrides; got %d", #ovs))
+    assert(ovs[1].ch == 0 and ovs[1].en == 1 and ovs[1].g == -3.0)
+    assert(ovs[2].ch == 1 and ovs[2].en == 0 and ovs[2].g == 0.0)
+    print("  ok")
+end
+
+-- -------------------------------------------------------------------------
+-- Undo of a linked-pair delete restores BOTH clips and the original
+-- clip_links rows so they remain in their original group.
+-- -------------------------------------------------------------------------
+print("-- Undo DeleteClip linked V+A: pair restored, link group intact --")
+do
+    local db = build_fixture()
+    seed_clip(db, "v1", "e-v1", 0, 100, 0, 100)
+    seed_clip(db, "a1", "e-a1", 0, 100, 0, 100)
+    link_clips(db, "G1", { { id = "v1", role = "video" }, { id = "a1", role = "audio" } })
+
+    local exec, undo = register(DeleteClip, "DeleteClip")
+    local cmd = make_cmd({ sequence_id = "e", clip_id = "v1" })
+    assert(exec(cmd))
+    assert(not clip_exists(db, "v1") and not clip_exists(db, "a1"),
+        "both members deleted after execute")
+
+    assert(undo(cmd))
+    assert(clip_exists(db, "v1") and clip_exists(db, "a1"),
+        "both members restored after undo")
+
+    local function group_id_for(id)
+        local stmt = db:prepare("SELECT link_group_id FROM clip_links WHERE clip_id = ?")
+        stmt:bind_value(1, id); assert(stmt:exec())
+        local g; if stmt:next() then g = stmt:value(0) end
+        stmt:finalize()
+        return g
+    end
+    assert(group_id_for("v1") == "G1", "v1 link membership restored to G1")
+    assert(group_id_for("a1") == "G1", "a1 link membership restored to G1")
+    print("  ok")
+end
+
 print("✅ test_013_delete_clip.lua passed")

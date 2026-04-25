@@ -214,4 +214,68 @@ do
     print("  ok")
 end
 
+-- Drive the registered executor + undoer through a minimal command shim.
+local function make_cmd(params)
+    return {
+        params = params,
+        get_all_parameters = function(self) return self.params end,
+        get_parameter      = function(self, k) return self.params[k] end,
+        set_parameter      = function(self, k, v) self.params[k] = v end,
+        set_parameters     = function(self, t)
+            for k, v in pairs(t) do self.params[k] = v end
+        end,
+    }
+end
+local function register(module, name)
+    local executors, undoers, last_err = {}, {}, nil
+    module.register(executors, undoers, nil, function(e) last_err = e end)
+    return executors[name], undoers[name], function() return last_err end
+end
+
+-- -------------------------------------------------------------------------
+-- Undo of a linked-pair ripple-delete: both clips restored at original
+-- positions, downstream pair shifts back to where it was, link groups
+-- reattached.
+-- -------------------------------------------------------------------------
+print("-- Undo RippleDelete linked V+A: clips + ripple restored --")
+do
+    local db = build_fixture()
+    seed_clip(db, "v1", "e-v1",   0, 100,   0, 100)
+    seed_clip(db, "a1", "e-a1",   0, 100,   0, 100)
+    seed_clip(db, "v2", "e-v1", 100, 100, 100, 200)
+    seed_clip(db, "a2", "e-a1", 100, 100, 100, 200)
+    link_clips(db, "G1", { { id = "v1", role = "video" }, { id = "a1", role = "audio" } })
+    link_clips(db, "G2", { { id = "v2", role = "video" }, { id = "a2", role = "audio" } })
+
+    local exec, undo = register(RippleDelete, "RippleDelete")
+    local cmd = make_cmd({ sequence_id = "e", clip_id = "v1" })
+    assert(exec(cmd))
+    -- Sanity: pair 1 gone, pair 2 rippled to start.
+    assert(not clip_exists(db, "v1") and not clip_exists(db, "a1"))
+    local v2 = load_clip(db, "v2")
+    assert(v2.timeline_start == 0)
+
+    -- Undo.
+    assert(undo(cmd))
+    assert(clip_exists(db, "v1") and clip_exists(db, "a1"),
+        "deleted pair restored")
+    local v1_after = load_clip(db, "v1")
+    local a1_after = load_clip(db, "a1")
+    assert(v1_after.timeline_start == 0 and v1_after.duration == 100,
+        "v1 restored at original position")
+    assert(a1_after.timeline_start == 0 and a1_after.duration == 100,
+        "a1 restored at original position")
+    local v2_after = load_clip(db, "v2")
+    local a2_after = load_clip(db, "a2")
+    assert(v2_after.timeline_start == 100 and v2_after.duration == 100,
+        "v2 un-rippled back to original position")
+    assert(a2_after.timeline_start == 100 and a2_after.duration == 100,
+        "a2 un-rippled back to original position")
+    assert(group_id_for(db, "v1") == "G1" and group_id_for(db, "a1") == "G1",
+        "G1 link rows restored")
+    assert(group_id_for(db, "v2") == "G2" and group_id_for(db, "a2") == "G2",
+        "G2 link rows untouched")
+    print("  ok")
+end
+
 print("✅ test_013_ripple_delete_link_group.lua passed")
