@@ -26,12 +26,12 @@ db:exec(require('import_schema'))
 -- Insert test data
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at, settings)
-    VALUES ('project_1', 'Test Project One', %d, %d, '{"key":"value"}');
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
+    VALUES ('project_1', 'Test Project One', 'resample', %d, %d, '{"key":"value"}');
 ]], now, now))
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at, settings)
-    VALUES ('project_2', 'Test Project Two', %d, %d, '{}');
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
+    VALUES ('project_2', 'Test Project Two', 'resample', %d, %d, '{}');
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)

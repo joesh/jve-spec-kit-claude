@@ -39,7 +39,7 @@ db:exec("DROP TRIGGER IF EXISTS trg_prevent_video_overlap_update;")
 local Project = require("models.project")
 local Track = require("models.track")
 
-local project = Project.create("Test Project")
+local project = Project.create("Test Project", { fps_mismatch_policy = 'resample' })
 project:save()
 
 local seq = Sequence.create("Test Sequence", project.id,

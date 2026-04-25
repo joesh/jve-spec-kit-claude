@@ -21,7 +21,7 @@ db:exec(require('import_schema'))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at) VALUES ('project', 'Test', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test', 'resample', %d, %d);
 ]], now, now))
 
 -- Create a masterclip sequence to prove marks work on masterclips too

@@ -21,14 +21,14 @@ local now = os.time()
 
 -- Create project, timeline sequence, and masterclip sequence
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('proj', 'Test Project', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('proj', 'Test Project', 'resample', %d, %d);
 ]], now, now))
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
                            audio_rate, width, height, created_at, modified_at)
-    VALUES ('timeline_seq', 'proj', 'Timeline', 'timeline', 30, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('timeline_seq', 'proj', 'Timeline', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 
 db:exec(string.format([[

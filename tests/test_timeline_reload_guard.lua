@@ -16,8 +16,8 @@ local timeline_state = require("ui.timeline.timeline_state")
 local SCHEMA_SQL = require("import_schema")
 
 local DATA_SQL = [[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', 'resample', strftime('%s','now'), strftime('%s','now'));
     INSERT INTO sequences (
         id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
         width, height, view_start_frame, view_duration_frames, playhead_frame,
@@ -25,7 +25,7 @@ local DATA_SQL = [[
         current_sequence_number, created_at, modified_at
     )
     VALUES
-        ('seq_a', 'default_project', 'Active Seq', 'timeline', 30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now')),
+        ('seq_a', 'default_project', 'Active Seq', 'nested', 30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now')),
         ('seq_b', 'default_project', 'Background Seq', 'timeline', 30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now'));
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES

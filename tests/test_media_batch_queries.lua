@@ -31,11 +31,11 @@ local db_path = "/tmp/jve/test_media_batch_queries_" .. os.time() .. ".jvp"
 os.execute("mkdir -p /tmp/jve")
 database.init(db_path)
 
-local project = Project.create("Batch Project", {})
+local project = Project.create("Batch Project", { fps_mismatch_policy = 'resample' })
 assert(project:save())
 
 -- A second project to confirm load_for_project is scoped.
-local other_project = Project.create("Other Project", {})
+local other_project = Project.create("Other Project", { fps_mismatch_policy = 'resample' })
 assert(other_project:save())
 
 local function make_media(params)

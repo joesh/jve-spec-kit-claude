@@ -15,13 +15,13 @@ db:exec(require('import_schema'))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('proj1', 'Test', %d, %d)
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', %d, %d)
 ]], now, now))
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq 1', 'timeline', 24, 1, 48000, 1920, 1080, %d, %d)
+    VALUES ('seq1', 'proj1', 'Seq 1', 'nested', 24, 1, 48000, 1920, 1080, %d, %d)
 ]], now, now))
 
 -- Insert tracks with muted/soloed/locked set to TRUE

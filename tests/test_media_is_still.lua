@@ -98,7 +98,7 @@ local db_path = "/tmp/jve/test_media_is_still_" .. os.time() .. ".jvp"
 os.execute("mkdir -p /tmp/jve")
 database.init(db_path)
 
-local project = Project.create("IsStill Project", {})
+local project = Project.create("IsStill Project", { fps_mismatch_policy = 'resample' })
 assert(project:save())
 
 local still_media = Media.create({

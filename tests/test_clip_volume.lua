@@ -22,8 +22,8 @@ assert(db:exec(require("import_schema")))
 
 -- Seed project, media, sequence, track
 assert(db:exec([[
-    INSERT INTO projects (id, name, created_at, modified_at, settings)
-    VALUES ('proj', 'Project', strftime('%s','now'), strftime('%s','now'), '{}');
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
+    VALUES ('proj', 'Project', 'resample', strftime('%s','now'), strftime('%s','now'), '{}');
 
     INSERT INTO sequences (
         id, project_id, name, kind,
@@ -34,7 +34,7 @@ assert(db:exec([[
         current_sequence_number, created_at, modified_at
     )
     VALUES (
-        'seq', 'proj', 'Sequence', 'timeline',
+        'seq', 'proj', 'Sequence', 'nested',
         24, 1, 48000,
         1920, 1080,
         0, 240, 0,

@@ -20,8 +20,8 @@ local db = database.get_connection()
 db:exec(require("import_schema"))
 
 db:exec([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', 'resample', strftime('%s','now'), strftime('%s','now'));
     INSERT INTO media (id, project_id, name, file_path, duration_frames,
         fps_numerator, fps_denominator, width, height, created_at, modified_at)
     VALUES ('media_test', 'default_project', 'Test Media', 'synthetic://test',
@@ -35,7 +35,7 @@ db:exec([[
         current_sequence_number, created_at, modified_at
     )
     VALUES (
-        'default_sequence', 'default_project', 'Default Sequence', 'timeline',
+        'default_sequence', 'default_project', 'Default Sequence', 'nested',
         30, 1, 48000,
         1920, 1080,
         0, 300, 0,

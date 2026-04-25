@@ -28,8 +28,8 @@ database.init(db_path)
 local now = os.time()
 local db = database.get_connection()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('proj1', 'Test', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', %d, %d);
 ]], now, now))
 
 -- Sequence with 2 clips on different tracks
@@ -38,7 +38,7 @@ db:exec(string.format([[
         audio_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Timeline', 'timeline', 24, 1, 48000, 1920, 1080,
+    VALUES ('seq1', 'proj1', 'Timeline', 'nested', 24, 1, 48000, 1920, 1080,
         50, 500, 100, '[]', '[]', '[]', 0, %d, %d);
 ]], now, now))
 
@@ -93,7 +93,7 @@ db:exec(string.format([[
         audio_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
-    VALUES ('seq_empty', 'proj1', 'Empty', 'timeline', 25, 1, 48000, 1920, 1080,
+    VALUES ('seq_empty', 'proj1', 'Empty', 'nested', 25, 1, 48000, 1920, 1080,
         0, 250, 0, '[]', '[]', '[]', 0, %d, %d);
 ]], now, now))
 
@@ -113,7 +113,7 @@ db:exec(string.format([[
         audio_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
-    VALUES ('seq_drp', 'proj1', 'DRP', 'timeline', 25, 1, 48000, 1920, 1080,
+    VALUES ('seq_drp', 'proj1', 'DRP', 'nested', 25, 1, 48000, 1920, 1080,
         0, 250, 0, '[]', '[]', '[]', 0, %d, %d);
 ]], now, now))
 db:exec([[

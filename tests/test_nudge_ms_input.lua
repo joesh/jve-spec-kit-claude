@@ -24,11 +24,11 @@ local function setup_db()
     local db = database.get_connection()
     assert(db, "failed to open db connection")
     assert(db:exec(import_schema), "failed to apply schema")
-    assert(db:exec([[INSERT INTO projects(id,name,created_at,modified_at,settings) VALUES('proj','Test',strftime('%s','now'),strftime('%s','now'),'{}')]]))
+    assert(db:exec([[INSERT INTO projects(id,name,fps_mismatch_policy, created_at,modified_at,settings) VALUES('proj','Test','resample',strftime('%s','now'),strftime('%s','now'),'{}')]]))
     assert(db:exec([[INSERT INTO sequences(id,project_id,name,kind,fps_numerator,fps_denominator,audio_rate,width,height,
         view_start_frame,view_duration_frames,playhead_frame,
         selected_clip_ids,selected_edge_infos,selected_gap_infos,current_sequence_number,created_at,modified_at)
-        VALUES('seq','proj','Sequence','timeline',24,1,48000,1920,1080,0,8000,0,'[]','[]','[]',0,strftime('%s','now'),strftime('%s','now'))
+        VALUES('seq','proj','Sequence','nested',24,1,48000,1920,1080,0,8000,0,'[]','[]','[]',0,strftime('%s','now'),strftime('%s','now'))
     ]]))
     assert(db:exec([[INSERT INTO tracks(id,sequence_id,name,track_type,track_index,enabled,locked,muted,soloed,volume,pan) VALUES
         ('v1','seq','V1','VIDEO',1,1,0,0,0,1.0,0.0)

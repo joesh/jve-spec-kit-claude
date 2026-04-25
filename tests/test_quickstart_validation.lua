@@ -32,7 +32,7 @@ local db = database.get_connection()
 
 local now = os.time()
 db:exec(string.format(
-    "INSERT INTO projects (id, name, created_at, modified_at) VALUES ('proj1', 'Quickstart', %d, %d)",
+    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('proj1', 'Quickstart', 'resample', %d, %d)",
     now, now))
 
 -- ============================================================================
@@ -241,7 +241,7 @@ print("=== Category 6: Find & Replace ===")
 
 -- Insert test clips into DB for replace tests
 local seq_stmt = db:prepare(string.format(
-    "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at) VALUES ('seq1', 'proj1', 'Seq', 'timeline', 24, 1, 48000, 1920, 1080, %d, %d)",
+    "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at) VALUES ('seq1', 'proj1', 'Seq', 'nested', 24, 1, 48000, 1920, 1080, %d, %d)",
     now, now))
 seq_stmt:exec()
 seq_stmt:finalize()

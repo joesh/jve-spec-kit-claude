@@ -20,8 +20,8 @@ assert(db:exec(schema_sql))
 
 -- Bootstrap project
 assert(db:exec([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('proj1', 'Test Project', strftime('%s','now'), strftime('%s','now'))
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('proj1', 'Test Project', 'resample', strftime('%s','now'), strftime('%s','now'))
 ]]))
 
 local passed, failed = 0, 0

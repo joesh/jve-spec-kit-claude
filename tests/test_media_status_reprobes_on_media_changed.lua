@@ -20,7 +20,7 @@ local Project = require("models.project")
 local db_path = "/tmp/jve/test_media_status_reprobe_" .. os.time() .. ".jvp"
 os.execute("mkdir -p /tmp/jve")
 database.init(db_path)
-local project = Project.create("Reprobe Project", {})
+local project = Project.create("Reprobe Project", { fps_mismatch_policy = 'resample' })
 assert(project:save())
 
 local good_path = "/tmp/jve/test_reprobe_exists.mov"

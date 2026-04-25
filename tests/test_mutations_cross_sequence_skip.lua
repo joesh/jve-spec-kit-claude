@@ -49,14 +49,14 @@ db:exec([[
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('p1', 'Cross Seq Test', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('p1', 'Cross Seq Test', 'resample', %d, %d);
 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
     VALUES
-        ('seqA', 'p1', 'A', 'timeline', 24000, 1001, 48000, 1920, 1080,
+        ('seqA', 'p1', 'A', 'nested', 24000, 1001, 48000, 1920, 1080,
             0, 240, 0, '[]', '[]', %d, %d),
         ('seqB', 'p1', 'B', 'timeline', 24000, 1001, 48000, 1920, 1080,
             0, 240, 0, '[]', '[]', %d, %d);

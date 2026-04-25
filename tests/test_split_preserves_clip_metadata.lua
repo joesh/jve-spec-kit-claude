@@ -29,8 +29,8 @@ database.init(db_path)
 local now = os.time()
 local db = database.get_connection()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('proj1', 'Test', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', %d, %d);
 ]], now, now))
 
 db:exec(string.format([[
@@ -38,7 +38,7 @@ db:exec(string.format([[
         audio_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq', 'timeline', 24, 1, 48000, 1920, 1080,
+    VALUES ('seq1', 'proj1', 'Seq', 'nested', 24, 1, 48000, 1920, 1080,
         0, 1000, 0, '[]', '[]', '[]', 0, %d, %d);
 ]], now, now))
 

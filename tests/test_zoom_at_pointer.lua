@@ -29,8 +29,8 @@ db:exec(require('import_schema'))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', 'resample', %d, %d);
 
     INSERT INTO sequences (
         id, project_id, name, kind,
@@ -40,7 +40,7 @@ db:exec(string.format([[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at
     ) VALUES (
-        'default_sequence', 'default_project', 'Sequence', 'timeline',
+        'default_sequence', 'default_project', 'Sequence', 'nested',
         24, 1, 48000, 1920, 1080, 100, 200, 150,
         '[]', '[]', '[]', 0, %d, %d
     );

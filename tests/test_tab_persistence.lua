@@ -18,8 +18,8 @@ db:exec(require("import_schema"))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('proj1', 'Test', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', %d, %d);
 ]], now, now))
 
 local seq_ids = {}
@@ -32,7 +32,7 @@ for i = 1, 4 do
             selected_clip_ids, selected_edge_infos, selected_gap_infos,
             current_sequence_number, created_at, modified_at
         ) VALUES (
-            '%s', 'proj1', 'Seq %d', 'timeline', 24, 1, 48000,
+            '%s', 'proj1', 'Seq %d', 'nested', 24, 1, 48000,
             1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, %d, %d
         );
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index,

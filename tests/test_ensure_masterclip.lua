@@ -48,8 +48,8 @@ local now = os.time()
 
 -- Create project
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('proj1', 'Test Project', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('proj1', 'Test Project', 'resample', %d, %d);
 ]], now, now))
 
 --------------------------------------------------------------------------------

@@ -102,7 +102,7 @@ local function test_split_clip_command_func()
     local db = setup_test_db()
     command_manager.init("default_sequence", "default_project")
 
-    local project = Project.create("Test Project Split")
+    local project = Project.create("Test Project Split", { fps_mismatch_policy = 'resample' })
     project:save(db)
     assert_not_nil(project.id, "Project ID should not be nil")
 
@@ -232,7 +232,7 @@ local function test_ripple_delete_command_func()
     local db = setup_test_db()
     command_manager.init("default_sequence", "default_project")
 
-    local project = Project.create("Test Project Ripple")
+    local project = Project.create("Test Project Ripple", { fps_mismatch_policy = 'resample' })
     project:save(db)
     
     local sequence = Sequence.create("Test Sequence Ripple", project.id, {fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
@@ -325,7 +325,7 @@ local function test_ripple_edit_command_func()
     local db = setup_test_db()
     command_manager.init("default_sequence", "default_project")
 
-    local project = Project.create("Test Project RippleEdit")
+    local project = Project.create("Test Project RippleEdit", { fps_mismatch_policy = 'resample' })
     project:save(db)
     
     local sequence = Sequence.create("Test Sequence RippleEdit", project.id, {fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
@@ -427,7 +427,7 @@ local function test_nudge_command_func()
     local db = setup_test_db()
     command_manager.init("default_sequence", "default_project")
 
-    local project = Project.create("Test Project Nudge")
+    local project = Project.create("Test Project Nudge", { fps_mismatch_policy = 'resample' })
     project:save(db)
     
     local sequence = Sequence.create("Test Sequence Nudge", project.id, {fps_numerator = 24, fps_denominator = 1}, 1920, 1080)
@@ -529,7 +529,7 @@ end
 local function test_move_clip_to_track_command_func()
     local db = setup_test_db()
 
-    local project = Project.create("Test Project MoveClip")
+    local project = Project.create("Test Project MoveClip", { fps_mismatch_policy = 'resample' })
     project:save(db)
 
     local sequence = Sequence.create("Test Sequence MoveClip", project.id, {fps_numerator = 24, fps_denominator = 1}, 1920, 1080)

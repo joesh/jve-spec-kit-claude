@@ -23,8 +23,8 @@ assert(db:exec(require("import_schema")))
 
 -- Seed project
 assert(db:exec([[
-    INSERT INTO projects (id, name, created_at, modified_at, settings)
-    VALUES ('proj', 'Project', strftime('%s','now'), strftime('%s','now'), '{}');
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
+    VALUES ('proj', 'Project', 'resample', strftime('%s','now'), strftime('%s','now'), '{}');
 ]]))
 
 -- =========================================================================

@@ -16,8 +16,8 @@ local function setup_db()
     assert(conn:exec(require('import_schema')))
 
     assert(conn:exec([[
-        INSERT INTO projects (id, name, created_at, modified_at)
-        VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+        VALUES ('default_project', 'Default Project', 'resample', strftime('%s','now'), strftime('%s','now'));
 
     INSERT INTO sequences (
         id, project_id, name, kind,
@@ -26,7 +26,7 @@ local function setup_db()
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at
     )
-    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline',
+    VALUES ('default_sequence', 'default_project', 'Timeline', 'nested',
         30, 1, 48000, 1920, 1080, 0, 240, 0,
         '[]', '[]', '[]', 0, strftime('%s','now'), strftime('%s','now'));
 

@@ -39,7 +39,7 @@ local Project = require("models.project")
 local Sequence = require("models.sequence")
 local Track = require("models.track")
 
-local project = Project.create("Test Project")
+local project = Project.create("Test Project", { fps_mismatch_policy = 'resample' })
 project:save()
 
 local seq = Sequence.create("Test Sequence", project.id,

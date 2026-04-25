@@ -18,7 +18,7 @@ assert(conn:exec(import_schema), "failed to apply schema")
 local project_id = "test-project-persist"
 local now = os.time()
 assert(conn:exec(string.format(
-    "INSERT INTO projects (id, name, created_at, modified_at, settings) VALUES ('%s', 'Test Project', %d, %d, '{}')",
+    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings) VALUES ('%s', 'Test Project', 'resample', %d, %d, '{}')",
     project_id, now, now)))
 
 -- 1. Sort state round-trip

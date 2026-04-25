@@ -38,7 +38,7 @@ local Sequence = require("models.sequence")
 local Track = require("models.track")
 local Media = require("models.media")
 
-local project = Project.create("Test Project")
+local project = Project.create("Test Project", { fps_mismatch_policy = 'resample' })
 project:save()
 
 local seq = Sequence.create("Test Seq", project.id,

@@ -311,8 +311,8 @@ local db = database.get_connection()
 -- Seed project
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('proj1', 'Test', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', %d, %d);
 ]], now, now))
 
 -- 5a. save with nil db and no global connection → false

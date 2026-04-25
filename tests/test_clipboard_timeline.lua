@@ -27,9 +27,9 @@ local SCHEMA_SQL = require("import_schema")
 local now = os.time()
 -- 25fps sequence (not 30!) — catches bugs where fps accidentally matches frame values
 local BASE_DATA_SQL = string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at) VALUES ('proj', 'Test Project', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('proj', 'Test Project', 'resample', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
-    VALUES ('seq', 'proj', 'Timeline', 'timeline', 25, 1, 48000, 1920, 1080, 0, 0, 8000, %d, %d);
+    VALUES ('seq', 'proj', 'Timeline', 'nested', 25, 1, 48000, 1920, 1080, 0, 0, 8000, %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('a1', 'seq', 'A1', 'AUDIO', 1, 1);
 ]], now, now, now, now)

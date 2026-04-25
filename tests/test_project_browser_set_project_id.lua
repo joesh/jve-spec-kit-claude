@@ -14,7 +14,7 @@ local db_path_2 = "/tmp/jve/test_proj2_" .. os.time() .. ".jvp"
 
 -- Create first project database
 database.init(db_path_1)
-local project1 = Project.create("Project One", {})
+local project1 = Project.create("Project One", { fps_mismatch_policy = 'resample' })
 assert(project1:save(), "Failed to save project 1")
 
 local seq1 = Sequence.create("Timeline One", project1.id, {fps_numerator = 30, fps_denominator = 1}, 1920, 1080, {})
@@ -27,7 +27,7 @@ database.shutdown()
 
 -- Create second project database
 database.init(db_path_2)
-local project2 = Project.create("Project Two", {})
+local project2 = Project.create("Project Two", { fps_mismatch_policy = 'resample' })
 assert(project2:save(), "Failed to save project 2")
 
 local seq2 = Sequence.create("Timeline Two", project2.id, {fps_numerator = 24, fps_denominator = 1}, 1920, 1080, {})

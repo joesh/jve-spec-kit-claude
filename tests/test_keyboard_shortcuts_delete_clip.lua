@@ -29,7 +29,7 @@ os.remove(db_path .. "-wal")
 os.remove(db_path .. "-shm")
 db.init(db_path)
 
-local project = Project.create("Test Delete")
+local project = Project.create("Test Delete", { fps_mismatch_policy = 'resample' })
 project:save()
 
 local media = Media.create({

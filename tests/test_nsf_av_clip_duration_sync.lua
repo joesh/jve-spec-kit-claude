@@ -28,8 +28,8 @@ db:exec(require("import_schema"))
 local project_id = "test_project"
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('%s', 'Test Project', %d, %d)
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('%s', 'Test Project', 'resample', %d, %d)
 ]], project_id, now, now))
 
 -- Create timeline sequence at 30fps

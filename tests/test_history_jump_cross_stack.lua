@@ -35,14 +35,14 @@ local function seed_project(db, project_id, sequence_id, track_id)
     db:exec(require("import_schema"))
     local now = os.time()
     db:exec(string.format([[
-        INSERT INTO projects (id, name, created_at, modified_at)
-          VALUES ('%s', 'P', %d, %d);
+        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+          VALUES ('%s', 'P', 'resample', %d, %d);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_rate, width, height,
             playhead_frame, view_start_frame, view_duration_frames,
             selected_clip_ids, selected_edge_infos, selected_gap_infos,
             current_sequence_number, created_at, modified_at)
-          VALUES ('%s', '%s', 'S', 'timeline', 25, 1, 48000, 1920, 1080,
+          VALUES ('%s', '%s', 'S', 'nested', 25, 1, 48000, 1920, 1080,
                   0, 0, 240, '[]', '[]', '[]', 0, %d, %d);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
             enabled, locked, muted, soloed, volume, pan)

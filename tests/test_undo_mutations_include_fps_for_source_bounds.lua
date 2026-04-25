@@ -19,8 +19,8 @@ local command_helper = require("core.command_helper")
 local SCHEMA_SQL = require("import_schema")
 
 local BASE_DATA_SQL = [[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', strftime('%s','now'), strftime('%s','now'));
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', 'resample', strftime('%s','now'), strftime('%s','now'));
 
     INSERT INTO sequences (
         id, project_id, name, kind,
@@ -30,7 +30,7 @@ local BASE_DATA_SQL = [[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at
     )
-    VALUES ('seq1', 'default_project', 'Sequence', 'timeline',
+    VALUES ('seq1', 'default_project', 'Sequence', 'nested',
             30, 1, 48000, 1920, 1080, 0, 300, 0, '[]', '[]', '[]', 0,
             strftime('%s','now'), strftime('%s','now'));
 

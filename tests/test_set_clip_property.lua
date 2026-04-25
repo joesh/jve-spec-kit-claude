@@ -81,13 +81,13 @@ db:exec([[
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('test_project', 'Property Test Project', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('test_project', 'Property Test Project', 'resample', %d, %d);
 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
         view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos,
         created_at, modified_at)
-    VALUES ('timeline_seq', 'test_project', 'Timeline Seq', 'timeline',
+    VALUES ('timeline_seq', 'test_project', 'Timeline Seq', 'nested',
         1000, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)

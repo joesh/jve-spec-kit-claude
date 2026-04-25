@@ -157,8 +157,8 @@ db:exec(require("import_schema"))
 -- Create a project + media + masterclip sequence
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('proj1', 'Test Project', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('proj1', 'Test Project', 'resample', %d, %d);
 
     INSERT INTO media (id, project_id, file_path, name, duration_frames,
         fps_numerator, fps_denominator, width, height, created_at, modified_at)

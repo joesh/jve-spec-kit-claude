@@ -30,11 +30,11 @@ db:exec(require('import_schema'))
 -- Insert Project and default sequence
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at) VALUES ('project', 'Test Project', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', %d, %d);
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-    VALUES ('default_sequence', 'project', 'Default Sequence', 'timeline', 30, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('default_sequence', 'project', 'Default Sequence', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)

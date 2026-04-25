@@ -34,7 +34,7 @@ local db = database.get_connection()
 db:exec("DROP TRIGGER IF EXISTS trg_prevent_video_overlap_insert;")
 db:exec("DROP TRIGGER IF EXISTS trg_prevent_video_overlap_update;")
 
-local project = Project.create("Test Project")
+local project = Project.create("Test Project", { fps_mismatch_policy = 'resample' })
 project:save()
 
 local seq = Sequence.create("Test Sequence", project.id,

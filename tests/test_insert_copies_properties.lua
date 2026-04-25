@@ -86,8 +86,8 @@ db:exec([[
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('test_project', 'Insert Test Project', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('test_project', 'Insert Test Project', 'resample', %d, %d);
 
     INSERT INTO sequences (
         id, project_id, name, kind,
@@ -98,7 +98,7 @@ db:exec(string.format([[
         current_sequence_number, created_at, modified_at
     )
     VALUES (
-        'timeline_seq', 'test_project', 'Timeline Seq', 'timeline',
+        'timeline_seq', 'test_project', 'Timeline Seq', 'nested',
         24, 1, 48000,
         1920, 1080,
         0, 240, 0,

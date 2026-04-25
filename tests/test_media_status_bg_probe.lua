@@ -32,7 +32,7 @@ do
     local now = os.time()
     -- Create project
     db:exec(string.format(
-        "INSERT INTO projects (id, name, created_at, modified_at) VALUES ('proj1', 'Test', %d, %d)",
+        "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('proj1', 'Test', 'resample', %d, %d)",
         now, now))
 
     -- Create media records: one for a file that exists, one for a file that doesn't
@@ -159,7 +159,7 @@ do
 
     local now = os.time()
     db:exec(string.format(
-        "INSERT INTO projects (id, name, created_at, modified_at) VALUES ('proj1', 'Test', %d, %d)",
+        "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('proj1', 'Test', 'resample', %d, %d)",
         now, now))
 
     local file_a = "/tmp/jve/bg_probe_nochange_a.txt"

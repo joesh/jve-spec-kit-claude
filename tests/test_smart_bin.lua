@@ -18,10 +18,10 @@ db:exec(require("import_schema"))
 
 local now = os.time()
 db:exec(string.format(
-    "INSERT INTO projects (id, name, created_at, modified_at) VALUES ('proj1', 'Test', %d, %d)",
+    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('proj1', 'Test', 'resample', %d, %d)",
     now, now))
 db:exec(string.format(
-    "INSERT INTO projects (id, name, created_at, modified_at) VALUES ('proj2', 'Other', %d, %d)",
+    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('proj2', 'Other', 'resample', %d, %d)",
     now, now))
 
 local smart_bin = require("core.smart_bin")

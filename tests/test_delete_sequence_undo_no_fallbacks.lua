@@ -21,8 +21,8 @@ local now = os.time()
 
 -- Insert project
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('proj1', 'Test Project', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('proj1', 'Test Project', 'resample', %d, %d);
 ]], now, now))
 
 -- Insert sequence with NON-DEFAULT values (not 1920x1080, not 48000, not 24fps)
@@ -36,7 +36,7 @@ db:exec(string.format([[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         created_at, modified_at
     ) VALUES (
-        'seq_custom', 'proj1', 'Custom Seq', 'timeline',
+        'seq_custom', 'proj1', 'Custom Seq', 'nested',
         25, 1, 44100,
         3840, 2160,
         50, 500, 120,

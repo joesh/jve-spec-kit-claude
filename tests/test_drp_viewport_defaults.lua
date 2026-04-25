@@ -23,8 +23,8 @@ local function with_db(fn)
     local db = database.get_connection()
     assert(db, "failed to open db connection")
     assert(db:exec(import_schema), "failed to apply schema")
-    assert(db:exec([[INSERT INTO projects(id, name, created_at, modified_at, settings)
-        VALUES('proj', 'Test', strftime('%s','now'), strftime('%s','now'), '{}')]]))
+    assert(db:exec([[INSERT INTO projects(id, name, fps_mismatch_policy, created_at, modified_at, settings)
+        VALUES('proj', 'Test', 'resample', strftime('%s','now'), strftime('%s','now'), '{}')]]))
     fn(db)
 end
 
@@ -44,7 +44,7 @@ with_db(function(db)
                               audio_rate, width, height,
                               playhead_frame, view_start_frame, view_duration_frames,
                               created_at, modified_at)
-        VALUES ('seq_ntsc', 'proj', 'NTSC Timeline', 'timeline', %d, %d, 48000, 1920, 1080,
+        VALUES ('seq_ntsc', 'proj', 'NTSC Timeline', 'nested', %d, %d, 48000, 1920, 1080,
                 0, 0, %d,
                 strftime('%%s','now'), strftime('%%s','now'))
     ]], fps_num, fps_den, default_view_dur)
@@ -88,7 +88,7 @@ with_db(function(db)
                               audio_rate, width, height,
                               playhead_frame, view_start_frame, view_duration_frames,
                               created_at, modified_at)
-        VALUES ('seq_pal', 'proj', 'PAL Timeline', 'timeline', %d, %d, 48000, 1920, 1080,
+        VALUES ('seq_pal', 'proj', 'PAL Timeline', 'nested', %d, %d, 48000, 1920, 1080,
                 0, 0, %d,
                 strftime('%%s','now'), strftime('%%s','now'))
     ]], fps_num, fps_den, default_view_dur)
@@ -119,7 +119,7 @@ with_db(function(db)
                               audio_rate, width, height,
                               playhead_frame, view_start_frame, view_duration_frames,
                               created_at, modified_at)
-        VALUES ('seq_30ntsc', 'proj', '30 NTSC Timeline', 'timeline', %d, %d, 48000, 1920, 1080,
+        VALUES ('seq_30ntsc', 'proj', '30 NTSC Timeline', 'nested', %d, %d, 48000, 1920, 1080,
                 0, 0, %d,
                 strftime('%%s','now'), strftime('%%s','now'))
     ]], fps_num, fps_den, default_view_dur)

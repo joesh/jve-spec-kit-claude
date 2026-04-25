@@ -66,7 +66,7 @@ do
 
     -- Create and persist a project so DB is non-empty
     local Project = require("models.project")
-    local project = Project.create("Test Project")
+    local project = Project.create("Test Project", { fps_mismatch_policy = 'resample' })
     project:save()
     check("project created and saved", project ~= nil)
 

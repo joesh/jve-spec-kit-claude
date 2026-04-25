@@ -47,7 +47,7 @@ local sequence_id = "seq_cs_001"
 local track_id = "track_cs_001"
 
 db:exec(string.format(
-    "INSERT INTO projects (id, name, created_at, modified_at, settings) VALUES ('%s', 'TestProj', %d, %d, '{}')",
+    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings) VALUES ('%s', 'TestProj', 'resample', %d, %d, '{}')",
     project_id, now, now
 ))
 db:exec(string.format(

@@ -19,12 +19,12 @@ db:exec(require('import_schema'))
 -- Need a minimal project to initialize command_manager
 local now = os.time()
 assert(db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('init_project', 'Init Project', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('init_project', 'Init Project', 'resample', %d, %d);
 ]], now, now)))
 assert(db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-    VALUES ('init_sequence', 'init_project', 'Init Sequence', 'timeline', 30, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('init_sequence', 'init_project', 'Init Sequence', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now)))
 
 command_manager.init('init_sequence', 'init_project')

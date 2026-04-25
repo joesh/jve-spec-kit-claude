@@ -47,7 +47,7 @@ local sequence_id = "seq_hist_001"
 local now = os.time()
 
 db:exec(string.format(
-    "INSERT INTO projects (id, name, created_at, modified_at) VALUES ('%s', 'Test', %d, %d)",
+    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('%s', 'Test', 'resample', %d, %d)",
     project_id, now, now
 ))
 db:exec(string.format(

@@ -274,13 +274,17 @@ function M.create(opts)
     assert(database.init(db_path), "Failed to init database")
 
     -- Create project using model
-    local project = Project.create(cfg.project_name, {id = cfg.project_id})
+    local project = Project.create(cfg.project_name, {
+        id = cfg.project_id,
+        fps_mismatch_policy = "resample",
+    })
     assert(project and project:save(), "Failed to create project")
 
     -- Create sequence using model
     local frame_rate = {fps_numerator = cfg.fps_numerator, fps_denominator = cfg.fps_denominator}
     local sequence = Sequence.create(cfg.sequence_name, cfg.project_id, frame_rate, cfg.width, cfg.height, {
         id = cfg.sequence_id,
+        kind = "nested",
         audio_rate = cfg.audio_rate,
         view_start_frame = cfg.view_start_frame,
         view_duration_frames = cfg.view_duration_frames,

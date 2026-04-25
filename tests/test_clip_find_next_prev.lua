@@ -22,15 +22,15 @@ assert(db:exec(import_schema))
 
 -- Create project + sequence + tracks
 assert(db:exec([[
-    INSERT INTO projects(id, name, created_at, modified_at)
-    VALUES('proj', 'TestProject', strftime('%s','now'), strftime('%s','now'))
+    INSERT INTO projects(id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES('proj', 'TestProject', 'resample', strftime('%s','now'), strftime('%s','now'))
 ]]))
 
 assert(db:exec([[
     INSERT INTO sequences(id, project_id, name, kind, fps_numerator, fps_denominator,
                          audio_rate, width, height, view_start_frame, view_duration_frames,
                          playhead_frame, created_at, modified_at)
-    VALUES('seq', 'proj', 'TestTimeline', 'timeline', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
+    VALUES('seq', 'proj', 'TestTimeline', 'nested', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
            strftime('%s','now'), strftime('%s','now'))
 ]]))
 

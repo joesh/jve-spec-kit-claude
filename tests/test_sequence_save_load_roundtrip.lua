@@ -31,8 +31,8 @@ database.init(db_path)
 local db = database.get_connection()
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('proj1', 'Test', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', %d, %d);
 ]], now, now))
 
 -- Insert a sequence with specific created_at (in the past)
@@ -49,7 +49,7 @@ db:exec(string.format([[
         video_audio_split_ratio,
         created_at, modified_at
     ) VALUES (
-        'seq1', 'proj1', 'Timeline', 'timeline', 24, 1,
+        'seq1', 'proj1', 'Timeline', 'nested', 24, 1,
         48000, 1920, 1080,
         100, 50, 500,
         10, 200,

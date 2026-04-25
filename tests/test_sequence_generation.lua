@@ -33,8 +33,8 @@ local db = database.get_connection()
 -- Seed a project + sequence with all NOT NULL columns populated.
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('proj1', 'test', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('proj1', 'test', 'resample', %d, %d);
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (
@@ -42,7 +42,7 @@ db:exec(string.format([[
         fps_numerator, fps_denominator, audio_rate,
         width, height,
         created_at, modified_at
-    ) VALUES ('seq1', 'proj1', 'Seq 1', 'timeline',
+    ) VALUES ('seq1', 'proj1', 'Seq 1', 'nested',
               25, 1, 48000,
               1920, 1080,
               %d, %d);

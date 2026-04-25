@@ -16,12 +16,12 @@ assert(db:exec(SCHEMA_SQL))
 
 local now = os.time()
 local seed = string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', 'resample', %d, %d);
 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
                           playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
-    VALUES ('default_sequence', 'default_project', 'Timeline', 'timeline', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);
+    VALUES ('default_sequence', 'default_project', 'Timeline', 'nested', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
     VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1);

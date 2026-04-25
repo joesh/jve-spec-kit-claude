@@ -20,7 +20,7 @@ end
 
 local function create_test_project(db)
     local project_id = uuid.generate()
-    local project = Project.create("Test Project", {id = project_id})
+    local project = Project.create("Test Project", { fps_mismatch_policy = 'resample', id = project_id})
     project:save()
     return project_id
 end

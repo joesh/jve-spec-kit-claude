@@ -20,8 +20,8 @@ assert(db:exec(import_schema))
 
 local now = os.time()
 local seed = string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('proj', 'Timeline', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
+    VALUES ('proj', 'Timeline', 'resample', %d, %d);
 
     INSERT INTO sequences (
         id, project_id, name, kind,
@@ -29,7 +29,7 @@ local seed = string.format([[
         width, height, view_start_frame, view_duration_frames, playhead_frame,
         created_at, modified_at
     )
-    VALUES ('seq', 'proj', 'Sequence 1', 'timeline',
+    VALUES ('seq', 'proj', 'Sequence 1', 'nested',
             24, 1, 48000, 1920, 1080, 0, 20000, 0, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)

@@ -35,7 +35,7 @@ db:exec("DROP TRIGGER IF EXISTS trg_prevent_video_overlap_update;")
 -- Create project/sequence at 25fps (non-trivial fps)
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at) VALUES ('proj1', 'Test', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('proj1', 'Test', 'resample', %d, %d);
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, fps_numerator, fps_denominator,
