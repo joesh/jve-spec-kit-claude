@@ -117,7 +117,7 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 
 - [x] **T032 [P]** CT-C1 Insert: dropping a master with V and stereo audio creates exactly 2 `clips` rows (V + A), both with correct `nested_sequence_id`, NULL `master_layer_track_id`, non-NULL `fps_mismatch_policy`, joined by one `clip_links.link_group_id`. **Parametrized over both policies**: 25fps master on 24fps timeline gives `duration_frames=96` under `resample` and `duration_frames=100` under `passthrough`; `source_out_frame=100` in both. Also covers the Insert optional-arg path (explicit policy overrides the inherited default). Path: `tests/test_insert_creates_linked_clips.lua`.
 - [x] **T033 [P]** CT-C2 Overwrite: overlapping clip trimmed, new clip occupies [start, start + duration_under_policy). Parametrized over both policies. Path: `tests/test_overwrite_trims_overlap.lua`.
-- [ ] **T034 [P]** CT-C3 Trim (head): `source_in` and `timeline_start` update by the trim amount in the nested sequence's timebase. Path: `tests/test_trim_head.lua`.
+- [x] **T034 [P]** CT-C3 Trim (head): `source_in` and `timeline_start` update by the trim amount in the nested sequence's timebase. Path: `tests/test_013_trim_head_tail.lua` (covers TrimHead + TrimTail in one file — paired contracts).
 - [x] **T035 [P]** CT-C4/C5/C6 Slip/Slide/Roll — one test per command; all arithmetic in nested-sequence timebase; out-of-bounds loud-fail. Path: `tests/test_slip_slide_roll.lua`.
 - [x] **T036 [P]** CT-C7 Split preserves overrides on both halves. Path: `tests/test_split_preserves_overrides.lua`.
 - [x] **T036a [P]** CT-C7b Blade (razor-at-playhead across linked tracks) — Blade at playhead on armed tracks splits every linked clip at the playhead, preserving the link group on each resulting half-pair (distinct from a single-clip Split). If commands.md treats Blade as a synonym for Split, this test documents that — one failing test forces the distinction decision. Path: `tests/test_blade_across_linked_tracks.lua`.
@@ -131,7 +131,7 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 - [x] **T040 [P]** Rewrite `src/lua/core/commands/insert.lua` — no flattening; insert 1 or 2 `clips` rows with `nested_sequence_id` = the master; cycle check; link-group creation; ripple on target tracks.
 - [x] **T041 [P]** Rewrite `src/lua/core/commands/overwrite.lua` — same shape as Insert, overlap removed/trimmed.
 - [ ] **T042 [P]** Rewrite `src/lua/core/commands/add_clips_to_sequence.lua` — emit clip rows referencing sequences only; no `media_id`/`clip_kind` references.
-- [ ] **T043 [P]** Rewrite `src/lua/core/commands/trim_head.lua` and `trim_tail.lua` — units are nested sequence's timebase. (Two files, still [P] with each other.)
+- [x] **T043 [P]** Rewrite `src/lua/core/commands/trim_head.lua` and `trim_tail.lua` — units are nested sequence's timebase. (Two files, still [P] with each other.)
 - [x] **T044 [P]** Rewrite `src/lua/core/commands/slip.lua`, `slide.lua`, `roll.lua`. (Three files, [P].)
 - [x] **T045 [P]** Rewrite `src/lua/core/commands/split_clip.lua` — single-clip Split; override copy to both halves; new link_group for each half. Precondition: T036 passes.
 - [x] **T045a [P]** Rewrite `src/lua/core/commands/blade.lua` — razor-at-playhead across armed tracks; preserves link group integrity per T036a. If implementation finds Blade and Split share enough code to refactor into a `split_at(clip_ids_by_track, frame)` helper, do it; but each command's contract is distinct and both contracts must pass.
