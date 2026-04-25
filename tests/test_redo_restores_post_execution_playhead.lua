@@ -80,7 +80,7 @@ mc_seq:save()
 -- Execute Insert with advance_playhead=true
 local insert_cmd = Command.create("Insert", "default_project")
 insert_cmd:set_parameter("sequence_id", "seq1")
-insert_cmd:set_parameter("track_id", "v1")
+insert_cmd:set_parameter("target_video_track_id", "v1")
 insert_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
 insert_cmd:set_parameter("timeline_start_frame", 0)
 insert_cmd:set_parameter("advance_playhead", true)

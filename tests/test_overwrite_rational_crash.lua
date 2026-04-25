@@ -120,7 +120,7 @@ print("Created existing clip at 0-100 frames")
 -- This triggers clip_mutator to resolve occlusion (trim existing clip)
 local cmd = Command.create("Overwrite", "project")
 cmd:set_parameter("nested_sequence_id", nested_sequence_id)
-cmd:set_parameter("track_id", "track_v1")
+cmd:set_parameter("target_video_track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
 -- Rationals
 cmd:set_parameter("overwrite_time", 50)

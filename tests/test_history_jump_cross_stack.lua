@@ -77,7 +77,7 @@ end
 local function insert_clip(project_id, sequence_id, track_id, master_id, clip_id, t)
     local c = Command.create("Insert", project_id)
     c:set_parameter("sequence_id", sequence_id)
-    c:set_parameter("track_id", track_id)
+    c:set_parameter("target_video_track_id", track_id)
     c:set_parameter("nested_sequence_id", master_id)
     c:set_parameter("clip_id", clip_id)
     c:set_parameter("timeline_start_frame", t)

@@ -170,7 +170,7 @@ print("Test 1: Basic insertion at frame 0")
 set_masterclip_marks(nested_sequence_id, 0, 50)
 local insert_cmd = Command.create("Insert", "project")
 insert_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
-insert_cmd:set_parameter("track_id", "track_v1")
+insert_cmd:set_parameter("target_video_track_id", "track_v1")
 insert_cmd:set_parameter("sequence_id", "sequence")
 insert_cmd:set_parameter("timeline_start_frame", 0)
 
@@ -189,11 +189,11 @@ assert(downstream_start == 250, string.format("Downstream should ripple to 250, 
 -- =============================================================================
 print("Test 2: Second insert at frame 0 ripples everything")
 set_masterclip_marks(nested_sequence_id, 0, 30)
-local insert_cmd2 = Command.create("Insert", "project")
+local insert_cmd2 = Command.cr, "project")
 insert_cmd2:set_parameter("nested_sequence_id", nested_sequence_id)
-insert_cmd2:set_parameter("track_id", "track_v1")
+insert_cmd2:set_parameter("target_video_track_id", "track_v1")
 insert_cmd2:set_parameter("sequence_id", "sequence")
-insert_cmd2:set_parameter("timeline_start_frame", 0)
+insert_cmd2:set_parameter("timeline_start_frame", 0)rt_frame", 0)
 
 result = execute_cmd(insert_cmd2)
 assert(result.success, "Second insert should succeed")
@@ -243,12 +243,12 @@ db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip
 
 -- Clear marks — no marks = use full clip range
 set_masterclip_marks(nested_sequence_id, nil, nil)
-local insert_cmd3 = Command.create("Insert", "project")
+local insert_cmd3, "project")
 insert_cmd3:set_parameter("nested_sequence_id", nested_sequence_id)
-insert_cmd3:set_parameter("track_id", "track_v1")
+insert_cmd3:set_parameter("target_video_track_id", "track_v1")
 insert_cmd3:set_parameter("sequence_id", "sequence")
 insert_cmd3:set_parameter("timeline_start_frame", 0)
--- No marks set — should use full media duration (100 frames)
+-- No marks set — should use full media duration (100 frames)edia duration (100 frames)
 
 result = execute_cmd(insert_cmd3)
 assert(result.success, "Insert without duration should succeed: " .. tostring(result.error_message))
@@ -270,11 +270,11 @@ db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_cli
 db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
 
 set_masterclip_marks(nested_sequence_id, 0, 50)
-local insert_cmd4 = Command.create("Insert", "project")
+loca, "project")
 insert_cmd4:set_parameter("nested_sequence_id", nested_sequence_id)
-insert_cmd4:set_parameter("track_id", "track_v1")
+insert_cmd4:set_parameter("target_video_track_id", "track_v1")
 insert_cmd4:set_parameter("sequence_id", "sequence")
-insert_cmd4:set_parameter("timeline_start_frame", 200)  -- Exactly at downstream start
+insert_cmd4:set_parameter("timeline_start_frame", 200)  -- Exactly at downstream start", 200)  -- Exactly at downstream start
 
 result = execute_cmd(insert_cmd4)
 assert(result.success, "Insert at boundary should succeed")
@@ -288,12 +288,12 @@ assert(downstream_start == 250, string.format("Downstream should ripple to 250, 
 -- =============================================================================
 print("Test 7: Missing media_id fails")
 -- Disable asserts for error case testing (schema validation asserts on missing required params)
-asserts._set_enabled_for_tests(false)
-local bad_cmd = Command.create("Insert", "project")
-bad_cmd:set_parameter("track_id", "track_v1")
+asserts._set_enabled_for_, "project")
+bad_cmd:set_parameter("target_video_track_id", "track_v1")
 bad_cmd:set_parameter("sequence_id", "sequence")
 bad_cmd:set_parameter("timeline_start_frame", 0)
 bad_cmd:set_parameter("duration", 50)
+-- No media_idbad_cmd:set_parameter("duration", 50)
 -- No media_id
 
 result = execute_cmd(bad_cmd)
@@ -304,13 +304,13 @@ assert(not result.success, "Insert without media_id should fail")
 -- TEST 8: Error case - nonexistent nested_sequence_id
 -- =============================================================================
 print("Test 8: Nonexistent nested_sequence_id fails")
-asserts._set_enabled_for_tests(false)
-local bad_cmd2 = Command.create("Insert", "project")
+asserts._set_, "project")
 bad_cmd2:set_parameter("nested_sequence_id", nested_sequence_id)
-bad_cmd2:set_parameter("track_id", "track_v1")
+bad_cmd2:set_parameter("target_video_track_id", "track_v1")
 bad_cmd2:set_parameter("sequence_id", "sequence")
 bad_cmd2:set_parameter("timeline_start_frame", 0)
 bad_cmd2:set_parameter("nested_sequence_id", "nonexistent_master")  -- Should fail
+bad_cmd2:set_parameter("duration", 50)t_master")  -- Should fail
 bad_cmd2:set_parameter("duration", 50)
 
 result = execute_cmd(bad_cmd2)
@@ -326,14 +326,14 @@ db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_cli
 db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
 
 -- Insert 3 clips
-set_masterclip_marks(nested_sequence_id, 0, 20)
-for i = 1, 3 do
-    local cmd = Command.create("Insert", "project")
+set_masterclip_marks(nest, "project")
     cmd:set_parameter("nested_sequence_id", nested_sequence_id)
-    cmd:set_parameter("track_id", "track_v1")
+    cmd:set_parameter("target_video_track_id", "track_v1")
     cmd:set_parameter("sequence_id", "sequence")
     cmd:set_parameter("timeline_start_frame", 0)
     result = execute_cmd(cmd)
+    assert(result.success, string.format("Insert %d should succeed", i))
+end)
     assert(result.success, string.format("Insert %d should succeed", i))
 end
 

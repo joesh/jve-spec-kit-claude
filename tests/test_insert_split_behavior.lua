@@ -133,7 +133,7 @@ mc_seq:save()
 
 local cmd = Command.create("Insert", "project")
 cmd:set_parameter("nested_sequence_id", nested_sequence_id)
-cmd:set_parameter("track_id", "track_v1")
+cmd:set_parameter("target_video_track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
 cmd:set_parameter("timeline_start_frame", 50)
 cmd:set_parameter("clip_name", "Clip B")

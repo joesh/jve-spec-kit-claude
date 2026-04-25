@@ -79,7 +79,7 @@ local function create_clip_via_insert(spec)
 
     local cmd = Command.create("Insert", "default_project")
     cmd:set_parameter("sequence_id", "default_sequence")
-    cmd:set_parameter("track_id", spec.track)
+    cmd:set_parameter("target_video_track_id", spec.track)
     cmd:set_parameter("nested_sequence_id", nested_sequence_id)
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("timeline_start_frame", spec.start)

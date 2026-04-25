@@ -83,7 +83,7 @@ end
 -- Execute an overwrite operation (has mutation population code)
 local overwrite_cmd = Command.create("Overwrite", "default_project")
 overwrite_cmd:set_parameter("sequence_id", "seq1")
-overwrite_cmd:set_parameter("track_id", "v1")
+overwrite_cmd:set_parameter("target_video_track_id", "v1")
 overwrite_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
 overwrite_cmd:set_parameter("overwrite_time", 50)
 overwrite_cmd:set_parameter("duration", 100)

@@ -128,7 +128,7 @@ expect_generation(0, "baseline before Insert")
 
 local insert_cmd = Command.create("Insert", "proj1")
 insert_cmd:set_parameter("sequence_id", "seq1")
-insert_cmd:set_parameter("track_id", "v1")
+insert_cmd:set_parameter("target_video_track_id", "v1")
 insert_cmd:set_parameter("nested_sequence_id", mc_id)
 insert_cmd:set_parameter("clip_id", "clip_a")
 insert_cmd:set_parameter("timeline_start_frame", 100)

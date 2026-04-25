@@ -61,7 +61,7 @@ print("\n=== Insert with media_id but no duration/source_out ===")
 local cmd = Command.create("Insert", "project")
 cmd:set_parameter("project_id", "project")
 cmd:set_parameter("sequence_id", "sequence")
-cmd:set_parameter("track_id", "track_v1")
+cmd:set_parameter("target_video_track_id", "track_v1")
 cmd:set_parameter("nested_sequence_id", nested_sequence_id)
 -- NOTE: no duration, source_in, source_out provided - should infer from masterclip
 

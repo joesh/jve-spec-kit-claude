@@ -104,7 +104,7 @@ reset_tracking()
 
 -- Execute Overwrite
 local overwrite_cmd = Command.create("Overwrite", "default_project")
-overwrite_cmd:set_parameter("track_id", "track_v1")
+overwrite_cmd:set_parameter("target_video_track_id", "track_v1")
 overwrite_cmd:set_parameter("sequence_id", "default_sequence")
 overwrite_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
 overwrite_cmd:set_parameter("overwrite_time", 400)

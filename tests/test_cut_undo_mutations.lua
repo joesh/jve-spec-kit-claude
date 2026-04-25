@@ -56,7 +56,7 @@ local mc_id = test_env.create_test_masterclip_sequence('proj', 'MC1', 25, 1, 500
 -- Insert a clip
 local cmd = Command.create("Insert", "proj")
 cmd:set_parameter("sequence_id", "seq")
-cmd:set_parameter("track_id", "v1")
+cmd:set_parameter("target_video_track_id", "v1")
 cmd:set_parameter("nested_sequence_id", mc_id)
 cmd:set_parameter("clip_id", "clip_a")
 cmd:set_parameter("timeline_start_frame", 100)

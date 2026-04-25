@@ -186,7 +186,7 @@ assert(property_result.success, "SetClipProperty failed: " .. tostring(property_
 print("Test 1: Insert copies master clip properties to timeline clip")
 local insert_cmd = Command.create("Insert", "test_project")
 insert_cmd:set_parameter("media_id", import_cmd:get_parameter("media_id") or "media_001")
-insert_cmd:set_parameter("track_id", "track_v1")
+insert_cmd:set_parameter("target_video_track_id", "track_v1")
 insert_cmd:set_parameter("sequence_id", "timeline_seq")
 insert_cmd:set_parameter("project_id", "test_project")
 insert_cmd:set_parameter("timeline_start_frame", 0)

@@ -109,7 +109,7 @@ end
 set_mc_marks(nested_sequence_id, 0, 4543560)
 local insert_cmd = Command.create("Insert", "default_project")
 insert_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
-insert_cmd:set_parameter("track_id", "track_default_v1")
+insert_cmd:set_parameter("target_video_track_id", "track_default_v1")
 insert_cmd:set_parameter("timeline_start_frame", 0)
 insert_cmd:set_parameter("sequence_id", "default_sequence")
 exec(insert_cmd)
@@ -205,12 +205,13 @@ nested_sequence_id = test_env.create_test_masterclip_sequence(
 
 local function insert_clip(start_value, duration, source_in)
     set_mc_marks(nested_sequence_id, source_in or 0, (source_in or 0) + duration)
-    local cmd = Command.create("Insert", "default_project")
+    local cmd = Command.cr, "default_project")
     cmd:set_parameter("nested_sequence_id", nested_sequence_id)
-    cmd:set_parameter("track_id", "track_default_v1")
+    cmd:set_parameter("target_video_track_id", "track_default_v1")
     cmd:set_parameter("timeline_start_frame", start_value)
     cmd:set_parameter("sequence_id", "default_sequence")
     exec(cmd)
+endexec(cmd)
 end
 
 local function fetch_clips_ordered()

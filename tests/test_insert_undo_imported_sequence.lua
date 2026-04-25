@@ -178,7 +178,7 @@ assert(baseline == 1, string.format("Expected baseline clip count 1, got %d", ba
 local insert_cmd = Command.create("Insert", 'default_project')
 insert_cmd:set_parameter("nested_sequence_id", "masterclip_insert")
 insert_cmd:set_parameter("sequence_id", "imported_sequence")
-insert_cmd:set_parameter("track_id", "imported_v1")
+insert_cmd:set_parameter("target_video_track_id", "imported_v1")
 insert_cmd:set_parameter("timeline_start_frame", 111400)
 insert_cmd:set_parameter("duration", 4543560)
 insert_cmd:set_parameter("source_in", 0)
