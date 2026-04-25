@@ -28,13 +28,13 @@ check("resolve_occlusions asserts on nil duration", not ok2)
 
 -- Test 3: resolve_ripple with nil track_id → noop (true)
 local ok3 = pcall(function()
-    return ClipMutator.resolve_ripple(nil, { track_id = nil, insert_time = 0, shift_amount = 5 })
+    return ClipMutator.resolve_ripple(nil, { track_id = nil, timeline_start_frame = 0, shift_amount = 5 })
 end)
 check("resolve_ripple noops on nil track_id", ok3)
 
 -- Test 4: resolve_ripple with nil shift_amount should assert
 local ok4 = pcall(function()
-    ClipMutator.resolve_ripple(nil, { track_id = "t1", insert_time = 0, shift_amount = nil })
+    ClipMutator.resolve_ripple(nil, { track_id = "t1", timeline_start_frame = 0, shift_amount = nil })
 end)
 check("resolve_ripple asserts on nil shift_amount", not ok4)
 

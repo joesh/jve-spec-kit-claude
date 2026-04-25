@@ -412,10 +412,10 @@ do
     check("ripple nil params ok", ok == true)
 end
 
-print("\n--- resolve_ripple: missing insert_time → noop ---")
+print("\n--- resolve_ripple: missing timeline_start_frame → noop ---")
 do
     local ok = ClipMutator.resolve_ripple(nil, {track_id = "t1", shift_amount = 10})
-    check("ripple missing insert_time ok", ok == true)
+    check("ripple missing timeline_start_frame ok", ok == true)
 end
 
 print("\n--- resolve_ripple: shift clips after insert point ---")
@@ -436,7 +436,7 @@ do
 
     local ok, _, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
-        insert_time = 500,
+        timeline_start_frame = 500,
         shift_amount = 200,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
@@ -463,7 +463,7 @@ do
 
     local ok, _, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
-        insert_time = 400,
+        timeline_start_frame = 400,
         shift_amount = 300,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
@@ -504,7 +504,7 @@ do
 
     local ok, _, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
-        insert_time = 0,
+        timeline_start_frame = 0,
         shift_amount = 100,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
@@ -531,7 +531,7 @@ do
 
     local ok, _, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
-        insert_time = 1000,
+        timeline_start_frame = 1000,
         shift_amount = 200,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })

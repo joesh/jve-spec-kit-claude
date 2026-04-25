@@ -202,9 +202,9 @@ local function test_timeline_clips_visual_sync()
     local result = command_manager.execute("Insert", {
         project_id = project_id,
         sequence_id = timeline.id,
-        track_id = video_track.id,
+        target_video_track_id = video_track.id,
         nested_sequence_id = masterclip.id,
-        insert_time = 0,
+        timeline_start_frame = 0,
     })
     assert(result and result.success, "Insert failed: " .. tostring(result and result.error_message))
 

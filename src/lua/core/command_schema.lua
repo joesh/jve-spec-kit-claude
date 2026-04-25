@@ -242,6 +242,10 @@ function M.validate_and_normalize(command_name, spec, params, opts)
     -- Required keys, defaults, kind checks, and nested-table normalization.
     local function apply_rules(rules, enforce_required)
         for k, rule in pairs(rules or {}) do
+            -- SPEC.persisted entries may use a default-value shorthand (e.g.
+            -- `duration_frames = 0`, `fps_mismatch_policy = ""`). Treat those
+            -- as a rule with no flags.
+            if type(rule) ~= "table" then rule = {} end
             local v = out[k]
 
             if v == "" and rule.empty_as_nil then

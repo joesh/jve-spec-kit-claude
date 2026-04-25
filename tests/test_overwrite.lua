@@ -209,9 +209,9 @@ reset_timeline()
 local result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
-    track_id = "track_v1",
+    target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    overwrite_time = 0,
+    timeline_start_frame = 0,
     duration = 100,
     source_in = 0,
     source_out = 100
@@ -229,10 +229,10 @@ create_clip("existing_clip", "track_v1", 0, 100)
 result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
-    track_id = "track_v1",
+    target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    clip_id = "overwrite_clip",
-    overwrite_time = 0,
+    nested_sequence_id = "overwrite_clip",
+    timeline_start_frame = 0,
     duration = 100,
     source_in = 0,
     source_out = 100
@@ -254,10 +254,10 @@ create_clip("trim_start", "track_v1", 0, 100)
 result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
-    track_id = "track_v1",
+    target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    clip_id = "overwrite_start",
-    overwrite_time = 0,
+    nested_sequence_id = "overwrite_start",
+    timeline_start_frame = 0,
     duration = 50,
     source_in = 0,
     source_out = 50
@@ -309,10 +309,10 @@ create_clip("split_me", "track_v1", 0, 200)
 result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
-    track_id = "track_v1",
+    target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    clip_id = "middle_overwrite",
-    overwrite_time = 75,
+    nested_sequence_id = "middle_overwrite",
+    timeline_start_frame = 75,
     duration = 50,
     source_in = 0,
     source_out = 50
@@ -331,8 +331,8 @@ asserts._set_enabled_for_tests(false)
 result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
-    track_id = "track_v1",
-    overwrite_time = 0,
+    target_video_track_id = "track_v1",
+    timeline_start_frame = 0,
     duration = 100
     -- No nested_sequence_id
 })
@@ -349,7 +349,7 @@ result = execute_command("Overwrite", {
     sequence_id = "sequence",
     -- No track_id - should use first video track
     nested_sequence_id = nested_sequence_id,
-    overwrite_time = 0,
+    timeline_start_frame = 0,
     duration = 100,
     source_in = 0,
     source_out = 100
@@ -366,10 +366,10 @@ reset_timeline()
 result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
-    track_id = "track_v1",
+    target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    clip_id = "fallback_dur_clip",
-    overwrite_time = 0
+    nested_sequence_id = "fallback_dur_clip",
+    timeline_start_frame = 0
     -- No duration - should infer from masterclip stream
 })
 assert(result.success, "Overwrite should succeed with duration inference: " .. tostring(result.error_message))
@@ -388,10 +388,10 @@ reset_timeline()
 result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
-    track_id = "track_v1",
+    target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    clip_id = "ow_1",
-    overwrite_time = 0,
+    nested_sequence_id = "ow_1",
+    timeline_start_frame = 0,
     duration = 100,
     source_in = 0,
     source_out = 100
@@ -402,10 +402,10 @@ assert(result.success, "First overwrite should succeed")
 result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
-    track_id = "track_v1",
+    target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    clip_id = "ow_2",
-    overwrite_time = 100,
+    nested_sequence_id = "ow_2",
+    timeline_start_frame = 100,
     duration = 100,
     source_in = 100,
     source_out = 200
@@ -416,10 +416,10 @@ assert(result.success, "Second overwrite should succeed")
 result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
-    track_id = "track_v1",
+    target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    clip_id = "ow_3",
-    overwrite_time = 200,
+    nested_sequence_id = "ow_3",
+    timeline_start_frame = 200,
     duration = 100,
     source_in = 200,
     source_out = 300
@@ -446,10 +446,10 @@ create_clip("v1_clip", "track_v1", 0, 100)
 result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
-    track_id = "track_v2",  -- Different track
+    target_video_track_id = "track_v2",  -- Different track
     nested_sequence_id = nested_sequence_id,
-    clip_id = "v2_clip",
-    overwrite_time = 0,
+    nested_sequence_id = "v2_clip",
+    timeline_start_frame = 0,
     duration = 100,
     source_in = 0,
     source_out = 100
@@ -475,9 +475,9 @@ reset_timeline()
 result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
-    track_id = "track_v1",
+    target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,  -- Uses the existing video-only masterclip
-    overwrite_time = 0,
+    timeline_start_frame = 0,
     duration = 100,
     source_in = 0,
     source_out = 100

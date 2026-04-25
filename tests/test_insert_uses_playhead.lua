@@ -1,7 +1,7 @@
 #!/usr/bin/env luajit
 
--- Regression test: Insert command should use playhead position when insert_time not specified.
--- Bug: insert_time had default=0 in SPEC, so it was never nil, and playhead was never consulted.
+-- Regression test: Insert command should use playhead position when timeline_start_frame not specified.
+-- Bug: timeline_start_frame had default=0 in SPEC, so it was never nil, and playhead was never consulted.
 --
 -- Uses REAL timeline_state (not mocked) — exercises the actual playhead state management.
 
@@ -83,9 +83,9 @@ end
 assert(video_track_id, "Should have a VIDEO track")
 
 -- =============================================================================
--- TEST: Insert without insert_time should use playhead position (frame 150)
+-- TEST: Insert without timeline_start_frame should use playhead position (frame 150)
 -- =============================================================================
-print("Test: Insert without insert_time uses playhead position")
+print("Test: Insert without timeline_start_frame uses playhead position")
 
 -- Set marks on masterclip sequence — Insert reads timing from these
 local mc_seq = Sequence.load(nested_sequence_id)
@@ -97,7 +97,7 @@ mc_seq:save()
 command_manager.begin_command_event("script")
 local result = command_manager.execute("Insert", {
     nested_sequence_id = nested_sequence_id,
-    track_id = video_track_id,
+    target_video_track_id = video_track_id,
     sequence_id = seq.id,
     project_id = project.id,
 })

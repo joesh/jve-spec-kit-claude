@@ -110,10 +110,10 @@ local function insert_clip(params)
     local cmd = Command.create("Insert", "proj")
     cmd:set_parameters({
         nested_sequence_id = nested_sequence_id,
-        track_id = params.track_id,
+        target_video_track_id = params.track_id,
         sequence_id = "seq",
-        insert_time = params.timeline_start,
-        clip_id = params.clip_id,
+        timeline_start_frame = params.timeline_start,
+        nested_sequence_id = params.clip_id,
         advance_playhead = false,
     })
     local result = command_manager.execute(cmd)

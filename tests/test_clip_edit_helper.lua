@@ -205,27 +205,27 @@ check("empty string → resolves", track_id3 == "trk_v1" and err == nil)
 print("\n--- 4. resolve_edit_time ---")
 
 -- 4a. Explicit value → pass through (including 0)
-result = clip_edit_helper.resolve_edit_time(0, nil, "insert_time")
+result = clip_edit_helper.resolve_edit_time(0, nil, "timeline_start_frame")
 check("edit_time=0 → 0 (not nil)", result == 0)
 
-result = clip_edit_helper.resolve_edit_time(42, nil, "insert_time")
+result = clip_edit_helper.resolve_edit_time(42, nil, "timeline_start_frame")
 check("edit_time=42 → 42", result == 42)
 
 -- 4b. Integer value → pass through
 local int_val = 10
-result = clip_edit_helper.resolve_edit_time(int_val, nil, "insert_time")
+result = clip_edit_helper.resolve_edit_time(int_val, nil, "timeline_start_frame")
 check("edit_time integer → pass through", result == int_val)
 
 -- 4c. nil → fallback to timeline_state playhead
 mock_timeline_state.get_playhead_position = function() return 100 end
 cmd = mock_command()
-result = clip_edit_helper.resolve_edit_time(nil, cmd, "insert_time")
+result = clip_edit_helper.resolve_edit_time(nil, cmd, "timeline_start_frame")
 check("nil → playhead from timeline_state", result == 100)
-check("param set on command", cmd.params.insert_time == 100)
+check("param set on command", cmd.params.timeline_start_frame == 100)
 
 -- 4d. nil with no timeline_state → nil
 mock_timeline_state.get_playhead_position = nil
-result = clip_edit_helper.resolve_edit_time(nil, nil, "overwrite_time")
+result = clip_edit_helper.resolve_edit_time(nil, nil, "timeline_start_frame")
 check("nil no timeline → nil", result == nil)
 
 

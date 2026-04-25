@@ -90,7 +90,7 @@ create_clip({clip_id = 'clip_tgt', media_id = 'media_tgt', track_id = 'video2', 
 local overwrite_cmd = Command.create('Overwrite', 'default_project')
 overwrite_cmd:set_parameter('nested_sequence_id', masterclip_ids['media_src'])
 overwrite_cmd:set_parameter('track_id', 'video2')
-overwrite_cmd:set_parameter('overwrite_time', 1000)
+overwrite_cmd:set_parameter('timeline_start_frame', 1000)
 overwrite_cmd:set_parameter('duration', 1000)
 overwrite_cmd:set_parameter('source_in', 0)
 overwrite_cmd:set_parameter('source_out', 1000)
@@ -130,7 +130,7 @@ local command_specs = {
         command_type = "Overwrite",
         parameters = {
             track_id = 'video2',
-            overwrite_time = 500,
+            timeline_start_frame = 500,
             duration = 1000,
             source_in = 0,
             source_out = 1000,
@@ -144,7 +144,7 @@ local command_specs = {
         command_type = "Overwrite",
         parameters = {
             track_id = 'video2',
-            overwrite_time = 3200,
+            timeline_start_frame = 3200,
             duration = 1200,
             source_in = 0,
             source_out = 1200,
