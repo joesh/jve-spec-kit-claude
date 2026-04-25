@@ -79,7 +79,7 @@ local function insert_clip(project_id, sequence_id, track_id, master_id, clip_id
     c:set_parameter("sequence_id", sequence_id)
     c:set_parameter("target_video_track_id", track_id)
     c:set_parameter("nested_sequence_id", master_id)
-    c:set_parameter("nested_sequence_id", clip_id)
+    c:set_parameter("clip_name", clip_id)
     c:set_parameter("timeline_start_frame", t)
     local r = command_manager.execute(c)
     assert(r.success, "Insert(" .. clip_id .. ") failed: " .. tostring(r.error_message))
