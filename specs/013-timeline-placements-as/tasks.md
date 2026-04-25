@@ -135,15 +135,7 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 - [x] **T044 [P]** Rewrite `src/lua/core/commands/slip.lua`, `slide.lua`, `roll.lua`. (Three files, [P].)
 - [x] **T045 [P]** Rewrite `src/lua/core/commands/split_clip.lua` — single-clip Split; override copy to both halves; new link_group for each half. Precondition: T036 passes.
 - [x] **T045a [P]** Rewrite `src/lua/core/commands/blade.lua` — razor-at-playhead across armed tracks; preserves link group integrity per T036a. If implementation finds Blade and Split share enough code to refactor into a `split_at(clip_ids_by_track, frame)` helper, do it; but each command's contract is distinct and both contracts must pass.
-- [ ] **T046 [P]** Rewrite the ripple + extend + delete command set. For each file listed below: remove any read/write of `clip.media_id` / `clip.clip_kind` / `clip.master_clip_id` / `clip.offline`; replace with `clip.nested_sequence_id` + resolver-driven lookups where a preview of post-mutation state is needed. No silent schema migration inside the command; if a query previously projected `media_id`, project `nested_sequence_id` explicitly and follow the chain through the model layer (no inline SQL JOINs to `media_refs` — let `media_ref.lua` / `sequence.lua` own the chain walk). Exact files (enumerate so [P] parallelism is verifiable):
-  - `src/lua/core/commands/extend_edit.lua`
-  - `src/lua/core/commands/ripple_insert.lua`
-  - `src/lua/core/commands/ripple_overwrite.lua`
-  - `src/lua/core/commands/ripple_delete.lua`
-  - `src/lua/core/commands/ripple_trim.lua`
-  - `src/lua/core/commands/delete_clip.lua`
-  - `src/lua/core/commands/delete_range.lua`
-  (Verify these exact filenames against `ls src/lua/core/commands/` before starting; any file not present is dropped from this task and flagged for follow-up.)
+- [x] **T046 [P]** Rewrite the ripple + extend + delete command set. Existing files migrated: `extend_edit.lua` (already V13-clean — zero V8 col refs), `ripple_delete.lua` (V13 + capture/restore), `delete_clip.lua` (V13 + capture/restore). Files dropped per the verify-and-flag clause (do not exist under `src/lua/core/commands/`): `ripple_insert.lua`, `ripple_overwrite.lua`, `ripple_trim.lua`, `delete_range.lua`. **Follow-up**: if any of those features are needed, file new tasks; today's editor surface achieves them via `BatchRippleEdit` + `Insert`/`Overwrite` + `DeleteClip` + `DeleteSelection`.
 - [x] **T047 [P]** Rewrite `src/lua/core/commands/duplicate.lua` — copy overrides + `clip_channel_override` rows.
 
 ---
