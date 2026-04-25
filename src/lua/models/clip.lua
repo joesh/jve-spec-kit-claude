@@ -374,8 +374,12 @@ local function save_internal(self, _opts)
     -- project_validator, not here.
 
     ensure_project_context(self, db)
-    assert(self.clip_kind, "Clip.save: clip_kind is required for clip " .. tostring(self.id))
-    self.offline = false  -- transient: never persist to DB
+    -- V13: clip_kind is a derived/compat surface (from track type); not a real
+    -- column. self.nested_sequence_id replaces master_clip_id.
+    local nested_id = self.nested_sequence_id or self.master_clip_id
+    assert(nested_id and nested_id ~= "",
+        "Clip.save: nested_sequence_id (or master_clip_id alias) required for clip " .. tostring(self.id))
+    self.offline = false
     self.name = derive_display_name(self.id, self.name)
 
     local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
@@ -408,11 +412,13 @@ local function save_internal(self, _opts)
     if exists then
         query = db:prepare([[
             UPDATE clips
-            SET project_id = ?, clip_kind = ?, name = ?, track_id = ?, media_id = ?,
-                master_clip_id = ?, owner_sequence_id = ?,
-                timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?,
-                fps_numerator = ?, fps_denominator = ?, enabled = ?, offline = ?,
-                volume = ?,
+            SET project_id = ?, name = ?, track_id = ?,
+                owner_sequence_id = ?, nested_sequence_id = ?,
+                timeline_start_frame = ?, duration_frames = ?,
+                source_in_frame = ?, source_out_frame = ?,
+                master_layer_track_id = ?, master_audio_track_id = ?,
+                fps_mismatch_policy = ?,
+                enabled = ?, volume = ?,
                 mark_in_frame = ?, mark_out_frame = ?, playhead_frame = ?,
                 modified_at = strftime('%s','now')
             WHERE id = ?
@@ -420,21 +426,23 @@ local function save_internal(self, _opts)
     else
         query = db:prepare([[
             INSERT INTO clips (
-                id, project_id, clip_kind, name, track_id, media_id,
-                master_clip_id, owner_sequence_id,
-                timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-                fps_numerator, fps_denominator, enabled, offline,
-                volume,
+                id, project_id, name, track_id,
+                owner_sequence_id, nested_sequence_id,
+                timeline_start_frame, duration_frames,
+                source_in_frame, source_out_frame,
+                master_layer_track_id, master_audio_track_id,
+                fps_mismatch_policy,
+                enabled, volume,
                 mark_in_frame, mark_out_frame, playhead_frame,
                 created_at, modified_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    strftime('%s','now'), strftime('%s','now'))
         ]])
     end
 
     assert(query, "Clip.save: Failed to prepare query for clip " .. tostring(self.id))
 
-    -- Helper: bind nullable integer (mark_in, mark_out are nullable)
     local function bind_nullable(stmt, idx, val)
         if val ~= nil then
             stmt:bind_value(idx, val)
@@ -445,48 +453,45 @@ local function save_internal(self, _opts)
         end
     end
 
+    local fps_policy = self.fps_mismatch_policy or "resample"
     if exists then
         query:bind_value(1, self.project_id)
-        query:bind_value(2, self.clip_kind)
-        query:bind_value(3, self.name or "")
-        query:bind_value(4, self.track_id)
-        query:bind_value(5, self.media_id)
-        query:bind_value(6, self.master_clip_id)
-        query:bind_value(7, self.owner_sequence_id)
-        query:bind_value(8, db_start_frame)
-        query:bind_value(9, db_duration_frames)
-        query:bind_value(10, db_source_in_frame)
-        query:bind_value(11, db_source_out_frame)
-        query:bind_value(12, db_fps_num)
-        query:bind_value(13, db_fps_den)
-        query:bind_value(14, self.enabled and 1 or 0)
-        query:bind_value(15, self.offline and 1 or 0)
-        query:bind_value(16, self.volume)
-        bind_nullable(query, 17, self.mark_in)
-        bind_nullable(query, 18, self.mark_out)
-        query:bind_value(19, self.playhead_frame)
-        query:bind_value(20, self.id)
+        query:bind_value(2, self.name or "")
+        query:bind_value(3, self.track_id)
+        query:bind_value(4, self.owner_sequence_id)
+        query:bind_value(5, nested_id)
+        query:bind_value(6, db_start_frame)
+        query:bind_value(7, db_duration_frames)
+        query:bind_value(8, db_source_in_frame)
+        query:bind_value(9, db_source_out_frame)
+        bind_nullable(query, 10, self.master_layer_track_id)
+        bind_nullable(query, 11, self.master_audio_track_id)
+        query:bind_value(12, fps_policy)
+        query:bind_value(13, self.enabled and 1 or 0)
+        query:bind_value(14, self.volume)
+        bind_nullable(query, 15, self.mark_in)
+        bind_nullable(query, 16, self.mark_out)
+        query:bind_value(17, self.playhead_frame)
+        query:bind_value(18, self.id)
     else
         query:bind_value(1, self.id)
         query:bind_value(2, self.project_id)
-        query:bind_value(3, self.clip_kind)
-        query:bind_value(4, self.name or "")
-        query:bind_value(5, self.track_id)
-        query:bind_value(6, self.media_id)
-        query:bind_value(7, self.master_clip_id)
-        query:bind_value(8, self.owner_sequence_id)
-        query:bind_value(9, db_start_frame)
-        query:bind_value(10, db_duration_frames)
-        query:bind_value(11, db_source_in_frame)
-        query:bind_value(12, db_source_out_frame)
-        query:bind_value(13, db_fps_num)
-        query:bind_value(14, db_fps_den)
-        query:bind_value(15, self.enabled and 1 or 0)
-        query:bind_value(16, self.offline and 1 or 0)
-        query:bind_value(17, self.volume)
-        bind_nullable(query, 18, self.mark_in)
-        bind_nullable(query, 19, self.mark_out)
-        query:bind_value(20, self.playhead_frame)
+        query:bind_value(3, self.name or "")
+        query:bind_value(4, self.track_id)
+        query:bind_value(5, self.owner_sequence_id)
+        query:bind_value(6, nested_id)
+        query:bind_value(7, db_start_frame)
+        query:bind_value(8, db_duration_frames)
+        query:bind_value(9, db_source_in_frame)
+        query:bind_value(10, db_source_out_frame)
+        bind_nullable(query, 11, self.master_layer_track_id)
+        bind_nullable(query, 12, self.master_audio_track_id)
+        query:bind_value(13, fps_policy)
+        query:bind_value(14, self.enabled and 1 or 0)
+        query:bind_value(15, self.volume)
+        bind_nullable(query, 16, self.mark_in)
+        bind_nullable(query, 17, self.mark_out)
+        query:bind_value(18, self.playhead_frame)
     end
 
     local krono_exec = (krono_enabled and krono_exists and krono.now and krono.now()) or nil

@@ -51,7 +51,7 @@ require("test_env").create_test_media({
     project_id = "proj",
     name = "TestMedia",
     file_path = "/tmp/test.mov",
-    duration_frames = 1000,
+    duration_frames = 1000000,
     fps_numerator = 48000,
     fps_denominator = 1,
     audio_channels = 2,
@@ -84,13 +84,14 @@ local MC_TEST = _Sequence_for_master.ensure_master("media1", "proj")
 -- =========================================================================
 -- Test 1: Create clip with non-unity volume, save, reload, verify
 -- =========================================================================
-local clip1 = Clip.create({
+local clip1_id = Clip.create({
         nested_sequence_id = MC_TEST,
         name = "Quiet Clip",
         project_id = "proj",
         owner_sequence_id = "seq",
         track_id = "a1",
         timeline_start_frame = 48000,
+        duration_frames = 120000 - 0,
         source_in_frame = 0,
         source_out_frame = 120000,
         volume = 0.501187,
@@ -98,8 +99,8 @@ local clip1 = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
+local clip1 = Clip.load(clip1_id)
 assert(clip1.volume == 0.501187, "create: volume should be 0.501187, got " .. tostring(clip1.volume))
-assert(clip1:save())
 
 local loaded1 = Clip.load(clip1.id)
 assert(loaded1, "reload: clip should exist")
@@ -110,7 +111,7 @@ print("  ✓ Clip volume persists through save/reload (0.501187 ≈ -6dB)")
 -- =========================================================================
 -- Test 2: Default volume is 1.0 (unity gain)
 -- =========================================================================
-local clip2 = Clip.create({
+local clip2_id = Clip.create({
         nested_sequence_id = MC_TEST,
         name = "Unity Clip",
         project_id = "proj",
@@ -125,8 +126,8 @@ local clip2 = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
+local clip2 = Clip.load(clip2_id)
 assert(clip2.volume == 1.0, "default: volume should be 1.0, got " .. tostring(clip2.volume))
-assert(clip2:save())
 local loaded2 = Clip.load(clip2.id)
 assert(loaded2.volume == 1.0, "default reload: volume should be 1.0, got " .. tostring(loaded2.volume))
 print("  ✓ Default volume is 1.0 (unity gain)")
@@ -147,7 +148,7 @@ print("  ✓ Volume survives UPDATE")
 local snapshot_manager = require("core.snapshot_manager")
 
 -- Create a clip with interesting volume
-local clip3 = Clip.create({
+local clip3_id = Clip.create({
         nested_sequence_id = MC_TEST,
         name = "Snapshot Clip",
         project_id = "proj",
@@ -162,7 +163,7 @@ local clip3 = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
-assert(clip3:save())
+local clip3 = Clip.load(clip3_id)
 
 -- Take snapshot (API: create_snapshot(db, seq_id, seq_number, clips))
 snapshot_manager.create_snapshot(db, "seq", 1, {clip1, clip2, clip3})
@@ -217,7 +218,7 @@ print("  ✓ Negative volume fails validation")
 -- =========================================================================
 -- Test 6: Volume = 0.0 (silence) persists and round-trips
 -- =========================================================================
-local clip_silent = Clip.create({
+local clip_silent_id = Clip.create({
         nested_sequence_id = MC_TEST,
         name = "Silent Clip",
         project_id = "proj",
@@ -232,9 +233,9 @@ local clip_silent = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
+local clip_silent = Clip.load(clip_silent_id)
 assert(clip_silent.volume == 0.0, "create: volume should be 0.0, got " .. tostring(clip_silent.volume))
-assert(clip_silent:save())
-local loaded_silent = Clip.load(clip_silent.id)
+local loaded_silent = Clip.load(clip_silent_id)
 assert(loaded_silent.volume == 0.0,
     string.format("reload: volume should be 0.0, got %s", tostring(loaded_silent.volume)))
 print("  ✓ Volume = 0.0 (silence) persists through save/reload")
