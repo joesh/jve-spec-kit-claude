@@ -1780,8 +1780,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     local function persist_undo_parameters(ctx)
         local persisted_states = {}
         for id, state in pairs(ctx.original_states_map) do
-            -- V13: gaps are in-memory only — never appear in original_states_map.
-            persisted_states[id] = state
+            -- V13: gaps are in-memory only — recomputed by timeline_state on
+            -- undo. Excluded here so revert_mutations doesn't try to restore
+            -- a gap row (which has no source_in/source_out).
+            if not state.is_gap then
+                persisted_states[id] = state
+            end
         end
         ctx.command:set_parameter("original_states", persisted_states)
 
@@ -1794,7 +1798,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local order = {}
         for _, mut in ipairs(ctx.planned_mutations) do
             if type(mut) == "table" and mut.type and mut.clip_id and mut.type ~= "gap_preview" then
-                table.insert(order, {type = mut.type, clip_id = mut.clip_id})
+                -- Skip gap-clip mutations: gaps are recomputed by
+                -- timeline_state on undo, so the persisted order must not
+                -- name gap ids (matches persist_undo_parameters' filter).
+                local cap = ctx.original_states_map[mut.clip_id]
+                if not (cap and cap.is_gap) then
+                    table.insert(order, {type = mut.type, clip_id = mut.clip_id})
+                end
             end
         end
         ctx.command:set_parameter("executed_mutation_order", order)

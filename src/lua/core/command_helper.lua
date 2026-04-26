@@ -533,6 +533,10 @@ function M.capture_clip_state(clip)
         id = clip.id,
         project_id = clip.project_id,
         track_type = clip.track_type,
+        -- Mark gap captures so persistence can filter them out — gaps are
+        -- in-memory-only (recomputed by timeline_state at apply/undo time);
+        -- they have no source_in/source_out and would crash revert_mutations.
+        is_gap = clip.is_gap == true or nil,
         owner_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
         track_sequence_id = clip.track_sequence_id or clip.owner_sequence_id,
         nested_sequence_id = clip.nested_sequence_id,
