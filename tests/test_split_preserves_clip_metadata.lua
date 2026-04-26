@@ -90,7 +90,7 @@ db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, volume, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, playhead_frame)
 VALUES
     
-    ('clip1', 'proj1', 'Gained', 'v1', 'master_media1', 'seq1', 100, 200, 5000, 5200, 1, 1.0, %d, %d, NULL, NULL, 'resample', 0);
+    ('clip1', 'proj1', 'Gained', 'v1', 'master_media1', 'seq1', 100, 200, 5000, 5200, 1, 0.42, %d, %d, NULL, NULL, 'resample', 0);
 ]], now, now))
 
 command_manager.init("seq1", "proj1")
