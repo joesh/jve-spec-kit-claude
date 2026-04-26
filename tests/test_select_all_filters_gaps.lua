@@ -68,7 +68,7 @@ local all_clips = timeline_state.get_clips()
 local gap_count = 0
 local media_count = 0
 for _, c in ipairs(all_clips) do
-    if c.clip_kind == "gap" then gap_count = gap_count + 1
+    if c.is_gap == true then gap_count = gap_count + 1
     else media_count = media_count + 1 end
 end
 assert(gap_count > 0, "should have at least one gap clip")
@@ -108,7 +108,7 @@ print("Test 3: DeleteSelection rejects gap clips")
 -- Manually inject a gap clip into selection to test the assert
 local gap_clip = nil
 for _, c in ipairs(all_clips) do
-    if c.clip_kind == "gap" then gap_clip = c; break end
+    if c.is_gap == true then gap_clip = c; break end
 end
 assert(gap_clip, "need a gap clip for this test")
 

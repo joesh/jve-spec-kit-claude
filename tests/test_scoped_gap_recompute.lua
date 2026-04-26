@@ -38,12 +38,35 @@ db:exec(string.format([[
 db:exec("INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'seq1', 'V1', 'VIDEO', 1, 1)")
 db:exec("INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_a1', 'seq1', 'A1', 'AUDIO', 2, 1)")
 
+-- V13 placeholder master sequence + media_ref (clip nested_sequence_id FK).
+db:exec(string.format([[
+    INSERT INTO media (id, project_id, name, file_path, duration_frames,
+        fps_numerator, fps_denominator, width, height, audio_channels, codec,
+        created_at, modified_at)
+    VALUES ('mc_media', 'proj1', 'mc', '/tmp/mc.mov', 1000, 25, 1, 1920, 1080,
+        0, 'raw', %d, %d);
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
+        audio_rate, width, height, created_at, modified_at)
+    VALUES ('mc_seq', 'proj1', 'MC', 'master', 25, 1, 48000, 1920, 1080, %d, %d);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('mc_seq_v', 'mc_seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    UPDATE sequences SET default_video_layer_track_id = 'mc_seq_v' WHERE id = 'mc_seq';
+    INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
+        source_in_frame, source_out_frame, timeline_start_frame, duration_frames,
+        enabled, volume, playhead_frame, created_at, modified_at)
+    VALUES ('mc_seq_mr', 'proj1', 'mc_seq', 'mc_seq_v', 'mc_media',
+        0, 1000, 0, 1000, 1, 1.0, 0, %d, %d);
+]], now, now, now, now, now, now))
+
 -- Create clips: V1 has clips at 0-100 and 200-400 (gap 100-200). A1 has clip at 0-300 and 400-500 (gap 300-400).
 local function insert_clip(id, track_id, start, dur)
-    db:exec(string.format(
-        "INSERT INTO clips (id, project_id, clip_kind, track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, created_at, modified_at) " ..
-        "VALUES ('%s', 'proj1', 'timeline', '%s', %d, %d, 0, %d, 25, 1, 1, %d, %d)",
-        id, track_id, start, dur, dur, now, now))
+    assert(db:exec(string.format(
+        "INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, nested_sequence_id, " ..
+        "timeline_start_frame, duration_frames, source_in_frame, source_out_frame, " ..
+        "master_layer_track_id, master_audio_track_id, fps_mismatch_policy, " ..
+        "enabled, volume, playhead_frame, created_at, modified_at) " ..
+        "VALUES ('%s', 'proj1', '%s', '%s', 'seq1', 'mc_seq', %d, %d, 0, %d, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d)",
+        id, id, track_id, start, dur, dur, now, now)))
 end
 
 insert_clip("clip_v1a", "track_v1", 0, 100)
@@ -60,7 +83,7 @@ timeline_core_state.init("seq1", "proj1")
 local function get_gap_ids_for_track(track_id)
     local ids = {}
     for _, clip in ipairs(data.state.clips) do
-        if clip.track_id == track_id and clip.clip_kind == "gap" then
+        if clip.track_id == track_id and clip.is_gap == true then
             table.insert(ids, clip.id)
         end
     end

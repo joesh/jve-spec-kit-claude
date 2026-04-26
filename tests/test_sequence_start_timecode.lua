@@ -35,7 +35,7 @@ local seq1 = Sequence.create("Default TC", "proj",
     { kind = "nested", audio_rate = 48000 })
 assert(seq1.start_timecode_frame == 0,
     "default: start_timecode_frame should be 0, got " .. tostring(seq1.start_timecode_frame))
-seq:save(db)
+seq1:save(db)
 local loaded1 = Sequence.load(seq1.id)
 assert(loaded1.start_timecode_frame == 0,
     "reload: start_timecode_frame should be 0, got " .. tostring(loaded1.start_timecode_frame))
@@ -50,7 +50,7 @@ local seq2 = Sequence.create("1-Hour TC", "proj",
     { kind = "nested", audio_rate = 48000, start_timecode_frame = one_hour_25fps })
 assert(seq2.start_timecode_frame == one_hour_25fps,
     "create: start_timecode_frame should be 90000, got " .. tostring(seq2.start_timecode_frame))
-seq:save(db)
+seq2:save(db)
 local loaded2 = Sequence.load(seq2.id)
 assert(loaded2.start_timecode_frame == one_hour_25fps,
     "reload: start_timecode_frame should be 90000, got " .. tostring(loaded2.start_timecode_frame))
