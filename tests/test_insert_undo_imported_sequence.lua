@@ -47,7 +47,7 @@ db:exec(string.format([[
     ) VALUES
         ('default_sequence', 'default_project', 'Default Sequence', 'nested',
          30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, %d, %d),
-        ('imported_sequence', 'default_project', 'Imported Sequence', 'timeline',
+        ('imported_sequence', 'default_project', 'Imported Sequence', 'nested',
          30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
@@ -61,10 +61,13 @@ local media_existing = Media.create({
     project_id = "default_project",
     name = "Existing Clip",
     file_path = "synthetic://existing",
-    duration_frames = 150,
-    frame_rate = 30,
+    duration_frames = 10000,
+    fps_numerator = 30,
+    fps_denominator = 1,
     width = 1920,
     height = 1080,
+    audio_channels = 0,
+    metadata = require("dkjson").encode({ start_tc_value = 0, start_tc_rate = 30 }),
     created_at = now,
     modified_at = now
 })
@@ -98,43 +101,24 @@ local media_insert = Media.create({
     name = "Insert Clip",
     file_path = "synthetic://insert",
     duration_frames = 135000,
-    frame_rate = 30,
+    fps_numerator = 30,
+    fps_denominator = 1,
     width = 1920,
     height = 1080,
+    audio_channels = 0,
+    metadata = require("dkjson").encode({ start_tc_value = 0, start_tc_rate = 30 }),
     created_at = now,
     modified_at = now
 })
 assert(media_insert and media_insert:save(db))
 
--- IS-a refactor: create masterclip sequence for the media
+-- V13: media_insert needs a master sequence so Insert can find one to plant.
+-- ensure_master attaches the media_ref; the original V8 'stream clip inside
+-- master' construction is gone (INV-2 forbids it).
 local Sequence = require("models.sequence")
-local Track = require("models.track")
+local masterclip_insert_id = Sequence.ensure_master("media_insert", "default_project")
 
-local masterclip_seq = Sequence.create("Insert Clip Master", "default_project",
-    { fps_numerator = 30, fps_denominator = 1},
-    1920, 1080,
-    { audio_rate = 48000,id = "masterclip_insert", kind = "master"})
-masterclip_seq:save(db)
-local master_video_track = Track.create_video("V1", masterclip_seq.id, {id = "masterclip_insert_v1"})
-master_video_track:save(db)
-local stream_clip = Clip.create({
-        nested_sequence_id = MC_TEST,
-        name = "Insert Clip Video",
-        id = "masterclip_insert_stream",
-        project_id = "default_project",
-        track_id = master_video_track.id,
-        owner_sequence_id = masterclip_seq.id,
-        timeline_start_frame = 0,
-        duration_frames = 4543560,
-        source_in_frame = 0,
-        source_out_frame = 4543560,
-        fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-stream_clip:save(db)
-local base_clip = Clip.create({
+local base_clip_id = Clip.create({
         name = "Existing Clip",
         id = "clip_existing",
         project_id = "default_project",
@@ -150,7 +134,7 @@ local base_clip = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(base_clip and base_clip:save(db))
+assert(base_clip_id and base_clip_id ~= "", "failed to create existing clip")
 
 command_manager.init('default_sequence', 'default_project')
 
@@ -173,7 +157,7 @@ local baseline = clip_count('imported_sequence')
 assert(baseline == 1, string.format("Expected baseline clip count 1, got %d", baseline))
 
 local insert_cmd = Command.create("Insert", 'default_project')
-insert_cmd:set_parameter("nested_sequence_id", "masterclip_insert")
+insert_cmd:set_parameter("nested_sequence_id", masterclip_insert_id)
 insert_cmd:set_parameter("sequence_id", "imported_sequence")
 insert_cmd:set_parameter("target_video_track_id", "imported_v1")
 insert_cmd:set_parameter("timeline_start_frame", 111400)
