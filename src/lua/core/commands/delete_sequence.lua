@@ -53,8 +53,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        if sequence_row.kind and sequence_row.kind ~= "timeline" then
-            set_error(set_last_error, "DeleteSequence: Only timeline sequences can be deleted")
+        -- V13: kind narrowed to ('master','nested'). Edit timelines are
+        -- 'nested' (the V13 successor to V8 'timeline'). Masters cannot be
+        -- deleted via this command — that's a separate operation.
+        if sequence_row.kind and sequence_row.kind ~= "nested" then
+            set_error(set_last_error, "DeleteSequence: Only nested (edit timeline) sequences can be deleted")
             return false
         end
 

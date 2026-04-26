@@ -51,7 +51,10 @@ local media = Media.create({
     name = "DS Video",
     duration_frames = 500,
     fps_numerator = 30,
-    fps_denominator = 1
+    fps_denominator = 1,
+    width = 1920,
+    height = 1080,
+    audio_channels = 0,
 })
 media:save(db)
 -- V13: master sequence wrapping the media for clip references.
@@ -163,11 +166,18 @@ local function clip_exists(clip_id)
     return count > 0
 end
 
--- Helper: reset test sequences (keep default_sequence)
+-- Helper: reset test sequences (keep default_sequence + the master MC_TEST
+-- whose media_refs are referenced by every test clip's nested_sequence_id)
 local function reset_test_sequences()
-    db:exec("DELETE FROM clips WHERE owner_sequence_id != 'default_sequence'")
-    db:exec("DELETE FROM tracks WHERE sequence_id != 'default_sequence'")
-    db:exec("DELETE FROM sequences WHERE id != 'default_sequence'")
+    db:exec(string.format(
+        "DELETE FROM clips WHERE owner_sequence_id NOT IN ('default_sequence', '%s')",
+        MC_TEST))
+    db:exec(string.format(
+        "DELETE FROM tracks WHERE sequence_id NOT IN ('default_sequence', '%s')",
+        MC_TEST))
+    db:exec(string.format(
+        "DELETE FROM sequences WHERE id NOT IN ('default_sequence', '%s')",
+        MC_TEST))
 end
 
 -- =============================================================================
