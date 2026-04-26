@@ -101,12 +101,17 @@ db:exec(string.format([[
 
 command_manager.init('sequence', 'project')
 
--- Helper: execute command with proper event wrapping
+-- Helper: execute command with proper event wrapping. command_manager.execute
+-- now hard-asserts on missing project_id (V13 normalize_command),
+-- so wrap in pcall so the test can probe the failure path.
 local function execute_command(name, params)
     command_manager.begin_command_event("script")
-    local result = command_manager.execute(name, params)
+    local ok, result_or_err = pcall(command_manager.execute, name, params)
     command_manager.end_command_event()
-    return result
+    if not ok then
+        return { success = false, error_message = tostring(result_or_err) }
+    end
+    return result_or_err
 end
 
 -- Helper: undo/redo with proper event wrapping
@@ -134,9 +139,14 @@ local function count_media()
     return count
 end
 
--- Helper: count clips
+-- Helper: count master clips (V13: master sequences with at least one media_ref).
 local function count_clips()
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips")
+    local stmt = db:prepare([[
+        SELECT COUNT(DISTINCT s.id)
+          FROM sequences s
+          JOIN media_refs mr ON mr.owner_sequence_id = s.id
+         WHERE s.kind = 'master'
+    ]])
     stmt:exec()
     stmt:next()
     local count = stmt:value(0)
@@ -311,7 +321,7 @@ assert(seq_after > seq_before, "Should have created master sequence")
 -- IS-a refactor: masterclips are sequences with kind='masterclip'
 local stmt = db:prepare([[
     SELECT s.id, s.name, s.kind FROM sequences s
-    WHERE s.project_id = 'project' AND s.kind = 'masterclip'
+    WHERE s.project_id = 'project' AND s.kind = 'master'
     ORDER BY s.created_at DESC LIMIT 1
 ]])
 stmt:exec()
@@ -321,7 +331,7 @@ if stmt:next() then
     local seq_kind = stmt:value(2)
     stmt:finalize()
 
-    assert(seq_kind == "masterclip", "Sequence should be of kind 'masterclip'")
+    assert(seq_kind == "master", "Sequence should be of kind 'master'")
     -- IS-a refactor: name comes from file basename, not "Source"
     assert(seq_name and seq_name ~= "", "Masterclip sequence should have a name")
 
@@ -353,7 +363,7 @@ assert(av_result.success, "Import should succeed")
 -- Find the masterclip sequence just created
 local mc_stmt = db:prepare([[
     SELECT s.id FROM sequences s
-    WHERE s.project_id = 'project' AND s.kind = 'masterclip'
+    WHERE s.project_id = 'project' AND s.kind = 'master'
     ORDER BY s.created_at DESC LIMIT 1
 ]])
 mc_stmt:exec()
