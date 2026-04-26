@@ -45,6 +45,8 @@ function M.execute(args)
     end
 
     local plan = place_shared.plan_placement(args)
+    -- Carry preset_ids through redo so created_clip_ids stays stable.
+    plan.preset_ids = args.created_clip_ids
 
     -- Ripple target tracks BEFORE inserting so the new clip doesn't collide.
     local rippled = {}

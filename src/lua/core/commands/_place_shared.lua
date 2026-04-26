@@ -316,9 +316,22 @@ function M.write_clips(plan)
         return Clip.create(fields)
     end
 
+    -- Optional preset_ids let callers (e.g. command redo replaying a
+    -- persisted execute) pin the new clip ids so undo/redo round-trip
+    -- without churning uuids. preset_ids[1] is consumed for the video
+    -- clip (when there is one) and the remaining entries feed the audio
+    -- clip loop in order. Falls back to uuid.generate per slot.
+    local preset_ids = plan.preset_ids or {}
+    local preset_idx = 1
+    local function next_preset()
+        local pid = preset_ids[preset_idx]
+        preset_idx = preset_idx + 1
+        return pid or uuid.generate()
+    end
+
     if plan.targets.VIDEO then
         v_clip_id = insert_clip({
-            id                    = uuid.generate(),
+            id                    = next_preset(),
             project_id            = plan.owner.project_id,
             owner_sequence_id     = plan.owner.id,
             track_id              = plan.targets.VIDEO,
@@ -340,7 +353,7 @@ function M.write_clips(plan)
 
     for _, tgt in ipairs(plan.audio_targets or {}) do
         local id = insert_clip({
-            id                    = uuid.generate(),
+            id                    = next_preset(),
             project_id            = plan.owner.project_id,
             owner_sequence_id     = plan.owner.id,
             track_id              = tgt.track_id,

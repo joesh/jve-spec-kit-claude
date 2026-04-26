@@ -48,6 +48,8 @@ function M.execute(args)
     end
 
     local plan = place_shared.plan_placement(args)
+    -- Carry preset_ids through redo so created_clip_ids stays stable.
+    plan.preset_ids = args.created_clip_ids
     local n_start = plan.start_frame
     local n_end   = plan.start_frame + plan.owner_duration
 

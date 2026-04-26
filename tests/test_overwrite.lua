@@ -99,9 +99,23 @@ local function clear_mc_marks(mc_id)
     end
 end
 
+-- Map test-friendly aliases ("overwrite_clip", "middle_overwrite", …)
+-- to the V13-generated id of the clip the corresponding command
+-- actually created. Tests reference clips by alias for readability;
+-- the helpers below resolve the alias before clip_exists /
+-- get_clip_position. The duplicate-key params lines used to override
+-- nested_sequence_id with the desired literal id; in V13 the new
+-- clip's id is generated, so we capture it under params._alias instead.
+local clip_alias = {}
+local function resolve_clip_id(id)
+    return clip_alias[id] or id
+end
+
 -- Helper: execute command with proper event wrapping
 -- For Insert/Overwrite: reads source_in/source_out from params, sets marks, removes timing params
 local function execute_command(name, params)
+    local alias = params._alias
+    params._alias = nil
     if (name == "Insert" or name == "Overwrite") and params.nested_sequence_id then
         if params.source_in and params.source_out then
             set_mc_marks(params.nested_sequence_id, params.source_in, params.source_out)
@@ -114,9 +128,18 @@ local function execute_command(name, params)
             params.duration = nil
         end
     end
+    local Command = require("command")
+    local cmd = Command.create(name, params.project_id or "project")
+    cmd:set_parameters(params)
     command_manager.begin_command_event("script")
-    local result = command_manager.execute(name, params)
+    local result = command_manager.execute(cmd)
     command_manager.end_command_event()
+    if alias and result and result.success then
+        local ids = cmd:get_parameter("created_clip_ids")
+        if ids and ids[1] then
+            clip_alias[alias] = ids[1]
+        end
+    end
     return result
 end
 
@@ -159,6 +182,7 @@ end
 
 -- Helper: get clip position
 local function get_clip_position(clip_id)
+    clip_id = resolve_clip_id(clip_id)
     local stmt = db:prepare("SELECT timeline_start_frame, duration_frames FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     stmt:exec()
@@ -174,6 +198,7 @@ end
 
 -- Helper: check if clip exists
 local function clip_exists(clip_id)
+    clip_id = resolve_clip_id(clip_id)
     local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     stmt:exec()
@@ -230,7 +255,7 @@ result = execute_command("Overwrite", {
     sequence_id = "sequence",
     target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    nested_sequence_id = "overwrite_clip",
+    _alias = "overwrite_clip",
     timeline_start_frame = 0,
     duration = 100,
     source_in = 0,
@@ -255,7 +280,7 @@ result = execute_command("Overwrite", {
     sequence_id = "sequence",
     target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    nested_sequence_id = "overwrite_start",
+    _alias = "overwrite_start",
     timeline_start_frame = 0,
     duration = 50,
     source_in = 0,
@@ -310,7 +335,7 @@ result = execute_command("Overwrite", {
     sequence_id = "sequence",
     target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    nested_sequence_id = "middle_overwrite",
+    _alias = "middle_overwrite",
     timeline_start_frame = 75,
     duration = 50,
     source_in = 0,
@@ -367,7 +392,7 @@ result = execute_command("Overwrite", {
     sequence_id = "sequence",
     target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    nested_sequence_id = "fallback_dur_clip",
+    _alias = "fallback_dur_clip",
     timeline_start_frame = 0
     -- No duration - should infer from masterclip stream
 })
@@ -389,7 +414,7 @@ result = execute_command("Overwrite", {
     sequence_id = "sequence",
     target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    nested_sequence_id = "ow_1",
+    _alias = "ow_1",
     timeline_start_frame = 0,
     duration = 100,
     source_in = 0,
@@ -403,7 +428,7 @@ result = execute_command("Overwrite", {
     sequence_id = "sequence",
     target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    nested_sequence_id = "ow_2",
+    _alias = "ow_2",
     timeline_start_frame = 100,
     duration = 100,
     source_in = 100,
@@ -417,7 +442,7 @@ result = execute_command("Overwrite", {
     sequence_id = "sequence",
     target_video_track_id = "track_v1",
     nested_sequence_id = nested_sequence_id,
-    nested_sequence_id = "ow_3",
+    _alias = "ow_3",
     timeline_start_frame = 200,
     duration = 100,
     source_in = 200,
@@ -447,7 +472,7 @@ result = execute_command("Overwrite", {
     sequence_id = "sequence",
     target_video_track_id = "track_v2",  -- Different track
     nested_sequence_id = nested_sequence_id,
-    nested_sequence_id = "v2_clip",
+    _alias = "v2_clip",
     timeline_start_frame = 0,
     duration = 100,
     source_in = 0,
