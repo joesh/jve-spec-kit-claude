@@ -49,26 +49,34 @@ require("test_env").create_test_media({
     audio_sample_rate = 48000,
 })
 
+-- V13 master sequence wrapping med1 (clip nested_sequence_id target).
+local _Sequence = require("models.sequence")
+local _MC = _Sequence.ensure_master("med1", "proj1")
+
 -- Create linked clips: V1 [video 0..1000] linked to A1 [audio 0..1000]
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id,
-        owner_sequence_id,
+    INSERT INTO clips (id, project_id, name, track_id,
+        owner_sequence_id, nested_sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-    VALUES ('clip_video', 'proj1', 'timeline', 'Video', 'trk_v', 'med1',
-        'seq1',
-        0, 1000, 0, 1000, 24000, 1001, 1, 0, %d, %d);
-]], now, now))
+        master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+        enabled, volume, playhead_frame, created_at, modified_at)
+    VALUES ('clip_video', 'proj1', 'Video', 'trk_v',
+        'seq1', '%s',
+        0, 1000, 0, 1000, NULL, NULL, 'resample',
+        1, 1.0, 0, %d, %d);
+]], _MC, now, now))
 
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id,
-        owner_sequence_id,
+    INSERT INTO clips (id, project_id, name, track_id,
+        owner_sequence_id, nested_sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
-    VALUES ('clip_audio', 'proj1', 'timeline', 'Audio', 'trk_a', 'med1',
-        'seq1',
-        0, 1000, 0, 1000, 24000, 1001, 1, 0, %d, %d);
-]], now, now))
+        master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+        enabled, volume, playhead_frame, created_at, modified_at)
+    VALUES ('clip_audio', 'proj1', 'Audio', 'trk_a',
+        'seq1', '%s',
+        0, 1000, 0, 1000, NULL, NULL, 'resample',
+        1, 1.0, 0, %d, %d);
+]], _MC, now, now))
 
 -- Link them
 ClipLink.create_link_group({
