@@ -344,18 +344,27 @@ fetch_sequence_clips = function(db, sequence_id)
     local properties = {}
     local clip_links = {}
 
+    -- V13 columns: clips no longer carry clip_kind / media_id /
+    -- fps_numerator / fps_denominator / offline (those moved to the
+    -- nested sequence + media_refs + media chain). master_clip_id
+    -- renamed to nested_sequence_id; new columns master_layer_track_id /
+    -- master_audio_track_id / fps_mismatch_policy.
     local clip_stmt = db:prepare([[
-        SELECT id, project_id, clip_kind, name, track_id, media_id,
-               master_clip_id, owner_sequence_id,
-               timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-               fps_numerator, fps_denominator, enabled,
-               offline, created_at, modified_at,
-               volume, mark_in_frame, mark_out_frame, playhead_frame
-        FROM clips
-        WHERE track_id IN (
+        SELECT c.id, c.project_id, c.name, c.track_id,
+               c.nested_sequence_id, c.owner_sequence_id,
+               c.timeline_start_frame, c.duration_frames,
+               c.source_in_frame, c.source_out_frame,
+               c.master_layer_track_id, c.master_audio_track_id,
+               c.fps_mismatch_policy,
+               c.enabled, c.created_at, c.modified_at,
+               c.volume, c.mark_in_frame, c.mark_out_frame, c.playhead_frame,
+               t.track_type
+        FROM clips c
+        JOIN tracks t ON c.track_id = t.id
+        WHERE c.track_id IN (
             SELECT id FROM tracks WHERE sequence_id = ?
         )
-        ORDER BY track_id, timeline_start_frame
+        ORDER BY c.track_id, c.timeline_start_frame
     ]])
     if not clip_stmt then
         return clips, properties, clip_links
@@ -368,26 +377,25 @@ fetch_sequence_clips = function(db, sequence_id)
             local clip_entry = {
                 id = clip_id,
                 project_id = clip_stmt:value(1),
-                clip_kind = clip_stmt:value(2),
-                name = clip_stmt:value(3),
-                track_id = clip_stmt:value(4),
-                media_id = clip_stmt:value(5),
-                master_clip_id = clip_stmt:value(6),
-                owner_sequence_id = clip_stmt:value(7),
-                start_value = assert(tonumber(clip_stmt:value(8)), "DeleteSequence.fetch_sequence_clips: missing start_value for clip " .. tostring(clip_id)),
-                duration_value = assert(tonumber(clip_stmt:value(9)), "DeleteSequence.fetch_sequence_clips: missing duration_value for clip " .. tostring(clip_id)),
-                source_in_value = assert(tonumber(clip_stmt:value(10)), "DeleteSequence.fetch_sequence_clips: missing source_in_value for clip " .. tostring(clip_id)),
-                source_out_value = assert(tonumber(clip_stmt:value(11)), "DeleteSequence.fetch_sequence_clips: missing source_out_value for clip " .. tostring(clip_id)),
-                fps_numerator = assert(tonumber(clip_stmt:value(12)), "DeleteSequence.fetch_sequence_clips: missing fps_numerator for clip " .. tostring(clip_id)),
-                fps_denominator = assert(tonumber(clip_stmt:value(13)), "DeleteSequence.fetch_sequence_clips: missing fps_denominator for clip " .. tostring(clip_id)),
-                enabled = clip_stmt:value(14) == 1 or clip_stmt:value(14) == true,
-                offline = clip_stmt:value(15) == 1 or clip_stmt:value(15) == true,
-                created_at = clip_stmt:value(16) and tonumber(clip_stmt:value(16)) or nil,
-                modified_at = clip_stmt:value(17) and tonumber(clip_stmt:value(17)) or nil,
-                volume = clip_stmt:value(18) and tonumber(clip_stmt:value(18)) or nil,
-                mark_in_value = clip_stmt:value(19) and tonumber(clip_stmt:value(19)) or nil,
-                mark_out_value = clip_stmt:value(20) and tonumber(clip_stmt:value(20)) or nil,
-                playhead_value = clip_stmt:value(21) and tonumber(clip_stmt:value(21)) or nil
+                name = clip_stmt:value(2),
+                track_id = clip_stmt:value(3),
+                nested_sequence_id = clip_stmt:value(4),
+                owner_sequence_id = clip_stmt:value(5),
+                start_value = assert(tonumber(clip_stmt:value(6)), "DeleteSequence.fetch_sequence_clips: missing start_value for clip " .. tostring(clip_id)),
+                duration_value = assert(tonumber(clip_stmt:value(7)), "DeleteSequence.fetch_sequence_clips: missing duration_value for clip " .. tostring(clip_id)),
+                source_in_value = assert(tonumber(clip_stmt:value(8)), "DeleteSequence.fetch_sequence_clips: missing source_in_value for clip " .. tostring(clip_id)),
+                source_out_value = assert(tonumber(clip_stmt:value(9)), "DeleteSequence.fetch_sequence_clips: missing source_out_value for clip " .. tostring(clip_id)),
+                master_layer_track_id = clip_stmt:value(10),
+                master_audio_track_id = clip_stmt:value(11),
+                fps_mismatch_policy = clip_stmt:value(12),
+                enabled = clip_stmt:value(13) == 1 or clip_stmt:value(13) == true,
+                created_at = clip_stmt:value(14) and tonumber(clip_stmt:value(14)) or nil,
+                modified_at = clip_stmt:value(15) and tonumber(clip_stmt:value(15)) or nil,
+                volume = clip_stmt:value(16) and tonumber(clip_stmt:value(16)) or nil,
+                mark_in_value = clip_stmt:value(17) and tonumber(clip_stmt:value(17)) or nil,
+                mark_out_value = clip_stmt:value(18) and tonumber(clip_stmt:value(18)) or nil,
+                playhead_value = clip_stmt:value(19) and tonumber(clip_stmt:value(19)) or nil,
+                track_type = clip_stmt:value(20),
             }
 
             -- Fetch properties for this clip
@@ -460,9 +468,10 @@ fetch_sequence_snapshot = function(db, sequence_id)
 end
 
 count_sequence_references = function(db, sequence_id)
+    -- V13: clips reference other sequences via nested_sequence_id.
     local stmt = db:prepare([[
         SELECT COUNT(*) FROM clips
-        WHERE master_clip_id = ?
+        WHERE nested_sequence_id = ?
           AND (owner_sequence_id IS NULL OR owner_sequence_id <> ?)
     ]])
     if not stmt then
@@ -615,15 +624,18 @@ restore_sequence_from_payload = function(db, set_last_error, payload)
 
     local clips = payload.clips or {}
     if #clips > 0 then
+        -- V13 INSERT shape: see schema.sql clips table.
         local insert_clip_stmt = db:prepare([[
             INSERT INTO clips (
-                id, project_id, clip_kind, name, track_id, media_id,
-                master_clip_id, owner_sequence_id,
-                timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-                fps_numerator, fps_denominator, enabled,
-                offline, created_at, modified_at,
+                id, project_id, name, track_id,
+                nested_sequence_id, owner_sequence_id,
+                timeline_start_frame, duration_frames,
+                source_in_frame, source_out_frame,
+                master_layer_track_id, master_audio_track_id,
+                fps_mismatch_policy,
+                enabled, created_at, modified_at,
                 volume, mark_in_frame, mark_out_frame, playhead_frame
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not insert_clip_stmt then
             set_error(set_last_error, "UndoDeleteSequence: Failed to prepare clip insert")
@@ -631,43 +643,35 @@ restore_sequence_from_payload = function(db, set_last_error, payload)
         end
 
         for _, clip in ipairs(clips) do
-            insert_clip_stmt:bind_value(1, clip.id)
-            insert_clip_stmt:bind_value(2, clip.project_id)
-            insert_clip_stmt:bind_value(3, clip.clip_kind or "timeline")
-            insert_clip_stmt:bind_value(4, clip.name or "")
-            insert_clip_stmt:bind_value(5, clip.track_id)
-            insert_clip_stmt:bind_value(6, clip.media_id)
-            insert_clip_stmt:bind_value(7, clip.master_clip_id)
-            insert_clip_stmt:bind_value(8, clip.owner_sequence_id or sequence_row.id)
-            insert_clip_stmt:bind_value(9, clip.start_value or 0)
-            insert_clip_stmt:bind_value(10, clip.duration_value or clip.duration or 0)
-            insert_clip_stmt:bind_value(11, clip.source_in_value or clip.source_in or 0)
-            insert_clip_stmt:bind_value(12, clip.source_out_value or clip.source_out or 0)
-            local clip_fps_num = clip.fps_numerator or sequence_row.fps_numerator
-            local clip_fps_den = clip.fps_denominator or sequence_row.fps_denominator
-            if not clip_fps_num or not clip_fps_den then
+            if not clip.nested_sequence_id or clip.nested_sequence_id == "" then
                 insert_clip_stmt:finalize()
-                set_error(set_last_error, "UndoDeleteSequence: Missing clip fps")
+                set_error(set_last_error, "UndoDeleteSequence: clip " .. tostring(clip.id) .. " missing nested_sequence_id")
                 return false
             end
-            insert_clip_stmt:bind_value(13, clip_fps_num)
-            insert_clip_stmt:bind_value(14, clip_fps_den)
-            insert_clip_stmt:bind_value(15, clip.enabled and 1 or 0)
-            insert_clip_stmt:bind_value(16, clip.offline and 1 or 0)
-            insert_clip_stmt:bind_value(17, clip.created_at or os.time())
-            insert_clip_stmt:bind_value(18, clip.modified_at or os.time())
-            if clip.volume then
-                insert_clip_stmt:bind_value(19, clip.volume)
-            end
+            insert_clip_stmt:bind_value(1, clip.id)
+            insert_clip_stmt:bind_value(2, clip.project_id)
+            insert_clip_stmt:bind_value(3, clip.name or "")
+            insert_clip_stmt:bind_value(4, clip.track_id)
+            insert_clip_stmt:bind_value(5, clip.nested_sequence_id)
+            insert_clip_stmt:bind_value(6, clip.owner_sequence_id or sequence_row.id)
+            insert_clip_stmt:bind_value(7, clip.start_value or 0)
+            insert_clip_stmt:bind_value(8, clip.duration_value or clip.duration or 0)
+            insert_clip_stmt:bind_value(9, clip.source_in_value or clip.source_in or 0)
+            insert_clip_stmt:bind_value(10, clip.source_out_value or clip.source_out or 0)
+            insert_clip_stmt:bind_value(11, clip.master_layer_track_id)
+            insert_clip_stmt:bind_value(12, clip.master_audio_track_id)
+            insert_clip_stmt:bind_value(13, clip.fps_mismatch_policy or "resample")
+            insert_clip_stmt:bind_value(14, clip.enabled and 1 or 0)
+            insert_clip_stmt:bind_value(15, clip.created_at or os.time())
+            insert_clip_stmt:bind_value(16, clip.modified_at or os.time())
+            insert_clip_stmt:bind_value(17, clip.volume or 1.0)
             if clip.mark_in_value then
-                insert_clip_stmt:bind_value(20, clip.mark_in_value)
+                insert_clip_stmt:bind_value(18, clip.mark_in_value)
             end
             if clip.mark_out_value then
-                insert_clip_stmt:bind_value(21, clip.mark_out_value)
+                insert_clip_stmt:bind_value(19, clip.mark_out_value)
             end
-            if clip.playhead_value then
-                insert_clip_stmt:bind_value(22, clip.playhead_value)
-            end
+            insert_clip_stmt:bind_value(20, clip.playhead_value or 0)
             if not insert_clip_stmt:exec() then
                 insert_clip_stmt:finalize()
                 set_error(set_last_error, "UndoDeleteSequence: Failed to restore clip")

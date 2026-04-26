@@ -1,8 +1,10 @@
---- Find Master Clip in Browser: reveal and select the master clip in the project browser.
+--- Find Master Clip in Browser: reveal and select the master sequence
+-- in the project browser.
 --
--- From timeline: resolves the clip under the playhead (same logic as MatchFrame),
---   gets its master_clip_id, and selects it in the browser.
--- From source viewer: uses the currently-loaded master clip sequence.
+-- From timeline: resolves the clip under the playhead (same logic as
+--   MatchFrame), gets its nested_sequence_id (V13 master ref), and
+--   selects it in the browser.
+-- From source viewer: uses the currently-loaded master sequence.
 --
 -- Always focuses the project browser panel.
 --
@@ -20,16 +22,16 @@ local SPEC = {
     }
 }
 
---- From timeline: find clip under playhead, return its master_clip_id.
+--- From timeline: find clip under playhead, return its nested_sequence_id.
 local function resolve_from_timeline()
     local target_clips = command_helper.resolve_clips_at_playhead()
     if #target_clips == 0 then return nil, "No clips under playhead" end
 
     local best = command_helper.pick_best_clip(target_clips)
-    if not best or not best.master_clip_id or best.master_clip_id == "" then
-        return nil, "Clip is not linked to a master clip"
+    if not best or not best.nested_sequence_id or best.nested_sequence_id == "" then
+        return nil, "Clip has no nested sequence"
     end
-    return best.master_clip_id
+    return best.nested_sequence_id
 end
 
 --- From source viewer: get the currently-loaded master clip sequence ID.
@@ -56,21 +58,21 @@ function M.register(command_executors, _command_undoers, _db, set_last_error)
         local project_browser = require("ui.project_browser")
 
         local panel = focus_manager.get_focused_panel()
-        local master_clip_id, err
+        local master_seq_id, err
 
         if panel == "source_monitor" then
-            master_clip_id, err = resolve_from_source_viewer()
+            master_seq_id, err = resolve_from_source_viewer()
         else
             -- Default: timeline (also handles timeline_monitor)
-            master_clip_id, err = resolve_from_timeline()
+            master_seq_id, err = resolve_from_timeline()
         end
 
-        if not master_clip_id then
+        if not master_seq_id then
             set_last_error("FindMasterClipInBrowser: " .. (err or "unknown error"))
             return false
         end
 
-        local ok, focus_err = pcall(project_browser.focus_master_clip, master_clip_id, {
+        local ok, focus_err = pcall(project_browser.focus_master_clip, master_seq_id, {
             skip_activate = true,  -- don't load into source viewer
         })
         if not ok then
@@ -79,7 +81,7 @@ function M.register(command_executors, _command_undoers, _db, set_last_error)
         end
 
         log.event("FindMasterClipInBrowser: revealed %s (from %s)",
-            master_clip_id:sub(1, 8), panel or "timeline")
+            master_seq_id:sub(1, 8), panel or "timeline")
         return true
     end
 

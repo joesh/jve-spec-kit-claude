@@ -656,9 +656,17 @@ function M:get_source_extent(target_rate)
     local database = require("core.database")
     local db = assert(database.get_connection(),
         string.format("Media:get_source_extent: no database connection (media_id=%s)", tostring(self.id)))
+    -- V13: clip.source_in/out are in the NESTED sequence's timebase. Walk
+    -- clips → nested → master.media_refs to find clips referencing this
+    -- media. fps_numerator/denominator come from the nested sequence (the
+    -- clip's source-side timebase).
     local stmt = assert(db:prepare([[
-        SELECT source_in_frame, source_out_frame, fps_numerator, fps_denominator
-        FROM clips WHERE media_id = ? AND clip_kind != 'master'
+        SELECT c.source_in_frame, c.source_out_frame,
+               nested.fps_numerator, nested.fps_denominator
+        FROM clips c
+        JOIN sequences nested ON nested.id = c.nested_sequence_id
+        JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+        WHERE mr.media_id = ?
     ]]), "Media:get_source_extent: failed to prepare query")
     stmt:bind_value(1, self.id)
     assert(stmt:exec(), string.format(
@@ -987,11 +995,15 @@ function M.batch_get_source_extents(media_rates)
         local n = chunk_end - chunk_start + 1
         local phs = {}
         for i = 1, n do phs[i] = "?" end
+        -- V13: walk clips → nested sequence → master.media_refs to find
+        -- clips referencing each media. fps from nested (clip's source-side).
         local sql = string.format([[
-            SELECT media_id, source_in_frame, source_out_frame,
-                   fps_numerator, fps_denominator
-            FROM clips
-            WHERE media_id IN (%s) AND clip_kind != 'master'
+            SELECT mr.media_id, c.source_in_frame, c.source_out_frame,
+                   nested.fps_numerator, nested.fps_denominator
+            FROM clips c
+            JOIN sequences nested ON nested.id = c.nested_sequence_id
+            JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+            WHERE mr.media_id IN (%s)
         ]], table.concat(phs, ","))
 
         local stmt = assert(db:prepare(sql),

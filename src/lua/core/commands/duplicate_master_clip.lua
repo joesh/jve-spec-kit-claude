@@ -61,22 +61,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         assert(duration, "DuplicateMasterClip: missing duration (no duration and no source_out)")
 
-        local clip_opts = {
-            id = new_clip_id,
-            project_id = project_id,
-            clip_kind = "master",
-            master_clip_id = args.clip_snapshot.master_clip_id,
-            timeline_start = timeline_start,
-            duration = duration,
-            source_in = source_in,
-            source_out = source_out or (source_in + duration),
-            fps_numerator = args.clip_snapshot.fps_numerator,
-            fps_denominator = args.clip_snapshot.fps_denominator,
-            enabled = args.clip_snapshot.enabled ~= false,
-            offline = args.clip_snapshot.offline == true,
-        }
-
-        local clip = Clip.create(clip_name, media_id, clip_opts)
+        -- V13 (FR-018): "duplicate a master clip" maps to "clone the master
+        -- sequence + its media_refs." The pre-013 implementation INSERTed a
+        -- new clips row with clip_kind='master' (column dropped). This
+        -- command needs a full V13 rewrite that goes through Sequence.
+        error("DuplicateMasterClip: V13 implementation pending. The V8 path "
+            .. "(INSERT into clips with clip_kind='master') no longer applies "
+            .. "— masters are sequences in V13.")
+        local _unused = { new_clip_id, project_id, clip_name, media_id,
+            timeline_start, duration, source_in, source_out }  -- luacheck: ignore
         command:set_parameter("project_id", project_id)
 
         local ok = clip:save({skip_occlusion = true})

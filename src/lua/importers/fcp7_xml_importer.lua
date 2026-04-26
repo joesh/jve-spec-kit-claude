@@ -681,25 +681,10 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         if not media_id or media_id == "" then
             return nil
         end
-        local stmt = conn:prepare([[
-            SELECT id
-            FROM clips
-            WHERE clip_kind = 'master'
-              AND media_id = ?
-              AND (project_id = ? OR project_id IS NULL)
-            LIMIT 1
-        ]])
-        if not stmt then
-            return nil
-        end
-        stmt:bind_value(1, media_id)
-        stmt:bind_value(2, project_id)
-        local existing_id = nil
-        if stmt:exec() and stmt:next() then
-            existing_id = stmt:value(0)
-        end
-        stmt:finalize()
-        return existing_id
+        -- V13: master sequences are kind='master' rows in `sequences` whose
+        -- media_refs reference this media. Sequence.find_master_for_media
+        -- is the canonical helper.
+        return Sequence.find_master_for_media(media_id)
     end
 
     local function build_master_key(clip_info, clip_key)
@@ -734,64 +719,31 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             if key then
                 remember_master_mapping(key, existing_id)
             end
-            clip_info.master_clip_id = existing_id
+            -- V13: clip_info points the FCP7 import bridge at the master
+            -- sequence id under nested_sequence_id (replaces master_clip_id).
+            clip_info.nested_sequence_id = existing_id
             return existing_id
         end
 
         local reuse_id = key and resolve_reuse_id('clips', key) or nil
 
-        local name = clip_info.name
-        if (not name or name == "") and clip_info.media and clip_info.media.name then
-            name = clip_info.media.name
-        end
-        if not name or name == "" then
-            name = "Imported Master Clip"
-        end
-
-        local fps_num = math.floor(clip_info.frame_rate * 1000)
-        local fps_den = 1000
-
-        -- All values are integer frames
-        local duration = (clip_info.media and clip_info.media.duration) or clip_info.duration or 1000
-        if type(duration) ~= "number" then
-            duration = 1000  -- Default 1000 frames if invalid
-        end
-        if duration <= 0 then
-            duration = 1000
-        end
-        local source_in = clip_info.source_in or 0
-        local source_out = clip_info.source_out or (source_in + duration)
-        if source_out < source_in then
-            source_out = source_in + duration
-        end
-
-        local master_clip = Clip.create(name, media_id, {
+        -- V13: a "master clip" is a kind='master' sequence containing
+        -- media_refs. Sequence.ensure_master handles row creation,
+        -- media_ref insertion, and TC-origin metadata; it dedups by
+        -- media_id automatically.
+        local master_seq_id = Sequence.ensure_master(media_id, project_id, {
             id = reuse_id,
-            project_id = project_id,
-            clip_kind = "master",
-            timeline_start = 0, -- Master clips always start at 0 timeline position (integer)
-            duration = duration,
-            source_in = source_in,
-            source_out = source_out,
-            fps_numerator = fps_num,
-            fps_denominator = fps_den,
-            enabled = clip_info.enabled ~= false,
         })
-
-        if not master_clip then
+        if not master_seq_id or master_seq_id == "" then
             return nil
         end
 
-        if not master_clip:save(conn, {skip_occlusion = true}) then
-            return nil
-        end
-
-        clip_info.master_clip_id = master_clip.id
+        clip_info.nested_sequence_id = master_seq_id
         if key then
-            master_lookup[key] = master_clip.id
+            master_lookup[key] = master_seq_id
         end
-        record_master_clip_id(key, master_clip.id)
-        return master_clip.id
+        record_master_clip_id(key, master_seq_id)
+        return master_seq_id
     end
 
     local function find_existing_media_id(file_path)

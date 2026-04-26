@@ -953,25 +953,25 @@ local function log_zero_fit_detail(cand, clips, stored_rate, tc_remap_offset)
         get_filename(cand.path))
 end
 
--- Rescale clip source range into stored_rate units and drop master clips.
+-- Rescale clip source range into stored_rate units. Under V13 every
+-- `clips` row IS a timeline clip (masters live in `media_refs`), so
+-- the V8 "drop master clips" filter is gone.
 -- check_clip_containment compares against probe ranges at stored_rate, so
 -- audio clips at 48kHz must be down-converted or they look ~1920× too large.
 local function normalize_clips_to_stored_rate(raw_clips, stored_rate)
     local out = {}
     for _, clip in ipairs(raw_clips) do
-        if clip.clip_kind ~= "master" then
-            local clip_rate = clip.fps_num / (clip.fps_den or 1)
-            local src_in, src_out = clip.source_in, clip.source_out
-            if clip_rate > 0 and math.abs(clip_rate - stored_rate) > 0.01 then
-                src_in = math.floor(src_in * stored_rate / clip_rate + 0.5)
-                src_out = math.floor(src_out * stored_rate / clip_rate + 0.5)
-            end
-            out[#out + 1] = {
-                clip_id = clip.clip_id,
-                source_in = src_in,
-                source_out = src_out,
-            }
+        local clip_rate = clip.fps_num / (clip.fps_den or 1)
+        local src_in, src_out = clip.source_in, clip.source_out
+        if clip_rate > 0 and math.abs(clip_rate - stored_rate) > 0.01 then
+            src_in = math.floor(src_in * stored_rate / clip_rate + 0.5)
+            src_out = math.floor(src_out * stored_rate / clip_rate + 0.5)
         end
+        out[#out + 1] = {
+            clip_id = clip.clip_id,
+            source_in = src_in,
+            source_out = src_out,
+        }
     end
     return out
 end
