@@ -180,25 +180,59 @@ local function build_media_infos(media_list, widgets)
     -- source extent, which the matcher handles (trimmed-media
     -- containment check returns false for nil extents).
     local tc_by_id = {}      -- media_id → {value, rate}; rate may be nil
-    local rates_by_id = {}   -- only media with a known rate
+    local audio_tc_by_id = {} -- media_id → {value, rate}; rate may be nil
+    local rates_by_id = {}   -- per-stream target rates: {video_rate=, audio_rate=}
     for _, media in ipairs(media_list) do
         local tc_value, tc_rate = media:get_start_tc()
         tc_by_id[media.id] = { value = tc_value, rate = tc_rate }
-        if tc_rate then
-            rates_by_id[media.id] = tc_rate
-        end
+        local atc_value, atc_rate = media:get_audio_start_tc()
+        audio_tc_by_id[media.id] = { value = atc_value, rate = atc_rate }
+        local audio_rate_for_extent = atc_rate or media.audio_sample_rate
+        if audio_rate_for_extent == 0 then audio_rate_for_extent = nil end
+        rates_by_id[media.id] = {
+            video_rate = tc_rate,
+            audio_rate = audio_rate_for_extent,
+        }
     end
 
-    -- Phase 2: one SQL query fetches the clip extents for every media
+    -- Phase 2: one SQL query fetches per-stream clip extents for every media
     -- in the batch. Replaces 1130× per-media get_source_extent calls.
+    -- extents_by_id[mid] = { video = {min_in,max_out,rate}|nil,
+    --                        audio = {min_in,max_out,rate}|nil }
     local Media = require("models.media")
     local extents_by_id = Media.batch_get_source_extents(rates_by_id)
 
     -- Phase 3: assemble media_info structs and pump the UI.
+    -- Each clip's source_in/out is in either video frames (video clip) or
+    -- audio samples (audio clip). The relinker's coverage check operates in
+    -- a single coordinate system (frames at media.start_tc_rate). Project
+    -- the audio extent (samples at audio_sample_rate) into video-frame
+    -- space and union with the video extent. Sub-frame precision is lost
+    -- in the projection — irrelevant for "does this file have enough
+    -- content"; sample-accurate operations live elsewhere.
     for mi, media in ipairs(media_list) do
         local tc = tc_by_id[media.id]
-        local extent = extents_by_id[media.id]  -- nil for media without TC rate
+        local atc = audio_tc_by_id[media.id]
+        local ext = extents_by_id[media.id] or {}
+        local v_extent = ext.video
+        local a_extent = ext.audio
         local file_orig_tc = media:get_file_original_timecode()
+
+        local extent_start, extent_end
+        if v_extent then
+            extent_start, extent_end = v_extent[1], v_extent[2]
+        end
+        if a_extent and tc.rate and a_extent.rate then
+            -- samples-at-audio_rate → frames-at-video_rate
+            local a_in_frames  = math.floor(a_extent[1] * tc.rate / a_extent.rate + 0.5)
+            local a_out_frames = math.floor(a_extent[2] * tc.rate / a_extent.rate + 0.5)
+            if not extent_start or a_in_frames < extent_start then
+                extent_start = a_in_frames
+            end
+            if not extent_end or a_out_frames > extent_end then
+                extent_end = a_out_frames
+            end
+        end
 
         media_lines[#media_lines + 1] = string.format("  %s  (%s)",
             media.name or media.id:sub(1, 8), media:get_file_path())
@@ -212,8 +246,8 @@ local function build_media_infos(media_list, widgets)
             media_file_original_tc = file_orig_tc,
             width = media.width or 0,
             height = media.height or 0,
-            source_extent_start = extent and extent[1],
-            source_extent_end = extent and extent[2],
+            source_extent_start = extent_start,
+            source_extent_end   = extent_end,
         }
 
         -- Update UI every 100 media — the per-media loop is now mostly

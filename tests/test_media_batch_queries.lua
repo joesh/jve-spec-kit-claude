@@ -222,55 +222,70 @@ check("nonexistent ids silently omitted from result", #mixed == 1)
 -- ---------------------------------------------------------------------------
 print("\n--- batch_get_source_extents ---")
 
--- media_a clips at native rate 25fps, target rate 25 → no normalization.
--- Expected min_in=100, max_out=700 (from clip_a1 and clip_a2).
+-- Per-stream API: pass {video_rate=, audio_rate=} per media. Each stream
+-- bucket comes back as {min_in, max_out, rate=}, in that stream's native
+-- units (frames at video_rate; samples at audio_rate). nil bucket means
+-- no clips of that track type reference the media.
+--
+-- media_a clips at native rate 25fps, target video_rate 25 → no
+-- normalization. Expected video extent min_in=100, max_out=700.
 local extents = Media.batch_get_source_extents({
-    media_a = 25, media_b = 24, media_c = 48000,
+    media_a = { video_rate = 25 },
+    media_b = { video_rate = 24 },
+    media_c = { audio_rate = 48000 },
 })
-check("media_a extent_start reflects earliest non-master source_in (100)",
-    extents["media_a"][1] == 100)
-check("media_a extent_end reflects latest non-master source_out (700)",
-    extents["media_a"][2] == 700)
+check("media_a video extent_start reflects earliest non-master source_in (100)",
+    extents["media_a"].video[1] == 100)
+check("media_a video extent_end reflects latest non-master source_out (700)",
+    extents["media_a"].video[2] == 700)
 
 -- media_b clip at native 24fps, target 24 → no normalization. Single clip [600, 900].
-check("media_b extent_start (600)", extents["media_b"][1] == 600)
-check("media_b extent_end (900)", extents["media_b"][2] == 900)
+check("media_b video extent_start (600)", extents["media_b"].video[1] == 600)
+check("media_b video extent_end (900)", extents["media_b"].video[2] == 900)
 
 -- media_c audio clip at 48kHz native and target → no normalization.
-check("media_c extent_start (1000 samples)", extents["media_c"][1] == 1000)
-check("media_c extent_end (4000 samples)", extents["media_c"][2] == 4000)
+check("media_c audio extent_start (1000 samples)", extents["media_c"].audio[1] == 1000)
+check("media_c audio extent_end (4000 samples)", extents["media_c"].audio[2] == 4000)
 
 -- Master clips excluded: if master were counted, media_a's range would
 -- stretch to [0, 1000]. Confirmed above.
-check("master clip excluded from media_a extent",
-    extents["media_a"][1] ~= 0 and extents["media_a"][2] ~= 1000)
+check("master clip excluded from media_a video extent",
+    extents["media_a"].video[1] ~= 0 and extents["media_a"].video[2] ~= 1000)
 
--- Normalization: request media_a extent at rate 50 instead of 25.
+-- Normalization: request media_a extent at video_rate 50 instead of 25.
 -- Native clips at 25; target 50 means double each value.
-local extents_doubled = Media.batch_get_source_extents({media_a = 50})
+local extents_doubled = Media.batch_get_source_extents({
+    media_a = { video_rate = 50 },
+})
 check("rate conversion doubles extent values (25→50)",
-    extents_doubled["media_a"][1] == 200 and extents_doubled["media_a"][2] == 1400)
+    extents_doubled["media_a"].video[1] == 200
+        and extents_doubled["media_a"].video[2] == 1400)
 
--- Media with no non-master clips gets {nil, nil} — not omitted entirely.
+-- Media with no non-master clips gets both buckets nil — not omitted.
 make_media({
     id = "media_empty", project_id = project.id,
     file_path = "/mnt/footage/empty.mov", name = "empty.mov",
     duration_frames = 100, fps_numerator = 25, fps_denominator = 1,
     width = 1920, height = 1080, codec = "prores", is_still = false,
 })
-local extents_with_empty = Media.batch_get_source_extents({media_empty = 25})
+local extents_with_empty = Media.batch_get_source_extents({
+    media_empty = { video_rate = 25 },
+})
 check("media with no clips appears in result map",
     extents_with_empty["media_empty"] ~= nil)
-check("media with no clips has nil extent bounds",
-    extents_with_empty["media_empty"][1] == nil and extents_with_empty["media_empty"][2] == nil)
+check("media with no clips has nil video bucket",
+    extents_with_empty["media_empty"].video == nil)
 
 -- Invalid rate is a hard error (rule 1.14: no fabricated default fps).
-local ok_bad_rate = pcall(Media.batch_get_source_extents, {media_a = 0})
-check("zero target_rate is a hard error", not ok_bad_rate)
+local ok_bad_rate = pcall(Media.batch_get_source_extents, {
+    media_a = { video_rate = 0 },
+})
+check("zero video_rate is a hard error", not ok_bad_rate)
 
 local ok_nil_rate = pcall(Media.batch_get_source_extents, {media_a = nil})
--- nil rate means the key isn't in the map (Lua semantic) — empty input case
-check("nil rate via absent key is an empty input (not an error)", ok_nil_rate ~= false)
+-- nil rate-table via absent key is an empty input (Lua semantic).
+check("nil rate-table via absent key is an empty input (not an error)",
+    ok_nil_rate ~= false)
 
 -- ---------------------------------------------------------------------------
 -- batch_set_file_paths: changes persist; returns pre-change linked-file

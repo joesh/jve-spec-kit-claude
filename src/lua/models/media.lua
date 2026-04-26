@@ -961,14 +961,20 @@ function M.batch_clear_offline_notes(media_ids)
 end
 
 --- Batch version of Media:get_source_extent.
---- Takes a map of {[media_id] = target_rate} and returns {[media_id] = {min_in, max_out}}
---- where each pair is that media's source extent in its target_rate units
---- (normalized from each clip's native rate, excluding master clips).
---- Replaces the N+1 pattern of calling get_source_extent per media with a
---- single chunked IN query — relink-dialog open was dominated by this.
---- Media with no non-master clips get {nil, nil}.
---- @param media_rates table {[media_id] = target_rate}
---- @return table {[media_id] = {min_in, max_out}}
+--- Returns per-stream extents — video clips and audio clips have different
+--- source units (frames vs samples) so a single combined extent would mix
+--- coordinate systems. The relinker compares each stream against the
+--- candidate file's video TC range and audio sample range separately.
+---
+--- @param media_rates table {[media_id] = {video_rate=number|nil,
+---                                          audio_rate=number|nil}}
+---     video_rate: video frames-per-second the video extent should report
+---                 in (typically media's start_tc_rate; nil disables video).
+---     audio_rate: audio samples-per-second the audio extent should report
+---                 in (typically media.audio_sample_rate; nil disables audio).
+--- @return table {[media_id] = {video={min_in,max_out,rate}|nil,
+---                              audio={min_in,max_out,rate}|nil}}
+---     A bucket is nil when no clips of that track type reference the media.
 function M.batch_get_source_extents(media_rates)
     assert(type(media_rates) == "table",
         "Media.batch_get_source_extents: media_rates table required")
@@ -979,14 +985,33 @@ function M.batch_get_source_extents(media_rates)
 
     local result = {}
     local ids = {}
-    for mid, rate in pairs(media_rates) do
-        assert(rate and type(rate) == "number" and rate > 0, string.format(
-            "Media.batch_get_source_extents: invalid target_rate for %s: %s",
-            tostring(mid), tostring(rate)))
+    for mid, rates in pairs(media_rates) do
+        assert(type(rates) == "table", string.format(
+            "Media.batch_get_source_extents: rates entry for %s must be a table "
+            .. "{video_rate=, audio_rate=}", tostring(mid)))
+        if rates.video_rate ~= nil then
+            assert(type(rates.video_rate) == "number" and rates.video_rate > 0,
+                string.format("Media.batch_get_source_extents: invalid video_rate "
+                    .. "for %s: %s", tostring(mid), tostring(rates.video_rate)))
+        end
+        if rates.audio_rate ~= nil then
+            assert(type(rates.audio_rate) == "number" and rates.audio_rate > 0,
+                string.format("Media.batch_get_source_extents: invalid audio_rate "
+                    .. "for %s: %s", tostring(mid), tostring(rates.audio_rate)))
+        end
         ids[#ids + 1] = mid
-        result[mid] = { nil, nil }
+        result[mid] = { video = nil, audio = nil }
     end
     if #ids == 0 then return result end
+
+    local function include_in_extent(extent, src_in, src_out)
+        if not extent.min_in or src_in < extent.min_in then
+            extent.min_in = src_in
+        end
+        if not extent.max_out or src_out > extent.max_out then
+            extent.max_out = src_out
+        end
+    end
 
     -- Chunked IN clause — stay under SQLITE_MAX_VARIABLE_NUMBER comfortably.
     local CHUNK = 500
@@ -996,13 +1021,19 @@ function M.batch_get_source_extents(media_rates)
         local phs = {}
         for i = 1, n do phs[i] = "?" end
         -- V13: walk clips → nested sequence → master.media_refs to find
-        -- clips referencing each media. fps from nested (clip's source-side).
+        -- clips referencing each media. nested fps drives video clip rate;
+        -- nested.audio_rate drives audio clip rate. Track type drives which
+        -- bucket the row contributes to — video clips' source values are in
+        -- video frames at nested.fps; audio clips' source values are in
+        -- audio samples at nested.audio_rate.
         local sql = string.format([[
             SELECT mr.media_id, c.source_in_frame, c.source_out_frame,
-                   nested.fps_numerator, nested.fps_denominator
+                   nested.fps_numerator, nested.fps_denominator,
+                   nested.audio_rate, t.track_type
             FROM clips c
             JOIN sequences nested ON nested.id = c.nested_sequence_id
             JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+            JOIN tracks t ON t.id = c.track_id
             WHERE mr.media_id IN (%s)
         ]], table.concat(phs, ","))
 
@@ -1020,13 +1051,14 @@ function M.batch_get_source_extents(media_rates)
             local src_out = stmt:value(2)
             local fps_num = stmt:value(3)
             local fps_den = stmt:value(4)
-            -- Schema enforces NOT NULL + CHECK > 0 on these columns; a nil
-            -- here indicates data corruption — assert with row context so
-            -- the bad row is identifiable.
+            local audio_rate = stmt:value(5)
+            local track_type = stmt:value(6)
             assert(src_in, string.format(
-                "batch_get_source_extents: clip on media %s has NULL source_in_frame", tostring(mid)))
+                "batch_get_source_extents: clip on media %s has NULL source_in_frame",
+                tostring(mid)))
             assert(src_out, string.format(
-                "batch_get_source_extents: clip on media %s has NULL source_out_frame", tostring(mid)))
+                "batch_get_source_extents: clip on media %s has NULL source_out_frame",
+                tostring(mid)))
             assert(fps_num and fps_num > 0, string.format(
                 "batch_get_source_extents: clip on media %s has invalid fps_numerator=%s",
                 tostring(mid), tostring(fps_num)))
@@ -1034,17 +1066,50 @@ function M.batch_get_source_extents(media_rates)
                 "batch_get_source_extents: clip on media %s has invalid fps_denominator=%s",
                 tostring(mid), tostring(fps_den)))
 
-            local target_rate = media_rates[mid]
-            local clip_rate = fps_num / fps_den
-            if math.abs(clip_rate - target_rate) > 0.01 then
-                src_in = math.floor(src_in * target_rate / clip_rate + 0.5)
-                src_out = math.floor(src_out * target_rate / clip_rate + 0.5)
+            local rates = media_rates[mid]
+            if track_type == "VIDEO" and rates.video_rate then
+                local clip_rate = fps_num / fps_den
+                local target = rates.video_rate
+                if math.abs(clip_rate - target) > 0.01 then
+                    src_in = math.floor(src_in * target / clip_rate + 0.5)
+                    src_out = math.floor(src_out * target / clip_rate + 0.5)
+                end
+                local bucket = result[mid].video
+                if not bucket then
+                    bucket = { rate = target }
+                    result[mid].video = bucket
+                end
+                include_in_extent(bucket, src_in, src_out)
+            elseif track_type == "AUDIO" and rates.audio_rate then
+                assert(audio_rate and audio_rate > 0, string.format(
+                    "batch_get_source_extents: nested sequence for media %s has "
+                    .. "no audio_rate; cannot scale audio clip extent",
+                    tostring(mid)))
+                local target = rates.audio_rate
+                if math.abs(audio_rate - target) > 0.01 then
+                    src_in = math.floor(src_in * target / audio_rate + 0.5)
+                    src_out = math.floor(src_out * target / audio_rate + 0.5)
+                end
+                local bucket = result[mid].audio
+                if not bucket then
+                    bucket = { rate = target }
+                    result[mid].audio = bucket
+                end
+                include_in_extent(bucket, src_in, src_out)
             end
-            local extent = result[mid]
-            if not extent[1] or src_in < extent[1] then extent[1] = src_in end
-            if not extent[2] or src_out > extent[2] then extent[2] = src_out end
         end
         stmt:finalize()
+    end
+
+    -- Flatten into the documented shape: {min_in, max_out, rate} per stream
+    -- (the helper accumulator used min_in/max_out names for clarity).
+    for _, per_media in pairs(result) do
+        for _, bucket in pairs(per_media) do
+            bucket[1] = bucket.min_in
+            bucket[2] = bucket.max_out
+            bucket.min_in = nil
+            bucket.max_out = nil
+        end
     end
 
     return result

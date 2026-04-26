@@ -1474,10 +1474,74 @@ end
 -- Class-form (first arg is seq_id), NOT instance-form. Consumers
 -- (playback_engine, test_drp_anamnesis_full) are rewritten in T093.
 
+-- Repack a resolver flat entry into the legacy nested-clip shape that
+-- playback_engine + a couple of integration tests expect — a thin
+-- compatibility shim per T031's contract ("wrapper preserves existing
+-- entry shape column-for-column"). T093 will rewrite consumers to read
+-- the flat shape directly; until then the wrapper does the repack.
+--
+-- media_cache: optional {[media_id] = media_row} table reused across
+-- entries in one batch so we don't re-hit the DB per entry.
+local function repack_legacy_entry(e, media_cache)
+    local Media = require("models.media")
+    local media = media_cache[e.media_id]
+    if not media then
+        media = Media.load(e.media_id)
+        assert(media, string.format(
+            "Sequence wrappers: media row missing for media_id=%s "
+            .. "(entry kind=%s, source=[%s,%s])",
+            tostring(e.media_id), tostring(e.media_kind),
+            tostring(e.source_in), tostring(e.source_out)))
+        media_cache[e.media_id] = media
+    end
+    local fps_num = media.frame_rate.fps_numerator
+    local fps_den = media.frame_rate.fps_denominator
+    -- The outermost owning clip id is the first link of provenance chain.
+    -- Fall back to the leaf media_ref id if no clip wrapped this entry
+    -- (resolution starting from a master sequence directly).
+    local clip_id
+    if e.provenance and e.provenance[1] then
+        clip_id = e.provenance[1]
+    else
+        clip_id = e.media_id  -- best-effort key for downstream caches
+    end
+    e.clip = {
+        id             = e.owner_clip_id or clip_id,
+        timeline_start = e.timeline_start,
+        duration       = e.duration,
+        source_in      = e.source_in,
+        source_out     = e.source_out,
+        volume         = e.volume,
+        enabled        = e.enabled,
+        rate = {
+            fps_numerator   = fps_num,
+            fps_denominator = fps_den,
+        },
+    }
+    -- Outermost owning clip's track. Resolver tags entries during
+    -- resolve_nested (recursion-bubbles-out, outermost wins).
+    if e.owner_track_index ~= nil then
+        e.track = {
+            track_index = e.owner_track_index,
+            track_type  = e.owner_track_type,
+        }
+    end
+    e.media_fps_num = fps_num
+    e.media_fps_den = fps_den
+    return e
+end
+
+-- Filter to one media kind. Offline entries flow through with media_path
+-- populated — the renderer/TMB layer is responsible for FR-022 loud-fail
+-- offline indication; silently dropping entries here would hide the
+-- condition.
 local function filter_by_media_kind(entries, kind)
     local out = {}
+    local cache = {}
     for _, e in ipairs(entries) do
-        if e.media_kind == kind then out[#out + 1] = e end
+        if e.media_kind == kind then
+            out[#out + 1] = repack_legacy_entry(e, cache)
+        end
     end
     return out
 end
@@ -1486,7 +1550,7 @@ end
 --- as the sequence to resolve.
 -- @param from_frame integer: inclusive start in self's timebase
 -- @param to_frame integer: exclusive end
--- @return ResolvedEntry[] with media_kind='video'
+-- @return ResolvedEntry[] with media_kind='video' + legacy entry.clip shim
 function Sequence:get_video_in_range(from_frame, to_frame)
     assert(self and type(self.id) == "string" and self.id ~= "",
         "Sequence:get_video_in_range: must be called on a sequence instance")
@@ -1900,16 +1964,22 @@ local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
             local hi = math.min(r_hi, master_hi)
             local file_in  = r.source_in + (lo - r.timeline_start)
             local file_out = r.source_in + (hi - r.timeline_start)
-            local online   = require("core.media.media_status").is_online(r.file_path)
+            -- media_path always carries the file path — runtime online state
+            -- is signalled separately so consumers (renderer, TMB) can show
+            -- the FR-022 loud-fail offline indicator instead of silently
+            -- dropping the entry. enabled mirrors only the user's
+            -- enable/disable on the media_ref; offline ≠ disabled.
+            local online = require("core.media.media_status").is_online(r.file_path)
             local base = {
-                media_path     = online and r.file_path or nil,
+                media_path     = r.file_path,
                 media_id       = r.media_id,
                 source_in      = file_in,
                 source_out     = file_out,
                 timeline_start = lo,            -- master coords; outer translates
                 duration       = hi - lo,       -- master coords
                 volume         = r.volume,      -- leaf media_ref's own volume
-                enabled        = online and r.enabled,
+                enabled        = r.enabled,
+                online         = online,        -- runtime offline indicator
                 effects        = {},
                 provenance     = build_provenance(outer_chain, r.id),
             }
@@ -1936,6 +2006,7 @@ local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
                         channel_index  = ch,
                         volume         = base.volume,
                         enabled        = base.enabled,
+                        online         = base.online,
                         effects        = {},
                         provenance     = build_provenance(outer_chain, r.id),
                         -- Channel state stays SEPARATE from volume until the
@@ -2086,6 +2157,15 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
                     -- entry's timeline_start/duration are in this clip's
                     -- nested-timebase, so we use this clip's source ratio.
                     translate_to_outer(e, c, c.source_in)
+
+                    -- Tag entry with the outermost owning clip's track so
+                    -- consumers (playback TMB routing) know which timeline
+                    -- track to address. Recursion bubbles outwards — each
+                    -- enclosing resolve_nested overwrites, so the topmost
+                    -- (outermost) call wins.
+                    e.owner_track_index = c.track_index
+                    e.owner_track_type  = c.track_type
+                    e.owner_clip_id     = c.id
 
                     -- Fold this clip's own volume + enabled into the chain.
                     e.volume  = e.volume * c.volume
