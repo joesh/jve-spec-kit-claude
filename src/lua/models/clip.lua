@@ -220,9 +220,8 @@ function M.create(fields)
         .. "positional form was removed under FR-018. To create a master "
         .. "from a media file, use Sequence.ensure_master.")
     assert(fields.nested_sequence_id ~= nil,
-        "Clip.create: 'nested_sequence_id' is required (V13). Old callers "
-        .. "passing 'media_id' / 'master_clip_id' / 'clip_kind' must "
-        .. "migrate to the V13 model.")
+        "Clip.create: 'nested_sequence_id' is required (V13). Pre-013 "
+        .. "shape (file-id-on-clip + kind discriminator) does not apply.")
     return M._create_v13_row(fields)
 end
 

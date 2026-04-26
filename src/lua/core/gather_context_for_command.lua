@@ -147,7 +147,7 @@ local function build_group_from_master_clip(master_clip, media, timeline_state, 
     return {
         clips = clips,
         duration = duration,
-        master_clip_id = master_clip.clip_id or master_clip.id,
+        nested_sequence_id = master_clip.clip_id or master_clip.id,
     }
 end
 

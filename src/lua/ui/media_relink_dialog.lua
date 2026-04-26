@@ -569,9 +569,11 @@ function M.show(media_list, parent_window, opts)
                 local clips = Clip.find_clips_for_media(media_id)
                 local entries = {}
                 for _, clip in ipairs(clips) do
+                    -- V13: every clip is a timeline placement; no
+                    -- master/timeline kind discriminator needed.
                     entries[#entries + 1] = {
                         clip_id = clip.id,
-                        clip_kind = clip.clip_kind,
+                        track_type = clip.track_type,
                         source_in = clip.source_in,
                         source_out = clip.source_out,
                         fps_num = clip.rate.fps_numerator,

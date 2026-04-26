@@ -2254,7 +2254,7 @@ function M.delete_selected_items()
                 end
 
                 local result = command_manager.execute_interactive("DeleteMasterClip", {
-                    master_clip_id = clip.clip_id,
+                    master_sequence_id = clip.clip_id,
                     project_id = project_id,
                     force = force,
                 })
