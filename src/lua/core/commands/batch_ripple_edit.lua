@@ -316,7 +316,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             "apply_media_limits: clip_state.source_in must be integer")
         local media = fetch_media_for_clip(ctx, clip)
         local file_src_in = file_relative_source_in(media, clip_state.source_in)
-        return -file_src_in, nil  -- can't extend further left than file start
+        -- file_src_in is in SOURCE units; the per-edge constraint operates on
+        -- delta_frames which is OWNER (sequence) units. Convert before
+        -- using as a delta limit, so a clip on a 24fps timeline against a
+        -- 30fps source clamps to the right number of owner frames.
+        local clip_num = clip.rate and clip.rate.fps_numerator or clip.fps_numerator
+        local clip_den = clip.rate and clip.rate.fps_denominator or clip.fps_denominator
+        local owner_limit = file_src_in
+        if clip_num and clip_den and ctx.seq_fps_num and ctx.seq_fps_den then
+            owner_limit = math.floor(
+                file_src_in * clip_den * ctx.seq_fps_num / (clip_num * ctx.seq_fps_den) + 0.5)
+        end
+        return -owner_limit, nil  -- can't extend further left than file start
     end
 
     -- Out-edge source limit: growing the out-point rightward (extending
@@ -333,6 +344,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         assert(type(clip_state.duration) == "number", "apply_media_limits: clip_state.duration must be integer")
         local file_src_in = file_relative_source_in(media, clip_state.source_in)
         local available = media.duration - file_src_in - clip_state.duration
+        -- available is in SOURCE units; convert to OWNER (sequence) units to
+        -- match the per-edge constraint operating on delta_frames.
+        local clip_num = clip.rate and clip.rate.fps_numerator or clip.fps_numerator
+        local clip_den = clip.rate and clip.rate.fps_denominator or clip.fps_denominator
+        if clip_num and clip_den and ctx.seq_fps_num and ctx.seq_fps_den then
+            available = math.floor(
+                available * clip_den * ctx.seq_fps_num / (clip_num * ctx.seq_fps_den) + 0.5)
+        end
         if will_negate then
             return -available, nil  -- negated edge is constrained on the min side
         end
