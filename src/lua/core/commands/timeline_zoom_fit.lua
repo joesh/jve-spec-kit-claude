@@ -66,8 +66,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local min_start, max_end = nil, nil
 
         for _, clip in ipairs(clips) do
-            -- V13: gaps are in-memory only and don't appear in timeline_state.get_clips().
-            do
+            -- V13: gaps DO show up in timeline_state.get_clips() (they're
+            -- in-memory clip rows with is_gap=true). Skip them so leading
+            -- gaps don't flatten min_start to 0 and inflate the fit window.
+            if not clip.is_gap then
                 local s = clip.timeline_start
                 local d = clip.duration
                 assert(type(s) == "number",
