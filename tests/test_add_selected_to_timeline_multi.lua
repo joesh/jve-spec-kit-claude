@@ -52,10 +52,13 @@ function mock_source_sv:get_mark_out() return nil end
 panel_manager.register_sequence_monitor("source_monitor", mock_source_sv)
 panel_manager.register_sequence_monitor("timeline_monitor", mock_source_sv)
 
--- Create 3 media items with masterclip sequences (IS-a refactor)
+-- V13: each "master clip" is a Sequence (kind='master') created via
+-- Sequence.ensure_master with one media_ref pointing at a media row.
+local Sequence = require("models.sequence")
+local dkjson = require("dkjson")
+local master_ids = {}
 for i = 1, 3 do
     local duration = 50 + (i * 25)  -- 75, 100, 125 frames
-
     local media = Media.create({
         id = "media_" .. i,
         project_id = "project",
@@ -66,26 +69,11 @@ for i = 1, 3 do
         fps_denominator = 1,
         width = 1920,
         height = 1080,
-        audio_channels = 0,  -- No audio to simplify test
+        audio_channels = 0,
+        metadata = dkjson.encode({ start_tc_value = 0, start_tc_rate = 24 }),
     })
     media:save(db)
-    -- IS-a refactor: create masterclip sequence (not clip with clip_kind='master')
-    db:exec(string.format([[
-        INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-        VALUES ('master_%d', 'project', 'Video %d', 'masterclip', 24, 1, 48000, 1920, 1080, %d, %d);
-    ]], i, i, now, now))
-
-    -- Create video track in masterclip sequence
-    db:exec(string.format([[
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-        VALUES ('master_%d_v1', 'master_%d', 'V1', 'VIDEO', 1, 1);
-    ]], i, i))
-
-    -- Create stream clip in masterclip sequence
-    db:exec(string.format([[
-        INSERT INTO clips (id, project_id, track_id, owner_sequence_id, name, media_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, created_at, modified_at)
-        VALUES ('stream_%d', 'project', 'master_%d_v1', 'master_%d', 'Video %d', 'media_%d', 0, %d, 0, %d, 24, 1, 1, %d, %d);
-    ]], i, i, i, i, i, duration, duration, now, now))
+    master_ids[i] = Sequence.ensure_master("media_" .. i, "project")
 end
 
 -- Mock dependencies
@@ -129,9 +117,10 @@ for _, clip in ipairs(master_clips) do
     end
 end
 
--- Helper: count timeline clips
+-- Helper: count timeline clips (V13: timeline clips on the timeline track,
+-- masters live in their own sequences and don't share track_id).
 local function count_timeline_clips()
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE track_id = 'track_v1' AND clip_kind != 'master'")
+    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE track_id = 'track_v1'")
     stmt:exec()
     stmt:next()
     local count = stmt:value(0)
@@ -144,11 +133,11 @@ end
 -- =============================================================================
 print("Test: add_selected_to_timeline with 3 clips selected")
 
--- Set up selection with 3 master clips
+-- Set up selection with 3 master clips (V13: ids are master sequence ids).
 project_browser.selected_items = {
-    { type = "master_clip", clip_id = "master_1" },
-    { type = "master_clip", clip_id = "master_2" },
-    { type = "master_clip", clip_id = "master_3" },
+    { type = "master_clip", clip_id = master_ids[1] },
+    { type = "master_clip", clip_id = master_ids[2] },
+    { type = "master_clip", clip_id = master_ids[3] },
 }
 
 print(string.format("  Selected %d items", #project_browser.selected_items))
@@ -177,7 +166,7 @@ local context = gather_context.gather_edit_context({
 })
 
 local ok, err = pcall(function()
-    command_manager.execute("AddClipsToSequence", {
+    local result = command_manager.execute("AddClipsToSequence", {
         groups = context.groups,
         position = context.position,
         sequence_id = context.sequence_id,
@@ -186,6 +175,7 @@ local ok, err = pcall(function()
         arrangement = "serial",
         advance_playhead = true,
     })
+    assert(result.success, "AddClipsToSequence: " .. tostring(result.error_message))
 end)
 
 if not ok then

@@ -106,6 +106,7 @@ local function build_group_from_master_clip(master_clip, media, timeline_state, 
     local clips = {}
 
     -- Video clip descriptor
+    local fps_policy = master_clip.fps_mismatch_policy or "resample"
     if has_video then
         local video_track = track_resolver.resolve_video_track(timeline_state, 0)
         table.insert(clips, {
@@ -119,6 +120,7 @@ local function build_group_from_master_clip(master_clip, media, timeline_state, 
             duration = duration,
             fps_numerator = clip_fps_num,
             fps_denominator = clip_fps_den,
+            fps_mismatch_policy = fps_policy,
             target_track_id = video_track.id,
         })
     end
@@ -138,6 +140,7 @@ local function build_group_from_master_clip(master_clip, media, timeline_state, 
             duration = duration,
             fps_numerator = clip_fps_num,
             fps_denominator = clip_fps_den,
+            fps_mismatch_policy = fps_policy,
             target_track_id = audio_track.id,
         })
     end
