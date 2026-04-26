@@ -155,10 +155,18 @@ local function get_clip_position(clip_id)
     return nil, nil
 end
 
--- Helper: reset timeline
+-- Helper: reset timeline. Direct-DB DELETE bypasses timeline_state's
+-- cache; reload after each reset so clip_state.apply_mutations bulk_shift
+-- finds the right clips (the test's create_clip below also goes
+-- direct-DB; reload_clips is repeated after the setup if pre-existing
+-- clips are part of the test's preconditions).
 local function reset_timeline()
     db:exec("DELETE FROM clips")
     db:exec("DELETE FROM clip_links")
+    local timeline_state = require("ui.timeline.timeline_state")
+    if timeline_state.reload_clips then
+        timeline_state.reload_clips("sequence")
+    end
 end
 
 -- Helper: create existing clip
@@ -180,7 +188,11 @@ local function create_clip(id, track_id, start_frame, duration_frames)
         playhead_frame = 0,
     })
     assert(clip ~= nil and clip ~= "", "Failed to save clip " .. id)
-
+    -- Direct Clip.create bypasses timeline_state cache; sync.
+    local timeline_state = require("ui.timeline.timeline_state")
+    if timeline_state.reload_clips then
+        timeline_state.reload_clips("sequence")
+    end
     return clip
 end
 
@@ -195,8 +207,7 @@ local groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1",
-                nested_sequence_id = nil,
+                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Test Clip",
                 source_in = 0,
@@ -234,7 +245,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1",
+                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Inserted",
                 source_in = 0,
@@ -276,7 +287,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1",
+                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Overwritten",
                 source_in = 0,
@@ -316,7 +327,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1",
+                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Clip A",
                 source_in = 0,
@@ -333,7 +344,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1",
+                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Clip B",
                 source_in = 0,
@@ -381,7 +392,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1",
+                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "AV Clip",
                 source_in = 0,
@@ -394,7 +405,7 @@ groups = {
             {
                 role = "audio",
                 channel = 0,
-                media_id = "media_1",
+                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "AV Clip (Audio)",
                 source_in = 0,
@@ -469,7 +480,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1",
+                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Inserted",
                 source_in = 0,

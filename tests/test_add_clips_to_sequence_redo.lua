@@ -87,7 +87,7 @@ local groups = {
                 duration = 50,
                 fps_numerator = 24,
                 fps_denominator = 1,
-                target_track_id = "track_v1",
+                target_track_id = "track_v1", fps_mismatch_policy = "resample",
             }
         }
     },
@@ -106,7 +106,7 @@ local groups = {
                 duration = 75,
                 fps_numerator = 24,
                 fps_denominator = 1,
-                target_track_id = "track_v1",
+                target_track_id = "track_v1", fps_mismatch_policy = "resample",
             }
         }
     },

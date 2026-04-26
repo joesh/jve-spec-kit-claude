@@ -62,6 +62,8 @@ local SPEC = {
     persisted = {
         created_clip_ids       = { kind = "table" },
         created_link_group_ids = { kind = "table" },
+        rippled_capture        = { kind = "table" },
+        occluded_capture       = { kind = "table" },
         prior_playhead         = { kind = "number" },
     },
 }
@@ -334,6 +336,55 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
         command:set_parameter("created_clip_ids",       result_or_err.created_clip_ids)
         command:set_parameter("created_link_group_ids", result_or_err.link_group_ids)
+        command:set_parameter("rippled_capture",        (result_or_err.carve or {}).rippled or {})
+        command:set_parameter("occluded_capture",       (result_or_err.carve or {}).occluded or {})
+
+        -- Emit __timeline_mutations so command_manager's post-DB hook
+        -- can hand a structured mutation list to timeline_state. Mirrors
+        -- Insert's emission shape so the consumer is uniform.
+        do
+            local bucket = {
+                sequence_id = args.sequence_id,
+                inserts = {},
+                updates = {},
+                deletes = {},
+                bulk_shifts = {},
+            }
+            for _, cid in ipairs(result_or_err.created_clip_ids or {}) do
+                local row = Clip.load_v13_row(cid)
+                if row then
+                    bucket.inserts[#bucket.inserts + 1] = {
+                        id                    = row.id,
+                        owner_sequence_id     = row.owner_sequence_id,
+                        track_sequence_id     = row.owner_sequence_id,
+                        track_id              = row.track_id,
+                        nested_sequence_id    = row.nested_sequence_id,
+                        start_value           = row.timeline_start_frame,
+                        timeline_start        = row.timeline_start_frame,
+                        duration_value        = row.duration_frames,
+                        duration              = row.duration_frames,
+                        source_in             = row.source_in_frame,
+                        source_out            = row.source_out_frame,
+                        master_layer_track_id = row.master_layer_track_id,
+                        fps_mismatch_policy   = row.fps_mismatch_policy,
+                        name                  = row.name,
+                        enabled               = row.enabled,
+                        volume                = row.volume,
+                        playhead_frame        = row.playhead_frame,
+                    }
+                end
+            end
+            local carve = result_or_err.carve or {}
+            for track_id, rip in pairs(carve.rippled or {}) do
+                bucket.bulk_shifts[#bucket.bulk_shifts + 1] = {
+                    track_id     = track_id,
+                    shift_frames = rip.shift,
+                    start_frame  = rip.from_frame,
+                }
+            end
+            command:set_parameter("__timeline_mutations", bucket)
+        end
+
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
 
@@ -355,18 +406,76 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         }
     end
 
-    command_undoers["AddClipsToSequence"] = function(_command)
-        -- TODO(T046 full): full undo. Requires:
-        --   1. Drop the new link_links rows (cascade via clip_links FK on
-        --      DELETE — handled by step 2).
-        --   2. Delete every newly-created clip via Clip.delete_one.
-        --   3. Restore the carve captures (un-ripple insert-mode tracks;
-        --      restore deleted/trimmed/split-new clips for overwrite via
-        --      Clip.restore_v13_state on captured pre-state).
-        -- Deferred until the wider T046 sweep so the carve-undo logic
-        -- can be unified with RippleDelete and the future ripple_edit
-        -- migration.
-        error("AddClipsToSequence: undo not yet implemented (T046 full sweep)", 0)
+    command_undoers["AddClipsToSequence"] = function(command)
+        local args = command:get_all_parameters()
+        local created_ids = args.created_clip_ids or {}
+        local rippled     = args.rippled_capture or {}
+        local occluded    = args.occluded_capture or {}
+
+        -- 1. Delete the newly-created clips (clip_links FK cascades).
+        Clip.delete_by_ids(created_ids)
+
+        -- 2. Reverse the insert-mode ripple. Use shift_many_by on the
+        --    captured clip_ids so re-created/restored clips below aren't
+        --    swept in. delta = -shift.
+        for _, rip in pairs(rippled) do
+            if rip.clip_ids and #rip.clip_ids > 0 and rip.shift then
+                Clip.shift_many_by(rip.clip_ids, -rip.shift)
+            end
+        end
+
+        -- 3. Restore overwrite-mode occlusion captures: drop split-rights,
+        --    un-trim, re-create fully-deleted clips. Mirrors Overwrite.undo.
+        for _, cap in pairs(occluded) do
+            Clip.delete_by_ids(cap.split_new_ids or {})
+        end
+        for _, cap in pairs(occluded) do
+            for _, tr in ipairs(cap.trimmed or {}) do
+                Clip.update_bounds(tr.id,
+                    tr.prior.timeline_start_frame,
+                    tr.prior.duration_frames,
+                    tr.prior.source_in_frame,
+                    tr.prior.source_out_frame)
+            end
+        end
+        for _, cap in pairs(occluded) do
+            for _, d in ipairs(cap.deleted or {}) do
+                Clip.create({
+                    id                    = d.id,
+                    project_id            = d.project_id,
+                    owner_sequence_id     = d.owner_sequence_id,
+                    track_id              = d.track_id,
+                    nested_sequence_id    = d.nested_sequence_id,
+                    name                  = d.name,
+                    timeline_start_frame  = d.timeline_start_frame,
+                    duration_frames       = d.duration_frames,
+                    source_in_frame       = d.source_in_frame,
+                    source_out_frame      = d.source_out_frame,
+                    master_layer_track_id = d.master_layer_track_id,
+                    fps_mismatch_policy   = d.fps_mismatch_policy,
+                    enabled               = d.enabled,
+                    volume                = d.volume,
+                    mark_in_frame         = d.mark_in_frame,
+                    mark_out_frame        = d.mark_out_frame,
+                    playhead_frame        = d.playhead_frame,
+                })
+            end
+        end
+
+        local Signals = require("core.signals")
+        Signals.emit("sequence_content_changed", args.sequence_id)
+
+        -- Restore playhead if execute had advanced it.
+        if args.prior_playhead ~= nil and args.sequence_id then
+            local owner = Sequence.load(args.sequence_id)
+            if owner then
+                owner:set_playhead(args.prior_playhead)
+                owner:save()
+                Signals.emit("playhead_changed", args.sequence_id, args.prior_playhead)
+            end
+        end
+
+        return true
     end
 
     return {

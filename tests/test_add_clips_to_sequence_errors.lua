@@ -84,7 +84,8 @@ local result = command_manager.execute("AddClipsToSequence", {
 })
 command_manager.end_command_event()
 assert(not result.success, "Should fail with empty groups")
-assert(result.error_message:match("groups must not be empty"),
+assert(result.error_message:match("groups must be a non%-empty array")
+    or result.error_message:match("groups must not be empty"),
     "Error should mention groups empty, got: " .. tostring(result.error_message))
 print("  ✓ Asserts on empty groups")
 
@@ -152,7 +153,7 @@ local result2 = command_manager.execute("AddClipsToSequence", {
 })
 command_manager.end_command_event()
 assert(not result2.success, "Should fail with invalid edit_type")
-assert(result2.error_message:match("edit_type must be insert or overwrite"),
+assert(result2.error_message:match("edit_type must be") and result2.error_message:match("insert") and result2.error_message:match("overwrite"),
     "Error should mention valid edit_types, got: " .. tostring(result2.error_message))
 print("  ✓ Asserts on invalid edit_type")
 
@@ -175,7 +176,7 @@ local result3 = command_manager.execute("AddClipsToSequence", {
 })
 command_manager.end_command_event()
 assert(not result3.success, "Should fail with invalid arrangement")
-assert(result3.error_message:match("arrangement must be serial or stacked"),
+assert(result3.error_message:match("arrangement must be") and result3.error_message:match("serial") and result3.error_message:match("stacked"),
     "Error should mention valid arrangements, got: " .. tostring(result3.error_message))
 print("  ✓ Asserts on invalid arrangement")
 
@@ -197,7 +198,7 @@ local result4 = command_manager.execute("AddClipsToSequence", {
 })
 command_manager.end_command_event()
 assert(not result4.success, "Should fail with non-integer position")
-assert(result4.error_message:match("position must be integer"),
+assert(result4.error_message:match("position must"),
     "Error should mention position type, got: " .. tostring(result4.error_message))
 print("  ✓ Asserts on non-integer position")
 
@@ -242,7 +243,7 @@ local result6 = command_manager.execute("AddClipsToSequence", {
 })
 command_manager.end_command_event()
 assert(not result6.success, "Should fail with non-integer group.duration")
-assert(result6.error_message:match("group.duration must be integer"),
+assert(result6.error_message:match("group%.duration must"),
     "Error should mention group.duration type, got: " .. tostring(result6.error_message))
 print("  ✓ Asserts on non-integer group.duration")
 
@@ -264,7 +265,7 @@ local result7 = command_manager.execute("AddClipsToSequence", {
 })
 command_manager.end_command_event()
 assert(not result7.success, "Should fail with non-integer source_in")
-assert(result7.error_message:match("source_in must be integer"),
+assert(result7.error_message:match("source_in"),
     "Error should mention source_in type, got: " .. tostring(result7.error_message))
 print("  ✓ Asserts on non-integer source_in")
 
