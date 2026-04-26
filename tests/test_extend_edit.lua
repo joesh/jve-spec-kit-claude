@@ -121,8 +121,8 @@ do
 
     if #ripple_calls > 0 then
         check("extend out ripple: delta_frames = 50", ripple_calls[1].params.delta_frames == 50)
-        check("extend out ripple: edge_type = out", ripple_calls[1].params.edge_info.edge_type == "out")
-        check("extend out ripple: trim_type = ripple", ripple_calls[1].params.edge_info.trim_type == "ripple")
+        check("extend out ripple: edge_type = out", (ripple_calls[1].params.edge_info or ripple_calls[1].params.edge_infos[1]).edge_type == "out")
+        check("extend out ripple: trim_type = ripple", (ripple_calls[1].params.edge_info or ripple_calls[1].params.edge_infos[1]).trim_type == "ripple")
     end
 end
 
@@ -163,7 +163,7 @@ do
 
     if #ripple_calls > 0 then
         check("extend in ripple: delta_frames = -50", ripple_calls[1].params.delta_frames == -50)
-        check("extend in ripple: edge_type = in", ripple_calls[1].params.edge_info.edge_type == "in")
+        check("extend in ripple: edge_type = in", (ripple_calls[1].params.edge_info or ripple_calls[1].params.edge_infos[1]).edge_type == "in")
     end
 end
 
@@ -202,7 +202,7 @@ do
 
     if #ripple_calls > 0 then
         check("extend roll: delta_frames = 30", ripple_calls[1].params.delta_frames == 30)
-        check("extend roll: trim_type = roll preserved", ripple_calls[1].params.edge_info.trim_type == "roll")
+        check("extend roll: trim_type = roll preserved", (ripple_calls[1].params.edge_info or ripple_calls[1].params.edge_infos[1]).trim_type == "roll")
     end
 end
 
