@@ -73,6 +73,7 @@ media_cmd:set_parameter("media_id", "media_src")
 media_cmd:set_parameter("file_path", "/tmp/jve/media_src.mov")
 media_cmd:set_parameter("file_name", "Test Media")
 media_cmd:set_parameter("frame_rate", 30)
+media_cmd:set_parameter("duration_value", 10000000)
 local media_result = command_manager.execute(media_cmd)
 assert(media_result.success, media_result.error_message or "TestCreateMedia failed")
 
@@ -87,7 +88,7 @@ local function exec(cmd)
 end
 
 local function clip_count()
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline' AND owner_sequence_id = 'default_sequence'")
+    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE owner_sequence_id = 'default_sequence'")
     assert(stmt:exec(), "Failed to count clips")
     assert(stmt:next(), "Count query produced no rows")
     local count = stmt:value(0)
@@ -119,9 +120,10 @@ local clip_id = stmt:value(0)
 stmt:finalize()
 
 -- Trim out-point significantly to test redo integrity
-local ripple_cmd = Command.create("RippleEdit", "default_project")
-ripple_cmd:set_parameter("edge_info", {clip_id = clip_id, edge_type = "out", track_id = "track_default_v1"})
-ripple_cmd:set_parameter("delta_frames", -100)  -- shorten clip by 100 frames
+-- 013/T046: ripple_edit dropped; use BatchRippleEdit.
+local ripple_cmd = Command.create("BatchRippleEdit", "default_project")
+ripple_cmd:set_parameter("edge_infos", {{clip_id = clip_id, edge_type = "out", track_id = "track_default_v1"}})
+ripple_cmd:set_parameter("delta_frames", -100)
 ripple_cmd:set_parameter("sequence_id", "default_sequence")
 exec(ripple_cmd)
 
@@ -129,7 +131,7 @@ local function snapshot_clips()
     local snap_stmt = db:prepare([[
         SELECT id, track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame
         FROM clips
-        WHERE clip_kind = 'timeline' AND owner_sequence_id = 'default_sequence'
+        WHERE owner_sequence_id = 'default_sequence'
         ORDER BY track_id, timeline_start_frame
     ]])
     assert(snap_stmt:exec(), "Failed to fetch clips for snapshot")
@@ -203,20 +205,19 @@ nested_sequence_id = test_env.create_test_masterclip_sequence(
 
 local function insert_clip(start_value, duration, source_in)
     set_mc_marks(nested_sequence_id, source_in or 0, (source_in or 0) + duration)
-    local cmd = Command.cr, "default_project")
+    local cmd = Command.create("Insert", "default_project")
     cmd:set_parameter("nested_sequence_id", nested_sequence_id)
     cmd:set_parameter("target_video_track_id", "track_default_v1")
     cmd:set_parameter("timeline_start_frame", start_value)
     cmd:set_parameter("sequence_id", "default_sequence")
     exec(cmd)
-endexec(cmd)
 end
 
 local function fetch_clips_ordered()
     local order_stmt = db:prepare([[
         SELECT id, timeline_start_frame, duration_frames
         FROM clips
-        WHERE clip_kind = 'timeline' AND owner_sequence_id = 'default_sequence'
+        WHERE owner_sequence_id = 'default_sequence'
         ORDER BY timeline_start_frame
     ]])
     assert(order_stmt:exec(), "Failed to fetch clip ordering")
@@ -243,8 +244,8 @@ local second_initial = initial_clips[2]
 
 -- Domain: 1900329ms × 30fps / 1000 = 57009.87 → rounds to 57010 frames
 local extend_delta_frames = 57010
-local extend_cmd = Command.create("RippleEdit", "default_project")
-extend_cmd:set_parameter("edge_info", {clip_id = first_initial.id, edge_type = "out", track_id = "track_default_v1"})
+local extend_cmd = Command.create("BatchRippleEdit", "default_project")
+extend_cmd:set_parameter("edge_infos", {{clip_id = first_initial.id, edge_type = "out", track_id = "track_default_v1"}})
 extend_cmd:set_parameter("delta_frames", extend_delta_frames)
 extend_cmd:set_parameter("sequence_id", "default_sequence")
 exec(extend_cmd)

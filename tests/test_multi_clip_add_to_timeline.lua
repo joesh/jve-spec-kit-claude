@@ -56,10 +56,9 @@ local media1 = Media.create({
     width = 1920,
     height = 1080,
     audio_channels = 2,
-,
     audio_sample_rate = 48000
 })
-media:save(db)
+media1:save(db)
 local media2 = Media.create({
     id = "media_2",
     project_id = "project",
@@ -71,10 +70,9 @@ local media2 = Media.create({
     width = 1920,
     height = 1080,
     audio_channels = 2,
-,
     audio_sample_rate = 48000
 })
-media:save(db)
+media2:save(db)
 local media3 = Media.create({
     id = "media_3",
     project_id = "project",
@@ -86,10 +84,9 @@ local media3 = Media.create({
     width = 1920,
     height = 1080,
     audio_channels = 2,
-,
     audio_sample_rate = 48000
 })
-media:save(db)
+media3:save(db)
 -- Create masterclip sequences (IS-a refactor: masterclip IS a sequence)
 local test_env = require("test_env")
 local master_1 = test_env.create_test_masterclip_sequence("project", "Video 1", 24, 1, 100, "media_1")
@@ -98,7 +95,7 @@ local master_3 = test_env.create_test_masterclip_sequence("project", "Video 3", 
 
 -- Helper: count clips on track
 local function count_clips(track_id)
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE track_id = ? AND clip_kind != 'master'")
+    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE track_id = ?")
     stmt:bind_value(1, track_id)
     stmt:exec()
     stmt:next()
@@ -109,7 +106,7 @@ end
 
 -- Helper: get clip positions on a track
 local function get_clip_positions(track_id)
-    local stmt = db:prepare("SELECT id, timeline_start_frame, duration_frames FROM clips WHERE track_id = ? AND clip_kind != 'master' ORDER BY timeline_start_frame")
+    local stmt = db:prepare("SELECT id, timeline_start_frame, duration_frames FROM clips WHERE track_id = ? ORDER BY timeline_start_frame")
     stmt:bind_value(1, track_id)
     stmt:exec()
     local clips = {}
@@ -145,7 +142,7 @@ local groups = {
                 duration = 100,
                 fps_numerator = 24,
                 fps_denominator = 1,
-                target_track_id = "track_v1",
+                target_track_id = "track_v1", fps_mismatch_policy = "resample",
             }
         },
         duration = 100,
@@ -164,7 +161,7 @@ local groups = {
                 duration = 50,
                 fps_numerator = 24,
                 fps_denominator = 1,
-                target_track_id = "track_v1",
+                target_track_id = "track_v1", fps_mismatch_policy = "resample",
             }
         },
         duration = 50,
@@ -183,7 +180,7 @@ local groups = {
                 duration = 75,
                 fps_numerator = 24,
                 fps_denominator = 1,
-                target_track_id = "track_v1",
+                target_track_id = "track_v1", fps_mismatch_policy = "resample",
             }
         },
         duration = 75,
