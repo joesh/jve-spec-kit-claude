@@ -155,9 +155,9 @@ check("masterclip created", mc_id ~= nil)
 -- Query the video stream clip's source_in
 local stmt = assert(db:prepare([[
     SELECT c.source_in_frame, c.source_out_frame, c.timeline_start_frame
-    FROM clips c
+    FROM media_refs c
     JOIN tracks t ON c.track_id = t.id
-    WHERE c.owner_sequence_id = ? AND t.track_type = 'VIDEO' AND c.clip_kind = 'master'
+    WHERE c.owner_sequence_id = ? AND t.track_type = 'VIDEO' AND 1=1
 ]]))
 stmt:bind_value(1, mc_id)
 assert(stmt:exec() and stmt:next())
@@ -176,9 +176,9 @@ check("video timeline_start = TC origin", timeline_start == 1148001,
 -- Query audio stream clip's source_in
 local astmt = assert(db:prepare([[
     SELECT c.source_in_frame, c.source_out_frame
-    FROM clips c
+    FROM media_refs c
     JOIN tracks t ON c.track_id = t.id
-    WHERE c.owner_sequence_id = ? AND t.track_type = 'AUDIO' AND c.clip_kind = 'master'
+    WHERE c.owner_sequence_id = ? AND t.track_type = 'AUDIO' AND 1=1
     LIMIT 1
 ]]))
 astmt:bind_value(1, mc_id)
@@ -206,9 +206,9 @@ check("TC=0 masterclip created", mc_id_0 ~= nil)
 
 local stmt0 = assert(db:prepare([[
     SELECT c.source_in_frame, c.timeline_start_frame
-    FROM clips c
+    FROM media_refs c
     JOIN tracks t ON c.track_id = t.id
-    WHERE c.owner_sequence_id = ? AND t.track_type = 'VIDEO' AND c.clip_kind = 'master'
+    WHERE c.owner_sequence_id = ? AND t.track_type = 'VIDEO' AND 1=1
 ]]))
 stmt0:bind_value(1, mc_id_0)
 assert(stmt0:exec() and stmt0:next())

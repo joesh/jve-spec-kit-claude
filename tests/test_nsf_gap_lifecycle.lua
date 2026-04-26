@@ -12,7 +12,7 @@ local SEQ_FPS = { fps_numerator = 24, fps_denominator = 1 }
 local function media_clip(id, track_id, start, dur)
     return {
         id = id, track_id = track_id, timeline_start = start, duration = dur,
-        clip_kind = "nested", media_id = "m1",
+        is_gap = false, media_id = "m1",
     }
 end
 
@@ -106,20 +106,20 @@ do
     assert(gaps[2].timeline_start + gaps[2].duration == clips[2].timeline_start,
         "gap2 end must equal c2 start")
 
-    -- All gaps must have clip_kind = "gap"
+    -- All gaps must have is_gap = true
     for _, gap in ipairs(gaps) do
-        assert(gap.clip_kind == "gap", "gap must have clip_kind='gap'")
+        assert(gap.is_gap == true, "gap must have clip_kind='gap'")
         assert(gap.media_id == nil, "gap must have nil media_id")
         assert(gap.duration >= 0, "gap duration must be >= 0")
     end
 end
 print("  ✓ gap invariants hold (contiguity, clip_kind, non-negative)")
 
--- create_implied_gap: output must have clip_kind = "gap" and duration = 0
+-- create_implied_gap: output must have is_gap = true and duration = 0
 do
     local gap = gap_lifecycle.create_implied_gap("v1", 100, SEQ_FPS)
     assert(gap, "create_implied_gap must return a gap")
-    assert(gap.clip_kind == "gap", "implied gap must have clip_kind='gap'")
+    assert(gap.is_gap == true, "implied gap must have clip_kind='gap'")
     assert(gap.duration == 0, "implied gap must have duration 0")
     assert(gap.timeline_start == 100, "implied gap must be at requested position")
     assert(gap.track_id == "v1", "implied gap must have correct track_id")

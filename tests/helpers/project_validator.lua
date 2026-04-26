@@ -121,7 +121,7 @@ local function check_video_overlaps(db, result)
         JOIN clips c2 ON c1.track_id = c2.track_id AND c1.id < c2.id
         JOIN tracks t ON t.id = c1.track_id
         WHERE t.track_type = 'VIDEO'
-          AND c1.clip_kind = 'timeline' AND c2.clip_kind = 'timeline'
+          AND 1=1
           AND c1.timeline_start_frame < (c2.timeline_start_frame + c2.duration_frames)
           AND (c1.timeline_start_frame + c1.duration_frames) > c2.timeline_start_frame
     ]]
@@ -148,8 +148,8 @@ end
 
 --- Check fps values are positive.
 local function check_fps_positive(db, result)
+    -- V13: clips no longer carry fps; rate derives from nested_sequence_id.
     local tables = {
-        {"clips", "fps_numerator", "fps_denominator"},
         {"sequences", "fps_numerator", "fps_denominator"},
         {"media", "fps_numerator", "fps_denominator"},
     }
@@ -176,7 +176,7 @@ local function check_source_range(db, result)
     each_row(db,
         [[SELECT id, name, source_in_frame, source_out_frame
           FROM clips
-          WHERE clip_kind = 'timeline'
+          WHERE 1=1
             AND source_in_frame IS NOT NULL
             AND source_out_frame IS NOT NULL
             AND source_out_frame = source_in_frame]],
@@ -197,19 +197,20 @@ local function check_source_out_speed_ratio(db, result, sequence_id_filter)
     if sequence_id_filter then
         where_clause = string.format(" AND t.sequence_id = '%s'", sequence_id_filter)
     end
+    -- V13: clip.rate derives from nested_sequence; pull both owner+nested fps.
     local sql = string.format([[
         SELECT c.id, c.name, c.source_in_frame, c.source_out_frame,
-               c.duration_frames, c.fps_numerator, c.fps_denominator,
+               c.duration_frames,
+               nested.fps_numerator, nested.fps_denominator,
                s.fps_numerator, s.fps_denominator
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences s ON t.sequence_id = s.id
-        WHERE c.clip_kind = 'timeline'
+        JOIN sequences nested ON c.nested_sequence_id = nested.id
+        WHERE 1=1
           AND c.source_in_frame IS NOT NULL
           AND c.source_out_frame IS NOT NULL
           AND c.duration_frames > 0
-          AND c.fps_numerator > 0
-          AND c.fps_denominator > 0
           %s
     ]], where_clause)
 
@@ -291,7 +292,7 @@ local function check_video_overlaps_for_sequence(db, sequence_id, result)
         JOIN tracks t ON t.id = c1.track_id
         WHERE t.track_type = 'VIDEO'
           AND t.sequence_id = '%s'
-          AND c1.clip_kind = 'timeline' AND c2.clip_kind = 'timeline'
+          AND 1=1
           AND c1.timeline_start_frame < (c2.timeline_start_frame + c2.duration_frames)
           AND (c1.timeline_start_frame + c1.duration_frames) > c2.timeline_start_frame
     ]], sequence_id)
@@ -356,7 +357,7 @@ local function check_source_range_for_sequence(db, sequence_id, result)
               FROM clips c
               JOIN tracks t ON c.track_id = t.id
               WHERE t.sequence_id = '%s'
-                AND c.clip_kind = 'timeline'
+                AND 1=1
                 AND c.source_in_frame IS NOT NULL
                 AND c.source_out_frame IS NOT NULL
                 AND c.source_out_frame = c.source_in_frame]], sequence_id),
@@ -422,7 +423,7 @@ local function check_clips_match_db(ts, db, sequence_id, result)
 
     local mem_media = {}
     for _, clip in ipairs(mem_clips) do
-        if clip.clip_kind ~= "gap" then
+        if not clip.is_gap then
             mem_media[clip.id] = clip
         end
     end
@@ -435,7 +436,7 @@ local function check_clips_match_db(ts, db, sequence_id, result)
                      c.source_in_frame, c.source_out_frame
               FROM clips c
               JOIN tracks t ON c.track_id = t.id
-              WHERE t.sequence_id = '%s' AND c.clip_kind = 'timeline']],
+              WHERE t.sequence_id = '%s' AND 1=1]],
             sequence_id),
         function(stmt)
             db_clips[stmt:value(0)] = {
@@ -510,7 +511,7 @@ local function check_gap_invariants(ts, result)
         -- Check: no two adjacent gaps
         local prev_was_gap = false
         for _, clip in ipairs(track_clips) do
-            local is_gap = clip.clip_kind == "gap"
+            local is_gap = clip.is_gap == true
             if is_gap and prev_was_gap then
                 fail(result, string.format(
                     "ADJACENT_GAPS: track %s has adjacent gaps at position %d",
@@ -529,7 +530,7 @@ local function check_gap_invariants(ts, result)
                 if clip_end ~= next_clip.timeline_start then
                     -- Allow zero-length gaps between adjacent media clips
                     -- (they may not have been materialized yet)
-                    if not (clip.clip_kind ~= "gap" and next_clip.clip_kind ~= "gap"
+                    if not (not clip.is_gap and not next_clip.is_gap
                             and clip_end == next_clip.timeline_start) then
                         fail(result, string.format(
                             "GAP_DISCONTINUITY: track %s: clip %s ends at %d but next clip %s starts at %d",
@@ -539,14 +540,14 @@ local function check_gap_invariants(ts, result)
             end
 
             -- Check: gap duration >= 0
-            if clip.clip_kind == "gap" and clip.duration < 0 then
+            if clip.is_gap == true and clip.duration < 0 then
                 fail(result, string.format(
                     "NEGATIVE_GAP: track %s gap %s has duration %d",
                     track_id, clip.id, clip.duration))
             end
 
             -- Check: media clip duration > 0
-            if clip.clip_kind ~= "gap" and clip.duration <= 0 then
+            if not clip.is_gap and clip.duration <= 0 then
                 fail(result, string.format(
                     "ZERO_MEDIA_CLIP: track %s clip %s has duration %d",
                     track_id, clip.id, clip.duration))
@@ -556,7 +557,7 @@ local function check_gap_invariants(ts, result)
         -- Check: between any two adjacent media clips, exactly one gap
         local media_only = {}
         for _, clip in ipairs(track_clips) do
-            if clip.clip_kind ~= "gap" then
+            if not clip.is_gap then
                 table.insert(media_only, clip)
             end
         end
@@ -571,7 +572,7 @@ local function check_gap_invariants(ts, result)
                 -- There should be exactly one gap between these clips
                 local gap_count = 0
                 for _, clip in ipairs(track_clips) do
-                    if clip.clip_kind == "gap"
+                    if clip.is_gap == true
                         and clip.timeline_start >= curr_end
                         and clip.timeline_start < next_media.timeline_start then
                         gap_count = gap_count + 1
@@ -589,7 +590,7 @@ local function check_gap_invariants(ts, result)
         if #media_only > 0 and media_only[1].timeline_start > 0 then
             local leading_gap = false
             for _, clip in ipairs(track_clips) do
-                if clip.clip_kind == "gap" and clip.timeline_start == 0 then
+                if clip.is_gap == true and clip.timeline_start == 0 then
                     leading_gap = true
                     if clip.duration ~= media_only[1].timeline_start then
                         fail(result, string.format(
