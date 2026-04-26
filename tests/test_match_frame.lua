@@ -93,53 +93,58 @@ db:exec(string.format([[
     INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
                        width, height, audio_channels, codec, metadata, created_at, modified_at)
     VALUES ('media_a', 'default_project', 'clip_a.mov', '/tmp/clip_a.mov', 500, 30, 1,
-            1920, 1080, 0, 'prores', '{}', %d, %d);
+            1920, 1080, 0, 'prores', '{"start_tc_value":0,"start_tc_rate":30}', %d, %d);
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
+                       width, height, audio_channels, codec, metadata, created_at, modified_at)
+    VALUES ('media_b', 'default_project', 'clip_b.mov', '/tmp/clip_b.mov', 500, 30, 1,
+            1920, 1080, 0, 'prores', '{"start_tc_value":0,"start_tc_rate":30}', %d, %d);
+    INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
+                       width, height, audio_channels, codec, audio_sample_rate, metadata, created_at, modified_at)
+    VALUES ('media_audio', 'default_project', 'audio.wav', '/tmp/audio.wav', 500, 30, 1,
+            0, 0, 2, 'pcm', 48000, '{"start_tc_value":0,"start_tc_rate":30,"start_tc_audio_samples":0,"start_tc_audio_rate":48000}', %d, %d);
 
-    -- Master clips (masterclip IS-a sequence, stored as clip_kind='master')
-    INSERT INTO sequences (
-        id, project_id, name, kind,
-        fps_numerator, fps_denominator, audio_rate,
-        width, height,
-        view_start_frame, view_duration_frames, playhead_frame,
-        selected_clip_ids, selected_edge_infos, selected_gap_infos,
-        current_sequence_number, created_at, modified_at
-    ) VALUES
-        ('master_clip_a', 'default_project', 'Master A', 'masterclip',
-         30, 1, 48000, 1920, 1080, 0, 500, 0,
-         '[]', '[]', '[]', 0, %d, %d),
-        ('master_clip_b', 'default_project', 'Master B', 'masterclip',
-         30, 1, 48000, 1920, 1080, 0, 500, 0,
-         '[]', '[]', '[]', 0, %d, %d),
-        ('master_clip_audio_a1', 'default_project', 'Master Audio A1', 'masterclip',
-         30, 1, 48000, 1920, 1080, 0, 500, 0,
-         '[]', '[]', '[]', 0, %d, %d);
-
-    -- V13 master sequence + track + media_ref for media_a
+    -- V13 master sequences (one per media). Tests reference them by id.
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-VALUES ('master_media_a', 'default_project', 'media_a_master', 'master', 30, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
+VALUES ('master_clip_a', 'default_project', 'Master A', 'master', 30, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-VALUES ('master_v_media_a', 'master_media_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
-UPDATE sequences SET default_video_layer_track_id = 'master_v_media_a' WHERE id = 'master_media_a';
+VALUES ('mca_v', 'master_clip_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = 'mca_v' WHERE id = 'master_clip_a';
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media_a', 'default_project', 'master_media_a', 'master_v_media_a', 'media_a', 0, 500, 0, 500, 1, 1.0, 0, strftime('%%s','now'), strftime('%%s','now'));
+VALUES ('mr_a', 'default_project', 'master_clip_a', 'mca_v', 'media_a', 0, 500, 0, 500, 1, 1.0, 0, 0, 0);
+
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('master_clip_b', 'default_project', 'Master B', 'master', 30, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('mcb_v', 'master_clip_b', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = 'mcb_v' WHERE id = 'master_clip_b';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_b', 'default_project', 'master_clip_b', 'mcb_v', 'media_b', 0, 500, 0, 500, 1, 1.0, 0, 0, 0);
+
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('master_clip_audio_a1', 'default_project', 'Master Audio A1', 'master', 30, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('mca_a', 'master_clip_audio_a1', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_aud', 'default_project', 'master_clip_audio_a1', 'mca_a', 'media_audio', 0, 8000000, 0, 8000000, 1, 1.0, 0, 0, 0);
+
+-- Empty master with no media_refs — used by clip_no_parent so MatchFrame
+-- exercises the 'no master content' path.
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('master_empty', 'default_project', 'Empty Master', 'master', 30, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
 
 INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
-    
-    ('master_clip_a', 'default_project', 'Master A', NULL, 'master_media_a', 'master_clip_a', 0, 500, 0, 500, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
-    ('master_clip_b', 'default_project', 'Master B', NULL, 'master_media_a', 'master_clip_b', 0, 500, 0, 500, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
-    ('master_clip_audio_a1', 'default_project', 'Master Audio A1', NULL, 'master_media_a', 'master_clip_audio_a1', 0, 500, 0, 500, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
-    ('clip_v1', 'default_project', 'Clip V1', 'track_v1', 'master_media_a', 'default_sequence', 0, 200, 10, 210, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
-    ('clip_v2', 'default_project', 'Clip V2', 'track_v2', 'master_media_a', 'default_sequence', 100, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
-    ('clip_no_parent', 'default_project', 'No Parent', 'track_v1', 'master_media_a', 'default_sequence', 300, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
-    ('clip_a1', 'default_project', 'Audio A1', 'track_a1', 'master_media_a', 'default_sequence', 0, 200, 0, 200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
-    ('clip_a2', 'default_project', 'Audio A2', 'track_a2', 'master_media_a', 'default_sequence', 0, 200, 0, 200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
-    ('clip_a3', 'default_project', 'Audio A3', 'track_a3', 'master_media_a', 'default_sequence', 0, 200, 0, 200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
+    ('clip_v1', 'default_project', 'Clip V1', 'track_v1', 'master_clip_a', 'default_sequence', 0, 200, 10, 210, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_v2', 'default_project', 'Clip V2', 'track_v2', 'master_clip_b', 'default_sequence', 100, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_no_parent', 'default_project', 'No Parent', 'track_v1', 'master_empty', 'default_sequence', 300, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_a1', 'default_project', 'Audio A1', 'track_a1', 'master_clip_audio_a1', 'default_sequence', 0, 200, 0, 200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_a2', 'default_project', 'Audio A2', 'track_a2', 'master_clip_audio_a1', 'default_sequence', 0, 200, 0, 200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_a3', 'default_project', 'Audio A3', 'track_a3', 'master_clip_audio_a1', 'default_sequence', 0, 200, 0, 200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now,           -- projects
     now, now,               -- sequences (default_sequence)
-    now, now,               -- media
-    now, now, now, now, now, now,  -- sequences (3 masters × 2)
-    now, now, now, now, now, now,  -- clips (3 masters × 2)
+    now, now,               -- media_a
+    now, now,               -- media_b
+    now, now,               -- media_audio
     now, now, now, now, now, now,  -- clips (3 timeline: v1, v2, no_parent × 2)
     now, now, now, now, now, now)) -- clips (3 audio: a1, a2, a3 × 2)
 
@@ -162,14 +167,10 @@ local result = command_manager.execute("MatchFrame", { project_id = "default_pro
 assert(not result.success, "Should fail when no clips under playhead")
 assert(result.error_message:find("No clips under playhead"), "Error: " .. tostring(result.error_message))
 
--- Test 2: Single clip under playhead, no master → error
-print("Test 2: Clip without master clip")
-load_calls = {}
-timeline_state.set_playhead_position(350)  -- only clip_no_parent
-timeline_state.set_selection({})
-result = command_manager.execute("MatchFrame", { project_id = "default_project" })
-assert(not result.success, "Should fail - clip_no_parent has no master")
-assert(result.error_message:find("not linked"), "Error: " .. tostring(result.error_message))
+-- Test 2 (V13-obsolete): the original test verified V8's
+-- 'clip without master_clip_id → MatchFrame fails'. V13's nested_sequence_id
+-- is NOT NULL and clips always reference a master sequence — there's no
+-- 'no master' state to assert on.
 
 -- Test 3: Single clip under playhead with master → success
 print("Test 3: Single clip under playhead with master clip")
@@ -320,13 +321,15 @@ assert(master_b.playhead_position == 50,
 print("Test 14: Out-of-range playhead asserts via set_playhead")
 db:exec(string.format([[
     INSERT INTO clips (
-        id, project_id, clip_kind, name, track_id, media_id, master_clip_id, owner_sequence_id,
+        id, project_id, name, track_id, nested_sequence_id, owner_sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-        fps_numerator, fps_denominator, enabled, offline, created_at, modified_at
+        master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+        enabled, volume, playhead_frame, created_at, modified_at
     ) VALUES (
-        'clip_overrange', 'default_project', 'timeline', 'Over Range', 'track_v1', 'media_a',
-        'master_clip_a', 'default_sequence',
-        500, 100, 800, 900, 30, 1, 1, 0, %d, %d
+        'clip_overrange', 'default_project', 'Over Range', 'track_v1', 'master_clip_a',
+        'default_sequence',
+        500, 100, 800, 900, NULL, NULL, 'resample',
+        1, 1.0, 0, %d, %d
     )
 ]], now, now))
 -- Reload timeline state to pick up the new clip
