@@ -59,6 +59,7 @@ local m = Media.create({
     file_path = '/tmp/jve/m1.mov',
     name = "m1", duration_frames = 500,
     fps_numerator = 25, fps_denominator = 1,
+    width = 1920, height = 1080, audio_channels = 0,
 })
 m:save(db)
 local mc = test_env.create_test_masterclip_sequence('proj', 'm1 MC', 25, 1, 500, 'm1')
@@ -72,45 +73,52 @@ print("=== Overwrite → state.clips has exactly one entry per inserted clip ===
 local cmd = Command.create("Overwrite", "proj")
 cmd:set_parameters({
     nested_sequence_id = mc, target_video_track_id = "v1", sequence_id = "seq",
-    timeline_start_frame = 100, nested_sequence_id = "clip_a", advance_playhead = false,
+    timeline_start_frame = 100, advance_playhead = false,
 })
-assert(command_manager.execute(cmd).success, "Overwrite failed")
+local res = command_manager.execute(cmd)
+assert(res.success, "Overwrite failed: " .. tostring(res.error_message))
+local clip_a = (cmd:get_parameter("created_clip_ids") or {})[1]
+assert(clip_a, "Overwrite did not produce created_clip_ids")
 
--- Count media (non-gap) clips for id "clip_a" in state.
+-- Count media (non-gap) clips for id in state.
 local function count_media_clips_in_state(clip_id)
     local n = 0
     for _, c in ipairs(tsdata.state.clips) do
-        if c.clip_kind ~= "gap" and c.id == clip_id then n = n + 1 end
+        if not c.is_gap and c.id == clip_id then n = n + 1 end
     end
     return n
 end
 
-local count_a = count_media_clips_in_state("clip_a")
+local count_a = count_media_clips_in_state(clip_a)
 assert(count_a == 1, string.format(
     "Overwrite must insert each clip exactly once into state.clips; "
-    .. "found %d copies of clip 'clip_a' (duplicate-insert regression)", count_a))
-print(string.format("  OK: Overwrite inserted clip_a exactly once (%d occurrences)", count_a))
+    .. "found %d copies of the new clip (duplicate-insert regression)", count_a))
+print(string.format("  OK: Overwrite inserted new clip exactly once (%d occurrences)", count_a))
 
 -- Sanity: DB count matches
-local stmt = assert(conn:prepare("SELECT COUNT(*) FROM clips WHERE id='clip_a'"))
+local stmt = assert(conn:prepare("SELECT COUNT(*) FROM clips WHERE id=?"))
+stmt:bind_value(1, clip_a)
 assert(stmt:exec() and stmt:next())
 local db_count = stmt:value(0)
 stmt:finalize()
-assert(db_count == 1, "DB should have exactly one clip_a row; got " .. tostring(db_count))
+assert(db_count == 1, "DB should have exactly one new clip row; got " .. tostring(db_count))
 
 print("=== Insert → same invariant ===")
 
 local cmd2 = Command.create("Insert", "proj")
 cmd2:set_parameters({
     nested_sequence_id = mc, target_video_track_id = "v1", sequence_id = "seq",
-    timeline_start_frame = 500, nested_sequence_id = "clip_b", advance_playhead = false,
+    timeline_start_frame = 500, advance_playhead = false,
 })
-assert(command_manager.execute(cmd2).success, "Insert failed")
+local res2 = command_manager.execute(cmd2)
+assert(res2.success, "Insert failed: " .. tostring(res2.error_message))
+local clip_b = (cmd2:get_parameter("created_clip_ids") or {})[1]
+assert(clip_b, "Insert did not produce created_clip_ids")
 
-local count_b = count_media_clips_in_state("clip_b")
+local count_b = count_media_clips_in_state(clip_b)
 assert(count_b == 1, string.format(
     "Insert must insert each clip exactly once into state.clips; "
-    .. "found %d copies of clip 'clip_b' (duplicate-insert regression)", count_b))
-print(string.format("  OK: Insert inserted clip_b exactly once (%d occurrences)", count_b))
+    .. "found %d copies of the new clip (duplicate-insert regression)", count_b))
+print(string.format("  OK: Insert inserted new clip exactly once (%d occurrences)", count_b))
 
 print("✅ test_insert_overwrite_no_duplicate_state_clips.lua passed")
