@@ -196,6 +196,7 @@ media_cmd:set_parameter("media_id", "media_src")
 media_cmd:set_parameter("file_path", "/tmp/jve/media_src.mov")
 media_cmd:set_parameter("file_name", "Test Media")
 media_cmd:set_parameter("frame_rate", 30)
+media_cmd:set_parameter("duration_value", 10000000)
 media_result = command_manager.execute(media_cmd)
 assert(media_result.success, media_result.error_message or "TestCreateMedia failed")
 
