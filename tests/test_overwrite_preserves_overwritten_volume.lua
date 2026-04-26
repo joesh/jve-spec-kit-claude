@@ -101,7 +101,7 @@ db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, volume, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, playhead_frame)
 VALUES
     
-    ('existing', 'proj1', 'Quiet', 'v1', 'master_media1', 'seq1', 0, 200, 0, 200, 1, 1.0, %d, %d, NULL, NULL, 'resample', 0);
+    ('existing', 'proj1', 'Quiet', 'v1', 'master_media1', 'seq1', 0, 200, 0, 200, 1, 0.3, %d, %d, NULL, NULL, 'resample', 0);
 ]], now, now))
 
 command_manager.init("seq1", "proj1")
@@ -109,6 +109,22 @@ command_manager.init("seq1", "proj1")
 local function execute_cmd(name, params)
     params = params or {}
     params.project_id = params.project_id or "proj1"
+    -- V13: Insert/Overwrite take their source range from marks on the
+    -- nested_sequence; convert legacy source_in/source_out into marks.
+    if (name == "Insert" or name == "Overwrite") and params.nested_sequence_id then
+        if params.source_in and params.source_out then
+            local mc = Sequence.load(params.nested_sequence_id)
+            mc:set_in(params.source_in)
+            mc:set_out(params.source_out)
+            params.source_in = nil
+            params.source_out = nil
+            params.duration = nil
+        end
+        if params.playhead and not params.timeline_start_frame then
+            params.timeline_start_frame = params.playhead
+            params.playhead = nil
+        end
+    end
     command_manager.begin_command_event("script")
     local result = command_manager.execute(name, params)
     command_manager.end_command_event()
