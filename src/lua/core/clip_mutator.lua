@@ -657,8 +657,8 @@ ClipMutator.plan_insert = plan_insert
 function ClipMutator.resolve_ripple(db, params)
     if not params then return true end
     local track_id = params.track_id
-    local insert_time = params.insert_time or params.timeline_start
-    local shift_amount = params.shift_amount or params.duration
+    local insert_time = params.insert_time or params.timeline_start or params.timeline_start_frame
+    local shift_amount = params.shift_amount or params.duration or params.duration_frames
     if not track_id then return true end
     if not insert_time then return true end
     assert(shift_amount, "clip_mutator.resolve_ripple: shift_amount/duration is required")
