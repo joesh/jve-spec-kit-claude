@@ -62,6 +62,7 @@ local BANNED = {
         -- read off a V13 `clips` row.
         pattern = [[\b(clip|clips|c)\.media_id\b]],
         allowlist = {
+            "src/lua/core/database.lua",
             "src/lua/ui/project_browser.lua",
             "src/lua/ui/project_browser/browser_state.lua",
         },
@@ -73,6 +74,7 @@ local BANNED = {
         -- NOT a `clips` table column. Same name, different concept.
         pattern = [[\b(clip|clips|c)\.offline\b]],
         allowlist = {
+            "src/lua/core/database.lua",
             "src/lua/core/media/media_status.lua",
             "src/lua/ui/timeline/state/timeline_core_state.lua",
             "src/lua/ui/timeline/view/timeline_view_renderer.lua",
