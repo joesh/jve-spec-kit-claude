@@ -712,6 +712,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             source_out = base.source_out,
             name = base.name,
             enabled = base.enabled,
+            -- Carry is_gap so downstream gap-aware code (compute_seed_shift_contribution,
+            -- register_ripple_anchor) sees the gap-orientation flip on synthesized
+            -- gap edges. Without it, cross-track ripple propagation flipped sign.
+            is_gap = base.is_gap,
             rate = base.rate,
             fps_numerator = base.rate.fps_numerator,
             fps_denominator = base.rate.fps_denominator,
