@@ -159,7 +159,7 @@ assert(db:exec([[
         current_sequence_number, created_at, modified_at
     )
     VALUES (
-        'mc_seq', 'proj', 'MC Seq', 'masterclip',
+        'mc_seq', 'proj', 'MC Seq', 'master',
         24, 1, 48000,
         1920, 1080,
         0, 240, 0,
