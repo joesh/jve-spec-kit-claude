@@ -54,8 +54,8 @@ db:exec(string.format([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('v1', 'seq1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 
-    INSERT INTO media (id, project_id, file_path, name, duration_frames, fps_numerator, fps_denominator, created_at, modified_at)
-    VALUES ('media1', 'default_project', '/tmp/test.mov', 'Test Media', 3000, 30, 1, %d, %d);
+    INSERT INTO media (id, project_id, file_path, name, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, created_at, modified_at)
+    VALUES ('media1', 'default_project', '/tmp/test.mov', 'Test Media', 3000, 30, 1, 1920, 1080, 0, %d, %d);
 ]], now, now, now, now, now, now))
 
 command_manager.init("seq1", "default_project")

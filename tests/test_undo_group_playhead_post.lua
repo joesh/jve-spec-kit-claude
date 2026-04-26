@@ -53,6 +53,7 @@ local media = Media.create({
     id = "media_v", project_id = project.id,
     file_path = "/tmp/jve/v.mov", name = "V",
     duration_frames = 100, fps_numerator = 30, fps_denominator = 1,
+    width = 1920, height = 1080, audio_channels = 0,
 })
 media:save(db)
 local mc_id = test_env.create_test_masterclip_sequence(
