@@ -121,14 +121,18 @@ local master_clip = master_clips[1]
 assert(master_clip.media_id == "media_stub", "Master clip should reference stub media id")
 assert(master_clip.sequence and master_clip.sequence.id, "Master clip should point to a source sequence")
 
-local master_sequence_id = master_clip.master_clip_id
-assert(master_sequence_id ~= nil, "Master clip should store master_clip_id")
+-- V13: load_master_clips returns clip_entry with clip_id == sequence_id
+-- (the master Sequence's id). The legacy master_clip_id alias was a V8
+-- carry-over; use sequence_id instead.
+local master_sequence_id = master_clip.sequence_id
+assert(master_sequence_id ~= nil, "Master clip should store sequence_id")
 
--- Verify sequence and tracks created
--- IS-a refactor: stream clips use owner_sequence_id (not parent_clip_id)
+-- Verify sequence and tracks created. V13: master sequences hold media_refs
+-- (not stream clips), so the V8 'count clips inside the master' check is
+-- replaced by counting media_refs.
 assert(count_rows(db, "sequences", "id = ?", master_sequence_id) == 1, "Master sequence missing")
 assert(count_rows(db, "tracks", "sequence_id = ?", master_sequence_id) >= 1, "Master sequence should have tracks")
-assert(count_rows(db, "clips", "owner_sequence_id = ?", master_sequence_id) >= 1, "Master sequence should have stream clips")
+assert(count_rows(db, "media_refs", "owner_sequence_id = ?", master_sequence_id) >= 1, "Master sequence should have media_refs")
 assert(count_rows(db, "media", "id = ?", master_clip.media_id) == 1, "Media row missing after import")
 
 -- Undo
@@ -136,15 +140,15 @@ command_manager.undo()
 assert_master_state(0)
 assert(count_rows(db, "sequences", "id = ?", master_sequence_id) == 0, "Master sequence should be removed after undo")
 assert(count_rows(db, "tracks", "sequence_id = ?", master_sequence_id) == 0, "Master tracks should be removed after undo")
-assert(count_rows(db, "clips", "owner_sequence_id = ?", master_sequence_id) == 0, "Stream clips should be removed after undo")
+assert(count_rows(db, "media_refs", "owner_sequence_id = ?", master_sequence_id) == 0, "Master media_refs should be removed after undo")
 assert(count_rows(db, "media", "id = ?", master_clip.media_id) == 0, "Media row should be removed after undo")
 
 -- Redo
 command_manager.redo()
 master_clips = assert_master_state(1)
 local redo_clip = master_clips[1]
-assert(redo_clip.master_clip_id ~= nil, "Redo should recreate master sequence")
-assert(count_rows(db, "tracks", "sequence_id = ?", redo_clip.master_clip_id) >= 1, "Redo should recreate tracks")
+assert(redo_clip.sequence_id ~= nil, "Redo should recreate master sequence")
+assert(count_rows(db, "tracks", "sequence_id = ?", redo_clip.sequence_id) >= 1, "Redo should recreate tracks")
 assert(count_rows(db, "media", "id = ?", redo_clip.media_id) == 1, "Redo should recreate media row")
 
 media_reader.import_media = original_import
