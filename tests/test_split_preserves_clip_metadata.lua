@@ -130,7 +130,7 @@ check("clip1 volume=0.42", math.abs(get_clip_field("clip1", "volume") - 0.42) < 
 print("\n--- Split ---")
 local r = execute_cmd("SplitClip", {
     clip_id = "clip1",
-    split_value = 200,
+    split_frame = 200,
     sequence_id = "seq1",
 })
 check("split succeeds", r == true or (type(r) == "table" and r.success))

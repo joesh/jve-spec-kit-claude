@@ -103,7 +103,7 @@ reset_tracking()
 -- Execute SplitClip
 local split_cmd = Command.create("SplitClip", "default_project")
 split_cmd:set_parameter("clip_id", "clip_a")
-split_cmd:set_parameter("split_value", 600)
+split_cmd:set_parameter("split_frame", 600)
 split_cmd:set_parameter("sequence_id", "default_sequence")
 
 local split_result = command_manager.execute(split_cmd)

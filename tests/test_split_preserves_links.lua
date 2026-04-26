@@ -90,7 +90,7 @@ local result = command_manager.execute("SplitClip", {
     project_id = "proj1",
     sequence_id = "seq1",
     clip_id = "clip_video",
-    split_value = 500,
+    split_frame = 500,
 })
 assert(result.success or result == true, "SplitClip should succeed")
 
