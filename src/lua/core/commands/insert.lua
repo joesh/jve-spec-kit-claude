@@ -48,7 +48,28 @@ function M.execute(args)
     -- Carry preset_ids through redo so created_clip_ids stays stable.
     plan.preset_ids = args.created_clip_ids
 
+    -- A clip strictly straddling the insertion frame is split into a left
+    -- half ending at start_frame and a right half starting at start_frame
+    -- BEFORE the ripple step. This matches V8 / Resolve / Premiere / FCP
+    -- UX: an Insert at mid-clip cuts that clip and shoves the right half
+    -- (along with everything downstream) forward by the inserted duration.
+    -- Without this step, ripple_track_forward (which only moves clips
+    -- whose start >= insertion frame) would leave the straddler untouched
+    -- and the new clip's INSERT would collide with it on the
+    -- video-overlap trigger.
+    local split_captures = {}
+    for _, track_id in pairs(plan.targets) do
+        local cap = place_shared.split_track_at_insertion(
+            track_id, plan.owner, plan.start_frame)
+        if cap and (#cap.trimmed > 0 or #cap.split_new_ids > 0) then
+            split_captures[track_id] = cap
+        end
+    end
+
     -- Ripple target tracks BEFORE inserting so the new clip doesn't collide.
+    -- The right halves created by split_track_at_insertion (timeline_start
+    -- == plan.start_frame) get picked up here and shifted along with all
+    -- downstream clips.
     local rippled = {}
     for _, track_id in pairs(plan.targets) do
         local ids = Clip.ripple_track_forward(
@@ -76,6 +97,7 @@ function M.execute(args)
         duration_frames     = plan.owner_duration,
         fps_mismatch_policy = plan.policy,
         rippled             = rippled,
+        split_captures      = split_captures,
         start_frame         = plan.start_frame,
     }
 end
@@ -102,6 +124,7 @@ local SPEC = {
         created_clip_ids       = { kind = "table" },
         created_link_group_id  = { kind = "string" },
         rippled_capture        = { kind = "table" },
+        split_capture          = { kind = "table" },
         duration_frames        = { kind = "number" },
         fps_mismatch_policy    = { kind = "string" },
         prior_playhead         = { kind = "number" },
@@ -154,6 +177,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("created_clip_ids",      result.created_clip_ids)
         command:set_parameter("created_link_group_id", result.link_group_id or "")
         command:set_parameter("rippled_capture",       result.rippled)
+        command:set_parameter("split_capture",         result.split_captures or {})
         command:set_parameter("duration_frames",       result.duration_frames)
         command:set_parameter("fps_mismatch_policy",   result.fps_mismatch_policy)
 
@@ -164,6 +188,30 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             deletes = {},
             bulk_shifts = {},
         }
+        -- Mid-clip-Insert split right-halves: emit as inserts with their
+        -- post-ripple final positions (already in DB at this point).
+        for _, cap in pairs(result.split_captures or {}) do
+            for _, right_id in ipairs(cap.split_new_ids or {}) do
+                bucket.inserts[#bucket.inserts + 1] =
+                    build_insert_mutation_entry(right_id)
+            end
+            -- Trimmed left-halves: emit updates with the post-trim bounds
+            -- so timeline_state's cache reflects the shrunk-to-the-cut row.
+            for _, tr in ipairs(cap.trimmed or {}) do
+                local row = Clip.load_v13_row(tr.id)
+                assert(row, "Insert: could not re-read trimmed left-half "
+                    .. tostring(tr.id))
+                bucket.updates[#bucket.updates + 1] = {
+                    clip_id           = row.id,
+                    id                = row.id,
+                    track_id          = row.track_id,
+                    start_value       = row.timeline_start_frame,
+                    duration_value    = row.duration_frames,
+                    source_in_value   = row.source_in_frame,
+                    source_out_value  = row.source_out_frame,
+                }
+            end
+        end
         for _, cid in ipairs(result.created_clip_ids) do
             bucket.inserts[#bucket.inserts + 1] = build_insert_mutation_entry(cid)
         end
@@ -201,6 +249,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local created_ids   = args.created_clip_ids or {}
         local link_group_id = args.created_link_group_id
         local rippled       = args.rippled_capture or {}
+        local splits        = args.split_capture or {}
 
         -- clip_links rows cascade on clip delete via ON DELETE CASCADE;
         -- link_group_id stays in undo state for redo reinstatement.
@@ -211,6 +260,23 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         for _, rip in pairs(rippled) do
             if rip.clip_ids and #rip.clip_ids > 0 then
                 Clip.shift_many_by(rip.clip_ids, -rip.shift)
+            end
+        end
+
+        -- Reverse the mid-clip-Insert splits: drop right-halves first
+        -- (frees [position, e_end) on the track), then grow each left-half
+        -- back to its pre-split bounds. Order matches split_clip.lua's
+        -- undoer to dodge the video-overlap trigger.
+        for _, cap in pairs(splits) do
+            if cap.split_new_ids and #cap.split_new_ids > 0 then
+                Clip.delete_by_ids(cap.split_new_ids)
+            end
+        end
+        for _, cap in pairs(splits) do
+            for _, tr in ipairs(cap.trimmed or {}) do
+                Clip.update_bounds(tr.id,
+                    tr.prior.timeline_start_frame, tr.prior.duration_frames,
+                    tr.prior.source_in_frame,      tr.prior.source_out_frame)
             end
         end
 
@@ -233,6 +299,25 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                         track_id     = track_id,
                         shift_frames = -rip.shift,
                         start_frame  = (rip.from_frame or 0) + rip.shift,
+                    }
+                end
+            end
+            -- Split-right-halves come back as deletes; split-left-halves'
+            -- restored bounds come back as updates. Order in the consumer
+            -- is updates → inserts → bulk_shifts → deletes (per
+            -- clip_state.apply_mutations), which is the order we want.
+            for _, cap in pairs(splits) do
+                for _, right_id in ipairs(cap.split_new_ids or {}) do
+                    bucket.deletes[#bucket.deletes + 1] = { clip_id = right_id }
+                end
+                for _, tr in ipairs(cap.trimmed or {}) do
+                    bucket.updates[#bucket.updates + 1] = {
+                        clip_id          = tr.id,
+                        id               = tr.id,
+                        start_value      = tr.prior.timeline_start_frame,
+                        duration_value   = tr.prior.duration_frames,
+                        source_in_value  = tr.prior.source_in_frame,
+                        source_out_value = tr.prior.source_out_frame,
                     }
                 end
             end

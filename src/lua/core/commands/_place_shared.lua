@@ -547,4 +547,100 @@ function M.occlude_track(track_id, owner_seq, n_start, n_end)
     }
 end
 
+--- Split any clip on `track_id` that strictly straddles `position`
+--- (timeline_start < position < timeline_start + duration) into a left
+--- half ending at position and a right half starting at position. The
+--- caller's subsequent ripple_track_forward(track_id, position, shift)
+--- picks up the new right-half (its timeline_start_frame == position) and
+--- shifts it forward by `shift` along with everything downstream.
+---
+--- Net effect for an Insert at mid-clip: A becomes [orig_start, position),
+--- the inserted clip occupies [position, position+inserted_dur), and
+--- A_right occupies [position+inserted_dur, position+inserted_dur+(orig_end-position)).
+--- This is the V8 / Resolve / Premiere / FCP UX for Insert.
+---
+--- INV: at most one clip on a track can strictly straddle a single point
+--- (clips on a track may not overlap), so the loop runs at most once.
+---
+--- Returns { trimmed = [{id, prior}], split_new_ids = [ids] } — same
+--- shape subset as occlude_track. Call sites can route this through the
+--- same undo path: delete split_new_ids, restore trimmed bounds.
+function M.split_track_at_insertion(track_id, owner_seq, position)
+    assert(track_id and track_id ~= "",
+        "place_shared.split_track_at_insertion: track_id required")
+    assert(type(position) == "number",
+        "place_shared.split_track_at_insertion: position must be integer frame")
+    assert(owner_seq and owner_seq.fps_numerator and owner_seq.fps_denominator,
+        "place_shared.split_track_at_insertion: owner_seq with fps required")
+
+    local trimmed       = {}
+    local split_new_ids = {}
+
+    -- A strict-straddler has start < position AND start + duration > position.
+    -- find_overlapping_on_track requires hi > lo, so use [position, position+1).
+    local candidates = Clip.find_overlapping_on_track(track_id, position, position + 1)
+    for _, e in ipairs(candidates) do
+        local e_start = e.timeline_start_frame
+        local e_end   = e_start + e.duration_frames
+        if e_start < position and e_end > position then
+            local nested = Sequence.find(e.nested_sequence_id)
+            assert(nested, string.format(
+                "place_shared.split_track_at_insertion: nested %s of clip %s not found",
+                tostring(e.nested_sequence_id), tostring(e.id)))
+
+            local left_duration  = position - e_start
+            local right_duration = e_end - position
+            local source_offset  = Clip.owner_delta_to_source(
+                e.fps_mismatch_policy, left_duration,
+                owner_seq.fps_numerator, owner_seq.fps_denominator,
+                nested.fps_numerator,    nested.fps_denominator)
+
+            trimmed[#trimmed + 1] = {
+                id = e.id,
+                prior = {
+                    timeline_start_frame = e.timeline_start_frame,
+                    duration_frames      = e.duration_frames,
+                    source_in_frame      = e.source_in_frame,
+                    source_out_frame     = e.source_out_frame,
+                },
+            }
+
+            -- Atomic order matters for the video-overlap trigger: shrink
+            -- the left half first (frees [position, e_end)), then create
+            -- the right half into that freed range. Mirrors split_clip.lua.
+            Clip.update_bounds(e.id,
+                e.timeline_start_frame, left_duration,
+                e.source_in_frame, e.source_in_frame + source_offset)
+
+            local right_id = uuid.generate()
+            Clip._create_v13_row({
+                id                    = right_id,
+                project_id            = e.project_id,
+                owner_sequence_id     = e.owner_sequence_id,
+                track_id              = e.track_id,
+                nested_sequence_id    = e.nested_sequence_id,
+                name                  = e.name,
+                timeline_start_frame  = position,
+                duration_frames       = right_duration,
+                source_in_frame       = e.source_in_frame + source_offset,
+                source_out_frame      = e.source_out_frame,
+                master_layer_track_id = e.master_layer_track_id,
+                fps_mismatch_policy   = e.fps_mismatch_policy,
+                enabled               = e.enabled,
+                volume                = e.volume,
+                mark_in_frame         = e.mark_in_frame,
+                mark_out_frame        = e.mark_out_frame,
+                playhead_frame        = e.playhead_frame,
+            })
+            Clip.copy_channel_overrides(e.id, right_id)
+            split_new_ids[#split_new_ids + 1] = right_id
+        end
+    end
+
+    return {
+        trimmed       = trimmed,
+        split_new_ids = split_new_ids,
+    }
+end
+
 return M
