@@ -124,26 +124,8 @@ end
 local start_batch = run_case(TEST_DB, true)
 assert(start_batch == 2000, "batch ripple should clamp gap out-edge to avoid overlapping left clip")
 
--- Zero-gap: clamp to no movement when clips touch
-local function run_zero_gap(db_path)
-    local db_conn = seed_db(db_path)
-    -- Move right clip to butt against left (gap=0)
-    assert(db_conn:exec("UPDATE clips SET timeline_start_frame = 2000 WHERE id = 'clip_right'"))
+-- 013/T046: zero-gap clamp behavior is covered by
+-- test_batch_ripple_zero_gap_block_reports_implied_edge.lua. The legacy
+-- single-edge RippleEdit path is gone; not re-tested here.
 
-    local cmd = Command.create("RippleEdit", "default_project")
-    cmd:set_parameter("edge_info", {clip_id = "clip_right", edge_type = "gap_before", track_id = "track_v1"})
-    cmd:set_parameter("delta_frames", -500)
-    cmd:set_parameter("sequence_id", "default_sequence")
-
-    local result = command_manager.execute(cmd)
-    assert(result.success, result.error_message or "RippleEdit zero-gap should succeed")
-
-    local start_value = fetch_start(db_conn, "clip_right")
-    os.remove(db_path)
-    return start_value
-end
-
-local zero_gap_start = run_zero_gap("/tmp/jve/test_ripple_overlap_zero_gap.db")
-assert(zero_gap_start == 2000, "zero-gap ripple should clamp to no movement")
-
-print("✅ Ripple edit clamps to avoid overlapping upstream clip (single and batch)")
+print("✅ Ripple edit clamps to avoid overlapping upstream clip")
