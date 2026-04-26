@@ -97,6 +97,29 @@ function M.register(executors, undoers, db)
             assert(rec.fps_den, "RelinkClips: new_media_record requires fps_den")
             local rec_codec = rec.codec
             local rec_width = rec.width
+            -- Synthesize TC metadata from explicit per-field args when the
+            -- caller didn't supply a fully formed metadata blob. V13's
+            -- Sequence.ensure_master asserts on missing video TC origin,
+            -- so we have to populate start_tc_value/start_tc_rate (and
+            -- the audio variants when audio is present) on the media row.
+            local rec_metadata = rec.metadata
+            if not rec_metadata or rec_metadata == "" or rec_metadata == "{}" then
+                if rec.start_tc_value ~= nil then
+                    local _json = require("dkjson")
+                    local tc_meta = {
+                        start_tc_value = rec.start_tc_value,
+                        start_tc_rate = rec.start_tc_rate or rec.fps_num,
+                    }
+                    if (rec.audio_channels or 0) > 0 then
+                        tc_meta.start_tc_audio_samples = rec.start_tc_audio_samples or 0
+                        tc_meta.start_tc_audio_rate = rec.start_tc_audio_rate
+                            or rec.audio_sample_rate or 48000
+                    end
+                    rec_metadata = _json.encode(tc_meta)
+                else
+                    rec_metadata = "{}"
+                end
+            end
             local media = Media.create({
                 id = rec.id,
                 project_id = args.project_id,
@@ -111,7 +134,7 @@ function M.register(executors, undoers, db)
                 height = rec.height,
                 codec = rec_codec,
                 is_still = Media.classify_is_still(rec_codec, rec_width, rec.duration_frames),
-                metadata = rec.metadata or "{}",
+                metadata = rec_metadata,
             })
             assert(media:save(), string.format("RelinkClips: failed to save new media %s", rec.id))
             log.event("RelinkClips: created media %s → %s", rec.id, rec.path)

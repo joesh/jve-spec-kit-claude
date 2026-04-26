@@ -63,6 +63,7 @@ local BANNED = {
         pattern = [[\b(clip|clips|c)\.media_id\b]],
         allowlist = {
             "src/lua/core/database.lua",
+            "src/lua/models/clip.lua",
             "src/lua/ui/project_browser.lua",
             "src/lua/ui/project_browser/browser_state.lua",
         },

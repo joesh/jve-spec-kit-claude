@@ -1172,9 +1172,15 @@ function M:delete()
     local db = assert(database.get_connection(), "Media:delete: no database connection")
     assert(self.id and self.id ~= "", "Media:delete: id required")
 
-    -- Delete properties and clip_links for clips referencing this media
-    -- (properties table has no FK cascade — must clean up explicitly)
-    local clip_ids_stmt = db:prepare("SELECT id FROM clips WHERE media_id = ?")
+    -- V13: clips don't carry media_id directly. The reachable clips are
+    -- those whose nested_sequence_id points at a master sequence that has
+    -- a media_ref to this media. Find them via media_refs.
+    -- properties table has no FK cascade — must clean up explicitly.
+    local clip_ids_stmt = db:prepare([[
+        SELECT c.id FROM clips c
+          JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+         WHERE mr.media_id = ?
+    ]])
     if clip_ids_stmt then
         clip_ids_stmt:bind_value(1, self.id)
         if clip_ids_stmt:exec() then
@@ -1197,14 +1203,25 @@ function M:delete()
         clip_ids_stmt:finalize()
     end
 
-    -- Delete clips referencing this media (FK constraint)
-    local del_clips = assert(db:prepare("DELETE FROM clips WHERE media_id = ?"),
-        "Media:delete: failed to prepare clip delete")
-    del_clips:bind_value(1, self.id)
-    del_clips:exec()
-    del_clips:finalize()
+    -- Drop media_refs pointing at this media row first. The schema's
+    -- ON DELETE SET NULL on media_refs.media_id contradicts the
+    -- NOT NULL constraint on the same column, so a SET NULL would
+    -- crash the DELETE FROM media. Removing the media_refs rows
+    -- explicitly orphans any master-sequence shells that referenced
+    -- them — the master sequence row itself remains; relink/undo
+    -- callers that created the master are responsible for tearing it
+    -- down separately.
+    local del_refs = assert(db:prepare("DELETE FROM media_refs WHERE media_id = ?"),
+        "Media:delete: failed to prepare media_refs delete")
+    del_refs:bind_value(1, self.id)
+    if not del_refs:exec() then
+        local err = del_refs:last_error()
+        del_refs:finalize()
+        error(string.format("Media:delete: failed to delete media_refs for %s: %s", self.id, err))
+    end
+    del_refs:finalize()
 
-    -- Delete the media record
+    -- Now drop the media row itself.
     local del_media = assert(db:prepare("DELETE FROM media WHERE id = ?"),
         "Media:delete: failed to prepare media delete")
     del_media:bind_value(1, self.id)
