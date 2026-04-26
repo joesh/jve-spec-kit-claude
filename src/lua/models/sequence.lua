@@ -787,84 +787,80 @@ function Sequence:is_masterclip()
     return self:is_master()
 end
 
---- Ensure stream clips are loaded and cached for this masterclip sequence
--- Asserts if called on non-masterclip sequence
+--- V13: enumerate the media_refs inside a kind='master' sequence as
+-- "stream clips" for legacy callers. Each returned record is shaped to
+-- match the V8 clip-stream contract that callers depend on:
+--   .id, .track_id, .timeline_start, .duration,
+--   .source_in, .source_out, .media_id,
+--   .rate = {fps_numerator, fps_denominator}.
+-- For video, rate is the master's frame_rate (= media's frame rate).
+-- For audio, rate is {audio_rate, 1} so source units are samples.
 -- @return table {video_clips = {...}, audio_clips = {...}}
 local function ensure_stream_clips(self)
-    assert(self.kind == "masterclip", string.format(
-        "Sequence.ensure_stream_clips: sequence %s is not a masterclip (kind=%s)",
+    assert(self.kind == "master", string.format(
+        "Sequence.ensure_stream_clips: sequence %s is not a master (kind=%s)",
         tostring(self.id), tostring(self.kind)))
 
-    -- Check cache
     if self._cached_stream_clips then
         return self._cached_stream_clips
     end
 
     local Track = require("models.track")
-    local Clip = require("models.clip")
     local conn = resolve_db()
 
-    -- Get all tracks in this sequence
     local video_tracks = Track.find_by_sequence(self.id, "VIDEO")
     local audio_tracks = Track.find_by_sequence(self.id, "AUDIO")
 
-    local video_clips = {}
-    local audio_clips = {}
-
-    -- Find clips on video tracks (for masterclip, just get all clips on track)
-    for _, track in ipairs(video_tracks) do
+    local function load_for_track(track_id, rate)
+        local out = {}
         local stmt = conn:prepare([[
-            SELECT id FROM clips
-            WHERE track_id = ?
+            SELECT id, track_id, media_id, source_in_frame, source_out_frame,
+                   timeline_start_frame, duration_frames,
+                   enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
+            FROM media_refs WHERE track_id = ?
             ORDER BY timeline_start_frame ASC
         ]])
-        assert(stmt, "Sequence.ensure_stream_clips: Failed to prepare video query")
-        stmt:bind_value(1, track.id)
-        local exec_ok = stmt:exec()
-        assert(exec_ok, string.format(
-            "Sequence.ensure_stream_clips: video query exec failed for track_id=%s",
-            tostring(track.id)))
+        assert(stmt, "ensure_stream_clips: media_refs prepare failed")
+        stmt:bind_value(1, track_id)
+        assert(stmt:exec(), "ensure_stream_clips: media_refs exec failed")
         while stmt:next() do
-            local clip_id = stmt:value(0)
-            local clip = Clip.load(clip_id)
-            assert(clip, string.format(
-                "Sequence.ensure_stream_clips: Failed to load video stream clip %s",
-                tostring(clip_id)))
-            video_clips[#video_clips + 1] = clip
+            out[#out + 1] = {
+                id             = stmt:value(0),
+                track_id       = stmt:value(1),
+                media_id       = stmt:value(2),
+                source_in      = stmt:value(3),
+                source_out     = stmt:value(4),
+                timeline_start = stmt:value(5),
+                duration       = stmt:value(6),
+                enabled        = stmt:value(7) == 1,
+                volume         = stmt:value(8),
+                mark_in        = stmt:value(9),
+                mark_out       = stmt:value(10),
+                playhead_frame = stmt:value(11),
+                rate           = rate,
+            }
         end
         stmt:finalize()
+        return out
     end
 
-    -- Find clips on audio tracks
-    for _, track in ipairs(audio_tracks) do
-        local stmt = conn:prepare([[
-            SELECT id FROM clips
-            WHERE track_id = ?
-            ORDER BY timeline_start_frame ASC
-        ]])
-        assert(stmt, "Sequence.ensure_stream_clips: Failed to prepare audio query")
-        stmt:bind_value(1, track.id)
-        local exec_ok = stmt:exec()
-        assert(exec_ok, string.format(
-            "Sequence.ensure_stream_clips: audio query exec failed for track_id=%s",
-            tostring(track.id)))
-        while stmt:next() do
-            local clip_id = stmt:value(0)
-            local clip = Clip.load(clip_id)
-            assert(clip, string.format(
-                "Sequence.ensure_stream_clips: Failed to load audio stream clip %s",
-                tostring(clip_id)))
-            audio_clips[#audio_clips + 1] = clip
+    local video_rate = self.frame_rate
+        or { fps_numerator = self.fps_numerator, fps_denominator = self.fps_denominator }
+    local audio_rate = { fps_numerator = self.audio_sample_rate or 48000, fps_denominator = 1 }
+
+    local video_clips, audio_clips = {}, {}
+    for _, t in ipairs(video_tracks) do
+        for _, r in ipairs(load_for_track(t.id, video_rate)) do
+            video_clips[#video_clips + 1] = r
         end
-        stmt:finalize()
+    end
+    for _, t in ipairs(audio_tracks) do
+        for _, r in ipairs(load_for_track(t.id, audio_rate)) do
+            audio_clips[#audio_clips + 1] = r
+        end
     end
 
-    local result = {
-        video_clips = video_clips,
-        audio_clips = audio_clips,
-    }
-
-    -- Cache for subsequent calls
+    local result = { video_clips = video_clips, audio_clips = audio_clips }
     self._cached_stream_clips = result
     return result
 end

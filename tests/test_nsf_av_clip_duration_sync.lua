@@ -43,69 +43,34 @@ assert(video_track:save(), "Failed to save video track")
 local audio_track = Track.create_audio("A1", timeline.id, {index = 1})
 assert(audio_track:save(), "Failed to save audio track")
 
--- Create masterclip sequence at 24fps (simulating imported media)
-local masterclip = Sequence.create("TestClip", project_id,
-    { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
-    {kind = "master", audio_rate = 48000})
-assert(masterclip:save(), "Failed to save masterclip")
-
--- Create video track in masterclip
-local mc_video_track = Track.create_video("Video", masterclip.id, {index = 1})
-assert(mc_video_track:save(), "Failed to save mc video track")
-
--- Create audio track in masterclip
-local mc_audio_track = Track.create_audio("Audio", masterclip.id, {index = 1})
-assert(mc_audio_track:save(), "Failed to save mc audio track")
-
--- Create media record
+-- V13: master sequences are created by Sequence.ensure_master from a Media
+-- row. The internal V/A "streams" are media_refs (not clips). Test fixture
+-- below uses the proper V13 path.
+local dkjson = require("dkjson")
 local media = Media.create({
+    id = "av_dur_media",
     project_id = project_id,
     file_path = "/fake/test.mp4",
     name = "test.mp4",
-    duration_frames = 240,  -- 10 seconds at 24fps
+    duration_frames = 240,  -- 10s at 24fps
     fps_numerator = 24,
     fps_denominator = 1,
+    width = 1920,
+    height = 1080,
     audio_channels = 2,
+    audio_sample_rate = 48000,
+    metadata = dkjson.encode({
+        start_tc_value = 0, start_tc_rate = 24,
+        start_tc_audio_samples = 0, start_tc_audio_rate = 48000,
+    }),
 })
 assert(media:save(), "Failed to save media")
 
--- Create stream clips in masterclip
--- Video: 240 frames at 24fps = 10 seconds
--- Audio: 10 seconds * 48000 = 480000 samples
+local masterclip_id = Sequence.ensure_master("av_dur_media", project_id)
+local masterclip = Sequence.load(masterclip_id)
+assert(masterclip, "ensure_master returned no loadable sequence")
 local video_duration_frames = 240
 local audio_duration_samples = 480000  -- 10 * 48000
-
-local video_stream = Clip.create({
-        name = "Video Stream",
-        project_id = project_id,
-        track_id = mc_video_track.id,
-        owner_sequence_id = masterclip.id,
-        timeline_start_frame = 0,
-        duration_frames = video_duration_frames,
-        source_in_frame = 0,
-        source_out_frame = video_duration_frames,
-        fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-assert(video_stream:save({skip_occlusion = true}), "Failed to save video stream")
-
-local audio_stream = Clip.create({
-        name = "Audio Stream",
-        project_id = project_id,
-        track_id = mc_audio_track.id,
-        owner_sequence_id = masterclip.id,
-        timeline_start_frame = 0,
-        duration_frames = audio_duration_samples,
-        source_in_frame = 0,
-        source_out_frame = audio_duration_samples,
-        fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-assert(audio_stream:save({skip_occlusion = true}), "Failed to save audio stream")
 
 -- Initialize command manager
 command_manager.init(timeline.id, project_id)
@@ -210,7 +175,7 @@ local function test_timeline_clips_visual_sync()
 
     -- Query video clip from timeline
     local video_stmt = db:prepare([[
-        SELECT duration_frames, fps_numerator, fps_denominator, timeline_start_frame
+        SELECT duration_frames, timeline_start_frame
         FROM clips WHERE track_id = ? AND owner_sequence_id = ?
     ]])
     video_stmt:bind_value(1, video_track.id)
@@ -218,14 +183,12 @@ local function test_timeline_clips_visual_sync()
     assert(video_stmt:exec(), "Video clip query failed")
     assert(video_stmt:next(), "No video clip created on timeline")
     local vc_duration = video_stmt:value(0)
-    local _ = video_stmt:value(1) -- fps_num (unused)
-    local _ = video_stmt:value(2) -- fps_den (unused)  -- luacheck: ignore 411
-    local vc_start = video_stmt:value(3)
+    local vc_start = video_stmt:value(1)
     video_stmt:finalize()
 
     -- Query audio clip from timeline
     local audio_stmt = db:prepare([[
-        SELECT duration_frames, fps_numerator, fps_denominator, timeline_start_frame
+        SELECT duration_frames, timeline_start_frame
         FROM clips WHERE track_id = ? AND owner_sequence_id = ?
     ]])
     audio_stmt:bind_value(1, audio_track.id)
@@ -233,9 +196,7 @@ local function test_timeline_clips_visual_sync()
     assert(audio_stmt:exec(), "Audio clip query failed")
     assert(audio_stmt:next(), "No audio clip created on timeline")
     local ac_duration = audio_stmt:value(0)
-    local _ = audio_stmt:value(1) -- fps_num (unused)
-    local _ = audio_stmt:value(2) -- fps_den (unused)  -- luacheck: ignore 411
-    local ac_start = audio_stmt:value(3)
+    local ac_start = audio_stmt:value(1)
     audio_stmt:finalize()
 
     -- Both should have same timeline_start
