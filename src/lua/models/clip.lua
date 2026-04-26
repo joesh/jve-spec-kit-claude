@@ -792,16 +792,23 @@ function M:set_source_range(source_in, source_out)
     self:save()
 end
 
---- Read lightweight source state for multiple clips (no JOINs).
+--- Read lightweight source state for multiple clips. V13: clip.media_id
+--  has been removed; the leaf media is reached through the clip's
+--  nested_sequence_id master and its (single) media_ref. Returns the
+--  same shape as the legacy V8 helper so relink_clips can keep using
+--  it as an opaque 'before' snapshot.
 -- @param clip_ids table Array or set of clip IDs
 -- @return table {clip_id → {media_id, source_in, source_out}}
 function M.batch_read_source(clip_ids)
     local database = require("core.database")
     local db = assert(database.get_connection(), "Clip.batch_read_source: no database connection")
 
-    local stmt = assert(db:prepare(
-        "SELECT media_id, source_in_frame, source_out_frame FROM clips WHERE id = ?"),
-        "Clip.batch_read_source: failed to prepare query")
+    local stmt = assert(db:prepare([[
+        SELECT mr.media_id, c.source_in_frame, c.source_out_frame
+          FROM clips c
+          JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+         WHERE c.id = ?
+    ]]), "Clip.batch_read_source: failed to prepare query")
 
     local result = {}
     for clip_id in pairs(clip_ids) do
@@ -822,29 +829,78 @@ function M.batch_read_source(clip_ids)
     return result
 end
 
---- Batch update media_id + source range for multiple clips.
+--- Batch update source range (and, when changed, retarget the clip's
+--  master sequence so it points at a different media). V13: clips
+--  themselves no longer hold media_id; rebinding to a different media
+--  means switching the clip's nested_sequence_id to that media's master
+--  (created on demand via Sequence.ensure_master).
 -- @param updates table {clip_id → {media_id, source_in, source_out}}
 function M.batch_update_source(updates)
     local database = require("core.database")
     local db = assert(database.get_connection(), "Clip.batch_update_source: no database connection")
 
-    local stmt = assert(db:prepare([[
-        UPDATE clips SET media_id = ?, source_in_frame = ?, source_out_frame = ?,
+    -- Source-range updates always apply.
+    local range_stmt = assert(db:prepare([[
+        UPDATE clips SET source_in_frame = ?, source_out_frame = ?,
             modified_at = strftime('%s','now') WHERE id = ?
-    ]]), "Clip.batch_update_source: failed to prepare query")
+    ]]), "Clip.batch_update_source: failed to prepare range update")
+
+    -- Master swap: only fire when the clip's current master no longer
+    -- matches the desired media.
+    local current_stmt = assert(db:prepare([[
+        SELECT c.nested_sequence_id, mr.media_id
+          FROM clips c
+          JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+         WHERE c.id = ?
+    ]]), "Clip.batch_update_source: failed to prepare current-master query")
+
+    local rebind_stmt = assert(db:prepare([[
+        UPDATE clips SET nested_sequence_id = ?,
+            modified_at = strftime('%s','now') WHERE id = ?
+    ]]), "Clip.batch_update_source: failed to prepare rebind update")
+
+    local Sequence = require("models.sequence")
 
     for clip_id, vals in pairs(updates) do
         assert(vals.media_id, "Clip.batch_update_source: media_id required for " .. clip_id)
         assert(vals.source_in, "Clip.batch_update_source: source_in required for " .. clip_id)
         assert(vals.source_out, "Clip.batch_update_source: source_out required for " .. clip_id)
-        stmt:bind_value(1, vals.media_id)
-        stmt:bind_value(2, vals.source_in)
-        stmt:bind_value(3, vals.source_out)
-        stmt:bind_value(4, clip_id)
-        assert(stmt:exec(), "Clip.batch_update_source: exec failed for " .. clip_id)
-        stmt:reset()
+
+        -- Read the clip's existing (master, leaf media) pair.
+        current_stmt:bind_value(1, clip_id)
+        assert(current_stmt:exec(), "Clip.batch_update_source: current-master exec failed for " .. clip_id)
+        assert(current_stmt:next(), "Clip.batch_update_source: clip not found: " .. clip_id)
+        local current_mid = current_stmt:value(1)
+        current_stmt:reset()
+
+        if current_mid ~= vals.media_id then
+            -- Rebind the clip to the new media's master sequence. The
+            -- clip's project_id is whatever the master's project_id is —
+            -- read it back from the existing master's row.
+            local proj_stmt = assert(db:prepare(
+                "SELECT project_id FROM clips WHERE id = ?"),
+                "Clip.batch_update_source: failed to prepare project_id query")
+            proj_stmt:bind_value(1, clip_id)
+            assert(proj_stmt:exec() and proj_stmt:next(),
+                "Clip.batch_update_source: project_id lookup failed for " .. clip_id)
+            local project_id = proj_stmt:value(0)
+            proj_stmt:finalize()
+            local new_master_id = Sequence.ensure_master(vals.media_id, project_id)
+            rebind_stmt:bind_value(1, new_master_id)
+            rebind_stmt:bind_value(2, clip_id)
+            assert(rebind_stmt:exec(), "Clip.batch_update_source: rebind exec failed for " .. clip_id)
+            rebind_stmt:reset()
+        end
+
+        range_stmt:bind_value(1, vals.source_in)
+        range_stmt:bind_value(2, vals.source_out)
+        range_stmt:bind_value(3, clip_id)
+        assert(range_stmt:exec(), "Clip.batch_update_source: range exec failed for " .. clip_id)
+        range_stmt:reset()
     end
-    stmt:finalize()
+    range_stmt:finalize()
+    current_stmt:finalize()
+    rebind_stmt:finalize()
 end
 
 -- ===========================================================================
