@@ -1,8 +1,9 @@
 --- DeleteMasterClip — V13 rewrite.
 --
 -- "Master clip" in V13 == a sequence with kind='master' (whose tracks
--- hold media_refs). The arg name `master_clip_id` is retained for
--- continuity with the user-facing menu label, but it is a sequence id.
+-- hold media_refs). The V13 arg name is `master_sequence_id`; the V8
+-- alias `master_clip_id` is accepted via SPEC.args.aliases for
+-- continuity with menu wiring that hasn't migrated yet.
 --
 -- Forward path:
 --   1. Validate the target is a kind='master' sequence.
@@ -30,7 +31,7 @@ local set_error
 
 local SPEC = {
     args = {
-        master_clip_id = { required = true, kind = "string" },
+        master_sequence_id = { required = true, kind = "string", aliases = { "master_clip_id" } },
         project_id = { required = true, kind = "string" },
         force = { kind = "boolean" },  -- delete timeline clips that reference this master
     },
@@ -74,7 +75,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     command_executors["DeleteMasterClip"] = function(command)
         local args = command:get_all_parameters()
-        local seq_id = args.master_clip_id
+        local seq_id = args.master_sequence_id
 
         local seq = Sequence.find(seq_id)
         if not seq then

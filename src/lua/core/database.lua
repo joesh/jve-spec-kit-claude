@@ -1224,18 +1224,19 @@ function M.load_master_clips(project_id)
                 audio_sample_rate = seq_audio_rate
             }
 
-            -- Build entry compatible with old structure
-            -- clip_id = sequence ID (since the sequence IS the masterclip)
-            -- master_clip_id = also sequence ID (self-referential)
+            -- Browser entry for a master sequence. Under V13 a "master clip"
+            -- is a sequence with kind='master', so:
+            --   clip_id        = sequence id (browser uses this as primary key)
+            --   sequence_id    = sequence id (canonical V13 alias)
+            --   media_id       = the master's first/only media_ref's media id
             local clip_entry = {
                 clip_id = seq_id,
+                sequence_id = seq_id,
                 project_id = seq_project_id,
                 name = seq_name,
                 media_id = media_id,
-                master_clip_id = seq_id,  -- IS-a: sequence is the masterclip
 
-                -- Source timing comes from stream clips, but for listing purposes
-                -- use sequence-level defaults (0 to duration)
+                -- Listing-level defaults (browsers display the whole master).
                 timeline_start = 0,
                 duration = media_duration_frames or 0,
                 source_in = 0,
@@ -1244,7 +1245,6 @@ function M.load_master_clips(project_id)
                 rate = { fps_numerator = seq_fps_num, fps_denominator = seq_fps_den },
 
                 enabled = true,
-                offline = false,
                 created_at = seq_created_at,
                 modified_at = seq_modified_at,
                 media = media_info,
