@@ -138,10 +138,11 @@ VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeho
 ]])
 
 for i, cid in ipairs(clip_ids) do
-    db:exec(string.format([[
-INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
-    ('%s', 'proj1', 'seq1', 'track1', '_v13_placeholder_master', '%s', %d, 100, 0, 100, %d, %d, NULL, NULL, 'resample', 1.0, 0);
+    local rc, err = db:exec(string.format([[
+INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('%s', 'proj1', 'seq1', 'track1', '_v13_placeholder_master', '%s', %d, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
     ]], cid, clip_names[i], (i - 1) * 100, now, now))
+    assert(rc, "clip insert failed for " .. cid .. ": " .. tostring(err))
 end
 
 stub_timeline_state()
