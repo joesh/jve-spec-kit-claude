@@ -62,7 +62,7 @@ INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, s
 VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 5200, 0, 5200, 1, 1.0, 0, 0, 0);
 
 INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, volume, mark_in_frame, mark_out_frame, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy) VALUES
-    ('clip1', 'proj1', 'TestClip', 'v1', '_v13_placeholder_master', 'seq1', 100, 200, 5000, 5200, 1, 1.0, 30, 170, 0, %d, %d, NULL, NULL, 'resample');
+    ('clip1', 'proj1', 'TestClip', 'v1', '_v13_placeholder_master', 'seq1', 100, 200, 5000, 5200, 1, 0.42, 30, 170, 85, %d, %d, NULL, NULL, 'resample');
 ]], now, now))
 
 command_manager.init("seq1", "proj1")

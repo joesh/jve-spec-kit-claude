@@ -37,14 +37,20 @@ local ClipMutator = require("core.clip_mutator")
 print("\n--- plan_insert: valid clip ---")
 do
     local row = {
-        id = "c1", project_id = "p1", clip_kind = "nested", name = "Clip",
-        track_id = "t1", media_id = "m1",
+        id = "c1", project_id = "p1", name = "Clip",
+        track_id = "t1",
+        owner_sequence_id = "owner_seq",
+        nested_sequence_id = "nested_seq",
         timeline_start = 0,
         duration = 100,
         source_in = 0,
         source_out = 100,
         fps_numerator = 24000, fps_denominator = 1001,
-        enabled = true, offline = false,
+        fps_mismatch_policy = "resample",
+        master_layer_track_id = nil,
+        enabled = true,
+        volume = 1.0,
+        playhead_frame = 0,
         created_at = os.time(), modified_at = os.time()
     }
     local mut = ClipMutator.plan_insert(row)
@@ -54,10 +60,10 @@ do
     check("plan_insert duration_frames", mut.duration_frames == 100)
     check("plan_insert source_in_frame", mut.source_in_frame == 0)
     check("plan_insert source_out_frame", mut.source_out_frame == 100)
-    check("plan_insert fps_numerator", mut.fps_numerator == 24000)
-    check("plan_insert fps_denominator", mut.fps_denominator == 1001)
     check("plan_insert enabled=1", mut.enabled == 1)
-    check("plan_insert offline=0", mut.offline == 0)
+    -- V13: fps_numerator/fps_denominator/offline are no longer part of the
+    -- clip mutation entry (clips reference nested sequences for timebase;
+    -- offline is derived).
 end
 
 print("\n--- plan_insert: missing fps asserts ---")
@@ -436,7 +442,7 @@ do
 
     local ok, _, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start_frame = 500,
+        insert_time = 500,
         shift_amount = 200,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
@@ -463,7 +469,7 @@ do
 
     local ok, _, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start_frame = 400,
+        insert_time = 400,
         shift_amount = 300,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
@@ -504,7 +510,7 @@ do
 
     local ok, _, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start_frame = 0,
+        insert_time = 0,
         shift_amount = 100,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
