@@ -59,23 +59,23 @@ db:exec(string.format([[
 print("\n--- ensure_masterclip: input validation ---")
 
 expect_error("nil media_id asserts", function()
-    Sequence.ensure_masterclip(nil, "proj1")
+    Sequence.ensure_master(nil, "proj1")
 end, "media_id is required")
 
 expect_error("empty media_id asserts", function()
-    Sequence.ensure_masterclip("", "proj1")
+    Sequence.ensure_master("", "proj1")
 end, "media_id is required")
 
 expect_error("nil project_id asserts", function()
-    Sequence.ensure_masterclip("some_media", nil)
+    Sequence.ensure_master("some_media", nil)
 end, "project_id is required")
 
 expect_error("empty project_id asserts", function()
-    Sequence.ensure_masterclip("some_media", "")
+    Sequence.ensure_master("some_media", "")
 end, "project_id is required")
 
 expect_error("nonexistent media_id asserts", function()
-    Sequence.ensure_masterclip("nonexistent_media_id", "proj1")
+    Sequence.ensure_master("nonexistent_media_id", "proj1")
 end, "Media record not found")
 
 --------------------------------------------------------------------------------
@@ -126,7 +126,7 @@ local MC_TEST = _Sequence_for_master.ensure_master("media_va", "proj1")
 })
 assert(media_va:save(), "Failed to save video+audio media")
 
-local mc_id = Sequence.ensure_masterclip("media_va", "proj1")
+local mc_id = Sequence.ensure_master("media_va", "proj1")
 check("returns non-nil ID", mc_id ~= nil)
 check("returns string ID", type(mc_id) == "string")
 
@@ -255,7 +255,7 @@ end
 
 print("\n--- ensure_masterclip: idempotent ---")
 
-local mc_id2 = Sequence.ensure_masterclip("media_va", "proj1")
+local mc_id2 = Sequence.ensure_master("media_va", "proj1")
 check("second call returns same ID", mc_id2 == mc_id,
     string.format("first=%s, second=%s", tostring(mc_id), tostring(mc_id2)))
 
@@ -291,9 +291,8 @@ local media_v = Media.create({
         start_tc_audio_samples = 0,
     }),
 })
-assert(media_v:save())
-
-local mc_v = Sequence.ensure_masterclip("media_v_only", "proj1")
+media:save(db)
+local mc_v = Sequence.ensure_master("media_v_only", "proj1")
 check("video-only returns ID", mc_v ~= nil)
 
 -- Verify: 1 video track, 0 audio tracks
@@ -340,9 +339,8 @@ local media_a = Media.create({
         start_tc_audio_samples = 0, start_tc_audio_rate = 48000,
     }),
 })
-assert(media_a:save())
-
-local mc_a = Sequence.ensure_masterclip("media_a_only", "proj1")
+media:save(db)
+local mc_a = Sequence.ensure_master("media_a_only", "proj1")
 check("audio-only returns ID", mc_a ~= nil)
 
 -- Verify: 0 video tracks, 1 audio track
@@ -410,9 +408,8 @@ local media_replay = Media.create({
         start_tc_audio_samples = 0, start_tc_audio_rate = 48000,
     }),
 })
-assert(media_replay:save())
-
-local mc_replay = Sequence.ensure_masterclip("media_replay", "proj1", {
+media:save(db)
+local mc_replay = Sequence.ensure_master("media_replay", "proj1", {
     id = "fixed_seq_id",
     video_track_id = "fixed_vtrack_id",
     video_clip_id = "fixed_vclip_id",
@@ -477,11 +474,9 @@ print("\n--- Clip.create auto-resolve ---")
 -- Create a timeline sequence + track to put clips on
 local tl_seq = Sequence.create("Timeline", "proj1",
     { fps_numerator = 24, fps_denominator = 1}, 1920, 1080, { kind = "nested", audio_rate = 48000 })
-assert(tl_seq:save())
-
+tl_seq:save(db)
 local tl_track = Track.create_video("V1", tl_seq.id, {index = 1})
-assert(tl_track:save())
-
+tl_track:save(db)
 -- Create timeline clip WITHOUT explicit master_clip_id
 local auto_clip = Clip.create({
         nested_sequence_id = MC_TEST,
@@ -599,9 +594,8 @@ local media_ntsc = Media.create({
         start_tc_audio_samples = 0, start_tc_audio_rate = 48000,
     }),
 })
-assert(media_ntsc:save())
-
-local mc_ntsc = Sequence.ensure_masterclip("media_ntsc", "proj1")
+media:save(db)
+local mc_ntsc = Sequence.ensure_master("media_ntsc", "proj1")
 check("NTSC: returns ID", mc_ntsc ~= nil)
 
 -- Check audio source_out: 300 * 48000 * 1001 / 30000 = 480480
@@ -650,9 +644,8 @@ local media_still = Media.create({
         start_tc_audio_samples = 0,
     }),
 })
-assert(media_still:save())
-
-local mc_still = Sequence.ensure_masterclip("media_still", "proj1")
+media:save(db)
+local mc_still = Sequence.ensure_master("media_still", "proj1")
 check("still image: returns ID", mc_still ~= nil)
 
 local still_clip_stmt = assert(db:prepare(

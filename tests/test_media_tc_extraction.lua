@@ -71,8 +71,7 @@ local m_no_tc = Media.create({
     file_path = "/nonexistent/no_tc.mov",
     duration_frames = 100, fps_numerator = 25, fps_denominator = 1,
 })
-assert(m_no_tc:save())
-
+m_no_tc:save(db)
 local tc, rate = m_no_tc:get_start_tc()
 check("no metadata → get_start_tc returns nil", tc == nil,
     "got: " .. tostring(tc))
@@ -85,8 +84,7 @@ local m_empty = Media.create({
     duration_frames = 100, fps_numerator = 24, fps_denominator = 1,
     metadata = "{}",
 })
-assert(m_empty:save())
-
+m_empty:save(db)
 local tc2 = m_empty:get_start_tc()
 check("empty metadata → get_start_tc returns nil", tc2 == nil,
     "got: " .. tostring(tc2))
@@ -105,8 +103,7 @@ local m_tc0 = Media.create({
     width = 1920, height = 1080,
     metadata = json.encode({start_tc_value = 0, start_tc_rate = 25}),
 })
-assert(m_tc0:save())
-
+m_tc0:save(db)
 local tc3, rate3 = m_tc0:get_start_tc()
 check("TC=0 → returns 0 (not nil)", tc3 == 0, "got: " .. tostring(tc3))
 check("TC=0 → rate preserved", rate3 == 25)
@@ -123,8 +120,7 @@ local m_tc_high = Media.create({
         start_tc_audio_samples = 2204162, start_tc_audio_rate = 48000,
     }),
 })
-assert(m_tc_high:save())
-
+m_tc_high:save(db)
 local tc4, rate4 = m_tc_high:get_start_tc()
 check("TC=1148001 → returns 1148001", tc4 == 1148001, "got: " .. tostring(tc4))
 check("TC=1148001 → rate=25", rate4 == 25)
@@ -140,11 +136,11 @@ check("audio rate=48000", arate4 == 48000)
 print("\n--- ensure_masterclip rejects unknown TC ---")
 
 expect_error("ensure_masterclip asserts on nil TC", function()
-    Sequence.ensure_masterclip("m_no_tc", "proj1")
+    Sequence.ensure_master("m_no_tc", "proj1")
 end, "has no TC origin")
 
 expect_error("ensure_masterclip asserts on empty metadata TC", function()
-    Sequence.ensure_masterclip("m_empty", "proj1")
+    Sequence.ensure_master("m_empty", "proj1")
 end, "has no TC origin")
 
 --------------------------------------------------------------------------------
@@ -153,7 +149,7 @@ end, "has no TC origin")
 
 print("\n--- masterclip source_in = TC origin (the actual crash fix) ---")
 
-local mc_id = Sequence.ensure_masterclip("m_tc_high", "proj1")
+local mc_id = Sequence.ensure_master("m_tc_high", "proj1")
 check("masterclip created", mc_id ~= nil)
 
 -- Query the video stream clip's source_in
@@ -205,7 +201,7 @@ check("audio source_out = audio_tc + duration_samples", audio_source_out == expe
 
 print("\n--- TC=0 masterclip works correctly ---")
 
-local mc_id_0 = Sequence.ensure_masterclip("m_tc0", "proj1")
+local mc_id_0 = Sequence.ensure_master("m_tc0", "proj1")
 check("TC=0 masterclip created", mc_id_0 ~= nil)
 
 local stmt0 = assert(db:prepare([[
@@ -237,8 +233,7 @@ local m_derive = Media.create({
     audio_channels = 1, audio_sample_rate = 48000,
     metadata = json.encode({start_tc_value = 1000, start_tc_rate = 25}),
 })
-assert(m_derive:save())
-
+m_derive:save(db)
 local derived_atc, derived_sr = m_derive:get_audio_start_tc()
 check("derived audio TC = 1920000", derived_atc == 1920000,
     string.format("expected 1920000, got %s", tostring(derived_atc)))
@@ -252,8 +247,7 @@ local m_bad_rate = Media.create({
     audio_channels = 1, audio_sample_rate = 48000,
     metadata = json.encode({start_tc_value = 100, start_tc_rate = 0}),
 })
-assert(m_bad_rate:save())
-
+m_bad_rate:save(db)
 expect_error("audio TC derivation asserts on fps=0", function()
     m_bad_rate:get_audio_start_tc()
 end, "start_tc_rate must be positive")

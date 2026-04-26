@@ -1,4 +1,4 @@
--- Regression: Sequence.ensure_masterclip must read the audio sample rate
+-- Regression: Sequence.ensure_master must read the audio sample rate
 -- from the media record (now that media.audio_sample_rate is populated for
 -- A/V files), not fall back to 48000. The previous behavior silently
 -- produced incorrect audio coordinates for files at non-48kHz rates
@@ -56,7 +56,7 @@ local media = Media.create({
 })
 assert(media:save(), "Failed to save A/V media")
 
-local mc_id = Sequence.ensure_masterclip("media_av_441", "proj1")
+local mc_id = Sequence.ensure_master("media_av_441", "proj1")
 assert(mc_id, "ensure_masterclip returned nil")
 
 -- Find the audio stream clip. Stream clips have owner_sequence_id = masterclip.
@@ -119,9 +119,8 @@ local media_av_no_rate = Media.create({
         start_tc_value = 0, start_tc_rate = 25,
     }),
 })
-assert(media_av_no_rate:save())
-
-local ok, err = pcall(Sequence.ensure_masterclip, "media_av_no_rate", "proj1")
+media:save(db)
+local ok, err = pcall(Sequence.ensure_master, "media_av_no_rate", "proj1")
 assert(not ok, "ensure_masterclip must fail when A/V media has no audio_sample_rate")
 assert(tostring(err):match("no sample rate") or tostring(err):match("audio_sample_rate"),
     "assert message should identify the missing sample rate, got: " .. tostring(err))

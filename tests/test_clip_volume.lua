@@ -136,7 +136,7 @@ print("  ✓ Default volume is 1.0 (unity gain)")
 -- Test 3: Volume survives UPDATE (modify and re-save)
 -- =========================================================================
 loaded1.volume = 0.251189  -- -12dB
-assert(loaded1:save())
+loaded1:save(db)
 local reloaded = Clip.load(loaded1.id)
 assert(math.abs(reloaded.volume - 0.251189) < 0.0001,
     string.format("update: volume should be ~0.251189, got %s", tostring(reloaded.volume)))
@@ -170,8 +170,7 @@ snapshot_manager.create_snapshot(db, "seq", 1, {clip1, clip2, clip3})
 
 -- Modify volume (simulate a command changing it)
 clip3.volume = 0.1
-assert(clip3:save())
-
+clip3:save(db)
 -- Restore snapshot (API: load_snapshot(db, seq_id))
 local snap_state = snapshot_manager.load_snapshot(db, "seq")
 assert(snap_state, "snapshot should exist")

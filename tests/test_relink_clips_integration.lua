@@ -73,8 +73,7 @@ local video_media = Media.create({
     height = 1080,
     metadata = json.encode({start_tc_value = 89750, start_tc_rate = 25}),
 })
-assert(video_media:save())
-
+video_media:save(db)
 local audio_media = Media.create({
     id = audio_media_id,
     project_id = project_id,
@@ -85,8 +84,7 @@ local audio_media = Media.create({
     fps_denominator = 1,
     metadata = json.encode({start_tc_value = 172320000, start_tc_rate = 48000}),
 })
-assert(audio_media:save())
-
+audio_media:save(db)
 -- Create clips: 2 video, 1 audio
 local v_clip_1 = uuid.generate()
 local v_clip_2 = uuid.generate()

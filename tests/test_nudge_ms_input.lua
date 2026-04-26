@@ -74,7 +74,6 @@ local clip = Clip.create({
         enabled = 1,
     })
 clip:save(db)
-
 local cmd = Command.create("Nudge", "proj")
 cmd:set_parameter("sequence_id", "seq")
 cmd:set_parameter("fps_numerator", 24)

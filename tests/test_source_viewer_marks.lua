@@ -65,7 +65,6 @@ end
 local _Sequence_for_master = require("models.sequence")
 local MC_TEST = _Sequence_for_master.ensure_master("media_1", "project")
 media:save(db)
-
 -- Create masterclip sequence with stream clips at full range
 local mc = Sequence.create("Test MC", "project",
     { fps_numerator = 24, fps_denominator = 1},

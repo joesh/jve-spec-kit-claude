@@ -21,8 +21,7 @@ local db_path = "/tmp/jve/test_media_status_reprobe_" .. os.time() .. ".jvp"
 os.execute("mkdir -p /tmp/jve")
 database.init(db_path)
 local project = Project.create("Reprobe Project", { fps_mismatch_policy = 'resample' })
-assert(project:save())
-
+project:save(db)
 local good_path = "/tmp/jve/test_reprobe_exists.mov"
 local f = io.open(good_path, "w"); f:write("x"); f:close()
 local bad_path = "/tmp/jve/test_reprobe_missing_" .. os.time() .. ".mov"
@@ -36,8 +35,7 @@ local media = Media.create({
     fps_numerator = 24,
     fps_denominator = 1,
 })
-assert(media:save())
-
+media:save(db)
 media_status.clear()
 media_status.load_persisted(project.id)
 
@@ -56,7 +54,7 @@ assert(after.offline == false,
 
 -- Switch to missing path (simulates relink-to-offline)
 media:set_file_path(bad_path)
-assert(media:save())
+media:save(db)
 Signals.emit("media_changed", { [media.id] = true })
 
 local after_bad = media_status.get(bad_path)

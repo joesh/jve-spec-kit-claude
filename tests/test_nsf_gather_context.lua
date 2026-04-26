@@ -29,10 +29,8 @@ local function create_test_sequence(db, project_id)
     local seq = Sequence.create("Test Sequence", project_id, { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
     {kind = "nested", audio_rate = 48000 })
     seq:save(db)
-
     local track = Track.create_video("V1", seq.id, {index = 1})
     track:save(db)
-
     return seq.id, track.id
 end
 
@@ -74,7 +72,6 @@ local function test_gather_context_asserts_on_missing_video_dimensions()
         enabled = 1,
     })
     master_clip:save(db)
-
     -- Mock timeline_state
     local mock_timeline_state = {
         get_sequence_id = function() return sequence_id end,
@@ -174,7 +171,6 @@ local function test_gather_context_valid_video_only_media()
         enabled = 1,
     })
     master_clip:save(db)
-
     -- Load tracks from DB
     local video_tracks = Track.find_by_sequence(sequence_id, "VIDEO")
 

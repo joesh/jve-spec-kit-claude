@@ -69,7 +69,6 @@ for i = 1, 3 do
         audio_channels = 0,  -- No audio to simplify test
     })
     media:save(db)
-
     -- IS-a refactor: create masterclip sequence (not clip with clip_kind='master')
     db:exec(string.format([[
         INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)

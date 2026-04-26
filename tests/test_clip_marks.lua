@@ -192,8 +192,7 @@ local clip7 = Clip.create({
 assert(clip7.mark_in == 10, "create: mark_in not set, got " .. tostring(clip7.mark_in))
 assert(clip7.mark_out == 200, "create: mark_out not set, got " .. tostring(clip7.mark_out))
 assert(clip7.playhead_frame == 50, "create: playhead_frame not set, got " .. tostring(clip7.playhead_frame))
-assert(clip7:save({skip_occlusion = true}))
-
+clip7:save(db)
 local loaded7 = Clip.load("clip7")
 assert(loaded7, "Clip.load returned nil for clip7")
 assert(loaded7.mark_in == 10, "loaded mark_in wrong: " .. tostring(loaded7.mark_in))
@@ -223,8 +222,7 @@ local clip8 = Clip.create({
 assert(clip8.mark_in == nil, "default mark_in should be nil")
 assert(clip8.mark_out == nil, "default mark_out should be nil")
 assert(clip8.playhead_frame == 0, "default playhead_frame should be 0, got " .. tostring(clip8.playhead_frame))
-assert(clip8:save({skip_occlusion = true}))
-
+clip8:save(db)
 local loaded8 = Clip.load("clip8")
 assert(loaded8, "Clip.load returned nil for clip8")
 assert(loaded8.mark_in == nil, "loaded default mark_in should be nil")
@@ -239,8 +237,7 @@ print("Test 9: Clip model mark update persistence...")
 loaded7.mark_in = 20
 loaded7.mark_out = 300
 loaded7.playhead_frame = 99
-assert(loaded7:save({skip_occlusion = true}))
-
+loaded7:save(db)
 local reloaded7 = Clip.load("clip7")
 assert(reloaded7.mark_in == 20, "updated mark_in wrong: " .. tostring(reloaded7.mark_in))
 assert(reloaded7.mark_out == 300, "updated mark_out wrong: " .. tostring(reloaded7.mark_out))
@@ -377,7 +374,7 @@ local clip16 = Clip.create({
     })
 assert(clip16.mark_in == 0, "create: mark_in=0 not preserved")
 assert(clip16.mark_out == 0, "create: mark_out=0 not preserved")
-assert(clip16:save({skip_occlusion = true}))
+clip16:save(db)
 local loaded16 = Clip.load("clip16")
 assert(loaded16.mark_in == 0, "loaded mark_in=0 wrong: " .. tostring(loaded16.mark_in))
 assert(loaded16.mark_out == 0, "loaded mark_out=0 wrong: " .. tostring(loaded16.mark_out))
@@ -402,7 +399,7 @@ local clip17 = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
-assert(clip17:save({skip_occlusion = true}))
+clip17:save(db)
 -- Now corrupt it
 clip17.playhead_frame = nil
 local ok17, err17 = pcall(clip17.save, clip17, {skip_occlusion = true})

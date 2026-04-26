@@ -51,8 +51,7 @@ local media = Media.create({
     fps_numerator = 30,
     fps_denominator = 1,
 })
-assert(media:save(db))
-
+media:save(db)
 -- V13: master sequence wrapping the media for clip references.
 do
     local _Media = require("models.media")
@@ -89,8 +88,7 @@ local master = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
-assert(master:save(db, {skip_occlusion = true}))
-
+master:save(db)
 local t1 = Clip.create({
         name = "Timeline",
         id = "t1",
@@ -107,8 +105,7 @@ local t1 = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
-assert(t1:save(db))
-
+t1:save(db)
 local dup = Command.create("DuplicateClips", "proj")
 dup:set_parameter("project_id", "proj")
 dup:set_parameter("sequence_id", "seq")

@@ -110,7 +110,7 @@ local function test_split_clip_command_func()
     local sequence_fps_den = 1
     local sequence = Sequence.create("Test Sequence Split", project.id, { fps_numerator = sequence_fps_num, fps_denominator = sequence_fps_den}, 1920, 1080,
     {kind = "nested", audio_rate = 48000 })
-    sequence:save(db)
+    seq:save(db)
     assert_not_nil(sequence.id, "Sequence ID should not be nil")
     
     local track = Track.create_video("Video Track Split", sequence.id, {index = 1})
@@ -235,14 +235,11 @@ local function test_ripple_delete_command_func()
 
     local project = Project.create("Test Project Ripple", { fps_mismatch_policy = 'resample' })
     project:save(db)
-    
     local sequence = Sequence.create("Test Sequence Ripple", project.id, { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
     {kind = "nested", audio_rate = 48000 })
-    sequence:save(db)
-    
+    seq:save(db)
     local track = Track.create_video("Video Track Ripple", sequence.id, {index = 1})
     track:save(db)
-
     local media = Media.create({
         project_id = project.id,
         file_path = "/path/to/ripple_media.mov",
@@ -254,7 +251,6 @@ local function test_ripple_delete_command_func()
         height = 1080,
     })
     media:save(db)
-
     -- Clip 1: [0, 24) frames (1s)
     local clip1 = Clip.create({
         name = "Clip 1",
@@ -272,7 +268,6 @@ local function test_ripple_delete_command_func()
         enabled = 1,
     })
     clip1:save(db)
-
     -- Gap: [24, 48) frames (1s)
 
     -- Clip 2: [48, 72) frames (1s)
@@ -292,7 +287,6 @@ local function test_ripple_delete_command_func()
         enabled = 1,
     })
     clip2:save(db)
-
     -- Ripple delete the gap: start=24, duration=24
     local gap_start = 24
     local gap_duration = 24
@@ -337,14 +331,11 @@ local function test_ripple_edit_command_func()
 
     local project = Project.create("Test Project RippleEdit", { fps_mismatch_policy = 'resample' })
     project:save(db)
-    
     local sequence = Sequence.create("Test Sequence RippleEdit", project.id, { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
     {kind = "nested", audio_rate = 48000 })
-    sequence:save(db)
-    
+    seq:save(db)
     local track = Track.create_video("Video Track RippleEdit", sequence.id, {index = 1})
     track:save(db)
-
     local media = Media.create({
         project_id = project.id,
         file_path = "/path/to/ripple_edit_media.mov",
@@ -356,7 +347,6 @@ local function test_ripple_edit_command_func()
         height = 1080,
     })
     media:save(db)
-
     -- Clip 1: [0, 48) frames (2s). Media In: 0, Out: 48
     local clip1 = Clip.create({
         name = "Clip 1",
@@ -374,7 +364,6 @@ local function test_ripple_edit_command_func()
         enabled = 1,
     })
     clip1:save(db)
-
     -- Clip 2: [48, 96) frames (2s). Media In: 0, Out: 48
     local clip2 = Clip.create({
         name = "Clip 2",
@@ -392,7 +381,6 @@ local function test_ripple_edit_command_func()
         enabled = 1,
     })
     clip2:save(db)
-
     -- Ripple Edit: Trim Clip 1 OUT point by +24 frames (extend right)
     -- This should push Clip 2 to start at 72.
     local delta_frames = 24
@@ -448,14 +436,11 @@ local function test_nudge_command_func()
 
     local project = Project.create("Test Project Nudge", { fps_mismatch_policy = 'resample' })
     project:save(db)
-    
     local sequence = Sequence.create("Test Sequence Nudge", project.id, { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
     {kind = "nested", audio_rate = 48000 })
-    sequence:save(db)
-    
+    seq:save(db)
     local track = Track.create_video("Video Track Nudge", sequence.id, {index = 1})
     track:save(db)
-
     local media = Media.create({
         project_id = project.id,
         file_path = "/path/to/nudge_media.mov",
@@ -467,7 +452,6 @@ local function test_nudge_command_func()
         height = 1080,
     })
     media:save(db)
-
     -- Clip 1: [0, 48) frames (2s)
     local clip1 = Clip.create({
         name = "Clip 1",
@@ -485,7 +469,6 @@ local function test_nudge_command_func()
         enabled = 1,
     })
     clip1:save(db)
-
     -- Nudge clip by +24 frames
     local nudge_amount = 24
     local command_data = {
@@ -555,17 +538,15 @@ local function test_move_clip_to_track_command_func()
 
     local project = Project.create("Test Project MoveClip", { fps_mismatch_policy = 'resample' })
     project:save(db)
-
     local sequence = Sequence.create("Test Sequence MoveClip", project.id, { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
     {kind = "nested", audio_rate = 48000 })
-    sequence:save(db)
+    seq:save(db)
     command_manager.init(sequence.id, project.id)
     
     local track1 = Track.create_video("Video Track 1", sequence.id, {index = 1})
-    track1:save(db)
+    track:save(db)
     local track2 = Track.create_video("Video Track 2", sequence.id, {index = 2})
-    track2:save(db)
-
+    track:save(db)
     local media = Media.create({
         project_id = project.id,
         file_path = "/path/to/move_media.mov",
@@ -577,7 +558,6 @@ local function test_move_clip_to_track_command_func()
         height = 1080,
     })
     media:save(db)
-
     -- Clip on track1: [0, 48) frames (2s)
     local clip = Clip.create({
         name = "Clip to Move",
@@ -595,7 +575,6 @@ local function test_move_clip_to_track_command_func()
         enabled = 1,
     })
     clip:save(db)
-
     -- Move clip to track2
     local command_data = {
         id = "cmd_move_clip",

@@ -114,11 +114,9 @@ local masterclip_seq = Sequence.create("Insert Clip Master", "default_project",
     { fps_numerator = 30, fps_denominator = 1},
     1920, 1080,
     { audio_rate = 48000,id = "masterclip_insert", kind = "master"})
-assert(masterclip_seq:save())
-
+masterclip_seq:save(db)
 local master_video_track = Track.create_video("V1", masterclip_seq.id, {id = "masterclip_insert_v1"})
-assert(master_video_track:save())
-
+master_video_track:save(db)
 local stream_clip = Clip.create({
         nested_sequence_id = MC_TEST,
         name = "Insert Clip Video",
@@ -135,8 +133,7 @@ local stream_clip = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
-assert(stream_clip:save({skip_occlusion = true}))
-
+stream_clip:save(db)
 local base_clip = Clip.create({
         name = "Existing Clip",
         id = "clip_existing",

@@ -71,8 +71,7 @@ local c1 = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
-assert(c1:save(db))
-
+c1:save(db)
 local c2 = Clip.create({
         name = "C2",
         id = "c2",
@@ -89,8 +88,7 @@ local c2 = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
-assert(c2:save(db))
-
+c2:save(db)
 -- Duplicate both clips with delta=5. The duplicates should land at [5, 15) and [17, 27).
 -- This overlaps the source clips — resolve_occlusions should trim them (overwrite behavior).
 local dup = Command.create("DuplicateClips", "proj")

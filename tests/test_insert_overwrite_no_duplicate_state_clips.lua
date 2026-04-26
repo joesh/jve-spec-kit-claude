@@ -60,7 +60,7 @@ local m = Media.create({
     name = "m1", duration_frames = 500,
     fps_numerator = 25, fps_denominator = 1,
 })
-m:save(conn)
+m:save(db)
 local mc = test_env.create_test_masterclip_sequence('proj', 'm1 MC', 25, 1, 500, 'm1')
 local mc_seq = Sequence.load(mc)
 mc_seq:set_in(50)

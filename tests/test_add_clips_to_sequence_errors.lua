@@ -48,7 +48,6 @@ local media = Media.create({
     audio_channels = 0,
 })
 media:save(db)
-
 local test_env = require("test_env")
 local master_1 = test_env.create_test_masterclip_sequence("project", "Master 1", 24, 1, 100, "media_1")
 

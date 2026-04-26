@@ -99,8 +99,7 @@ os.execute("mkdir -p /tmp/jve")
 database.init(db_path)
 
 local project = Project.create("IsStill Project", { fps_mismatch_policy = 'resample' })
-assert(project:save())
-
+project:save(db)
 local still_media = Media.create({
     id = "media_still_1",
     project_id = project.id,

@@ -75,7 +75,6 @@ local clip1 = Clip.create({
         enabled = 1,
     })
 clip1:save(db)
-
 timeline_state.reload_clips("seq")
 
 -- Mock View Object

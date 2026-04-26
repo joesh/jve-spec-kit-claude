@@ -59,8 +59,7 @@ local media1 = Media.create({
 ,
     audio_sample_rate = 48000
 })
-media1:save(db)
-
+media:save(db)
 local media2 = Media.create({
     id = "media_2",
     project_id = "project",
@@ -75,8 +74,7 @@ local media2 = Media.create({
 ,
     audio_sample_rate = 48000
 })
-media2:save(db)
-
+media:save(db)
 local media3 = Media.create({
     id = "media_3",
     project_id = "project",
@@ -91,8 +89,7 @@ local media3 = Media.create({
 ,
     audio_sample_rate = 48000
 })
-media3:save(db)
-
+media:save(db)
 -- Create masterclip sequences (IS-a refactor: masterclip IS a sequence)
 local test_env = require("test_env")
 local master_1 = test_env.create_test_masterclip_sequence("project", "Video 1", 24, 1, 100, "media_1")

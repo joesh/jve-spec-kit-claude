@@ -70,8 +70,7 @@ local online_media = Media.create({
     height = 1080,
     metadata = json.encode({start_tc_value = 90000, start_tc_rate = 25}),
 })
-assert(online_media:save())
-
+online_media:save(db)
 ---------------------------------------------------------------------------------
 -- Create OFFLINE media (file does NOT exist)
 ---------------------------------------------------------------------------------
@@ -87,8 +86,7 @@ local offline_media = Media.create({
     height = 1080,
     metadata = json.encode({start_tc_value = 45000, start_tc_rate = 25}),
 })
-assert(offline_media:save())
-
+offline_media:save(db)
 ---------------------------------------------------------------------------------
 -- Create PROXY media (should always be excluded)
 ---------------------------------------------------------------------------------
@@ -104,8 +102,7 @@ local proxy_media = Media.create({
     height = 540,
     metadata = "{}",
 })
-assert(proxy_media:save())
-
+proxy_media:save(db)
 ---------------------------------------------------------------------------------
 -- Create clips on the timeline
 ---------------------------------------------------------------------------------

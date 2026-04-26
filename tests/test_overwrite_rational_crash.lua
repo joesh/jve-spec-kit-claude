@@ -69,7 +69,6 @@ local media = Media.create({
     fps_denominator = 1
 })
 media:save(db)
-
 -- V13: master sequence wrapping the media for clip references.
 do
     local _Media = require("models.media")
@@ -113,7 +112,6 @@ local clip_existing = Clip.create({
         playhead_frame = 0,
     })
 clip_existing:save(db)
-
 print("Created existing clip at 0-100 frames")
 
 -- Execute Overwrite (Overlap 50-150)

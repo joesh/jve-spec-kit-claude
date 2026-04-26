@@ -64,7 +64,6 @@ local media = Media.create({
     height = 1080,
 })
 media:save(db)
-
 -- Create masterclip sequence for this media (required for Insert)
 local nested_sequence_id = test_env.create_test_masterclip_sequence(
     project.id, "Video Master", 30, 1, 100, "media_video")
