@@ -63,7 +63,7 @@ assert(db:exec([[
 assert(db:exec([[
     -- V13 master sequence for media_a
 INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-VALUES ('master_media_a', 'proj', 'media_a_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_a', 'proj', 'media_a_master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_a', 'master_media_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_a' WHERE id = 'master_media_a' AND default_video_layer_track_id IS NULL;
@@ -72,7 +72,7 @@ VALUES ('mr_media_a', 'proj', 'master_media_a', 'master_v_media_a', 'media_a', 0
 
 -- V13 master sequence for media_audio
 INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-VALUES ('master_media_audio', 'proj', 'media_audio_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_audio', 'proj', 'media_audio_master', 'master', 48000, 1, 48000, 1920, 1080, 0, 0);
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_audio', 'master_media_audio', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_audio' WHERE id = 'master_media_audio' AND default_video_layer_track_id IS NULL;
@@ -81,7 +81,7 @@ VALUES ('mr_media_audio', 'proj', 'master_media_audio', 'master_v_media_audio', 
 
 -- V13 master sequence for media_b
 INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-VALUES ('master_media_b', 'proj', 'media_b_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_b', 'proj', 'media_b_master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_b', 'master_media_b', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_b' WHERE id = 'master_media_b' AND default_video_layer_track_id IS NULL;
@@ -197,7 +197,7 @@ local function test_get_sequence_info()
     assert(info.width == 1920, "Expected width=1920")
     assert(info.height == 1080, "Expected height=1080")
     assert(info.name == "TestTimeline", "Expected name=TestTimeline")
-    assert(info.kind == "timeline", "Expected kind=timeline")
+    assert(info.kind == "nested", "Expected kind=nested")
     assert(info.audio_sample_rate == 48000, "Expected audio_sample_rate=48000")
     print("  test_get_sequence_info passed")
 end
