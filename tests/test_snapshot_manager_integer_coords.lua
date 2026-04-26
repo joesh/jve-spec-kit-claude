@@ -51,6 +51,27 @@ db:exec(string.format([[
         24, 1, 1920, 1080, 2, 'prores', '{}', %d, %d);
 ]], now, now))
 
+-- V13 master sequence + track + media_ref for med1 (clip references it
+-- via nested_sequence_id). The 'master_seq_for_med1' literal id matches
+-- the clip fixture below.
+db:exec([[
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator,
+        fps_denominator, audio_rate, width, height, created_at, modified_at)
+    VALUES ('master_seq_for_med1', 'proj1', 'shot_01_master', 'master',
+        24, 1, 48000, 1920, 1080, 0, 0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
+        enabled, locked, muted, soloed, volume, pan)
+    VALUES ('master_v_med1', 'master_seq_for_med1', 'V1', 'VIDEO', 1,
+        1, 0, 0, 0, 1.0, 0.0);
+    UPDATE sequences SET default_video_layer_track_id = 'master_v_med1'
+        WHERE id = 'master_seq_for_med1';
+    INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
+        media_id, source_in_frame, source_out_frame, timeline_start_frame,
+        duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+    VALUES ('mr_med1', 'proj1', 'master_seq_for_med1', 'master_v_med1',
+        'med1', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+]])
+
 --------------------------------------------------------------------------------
 -- HAPPY PATH: Integer coordinates round-trip
 --------------------------------------------------------------------------------
@@ -76,6 +97,10 @@ local clips = {
         rate = { fps_numerator = 24, fps_denominator = 1 },
         enabled = true,
         volume = 1.0,
+        -- V13: snapshot_manager reads resolved_media (denormed leaf from
+        -- nested→master→media_ref→media). Tests building clip dicts by
+        -- hand must include it.
+        resolved_media = { id = "med1", name = "shot_01.mov", path = "/tmp/shot_01.mov" },
     },
 }
 
@@ -137,13 +162,15 @@ local bad_payload = json.encode({
     tracks = {},
     clips = {
         {
-            id = "clip_bad", clip_kind = "nested", name = "Bad",
+            id = "clip_bad", track_type = "VIDEO", name = "Bad",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
+            nested_sequence_id = "master_seq_for_med1",
+            fps_mismatch_policy = "resample",
             -- Missing timeline_start_frame!
             duration_frames = 100,
             source_in_frame = 0, source_out_frame = 100,
             fps_numerator = 24, fps_denominator = 1,
-            enabled = 1, offline = 0,
+            enabled = 1,
         },
     },
     media = {},
@@ -172,13 +199,15 @@ local bad_payload2 = json.encode({
     tracks = {},
     clips = {
         {
-            id = "clip_no_dur", clip_kind = "nested", name = "No Duration",
+            id = "clip_no_dur", track_type = "VIDEO", name = "No Duration",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
+            nested_sequence_id = "master_seq_for_med1",
+            fps_mismatch_policy = "resample",
             timeline_start_frame = 0,
             -- Missing duration_frames!
             source_in_frame = 0, source_out_frame = 100,
             fps_numerator = 24, fps_denominator = 1,
-            enabled = 1, offline = 0,
+            enabled = 1,
         },
     },
     media = {},
