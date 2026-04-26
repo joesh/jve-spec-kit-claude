@@ -68,6 +68,7 @@ local online_media = Media.create({
     fps_denominator = 1,
     width = 1920,
     height = 1080,
+    audio_channels = 0,
     metadata = json.encode({start_tc_value = 90000, start_tc_rate = 25}),
 })
 online_media:save(db)
@@ -84,6 +85,7 @@ local offline_media = Media.create({
     fps_denominator = 1,
     width = 1920,
     height = 1080,
+    audio_channels = 0,
     metadata = json.encode({start_tc_value = 45000, start_tc_rate = 25}),
 })
 offline_media:save(db)
@@ -100,7 +102,8 @@ local proxy_media = Media.create({
     fps_denominator = 1,
     width = 960,
     height = 540,
-    metadata = "{}",
+    audio_channels = 0,
+    metadata = json.encode({start_tc_value = 0, start_tc_rate = 25}),
 })
 proxy_media:save(db)
 ---------------------------------------------------------------------------------
@@ -110,30 +113,36 @@ local online_clip_id = uuid.generate()
 local offline_clip_id = uuid.generate()
 local offline_clip_2_id = uuid.generate()
 
+-- V13: master sequences for the two media files (proxy excluded — clips
+-- never reference it, so it doesn't need a master).
+local _Sequence = require("models.sequence")
+local online_master = _Sequence.ensure_master(online_media.id, project_id)
+local offline_master = _Sequence.ensure_master(offline_media.id, project_id)
+
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id,
-        owner_sequence_id, timeline_start_frame, duration_frames,
-        source_in_frame, source_out_frame, fps_numerator, fps_denominator,
-        enabled, offline, playhead_frame, created_at, modified_at)
-    VALUES ('%s', '%s', 'timeline', 'Online-Shot', '%s', '%s',
-        '%s', 0, 100, 100, 200, 25, 1, 1, 0, 0, %d, %d);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+        enabled, volume, playhead_frame, created_at, modified_at)
+    VALUES ('%s', '%s', 'Online-Shot', '%s', '%s', '%s',
+        0, 100, 100, 200, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
 
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id,
-        owner_sequence_id, timeline_start_frame, duration_frames,
-        source_in_frame, source_out_frame, fps_numerator, fps_denominator,
-        enabled, offline, playhead_frame, created_at, modified_at)
-    VALUES ('%s', '%s', 'timeline', 'Offline-Shot1', '%s', '%s',
-        '%s', 100, 80, 50, 130, 25, 1, 1, 0, 0, %d, %d);
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+        enabled, volume, playhead_frame, created_at, modified_at)
+    VALUES ('%s', '%s', 'Offline-Shot1', '%s', '%s', '%s',
+        100, 80, 50, 130, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
 
-    INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id,
-        owner_sequence_id, timeline_start_frame, duration_frames,
-        source_in_frame, source_out_frame, fps_numerator, fps_denominator,
-        enabled, offline, playhead_frame, created_at, modified_at)
-    VALUES ('%s', '%s', 'timeline', 'Offline-Shot2', '%s', '%s',
-        '%s', 180, 60, 200, 260, 25, 1, 1, 0, 0, %d, %d);
-]], online_clip_id, project_id, v1_track, online_media.id, seq_id, now, now,
-    offline_clip_id, project_id, v1_track, offline_media.id, seq_id, now, now,
-    offline_clip_2_id, project_id, v1_track, offline_media.id, seq_id, now, now))
+    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id,
+        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+        enabled, volume, playhead_frame, created_at, modified_at)
+    VALUES ('%s', '%s', 'Offline-Shot2', '%s', '%s', '%s',
+        180, 60, 200, 260, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
+]], online_clip_id, project_id, v1_track, online_master, seq_id, now, now,
+    offline_clip_id, project_id, v1_track, offline_master, seq_id, now, now,
+    offline_clip_2_id, project_id, v1_track, offline_master, seq_id, now, now))
 
 ---------------------------------------------------------------------------------
 -- Test 1: find_project_media returns ALL non-proxy media
