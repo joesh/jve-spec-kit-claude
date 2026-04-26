@@ -69,9 +69,15 @@ assert(r and r.success, "Insert failed: " .. tostring(r and r.error_message))
 local insert_seq = command_manager.get_current_sequence_number()
 print(string.format("After Insert: cursor at seq %d", insert_seq))
 
+-- V13: Insert generates a uuid; resolve via persisted created_clip_ids.
+local cmd_obj = Command.deserialize(r.result_data)
+local new_clip_id = cmd_obj.parameters.created_clip_ids
+    and cmd_obj.parameters.created_clip_ids[1]
+assert(new_clip_id, "Insert should record created_clip_ids[1]")
+
 -- Select the clip and Cut it (recorded as command seq=2+)
-local clip = timeline_state.get_clip_by_id("clip_a")
-assert(clip, "clip_a must be in timeline cache")
+local clip = timeline_state.get_clip_by_id(new_clip_id)
+assert(clip, "Inserted clip must be in timeline cache")
 timeline_state.set_selection({clip})
 
 local sel_before_cut = timeline_state.get_selected_clips()
@@ -93,12 +99,12 @@ local function clip_exists(id)
     return c > 0
 end
 
-assert(not clip_exists("clip_a"), "clip_a should be gone after Cut")
+assert(not clip_exists(new_clip_id), "clip_a should be gone after Cut")
 
 -- Undo Cut
 r = command_manager.undo()
 assert(r and r.success, "Undo failed: " .. tostring(r and r.error_message))
-assert(clip_exists("clip_a"), "clip_a should be restored after undo")
+assert(clip_exists(new_clip_id), "clip_a should be restored after undo")
 
 local undo_seq = command_manager.get_current_sequence_number()
 print(string.format("After Undo: cursor at seq %d", undo_seq))
@@ -108,7 +114,7 @@ local sel_after_undo = timeline_state.get_selected_clips()
 print(string.format("Selection after undo: %d clips", #sel_after_undo))
 assert(#sel_after_undo == 1, string.format(
     "Selection should be restored after undo (got %d, expected 1)", #sel_after_undo))
-assert(sel_after_undo[1].id == "clip_a" or sel_after_undo[1].clip_id == "clip_a",
+assert(sel_after_undo[1].id == new_clip_id or sel_after_undo[1].clip_id == new_clip_id,
     "Restored selection should contain clip_a")
 
 -- Simulate user interaction clearing selection (clicking elsewhere, changing focus, etc.)
@@ -130,6 +136,6 @@ assert(final_seq == cut_seq, string.format(
     "After jump, cursor should be at %d but is at %d", cut_seq, final_seq))
 
 -- Verify clip was cut again
-assert(not clip_exists("clip_a"), "clip_a should be gone after jump-to-Cut")
+assert(not clip_exists(new_clip_id), "clip_a should be gone after jump-to-Cut")
 
 print("\n✅ test_history_jump_redo.lua passed")

@@ -64,9 +64,15 @@ cmd:set_parameter("timeline_start_frame", 100)
 local r = command_manager.execute(cmd)
 assert(r and r.success, "Insert failed: " .. tostring(r and r.error_message))
 
--- Record actual clip properties (Insert derives duration from masterclip, ignores param)
-local clip = timeline_state.get_clip_by_id("clip_a")
-assert(clip, "clip_a must be in timeline cache")
+-- V13: Insert generates a uuid for the new clip; resolve via the
+-- command's persisted created_clip_ids[1] rather than relying on
+-- clip_name being used as id (V8 behavior).
+local cmd_obj = Command.deserialize(r.result_data)
+local created = cmd_obj.parameters.created_clip_ids
+local new_clip_id = created and created[1]
+assert(new_clip_id, "Insert should record created_clip_ids[1]")
+local clip = timeline_state.get_clip_by_id(new_clip_id)
+assert(clip, "Inserted clip must be in timeline cache")
 local original_start = clip.timeline_start
 local original_duration = clip.duration
 print(string.format("Clip after Insert: start=%d dur=%d", original_start, original_duration))
@@ -97,8 +103,8 @@ assert(not reload_called,
     "Cut undoer must produce __timeline_mutations, not rely on reload_clips fallback")
 
 -- Verify clip was restored in the UI cache via mutations
-local restored = timeline_state.get_clip_by_id("clip_a")
-assert(restored, "clip_a must be back in timeline cache after undo")
+local restored = timeline_state.get_clip_by_id(new_clip_id)
+assert(restored, "Inserted clip must be back in timeline cache after undo")
 
 assert(restored.timeline_start == original_start,
     string.format("clip_a.timeline_start should be %d, got %s", original_start, tostring(restored.timeline_start)))
