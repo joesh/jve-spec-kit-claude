@@ -59,20 +59,35 @@ db:exec(string.format(
     track_id, sequence_id
 ))
 
--- Helper: insert a clip with all required columns
+-- V13 placeholder master sequence + media_ref + media so clips below
+-- can reference '_v13_placeholder_master' as their nested_sequence_id.
+db:exec(string.format([[
+INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
+VALUES ('_v13_placeholder_media', '%s', 'placeholder', '_placeholder', 1000, 30, 1, 1920, 1080, 0, 'raw', %d, %d);
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('_v13_placeholder_master', '%s', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, %d, %d);
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('_v13_placeholder_mr', '%s', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 1000, 0, 1000, 1, 1.0, 0, %d, %d);
+]], project_id, now, now, project_id, now, now, project_id, now, now))
+
+-- Helper: insert a V13 clip row.
 local function insert_clip(id, opts)
     opts = opts or {}
-    local stmt = db:prepare("INSERT OR REPLACE INTO clips (id, project_id, owner_sequence_id, track_id, clip_kind, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, fps_numerator, fps_denominator, enabled, offline, created_at, modified_at) VALUES (?, ?, ?, ?, 'timeline', ?, ?, ?, ?, 30, 1, 1, 0, ?, ?)")
+    local stmt = db:prepare("INSERT OR REPLACE INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) VALUES (?, ?, ?, ?, '_v13_placeholder_master', ?, ?, ?, ?, ?, NULL, NULL, 'resample', 1, 1.0, 0, ?, ?)")
     stmt:bind_value(1, id)
     stmt:bind_value(2, project_id)
     stmt:bind_value(3, sequence_id)
     stmt:bind_value(4, opts.track_id or track_id)
-    stmt:bind_value(5, opts.start or 0)
-    stmt:bind_value(6, opts.duration or 100)
-    stmt:bind_value(7, opts.source_in or 0)
-    stmt:bind_value(8, opts.source_out or (opts.duration or 100))
-    stmt:bind_value(9, now)
+    stmt:bind_value(5, id)  -- name
+    stmt:bind_value(6, opts.start or 0)
+    stmt:bind_value(7, opts.duration or 100)
+    stmt:bind_value(8, opts.source_in or 0)
+    stmt:bind_value(9, opts.source_out or (opts.duration or 100))
     stmt:bind_value(10, now)
+    stmt:bind_value(11, now)
     local ok = stmt:exec()
     if not ok then
         local err_msg = "unknown"

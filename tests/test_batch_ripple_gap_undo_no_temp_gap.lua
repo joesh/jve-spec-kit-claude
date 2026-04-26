@@ -66,7 +66,8 @@ local TEST_DB = "/tmp/jve/test_batch_ripple_gap_undo_no_temp_gap.db"
 local db = setup_db(TEST_DB)
 
 local function clip_count()
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline' AND track_id IS NOT NULL")
+    -- V13: every clips row IS a timeline placement.
+    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE track_id IS NOT NULL")
     assert(stmt:exec() and stmt:next(), "Failed to count clips")
     local count = tonumber(stmt:value(0)) or 0
     stmt:finalize()

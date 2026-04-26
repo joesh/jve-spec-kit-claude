@@ -114,7 +114,8 @@ assert(math.abs(b_start - 3000) < 1, "clip_b start should restore after undo")
 assert(math.abs(b_dur - 2000) < 1, "clip_b duration should restore after undo")
 
 local function clip_count()
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline'")
+    -- V13: every clips row IS a timeline placement.
+    local stmt = db:prepare("SELECT COUNT(*) FROM clips")
     assert(stmt:exec() and stmt:next(), "Failed to count clips")
     local count = tonumber(stmt:value(0)) or 0
     stmt:finalize()

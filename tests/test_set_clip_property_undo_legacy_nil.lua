@@ -56,24 +56,41 @@ db:exec(string.format([[
     VALUES ('t1', 'seq1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 ]], now, now, now, now))
 
+-- V13 placeholder master sequence + media_ref for the clip below.
+db:exec([[
+INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
+VALUES ('_v13_placeholder_media', 'p1', 'placeholder', '_placeholder', 1000, 24, 1, 1920, 1080, 0, 'raw', 0, 0);
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+VALUES ('_v13_placeholder_master', 'p1', 'placeholder_master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
+INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('_v13_placeholder_mr', 'p1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+]])
+
 do
     local stmt = db:prepare([[
-        INSERT INTO clips (id, project_id, clip_kind, owner_sequence_id,
-            track_id, media_id, name,
+        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
+            nested_sequence_id, name,
             timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-            fps_numerator, fps_denominator, enabled, created_at, modified_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+            enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES (?, ?, ?, ?, '_v13_placeholder_master', ?, ?, ?, ?, ?, NULL, NULL, 'resample', ?, 1.0, 0, ?, ?)
     ]])
-    stmt:bind_value(1, "c1"); stmt:bind_value(2, "p1")
-    stmt:bind_value(3, "timeline"); stmt:bind_value(4, "seq1")
-    stmt:bind_value(5, "t1"); stmt:bind_value(6, nil)
-    stmt:bind_value(7, "Original")
-    stmt:bind_value(8, 0); stmt:bind_value(9, 120)
-    stmt:bind_value(10, 0); stmt:bind_value(11, 120)
-    stmt:bind_value(12, 24000); stmt:bind_value(13, 1001)
-    stmt:bind_value(14, 1)
-    stmt:bind_value(15, now); stmt:bind_value(16, now)
-    assert(stmt:exec(), "clip insert failed")
+    stmt:bind_value(1, "c1")
+    stmt:bind_value(2, "p1")
+    stmt:bind_value(3, "seq1")
+    stmt:bind_value(4, "t1")
+    stmt:bind_value(5, "Original")
+    stmt:bind_value(6, 0)
+    stmt:bind_value(7, 120)
+    stmt:bind_value(8, 0)
+    stmt:bind_value(9, 120)
+    stmt:bind_value(10, 1)
+    stmt:bind_value(11, now)
+    stmt:bind_value(12, now)
+    assert(stmt:exec(), "clip insert failed: " .. tostring(db:last_error()))
     stmt:finalize()
 end
 

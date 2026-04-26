@@ -80,7 +80,9 @@ do
     end
 end
 local _Sequence_for_master = require("models.sequence")
-local MC_TEST = _Sequence_for_master.ensure_master("media_ripple", "project")
+-- V13: master sequence wrapping the media; export to module-level via _G
+-- so the main body can pass it to Clip.create as nested_sequence_id.
+rawset(_G, "MC_TEST", _Sequence_for_master.ensure_master("media_ripple", "project"))
 
 
     -- V5 Schema INSERT
@@ -198,7 +200,8 @@ ensure_media_record(db, "media_D", 150) -- 5000ms
 ensure_media_record(db, "media_E", 240) -- 8000ms
 ensure_media_record(db, "media_F", 60)  -- 2000ms
 
--- Seed two clips
+-- Seed two clips. MC_TEST is published into _G by setup_db (V13 master seq).
+local MC_TEST = _G.MC_TEST
 local clip_a = Clip.create({
         name = "A",
         id = "A",
@@ -215,8 +218,7 @@ local clip_a = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(clip_a:save(db), "failed saving clip A")
-
+-- V13: Clip.create already INSERTed; clip_a is the id string.
 local clip_b = Clip.create({
         name = "B",
         id = "B",
@@ -233,8 +235,7 @@ local clip_b = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(clip_b:save(db), "failed saving clip B")
-
+-- V13: Clip.create already INSERTed; clip_b is the id string.
 print("Test 2b: MoveClipToTrack resolves overlaps on destination track")
 db:exec([[INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
           VALUES ('track_v2', 'sequence', 'V2', 'VIDEO', 2, 1)]])
@@ -255,8 +256,7 @@ local mover_clip = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(mover_clip:save(db), "failed saving mover clip")
-
+-- V13: Clip.create already INSERTed; mover_clip is the id string.
 local move_cmd = Command.create("MoveClipToTrack", "project")
 move_cmd:set_parameter("clip_id", mover_clip.id)
 move_cmd:set_parameter("target_track_id", "track_v1")
@@ -301,8 +301,7 @@ local base_left = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(base_left:save(db), "failed saving base_left clip")
-
+-- V13: Clip.create already INSERTed; base_left is the id string.
 local base_right = Clip.create({
         name = "Base Right",
         id = "Base Right",
@@ -319,8 +318,7 @@ local base_right = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(base_right:save(db), "failed saving base_right clip")
-
+-- V13: Clip.create already INSERTed; base_right is the id string.
 local mover_for_nudge = Clip.create({
         name = "Mover Nudge",
         id = "Mover Nudge",
@@ -337,8 +335,7 @@ local mover_for_nudge = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(mover_for_nudge:save(db), "failed saving mover clip for nudge test")
-
+-- V13: Clip.create already INSERTed; mover_for_nudge is the id string.
 local move_cmd2 = Command.create("MoveClipToTrack", "project")
 move_cmd2:set_parameter("clip_id", mover_for_nudge.id)
 move_cmd2:set_parameter("target_track_id", "track_nudge_v1")
@@ -398,8 +395,7 @@ local ripple_clip = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(ripple_clip:save(db), "failed saving ripple clip")
-
+-- V13: Clip.create already INSERTed; ripple_clip is the id string.
 local ripple_cmd = Command.create("RippleEdit", "project")
 ripple_cmd:set_parameter("edge_info", {clip_id = ripple_clip.id, edge_type = "out", track_id = "track_ripple_test"})
 ripple_cmd:set_parameter("delta_frames", 45)
