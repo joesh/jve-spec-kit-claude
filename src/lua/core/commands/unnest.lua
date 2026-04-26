@@ -190,8 +190,8 @@ local SPEC = {
     },
     persisted = {
         moved                = {},
-        nested_id            = "",
-        orphan_deleted       = false,
+        nested_id            = { kind = "string" },
+        orphan_deleted       = { kind = "boolean" },
         clip_capture         = {},
         nested_state_capture = {},
     },

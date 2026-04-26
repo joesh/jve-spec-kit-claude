@@ -136,9 +136,9 @@ local SPEC = {
         gain_db       = { required = true },
     },
     persisted = {
-        prior_existed = false,
-        prior_enabled = false,
-        prior_gain_db = 0.0,
+        prior_existed = { kind = "boolean" },
+        prior_enabled = { kind = "boolean" },
+        prior_gain_db = { kind = "number" },
     },
 }
 

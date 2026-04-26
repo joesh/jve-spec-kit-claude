@@ -90,7 +90,7 @@ local SPEC = {
         track_id    = { required = true },
     },
     persisted = {
-        prior_track_id = "",
+        prior_track_id = { kind = "string" },
     },
 }
 

@@ -323,8 +323,8 @@ local SPEC = {
         clip_ids    = { required = true },
     },
     persisted = {
-        composite_clip_id = "",
-        link_group_id     = "",
+        composite_clip_id = { kind = "string" },
+        link_group_id     = { kind = "string" },
     },
 }
 

@@ -144,11 +144,11 @@ local SPEC = {
         channel_index = {},   -- channel variant only
     },
     persisted = {
-        kind             = "",
-        channel_index    = 0,
-        prior_enabled    = false,
-        prior_gain_db    = 0.0,
-        prior_track_id   = "",
+        kind             = { kind = "string" },
+        channel_index    = { kind = "number" },
+        prior_enabled    = { kind = "boolean" },
+        prior_gain_db    = { kind = "number" },
+        prior_track_id   = { kind = "string" },
     },
 }
 

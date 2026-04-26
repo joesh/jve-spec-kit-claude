@@ -22,12 +22,28 @@
 local M = {}
 
 local Clip          = require("models.clip")
+local Sequence      = require("models.sequence")
 local place_shared  = require("core.commands._place_shared")
 local log           = require("core.logger").for_area("commands")
 
 -- M.execute — pure-logic entry point. Args and return shape documented
 -- alongside the orchestrator body below.
 function M.execute(args)
+    -- timeline_start_frame is optional at the SPEC layer because the
+    -- editor's user-mode Insert is "insert at playhead." When omitted,
+    -- resolve from the owner sequence's authoritative playhead_position.
+    -- Loud-fail if neither is available — no silent default to 0
+    -- (rule 2.13).
+    if args.timeline_start_frame == nil then
+        local owner = assert(Sequence.find(args.sequence_id), string.format(
+            "Insert: sequence %s not found (cannot resolve playhead fallback)",
+            tostring(args.sequence_id)))
+        assert(type(owner.playhead_position) == "number", string.format(
+            "Insert: timeline_start_frame omitted and sequence %s has no "
+            .. "playhead_position to fall back on", tostring(args.sequence_id)))
+        args.timeline_start_frame = owner.playhead_position
+    end
+
     local plan = place_shared.plan_placement(args)
 
     -- Ripple target tracks BEFORE inserting so the new clip doesn't collide.
@@ -58,6 +74,7 @@ function M.execute(args)
         duration_frames     = plan.owner_duration,
         fps_mismatch_policy = plan.policy,
         rippled             = rippled,
+        start_frame         = plan.start_frame,
     }
 end
 
@@ -67,28 +84,25 @@ end
 
 local SPEC = {
     args = {
-        sequence_id           = { required = true },
-        nested_sequence_id    = { required = true },
-        timeline_start_frame  = { required = true, default = 0 },
-        target_video_track_id = {},
-        target_audio_track_id = {},
-        fps_mismatch_policy   = {},
-        clip_name             = {},
-        audio_drop_mode       = {},   -- 'composite' (default) or 'expanded'
-        -- V8 compat: accepted-but-ignored params for tests / older callers.
-        -- V13 derives source bounds from the nested sequence's marks; passing
-        -- explicit source_in/source_out/duration is a no-op.
-        advance_playhead      = {},
-        source_in             = {},
-        source_out            = {},
-        duration              = {},
+        sequence_id           = { required = true,  kind = "string" },
+        nested_sequence_id    = { required = true,  kind = "string" },
+        -- timeline_start_frame omitted ⇒ resolve from sequence.playhead_position.
+        -- No silent default-to-0 (rule 2.13).
+        timeline_start_frame  = { kind = "number" },
+        target_video_track_id = { kind = "string" },
+        target_audio_track_id = { kind = "string" },
+        fps_mismatch_policy   = { kind = "string" },
+        clip_name             = { kind = "string" },
+        audio_drop_mode       = { kind = "string", one_of = { "composite", "expanded" } },
+        advance_playhead      = { kind = "boolean" },
     },
     persisted = {
-        created_clip_ids       = {},
-        created_link_group_id  = "",
-        rippled_capture        = {},
-        duration_frames        = 0,
-        fps_mismatch_policy    = "",
+        created_clip_ids       = { kind = "table" },
+        created_link_group_id  = { kind = "string" },
+        rippled_capture        = { kind = "table" },
+        duration_frames        = { kind = "number" },
+        fps_mismatch_policy    = { kind = "string" },
+        prior_playhead         = { kind = "number" },
     },
 }
 
@@ -153,6 +167,21 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
 
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
+
+        -- advance_playhead: editor-mode side effect — after a successful
+        -- placement, advance the sequence's playhead by the placed clip's
+        -- owner-frame duration, persist, and emit playhead_changed.
+        -- Captured to args.prior_playhead for undo restore.
+        if args.advance_playhead then
+            local owner = assert(Sequence.load(args.sequence_id),
+                "Insert: sequence " .. tostring(args.sequence_id) .. " not found post-execute")
+            command:set_parameter("prior_playhead", owner.playhead_position)
+            local new_playhead = result.start_frame + result.duration_frames
+            owner:set_playhead(new_playhead)
+            assert(owner:save(), "Insert: sequence save failed after advance_playhead")
+            Signals.emit("playhead_changed", args.sequence_id, new_playhead)
+        end
+
         return true
     end
 
@@ -176,6 +205,16 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
 
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
+
+        -- Restore playhead if we advanced it.
+        if args.advance_playhead and type(args.prior_playhead) == "number" then
+            local owner = assert(Sequence.load(args.sequence_id),
+                "Insert.undo: sequence " .. tostring(args.sequence_id) .. " not found")
+            owner:set_playhead(args.prior_playhead)
+            assert(owner:save(), "Insert.undo: sequence save failed")
+            Signals.emit("playhead_changed", args.sequence_id, args.prior_playhead)
+        end
+
         return true
     end
 

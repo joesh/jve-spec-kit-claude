@@ -108,7 +108,7 @@ local SPEC = {
         track_id    = {},   -- nullable: NULL clears the override
     },
     persisted = {
-        prior_track_id = "",
+        prior_track_id = { kind = "string" },
     },
 }
 

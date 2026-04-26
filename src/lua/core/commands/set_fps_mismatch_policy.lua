@@ -145,8 +145,8 @@ local SPEC = {
         policy       = {},
     },
     persisted = {
-        scope        = "",
-        prior_policy = "",
+        scope        = { kind = "string" },
+        prior_policy = { kind = "string" },
     },
 }
 

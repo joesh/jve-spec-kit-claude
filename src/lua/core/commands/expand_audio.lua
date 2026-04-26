@@ -285,7 +285,7 @@ local SPEC = {
         expanded_clip_ids   = {},
         created_track_ids   = {},
         source_capture      = {},
-        source_link_group_id = "",
+        source_link_group_id = { kind = "string" },
     },
 }
 

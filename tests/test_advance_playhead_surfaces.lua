@@ -50,7 +50,8 @@ seq:save()
 Track.create_video("V1", seq.id, { index = 1 }):save()
 Track.create_audio("A1", seq.id, { index = 1 }):save()
 
--- Create media (200 frames @ 30fps)
+-- Create media (200 frames @ 30fps; width/height required for ensure_master
+-- to create the video media_ref).
 local media = Media.create({
     id = "media_video",
     project_id = project.id,
@@ -59,6 +60,8 @@ local media = Media.create({
     duration_frames = 200,
     fps_numerator = 30,
     fps_denominator = 1,
+    width = 1920,
+    height = 1080,
 })
 media:save(db)
 
@@ -69,7 +72,13 @@ local nested_sequence_id = test_env.create_test_masterclip_sequence(
 -- Init command system + real timeline_state
 command_manager.init(seq.id, project.id)
 
--- Place playhead at frame 100
+-- Place playhead at frame 100. Per CLAUDE.md MVC, the model owns playhead;
+-- persist to model so Insert's playhead-fallback resolution sees it.
+do
+    local seq_for_playhead = Sequence.load(seq.id)
+    seq_for_playhead:set_playhead(100)
+    assert(seq_for_playhead:save(), "Failed to persist playhead to model")
+end
 timeline_state.set_playhead_position(100)
 
 -- Track signal emissions

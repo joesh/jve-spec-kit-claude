@@ -134,6 +134,37 @@ function M.plan_placement(args)
         assert(audio_native_dur > 0, "place_shared: AUDIO medium has zero duration")
     end
 
+    -- Honor nested-sequence marks (FCP/Premiere/Resolve UX): when the user
+    -- has marked a sub-region of the nested sequence (set_in/set_out),
+    -- Insert/Overwrite plant only that region. mark_in/mark_out are in the
+    -- nested's video timebase, absolute TC. Subtract start_timecode_frame
+    -- to get a 0-based offset into the native duration.
+    local nested_mark_in  = nested.mark_in
+    local nested_mark_out = nested.mark_out
+    if nested_mark_in ~= nil or nested_mark_out ~= nil then
+        local tc_origin = nested.start_timecode_frame or 0
+        local lo = nested_mark_in  and (nested_mark_in  - tc_origin) or 0
+        local hi = nested_mark_out and (nested_mark_out - tc_origin) or video_native_dur
+        if mediums.VIDEO then
+            assert(lo >= 0 and hi <= video_native_dur and hi > lo, string.format(
+                "place_shared: nested %s marks [%s,%s) out of bounds for video duration %d",
+                nested.id, tostring(lo), tostring(hi), video_native_dur))
+            video_native_dur = hi - lo
+        end
+        if mediums.AUDIO then
+            -- Convert video-frame mark range to audio sample range.
+            local samples_per_frame = nested.audio_rate * nested.fps_denominator
+                / nested.fps_numerator
+            local a_lo = math.floor(lo * samples_per_frame + 0.5)
+            local a_hi = math.floor(hi * samples_per_frame + 0.5)
+            assert(a_lo >= 0 and a_hi <= audio_native_dur and a_hi > a_lo, string.format(
+                "place_shared: nested %s mark-derived audio range [%d,%d) "
+                .. "out of bounds for audio duration %d",
+                nested.id, a_lo, a_hi, audio_native_dur))
+            audio_native_dur = a_hi - a_lo
+        end
+    end
+
     local owner_duration
     if mediums.VIDEO then
         owner_duration = M.compute_owner_duration(

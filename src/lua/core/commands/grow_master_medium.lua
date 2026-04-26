@@ -270,8 +270,8 @@ local SPEC = {
         track_spec  = { required = true },
     },
     persisted = {
-        new_track_id     = "",
-        new_media_ref_id = "",
+        new_track_id     = { kind = "string" },
+        new_media_ref_id = { kind = "string" },
         companions       = {},
     },
 }

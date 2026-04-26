@@ -220,9 +220,9 @@ local SPEC = {
         selected_clip_ids  = { required = true },
     },
     persisted = {
-        new_sequence_id = "",
-        new_track_id    = "",
-        new_clip_id     = "",
+        new_sequence_id = { kind = "string" },
+        new_track_id    = { kind = "string" },
+        new_clip_id     = { kind = "string" },
         moved           = {},
     },
 }

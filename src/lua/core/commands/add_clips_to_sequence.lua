@@ -60,8 +60,9 @@ local SPEC = {
         advance_playhead = { kind = "boolean" },
     },
     persisted = {
-        created_clip_ids       = {},
-        created_link_group_ids = {},
+        created_clip_ids       = { kind = "table" },
+        created_link_group_ids = { kind = "table" },
+        prior_playhead         = { kind = "number" },
     },
 }
 
@@ -335,6 +336,19 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("created_link_group_ids", result_or_err.link_group_ids)
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
+
+        -- advance_playhead: same contract as Insert/Overwrite. Advance by
+        -- total_duration from position; persist; emit playhead_changed.
+        if args.advance_playhead then
+            local owner = assert(Sequence.load(args.sequence_id),
+                "AddClipsToSequence: sequence " .. tostring(args.sequence_id) .. " not found post-execute")
+            command:set_parameter("prior_playhead", owner.playhead_position)
+            local new_playhead = result_or_err.position + result_or_err.total_duration
+            owner:set_playhead(new_playhead)
+            assert(owner:save(), "AddClipsToSequence: sequence save failed after advance_playhead")
+            Signals.emit("playhead_changed", args.sequence_id, new_playhead)
+        end
+
         return true, {
             created_clip_ids = result_or_err.created_clip_ids,
             link_group_ids   = result_or_err.link_group_ids,

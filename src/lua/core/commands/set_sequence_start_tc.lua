@@ -85,9 +85,9 @@ local SPEC = {
         tc_value    = { required = true },
     },
     persisted = {
-        prior_value_present = false,
-        prior_value         = 0,
-        medium              = "",
+        prior_value_present = { kind = "boolean" },
+        prior_value         = { kind = "number" },
+        medium              = { kind = "string" },
     },
 }
 

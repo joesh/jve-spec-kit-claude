@@ -22,6 +22,7 @@
 local M = {}
 
 local Clip          = require("models.clip")
+local Sequence      = require("models.sequence")
 local place_shared  = require("core.commands._place_shared")
 local log           = require("core.logger").for_area("commands")
 
@@ -34,6 +35,18 @@ end
 
 
 function M.execute(args)
+    -- timeline_start_frame omitted ⇒ resolve from sequence.playhead_position.
+    -- See insert.lua for rationale (rule 2.13 — no silent default-to-0).
+    if args.timeline_start_frame == nil then
+        local owner = assert(Sequence.find(args.sequence_id), string.format(
+            "Overwrite: sequence %s not found (cannot resolve playhead fallback)",
+            tostring(args.sequence_id)))
+        assert(type(owner.playhead_position) == "number", string.format(
+            "Overwrite: timeline_start_frame omitted and sequence %s has no "
+            .. "playhead_position to fall back on", tostring(args.sequence_id)))
+        args.timeline_start_frame = owner.playhead_position
+    end
+
     local plan = place_shared.plan_placement(args)
     local n_start = plan.start_frame
     local n_end   = plan.start_frame + plan.owner_duration
@@ -60,6 +73,7 @@ function M.execute(args)
         duration_frames     = plan.owner_duration,
         fps_mismatch_policy = plan.policy,
         occluded            = occluded,
+        start_frame         = plan.start_frame,
     }
 end
 
@@ -69,25 +83,23 @@ end
 
 local SPEC = {
     args = {
-        sequence_id           = { required = true },
-        nested_sequence_id    = { required = true },
-        timeline_start_frame  = { required = true, default = 0 },
-        target_video_track_id = {},
-        target_audio_track_id = {},
-        fps_mismatch_policy   = {},
-        clip_name             = {},
-        -- V8 compat: accepted-but-ignored params for tests / older callers.
-        advance_playhead      = {},
-        source_in             = {},
-        source_out            = {},
-        duration              = {},
+        sequence_id           = { required = true,  kind = "string" },
+        nested_sequence_id    = { required = true,  kind = "string" },
+        -- timeline_start_frame omitted ⇒ resolve from sequence.playhead_position.
+        timeline_start_frame  = { kind = "number" },
+        target_video_track_id = { kind = "string" },
+        target_audio_track_id = { kind = "string" },
+        fps_mismatch_policy   = { kind = "string" },
+        clip_name             = { kind = "string" },
+        advance_playhead      = { kind = "boolean" },
     },
     persisted = {
-        created_clip_ids       = {},
-        created_link_group_id  = "",
-        occluded_capture       = {},
-        duration_frames        = 0,
-        fps_mismatch_policy    = "",
+        created_clip_ids       = { kind = "table" },
+        created_link_group_id  = { kind = "string" },
+        occluded_capture       = { kind = "table" },
+        duration_frames        = { kind = "number" },
+        fps_mismatch_policy    = { kind = "string" },
+        prior_playhead         = { kind = "number" },
     },
 }
 
@@ -168,6 +180,19 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
 
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
+
+        -- advance_playhead: see insert.lua for the contract. Capture prior,
+        -- set new, persist, emit.
+        if args.advance_playhead then
+            local owner = assert(Sequence.load(args.sequence_id),
+                "Overwrite: sequence " .. tostring(args.sequence_id) .. " not found post-execute")
+            command:set_parameter("prior_playhead", owner.playhead_position)
+            local new_playhead = result.start_frame + result.duration_frames
+            owner:set_playhead(new_playhead)
+            assert(owner:save(), "Overwrite: sequence save failed after advance_playhead")
+            Signals.emit("playhead_changed", args.sequence_id, new_playhead)
+        end
+
         return true
     end
 
@@ -225,6 +250,16 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
 
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
+
+        -- Restore playhead if we advanced it.
+        if args.advance_playhead and type(args.prior_playhead) == "number" then
+            local owner = assert(Sequence.load(args.sequence_id),
+                "Overwrite.undo: sequence " .. tostring(args.sequence_id) .. " not found")
+            owner:set_playhead(args.prior_playhead)
+            assert(owner:save(), "Overwrite.undo: sequence save failed")
+            Signals.emit("playhead_changed", args.sequence_id, args.prior_playhead)
+        end
+
         return true
     end
 

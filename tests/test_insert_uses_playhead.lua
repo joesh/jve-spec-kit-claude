@@ -50,7 +50,8 @@ seq:save()
 Track.create_video("V1", seq.id, { index = 1 }):save()
 Track.create_audio("A1", seq.id, { index = 1 }):save()
 
--- Create Media (100 frames @ 30fps)
+-- Create Media (100 frames @ 30fps, video-only — width/height drive
+-- ensure_master's track creation; without them no media_refs land).
 local media = Media.create({
     id = "media_video",
     project_id = project.id,
@@ -59,6 +60,8 @@ local media = Media.create({
     duration_frames = 100,
     fps_numerator = 30,
     fps_denominator = 1,
+    width = 1920,
+    height = 1080,
 })
 media:save(db)
 
@@ -69,7 +72,15 @@ local nested_sequence_id = test_env.create_test_masterclip_sequence(
 -- Init command system + real timeline_state
 command_manager.init(seq.id, project.id)
 
--- Set playhead to frame 150 using the REAL timeline_state
+-- Set playhead to frame 150. Per CLAUDE.md MVC, the model owns playhead;
+-- the UI viewport is a derived view. Insert pulls timeline_start_frame
+-- from the model when the arg is omitted, so the test must persist
+-- playhead at the model layer (not just the in-memory viewport).
+do
+    local seq_for_playhead = Sequence.load(seq.id)
+    seq_for_playhead:set_playhead(150)
+    assert(seq_for_playhead:save(), "Failed to persist playhead to model")
+end
 timeline_state.set_playhead_position(150)
 assert(timeline_state.get_playhead_position() == 150,
     "Playhead should be at 150, got " .. tostring(timeline_state.get_playhead_position()))

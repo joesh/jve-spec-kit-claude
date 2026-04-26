@@ -1503,8 +1503,12 @@ function Sequence:set_playhead(frame)
     local duration = self:content_duration()
     if duration > 0 then
         local end_frame = start + duration
-        assert(frame < end_frame,
-            string.format("Sequence:set_playhead(%s): frame %d >= end %d (start_tc=%d, dur=%d)",
+        -- Playhead may equal end_frame (the cursor lives just past the
+        -- last frame after advance_playhead from Insert/Overwrite, or
+        -- after a delete that leaves it at the new tail). Reject strictly
+        -- only if it goes BEYOND end.
+        assert(frame <= end_frame,
+            string.format("Sequence:set_playhead(%s): frame %d > end %d (start_tc=%d, dur=%d)",
                 tostring(self.id), frame, end_frame, start, duration))
     end
     self.playhead_position = frame
@@ -2078,7 +2082,9 @@ function Sequence.find(id)
         SELECT id, project_id, name, kind, fps_numerator, fps_denominator,
                audio_rate, width, height,
                default_video_layer_track_id, video_start_tc_frame,
-               audio_start_tc_samples, fps_mismatch_policy
+               audio_start_tc_samples, fps_mismatch_policy,
+               start_timecode_frame, mark_in_frame, mark_out_frame,
+               playhead_frame
         FROM sequences WHERE id = ?
     ]])
     assert(stmt, "Sequence.find: prepare failed")
@@ -2100,6 +2106,10 @@ function Sequence.find(id)
             video_start_tc_frame = stmt:value(10),
             audio_start_tc_samples = stmt:value(11),
             fps_mismatch_policy = stmt:value(12),
+            start_timecode_frame = stmt:value(13),
+            mark_in = stmt:value(14),
+            mark_out = stmt:value(15),
+            playhead_position = stmt:value(16),
         }
     end
     stmt:finalize()
