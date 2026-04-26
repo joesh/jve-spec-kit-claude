@@ -74,7 +74,18 @@ local function new_bin(project_id, name)
     return c.sequence_number
 end
 
+-- V13: Insert generates a uuid for the new clip. Return it so callers
+-- can address the clip by its actual id. Set narrow marks on the
+-- master so the inserted clip is small enough not to overlap the next.
 local function insert_clip(project_id, sequence_id, track_id, master_id, clip_id, t)
+    do
+        local mc = require("models.sequence").load(master_id)
+        if mc then
+            mc.mark_in = 0
+            mc.mark_out = 50
+            mc:save()
+        end
+    end
     local c = Command.create("Insert", project_id)
     c:set_parameter("sequence_id", sequence_id)
     c:set_parameter("target_video_track_id", track_id)
@@ -83,6 +94,9 @@ local function insert_clip(project_id, sequence_id, track_id, master_id, clip_id
     c:set_parameter("timeline_start_frame", t)
     local r = command_manager.execute(c)
     assert(r.success, "Insert(" .. clip_id .. ") failed: " .. tostring(r.error_message))
+    local cmd_obj = Command.deserialize(r.result_data)
+    return cmd_obj.parameters.created_clip_ids
+        and cmd_obj.parameters.created_clip_ids[1]
 end
 
 local function clip_exists(db, id)
@@ -112,18 +126,18 @@ local newbin_seq = new_bin("proj", "Alpha")
 assert(history.get_global_cursor() == newbin_seq,
     "NewBin must advance the global cursor")
 
-insert_clip("proj", "seq", "v1", mc_id, "clip_a", 0)
+local clip_a_id = insert_clip("proj", "seq", "v1", mc_id, "clip_a", 0)
 assert(history.get_sequence_cursor("seq") > newbin_seq,
     "Insert must advance the sequence cursor past NewBin")
 assert(history.get_global_cursor() == newbin_seq,
     "Insert must NOT touch the global cursor")
-assert(clip_exists(db, "clip_a"), "clip_a must exist after Insert")
+assert(clip_exists(db, clip_a_id), "clip_a must exist after Insert")
 
 local ok, err = command_manager:jump_to_sequence_number(newbin_seq)
 assert(ok, "jump to global target failed: " .. tostring(err))
 assert(merged_cursor("seq") == newbin_seq,
     "merged cursor must land at NewBin after jump")
-assert(not clip_exists(db, "clip_a"),
+assert(not clip_exists(db, clip_a_id),
     "clip_a must be removed by undoing Insert during jump")
 
 --------------------------------------------------------------------------------
@@ -131,9 +145,9 @@ assert(not clip_exists(db, "clip_a"),
 -- The seq cursor's parent-chain walk must not undo past the target.
 --------------------------------------------------------------------------------
 
-insert_clip("proj", "seq", "v1", mc_id, "clip_a", 0)       -- redo the first clip
+local clip_a2_id = insert_clip("proj", "seq", "v1", mc_id, "clip_a", 0)  -- redo the first clip
 local newbin2_seq = new_bin("proj", "Beta")                -- global after seq
-insert_clip("proj", "seq", "v1", mc_id, "clip_b", 0)       -- seq after global
+local clip_b_id = insert_clip("proj", "seq", "v1", mc_id, "clip_b", 0)  -- seq after global
 
 local ok2, err2 = command_manager:jump_to_sequence_number(newbin2_seq)
 assert(ok2, "second jump failed: " .. tostring(err2))
@@ -141,9 +155,9 @@ assert(merged_cursor("seq") == newbin2_seq,
     "merged cursor must land at NewBin2 after second jump")
 assert(history.get_global_cursor() == newbin2_seq,
     "global cursor must not be undone past NewBin2")
-assert(not clip_exists(db, "clip_b"),
+assert(not clip_exists(db, clip_b_id),
     "clip_b must be removed by undoing post-NewBin2 Insert")
-assert(clip_exists(db, "clip_a"),
+assert(clip_exists(db, clip_a2_id),
     "clip_a must remain (it pre-dates NewBin2)")
 
 --------------------------------------------------------------------------------

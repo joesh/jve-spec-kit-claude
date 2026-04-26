@@ -203,6 +203,31 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             end
         end
 
+        -- Emit __timeline_mutations so command_manager's post-DB hook
+        -- can sync timeline_state's cache to the undo-restored state.
+        do
+            local bucket = {
+                sequence_id = args.sequence_id,
+                inserts = {},
+                updates = {},
+                deletes = {},
+                bulk_shifts = {},
+            }
+            for _, cid in ipairs(created_ids) do
+                bucket.deletes[#bucket.deletes + 1] = { clip_id = cid }
+            end
+            for track_id, rip in pairs(rippled) do
+                if rip.shift and rip.shift ~= 0 then
+                    bucket.bulk_shifts[#bucket.bulk_shifts + 1] = {
+                        track_id     = track_id,
+                        shift_frames = -rip.shift,
+                        start_frame  = (rip.from_frame or 0) + rip.shift,
+                    }
+                end
+            end
+            command:set_parameter("__timeline_mutations", bucket)
+        end
+
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
 
