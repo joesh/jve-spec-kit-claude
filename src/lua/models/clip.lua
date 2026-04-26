@@ -33,21 +33,15 @@ function M.generate_id()
     return uuid.generate()
 end
 
--- Forward-declare so load_masterclip_stream can call it
-local load_internal
+-- V13: pre-013 had a load_masterclip_stream helper that resolved a
+-- master-sequence id to its "first stream clip" so callers could treat
+-- a masterclip as either a sequence OR a clip (IS-a). V13 master
+-- sequences hold media_refs (not clips), so that helper has no analog
+-- and is gone. Callers needing media metadata for a master sequence
+-- query media_refs directly via Sequence.find_master_for_media or the
+-- resolver chain.
 
---- IS-a: a masterclip is both a sequence and a clip. When the caller asks for
---- a clip by masterclip sequence ID, resolve to the first stream clip inside
---- that sequence. This is the ONE place that handles the dual identity.
--- V13: master sequences hold media_refs, not stream clips. The pre-013
--- IS-a alias (clip_id == masterclip_seq_id resolves to the inner stream clip)
--- has no V13 analogue. Callers that need media metadata for a master sequence
--- should query media_refs directly.
-local function load_masterclip_stream(_db, _seq_id)
-    return nil
-end
-
-load_internal = function(clip_id, raise_errors)
+local function load_internal(clip_id, raise_errors)
     if not clip_id or clip_id == "" then
         if raise_errors then
             error("Clip.load_failed: Invalid clip_id")
