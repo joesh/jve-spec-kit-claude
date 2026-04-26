@@ -84,10 +84,37 @@ make_media({
 local db = database.get_connection()
 local now = os.time()
 db:exec(string.format(
-    "INSERT INTO sequences (id, project_id, name, created_at, modified_at, "
+    "INSERT INTO sequences (id, project_id, name, kind, created_at, modified_at, "
     .. "fps_numerator, fps_denominator, audio_rate, width, height) "
-    .. "VALUES ('seq1', '%s', 'Seq', %d, %d, 25, 1, 48000, 1920, 1080)",
+    .. "VALUES ('seq1', '%s', 'Seq', 'nested', %d, %d, 25, 1, 48000, 1920, 1080)",
     project.id, now, now))
+
+-- V13: each clip's nested_sequence_id ('mc_<media_id>') references a
+-- master sequence wrapping the media. Create those masters via
+-- ensure_master with a stable id, plus add audio_sample_rate metadata
+-- that ensure_master requires.
+local _Sequence = require("models.sequence")
+local _Media = require("models.media")
+local _json = require("dkjson")
+local _MASTER_SPECS = {
+    {media = "media_a", id = "mc_media_a"},
+    {media = "media_b", id = "mc_media_b"},
+    {media = "media_c", id = "mc_media_c"},
+}
+for _, spec in ipairs(_MASTER_SPECS) do
+    local _m = _Media.load(spec.media)
+    if _m then
+        _m.metadata = _json.encode({
+            start_tc_value = 0,
+            start_tc_rate = (_m.frame_rate and _m.frame_rate.fps_numerator) or 24,
+            start_tc_audio_samples = 0,
+            start_tc_audio_rate = (_m.audio_channels and _m.audio_channels > 0)
+                and (_m.audio_sample_rate or 48000) or nil,
+        })
+        _m:save()
+    end
+    _Sequence.ensure_master(spec.media, project.id, { id = spec.id })
+end
 db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) "
     .. "VALUES ('track_v1', 'seq1', 'V1', 'VIDEO', 1, 1)")
@@ -119,7 +146,7 @@ local function make_clip(params)
         playhead_frame = 0,
         enabled = 1,
     })
-    assert(c:save({skip_occlusion = true}))
+    assert(c ~= nil, "Clip.create returned nil")
     return c
 end
 
