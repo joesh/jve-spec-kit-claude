@@ -57,7 +57,7 @@ local track = Track.create_video("V1", seq.id, { index = 1 })
 track:save()
 
 local function make_clip(name, start, dur)
-    local c = Clip.create({
+    local clip_id = Clip.create({
         name = name,
         project_id = seq.project_id,
         track_id = track.id,
@@ -72,7 +72,7 @@ local function make_clip(name, start, dur)
         playhead_frame = 0,
         enabled = 1,
     })
-    return c
+    return Clip.load(clip_id)
 end
 
 -- ── Init real command system + keyboard dispatch ──
