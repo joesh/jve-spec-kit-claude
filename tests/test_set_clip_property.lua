@@ -92,6 +92,10 @@ db:exec(string.format([[
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('track_v1', 'timeline_seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_a1', 'timeline_seq', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_a2', 'timeline_seq', 'A2', 'AUDIO', 2, 1, 0, 0, 0, 1.0, 0.0);
 ]], now, now, now, now))
 
 stub_timeline_state()
@@ -133,12 +137,25 @@ import_cmd:set_parameter("project_id", "test_project")
 local import_result = command_manager.execute(import_cmd)
 assert(import_result.success, "ImportMedia command failed: " .. tostring(import_result.error_message))
 
--- ImportMedia stores arrays of IDs (supports multiple files)
--- IS-a refactor: masterclips are now sequences. Use video_clip_ids to get actual clip IDs.
-local video_clip_ids = import_cmd:get_parameter("video_clip_ids")
-assert(video_clip_ids and #video_clip_ids > 0, "Expected video_clip_ids array from ImportMedia")
-local clip_id = video_clip_ids[1]
-assert(clip_id and clip_id ~= "", "Expected valid video_clip_id")
+-- V13: ImportMedia creates master sequences, not clips. To exercise
+-- SetClipProperty (which operates on timeline clips, not on master
+-- media_refs), Insert the master onto the timeline.
+local master_sequence_ids = import_cmd:get_parameter("master_sequence_ids")
+assert(master_sequence_ids and #master_sequence_ids > 0,
+    "Expected master_sequence_ids array from ImportMedia")
+local master_seq_id = master_sequence_ids[1]
+local insert_cmd = Command.create("Insert", "test_project")
+insert_cmd:set_parameters({
+    project_id = "test_project",
+    sequence_id = "timeline_seq",
+    target_video_track_id = "track_v1",
+    nested_sequence_id = master_seq_id,
+    timeline_start_frame = 0,
+})
+local insert_res = command_manager.execute(insert_cmd)
+assert(insert_res.success, "Insert failed: " .. tostring(insert_res.error_message))
+local clip_id = (insert_cmd:get_parameter("created_clip_ids") or {})[1]
+assert(clip_id and clip_id ~= "", "Expected created_clip_ids[1] from Insert")
 
 local property_name = "audio:sample_rate"
 
