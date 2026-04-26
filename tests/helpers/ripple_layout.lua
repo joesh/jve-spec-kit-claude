@@ -344,6 +344,7 @@ function M.create(opts)
         master_seq_for_media[m.id] = master_seq_id
     end
 
+
     -- Create clips (V13: nested_sequence_id references a master sequence,
     -- source_in/out are in that master's timebase).
     for _, key in ipairs(cfg.clips.order or {}) do
@@ -386,7 +387,10 @@ function M.create(opts)
         tracks = cfg.tracks,
         media = cfg.media,
         clips = cfg.clips,
-        config = cfg
+        config = cfg,
+        -- Map media_id → master sequence id created above; tests that need
+        -- to attach extra clips to the same master use this.
+        master_seq_for_media = master_seq_for_media,
     }
 
     function layout:cleanup()

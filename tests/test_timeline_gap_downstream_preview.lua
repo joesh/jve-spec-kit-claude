@@ -20,12 +20,14 @@ local layout = ripple_layout.create({
 local clips = layout.clips
 local tracks = layout.tracks
 
--- Insert a downstream clip on V2 before initializing the timeline state
+-- Insert a downstream clip on V2 before initializing the timeline state.
+-- Reuse the layout's primary master so the master row + media_ref exist.
+local _primary_master = layout.master_seq_for_media[layout.media.main.id]
 local downstream = Clip.create({
         name = "V2 Downstream",
         project_id = layout.project_id,
         owner_sequence_id = layout.sequence_id,
-        nested_sequence_id = "mc_test",
+        nested_sequence_id = _primary_master,
         track_id = tracks.v2.id,
         timeline_start_frame = 2600,
         duration_frames = 600,
@@ -36,11 +38,13 @@ local downstream = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
-assert(downstream:save(layout.db), "Failed to insert downstream clip")
+-- V13 Clip.create returns a string id (no :save method).
+assert(downstream and downstream ~= "", "Failed to insert downstream clip")
+local downstream_id = downstream
 
 layout:init_timeline_state()
 
-downstream = Clip.load(downstream.id, layout.db)
+downstream = Clip.load(downstream_id)
 assert(downstream, "Downstream clip should exist")
 
 local width, height = 1800, 360
