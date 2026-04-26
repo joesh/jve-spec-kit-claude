@@ -16,7 +16,7 @@ local function clip(id, track_id, start, dur)
         track_id = track_id,
         timeline_start = start,
         duration = dur,
-        clip_kind = "nested",
+        is_gap = false,
         media_id = "media_1",
         source_in = 0,
         source_out = dur,
@@ -28,7 +28,7 @@ end
 -- Helper: verify gap clip fields
 local function assert_gap(gap, expected_start, expected_dur, track_id, label)
     assert(gap, label .. ": gap is nil")
-    assert(gap.clip_kind == "gap", string.format("%s: clip_kind=%s, expected gap", label, tostring(gap.clip_kind)))
+    assert(gap.is_gap == true, string.format("%s: clip_kind=%s, expected gap", label, tostring(gap.clip_kind)))
     assert(gap.media_id == nil, string.format("%s: media_id should be nil", label))
     assert(gap.track_id == track_id, string.format("%s: track_id=%s, expected %s", label, tostring(gap.track_id), tostring(track_id)))
     assert(gap.timeline_start == expected_start,

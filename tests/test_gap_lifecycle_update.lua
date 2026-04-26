@@ -15,7 +15,7 @@ local function media_clip(id, track_id, start, dur)
         track_id = track_id,
         timeline_start = start,
         duration = dur,
-        clip_kind = "nested",
+        is_gap = false,
         media_id = "media_1",
         source_in = 0,
         source_out = dur,
@@ -30,7 +30,7 @@ local function gap_clip(track_id, start, dur)
         track_id = track_id,
         timeline_start = start,
         duration = dur,
-        clip_kind = "gap",
+        is_gap = true,
         media_id = nil,
         source_in = nil,
         source_out = nil,
@@ -43,7 +43,7 @@ end
 local function extract_gaps(clips)
     local gaps = {}
     for _, c in ipairs(clips) do
-        if c.clip_kind == "gap" then
+        if c.is_gap == true then
             table.insert(gaps, c)
         end
     end
@@ -54,7 +54,7 @@ end
 local function extract_media(clips)
     local result = {}
     for _, c in ipairs(clips) do
-        if c.clip_kind ~= "gap" then
+        if not c.is_gap then
             table.insert(result, c)
         end
     end

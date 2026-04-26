@@ -14,7 +14,7 @@ print("--- (a) zero-length gap at adjacent boundary ---")
 do
     local gap = gap_lifecycle.create_implied_gap("v1", 100, SEQ_FPS)
     assert(gap ~= nil, "create_implied_gap should return a gap clip")
-    assert(gap.clip_kind == "gap", "clip_kind should be 'gap', got " .. tostring(gap.clip_kind))
+    assert(gap.is_gap == true, "clip_kind should be 'gap', got " .. tostring(gap.clip_kind))
     assert(gap.duration == 0, "implied gap duration should be 0, got " .. tostring(gap.duration))
     assert(gap.timeline_start == 100, "timeline_start should be 100, got " .. tostring(gap.timeline_start))
     assert(gap.track_id == "v1", "track_id should be 'v1', got " .. tostring(gap.track_id))
