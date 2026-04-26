@@ -71,7 +71,7 @@ local c1 = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
-c1:save(db)
+assert(c1 ~= nil, "Failed to create c1")
 local c2 = Clip.create({
         name = "C2",
         id = "c2",
@@ -88,7 +88,7 @@ local c2 = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
-c2:save(db)
+assert(c2 ~= nil, "Failed to create c2")
 -- Duplicate both clips with delta=5. The duplicates should land at [5, 15) and [17, 27).
 -- This overlaps the source clips — resolve_occlusions should trim them (overwrite behavior).
 local dup = Command.create("DuplicateClips", "proj")
@@ -105,7 +105,7 @@ assert(result.success, result.error_message or "DuplicateClips failed")
 local clips = database.load_clips("seq")
 local by_start = {}
 for _, clip in ipairs(clips) do
-    if clip.track_id == "v1" and clip.clip_kind == "timeline" then
+    if clip.track_id == "v1" then
         by_start[clip.timeline_start] = (by_start[clip.timeline_start] or 0) + 1
     end
 end

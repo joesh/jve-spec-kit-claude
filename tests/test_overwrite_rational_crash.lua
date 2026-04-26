@@ -111,7 +111,7 @@ local clip_existing = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
     })
-clip_existing:save(db)
+assert(clip_existing ~= nil, "Failed to create clip_existing")
 print("Created existing clip at 0-100 frames")
 
 -- Execute Overwrite (Overlap 50-150)

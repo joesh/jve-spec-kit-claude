@@ -94,7 +94,7 @@ local clip_a = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(clip_a:save(db), "Failed to save Clip A")
+assert(clip_a ~= nil, "Failed to create Clip A")
 
 -- Create Clip B (100-200 frames)
 local clip_b = Clip.create({
@@ -112,7 +112,7 @@ local clip_b = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(clip_b:save(db), "Failed to save Clip B")
+assert(clip_b ~= nil, "Failed to create Clip B")
 
 print("Created Clip A (0-100) and Clip B (100-200)")
 
@@ -151,10 +151,11 @@ local function get_clip(id)
     return Clip.load(id, db)
 end
 
-local a_after = get_clip(clip_a.id)
-local b_after = get_clip(clip_b.id)
-local c_id = cmd:get_parameter("clip_id")
-local c_after = get_clip(c_id)
+local a_after = get_clip(clip_a)
+local b_after = get_clip(clip_b)
+local created_ids = cmd:get_parameter("created_clip_ids") or {}
+local c_id = created_ids[1]
+local c_after = c_id and get_clip(c_id) or nil
 
 print("\nVerifying state:")
 

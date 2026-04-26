@@ -73,12 +73,12 @@ local clip = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
-clip:save(db)
+assert(clip ~= nil, "Failed to create clip")
 local cmd = Command.create("Nudge", "proj")
 cmd:set_parameter("sequence_id", "seq")
 cmd:set_parameter("fps_numerator", 24)
 cmd:set_parameter("fps_denominator", 1)
-cmd:set_parameter("selected_clip_ids", {clip.id})
+cmd:set_parameter("selected_clip_ids", {clip})
 -- Nudge by 24 frames (1 second at 24fps)
 local nudge_amount = 24
 cmd:set_parameter("nudge_amount", nudge_amount)
@@ -86,7 +86,7 @@ cmd:set_parameter("nudge_amount", nudge_amount)
 local res = command_manager.execute(cmd)
 assert(res.success, "Nudge with ms payload should succeed")
 
-local updated = Clip.load(clip.id, db)
+local updated = Clip.load(clip, db)
 assert(updated.timeline_start == 24, "Clip should move forward by ~24 frames for 1000ms at 24fps")
 
 -- Undo to keep DB tidy

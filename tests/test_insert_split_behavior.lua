@@ -95,7 +95,7 @@ local clip_a = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(clip_a:save(db), "Failed to save Clip A")
+assert(clip_a ~= nil, "Failed to create Clip A")
 
 -- Create Clip C (200-300 frames) - Downstream clip to test ripple
 local clip_c = Clip.create({
@@ -113,7 +113,11 @@ local clip_c = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(clip_c:save(db), "Failed to save Clip C")
+assert(clip_c ~= nil, "Failed to create Clip C")
+do
+    local ts = require("ui.timeline.timeline_state")
+    if ts.reload_clips then ts.reload_clips("sequence") end
+end
 
 print("Created Clip A (0-100) and Clip C (200-300)")
 
@@ -172,8 +176,8 @@ local function get_clip(id)
     return Clip.load(id, db)
 end
 
-local a_after = get_clip(clip_a.id)
-local c_after = get_clip(clip_c.id)
+local a_after = get_clip(clip_a)
+local c_after = get_clip(clip_c)
 -- local b_id = cmd:get_parameter("clip_id") -- Use parsed ID
 print("DEBUG: b_id from result is: " .. tostring(b_id))
 local b_after = get_clip(b_id)

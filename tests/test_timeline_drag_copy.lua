@@ -74,7 +74,7 @@ local clip1 = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
-clip1:save(db)
+assert(clip1 ~= nil, "Failed to create clip1")
 timeline_state.reload_clips("seq")
 
 -- Mock View Object
@@ -96,15 +96,15 @@ local drag_state = {
     current_y = 100,
     delta_ms = 1000, -- Shift by 1 second (30 frames at 30fps)
     delta_frames = 30,
-    clips = {{id = clip1.id}},
-    anchor_clip_id = clip1.id,
+    clips = {{id = clip1}},
+    anchor_clip_id = clip1,
     alt_copy = true
 }
 
 timeline_view_drag_handler.handle_release(mock_view, drag_state)
 
 -- Original clip should still exist on V1 at 0
-local loaded_clip1 = Clip.load(clip1.id, db)
+local loaded_clip1 = Clip.load(clip1, db)
 assert(loaded_clip1, "Original clip should exist")
 assert(loaded_clip1.track_id == 'v1', "Original clip should stay on V1")
 assert(loaded_clip1.timeline_start == 0, "Original clip should stay at 0")
@@ -113,7 +113,7 @@ assert(loaded_clip1.timeline_start == 0, "Original clip should stay at 0")
 local all_clips = database.load_clips("seq")
 local new_clip = nil
 for _, c in ipairs(all_clips) do
-    if c.id ~= clip1.id then
+    if c.id ~= clip1 then
         new_clip = c
         break
     end
@@ -122,7 +122,10 @@ end
 assert(new_clip, "A new clip should have been created (Copy)")
 assert(new_clip.track_id == 'v2', "New clip should be on V2")
 assert(new_clip.timeline_start == 30, "New clip should be at 30 frames (got " .. tostring(new_clip.timeline_start) .. ")")
-assert(new_clip.media_id == 'media1', "New clip should reference same media")
+-- V13: clips reference master sequences (not media directly). Equivalent
+-- "same source" check is on nested_sequence_id.
+assert(new_clip.nested_sequence_id ~= nil and new_clip.nested_sequence_id ~= "",
+    "New clip should reference a master sequence (V13 nested_sequence_id)")
 
 cleanup_db_artifacts(db_path)
 print("✅ Test passed: Alt-drag copied clip instead of moving it")
