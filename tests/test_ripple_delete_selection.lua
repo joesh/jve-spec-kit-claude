@@ -132,22 +132,34 @@ local function create_clip_command(params)
         fps_denominator = 1,
         width = 1920,
         height = 1080,
+        audio_channels = 0,
     })
 
-    local clip = require('models.clip').create("Test Clip", media_id, {
+    local Sequence = require('models.sequence')
+    local master_seq_id = Sequence.ensure_master(media_id, 'default_project')
+    local now = os.time()
+    local new_clip_id = require('models.clip').create({
         id = params.clip_id,
         project_id = 'default_project',
+        name = "Test Clip",
         track_id = params.track_id,
         owner_sequence_id = 'default_sequence',
-        timeline_start = params.start_value,
-        duration = params.duration,
-        source_in = 0,
-        source_out = params.duration,
-        fps_numerator = 30,
-        fps_denominator = 1,
-        enabled = true
+        nested_sequence_id = master_seq_id,
+        timeline_start_frame = params.start_value,
+        duration_frames = params.duration,
+        source_in_frame = 0,
+        source_out_frame = params.duration,
+        master_layer_track_id = nil,
+        master_audio_track_id = nil,
+        fps_mismatch_policy = "resample",
+        enabled = 1,
+        volume = 1.0,
+        playhead_frame = 0,
+        created_at = now,
+        modified_at = now,
     })
-    return clip:save(db, {skip_occlusion = true})
+    assert(new_clip_id and new_clip_id ~= "", "create_clip_command failed for " .. tostring(params.clip_id))
+    return true
 end
 
 -- Register schema for TestCreateClip test command
@@ -187,6 +199,7 @@ for _, spec in ipairs(clip_specs) do
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 
@@ -266,6 +279,7 @@ for _, spec in ipairs(regression_specs) do
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 
@@ -311,6 +325,7 @@ for _, spec in ipairs(multi_specs) do
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", spec.track_id)
     cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 
@@ -379,6 +394,7 @@ for _, spec in ipairs({
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 timeline_state.reload_clips()
@@ -404,6 +420,7 @@ for _, spec in ipairs({
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 timeline_state.reload_clips()
@@ -434,6 +451,7 @@ for _, spec in ipairs({
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 timeline_state.reload_clips()
@@ -461,6 +479,7 @@ for _, spec in ipairs({
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 timeline_state.reload_clips()
@@ -490,6 +509,7 @@ for _, spec in ipairs({
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 timeline_state.reload_clips()
@@ -524,6 +544,7 @@ for _, spec in ipairs({
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
+    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 timeline_state.reload_clips()
