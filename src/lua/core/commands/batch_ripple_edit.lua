@@ -288,11 +288,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- preloaded cache first so we don't hit the DB twice for the same
     -- media during one command.
     local function fetch_media_for_clip(ctx, clip)
-        if not clip.media_id then return nil end
-        local cached = ctx.preloaded_media[clip.media_id]
+        if not (clip.resolved_media and clip.resolved_media.id) then return nil end
+        local cached = ctx.preloaded_media[(clip.resolved_media and clip.resolved_media.id)]
         if cached then return cached end
-        local media = require("models.media").load(clip.media_id, db)
-        ctx.preloaded_media[clip.media_id] = media
+        local media = require("models.media").load((clip.resolved_media and clip.resolved_media.id), db)
+        ctx.preloaded_media[(clip.resolved_media and clip.resolved_media.id)] = media
         return media
     end
 

@@ -1153,10 +1153,10 @@ function Sequence:get_video_at(playhead_frame)
     for _, track in ipairs(tracks) do
         local clip = Clip.find_at_time(track.id, playhead_frame)
         if clip then
-            local media = Media.load(clip.media_id)
+            local media = Media.load(clip.resolved_media and clip.resolved_media.id)
             assert(media, string.format(
                 "Sequence:get_video_at: clip %s references missing media %s",
-                clip.id, tostring(clip.media_id)))
+                clip.id, tostring(clip.resolved_media and clip.resolved_media.id)))
 
             local source_time_us, source_frame = calc_source_time_us(clip, playhead_frame)
 
@@ -1193,10 +1193,10 @@ function Sequence:get_audio_at(playhead_frame)
     for _, track in ipairs(tracks) do
         local clip = Clip.find_at_time(track.id, playhead_frame)
         if clip then
-            local media = Media.load(clip.media_id)
+            local media = Media.load(clip.resolved_media and clip.resolved_media.id)
             assert(media, string.format(
                 "Sequence:get_audio_at: audio clip %s references missing media %s",
-                clip.id, tostring(clip.media_id)))
+                clip.id, tostring(clip.resolved_media and clip.resolved_media.id)))
 
             local source_time_us, source_frame = calc_source_time_us(clip, playhead_frame)
 
@@ -1235,10 +1235,10 @@ function Sequence:get_next_video(after_frame)
     for _, track in ipairs(tracks) do
         local clip = Clip.find_next_on_track(track.id, after_frame)
         if clip then
-            local media = Media.load(clip.media_id)
+            local media = Media.load(clip.resolved_media and clip.resolved_media.id)
             assert(media, string.format(
                 "Sequence:get_next_video: clip %s references missing media %s",
-                clip.id, tostring(clip.media_id)))
+                clip.id, tostring(clip.resolved_media and clip.resolved_media.id)))
             -- source_frame at clip start = source_in
             local source_time_us, source_frame = calc_source_time_us(clip, clip.timeline_start)
             results[#results + 1] = {
@@ -1271,10 +1271,10 @@ function Sequence:get_prev_video(before_frame)
     for _, track in ipairs(tracks) do
         local clip = Clip.find_prev_on_track(track.id, before_frame)
         if clip then
-            local media = Media.load(clip.media_id)
+            local media = Media.load(clip.resolved_media and clip.resolved_media.id)
             assert(media, string.format(
                 "Sequence:get_prev_video: clip %s references missing media %s",
-                clip.id, tostring(clip.media_id)))
+                clip.id, tostring(clip.resolved_media and clip.resolved_media.id)))
             -- Source position at clip END (last frame): reverse playback enters here
             local last_frame = clip.timeline_start + clip.duration - 1
             local source_time_us, source_frame = calc_source_time_us(clip, last_frame)
@@ -1308,10 +1308,10 @@ function Sequence:get_next_audio(after_frame)
     for _, track in ipairs(tracks) do
         local clip = Clip.find_next_on_track(track.id, after_frame)
         if clip then
-            local media = Media.load(clip.media_id)
+            local media = Media.load(clip.resolved_media and clip.resolved_media.id)
             assert(media, string.format(
                 "Sequence:get_next_audio: clip %s references missing media %s",
-                clip.id, tostring(clip.media_id)))
+                clip.id, tostring(clip.resolved_media and clip.resolved_media.id)))
             local source_time_us, source_frame = calc_source_time_us(clip, clip.timeline_start)
             results[#results + 1] = {
                 media_path = media.file_path,
@@ -1345,10 +1345,10 @@ function Sequence:get_prev_audio(before_frame)
     for _, track in ipairs(tracks) do
         local clip = Clip.find_prev_on_track(track.id, before_frame)
         if clip then
-            local media = Media.load(clip.media_id)
+            local media = Media.load(clip.resolved_media and clip.resolved_media.id)
             assert(media, string.format(
                 "Sequence:get_prev_audio: clip %s references missing media %s",
-                clip.id, tostring(clip.media_id)))
+                clip.id, tostring(clip.resolved_media and clip.resolved_media.id)))
             -- Source position at clip END (last frame): reverse playback enters here
             local last_frame = clip.timeline_start + clip.duration - 1
             local source_time_us, source_frame = calc_source_time_us(clip, last_frame)

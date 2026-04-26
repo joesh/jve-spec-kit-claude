@@ -31,27 +31,54 @@ end)()
 --   label    : short name
 --   allowlist: set of path suffixes (relative to repo root) where the
 --              match is intentional / not a bug.
+-- Each pattern's allowlist is a list of file path SUFFIXES (relative to
+-- repo root) where the match is intentional — surviving V13 callsites
+-- that legitimately use the same identifier for a different concept.
 local BANNED = {
     {
         label = "clip_kind",
         pattern = [[\bclip_kind\b]],
-        allowlist = {},
+        -- duplicate_master_clip carries clip_kind in an error-message
+        -- string (explains the deprecated V8 INSERT shape). Not a live read.
+        allowlist = {
+            "src/lua/core/commands/duplicate_master_clip.lua",
+        },
     },
     {
         label = "master_clip_id",
         pattern = [[\bmaster_clip_id\b]],
-        allowlist = {},
+        -- DeleteMasterClip retains master_clip_id as a SPEC.args alias
+        -- for the V13 master_sequence_id arg (menu wiring continuity).
+        allowlist = {
+            "src/lua/core/commands/delete_master_clip.lua",
+        },
     },
     {
         label = "clips.media_id",
-        -- clip.media_id, c.media_id, clips.media_id — common Lua/SQL forms
+        -- clip.media_id, c.media_id, clips.media_id — common Lua/SQL forms.
+        -- project_browser / browser_state operate on browser-row entries
+        -- (master-sequence rows from load_master_clips), where `media_id`
+        -- is the master's bound leaf media — a V13-correct field, not a
+        -- read off a V13 `clips` row.
         pattern = [[\b(clip|clips|c)\.media_id\b]],
-        allowlist = {},
+        allowlist = {
+            "src/lua/ui/project_browser.lua",
+            "src/lua/ui/project_browser/browser_state.lua",
+        },
     },
     {
         label = "clips.offline",
+        -- `clip.offline` under V13 is a runtime-stamped derived state
+        -- (media_status.ensure_clip_status writes it; renderer reads it),
+        -- NOT a `clips` table column. Same name, different concept.
         pattern = [[\b(clip|clips|c)\.offline\b]],
-        allowlist = {},
+        allowlist = {
+            "src/lua/core/media/media_status.lua",
+            "src/lua/ui/timeline/state/timeline_core_state.lua",
+            "src/lua/ui/timeline/view/timeline_view_renderer.lua",
+            "src/lua/ui/project_browser.lua",
+            "src/lua/ui/project_browser/browser_state.lua",
+        },
     },
     {
         label = "legacy sequences.kind literal 'timeline'",

@@ -390,15 +390,20 @@ local function build_clip_from_query_row(query, requested_sequence_id)
 
         track_type = track_type,
 
-        -- V13-resolved chain leaves: nested→master→media_ref→media.
-        -- NULL when nested is itself nested (no terminal media_ref reachable
-        -- in this single SELECT — deeper resolution is the resolver's job).
-        -- These are NOT direct columns on the clips table.
-        media_id = media_id,
-        media_name = media_name,
-        media_path = media_path,
-        offline_note = offline_note,
     }
+    -- V13-resolved chain leaf: nested→master→media_ref→media. Substructure
+    -- so consumers see clearly that these are denormalized join results,
+    -- not direct columns on `clips`. NULL when the nested sequence is itself
+    -- nested (no terminal media_ref reachable in this single SELECT —
+    -- deeper resolution is the resolver's job).
+    if media_id then
+        clip.resolved_media = {
+            id = media_id,
+            name = media_name,
+            path = media_path,
+            offline_note = offline_note,
+        }
+    end
 
     if not clip.name or clip.name == "" then
         clip.name = "Clip " .. (clip_id and clip_id:sub(1, 8) or "")

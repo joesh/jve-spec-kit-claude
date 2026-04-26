@@ -163,7 +163,7 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
     -- CONSTRAINT 2: Media boundaries (can't trim beyond available media)
     -- Gap clips have no media_id - they represent empty timeline space
     local media_missing = false
-    if clip.media_id ~= nil then  -- Real clip with media
+    if clip.resolved_media ~= nil then  -- Real clip with media
         if edge_type == "in" then
             -- Can't drag left beyond source_in = 0
             local media_min = -source_in
@@ -179,12 +179,12 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
             assert(db_connection, "timeline_constraints: no active database connection")
 
             assert(Media and Media.load, "timeline_constraints: Media.load unavailable")
-            local media_record = Media.load(clip.media_id, db_connection)
+            local media_record = Media.load((clip.resolved_media and clip.resolved_media.id), db_connection)
             if not media_record then
                 if database_module.ensure_media_record then
-                    local restored = database_module.ensure_media_record(clip.media_id)
+                    local restored = database_module.ensure_media_record((clip.resolved_media and clip.resolved_media.id))
                     if restored then
-                        media_record = Media.load(clip.media_id, db_connection)
+                        media_record = Media.load((clip.resolved_media and clip.resolved_media.id), db_connection)
                     end
                 end
                 if not media_record then

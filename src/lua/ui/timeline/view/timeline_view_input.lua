@@ -307,7 +307,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
     -- Reveal in Filesystem (only for clips with media)
     local has_media = false
     for _, clip in ipairs(selected_clips) do
-        if clip.media_id then has_media = true; break end
+        if clip.resolved_media then has_media = true; break end
     end
     if has_media then
         table.insert(actions, {

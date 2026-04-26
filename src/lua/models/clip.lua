@@ -177,13 +177,20 @@ load_internal = function(clip_id, raise_errors)
 
         track_type = track_type,
         nested_sequence_kind = query:value(23),
-
-        -- V13-resolved chain leaves (see database.build_clip_from_query_row).
-        media_id = query:value(26),
-        media_name = query:value(27),
-        media_path = query:value(28),
-        offline_note = query:value(29),
     }
+    -- V13-resolved chain leaf substructure (see
+    -- database.build_clip_from_query_row for the same shape).
+    do
+        local media_id_val = query:value(26)
+        if media_id_val then
+            clip.resolved_media = {
+                id = media_id_val,
+                name = query:value(27),
+                path = query:value(28),
+                offline_note = query:value(29),
+            }
+        end
+    end
 
     query:finalize()
 

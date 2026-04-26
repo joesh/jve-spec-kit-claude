@@ -191,10 +191,10 @@ local function build_snapshot_payload(db, sequence_id, clips)
             volume = clip.volume
         })
 
-        if clip.media_id and clip.media_id ~= "" then
-            local media = media_lookup[clip.media_id]
-            if media and not media_data_lookup[clip.media_id] then
-                media_data_lookup[clip.media_id] = {
+        if clip.resolved_media and clip.resolved_media.id and clip.resolved_media.id ~= "" then
+            local media = media_lookup[clip.resolved_media.id]
+            if media and not media_data_lookup[clip.resolved_media.id] then
+                media_data_lookup[clip.resolved_media.id] = {
                     id = media.id,
                     project_id = media.project_id,
                     name = media.name,

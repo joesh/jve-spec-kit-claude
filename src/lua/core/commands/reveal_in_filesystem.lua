@@ -33,8 +33,8 @@ local function get_timeline_file_path()
 
     -- Use first selected clip with media
     for _, clip in ipairs(selected) do
-        if clip.media_id then
-            local media = Media.load(clip.media_id)
+        if clip.resolved_media then
+            local media = Media.load((clip.resolved_media and clip.resolved_media.id))
             if media and media.file_path then
                 return media.file_path
             end

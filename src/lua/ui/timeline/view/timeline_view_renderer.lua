@@ -800,7 +800,7 @@ function M.render(view)
             -- surfacing a bug is preferable to a silent skip.
             if is_audio and not clip.offline
                     and track_state.get_waveform_enabled(render_track_id)
-                    and clip.media_id and draw_width > 1 and clip_width > 0 then
+                    and (clip.resolved_media and clip.resolved_media.id) and draw_width > 1 and clip_width > 0 then
                 local vis_src_in, vis_src_out = waveform_utils.visible_source_range(
                     clip.source_in, clip.source_out, x, visible_x, clip_width, draw_width)
 
@@ -814,7 +814,7 @@ function M.render(view)
                 local peak_end = reversed and vis_src_in or vis_src_out
 
                 local peaks, count, actual_start, actual_end = peak_cache.get_visible_peaks(
-                    clip.media_id, peak_start, peak_end, draw_width)
+                    (clip.resolved_media and clip.resolved_media.id), peak_start, peak_end, draw_width)
                 -- peaks == nil is legitimate: peak generation is async, peaks may
                 -- not yet be available for a freshly-loaded media.
                 if peaks and count > 0 then
@@ -824,7 +824,7 @@ function M.render(view)
                     local samples_per_pixel = (peak_end - peak_start) / draw_width
                     local mip_level = peak_constants.select_level(samples_per_pixel)
                     local max_drift = peak_constants.SAMPLES_PER_LEVEL[mip_level]
-                    log_waveform_range_anomalies(clip.media_id,
+                    log_waveform_range_anomalies((clip.resolved_media and clip.resolved_media.id),
                         peak_start, peak_end, actual_start, actual_end, max_drift)
 
                     local wave_col = waveform_color.derive(body_color)
