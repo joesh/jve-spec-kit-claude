@@ -90,6 +90,7 @@ test_env.create_test_media({
 
 local function create_clip(id, track_id, media_id, start_frame, dur)
     local clip = Clip.create({
+        project_id = "proj",
         nested_sequence_id = MC_TEST,
         name = id,
         id = id,

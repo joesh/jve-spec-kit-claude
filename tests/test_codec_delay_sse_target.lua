@@ -57,7 +57,7 @@ local mock_qt_constants = {
         PUSH_PCM = function(sse, ptr, frames, start_us)
             sse_calls.pcm_start = start_us
         end,
-        RENDER_ALLOC = function(sse, frames)
+        _TEST_RENDER_ALLOC = function(sse, frames)
             return mock_pcm_buf, frames
         end,
         STARVED = function(sse)
@@ -74,7 +74,7 @@ local mock_qt_constants = {
         FLUSH = function(aop) end,
         PLAYHEAD_US = function(aop) return 0 end,
         BUFFERED_FRAMES = function(aop) return 4800 end,
-        WRITE_F32 = function(aop, pcm, frames) end,
+        _TEST_WRITE_F32 = function(aop, pcm, frames) end,
         HAD_UNDERRUN = function(aop) return false end,
         CLEAR_UNDERRUN = function(aop) end,
         CLOSE = function(aop) end,

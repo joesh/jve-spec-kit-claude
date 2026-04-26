@@ -30,7 +30,7 @@ local tracks = layout.tracks
 -- Verify gaps exist in clip list (prerequisite for all tests)
 local gap1_id = layout:gap_id("v1", 500)
 local gap1 = ts.get_clip_by_id(gap1_id)
-assert(gap1 and gap1.clip_kind == "gap", "Gap clip should exist at 500")
+assert(gap1 and gap1.is_gap == true, "Gap clip should exist at 500")
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- Test 1: Renderer must NOT draw gap clips as rectangles
@@ -98,7 +98,7 @@ assert(track_clip_index, "track clip index should exist")
 -- Verify gap clip IS in the raw index (this is expected — gap clips live in the list)
 local gap_in_index = false
 for _, clip in ipairs(track_clip_index) do
-    if clip.clip_kind == "gap" and clip.timeline_start == 500 then
+    if clip.is_gap == true and clip.timeline_start == 500 then
         gap_in_index = true
         break
     end
@@ -140,7 +140,7 @@ end
 
 -- Without the gap filter, the binary search finds the gap clip.
 -- This proves the bug is real: gap clips in the track index ARE hit.
-assert(cursor_hit ~= nil and cursor_hit.clip_kind == "gap",
+assert(cursor_hit ~= nil and cursor_hit.is_gap == true,
     "Prerequisite: raw scan without gap filter MUST find the gap clip (proves bug exists)")
 
 -- get_clips_for_track returns gap clips. Any code that iterates
@@ -149,7 +149,7 @@ assert(cursor_hit ~= nil and cursor_hit.clip_kind == "gap",
 local track_clips_for_v1 = ts.get_clips_for_track(tracks.v1.id)
 local gap_spans_600 = false
 for _, c in ipairs(track_clips_for_v1) do
-    if c.clip_kind == "gap" and c.timeline_start <= 600
+    if c.is_gap == true and c.timeline_start <= 600
         and (c.timeline_start + c.duration) > 600 then
         gap_spans_600 = true
         break
@@ -207,7 +207,7 @@ print("  ✓ Confirmed: old gap-scanning logic broken by gap clips in list")
 -- Now test that the NEW find_gap_at_time works: scan for clip_kind=="gap" directly
 local gap_found_new_way = nil
 for _, clip in ipairs(track_clip_index) do
-    if clip.clip_kind == "gap"
+    if clip.is_gap == true
         and type(clip.timeline_start) == "number"
         and type(clip.duration) == "number"
         and clip.duration > 0

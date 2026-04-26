@@ -40,6 +40,9 @@ local media = Media.create({
     duration_frames = 500,
     fps_numerator = 24,
     fps_denominator = 1,
+    width = 1920,
+    height = 1080,
+    audio_channels = 0,
 })
 media:save(db.get_connection())
 
@@ -56,6 +59,7 @@ track:save()
 local function make_clip(name, start, dur)
     local c = Clip.create({
         name = name,
+        project_id = seq.project_id,
         track_id = track.id,
         owner_sequence_id = seq.id,
         nested_sequence_id = mc_seq_id,
@@ -68,7 +72,6 @@ local function make_clip(name, start, dur)
         playhead_frame = 0,
         enabled = 1,
     })
-    c:save({ skip_occlusion = true })
     return c
 end
 

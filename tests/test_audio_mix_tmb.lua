@@ -139,7 +139,7 @@ package.loaded["core.qt_constants"] = {
                 data = data,
             }
         end,
-        RENDER_ALLOC = function(sse, frames) return ffi.new("float[?]", frames * 2), 0 end,
+        _TEST_RENDER_ALLOC = function(sse, frames) return ffi.new("float[?]", frames * 2), 0 end,
         CURRENT_TIME_US = function() return mock_sse_current_time end,
         STARVED = function() return false end,
         CLEAR_STARVED = function() end,
@@ -152,7 +152,7 @@ package.loaded["core.qt_constants"] = {
         FLUSH = function() aop_flush_calls = aop_flush_calls + 1 end,
         PLAYHEAD_US = function() return 0 end,
         BUFFERED_FRAMES = function() return 0 end,
-        WRITE_F32 = function() end,
+        _TEST_WRITE_F32 = function() end,
         HAD_UNDERRUN = function() return false end,
         CLEAR_UNDERRUN = function() end,
     },

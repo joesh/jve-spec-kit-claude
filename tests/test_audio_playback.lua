@@ -460,7 +460,7 @@ assert(qt_constants.SSE.CLOSE, "SSE.CLOSE missing")
 assert(qt_constants.SSE.RESET, "SSE.RESET missing")
 assert(qt_constants.SSE.SET_TARGET, "SSE.SET_TARGET missing")
 assert(qt_constants.SSE.PUSH_PCM, "SSE.PUSH_PCM missing")
-assert(qt_constants.SSE.RENDER_ALLOC, "SSE.RENDER_ALLOC missing")
+assert(qt_constants.SSE._TEST_RENDER_ALLOC, "SSE._TEST_RENDER_ALLOC missing")
 assert(qt_constants.SSE.STARVED, "SSE.STARVED missing")
 assert(qt_constants.SSE.CURRENT_TIME_US, "SSE.CURRENT_TIME_US missing")
 assert(qt_constants.SSE.Q1 == 1, "SSE.Q1 should be 1")
@@ -474,7 +474,7 @@ assert(qt_constants.AOP.CLOSE, "AOP.CLOSE missing")
 assert(qt_constants.AOP.START, "AOP.START missing")
 assert(qt_constants.AOP.STOP, "AOP.STOP missing")
 assert(qt_constants.AOP.FLUSH, "AOP.FLUSH missing")
-assert(qt_constants.AOP.WRITE_F32, "AOP.WRITE_F32 missing")
+assert(qt_constants.AOP._TEST_WRITE_F32, "AOP._TEST_WRITE_F32 missing")
 assert(qt_constants.AOP.BUFFERED_FRAMES, "AOP.BUFFERED_FRAMES missing")
 assert(qt_constants.AOP.PLAYHEAD_US, "AOP.PLAYHEAD_US missing")
 assert(qt_constants.AOP.HAD_UNDERRUN, "AOP.HAD_UNDERRUN missing")
@@ -497,7 +497,7 @@ assert(qt_constants.SSE.CURRENT_TIME_US(sse) == 0, "Time should be 0 after reset
 qt_constants.SSE.CLOSE(sse)
 print("  ✓ SSE basic operations work")
 
-print("\nTest 10.4: SSE RENDER_ALLOC produces frames")
+print("\nTest 10.4: SSE _TEST_RENDER_ALLOC produces frames")
 local sse2 = qt_constants.SSE.CREATE({
     sample_rate = 48000,
     channels = 2,
@@ -506,13 +506,13 @@ assert(sse2, "SSE.CREATE should return handle")
 
 qt_constants.SSE.SET_TARGET(sse2, 0, 1.0, qt_constants.SSE.Q1)
 
-local ptr, produced = qt_constants.SSE.RENDER_ALLOC(sse2, 512)
-assert(ptr, "RENDER_ALLOC should return pointer")
+local ptr, produced = qt_constants.SSE._TEST_RENDER_ALLOC(sse2, 512)
+assert(ptr, "_TEST_RENDER_ALLOC should return pointer")
 assert(produced == 512, "Should produce requested frames (silence when starved)")
 assert(qt_constants.SSE.STARVED(sse2), "Should be starved without source PCM")
 
 qt_constants.SSE.CLOSE(sse2)
-print("  ✓ SSE RENDER_ALLOC works")
+print("  ✓ SSE _TEST_RENDER_ALLOC works")
 
 else
     print("\n--- Section 10: Qt-Dependent Tests ---")

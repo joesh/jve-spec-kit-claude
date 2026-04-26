@@ -16,7 +16,7 @@ local mock_qt_constants = {
         FLUSH = function() end,
         PLAYHEAD_US = function() return 0 end,
         BUFFERED_FRAMES = function() return 0 end,
-        WRITE_F32 = function() end,
+        _TEST_WRITE_F32 = function() end,
         HAD_UNDERRUN = function() return false end,
         CLEAR_UNDERRUN = function() end,
     },
@@ -37,7 +37,7 @@ local mock_qt_constants = {
             })
         end,
         PUSH_PCM = function() end,
-        RENDER_ALLOC = function(sse, frames)
+        _TEST_RENDER_ALLOC = function(sse, frames)
             return {}, 0  -- Empty PCM, 0 produced
         end,
         STARVED = function() return false end,
