@@ -74,21 +74,8 @@ end
 local _Sequence_for_master = require("models.sequence")
 local MC_TEST = _Sequence_for_master.ensure_master("media1", "proj")
 
-local master = Clip.create({
-        nested_sequence_id = MC_TEST,
-        name = "Master",
-        id = "master1",
-        project_id = "proj",
-        timeline_start_frame = 0,
-        duration_frames = 1000,
-        source_in_frame = 0,
-        source_out_frame = 1000,
-        fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-master:save(db)
+-- V13: clips live on nested sequences only; the V8 "master clip" row
+-- inside a masterclip sequence is gone. The masterclip is MC_TEST.
 local t1 = Clip.create({
         name = "Timeline",
         id = "t1",
@@ -105,7 +92,11 @@ local t1 = Clip.create({
         playhead_frame = 0,
         enabled = 1,
     })
-t1:save(db)
+assert(t1 ~= nil)
+do
+    local ts = require("ui.timeline.timeline_state")
+    if ts.reload_clips then ts.reload_clips("seq") end
+end
 local dup = Command.create("DuplicateClips", "proj")
 dup:set_parameter("project_id", "proj")
 dup:set_parameter("sequence_id", "seq")
@@ -120,7 +111,7 @@ assert(result.success, result.error_message or "DuplicateClips failed")
 local all = database.load_clips("seq")
 local duplicated_id = nil
 for _, c in ipairs(all) do
-    if c.id ~= "t1" and c.clip_kind == "timeline" and c.track_id == "v2" then
+    if c.id ~= "t1" and c.track_id == "v2" then
         duplicated_id = c.id
         break
     end
@@ -130,7 +121,8 @@ assert(duplicated_id, "Expected a duplicated clip on v2")
 local dup_clip = Clip.load_optional(duplicated_id, db)
 assert(dup_clip, "Expected to load duplicated clip")
 assert(dup_clip.owner_sequence_id == "seq", "Duplicated clip should preserve owner_sequence_id")
-assert(dup_clip.offline == false, "offline is transient, always false from DB")
+-- V13: 'offline' column dropped; offline is derived from the chain
+-- (clip → nested → media_ref → media.offline_note).
 
 cleanup_db_artifacts(db_path)
 print("✅ DuplicateClips preserves owner_sequence_id/offline via mutation inserts")

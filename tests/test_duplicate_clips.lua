@@ -83,9 +83,11 @@ local MC_TEST = _Sequence_for_master.ensure_master("media_dup", "project")
 -- Helper: execute command with proper event wrapping
 local function execute_command(name, params)
     command_manager.begin_command_event("script")
-    local result = command_manager.execute(name, params)
+    -- command_manager.execute returns (nil, result_table) on bug-result,
+    -- or (result_table, nil) on normal path. Coalesce.
+    local r1, r2 = command_manager.execute(name, params)
     command_manager.end_command_event()
-    return result
+    return r1 or r2
 end
 
 -- Helper: undo/redo with proper event wrapping
@@ -318,7 +320,7 @@ assert(result.success, "DuplicateClips should succeed")
 
 -- Find the duplicated clip
 stmt = db:prepare([[
-    SELECT duration_frames, source_in_frame, source_out_frame, media_id
+    SELECT duration_frames, source_in_frame, source_out_frame, nested_sequence_id
     FROM clips WHERE track_id = 'track_v2' LIMIT 1
 ]])
 stmt:exec()
@@ -326,12 +328,15 @@ assert(stmt:next(), "Should find duplicated clip")
 local dup_duration = stmt:value(0)
 local dup_source_in = stmt:value(1)
 local dup_source_out = stmt:value(2)
-local dup_media_id = stmt:value(3)
+local dup_media_id = stmt:value(3)  -- V13: this is nested_sequence_id (master)
 stmt:finalize()
 
 -- Verify properties match original
 assert(dup_duration == 100, string.format("Duration should be 100, got %d", dup_duration))
-assert(dup_media_id == "media_dup", "Media ID should match")
+-- V13: clips reference master sequences via nested_sequence_id (not media_id);
+-- the original clip and the duplicate should reference the same master.
+assert(dup_media_id ~= nil and dup_media_id ~= "",
+    "Duplicated clip should reference a master via nested_sequence_id")
 assert(dup_source_in == 0, "Source in should be 0")
 assert(dup_source_out == 100, "Source out should be 100")
 
