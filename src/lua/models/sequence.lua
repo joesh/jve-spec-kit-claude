@@ -608,6 +608,10 @@ function Sequence.ensure_master(media_id, project_id, opts)
     local duration_frames = media.duration
     local has_video = media.width > 0
     local has_audio = media.audio_channels > 0
+    assert(has_video or has_audio, string.format(
+        "Sequence.ensure_master: media %s has no video and no audio "
+        .. "(width=%d, audio_channels=%d) — has no TC origin to anchor a master",
+        tostring(media_id), media.width, media.audio_channels))
 
     local sample_rate = opts.sample_rate
     if not sample_rate and has_audio then
@@ -670,6 +674,12 @@ function Sequence.ensure_master(media_id, project_id, opts)
 
     local now = os.time()
 
+    -- Master sequence's timebase IS absolute TC space. Each media_ref sits
+    -- at timeline_start = file's TC origin and spans [tc_origin, tc_origin +
+    -- file_duration]. Clips that reference this master use absolute-TC
+    -- source_in into this timebase; C++ decode recovers file position via
+    -- file_pos = source_in - file_tc_origin. The range [0, tc_origin) is
+    -- empty TC space (no content) and is correct — there's no media there.
     if has_video then
         local vtrack = Track.create_video("Video 1", seq.id, {
             id    = opts.video_track_id,
@@ -683,9 +693,9 @@ function Sequence.ensure_master(media_id, project_id, opts)
             owner_sequence_id    = seq.id,
             track_id             = vtrack.id,
             media_id             = media_id,
-            source_in_frame      = 0,
-            source_out_frame     = duration_frames,
-            timeline_start_frame = 0,
+            source_in_frame      = video_start_tc_frame,
+            source_out_frame     = video_start_tc_frame + duration_frames,
+            timeline_start_frame = video_start_tc_frame,
             duration_frames      = duration_frames,
             enabled              = true,
             volume               = 1.0,
@@ -717,9 +727,9 @@ function Sequence.ensure_master(media_id, project_id, opts)
                 owner_sequence_id    = seq.id,
                 track_id             = atrack.id,
                 media_id             = media_id,
-                source_in_frame      = 0,
-                source_out_frame     = duration_samples,
-                timeline_start_frame = 0,
+                source_in_frame      = audio_start_tc_samples,
+                source_out_frame     = audio_start_tc_samples + duration_samples,
+                timeline_start_frame = audio_start_tc_samples,
                 duration_frames      = duration_samples,
                 enabled              = true,
                 volume               = 1.0,

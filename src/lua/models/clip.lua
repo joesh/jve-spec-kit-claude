@@ -949,22 +949,28 @@ local function nested_sequence_effective_duration(db, seq_id)
     return total
 end
 
--- Assert window is in-bounds per INV-4. Loud-fail with the clip id, the
--- offending bounds, and the nested sequence's duration in its timebase
--- (rule 1.14: names everything a caller would need to debug).
+-- Assert window is in-bounds per INV-4. Direction-agnostic: forward clips
+-- have source_in < source_out; reverse clips have source_in > source_out
+-- (parser convention — see drp_importer reverse-clip handling). Both bounds
+-- must lie in [0, nested_sequence_effective_duration]; only the empty
+-- window source_in == source_out is forbidden. Rule 1.14: error names the
+-- clip id, both bounds, and the nested sequence's duration.
 local function assert_window_in_bounds(db, clip_id, nested_seq_id, source_in, source_out)
     assert(type(source_in) == "number" and type(source_out) == "number",
         "Clip: source_in/out must be numbers")
-    assert(source_in >= 0, string.format(
-        "INV-4 violation: clip %s has source_in=%d < 0 (assert_window_in_bounds)",
-        tostring(clip_id), source_in))
-    assert(source_out > source_in, string.format(
-        "INV-4 violation: clip %s has source_in=%d >= source_out=%d (empty/inverted window)",
+    assert(source_in ~= source_out, string.format(
+        "INV-4 violation: clip %s has source_in=%d == source_out=%d (empty window)",
         tostring(clip_id), source_in, source_out))
+    local lo = math.min(source_in, source_out)
+    local hi = math.max(source_in, source_out)
+    assert(lo >= 0, string.format(
+        "INV-4 violation: clip %s has bound %d < 0 (source_in=%d, source_out=%d)",
+        tostring(clip_id), lo, source_in, source_out))
     local dur = nested_sequence_effective_duration(db, nested_seq_id)
-    assert(source_out <= dur, string.format(
-        "INV-4 violation: clip %s has source_out=%d > nested_sequence(%s).duration=%d",
-        tostring(clip_id), source_out, tostring(nested_seq_id), dur))
+    assert(hi <= dur, string.format(
+        "INV-4 violation: clip %s has bound %d > nested_sequence(%s).duration=%d "
+        .. "(source_in=%d, source_out=%d)",
+        tostring(clip_id), hi, tostring(nested_seq_id), dur, source_in, source_out))
 end
 
 local function to_int_bool(v)

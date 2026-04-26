@@ -1,9 +1,7 @@
 --- DeleteMasterClip — V13 rewrite.
 --
 -- "Master clip" in V13 == a sequence with kind='master' (whose tracks
--- hold media_refs). The V13 arg name is `master_sequence_id`; the V8
--- alias `master_clip_id` is accepted via SPEC.args.aliases for
--- continuity with menu wiring that hasn't migrated yet.
+-- hold media_refs). The V13 arg name is `master_sequence_id`.
 --
 -- Forward path:
 --   1. Validate the target is a kind='master' sequence.
@@ -31,7 +29,7 @@ local set_error
 
 local SPEC = {
     args = {
-        master_sequence_id = { required = true, kind = "string", aliases = { "master_clip_id" } },
+        master_sequence_id = { required = true, kind = "string" },
         project_id = { required = true, kind = "string" },
         force = { kind = "boolean" },  -- delete timeline clips that reference this master
     },

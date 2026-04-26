@@ -13,6 +13,8 @@
 -- Volatility: unknown
 --
 -- @file delete_sequence.lua
+local log = require("core.logger").for_area("commands")
+
 local M = {}
 local set_error
 local ensure_mutation_bucket
@@ -152,8 +154,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 name = sequence_row.name
             })
         end
-        print(string.format("✅ Deleted sequence %s (%d track(s), %d clip(s))",
-            sequence_row.name or sequence_id, #tracks, #clips))
+        log.event("Deleted sequence %s (%d track(s), %d clip(s))",
+            sequence_row.name or sequence_id, #tracks, #clips)
         return true
     end
 
@@ -727,7 +729,7 @@ restore_sequence_from_payload = function(db, set_last_error, payload)
         insert_snapshot_stmt:finalize()
     end
 
-    print(string.format("✅ Undo DeleteSequence: Restored sequence %s", tostring(sequence_row.id)))
+    log.event("Undo DeleteSequence: restored sequence %s", tostring(sequence_row.id))
     return true
 end
 

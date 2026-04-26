@@ -480,13 +480,17 @@ function M.import_into_project(project_id, parse_result, opts)
                     table.insert(result.track_ids, track.id)
 
                     for _, clip_data in ipairs(track_data.clips) do
-                        -- Prefer UUID lookup, fall back to path
-                        local media_id = nil
+                        -- Prefer UUID lookup, fall back to path. Hold the
+                        -- whole record so we can read media duration without
+                        -- a round-trip through the DB (and without the
+                        -- file-system-touching `Media:get_start_tc()` path).
+                        local media_record
                         if clip_data.file_uuid and media_by_uuid[clip_data.file_uuid] then
-                            media_id = media_by_uuid[clip_data.file_uuid].id
+                            media_record = media_by_uuid[clip_data.file_uuid]
                         elseif clip_data.file_path and media_by_path[clip_data.file_path] then
-                            media_id = media_by_path[clip_data.file_path].id
+                            media_record = media_by_path[clip_data.file_path]
                         end
+                        local media_id = media_record and media_record.id or nil
 
                         if not media_id then
                             if not clip_data.file_path or clip_data.file_path == "" then
@@ -500,10 +504,21 @@ function M.import_into_project(project_id, parse_result, opts)
                         end
 
                         -- Clip rate = media's native rate. Source coordinates
-                        -- (source_in, source_out) are in native units set by the
-                        -- parser (parse_resolve_tracks). The rate must match.
+                        -- (source_in, source_out) are absolute TC in native
+                        -- units, set by the parser (parse_resolve_tracks):
+                        -- file_tc_origin + file-relative offset. Frames for
+                        -- video, samples for audio. The master sequence's
+                        -- timebase IS TC space (its media_refs sit at
+                        -- timeline_start = file_tc_origin), so parser values
+                        -- pass through unchanged.
                         assert(clip_data.native_rate, string.format(
                             "import_into_project: clip '%s' missing native_rate (media_id=%s)",
+                            clip_data.name or "unnamed", media_id))
+                        assert(type(clip_data.source_in) == "number", string.format(
+                            "import_into_project: clip '%s' missing source_in (media_id=%s)",
+                            clip_data.name or "unnamed", media_id))
+                        assert(type(clip_data.duration) == "number", string.format(
+                            "import_into_project: clip '%s' missing duration (media_id=%s)",
                             clip_data.name or "unnamed", media_id))
                         local clip_rate_num = clip_data.native_rate
                         local clip_rate_den = 1
@@ -512,19 +527,19 @@ function M.import_into_project(project_id, parse_result, opts)
                         local is_reverse = (clip_data.clip_speed or 1) < 0
 
                         if not is_reverse then
-                            if not source_out or source_out <= (clip_data.source_in or 0) then
-                                source_out = (clip_data.source_in or 0) + (clip_data.duration or 0)
+                            if not source_out or source_out <= clip_data.source_in then
+                                source_out = clip_data.source_in + clip_data.duration
                             end
-                            if source_out <= (clip_data.source_in or 0) then
+                            if source_out <= clip_data.source_in then
                                 log.warn("Skipping clip '%s' - zero source range (source_in=%s, source_out=%s)",
                                     clip_data.name or "unnamed", tostring(clip_data.source_in), tostring(source_out))
                                 goto continue_clip
                             end
                         else
                             if not source_out then
-                                source_out = (clip_data.source_in or 0) - (clip_data.duration or 0)
+                                source_out = clip_data.source_in - clip_data.duration
                             end
-                            if source_out == (clip_data.source_in or 0) then
+                            if source_out == clip_data.source_in then
                                 log.warn("Skipping reverse clip '%s' - zero source range (source_in=%s, source_out=%s)",
                                     clip_data.name or "unnamed", tostring(clip_data.source_in), tostring(source_out))
                                 goto continue_clip
@@ -533,33 +548,58 @@ function M.import_into_project(project_id, parse_result, opts)
 
                         -- V13: master sequence is the link from clip → media.
                         local master_seq_id = Sequence.ensure_master(media_id, project_id)
-                        -- Parser hands clip_data.source_in/out as ABSOLUTE TC
-                        -- (media_tc_origin + file-relative offset). The master
-                        -- sequence's range is [0, media_duration_frames] in the
-                        -- media's own timebase. Subtract the media's TC origin
-                        -- to get the file-relative source range that V13
-                        -- INV-4 expects.
+
+                        -- Reconcile the parser's source range against the
+                        -- media row's actual extent. The model: source_in =
+                        -- tc_origin + zero-based file index, where the index
+                        -- lives in [0, file_duration). For stills (a single
+                        -- file frame) the index is always 0, regardless of
+                        -- what Resolve put in <In> — Resolve sometimes writes
+                        -- the timeline TC into <In> for stills, which the
+                        -- parser propagates verbatim; the file's true span
+                        -- wins.
+                        local Media = require("models.media")
                         local media_row = Media.load(media_id)
                         assert(media_row, string.format(
-                            "importer_core: media %s not found while creating clip '%s'",
+                            "importer_core: media %s missing while creating clip '%s'",
                             tostring(media_id), tostring(clip_data.name)))
-                        local media_tc_origin
+                        local source_in_final = clip_data.source_in
+                        local source_out_final = source_out
                         if track_data.type == "AUDIO" then
-                            -- Audio source units are samples; subtract audio TC origin.
-                            local audio_tc = media_row.get_audio_start_tc and
-                                media_row:get_audio_start_tc() or 0
-                            media_tc_origin = audio_tc or 0
+                            local atc = media_row:get_audio_start_tc()
+                            local extent = (atc or 0) + (media_row.duration_frames or 0)
+                            -- duration_frames on an audio media row is in
+                            -- native frames; samples = frames * sr / fps.
+                            -- Stills don't apply to audio, so keep this as
+                            -- a bounds assertion only.
+                            assert(math.max(source_in_final, source_out_final) <= extent,
+                                string.format(
+                                "importer_core: clip '%s' audio source range "
+                                .. "[%d,%d] exceeds media %s extent %d (atc=%s, dur=%s) — parser bug",
+                                tostring(clip_data.name), source_in_final, source_out_final,
+                                tostring(media_id), extent,
+                                tostring(atc), tostring(media_row.duration_frames)))
                         else
-                            local video_tc = media_row.get_start_tc and
-                                media_row:get_start_tc() or 0
-                            media_tc_origin = video_tc or 0
+                            local vtc = media_row:get_start_tc() or 0
+                            local fdur = media_row.duration_frames or 0
+                            local extent = vtc + fdur
+                            if media_row.is_still or fdur == 1 then
+                                -- Still: source range is always [tc_origin,
+                                -- tc_origin+1). Resolve's <In>/<Out> for stills
+                                -- are timeline coordinates; the source has
+                                -- exactly one frame.
+                                source_in_final = vtc
+                                source_out_final = vtc + 1
+                            else
+                                assert(math.max(source_in_final, source_out_final) <= extent,
+                                    string.format(
+                                    "importer_core: clip '%s' video source range "
+                                    .. "[%d,%d] exceeds media %s extent %d (vtc=%d, dur=%d) — parser bug",
+                                    tostring(clip_data.name), source_in_final, source_out_final,
+                                    tostring(media_id), extent, vtc, fdur))
+                            end
                         end
-                        local file_rel_in = (clip_data.source_in or 0) - media_tc_origin
-                        local file_rel_out = source_out - media_tc_origin
-                        if file_rel_in < 0 then file_rel_in = 0 end
-                        if file_rel_out < file_rel_in then
-                            file_rel_out = file_rel_in + (clip_data.duration or 1)
-                        end
+
                         local now = os.time()
                         local clip_id = Clip.create({
                             project_id = project_id,
@@ -569,8 +609,8 @@ function M.import_into_project(project_id, parse_result, opts)
                             name = clip_data.name or "Untitled Clip",
                             timeline_start_frame = clip_data.start_value,
                             duration_frames = clip_data.duration,
-                            source_in_frame = file_rel_in,
-                            source_out_frame = file_rel_out,
+                            source_in_frame = source_in_final,
+                            source_out_frame = source_out_final,
                             master_layer_track_id = nil,
                             master_audio_track_id = nil,
                             fps_mismatch_policy = "resample",

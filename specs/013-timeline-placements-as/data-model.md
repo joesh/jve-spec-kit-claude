@@ -77,7 +77,12 @@ CREATE TABLE media_refs (
 
     -- What file is referenced and which portion of it.
     media_id TEXT NOT NULL REFERENCES media(id) ON DELETE SET NULL,
-    source_in_frame INTEGER NOT NULL,      -- in the media file's native units
+    -- Absolute TC: source_in_frame = file_tc_origin + zero-based file index.
+    -- For most files the TC origin is 0 so source_in = file index. For files
+    -- with embedded TC (cinema-camera grabs, DPX/EXR sequences, BWF audio)
+    -- the TC origin shifts the addressable range. Frames for video, samples
+    -- for audio, both at the file's native rate.
+    source_in_frame INTEGER NOT NULL,
     source_out_frame INTEGER NOT NULL,
 
     -- Where on the master's track this portion sits.
@@ -107,7 +112,9 @@ CREATE INDEX idx_media_refs_media ON media_refs(media_id);
 
 **Semantics**:
 - One row per track-positioning of a media file inside a master sequence. A single-file A/V .mov appears as 3 rows inside its master (V track + two A channel tracks), all pointing at the same `media.id` via FK.
-- `source_in/out_frame` are in the file's native units (video frames or audio samples) at the file's native fps / sample rate.
+- `source_in/out_frame` are absolute TC = file's TC origin + zero-based file index, in the file's native units (frames for video, samples for audio) at the file's native fps / sample rate.
+- A fresh import of a single file yields one media_ref with `source_in_frame = file_tc_origin`, `source_out_frame = file_tc_origin + file_duration`, and `timeline_start_frame = file_tc_origin` — the master sequence's timebase IS absolute TC space, with the range `[0, file_tc_origin)` empty (no media there).
+- C++ decode recovers the file-relative position: `file_pos = source_in_frame - file_tc_origin`.
 - `owner_sequence_id` must reference a `kind='master'` sequence (enforced at model layer, validated on write).
 
 **Replaces**: today's `clips` rows where `clip_kind='master'`. Column-for-column near-identical, isolated into its own table per rule 2.21.
@@ -127,7 +134,11 @@ CREATE TABLE clips (
     -- can be nested per FR-010).
     nested_sequence_id TEXT NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
 
-    -- Window into the nested sequence's timebase.
+    -- Window into the nested sequence's timebase. When the nested sequence
+    -- is kind='master', that timebase IS absolute TC space (file's TC origin
+    -- + zero-based offset) — see media_refs above. Forward clips have
+    -- source_in < source_out; reverse clips (parser convention) have
+    -- source_in > source_out, encoding playback direction by ordering.
     source_in_frame INTEGER NOT NULL,
     source_out_frame INTEGER NOT NULL,
 
@@ -250,7 +261,7 @@ sequences (kind='nested')
 | INV-1 | Every `media_refs` row's `owner_sequence_id` references a `kind='master'` sequence. | Model-layer actionable assert on write; runtime check via JOIN for defense in depth. |
 | INV-2 | Every `clips` row's `owner_sequence_id` references a `kind='nested'` sequence. | Same. |
 | INV-3 | No cycle in the containment DAG: a sequence reached by walking `clips.nested_sequence_id` cannot contain a clip whose `nested_sequence_id` resolves back to the starting sequence (directly or transitively). | `would_create_cycle` DFS at mutation time per research §3; defense-in-depth assert in resolver at playback time. |
-| INV-4 | A clip's window fits inside its referenced sequence: `source_in_frame ≥ 0 AND source_out_frame ≤ nested_sequence.duration_in_its_own_timebase`. | Editing commands (trim, slip, roll, etc.) clamp or refuse. |
+| INV-4 | A clip's window fits inside its referenced sequence: both `source_in_frame` and `source_out_frame` lie in `[0, nested_sequence.duration_in_its_own_timebase]`, and `source_in_frame ≠ source_out_frame` (empty window forbidden). Direction-agnostic — forward clips have `source_in < source_out`, reverse clips have `source_in > source_out`. | `Clip.assert_window_in_bounds`; editing commands (trim, slip, roll, etc.) clamp or refuse. |
 | INV-5 | `clip_channel_override.channel_index` refers to an existing channel in the referenced nested sequence's audio layout at resolution time. | Resolver asserts loudly if the channel has been removed; fallback to master state is NOT silent. |
 | INV-6 | On master-track deletion, every `clips.master_layer_track_id` pointing at the deleted track is set to NULL by the DB FK (`ON DELETE SET NULL`). The MASTER's own `default_video_layer_track_id` must still refer to a live track, or be NULL-only-if-the-master-has-no-video-tracks (INV-8). | DB FK + model assertion on master after track-delete. |
 | INV-7 | Every `clips` row is in at most one link group (it may have zero or one row in `clip_links`). | `clip_links` table semantics (enforced in link/unlink commands). |

@@ -1379,21 +1379,25 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 "parse_resolve_tracks: clip '%s' in_offset=%d < 0 (in_value=%s speed=%s)",
                 clip_name, in_offset, tostring(in_value), tostring(abs_speed)))
 
-            -- source_in is ABSOLUTE TC = media_tc_origin + file-relative offset
+            -- source_in is ABSOLUTE TC in native units = file_tc_origin
+            -- (media_tc_origin) + file-relative offset. Frames for video,
+            -- samples for audio. The master sequence's timebase IS TC space:
+            -- its media_refs sit at timeline_start = file_tc_origin spanning
+            -- [tc_origin, tc_origin + file_duration]. Clips reference absolute
+            -- TC into that timebase. C++ decode does file_pos = source_in -
+            -- file_tc_origin to recover the file-relative position.
             local source_in_native = media_tc_origin + in_offset
             log.detail("  source_in: %s MST=%.4f tc_origin=%d in_val=%s in_off=%d src_in=%d dur=%d spd=%.3f %s",
                 clip_name, media_start_time or 0, media_tc_origin,
                 tostring(in_value), in_offset, source_in_native, source_duration or 0,
                 abs_speed or 1, retime_keyframes and string.format("retime(%d kf)", #retime_keyframes) or "no-retime")
 
-            -- Source extent in VIDEO FRAMES (for media duration tracking).
-            -- File-relative (excludes media_tc_origin — file length, not TC space).
+            -- Source extent in native units, file-relative — used downstream
+            -- for media-row duration tracking (file length, not TC space).
             local source_extent_frames
             if track_type == "AUDIO" then
-                -- Audio in_offset/duration are in samples; use pre-conversion frame values
                 source_extent_frames = math.floor(in_value) + duration_raw
             else
-                -- Video: file-relative in_offset + source_duration
                 source_extent_frames = in_offset + source_duration
             end
             assert(source_extent_frames >= 0, string.format(
