@@ -54,7 +54,10 @@ local media = Media.create({
     name = "Media 1",
     duration_frames = 240,
     fps_numerator = 24,
-    fps_denominator = 1
+    fps_denominator = 1,
+    width = 1920,
+    height = 1080,
+    audio_channels = 0,
 })
 assert(media:save(db), "Failed to save media_1")
 
