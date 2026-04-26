@@ -347,10 +347,11 @@ do
     assert(view.fps_den == 1, "fps_den")
     assert(view.sequence:is_masterclip(), "sequence is masterclip")
 
-    -- Title should show "Source: TestMaster"
+    -- Title should show "Source: <media_name>" (V13 master sequences derive
+    -- their display name from the bound media row).
     local title = view:get_title_widget()
     assert(title._text:find("Source"), "title contains Source")
-    assert(title._text:find("TestMaster"), "title contains name")
+    assert(title._text:find("TestClip"), "title contains media name")
 
     view:destroy()
     print("  ok")

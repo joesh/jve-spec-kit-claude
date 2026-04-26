@@ -1437,6 +1437,11 @@ end
 -- Returns max(timeline_start + duration) across all clips on all tracks.
 -- @return integer  0 if no clips
 function Sequence:compute_content_end()
+    -- V13: master sequences hold media_refs (not clips). Delegate to
+    -- content_duration which already handles both kinds.
+    if self.kind == "master" then
+        return self:content_duration() or 0
+    end
     local database = require("core.database") -- luacheck: ignore 431
     assert(database.has_connection(),
         "Sequence:compute_content_end: no database connection")
