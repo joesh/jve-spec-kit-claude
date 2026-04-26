@@ -72,7 +72,7 @@ db:exec(string.format([[
 db:exec(string.format([[
     -- V13 master sequence + track + media_ref for med1
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-VALUES ('master_med1', 'proj1', 'med1_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_med1', 'proj1', 'med1_master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_med1', 'master_med1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_med1' WHERE id = 'master_med1';
@@ -98,21 +98,15 @@ db:exec([[
     VALUES ('trk_a1', 'seq1', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0);
 ]])
 
--- clip3: clip with NO media (media_id NULL) on audio track
+-- clip3: clip whose master sequence has NO media_ref (V13 "no media" shape)
 db:exec(string.format([[
-    -- V13 placeholder master sequence (was V8 NULL media_id)
-INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
-VALUES ('_v13_placeholder_media', 'proj1', 'placeholder', '_placeholder', 200, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
-VALUES ('_v13_placeholder_master', 'proj1', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_nomedia', 'proj1', 'nomedia_master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
-UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 200, 0, 200, 1, 1.0, 0, 0, 0);
+VALUES ('master_a_nomedia', 'master_nomedia', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0);
 
 INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
-    ('clip3', 'proj1', '', 'trk_a1', '_v13_placeholder_master', 'seq1', 0, 200, 0, 200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
+    ('clip3', 'proj1', '', 'trk_a1', 'master_nomedia', 'seq1', 0, 200, 0, 200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 -- Empty sequence for zero-clip tests
