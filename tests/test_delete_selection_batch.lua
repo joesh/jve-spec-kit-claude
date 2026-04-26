@@ -70,24 +70,29 @@ local function insert_clip(conn, id, track_id, start_frames, dur_frames, media_i
         height = 1080,
         codec = "prores",
     })
+    -- V13: clip references a master sequence wrapping the media.
+    local master_id = test_env.create_test_masterclip_sequence(
+        "proj", media_id, 24, 1, dur_frames, media_id)
 
     assert(conn:exec(string.format([[
         INSERT INTO clips (
-            id, project_id, clip_kind, name, track_id, media_id,
-            owner_sequence_id,
+            id, project_id, name, track_id,
+            owner_sequence_id, nested_sequence_id,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
-            fps_numerator, fps_denominator,
-            enabled, created_at, modified_at
+            master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+            enabled, volume, playhead_frame,
+            created_at, modified_at
         ) VALUES (
-            '%s', 'proj', 'timeline', '%s', '%s', '%s',
-            'seq',
+            '%s', 'proj', '%s', '%s',
+            'seq', '%s',
             %d, %d,
             0, %d,
-            24, 1,
-            1, %d, %d
+            NULL, NULL, 'resample',
+            1, 1.0, 0,
+            %d, %d
         )
-    ]], id, id, track_id, media_id,
+    ]], id, id, track_id, master_id,
         start_frames, dur_frames, dur_frames,
         now, now)))
 end

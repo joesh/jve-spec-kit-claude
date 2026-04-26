@@ -65,14 +65,19 @@ local function insert_clip(conn, id, start_frames, dur_frames, track_id)
         codec = "prores",
     })
     local now = os.time()
+    -- V13: clip references a kind='master' sequence wrapping the media.
+    local test_env = require("test_env")
+    local master_id = test_env.create_test_masterclip_sequence(
+        "proj", media_id, 24, 1, dur_frames, media_id)
     assert(conn:exec(string.format([[
-        INSERT INTO clips (id, project_id, clip_kind, name, track_id, media_id,
-            owner_sequence_id, timeline_start_frame, duration_frames,
-            source_in_frame, source_out_frame, fps_numerator, fps_denominator,
-            enabled, created_at, modified_at)
-        VALUES ('%s', 'proj', 'timeline', '%s', '%s', '%s', 'seq',
-            %d, %d, 0, %d, 24, 1, 1, %d, %d)
-    ]], id, id, track_id, media_id, start_frames, dur_frames, dur_frames, now, now)))
+        INSERT INTO clips (id, project_id, name, track_id,
+            owner_sequence_id, nested_sequence_id, timeline_start_frame, duration_frames,
+            source_in_frame, source_out_frame,
+            master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+            enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('%s', 'proj', '%s', '%s', 'seq', '%s',
+            %d, %d, 0, %d, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d)
+    ]], id, id, track_id, master_id, start_frames, dur_frames, dur_frames, now, now)))
 end
 
 ----------------------------------------------------------------------
@@ -135,16 +140,18 @@ timeline_state.set_playhead_position(50)
 timeline_state.set_selection({})
 result = command_manager.execute("Blade", {
     project_id = "proj", sequence_id = "seq",
+    blade_frame = 50,
+    track_ids = { "v1", "v2", "v3" },
 })
 assert(result.success, "blade should succeed")
 
 entries, visible_current = command_manager:list_history_entries()
 assert(#entries == 1,
     string.format("3 grouped SplitClips should collapse to 1 entry (got %d)", #entries))
-assert(entries[1].label:find("Split Clip"),
-    string.format("group label should mention Split Clip (got '%s')", entries[1].label))
-assert(entries[1].label:find("3"),
-    string.format("group label should mention count 3 (got '%s')", entries[1].label))
+-- 013: V13 Blade is a single command (not a group of 3 SplitClips); label
+-- reflects the command type. Per-clip-count breakdown isn't surfaced.
+assert(entries[1].label:find("Blade") or entries[1].label:find("Split"),
+    string.format("group label should mention Blade or Split (got '%s')", entries[1].label))
 assert(visible_current == entries[1].sequence_number,
     "arrow should be on the group representative")
 
@@ -165,7 +172,7 @@ assert(#entries >= 1, "undo should still show the group as redo-able")
 -- visible_current should not match the group entry
 local group_entry = nil
 for _, e in ipairs(entries) do
-    if e.label and e.label:find("Split Clip") then
+    if e.label and (e.label and (e.label:find("Blade") or e.label:find("Split"))) then
         group_entry = e
     end
 end
@@ -184,7 +191,7 @@ assert(redo_result.success, "redo should succeed")
 entries, visible_current = command_manager:list_history_entries()
 group_entry = nil
 for _, e in ipairs(entries) do
-    if e.label and e.label:find("Split Clip") then
+    if e.label and (e.label and (e.label:find("Blade") or e.label:find("Split"))) then
         group_entry = e
     end
 end
@@ -201,6 +208,8 @@ print("✅ redo restores arrow to group")
 timeline_state.set_playhead_position(75)
 local _ = command_manager.execute("Blade", { -- luacheck: ignore 211
     project_id = "proj", sequence_id = "seq",
+    blade_frame = 75,
+    track_ids = { "v1", "v2", "v3" },
 })
 -- Some clips may not intersect at 75 (already split at 50), but at least some should
 entries, visible_current = command_manager:list_history_entries()

@@ -151,6 +151,49 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             return false, tostring(result_or_err)
         end
         command:set_parameter("prior_splits", result_or_err.splits)
+
+        -- Emit aggregate __timeline_mutations: each split is left UPDATE +
+        -- right INSERT. Mirrors Insert's emission shape.
+        do
+            local bucket = {
+                sequence_id = args.sequence_id,
+                inserts = {},
+                updates = {},
+                deletes = {},
+                bulk_shifts = {},
+            }
+            local function entry_for(cid)
+                local row = Clip.load_v13_row(cid)
+                if not row then return nil end
+                return {
+                    id                    = row.id,
+                    owner_sequence_id     = row.owner_sequence_id,
+                    track_sequence_id     = row.owner_sequence_id,
+                    track_id              = row.track_id,
+                    nested_sequence_id    = row.nested_sequence_id,
+                    start_value           = row.timeline_start_frame,
+                    timeline_start        = row.timeline_start_frame,
+                    duration_value        = row.duration_frames,
+                    duration              = row.duration_frames,
+                    source_in             = row.source_in_frame,
+                    source_out            = row.source_out_frame,
+                    master_layer_track_id = row.master_layer_track_id,
+                    fps_mismatch_policy   = row.fps_mismatch_policy,
+                    name                  = row.name,
+                    enabled               = row.enabled,
+                    volume                = row.volume,
+                    playhead_frame        = row.playhead_frame,
+                }
+            end
+            for _, s in ipairs(result_or_err.splits or {}) do
+                local left = entry_for(s.clip_id)
+                local right = entry_for(s.second_clip_id)
+                if left then bucket.updates[#bucket.updates + 1] = left end
+                if right then bucket.inserts[#bucket.inserts + 1] = right end
+            end
+            command:set_parameter("__timeline_mutations", bucket)
+        end
+
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
         return true, { splits = result_or_err.splits }
