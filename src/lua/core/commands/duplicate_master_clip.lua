@@ -47,63 +47,127 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local media_id = args.clip_snapshot.media_id
         local project_id = args.project_id
         local target_bin_id = args.bin_id
-        local new_clip_id = args.new_clip_id
+        local new_master_id = args.new_clip_id  -- arg name kept for menu compatibility
 
         local clip_name = args.name or args.clip_snapshot.name or "Master Clip Copy"
 
-        -- All coordinates are integer frames
-        local timeline_start = args.clip_snapshot.timeline_start or 0
-        local source_in = args.clip_snapshot.source_in or 0
-        local source_out = args.clip_snapshot.source_out
-        local duration = args.clip_snapshot.duration
-        if duration == nil and source_out ~= nil then
-            duration = source_out - source_in
+        -- V13: a "duplicated master clip" is a fresh master sequence row
+        -- pointing at the same media. Reuse Sequence.ensure_master logic
+        -- but force a unique sequence id (so the original and the copy
+        -- coexist) — there's no built-in 'duplicate' helper, so build the
+        -- master inline mirroring ensure_master's structure.
+        local Sequence = require("models.sequence")
+        local Track    = require("models.track")
+        local MediaRef = require("models.media_ref")
+        local Media    = require("models.media")
+
+        local media = Media.load(media_id)
+        assert(media, string.format(
+            "DuplicateMasterClip: Media %s not found", tostring(media_id)))
+
+        local fps_num = media.frame_rate.fps_numerator
+        local fps_den = media.frame_rate.fps_denominator
+        local duration_frames = media.duration
+        local has_video = media.width > 0
+        local has_audio = (media.audio_channels or 0) > 0
+
+        local sample_rate = has_audio and media.audio_sample_rate or 48000
+        local duration_samples = 0
+        if has_audio and duration_frames > 0 then
+            duration_samples = math.floor(
+                duration_frames * sample_rate * fps_den / fps_num + 0.5)
         end
-        assert(duration, "DuplicateMasterClip: missing duration (no duration and no source_out)")
 
-        -- V13 (FR-018): "duplicate a master clip" maps to "clone the master
-        -- sequence + its media_refs." The pre-013 implementation INSERTed a
-        -- new clips row with clip_kind='master' (column dropped). This
-        -- command needs a full V13 rewrite that goes through Sequence.
-        error("DuplicateMasterClip: V13 implementation pending. The V8 path "
-            .. "(INSERT into clips with clip_kind='master') no longer applies "
-            .. "— masters are sequences in V13.")
-        local _unused = { new_clip_id, project_id, clip_name, media_id,
-            timeline_start, duration, source_in, source_out }  -- luacheck: ignore
-        command:set_parameter("project_id", project_id)
+        local width  = has_video and media.width  or 1920
+        local height = has_video and media.height or 1080
 
-        local ok = clip:save({skip_occlusion = true})
-        if not ok then
-            set_last_error("DuplicateMasterClip: Failed to save duplicated clip")
-            return false
+        local video_start_tc_frame = has_video and media:get_start_tc() or nil
+        local audio_start_tc_samples = has_audio and media:get_audio_start_tc() or nil
+
+        local seq = Sequence.create(clip_name, project_id,
+            { fps_numerator = fps_num, fps_denominator = fps_den },
+            width, height, {
+                id                       = new_master_id,
+                kind                     = "master",
+                audio_rate               = sample_rate,
+                start_timecode_frame     = video_start_tc_frame or 0,
+                playhead_frame           = video_start_tc_frame or 0,
+                video_start_tc_frame     = video_start_tc_frame,
+                audio_start_tc_samples   = audio_start_tc_samples,
+            })
+        assert(seq:save(), "DuplicateMasterClip: failed to save master sequence")
+
+        if has_video then
+            local vtrack = Track.create_video("Video 1", seq.id, { index = 1 })
+            assert(vtrack:save(), "DuplicateMasterClip: failed to save video track")
+            MediaRef.create({
+                project_id           = project_id,
+                owner_sequence_id    = seq.id,
+                track_id             = vtrack.id,
+                media_id             = media_id,
+                source_in_frame      = 0,
+                source_out_frame     = duration_frames,
+                timeline_start_frame = 0,
+                duration_frames      = duration_frames,
+                enabled              = true,
+                volume               = 1.0,
+                playhead_frame       = 0,
+                created_at           = os.time(),
+                modified_at          = os.time(),
+            })
+            Sequence.update(seq.id, { default_video_layer_track_id = vtrack.id })
         end
 
+        if has_audio then
+            for ch = 1, media.audio_channels do
+                local atrack = Track.create_audio(
+                    string.format("Audio %d", ch), seq.id, { index = ch })
+                assert(atrack:save(), "DuplicateMasterClip: failed to save audio track")
+                MediaRef.create({
+                    project_id           = project_id,
+                    owner_sequence_id    = seq.id,
+                    track_id             = atrack.id,
+                    media_id             = media_id,
+                    source_in_frame      = 0,
+                    source_out_frame     = duration_samples,
+                    timeline_start_frame = 0,
+                    duration_frames      = duration_samples,
+                    enabled              = true,
+                    volume               = 1.0,
+                    playhead_frame       = 0,
+                    created_at           = os.time(),
+                    modified_at          = os.time(),
+                })
+            end
+        end
 
         if type(args.copied_properties) == "table" and #args.copied_properties > 0 then
-            command_helper.delete_properties_for_clip(new_clip_id)
-            command_helper.insert_properties_for_clip(new_clip_id, args.copied_properties)
+            command_helper.delete_properties_for_clip(new_master_id)
+            command_helper.insert_properties_for_clip(new_master_id, args.copied_properties)
         end
 
-        if target_bin_id and not database.assign_master_clip_to_bin(project_id, new_clip_id, target_bin_id) then
-            print(string.format("WARNING: DuplicateMasterClip: Failed to persist bin assignment for %s", new_clip_id))
+        if target_bin_id then
+            local tag_service = require("core.tag_service")
+            tag_service.add_to_bin(project_id, { new_master_id }, target_bin_id, "master_clip")
         end
 
-        print(string.format("✅ Duplicated master clip '%s' → %s", tostring(args.clip_snapshot.name or media_id), new_clip_id))
         return true
     end
 
     command_undoers["DuplicateMasterClip"] = function(command)
         local args = command:get_all_parameters()
-        local clip = Clip.load_optional(args.new_clip_id)
-        if clip then
-            command_helper.delete_properties_for_clip(args.new_clip_id)
-            if not clip:delete() then
-                set_last_error("UndoDuplicateMasterClip: Failed to delete duplicated clip")
-                return false
-            end
-        end
+        local new_master_id = args.new_clip_id
+        local Sequence = require("models.sequence")
 
-        database.assign_master_clip_to_bin(args.project_id, args.new_clip_id, nil)
+        -- Tear down properties first (no FK cascade), then the master
+        -- sequence row (CASCADE drops media_refs, tracks, and any
+        -- nested clips referencing this id — there shouldn't be any
+        -- on a fresh duplicate, but the cascade keeps undo robust).
+        command_helper.delete_properties_for_clip(new_master_id)
+        local seq = Sequence.load(new_master_id)
+        if seq then
+            Sequence.delete_one(new_master_id)
+        end
 
         return true
     end

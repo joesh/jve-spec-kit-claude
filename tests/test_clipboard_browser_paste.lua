@@ -65,8 +65,14 @@ local function setup_db(path)
     return conn
 end
 
+-- V13: a "master clip" is a master Sequence with at least one media_ref.
 local function count_master_clips(conn)
-    local q = conn:prepare("SELECT COUNT(*) FROM clips WHERE clip_kind = 'master'")
+    local q = conn:prepare([[
+        SELECT COUNT(DISTINCT s.id)
+          FROM sequences s
+          JOIN media_refs mr ON mr.owner_sequence_id = s.id
+         WHERE s.kind = 'master'
+    ]])
     assert(q:exec() and q:next())
     local c = q:value(0)
     q:finalize()
@@ -101,20 +107,9 @@ local mc_a_seq_id = test_env.create_test_masterclip_sequence(
 local mc_b_seq_id = test_env.create_test_masterclip_sequence(
     "proj", "Clip B", 24, 1, 240, "media_b")
 
--- Find the master clip IDs (clips with clip_kind='master' in those sequences)
-local function find_master_clip_in_seq(seq_id)
-    local q = conn:prepare([[
-        SELECT id FROM clips WHERE owner_sequence_id = ? AND clip_kind = 'master' LIMIT 1
-    ]])
-    q:bind_value(1, seq_id)
-    assert(q:exec() and q:next(), "no master clip in sequence " .. seq_id)
-    local id = q:value(0)
-    q:finalize()
-    return id
-end
-
-local mc_a_clip_id = find_master_clip_in_seq(mc_a_seq_id)
-local mc_b_clip_id = find_master_clip_in_seq(mc_b_seq_id)
+-- V13: master clip ID == master sequence ID.
+local mc_a_clip_id = mc_a_seq_id
+local mc_b_clip_id = mc_b_seq_id
 
 local initial_master_count = count_master_clips(conn)
 assert(initial_master_count == 2,
@@ -159,11 +154,13 @@ local after_paste_count = count_master_clips(conn)
 assert(after_paste_count == 4,
     string.format("paste should create 2 new master clips (expected 4, got %d)", after_paste_count))
 
--- New clips should have the " copy" suffix
+-- New master sequences should have the " copy" suffix.
 local q = conn:prepare([[
-    SELECT name FROM clips WHERE clip_kind = 'master'
-    AND id NOT IN (?, ?)
-    ORDER BY name
+    SELECT DISTINCT s.name
+      FROM sequences s
+      JOIN media_refs mr ON mr.owner_sequence_id = s.id
+     WHERE s.kind = 'master' AND s.id NOT IN (?, ?)
+     ORDER BY s.name
 ]])
 q:bind_value(1, mc_a_clip_id)
 q:bind_value(2, mc_b_clip_id)
@@ -183,9 +180,12 @@ local after_undo_count = count_master_clips(conn)
 assert(after_undo_count == 2,
     string.format("undo should restore to 2 master clips (got %d)", after_undo_count))
 
--- Original clips still exist
-assert(Clip.load_optional(mc_a_clip_id), "original mc_a should survive undo")
-assert(Clip.load_optional(mc_b_clip_id), "original mc_b should survive undo")
+-- V13: originals are master sequences.
+do
+    local Sequence = require("models.sequence")
+    assert(Sequence.load(mc_a_clip_id), "original mc_a master should survive undo")
+    assert(Sequence.load(mc_b_clip_id), "original mc_b master should survive undo")
+end
 
 -- Redo: clips come back
 local redo = command_manager.redo()

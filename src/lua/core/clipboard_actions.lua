@@ -288,48 +288,40 @@ local function copy_browser_selection()
         return false, "No browser items selected"
     end
 
+    -- V13: a project-browser "master clip" is a master Sequence with one
+    -- media leaf reachable via media_refs. Load the sequence + first
+    -- media_ref to materialise the snapshot DuplicateMasterClip needs.
+    local Sequence = require("models.sequence")
     local items = {}
     local project_id = nil
     for _, raw in ipairs(snapshot) do
         local entry = normalize_selection_item(raw)
         if entry and entry.clip_id then
-            local clip = Clip.load(entry.clip_id)
-            if clip then
-                project_id = project_id or clip.project_id or entry.project_id
+            local seq = Sequence.load(entry.clip_id)
+            if seq and seq.kind == "master" then
+                project_id = project_id or seq.project_id or entry.project_id
                 assert(project_id and project_id ~= "",
-                    "clipboard_actions.copy_browser_selection: missing project_id for clip " .. tostring(entry.clip_id))
-                -- TODO(013): V13 browser entries are master SEQUENCES
-                -- (not Clip rows). Clip.load(entry.clip_id) returns nil
-                -- for a master id. The browser-duplicate path needs a
-                -- V13 rewrite that loads a sequence + its media_refs.
-                items[#items + 1] = {
-                    bin_id = entry.bin_id,
-                    duplicate_name = duplicate_name(entry.name or clip.name),
-                    snapshot = {
-                        name = clip.name,
-                        nested_sequence_id = clip.nested_sequence_id,
-                        master_layer_track_id = clip.master_layer_track_id,
-                        master_audio_track_id = clip.master_audio_track_id,
-                        fps_mismatch_policy = clip.fps_mismatch_policy,
-                        fps_numerator = assert(clip.rate and clip.rate.fps_numerator,
-                            "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing rate.fps_numerator"),
-                        fps_denominator = assert(clip.rate and clip.rate.fps_denominator,
-                            "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing rate.fps_denominator"),
-                        duration = assert(clip.duration,
-                            "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing duration"),
-                        source_in = assert(clip.source_in,
-                            "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing source_in"),
-                        source_out = assert(clip.source_out,
-                            "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing source_out"),
-                        timeline_start = assert(clip.timeline_start,
-                            "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing timeline_start"),
-                        enabled = clip.enabled,
-                        project_id = assert(clip.project_id or entry.project_id,
-                            "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing project_id"),
-                        track_type = clip.track_type,
-                    },
-                    copied_properties = load_clip_properties(clip.id)
-                }
+                    "clipboard_actions.copy_browser_selection: missing project_id for master " .. tostring(entry.clip_id))
+                local leaf_media_id, leaf_source_out =
+                    Sequence.get_first_media_ref(entry.clip_id)
+                if leaf_media_id then
+                    items[#items + 1] = {
+                        bin_id = entry.bin_id,
+                        duplicate_name = duplicate_name(entry.name or seq.name),
+                        snapshot = {
+                            name = seq.name,
+                            media_id = leaf_media_id,
+                            fps_numerator = seq.frame_rate.fps_numerator,
+                            fps_denominator = seq.frame_rate.fps_denominator,
+                            duration = leaf_source_out,
+                            source_in = 0,
+                            source_out = leaf_source_out,
+                            timeline_start = 0,
+                            project_id = project_id,
+                        },
+                        copied_properties = load_clip_properties(entry.clip_id),
+                    }
+                end
             end
         end
     end

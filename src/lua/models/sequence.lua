@@ -761,6 +761,28 @@ function Sequence.find_master_for_media(media_id)
     return id
 end
 
+--- Return the first media_ref for this master sequence's bound media.
+--- Used by clipboard_actions.copy_browser_selection to materialise a
+--- DuplicateMasterClip snapshot from a project-browser entry.
+--- @param sequence_id string master sequence id
+--- @return string|nil media_id, integer|nil source_out_frame
+function Sequence.get_first_media_ref(sequence_id)
+    assert(sequence_id and sequence_id ~= "",
+        "Sequence.get_first_media_ref: sequence_id is required")
+    local conn = resolve_db()
+    local stmt = conn:prepare([[
+        SELECT media_id, source_out_frame
+          FROM media_refs WHERE owner_sequence_id = ? LIMIT 1
+    ]])
+    assert(stmt, "Sequence.get_first_media_ref: prepare failed")
+    stmt:bind_value(1, sequence_id)
+    assert(stmt:exec(), "Sequence.get_first_media_ref: exec failed")
+    local mid, sout
+    if stmt:next() then mid = stmt:value(0); sout = stmt:value(1) end
+    stmt:finalize()
+    return mid, sout
+end
+
 -- Sequence.ensure_masterclip / find_masterclip_for_media / _find_masterclip_for_media
 -- were V8-only paths that wrote sequences.kind='masterclip' (banned under V13)
 -- and clips with clip_kind='master'/media_id (columns dropped). Replaced by
