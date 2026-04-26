@@ -85,6 +85,9 @@ local function create_media_and_masterclip(media_id, duration_frames)
         duration_frames = duration_frames,
         fps_numerator = 25,
         fps_denominator = 1,
+        width = 1920,
+        height = 1080,
+        audio_channels = 0,
     })
     media:save(database.get_connection())
     local nested_sequence_id = test_env.create_test_masterclip_sequence(
@@ -92,6 +95,12 @@ local function create_media_and_masterclip(media_id, duration_frames)
     masterclip_cache[media_id] = nested_sequence_id
     return nested_sequence_id
 end
+
+-- Map test-friendly aliases ('orig', 'clip_a', …) to V13-generated clip
+-- ids. insert_clip captures the new clip id under the caller-supplied
+-- params.clip_id alias.
+local clip_alias = {}
+local function resolve_clip_id(id) return clip_alias[id] or id end
 
 --- Insert a clip directly via Insert command. All values are integer frames.
 -- Sets marks on the masterclip sequence to define the source range.
@@ -113,11 +122,14 @@ local function insert_clip(params)
         target_video_track_id = params.track_id,
         sequence_id = "seq",
         timeline_start_frame = params.timeline_start,
-        nested_sequence_id = params.clip_id,
         advance_playhead = false,
     })
     local result = command_manager.execute(cmd)
     assert(result.success, result.error_message or "Insert command failed")
+    if params.clip_id then
+        local ids = cmd:get_parameter("created_clip_ids") or {}
+        if ids[1] then clip_alias[params.clip_id] = ids[1] end
+    end
 end
 
 --- Count timeline clips (excludes masterclip stream clips)
@@ -152,6 +164,7 @@ end
 
 --- Get clip start frame from DB
 local function get_clip_start_frame(clip_id)
+    clip_id = resolve_clip_id(clip_id)
     local conn = database.get_connection()
     local stmt = conn:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
@@ -186,7 +199,7 @@ insert_clip({
 })
 
 -- Copy the clip
-local orig = timeline_state.get_clip_by_id("orig")
+local orig = timeline_state.get_clip_by_id(resolve_clip_id("orig"))
 assert(orig, "orig should exist in timeline_state")
 timeline_state.set_selection({orig})
 focus_manager.set_focused_panel("timeline")
@@ -212,7 +225,7 @@ assert(pasted.source_out == 170,
 
 -- Original should still be at frame 300
 local orig_after = find_clip_at_frame(300)
-assert(orig_after and orig_after.id == "orig",
+assert(orig_after and orig_after.id == resolve_clip_id("orig"),
     "original clip should still be at frame 300")
 
 -- Undo: pasted clip should be removed, original untouched
@@ -223,7 +236,7 @@ local pasted_after_undo = find_clip_at_frame(750)
 assert(not pasted_after_undo, "pasted clip should be gone after undo")
 
 local orig_after_undo = find_clip_at_frame(300)
-assert(orig_after_undo and orig_after_undo.id == "orig",
+assert(orig_after_undo and orig_after_undo.id == resolve_clip_id("orig"),
     "original clip should survive undo")
 assert(count_timeline_clips() == 1, "only original clip should remain after undo")
 
@@ -271,7 +284,7 @@ insert_clip({
 })
 
 -- Copy clip_b
-local cb = timeline_state.get_clip_by_id("clip_b")
+local cb = timeline_state.get_clip_by_id(resolve_clip_id("clip_b"))
 assert(cb, "clip_b should exist")
 timeline_state.set_selection({cb})
 focus_manager.set_focused_panel("timeline")
@@ -286,13 +299,13 @@ assert(clipboard_actions.paste())
 -- Pasted clip should be at [200, 300)
 local pasted_clip = find_clip_at_frame(200)
 assert(pasted_clip, "pasted clip should be at frame 200")
-assert(pasted_clip.id ~= "clip_a", "pasted clip should not be clip_a")
+assert(pasted_clip.id ~= resolve_clip_id("clip_a"), "pasted clip should not be clip_a")
 
 -- Undo: clip_a should be restored to original [100, 300)
 assert(command_manager.undo().success, "Undo should succeed")
 
 local restored_a = find_clip_at_frame(100)
-assert(restored_a and restored_a.id == "clip_a", "clip_a should be restored at frame 100")
+assert(restored_a and restored_a.id == resolve_clip_id("clip_a"), "clip_a should be restored at frame 100")
 assert(restored_a.duration == 200,
     string.format("clip_a should have original duration 200 (got %d)", restored_a.duration))
 
@@ -322,7 +335,7 @@ insert_clip({
 local baseline_tail = get_clip_start_frame("d_tail")
 
 -- Copy d_src, paste far away
-local d_src = timeline_state.get_clip_by_id("d_src")
+local d_src = timeline_state.get_clip_by_id(resolve_clip_id("d_src"))
 assert(d_src)
 timeline_state.set_selection({d_src})
 focus_manager.set_focused_panel("timeline")
@@ -362,7 +375,7 @@ insert_clip({
     source_out = 110,
 })
 
-local cut_c = timeline_state.get_clip_by_id("cut_clip")
+local cut_c = timeline_state.get_clip_by_id(resolve_clip_id("cut_clip"))
 assert(cut_c)
 timeline_state.set_selection({cut_c})
 
@@ -398,8 +411,10 @@ insert_clip({
 
 local orig_b_start = get_clip_start_frame("r_b")
 
+local r_a_id = resolve_clip_id("r_a")
+local r_b_id = resolve_clip_id("r_b")
 local ripple_cmd = Command.create("RippleDeleteSelection", "proj")
-ripple_cmd:set_parameter("clip_ids", {"r_a"})
+ripple_cmd:set_parameter("clip_ids", { r_a_id })
 ripple_cmd:set_parameter("sequence_id", "seq")
 assert(command_manager.execute(ripple_cmd).success, "RippleDelete should succeed")
 
@@ -408,8 +423,8 @@ local clips_after = database.load_clips("seq")
 local r_a_exists = false
 local r_b_after = nil
 for _, c in ipairs(clips_after) do
-    if c.id == "r_a" then r_a_exists = true end
-    if c.id == "r_b" then r_b_after = c end
+    if c.id == r_a_id then r_a_exists = true end
+    if c.id == r_b_id then r_b_after = c end
 end
 assert(not r_a_exists, "r_a should be deleted")
 assert(r_b_after, "r_b should still exist")
@@ -421,8 +436,8 @@ assert(command_manager.undo().success)
 local undo_clips = database.load_clips("seq")
 local undo_a_found, undo_b_start = false, nil
 for _, c in ipairs(undo_clips) do
-    if c.id == "r_a" then undo_a_found = true end
-    if c.id == "r_b" then undo_b_start = c.timeline_start end
+    if c.id == r_a_id then undo_a_found = true end
+    if c.id == r_b_id then undo_b_start = c.timeline_start end
 end
 assert(undo_a_found, "r_a should be restored")
 assert(undo_b_start == orig_b_start,

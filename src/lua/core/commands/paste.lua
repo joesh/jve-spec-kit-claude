@@ -125,7 +125,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local placements = {}  -- {track_id, paste_start, clip_data}
         for _, clip_data in ipairs(clip_entries) do
             assert(clip_data.track_id, "Paste: clipboard clip missing track_id")
-            assert(clip_data.media_id, "Paste: clipboard clip missing media_id")
+            -- V13 Paste resolves through clip_data.nested_sequence_id; the
+            -- V8 media_id direct-link is no longer required at paste time.
             assert(track_lookup[clip_data.track_id],
                 "Paste: target track " .. tostring(clip_data.track_id) .. " not found in sequence")
             assert(type(clip_data.duration) == "number", "Paste: duration must be integer")
