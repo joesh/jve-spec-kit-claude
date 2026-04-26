@@ -533,6 +533,34 @@ function M.import_into_project(project_id, parse_result, opts)
 
                         -- V13: master sequence is the link from clip → media.
                         local master_seq_id = Sequence.ensure_master(media_id, project_id)
+                        -- Parser hands clip_data.source_in/out as ABSOLUTE TC
+                        -- (media_tc_origin + file-relative offset). The master
+                        -- sequence's range is [0, media_duration_frames] in the
+                        -- media's own timebase. Subtract the media's TC origin
+                        -- to get the file-relative source range that V13
+                        -- INV-4 expects.
+                        local Media = require("models.media")
+                        local media_row = Media.load(media_id)
+                        assert(media_row, string.format(
+                            "importer_core: media %s not found while creating clip '%s'",
+                            tostring(media_id), tostring(clip_data.name)))
+                        local media_tc_origin = 0
+                        if track_data.type == "AUDIO" then
+                            -- Audio source units are samples; subtract audio TC origin.
+                            local audio_tc = media_row.get_audio_start_tc and
+                                media_row:get_audio_start_tc() or 0
+                            media_tc_origin = audio_tc or 0
+                        else
+                            local video_tc = media_row.get_start_tc and
+                                media_row:get_start_tc() or 0
+                            media_tc_origin = video_tc or 0
+                        end
+                        local file_rel_in = (clip_data.source_in or 0) - media_tc_origin
+                        local file_rel_out = source_out - media_tc_origin
+                        if file_rel_in < 0 then file_rel_in = 0 end
+                        if file_rel_out < file_rel_in then
+                            file_rel_out = file_rel_in + (clip_data.duration or 1)
+                        end
                         local now = os.time()
                         local clip_id = Clip.create({
                             project_id = project_id,
@@ -542,8 +570,8 @@ function M.import_into_project(project_id, parse_result, opts)
                             name = clip_data.name or "Untitled Clip",
                             timeline_start_frame = clip_data.start_value,
                             duration_frames = clip_data.duration,
-                            source_in_frame = clip_data.source_in,
-                            source_out_frame = source_out,
+                            source_in_frame = file_rel_in,
+                            source_out_frame = file_rel_out,
                             master_layer_track_id = nil,
                             master_audio_track_id = nil,
                             fps_mismatch_policy = "resample",
