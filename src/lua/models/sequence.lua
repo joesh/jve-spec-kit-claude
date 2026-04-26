@@ -1148,6 +1148,68 @@ local function calc_source_time_us(clip, playhead_frame)
     return source_time_us, source_frame
 end
 
+-- Master-side get_video_at / get_audio_at helper.
+-- V13 master sequences hold media_refs on their tracks; render the
+-- media_ref at the requested playhead and shape the result like the
+-- nested-sequence path so callers don't need to branch.
+local function resolve_master_at(self, tracks, playhead_frame, track_kind)
+    local Media = require("models.media")
+    local conn = resolve_db()
+    local results = {}
+    for _, track in ipairs(tracks) do
+        local stmt = assert(conn:prepare([[
+            SELECT id, media_id, source_in_frame, source_out_frame,
+                   timeline_start_frame, duration_frames, enabled, volume
+              FROM media_refs WHERE track_id = ? LIMIT 1
+        ]]), "Sequence:resolve_master_at: prepare failed")
+        stmt:bind_value(1, track.id)
+        local row
+        if stmt:exec() and stmt:next() then
+            row = {
+                id             = stmt:value(0),
+                media_id       = stmt:value(1),
+                source_in      = stmt:value(2),
+                source_out     = stmt:value(3),
+                timeline_start = stmt:value(4),
+                duration       = stmt:value(5),
+                enabled        = stmt:value(6) == 1,
+                volume         = stmt:value(7),
+            }
+        end
+        stmt:finalize()
+        if row then
+            local mr_end = row.timeline_start + row.duration
+            if playhead_frame >= row.timeline_start and playhead_frame < mr_end then
+                local mr = {
+                    id                = row.id,
+                    track_id          = track.id,
+                    nested_sequence_id = self.id,
+                    timeline_start    = row.timeline_start,
+                    duration          = row.duration,
+                    source_in         = row.source_in,
+                    source_out        = row.source_out,
+                    enabled           = row.enabled,
+                    volume            = row.volume,
+                    rate              = self.frame_rate,
+                    track_type        = track_kind,
+                }
+                local source_time_us, source_frame = calc_source_time_us(mr, playhead_frame)
+                local media = Media.load(row.media_id)
+                assert(media, string.format(
+                    "Sequence:resolve_master_at: media %s not found", tostring(row.media_id)))
+                results[#results + 1] = {
+                    media_path     = media.file_path,
+                    source_time_us = source_time_us,
+                    source_frame   = source_frame,
+                    clip           = mr,
+                    track          = track,
+                }
+            end
+        end
+    end
+    return results
+end
+
 --- Get ALL video clips at position, ordered by track_index ascending.
 -- Returns one entry per video track that has a clip at playhead.
 -- Renderer iterates highest-index-first for display. Future: composite all layers.
@@ -1164,6 +1226,13 @@ function Sequence:get_video_at(playhead_frame)
     local tracks = Track.find_by_sequence(self.id, "VIDEO")
     if not tracks or #tracks == 0 then
         return {}
+    end
+
+    -- V13 master sequences hold media_refs (not clips) on their tracks.
+    -- Read the media_ref + its media row to materialise the same shape
+    -- callers expect from a nested-sequence get_video_at result.
+    if self.kind == "master" then
+        return resolve_master_at(self, tracks, playhead_frame, "VIDEO")
     end
 
     local results = {}
@@ -1205,6 +1274,10 @@ function Sequence:get_audio_at(playhead_frame)
     local tracks = Track.find_by_sequence(self.id, "AUDIO")
     if not tracks or #tracks == 0 then
         return {}
+    end
+
+    if self.kind == "master" then
+        return resolve_master_at(self, tracks, playhead_frame, "AUDIO")
     end
 
     local results = {}

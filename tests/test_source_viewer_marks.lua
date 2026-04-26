@@ -63,52 +63,12 @@ do
         _m:save()
     end
 end
-local _Sequence_for_master = require("models.sequence")
-local MC_TEST = _Sequence_for_master.ensure_master("media_1", "project")
--- Create masterclip sequence with stream clips at full range
-local mc = Sequence.create("Test MC", "project",
-    { fps_numerator = 24, fps_denominator = 1},
-    1920, 1080,
-    { audio_rate = 48000,kind = "master"})
-assert(mc:save(), "Failed to save masterclip")
-
-local v_track = Track.create_video("V1", mc.id, {index = 1})
-assert(v_track:save(), "Failed to save video track")
-local a_track = Track.create_audio("A1", mc.id, {index = 1})
-assert(a_track:save(), "Failed to save audio track")
-
-local v_clip = Clip.create({
-        nested_sequence_id = MC_TEST,
-        name = "Video Stream",
-        track_id = v_track.id,
-        owner_sequence_id = mc.id,
-        timeline_start_frame = 0,
-        duration_frames = 2400,
-        source_in_frame = 0,
-        source_out_frame = 2400,
-        fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-assert(v_clip:save({skip_occlusion = true}), "Failed to save video clip")
-
-local a_clip = Clip.create({
-        nested_sequence_id = MC_TEST,
-        name = "Audio Stream",
-        track_id = a_track.id,
-        owner_sequence_id = mc.id,
-        timeline_start_frame = 0,
-        duration_frames = 4800000,
-        source_in_frame = 0,
-        source_out_frame = 4800000,
-        fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-assert(a_clip:save({skip_occlusion = true}), "Failed to save audio clip")
-
+-- V13: ensure_master creates the master Sequence + V/A tracks + media_refs
+-- in one shot. video_stream / audio_streams read from media_refs (no
+-- 'clips inside master' table — INV-2 forbids that).
+local MC_TEST = Sequence.ensure_master("media_1", "project")
+local mc = Sequence.load(MC_TEST)
+assert(mc, "ensure_master should produce a loadable master")
 mc:invalidate_stream_cache()
 
 local pass_count = 0
