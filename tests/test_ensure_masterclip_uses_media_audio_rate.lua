@@ -61,22 +61,25 @@ assert(mc_id, "ensure_masterclip returned nil")
 
 -- Find the audio stream clip. Stream clips have owner_sequence_id = masterclip.
 -- Audio clips live on AUDIO tracks; filter by join.
+-- V13: stream clips live in media_refs; their timebase derives from
+-- the media's audio_sample_rate (carried on media row, not on the ref).
 local stmt = assert(db:prepare([[
-    SELECT c.fps_numerator, c.fps_denominator, c.source_in_frame, c.source_out_frame
-    FROM clips c
-    JOIN tracks t ON c.track_id = t.id
-    WHERE c.owner_sequence_id = ? AND t.track_type = 'AUDIO'
+    SELECT m.audio_sample_rate, mr.source_in_frame, mr.source_out_frame
+    FROM media_refs mr
+    JOIN tracks t ON mr.track_id = t.id
+    JOIN media m ON mr.media_id = m.id
+    WHERE mr.owner_sequence_id = ? AND t.track_type = 'AUDIO'
     ORDER BY t.track_index
     LIMIT 1
 ]]))
 stmt:bind_value(1, mc_id)
 assert(stmt:exec())
-assert(stmt:next(), "No audio stream clip found in masterclip " .. mc_id)
+assert(stmt:next(), "No audio stream media_ref found in master " .. mc_id)
 
 local audio_fps_num = stmt:value(0)
-local audio_fps_den = stmt:value(1)
-local source_in = stmt:value(2)
-local source_out = stmt:value(3)
+local audio_fps_den = 1
+local source_in = stmt:value(1)
+local source_out = stmt:value(2)
 stmt:finalize()
 
 -- Expected duration in samples at the media's real sample rate.
@@ -119,7 +122,7 @@ local media_av_no_rate = Media.create({
         start_tc_value = 0, start_tc_rate = 25,
     }),
 })
-media:save(db)
+media_av_no_rate:save(db)
 local ok, err = pcall(Sequence.ensure_master, "media_av_no_rate", "proj1")
 assert(not ok, "ensure_masterclip must fail when A/V media has no audio_sample_rate")
 assert(tostring(err):match("no sample rate") or tostring(err):match("audio_sample_rate"),
