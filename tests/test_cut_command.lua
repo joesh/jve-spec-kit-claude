@@ -77,15 +77,30 @@ local function create_clip_via_insert(spec)
     local nested_sequence_id = test_env.create_test_masterclip_sequence(
         'default_project', spec.id .. ' Master', 30, 1, spec.duration, media_id)
 
-    local cmd = Command.create("Insert", "default_project")
-    cmd:set_parameter("sequence_id", "default_sequence")
-    cmd:set_parameter("target_video_track_id", spec.track)
-    cmd:set_parameter("nested_sequence_id", nested_sequence_id)
-    cmd:set_parameter("clip_name", spec.id)
-    cmd:set_parameter("timeline_start_frame", spec.start)
-
-    local result = command_manager.execute(cmd)
-    assert(result and result.success, "Insert command failed for " .. spec.id)
+    -- V13: bypass Insert (which generates a uuid) and create directly so
+    -- the clip's id is the friendly spec.id the test asserts on.
+    local Clip = require("models.clip")
+    Clip.create({
+        id                   = spec.id,
+        project_id           = "default_project",
+        name                 = spec.id,
+        track_id             = spec.track,
+        owner_sequence_id    = "default_sequence",
+        nested_sequence_id   = nested_sequence_id,
+        timeline_start_frame = spec.start,
+        duration_frames      = spec.duration,
+        source_in_frame      = 0,
+        source_out_frame     = spec.duration,
+        master_layer_track_id = nil,
+        master_audio_track_id = nil,
+        fps_mismatch_policy  = "resample",
+        enabled              = 1,
+        volume               = 1.0,
+        playhead_frame       = 0,
+    })
+    if timeline_state.reload_clips then
+        timeline_state.reload_clips("default_sequence")
+    end
 end
 
 -- Create four clips as setup

@@ -51,7 +51,7 @@ db:exec([[
         current_sequence_number, created_at, modified_at
     )
     VALUES (
-        'mc_seq', 'default_project', 'Test Master', 'masterclip',
+        'mc_seq', 'default_project', 'Test Master', 'master',
         30, 1, 48000,
         1920, 1080,
         0, 300, 0,
@@ -87,7 +87,7 @@ assert(clip, "Clip should exist for capture/restore test")
 local state = command_helper.capture_clip_state(clip)
 assert(state.project_id == "default_project", "capture must include project_id")
 assert(state.owner_sequence_id == "default_sequence", "capture must include owner_sequence_id")
-assert(state.clip_kind == "timeline", "capture must include clip_kind")
+-- V13: clip_kind discriminator removed (FR-018); clips are uniform.
 
 -- Remove the clip to force restore path to recreate it with captured metadata
 db:exec("DELETE FROM clips WHERE id = 'clip_state_test'")
