@@ -160,31 +160,34 @@ local function build_snapshot_payload(db, sequence_id, clips)
     local clip_data = {}
     for _, clip in ipairs(clips) do
         require_field("build_snapshot_payload", "clip", "id", clip.id)
-        require_field("build_snapshot_payload", "clip", "clip_kind", clip.clip_kind)
-        -- All coords are integer frames
+        require_field("build_snapshot_payload", "clip", "track_type", clip.track_type)
+        require_field("build_snapshot_payload", "clip", "nested_sequence_id", clip.nested_sequence_id)
         assert(type(clip.timeline_start) == "number", string.format(
             "snapshot_manager.build_snapshot_payload: clip %s timeline_start must be integer", tostring(clip.id)))
 
         table.insert(clip_data, {
             id = clip.id,
-            clip_kind = clip.clip_kind,
+            track_type = clip.track_type,
             name = clip.name or "",
             project_id = clip.project_id,
             track_id = clip.track_id,
             owner_sequence_id = clip.owner_sequence_id,
-            master_clip_id = clip.master_clip_id,
-            media_id = clip.media_id,
+            nested_sequence_id = clip.nested_sequence_id,
+            master_layer_track_id = clip.master_layer_track_id,
+            master_audio_track_id = clip.master_audio_track_id,
+            fps_mismatch_policy = clip.fps_mismatch_policy,
 
             timeline_start_frame = clip.timeline_start,
             duration_frames = clip.duration,
             source_in_frame = clip.source_in,
             source_out_frame = clip.source_out,
 
+            -- Source-side timebase (the nested sequence's rate); kept on the
+            -- snapshot so a deserializer can reconstruct without a fresh JOIN.
             fps_numerator = clip.rate and clip.rate.fps_numerator,
             fps_denominator = clip.rate and clip.rate.fps_denominator,
 
             enabled = clip.enabled and 1 or 0,
-            offline = 0,  -- transient: never persist
             volume = clip.volume
         })
 
@@ -296,34 +299,34 @@ local function deserialize_snapshot_payload(json_str)
     if payload.clips then
         for _, data in ipairs(payload.clips) do
             require_field("deserialize_snapshot_payload", "clip", "id", data.id)
-            require_field("deserialize_snapshot_payload", "clip", "clip_kind", data.clip_kind)
-            
+            require_field("deserialize_snapshot_payload", "clip", "track_type", data.track_type)
+            require_field("deserialize_snapshot_payload", "clip", "nested_sequence_id", data.nested_sequence_id)
+
             assert(data.fps_numerator, "deserialize_snapshot_payload: clip " .. data.id .. " missing fps_numerator")
             assert(data.fps_denominator, "deserialize_snapshot_payload: clip " .. data.id .. " missing fps_denominator")
             local num = data.fps_numerator
             local den = data.fps_denominator
-            
+
             clips[#clips + 1] = {
                 id = data.id,
-                clip_kind = data.clip_kind,
+                track_type = data.track_type,
                 name = data.name,
                 project_id = data.project_id,
                 owner_sequence_id = data.owner_sequence_id,
-                master_clip_id = data.master_clip_id,
+                nested_sequence_id = data.nested_sequence_id,
+                master_layer_track_id = data.master_layer_track_id,
+                master_audio_track_id = data.master_audio_track_id,
+                fps_mismatch_policy = data.fps_mismatch_policy,
                 track_id = data.track_id,
-                media_id = data.media_id,
-                
+
                 timeline_start = require_field("deserialize_snapshot_payload", "clip " .. data.id, "timeline_start_frame", data.timeline_start_frame),
                 duration = require_field("deserialize_snapshot_payload", "clip " .. data.id, "duration_frames", data.duration_frames),
                 source_in = require_field("deserialize_snapshot_payload", "clip " .. data.id, "source_in_frame", data.source_in_frame),
                 source_out = require_field("deserialize_snapshot_payload", "clip " .. data.id, "source_out_frame", data.source_out_frame),
-                
+
                 rate = { fps_numerator = num, fps_denominator = den },
-                
+
                 enabled = data.enabled == 1,
-                offline = false,  -- transient: recomputed by media_status
-                -- Schema evolution: volume added after initial snapshot format.
-                -- Existing snapshots without volume are pre-clip-gain and 1.0 is correct.
                 volume = data.volume or 1.0
             }
         end

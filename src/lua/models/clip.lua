@@ -178,14 +178,11 @@ load_internal = function(clip_id, raise_errors)
         track_type = track_type,
         nested_sequence_kind = query:value(23),
 
-        -- Compatibility surfaces — see database.build_clip_from_query_row.
-        clip_kind = (track_type == "VIDEO") and "video" or "audio",
+        -- V13-resolved chain leaves (see database.build_clip_from_query_row).
         media_id = query:value(26),
         media_name = query:value(27),
         media_path = query:value(28),
         offline_note = query:value(29),
-        master_clip_id = nested_id,
-        offline = false,
     }
 
     query:finalize()
@@ -316,11 +313,11 @@ local function ensure_project_context(self, db)
         end
     end
 
-    -- Fallback: derive from masterclip sequence if present
-    if not self.project_id and self.master_clip_id then
+    -- Fallback: derive from nested sequence if present
+    if not self.project_id and self.nested_sequence_id then
         local seq_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
         if seq_query then
-            seq_query:bind_value(1, self.master_clip_id)
+            seq_query:bind_value(1, self.nested_sequence_id)
             if seq_query:exec() and seq_query:next() then
                 self.project_id = seq_query:value(0)
             end
@@ -329,8 +326,8 @@ local function ensure_project_context(self, db)
     end
 
     assert(self.project_id, string.format(
-        "ensure_project_context: could not derive project_id for clip %s (track_id=%s, master_clip_id=%s)",
-        tostring(self.id), tostring(self.track_id), tostring(self.master_clip_id)))
+        "ensure_project_context: could not derive project_id for clip %s (track_id=%s, nested_sequence_id=%s)",
+        tostring(self.id), tostring(self.track_id), tostring(self.nested_sequence_id)))
 end
 
 -- Save clip to database (INSERT or UPDATE)
@@ -374,12 +371,9 @@ local function save_internal(self, _opts)
     -- project_validator, not here.
 
     ensure_project_context(self, db)
-    -- V13: clip_kind is a derived/compat surface (from track type); not a real
-    -- column. self.nested_sequence_id replaces master_clip_id.
-    local nested_id = self.nested_sequence_id or self.master_clip_id
+    local nested_id = self.nested_sequence_id
     assert(nested_id and nested_id ~= "",
-        "Clip.save: nested_sequence_id (or master_clip_id alias) required for clip " .. tostring(self.id))
-    self.offline = false
+        "Clip.save: nested_sequence_id required for clip " .. tostring(self.id))
     self.name = derive_display_name(self.id, self.name)
 
     local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
@@ -612,37 +606,38 @@ function M.find_at_time(track_id, time_frames)
     return M.load(clip_id)
 end
 
---- Get sequences where a master clip is used (has timeline clips)
--- @param master_clip_id string: The master clip ID to check
--- @return table: Array of {sequence_id, sequence_name, clip_count} for each affected sequence
-function M.get_master_clip_usage(master_clip_id)
-    assert(master_clip_id and master_clip_id ~= "", "Clip.get_master_clip_usage: missing master_clip_id")
+--- Get non-master sequences where a master sequence is referenced as a clip's
+--- nested target. (V13 — was get_master_clip_usage; "master clip" was the V8
+--- name for what V13 calls a master sequence.)
+-- @param master_sequence_id string: The master sequence ID to check
+-- @return table: Array of {sequence_id, sequence_name, clip_count}
+function M.get_master_sequence_usage(master_sequence_id)
+    assert(master_sequence_id and master_sequence_id ~= "",
+        "Clip.get_master_sequence_usage: missing master_sequence_id")
 
     local database = require("core.database")
     local db = database.get_connection()
     if not db then
-        log.warn("Clip.get_master_clip_usage: No database connection available")
+        log.warn("Clip.get_master_sequence_usage: No database connection available")
         return {}
     end
 
-    -- Find all sequences that have timeline clips referencing this masterclip
     local query = db:prepare([[
         SELECT s.id, s.name, COUNT(c.id) as clip_count
         FROM clips c
-        JOIN tracks t ON c.track_id = t.id
-        JOIN sequences s ON t.sequence_id = s.id
-        WHERE c.master_clip_id = ?
-          AND c.clip_kind = 'timeline'
+        JOIN sequences s ON c.owner_sequence_id = s.id
+        WHERE c.nested_sequence_id = ?
+          AND s.kind = 'nested'
         GROUP BY s.id, s.name
         ORDER BY s.name
     ]])
 
     if not query then
-        log.warn("Clip.get_master_clip_usage: Failed to prepare query")
+        log.warn("Clip.get_master_sequence_usage: Failed to prepare query")
         return {}
     end
 
-    query:bind_value(1, master_clip_id)
+    query:bind_value(1, master_sequence_id)
 
     local results = {}
     if query:exec() then
@@ -658,6 +653,7 @@ function M.get_master_clip_usage(master_clip_id)
 
     return results
 end
+
 
 -- =============================================================================
 -- TRACK-RELATIVE QUERY METHODS (for engine lookahead / pre-buffering)

@@ -130,8 +130,7 @@ function M.hydrate_executed_mutations_if_missing(command)
         assert(copy.project_id or project_id,
             "BatchRippleEdit undo: clip state missing project_id")
         copy.project_id = copy.project_id or project_id
-        assert(copy.clip_kind, string.format(
-            "BatchRippleEdit undo: clip %s missing clip_kind", tostring(copy.id)))
+        -- V13: clip_kind is gone — track_type lives on the row when needed.
         assert(copy.owner_sequence_id or copy.track_sequence_id or sequence_id,
             string.format("BatchRippleEdit undo: clip %s missing owner_sequence_id", tostring(copy.id)))
         copy.owner_sequence_id = copy.owner_sequence_id or copy.track_sequence_id or sequence_id

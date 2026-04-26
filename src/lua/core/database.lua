@@ -390,18 +390,14 @@ local function build_clip_from_query_row(query, requested_sequence_id)
 
         track_type = track_type,
 
-        -- Compatibility surfaces while UI/command_helper migrate to V13 shape:
-        --   clip_kind     — derived from track type (V13 has no column).
-        --   media_id/name/path/offline_note — resolved via nested→master→media_ref→media.
-        --                   NULL when nested is itself nested.
-        --   master_clip_id — alias for nested_sequence_id (V8 semantics).
-        clip_kind = (track_type == "VIDEO") and "video" or "audio",
+        -- V13-resolved chain leaves: nested→master→media_ref→media.
+        -- NULL when nested is itself nested (no terminal media_ref reachable
+        -- in this single SELECT — deeper resolution is the resolver's job).
+        -- These are NOT direct columns on the clips table.
         media_id = media_id,
         media_name = media_name,
         media_path = media_path,
         offline_note = offline_note,
-        master_clip_id = nested_sequence_id,
-        offline = false,
     }
 
     if not clip.name or clip.name == "" then

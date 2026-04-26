@@ -2218,7 +2218,7 @@ function M.delete_selected_items()
 
                 -- Check if clip is used in any sequences
                 local Clip = require("models.clip")
-                local usage = Clip.get_master_clip_usage(clip.clip_id)
+                local usage = Clip.get_master_sequence_usage(clip.clip_id)
 
                 local force = false
                 if #usage > 0 then
