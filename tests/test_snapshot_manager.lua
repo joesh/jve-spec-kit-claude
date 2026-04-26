@@ -86,8 +86,27 @@ db:exec(string.format([[
         fps_numerator, fps_denominator, width, height, audio_channels,
         codec, metadata, created_at, modified_at)
     VALUES ('med1', 'proj1', 'shot_01.mov', '/tmp/shot_01.mov', 1000,
-        24, 1, 1920, 1080, 2, 'prores', '{}', %d, %d);
+        24, 1, 1920, 1080, 0, 'prores', '{}', %d, %d);
 ]], now, now))
+
+-- V13 master sequence + track + media_ref so the snapshot's resolved_media
+-- chain reaches a real media row.
+db:exec([[
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator,
+        fps_denominator, audio_rate, width, height, created_at, modified_at)
+    VALUES ('master_med1', 'proj1', 'shot_01_master', 'master', 24, 1,
+        48000, 1920, 1080, 0, 0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
+        enabled, locked, muted, soloed, volume, pan)
+    VALUES ('master_v_med1', 'master_med1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    UPDATE sequences SET default_video_layer_track_id = 'master_v_med1'
+        WHERE id = 'master_med1';
+    INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
+        media_id, source_in_frame, source_out_frame, timeline_start_frame,
+        duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+    VALUES ('mr_med1', 'proj1', 'master_med1', 'master_v_med1', 'med1',
+        0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+]])
 
 -- ============================================================
 -- create_snapshot + load_snapshot: round-trip with clips
@@ -97,20 +116,21 @@ do
     local clips = {
         {
             id = "clip1",
-            clip_kind = "nested",
+            track_type = "VIDEO",
             name = "My Clip",
             project_id = "proj1",
             track_id = "trk1",
             owner_sequence_id = "seq1",
-            nested_sequence_id = nil,
-            media_id = "med1",
+            nested_sequence_id = "master_med1",
+            fps_mismatch_policy = "resample",
             timeline_start = 0,
             duration = 100,
             source_in = 0,
             source_out = 100,
             rate = { fps_numerator = 24, fps_denominator = 1 },
             enabled = true,
-            offline = false,
+            volume = 1.0,
+            resolved_media = { id = "med1", name = "shot_01.mov", path = "/tmp/shot_01.mov" },
         },
     }
 
@@ -139,10 +159,10 @@ do
     check("snapshot has clips", #snap.clips == 1)
     local c = snap.clips[1]
     check("clip.id", c.id == "clip1")
-    check("clip.clip_kind", c.clip_kind == "timeline")
+    check("clip.track_type", c.track_type == "VIDEO")
     check("clip.name", c.name == "My Clip")
     check("clip.track_id", c.track_id == "trk1")
-    check("clip.media_id", c.media_id == "med1")
+    check("clip.nested_sequence_id", c.nested_sequence_id == "master_med1")
     check("clip.timeline_start is Rational", c.timeline_start ~= nil and c.timeline_start ~= nil)
     check("clip.timeline_start == 0", c.timeline_start == 0)
     check("clip.duration == 100", c.duration == 100)
@@ -151,7 +171,6 @@ do
     check("clip.rate.fps_numerator", c.rate.fps_numerator == 24)
     check("clip.rate.fps_denominator", c.rate.fps_denominator == 1)
     check("clip.enabled == true", c.enabled == true)
-    check("clip.offline == false", c.offline == false)
 
     -- Media
     check("snapshot has media", #snap.media == 1)
@@ -163,7 +182,7 @@ do
     check("media.duration == 1000", m.duration == 1000)
     check("media.frame_rate.fps_numerator", m.frame_rate.fps_numerator == 24)
     check("media.width", m.width == 1920)
-    check("media.audio_channels", m.audio_channels == 2)
+    check("media.audio_channels", m.audio_channels == 0)
 end
 
 -- ============================================================
@@ -174,19 +193,21 @@ do
     local clips2 = {
         {
             id = "clip2",
-            clip_kind = "nested",
+            track_type = "VIDEO",
             name = "Clip 2",
             project_id = "proj1",
             track_id = "trk1",
             owner_sequence_id = "seq1",
-            media_id = "med1",
+            nested_sequence_id = "master_med1",
+            fps_mismatch_policy = "resample",
             timeline_start = 200,
             duration = 50,
             source_in = 0,
             source_out = 50,
             rate = { fps_numerator = 24, fps_denominator = 1 },
             enabled = true,
-            offline = false,
+            volume = 1.0,
+            resolved_media = { id = "med1", name = "shot_01.mov", path = "/tmp/shot_01.mov" },
         },
     }
 
@@ -290,12 +311,12 @@ end
 print("\n--- create_snapshot: clip missing required fields ---")
 do
     expect_error("clip missing id", function()
-        snapshot_manager.create_snapshot(db, "seq1", 200, {{ clip_kind = "nested" }})
+        snapshot_manager.create_snapshot(db, "seq1", 200, {{ track_type = "VIDEO" }})
     end, "missing required field 'id'")
 
-    expect_error("clip missing clip_kind", function()
+    expect_error("clip missing track_type", function()
         snapshot_manager.create_snapshot(db, "seq1", 200, {{ id = "c1" }})
-    end, "missing required field 'clip_kind'")
+    end, "missing required field 'track_type'")
 end
 
 -- ============================================================
@@ -306,19 +327,21 @@ do
     local clips = {
         {
             id = "clip_r",
-            clip_kind = "nested",
+            track_type = "VIDEO",
             name = "Rational Test",
             project_id = "proj1",
             track_id = "trk1",
             owner_sequence_id = "seq1",
-            media_id = "med1",
+            nested_sequence_id = "master_med1",
+            fps_mismatch_policy = "resample",
             timeline_start = 120,
             duration = 300,
             source_in = 10,
             source_out = 310,
             rate = { fps_numerator = 30, fps_denominator = 1 },
             enabled = false,
-            offline = true,  -- will be serialized as 0 (transient)
+            volume = 1.0,
+            resolved_media = { id = "med1", name = "shot_01.mov", path = "/tmp/shot_01.mov" },
         },
     }
 
@@ -333,7 +356,7 @@ do
     check("30fps clip rate.fps_numerator", c.rate.fps_numerator == 30)
     check("30fps clip rate.fps_denominator", c.rate.fps_denominator == 1)
     check("30fps clip enabled=false", c.enabled == false)
-    check("30fps clip offline=false (transient)", c.offline == false)
+    -- V13: offline is no longer a snapshot field (derived runtime state).
 end
 
 -- ============================================================
@@ -344,26 +367,30 @@ do
     -- Two clips referencing the same media
     local clips = {
         {
-            id = "clip_d1", clip_kind = "nested", name = "D1",
+            id = "clip_d1", track_type = "VIDEO", name = "D1",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
-            media_id = "med1",
+            nested_sequence_id = "master_med1",
+            fps_mismatch_policy = "resample",
             timeline_start = 0,
             duration = 50,
             source_in = 0,
             source_out = 50,
             rate = { fps_numerator = 24, fps_denominator = 1 },
-            enabled = true, offline = false,
+            enabled = true, volume = 1.0,
+            resolved_media = { id = "med1", name = "shot_01.mov", path = "/tmp/shot_01.mov" },
         },
         {
-            id = "clip_d2", clip_kind = "nested", name = "D2",
+            id = "clip_d2", track_type = "VIDEO", name = "D2",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
-            media_id = "med1",
+            nested_sequence_id = "master_med1",
+            fps_mismatch_policy = "resample",
             timeline_start = 50,
             duration = 50,
             source_in = 50,
             source_out = 100,
             rate = { fps_numerator = 24, fps_denominator = 1 },
-            enabled = true, offline = false,
+            enabled = true, volume = 1.0,
+            resolved_media = { id = "med1", name = "shot_01.mov", path = "/tmp/shot_01.mov" },
         },
     }
 
@@ -381,15 +408,17 @@ print("\n--- clip with no media ---")
 do
     local clips = {
         {
-            id = "clip_nm", clip_kind = "nested", name = "No Media",
+            id = "clip_nm", track_type = "VIDEO", name = "No Media",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
-            media_id = nil,
+            nested_sequence_id = "master_med1",
+            fps_mismatch_policy = "resample",
             timeline_start = 0,
             duration = 30,
             source_in = 0,
             source_out = 30,
             rate = { fps_numerator = 24, fps_denominator = 1 },
-            enabled = true, offline = false,
+            enabled = true, volume = 1.0,
+            -- No resolved_media: this clip has no media leaf.
         },
     }
 
@@ -419,23 +448,26 @@ do
     ]])
 
     -- Snapshot seq1 at 50, seq2 at 75
+    local _common_v13_resolved_media = { id = "med1", name = "shot_01.mov", path = "/tmp/shot_01.mov" }
     snapshot_manager.create_snapshot(db, "seq1", 50, {
-        { id = "cs1", clip_kind = "nested", name = "S1C",
+        { id = "cs1", track_type = "VIDEO", name = "S1C",
           project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
-          media_id = "med1",
+          nested_sequence_id = "master_med1", fps_mismatch_policy = "resample",
           timeline_start = 0, duration = 10,
           source_in = 0, source_out = 10,
           rate = { fps_numerator = 24, fps_denominator = 1 },
-          enabled = true, offline = false },
+          enabled = true, volume = 1.0,
+          resolved_media = _common_v13_resolved_media },
     })
     snapshot_manager.create_snapshot(db, "seq2", 75, {
-        { id = "cs2", clip_kind = "nested", name = "S2C",
+        { id = "cs2", track_type = "VIDEO", name = "S2C",
           project_id = "proj1", track_id = "trk2", owner_sequence_id = "seq2",
-          media_id = "med1",
+          nested_sequence_id = "master_med1", fps_mismatch_policy = "resample",
           timeline_start = 0, duration = 20,
           source_in = 0, source_out = 20,
           rate = { fps_numerator = 30, fps_denominator = 1 },
-          enabled = true, offline = false },
+          enabled = true, volume = 1.0,
+          resolved_media = _common_v13_resolved_media },
     })
 
     -- Load all for project with target_sequence_number=100 (both qualify)
