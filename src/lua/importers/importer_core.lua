@@ -531,23 +531,33 @@ function M.import_into_project(project_id, parse_result, opts)
                             end
                         end
 
-                        local clip = Clip.create(clip_data.name or "Untitled Clip", media_id, {
+                        -- V13: master sequence is the link from clip → media.
+                        local master_seq_id = Sequence.ensure_master(media_id, project_id)
+                        local now = os.time()
+                        local clip_id = Clip.create({
                             project_id = project_id,
                             owner_sequence_id = sequence.id,
                             track_id = track.id,
-                            timeline_start = clip_data.start_value,
-                            duration = clip_data.duration,
-                            source_in = clip_data.source_in,
-                            source_out = source_out,
-                            fps_numerator = clip_rate_num,
-                            fps_denominator = clip_rate_den,
-                            enabled = clip_data.enabled,
-                            volume = clip_data.volume,
+                            nested_sequence_id = master_seq_id,
+                            name = clip_data.name or "Untitled Clip",
+                            timeline_start_frame = clip_data.start_value,
+                            duration_frames = clip_data.duration,
+                            source_in_frame = clip_data.source_in,
+                            source_out_frame = source_out,
+                            master_layer_track_id = nil,
+                            master_audio_track_id = nil,
+                            fps_mismatch_policy = "resample",
+                            enabled = (clip_data.enabled ~= false),
+                            volume = clip_data.volume or 1.0,
+                            playhead_frame = 0,
+                            created_at = now,
+                            modified_at = now,
                         })
-
-                        assert(clip:save(), string.format(
-                            "importer_core: failed to save clip '%s' in track '%s'",
+                        assert(clip_id and clip_id ~= "", string.format(
+                            "importer_core: failed to create clip '%s' in track '%s'",
                             clip_data.name, track_name))
+                        local clip = { id = clip_id, nested_sequence_id = master_seq_id }
+                        local _unused = { clip_rate_num, clip_rate_den }  -- luacheck: ignore
                         do
                             table.insert(result.clip_ids, clip.id)
 
