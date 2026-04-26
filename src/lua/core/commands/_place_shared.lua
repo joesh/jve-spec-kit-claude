@@ -141,6 +141,9 @@ function M.plan_placement(args)
     -- to get a 0-based offset into the native duration.
     local nested_mark_in  = nested.mark_in
     local nested_mark_out = nested.mark_out
+    -- Default offsets land at 0; mark range shifts the source-in/out window.
+    local video_source_in = 0
+    local audio_source_in = 0
     if nested_mark_in ~= nil or nested_mark_out ~= nil then
         local tc_origin = nested.start_timecode_frame or 0
         local lo = nested_mark_in  and (nested_mark_in  - tc_origin) or 0
@@ -150,6 +153,7 @@ function M.plan_placement(args)
                 "place_shared: nested %s marks [%s,%s) out of bounds for video duration %d",
                 nested.id, tostring(lo), tostring(hi), video_native_dur))
             video_native_dur = hi - lo
+            video_source_in  = lo
         end
         if mediums.AUDIO then
             -- Convert video-frame mark range to audio sample range.
@@ -162,6 +166,7 @@ function M.plan_placement(args)
                 .. "out of bounds for audio duration %d",
                 nested.id, a_lo, a_hi, audio_native_dur))
             audio_native_dur = a_hi - a_lo
+            audio_source_in  = a_lo
         end
     end
 
@@ -290,6 +295,8 @@ function M.plan_placement(args)
         policy           = policy,
         video_native_dur = video_native_dur,
         audio_native_dur = audio_native_dur,
+        video_source_in  = video_source_in,
+        audio_source_in  = audio_source_in,
         owner_duration   = owner_duration,
         targets          = targets,
         audio_targets    = audio_targets,
@@ -330,6 +337,7 @@ function M.write_clips(plan)
     end
 
     if plan.targets.VIDEO then
+        local v_in  = plan.video_source_in or 0
         v_clip_id = insert_clip({
             id                    = next_preset(),
             project_id            = plan.owner.project_id,
@@ -339,8 +347,8 @@ function M.write_clips(plan)
             name                  = plan.base_name,
             timeline_start_frame  = plan.start_frame,
             duration_frames       = plan.owner_duration,
-            source_in_frame       = 0,
-            source_out_frame      = plan.video_native_dur,
+            source_in_frame       = v_in,
+            source_out_frame      = v_in + plan.video_native_dur,
             master_layer_track_id = nil,
             master_audio_track_id = nil,
             fps_mismatch_policy   = plan.policy,
@@ -351,6 +359,7 @@ function M.write_clips(plan)
         created_list[#created_list + 1] = v_clip_id
     end
 
+    local a_in = plan.audio_source_in or 0
     for _, tgt in ipairs(plan.audio_targets or {}) do
         local id = insert_clip({
             id                    = next_preset(),
@@ -361,8 +370,8 @@ function M.write_clips(plan)
             name                  = plan.base_name,
             timeline_start_frame  = plan.start_frame,
             duration_frames       = plan.owner_duration,
-            source_in_frame       = 0,
-            source_out_frame      = tgt.source_out,
+            source_in_frame       = a_in,
+            source_out_frame      = a_in + tgt.source_out,
             master_layer_track_id = nil,
             master_audio_track_id = tgt.master_audio_track_id,
             fps_mismatch_policy   = plan.policy,

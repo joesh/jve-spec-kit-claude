@@ -66,12 +66,18 @@ local function create_mc(media_id, dur)
         file_path = '/tmp/jve/' .. media_id .. '.mov',
         name = media_id, duration_frames = dur,
         fps_numerator = 25, fps_denominator = 1,
+        width = 1920, height = 1080, audio_channels = 0,
     })
     m:save(database.get_connection())
     local mc = test_env.create_test_masterclip_sequence('proj', media_id..' MC', 25, 1, dur, media_id)
     masterclip_cache[media_id] = mc
     return mc
 end
+
+-- Map test-friendly clip aliases to V13 generated ids so callers can
+-- still refer to clips by 'a', 'b', etc.
+local clip_alias = {}
+local function resolve_clip_id(id) return clip_alias[id] or id end
 
 local function insert_clip(p)
     local Sequence = require("models.sequence")
@@ -86,9 +92,14 @@ local function insert_clip(p)
     cmd:set_parameters({
         nested_sequence_id = mc, target_video_track_id = p.track_id, sequence_id = "seq",
         timeline_start_frame = p.start,
-        nested_sequence_id = p.id, advance_playhead = false,
+        advance_playhead = false,
     })
-    assert(command_manager.execute(cmd).success, "overwrite failed")
+    local result = command_manager.execute(cmd)
+    assert(result.success, "overwrite failed: " .. tostring(result.error_message))
+    if p.id then
+        local ids = cmd:get_parameter("created_clip_ids") or {}
+        if ids[1] then clip_alias[p.id] = ids[1] end
+    end
 end
 
 local function count_clips()
@@ -99,6 +110,7 @@ local function count_clips()
 end
 
 local function get_clip(clip_id)
+    clip_id = resolve_clip_id(clip_id)
     local conn = database.get_connection()
     local s = conn:prepare([[
         SELECT timeline_start_frame, duration_frames, source_in_frame, source_out_frame

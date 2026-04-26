@@ -108,6 +108,15 @@ local SPEC = {
 local function build_insert_mutation_entry(clip_id)
     local row = Clip.load_v13_row(clip_id)
     assert(row, "Overwrite: could not re-read clip " .. tostring(clip_id))
+    -- Carry the source-side timebase from the clip's nested sequence so
+    -- timeline_state's rate field gets populated. Without this, callers
+    -- that read clip.rate (clipboard_actions.copy_mark_range,
+    -- batch_ripple_edit's fetch_base_clip) crash with 'missing rate'
+    -- on a freshly-overwritten clip.
+    local Sequence = require("models.sequence")
+    local nested = Sequence.load(row.nested_sequence_id)
+    local fps_num = nested and nested.frame_rate and nested.frame_rate.fps_numerator
+    local fps_den = nested and nested.frame_rate and nested.frame_rate.fps_denominator
     return {
         id                    = row.id,
         owner_sequence_id     = row.owner_sequence_id,
@@ -122,6 +131,8 @@ local function build_insert_mutation_entry(clip_id)
         source_out            = row.source_out_frame,
         master_layer_track_id = row.master_layer_track_id,
         fps_mismatch_policy   = row.fps_mismatch_policy,
+        fps_numerator         = fps_num,
+        fps_denominator       = fps_den,
         name                  = row.name,
         enabled               = row.enabled,
         volume                = row.volume,
