@@ -114,18 +114,19 @@ local function copy_mark_range()
         clip_payloads[#clip_payloads + 1] = {
             original_id = clip.id,
             track_id = clip.track_id,
-            media_id = clip.media_id,
             fps_numerator = clip.rate.fps_numerator,
             fps_denominator = clip.rate.fps_denominator,
-            master_clip_id = clip.master_clip_id,
+            nested_sequence_id = clip.nested_sequence_id,
+            master_layer_track_id = clip.master_layer_track_id,
+            master_audio_track_id = clip.master_audio_track_id,
+            fps_mismatch_policy = clip.fps_mismatch_policy,
             owner_sequence_id = clip.owner_sequence_id,
-            clip_kind = clip.clip_kind,
+            track_type = clip.track_type,
             timeline_start = eff_start,
             duration = eff_duration,
             source_in = source_in,
             source_out = source_out,
             name = clip.name,
-            offline = clip.offline,
             copied_properties = load_clip_properties(clip.id),
         }
         ::continue::
@@ -178,7 +179,7 @@ local function copy_timeline_selection()
             assert(type(clip.timeline_start) == "number", "clipboard_actions: clip.timeline_start must be integer")
             local start_frame = clip.timeline_start
 
-            if clip.master_clip_id == nil then
+            if clip.nested_sequence_id == nil then
                 goto continue
             end
 
@@ -192,12 +193,14 @@ local function copy_timeline_selection()
             clip_payloads[#clip_payloads + 1] = {
                 original_id = clip.id,
                 track_id = clip.track_id,
-                media_id = clip.media_id,
                 fps_numerator = clip.rate.fps_numerator,
                 fps_denominator = clip.rate.fps_denominator,
-                master_clip_id = clip.master_clip_id,
+                nested_sequence_id = clip.nested_sequence_id,
+                master_layer_track_id = clip.master_layer_track_id,
+                master_audio_track_id = clip.master_audio_track_id,
+                fps_mismatch_policy = clip.fps_mismatch_policy,
                 owner_sequence_id = clip.owner_sequence_id,
-                clip_kind = clip.clip_kind,
+                track_type = clip.track_type,
 
                 -- All coords are integers
                 timeline_start = clip.timeline_start,
@@ -206,7 +209,6 @@ local function copy_timeline_selection()
                 source_out = clip.source_out,
 
                 name = clip.name,
-                offline = clip.offline,
                 copied_properties = load_clip_properties(clip.id)
             }
         end
@@ -296,12 +298,19 @@ local function copy_browser_selection()
                 project_id = project_id or clip.project_id or entry.project_id
                 assert(project_id and project_id ~= "",
                     "clipboard_actions.copy_browser_selection: missing project_id for clip " .. tostring(entry.clip_id))
+                -- TODO(013): V13 browser entries are master SEQUENCES
+                -- (not Clip rows). Clip.load(entry.clip_id) returns nil
+                -- for a master id. The browser-duplicate path needs a
+                -- V13 rewrite that loads a sequence + its media_refs.
                 items[#items + 1] = {
                     bin_id = entry.bin_id,
                     duplicate_name = duplicate_name(entry.name or clip.name),
                     snapshot = {
                         name = clip.name,
-                        media_id = clip.media_id,
+                        nested_sequence_id = clip.nested_sequence_id,
+                        master_layer_track_id = clip.master_layer_track_id,
+                        master_audio_track_id = clip.master_audio_track_id,
+                        fps_mismatch_policy = clip.fps_mismatch_policy,
                         fps_numerator = assert(clip.rate and clip.rate.fps_numerator,
                             "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing rate.fps_numerator"),
                         fps_denominator = assert(clip.rate and clip.rate.fps_denominator,
@@ -312,14 +321,12 @@ local function copy_browser_selection()
                             "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing source_in"),
                         source_out = assert(clip.source_out,
                             "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing source_out"),
-                        master_clip_id = clip.master_clip_id,
                         timeline_start = assert(clip.timeline_start,
                             "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing timeline_start"),
                         enabled = clip.enabled,
-                        offline = clip.offline,
                         project_id = assert(clip.project_id or entry.project_id,
                             "clipboard_actions: browser clip " .. tostring(entry.clip_id) .. " missing project_id"),
-                        clip_kind = clip.clip_kind,
+                        track_type = clip.track_type,
                     },
                     copied_properties = load_clip_properties(clip.id)
                 }

@@ -49,11 +49,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
             -- Find affected timeline clips and their sequences
             local affected_clips = {}
+            -- V13: every clips row IS a timeline clip; the V8
+            -- clip_kind='timeline' filter is gone. Look up by
+            -- nested_sequence_id instead of master_clip_id.
             local find_stmt = db:prepare([[
-                SELECT c.id, t.sequence_id
+                SELECT c.id, c.owner_sequence_id
                 FROM clips c
-                JOIN tracks t ON c.track_id = t.id
-                WHERE c.master_clip_id = ? AND c.clip_kind = 'timeline'
+                WHERE c.nested_sequence_id = ?
             ]])
             assert(find_stmt, "RenameItem: Failed to prepare affected clips query")
             find_stmt:bind_value(1, mc.id)
@@ -69,7 +71,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local update_stmt = db:prepare([[
                 UPDATE clips
                 SET name = ?
-                WHERE master_clip_id = ? AND clip_kind = 'timeline'
+                WHERE nested_sequence_id = ?
             ]])
             assert(update_stmt, "RenameItem: Failed to prepare timeline rename")
             update_stmt:bind_value(1, new_name)

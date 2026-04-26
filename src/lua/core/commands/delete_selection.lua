@@ -114,8 +114,7 @@ function M.register(executors, undoers, db)
             -- live selected_clips array as each child deletes.
             local clip_ids_to_delete = {}
             for _, clip in ipairs(selected_clips) do
-                assert(clip.clip_kind ~= "gap",
-                    string.format("DeleteSelection: gap clip %s in selected_clips — gaps are derived state, not deletable", clip.id))
+                -- V13: gaps are in-memory only and never appear in selected_clips.
                 clip_ids_to_delete[#clip_ids_to_delete + 1] = clip.id
             end
 

@@ -36,9 +36,9 @@ function M.register(executors, _undoers, db)
         local selected_clips = timeline_state.get_selected_clips()
         local selected_ids = {}
         for _, clip in ipairs(selected_clips or {}) do
-            if clip.clip_kind ~= "gap" then
-                selected_ids[#selected_ids + 1] = clip.id
-            end
+            -- V13: every clip references a sequence; gaps are in-memory only,
+            -- never reach selection. No filter needed.
+            selected_ids[#selected_ids + 1] = clip.id
         end
 
         local media_list

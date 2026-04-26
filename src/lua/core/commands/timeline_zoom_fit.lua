@@ -66,7 +66,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local min_start, max_end = nil, nil
 
         for _, clip in ipairs(clips) do
-            if clip.clip_kind ~= "gap" then
+            -- V13: gaps are in-memory only and don't appear in timeline_state.get_clips().
+            do
                 local s = clip.timeline_start
                 local d = clip.duration
                 assert(type(s) == "number",

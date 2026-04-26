@@ -698,12 +698,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local clip = {
             id = base.id,
             project_id = base.project_id,
-            clip_kind = base.clip_kind,
+            track_type = base.track_type,
             owner_sequence_id = base.owner_sequence_id,
             track_sequence_id = base.track_sequence_id,
-            master_clip_id = base.master_clip_id,
+            nested_sequence_id = base.nested_sequence_id,
+            master_layer_track_id = base.master_layer_track_id,
+            master_audio_track_id = base.master_audio_track_id,
+            fps_mismatch_policy = base.fps_mismatch_policy,
             track_id = base.track_id,
-            media_id = base.media_id,
             timeline_start = base.timeline_start,
             duration = base.duration,
             source_in = base.source_in,
@@ -1778,9 +1780,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     local function persist_undo_parameters(ctx)
         local persisted_states = {}
         for id, state in pairs(ctx.original_states_map) do
-            if state.clip_kind ~= "gap" then
-                persisted_states[id] = state
-            end
+            -- V13: gaps are in-memory only — never appear in original_states_map.
+            persisted_states[id] = state
         end
         ctx.command:set_parameter("original_states", persisted_states)
 

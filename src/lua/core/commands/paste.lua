@@ -35,37 +35,6 @@ local SPEC = {
     },
 }
 
---- Find source stream clip inside a masterclip sequence by role.
--- Shared pattern with AddClipsToSequence — finds video or audio stream clip.
-local function find_source_stream_clip(db, masterclip_sequence_id, role)
-    assert(masterclip_sequence_id and masterclip_sequence_id ~= "",
-        "Paste.find_source_stream_clip: masterclip_sequence_id required")
-    assert(role == "video" or role == "audio",
-        "Paste.find_source_stream_clip: role must be 'video' or 'audio'")
-
-    local track_type = (role == "video") and "VIDEO" or "AUDIO"
-    local track_stmt = assert(db:prepare([[
-        SELECT id FROM tracks WHERE sequence_id = ? AND track_type = ?
-        ORDER BY track_index ASC LIMIT 1
-    ]]), "Paste: failed to prepare track query")
-    track_stmt:bind_value(1, masterclip_sequence_id)
-    track_stmt:bind_value(2, track_type)
-    assert(track_stmt:exec(), "Paste: track query failed")
-    local track_id = track_stmt:next() and track_stmt:value(0) or nil
-    track_stmt:finalize()
-    if not track_id then return nil end
-
-    local clip_stmt = assert(db:prepare([[
-        SELECT id FROM clips WHERE owner_sequence_id = ? AND track_id = ? LIMIT 1
-    ]]), "Paste: failed to prepare clip query")
-    clip_stmt:bind_value(1, masterclip_sequence_id)
-    clip_stmt:bind_value(2, track_id)
-    assert(clip_stmt:exec(), "Paste: clip query failed")
-    local clip_id = clip_stmt:next() and clip_stmt:value(0) or nil
-    clip_stmt:finalize()
-    return clip_id
-end
-
 --- Populate __timeline_mutations for UI cache updates from clip_mutator mutations.
 local function populate_timeline_mutations(command, sequence_id, mutations)
     for _, mut in ipairs(mutations) do
@@ -78,11 +47,13 @@ local function populate_timeline_mutations(command, sequence_id, mutations)
                 source_in_value = mut.source_in_frame,
                 source_out_value = mut.source_out_frame,
                 name = mut.name,
-                media_id = mut.media_id,
-                master_clip_id = mut.master_clip_id,
+                nested_sequence_id = mut.nested_sequence_id,
+                master_layer_track_id = mut.master_layer_track_id,
+                master_audio_track_id = mut.master_audio_track_id,
+                fps_mismatch_policy = mut.fps_mismatch_policy,
                 owner_sequence_id = mut.owner_sequence_id,
                 enabled = mut.enabled ~= false,
-                clip_kind = mut.clip_kind,
+                track_type = mut.track_type,
                 fps_numerator = mut.fps_numerator,
                 fps_denominator = mut.fps_denominator,
             })
@@ -210,28 +181,44 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 clip_id = uuid.generate()
             end
 
-            local clip = Clip.create(cd.name or "Pasted Clip", cd.media_id, {
+            -- V13: Clip.create takes a single fields table; nested_sequence_id
+            -- is required. cd is a clipboard payload built by
+            -- clipboard_actions on the V13 shape.
+            assert(cd.nested_sequence_id and cd.nested_sequence_id ~= "",
+                "Paste: clipboard entry missing nested_sequence_id")
+            local now = os.time()
+            local clip_row = {
                 id = clip_id,
                 project_id = project_id,
                 track_id = p.track_id,
                 owner_sequence_id = sequence_id,
-                master_clip_id = cd.master_clip_id,
+                nested_sequence_id = cd.nested_sequence_id,
+                master_layer_track_id = cd.master_layer_track_id,
+                master_audio_track_id = cd.master_audio_track_id,
+                fps_mismatch_policy = cd.fps_mismatch_policy or "resample",
+                name = cd.name or "Pasted Clip",
                 timeline_start = p.paste_start,
+                start_value = p.paste_start,
                 duration = cd.duration,
                 source_in = cd.source_in,
                 source_out = cd.source_out,
                 enabled = true,
+                volume = cd.volume or 1.0,
+                rate = { fps_numerator = cd.fps_numerator,
+                         fps_denominator = cd.fps_denominator },
                 fps_numerator = cd.fps_numerator,
                 fps_denominator = cd.fps_denominator,
-            })
+                created_at = now,
+                modified_at = now,
+            }
 
-            table.insert(all_mutations, clip_mutator.plan_insert(clip))
+            table.insert(all_mutations, clip_mutator.plan_insert(clip_row))
             -- Determine role from track type
             local track = track_lookup[p.track_id]
             local role = (track.track_type == "VIDEO") and "video" or "audio"
             table.insert(created_clips, {
                 clip_id = clip_id,
-                master_clip_id = cd.master_clip_id,
+                nested_sequence_id = cd.nested_sequence_id,
                 role = role,
                 copied_properties = cd.copied_properties,
             })
@@ -244,31 +231,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        -- Phase 5: Copy properties from source masterclip stream clips
+        -- Phase 5: Restore copied properties from the clipboard payload.
+        -- (V8 had a "find_source_stream_clip" fallback that read property
+        -- rows attached to the master sequence's V/A stream clips. V13
+        -- masters hold media_refs, not clips, so the fallback is gone —
+        -- the clipboard payload carries the snapshot.)
         for _, created in ipairs(created_clips) do
-            -- Prefer properties snapshot from clipboard (preserves user edits)
             if created.copied_properties and #created.copied_properties > 0 then
                 command_helper.delete_properties_for_clip(created.clip_id)
                 command_helper.insert_properties_for_clip(created.clip_id, created.copied_properties)
-            elseif created.master_clip_id then
-                local source_clip_id = find_source_stream_clip(db, created.master_clip_id, created.role)
-                if source_clip_id then
-                    local copied_props = command_helper.ensure_copied_properties(command, source_clip_id)
-                    if #copied_props > 0 then
-                        command_helper.delete_properties_for_clip(created.clip_id)
-                        command_helper.insert_properties_for_clip(created.clip_id, copied_props)
-                    end
-                end
             end
         end
 
-        -- Phase 6: Link clips that came from the same masterclip
-        local clips_by_master = {}
+        -- Phase 6: Link clips that came from the same nested sequence
+        -- (e.g. V + A pair from one master).
+        local clips_by_nested = {}
         for _, created in ipairs(created_clips) do
-            local mc = created.master_clip_id
-            if not mc then goto next_link end
-            clips_by_master[mc] = clips_by_master[mc] or {}
-            table.insert(clips_by_master[mc], {
+            local ns = created.nested_sequence_id
+            if not ns then goto next_link end
+            clips_by_nested[ns] = clips_by_nested[ns] or {}
+            table.insert(clips_by_nested[ns], {
                 clip_id = created.clip_id,
                 role = created.role,
                 time_offset = 0,
@@ -276,7 +258,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             ::next_link::
         end
         local link_group_ids = {}
-        for _, group_clips in pairs(clips_by_master) do
+        for _, group_clips in pairs(clips_by_nested) do
             if #group_clips >= 2 then
                 local link_id, link_err = clip_link.create_link_group(group_clips, db)
                 assert(link_id,

@@ -112,7 +112,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local earliest_start_frame = math.huge
         for _, clip_id in ipairs(clip_ids) do
             local clip = Clip.load_optional(clip_id)
-            if clip and clip.master_clip_id then
+            if clip and clip.nested_sequence_id then
                 earliest_start_frame = math.min(earliest_start_frame, clip.timeline_start)
                 local fps_n = clip.rate and clip.rate.fps_numerator or clip.fps_numerator
                 local fps_d = clip.rate and clip.rate.fps_denominator or clip.fps_denominator
@@ -125,18 +125,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 clip_payloads[#clip_payloads + 1] = {
                     original_id = clip.id,
                     track_id = clip.track_id,
-                    media_id = clip.media_id,
                     fps_numerator = fps_n,
                     fps_denominator = fps_d,
-                    master_clip_id = clip.master_clip_id,
+                    nested_sequence_id = clip.nested_sequence_id,
+                    master_layer_track_id = clip.master_layer_track_id,
+                    master_audio_track_id = clip.master_audio_track_id,
+                    fps_mismatch_policy = clip.fps_mismatch_policy,
                     owner_sequence_id = clip.owner_sequence_id,
-                    clip_kind = clip.clip_kind,
+                    track_type = clip.track_type,
                     timeline_start = clip.timeline_start,
                     duration = clip.duration,
                     source_in = clip.source_in,
                     source_out = clip.source_out,
                     name = clip.name,
-                    offline = clip.offline,
                 }
             end
         end
@@ -168,7 +169,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 if state then
                     state.project_id = clip.project_id
                     state.owner_sequence_id = clip.owner_sequence_id or sequence_id
-                    state.clip_kind = clip.clip_kind
                     table.insert(deleted_states, state)
                 end
                 deleted_props[clip_id] = command_helper.snapshot_properties_for_clip(clip_id)

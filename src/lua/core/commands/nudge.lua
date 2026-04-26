@@ -40,8 +40,6 @@ local SPEC = {
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
-    local TIMELINE_CLIP_KIND = "timeline"
-
     -- Note: record_occlusion_actions removed - occlusion system is disabled
 
     command_executors["Nudge"] = function(command)
@@ -272,12 +270,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 -- NSF: If user selected a clip, it MUST exist
                 assert(clip, string.format("Nudge: selected clip %s not found - selection is stale", clip_id))
 
-                if clip.clip_kind and clip.clip_kind ~= TIMELINE_CLIP_KIND then
-                    -- Non-timeline clips (e.g., source clips) - skip silently, this is valid filtering
-                    clips_to_move[clip_id] = nil
-                    goto continue_collect_block
-                end
-                
+                -- V13: every `clips` row IS a timeline clip; the V8
+                -- clip_kind discriminator is gone (master rows live in
+                -- media_refs, not clips). No filter needed.
+
+
                 register_original_state(clip)
                 
                 -- Nudge clip
