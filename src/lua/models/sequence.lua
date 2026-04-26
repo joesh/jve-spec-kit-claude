@@ -1482,14 +1482,14 @@ local function filter_by_media_kind(entries, kind)
     return out
 end
 
---- Resolve video entries in a frame range.
--- @param seq_id string: sequence to resolve
--- @param from_frame integer: inclusive start in seq_id's timebase
+--- Resolve video entries in a frame range. Instance method — uses self.id
+--- as the sequence to resolve.
+-- @param from_frame integer: inclusive start in self's timebase
 -- @param to_frame integer: exclusive end
 -- @return ResolvedEntry[] with media_kind='video'
-function Sequence:get_video_in_range(seq_id, from_frame, to_frame)
-    assert(type(seq_id) == "string" and seq_id ~= "",
-        "Sequence:get_video_in_range: seq_id must be non-empty string")
+function Sequence:get_video_in_range(from_frame, to_frame)
+    assert(self and type(self.id) == "string" and self.id ~= "",
+        "Sequence:get_video_in_range: must be called on a sequence instance")
     assert(type(from_frame) == "number",
         "Sequence:get_video_in_range: from_frame must be integer")
     assert(type(to_frame) == "number",
@@ -1497,18 +1497,18 @@ function Sequence:get_video_in_range(seq_id, from_frame, to_frame)
     assert(from_frame < to_frame, string.format(
         "Sequence:get_video_in_range: from_frame %d must be < to_frame %d",
         from_frame, to_frame))
-    local entries = Sequence:resolve_in_range(seq_id, from_frame, to_frame, {})
+    local entries = Sequence:resolve_in_range(self.id, from_frame, to_frame, {})
     return filter_by_media_kind(entries, "video")
 end
 
---- Resolve audio entries in a frame range.
--- @param seq_id string: sequence to resolve
--- @param from_frame integer: inclusive start in seq_id's timebase
+--- Resolve audio entries in a frame range. Instance method — uses self.id
+--- as the sequence to resolve.
+-- @param from_frame integer: inclusive start in self's timebase
 -- @param to_frame integer: exclusive end
 -- @return ResolvedEntry[] with media_kind='audio'
-function Sequence:get_audio_in_range(seq_id, from_frame, to_frame)
-    assert(type(seq_id) == "string" and seq_id ~= "",
-        "Sequence:get_audio_in_range: seq_id must be non-empty string")
+function Sequence:get_audio_in_range(from_frame, to_frame)
+    assert(self and type(self.id) == "string" and self.id ~= "",
+        "Sequence:get_audio_in_range: must be called on a sequence instance")
     assert(type(from_frame) == "number",
         "Sequence:get_audio_in_range: from_frame must be integer")
     assert(type(to_frame) == "number",
@@ -1516,7 +1516,7 @@ function Sequence:get_audio_in_range(seq_id, from_frame, to_frame)
     assert(from_frame < to_frame, string.format(
         "Sequence:get_audio_in_range: from_frame %d must be < to_frame %d",
         from_frame, to_frame))
-    local entries = Sequence:resolve_in_range(seq_id, from_frame, to_frame, {})
+    local entries = Sequence:resolve_in_range(self.id, from_frame, to_frame, {})
     return filter_by_media_kind(entries, "audio")
 end
 

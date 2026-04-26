@@ -2272,29 +2272,29 @@ local function apply_pool_master_clip_marks(pool_master_clips, media_by_path)
             "apply_marks: Sequence.load failed for master %s (media=%s)",
             mc_seq_id, media.name))
 
-        -- Apply video marks to video stream clip
+        -- video_stream/audio_streams return plain tables backed by media_refs
+        -- rows under V13. Persist marks via MediaRef.update.
+        local MediaRef = require("models.media_ref")
+
         if name_marks.video then
-            local video_clip = mc_seq:video_stream()
-            if video_clip then
-                video_clip.mark_in = name_marks.video.mark_in
-                video_clip.mark_out = name_marks.video.mark_out
-                video_clip.playhead_frame = name_marks.video.playhead
-                assert(video_clip:save({skip_occlusion = true}), string.format(
-                    "apply_marks: save failed for video clip %s (media=%s)",
-                    video_clip.id, media.name))
+            local video_ref = mc_seq:video_stream()
+            if video_ref then
+                MediaRef.update(video_ref.id, {
+                    mark_in_frame  = name_marks.video.mark_in,
+                    mark_out_frame = name_marks.video.mark_out,
+                    playhead_frame = name_marks.video.playhead,
+                })
                 applied_count = applied_count + 1
             end
         end
 
-        -- Apply audio marks to all audio stream clips
         if name_marks.audio then
-            for _, audio_clip in ipairs(mc_seq:audio_streams()) do
-                audio_clip.mark_in = name_marks.audio.mark_in
-                audio_clip.mark_out = name_marks.audio.mark_out
-                audio_clip.playhead_frame = name_marks.audio.playhead
-                assert(audio_clip:save({skip_occlusion = true}), string.format(
-                    "apply_marks: save failed for audio clip %s (media=%s)",
-                    audio_clip.id, media.name))
+            for _, audio_ref in ipairs(mc_seq:audio_streams()) do
+                MediaRef.update(audio_ref.id, {
+                    mark_in_frame  = name_marks.audio.mark_in,
+                    mark_out_frame = name_marks.audio.mark_out,
+                    playhead_frame = name_marks.audio.playhead,
+                })
                 applied_count = applied_count + 1
             end
         end

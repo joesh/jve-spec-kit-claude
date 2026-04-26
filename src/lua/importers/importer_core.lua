@@ -563,25 +563,41 @@ function M.import_into_project(project_id, parse_result, opts)
                         assert(media_row, string.format(
                             "importer_core: media %s missing while creating clip '%s'",
                             tostring(media_id), tostring(clip_data.name)))
+                        -- Media.load hydrates the duration_frames column as
+                        -- the .duration field on the instance.
+                        local fdur = media_row.duration
+                        assert(type(fdur) == "number" and fdur > 0, string.format(
+                            "importer_core: media %s ('%s') has duration=%s — "
+                            .. "the dur<=0 skip in import_into_project should have prevented this",
+                            tostring(media_id), tostring(media_row.name), tostring(fdur)))
                         local source_in_final = clip_data.source_in
                         local source_out_final = source_out
                         if track_data.type == "AUDIO" then
-                            local atc = media_row:get_audio_start_tc()
-                            local extent = (atc or 0) + (media_row.duration_frames or 0)
-                            -- duration_frames on an audio media row is in
-                            -- native frames; samples = frames * sr / fps.
-                            -- Stills don't apply to audio, so keep this as
-                            -- a bounds assertion only.
+                            local atc = media_row:get_audio_start_tc() or 0
+                            -- Audio clip bounds are in samples; media.duration
+                            -- is in video frames. Convert to samples via the
+                            -- media's audio_sample_rate and fps ratio.
+                            local sr = media_row.audio_sample_rate
+                            local fps_num = media_row.frame_rate.fps_numerator
+                            local fps_den = media_row.frame_rate.fps_denominator
+                            assert(sr and sr > 0 and fps_num and fps_den, string.format(
+                                "importer_core: media %s audio metadata incomplete "
+                                .. "(sample_rate=%s, fps=%s/%s) for clip '%s'",
+                                tostring(media_id), tostring(sr),
+                                tostring(fps_num), tostring(fps_den),
+                                tostring(clip_data.name)))
+                            local dur_samples = math.floor(
+                                fdur * sr * fps_den / fps_num + 0.5)
+                            local extent = atc + dur_samples
                             assert(math.max(source_in_final, source_out_final) <= extent,
                                 string.format(
                                 "importer_core: clip '%s' audio source range "
-                                .. "[%d,%d] exceeds media %s extent %d (atc=%s, dur=%s) — parser bug",
+                                .. "[%d,%d] samples exceeds media %s extent %d "
+                                .. "(atc=%d, dur=%d samples = %d frames) — parser bug",
                                 tostring(clip_data.name), source_in_final, source_out_final,
-                                tostring(media_id), extent,
-                                tostring(atc), tostring(media_row.duration_frames)))
+                                tostring(media_id), extent, atc, dur_samples, fdur))
                         else
                             local vtc = media_row:get_start_tc() or 0
-                            local fdur = media_row.duration_frames or 0
                             local extent = vtc + fdur
                             if media_row.is_still or fdur == 1 then
                                 -- Still: source range is always [tc_origin,

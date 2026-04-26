@@ -67,7 +67,12 @@ assert(db:exec(
 require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
 
-local v_entries = Sequence:get_video_in_range("e", 0, 200)
+-- Wrappers are instance methods on a sequence — call on the sequence object,
+-- pass [from, to) range only. The wrapper resolves self.id internally.
+local seq_e = Sequence.load("e")
+assert(seq_e, "test fixture: failed to load sequence 'e'")
+
+local v_entries = seq_e:get_video_in_range(0, 200)
 assert(type(v_entries) == "table", "get_video_in_range must return table")
 assert(#v_entries == 1, "expected 1 video entry; got " .. tostring(#v_entries))
 assert(v_entries[1].media_kind == "video" or v_entries[1].media_kind == nil,
@@ -75,7 +80,7 @@ assert(v_entries[1].media_kind == "video" or v_entries[1].media_kind == nil,
 assert(v_entries[1].media_path == "/tmp/v.mov",
     "video entry should point at the video file")
 
-local a_entries = Sequence:get_audio_in_range("e", 0, 48000)
+local a_entries = seq_e:get_audio_in_range(0, 48000)
 assert(type(a_entries) == "table", "get_audio_in_range must return table")
 assert(#a_entries >= 1, "expected at least one audio entry; got " .. tostring(#a_entries))
 for _, e in ipairs(a_entries) do
