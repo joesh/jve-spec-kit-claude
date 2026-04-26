@@ -59,7 +59,7 @@ db:exec([[
         current_sequence_number, created_at, modified_at
     )
     VALUES (
-        'mc_seq', 'default_project', 'Test Master', 'masterclip',
+        'mc_seq', 'default_project', 'Test Master', 'master',
         30, 1, 48000,
         1920, 1080,
         0, 300, 0,
@@ -92,6 +92,9 @@ VALUES
 -- Init with REAL timeline_state
 command_manager.init("default_sequence", "default_project")
 command_manager.begin_command_event("script")
+if timeline_state.reload_clips then
+    timeline_state.reload_clips("default_sequence")
+end
 
 -- Verify clip exists in timeline cache before delete
 local function find_clip_in_cache(clip_id)
