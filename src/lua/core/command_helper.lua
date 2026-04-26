@@ -232,14 +232,16 @@ function M.clip_insert_payload(source, fallback_sequence_id)
         id = source.id,
         clip_id = source.id,
         project_id = source.project_id,
-        clip_kind = source.clip_kind,
+        track_type = source.track_type,
         name = source.name,
         label = label,
         track_id = source.track_id,
         track_sequence_id = track_sequence_id,
         owner_sequence_id = source.owner_sequence_id or track_sequence_id,
-        media_id = source.media_id,
-        master_clip_id = source.master_clip_id,
+        nested_sequence_id = source.nested_sequence_id,
+        master_layer_track_id = source.master_layer_track_id,
+        master_audio_track_id = source.master_audio_track_id,
+        fps_mismatch_policy = source.fps_mismatch_policy,
 
         timeline_start = source.timeline_start,
         duration = source.duration,
@@ -248,9 +250,8 @@ function M.clip_insert_payload(source, fallback_sequence_id)
         rate = rate,
         fps_numerator = rate and rate.fps_numerator or nil,
         fps_denominator = rate and rate.fps_denominator or nil,
-        
+
         enabled = source.enabled ~= false,
-        offline = false,  -- transient: recomputed by media_status
         volume = source.volume,
     }
 end
@@ -437,7 +438,9 @@ end
 
 function M.restore_clip_state(state)
     if not state then return end
-    if state.clip_kind == "gap" then return nil end
+    -- V13: gaps were collapsed into in-memory clips by feature 005; no DB
+    -- gap row exists. The pre-013 `state.clip_kind == "gap"` skip was V8
+    -- residue and is removed.
 
     -- Fill missing ownership if possible
     local seq_id = state.owner_sequence_id or state.track_sequence_id or lookup_track_sequence(state.track_id)
@@ -471,11 +474,11 @@ function M.restore_clip_state(state)
     local clip = Clip.load_optional(state.id)
     
     if not clip then
-        -- V13: Clip.create takes a single fields table. Use state's V13 names
-        -- (nested_sequence_id) with V8 aliases for transitional callers.
-        local nested_id = state.nested_sequence_id or state.master_clip_id
+        -- V13: Clip.create takes a single fields table. State carries V13
+        -- names only (no master_clip_id alias).
+        local nested_id = state.nested_sequence_id
         assert(nested_id and nested_id ~= "",
-            "restore_clip_state: state missing nested_sequence_id (and no master_clip_id alias)")
+            "restore_clip_state: state missing nested_sequence_id")
         local new_id = Clip.create({
             id = state.id,
             project_id = state.project_id,
@@ -524,30 +527,25 @@ function M.capture_clip_state(clip)
     if not rate or not rate.fps_numerator or not rate.fps_denominator then
         error(string.format("capture_clip_state: Clip %s missing rate metadata", tostring(clip.id)), 2)
     end
-    -- V13 capture: include nested_sequence_id + structural fields. Keep V8
-    -- compat fields (clip_kind/master_clip_id/media_id) from the loaded clip
-    -- so JSON round-trip preserves them; restore_deleted_clip prefers the
-    -- V13 names but accepts V8 aliases.
+    -- V13 snapshot: ONLY V13 fields. V8 aliases (clip_kind, master_clip_id,
+    -- media_id, offline) deleted per FR-018.
     local state = {
         id = clip.id,
         project_id = clip.project_id,
-        clip_kind = clip.clip_kind,                        -- compat surface
+        track_type = clip.track_type,
         owner_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
         track_sequence_id = clip.track_sequence_id or clip.owner_sequence_id,
-        nested_sequence_id = clip.nested_sequence_id or clip.master_clip_id,  -- V13
-        master_clip_id = clip.master_clip_id or clip.nested_sequence_id,      -- compat
+        nested_sequence_id = clip.nested_sequence_id,
         master_layer_track_id = clip.master_layer_track_id,
         master_audio_track_id = clip.master_audio_track_id,
         fps_mismatch_policy = clip.fps_mismatch_policy or "resample",
         track_id = clip.track_id,
-        media_id = clip.media_id,                          -- compat (derived)
         timeline_start = clip.timeline_start,
         duration = clip.duration,
         source_in = clip.source_in,
         source_out = clip.source_out,
         name = clip.name,
         enabled = clip.enabled,
-        offline = clip.offline,
         fps_numerator = rate.fps_numerator,
         fps_denominator = rate.fps_denominator
     }
@@ -855,9 +853,8 @@ function M.apply_mutations(db, mutations)
                 return false, stmt_err
             end
             -- V13 INSERT: callers must provide nested_sequence_id (the
-            -- referenced sequence) and fps_mismatch_policy. Accept legacy
-            -- master_clip_id as an alias for transitional callers.
-            local nested_id = mut.nested_sequence_id or mut.master_clip_id
+            -- referenced sequence) and fps_mismatch_policy. No V8 alias.
+            local nested_id = mut.nested_sequence_id
             if not nested_id or nested_id == "" then
                 finalize_all_stmts()
                 return false, "INSERT mutation missing nested_sequence_id for clip " .. tostring(mut.clip_id)
@@ -1065,7 +1062,7 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         if prev.created_at == nil or prev.modified_at == nil then
             return false, "undo delete: missing created_at/modified_at for clip " .. tostring(prev.id)
         end
-        local nested_id = prev.nested_sequence_id or prev.master_clip_id
+        local nested_id = prev.nested_sequence_id
         if not nested_id or nested_id == "" then
             return false, "undo delete: missing nested_sequence_id for clip " .. tostring(prev.id)
         end
