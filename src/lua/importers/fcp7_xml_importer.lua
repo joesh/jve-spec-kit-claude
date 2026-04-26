@@ -422,6 +422,13 @@ local function parse_sequence(sequence_node)
                     end
                 elseif media_child.tag == "audio" then
                     for _, audio_child in ipairs(media_child.children or {}) do
+                        if audio_child.tag == "samplecharacteristics" then
+                            for _, sc_child in ipairs(audio_child.children or {}) do
+                                if sc_child.tag == "samplerate" then
+                                    sequence_info.audio_rate = tonumber(sc_child.text)
+                                end
+                            end
+                        end
                         if audio_child.tag == "track" then
                             local track = parse_track(audio_child, sequence_info.frame_rate, "AUDIO", audio_track_index, sequence_info)
                             table.insert(sequence_info.audio_tracks, track)
@@ -1114,13 +1121,22 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         for seq_index, seq_info in ipairs(parsed_result.sequences or {}) do
             local sequence_key = seq_info.original_id or ("sequence_" .. tostring(seq_index))
             local reuse_id = resolve_reuse_id('sequences', sequence_key)
+            -- 013: edit timelines from FCP7 XML are kind='nested'.
+            -- audio_rate is parsed from <audio><samplecharacteristics><samplerate>;
+            -- if missing, use the project-conventional default (FCP7's own
+            -- default mix bus rate is 48000).
+            local seq_audio_rate = seq_info.audio_rate or 48000
             local sequence = Sequence.create(
                 seq_info.name,
                 project_id,
                 seq_info.frame_rate,
                 seq_info.width,
                 seq_info.height,
-                {id = reuse_id or seq_info.original_id}
+                {
+                    id = reuse_id or seq_info.original_id,
+                    kind = "nested",
+                    audio_rate = seq_audio_rate,
+                }
             )
             if not sequence then
                 error("Failed to allocate sequence")

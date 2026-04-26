@@ -2376,10 +2376,28 @@ function M.convert(drp_path, jvp_path, progress_cb)
     end
 
     local json = require("dkjson")
+    -- 013: every sequence carries audio_rate (mix bus rate). DRP doesn't store
+    -- it at the project level; pick the most common audio_sample_rate among
+    -- imported media, or fall back to 48000 (industry-standard mix bus rate
+    -- for FCP/Premiere/Resolve project defaults — user-modifiable post-import).
+    local audio_rate_votes = {}
+    for _, timeline in ipairs(parse_result.timelines or {}) do
+        for _, info in pairs(timeline.media_files or {}) do
+            local r = info.audio_sample_rate
+            if r and r > 0 then
+                audio_rate_votes[r] = (audio_rate_votes[r] or 0) + 1
+            end
+        end
+    end
+    local picked_audio_rate, best_count = 48000, 0
+    for r, c in pairs(audio_rate_votes) do
+        if c > best_count then picked_audio_rate, best_count = r, c end
+    end
     local settings = {
         frame_rate = parse_result.project.settings.frame_rate,
         width = parse_result.project.settings.width,
         height = parse_result.project.settings.height,
+        audio_rate = picked_audio_rate,
     }
 
     local project = Project.create(parse_result.project.name, {
