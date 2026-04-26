@@ -187,7 +187,6 @@ for _, spec in ipairs(clip_specs) do
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
-    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 
@@ -267,7 +266,6 @@ for _, spec in ipairs(regression_specs) do
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
-    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 
@@ -313,7 +311,6 @@ for _, spec in ipairs(multi_specs) do
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", spec.track_id)
     cmd:set_parameter("start_value", spec.start)
-    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 
@@ -382,7 +379,6 @@ for _, spec in ipairs({
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
-    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 timeline_state.reload_clips()
@@ -408,7 +404,6 @@ for _, spec in ipairs({
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
-    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 timeline_state.reload_clips()
@@ -439,7 +434,6 @@ for _, spec in ipairs({
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
-    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 timeline_state.reload_clips()
@@ -467,7 +461,6 @@ for _, spec in ipairs({
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
-    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 timeline_state.reload_clips()
@@ -497,7 +490,6 @@ for _, spec in ipairs({
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
-    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 timeline_state.reload_clips()
@@ -532,7 +524,6 @@ for _, spec in ipairs({
     cmd:set_parameter("clip_id", spec.id)
     cmd:set_parameter("track_id", "track_v1")
     cmd:set_parameter("start_value", spec.start)
-    cmd:set_parameter("duration", spec.duration)
     assert(command_manager.execute(cmd).success)
 end
 timeline_state.reload_clips()

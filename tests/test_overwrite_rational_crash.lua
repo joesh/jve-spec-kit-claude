@@ -124,9 +124,6 @@ cmd:set_parameter("target_video_track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
 -- Rationals
 cmd:set_parameter("timeline_start_frame", 50)
-cmd:set_parameter("duration", 100)
-cmd:set_parameter("source_in", 0)
-cmd:set_parameter("source_out", 100)
 
 print("Executing Overwrite...")
 local result = command_manager.execute(cmd)

@@ -48,7 +48,7 @@ local split_result = command_manager.execute("SplitClip", {
     project_id = layout.project_id,
     sequence_id = layout.sequence_id,
     clip_id = clip_id,
-    split_value = split_point,
+    split_frame = split_point,
 })
 
 assert(split_result.success, "SplitClip should succeed: " .. (split_result.error_message or ""))

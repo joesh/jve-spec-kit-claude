@@ -444,9 +444,6 @@ local insert_split = Command.create("Insert", "project")
 insert_split:set_parameter("nested_sequence_id", split_master_clip_id)
 insert_split:set_parameter("target_video_track_id", "track_v3")
 insert_split:set_parameter("timeline_start_frame", 60) -- 2000ms
-insert_split:set_parameter("duration", 30) -- 1000ms
-insert_split:set_parameter("source_in", 0)
-insert_split:set_parameter("source_out", 30)
 insert_split:set_parameter("sequence_id", "sequence")
 assert(command_manager.execute(insert_split).success, "Insert command failed")
 

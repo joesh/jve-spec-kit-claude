@@ -154,7 +154,7 @@ local function execute_batch_split(split_value_ms, clip_ids)
     for _, clip in ipairs(clip_ids) do
         local cmd = Command.create("SplitClip", "default_project")
         cmd:set_parameter("clip_id", clip.id or clip)
-        cmd:set_parameter("split_value", frames)
+        cmd:set_parameter("split_frame", frames)
         cmd:set_parameter("sequence_id", "default_sequence")
         local ok = command_manager.execute(cmd)
         assert(ok.success, ok.error_message or "SplitClip failed")

@@ -59,13 +59,15 @@ print("Test 1: create_snapshot with integer coords")
 local clips = {
     {
         id = "clip1",
-        clip_kind = "nested",
+        track_type = "VIDEO",
         name = "My Clip",
         project_id = "proj1",
         track_id = "trk1",
         owner_sequence_id = "seq1",
-        nested_sequence_id = nil,
-        media_id = "med1",
+        nested_sequence_id = "master_seq_for_med1",
+        master_layer_track_id = nil,
+        master_audio_track_id = nil,
+        fps_mismatch_policy = "resample",
         -- INTEGER coordinates (post-refactor)
         timeline_start = 0,
         duration = 100,
@@ -73,7 +75,7 @@ local clips = {
         source_out = 100,
         rate = { fps_numerator = 24, fps_denominator = 1 },
         enabled = true,
-        offline = false,
+        volume = 1.0,
     },
 }
 

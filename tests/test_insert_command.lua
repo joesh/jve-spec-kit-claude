@@ -292,7 +292,6 @@ asserts._set_enabled_for_, "project")
 bad_cmd:set_parameter("target_video_track_id", "track_v1")
 bad_cmd:set_parameter("sequence_id", "sequence")
 bad_cmd:set_parameter("timeline_start_frame", 0)
-bad_cmd:set_parameter("duration", 50)
 -- No media_idbad_cmd:set_parameter("duration", 50)
 -- No media_id
 
@@ -310,8 +309,6 @@ bad_cmd2:set_parameter("target_video_track_id", "track_v1")
 bad_cmd2:set_parameter("sequence_id", "sequence")
 bad_cmd2:set_parameter("timeline_start_frame", 0)
 bad_cmd2:set_parameter("nested_sequence_id", "nonexistent_master")  -- Should fail
-bad_cmd2:set_parameter("duration", 50)t_master")  -- Should fail
-bad_cmd2:set_parameter("duration", 50)
 
 result = execute_cmd(bad_cmd2)
 asserts._set_enabled_for_tests(true)
