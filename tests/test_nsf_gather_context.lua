@@ -57,21 +57,22 @@ local function test_gather_context_asserts_on_missing_video_dimensions()
     })
     media:save()
 
-    -- Create master clip referencing this media (also no dimensions)
-    local master_clip = Clip.create({
-        name = "Test Clip",
+    -- V13: a master clip on the project-browser side is a Sequence-shaped
+    -- snapshot record, not a Clip row. gather_edit_context only reads
+    -- fields on the table — fabricate one with width/height/audio_channels
+    -- all 0 so the has_video / has_audio checks both fail.
+    local master_clip = {
+        clip_id = uuid.generate(),
         id = uuid.generate(),
+        name = "Test Clip",
         project_id = project_id,
-        timeline_start_frame = 0,
-        duration_frames = 240,
-        source_in_frame = 0,
-        source_out_frame = 240,
+        media_id = media.id,
+        width = 0, height = 0, audio_channels = 0,
+        rate = { fps_numerator = 24, fps_denominator = 1 },
+        timeline_start = 0, duration = 240,
+        source_in = 0, source_out = 240,
         fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-    master_clip:save(db)
+    }
     -- Mock timeline_state
     local mock_timeline_state = {
         get_sequence_id = function() return sequence_id end,
@@ -156,21 +157,19 @@ local function test_gather_context_valid_video_only_media()
     })
     media:save()
 
-    -- Create master clip
-    local master_clip = Clip.create({
-        name = "Video Only Clip",
+    -- V13: master_clip is a fabricated browser-snapshot table (not a Clip).
+    local master_clip = {
+        clip_id = uuid.generate(),
         id = uuid.generate(),
+        name = "Video Only Clip",
         project_id = project_id,
-        timeline_start_frame = 0,
-        duration_frames = 240,
-        source_in_frame = 0,
-        source_out_frame = 240,
+        media_id = media.id,
+        width = 1920, height = 1080, audio_channels = 0,
+        rate = { fps_numerator = 24, fps_denominator = 1 },
+        timeline_start = 0, duration = 240,
+        source_in = 0, source_out = 240,
         fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-    master_clip:save(db)
+    }
     -- Load tracks from DB
     local video_tracks = Track.find_by_sequence(sequence_id, "VIDEO")
 
