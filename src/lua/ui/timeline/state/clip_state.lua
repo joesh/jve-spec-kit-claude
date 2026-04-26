@@ -360,6 +360,13 @@ function M.apply_mutations(mutations, persist_callback)
             if clip_id then
                 local clip = clip_lookup[clip_id]
                 if not clip then
+                    -- V13: gap clips live only in memory, never in DB. A
+                    -- mutation update that targets a gap that has been
+                    -- evicted from the in-memory cache simply has no
+                    -- corresponding row to load. Skip rather than hydrate.
+                    if update.is_gap or (type(clip_id) == "string" and clip_id:sub(1,4) == "gap_") then
+                        goto continue_update
+                    end
                     clip = M.hydrate_from_database(clip_id, update.track_sequence_id)
                     if clip then needs_resort = true; changed = true end
                 end
@@ -428,6 +435,7 @@ function M.apply_mutations(mutations, persist_callback)
                     return false
                 end
             end
+            ::continue_update::
         end
         if needs_resort then M.invalidate_indexes() end
     end
