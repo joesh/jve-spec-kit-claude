@@ -749,7 +749,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         if key then
             master_lookup[key] = master_seq_id
         end
-        record_master_clip_id(key, master_seq_id)
+        record_master_sequence_id(key, master_seq_id)
         return master_seq_id
     end
 

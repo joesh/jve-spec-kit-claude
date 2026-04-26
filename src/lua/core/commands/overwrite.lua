@@ -113,7 +113,6 @@ local function build_insert_mutation_entry(clip_id)
     -- that read clip.rate (clipboard_actions.copy_mark_range,
     -- batch_ripple_edit's fetch_base_clip) crash with 'missing rate'
     -- on a freshly-overwritten clip.
-    local Sequence = require("models.sequence")
     local nested = Sequence.load(row.nested_sequence_id)
     local fps_num = nested and nested.frame_rate and nested.frame_rate.fps_numerator
     local fps_den = nested and nested.frame_rate and nested.frame_rate.fps_denominator

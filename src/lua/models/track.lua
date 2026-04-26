@@ -367,7 +367,6 @@ end
 --- sequence's default_video_layer_track_id points at it.
 function Track.delete(track_id)
     assert(track_id and track_id ~= "", "Track.delete: track_id required")
-    local database = require("core.database")
     local db = database.get_connection()
 
     -- Look up the track: its sequence_id and track_type.

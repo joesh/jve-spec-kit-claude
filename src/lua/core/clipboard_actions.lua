@@ -21,7 +21,6 @@ local focus_manager = require("ui.focus_manager")
 local timeline_state = require("ui.timeline.timeline_state")
 local command_manager = require("core.command_manager")
 local uuid = require("uuid")
-local Clip = require("models.clip")
 
 
 local project_browser = nil

@@ -629,7 +629,7 @@ toggle_cmd2:set_parameter("clip_ids", {clip_for_move})
 assert(command_manager.execute(toggle_cmd2).success, "ToggleClipEnabled should succeed for regression setup")
 
 local insert_cmd2 = Command.create("Insert", "default_project")
-insert_cmd2:set_parameter("master_clip_id", insert_master_clip_id)
+insert_cmd2:set_parameter("nested_sequence_id", insert_nested_sequence_id)
 insert_cmd2:set_parameter("track_id", video_tracks[1])
 insert_cmd2:set_parameter("insert_time", 800000)
 insert_cmd2:set_parameter("duration", 1000)

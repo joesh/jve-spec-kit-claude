@@ -2291,20 +2291,11 @@ function Sequence.update(id, fields)
     local conn = resolve_db()
 
     local sets, values = {}, {}
-    -- Keep track of whether default_video_layer_track_id is being explicitly set to nil.
-    local explicit_nil_default_layer = false
     for k, v in pairs(fields) do
         assert(SEQUENCE_UPDATABLE[k], string.format(
             "Sequence.update: column '%s' is not updatable via this path", k))
         sets[#sets + 1] = k .. " = ?"
         values[#values + 1] = v
-    end
-    -- pairs() skips nil values — handle default_video_layer_track_id=nil explicitly.
-    if fields.default_video_layer_track_id == nil
-            and rawget(fields, "default_video_layer_track_id") == nil then
-        -- Caller used the sentinel form fields.default_video_layer_track_id = nil.
-        -- (This doesn't distinguish "not set" from "explicitly nil" in Lua.)
-        -- Detect via the "key present" check: use a separate marker.
     end
     -- To explicitly NULL a column, pass the sentinel string "__NULL__" or use
     -- Sequence.update_nullable. Callers that need to NULL default_video_layer_track_id

@@ -14,8 +14,6 @@
 --
 -- @file duplicate_master_clip.lua
 local M = {}
-local database = require("core.database")
-local Clip = require("models.clip")
 local command_helper = require("core.command_helper")
 
 

@@ -402,10 +402,7 @@ local function save_internal(self, _opts)
     local db_duration_frames = self.duration
     local db_source_in_frame = self.source_in
     local db_source_out_frame = self.source_out
-    
-    local db_fps_num = self.rate.fps_numerator
-    local db_fps_den = self.rate.fps_denominator
-    
+
     local query
     local krono_exists = (krono_enabled and krono_start and krono.now and krono.now()) or nil
     if exists then

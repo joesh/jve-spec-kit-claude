@@ -115,7 +115,6 @@ local function build_insert_mutation_entry(clip_id)
     -- timeline_state's rate field gets populated. Without this, callers
     -- that read clip.rate (batch_ripple_edit's fetch_base_clip etc.)
     -- crash with 'missing rate metadata' on freshly-inserted clips.
-    local Sequence = require("models.sequence")
     local nested = Sequence.load(row.nested_sequence_id)
     local fps_num = nested and nested.frame_rate and nested.frame_rate.fps_numerator
     local fps_den = nested and nested.frame_rate and nested.frame_rate.fps_denominator

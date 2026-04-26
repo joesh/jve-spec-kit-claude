@@ -329,8 +329,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 }
 
                 table.insert(group.clips, clip)
-
-                ::continue_collect_block::
             end
 
             if args.dry_run then

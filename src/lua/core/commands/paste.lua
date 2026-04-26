@@ -16,7 +16,6 @@
 local M = {}
 
 local clipboard = require("core.clipboard")
-local Clip = require("models.clip")
 local clip_mutator = require("core.clip_mutator")
 local clip_link = require("models.clip_link")
 local command_helper = require("core.command_helper")

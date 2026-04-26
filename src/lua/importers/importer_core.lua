@@ -539,12 +539,11 @@ function M.import_into_project(project_id, parse_result, opts)
                         -- media's own timebase. Subtract the media's TC origin
                         -- to get the file-relative source range that V13
                         -- INV-4 expects.
-                        local Media = require("models.media")
                         local media_row = Media.load(media_id)
                         assert(media_row, string.format(
                             "importer_core: media %s not found while creating clip '%s'",
                             tostring(media_id), tostring(clip_data.name)))
-                        local media_tc_origin = 0
+                        local media_tc_origin
                         if track_data.type == "AUDIO" then
                             -- Audio source units are samples; subtract audio TC origin.
                             local audio_tc = media_row.get_audio_start_tc and

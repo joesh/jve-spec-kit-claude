@@ -32,10 +32,10 @@ os.execute("mkdir -p /tmp/jve")
 database.init(db_path)
 
 local project = Project.create("Batch Project", { fps_mismatch_policy = 'resample' })
-project:save(db)
+project:save()
 -- A second project to confirm load_for_project is scoped.
 local other_project = Project.create("Other Project", { fps_mismatch_policy = 'resample' })
-other_project:save(db)
+other_project:save()
 local function make_media(params)
     local m = Media.create(params)
     assert(m:save(), "save media " .. tostring(params.id))
