@@ -52,36 +52,54 @@ db:exec(string.format([[
         enabled, locked, muted, soloed, volume, pan)
     VALUES ('t1', 'seq1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 
-]], now, now, now, now))
+    -- V13 placeholder master sequence for clip's nested_sequence_id FK.
+    INSERT INTO media (id, project_id, name, file_path, duration_frames,
+        fps_numerator, fps_denominator, width, height, audio_channels, codec,
+        created_at, modified_at)
+    VALUES ('mc_media', 'p1', 'mc', '/tmp/mc.mov', 1000, 24000, 1001,
+        1920, 1080, 0, 'raw', %d, %d);
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
+        audio_rate, width, height, created_at, modified_at)
+    VALUES ('mc_seq', 'p1', 'MC', 'master', 24000, 1001, 48000, 1920, 1080, %d, %d);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
+        enabled, locked, muted, soloed, volume, pan)
+    VALUES ('mc_seq_v', 'mc_seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    UPDATE sequences SET default_video_layer_track_id = 'mc_seq_v' WHERE id = 'mc_seq';
+    INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
+        source_in_frame, source_out_frame, timeline_start_frame, duration_frames,
+        enabled, volume, playhead_frame, created_at, modified_at)
+    VALUES ('mc_seq_mr', 'p1', 'mc_seq', 'mc_seq_v', 'mc_media',
+        0, 1000, 0, 1000, 1, 1.0, 0, %d, %d);
+]], now, now, now, now, now, now, now, now, now, now))
 
 -- Clip insert via prepared statement. The `db:exec` multi-statement path
 -- silently swallows errors on some rows; use prepare/bind to catch FK or
 -- CHECK violations as loud failures.
 do
     local stmt = db:prepare([[
-        INSERT INTO clips (id, project_id, clip_kind, owner_sequence_id,
-            track_id, media_id, name,
+        INSERT INTO clips (id, project_id, owner_sequence_id, nested_sequence_id,
+            track_id, name,
             timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
-            fps_numerator, fps_denominator, enabled, created_at, modified_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+            enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'resample', ?, ?, ?, ?, ?)
     ]])
     assert(stmt, "failed to prepare clip insert")
     stmt:bind_value(1, "c1")
     stmt:bind_value(2, "p1")
-    stmt:bind_value(3, "timeline")
-    stmt:bind_value(4, "seq1")
+    stmt:bind_value(3, "seq1")
+    stmt:bind_value(4, "mc_seq")
     stmt:bind_value(5, "t1")
-    stmt:bind_value(6, nil)  -- no media
-    stmt:bind_value(7, "Original")
-    stmt:bind_value(8, 0)
-    stmt:bind_value(9, 120)
-    stmt:bind_value(10, 0)
-    stmt:bind_value(11, 120)
-    stmt:bind_value(12, 24000)
-    stmt:bind_value(13, 1001)
-    stmt:bind_value(14, 1)
+    stmt:bind_value(6, "Original")
+    stmt:bind_value(7, 0)
+    stmt:bind_value(8, 120)
+    stmt:bind_value(9, 0)
+    stmt:bind_value(10, 120)
+    stmt:bind_value(11, 1)
+    stmt:bind_value(12, 1.0)
+    stmt:bind_value(13, 0)
+    stmt:bind_value(14, now)
     stmt:bind_value(15, now)
-    stmt:bind_value(16, now)
     local ok = stmt:exec()
     if not ok then
         local err = stmt.last_error and stmt:last_error() or "?"
