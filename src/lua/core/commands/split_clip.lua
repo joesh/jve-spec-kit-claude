@@ -214,6 +214,40 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         assert(database.release_savepoint(SAVEPOINT),
             "Undo SplitClip: release savepoint failed")
 
+        -- Emit __timeline_mutations on undo so timeline_state cache stays
+        -- in sync (delete the right half, restore the left half's bounds).
+        do
+            local row = Clip.load_v13_row(args.clip_id)
+            local bucket = {
+                sequence_id = args.sequence_id,
+                inserts = {},
+                updates = {},
+                deletes = { { clip_id = second } },
+                bulk_shifts = {},
+            }
+            if row then
+                bucket.updates[#bucket.updates + 1] = {
+                    id                  = row.id,
+                    owner_sequence_id   = row.owner_sequence_id,
+                    track_sequence_id   = row.owner_sequence_id,
+                    track_id            = row.track_id,
+                    nested_sequence_id  = row.nested_sequence_id,
+                    start_value         = row.timeline_start_frame,
+                    timeline_start      = row.timeline_start_frame,
+                    duration_value      = row.duration_frames,
+                    duration            = row.duration_frames,
+                    source_in           = row.source_in_frame,
+                    source_out           = row.source_out_frame,
+                    fps_mismatch_policy = row.fps_mismatch_policy,
+                    name                = row.name,
+                    enabled             = row.enabled,
+                    volume              = row.volume,
+                    playhead_frame      = row.playhead_frame,
+                }
+            end
+            command:set_parameter("__timeline_mutations", bucket)
+        end
+
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
         return true
