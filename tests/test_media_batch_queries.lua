@@ -164,14 +164,12 @@ make_clip({ id="clip_b1", media_id="media_b", track_id="track_v1",
 make_clip({ id="clip_c1", media_id="media_c", track_id="track_a1",
     timeline_start=0,   source_in=1000, source_out=4000, fps_num=48000, fps_den=1 })
 
--- Master clip for media_a spanning the full source range [0, 1000].
--- On a separate video track so it doesn't overlap timeline clips. If
--- batch_get_source_extents counted master clips, media_a's extent
--- would stretch to [0, 1000] instead of [100, 700]. The check below
--- verifies it does not.
-make_clip({ id="mc_media_a", media_id="media_a", track_id="track_v2",
-    timeline_start=0,   source_in=0, source_out=1000, fps_num=25, fps_den=1,
-    clip_kind="master" })
+-- V13: 'master clips' are master Sequences (already created above),
+-- not timeline clip rows. The legacy V8 fixture inserted an extra
+-- 'master' clip on track_v2 to verify batch_get_source_extents
+-- excluded clip_kind='master' rows; in V13 the timeline-clips table
+-- doesn't carry that distinction, so the V8 exclusion test reduces
+-- to "only timeline clips count" — which is automatic.
 
 -- ---------------------------------------------------------------------------
 -- load_for_project: returns exactly the media in the specified project,
