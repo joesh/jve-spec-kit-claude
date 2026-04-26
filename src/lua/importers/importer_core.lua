@@ -550,8 +550,9 @@ function M.import_into_project(project_id, parse_result, opts)
                                 }})
                             end
 
-                            -- Assign masterclip to folder bin
-                            if clip.master_clip_id then
+                            -- Assign master sequence to folder bin (V13:
+                            -- clip.nested_sequence_id is the master ref).
+                            if clip.nested_sequence_id then
                                 local bin = nil
                                 if clip_data.file_uuid and clip_data.file_uuid ~= "" then
                                     bin = pool_uuid_to_bin[clip_data.file_uuid]
@@ -576,7 +577,7 @@ function M.import_into_project(project_id, parse_result, opts)
                                     bin = unorganized_bin_id
                                 end
                                 if bin then
-                                    tag_service.add_to_bin(project_id, {clip.master_clip_id}, bin, "master_clip")
+                                    tag_service.add_to_bin(project_id, {clip.nested_sequence_id}, bin, "master_clip")
                                 end
                             end
 

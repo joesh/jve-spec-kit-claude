@@ -43,9 +43,10 @@ function M.resolve_media_id_from_ui(media_id, command)
     return media_id
 end
 
---- Resolve master_clip_id from browser selection.
--- @return string|nil The masterclip sequence ID (clip_id from browser)
-function M.resolve_master_clip_id_from_ui()
+--- Resolve nested_sequence_id from browser selection.
+-- @return string|nil The master sequence ID (clip_id from browser, which
+-- under V13 IS the master sequence id since masters are sequences).
+function M.resolve_nested_sequence_id_from_ui()
     local ui_state = require("ui.ui_state")
     local project_browser = ui_state.get_project_browser and ui_state.get_project_browser()
     if project_browser and project_browser.get_selected_master_clip then
@@ -73,7 +74,7 @@ function M.resolve_timeline_sequence_id(args, track_id, command)
     if sequence_id and sequence_id ~= "" then
         local Sequence = require("models.sequence")
         local seq = Sequence.load(sequence_id)
-        if seq and seq.kind == "masterclip" then
+        if seq and seq.kind == "master" then
             sequence_id = nil  -- wrong target, fall through
         end
     end
@@ -302,7 +303,7 @@ function M.resolve_clip_name_for_sequence(args, source_sequence, media)
 end
 
 --- Create a selected_clip object with video and audio support
--- @param params table {media_id, master_clip_id, project_id, duration, source_in, source_out, clip_name, clip_id, audio_channels}
+-- @param params table {media_id, nested_sequence_id, project_id, duration, source_in, source_out, clip_name, clip_id, audio_channels}
 -- @return table selected_clip object with has_video, has_audio, audio_channel_count, audio methods
 function M.create_selected_clip(params)
     local audio_channels = params.audio_channels or 0
@@ -310,7 +311,7 @@ function M.create_selected_clip(params)
     local clip_payload = {
         role = "video",
         media_id = params.media_id,
-        master_clip_id = params.master_clip_id,
+        nested_sequence_id = params.nested_sequence_id,
         project_id = params.project_id,
         duration = params.duration,
         source_in = params.source_in,
@@ -340,7 +341,7 @@ function M.create_selected_clip(params)
         return {
             role = "audio",
             media_id = params.media_id,
-            master_clip_id = params.master_clip_id,
+            nested_sequence_id = params.nested_sequence_id,
             project_id = params.project_id,
             duration = params.duration,
             source_in = params.source_in,

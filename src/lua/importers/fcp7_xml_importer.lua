@@ -664,7 +664,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         result.clip_id_map[key] = id
     end
 
-    local function record_master_clip_id(key, id)
+    local function record_master_sequence_id(key, id)
         if not id or id == "" then
             return
         end
@@ -890,19 +890,20 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         assert(media_id and media_id ~= "",
             string.format("create_clip: ensure_media returned nil for clip '%s' (key=%s)",
                 tostring(clip_info.name or clip_info.original_id), tostring(clip_key)))
-        local master_clip_id = ensure_master_clip(clip_info, clip_key, media_id)
-        assert(master_clip_id and master_clip_id ~= "",
+        -- V13: nested_sequence_id is the master sequence id (replaces master_clip_id).
+        local nested_seq_id = ensure_master_clip(clip_info, clip_key, media_id)
+        assert(nested_seq_id and nested_seq_id ~= "",
             string.format("create_clip: ensure_master_clip returned nil for clip '%s' (media_id=%s, key=%s)",
                 tostring(clip_info.name or clip_info.original_id), tostring(media_id), tostring(clip_key)))
 
-        if master_bin_id and master_bin_id ~= "" and master_clip_id then
+        if master_bin_id and master_bin_id ~= "" then
             local bucket = pending_bin_assignments[master_bin_id]
             if not bucket then
                 bucket = {}
                 pending_bin_assignments[master_bin_id] = bucket
             end
-            if not bucket[master_clip_id] then
-                bucket[master_clip_id] = true
+            if not bucket[nested_seq_id] then
+                bucket[nested_seq_id] = true
                 bin_assignment_dirty = true
             end
         end
@@ -933,31 +934,37 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             reuse_id = clip_info.original_id
         end
 
-        local clip = Clip.create(clip_info.name or "Clip", media_id, {
+        -- V13 Clip.create: single-table form. nested_sequence_id required.
+        -- Returns the new clip id (string) — INSERT happens inside.
+        local now = os.time()
+        local clip_id = Clip.create({
             id = reuse_id,
             project_id = project_id,
             track_id = track_id,
-            master_clip_id = master_clip_id,
             owner_sequence_id = clip_info.owner_sequence_id,
-            timeline_start = start_value,
-            duration = duration,
-            source_in = source_in,
-            source_out = source_out,
-            fps_numerator = fps_num,
-            fps_denominator = fps_den,
-            enabled = clip_info.enabled ~= false,
+            nested_sequence_id = nested_seq_id,
+            name = clip_info.name or "Clip",
+            timeline_start_frame = start_value,
+            duration_frames = duration,
+            source_in_frame = source_in,
+            source_out_frame = source_out,
+            master_layer_track_id = nil,
+            master_audio_track_id = nil,
+            fps_mismatch_policy = "resample",
+            enabled = (clip_info.enabled ~= false),
+            volume = 1.0,
+            playhead_frame = 0,
+            created_at = now,
+            modified_at = now,
         })
-        if not clip then
+        local _unused = { fps_num, fps_den, media_id }  -- luacheck: ignore
+        if not clip_id or clip_id == "" then
             return false, "Failed to allocate clip"
         end
 
-        if not clip:save(conn) then
-            return false, "Failed to save clip"
-        end
-
-        table.insert(result.clip_ids, clip.id)
+        table.insert(result.clip_ids, clip_id)
         if clip_key then
-            result.clip_id_map[tostring(clip_key)] = clip.id
+            result.clip_id_map[tostring(clip_key)] = clip_id
         end
         return true
     end
