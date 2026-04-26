@@ -65,9 +65,9 @@ UPDATE sequences SET default_video_layer_track_id = 'master_v_media_stub' WHERE 
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media_stub', 'default_project', 'master_media_stub', 'master_v_media_stub', 'media_stub', 0, 2000, 0, 2000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
-    ('clip_a', 'default_project', 'Clip A', 'track_v1', 'master_media_stub', NULL, 'default_sequence', 0, 1000, 0, 1000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
+    ('clip_a', 'default_project', 'Clip A', 'track_v1', 'master_media_stub', 'default_sequence', 0, 1000, 0, 1000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now, now, now, now, now))
 
 command_manager.init("default_sequence", "default_project")
@@ -113,7 +113,9 @@ local overwrite_result = command_manager.execute(overwrite_cmd)
 assert(overwrite_result.success, overwrite_result.error_message or "Overwrite execution failed")
 assert(reload_count == 0, "Overwrite should rely on timeline mutations, not reload fallback")
 assert(#mutation_log >= 1, "Overwrite should emit timeline mutations during execute")
-local inserted_clip_id = overwrite_cmd:get_parameter("clip_id")
+-- V13: Overwrite persists created_clip_ids (array) instead of singular clip_id.
+local created_ids = overwrite_cmd:get_parameter("created_clip_ids")
+local inserted_clip_id = created_ids and created_ids[1]
 assert(inserted_clip_id and inserted_clip_id ~= "", "Overwrite should persist inserted clip_id parameter")
 
 reset_tracking()
@@ -123,9 +125,11 @@ local undo_result = command_manager.undo()
 assert(undo_result.success, undo_result.error_message or "Undo Overwrite failed")
 assert(#mutation_log >= 1, "Undo Overwrite should emit timeline mutations")
 local last_mutations = mutation_log[#mutation_log]
+-- V13: deletes are tables { clip_id = "..." }, not raw strings.
 local deleted_lookup = {}
-for _, clip_id in ipairs(last_mutations.deletes or {}) do
-    deleted_lookup[clip_id] = true
+for _, entry in ipairs(last_mutations.deletes or {}) do
+    local cid = type(entry) == "table" and entry.clip_id or entry
+    deleted_lookup[cid] = true
 end
 assert(deleted_lookup[inserted_clip_id],
     "Undo Overwrite should delete the inserted clip without reloading the entire timeline")
@@ -134,7 +138,7 @@ assert(deleted_lookup[inserted_clip_id],
 local stmt = db:prepare([[
     SELECT id, timeline_start_frame, duration_frames
     FROM clips
-    WHERE clip_kind = 'timeline' AND owner_sequence_id = 'default_sequence'
+    WHERE owner_sequence_id = 'default_sequence'
     ORDER BY timeline_start_frame
 ]])
 assert(stmt and stmt:exec(), "Failed to query clips after undo")
