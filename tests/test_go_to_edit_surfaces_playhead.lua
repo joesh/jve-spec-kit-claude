@@ -32,6 +32,7 @@ os.remove(TEST_DB .. "-shm")
 database.init(TEST_DB)
 local db = database.get_connection()
 
+
 db:exec(require('import_schema'))
 
 -- Create a timeline with clips spread across a wide range:

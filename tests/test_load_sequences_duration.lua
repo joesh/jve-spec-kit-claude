@@ -27,6 +27,7 @@ database.init(db_path)
 
 local now = os.time()
 local db = database.get_connection()
+
 db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
     VALUES ('proj1', 'Test', 'resample', %d, %d);

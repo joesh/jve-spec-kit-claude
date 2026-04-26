@@ -28,6 +28,7 @@ os.remove(TEST_DB .. "-shm")
 database.init(TEST_DB)
 local db = database.get_connection()
 
+
 db:exec(require('import_schema'))
 
 -- Create clips: clip_a [0, 100), gap [100, 200), clip_b [200, 350)

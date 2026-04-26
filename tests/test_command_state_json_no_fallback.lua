@@ -30,6 +30,7 @@ os.remove(TEST_DB .. "-wal")
 os.remove(TEST_DB .. "-shm")
 assert(database.init(TEST_DB))
 local db = database.get_connection()
+
 db:exec(require("import_schema"))
 
 local now = os.time()

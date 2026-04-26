@@ -35,6 +35,7 @@ local db_path = "/tmp/jve/test_mutations_cross_sequence_skip.db"
 os.remove(db_path)
 assert(database.init(db_path))
 local db = database.get_connection()
+
 db:exec(require('import_schema'))
 db:exec([[
     CREATE TABLE IF NOT EXISTS properties (

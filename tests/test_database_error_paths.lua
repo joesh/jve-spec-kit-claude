@@ -38,6 +38,7 @@ os.remove(db_path)
 assert(database.init(db_path))
 local db = database.get_connection()
 
+
 -- Seed: project + sequence + track + media + clips
 local now = os.time()
 db:exec(string.format([[

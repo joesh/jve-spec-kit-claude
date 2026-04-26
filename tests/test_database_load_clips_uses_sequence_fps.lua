@@ -29,6 +29,7 @@ print("=== database.load_clips Integer Coords Tests ===")
 -- Setup: Create sequence with 25fps, clip with 30000/1001 fps
 --------------------------------------------------------------------------------
 assert(db:exec([[
+
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
     VALUES ('proj', 'Project', 'resample', 0, 0, '{}');
 

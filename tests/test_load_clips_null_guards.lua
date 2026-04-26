@@ -45,6 +45,7 @@ os.remove(db_path)
 assert(database.init(db_path))
 local db = database.get_connection()
 
+
 local now = os.time()
 
 db:exec(string.format([[

@@ -13,6 +13,7 @@ local function with_db(fn)
     local db = database.get_connection()
     assert(db, "failed to open db connection")
     assert(db:exec(import_schema), "failed to apply schema")
+
     assert(db:exec([[INSERT INTO projects(id,name,fps_mismatch_policy, created_at,modified_at,settings) VALUES('proj','Test','resample',0,0,'{}')]]))
     assert(db:exec([[
         INSERT INTO sequences(id,project_id,name,kind,fps_numerator,fps_denominator,audio_rate,width,height,

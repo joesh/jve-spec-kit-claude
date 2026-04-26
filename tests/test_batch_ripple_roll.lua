@@ -15,6 +15,7 @@ os.remove(TEST_DB)
 
 assert(database.init(TEST_DB))
 local db = database.get_connection()
+
 db:exec(require('import_schema'))
 
 local now = os.time()

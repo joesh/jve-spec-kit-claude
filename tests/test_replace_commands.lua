@@ -94,6 +94,7 @@ os.remove(db_path)
 assert(database.init(db_path))
 local db = database.get_connection()
 
+
 db:exec(require("import_schema"))
 
 local now = os.time()

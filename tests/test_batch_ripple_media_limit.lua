@@ -13,6 +13,7 @@ os.remove(TEST_DB)
 
 assert(database.init(TEST_DB))
 local db = database.get_connection()
+
 assert(db:exec(SCHEMA_SQL))
 
 local now = os.time()
