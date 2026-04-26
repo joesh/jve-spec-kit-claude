@@ -47,35 +47,31 @@ local function resolve_seq_fps(row, db_seq_fps_num, db_seq_fps_den)
 end
 
     local function clone_state(row)
-	    return {
-	        id = row.id,
-	        project_id = row.project_id,
-	        clip_kind = row.clip_kind,                          -- compat surface
-	        name = row.name,
-	        track_id = row.track_id,
-	        media_id = row.media_id,                            -- compat surface
-            master_clip_id = row.master_clip_id,                -- compat surface (= nested_sequence_id)
-            nested_sequence_id = row.nested_sequence_id or row.master_clip_id,
+        return {
+            id = row.id,
+            project_id = row.project_id,
+            track_type = row.track_type,
+            name = row.name,
+            track_id = row.track_id,
+            nested_sequence_id = row.nested_sequence_id,
             master_layer_track_id = row.master_layer_track_id,
             master_audio_track_id = row.master_audio_track_id,
             fps_mismatch_policy = row.fps_mismatch_policy or "resample",
             owner_sequence_id = row.owner_sequence_id,
-	        created_at = row.created_at,
-	        modified_at = row.modified_at,
-	        timeline_start = row.timeline_start,
-	        start_value = row.start_value,
-	        duration = row.duration,
-	        source_in = row.source_in,
-	        source_out = row.source_out,
-	        fps_numerator = row.fps_numerator,
-	        fps_denominator = row.fps_denominator,
-	        rate = row.rate,
-	        enabled = row.enabled,
-            offline = row.offline,
+            created_at = row.created_at,
+            modified_at = row.modified_at,
+            timeline_start = row.timeline_start,
+            start_value = row.start_value,
+            duration = row.duration,
+            source_in = row.source_in,
+            source_out = row.source_out,
+            fps_numerator = row.fps_numerator,
+            fps_denominator = row.fps_denominator,
+            rate = row.rate,
+            enabled = row.enabled,
             volume = row.volume,
-            track_type = row.track_type,
-	    }
-	end
+        }
+    end
 
 -- Assert value is integer frames
 local function _assert_int(val, label)  -- luacheck: ignore 211
@@ -157,11 +153,10 @@ local function plan_insert(row)
     assert(row.source_in, "clip_mutator: insert mutation missing source_in")
     assert(row.source_out, "clip_mutator: insert mutation missing source_out")
     -- V13: nested_sequence_id replaces master_clip_id; clip_kind/media_id/
-    -- offline are gone from clips. command_helper apply_mutations accepts
-    -- master_clip_id as a transitional alias.
-    local nested_id = row.nested_sequence_id or row.master_clip_id
+    -- offline are gone from clips.
+    local nested_id = row.nested_sequence_id
     assert(nested_id and nested_id ~= "",
-        "clip_mutator.plan_insert: missing nested_sequence_id (or master_clip_id alias) for clip " .. tostring(row.id))
+        "clip_mutator.plan_insert: missing nested_sequence_id for clip " .. tostring(row.id))
     return {
         type = "insert",
         clip_id = row.id,
@@ -169,7 +164,6 @@ local function plan_insert(row)
         name = row.name or "",
         track_id = row.track_id,
         nested_sequence_id = nested_id,
-        master_clip_id = nested_id,                                 -- compat alias
         master_layer_track_id = row.master_layer_track_id,
         master_audio_track_id = row.master_audio_track_id,
         fps_mismatch_policy = row.fps_mismatch_policy or "resample",
@@ -268,11 +262,8 @@ local function load_track_clips(db, track_id)
             enabled = stmt:value(13) == 1 or stmt:value(13) == true,
             volume = stmt:value(14),
             track_type = track_type,
-            -- Compat surfaces.
-            clip_kind = (track_type == "VIDEO") and "video" or "audio",
+            -- V13-resolved chain leaf (joined media_id; nil when nested is itself nested).
             media_id = stmt:value(23),
-            master_clip_id = nested_id,
-            offline = false,
         })
     end
     stmt:finalize()
@@ -483,10 +474,9 @@ function ClipMutator.resolve_occlusions(db, params)
                 local right_clip = {
                     id = uuid.generate(),
                     project_id = original.project_id,
-                    clip_kind = original.clip_kind,
+                    track_type = original.track_type,
                     name = original.name,
                     track_id = original.track_id,
-                    media_id = original.media_id,
                     timeline_start = end_time,
                     duration = right_duration,
                     source_in = get_source_in(original) + frame_utils.timeline_to_source(
@@ -497,7 +487,10 @@ function ClipMutator.resolve_occlusions(db, params)
                     fps_denominator = row_fps_den,
                     enabled = original.enabled,
                     volume = original.volume,
-                    master_clip_id = original.master_clip_id,
+                    nested_sequence_id = original.nested_sequence_id,
+                    master_layer_track_id = original.master_layer_track_id,
+                    master_audio_track_id = original.master_audio_track_id,
+                    fps_mismatch_policy = original.fps_mismatch_policy,
                     owner_sequence_id = original.owner_sequence_id,
                     created_at = os.time(),
                     modified_at = os.time()
@@ -625,11 +618,13 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
                 local split_clip = {
                     id = uuid.generate(),
                     project_id = original.project_id,
-                    clip_kind = original.clip_kind,
+                    track_type = original.track_type,
                     name = original.name,
                     track_id = original.track_id,
-                    media_id = original.media_id,
-                    master_clip_id = original.master_clip_id,
+                    nested_sequence_id = original.nested_sequence_id,
+                    master_layer_track_id = original.master_layer_track_id,
+                    master_audio_track_id = original.master_audio_track_id,
+                    fps_mismatch_policy = original.fps_mismatch_policy,
                     owner_sequence_id = original.owner_sequence_id,
                     timeline_start = f.s,
                     duration = f.e - f.s,
@@ -719,12 +714,10 @@ function ClipMutator.resolve_ripple(db, params)
             local right_clip = {
                 id = uuid.generate(),
                 project_id = row.project_id,
-                clip_kind = row.clip_kind,                                -- compat
+                track_type = row.track_type,
                 name = row.name .. " (2)",
                 track_id = row.track_id,
-                media_id = row.media_id,                                  -- compat
-                master_clip_id = original.master_clip_id or original.nested_sequence_id,  -- compat
-                nested_sequence_id = original.nested_sequence_id or original.master_clip_id,
+                nested_sequence_id = original.nested_sequence_id,
                 master_layer_track_id = original.master_layer_track_id,
                 master_audio_track_id = original.master_audio_track_id,
                 fps_mismatch_policy = original.fps_mismatch_policy or "resample",
@@ -737,7 +730,6 @@ function ClipMutator.resolve_ripple(db, params)
                 fps_denominator = row_fps_den,
                 enabled = row.enabled,
                 volume = original.volume,
-                offline = false,
                 created_at = os.time(),
                 modified_at = os.time()
             }
@@ -938,11 +930,8 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         modified_at = stmt:value(16),
         track_type = track_type,
         nested_sequence_kind = stmt:value(20),
-        -- Compat surfaces.
-        clip_kind = (track_type == "VIDEO") and "video" or "audio",
+        -- V13-resolved chain leaf (nil when nested is itself nested).
         media_id = stmt:value(23),
-        master_clip_id = nested_id,
-        offline = false,
     }
     stmt:finalize()
     return clip
@@ -1066,12 +1055,14 @@ function ClipMutator.plan_duplicate_block(db, params)
         local new_clip = {
             id = new_id,
             project_id = clip.project_id,
-            clip_kind = "timeline",
+            track_type = clip.track_type,
             name = clip.name,
             track_id = mapped_track.id,
-            media_id = clip.media_id,
             owner_sequence_id = sequence_id,
-            master_clip_id = clip.master_clip_id,
+            nested_sequence_id = clip.nested_sequence_id,
+            master_layer_track_id = clip.master_layer_track_id,
+            master_audio_track_id = clip.master_audio_track_id,
+            fps_mismatch_policy = clip.fps_mismatch_policy,
             timeline_start = new_start,
             duration = clip.duration,
             source_in = clip.source_in,
@@ -1079,7 +1070,6 @@ function ClipMutator.plan_duplicate_block(db, params)
             fps_numerator = clip.fps_numerator,
             fps_denominator = clip.fps_denominator,
             enabled = clip.enabled,
-            offline = false,  -- transient
             created_at = now,
             modified_at = now,
             volume = clip.volume,
