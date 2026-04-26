@@ -48,6 +48,10 @@ assert(db:exec([[
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('video1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('audio1', 'default_sequence', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('audio2', 'default_sequence', 'A2', 'AUDIO', 2, 1, 0, 0, 0, 1.0, 0.0);
 ]]))
 
 -- Prepare media: 1h16m22s@25fps (approx clip from the report)
