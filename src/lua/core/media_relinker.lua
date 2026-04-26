@@ -485,12 +485,16 @@ function M.find_media_for_clips(db, clip_ids)
     assert(type(clip_ids) == "table" and #clip_ids > 0,
         "find_media_for_clips: clip_ids must be non-empty array")
 
-    -- One query: collect distinct media_ids across every clip.
+    -- V13: clips reference master sequences via nested_sequence_id; the
+    -- master holds media_refs that point at media. JOIN through both.
     local phs = {}
     for i = 1, #clip_ids do phs[i] = "?" end
-    local sql = string.format(
-        "SELECT id, media_id FROM clips WHERE id IN (%s)",
-        table.concat(phs, ","))
+    local sql = string.format([[
+        SELECT c.id, mr.media_id
+          FROM clips c
+          JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+         WHERE c.id IN (%s)
+    ]], table.concat(phs, ","))
 
     local stmt = assert(db:prepare(sql),
         "find_media_for_clips: failed to prepare clips query")
