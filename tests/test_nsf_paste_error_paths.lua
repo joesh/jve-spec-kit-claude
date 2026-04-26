@@ -141,6 +141,8 @@ local function create_mc(media_id, dur)
         file_path = '/tmp/jve/' .. media_id .. '.mov',
         name = media_id, duration_frames = dur,
         fps_numerator = 25, fps_denominator = 1,
+        width = 1920, height = 1080,
+        audio_channels = 0,
     })
     m:save(database.get_connection())
     local mc = test_env.create_test_masterclip_sequence('proj', media_id..' MC', 25, 1, dur, media_id)
@@ -152,11 +154,13 @@ local mc = create_mc("med_outside", 500)
 local cmd = Command.create("Overwrite", "proj")
 cmd:set_parameters({
     nested_sequence_id = mc, target_video_track_id = "v1", sequence_id = "seq",
-    timeline_start_frame = 500, duration = 100,
-    source_in = 0, source_out = 100,
-    nested_sequence_id = "far_clip", advance_playhead = false,
+    timeline_start_frame = 500,
+    advance_playhead = false,
 })
-assert(command_manager.execute(cmd).success)
+do
+    local r = command_manager.execute(cmd)
+    assert(r.success, "Overwrite failed: " .. tostring(r.error_message))
+end
 
 -- Marks at [100, 200) — clip is at [500, 600), no overlap
 assert(command_manager.execute("SetMarkIn", {
