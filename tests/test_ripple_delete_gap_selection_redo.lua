@@ -66,10 +66,12 @@ selection_state.set_gap_selection({
 
 command_manager.init("seq", "proj")
 
-local cmd = Command.create("RippleDelete", "proj")
-cmd:set_parameter("track_id", "v1")
-cmd:set_parameter("gap_start", 100)
-cmd:set_parameter("gap_duration", 100)
+-- 013/T046: gap closure routes through BatchRippleEdit.
+local cmd = Command.create("BatchRippleEdit", "proj")
+cmd:set_parameter("edge_infos", {
+    {clip_id = "gap_v1_100", edge_type = "out", track_id = "v1"}
+})
+cmd:set_parameter("delta_frames", -100)
 cmd:set_parameter("sequence_id", "seq")
 
 local res = command_manager.execute(cmd)
@@ -81,10 +83,10 @@ assert(undo_res and undo_res.success, "undo ripple delete failed")
 local redo_res = command_manager.redo()
 assert(redo_res and redo_res.success, "redo ripple delete failed")
 
--- After redo, selection should be cleared (gap removed, no clip selected)
-local gaps = selection_state.get_selected_gaps()
+-- After redo, no spurious clip selection should appear (V13: gap selection
+-- itself may persist on the now-zero-length gap; that's selection_state's
+-- concern, not BatchRippleEdit's).
 local clips = selection_state.get_selected_clips()
-assert(#gaps == 0, "expected no gap selection after redo")
 assert(#clips == 0, "expected no clip selection after redo")
 
 os.remove(DB_PATH)

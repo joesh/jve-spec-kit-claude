@@ -56,10 +56,14 @@ insert_clip("c2", 200, 100)
 
 command_manager.init("seq", "proj")
 
-local cmd = Command.create("RippleDelete", "proj")
-cmd:set_parameter("track_id", "v1")
-cmd:set_parameter("gap_start", 100)
-cmd:set_parameter("gap_duration", 100)
+-- 013/T046: gap closure routes through BatchRippleEdit. The gap's id is
+-- 'gap_<track_id>_<start_frame>'; closing it = ripple the gap's "out" edge
+-- left by the gap's duration.
+local cmd = Command.create("BatchRippleEdit", "proj")
+cmd:set_parameter("edge_infos", {
+    {clip_id = "gap_v1_100", edge_type = "out", track_id = "v1"}
+})
+cmd:set_parameter("delta_frames", -100)
 cmd:set_parameter("sequence_id", "seq")
 
 local res = command_manager.execute(cmd)
