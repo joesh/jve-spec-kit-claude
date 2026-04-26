@@ -1287,7 +1287,7 @@ function M.load_sequences(project_id)
         SELECT id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
                playhead_frame, view_start_frame, view_duration_frames
         FROM sequences
-        WHERE project_id = ?
+        WHERE project_id = ? AND kind = 'nested'
         ORDER BY name
     ]])
     if not query then
