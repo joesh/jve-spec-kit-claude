@@ -42,20 +42,6 @@ function M.resolve_media_id_from_ui(media_id, command)
 end
 
 --- Resolve nested_sequence_id from browser selection.
--- @return string|nil The master sequence ID (clip_id from browser, which
--- under V13 IS the master sequence id since masters are sequences).
-function M.resolve_nested_sequence_id_from_ui()
-    local ui_state = require("ui.ui_state")
-    local project_browser = ui_state.get_project_browser and ui_state.get_project_browser()
-    if project_browser and project_browser.get_selected_master_clip then
-        local selected = project_browser.get_selected_master_clip()
-        if selected and selected.clip_id then
-            return selected.clip_id
-        end
-    end
-    return nil
-end
-
 --- Resolve sequence_id from args, track_id, or timeline_state
 -- @param args table Command arguments
 -- @param track_id string|nil Track ID to resolve from
