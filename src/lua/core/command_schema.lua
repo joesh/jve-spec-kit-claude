@@ -64,27 +64,6 @@ local function is_globally_allowed(k)
 end
 
 
---- @fn describe
---- @role internal
---- @idiom Only used for error messages; accepts nil.
-
-local function _describe(v)  -- luacheck: ignore 211 (kept for future use)
-    if v == nil then
-        return "nil"
-    end
-    return string.format("%s(%s)", type(v), tostring(v))
-end
-
-
---- @fn is_kind
---- @role internal
---- @idiom Type checking helper for validating parameter kinds.
-
-local function _is_kind(expected_kind, value)  -- luacheck: ignore 211 (kept for future use)
-    return type(value) == expected_kind
-end
-
-
 --- @fn normalize_spec
 --- @role internal
 --- @idiom Only called by validate_and_normalize after spec is known non-nil.
