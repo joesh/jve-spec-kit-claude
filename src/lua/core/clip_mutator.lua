@@ -41,7 +41,9 @@ end
             nested_sequence_id = row.nested_sequence_id,
             master_layer_track_id = row.master_layer_track_id,
             master_audio_track_id = row.master_audio_track_id,
-            fps_mismatch_policy = row.fps_mismatch_policy or "resample",
+            fps_mismatch_policy = assert(row.fps_mismatch_policy,
+                "clip_mutator: clip row missing fps_mismatch_policy "
+                .. "(NOT NULL in schema; rule 2.13 — no silent fallback)"),
             owner_sequence_id = row.owner_sequence_id,
             created_at = row.created_at,
             modified_at = row.modified_at,
@@ -151,7 +153,9 @@ local function plan_insert(row)
         nested_sequence_id = nested_id,
         master_layer_track_id = row.master_layer_track_id,
         master_audio_track_id = row.master_audio_track_id,
-        fps_mismatch_policy = row.fps_mismatch_policy or "resample",
+        fps_mismatch_policy = assert(row.fps_mismatch_policy,
+            "clip_mutator: insert mutation missing fps_mismatch_policy "
+            .. "for clip " .. tostring(row.id)),
         owner_sequence_id = row.owner_sequence_id,
         timeline_start_frame = get_frames(row.timeline_start or row.start_value),
         duration_frames = get_frames(row.duration),
@@ -705,7 +709,9 @@ function ClipMutator.resolve_ripple(db, params)
                 nested_sequence_id = original.nested_sequence_id,
                 master_layer_track_id = original.master_layer_track_id,
                 master_audio_track_id = original.master_audio_track_id,
-                fps_mismatch_policy = original.fps_mismatch_policy or "resample",
+                fps_mismatch_policy = assert(original.fps_mismatch_policy,
+                    "clip_mutator: original clip missing fps_mismatch_policy "
+                    .. "in resolve_ripple (split right-half)"),
                 owner_sequence_id = original.owner_sequence_id,
                 timeline_start = right_start,
                 duration = right_dur,
