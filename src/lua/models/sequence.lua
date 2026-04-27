@@ -1976,6 +1976,15 @@ local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
                 enabled        = online and r.enabled,
                 effects        = {},
                 provenance     = build_provenance(outer_chain, r.id),
+                -- Default owner-track tagging for the case where this master
+                -- is the outermost sequence (e.g. source viewer playing the
+                -- master directly). resolve_nested overwrites these when
+                -- recursion bubbles outwards. Without this default, entries
+                -- returned to consumers would have no track tag and crash
+                -- in playback_engine's TMB routing.
+                owner_track_index = r.track_index,
+                owner_track_type  = r.track_type,
+                owner_clip_id     = r.id,
             }
             if r.track_type == "VIDEO" then
                 base.media_kind   = "video"
@@ -2002,6 +2011,10 @@ local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
                         enabled        = base.enabled,
                         effects        = {},
                         provenance     = build_provenance(outer_chain, r.id),
+                        -- See base.owner_track_* above.
+                        owner_track_index = r.track_index,
+                        owner_track_type  = r.track_type,
+                        owner_clip_id     = r.id,
                         -- Channel state stays SEPARATE from volume until the
                         -- final composition pass — any clip in the chain may
                         -- replace it via clip_channel_override without
