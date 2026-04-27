@@ -69,8 +69,8 @@ assert(audio_playback.start, "audio_playback.start missing")
 assert(audio_playback.stop, "audio_playback.stop missing")
 assert(audio_playback.seek, "audio_playback.seek missing")
 assert(audio_playback.set_speed, "audio_playback.set_speed missing")
-assert(audio_playback.get_media_time_us, "audio_playback.get_media_time_us missing")
-assert(audio_playback.set_max_media_time, "audio_playback.set_max_media_time missing")
+assert(audio_playback.get_time_us, "audio_playback.get_time_us missing")
+assert(audio_playback.set_max_time, "audio_playback.set_max_time missing")
 assert(audio_playback.get_playhead_us, "audio_playback.get_playhead_us missing")
 assert(audio_playback.had_underrun, "audio_playback.had_underrun missing")
 assert(audio_playback.clear_underrun, "audio_playback.clear_underrun missing")
@@ -152,45 +152,45 @@ print("  ✓ apply_mix validates edit_time_us type")
 reset_module_state()
 
 --------------------------------------------------------------------------------
--- SECTION 4: set_max_media_time() Validation
+-- SECTION 4: set_max_time() Validation
 --------------------------------------------------------------------------------
-print("\n--- Section 4: set_max_media_time() Validation ---")
+print("\n--- Section 4: set_max_time() Validation ---")
 
 reset_module_state()
 
-print("\nTest 4.1: set_max_media_time with nil asserts")
+print("\nTest 4.1: set_max_time with nil asserts")
 expect_assert(
-    function() audio_playback.set_max_media_time(nil) end,
+    function() audio_playback.set_max_time(nil) end,
     "must be.*number",
-    "set_max_media_time(nil)"
+    "set_max_time(nil)"
 )
-print("  ✓ set_max_media_time(nil) asserts")
+print("  ✓ set_max_time(nil) asserts")
 
-print("\nTest 4.2: set_max_media_time with string asserts")
+print("\nTest 4.2: set_max_time with string asserts")
 expect_assert(
-    function() audio_playback.set_max_media_time("1000") end,
+    function() audio_playback.set_max_time("1000") end,
     "must be.*number",
-    "set_max_media_time(string)"
+    "set_max_time(string)"
 )
-print("  ✓ set_max_media_time(string) asserts")
+print("  ✓ set_max_time(string) asserts")
 
-print("\nTest 4.3: set_max_media_time with negative asserts")
+print("\nTest 4.3: set_max_time with negative asserts")
 expect_assert(
-    function() audio_playback.set_max_media_time(-100) end,
+    function() audio_playback.set_max_time(-100) end,
     "non%-negative",
-    "set_max_media_time(-100)"
+    "set_max_time(-100)"
 )
-print("  ✓ set_max_media_time(negative) asserts")
+print("  ✓ set_max_time(negative) asserts")
 
-print("\nTest 4.4: set_max_media_time(0) is valid")
-audio_playback.set_max_media_time(0)
+print("\nTest 4.4: set_max_time(0) is valid")
+audio_playback.set_max_time(0)
 assert(audio_playback.max_media_time_us == 0, "max_media_time_us should be 0")
-print("  ✓ set_max_media_time(0) works")
+print("  ✓ set_max_time(0) works")
 
-print("\nTest 4.5: set_max_media_time with positive value")
-audio_playback.set_max_media_time(1000000)
+print("\nTest 4.5: set_max_time with positive value")
+audio_playback.set_max_time(1000000)
 assert(audio_playback.max_media_time_us == 1000000, "max_media_time_us should be 1000000")
-print("  ✓ set_max_media_time(1000000) works")
+print("  ✓ set_max_time(1000000) works")
 
 --------------------------------------------------------------------------------
 -- SECTION 5: set_speed() Validation
@@ -307,34 +307,34 @@ assert(audio_playback.media_anchor_us == 300000, "media_anchor_us should be 3000
 print("  ✓ seek when stopped updates stopped state")
 
 --------------------------------------------------------------------------------
--- SECTION 7: get_media_time_us() Behavior
+-- SECTION 7: get_time_us() Behavior
 --------------------------------------------------------------------------------
-print("\n--- Section 7: get_media_time_us() Behavior ---")
+print("\n--- Section 7: get_time_us() Behavior ---")
 
 reset_module_state()
 
-print("\nTest 7.1: get_media_time_us when no session returns media_time_us")
+print("\nTest 7.1: get_time_us when no session returns media_time_us")
 audio_playback.session_initialized = false
 audio_playback.media_time_us = 123456
-local t = audio_playback.get_media_time_us()
+local t = audio_playback.get_time_us()
 assert(t == 123456, "Should return media_time_us when no session")
 print("  ✓ Returns media_time_us when no session")
 
-print("\nTest 7.2: get_media_time_us when not playing returns media_time_us")
+print("\nTest 7.2: get_time_us when not playing returns media_time_us")
 audio_playback.session_initialized = true
 audio_playback.playing = false
 audio_playback.media_time_us = 789000
-t = audio_playback.get_media_time_us()
+t = audio_playback.get_time_us()
 assert(t == 789000, "Should return media_time_us when not playing")
 print("  ✓ Returns media_time_us when not playing")
 
-print("\nTest 7.3: get_media_time_us with nil media_time_us asserts")
+print("\nTest 7.3: get_time_us with nil media_time_us asserts")
 audio_playback.session_initialized = false
 audio_playback.media_time_us = nil
 expect_assert(
-    function() audio_playback.get_media_time_us() end,
+    function() audio_playback.get_time_us() end,
     "missing media_time_us",
-    "get_media_time_us with nil"
+    "get_time_us with nil"
 )
 audio_playback.media_time_us = 0  -- restore
 print("  ✓ Asserts if media_time_us is nil")

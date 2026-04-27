@@ -136,11 +136,6 @@ function M.get_time_us()
     return clamp_media_us(result)
 end
 
---- Backward-compat alias (callers that haven't been updated yet)
-function M.get_media_time_us()
-    return M.get_time_us()
-end
-
 --------------------------------------------------------------------------------
 -- Transport Helpers (transport events only)
 --------------------------------------------------------------------------------
@@ -411,11 +406,6 @@ function M.set_max_time(max_us)
         "audio_playback.set_max_time: max_us must be non-negative number")
     M.max_media_time_us = max_us
     log.event("max_time set to %.3fs", max_us / 1000000)
-end
-
---- Backward-compat alias
-function M.set_max_media_time(max_us)
-    M.set_max_time(max_us)
 end
 
 --- Shutdown audio session. Closes AOP+SSE, clears all state.

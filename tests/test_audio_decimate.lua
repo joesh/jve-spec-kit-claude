@@ -115,7 +115,7 @@ audio_playback.init_session(48000, 2)
 audio_playback.apply_mix("mock_tmb", {
     { track_index = 1, volume = 1.0, muted = false, soloed = false },
 }, 0)
-audio_playback.set_max_media_time(10000000)
+audio_playback.set_max_time(10000000)
 clear_sse_calls()
 
 print("\nTest 2.1: Speed 2x selects Q1 mode")
@@ -171,7 +171,7 @@ audio_playback.init_session(48000, 2)
 audio_playback.apply_mix("mock_tmb", {
     { track_index = 1, volume = 1.0, muted = false, soloed = false },
 }, 0)
-audio_playback.set_max_media_time(10000000)
+audio_playback.set_max_time(10000000)
 audio_playback.media_time_us = 1000000  -- Start at 1 second
 clear_sse_calls()
 
