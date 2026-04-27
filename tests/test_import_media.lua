@@ -230,18 +230,6 @@ assert(after_redo_media > before_redo_media,
     string.format("Redo should increase media count: before=%d, after=%d", before_redo_media, after_redo_media))
 
 -- =============================================================================
--- TEST 5: Single file_path parameter (backward compatibility)
--- =============================================================================
-print("Test 5: Single file_path parameter works")
-local initial_count = count_media()
-result = execute_command("ImportMedia", {
-    project_id = "project",
-    file_path = "/tmp/jve/single_file.mov"  -- Note: file_path, not file_paths
-})
-assert(result.success, "ImportMedia with single file_path should succeed")
-assert(count_media() > initial_count, "Should have added media")
-
--- =============================================================================
 -- TEST 6: Error case - missing project_id
 -- =============================================================================
 print("Test 6: Missing project_id fails")

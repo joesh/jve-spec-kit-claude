@@ -43,7 +43,9 @@ print("Test 1: Media cleanup during undo/replay")
 
 -- Create ImportMedia command executor (simplified for testing)
 local function execute_import_media(cmd)
-    local file_path = cmd:get_parameter("file_path")
+    local paths = cmd:get_parameter("file_paths")
+    assert(type(paths) == "table" and paths[1], "test stub: file_paths required")
+    local file_path = paths[1]
     local media_id = cmd:get_parameter("media_id") or ("media_" .. file_path:gsub("[^%w]", "_"))
     local media = Media.create({
         id = media_id,
@@ -83,7 +85,7 @@ end
 local import_media_spec = {
     args = {
         project_id = { kind = "string", required = false },
-        file_path = { kind = "string", required = true },
+        file_paths = { kind = "table", required = true },
         media_id = { kind = "string", required = false },
     }
 }
@@ -91,7 +93,7 @@ command_manager.register_executor("ImportMedia", execute_import_media, undo_impo
 
 -- Import first media file
 local import1 = Command.create("ImportMedia", "test_project")
-import1:set_parameter("file_path", "/test/video1.mp4")
+import1:set_parameter("file_paths", { "/test/video1.mp4" })
 local result1 = command_manager.execute(import1)
 
 if not result1.success then
@@ -101,7 +103,7 @@ end
 
 -- Import second media file
 local import2 = Command.create("ImportMedia", "test_project")
-import2:set_parameter("file_path", "/test/video2.mp4")
+import2:set_parameter("file_paths", { "/test/video2.mp4" })
 local result2 = command_manager.execute(import2)
 
 if not result2.success then

@@ -28,7 +28,6 @@ local SPEC = {
         sequence_id = {},  -- Optional, may be passed from UI context
         interactive = { kind = "boolean" },  -- If true, show file picker dialog
         file_paths = {},  -- Array of file paths (or gathered from dialog)
-        file_path = {},   -- Single file for backward compatibility
     },
     persisted = {
         -- Arrays of IDs for each imported file (parallel arrays). V13: master
@@ -228,13 +227,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return { success = false, error_message = "Missing project_id" }
         end
 
-        -- Check if file paths provided
         local file_paths = args.file_paths
-        if not file_paths and args.file_path then
-            -- Single file_path for backward compatibility - convert to array
-            file_paths = { args.file_path }
-            command:set_parameter("file_paths", file_paths)
-        end
 
         -- If interactive mode or no file paths provided, show dialog
         if args.interactive or not file_paths or type(file_paths) ~= "table" or #file_paths == 0 then

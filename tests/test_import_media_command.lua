@@ -111,7 +111,7 @@ end
 
 -- Execute ImportMedia
 local import_cmd = Command.create("ImportMedia", "test_project")
-import_cmd:set_parameter("file_path", "/tmp/jve/test_source.mov")
+import_cmd:set_parameter("file_paths", { "/tmp/jve/test_source.mov" })
 
 local result = command_manager.execute(import_cmd)
 assert(result.success, "ImportMedia command failed to execute")

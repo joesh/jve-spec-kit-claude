@@ -131,7 +131,7 @@ media_reader.import_media = function(_, _, _, existing_media_id)
 end
 
 local import_cmd = Command.create("ImportMedia", "test_project")
-import_cmd:set_parameter("file_path", "/tmp/jve/test_source.mov")
+import_cmd:set_parameter("file_paths", { "/tmp/jve/test_source.mov" })
 import_cmd:set_parameter("project_id", "test_project")
 
 local import_result = command_manager.execute(import_cmd)
