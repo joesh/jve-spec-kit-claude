@@ -564,7 +564,6 @@ function M.import_into_project(project_id, parse_result, opts)
                         -- the timeline TC into <In> for stills, which the
                         -- parser propagates verbatim; the file's true span
                         -- wins.
-                        local Media = require("models.media")
                         local media_row = Media.load(media_id)
                         assert(media_row, string.format(
                             "importer_core: media %s missing while creating clip '%s'",
@@ -584,16 +583,17 @@ function M.import_into_project(project_id, parse_result, opts)
                             -- is in video frames. Convert to samples via the
                             -- media's audio_sample_rate and fps ratio.
                             local sr = media_row.audio_sample_rate
-                            local fps_num = media_row.frame_rate.fps_numerator
-                            local fps_den = media_row.frame_rate.fps_denominator
-                            assert(sr and sr > 0 and fps_num and fps_den, string.format(
+                            local media_fps_num = media_row.frame_rate.fps_numerator
+                            local media_fps_den = media_row.frame_rate.fps_denominator
+                            assert(sr and sr > 0 and media_fps_num and media_fps_den,
+                                string.format(
                                 "importer_core: media %s audio metadata incomplete "
                                 .. "(sample_rate=%s, fps=%s/%s) for clip '%s'",
                                 tostring(media_id), tostring(sr),
-                                tostring(fps_num), tostring(fps_den),
+                                tostring(media_fps_num), tostring(media_fps_den),
                                 tostring(clip_data.name)))
                             local dur_samples = math.floor(
-                                fdur * sr * fps_den / fps_num + 0.5)
+                                fdur * sr * media_fps_den / media_fps_num + 0.5)
                             local extent = atc + dur_samples
                             assert(math.max(source_in_final, source_out_final) <= extent,
                                 string.format(

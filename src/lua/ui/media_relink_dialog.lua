@@ -179,14 +179,12 @@ local function build_media_infos(media_list, widgets)
     -- default rate (rule 1.14). Media without TC will have a nil
     -- source extent, which the matcher handles (trimmed-media
     -- containment check returns false for nil extents).
-    local tc_by_id = {}      -- media_id → {value, rate}; rate may be nil
-    local audio_tc_by_id = {} -- media_id → {value, rate}; rate may be nil
-    local rates_by_id = {}   -- per-stream target rates: {video_rate=, audio_rate=}
+    local tc_by_id = {}     -- media_id → {value, rate}; rate may be nil
+    local rates_by_id = {}  -- per-stream target rates: {video_rate=, audio_rate=}
     for _, media in ipairs(media_list) do
         local tc_value, tc_rate = media:get_start_tc()
         tc_by_id[media.id] = { value = tc_value, rate = tc_rate }
-        local atc_value, atc_rate = media:get_audio_start_tc()
-        audio_tc_by_id[media.id] = { value = atc_value, rate = atc_rate }
+        local _, atc_rate = media:get_audio_start_tc()
         local audio_rate_for_extent = atc_rate or media.audio_sample_rate
         if audio_rate_for_extent == 0 then audio_rate_for_extent = nil end
         rates_by_id[media.id] = {
@@ -212,7 +210,6 @@ local function build_media_infos(media_list, widgets)
     -- content"; sample-accurate operations live elsewhere.
     for mi, media in ipairs(media_list) do
         local tc = tc_by_id[media.id]
-        local atc = audio_tc_by_id[media.id]
         local ext = extents_by_id[media.id] or {}
         local v_extent = ext.video
         local a_extent = ext.audio
