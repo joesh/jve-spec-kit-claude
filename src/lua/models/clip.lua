@@ -183,35 +183,20 @@ local function load_internal(clip_id, raise_errors)
     return clip
 end
 
--- Create a new Clip instance.
---
--- Two calling conventions:
---  1. Positional (legacy, pre-013): Clip.create(name, media_id, opts) →
---     returns an unpersisted Clip object for :save() chaining.
---  2. Table form (013, direct DB insert): Clip.create(fields) → inserts a V9
---     clips row and returns its id as a string. Enforces INV-2 via the
---     schema trigger + INV-4 via model-layer check.
---- Create a clip row (V13). Args: a single table with the V13 fields:
+--- Create a clip row. Args: a single table with the V13 fields:
 --- id (optional), project_id, owner_sequence_id, track_id,
 --- nested_sequence_id, name, timeline_start_frame, duration_frames,
 --- source_in_frame, source_out_frame, master_layer_track_id (nullable),
 --- fps_mismatch_policy ('resample'|'passthrough'), enabled, volume,
 --- mark_in_frame (nullable), mark_out_frame (nullable), playhead_frame.
 --- Returns the clip id (string). INV-2/INV-4 enforced via the model
---- helpers + DB triggers.
----
---- The legacy positional form (name, media_id, opts) and its V8 column
---- writes (clip_kind/master_clip_id/media_id/offline) were deleted per
---- FR-018. Callers that need a master sequence call Sequence.ensure_master
---- (which writes media_refs, not clips).
+--- helpers + DB triggers. To create a master sequence from a media file,
+--- call Sequence.ensure_master (writes media_refs, not clips).
 function M.create(fields)
     assert(type(fields) == "table",
-        "Clip.create: fields table required (V13 table form). Legacy "
-        .. "positional form was removed under FR-018. To create a master "
-        .. "from a media file, use Sequence.ensure_master.")
+        "Clip.create: fields table required")
     assert(fields.nested_sequence_id ~= nil,
-        "Clip.create: 'nested_sequence_id' is required (V13). Pre-013 "
-        .. "shape (file-id-on-clip + kind discriminator) does not apply.")
+        "Clip.create: 'nested_sequence_id' is required")
     return M._create_v13_row(fields)
 end
 
