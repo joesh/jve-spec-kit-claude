@@ -427,10 +427,10 @@ end
 -- Transport Control (these are transport events -> call reanchor)
 --------------------------------------------------------------------------------
 
---- Start audio playback (transport event)
--- NOTE: In Phase 3, C++ AudioPump owns the TMB→SSE→AOP pipeline.
--- This Lua function is retained for direct tests and legacy callers.
--- For normal playback, playback_engine uses PLAYBACK.ACTIVATE_AUDIO + controller:Play()
+--- Start audio playback (transport event). C++ AudioPump owns the
+-- TMB→SSE→AOP pipeline; this Lua entry point sets up the Lua-side state
+-- (reanchor, mark playing) and starts the AOP device. playback_engine
+-- and playback_helpers are the production callers.
 function M.start()
     assert(M.session_initialized,
         "audio_playback.start: session not initialized")
@@ -611,16 +611,19 @@ end
 
 --------------------------------------------------------------------------------
 -- Frame-Step Audio Burst (Jog)
--- NOTE: Phase 3 moved burst rendering to C++ via PLAYBACK.PLAY_BURST.
--- playback_engine now calls that directly. This stub remains for tests.
+-- C++ owns burst rendering via PLAYBACK.PLAY_BURST when the
+-- PlaybackController is available with audio. The Lua entry point below
+-- is the fallback for when no audio is loaded (tracks the stopped-state
+-- position so the playhead stays in sync) and for unit tests that drive
+-- audio_playback directly.
 --------------------------------------------------------------------------------
 
---- Play a short audio burst at a given time.
--- NOTE: In Phase 3, burst rendering moved to C++ via PLAYBACK.PLAY_BURST.
--- playback_engine calls that binding directly when controller has audio.
--- This Lua function is retained as a stub for backward compatibility with tests.
--- @param time_us number: playback time to play at
--- @param duration_us number: burst length in microseconds (typically 1 frame)
+--- Update stopped-state position at a given burst time. No decode/render
+-- happens here — that's the C++ AudioPump path. playback_engine calls
+-- this when its controller doesn't have audio (no media loaded yet).
+-- @param time_us number: playback time to anchor at
+-- @param duration_us number: burst length in microseconds (kept for API
+--   parity with the C++ binding; not consumed by the Lua fallback)
 function M.play_burst(time_us, duration_us)
     if not M.session_initialized then return end
     if not M.has_audio then return end
@@ -634,7 +637,7 @@ function M.play_burst(time_us, duration_us)
     -- Store stopped-state position at burst time
     M.media_time_us = clamp_media_us(time_us)
 
-    log.event("play_burst (stub): t=%.3fs dur=%.1fms - use PLAYBACK.PLAY_BURST for audio",
+    log.event("play_burst Lua fallback (no decode): t=%.3fs dur=%.1fms",
         time_us / 1000000, duration_us / 1000)
 end
 
