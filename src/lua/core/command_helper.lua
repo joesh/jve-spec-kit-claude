@@ -1,7 +1,6 @@
 --- Shared helper functions for command implementations.
 local M = {}
 
-local json = require("dkjson")
 local uuid = require("uuid")
 local Clip = require("models.clip")
 local Track = require("models.track")
