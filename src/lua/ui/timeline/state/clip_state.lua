@@ -313,10 +313,38 @@ function M.apply_mutations(mutations, persist_callback)
         end
     end
     
-    apply_bulk_shifts()
+    --- Apply order matches the natural three-phase domain flow used by
+    -- Insert (split → bulk_shift → place into cleared space):
+    --
+    --   1. updates    — trim the left half of any straddling clip the split
+    --                   cut into two, plus any pre-Insert bounds rewrites.
+    --   2. inserts    — materialize the split right-halves at their PRE-shift
+    --                   positions so step 3's predicate finds them. Also any
+    --                   inserts from non-Insert callers that don't need a
+    --                   ripple at all.
+    --   3. bulk_shifts — ripple all clips at/past the cut frame forward by
+    --                    the inserted duration. Pre-existing downstream
+    --                    clips and the just-inserted split right-halves
+    --                    both shift here.
+    --   4. placements — the actual new clips Insert is placing into the
+    --                   cleared space at the cut frame. They land at the
+    --                   FINAL position; bulk_shift has already run and
+    --                   does not touch them.
+    --   5. deletes    — last so any earlier step that reads bounds sees the
+    --                   clip before it disappears.
+    local function apply_inserts(list)
+        if not list then return end
+        for _, clip in ipairs(list) do
+            if normalize_clip_integers(clip) then
+                table.insert(data.state.clips, clip)
+                changed = true
+            end
+        end
+        M.invalidate_indexes()
+    end
 
-    -- Handle Deletes
-    if mutations.deletes then
+    local function apply_deletes()
+        if not mutations.deletes then return end
         for _, entry in ipairs(mutations.deletes) do
             -- Entries are either raw clip_id strings (legacy/minimal) or
             -- records {clip_id, track_id, timeline_start, duration} that
@@ -352,7 +380,7 @@ function M.apply_mutations(mutations, persist_callback)
         M.invalidate_indexes()
     end
 
-    -- Handle Updates
+    local function apply_updates()
     if mutations.updates and #mutations.updates > 0 then
         ensure_clip_indexes()
         for _, update in ipairs(mutations.updates) do
@@ -439,17 +467,15 @@ function M.apply_mutations(mutations, persist_callback)
         end
         if needs_resort then M.invalidate_indexes() end
     end
-
-    -- Handle Inserts
-    if mutations.inserts then
-        for _, clip in ipairs(mutations.inserts) do
-            if normalize_clip_integers(clip) then
-                table.insert(data.state.clips, clip)
-                changed = true
-            end
-        end
-        M.invalidate_indexes()
     end
+
+    -- Sequenced execution: split → bulk_shift → place → delete (see
+    -- block comment above apply_inserts for full rationale).
+    apply_updates()
+    apply_inserts(mutations.inserts)
+    apply_bulk_shifts()
+    apply_inserts(mutations.placements)
+    apply_deletes()
 
     if changed then
         state_version = state_version + 1

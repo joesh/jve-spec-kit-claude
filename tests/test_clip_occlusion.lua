@@ -3,6 +3,8 @@
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 
 local test_env = require('test_env')
+-- luacheck: ignore test_env  -- referenced from fixtures via _G
+_G.test_env_for_fixtures = test_env
 
 local database = require('core.database')
 local Clip = require('models.clip')
@@ -219,7 +221,7 @@ local clip_a = Clip.create({
         playhead_frame = 0,
     })
 -- V13: Clip.create already INSERTed; clip_a is the id string.
-local clip_b = Clip.create({
+local _clip_b = Clip.create({
         name = "B",
         id = "B",
         project_id = "project",
@@ -285,7 +287,7 @@ db:exec([[INSERT OR REPLACE INTO tracks (id, sequence_id, name, track_type, trac
           INSERT OR REPLACE INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
           VALUES ('track_nudge_v2', 'sequence', 'NV2', 'VIDEO', 13, 1);]])
 
-local base_left = Clip.create({
+local _base_left = Clip.create({
         name = "Base Left",
         id = "Base Left",
         project_id = "project",
@@ -302,7 +304,7 @@ local base_left = Clip.create({
         playhead_frame = 0,
     })
 -- V13: Clip.create already INSERTed; base_left is the id string.
-local base_right = Clip.create({
+local _base_right = Clip.create({
         name = "Base Right",
         id = "Base Right",
         project_id = "project",
@@ -416,15 +418,26 @@ assert(ripple_after.duration <= 5000,
 
 print("✅ RippleEdit clamps extension to media duration")
 
--- Test 5 (V13): Insert at mid-clip splits the existing clip — V13 Insert
--- doesn't implement split-on-overlap (a separate feature decision); the
--- behavior is covered by Overwrite's occlude_track contract instead.
--- Skip the rest of test 5 to leave the test file otherwise green.
-print("Test 5: skipped (V13 Insert doesn't split mid-clip; Overwrite does)")
-do return end
-local base_media = Media.create({id = "media_split_base", project_id = "project", file_path = "/tmp/jve/base.mov", name = "base.mov", duration_frames = 180, frame_rate = 30, created_at = os.time(), modified_at = os.time()})
+-- Test 5: Insert at mid-clip splits the existing clip and ripples
+-- downstream by the inserted duration.
+print("Test 5: Insert mid-clip splits and ripples")
+local base_media = Media.create({
+    id = "media_split_base", project_id = "project",
+    file_path = "/tmp/jve/base.mov", name = "base.mov",
+    duration_frames = 180,
+    fps_numerator = 30, fps_denominator = 1,
+    width = 1920, height = 1080, audio_channels = 0,
+    created_at = os.time(), modified_at = os.time(),
+})
 assert(base_media:save(db), "failed to save base media")
-local new_media = Media.create({id = "media_split_new", project_id = "project", file_path = "/tmp/jve/new.mov", name = "new.mov", duration_frames = 30, frame_rate = 30, created_at = os.time(), modified_at = os.time()})
+local new_media = Media.create({
+    id = "media_split_new", project_id = "project",
+    file_path = "/tmp/jve/new.mov", name = "new.mov",
+    duration_frames = 30,
+    fps_numerator = 30, fps_denominator = 1,
+    width = 1920, height = 1080, audio_channels = 0,
+    created_at = os.time(), modified_at = os.time(),
+})
 assert(new_media:save(db), "failed to save new media")
 
 -- Create masterclip sequence for the new media (required for Insert)

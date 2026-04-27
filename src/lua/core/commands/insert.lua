@@ -128,8 +128,35 @@ local SPEC = {
         duration_frames        = { kind = "number" },
         fps_mismatch_policy    = { kind = "string" },
         prior_playhead         = { kind = "number" },
+        executed_mutations     = { kind = "table" },
     },
 }
+
+-- Flat executed_mutations list: one entry per row touched. Stable contract
+-- consumed by tests/test_insert_split_behavior, batch-ripple undo, and
+-- move-clip-to-track replay paths. Entries:
+--   {type="insert", clip_id=...}  — new clip (created or split right-half)
+--   {type="update", clip_id=...}  — bounds changed (split left-half, ripple)
+local function build_executed_mutations(result)
+    local muts = {}
+    for _, cap in pairs(result.split_captures or {}) do
+        for _, right_id in ipairs(cap.split_new_ids or {}) do
+            muts[#muts + 1] = { type = "insert", clip_id = right_id }
+        end
+        for _, tr in ipairs(cap.trimmed or {}) do
+            muts[#muts + 1] = { type = "update", clip_id = tr.id }
+        end
+    end
+    for _, cid in ipairs(result.created_clip_ids) do
+        muts[#muts + 1] = { type = "insert", clip_id = cid }
+    end
+    for _, rip in pairs(result.rippled) do
+        for _, cid in ipairs(rip.clip_ids or {}) do
+            muts[#muts + 1] = { type = "update", clip_id = cid }
+        end
+    end
+    return muts
+end
 
 local function build_insert_mutation_entry(clip_id)
     local row = Clip.load_v13_row(clip_id)
@@ -164,19 +191,32 @@ local function build_insert_mutation_entry(clip_id)
     }
 end
 
--- Build the post-execute __timeline_mutations bucket for the Insert
--- executor: split right-halves emit as inserts, trimmed left-halves emit
--- as updates with post-trim bounds, created clips emit as inserts, and
--- ripple shifts emit as bulk_shifts.
+-- Build the post-execute __timeline_mutations bucket. Mirrors the natural
+-- three-phase domain flow: split → bulk_shift → place into cleared space.
+--   updates    — split's left-half trim
+--   inserts    — split's right-half at PRE-shift position (so bulk_shift
+--                catches it the same way it catches pre-existing
+--                downstream clips)
+--   bulk_shifts — ripple by inserted duration, predicate from cut frame
+--   placements — the new clips at their final post-shift position
+-- See clip_state.apply_mutations for the consumer side.
 local function build_executor_mutation_bucket(args, result)
     local bucket = {
         sequence_id = args.sequence_id,
-        inserts = {}, updates = {}, deletes = {}, bulk_shifts = {},
+        inserts = {}, updates = {}, deletes = {},
+        bulk_shifts = {}, placements = {},
     }
-    for _, cap in pairs(result.split_captures or {}) do
+    for track_id, cap in pairs(result.split_captures or {}) do
+        local track_shift = result.rippled[track_id]
+            and result.rippled[track_id].shift or 0
         for _, right_id in ipairs(cap.split_new_ids or {}) do
-            bucket.inserts[#bucket.inserts + 1] =
-                build_insert_mutation_entry(right_id)
+            local entry = build_insert_mutation_entry(right_id)
+            -- DB row is at POST-shift position (ripple ran after split).
+            -- Emit at PRE-shift so the bucket's bulk_shift moves it to the
+            -- final position in-memory, mirroring the DB sequence.
+            entry.start_value    = entry.start_value    - track_shift
+            entry.timeline_start = entry.timeline_start - track_shift
+            bucket.inserts[#bucket.inserts + 1] = entry
         end
         for _, tr in ipairs(cap.trimmed or {}) do
             local row = Clip.load_v13_row(tr.id)
@@ -193,15 +233,17 @@ local function build_executor_mutation_bucket(args, result)
             }
         end
     end
-    for _, cid in ipairs(result.created_clip_ids) do
-        bucket.inserts[#bucket.inserts + 1] = build_insert_mutation_entry(cid)
-    end
     for track_id, rip in pairs(result.rippled) do
         bucket.bulk_shifts[#bucket.bulk_shifts + 1] = {
             track_id     = track_id,
             shift_frames = rip.shift,
             start_frame  = rip.from_frame,
         }
+    end
+    -- New clips go into placements — applied AFTER bulk_shift, so they
+    -- land at the final post-ripple position without being double-shifted.
+    for _, cid in ipairs(result.created_clip_ids) do
+        bucket.placements[#bucket.placements + 1] = build_insert_mutation_entry(cid)
     end
     return bucket
 end
@@ -306,6 +348,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("split_capture",         result.split_captures or {})
         command:set_parameter("duration_frames",       result.duration_frames)
         command:set_parameter("fps_mismatch_policy",   result.fps_mismatch_policy)
+        command:set_parameter("executed_mutations",    build_executed_mutations(result))
         command:set_parameter("__timeline_mutations",
             build_executor_mutation_bucket(args, result))
 

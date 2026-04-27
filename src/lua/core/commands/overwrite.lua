@@ -102,8 +102,31 @@ local SPEC = {
         duration_frames        = { kind = "number" },
         fps_mismatch_policy    = { kind = "string" },
         prior_playhead         = { kind = "number" },
+        executed_mutations     = { kind = "table" },
     },
 }
+
+-- Flat executed_mutations list — see insert.lua for contract rationale.
+-- Overwrite has no ripple, so update entries come only from trimmed
+-- left/right halves of occluded clips.
+local function build_executed_mutations(result)
+    local muts = {}
+    for _, cap in pairs(result.occluded or {}) do
+        for _, prev in ipairs(cap.deleted or {}) do
+            muts[#muts + 1] = { type = "delete", clip_id = prev.id }
+        end
+        for _, tr in ipairs(cap.trimmed or {}) do
+            muts[#muts + 1] = { type = "update", clip_id = tr.id }
+        end
+        for _, new_id in ipairs(cap.split_new_ids or {}) do
+            muts[#muts + 1] = { type = "insert", clip_id = new_id }
+        end
+    end
+    for _, cid in ipairs(result.created_clip_ids) do
+        muts[#muts + 1] = { type = "insert", clip_id = cid }
+    end
+    return muts
+end
 
 local function build_insert_mutation_entry(clip_id)
     local row = Clip.load_v13_row(clip_id)
@@ -154,6 +177,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("occluded_capture",      result.occluded)
         command:set_parameter("duration_frames",       result.duration_frames)
         command:set_parameter("fps_mismatch_policy",   result.fps_mismatch_policy)
+        command:set_parameter("executed_mutations",    build_executed_mutations(result))
 
         local bucket = {
             sequence_id = args.sequence_id,
