@@ -332,8 +332,14 @@ function M.import_into_project(project_id, parse_result, opts)
         local max_end_frame = 0
         for _, track_data in ipairs(timeline_data.tracks) do
             for _, clip_data in ipairs(track_data.clips) do
-                local start = clip_data.start_value or 0
-                local dur = clip_data.duration or 0
+                assert(type(clip_data.start_value) == "number", string.format(
+                    "import_into_project: clip '%s' missing start_value",
+                    tostring(clip_data.name)))
+                assert(type(clip_data.duration) == "number", string.format(
+                    "import_into_project: clip '%s' missing duration",
+                    tostring(clip_data.name)))
+                local start = clip_data.start_value
+                local dur = clip_data.duration
                 if not min_start_frame or start < min_start_frame then
                     min_start_frame = start
                 end

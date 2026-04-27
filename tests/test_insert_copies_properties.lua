@@ -108,6 +108,10 @@ db:exec(string.format([[
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('track_v1', 'timeline_seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_a1', 'timeline_seq', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_a2', 'timeline_seq', 'A2', 'AUDIO', 2, 1, 0, 0, 0, 1.0, 0.0);
 ]], now, now, now, now))
 
 stub_timeline_state()
@@ -162,16 +166,18 @@ import_cmd:set_parameter("project_id", "test_project")
 local import_result = command_manager.execute(import_cmd)
 assert(import_result.success, "ImportMedia command failed: " .. tostring(import_result.error_message))
 
--- Get masterclip_sequence_id from command parameters (stored during execution)
--- IS-a refactor: masterclips are now sequences, so the parameter is masterclip_sequence_ids
-local masterclip_sequence_ids = import_cmd:get_parameter("masterclip_sequence_ids")
-assert(masterclip_sequence_ids and type(masterclip_sequence_ids) == "table" and #masterclip_sequence_ids > 0, "ImportMedia did not produce masterclip_sequence_ids")
-local nested_sequence_id = masterclip_sequence_ids[1]
+-- V13: ImportMedia exposes master_sequence_ids (kind='master' sequences
+-- per imported file) and video_media_ref_ids (V media_ref id per master).
+local master_sequence_ids = import_cmd:get_parameter("master_sequence_ids")
+assert(master_sequence_ids and type(master_sequence_ids) == "table"
+    and #master_sequence_ids > 0, "ImportMedia did not produce master_sequence_ids")
+local nested_sequence_id = master_sequence_ids[1]
 
--- IS-a refactor: to set properties, use stream clip IDs (not sequence ID)
-local video_clip_ids = import_cmd:get_parameter("video_clip_ids")
-assert(video_clip_ids and #video_clip_ids > 0, "ImportMedia did not produce video_clip_ids")
-local source_clip_id = video_clip_ids[1]
+-- V13: properties attach to the V media_ref inside the master sequence.
+local video_media_ref_ids = import_cmd:get_parameter("video_media_ref_ids")
+assert(video_media_ref_ids and #video_media_ref_ids > 0,
+    "ImportMedia did not produce video_media_ref_ids")
+local source_clip_id = video_media_ref_ids[1]
 
 local set_property_cmd = Command.create("SetClipProperty", "test_project")
 set_property_cmd:set_parameter("clip_id", source_clip_id)
@@ -184,8 +190,9 @@ local property_result = command_manager.execute(set_property_cmd)
 assert(property_result.success, "SetClipProperty failed: " .. tostring(property_result.error_message))
 
 print("Test 1: Insert copies master clip properties to timeline clip")
+-- V13: Insert takes nested_sequence_id (the master) instead of media_id —
+-- clips reference sequences, not media directly.
 local insert_cmd = Command.create("Insert", "test_project")
-insert_cmd:set_parameter("media_id", import_cmd:get_parameter("media_id") or "media_001")
 insert_cmd:set_parameter("target_video_track_id", "track_v1")
 insert_cmd:set_parameter("sequence_id", "timeline_seq")
 insert_cmd:set_parameter("project_id", "test_project")

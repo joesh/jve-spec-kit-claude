@@ -432,16 +432,21 @@ local function parse_sequence(seq_elem, by_id, by_uuid, media_items)
 
     local fps = ticks_per_frame_to_fps(video_ticks_per_frame)
 
-    -- Resolution from VideoTrackGroup
+    -- Resolution from VideoTrackGroup. .prproj reliably emits FrameRect on
+    -- video track groups; a missing one indicates malformed input — fail
+    -- loud rather than fabricate dimensions.
     local frame_rect_str = get_child_text(video_group, "FrameRect")
-    local width, height = 1920, 1080  -- will be overridden
-    if frame_rect_str then
-        local x1, y1, x2, y2 = frame_rect_str:match("(%d+),(%d+),(%d+),(%d+)")
-        if x2 and y2 then
-            width = tonumber(x2) - tonumber(x1)
-            height = tonumber(y2) - tonumber(y1)
-        end
-    end
+    assert(frame_rect_str, string.format(
+        "prproj: sequence '%s' missing FrameRect on VideoTrackGroup", name))
+    local x1, y1, x2, y2 = frame_rect_str:match("(%d+),(%d+),(%d+),(%d+)")
+    assert(x2 and y2, string.format(
+        "prproj: sequence '%s' has malformed FrameRect '%s'",
+        name, frame_rect_str))
+    local width  = tonumber(x2) - tonumber(x1)
+    local height = tonumber(y2) - tonumber(y1)
+    assert(width > 0 and height > 0, string.format(
+        "prproj: sequence '%s' has non-positive dimensions %dx%d (FrameRect '%s')",
+        name, width, height, frame_rect_str))
 
     -- Audio ticks per sample
     local audio_ticks_per_sample

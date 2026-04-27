@@ -102,20 +102,30 @@ local function create_clip(id, track_id, start, duration, source_in)
         width = 1920,
         height = 1080,
     })
-    local clip = require('models.clip').create("Clip " .. id, media_id, {
+    -- V13: clips reference master sequences, not media directly. Build the
+    -- master via ensure_master, then place a clip on the timeline that
+    -- references it.
+    local Sequence = require('models.sequence')
+    local master_seq_id = Sequence.ensure_master(media_id, 'proj')
+    local now = os.time()
+    require('models.clip').create({
         id = id,
         project_id = 'proj',
-        track_id = track_id,
         owner_sequence_id = 'seq',
-        timeline_start = start,
-        duration = duration,
-        source_in = source_in,
-        source_out = source_in + duration,
-        fps_numerator = 24,
-        fps_denominator = 1,
+        track_id = track_id,
+        nested_sequence_id = master_seq_id,
+        name = "Clip " .. id,
+        timeline_start_frame = start,
+        duration_frames = duration,
+        source_in_frame = source_in,
+        source_out_frame = source_in + duration,
+        fps_mismatch_policy = "resample",
         enabled = true,
+        volume = 1.0,
+        playhead_frame = 0,
+        created_at = now,
+        modified_at = now,
     })
-    assert(clip:save(db, {skip_occlusion = true}))
 end
 
 local function reset()

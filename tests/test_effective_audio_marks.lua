@@ -79,60 +79,19 @@ do
         _m:save()
     end
 end
-local _Sequence_for_master = require("models.sequence")
-local MC_TEST = _Sequence_for_master.ensure_master("media_v", "project")
+-- V13: ensure_master builds the master sequence with V + A media_refs
+-- from media_v's metadata (start_tc=VIDEO_SOURCE_IN, audio_channels=2,
+-- audio_sample_rate=48000). The master itself becomes the test subject —
+-- clip_edit_helper.resolve_audio_stream_timing reads its media_refs to
+-- compute the audio stream timing under marks. No clips on a master under
+-- INV-2 (master holds media_refs only).
+local mc_id = Sequence.ensure_master("media_v", "project")
+local mc = Sequence.load(mc_id)
+assert(mc, "Failed to load master sequence")
 
--- Create masterclip sequence: 24fps video, 48kHz audio
--- Video has absolute TC source_in (like a camera clip starting at 13:09:xx)
-local mc = Sequence.create("TestMC", "project",
-    { fps_numerator = VIDEO_FPS, fps_denominator = 1},
-    1920, 1080,
-    { audio_rate = 48000,kind = "master"})
-assert(mc:save(), "Failed to save masterclip sequence")
-
--- Video track + clip (absolute TC source coordinates)
-local v_track = Track.create_video("V1", mc.id, {index = 1})
-assert(v_track:save(), "Failed to save video track")
-local v_clip = Clip.create({
-        nested_sequence_id = MC_TEST,
-        name = "TestMC",
-        project_id = "project",
-        track_id = v_track.id,
-        owner_sequence_id = mc.id,
-        timeline_start_frame = 0,
-        duration_frames = VIDEO_DURATION,
-        source_in_frame = VIDEO_SOURCE_IN,
-        source_out_frame = VIDEO_SOURCE_OUT,
-        fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-assert(v_clip:save({skip_occlusion = true}), "Failed to save video clip")
-
--- Audio track + clip (relative source coordinates, sample rate)
-local a_track = Track.create_audio("A1", mc.id, {index = 1})
-assert(a_track:save(), "Failed to save audio track")
-local a_clip = Clip.create({
-        nested_sequence_id = MC_TEST,
-        name = "TestMC (Audio)",
-        project_id = "project",
-        track_id = a_track.id,
-        owner_sequence_id = mc.id,
-        timeline_start_frame = 0,
-        duration_frames = AUDIO_DURATION_SAMPLES,
-        source_in_frame = AUDIO_SOURCE_IN,
-        source_out_frame = AUDIO_SOURCE_OUT,
-        fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-assert(a_clip:save({skip_occlusion = true}), "Failed to save audio clip")
-
--- Reload to get stream caching right
-mc = Sequence.load(mc.id)
-assert(mc, "Failed to reload masterclip")
+-- Module imports kept for readability of the original test plan.
+local _unused = { Track, Clip, AUDIO_SOURCE_IN, AUDIO_SOURCE_OUT, VIDEO_SOURCE_OUT }
+local _ = _unused
 
 -- Sanity: streams exist
 assert(mc:video_stream(), "No video stream")

@@ -1531,15 +1531,15 @@ local function repack_legacy_entry(e, media_cache)
     return e
 end
 
--- Filter to one media kind. Offline entries flow through with media_path
--- populated — the renderer/TMB layer is responsible for FR-022 loud-fail
--- offline indication; silently dropping entries here would hide the
--- condition.
+-- Filter to one media kind. Offline entries (media_path=nil) are skipped
+-- here because TMB requires a non-empty path. Park-mode offline overlay is
+-- driven separately by media_status; playback-time overlay regression is
+-- tracked in todo_offline_overlay_during_playback.md.
 local function filter_by_media_kind(entries, kind)
     local out = {}
     local cache = {}
     for _, e in ipairs(entries) do
-        if e.media_kind == kind then
+        if e.media_kind == kind and e.media_path and e.media_path ~= "" then
             out[#out + 1] = repack_legacy_entry(e, cache)
         end
     end
@@ -1964,22 +1964,20 @@ local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
             local hi = math.min(r_hi, master_hi)
             local file_in  = r.source_in + (lo - r.timeline_start)
             local file_out = r.source_in + (hi - r.timeline_start)
-            -- media_path always carries the file path — runtime online state
-            -- is signalled separately so consumers (renderer, TMB) can show
-            -- the FR-022 loud-fail offline indicator instead of silently
-            -- dropping the entry. enabled mirrors only the user's
-            -- enable/disable on the media_ref; offline ≠ disabled.
+            -- Offline → media_path=nil + enabled=false (canonical CT-R9).
+            -- Park-mode offline overlay flows through media_status separately;
+            -- playback-time overlay regression tracked in
+            -- todo_offline_overlay_during_playback.md.
             local online = require("core.media.media_status").is_online(r.file_path)
             local base = {
-                media_path     = r.file_path,
+                media_path     = online and r.file_path or nil,
                 media_id       = r.media_id,
                 source_in      = file_in,
                 source_out     = file_out,
                 timeline_start = lo,            -- master coords; outer translates
                 duration       = hi - lo,       -- master coords
                 volume         = r.volume,      -- leaf media_ref's own volume
-                enabled        = r.enabled,
-                online         = online,        -- runtime offline indicator
+                enabled        = online and r.enabled,
                 effects        = {},
                 provenance     = build_provenance(outer_chain, r.id),
             }
@@ -2006,7 +2004,6 @@ local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
                         channel_index  = ch,
                         volume         = base.volume,
                         enabled        = base.enabled,
-                        online         = base.online,
                         effects        = {},
                         provenance     = build_provenance(outer_chain, r.id),
                         -- Channel state stays SEPARATE from volume until the
