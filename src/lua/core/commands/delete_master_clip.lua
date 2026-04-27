@@ -49,27 +49,122 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     local Sequence = require("models.sequence")
     local delete_sequence_mod = require("core.commands.delete_sequence")
 
+    -- Delete a single timeline clip + its properties + its link entry.
     local function delete_clip_with_metadata(clip_id)
         local prop_stmt = db:prepare("DELETE FROM properties WHERE clip_id = ?")
         if prop_stmt then
             prop_stmt:bind_value(1, clip_id)
-            assert(prop_stmt:exec(), "DeleteMasterClip: properties DELETE failed for clip " .. tostring(clip_id))
+            assert(prop_stmt:exec(), "DeleteMasterClip: properties DELETE failed for clip "
+                .. tostring(clip_id))
             prop_stmt:finalize()
         end
-
         local link_stmt = db:prepare("DELETE FROM clip_links WHERE clip_id = ?")
         if link_stmt then
             link_stmt:bind_value(1, clip_id)
-            assert(link_stmt:exec(), "DeleteMasterClip: clip_links DELETE failed for clip " .. tostring(clip_id))
+            assert(link_stmt:exec(), "DeleteMasterClip: clip_links DELETE failed for clip "
+                .. tostring(clip_id))
             link_stmt:finalize()
         end
-
         local delete_stmt = assert(db:prepare("DELETE FROM clips WHERE id = ?"),
             "DeleteMasterClip: failed to prepare clips DELETE for clip " .. tostring(clip_id))
         delete_stmt:bind_value(1, clip_id)
-        assert(delete_stmt:exec(), "DeleteMasterClip: clips DELETE failed for clip " .. tostring(clip_id))
+        assert(delete_stmt:exec(), "DeleteMasterClip: clips DELETE failed for clip "
+            .. tostring(clip_id))
         delete_stmt:finalize()
-        return true
+    end
+
+    -- Query every timeline clip referencing this master. Returns the list
+    -- of snapshots (suitable for both undo restoration and pre-delete
+    -- "in use" reporting).
+    local function snapshot_referencing_clips(seq_id)
+        local snapshots = {}
+        local stmt = db:prepare([[
+            SELECT c.id, c.project_id, c.name, c.track_id,
+                   c.nested_sequence_id, c.owner_sequence_id,
+                   c.timeline_start_frame, c.duration_frames,
+                   c.source_in_frame, c.source_out_frame,
+                   c.master_layer_track_id, c.master_audio_track_id,
+                   c.fps_mismatch_policy,
+                   c.enabled, c.created_at, c.modified_at,
+                   c.volume, c.mark_in_frame, c.mark_out_frame, c.playhead_frame,
+                   t.track_type
+            FROM clips c
+            JOIN tracks t ON c.track_id = t.id
+            WHERE c.nested_sequence_id = ?
+        ]])
+        if not stmt then return nil end
+        stmt:bind_value(1, seq_id)
+        if stmt:exec() then
+            while stmt:next() do
+                snapshots[#snapshots + 1] = {
+                    id = stmt:value(0), project_id = stmt:value(1),
+                    name = stmt:value(2), track_id = stmt:value(3),
+                    nested_sequence_id = stmt:value(4),
+                    owner_sequence_id = stmt:value(5),
+                    timeline_start = stmt:value(6),
+                    duration = stmt:value(7),
+                    source_in = stmt:value(8), source_out = stmt:value(9),
+                    master_layer_track_id = stmt:value(10),
+                    master_audio_track_id = stmt:value(11),
+                    fps_mismatch_policy = stmt:value(12),
+                    enabled = stmt:value(13) == 1,
+                    created_at = stmt:value(14),
+                    modified_at = stmt:value(15),
+                    volume = stmt:value(16),
+                    mark_in = stmt:value(17),
+                    mark_out = stmt:value(18),
+                    playhead_frame = stmt:value(19),
+                    track_type = stmt:value(20),
+                    sequence_id = stmt:value(5),  -- alias for cache invalidation
+                }
+            end
+        end
+        stmt:finalize()
+        return snapshots
+    end
+
+    -- Bulk-delete the referencing timeline clips and record the
+    -- per-sequence delete mutations for cache invalidation. Returns true
+    -- on success; false (with error string set) on failure.
+    local function force_delete_referencing(snapshots, command)
+        local command_helper = require("core.command_helper")
+        local clips_by_sequence = {}
+        for _, snap in ipairs(snapshots) do
+            delete_clip_with_metadata(snap.id)
+            if snap.owner_sequence_id then
+                local bucket = clips_by_sequence[snap.owner_sequence_id]
+                    or {}
+                bucket[#bucket + 1] = snap.id
+                clips_by_sequence[snap.owner_sequence_id] = bucket
+            end
+        end
+        command:set_parameter("deleted_timeline_clips", snapshots)
+        for sid, clip_ids in pairs(clips_by_sequence) do
+            command_helper.add_delete_mutation(command, sid, clip_ids)
+        end
+    end
+
+    -- Tear down the master sequence rows: tracks (cascades media_refs +
+    -- media_refs_channel_state), snapshots, then the sequence row itself.
+    local function delete_master_sequence_rows(seq_id)
+        local steps = {
+            { sql = "DELETE FROM tracks WHERE sequence_id = ?",
+              label = "tracks" },
+            { sql = "DELETE FROM snapshots WHERE sequence_id = ?",
+              label = "snapshots" },
+            { sql = "DELETE FROM sequences WHERE id = ?",
+              label = "sequences" },
+        }
+        for _, step in ipairs(steps) do
+            local stmt = db:prepare(step.sql)
+            if stmt then
+                stmt:bind_value(1, seq_id)
+                assert(stmt:exec(), string.format(
+                    "DeleteMasterClip: %s DELETE failed for sequence %s",
+                    step.label, tostring(seq_id)))
+                stmt:finalize()
+            end
+        end
     end
 
     command_executors["DeleteMasterClip"] = function(command)
@@ -88,114 +183,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        -- V13 in-use check: which timeline clips reference this master?
-        local timeline_clip_snapshots = {}
-        local ref_query = db:prepare([[
-            SELECT c.id, c.project_id, c.name, c.track_id,
-                   c.nested_sequence_id, c.owner_sequence_id,
-                   c.timeline_start_frame, c.duration_frames,
-                   c.source_in_frame, c.source_out_frame,
-                   c.master_layer_track_id, c.master_audio_track_id,
-                   c.fps_mismatch_policy,
-                   c.enabled, c.created_at, c.modified_at,
-                   c.volume, c.mark_in_frame, c.mark_out_frame, c.playhead_frame,
-                   t.track_type
-            FROM clips c
-            JOIN tracks t ON c.track_id = t.id
-            WHERE c.nested_sequence_id = ?
-        ]])
-        if not ref_query then
-            set_error(set_last_error, "DeleteMasterClip: Failed to prepare reference check")
+        local snapshots = snapshot_referencing_clips(seq_id)
+        if not snapshots then
+            set_error(set_last_error,
+                "DeleteMasterClip: Failed to prepare reference check")
             return false
         end
-        ref_query:bind_value(1, seq_id)
-        if ref_query:exec() then
-            while ref_query:next() do
-                table.insert(timeline_clip_snapshots, {
-                    id = ref_query:value(0),
-                    project_id = ref_query:value(1),
-                    name = ref_query:value(2),
-                    track_id = ref_query:value(3),
-                    nested_sequence_id = ref_query:value(4),
-                    owner_sequence_id = ref_query:value(5),
-                    timeline_start = ref_query:value(6),
-                    duration = ref_query:value(7),
-                    source_in = ref_query:value(8),
-                    source_out = ref_query:value(9),
-                    master_layer_track_id = ref_query:value(10),
-                    master_audio_track_id = ref_query:value(11),
-                    fps_mismatch_policy = ref_query:value(12),
-                    enabled = ref_query:value(13) == 1,
-                    created_at = ref_query:value(14),
-                    modified_at = ref_query:value(15),
-                    volume = ref_query:value(16),
-                    mark_in = ref_query:value(17),
-                    mark_out = ref_query:value(18),
-                    playhead_frame = ref_query:value(19),
-                    track_type = ref_query:value(20),
-                    sequence_id = ref_query:value(5),  -- alias for cache invalidation
-                })
-            end
+
+        if #snapshots > 0 and not args.force then
+            set_error(set_last_error, string.format(
+                "DeleteMasterClip: Master referenced by %d timeline clip(s). "
+                .. "Use force=true to delete anyway.", #snapshots))
+            return { success = false, in_use_count = #snapshots }
         end
-        ref_query:finalize()
-
-        if #timeline_clip_snapshots > 0 then
-            if not args.force then
-                set_error(set_last_error, string.format(
-                    "DeleteMasterClip: Master referenced by %d timeline clip(s). "
-                    .. "Use force=true to delete anyway.",
-                    #timeline_clip_snapshots))
-                return { success = false, in_use_count = #timeline_clip_snapshots }
-            end
-
-            local command_helper = require("core.command_helper")
-            local clips_by_sequence = {}
-            for _, snap in ipairs(timeline_clip_snapshots) do
-                if not delete_clip_with_metadata(snap.id) then
-                    set_error(set_last_error, "DeleteMasterClip: Failed to delete timeline clip " .. snap.id)
-                    return false
-                end
-                if snap.owner_sequence_id then
-                    clips_by_sequence[snap.owner_sequence_id] = clips_by_sequence[snap.owner_sequence_id] or {}
-                    table.insert(clips_by_sequence[snap.owner_sequence_id], snap.id)
-                end
-            end
-            command:set_parameter("deleted_timeline_clips", timeline_clip_snapshots)
-
-            for sid, clip_ids in pairs(clips_by_sequence) do
-                command_helper.add_delete_mutation(command, sid, clip_ids)
-            end
+        if #snapshots > 0 then
+            force_delete_referencing(snapshots, command)
         end
 
-        -- Snapshot + delete the master sequence (cascades tracks, media_refs,
-        -- media_refs_channel_state via FK).
-        local seq_snapshot = delete_sequence_mod.snapshot_for_delete(db, seq_id)
-        command:set_parameter("master_clip_snapshot", seq_snapshot)
-
-        -- Delete tracks (FK ON DELETE CASCADE on media_refs and clips
-        -- handles the rest), then snapshots, then the sequence row.
-        local delete_tracks = db:prepare("DELETE FROM tracks WHERE sequence_id = ?")
-        if delete_tracks then
-            delete_tracks:bind_value(1, seq_id)
-            assert(delete_tracks:exec(),
-                "DeleteMasterClip: tracks DELETE failed for sequence " .. tostring(seq_id))
-            delete_tracks:finalize()
-        end
-
-        local delete_snapshots = db:prepare("DELETE FROM snapshots WHERE sequence_id = ?")
-        if delete_snapshots then
-            delete_snapshots:bind_value(1, seq_id)
-            assert(delete_snapshots:exec(),
-                "DeleteMasterClip: snapshots DELETE failed for sequence " .. tostring(seq_id))
-            delete_snapshots:finalize()
-        end
-
-        local delete_sequence_stmt = assert(db:prepare("DELETE FROM sequences WHERE id = ?"),
-            "DeleteMasterClip: failed to prepare sequences DELETE for sequence " .. tostring(seq_id))
-        delete_sequence_stmt:bind_value(1, seq_id)
-        assert(delete_sequence_stmt:exec(),
-            "DeleteMasterClip: sequences DELETE failed for sequence " .. tostring(seq_id))
-        delete_sequence_stmt:finalize()
+        command:set_parameter("master_clip_snapshot",
+            delete_sequence_mod.snapshot_for_delete(db, seq_id))
+        delete_master_sequence_rows(seq_id)
 
         log.event("Deleted master sequence %s", seq.name or seq_id)
         return true
