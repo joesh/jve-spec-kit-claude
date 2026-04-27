@@ -26,108 +26,114 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     assert(command_executors, "DeleteSequence.register: missing command_executors")
     assert(command_undoers, "DeleteSequence.register: missing command_undoers")
 
-    command_executors["DeleteSequence"] = function(command)
-        local args = command:get_all_parameters()
-        local sequence_id = args.sequence_id
+    -- Validate the target sequence is a deletable nested edit timeline.
+    -- Returns the sequence row on success; false on refusal (with
+    -- set_last_error already invoked).
+    local function validate_target(sequence_id)
         if sequence_id == "default_sequence" then
-            set_error(set_last_error, "DeleteSequence: Cannot delete default sequence")
+            set_error(set_last_error,
+                "DeleteSequence: Cannot delete default sequence")
             return false
         end
-
-        local sequence_row = fetch_sequence_record(db, sequence_id)
-        if not sequence_row then
+        local row = fetch_sequence_record(db, sequence_id)
+        if not row then
             set_error(set_last_error, "DeleteSequence: Sequence not found")
             return false
         end
-
-        -- V13: kind narrowed to ('master','nested'). Edit timelines are
-        -- 'nested' (the V13 successor to V8 'timeline'). Masters cannot be
-        -- deleted via this command — that's a separate operation.
-        if sequence_row.kind and sequence_row.kind ~= "nested" then
-            set_error(set_last_error, "DeleteSequence: Only nested (edit timeline) sequences can be deleted")
+        if row.kind and row.kind ~= "nested" then
+            set_error(set_last_error,
+                "DeleteSequence: Only nested (edit timeline) sequences can be deleted")
             return false
         end
-
         if count_sequence_references(db, sequence_id) > 0 then
-            set_error(set_last_error, "DeleteSequence: Sequence is referenced by other clips")
+            set_error(set_last_error,
+                "DeleteSequence: Sequence is referenced by other clips")
             return false
         end
+        return row
+    end
 
-        local tracks = fetch_sequence_tracks(db, sequence_id)
-        local clips, clip_properties, clip_links = fetch_sequence_clips(db, sequence_id)
-        local snapshot = fetch_sequence_snapshot(db, sequence_id)
-
-        local payload = {
-            sequence = sequence_row,
-            tracks = tracks,
-            clips = clips,
-            properties = clip_properties,
-            clip_links = clip_links,
-            snapshot = snapshot
-        }
-        command:set_parameter("delete_sequence_snapshot", payload)
-
-        if #clips > 0 then
-            local clip_ids = {}
-            for _, clip in ipairs(clips) do
-                table.insert(clip_ids, clip.id)
-            end
-            local delete_links = db:prepare("DELETE FROM clip_links WHERE clip_id = ?")
-            if delete_links then
-                for _, clip_id in ipairs(clip_ids) do
-                    delete_links:bind_value(1, clip_id)
-                    assert(delete_links:exec(), "DeleteSequence: clip_links DELETE failed for clip " .. tostring(clip_id))
-                    delete_links:reset()
-                end
-                delete_links:finalize()
-            end
-
-            local delete_properties = db:prepare("DELETE FROM properties WHERE clip_id = ?")
-            if delete_properties then
-                for _, clip_id in ipairs(clip_ids) do
-                    delete_properties:bind_value(1, clip_id)
-                    assert(delete_properties:exec(), "DeleteSequence: properties DELETE failed for clip " .. tostring(clip_id))
-                    delete_properties:reset()
-                end
-                delete_properties:finalize()
-            end
-
-            local delete_clips = assert(db:prepare("DELETE FROM clips WHERE owner_sequence_id = ?"),
-                "DeleteSequence: failed to prepare clips DELETE for sequence " .. tostring(sequence_id))
-            delete_clips:bind_value(1, sequence_id)
-            assert(delete_clips:exec(), "DeleteSequence: clips DELETE failed for sequence " .. tostring(sequence_id))
-            delete_clips:finalize()
+    -- Run a parameterized DELETE for each clip id, asserting on failure.
+    local function delete_per_clip(sql, label, clip_ids, sequence_id)
+        local stmt = db:prepare(sql)
+        if not stmt then return end
+        for _, clip_id in ipairs(clip_ids) do
+            stmt:bind_value(1, clip_id)
+            assert(stmt:exec(), string.format(
+                "DeleteSequence: %s DELETE failed for clip %s in sequence %s",
+                label, tostring(clip_id), tostring(sequence_id)))
+            stmt:reset()
         end
+        stmt:finalize()
+    end
 
-        local delete_tracks = assert(db:prepare("DELETE FROM tracks WHERE sequence_id = ?"),
-            "DeleteSequence: failed to prepare tracks DELETE for sequence " .. tostring(sequence_id))
+    -- Bulk-delete every clip on this sequence + its links + properties.
+    local function delete_clips_in_sequence(clips, sequence_id)
+        if #clips == 0 then return end
+        local clip_ids = {}
+        for _, clip in ipairs(clips) do clip_ids[#clip_ids + 1] = clip.id end
+        delete_per_clip("DELETE FROM clip_links WHERE clip_id = ?",
+            "clip_links", clip_ids, sequence_id)
+        delete_per_clip("DELETE FROM properties WHERE clip_id = ?",
+            "properties", clip_ids, sequence_id)
+        local delete_clips = assert(db:prepare(
+            "DELETE FROM clips WHERE owner_sequence_id = ?"),
+            "DeleteSequence: failed to prepare clips DELETE for sequence "
+                .. tostring(sequence_id))
+        delete_clips:bind_value(1, sequence_id)
+        assert(delete_clips:exec(),
+            "DeleteSequence: clips DELETE failed for sequence "
+                .. tostring(sequence_id))
+        delete_clips:finalize()
+    end
+
+    -- Tear down the sequence's tracks, snapshots, then the sequence row.
+    local function delete_sequence_rows(sequence_id)
+        local delete_tracks = assert(db:prepare(
+            "DELETE FROM tracks WHERE sequence_id = ?"),
+            "DeleteSequence: failed to prepare tracks DELETE for sequence "
+                .. tostring(sequence_id))
         delete_tracks:bind_value(1, sequence_id)
-        assert(delete_tracks:exec(), "DeleteSequence: tracks DELETE failed for sequence " .. tostring(sequence_id))
+        assert(delete_tracks:exec(),
+            "DeleteSequence: tracks DELETE failed for sequence "
+                .. tostring(sequence_id))
         delete_tracks:finalize()
 
-        local delete_snapshots = db:prepare("DELETE FROM snapshots WHERE sequence_id = ?")
+        local delete_snapshots = db:prepare(
+            "DELETE FROM snapshots WHERE sequence_id = ?")
         if delete_snapshots then
             delete_snapshots:bind_value(1, sequence_id)
-            assert(delete_snapshots:exec(), "DeleteSequence: snapshots DELETE failed for sequence " .. tostring(sequence_id))
+            assert(delete_snapshots:exec(),
+                "DeleteSequence: snapshots DELETE failed for sequence "
+                    .. tostring(sequence_id))
             delete_snapshots:finalize()
         end
 
-        local delete_sequence_stmt = db:prepare("DELETE FROM sequences WHERE id = ?")
-        if not delete_sequence_stmt then
-            set_error(set_last_error, "DeleteSequence: Failed to prepare delete statement")
+        local delete_seq = db:prepare("DELETE FROM sequences WHERE id = ?")
+        if not delete_seq then
             return false
         end
-        delete_sequence_stmt:bind_value(1, sequence_id)
-        local ok = delete_sequence_stmt:exec()
-        delete_sequence_stmt:finalize()
-        if not ok then
-            set_error(set_last_error, "DeleteSequence: Failed to delete sequence")
-            return false
-        end
+        delete_seq:bind_value(1, sequence_id)
+        local ok = delete_seq:exec()
+        delete_seq:finalize()
+        return ok
+    end
 
+    -- Build the undo payload + record the metadata mutation entry.
+    local function record_undo_state(command, sequence_id, sequence_row,
+                                     tracks, clips, clip_properties, clip_links,
+                                     snapshot)
+        command:set_parameter("delete_sequence_snapshot", {
+            sequence    = sequence_row,
+            tracks      = tracks,
+            clips       = clips,
+            properties  = clip_properties,
+            clip_links  = clip_links,
+            snapshot    = snapshot,
+        })
         command:set_parameters({
-            ["__skip_timeline_reload"] = true,
-            ["__allow_empty_mutations"] = true,
+            __skip_timeline_reload = true,
+            __allow_empty_mutations = true,
         })
         local bucket = ensure_mutation_bucket(command, sequence_id)
         if bucket then
@@ -136,9 +142,33 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 action = "deleted",
                 sequence_id = sequence_id,
                 project_id = sequence_row.project_id,
-                name = sequence_row.name
+                name = sequence_row.name,
             })
         end
+    end
+
+    command_executors["DeleteSequence"] = function(command)
+        local args = command:get_all_parameters()
+        local sequence_id = args.sequence_id
+
+        local sequence_row = validate_target(sequence_id)
+        if not sequence_row then return false end
+
+        local tracks = fetch_sequence_tracks(db, sequence_id)
+        local clips, clip_properties, clip_links =
+            fetch_sequence_clips(db, sequence_id)
+        local snapshot = fetch_sequence_snapshot(db, sequence_id)
+
+        record_undo_state(command, sequence_id, sequence_row, tracks, clips,
+            clip_properties, clip_links, snapshot)
+
+        delete_clips_in_sequence(clips, sequence_id)
+        if not delete_sequence_rows(sequence_id) then
+            set_error(set_last_error,
+                "DeleteSequence: Failed to delete sequence")
+            return false
+        end
+
         log.event("Deleted sequence %s (%d track(s), %d clip(s))",
             sequence_row.name or sequence_id, #tracks, #clips)
         return true
