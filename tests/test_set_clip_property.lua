@@ -233,16 +233,20 @@ local final_row = query_property(db, clip_id, property_name)
 local final_decoded = JSON_decode(final_row.property_value)
 assert(final_decoded.value == "96000", "Final value should be 96000 after cycles")
 
-print("Test 7: Setting property on nonexistent clip (expect warning, command skips gracefully)")
+print("Test 7: Setting property on nonexistent clip MUST fail (rule 1.14)")
 local ghost_cmd = Command.create("SetClipProperty", "test_project")
 ghost_cmd:set_parameter("clip_id", "nonexistent_clip_id")
 ghost_cmd:set_parameter("property_name", "test_property")
 ghost_cmd:set_parameter("value", "test_value")
 ghost_cmd:set_parameter("property_type", "STRING")
 
--- Note: SetClipProperty returns true even for missing clips (logs warning and skips)
 local ghost_result = command_manager.execute(ghost_cmd)
-assert(ghost_result.success, "SetClipProperty on missing clip should succeed (skip gracefully)")
+assert(not ghost_result.success,
+    "SetClipProperty on missing clip MUST fail per rule 1.14 (no silent skip)")
+assert(ghost_result.error_message
+    and tostring(ghost_result.error_message):find("not found", 1, true),
+    "Error should mention the clip is not found; got: "
+    .. tostring(ghost_result.error_message))
 
 print("✅ All SetClipProperty tests passed")
 

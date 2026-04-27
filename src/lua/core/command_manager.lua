@@ -2105,7 +2105,11 @@ local function run_undoer(cmd)
             -- which produces the mutations. Only warn for leaf commands.
             local has_nested = cmd.undo_group_id
                 and #history.find_group_members(cmd.undo_group_id, nil, nil) > 1
-            if not is_non_clip_mutating_command(cmd.type) and not has_nested then
+            local no_muts_expected = cmd.parameters
+                and cmd.parameters.__no_timeline_mutations_expected
+            if not is_non_clip_mutating_command(cmd.type)
+                and not has_nested
+                and not no_muts_expected then
                 log.error("run_undoer: command %s produced no __timeline_mutations for sequence %s\n%s",
                     cmd.type, seq_id, debug.traceback("", 2))
             end
@@ -2226,7 +2230,11 @@ local function run_redo_executor(cmd)
         if seq_id and seq_id ~= "" then
             local has_nested = cmd.undo_group_id
                 and #history.find_group_members(cmd.undo_group_id, nil, nil) > 1
-            if not is_non_clip_mutating_command(cmd.type) and not has_nested then
+            local no_muts_expected = cmd.parameters
+                and cmd.parameters.__no_timeline_mutations_expected
+            if not is_non_clip_mutating_command(cmd.type)
+                and not has_nested
+                and not no_muts_expected then
                 log.error("run_redo_executor: command %s produced no __timeline_mutations for sequence %s\n%s",
                     cmd.type, seq_id, debug.traceback("", 2))
             end

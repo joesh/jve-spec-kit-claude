@@ -124,21 +124,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
 
         local clip = Clip.load_optional(clip_id)
-        if not clip or clip.id == "" then
-
-            if args.executed_with_clip then
-                log.event("SetClipProperty: clip %s missing during replay; skipping", clip_id)
-                return true
-            end
-
-            if args.previous_value ~= nil then
-                log.event("SetClipProperty: clip %s missing but previous_value present; assuming deleted, skipping", clip_id)
-                return true
-            end
-
-            log.warn("SetClipProperty: clip not found during replay: %s; skipping", clip_id)
-            return true
-        end
+        assert(clip and clip.id ~= "", string.format(
+            "SetClipProperty: clip %s not found (property=%s). Rule 1.14: a "
+            .. "command targeting a clip that no longer exists is a broken "
+            .. "invariant — undo grouping should have rolled this command "
+            .. "back alongside the deletion.",
+            tostring(clip_id), tostring(property_name)))
 
         -- Capture the clip's current column value BEFORE mutating. For
         -- Inspector edits that target real clip columns (name, duration,
@@ -288,10 +279,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- Emit __timeline_mutations so apply_command_mutations can
         -- patch the timeline's clip cache with a precise delta
-        -- instead of a full reload_clips.
+        -- instead of a full reload_clips. Non-column properties (volume,
+        -- mark_in/out, custom user metadata) don't change anything the
+        -- timeline cache cares about — flag the command so the manager's
+        -- "missing mutations" diagnostic stays silent for them.
         local mutations = build_clip_mutation_payload(clip, property_name, args.value)
         if mutations then
             command:set_parameter("__timeline_mutations", mutations)
+        else
+            command:set_parameter("__no_timeline_mutations_expected", true)
         end
         return true
     end
@@ -377,6 +373,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     clip, args.property_name, args.previous_value)
                 if mutations then
                     command:set_parameter("__timeline_mutations", mutations)
+                else
+                    command:set_parameter("__no_timeline_mutations_expected", true)
                 end
             end
         end
