@@ -16,163 +16,186 @@ local SPEC = {
     }
 }
 
+-- Mark-based Cut: when timeline marks bracket a range, Cut means
+-- "copy mark range then LiftRange." Returns true when this path handled
+-- the command (caller short-circuits), false when no marks set.
+local function try_mark_based_cut(args, command)
+    local mark_in  = timeline_state.get_mark_in  and timeline_state.get_mark_in()
+    local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out()
+    if not (mark_in and mark_out and mark_out > mark_in) then
+        return false
+    end
+    local clipboard_actions = require("core.clipboard_actions")
+    local ok_copy, copy_err = clipboard_actions.copy()
+    assert(ok_copy, "Cut: copy mark range failed: " .. tostring(copy_err))
+
+    local command_manager = require("core.command_manager")
+    local sequence_id = command_helper.resolve_active_sequence_id(
+        args.sequence_id, timeline_state)
+    assert(sequence_id, "Cut: missing sequence_id for mark-based cut")
+    local project_id = args.project_id
+        or (timeline_state.get_project_id and timeline_state.get_project_id())
+    assert(project_id and project_id ~= "", "Cut: missing project_id")
+
+    local result = command_manager.execute("LiftRange", {
+        project_id = project_id,
+        sequence_id = sequence_id,
+        mark_in = mark_in,
+        mark_out = mark_out,
+    })
+    assert(result and result.success,
+        "Cut: LiftRange failed: " .. tostring(result and result.error_message))
+    -- LiftRange owns the DB revert; this command's undo state stays empty.
+    command:set_parameters({
+        deleted_clip_states     = {},
+        deleted_clip_properties = {},
+    })
+    command_manager.execute("ClearMarks",
+        { project_id = project_id, sequence_id = sequence_id })
+    log.event("Cut mark range [%d, %d)", mark_in, mark_out)
+    return true
+end
+
+-- Extract unique clip ids from timeline_state's current selection.
+local function collect_selected_clip_ids()
+    local out, seen = {}, {}
+    local function add(id)
+        if id and id ~= "" and not seen[id] then
+            seen[id] = true
+            out[#out + 1] = id
+        end
+    end
+    for _, clip in ipairs(timeline_state.get_selected_clips() or {}) do
+        if type(clip) == "table" then
+            add(clip.id or clip.clip_id)
+        elseif type(clip) == "string" then
+            add(clip)
+        end
+    end
+    return out
+end
+
+-- Build the clipboard payload + earliest_start_frame for a selection.
+-- Asserts every clip resolves (rule 1.14: Cut must not silently degrade to
+-- Delete when a clip can't be loaded).
+local function build_clipboard_payload(clip_ids)
+    local payloads, earliest = {}, math.huge
+    for _, clip_id in ipairs(clip_ids) do
+        local clip = Clip.load_optional(clip_id)
+        if clip and clip.nested_sequence_id then
+            earliest = math.min(earliest, clip.timeline_start)
+            local fps_n = clip.rate and clip.rate.fps_numerator or clip.fps_numerator
+            local fps_d = clip.rate and clip.rate.fps_denominator or clip.fps_denominator
+            assert(type(fps_n) == "number" and fps_n > 0, string.format(
+                "Cut: clip %s has no fps_numerator (rate=%s, fps_numerator=%s)",
+                clip.id, tostring(clip.rate), tostring(clip.fps_numerator)))
+            assert(type(fps_d) == "number" and fps_d > 0, string.format(
+                "Cut: clip %s has no fps_denominator (rate=%s, fps_denominator=%s)",
+                clip.id, tostring(clip.rate), tostring(clip.fps_denominator)))
+            payloads[#payloads + 1] = {
+                original_id           = clip.id,
+                track_id              = clip.track_id,
+                fps_numerator         = fps_n,
+                fps_denominator       = fps_d,
+                nested_sequence_id    = clip.nested_sequence_id,
+                master_layer_track_id = clip.master_layer_track_id,
+                master_audio_track_id = clip.master_audio_track_id,
+                fps_mismatch_policy   = clip.fps_mismatch_policy,
+                owner_sequence_id     = clip.owner_sequence_id,
+                track_type            = clip.track_type,
+                timeline_start        = clip.timeline_start,
+                duration              = clip.duration,
+                source_in             = clip.source_in,
+                source_out            = clip.source_out,
+                name                  = clip.name,
+            }
+        end
+    end
+    assert(#payloads > 0, string.format(
+        "Cut: none of %d clip_ids could be loaded for clipboard — Cut must "
+        .. "not silently degrade to Delete", #clip_ids))
+    for _, entry in ipairs(payloads) do
+        entry.offset_frames = entry.timeline_start - earliest
+    end
+    return payloads, earliest
+end
+
+-- Push the assembled payload onto the global clipboard.
+local function push_to_clipboard(payloads, earliest, sequence_id)
+    local project_id = timeline_state.get_project_id
+        and timeline_state.get_project_id()
+    clipboard.set({
+        kind                  = "timeline_clips",
+        project_id            = project_id,
+        sequence_id           = sequence_id,
+        reference_start_frame = earliest,
+        clips                 = payloads,
+        count                 = #payloads,
+    })
+end
+
+-- Delete the listed clips, capturing per-clip state + properties for undo.
+-- Returns deleted_count, deleted_states, deleted_props, resolved_sequence_id.
+local function delete_selected_clips(clip_ids, sequence_id)
+    local deleted_count = 0
+    local states, props = {}, {}
+    for _, clip_id in ipairs(clip_ids) do
+        local clip = Clip.load_optional(clip_id)
+        if clip then
+            sequence_id = sequence_id
+                or clip.owner_sequence_id
+                or clip.track_sequence_id
+            local state = command_helper.capture_clip_state(clip)
+            if state then
+                state.project_id        = clip.project_id
+                state.owner_sequence_id = clip.owner_sequence_id or sequence_id
+                states[#states + 1] = state
+            end
+            props[clip_id] =
+                command_helper.snapshot_properties_for_clip(clip_id)
+            assert(clip:delete(),
+                string.format("Cut: failed to delete clip %s", clip_id))
+            deleted_count = deleted_count + 1
+        else
+            log.warn("Cut: clip %s not found", clip_id)
+        end
+    end
+    return deleted_count, states, props, sequence_id
+end
+
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["Cut"] = function(command)
         local args = command:get_all_parameters()
+        if not args.dry_run then log.event("Executing Cut") end
 
-        if not args.dry_run then
-            log.event("Executing Cut")
-        end
+        if try_mark_based_cut(args, command) then return true end
 
-        -- Mark-based cut: copy mark range + lift
-        local mark_in = timeline_state.get_mark_in and timeline_state.get_mark_in()
-        local mark_out = timeline_state.get_mark_out and timeline_state.get_mark_out()
-        if mark_in and mark_out and mark_out > mark_in then
-            local clipboard_actions = require("core.clipboard_actions")
-            local ok_copy, copy_err = clipboard_actions.copy()
-            assert(ok_copy,
-                "Cut: copy mark range failed: " .. tostring(copy_err))
-            local command_manager = require("core.command_manager")
-            local sequence_id = command_helper.resolve_active_sequence_id(args.sequence_id, timeline_state)
-            assert(sequence_id, "Cut: missing sequence_id for mark-based cut")
-            local project_id = args.project_id
-                or (timeline_state.get_project_id and timeline_state.get_project_id())
-            assert(project_id and project_id ~= "", "Cut: missing project_id")
-            local result = command_manager.execute("LiftRange", {
-                project_id = project_id,
-                sequence_id = sequence_id,
-                mark_in = mark_in,
-                mark_out = mark_out,
-            })
-            assert(result and result.success,
-                "Cut: LiftRange failed: " .. tostring(result and result.error_message))
-            -- Set empty undo state — LiftRange's undoer handles the DB revert
-            command:set_parameters({
-                ["deleted_clip_states"] = {},
-                ["deleted_clip_properties"] = {},
-            })
-            command_manager.execute("ClearMarks", {
-                project_id = project_id, sequence_id = sequence_id,
-            })
-            log.event("Cut mark range [%d, %d)", mark_in, mark_out)
-            return true
-        end
-
-        local selected = timeline_state.get_selected_clips() or {}
-        local unique = {}
-        local clip_ids = {}
-
-        local function add_clip_id(id)
-            if id and id ~= "" and not unique[id] then
-                unique[id] = true
-                table.insert(clip_ids, id)
-            end
-        end
-
-        for _, clip in ipairs(selected) do
-            if type(clip) == "table" then
-                add_clip_id(clip.id or clip.clip_id)
-            elseif type(clip) == "string" then
-                add_clip_id(clip)
-            end
-        end
-
+        local clip_ids = collect_selected_clip_ids()
         if #clip_ids == 0 then
-            if not args.dry_run then
-                log.event("Cut: nothing selected")
-            end
-            return false  -- Nothing to do = command did not execute
+            if not args.dry_run then log.event("Cut: nothing selected") end
+            return false
         end
+        if args.dry_run then return true, { clip_count = #clip_ids } end
 
-        if args.dry_run then
-            return true, { clip_count = #clip_ids }
-        end
+        local sequence_id = command_helper.resolve_active_sequence_id(
+            args.sequence_id, timeline_state)
+        if sequence_id then command:set_parameter("sequence_id", sequence_id) end
 
-        local sequence_id = command_helper.resolve_active_sequence_id(args.sequence_id, timeline_state)
-        if sequence_id then
-            command:set_parameter("sequence_id", sequence_id)
-        end
+        local payloads, earliest = build_clipboard_payload(clip_ids)
+        push_to_clipboard(payloads, earliest, sequence_id)
 
-        -- Copy to clipboard BEFORE deleting (Cut = Copy + Delete)
-        local clip_payloads = {}
-        local earliest_start_frame = math.huge
-        for _, clip_id in ipairs(clip_ids) do
-            local clip = Clip.load_optional(clip_id)
-            if clip and clip.nested_sequence_id then
-                earliest_start_frame = math.min(earliest_start_frame, clip.timeline_start)
-                local fps_n = clip.rate and clip.rate.fps_numerator or clip.fps_numerator
-                local fps_d = clip.rate and clip.rate.fps_denominator or clip.fps_denominator
-                assert(type(fps_n) == "number" and fps_n > 0,
-                    string.format("Cut: clip %s has no fps_numerator (rate=%s, fps_numerator=%s)",
-                        clip.id, tostring(clip.rate), tostring(clip.fps_numerator)))
-                assert(type(fps_d) == "number" and fps_d > 0,
-                    string.format("Cut: clip %s has no fps_denominator (rate=%s, fps_denominator=%s)",
-                        clip.id, tostring(clip.rate), tostring(clip.fps_denominator)))
-                clip_payloads[#clip_payloads + 1] = {
-                    original_id = clip.id,
-                    track_id = clip.track_id,
-                    fps_numerator = fps_n,
-                    fps_denominator = fps_d,
-                    nested_sequence_id = clip.nested_sequence_id,
-                    master_layer_track_id = clip.master_layer_track_id,
-                    master_audio_track_id = clip.master_audio_track_id,
-                    fps_mismatch_policy = clip.fps_mismatch_policy,
-                    owner_sequence_id = clip.owner_sequence_id,
-                    track_type = clip.track_type,
-                    timeline_start = clip.timeline_start,
-                    duration = clip.duration,
-                    source_in = clip.source_in,
-                    source_out = clip.source_out,
-                    name = clip.name,
-                }
-            end
-        end
-        assert(#clip_payloads > 0,
-            string.format("Cut: none of %d clip_ids could be loaded for clipboard — "
-                .. "Cut must not silently degrade to Delete", #clip_ids))
-        for _, entry in ipairs(clip_payloads) do
-            entry.offset_frames = entry.timeline_start - earliest_start_frame
-        end
-        local project_id = timeline_state.get_project_id and timeline_state.get_project_id()
-        clipboard.set({
-            kind = "timeline_clips",
-            project_id = project_id,
-            sequence_id = sequence_id,
-            reference_start_frame = earliest_start_frame,
-            clips = clip_payloads,
-            count = #clip_payloads,
-        })
-
-        -- Delete clips and capture state for undo
-        local deleted_count = 0
-        local deleted_states = {}
-        local deleted_props = {}
-        for _, clip_id in ipairs(clip_ids) do
-            local clip = Clip.load_optional(clip_id)
-            if clip then
-                sequence_id = sequence_id or clip.owner_sequence_id or clip.track_sequence_id
-                local state = command_helper.capture_clip_state(clip)
-                if state then
-                    state.project_id = clip.project_id
-                    state.owner_sequence_id = clip.owner_sequence_id or sequence_id
-                    table.insert(deleted_states, state)
-                end
-                deleted_props[clip_id] = command_helper.snapshot_properties_for_clip(clip_id)
-
-                assert(clip:delete(), string.format("Cut: failed to delete clip %s", clip_id))
-                deleted_count = deleted_count + 1
-            else
-                log.warn("Cut: clip %s not found", clip_id)
-            end
-        end
+        local deleted_count, states, props
+        deleted_count, states, props, sequence_id =
+            delete_selected_clips(clip_ids, sequence_id)
 
         command:set_parameters({
-            ["cut_clip_ids"] = clip_ids,
-            ["deleted_clip_states"] = deleted_states,
-            ["deleted_clip_properties"] = deleted_props,
+            cut_clip_ids            = clip_ids,
+            deleted_clip_states     = states,
+            deleted_clip_properties = props,
         })
         if not sequence_id then
-            sequence_id = command_helper.resolve_active_sequence_id(nil, timeline_state)
+            sequence_id = command_helper.resolve_active_sequence_id(
+                nil, timeline_state)
             if not sequence_id then
                 set_last_error("Cut: missing sequence_id")
                 return false
