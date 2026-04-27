@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~294 LOC
--- Volatility: unknown
---
--- @file command_state.lua
--- Original intent (unreviewed):
--- CommandState: Manages state hashing and selection snapshots
+--- CommandState: Manages state hashing and selection snapshots
 -- Extracted from command_manager.lua
 local M = {}
 

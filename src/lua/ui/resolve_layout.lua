@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~63 LOC
--- Volatility: unknown
---
--- @file resolve_layout.lua
--- Original intent (unreviewed):
--- Proper DaVinci Resolve 4-panel layout
+--- Proper DaVinci Resolve 4-panel layout
 print("🎬 Creating proper DaVinci Resolve layout...")
 
 -- Create main window

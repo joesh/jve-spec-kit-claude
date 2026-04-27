@@ -1,18 +1,3 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~65 LOC
--- Volatility: unknown
---
--- @file context.lua
 local M = {}
 
 local command_helper = require("core.command_helper")

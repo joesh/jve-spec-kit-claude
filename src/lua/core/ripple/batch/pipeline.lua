@@ -1,18 +1,3 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~29 LOC
--- Volatility: unknown
---
--- @file pipeline.lua
 local M = {}
 
 local prepare = require("core.ripple.batch.prepare")

@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~14 LOC
--- Volatility: unknown
---
--- @file toggle_maximize_panel.lua
--- Original intent (unreviewed):
--- ToggleMaximizePanel command
+--- ToggleMaximizePanel command
 local M = {}
 
 

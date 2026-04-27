@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~119 LOC
--- Volatility: unknown
---
--- @file command_registry.lua
--- Original intent (unreviewed):
--- CommandRegistry: Manages command executors and auto-loading
+--- CommandRegistry: Manages command executors and auto-loading
 -- Extracted from command_manager.lua
 local M = {}
 local log = require("core.logger").for_area("commands")

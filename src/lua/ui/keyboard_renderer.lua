@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~231 LOC
--- Volatility: unknown
---
--- @file keyboard_renderer.lua
--- Original intent (unreviewed):
--- Visual Keyboard Renderer (Pure Lua)
+--- Visual Keyboard Renderer (Pure Lua)
 -- Faithful rendering of physical keyboard layout for shortcut visualization
 -- Matches Premiere Pro visual style
 local M = {}

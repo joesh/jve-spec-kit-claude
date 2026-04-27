@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~70 LOC
--- Volatility: unknown
---
--- @file selection_hub.lua
--- Original intent (unreviewed):
--- Selection Hub
+--- Selection Hub
 -- Centralizes active selection state across panels and notifies interested listeners.
 local M = {}
 local log = require("core.logger").for_area("timeline")  -- luacheck: ignore 211 (reserved for debug logging)

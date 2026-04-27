@@ -1,18 +1,3 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~67 LOC
--- Volatility: unknown
---
--- @file keymap.lua
 local M = {}
 
 local KEY_RETURN = 16777220

@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~160 LOC
--- Volatility: unknown
---
--- @file selection_state.lua
--- Original intent (unreviewed):
--- Timeline Selection State
+--- Timeline Selection State
 -- Manages selected clips, edges, and gaps
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")

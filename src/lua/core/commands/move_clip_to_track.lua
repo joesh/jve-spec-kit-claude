@@ -1,18 +1,3 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~184 LOC
--- Volatility: unknown
---
--- @file move_clip_to_track.lua
 local M = {}
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")

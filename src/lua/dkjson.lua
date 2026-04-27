@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~628 LOC
--- Volatility: unknown
---
--- @file dkjson.lua
--- Original intent (unreviewed):
--- Module options:
+--- Module options:
 local always_try_using_lpeg = true
 local register_global_module_table = false
 local global_module_name = 'json'

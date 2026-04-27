@@ -1,18 +1,3 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~177 LOC
--- Volatility: unknown
---
--- @file edit_history_window.lua
 local M = {}
 
 local qt_constants = require("core.qt_constants")

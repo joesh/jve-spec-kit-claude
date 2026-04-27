@@ -1,18 +1,3 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~26 LOC
--- Volatility: unknown
---
--- @file deselect_all.lua
 local M = {}
 local timeline_state = require('ui.timeline.timeline_state')
 

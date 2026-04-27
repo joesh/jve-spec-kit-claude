@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~34 LOC
--- Volatility: unknown
---
--- @file debug_main_window.lua
--- Original intent (unreviewed):
--- Debug version with bright visible content
+--- Debug version with bright visible content
 print("🎬 JVE Editor - Creating DEBUG window with bright colors...")
 
 -- Create main window

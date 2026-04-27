@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~280 LOC
--- Volatility: unknown
---
--- @file command_history.lua
--- Original intent (unreviewed):
--- CommandHistory: Manages undo/redo stacks, sequence numbers, and position persistence
+--- CommandHistory: Manages undo/redo stacks, sequence numbers, and position persistence
 -- Extracted from command_manager.lua
 local M = {}
 local log = require("core.logger").for_area("commands")

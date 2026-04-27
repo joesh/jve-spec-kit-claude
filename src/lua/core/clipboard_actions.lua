@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~485 LOC
--- Volatility: unknown
---
--- @file clipboard_actions.lua
--- Original intent (unreviewed):
--- Clipboard-aware copy/paste helpers for timeline and project browser
+--- Clipboard-aware copy/paste helpers for timeline and project browser
 local clipboard = require("core.clipboard")
 local log = require("core.logger").for_area("commands")
 local focus_manager = require("ui.focus_manager")

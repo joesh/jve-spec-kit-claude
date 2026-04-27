@@ -1,18 +1,3 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~30 LOC
--- Volatility: unknown
---
--- @file path_utils.lua
 local M = {}
 
 local function is_absolute_path(path)

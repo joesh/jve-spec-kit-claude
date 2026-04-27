@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~63 LOC
--- Volatility: unknown
---
--- @file actual_resolve_layout.lua
--- Original intent (unreviewed):
--- Actual DaVinci Resolve layout based on real screenshot
+--- Actual DaVinci Resolve layout based on real screenshot
 print("🎬 Creating actual DaVinci Resolve layout...")
 
 -- Create main window

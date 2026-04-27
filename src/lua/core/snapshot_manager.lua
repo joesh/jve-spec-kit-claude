@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~408 LOC
--- Volatility: unknown
---
--- @file snapshot_manager.lua
--- Original intent (unreviewed):
--- Snapshot Manager Module
+--- Snapshot Manager Module
 -- Handles periodic state snapshots for fast event replay
 -- Part of the event sourcing architecture
 local uuid = require("uuid")

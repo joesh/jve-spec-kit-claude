@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~166 LOC
--- Volatility: unknown
---
--- @file media_reader.lua
--- Original intent (unreviewed):
--- Media File Reader - FFprobe Integration
+--- Media File Reader - FFprobe Integration
 -- Extracts metadata from video/audio files for timeline editing
 -- Uses FFprobe (part of FFmpeg suite) for cross-platform media inspection
 local M = {}

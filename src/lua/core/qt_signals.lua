@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~220 LOC
--- Volatility: unknown
---
--- @file qt_signals.lua
--- Original intent (unreviewed):
--- Qt Signal Bridge - Maps Qt signals to general signal system
+--- Qt Signal Bridge - Maps Qt signals to general signal system
 -- Provides clean interface for connecting Qt widget signals to Lua handlers
 -- Uses the general signals module for consistency with user-defined signals
 local signals = require("core.signals")

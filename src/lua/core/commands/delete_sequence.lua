@@ -1,18 +1,3 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~551 LOC
--- Volatility: unknown
---
--- @file delete_sequence.lua
 local log = require("core.logger").for_area("commands")
 
 local M = {}

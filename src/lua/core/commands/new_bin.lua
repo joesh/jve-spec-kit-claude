@@ -1,18 +1,3 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~57 LOC
--- Volatility: unknown
---
--- @file new_bin.lua
 local M = {}
 local tag_service = require("core.tag_service")
 local command_helper = require("core.command_helper")

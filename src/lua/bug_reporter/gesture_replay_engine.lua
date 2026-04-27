@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~195 LOC
--- Volatility: unknown
---
--- @file gesture_replay_engine.lua
--- Original intent (unreviewed):
--- gesture_replay_engine.lua
+--- gesture_replay_engine.lua
 -- Converts gesture log entries back to Qt events for pixel-perfect replay
 local GestureReplayEngine = {}
 

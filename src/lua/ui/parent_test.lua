@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~10 LOC
--- Volatility: unknown
---
--- @file parent_test.lua
--- Original intent (unreviewed):
--- Test explicit parenting
+--- Test explicit parenting
 print("🔧 Testing widget parenting...")
 
 -- Create main window

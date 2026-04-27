@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~155 LOC
--- Volatility: unknown
---
--- @file track.lua
--- Original intent (unreviewed):
--- Lua model for timeline tracks. Supports both video and audio variants.
+--- Lua model for timeline tracks. Supports both video and audio variants.
 local database = require("core.database")
 local uuid = require("uuid")
 

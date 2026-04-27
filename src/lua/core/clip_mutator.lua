@@ -1,18 +1,3 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~867 LOC
--- Volatility: unknown
---
--- @file clip_mutator.lua
 local ClipMutator = {}
 local uuid = require("uuid")
 local log = require("core.logger").for_area("commands")

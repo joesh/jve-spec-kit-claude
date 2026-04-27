@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~221 LOC
--- Volatility: unknown
---
--- @file capture_manager.lua
--- Original intent (unreviewed):
--- capture_manager.lua
+--- capture_manager.lua
 -- Continuous ring buffer capture system for bug reporting
 -- Captures gestures, commands, logs, and screenshots in memory
 local utils = require("bug_reporter.utils")

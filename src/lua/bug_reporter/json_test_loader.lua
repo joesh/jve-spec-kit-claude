@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~78 LOC
--- Volatility: unknown
---
--- @file json_test_loader.lua
--- Original intent (unreviewed):
--- json_test_loader.lua
+--- json_test_loader.lua
 -- Load and parse JSON test files
 local dkjson = require("dkjson")
 local log = require("core.logger").for_area("ui")

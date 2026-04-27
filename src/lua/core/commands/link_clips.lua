@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~124 LOC
--- Volatility: unknown
---
--- @file link_clips.lua
--- Original intent (unreviewed):
--- LinkClips and UnlinkClip commands
+--- LinkClips and UnlinkClip commands
 local M = {}
 
 

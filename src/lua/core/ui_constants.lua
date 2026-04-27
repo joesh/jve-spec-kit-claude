@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~209 LOC
--- Volatility: unknown
---
--- @file ui_constants.lua
--- Original intent (unreviewed):
--- UI System Constants
+--- UI System Constants
 -- Centralized constants with proper naming conventions and theme abstraction
 local ui_constants = {}
 

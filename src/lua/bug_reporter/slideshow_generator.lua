@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~78 LOC
--- Volatility: unknown
---
--- @file slideshow_generator.lua
--- Original intent (unreviewed):
--- slideshow_generator.lua
+--- slideshow_generator.lua
 -- Generate MP4 slideshow videos from screenshot sequences using ffmpeg
 local utils = require("bug_reporter.utils")
 local log = require("core.logger").for_area("ui")

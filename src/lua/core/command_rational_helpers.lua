@@ -1,18 +1,3 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~69 LOC
--- Volatility: unknown
---
--- @file command_rational_helpers.lua
 -- FPS metadata query helpers for commands.
 -- All coordinates are integers now - these just fetch fps_numerator/fps_denominator for clip metadata.
 local M = {}

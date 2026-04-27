@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~155 LOC
--- Volatility: unknown
---
--- @file test_runner_gui.lua
--- Original intent (unreviewed):
--- test_runner_gui.lua
+--- test_runner_gui.lua
 -- GUI test runner - replays gestures in actual JVE application for pixel-perfect testing
 local json_test_loader = require("bug_reporter.json_test_loader")
 local differential_validator = require("bug_reporter.differential_validator")

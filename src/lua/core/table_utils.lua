@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~27 LOC
--- Volatility: unknown
---
--- @file table_utils.lua
--- Original intent (unreviewed):
--- table_utils.lua
+--- table_utils.lua
 -- Shared table utilities (copying, transforms, etc.)
 local M = {}
 

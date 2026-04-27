@@ -1,20 +1,4 @@
---- TODO: one-line summary (human review required)
---
--- Responsibilities:
--- - TODO
---
--- Non-goals:
--- - TODO
---
--- Invariants:
--- - TODO
---
--- Size: ~123 LOC
--- Volatility: unknown
---
--- @file magnetic_snapping.lua
--- Original intent (unreviewed):
--- Magnetic snapping: Find snap points for clip edges and playhead
+--- Magnetic snapping: Find snap points for clip edges and playhead
 -- Provides snap detection logic for drag operations in the timeline
 local log = require("core.logger").for_area("timeline")
 
