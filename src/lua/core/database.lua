@@ -362,12 +362,6 @@ local function build_clip_from_query_row(query, requested_sequence_id)
             fps_denominator = nested_fps_den,
         },
 
-        -- Owner sequence's timebase (timeline_start/duration are expressed here).
-        owner_rate = {
-            fps_numerator = owner_fps_num,
-            fps_denominator = owner_fps_den,
-        },
-
         enabled = query:value(13) == 1,
         created_at = query:value(14),
         modified_at = query:value(15),

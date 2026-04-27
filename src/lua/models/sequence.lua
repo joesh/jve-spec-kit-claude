@@ -811,9 +811,10 @@ end
 -- match the V8 clip-stream contract that callers depend on:
 --   .id, .track_id, .timeline_start, .duration,
 --   .source_in, .source_out, .media_id,
---   .frame_rate = {fps_numerator, fps_denominator}.
--- For video, rate is the master's frame_rate (= media's frame rate).
--- For audio, rate is {audio_sample_rate, 1} so source units are samples.
+--   .frame_rate = {fps_numerator, fps_denominator} for video streams,
+--   .sample_rate = N (Hz, integer) for audio streams.
+-- Source-unit semantics: video source coords are frames at frame_rate;
+-- audio source coords are samples at sample_rate.
 -- @return table {video_clips = {...}, audio_clips = {...}}
 local function ensure_stream_clips(self)
     assert(self.kind == "master", string.format(
@@ -830,7 +831,7 @@ local function ensure_stream_clips(self)
     local video_tracks = Track.find_by_sequence(self.id, "VIDEO")
     local audio_tracks = Track.find_by_sequence(self.id, "AUDIO")
 
-    local function load_for_track(track_id, rate)
+    local function load_for_track(track_id, rate_field, rate_value)
         local out = {}
         local stmt = conn:prepare([[
             SELECT id, track_id, media_id, source_in_frame, source_out_frame,
@@ -843,7 +844,7 @@ local function ensure_stream_clips(self)
         stmt:bind_value(1, track_id)
         assert(stmt:exec(), "ensure_stream_clips: media_refs exec failed")
         while stmt:next() do
-            out[#out + 1] = {
+            local row = {
                 id             = stmt:value(0),
                 track_id       = stmt:value(1),
                 media_id       = stmt:value(2),
@@ -856,25 +857,26 @@ local function ensure_stream_clips(self)
                 mark_in        = stmt:value(9),
                 mark_out       = stmt:value(10),
                 playhead_frame = stmt:value(11),
-                rate           = rate,
             }
+            row[rate_field] = rate_value
+            out[#out + 1] = row
         end
         stmt:finalize()
         return out
     end
 
-    local video_rate = self.frame_rate
+    local video_frame_rate = self.frame_rate
         or { fps_numerator = self.fps_numerator, fps_denominator = self.fps_denominator }
-    local audio_sample_rate = { fps_numerator = self.audio_sample_rate or 48000, fps_denominator = 1 }
+    local audio_sample_rate = self.audio_sample_rate or 48000
 
     local video_clips, audio_clips = {}, {}
     for _, t in ipairs(video_tracks) do
-        for _, r in ipairs(load_for_track(t.id, video_rate)) do
+        for _, r in ipairs(load_for_track(t.id, "frame_rate", video_frame_rate)) do
             video_clips[#video_clips + 1] = r
         end
     end
     for _, t in ipairs(audio_tracks) do
-        for _, r in ipairs(load_for_track(t.id, audio_sample_rate)) do
+        for _, r in ipairs(load_for_track(t.id, "sample_rate", audio_sample_rate)) do
             audio_clips[#audio_clips + 1] = r
         end
     end
@@ -928,11 +930,7 @@ function Sequence:frame_to_samples(frame)
         return nil
     end
 
-    -- audio.rate.fps_numerator = sample_rate (e.g., 48000, 44100, 96000)
-    -- audio.rate.fps_denominator = 1
-    -- self.frame_rate.fps_numerator = video fps numerator
-    -- self.frame_rate.fps_denominator = video fps denominator
-    local sample_rate = audio.rate.fps_numerator
+    local sample_rate = audio.sample_rate
     local video_fps_num = self.frame_rate.fps_numerator
     local video_fps_den = self.frame_rate.fps_denominator
 
@@ -953,7 +951,7 @@ function Sequence:samples_to_frame(samples)
         return nil
     end
 
-    local sample_rate = audio.rate.fps_numerator
+    local sample_rate = audio.sample_rate
     local video_fps_num = self.frame_rate.fps_numerator
     local video_fps_den = self.frame_rate.fps_denominator
 
@@ -1082,7 +1080,7 @@ function Sequence:video_frame_to_audio_sample(frame)
     local audio = self:audio_streams()[1]
     assert(audio, "Sequence:video_frame_to_audio_sample: no audio stream")
 
-    local sample_rate = audio.rate.fps_numerator
+    local sample_rate = audio.sample_rate
     local video_fps_num = self.frame_rate.fps_numerator
     local video_fps_den = self.frame_rate.fps_denominator
 

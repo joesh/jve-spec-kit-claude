@@ -133,14 +133,10 @@ local function load_internal(clip_id, raise_errors)
         master_audio_track_id = query:value(11),
         fps_mismatch_policy   = query:value(12),
 
-        -- Source-side timebase (the nested sequence's rate).
+        -- Source-side timebase (the nested sequence's frame rate).
         frame_rate = {
             fps_numerator = nested_fps_num,
             fps_denominator = nested_fps_den,
-        },
-        owner_rate = {
-            fps_numerator = owner_fps_num,
-            fps_denominator = owner_fps_den,
         },
 
         enabled = query:value(13) == 1 or query:value(13) == true,

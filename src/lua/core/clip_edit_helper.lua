@@ -166,8 +166,8 @@ function M.resolve_video_stream_timing(source)
         source_in = source_in,
         source_out = source_out,
         duration = duration,
-        fps_numerator = video.rate.fps_numerator,
-        fps_denominator = video.rate.fps_denominator,
+        fps_numerator = video.frame_rate.fps_numerator,
+        fps_denominator = video.frame_rate.fps_denominator,
     }, nil
 end
 
@@ -191,8 +191,11 @@ function M.resolve_audio_stream_timing(source)
         source_in = source_in,
         source_out = source_out,
         duration = duration,
-        fps_numerator = audio.rate.fps_numerator,
-        fps_denominator = audio.rate.fps_denominator,
+        -- Audio source units are samples; expose the sample rate as the
+        -- "fps" pair so downstream rational math (frames-or-samples per
+        -- second over 1) keeps a single shape across video/audio.
+        fps_numerator = audio.sample_rate,
+        fps_denominator = 1,
     }, nil
 end
 

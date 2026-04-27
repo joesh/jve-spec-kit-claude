@@ -239,7 +239,6 @@ local function load_track_clips(db, track_id)
             -- Owner-sequence rate (same as old seq_*).
             seq_fps_numerator = owner_num,
             seq_fps_denominator = owner_den,
-            owner_rate = { fps_numerator = owner_num, fps_denominator = owner_den },
             enabled = stmt:value(13) == 1 or stmt:value(13) == true,
             volume = stmt:value(14),
             track_type = track_type,
@@ -906,7 +905,6 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         fps_numerator = nested_fps_num,
         fps_denominator = nested_fps_den,
         frame_rate = {fps_numerator = nested_fps_num, fps_denominator = nested_fps_den},
-        owner_rate = {fps_numerator = owning_fps_num, fps_denominator = owning_fps_den},
         enabled = stmt:value(13) == 1 or stmt:value(13) == true,
         volume = stmt:value(14),
         created_at = stmt:value(15),
