@@ -221,16 +221,4 @@ function M.set_bin(project_id, entity_ids, bin_id, entity_type)
     return database.set_bin(project_id, entity_ids, bin_id, entity_type or "master_clip")
 end
 
--- Legacy aliases
-function M.assign_master_clips(project_id, clip_ids, bin_id)
-    return M.set_bin(project_id, clip_ids, bin_id, "master_clip")
-end
-
-function M.assign_master_clip(project_id, clip_id, bin_id)
-    if not clip_id or clip_id == "" then
-        return false
-    end
-    return M.set_bin(project_id, {clip_id}, bin_id, "master_clip")
-end
-
 return M
