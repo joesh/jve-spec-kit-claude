@@ -164,6 +164,132 @@ local function build_insert_mutation_entry(clip_id)
     }
 end
 
+-- Build the post-execute __timeline_mutations bucket for the Insert
+-- executor: split right-halves emit as inserts, trimmed left-halves emit
+-- as updates with post-trim bounds, created clips emit as inserts, and
+-- ripple shifts emit as bulk_shifts.
+local function build_executor_mutation_bucket(args, result)
+    local bucket = {
+        sequence_id = args.sequence_id,
+        inserts = {}, updates = {}, deletes = {}, bulk_shifts = {},
+    }
+    for _, cap in pairs(result.split_captures or {}) do
+        for _, right_id in ipairs(cap.split_new_ids or {}) do
+            bucket.inserts[#bucket.inserts + 1] =
+                build_insert_mutation_entry(right_id)
+        end
+        for _, tr in ipairs(cap.trimmed or {}) do
+            local row = Clip.load_v13_row(tr.id)
+            assert(row, "Insert: could not re-read trimmed left-half "
+                .. tostring(tr.id))
+            bucket.updates[#bucket.updates + 1] = {
+                clip_id          = row.id,
+                id               = row.id,
+                track_id         = row.track_id,
+                start_value      = row.timeline_start_frame,
+                duration_value   = row.duration_frames,
+                source_in_value  = row.source_in_frame,
+                source_out_value = row.source_out_frame,
+            }
+        end
+    end
+    for _, cid in ipairs(result.created_clip_ids) do
+        bucket.inserts[#bucket.inserts + 1] = build_insert_mutation_entry(cid)
+    end
+    for track_id, rip in pairs(result.rippled) do
+        bucket.bulk_shifts[#bucket.bulk_shifts + 1] = {
+            track_id     = track_id,
+            shift_frames = rip.shift,
+            start_frame  = rip.from_frame,
+        }
+    end
+    return bucket
+end
+
+-- Build the inverse __timeline_mutations bucket for Insert's undoer:
+-- created clips become deletes, ripple shifts become inverse bulk_shifts,
+-- split right-halves become deletes, split left-halves' restored bounds
+-- become updates. Mirror order in the consumer (updates → inserts →
+-- bulk_shifts → deletes per clip_state.apply_mutations).
+local function build_undo_mutation_bucket(args, created_ids, rippled, splits)
+    local bucket = {
+        sequence_id = args.sequence_id,
+        inserts = {}, updates = {}, deletes = {}, bulk_shifts = {},
+    }
+    for _, cid in ipairs(created_ids) do
+        bucket.deletes[#bucket.deletes + 1] = { clip_id = cid }
+    end
+    for track_id, rip in pairs(rippled) do
+        if rip.shift and rip.shift ~= 0 then
+            bucket.bulk_shifts[#bucket.bulk_shifts + 1] = {
+                track_id     = track_id,
+                shift_frames = -rip.shift,
+                start_frame  = (rip.from_frame or 0) + rip.shift,
+            }
+        end
+    end
+    for _, cap in pairs(splits) do
+        for _, right_id in ipairs(cap.split_new_ids or {}) do
+            bucket.deletes[#bucket.deletes + 1] = { clip_id = right_id }
+        end
+        for _, tr in ipairs(cap.trimmed or {}) do
+            bucket.updates[#bucket.updates + 1] = {
+                clip_id          = tr.id,
+                id               = tr.id,
+                start_value      = tr.prior.timeline_start_frame,
+                duration_value   = tr.prior.duration_frames,
+                source_in_value  = tr.prior.source_in_frame,
+                source_out_value = tr.prior.source_out_frame,
+            }
+        end
+    end
+    return bucket
+end
+
+-- Reverse the mid-clip-Insert splits: drop right-halves first (frees the
+-- track range), then restore each left-half's pre-split bounds. Order
+-- matches split_clip.lua's undoer so the video-overlap trigger doesn't
+-- fire on the intermediate state.
+local function reverse_split_captures(splits)
+    for _, cap in pairs(splits) do
+        if cap.split_new_ids and #cap.split_new_ids > 0 then
+            Clip.delete_by_ids(cap.split_new_ids)
+        end
+    end
+    for _, cap in pairs(splits) do
+        for _, tr in ipairs(cap.trimmed or {}) do
+            Clip.update_bounds(tr.id,
+                tr.prior.timeline_start_frame, tr.prior.duration_frames,
+                tr.prior.source_in_frame,      tr.prior.source_out_frame)
+        end
+    end
+end
+
+-- advance_playhead side effect: after a successful placement, advance
+-- the sequence's playhead by the inserted duration and persist. Captures
+-- the prior playhead onto the command for undo. No-op when advance is off.
+local function advance_owner_playhead(args, command, result, signals)
+    if not args.advance_playhead then return end
+    local owner = assert(Sequence.load(args.sequence_id),
+        "Insert: sequence " .. tostring(args.sequence_id) .. " not found post-execute")
+    command:set_parameter("prior_playhead", owner.playhead_position)
+    local new_playhead = result.start_frame + result.duration_frames
+    owner:set_playhead(new_playhead)
+    assert(owner:save(), "Insert: sequence save failed after advance_playhead")
+    signals.emit("playhead_changed", args.sequence_id, new_playhead)
+end
+
+local function restore_owner_playhead(args, signals)
+    if not (args.advance_playhead and type(args.prior_playhead) == "number") then
+        return
+    end
+    local owner = assert(Sequence.load(args.sequence_id),
+        "Insert.undo: sequence " .. tostring(args.sequence_id) .. " not found")
+    owner:set_playhead(args.prior_playhead)
+    assert(owner:save(), "Insert.undo: sequence save failed")
+    signals.emit("playhead_changed", args.sequence_id, args.prior_playhead)
+end
+
 function M.register(command_executors, command_undoers, _db, set_last_error)
     command_executors["Insert"] = function(command)
         local args = command:get_all_parameters()
@@ -180,162 +306,37 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("split_capture",         result.split_captures or {})
         command:set_parameter("duration_frames",       result.duration_frames)
         command:set_parameter("fps_mismatch_policy",   result.fps_mismatch_policy)
-
-        local bucket = {
-            sequence_id = args.sequence_id,
-            inserts = {},
-            updates = {},
-            deletes = {},
-            bulk_shifts = {},
-        }
-        -- Mid-clip-Insert split right-halves: emit as inserts with their
-        -- post-ripple final positions (already in DB at this point).
-        for _, cap in pairs(result.split_captures or {}) do
-            for _, right_id in ipairs(cap.split_new_ids or {}) do
-                bucket.inserts[#bucket.inserts + 1] =
-                    build_insert_mutation_entry(right_id)
-            end
-            -- Trimmed left-halves: emit updates with the post-trim bounds
-            -- so timeline_state's cache reflects the shrunk-to-the-cut row.
-            for _, tr in ipairs(cap.trimmed or {}) do
-                local row = Clip.load_v13_row(tr.id)
-                assert(row, "Insert: could not re-read trimmed left-half "
-                    .. tostring(tr.id))
-                bucket.updates[#bucket.updates + 1] = {
-                    clip_id           = row.id,
-                    id                = row.id,
-                    track_id          = row.track_id,
-                    start_value       = row.timeline_start_frame,
-                    duration_value    = row.duration_frames,
-                    source_in_value   = row.source_in_frame,
-                    source_out_value  = row.source_out_frame,
-                }
-            end
-        end
-        for _, cid in ipairs(result.created_clip_ids) do
-            bucket.inserts[#bucket.inserts + 1] = build_insert_mutation_entry(cid)
-        end
-        for track_id, rip in pairs(result.rippled) do
-            bucket.bulk_shifts[#bucket.bulk_shifts + 1] = {
-                track_id     = track_id,
-                shift_frames = rip.shift,
-                start_frame  = rip.from_frame,
-            }
-        end
-        command:set_parameter("__timeline_mutations", bucket)
+        command:set_parameter("__timeline_mutations",
+            build_executor_mutation_bucket(args, result))
 
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
-
-        -- advance_playhead: editor-mode side effect — after a successful
-        -- placement, advance the sequence's playhead by the placed clip's
-        -- owner-frame duration, persist, and emit playhead_changed.
-        -- Captured to args.prior_playhead for undo restore.
-        if args.advance_playhead then
-            local owner = assert(Sequence.load(args.sequence_id),
-                "Insert: sequence " .. tostring(args.sequence_id) .. " not found post-execute")
-            command:set_parameter("prior_playhead", owner.playhead_position)
-            local new_playhead = result.start_frame + result.duration_frames
-            owner:set_playhead(new_playhead)
-            assert(owner:save(), "Insert: sequence save failed after advance_playhead")
-            Signals.emit("playhead_changed", args.sequence_id, new_playhead)
-        end
-
+        advance_owner_playhead(args, command, result, Signals)
         return true
     end
 
     command_undoers["Insert"] = function(command)
         local args = command:get_all_parameters()
-        local created_ids   = args.created_clip_ids or {}
-        local link_group_id = args.created_link_group_id
-        local rippled       = args.rippled_capture or {}
-        local splits        = args.split_capture or {}
-
-        -- clip_links rows cascade on clip delete via ON DELETE CASCADE;
-        -- link_group_id stays in undo state for redo reinstatement.
-        local _unused_here = link_group_id  -- luacheck: ignore 211
+        local created_ids = args.created_clip_ids or {}
+        local rippled     = args.rippled_capture  or {}
+        local splits      = args.split_capture    or {}
+        -- clip_links cascade on clip delete; link_group_id is preserved on
+        -- the command for redo reinstatement.
 
         Clip.delete_by_ids(created_ids)
-
         for _, rip in pairs(rippled) do
             if rip.clip_ids and #rip.clip_ids > 0 then
                 Clip.shift_many_by(rip.clip_ids, -rip.shift)
             end
         end
+        reverse_split_captures(splits)
 
-        -- Reverse the mid-clip-Insert splits: drop right-halves first
-        -- (frees [position, e_end) on the track), then grow each left-half
-        -- back to its pre-split bounds. Order matches split_clip.lua's
-        -- undoer to dodge the video-overlap trigger.
-        for _, cap in pairs(splits) do
-            if cap.split_new_ids and #cap.split_new_ids > 0 then
-                Clip.delete_by_ids(cap.split_new_ids)
-            end
-        end
-        for _, cap in pairs(splits) do
-            for _, tr in ipairs(cap.trimmed or {}) do
-                Clip.update_bounds(tr.id,
-                    tr.prior.timeline_start_frame, tr.prior.duration_frames,
-                    tr.prior.source_in_frame,      tr.prior.source_out_frame)
-            end
-        end
-
-        -- Emit __timeline_mutations so command_manager's post-DB hook
-        -- can sync timeline_state's cache to the undo-restored state.
-        do
-            local bucket = {
-                sequence_id = args.sequence_id,
-                inserts = {},
-                updates = {},
-                deletes = {},
-                bulk_shifts = {},
-            }
-            for _, cid in ipairs(created_ids) do
-                bucket.deletes[#bucket.deletes + 1] = { clip_id = cid }
-            end
-            for track_id, rip in pairs(rippled) do
-                if rip.shift and rip.shift ~= 0 then
-                    bucket.bulk_shifts[#bucket.bulk_shifts + 1] = {
-                        track_id     = track_id,
-                        shift_frames = -rip.shift,
-                        start_frame  = (rip.from_frame or 0) + rip.shift,
-                    }
-                end
-            end
-            -- Split-right-halves come back as deletes; split-left-halves'
-            -- restored bounds come back as updates. Order in the consumer
-            -- is updates → inserts → bulk_shifts → deletes (per
-            -- clip_state.apply_mutations), which is the order we want.
-            for _, cap in pairs(splits) do
-                for _, right_id in ipairs(cap.split_new_ids or {}) do
-                    bucket.deletes[#bucket.deletes + 1] = { clip_id = right_id }
-                end
-                for _, tr in ipairs(cap.trimmed or {}) do
-                    bucket.updates[#bucket.updates + 1] = {
-                        clip_id          = tr.id,
-                        id               = tr.id,
-                        start_value      = tr.prior.timeline_start_frame,
-                        duration_value   = tr.prior.duration_frames,
-                        source_in_value  = tr.prior.source_in_frame,
-                        source_out_value = tr.prior.source_out_frame,
-                    }
-                end
-            end
-            command:set_parameter("__timeline_mutations", bucket)
-        end
+        command:set_parameter("__timeline_mutations",
+            build_undo_mutation_bucket(args, created_ids, rippled, splits))
 
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
-
-        -- Restore playhead if we advanced it.
-        if args.advance_playhead and type(args.prior_playhead) == "number" then
-            local owner = assert(Sequence.load(args.sequence_id),
-                "Insert.undo: sequence " .. tostring(args.sequence_id) .. " not found")
-            owner:set_playhead(args.prior_playhead)
-            assert(owner:save(), "Insert.undo: sequence save failed")
-            Signals.emit("playhead_changed", args.sequence_id, args.prior_playhead)
-        end
-
+        restore_owner_playhead(args, Signals)
         return true
     end
 
