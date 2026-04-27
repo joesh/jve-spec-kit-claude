@@ -332,7 +332,7 @@ fetch_sequence_tracks = function(db, sequence_id)
     return tracks
 end
 
--- luacheck: ignore 211 (fetch_clip_properties defined but unused - kept for future use)
+-- Used by fetch_sequence_clips to snapshot per-clip property rows for undo.
 fetch_clip_properties = function(db_conn, clip_id)
     local props = {}
     local stmt = db_conn:prepare([[
