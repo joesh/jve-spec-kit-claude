@@ -361,7 +361,7 @@ local function paste_browser(payload)
                 project_id = project_id,
                 clip_snapshot = item.snapshot,
                 bin_id = target_bin_override or item.bin_id,
-                new_clip_id = uuid.generate(),
+                new_master_id = uuid.generate(),
                 name = item.duplicate_name,
                 copied_properties = item.copied_properties,
             })

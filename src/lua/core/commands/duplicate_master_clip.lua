@@ -20,7 +20,7 @@ local SPEC = {
         },
         copied_properties = { kind = "table" },
         name = { kind = "string" },
-        new_clip_id = { required = true, kind = "string" },
+        new_master_id = { required = true, kind = "string" },
         project_id = { required = true, kind = "string" },
     }
 }
@@ -30,7 +30,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local media_id = args.clip_snapshot.media_id
         local project_id = args.project_id
         local target_bin_id = args.bin_id
-        local new_master_id = args.new_clip_id  -- arg name kept for menu compatibility
+        local new_master_id = args.new_master_id
 
         local clip_name = args.name or args.clip_snapshot.name or "Master Clip Copy"
 
@@ -139,7 +139,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     command_undoers["DuplicateMasterClip"] = function(command)
         local args = command:get_all_parameters()
-        local new_master_id = args.new_clip_id
+        local new_master_id = args.new_master_id
         local Sequence = require("models.sequence")
 
         -- Tear down properties first (no FK cascade), then the master
