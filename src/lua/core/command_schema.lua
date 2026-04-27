@@ -195,27 +195,9 @@ function M.validate_and_normalize(command_name, spec, params, opts)
         out = params
     end
 
-    -- Aliases: allow alternate key names that normalize into a canonical param.
     local allowed_keys = {}
-    local alias_to_canonical = {}
-
-    local function register_keys(rules)
-        for k, rule in pairs(rules) do
-            allowed_keys[k] = true
-            if type(rule) == "table" and rule.aliases ~= nil then
-                assert(type(rule.aliases) == "table", "schema aliases must be a table")
-                for _, a in ipairs(rule.aliases) do
-                    assert(type(a) == "string", "schema alias must be a string")
-                    assert(alias_to_canonical[a] == nil, string.format("schema alias '%s' duplicated", tostring(a)))
-                    alias_to_canonical[a] = k
-                    allowed_keys[a] = true
-                end
-            end
-        end
-    end
-
-    register_keys(args)
-    register_keys(persisted)
+    for k in pairs(args) do allowed_keys[k] = true end
+    for k in pairs(persisted) do allowed_keys[k] = true end
 
     -- Unknown keys (except ephemeral and globally allowed)
     for k, _ in pairs(params) do
@@ -224,16 +206,6 @@ function M.validate_and_normalize(command_name, spec, params, opts)
         end
     end
 
-    -- Normalize aliases into canonical keys (in-place).
-    for alias, canonical in pairs(alias_to_canonical) do
-        if params[alias] ~= nil then
-            if params[canonical] ~= nil then
-                return fail(string.format("Command '%s' has both '%s' and alias '%s'", tostring(command_name), tostring(canonical), tostring(alias)))
-            end
-            params[canonical] = params[alias]
-            params[alias] = nil
-        end
-    end
     -- Required keys, defaults, kind checks, and nested-table normalization.
     local function apply_rules(rules, enforce_required)
         for k, rule in pairs(rules or {}) do

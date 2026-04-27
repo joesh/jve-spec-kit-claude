@@ -93,30 +93,6 @@ do
 end
 
 -- ============================================================
--- Alias normalization
--- ============================================================
-print("\n--- alias normalization ---")
-do
-    local spec = { args = { clip_name = { kind = "string", aliases = { "name" } } } }
-    local params = { name = "test" }
-    local ok = command_schema.validate_and_normalize("TestCmd", spec, params)
-    check("alias normalizes", ok == true)
-    check("alias canonical set", params.clip_name == "test")
-    check("alias original removed", params.name == nil)
-end
-
--- ============================================================
--- Alias + canonical conflict
--- ============================================================
-print("\n--- alias + canonical conflict ---")
-do
-    local spec = { args = { clip_name = { kind = "string", aliases = { "name" } } } }
-    local ok, _, err = command_schema.validate_and_normalize("TestCmd", spec, { clip_name = "a", name = "b" })
-    check("alias conflict fails", ok == false)
-    check("alias conflict msg", err:find("both.*and alias") ~= nil)
-end
-
--- ============================================================
 -- Bare spec normalization (no .args wrapper)
 -- ============================================================
 print("\n--- bare spec normalization ---")
@@ -335,20 +311,6 @@ do
         local spec = { args = { name = { kind = "string" } } }
         command_schema.validate_and_normalize("TestCmd", spec, { bogus = 1 }, { asserts_enabled = true })
     end, "unknown param 'bogus'")
-end
-
--- ============================================================
--- Multiple alias keys
--- ============================================================
-print("\n--- multiple aliases ---")
-do
-    local spec = { args = {
-        clip_id = { kind = "string", aliases = { "id", "cid" } },
-    } }
-    local params = { cid = "c1" }
-    local ok = command_schema.validate_and_normalize("TestCmd", spec, params)
-    check("second alias normalizes", ok == true)
-    check("second alias canonical set", params.clip_id == "c1")
 end
 
 -- ============================================================
