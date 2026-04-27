@@ -168,7 +168,7 @@ local function plan_insert(row)
         volume = row.volume,
         mark_in_frame = row.mark_in,
         mark_out_frame = row.mark_out,
-        playhead_frame = row.playhead_frame or row.playhead
+        playhead_frame = row.playhead_frame
     }
 end
 
@@ -323,8 +323,8 @@ function ClipMutator.resolve_occlusions(db, params)
     if not params then return true end
     local track_id = params.track_id
     if not track_id then return true end
-    local start_value = params.timeline_start or params.start_value
-    assert(start_value ~= nil, "clip_mutator.resolve_occlusions: timeline_start/start_value is required")
+    local start_value = assert(params.timeline_start,
+        "clip_mutator.resolve_occlusions: timeline_start is required")
     local duration = assert(params.duration, "clip_mutator.resolve_occlusions: duration is required")
 
     -- Ensure integer frame coordinates
