@@ -558,13 +558,6 @@ function M.fetch_clip_properties_for_copy(clip_id)
     return Property.copy_for_clip(clip_id)
 end
 
-function M.ensure_copied_properties(command, source_clip_id)
-    if not source_clip_id or source_clip_id == "" then
-        return {}
-    end
-    return M.fetch_clip_properties_for_copy(source_clip_id)
-end
-
 function M.insert_properties_for_clip(clip_id, properties)
     if not properties or #properties == 0 then
         return true
@@ -591,35 +584,6 @@ function M.delete_properties_for_clip(clip_id)
     assert(clip_id and clip_id ~= "", "delete_properties_for_clip: clip_id is required")
     Property.delete_for_clip(clip_id)
     return true
-end
-
-function M.delete_properties_by_list(properties)
-    if not properties or #properties == 0 then
-        return true
-    end
-
-    local prop_ids = {}
-    for _, prop in ipairs(properties) do
-        if prop.id then
-            table.insert(prop_ids, prop.id)
-        end
-    end
-
-    Property.delete_by_ids(prop_ids)
-    return true
-end
-
-function M.delete_clips_by_id(command, sequence_id, clip_ids)
-    if not clip_ids or #clip_ids == 0 then return end
-    for _, clip_id in ipairs(clip_ids) do
-        local clip = Clip.load_optional(clip_id)
-        if clip then
-            M.delete_properties_for_clip(clip_id)
-            if clip:delete(nil) then
-                M.add_delete_mutation(command, sequence_id, clip_id)
-            end
-        end
-    end
 end
 
 function M.add_bulk_shift_mutation(command, sequence_id, payload)
