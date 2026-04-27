@@ -796,11 +796,9 @@ end
 -- back-compat — old callers must migrate, no shim.
 
 -- =============================================================================
--- MASTERCLIP SEQUENCE METHODS (for kind="masterclip")
+-- MASTER SEQUENCE METHODS (for kind="master")
 -- =============================================================================
 
---- Check if this is a masterclip sequence (appears in project browser as source)
--- @return boolean true if kind == "masterclip"
 --- Whether this sequence is a master (V13 kind='master'). The `kind`
 --- value narrowed from {timeline,masterclip,compound,multicam} to
 --- {master,nested} in V13; this checks the new value.

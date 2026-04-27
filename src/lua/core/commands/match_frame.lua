@@ -58,10 +58,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             master_seq:set_playhead(target_clip.source_in + (playhead - target_clip.timeline_start))
             master_seq:save()
         else
-            -- FCP7 import doesn't create masterclip sequences (IS-a gap).
+            -- FCP7 import doesn't create master sequences (IS-a gap).
             -- Marks can't be written but focus_master_clip can still work.
-            -- TODO: FCP7 import should create masterclip sequences.
-            log.warn("MatchFrame: no masterclip sequence for %s — marks skipped (FCP7 import gap)",
+            -- TODO: FCP7 import should create master sequences.
+            log.warn("MatchFrame: no master sequence for %s — marks skipped (FCP7 import gap)",
                 tostring(target_master_id))
         end
 
