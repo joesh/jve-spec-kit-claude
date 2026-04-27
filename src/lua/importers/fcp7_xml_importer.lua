@@ -610,8 +610,6 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
     local pending_bin_assignments = {}
     local bin_assignment_dirty = false
 
-    local sequence_master_bins = {}  -- luacheck: ignore 241 (stored for future use in undo)
-
     local function ensure_master_bin(sequence_name)
         local base_name = (sequence_name and sequence_name ~= "") and sequence_name or "Imported Sequence"
         local bin_label = string.format("%s Master Clips", base_name)
@@ -1133,7 +1131,6 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             table.insert(result.sequence_ids, sequence.id)
             result.sequence_id_map[sequence_key] = sequence.id
             local master_bin_id = ensure_master_bin(seq_info.name)
-            sequence_master_bins[sequence_key] = master_bin_id
 
             for _, track_info in ipairs(seq_info.video_tracks or {}) do
                 local success, track_err = create_track(sequence_key, sequence.id, track_info, "VIDEO", master_bin_id)
