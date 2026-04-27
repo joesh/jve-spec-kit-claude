@@ -231,28 +231,6 @@ do
 end
 
 -- ============================================================
--- Nested table: accept_legacy_keys
--- ============================================================
-print("\n--- nested: accept_legacy_keys ---")
-do
-    local spec = { args = {
-        data = {
-            kind = "table",
-            accept_legacy_keys = { clip_name = { "name", "old_name" } },
-        },
-    } }
-    local params = { data = { name = "legacy" } }
-    local ok = command_schema.validate_and_normalize("TestCmd", spec, params)
-    check("legacy key success", ok == true)
-    check("legacy key copied to canonical", params.data.clip_name == "legacy")
-
-    -- canonical already present → not overwritten
-    params = { data = { clip_name = "canonical", name = "legacy" } }
-    local ok2 = command_schema.validate_and_normalize("TestCmd", spec, params)
-    check("canonical preserved", ok2 and params.data.clip_name == "canonical")
-end
-
--- ============================================================
 -- Nested table: requires_fields
 -- ============================================================
 print("\n--- nested: requires_fields ---")

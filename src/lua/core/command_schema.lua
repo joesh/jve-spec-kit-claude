@@ -10,10 +10,6 @@
 --
 --   Nested table normalization (single choke point):
 --     For params that are tables, a rule can declare:
---       accept_legacy_keys = { canonical = { "alias1", "alias2" } }
---         Copies the first present alias into canonical when canonical is missing.
---         Use this for temporary refactors or schema tidy-ups so executors do NOT need
---         to do shape-compat glue.
 --       fields = { field = { required=true, kind=..., one_of=..., default=..., empty_as_nil=true } }
 --         Validates/normalizes fields inside the nested table.
 --       requires_fields = { "field1", "field2" }
@@ -46,7 +42,6 @@ local asserts_module = require("core.asserts")
 --   default=<value>        applied when apply_defaults=true and key is absent
 --   empty_as_nil=true      converts "" to nil before required checks
 --   one_of={...} / enum={...}
---   accept_legacy_keys={ dst = { "old1", "old2" }, ... }   (table-valued param only)
 --   fields={ ... }         nested table field rules (table-valued param only)
 
 --- @fn is_ephemeral_key
@@ -302,19 +297,6 @@ function M.validate_and_normalize(command_name, spec, params, opts)
             -- This is where we keep the command schemas strict without forcing every executor
             -- to hand-normalize shapes before calling Command.set_parameter().
             if v ~= nil and type(v) == "table" then
-                if rule.accept_legacy_keys then
-                    for canonical, alternates in pairs(rule.accept_legacy_keys) do
-                        if v[canonical] == nil then
-                            for _, alt in ipairs(alternates) do
-                                if v[alt] ~= nil then
-                                    v[canonical] = v[alt]
-                                    break
-                                end
-                            end
-                        end
-                    end
-                end
-
                 if rule.fields then
                     for field_key, field_rule in pairs(rule.fields) do
                         local field_val = v[field_key]
