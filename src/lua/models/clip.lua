@@ -167,9 +167,8 @@ local function load_internal(clip_id, raise_errors)
                 path = query:value(28),
                 offline_note = query:value(29),
             }
-            -- Flat denorm fields (mirrors database.load_clips); UI and
-            -- relink-test code reads c.media_id / c.media_path directly.
-            clip.media_id = media_id_val
+            -- Flat denorm field (mirrors database.load_clips); the timeline
+            -- offline-tracker keys clips by media_path.
             clip.media_path = query:value(28)
         end
     end

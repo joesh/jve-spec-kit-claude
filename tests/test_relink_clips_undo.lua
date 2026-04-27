@@ -197,7 +197,8 @@ do
 
     -- Verify clip points to new media
     local c1 = Clip.load(clip_id_1)
-    assert(c1.media_id == new_media_id, "clip should point to new media")
+    assert(c1.resolved_media and c1.resolved_media.id == new_media_id,
+        "clip should point to new media")
     assert(c1.source_in == 0, "clip source_in should be 0")
 
     print("  ✓ new media record created, clip reassigned")
@@ -207,7 +208,8 @@ do
 
     -- Verify clip restored to original media
     c1 = Clip.load(clip_id_1)
-    assert(c1.media_id == media_id, "undo: clip should point back to original media")
+    assert(c1.resolved_media and c1.resolved_media.id == media_id,
+        "undo: clip should point back to original media")
     assert(c1.source_in == 100, "undo: clip source_in should be 100")
 
     -- Verify new media record deleted

@@ -142,7 +142,7 @@ assert(c1, "clip1 not found in load_clips result")
 
 check("clip1.project_id", c1.project_id == "proj1")
 check("clip1.track_id", c1.track_id == "trk1")
-check("clip1.media_id", c1.media_id == "med1")
+check("clip1.resolved_media.id", c1.resolved_media and c1.resolved_media.id == "med1")
 check("clip1.name", c1.name == "My Clip")
 check("clip1.enabled", c1.enabled == true)
 check("clip1.offline", c1.offline == false)
@@ -176,7 +176,6 @@ for _, c in ipairs(clips) do
     if c.id == "clip3" then c3 = c end
 end
 assert(c3, "clip3 not found")
-check("clip3.media_id is nil", c3.media_id == nil or c3.media_id == "")
 check("clip3.resolved_media is nil", c3.resolved_media == nil)
 check("clip3 no-media label → Clip <id>", c3.label == "Clip " .. ("clip3"):sub(1, 8))
 
