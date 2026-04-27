@@ -582,139 +582,145 @@ function Sequence.ensure_master(media_id, project_id, opts)
     local Track    = require("models.track")
     local MediaRef = require("models.media_ref")
 
-    local media = Media.load(media_id)
-    assert(media, string.format(
-        "Sequence.ensure_master: Media record not found for media_id=%s",
-        tostring(media_id)))
-
-    local fps_num = media.frame_rate.fps_numerator
-    local fps_den = media.frame_rate.fps_denominator
-    local duration_frames = media.duration
-    local has_video = media.width > 0
-    local has_audio = media.audio_channels > 0
-    assert(has_video or has_audio, string.format(
-        "Sequence.ensure_master: media %s has no video and no audio "
-        .. "(width=%d, audio_channels=%d) — has no TC origin to anchor a master",
-        tostring(media_id), media.width, media.audio_channels))
-
-    local sample_rate = opts.sample_rate
-    if not sample_rate and has_audio then
-        sample_rate = media.audio_sample_rate
-    end
-    assert(not has_audio or (sample_rate and sample_rate > 0), string.format(
-        "Sequence.ensure_master: media %s has audio but no sample_rate "
-        .. "(audio_channels=%s, audio_sample_rate=%s)",
-        tostring(media_id), tostring(media.audio_channels),
-        tostring(media.audio_sample_rate)))
-    -- Sequence.create requires opts.audio_rate > 0 even for video-only masters
-    -- (the field is on every sequence). Use a project-conventional placeholder
-    -- only when the media has no audio at all — the value is unused by the
-    -- resolver since no audio media_refs will be emitted.
-    local seq_audio_rate = sample_rate or 48000
-
-    local duration_samples = 0
-    if has_audio and duration_frames > 0 then
-        duration_samples = math.floor(
-            duration_frames * sample_rate * fps_den / fps_num + 0.5)
-    end
-
-    local width  = has_video and media.width  or 1920
-    local height = has_video and media.height or 1080
-
-    -- TC origins (FR-017 defaults).
-    local video_start_tc_frame  = has_video and media:get_start_tc()       or nil
-    local audio_start_tc_samples = has_audio and media:get_audio_start_tc() or nil
-    if has_video then
-        assert(video_start_tc_frame ~= nil, string.format(
-            "Sequence.ensure_master: media %s has no video TC origin",
+    -- Load + validate the source media; gather every dimension the master
+    -- needs in one named struct. Pure read; no side effects.
+    local function load_media_dims()
+        local media = Media.load(media_id)
+        assert(media, string.format(
+            "Sequence.ensure_master: Media record not found for media_id=%s",
             tostring(media_id)))
-    end
-    if has_audio then
-        assert(audio_start_tc_samples ~= nil, string.format(
-            "Sequence.ensure_master: media %s has no audio TC origin",
+        local fps_num = media.frame_rate.fps_numerator
+        local fps_den = media.frame_rate.fps_denominator
+        local duration_frames = media.duration
+        local has_video = media.width > 0
+        local has_audio = media.audio_channels > 0
+        assert(has_video or has_audio, string.format(
+            "Sequence.ensure_master: media %s has no video and no audio "
+            .. "(width=%d, audio_channels=%d) — has no TC origin to anchor a master",
+            tostring(media_id), media.width, media.audio_channels))
+
+        local sample_rate = opts.sample_rate
+            or (has_audio and media.audio_sample_rate or nil)
+        assert(not has_audio or (sample_rate and sample_rate > 0), string.format(
+            "Sequence.ensure_master: media %s has audio but no sample_rate "
+            .. "(audio_channels=%s, audio_sample_rate=%s)",
+            tostring(media_id), tostring(media.audio_channels),
+            tostring(media.audio_sample_rate)))
+
+        local duration_samples = 0
+        if has_audio and duration_frames > 0 then
+            duration_samples = math.floor(
+                duration_frames * sample_rate * fps_den / fps_num + 0.5)
+        end
+
+        -- TC origins (FR-017 defaults).
+        local video_tc  = has_video and media:get_start_tc()       or nil
+        local audio_tc  = has_audio and media:get_audio_start_tc() or nil
+        if has_video then
+            assert(video_tc ~= nil, string.format(
+                "Sequence.ensure_master: media %s has no video TC origin",
+                tostring(media_id)))
+        end
+        if has_audio then
+            assert(audio_tc ~= nil, string.format(
+                "Sequence.ensure_master: media %s has no audio TC origin",
+                tostring(media_id)))
+        end
+        assert(media.name and media.name ~= "", string.format(
+            "Sequence.ensure_master: media has no name for media_id=%s",
             tostring(media_id)))
+
+        return {
+            media            = media,
+            fps_num          = fps_num,
+            fps_den          = fps_den,
+            duration_frames  = duration_frames,
+            duration_samples = duration_samples,
+            has_video        = has_video,
+            has_audio        = has_audio,
+            sample_rate      = sample_rate,
+            -- For Sequence.create's mandatory audio_rate field on a
+            -- video-only master, fall back to a project-conventional
+            -- value — the resolver never emits audio media_refs in that
+            -- case so the rate goes unread.
+            seq_audio_rate   = sample_rate or 48000,
+            width            = has_video and media.width  or 1920,
+            height           = has_video and media.height or 1080,
+            video_tc         = video_tc,
+            audio_tc         = audio_tc,
+        }
     end
 
-    assert(media.name and media.name ~= "", string.format(
-        "Sequence.ensure_master: media has no name for media_id=%s",
-        tostring(media_id)))
-
-    -- Build the master sequence row. default_video_layer_track_id is set
-    -- AFTER the V track is created (INV-8 satisfied below).
-    local seq = Sequence.create(media.name, project_id,
-        {fps_numerator = fps_num, fps_denominator = fps_den},
-        width, height, {
-            id                       = opts.id,
-            kind                     = "master",
-            audio_rate               = seq_audio_rate,
-            start_timecode_frame     = video_start_tc_frame or 0,
-            playhead_frame           = video_start_tc_frame or 0,
-            video_start_tc_frame     = video_start_tc_frame,
-            audio_start_tc_samples   = audio_start_tc_samples,
-        })
-    assert(seq:save(), string.format(
-        "Sequence.ensure_master: failed to save master sequence for media_id=%s",
-        tostring(media_id)))
-
-    local now = os.time()
+    local function create_master_row(dims)
+        local seq = Sequence.create(dims.media.name, project_id,
+            { fps_numerator = dims.fps_num, fps_denominator = dims.fps_den },
+            dims.width, dims.height, {
+                id                       = opts.id,
+                kind                     = "master",
+                audio_rate               = dims.seq_audio_rate,
+                start_timecode_frame     = dims.video_tc or 0,
+                playhead_frame           = dims.video_tc or 0,
+                video_start_tc_frame     = dims.video_tc,
+                audio_start_tc_samples   = dims.audio_tc,
+            })
+        assert(seq:save(), string.format(
+            "Sequence.ensure_master: failed to save master sequence for media_id=%s",
+            tostring(media_id)))
+        return seq
+    end
 
     -- Master sequence's timebase IS absolute TC space. Each media_ref sits
-    -- at timeline_start = file's TC origin and spans [tc_origin, tc_origin +
-    -- file_duration]. Clips that reference this master use absolute-TC
-    -- source_in into this timebase; C++ decode recovers file position via
-    -- file_pos = source_in - file_tc_origin. The range [0, tc_origin) is
-    -- empty TC space (no content) and is correct — there's no media there.
-    if has_video then
-        local vtrack = Track.create_video("Video 1", seq.id, {
-            id    = opts.video_track_id,
-            index = 1,
-        })
+    -- at timeline_start = file's TC origin and spans [tc_origin, tc_origin
+    -- + file_duration]. Clips reference absolute TC into this timebase;
+    -- C++ decode recovers file position via file_pos = source_in -
+    -- file_tc_origin. The range [0, tc_origin) is empty (no media there).
+    local function add_video_stream(seq, dims, now)
+        if not dims.has_video then return end
+        local vtrack = Track.create_video("Video 1", seq.id,
+            { id = opts.video_track_id, index = 1 })
         assert(vtrack:save(), "Sequence.ensure_master: failed to save video track")
-
         MediaRef.create({
             id                   = opts.video_media_ref_id,
             project_id           = project_id,
             owner_sequence_id    = seq.id,
             track_id             = vtrack.id,
             media_id             = media_id,
-            source_in_frame      = video_start_tc_frame,
-            source_out_frame     = video_start_tc_frame + duration_frames,
-            timeline_start_frame = video_start_tc_frame,
-            duration_frames      = duration_frames,
+            source_in_frame      = dims.video_tc,
+            source_out_frame     = dims.video_tc + dims.duration_frames,
+            timeline_start_frame = dims.video_tc,
+            duration_frames      = dims.duration_frames,
             enabled              = true,
             volume               = 1.0,
             playhead_frame       = 0,
             created_at           = now,
             modified_at          = now,
         })
-
         -- INV-8: master with at least one V track must have a non-NULL
         -- default_video_layer_track_id.
-        Sequence.update(seq.id,
-            { default_video_layer_track_id = vtrack.id })
+        Sequence.update(seq.id, { default_video_layer_track_id = vtrack.id })
     end
 
-    if has_audio then
-        local replay_audio_track_ids    = opts.audio_track_ids     or {}
+    local function add_audio_streams(seq, dims, now)
+        if not dims.has_audio then return end
+        local replay_audio_track_ids     = opts.audio_track_ids     or {}
         local replay_audio_media_ref_ids = opts.audio_media_ref_ids or {}
-        for ch = 1, media.audio_channels do
+        for ch = 1, dims.media.audio_channels do
             local atrack = Track.create_audio(
                 string.format("Audio %d", ch), seq.id, {
                     id    = replay_audio_track_ids[ch],
                     index = ch,
                 })
             assert(atrack:save(), "Sequence.ensure_master: failed to save audio track")
-
             MediaRef.create({
                 id                   = replay_audio_media_ref_ids[ch],
                 project_id           = project_id,
                 owner_sequence_id    = seq.id,
                 track_id             = atrack.id,
                 media_id             = media_id,
-                source_in_frame      = audio_start_tc_samples,
-                source_out_frame     = audio_start_tc_samples + duration_samples,
-                timeline_start_frame = audio_start_tc_samples,
-                duration_frames      = duration_samples,
+                source_in_frame      = dims.audio_tc,
+                source_out_frame     = dims.audio_tc + dims.duration_samples,
+                timeline_start_frame = dims.audio_tc,
+                duration_frames      = dims.duration_samples,
                 enabled              = true,
                 volume               = 1.0,
                 playhead_frame       = 0,
@@ -724,9 +730,15 @@ function Sequence.ensure_master(media_id, project_id, opts)
         end
     end
 
+    local dims = load_media_dims()
+    local seq  = create_master_row(dims)
+    local now  = os.time()
+    add_video_stream(seq, dims, now)
+    add_audio_streams(seq, dims, now)
+
     if opts.bin_id then
         local tag_service = require("core.tag_service")
-        tag_service.add_to_bin(project_id, {seq.id}, opts.bin_id, "master_clip")
+        tag_service.add_to_bin(project_id, { seq.id }, opts.bin_id, "master_clip")
     end
 
     return seq.id
