@@ -390,8 +390,8 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         -- Flat denormalised fields for downstream UI consumers (project_browser,
         -- media_relink_dialog, timeline_core_state). These mirror the resolved
         -- chain leaf one-step from join; keep in sync with resolved_media above.
+        -- (clip.media_name was also denormed here but had no consumers; dropped.)
         clip.media_id = media_id
-        clip.media_name = media_name
         clip.media_path = media_path
         clip.offline = (offline_note ~= nil)
     else

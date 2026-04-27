@@ -168,9 +168,8 @@ local function load_internal(clip_id, raise_errors)
                 offline_note = query:value(29),
             }
             -- Flat denorm fields (mirrors database.load_clips); UI and
-            -- relink-test code reads c.media_id directly.
+            -- relink-test code reads c.media_id / c.media_path directly.
             clip.media_id = media_id_val
-            clip.media_name = query:value(27)
             clip.media_path = query:value(28)
         end
     end

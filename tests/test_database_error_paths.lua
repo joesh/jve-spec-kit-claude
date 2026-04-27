@@ -157,7 +157,8 @@ check("clip1.rate.fps_numerator", c1.rate.fps_numerator == 24)
 check("clip1.rate.fps_denominator", c1.rate.fps_denominator == 1)
 
 -- 1c. Media label
-check("clip1.media_name == shot_01.mov", c1.media_name == "shot_01.mov")
+check("clip1.resolved_media.name == shot_01.mov",
+    c1.resolved_media and c1.resolved_media.name == "shot_01.mov")
 check("clip1.media_path", c1.media_path == "/tmp/jve/shot_01.mov")
 check("clip1.label is name (non-empty)", c1.label == "My Clip")
 
@@ -176,7 +177,7 @@ for _, c in ipairs(clips) do
 end
 assert(c3, "clip3 not found")
 check("clip3.media_id is nil", c3.media_id == nil or c3.media_id == "")
-check("clip3.media_name is nil", c3.media_name == nil)
+check("clip3.resolved_media is nil", c3.resolved_media == nil)
 check("clip3 no-media label → Clip <id>", c3.label == "Clip " .. ("clip3"):sub(1, 8))
 
 -- 1f. Empty sequence → empty array
