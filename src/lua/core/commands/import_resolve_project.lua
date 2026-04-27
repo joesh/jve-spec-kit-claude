@@ -205,7 +205,6 @@ local function persist_and_refresh(command, project_id_key, project_id, import_r
 end
 
 function M.register(executors, undoers, db)
-    local _sqlite3 = require("lsqlite3")  -- luacheck: ignore 211
 
     -- =========================================================================
     -- ImportResolveProject (.drp file)
