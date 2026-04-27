@@ -1,5 +1,4 @@
 --- Shared helper functions for command implementations.
--- Extracted to support splitting command_implementations.lua into modular files.
 local M = {}
 
 local json = require("dkjson")
