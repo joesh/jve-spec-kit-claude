@@ -345,7 +345,7 @@ do
     assert(view.total_frames == 100, "total_frames from masterclip")
     assert(view.fps_num == 24, "fps_num")
     assert(view.fps_den == 1, "fps_den")
-    assert(view.sequence:is_masterclip(), "sequence is masterclip")
+    assert(view.sequence:is_master(), "sequence is masterclip")
 
     -- Title should show "Source: <media_name>" (V13 master sequences derive
     -- their display name from the bound media row).
@@ -369,7 +369,7 @@ do
     assert(view:has_clip(), "has_clip after load")
     assert(view.total_frames == 50, "total_frames from timeline clips")
     assert(view.fps_num == 24, "fps_num")
-    assert(not view.sequence:is_masterclip(), "NOT masterclip")
+    assert(not view.sequence:is_master(), "NOT masterclip")
 
     -- Title should show "Timeline: MyTimeline"
     local title = view:get_title_widget()

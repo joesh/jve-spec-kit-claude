@@ -359,7 +359,7 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     -- Skip when reloading the same sequence: external writers (e.g. MatchFrame)
     -- may have updated marks+playhead in DB — saving stale in-memory state would
     -- clobber those fresh values.
-    if self.sequence and self.sequence:is_masterclip()
+    if self.sequence and self.sequence:is_master()
        and self.sequence_id ~= sequence_id then
         self:save_playhead_to_db()
     end
@@ -420,7 +420,7 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     self.engine:seek(saved_playhead)
 
     -- Update title
-    local title = seq:is_masterclip() and "Source" or "Timeline"
+    local title = seq:is_master() and "Source" or "Timeline"
     self:_set_title(string.format("%s: %s", title, seq.name or sequence_id))
 
     self:_notify()
@@ -432,7 +432,7 @@ end
 
 --- Unload current sequence.
 function SequenceMonitor:unload()
-    if self.sequence and self.sequence:is_masterclip() then
+    if self.sequence and self.sequence:is_master() then
         self:save_playhead_to_db()
     end
 
@@ -475,7 +475,7 @@ function SequenceMonitor:seek_to_frame(frame)
     -- engine:seek uses set_position_silent (no callback), update manually
     self.playhead = math.max(self.start_frame, math.floor(frame))
     self:_ensure_playhead_visible()
-    if self.sequence and self.sequence:is_masterclip() then
+    if self.sequence and self.sequence:is_master() then
         self:_schedule_persist()
     end
     self:_notify()
@@ -549,7 +549,7 @@ function SequenceMonitor:set_playhead(frame)
     self.playhead = pos
     self:_ensure_playhead_visible()
     self:_notify()
-    if self.sequence and self.sequence:is_masterclip() then
+    if self.sequence and self.sequence:is_master() then
         self:_schedule_persist()
     end
 end
@@ -682,7 +682,7 @@ end
 --- Save playhead to DB (for masterclip sequences).
 function SequenceMonitor:save_playhead_to_db()
     if not self.sequence then return end
-    if not self.sequence:is_masterclip() then return end
+    if not self.sequence:is_master() then return end
     if not database.has_connection() then return end
 
     -- Clamp before writing — playhead can drift to total_frames after
@@ -778,7 +778,7 @@ end
 function SequenceMonitor:_on_position_changed(frame)
     self.playhead = math.floor(frame)
     self:_ensure_playhead_visible()
-    if self.sequence and self.sequence:is_masterclip() then
+    if self.sequence and self.sequence:is_master() then
         self:_schedule_persist()
     end
     self:_notify()
@@ -878,7 +878,7 @@ end
 
 --- Clean up resources.
 function SequenceMonitor:destroy()
-    if self.sequence and self.sequence:is_masterclip() then
+    if self.sequence and self.sequence:is_master() then
         self:save_playhead_to_db()
     end
     self:clear_frame_mirror()

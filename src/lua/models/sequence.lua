@@ -808,13 +808,6 @@ function Sequence:is_master()
     return self.kind == "master"
 end
 
---- Deprecated alias for is_master(). Pre-V13 callers used this name;
---- semantics are unchanged under V13 since both check kind=='master'.
---- Slated for removal once all UI surfaces migrate to is_master().
-function Sequence:is_masterclip()
-    return self:is_master()
-end
-
 --- V13: enumerate the media_refs inside a kind='master' sequence as
 -- "stream clips" for legacy callers. Each returned record is shaped to
 -- match the V8 clip-stream contract that callers depend on:

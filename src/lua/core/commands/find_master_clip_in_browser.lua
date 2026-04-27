@@ -46,7 +46,7 @@ local function resolve_from_source_viewer()
     if not seq then
         return nil, "Source viewer sequence not found"
     end
-    if not seq:is_masterclip() then
+    if not seq:is_master() then
         return nil, "Source viewer is not showing a master clip"
     end
     return source.sequence_id
