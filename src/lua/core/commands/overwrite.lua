@@ -234,10 +234,11 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
 
     command_undoers["Overwrite"] = function(command)
         local args = command:get_all_parameters()
-        local created_ids   = args.created_clip_ids or {}
-        local link_group_id = args.created_link_group_id
-        local occluded      = args.occluded_capture or {}
-        local _unused_here = link_group_id  -- luacheck: ignore 211
+        local created_ids = args.created_clip_ids or {}
+        local occluded    = args.occluded_capture or {}
+        -- args.created_link_group_id is preserved on the command for redo;
+        -- the undoer doesn't need to read it (clip_links cascade on
+        -- clip delete).
 
         -- Drop the new clips + any split-right-halves.
         Clip.delete_by_ids(created_ids)
