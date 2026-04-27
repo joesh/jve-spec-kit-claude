@@ -90,17 +90,27 @@ end
 ---             video_native_dur, audio_native_dur, owner_duration,
 ---             targets = { VIDEO?, AUDIO? }, base_name,
 ---             start_frame }
-function M.plan_placement(args)
-    assert(type(args) == "table", "place_shared.plan_placement: args table required")
+-- Validate the place_placement input shape. Caller invariants only — the
+-- field-level assertions on referenced sequences happen inside resolve_*
+-- helpers below.
+local function validate_plan_args(args)
+    assert(type(args) == "table",
+        "place_shared.plan_placement: args table required")
     assert(args.sequence_id and args.sequence_id ~= "",
         "place_shared: sequence_id required")
     assert(args.nested_sequence_id and args.nested_sequence_id ~= "",
         "place_shared: nested_sequence_id required")
-    assert(type(args.timeline_start_frame) == "number" and args.timeline_start_frame >= 0,
+    assert(type(args.timeline_start_frame) == "number"
+        and args.timeline_start_frame >= 0,
         "place_shared: timeline_start_frame must be non-negative integer")
+end
 
+-- Load the owner+nested sequences, enforce INV-2 on the owner, project
+-- consistency, and cycle absence. Returns owner, nested.
+local function resolve_endpoints(args)
     local owner  = Sequence.find(args.sequence_id)
-    assert(owner, string.format("place_shared: owner %s not found", args.sequence_id))
+    assert(owner, string.format(
+        "place_shared: owner %s not found", args.sequence_id))
     local nested = Sequence.find(args.nested_sequence_id)
     assert(nested, string.format(
         "place_shared: nested %s not found", args.nested_sequence_id))
@@ -110,80 +120,167 @@ function M.plan_placement(args)
     assert(owner.project_id == nested.project_id, string.format(
         "place_shared: owner project %s != nested project %s",
         tostring(owner.project_id), tostring(nested.project_id)))
-
     if Cycle.would_create_cycle(owner.id, nested.id) then
         error(string.format(
             "place_shared: would create a cycle — sequence %s reachable from %s",
             nested.id, owner.id))
     end
+    return owner, nested
+end
 
-    local policy = M.resolve_policy(args.fps_mismatch_policy, owner)
+-- Compute per-medium native durations from the nested sequence. Asserts
+-- non-zero when the medium is present.
+local function compute_native_durations(nested, mediums)
+    local v_dur = mediums.VIDEO
+        and Sequence.native_duration_for_medium(nested.id, "VIDEO") or 0
+    local a_dur = mediums.AUDIO
+        and Sequence.native_duration_for_medium(nested.id, "AUDIO") or 0
+    if mediums.VIDEO then
+        assert(v_dur > 0, "place_shared: VIDEO medium has zero duration")
+    end
+    if mediums.AUDIO then
+        assert(a_dur > 0, "place_shared: AUDIO medium has zero duration")
+    end
+    return v_dur, a_dur
+end
+
+-- Honor nested-sequence marks (FCP/Premiere/Resolve UX). mark_in/mark_out
+-- are in the nested's video timebase, absolute TC. When set, narrow the
+-- video and audio source ranges to the marked sub-region. Returns four
+-- values: video_native_dur, video_source_in, audio_native_dur, audio_source_in.
+local function apply_nested_marks(nested, mediums, v_dur, a_dur)
+    local mark_in, mark_out = nested.mark_in, nested.mark_out
+    if mark_in == nil and mark_out == nil then
+        return v_dur, 0, a_dur, 0
+    end
+    local tc_origin = nested.start_timecode_frame or 0
+    local lo = mark_in  and (mark_in  - tc_origin) or 0
+    local hi = mark_out and (mark_out - tc_origin) or v_dur
+    local video_source_in, audio_source_in = 0, 0
+    if mediums.VIDEO then
+        assert(lo >= 0 and hi <= v_dur and hi > lo, string.format(
+            "place_shared: nested %s marks [%s,%s) out of bounds for video duration %d",
+            nested.id, tostring(lo), tostring(hi), v_dur))
+        v_dur, video_source_in = hi - lo, lo
+    end
+    if mediums.AUDIO then
+        local samples_per_frame =
+            nested.audio_rate * nested.fps_denominator / nested.fps_numerator
+        local a_lo = math.floor(lo * samples_per_frame + 0.5)
+        local a_hi = math.floor(hi * samples_per_frame + 0.5)
+        assert(a_lo >= 0 and a_hi <= a_dur and a_hi > a_lo, string.format(
+            "place_shared: nested %s mark-derived audio range [%d,%d) "
+            .. "out of bounds for audio duration %d",
+            nested.id, a_lo, a_hi, a_dur))
+        a_dur, audio_source_in = a_hi - a_lo, a_lo
+    end
+    return v_dur, video_source_in, a_dur, audio_source_in
+end
+
+-- Project the placement onto owner-timebase frames. Video drives the
+-- duration when present (rate-aware via policy); audio-only paths convert
+-- samples through real-time seconds to owner frames.
+local function compute_owner_duration_for_plan(policy, owner, nested, mediums,
+                                               v_dur, a_dur)
+    if mediums.VIDEO then
+        return M.compute_owner_duration(
+            policy, v_dur,
+            owner.fps_numerator, owner.fps_denominator,
+            nested.fps_numerator, nested.fps_denominator)
+    end
+    -- Audio-only: samples @ nested.audio_rate → seconds → owner frames.
+    local seconds = a_dur / nested.audio_rate
+    return math.floor(seconds * owner.fps_numerator / owner.fps_denominator + 0.5)
+end
+
+-- Build the audio_targets list: one entry per A clip to create. Composite
+-- emits 1 entry with NULL master_audio_track_id; expanded emits N entries,
+-- one per nested A track. Auto-creates missing owner A tracks for the
+-- expanded path; refuses on collision (rule 1.14, FR-023).
+local function resolve_audio_targets(owner, nested, drop_mode, args, a_dur,
+                                     owner_duration)
+    if drop_mode == "composite" then
+        return { {
+            track_id              = M.pick_target_track(
+                owner.id, "AUDIO", args.target_audio_track_id),
+            master_audio_track_id = nil,
+            source_out            = a_dur,
+        } }
+    end
+
+    local nested_a = Track.find_by_sequence(nested.id, "AUDIO") or {}
+    assert(#nested_a > 0, string.format(
+        "place_shared: expanded audio_drop_mode requires nested %s to have "
+        .. "at least one A track; got 0", nested.id))
+    local owner_a_by_index = {}
+    for _, t in ipairs(Track.find_by_sequence(owner.id, "AUDIO") or {}) do
+        owner_a_by_index[t.track_index] = t.id
+    end
+
+    local targets = {}
+    for _, nt in ipairs(nested_a) do
+        local owner_track_id = owner_a_by_index[nt.track_index]
+        if not owner_track_id then
+            local newt = Track.create_audio(
+                string.format("Audio %d", nt.track_index), owner.id,
+                { id = uuid.generate(), index = nt.track_index })
+            assert(newt:save(), string.format(
+                "place_shared: failed to auto-create owner A track at index %d "
+                .. "on sequence %s", nt.track_index, owner.id))
+            owner_track_id = newt.id
+            owner_a_by_index[nt.track_index] = owner_track_id
+        end
+        targets[#targets + 1] = {
+            track_id              = owner_track_id,
+            master_audio_track_id = nt.id,
+            source_out            = a_dur,
+        }
+    end
+
+    -- Collision check across the owner-frame placement window.
+    local hi = args.timeline_start_frame + owner_duration
+    for _, tgt in ipairs(targets) do
+        local overlapping = Clip.find_overlapping_on_track(
+            tgt.track_id, args.timeline_start_frame, hi)
+        if #overlapping > 0 then
+            error(string.format(
+                "place_shared: expanded-audio collision on owner track %s — "
+                .. "existing clip %s overlaps [%d, %d). Auto-creating tracks "
+                .. "is non-destructive but overwriting an existing clip is. "
+                .. "Clear the track or pick another start frame.",
+                tgt.track_id, overlapping[1].id,
+                args.timeline_start_frame, hi))
+        end
+    end
+    return targets
+end
+
+local function derive_base_name(nested, args)
+    local name = args.clip_name
+    if not name or name == "" then
+        name = Sequence.get_name(nested.id)
+    end
+    assert(name and name ~= "", "place_shared: could not derive clip name")
+    return name
+end
+
+function M.plan_placement(args)
+    validate_plan_args(args)
+    local owner, nested = resolve_endpoints(args)
+    local policy        = M.resolve_policy(args.fps_mismatch_policy, owner)
 
     local mediums = Sequence.contained_mediums(nested.id)
     assert(next(mediums) ~= nil, string.format(
         "place_shared: nested %s has no mediums", nested.id))
 
-    local video_native_dur = mediums.VIDEO
-        and Sequence.native_duration_for_medium(nested.id, "VIDEO") or 0
-    local audio_native_dur = mediums.AUDIO
-        and Sequence.native_duration_for_medium(nested.id, "AUDIO") or 0
-    if mediums.VIDEO then
-        assert(video_native_dur > 0, "place_shared: VIDEO medium has zero duration")
-    end
-    if mediums.AUDIO then
-        assert(audio_native_dur > 0, "place_shared: AUDIO medium has zero duration")
-    end
+    local v_dur, a_dur = compute_native_durations(nested, mediums)
+    local v_src_in, a_src_in
+    v_dur, v_src_in, a_dur, a_src_in =
+        apply_nested_marks(nested, mediums, v_dur, a_dur)
 
-    -- Honor nested-sequence marks (FCP/Premiere/Resolve UX): when the user
-    -- has marked a sub-region of the nested sequence (set_in/set_out),
-    -- Insert/Overwrite plant only that region. mark_in/mark_out are in the
-    -- nested's video timebase, absolute TC. Subtract start_timecode_frame
-    -- to get a 0-based offset into the native duration.
-    local nested_mark_in  = nested.mark_in
-    local nested_mark_out = nested.mark_out
-    -- Default offsets land at 0; mark range shifts the source-in/out window.
-    local video_source_in = 0
-    local audio_source_in = 0
-    if nested_mark_in ~= nil or nested_mark_out ~= nil then
-        local tc_origin = nested.start_timecode_frame or 0
-        local lo = nested_mark_in  and (nested_mark_in  - tc_origin) or 0
-        local hi = nested_mark_out and (nested_mark_out - tc_origin) or video_native_dur
-        if mediums.VIDEO then
-            assert(lo >= 0 and hi <= video_native_dur and hi > lo, string.format(
-                "place_shared: nested %s marks [%s,%s) out of bounds for video duration %d",
-                nested.id, tostring(lo), tostring(hi), video_native_dur))
-            video_native_dur = hi - lo
-            video_source_in  = lo
-        end
-        if mediums.AUDIO then
-            -- Convert video-frame mark range to audio sample range.
-            local samples_per_frame = nested.audio_rate * nested.fps_denominator
-                / nested.fps_numerator
-            local a_lo = math.floor(lo * samples_per_frame + 0.5)
-            local a_hi = math.floor(hi * samples_per_frame + 0.5)
-            assert(a_lo >= 0 and a_hi <= audio_native_dur and a_hi > a_lo, string.format(
-                "place_shared: nested %s mark-derived audio range [%d,%d) "
-                .. "out of bounds for audio duration %d",
-                nested.id, a_lo, a_hi, audio_native_dur))
-            audio_native_dur = a_hi - a_lo
-            audio_source_in  = a_lo
-        end
-    end
-
-    local owner_duration
-    if mediums.VIDEO then
-        owner_duration = M.compute_owner_duration(
-            policy, video_native_dur,
-            owner.fps_numerator, owner.fps_denominator,
-            nested.fps_numerator, nested.fps_denominator)
-    else
-        -- Audio-only: convert samples @ nested audio_rate to owner video frames.
-        local seconds = audio_native_dur / nested.audio_rate
-        owner_duration = math.floor(
-            seconds * owner.fps_numerator / owner.fps_denominator + 0.5)
-    end
-    assert(owner_duration > 0,
-        "place_shared: computed owner_duration <= 0")
+    local owner_duration = compute_owner_duration_for_plan(
+        policy, owner, nested, mediums, v_dur, a_dur)
+    assert(owner_duration > 0, "place_shared: computed owner_duration <= 0")
 
     local targets = {}
     if mediums.VIDEO then
@@ -191,117 +288,27 @@ function M.plan_placement(args)
             owner.id, "VIDEO", args.target_video_track_id)
     end
 
-    -- Audio drop-mode (FR-002 + FR-025).
-    --   'composite' (default): one A clip with master_audio_track_id=NULL.
-    --   'expanded': one A clip per nested A track, each with a distinct
-    --     non-NULL master_audio_track_id; auto-creates owner A tracks
-    --     where missing. Refused if any target A track has an existing
-    --     clip overlapping [start_frame, start_frame + owner_duration).
-    local audio_drop_mode = args.audio_drop_mode or "composite"
-    assert(audio_drop_mode == "composite" or audio_drop_mode == "expanded",
-        string.format(
+    local drop_mode = args.audio_drop_mode or "composite"
+    assert(drop_mode == "composite" or drop_mode == "expanded", string.format(
         "place_shared: audio_drop_mode must be 'composite' or 'expanded'; "
-        .. "got %s", tostring(audio_drop_mode)))
-
-    -- audio_targets is a list of { track_id, master_audio_track_id, source_out }
-    -- — one entry per A clip to create. Composite: 1 entry, NULL selector.
-    -- Expanded: N entries, one per nested A track.
-    local audio_targets = {}
-    if mediums.AUDIO then
-        if audio_drop_mode == "composite" then
-            audio_targets[#audio_targets + 1] = {
-                track_id              = M.pick_target_track(
-                    owner.id, "AUDIO", args.target_audio_track_id),
-                master_audio_track_id = nil,
-                source_out            = audio_native_dur,
-            }
-        else
-            -- Expanded: enumerate nested A tracks (sorted by index).
-            local nested_a = Track.find_by_sequence(nested.id, "AUDIO") or {}
-            assert(#nested_a > 0, string.format(
-                "place_shared: expanded audio_drop_mode requires nested %s "
-                .. "to have at least one A track; got 0", nested.id))
-
-            -- Walk nested A tracks; for each, ensure an owner A track at
-            -- the same track_index exists (auto-create if not).
-            local owner_a = Track.find_by_sequence(owner.id, "AUDIO") or {}
-            local owner_a_by_index = {}
-            for _, t in ipairs(owner_a) do
-                owner_a_by_index[t.track_index] = t.id
-            end
-
-            for _, nt in ipairs(nested_a) do
-                local owner_track_id = owner_a_by_index[nt.track_index]
-                if not owner_track_id then
-                    -- Auto-create the owner A track.
-                    local newt = Track.create_audio(
-                        string.format("Audio %d", nt.track_index),
-                        owner.id,
-                        { id = uuid.generate(), index = nt.track_index })
-                    assert(newt:save(), string.format(
-                        "place_shared: failed to auto-create owner A track "
-                        .. "at index %d on sequence %s",
-                        nt.track_index, owner.id))
-                    owner_track_id = newt.id
-                    owner_a_by_index[nt.track_index] = owner_track_id
-                end
-
-                -- Per-track source range: each nested A track has its own
-                -- media_ref; their durations may differ. Use the maximum
-                -- A-medium native duration we already computed for the
-                -- timeline duration; the per-track source_out is the
-                -- audio media_ref's duration on THAT track.
-                -- For first landing we use audio_native_dur uniformly —
-                -- multi-track masters typically share duration. Tracks
-                -- whose media_ref is shorter would get clamped at INV-4.
-                audio_targets[#audio_targets + 1] = {
-                    track_id              = owner_track_id,
-                    master_audio_track_id = nt.id,
-                    source_out            = audio_native_dur,
-                }
-            end
-
-            -- Collision check: every owner A target track must be empty
-            -- across [start_frame, start_frame + owner_duration). A
-            -- collision is destructive (rule 1.14) — refuse loudly with
-            -- the offending clip id.
-            local hi = args.timeline_start_frame + owner_duration
-            for _, tgt in ipairs(audio_targets) do
-                local overlapping = Clip.find_overlapping_on_track(
-                    tgt.track_id, args.timeline_start_frame, hi)
-                if #overlapping > 0 then
-                    error(string.format(
-                        "place_shared: expanded-audio collision on owner "
-                        .. "track %s — existing clip %s overlaps [%d, %d). "
-                        .. "Auto-creating tracks is non-destructive but "
-                        .. "overwriting an existing clip is. Clear the "
-                        .. "track or pick another start frame.",
-                        tgt.track_id, overlapping[1].id,
-                        args.timeline_start_frame, hi))
-                end
-            end
-        end
-    end
-
-    local base_name = args.clip_name
-    if not base_name or base_name == "" then
-        base_name = Sequence.get_name(nested.id)
-    end
-    assert(base_name and base_name ~= "", "place_shared: could not derive clip name")
+        .. "got %s", tostring(drop_mode)))
+    local audio_targets = mediums.AUDIO
+        and resolve_audio_targets(owner, nested, drop_mode, args, a_dur, owner_duration)
+        or {}
 
     return {
         owner            = owner,
         nested           = nested,
         policy           = policy,
-        video_native_dur = video_native_dur,
-        audio_native_dur = audio_native_dur,
-        video_source_in  = video_source_in,
-        audio_source_in  = audio_source_in,
+        video_native_dur = v_dur,
+        audio_native_dur = a_dur,
+        video_source_in  = v_src_in,
+        audio_source_in  = a_src_in,
         owner_duration   = owner_duration,
         targets          = targets,
         audio_targets    = audio_targets,
-        audio_drop_mode  = audio_drop_mode,
-        base_name        = base_name,
+        audio_drop_mode  = drop_mode,
+        base_name        = derive_base_name(nested, args),
         start_frame      = args.timeline_start_frame,
     }
 end
@@ -421,6 +428,103 @@ end
 ---
 --- Returns { deleted = [rows], trimmed = [{id, prior}], split_new_ids = [ids] }
 --- so the caller can capture undo state.
+-- Capture an existing clip's bounds for undo restoration.
+local function snapshot_bounds(e)
+    return {
+        id = e.id,
+        prior = {
+            timeline_start_frame = e.timeline_start_frame,
+            duration_frames      = e.duration_frames,
+            source_in_frame      = e.source_in_frame,
+            source_out_frame     = e.source_out_frame,
+        },
+    }
+end
+
+-- Convert an owner-frame delta to the equivalent source-frame delta under
+-- this clip's fps_mismatch_policy. Wrapper for the long Clip.owner_delta…
+-- name inside this branchy function.
+local function owner_to_source_delta(e, owner_seq, nested, owner_delta)
+    return Clip.owner_delta_to_source(
+        e.fps_mismatch_policy, owner_delta,
+        owner_seq.fps_numerator, owner_seq.fps_denominator,
+        nested.fps_numerator,    nested.fps_denominator)
+end
+
+-- One of four overlap cases. Each helper mutates the clip via Clip.* and
+-- returns the per-call deltas (a deleted row, a trimmed snapshot, a new
+-- right-half id, or any combination). Returning tables instead of nil
+-- keeps the dispatcher's accumulator code uniform.
+
+local function occlude_full_cover(e)
+    Clip.delete_by_ids({ e.id })
+    return { deleted = e }
+end
+
+local function occlude_trim_tail(e, owner_seq, nested, n_start)
+    local new_duration = n_start - e.timeline_start_frame
+    local source_delta = owner_to_source_delta(
+        e, owner_seq, nested, e.duration_frames - new_duration)
+    local snap = snapshot_bounds(e)
+    Clip.update_bounds(e.id,
+        e.timeline_start_frame, new_duration,
+        e.source_in_frame, e.source_out_frame - source_delta)
+    return { trimmed = snap }
+end
+
+local function occlude_trim_head(e, owner_seq, nested, n_end)
+    local shift        = n_end - e.timeline_start_frame
+    local new_duration = e.duration_frames - shift
+    local source_delta = owner_to_source_delta(e, owner_seq, nested, shift)
+    local snap = snapshot_bounds(e)
+    Clip.update_bounds(e.id,
+        n_end, new_duration,
+        e.source_in_frame + source_delta, e.source_out_frame)
+    return { trimmed = snap }
+end
+
+local function occlude_split_middle(e, owner_seq, nested, n_start, n_end)
+    local e_end           = e.timeline_start_frame + e.duration_frames
+    local left_duration   = n_start - e.timeline_start_frame
+    local right_duration  = e_end - n_end
+    local left_source_delta = owner_to_source_delta(
+        e, owner_seq, nested, e.duration_frames - left_duration)
+    local right_source_delta = owner_to_source_delta(
+        e, owner_seq, nested, n_end - e.timeline_start_frame)
+    local snap = snapshot_bounds(e)
+    Clip.update_bounds(e.id,
+        e.timeline_start_frame, left_duration,
+        e.source_in_frame, e.source_out_frame - left_source_delta)
+    local right_id = Clip.create({
+        id                    = uuid.generate(),
+        project_id            = e.project_id,
+        owner_sequence_id     = e.owner_sequence_id,
+        track_id              = e.track_id,
+        nested_sequence_id    = e.nested_sequence_id,
+        name                  = e.name,
+        timeline_start_frame  = n_end,
+        duration_frames       = right_duration,
+        source_in_frame       = e.source_in_frame + right_source_delta,
+        source_out_frame      = e.source_out_frame,
+        master_layer_track_id = e.master_layer_track_id,
+        fps_mismatch_policy   = e.fps_mismatch_policy,
+        enabled               = e.enabled,
+        volume                = e.volume,
+        mark_in_frame         = e.mark_in_frame,
+        mark_out_frame        = e.mark_out_frame,
+        playhead_frame        = e.playhead_frame,
+    })
+    return { trimmed = snap, split_new_id = right_id }
+end
+
+local function classify_overlap(e_start, e_end, n_start, n_end)
+    if n_start <= e_start and n_end >= e_end then return "full_cover" end
+    if n_start >  e_start and n_end >= e_end then return "trim_tail" end
+    if n_start <= e_start and n_end <  e_end then return "trim_head" end
+    if n_start >  e_start and n_end <  e_end then return "split"     end
+    return nil  -- unreachable for an actually-overlapping clip
+end
+
 function M.occlude_track(track_id, owner_seq, n_start, n_end)
     assert(track_id and track_id ~= "",
         "place_shared.occlude_track: track_id required")
@@ -428,116 +532,32 @@ function M.occlude_track(track_id, owner_seq, n_start, n_end)
        and n_end > n_start,
         "place_shared.occlude_track: range must be a non-empty owner-frame pair")
 
-    local overlapping = Clip.find_overlapping_on_track(track_id, n_start, n_end)
-    local deleted_rows  = {}
-    local trimmed       = {}
-    local split_new_ids = {}
-
-    for _, e in ipairs(overlapping) do
-        local e_start = e.timeline_start_frame
-        local e_end   = e_start + e.duration_frames
-
+    local deleted_rows, trimmed, split_new_ids = {}, {}, {}
+    for _, e in ipairs(Clip.find_overlapping_on_track(track_id, n_start, n_end)) do
         local nested = Sequence.find(e.nested_sequence_id)
         assert(nested, string.format(
             "place_shared.occlude_track: nested %s of clip %s not found",
             tostring(e.nested_sequence_id), tostring(e.id)))
-
-        if n_start <= e_start and n_end >= e_end then
-            deleted_rows[#deleted_rows + 1] = e
-            Clip.delete_by_ids({ e.id })
-
-        elseif n_start > e_start and n_end >= e_end then
-            local new_duration = n_start - e_start
-            local trim_delta   = e.duration_frames - new_duration
-            local source_delta = Clip.owner_delta_to_source(
-                e.fps_mismatch_policy, trim_delta,
-                owner_seq.fps_numerator, owner_seq.fps_denominator,
-                nested.fps_numerator,    nested.fps_denominator)
-            trimmed[#trimmed + 1] = {
-                id = e.id,
-                prior = {
-                    timeline_start_frame = e.timeline_start_frame,
-                    duration_frames      = e.duration_frames,
-                    source_in_frame      = e.source_in_frame,
-                    source_out_frame     = e.source_out_frame,
-                },
-            }
-            Clip.update_bounds(e.id,
-                e.timeline_start_frame, new_duration,
-                e.source_in_frame, e.source_out_frame - source_delta)
-
-        elseif n_start <= e_start and n_end < e_end then
-            local shift        = n_end - e_start
-            local new_duration = e.duration_frames - shift
-            local source_delta = Clip.owner_delta_to_source(
-                e.fps_mismatch_policy, shift,
-                owner_seq.fps_numerator, owner_seq.fps_denominator,
-                nested.fps_numerator,    nested.fps_denominator)
-            trimmed[#trimmed + 1] = {
-                id = e.id,
-                prior = {
-                    timeline_start_frame = e.timeline_start_frame,
-                    duration_frames      = e.duration_frames,
-                    source_in_frame      = e.source_in_frame,
-                    source_out_frame     = e.source_out_frame,
-                },
-            }
-            Clip.update_bounds(e.id,
-                n_end, new_duration,
-                e.source_in_frame + source_delta, e.source_out_frame)
-
-        elseif n_start > e_start and n_end < e_end then
-            local left_duration   = n_start - e_start
-            local right_duration  = e_end - n_end
-            local left_trim_delta = e.duration_frames - left_duration
-            local left_source_delta = Clip.owner_delta_to_source(
-                e.fps_mismatch_policy, left_trim_delta,
-                owner_seq.fps_numerator, owner_seq.fps_denominator,
-                nested.fps_numerator,    nested.fps_denominator)
-            local right_owner_shift  = n_end - e_start
-            local right_source_delta = Clip.owner_delta_to_source(
-                e.fps_mismatch_policy, right_owner_shift,
-                owner_seq.fps_numerator, owner_seq.fps_denominator,
-                nested.fps_numerator,    nested.fps_denominator)
-            trimmed[#trimmed + 1] = {
-                id = e.id,
-                prior = {
-                    timeline_start_frame = e.timeline_start_frame,
-                    duration_frames      = e.duration_frames,
-                    source_in_frame      = e.source_in_frame,
-                    source_out_frame     = e.source_out_frame,
-                },
-            }
-            Clip.update_bounds(e.id,
-                e.timeline_start_frame, left_duration,
-                e.source_in_frame, e.source_out_frame - left_source_delta)
-            local right_id = Clip.create({
-                id                    = uuid.generate(),
-                project_id            = e.project_id,
-                owner_sequence_id     = e.owner_sequence_id,
-                track_id              = e.track_id,
-                nested_sequence_id    = e.nested_sequence_id,
-                name                  = e.name,
-                timeline_start_frame  = n_end,
-                duration_frames       = right_duration,
-                source_in_frame       = e.source_in_frame + right_source_delta,
-                source_out_frame      = e.source_out_frame,
-                master_layer_track_id = e.master_layer_track_id,
-                fps_mismatch_policy   = e.fps_mismatch_policy,
-                enabled               = e.enabled,
-                volume                = e.volume,
-                mark_in_frame         = e.mark_in_frame,
-                mark_out_frame        = e.mark_out_frame,
-                playhead_frame        = e.playhead_frame,
-            })
-            split_new_ids[#split_new_ids + 1] = right_id
-
+        local e_end = e.timeline_start_frame + e.duration_frames
+        local kind  = classify_overlap(e.timeline_start_frame, e_end, n_start, n_end)
+        local out
+        if kind == "full_cover" then
+            out = occlude_full_cover(e)
+        elseif kind == "trim_tail" then
+            out = occlude_trim_tail(e, owner_seq, nested, n_start)
+        elseif kind == "trim_head" then
+            out = occlude_trim_head(e, owner_seq, nested, n_end)
+        elseif kind == "split" then
+            out = occlude_split_middle(e, owner_seq, nested, n_start, n_end)
         else
             error(string.format(
                 "place_shared.occlude_track: unreachable case — clip=%s "
-                .. "E=[%d,%d) N=[%d,%d)",
-                e.id, e_start, e_end, n_start, n_end))
+                .. "E=[%d,%d) N=[%d,%d)", e.id, e.timeline_start_frame, e_end,
+                n_start, n_end))
         end
+        if out.deleted      then deleted_rows[#deleted_rows + 1]   = out.deleted   end
+        if out.trimmed      then trimmed[#trimmed + 1]             = out.trimmed   end
+        if out.split_new_id then split_new_ids[#split_new_ids + 1] = out.split_new_id end
     end
 
     return {

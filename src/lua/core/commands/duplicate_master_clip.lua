@@ -145,7 +145,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Tear down properties first (no FK cascade), then the master
         -- sequence row (CASCADE drops media_refs, tracks, and any
         -- nested clips referencing this id — there shouldn't be any
-        -- on a fresh duplicate, but the cascade keeps undo robust).
+        -- on a fresh duplicate, but the cascade covers the case).
         command_helper.delete_properties_for_clip(new_master_id)
         local seq = Sequence.load(new_master_id)
         if seq then

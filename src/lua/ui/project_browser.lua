@@ -1106,7 +1106,7 @@ function M.create()
         ui_constants.FONTS.DEFAULT_FONT_SIZE)
     qt_constants.PROPERTIES.SET_STYLE(tree, tree_style)
 
-    -- Set tree columns (Professional NLE style: Name, Duration, Resolution, FPS, Codec, Date Modified)
+    -- Tree columns: Name, Duration, Resolution, FPS, Codec, Date Modified.
     qt_constants.CONTROL.SET_TREE_HEADERS(tree, BASE_HEADERS)
     qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(tree, 0, 180)  -- Clip Name
     qt_constants.CONTROL.SET_TREE_COLUMN_WIDTH(tree, 1, 80)   -- Duration

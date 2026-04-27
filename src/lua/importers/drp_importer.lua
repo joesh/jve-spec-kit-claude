@@ -2209,8 +2209,8 @@ local Sequence = require("models.sequence")
 -- Helper: Infer frame rate from 1-hour timecode start position
 -- ---------------------------------------------------------------------------
 --
--- HEURISTIC: Professional video workflows typically use 1-hour timecode start
--- (01:00:00:00). Different frame rates produce different frame counts:
+-- HEURISTIC: video projects typically place start TC at 01:00:00:00
+-- (1-hour offset). Different frame rates produce different frame counts:
 --
 --   Frame Rate    | Frames in 1 Hour | Rational (num/den)
 --   23.976 fps    | ~86,314          | 24000/1001

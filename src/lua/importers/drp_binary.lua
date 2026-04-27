@@ -727,9 +727,9 @@ end
 -- stream the pool item claims (own embedded audio, synced external
 -- audio, or both). Each MediaRef's value is a 72-byte UTF-16BE encoding
 -- of a canonical dashed UUID. Rather than walk the protobuf, we scan
--- the decompressed bytes for the canonical UUID shape — cheap, robust,
--- and the order matches the protobuf field order (callers rely on that
--- for source-index ↔ file mapping).
+-- the decompressed bytes for the canonical UUID shape. The order matches
+-- the protobuf field order (callers rely on that for source-index ↔ file
+-- mapping).
 --
 -- Returns UUIDs in on-wire order, duplicates preserved: callers can
 -- build a distinct set or count occurrences as needed.
