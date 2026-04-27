@@ -16,6 +16,7 @@
 -- local resolve_db = require("importers.resolve_database_importer")
 -- local result = resolve_db.import_from_database("/path/to/resolve.db")
 local M = {}
+local log = require("core.logger").for_area("media")
 
 local sqlite3 = require("lsqlite3")
 
@@ -336,39 +337,32 @@ function M.import_from_database(db_path)
         return {success = false, error = err}
     end
 
-    -- Get schema version for debugging
     local schema_version = get_schema_version(resolve_db)
-    print(string.format("Resolve database schema version: %d", schema_version))
+    log.detail("Resolve database schema version: %d", schema_version)
 
-    -- List tables for debugging
     local tables = list_tables(resolve_db)
-    print(string.format("Found %d tables in Resolve database:", #tables))
+    log.detail("Found %d tables in Resolve database", #tables)
     for _, table_name in ipairs(tables) do
-        print(string.format("  - %s", table_name))
+        log.detail("  - %s", table_name)
     end
 
-    -- Extract project metadata
     local project = extract_project_metadata(resolve_db)
-    print(string.format("Project: %s (%dx%d @ %.2ffps)",
-        project.name, project.width, project.height, project.frame_rate))
+    log.event("Project: %s (%dx%d @ %.2ffps)",
+        project.name, project.width, project.height, project.frame_rate)
 
-    -- Extract media items
     local media_items = extract_media_items(resolve_db)
-    print(string.format("Found %d media items", #media_items))
+    log.event("Found %d media items", #media_items)
 
-    -- Extract timelines with full structure
     local timelines = extract_timelines(resolve_db)
-    print(string.format("Found %d timelines", #timelines))
+    log.event("Found %d timelines", #timelines)
 
     for _, timeline in ipairs(timelines) do
-        -- Extract tracks for this timeline
         timeline.tracks = extract_tracks(resolve_db, timeline.resolve_id)
-        print(string.format("  Timeline '%s': %d tracks", timeline.name, #timeline.tracks))
-
-        -- Extract clips for each track
+        log.detail("  Timeline '%s': %d tracks", timeline.name, #timeline.tracks)
         for _, track in ipairs(timeline.tracks) do
             track.clips = extract_clips(resolve_db, track.resolve_id)
-            print(string.format("    Track %s%d: %d clips", track.type, track.index, #track.clips))
+            log.detail("    Track %s%d: %d clips",
+                track.type, track.index, #track.clips)
         end
     end
 

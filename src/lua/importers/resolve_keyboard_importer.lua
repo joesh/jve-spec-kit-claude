@@ -6,6 +6,7 @@
 -- [Header: 12 bytes] [Length: 4B] [Preset Name: UTF-16] [Metadata: 8B]
 -- Then repeating: [Length: 4B] [Command: UTF-16] [Count: 4B] [Shortcuts...]
 local M = {}
+local log = require("core.logger").for_area("ui")
 
 --- Read 32-bit big-endian integer from hex string
 -- @param hex_str string 8-character hex string representing 4 bytes
@@ -489,17 +490,12 @@ function M.import_to_registry(file_path, registry)
             end
         else
             unmapped_count = unmapped_count + 1
-            if M.debug then
-                print(string.format("Unmapped: %s (%s) → %s",
-                    entry.resolve_command, entry.raw_command, entry.shortcut))
-            end
+            log.detail("Unmapped: %s (%s) → %s",
+                entry.resolve_command, entry.raw_command, entry.shortcut)
         end
     end
 
     return imported_count, unmapped_count, nil
 end
-
--- Debug flag
-M.debug = false
 
 return M
