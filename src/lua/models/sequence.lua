@@ -1463,90 +1463,86 @@ function Sequence:get_prev_audio(before_frame)
     return results
 end
 
--- T031 (013): thin wrappers over Sequence:resolve_in_range filtered by
--- media_kind. Shape: ResolvedEntry[] per contracts/resolver.md. Legacy
--- shape (entry.clip, entry.track, entry.media_fps_*) is dead under V9
--- because clips.media_id no longer exists; see wrapper-shape-audit.md.
--- Class-form (first arg is seq_id), NOT instance-form. Consumers
--- (playback_engine, test_drp_anamnesis_full) are rewritten in T093.
+-- Public-boundary wrappers over the resolver. Returned entry is flat:
+-- consumers (playback_engine, render preview, integration tests) read
+-- fields directly off the entry — no entry.clip / entry.track / .media_fps_*
+-- nesting. Each entry describes the OUTERMOST owner's full owner-coord
+-- extent (timeline_start, duration), media-file source range (source_in,
+-- source_out), and routing (track_index, track_type). The leaf media's
+-- native rate rides along as fps_numerator / fps_denominator so consumers
+-- can compute speed ratios without re-loading the Media row.
 
--- Repack a resolver flat entry into the legacy nested-clip shape that
--- playback_engine + a couple of integration tests expect — a thin
--- compatibility shim per T031's contract ("wrapper preserves existing
--- entry shape column-for-column"). T093 will rewrite consumers to read
--- the flat shape directly; until then the wrapper does the repack.
---
--- media_cache: optional {[media_id] = media_row} table reused across
--- entries in one batch so we don't re-hit the DB per entry.
-local function repack_legacy_entry(e, media_cache)
+-- Promote a resolver internal entry to the public flat shape. Tags
+-- already on the entry from resolve_nested / resolve_master_leaf:
+-- owner_clip_id, owner_track_index, owner_track_type. Outer-coord
+-- timeline_start / duration are already set to the outermost extent
+-- because resolve_nested recurses with each clip's full source window
+-- (not intersected with the playback window), and translate_to_outer
+-- maps that to the outer clip's full extent. media_cache reuses Media
+-- rows across entries in one batch.
+local function finalize_to_flat(e, media_cache)
     local Media = require("models.media")
     local media = media_cache[e.media_id]
     if not media then
         media = Media.load(e.media_id)
         assert(media, string.format(
-            "Sequence wrappers: media row missing for media_id=%s "
-            .. "(entry kind=%s, source=[%s,%s])",
+            "Sequence resolver: media row missing for media_id=%s "
+            .. "(kind=%s, source=[%s,%s])",
             tostring(e.media_id), tostring(e.media_kind),
             tostring(e.source_in), tostring(e.source_out)))
         media_cache[e.media_id] = media
     end
-    local fps_num = media.frame_rate.fps_numerator
-    local fps_den = media.frame_rate.fps_denominator
-    -- The outermost owning clip id is the first link of provenance chain.
-    -- Fall back to the leaf media_ref id if no clip wrapped this entry
-    -- (resolution starting from a master sequence directly).
-    local clip_id
-    if e.provenance and e.provenance[1] then
-        clip_id = e.provenance[1]
-    else
-        clip_id = e.media_id  -- best-effort key for downstream caches
-    end
-    e.clip = {
-        id             = e.owner_clip_id or clip_id,
-        timeline_start = e.timeline_start,
-        duration       = e.duration,
-        source_in      = e.source_in,
-        source_out     = e.source_out,
-        volume         = e.volume,
-        enabled        = e.enabled,
-        rate = {
-            fps_numerator   = fps_num,
-            fps_denominator = fps_den,
-        },
-    }
-    -- Outermost owning clip's track. Resolver tags entries during
-    -- resolve_nested (recursion-bubbles-out, outermost wins).
-    if e.owner_track_index ~= nil then
-        e.track = {
-            track_index = e.owner_track_index,
-            track_type  = e.owner_track_type,
-        }
-    end
-    e.media_fps_num = fps_num
-    e.media_fps_den = fps_den
+    e.fps_numerator   = media.frame_rate.fps_numerator
+    e.fps_denominator = media.frame_rate.fps_denominator
+    e.clip_id         = e.owner_clip_id
+    e.track_index     = e.owner_track_index
+    e.track_type      = e.owner_track_type
+    -- Internal owner_* fields have served their purpose; strip them so
+    -- consumers don't depend on resolver internals.
+    e.owner_clip_id     = nil
+    e.owner_track_index = nil
+    e.owner_track_type  = nil
     return e
 end
 
--- Filter to one media kind. Offline entries (media_path=nil) are skipped
--- here because TMB requires a non-empty path. Park-mode offline overlay is
--- driven separately by media_status; playback-time overlay regression is
--- tracked in todo_offline_overlay_during_playback.md.
-local function filter_by_media_kind(entries, kind)
+-- Filter to one media kind, drop offline entries (TMB requires a non-empty
+-- path; park-mode offline overlay is driven separately by media_status —
+-- see todo_offline_overlay_during_playback.md), then promote to flat.
+-- Also overlap-filter to the requested [from, to) since the resolver may
+-- have widened the recursion window.
+local function filter_and_finalize(entries, kind, from_frame, to_frame)
     local out = {}
     local cache = {}
     for _, e in ipairs(entries) do
         if e.media_kind == kind and e.media_path and e.media_path ~= "" then
-            out[#out + 1] = repack_legacy_entry(e, cache)
+            local e_lo = e.timeline_start
+            local e_hi = e.timeline_start + e.duration
+            if e_hi > from_frame and e_lo < to_frame then
+                out[#out + 1] = finalize_to_flat(e, cache)
+            end
         end
     end
     return out
 end
 
---- Resolve video entries in a frame range. Instance method — uses self.id
---- as the sequence to resolve.
+-- Pick the resolver bounds. For a master sequence (source viewer playing
+-- the master directly) we want every media_ref returned at FULL extent;
+-- master_leaf clips entries to the master_lo/master_hi window, so we
+-- pass a wide range and let filter_and_finalize re-narrow by overlap.
+-- For a nested sequence, list_clips_overlapping uses the window to skip
+-- non-overlapping outer clips — pass it through unchanged. resolve_nested
+-- internally recurses each in-scope clip with its full source window.
+local function pick_resolve_bounds(self, from_frame, to_frame)
+    if self.kind == "master" then
+        return 0, math.huge
+    end
+    return from_frame, to_frame
+end
+
+--- Resolve video entries that overlap a frame range. Instance method.
 -- @param from_frame integer: inclusive start in self's timebase
 -- @param to_frame integer: exclusive end
--- @return ResolvedEntry[] with media_kind='video' + legacy entry.clip shim
+-- @return list of flat entries, each at the OUTERMOST owner's full extent
 function Sequence:get_video_in_range(from_frame, to_frame)
     assert(self and type(self.id) == "string" and self.id ~= "",
         "Sequence:get_video_in_range: must be called on a sequence instance")
@@ -1557,15 +1553,15 @@ function Sequence:get_video_in_range(from_frame, to_frame)
     assert(from_frame < to_frame, string.format(
         "Sequence:get_video_in_range: from_frame %d must be < to_frame %d",
         from_frame, to_frame))
-    local entries = Sequence:resolve_in_range(self.id, from_frame, to_frame, {})
-    return filter_by_media_kind(entries, "video")
+    local lo, hi = pick_resolve_bounds(self, from_frame, to_frame)
+    local entries = Sequence:resolve_in_range(self.id, lo, hi, {})
+    return filter_and_finalize(entries, "video", from_frame, to_frame)
 end
 
---- Resolve audio entries in a frame range. Instance method — uses self.id
---- as the sequence to resolve.
+--- Resolve audio entries that overlap a frame range. Instance method.
 -- @param from_frame integer: inclusive start in self's timebase
 -- @param to_frame integer: exclusive end
--- @return ResolvedEntry[] with media_kind='audio'
+-- @return list of flat entries, each at the OUTERMOST owner's full extent
 function Sequence:get_audio_in_range(from_frame, to_frame)
     assert(self and type(self.id) == "string" and self.id ~= "",
         "Sequence:get_audio_in_range: must be called on a sequence instance")
@@ -1576,8 +1572,9 @@ function Sequence:get_audio_in_range(from_frame, to_frame)
     assert(from_frame < to_frame, string.format(
         "Sequence:get_audio_in_range: from_frame %d must be < to_frame %d",
         from_frame, to_frame))
-    local entries = Sequence:resolve_in_range(self.id, from_frame, to_frame, {})
-    return filter_by_media_kind(entries, "audio")
+    local lo, hi = pick_resolve_bounds(self, from_frame, to_frame)
+    local entries = Sequence:resolve_in_range(self.id, lo, hi, {})
+    return filter_and_finalize(entries, "audio", from_frame, to_frame)
 end
 
 --- Get sorted list of track indices for a given track type.
@@ -2136,23 +2133,22 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
 
             -- Compute the source-coord (= nested-timebase) sub-range to
             -- recurse into, derived from the outer-coord intersection.
-            local source_span = c.source_out - c.source_in
-            local owner_span  = c.duration
-            local source_per_owner = source_span / owner_span
-            local clip_outer_lo = math.max(c.timeline_start, outer_lo)
-            local clip_outer_hi = math.min(c.timeline_start + owner_span, outer_hi)
-            local source_lo = c.source_in
-                + round_int((clip_outer_lo - c.timeline_start) * source_per_owner)
-            local source_hi = c.source_in
-                + round_int((clip_outer_hi - c.timeline_start) * source_per_owner)
-
-            -- Cycle-guarded recurse.
+            -- Recurse over the FULL source-window the clip exposes
+            -- ([c.source_in, c.source_out)), NOT intersected with the
+            -- caller's playback window. The wrapper layer
+            -- (get_video_in_range / get_audio_in_range) uses outer_lo /
+            -- outer_hi as a clip-overlap filter; once a clip is in scope
+            -- it's returned at its full owner-coord extent so consumers
+            -- (TMB) get the complete clip and can play through without
+            -- a re-fetch every frame. Pre-013 had this contract; the
+            -- intersect-with-window form was a 013 regression that made
+            -- TMB get 1-frame slices.
             local inner_chain = {}
             for i, v in ipairs(outer_chain) do inner_chain[i] = v end
             inner_chain[#inner_chain + 1] = c.id
 
             local inner = resolve_seq_range(db, c.nested_sequence_id,
-                source_lo, source_hi, context, inner_chain,
+                c.source_in, c.source_out, context, inner_chain,
                 layer_for_inner, audio_for_inner)
 
             -- No double-counting: V clips materialize only V media; A only A.

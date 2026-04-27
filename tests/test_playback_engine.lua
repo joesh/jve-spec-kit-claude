@@ -1299,7 +1299,7 @@ do
     engine:load_sequence("seq1", 100)
 
     -- Domain: 100 source frames over 100 timeline frames = real-time (1.0x)
-    local entry = { clip = { id = "c1", source_in = 0, source_out = 100, duration = 100 } }
+    local entry = { clip_id = "c1", source_in = 0, source_out = 100, duration = 100 }
     local ratio = engine:_compute_video_speed_ratio(entry)
     assert(ratio == 1.0,
         "100 source / 100 timeline = real-time 1.0, got " .. tostring(ratio))
@@ -1312,8 +1312,7 @@ do
     engine:load_sequence("seq1", 100)
 
     -- Domain: source_in=100, source_out=0 means clip plays backwards
-    -- (0-100)/100 = -1.0 = reverse at normal speed
-    local entry = { clip = { id = "c2", source_in = 100, source_out = 0, duration = 100 } }
+    local entry = { clip_id = "c2", source_in = 100, source_out = 0, duration = 100 }
     local ratio = engine:_compute_video_speed_ratio(entry)
     assert(ratio == -1.0,
         "reverse 100→0 over 100 frames = -1.0, got " .. tostring(ratio))
@@ -1326,8 +1325,7 @@ do
     engine:load_sequence("seq1", 100)
 
     -- Domain: 50 source frames stretched over 100 timeline frames = half-speed
-    -- This is standard NLE speed change: source_range / duration = 50/100 = 0.5
-    local entry = { clip = { id = "c3", source_in = 0, source_out = 50, duration = 100 } }
+    local entry = { clip_id = "c3", source_in = 0, source_out = 50, duration = 100 }
     local ratio = engine:_compute_video_speed_ratio(entry)
     assert(ratio == 0.5,
         "50 source / 100 timeline = half-speed 0.5, got " .. tostring(ratio))
@@ -1339,33 +1337,28 @@ do
     clear_timers()
     engine:load_sequence("seq1", 100)
 
-    -- Error: nil source_out → assert
     expect_assert(function()
-        engine:_compute_video_speed_ratio({ clip = { id = "bad", source_in = 0, source_out = nil, duration = 100 } })
+        engine:_compute_video_speed_ratio({ clip_id = "bad", source_in = 0, source_out = nil, duration = 100 })
     end, "_compute_video_speed_ratio nil source_out")
     print("  nil source_out asserts: ok")
 
-    -- Error: nil source_in → assert
     expect_assert(function()
-        engine:_compute_video_speed_ratio({ clip = { id = "bad", source_in = nil, source_out = 100, duration = 100 } })
+        engine:_compute_video_speed_ratio({ clip_id = "bad", source_in = nil, source_out = 100, duration = 100 })
     end, "_compute_video_speed_ratio nil source_in")
     print("  nil source_in asserts: ok")
 
-    -- Error: nil duration → assert
     expect_assert(function()
-        engine:_compute_video_speed_ratio({ clip = { id = "bad", source_in = 0, source_out = 100, duration = nil } })
+        engine:_compute_video_speed_ratio({ clip_id = "bad", source_in = 0, source_out = 100, duration = nil })
     end, "_compute_video_speed_ratio nil duration")
     print("  nil duration asserts: ok")
 
-    -- Error: zero source_range → assert
     expect_assert(function()
-        engine:_compute_video_speed_ratio({ clip = { id = "bad", source_in = 50, source_out = 50, duration = 100 } })
+        engine:_compute_video_speed_ratio({ clip_id = "bad", source_in = 50, source_out = 50, duration = 100 })
     end, "_compute_video_speed_ratio zero source_range")
     print("  zero source_range asserts: ok")
 
-    -- Error: zero duration → assert
     expect_assert(function()
-        engine:_compute_video_speed_ratio({ clip = { id = "bad", source_in = 0, source_out = 100, duration = 0 } })
+        engine:_compute_video_speed_ratio({ clip_id = "bad", source_in = 0, source_out = 100, duration = 0 })
     end, "_compute_video_speed_ratio zero duration")
     print("  zero duration asserts: ok")
 end

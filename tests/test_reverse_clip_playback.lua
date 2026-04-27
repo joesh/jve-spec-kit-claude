@@ -195,15 +195,11 @@ do
 
     -- Domain: 50 source frames forward over 50 timeline frames = real-time (1.0x)
     local entry_fwd = {
-        clip = {
-            id = "fwd1",
-            source_in = 0,
-            source_out = 50,
-            duration = 50,
-            rate = { fps_numerator = 25, fps_denominator = 1 },
-        },
+        clip_id = "fwd1",
+        source_in = 0, source_out = 50, duration = 50,
+        fps_numerator = 25, fps_denominator = 1,
         media_path = "/test.mov",
-        track = { track_index = 0 },
+        track_index = 0,
     }
     local ratio_fwd = engine:_compute_video_speed_ratio(entry_fwd)
     assert(ratio_fwd == 1.0, string.format("forward clip: expected 1.0, got %.4f", ratio_fwd))
@@ -211,15 +207,11 @@ do
 
     -- Domain: playing source backwards (50→0) over 50 timeline frames = -1.0x
     local entry_rev = {
-        clip = {
-            id = "rev1",
-            source_in = 50,
-            source_out = 0,
-            duration = 50,
-            rate = { fps_numerator = 25, fps_denominator = 1 },
-        },
+        clip_id = "rev1",
+        source_in = 50, source_out = 0, duration = 50,
+        fps_numerator = 25, fps_denominator = 1,
         media_path = "/test.mov",
-        track = { track_index = 0 },
+        track_index = 0,
     }
     local ratio_rev = engine:_compute_video_speed_ratio(entry_rev)
     assert(ratio_rev == -1.0, string.format("reverse clip: expected -1.0, got %.4f", ratio_rev))
@@ -227,15 +219,11 @@ do
 
     -- Domain: 50 source frames backwards over 100 timeline frames = -0.5x (half-speed reverse)
     local entry_rev_slow = {
-        clip = {
-            id = "rev_slow1",
-            source_in = 50,
-            source_out = 0,
-            duration = 100,
-            rate = { fps_numerator = 25, fps_denominator = 1 },
-        },
+        clip_id = "rev_slow1",
+        source_in = 50, source_out = 0, duration = 100,
+        fps_numerator = 25, fps_denominator = 1,
         media_path = "/test.mov",
-        track = { track_index = 0 },
+        track_index = 0,
     }
     local ratio_rev_slow = engine:_compute_video_speed_ratio(entry_rev_slow)
     assert(ratio_rev_slow == -0.5, string.format("reverse slow-mo: expected -0.5, got %.4f", ratio_rev_slow))
@@ -249,22 +237,18 @@ do
     engine:load_sequence("seq1", 100)
 
     local entry = {
-        clip = {
-            id = "rev1",
-            timeline_start = 0,
-            duration = 50,
-            source_in = 50,
-            source_out = 0,
-            rate = { fps_numerator = 25, fps_denominator = 1 },
-        },
+        clip_id = "rev1",
+        timeline_start = 0, duration = 50,
+        source_in = 50, source_out = 0,
+        fps_numerator = 25, fps_denominator = 1,
         media_path = "/test.mov",
-        track = { track_index = 0 },
+        track_index = 0,
+        volume = 1.0,
     }
     local ok, err = pcall(engine._build_tmb_clip, engine, entry, -1.0)
     assert(ok, "negative speed_ratio should be accepted: " .. tostring(err))
     print("  negative speed_ratio accepted ok")
 
-    -- Zero must still be rejected
     ok = pcall(engine._build_tmb_clip, engine, entry, 0)
     assert(not ok, "zero speed_ratio should be rejected")
     print("  zero speed_ratio rejected ok")
@@ -276,21 +260,15 @@ do
     local engine = make_engine()
     tmb_clips = {}
 
-    -- Set up mock clips: one reverse video clip
     mock_clips = {
         {
-            clip = {
-                id = "rev1",
-                timeline_start = 0,
-                duration = 50,
-                source_in = 50,
-                source_out = 0,
-                rate = { fps_numerator = 25, fps_denominator = 1 },
-            },
+            clip_id = "rev1",
+            timeline_start = 0, duration = 50,
+            source_in = 50, source_out = 0,
+            fps_numerator = 25, fps_denominator = 1,
             media_path = "/test.mov",
-            track = { track_index = 0 },
-            media_fps_num = 25,
-            media_fps_den = 1,
+            track_index = 0,
+            volume = 1.0,
         },
     }
 
@@ -311,23 +289,16 @@ do
     local engine = make_engine()
     tmb_clips = {}
 
-    -- Reverse audio clip: source_in > source_out
-    -- 25fps media in 25fps sequence → conform ratio = 1.0
-    -- But clip is reversed → final speed should be -1.0
     mock_clips = {
         {
-            clip = {
-                id = "rev_audio1",
-                timeline_start = 0,
-                duration = 50,
-                source_in = 2400000,   -- 50s * 48000
-                source_out = 0,
-                rate = { fps_numerator = 48000, fps_denominator = 1 },
-            },
+            clip_id = "rev_audio1",
+            timeline_start = 0, duration = 50,
+            source_in = 2400000,   -- 50s * 48000
+            source_out = 0,
+            fps_numerator = 25, fps_denominator = 1,  -- media's video rate (audio path uses this)
             media_path = "/test.wav",
-            track = { track_index = 0 },
-            media_fps_num = 25,
-            media_fps_den = 1,
+            track_index = 0,
+            volume = 1.0,
         },
     }
 

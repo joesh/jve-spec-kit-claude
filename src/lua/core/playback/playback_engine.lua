@@ -520,13 +520,13 @@ function PlaybackEngine:_provide_clips(from, to, track_type)
             -- Audio conform ratio is always positive (seq_fps / media_fps).
             -- Multiply by retime direction: -1 for reverse clips (source_in > source_out).
             speed = self:_compute_audio_speed_ratio(entry)
-            local c = entry.clip
-            if c.source_in and c.source_out and c.source_out < c.source_in then
+            if entry.source_in and entry.source_out
+                and entry.source_out < entry.source_in then
                 speed = -speed
             end
         end
         local clip = self:_build_tmb_clip(entry, speed)
-        local track_idx = entry.track.track_index
+        local track_idx = entry.track_index
         EMP.TMB_ADD_CLIPS(self._tmb, track_type, track_idx, {clip})
         -- Record that this path is live in TMB so the media_status_changed
         -- listener can skip reloads for paths we never sent to the decoder.
@@ -537,8 +537,8 @@ function PlaybackEngine:_provide_clips(from, to, track_type)
         -- frame on the render path.
         if track_type == "video" then
             self._clip_info_by_id[clip.clip_id] = {
-                source_in  = entry.clip.source_in,
-                source_out = entry.clip.source_out,
+                source_in  = entry.source_in,
+                source_out = entry.source_out,
             }
         end
 
@@ -702,12 +702,14 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
         "PlaybackEngine:_build_tmb_clip: entry must be table, got %s", type(entry)))
     assert(type(entry.media_path) == "string" and entry.media_path ~= "",
         "PlaybackEngine:_build_tmb_clip: entry.media_path must be non-empty string")
-    local clip = entry.clip
-    assert(clip.rate, string.format(
-        "PlaybackEngine:_build_tmb_clip: clip %s missing rate", clip.id))
+    assert(type(entry.fps_numerator) == "number"
+        and type(entry.fps_denominator) == "number"
+        and entry.fps_denominator > 0, string.format(
+        "PlaybackEngine:_build_tmb_clip: clip %s missing fps_numerator / fps_denominator",
+        tostring(entry.clip_id)))
     assert(type(speed_ratio) == "number" and speed_ratio ~= 0 and math.abs(speed_ratio) < 100, string.format(
         "PlaybackEngine:_build_tmb_clip: clip %s speed_ratio must be non-zero (|sr|<100), got %s",
-        clip.id, tostring(speed_ratio)))
+        tostring(entry.clip_id), tostring(speed_ratio)))
 
     -- Resolve offline state from media_status — single source of truth.
     -- Was a direct io.open check here; that created two sources of
@@ -729,70 +731,63 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
     end
 
     return {
-        clip_id = clip.id,
-        media_path = entry.media_path,
-        timeline_start = clip.timeline_start,
-        duration = clip.duration,
-        source_in = clip.source_in,
-        rate_num = clip.rate.fps_numerator,
-        rate_den = clip.rate.fps_denominator,
-        speed_ratio = speed_ratio,
-        offline = is_offline,
-        volume = clip.volume,
+        clip_id        = entry.clip_id,
+        media_path     = entry.media_path,
+        timeline_start = entry.timeline_start,
+        duration       = entry.duration,
+        source_in      = entry.source_in,
+        rate_num       = entry.fps_numerator,
+        rate_den       = entry.fps_denominator,
+        speed_ratio    = speed_ratio,
+        offline        = is_offline,
+        volume         = entry.volume,
     }
 end
 
 --- Compute video speed_ratio from clip's source range vs timeline duration.
 -- When source_out - source_in == duration, speed is 1.0 (no change).
 -- Otherwise, speed = source_range / timeline_duration (< 1.0 = slow motion).
--- @param entry table: video entry from get_video_at (has .clip with source_in/source_out/duration)
--- @return number: speed_ratio > 0
 function PlaybackEngine:_compute_video_speed_ratio(entry)
-    local clip = entry.clip
-    assert(clip.source_out ~= nil,
-        "_compute_video_speed_ratio: clip.source_out is nil (clip_id=" .. tostring(clip.id) .. ")")
-    assert(clip.source_in ~= nil,
-        "_compute_video_speed_ratio: clip.source_in is nil (clip_id=" .. tostring(clip.id) .. ")")
-    assert(clip.duration ~= nil,
-        "_compute_video_speed_ratio: clip.duration is nil (clip_id=" .. tostring(clip.id) .. ")")
+    assert(entry.source_out ~= nil,
+        "_compute_video_speed_ratio: source_out is nil (clip_id="
+        .. tostring(entry.clip_id) .. ")")
+    assert(entry.source_in ~= nil,
+        "_compute_video_speed_ratio: source_in is nil (clip_id="
+        .. tostring(entry.clip_id) .. ")")
+    assert(entry.duration ~= nil,
+        "_compute_video_speed_ratio: duration is nil (clip_id="
+        .. tostring(entry.clip_id) .. ")")
     -- source_range is signed: positive = forward, negative = reverse
-    local source_range = clip.source_out - clip.source_in
+    local source_range = entry.source_out - entry.source_in
     assert(source_range ~= 0, string.format(
-        "_compute_video_speed_ratio: source_range must be non-zero, got %d (clip_id=%s, source_out=%d, source_in=%d)",
-        source_range, tostring(clip.id), clip.source_out, clip.source_in))
-    assert(clip.duration > 0, string.format(
-        "_compute_video_speed_ratio: clip.duration must be positive, got %d (clip_id=%s)",
-        clip.duration, tostring(clip.id)))
-    local ratio = source_range / clip.duration
+        "_compute_video_speed_ratio: source_range must be non-zero, got %d "
+        .. "(clip_id=%s, source_out=%d, source_in=%d)",
+        source_range, tostring(entry.clip_id),
+        entry.source_out, entry.source_in))
+    assert(entry.duration > 0, string.format(
+        "_compute_video_speed_ratio: duration must be positive, got %d "
+        .. "(clip_id=%s)", entry.duration, tostring(entry.clip_id)))
+    local ratio = source_range / entry.duration
     assert(math.abs(ratio) > 0 and math.abs(ratio) < 100, string.format(
-        "_compute_video_speed_ratio: ratio out of sane range: %.4f (clip_id=%s, source_range=%d, duration=%d)",
-        ratio, tostring(clip.id), source_range, clip.duration))
-    -- Near 1.0 = no speed change (avoid floating-point noise)
-    if math.abs(ratio - 1.0) < 0.001 then
-        return 1.0
-    end
-    -- Near -1.0 = reverse at normal speed
-    if math.abs(ratio + 1.0) < 0.001 then
-        return -1.0
-    end
+        "_compute_video_speed_ratio: ratio out of sane range: %.4f "
+        .. "(clip_id=%s, source_range=%d, duration=%d)",
+        ratio, tostring(entry.clip_id), source_range, entry.duration))
+    if math.abs(ratio - 1.0) < 0.001 then return 1.0 end
+    if math.abs(ratio + 1.0) < 0.001 then return -1.0 end
     return ratio
 end
 
 --- Compute audio conform speed_ratio: seq_fps / media_video_fps.
 -- When media_video_fps >= 1000 (audio-only) or matches seq_fps, returns 1.0.
--- @param entry table: audio entry from get_audio_at (has media_fps_num/den)
--- @return number: speed_ratio > 0
 function PlaybackEngine:_compute_audio_speed_ratio(entry)
-    local media_fps_num = entry.media_fps_num
-    local media_fps_den = entry.media_fps_den
-    assert(type(media_fps_num) == "number", string.format(
-        "PlaybackEngine:_compute_audio_speed_ratio: missing media_fps_num (got %s)",
-        type(media_fps_num)))
-    assert(type(media_fps_den) == "number" and media_fps_den > 0, string.format(
-        "PlaybackEngine:_compute_audio_speed_ratio: invalid media_fps_den=%s",
-        tostring(media_fps_den)))
-    local media_video_fps = media_fps_num / media_fps_den
-    -- Audio-only media (rate >= 1000) or matching fps → no conform
+    assert(type(entry.fps_numerator) == "number", string.format(
+        "PlaybackEngine:_compute_audio_speed_ratio: missing fps_numerator (got %s)",
+        type(entry.fps_numerator)))
+    assert(type(entry.fps_denominator) == "number" and entry.fps_denominator > 0,
+        string.format(
+        "PlaybackEngine:_compute_audio_speed_ratio: invalid fps_denominator=%s",
+        tostring(entry.fps_denominator)))
+    local media_video_fps = entry.fps_numerator / entry.fps_denominator
     if media_video_fps >= 1000 then return 1.0 end
     local seq_fps = self.fps_num / self.fps_den
     if math.abs(media_video_fps - seq_fps) < 0.01 then return 1.0 end

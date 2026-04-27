@@ -144,6 +144,9 @@ local mock_sequence = {
             return audio_at_map[frame] or {}
         end
         if frame >= 0 and frame < 100 then
+            -- get_audio_at still returns the legacy nested entry shape
+            -- (real Track + Clip model objects). Only the resolver-backed
+            -- get_*_in_range methods return the flat resolver shape.
             return {{
                 media_path = "/test.mov",
                 source_frame = frame,
@@ -153,8 +156,7 @@ local mock_sequence = {
                     timeline_start = 0, duration = 100, source_in = 0, source_out = 100,
                 },
                 track = { id = "track_a1", track_index = 1, muted = false, soloed = false, volume = 1.0 },
-                media_fps_num = 24,
-                media_fps_den = 1,
+                media_fps_num = 24, media_fps_den = 1,
             }}
         end
         return {}
@@ -800,46 +802,38 @@ do
     local engine, _ = make_engine()
     engine:load_sequence("seq1", 100)
 
-    -- nil media_fps_num → must assert
     local ok, err = pcall(function()
         engine:_compute_audio_speed_ratio({
-            media_fps_num = nil,
-            media_fps_den = 1,
+            fps_numerator = nil, fps_denominator = 1,
         })
     end)
-    assert(not ok, "nil media_fps_num should assert")
-    assert(tostring(err):find("media_fps_num"),
-        "Error should mention media_fps_num, got: " .. tostring(err))
+    assert(not ok, "nil fps_numerator should assert")
+    assert(tostring(err):find("fps_numerator"),
+        "Error should mention fps_numerator, got: " .. tostring(err))
 
-    -- nil media_fps_den → must assert
     ok, _ = pcall(function()
         engine:_compute_audio_speed_ratio({
-            media_fps_num = 24,
-            media_fps_den = nil,
+            fps_numerator = 24, fps_denominator = nil,
         })
     end)
-    assert(not ok, "nil media_fps_den should assert")
+    assert(not ok, "nil fps_denominator should assert")
 
-    -- media_fps_den == 0 → must assert
     ok, _ = pcall(function()
         engine:_compute_audio_speed_ratio({
-            media_fps_num = 24,
-            media_fps_den = 0,
+            fps_numerator = 24, fps_denominator = 0,
         })
     end)
-    assert(not ok, "media_fps_den == 0 should assert")
+    assert(not ok, "fps_denominator == 0 should assert")
 
-    -- Valid fps → returns ratio
-    -- Domain: 24fps media in 24fps sequence → no conform needed → ratio = 1.0
+    -- Valid fps → returns ratio (24fps media in 24fps seq → 1.0)
     local ratio = engine:_compute_audio_speed_ratio({
-        media_fps_num = 24, media_fps_den = 1,
+        fps_numerator = 24, fps_denominator = 1,
     })
     assert(ratio == 1.0, "24fps media in 24fps seq: no conform needed, ratio=1.0")
 
-    -- Audio-only media (sample rate stored as fps, e.g. 48000/1) → no video
-    -- conform applies, ratio is always 1.0 regardless of sequence fps
+    -- Audio-only media (sample rate stored as fps) → no video conform
     ratio = engine:_compute_audio_speed_ratio({
-        media_fps_num = 48000, media_fps_den = 1,
+        fps_numerator = 48000, fps_denominator = 1,
     })
     assert(ratio == 1.0, "Audio-only media: no video conform, ratio=1.0")
 

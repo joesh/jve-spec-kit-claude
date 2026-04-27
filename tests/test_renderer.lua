@@ -161,6 +161,7 @@ local function test_get_audio_at_single()
     assert(results[1].media_path == "/test/audio.wav", "Wrong audio media path")
     -- A1: source_in=0, offset=10, source_frame=10, rate=48000/1
     assert(results[1].source_frame == 10, string.format("Expected audio source_frame=10, got %d", results[1].source_frame))
+    -- get_audio_at returns the legacy nested entry shape (real Media row).
     assert(results[1].media_fps_num == 48000, "Expected media_fps_num=48000")
     assert(results[1].media_fps_den == 1, "Expected media_fps_den=1")
     print("  test_get_audio_at_single passed")

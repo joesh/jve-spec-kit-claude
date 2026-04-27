@@ -62,13 +62,13 @@ local PlaybackEngine = require("core.playback.playback_engine")
 
 local function build_entry(path)
     return {
-        media_path = path,
-        clip = {
-            id = "c1", rate = { fps_numerator = 24, fps_denominator = 1 },
-            timeline_start = 0, duration = 10,
-            source_in = 0, volume = 1.0,
-        },
-        track = { track_index = 0 },
+        media_path     = path,
+        clip_id        = "c1",
+        fps_numerator  = 24, fps_denominator = 1,
+        timeline_start = 0, duration = 10,
+        source_in      = 0, source_out = 10,
+        volume         = 1.0,
+        track_index    = 0,
     }
 end
 

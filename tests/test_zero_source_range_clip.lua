@@ -114,14 +114,17 @@ local bad_track = {
 local mock_sequence = {
     id = "seq_with_bad_clip",
     compute_content_end = function() return 100 end,
-    get_video_at = function(self, frame)
+    get_video_at = function(_self, frame)
         if frame >= 0 and frame < 100 then
             return {{
                 media_path = "/test.mov",
                 source_time_us = 0,
                 source_frame = 0,
-                clip = bad_clip,
-                track = bad_track,
+                clip_id = bad_clip.id,
+                source_in = bad_clip.source_in, source_out = bad_clip.source_out,
+                duration = bad_clip.duration, timeline_start = bad_clip.timeline_start,
+                fps_numerator = bad_clip.fps_numerator, fps_denominator = bad_clip.fps_denominator,
+                track_index = bad_track.track_index, track_type = bad_track.type,
             }}
         end
         return {}
@@ -131,13 +134,15 @@ local mock_sequence = {
     get_audio_at = function() return {} end,
     get_next_audio = function() return {} end,
     get_prev_audio = function() return {} end,
-    get_video_in_range = function(self, from, to)
+    get_video_in_range = function(_self, from, to)
         if from < 100 and to > 0 then
             return {{
                 media_path = "/test.mov",
-                clip = bad_clip,
-                track = bad_track,
-                media_fps_num = 25, media_fps_den = 1,
+                clip_id = bad_clip.id,
+                source_in = bad_clip.source_in, source_out = bad_clip.source_out,
+                duration = bad_clip.duration, timeline_start = bad_clip.timeline_start,
+                fps_numerator = 25, fps_denominator = 1,
+                track_index = bad_track.track_index, track_type = bad_track.type,
             }}
         end
         return {}
@@ -174,7 +179,13 @@ local engine = PlaybackEngine.new({
 })
 
 print("TEST 1: _compute_video_speed_ratio asserts on zero source range")
-local entry = { clip = bad_clip, track = bad_track }
+local entry = {
+    clip_id = bad_clip.id,
+    source_in = bad_clip.source_in,
+    source_out = bad_clip.source_out,
+    duration = bad_clip.duration,
+    track_index = bad_track.track_index,
+}
 local ok, err = pcall(function()
     engine:_compute_video_speed_ratio(entry)
 end)
