@@ -884,17 +884,18 @@ local function ensure_stream_clips(self)
     return result
 end
 
---- Get the video stream clip from this masterclip sequence
--- Asserts if called on non-masterclip sequence
--- @return Clip|nil Video clip or nil if no video stream exists
+--- Get the video stream from this master sequence (a media_ref reshaped
+--- as a "clip" for callers that haven't been moved off the V8 stream-clip
+--- shape yet). Asserts if called on a non-master sequence.
+-- @return table|nil video media_ref reshaped as clip, or nil if none exists
 function Sequence:video_stream()
     local streams = ensure_stream_clips(self)
     return streams.video_clips[1]
 end
 
---- Get all audio stream clips from this masterclip sequence
--- Asserts if called on non-masterclip sequence
--- @return table Array of audio clips (may be empty)
+--- Get all audio streams from this master sequence (media_refs reshaped as
+--- clips). Asserts if called on a non-master sequence.
+-- @return table Array of audio media_ref-shaped clips (may be empty)
 function Sequence:audio_streams()
     local streams = ensure_stream_clips(self)
     return streams.audio_clips
@@ -912,7 +913,7 @@ function Sequence:invalidate_stream_cache()
 end
 
 -- =============================================================================
--- TIMEBASE CONVERSION (for masterclip sequences)
+-- TIMEBASE CONVERSION (for master sequences)
 -- =============================================================================
 
 --- Convert video frames to audio samples using this sequence's video rate
