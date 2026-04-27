@@ -136,6 +136,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         command:set_parameter("executed_mutations", all_mutations)
         populate_timeline_mutations(command, sequence_id, all_mutations)
 
+        require("core.signals").emit("sequence_content_changed", sequence_id)
+
         log.event("ExtractRange: extracted [%d, %d), %d lift + %d ripple mutations",
             mark_in, mark_out, #lift_mutations, #ripple_mutations)
         return true
@@ -152,6 +154,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local ok, err = command_helper.revert_mutations(db, executed_mutations, command, args.sequence_id)
         assert(ok, "UndoExtractRange: revert_mutations failed: " .. tostring(err))
+
+        require("core.signals").emit("sequence_content_changed", args.sequence_id)
 
         log.event("Undo ExtractRange: reverted %d mutation(s)", #executed_mutations)
         return true

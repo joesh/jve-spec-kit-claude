@@ -112,14 +112,13 @@ local clip_id = stmt:value(0)
 stmt:finalize()
 assert(clip_id and clip_id ~= "", "clip_id is empty")
 
--- TrimTail at frame 100 → clip becomes [50, 100), content_end should be 100
+-- TrimTail at frame 100 → clip becomes [50, 100), content_end should be 100.
+-- TrimTail accepts a clip_ids array + trim_frame (the playhead/cut frame).
 local trim_cmd = Command.create("TrimTail", "proj1")
 trim_cmd:set_parameter("project_id", "proj1")
 trim_cmd:set_parameter("sequence_id", "seq1")
-trim_cmd:set_parameter("clip_id", clip_id)
--- V13 TrimTail SPEC: trim_amount_frames (delta, positive shrinks).
--- Insert produced clip [50, 150); trim tail to 100 → reduce by 50.
-trim_cmd:set_parameter("trim_amount_frames", 50)
+trim_cmd:set_parameter("clip_ids", { clip_id })
+trim_cmd:set_parameter("trim_frame", 100)
 local trim_result = execute_cmd(trim_cmd)
 assert(trim_result.success, "TrimTail failed: " .. tostring(trim_result.error_message))
 

@@ -187,26 +187,49 @@ do
 end
 
 -- -------------------------------------------------------------------------
--- TrimHead, TrimTail (T043)
+-- TrimHead, TrimTail
+-- TrimHead/TrimTail delegate to ExtractRange via command_manager.execute,
+-- so we drive them through command_manager rather than the bare executor.
+-- The sequence_content_changed emit comes from ExtractRange.
 -- -------------------------------------------------------------------------
+local function drive_via_command_manager(name, args, ...)
+    local command_manager = require("core.command_manager")
+    require("command")  -- side-effect: registers Command type
+    local Command = require("command")
+    command_manager.init(args.sequence_id, "p1")
+    -- Register the named command + every other module passed in.
+    for _, mod in ipairs({...}) do mod.register(
+        command_manager.command_executors or {},
+        command_manager.command_undoers   or {},
+        require("core.database").get_connection(),
+        function(_) end) end
+    local cmd = Command.create(name, "p1")
+    for k, v in pairs(args) do cmd:set_parameter(k, v) end
+    local result = command_manager.execute(cmd)
+    assert(result and result.success, name .. " failed: "
+        .. tostring(result and result.error_message))
+end
+
 do
     local db = base_fixture()
     seed_clip(db, "c", "e-v1", 100, 100, 0, 100)
-    local TrimHead = require("core.commands.trim_head")
     assert_emit_for("TrimHead", "e", function()
-        drive(TrimHead, "TrimHead", {
-            sequence_id = "e", clip_id = "c", trim_amount_frames = 5,
-        })
+        drive_via_command_manager("TrimHead", {
+            sequence_id = "e", project_id = "p1",
+            clip_ids = {"c"}, trim_frame = 105,
+        }, require("core.commands.trim_head"),
+           require("core.commands.extract_range"))
     end)
 end
 do
     local db = base_fixture()
     seed_clip(db, "c", "e-v1", 100, 100, 0, 100)
-    local TrimTail = require("core.commands.trim_tail")
     assert_emit_for("TrimTail", "e", function()
-        drive(TrimTail, "TrimTail", {
-            sequence_id = "e", clip_id = "c", trim_amount_frames = 5,
-        })
+        drive_via_command_manager("TrimTail", {
+            sequence_id = "e", project_id = "p1",
+            clip_ids = {"c"}, trim_frame = 195,
+        }, require("core.commands.trim_tail"),
+           require("core.commands.extract_range"))
     end)
 end
 
