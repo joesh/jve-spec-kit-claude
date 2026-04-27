@@ -60,12 +60,6 @@ end
         }
     end
 
--- Assert value is integer frames
-local function _assert_int(val, label)  -- luacheck: ignore 211
-    assert(type(val) == "number", "clip_mutator: " .. (label or "value") .. " must be integer")
-    return val
-end
-
 -- Extract frames from value (all coords are now integers; this validates and returns)
 local function get_frames(val)
     if val == nil then return nil end
