@@ -5,7 +5,6 @@
 --- rate is read from the sequence, never duplicated into the payload.
 ---
 --- @file sequence.lua
-require("command")  -- luacheck: ignore 211 (reserved for future use)
 local command_manager = require("core.command_manager")
 local metadata_schemas = require("ui.metadata_schemas")
 

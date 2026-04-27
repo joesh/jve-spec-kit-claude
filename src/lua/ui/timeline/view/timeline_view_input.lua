@@ -67,22 +67,6 @@ local function edges_match(a, b)
         and (a.trim_type or "ripple") == (b.trim_type or "ripple")
 end
 
--- luacheck: ignore 211 (selection_contains_all - unused for now, kept for future use)
-local function selection_contains_all(existing, target_edges)
-    if not existing or not target_edges then return false end
-    for _, target in ipairs(target_edges) do
-        local found = false
-        for _, current in ipairs(existing) do
-            if edges_match(current, target) then
-                found = true
-                break
-            end
-        end
-        if not found then return false end
-    end
-    return true
-end
-
 local function find_clip_under_cursor(view, x, y, width, height)
     local state = view.state
     if not state.get_track_clip_index then

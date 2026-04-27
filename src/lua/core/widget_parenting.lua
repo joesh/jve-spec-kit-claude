@@ -3,7 +3,6 @@
 -- module exists for future centralization.
 local error_system = require("core.error_system")
 local log = require("core.logger").for_area("ui")
-require("core.ui_constants")  -- luacheck: ignore 211
 
 local M = {}
 
