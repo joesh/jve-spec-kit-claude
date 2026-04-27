@@ -60,13 +60,6 @@ local function discard_drag(view, state)
     state.flush_pending_notify()
 end
 
-local function edges_match(a, b)
-    return a and b
-        and a.clip_id == b.clip_id
-        and a.edge_type == b.edge_type
-        and (a.trim_type or "ripple") == (b.trim_type or "ripple")
-end
-
 local function find_clip_under_cursor(view, x, y, width, height)
     local state = view.state
     if not state.get_track_clip_index then
@@ -232,7 +225,6 @@ end
 -- @param event The mouse event object (may contain global_x, global_y)
 local function show_clip_context_menu(view, x, y, clicked_clip, event)
     local state = view.state
-    local _width, _height = timeline.get_dimensions(view.widget)
 
     -- Get global mouse position for popup
     -- First check if event has global coordinates (like project_browser)
