@@ -3,6 +3,7 @@
 -- Uses the general signals module for consistency with user-defined signals
 local signals = require("core.signals")
 local error_system = require("core.error_system")
+local log = require("core.logger").for_area("ui")
 
 local QtSignals = {}
 
@@ -93,36 +94,26 @@ function QtSignals.connect(widget, signal_name, handler)
         if not ok then
             local err_msg = tostring(results_or_error)
             local connection_info = signals._debug_get_connection(connection_id)
-            local creation_trace = connection_info and connection_info.creation_trace or "(unknown)"
-            local handler_type = connection_info and type(connection_info.handler) or "(unknown)"
-            print(string.format(
-                "ERROR: Qt signal dispatch failed (signal=%s, connection=%s, handler_type=%s): %s",
-                unique_signal_name,
-                tostring(connection_id),
-                handler_type,
-                err_msg
-            ))
-            print("-- Handler creation trace --")
-            print(creation_trace)
+            local creation_trace = connection_info
+                and connection_info.creation_trace or "(unknown)"
+            local handler_type = connection_info
+                and type(connection_info.handler) or "(unknown)"
+            log.error("Qt signal dispatch failed: signal=%s connection=%s "
+                .. "handler_type=%s err=%s\nHandler creation trace:\n%s",
+                unique_signal_name, tostring(connection_id), handler_type,
+                err_msg, creation_trace)
             return
         end
 
-        local results = results_or_error
-        -- Qt callbacks typically don't need return values, but we log errors
-        for _, result in ipairs(results) do
+        for _, result in ipairs(results_or_error) do
             if not result.success then
-                -- Log handler error but don't fail Qt operation
-                local prefix = string.format(
-                    "WARNING: Qt signal handler failed (signal=%s, connection=%s, handler_type=%s)",
-                    unique_signal_name,
-                    tostring(result.connection_id),
-                    tostring(result.handler_type)
-                )
-                print(prefix .. ": " .. tostring(result.error))
-                if result.creation_trace then
-                    print("-- Handler creation trace --")
-                    print(result.creation_trace)
-                end
+                log.warn("Qt signal handler failed: signal=%s connection=%s "
+                    .. "handler_type=%s err=%s%s",
+                    unique_signal_name, tostring(result.connection_id),
+                    tostring(result.handler_type), tostring(result.error),
+                    result.creation_trace
+                        and ("\nHandler creation trace:\n" .. result.creation_trace)
+                        or "")
             end
         end
     end

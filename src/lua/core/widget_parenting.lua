@@ -1,24 +1,22 @@
---- scripts/core/widget_parenting.lua
--- PURPOSE: Smart widget parenting system for Qt widgets
+-- Smart widget parenting system. NOTE: smart_add_child is a stub —
+-- widget parenting is currently handled at the bindings layer; this
+-- module exists for future centralization.
 local error_system = require("core.error_system")
--- Keeping these requires for future use when widget parenting is fully implemented
-require("core.logger")  -- luacheck: ignore 211  -- kept for future use
+local log = require("core.logger").for_area("ui")
 require("core.ui_constants")  -- luacheck: ignore 211
 
 local M = {}
 
 function M.debug_widget_info(widget, name)
-  local widget_type = type(widget)
-  print("DEBUG: Widget '" .. (name or "unknown") .. "' - type: " .. widget_type)
+    log.detail("widget_parenting: '%s' type=%s", name or "unknown", type(widget))
 end
 
 function M.smart_add_child(parent, child)
-  print("DEBUG: smart_add_child called - parent:", type(parent), "child:", type(child))
-  
-  -- For now, just return success since we don't have real Qt integration yet
-  return error_system.create_success({
-    message = "Widget parenting simulated successfully"
-  })
+    log.detail("widget_parenting.smart_add_child: parent=%s child=%s",
+        type(parent), type(child))
+    return error_system.create_success({
+        message = "Widget parenting simulated successfully"
+    })
 end
 
 return M

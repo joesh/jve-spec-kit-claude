@@ -275,11 +275,11 @@ function M.create_key(label, width, key_type)
     return key_button
 end
 
--- Handle key click
+-- Handle key click. TODO: show shortcuts assigned to this key; allow
+-- assigning new shortcut (UI not yet wired).
 function M.on_key_clicked(key_label)
-    print(string.format("Key clicked: %s", key_label))
-    -- Future: Show shortcuts assigned to this key
-    -- Future: Allow assigning new shortcut
+    require("core.logger").for_area("ui").detail("keyboard_renderer key click: %s",
+        tostring(key_label))
 end
 
 -- Mark a key as having a shortcut assigned

@@ -1,5 +1,6 @@
 local M = {}
 local timeline_state = require('ui.timeline.timeline_state')
+local log = require('core.logger').for_area('commands')
 
 
 local SPEC = {
@@ -16,7 +17,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
 
         if not args.dry_run then
-            print("Executing SelectAll command")
+            log.event("Executing SelectAll")
         end
 
         local focus_manager_ok, focus_manager = pcall(require, "ui.focus_manager")
@@ -37,10 +38,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 return false, "Project browser select_all not available"
             end)
             if ok and result then
-                print("✅ Selected all items in Project Browser")
+                log.event("SelectAll: project browser")
                 return true
             end
-            print(string.format("SelectAll (Project Browser) failed: %s", result or "unknown error"))
+            log.warn("SelectAll (project browser) failed: %s",
+                tostring(result or "unknown error"))
             return false
         end
 
