@@ -80,13 +80,14 @@ assert(audio_playback.switch_source == nil, "audio_playback.switch_source should
 assert(audio_playback.set_audio_sources == nil, "audio_playback.set_audio_sources should be removed")
 print("  ✓ All public functions present")
 
-print("\nTest 1.2: Internal functions present")
--- Phase 3: _start_pump, _pump_tick removed (C++ owns pump)
--- decode_mix_and_send_to_sse and render_and_write_to_device are now stubs
-assert(audio_playback.decode_mix_and_send_to_sse, "decode_mix_and_send_to_sse stub missing")
-assert(audio_playback.render_and_write_to_device, "render_and_write_to_device stub missing")
-assert(audio_playback._phase3_stub == true, "_phase3_stub marker missing")
-print("  ✓ Internal functions/stubs present (Phase 3)")
+print("\nTest 1.2: Pump entrypoints have been moved to C++")
+assert(audio_playback.decode_mix_and_send_to_sse == nil,
+    "decode_mix_and_send_to_sse should be gone (C++ AudioPump owns pump)")
+assert(audio_playback.render_and_write_to_device == nil,
+    "render_and_write_to_device should be gone (C++ AudioPump owns pump)")
+assert(audio_playback._phase3_stub == nil,
+    "_phase3_stub marker should be gone")
+print("  ✓ Lua-side pump entrypoints removed")
 
 --------------------------------------------------------------------------------
 -- SECTION 2: Initial State

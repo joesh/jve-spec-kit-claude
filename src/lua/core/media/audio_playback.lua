@@ -372,23 +372,9 @@ function M.refresh_mix_volumes(mix_params)
 end
 
 -- NOTE: PCM buffer management moved to C++ AudioPump in Phase 3.
--- C++ AudioPump now owns the TMB→SSE→AOP pipeline with adaptive sleep (2-15ms).
--- Stub functions kept for test backward-compatibility.
-
---- STUB: decode_mix_and_send_to_sse (moved to C++ AudioPump)
--- Tests may call this but it's a no-op since C++ owns the pump.
--- Mark as "_phase3_stub" so tests know to skip related assertions.
-M._phase3_stub = true
-
-function M.decode_mix_and_send_to_sse()
-    -- No-op: C++ AudioPump handles TMB→SSE push
-end
-
---- STUB: render_and_write_to_device (moved to C++ AudioPump)
-function M.render_and_write_to_device(_frames_needed)
-    -- No-op: C++ AudioPump handles SSE→AOP render
-    return 0
-end
+-- C++ AudioPump owns the TMB→SSE→AOP pipeline with adaptive sleep
+-- (2-15ms). The Lua-side decode_mix_and_send_to_sse / render_and_write_to_device
+-- entrypoints are gone — there is nothing to expose from Lua.
 
 --- Check if fully ready for playback (session + at least one audio source).
 -- Use for query guards (e.g. "should video follow audio time?").
