@@ -405,7 +405,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return true
     end
 
-    command_undoers["UndoNudge"] = function(command)
+    command_undoers["Nudge"] = function(command)
         local args = command:get_all_parameters()
         log.event("Executing UndoNudge")
 
@@ -435,14 +435,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return { success = true }
     end
 
-    command_executors["UndoNudge"] = command_undoers["UndoNudge"]
-    -- Ensure undoer is registered under the base command type so command_manager can find it.
-    command_undoers["Nudge"] = command_undoers["UndoNudge"]
+    -- Explicit "UndoNudge" command (Command:create_undo() builds one with
+    -- this type; tests + redo-of-undone exercise the flow). Same body as
+    -- the regular undoer.
+    command_executors["UndoNudge"] = command_undoers["Nudge"]
 
     return {
         executor = command_executors["Nudge"],
-        undoer = command_undoers["UndoNudge"],
-        spec = SPEC,
+        undoer   = command_undoers["Nudge"],
+        spec     = SPEC,
     }
 end
 

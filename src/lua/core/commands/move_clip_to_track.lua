@@ -185,7 +185,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return true
     end
 
-    command_undoers["UndoMoveClipToTrack"] = function(command)
+    command_undoers["MoveClipToTrack"] = function(command)
         local args = command:get_all_parameters()
         log.event("Executing UndoMoveClipToTrack")
 
@@ -223,14 +223,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return {success = true}
     end
 
-    command_executors["UndoMoveClipToTrack"] = command_undoers["UndoMoveClipToTrack"]
-    -- Register undoer under the execute type so command_manager picks it directly.
-    command_undoers["MoveClipToTrack"] = command_undoers["UndoMoveClipToTrack"]
+    -- Explicit "UndoMoveClipToTrack" command (Command:create_undo() builds
+    -- one with this type). Same body as the regular undoer.
+    command_executors["UndoMoveClipToTrack"] = command_undoers["MoveClipToTrack"]
 
     return {
         executor = command_executors["MoveClipToTrack"],
-        undoer = command_executors["UndoMoveClipToTrack"],
-        spec = SPEC,
+        undoer   = command_undoers["MoveClipToTrack"],
+        spec     = SPEC,
     }
 end
 
