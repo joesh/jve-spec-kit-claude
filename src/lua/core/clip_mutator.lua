@@ -48,7 +48,6 @@ end
             created_at = row.created_at,
             modified_at = row.modified_at,
             timeline_start = row.timeline_start,
-            start_value = row.start_value,
             duration = row.duration,
             source_in = row.source_in,
             source_out = row.source_out,
@@ -107,7 +106,7 @@ local function plan_update(row, original)
         type = "update",
         clip_id = row.id,
         track_id = row.track_id,
-        timeline_start_frame = get_frames(row.timeline_start or row.start_value),
+        timeline_start_frame = get_frames(row.timeline_start),
         duration_frames = get_frames(row.duration),
         source_in_frame = get_frames(row.source_in),
         source_out_frame = get_frames(row.source_out),
@@ -129,7 +128,7 @@ local function plan_insert(row)
     local fps_num = row.fps_numerator or (row.rate and row.rate.fps_numerator)
     local fps_den = row.fps_denominator or (row.rate and row.rate.fps_denominator)
     assert_fps(fps_num, fps_den, "clip fps")
-    assert(row.timeline_start or row.start_value, "clip_mutator: insert mutation missing timeline_start")
+    assert(row.timeline_start, "clip_mutator: insert mutation missing timeline_start")
     assert(row.duration, "clip_mutator: insert mutation missing duration")
     assert(row.source_in, "clip_mutator: insert mutation missing source_in")
     assert(row.source_out, "clip_mutator: insert mutation missing source_out")
@@ -151,7 +150,7 @@ local function plan_insert(row)
             "clip_mutator: insert mutation missing fps_mismatch_policy "
             .. "for clip " .. tostring(row.id)),
         owner_sequence_id = row.owner_sequence_id,
-        timeline_start_frame = get_frames(row.timeline_start or row.start_value),
+        timeline_start_frame = get_frames(row.timeline_start),
         duration_frames = get_frames(row.duration),
         source_in_frame = get_frames(row.source_in),
         source_out_frame = get_frames(row.source_out),
@@ -166,9 +165,9 @@ local function plan_insert(row)
     }
 end
 
--- Resolve occlusions for a clip about to occupy [start_value, end_time).
+-- Resolve occlusions for a clip about to occupy [timeline_start, end_time).
 -- Params:
---   track_id, start_value, duration
+--   track_id, timeline_start, duration
 --   exclude_clip_id: clip id to ignore while checking overlaps (e.g., the clip being updated)
 local function load_track_clips(db, track_id)
     -- V13 SELECT: same column set produced by database.load_clips, plus
@@ -230,7 +229,6 @@ local function load_track_clips(db, track_id)
             modified_at = stmt:value(16),
             -- Integer frame coordinates
             timeline_start = stmt:value(6),
-            start_value = stmt:value(6),  -- Legacy compat
             duration = stmt:value(7),
             source_in = stmt:value(8),
             source_out = stmt:value(9),
@@ -267,7 +265,7 @@ local function normalize_pending_lookup(pending_clips, exclude_id)
             return
         end
         lookup[clip_id] = {
-            start_value = pending.timeline_start or pending.start_value, -- Accept both
+            timeline_start = pending.timeline_start,
             duration = pending.duration,
             tolerance = pending.tolerance,
             _seen = false,
@@ -297,7 +295,7 @@ local function iter_overlaps(clip_list, start_value, end_time)
         while index <= count do
             local item = clip_list[index]
             index = index + 1
-            local clip_start = item.timeline_start or item.start_value
+            local clip_start = item.timeline_start
             assert(type(clip_start) == "number", "clip_mutator: overlap check missing clip_start")
             local clip_end = clip_start + (item.duration or 0)
 
@@ -373,7 +371,7 @@ function ClipMutator.resolve_occlusions(db, params)
             goto continue_loop
         end
 
-        local clip_start = row.timeline_start or row.start_value
+        local clip_start = row.timeline_start
         assert(type(clip_start) == "number", "clip_mutator.resolve_occlusions: missing clip_start")
 
         local clip_duration = row.duration
@@ -528,7 +526,7 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
     local actions = {}
 
     for _, row in ipairs(track_clips) do
-        local clip_start = row.timeline_start or row.start_value
+        local clip_start = row.timeline_start
         assert(type(clip_start) == "number",
             string.format("resolve_occlusions_multi: clip %s missing timeline_start",
                 tostring(row.id)))
@@ -664,7 +662,7 @@ function ClipMutator.resolve_ripple(db, params)
     -- Note: clips are ordered by start time
     for _, row in ipairs(track_clips) do
         local original = clone_state(row)
-        local clip_start = row.timeline_start or row.start_value
+        local clip_start = row.timeline_start
         assert(type(clip_start) == "number", "clip_mutator.resolve_ripple: missing clip_start")
         local clip_end = clip_start + row.duration
 
