@@ -6,6 +6,7 @@
 --
 -- @file report_bug.lua
 local M = {}
+local log = require("core.logger").for_area("commands")
 
 local SPEC = {
     undoable = false,
@@ -24,18 +25,14 @@ function M.register(executors, undoers, db)
         local test_path = bug_reporter.capture_manual("User triggered via menu - Manual bug report")
 
         if test_path then
-            print("✅ Bug report captured: " .. test_path)
-
-            -- Show submission dialog
+            log.event("Bug report captured: %s", test_path)
+            -- Show submission dialog (non-blocking so user can review)
             local wrapper = submission_dialog.create(test_path)
-            if wrapper and wrapper.dialog then
-                -- Show non-blocking so user can review
-                if qt_show_dialog then
-                    qt_show_dialog(wrapper.dialog, false)
-                end
+            if wrapper and wrapper.dialog and qt_show_dialog then
+                qt_show_dialog(wrapper.dialog, false)
             end
         else
-            print("❌ Bug report capture failed")
+            log.error("Bug report capture failed")
         end
 
         return true

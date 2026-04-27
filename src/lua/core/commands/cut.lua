@@ -3,6 +3,7 @@ local timeline_state = require('ui.timeline.timeline_state')
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local clipboard = require("core.clipboard")
+local log = require("core.logger").for_area("commands")
 
 
 local SPEC = {
@@ -20,7 +21,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
 
         if not args.dry_run then
-            print("Executing Cut command")
+            log.event("Executing Cut")
         end
 
         -- Mark-based cut: copy mark range + lift
@@ -53,7 +54,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             command_manager.execute("ClearMarks", {
                 project_id = project_id, sequence_id = sequence_id,
             })
-            print(string.format("✅ Cut mark range [%d, %d)", mark_in, mark_out))
+            log.event("Cut mark range [%d, %d)", mark_in, mark_out)
             return true
         end
 
@@ -78,7 +79,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         if #clip_ids == 0 then
             if not args.dry_run then
-                print("Cut: nothing selected")
+                log.event("Cut: nothing selected")
             end
             return false  -- Nothing to do = command did not execute
         end
@@ -161,7 +162,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 assert(clip:delete(), string.format("Cut: failed to delete clip %s", clip_id))
                 deleted_count = deleted_count + 1
             else
-                print(string.format("WARNING: Cut: clip %s not found", clip_id))
+                log.warn("Cut: clip %s not found", clip_id)
             end
         end
 
@@ -184,7 +185,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             timeline_state.clear_edge_selection()
         end
 
-        print(string.format("✅ Cut removed %d clip(s)", deleted_count))
+        log.event("Cut removed %d clip(s)", deleted_count)
         return true
     end
 
@@ -225,7 +226,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        print("✅ Undo Cut: Restored deleted clips")
+        log.event("Undo Cut: restored deleted clips")
         return true
     end
 

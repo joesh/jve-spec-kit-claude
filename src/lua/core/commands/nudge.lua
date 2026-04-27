@@ -1,4 +1,5 @@
 local M = {}
+local log = require("core.logger").for_area("commands")
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local clip_mutator = require("core.clip_mutator")
@@ -31,7 +32,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
 
         if not args.dry_run then
-            print("Executing Nudge command")
+            log.event("Executing Nudge")
         end
 
         -- Nudge amount must be integer frames
@@ -235,7 +236,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 }
             end
 
-            print(string.format("✅ Nudged %d edge(s) by %d frames", #args.selected_edges, nudge_frames))
+            log.event("Nudged %d edge(s) by %d frames",
+                #args.selected_edges, nudge_frames)
         elseif args.selected_clip_ids and #args.selected_clip_ids > 0 then
             nudge_type = "clips"
             local clips_to_move = {}
@@ -339,7 +341,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                             pending_clips = group.pending
                         })
                         if not ok then
-                            print(string.format("ERROR: Nudge: Failed to resolve occlusions on track %s: %s", tostring(track_id), tostring(err)))
+                            log.error("Nudge: failed to resolve occlusions on track %s: %s",
+                                tostring(track_id), tostring(err))
                             return false
                         end
                         
@@ -369,7 +372,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
             end
 
-            print(string.format("✅ Nudged %d clip(s) by %d frames", #args.selected_clip_ids, nudge_frames))
+            log.event("Nudged %d clip(s) by %d frames",
+                #args.selected_clip_ids, nudge_frames)
         else
             set_last_error("Nudge: Nothing selected")
             return false
@@ -392,9 +396,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 recovered = capture_updates_from_selection(active_sequence_id)
             end
             if not recovered then
-                print(string.format(
-                    "WARNING: Nudge: Failed to capture timeline mutations for timeline cache (sequence=%s)",
-                    tostring(active_sequence_id or "nil")))
+                log.warn("Nudge: failed to capture timeline mutations for "
+                    .. "timeline cache (sequence=%s)",
+                    tostring(active_sequence_id or "nil"))
             end
         end
 
@@ -403,7 +407,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     command_undoers["UndoNudge"] = function(command)
         local args = command:get_all_parameters()
-        print("Executing UndoNudge command")
+        log.event("Executing UndoNudge")
 
 
 

@@ -1,4 +1,5 @@
 local M = {}
+local log = require("core.logger").for_area("commands")
 local Sequence = require('models.sequence')
 local Track = require('models.track')
 local database = require("core.database")
@@ -76,7 +77,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     command_executors["CreateSequence"] = function(command)
         local args = command:get_all_parameters()
-        print("Executing CreateSequence command")
+        log.event("Executing CreateSequence")
 
         local name = args.name
         local project_id = args.project_id
@@ -103,17 +104,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         command:set_parameter("sequence_id", sequence.id)
 
         if not sequence:save() then
-            print(string.format("Failed to save sequence: %s", name))
+            log.error("Failed to save sequence: %s", name)
             return false
         end
 
         local seeded, seed_err = seed_default_tracks(sequence.id, project_id)
         if not seeded then
-            print(string.format("ERROR: %s", seed_err or "CreateSequence: Failed to seed default tracks"))
+            log.error("%s", tostring(seed_err or "CreateSequence: Failed to seed default tracks"))
             return false
         end
 
-        print(string.format("Created sequence: %s with ID: %s", name, sequence.id))
+        log.event("Created sequence: %s id=%s", name, sequence.id)
         local metadata_bucket = command_helper.ensure_timeline_mutation_bucket(command, sequence.id)
         if metadata_bucket then
             metadata_bucket.sequence_meta = metadata_bucket.sequence_meta or {}
@@ -130,7 +131,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     command_undoers["CreateSequence"] = function(command)
         local args = command:get_all_parameters()
-        print("Undoing CreateSequence command")
+        log.event("Undoing CreateSequence")
 
 
         local stmt = db:prepare("DELETE FROM sequences WHERE id = ?")
@@ -142,10 +143,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local ok = stmt:exec()
         stmt:finalize()
         if not ok then
-            print("ERROR: UndoCreateSequence failed: " .. tostring(db:last_error() or "unknown"))
+            log.error("UndoCreateSequence failed: %s", tostring(db:last_error() or "unknown"))
             return false
         end
-        print(string.format("✅ Undo CreateSequence: Removed sequence %s", tostring(args.sequence_id)))
+        log.event("Undo CreateSequence: removed sequence %s", tostring(args.sequence_id))
         return true
     end
     command_executors["UndoCreateSequence"] = command_undoers["CreateSequence"]

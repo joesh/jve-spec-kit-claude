@@ -24,6 +24,7 @@
 --
 -- @file delete_master_clip.lua
 local M = {}
+local log = require("core.logger").for_area("commands")
 local set_error
 
 
@@ -196,7 +197,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             "DeleteMasterClip: sequences DELETE failed for sequence " .. tostring(seq_id))
         delete_sequence_stmt:finalize()
 
-        print(string.format("✅ Deleted master sequence %s", seq.name or seq_id))
+        log.event("Deleted master sequence %s", seq.name or seq_id)
         return true
     end
 
@@ -279,7 +280,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local timeline_msg = #deleted_timeline_clips > 0
             and string.format(" and %d timeline clip(s)", #deleted_timeline_clips)
             or ""
-        print(string.format("UNDO: Restored master sequence %s%s", seq_name, timeline_msg))
+        log.event("Undo DeleteMasterClip: restored master sequence %s%s", seq_name, timeline_msg)
         return true
     end
 

@@ -1,5 +1,6 @@
 --- LinkClips and UnlinkClip commands
 local M = {}
+local log = require("core.logger").for_area("commands")
 
 
 local SPEC = {
@@ -24,13 +25,11 @@ function M.register(executors, undoers, db)
         local args = command:get_all_parameters()
 
         if not args.dry_run then
-            print("Executing LinkClips command")
+            log.event("Executing LinkClips")
         end
 
-
-
         if not args.clips or #args.clips < 2 then
-            print("ERROR: LinkClips requires at least 2 clips")
+            log.error("LinkClips requires at least 2 clips")
             return false
         end
 
@@ -42,14 +41,12 @@ function M.register(executors, undoers, db)
         local link_group_id, error_msg = clip_links.create_link_group(args.clips, db)
 
         if not link_group_id then
-            print(string.format("ERROR: LinkClips failed: %s", error_msg or "unknown error"))
+            log.error("LinkClips failed: %s", tostring(error_msg or "unknown error"))
             return false
         end
 
-        -- Store link group ID for undo
         command:set_parameter("link_group_id", link_group_id)
-
-        print(string.format("✅ Linked %d clips (group %s)", #args.clips, link_group_id:sub(1,8)))
+        log.event("Linked %d clips (group %s)", #args.clips, link_group_id:sub(1, 8))
         return true
     end
 
@@ -75,13 +72,11 @@ function M.register(executors, undoers, db)
         local args = command:get_all_parameters()
 
         if not args.dry_run then
-            print("Executing UnlinkClip command")
+            log.event("Executing UnlinkClip")
         end
 
-
-
         if not args.clip_id then
-            print("ERROR: UnlinkClip missing args.clip_id")
+            log.error("UnlinkClip missing args.clip_id")
             return false
         end
 
@@ -111,9 +106,9 @@ function M.register(executors, undoers, db)
         local success = clip_links.unlink_clip(args.clip_id, db)
 
         if success then
-            print(string.format("✅ Unlinked clip %s", args.clip_id:sub(1,8)))
+            log.event("Unlinked clip %s", args.clip_id:sub(1, 8))
         else
-            print(string.format("ERROR: Failed to unlink clip %s", args.clip_id:sub(1,8)))
+            log.error("Failed to unlink clip %s", args.clip_id:sub(1, 8))
         end
 
         return success

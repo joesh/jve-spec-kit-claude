@@ -60,13 +60,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if #media_clips == 0 then
             timeline_state.set_selection({})
             timeline_state.clear_edge_selection()
-            print("SelectAll: no clips available to select")
+            log.event("SelectAll: no clips available to select")
             return true
         end
 
         timeline_state.set_selection(media_clips)
         timeline_state.clear_edge_selection()
-        print(string.format("✅ Selected all %d clip(s)", #media_clips))
+        log.event("Selected all %d clip(s)", #media_clips)
         return true
     end
 
