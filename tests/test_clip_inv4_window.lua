@@ -82,7 +82,7 @@ assert(tostring(err2):find("source_out"), "error must name source_out")
 assert(tostring(err2):find("100"), "error must name nested duration (100)")
 
 -- Bad: source_in_frame >= source_out_frame (zero-or-negative window).
-local ok3, err3 = pcall(function()
+local ok3 = pcall(function()
     Clip.update(clip_id, { source_in_frame = 50, source_out_frame = 50 })
 end)
 assert(not ok3, "source_in == source_out must refuse (empty window)")

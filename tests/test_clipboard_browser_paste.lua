@@ -28,7 +28,6 @@ local clipboard = require("core.clipboard")
 local clipboard_actions = require("core.clipboard_actions")
 local focus_manager = require("ui.focus_manager")
 local timeline_state = require("ui.timeline.timeline_state")
-local Clip = require("models.clip")
 local test_env = require("test_env")
 
 local SCHEMA_SQL = require("import_schema")

@@ -195,7 +195,7 @@ assert(db:exec([[
 ]]))
 
 local Clip = require("models.clip")
-local clip7 = Clip.create({
+Clip.create({
         name = "Marked Clip",
         id = "clip7",
         project_id = "proj",
@@ -230,7 +230,7 @@ print("  OK")
 -- Test 8: Clip.create WITHOUT marks → defaults (nil/nil/0)
 -- ======================================================================
 print("Test 8: Clip model mark defaults...")
-local clip8 = Clip.create({
+Clip.create({
         name = "Unmarked Clip",
         id = "clip8",
         project_id = "proj",
@@ -275,7 +275,7 @@ print("  OK")
 -- Test 10: Clip.create rejects non-integer mark_in (V13 table form)
 -- ======================================================================
 print("Test 10: reject non-integer mark_in...")
-local ok10, err10 = pcall(Clip.create, {
+local ok10 = pcall(Clip.create, {
     id = "clip_bad_mark",
     project_id = "proj",
     track_id = "mc_v1",
@@ -304,7 +304,7 @@ print("  OK")
 -- Test 11: Clip.create rejects non-integer mark_out (V13 table form)
 -- ======================================================================
 print("Test 11: reject non-integer mark_out...")
-local ok11, _err11 = pcall(Clip.create, {
+local ok11 = pcall(Clip.create, {
     id = "clip_bad_mark2",
     project_id = "proj",
     track_id = "mc_v1",
@@ -326,7 +326,7 @@ print("  OK")
 -- Test 12: Clip.create rejects non-integer playhead_frame
 -- ======================================================================
 print("Test 12: reject non-integer playhead_frame...")
-local ok12, _err12 = pcall(Clip.create, {
+local ok12 = pcall(Clip.create, {
     id = "clip_bad_ph",
     project_id = "proj",
     track_id = "mc_v1",
@@ -367,7 +367,7 @@ print("  OK")
 -- Test 15: Clip.create rejects false for playhead_frame
 -- ======================================================================
 print("Test 15: reject false playhead_frame...")
-local ok15, _err15 = pcall(Clip.create, {
+local ok15 = pcall(Clip.create, {
     id = "clip_bad_ph2",
     project_id = "proj",
     track_id = "mc_v1",

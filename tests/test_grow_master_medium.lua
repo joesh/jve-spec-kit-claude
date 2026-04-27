@@ -110,24 +110,6 @@ local function link_group_of(db, clip_id)
     return g
 end
 
-local function clip_in_link_group_on_medium(db, link_group_id, owner, medium_track_type)
-    local stmt = db:prepare([[
-        SELECT cl.clip_id FROM clip_links cl
-        JOIN clips c ON c.id = cl.clip_id
-        JOIN tracks t ON t.id = c.track_id
-        WHERE cl.link_group_id = ? AND c.owner_sequence_id = ?
-          AND t.track_type = ?
-    ]])
-    stmt:bind_value(1, link_group_id)
-    stmt:bind_value(2, owner)
-    stmt:bind_value(3, medium_track_type)
-    assert(stmt:exec())
-    local id
-    if stmt:next() then id = stmt:value(0) end
-    stmt:finalize()
-    return id
-end
-
 local GrowMasterMedium = require("core.commands.grow_master_medium")
 
 print("-- video-only master gains audio: each existing clip gets a linked A companion --")

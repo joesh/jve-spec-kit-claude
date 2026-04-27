@@ -8,8 +8,6 @@ require('test_env')
 
 local database = require('core.database')
 local Sequence = require('models.sequence')
-local Track = require('models.track')
-local Clip = require('models.clip')
 local Media = require('models.media')
 
 print("=== test_source_viewer_marks.lua ===\n")

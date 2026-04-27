@@ -226,7 +226,7 @@ end
 
 print("-- sequence_id mismatch refused (rule 2.29) --")
 do
-    local _db, nest_result = build_nested_fixture()
+    local _, nest_result = build_nested_fixture()
     local ok = pcall(Unnest.execute, {
         sequence_id = "m",  -- not the clip's owner
         clip_id     = nest_result.new_clip_id,

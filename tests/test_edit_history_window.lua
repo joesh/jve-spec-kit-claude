@@ -66,7 +66,6 @@ local function insert_clip(conn, id, start_frames, dur_frames, track_id)
     })
     local now = os.time()
     -- V13: clip references a kind='master' sequence wrapping the media.
-    local test_env = require("test_env")
     local master_id = test_env.create_test_masterclip_sequence(
         "proj", media_id, 24, 1, dur_frames, media_id)
     assert(conn:exec(string.format([[

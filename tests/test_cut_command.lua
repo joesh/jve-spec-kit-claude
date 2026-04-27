@@ -15,7 +15,6 @@ package.loaded["ui.panel_manager"] = {
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
-local Command = require('command')
 local Media = require('models.media')
 local timeline_state = require('ui.timeline.timeline_state')
 

@@ -15,7 +15,6 @@ require('test_env')
 local database        = require('core.database')
 local command_manager = require('core.command_manager')
 local Command         = require('command')
-local Media           = require('models.media')
 local Sequence        = require('models.sequence')
 local test_env        = require('test_env')
 

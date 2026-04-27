@@ -377,12 +377,9 @@ function M.create_test_masterclip_sequence(project_id, name, fps_num, fps_den, d
         assert(media:save(), "create_test_masterclip_sequence: failed to update media metadata")
     end
 
-    -- Tolerate fps mismatches between the legacy duration_frames argument and
-    -- the media's actual duration: ensure_master derives duration from the
-    -- media row, so we don't need duration_frames here. Kept in the signature
-    -- for back-compat with existing callers.
-    _ = duration_frames; _ = fps_num; _ = fps_den; _ = name
-
+    -- ensure_master derives duration / rate / name from the media row, so
+    -- duration_frames / fps_num / fps_den / name args are unused here. Kept
+    -- in the signature for back-compat with existing callers.
     return Sequence.ensure_master(media_id, project_id)
 end
 

@@ -90,7 +90,7 @@ assert(tostring(err):find("master"),
     "Error must name the actual kind ('master'); got: " .. tostring(err))
 
 -- Bad: fps_mismatch_policy must be explicit (NOT NULL, no default under rule 2.13).
-local ok_nopol, err_nopol = pcall(function()
+local ok_nopol = pcall(function()
     Clip.create({
         project_id = "p1",
         owner_sequence_id = "seq-edit",

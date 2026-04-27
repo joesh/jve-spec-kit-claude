@@ -13,7 +13,6 @@ require("test_env")
 local database = require("core.database")
 local Sequence = require("models.sequence")
 local Track = require("models.track")
-local Clip = require("models.clip")
 local Media = require("models.media")
 local command_manager = require("core.command_manager")
 require("uuid") -- luacheck: ignore 411
