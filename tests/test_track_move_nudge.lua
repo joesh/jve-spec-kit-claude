@@ -19,7 +19,6 @@ package.loaded["ui.panel_manager"] = {
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
-require('core.command_implementations')
 local Command = require('command')
 
 local TEST_DB = "/tmp/jve/test_track_move_nudge.db"

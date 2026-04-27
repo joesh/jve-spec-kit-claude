@@ -4,7 +4,6 @@ require('test_env')
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
-local _ = require('core.command_implementations') -- load for side effects
 local Command = require('command')
 local Media = require('models.media')
 local Clip = require('models.clip')

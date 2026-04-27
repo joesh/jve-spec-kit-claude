@@ -16,7 +16,6 @@ package.loaded["ui.panel_manager"] = {
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
-local _ = require('core.command_implementations')
 local timeline_state = require('ui.timeline.timeline_state')
 
 local TEST_DB = "/tmp/jve/test_trim_head_tail.db"

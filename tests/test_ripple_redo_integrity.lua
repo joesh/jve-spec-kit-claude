@@ -6,7 +6,6 @@ local test_env = require('test_env')
 
 local database = require('core.database')
 local command_manager = require('core.command_manager')
-local _ = require('core.command_implementations') -- load for side effects
 local Command = require('command')
 local timeline_state = require('ui.timeline.timeline_state')
 local Media = require('models.media')
