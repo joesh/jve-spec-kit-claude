@@ -45,7 +45,7 @@ local PER_SEQUENCE_COMMAND_NAMES = {
     "Insert", "Overwrite",
     "MatchFrame",
     "Nudge",
-    "Split",
+    "SplitClip",
     "ToggleClipEnabled",
     "LinkClips", "UnlinkClips",
     "CloseGap",

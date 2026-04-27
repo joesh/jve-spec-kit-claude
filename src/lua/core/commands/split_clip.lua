@@ -253,21 +253,10 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         return true
     end
 
-    -- Menu binding uses "Split" — alias both names.
-    command_executors["Split"] = command_executors["SplitClip"]
-    command_undoers["Split"]   = command_undoers["SplitClip"]
-
     return {
-        ["SplitClip"] = {
-            executor = command_executors["SplitClip"],
-            undoer   = command_undoers["SplitClip"],
-            spec     = SPEC,
-        },
-        ["Split"] = {
-            executor = command_executors["Split"],
-            undoer   = command_undoers["Split"],
-            spec     = SPEC,
-        },
+        executor = command_executors["SplitClip"],
+        undoer   = command_undoers["SplitClip"],
+        spec     = SPEC,
     }
 end
 

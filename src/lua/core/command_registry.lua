@@ -22,8 +22,6 @@ local module_aliases = {
     -- Project open
     OpenProject = "core.commands.open_project",
 
-    -- Split lives in split_clip.lua (registers both Split and SplitClip)
-    Split = "core.commands.split_clip",
     SplitClip = "core.commands.split_clip",
 
     -- Link/Unlink live in link_clips.lua

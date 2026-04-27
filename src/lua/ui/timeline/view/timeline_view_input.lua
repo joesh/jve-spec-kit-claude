@@ -328,7 +328,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
         label = "Split at Playhead",
         shortcut = "S",
         handler = function()
-            command_manager.execute_interactive("Split", {
+            command_manager.execute_interactive("SplitClip", {
                 project_id = state.get_project_id(),
                 sequence_id = state.get_sequence_id(),
             })

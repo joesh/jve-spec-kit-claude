@@ -57,7 +57,7 @@
 
   <!-- Clip Menu -->
   <menu name="Clip">
-    <item name="Split" command="Split"/>
+    <item name="Split" command="SplitClip"/>
     <item name="Link Clips" command="LinkClips"/>
     <item name="Unlink Clips" command="UnlinkClips"/>
     <separator/>

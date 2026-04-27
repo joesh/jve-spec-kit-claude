@@ -109,13 +109,12 @@ menu_system.set_timeline_panel({
     get_state = function() return timeline_state end,
 })
 
-local callback = menu_system._test_get_action_callback("Split")
+local callback = menu_system._test_get_action_callback("SplitClip")
 
 local ok, err = pcall(callback)
-assert(ok, "Split menu callback errored: " .. tostring(err))
-assert(captured_command, "Split menu did not dispatch a command")
+assert(ok, "SplitClip menu callback errored: " .. tostring(err))
+assert(captured_command, "SplitClip menu did not dispatch a command")
 
--- Split menu dispatches "Split" command string; Split internally executes SplitClip children
-assert(type(captured_command) == "string", "Expected Split command string, got " .. type(captured_command))
-assert(captured_command == "Split", "Expected Split command, got " .. tostring(captured_command))
-print("✅ Split menu handles Rational clip fields and dispatches Split command")
+assert(type(captured_command) == "string", "Expected SplitClip command string, got " .. type(captured_command))
+assert(captured_command == "SplitClip", "Expected SplitClip command, got " .. tostring(captured_command))
+print("✅ Split menu handles Rational clip fields and dispatches SplitClip command")
