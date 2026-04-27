@@ -119,21 +119,6 @@ function M.reload_timeline(sequence_id)
     end
 end
 
-function M.encode_property_json(raw)
-    if raw == nil or raw == "" then
-        local encoded = json.encode({ value = nil })
-        return encoded
-    end
-    if type(raw) == "string" then
-        return raw
-    end
-    local encoded = json.encode({ value = raw })
-    if not encoded then
-        return json.encode({ value = nil })
-    end
-    return encoded
-end
-
 function M.ensure_timeline_mutation_bucket(command, sequence_id)
     if not sequence_id then
         local cmd_type = command and command.type or "unknown_command"
