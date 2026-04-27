@@ -471,28 +471,13 @@ local function format_duration(duration_input, frame_rate)
     if not duration_input then
         return "--:--"
     end
-
+    -- Both inputs must be valid; no pcall-swallow, no ms-fallback path.
+    -- Callers populate frame_rate from authoritative model fields
+    -- (clip.rate / sequence.frame_rate); a missing or malformed rate is
+    -- a producer bug and should fail loud here, not paper over with a
+    -- minutes:seconds approximation that hides the broken upstream.
     assert(frame_rate, "project_browser.format_duration: frame_rate must not be nil")
-    local rate = frame_rate
-    local ok, formatted = pcall(frame_utils.format_timecode, duration_input, rate)
-    if ok and formatted then
-        return formatted
-    end
-
-    if type(duration_input) == "number" then
-        local total_seconds = math.floor(duration_input / 1000)
-        local hours = math.floor(total_seconds / 3600)
-        local minutes = math.floor((total_seconds % 3600) / 60)
-        local seconds = total_seconds % 60
-
-        if hours > 0 then
-            return string.format("%d:%02d:%02d", hours, minutes, seconds)
-        else
-            return string.format("%d:%02d", minutes, seconds)
-        end
-    end
-    
-    return "--:--"
+    return frame_utils.format_timecode(duration_input, frame_rate)
 end
 
 local function format_date(timestamp)
@@ -755,7 +740,13 @@ local function populate_tree()
         local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
         clip.type = clip.type or "master_clip"
         clip.name = clip.name or media.name or clip.clip_id
-        clip.fps_float = get_fps_float(clip.frame_rate or (media and media.frame_rate))
+        -- V13: master clip rate comes from the master sequence row
+        -- (sequences.fps_numerator NOT NULL by schema). No fallback to
+        -- media.frame_rate — that stub is nil-fielded for orphaned
+        -- masters (Media:delete leaves shells, models/media.lua:1271).
+        assert(clip.frame_rate, string.format(
+            "project_browser: master clip %s missing rate", tostring(clip.clip_id)))
+        clip.fps_float = get_fps_float(clip.frame_rate)
         clip.codec = clip.codec or media.codec or ""
         clip.width = clip.width or media.width
         clip.height = clip.height or media.height
@@ -836,10 +827,17 @@ local function populate_tree()
         -- Pull offline state from authoritative cache (same as timeline renderer).
         media_status.ensure_clip_status(clip)
         local duration_ms = clip.duration or media.duration
-        local duration_str = format_duration(duration_ms, clip.frame_rate or (media and media.frame_rate))
+        -- V13: clip.frame_rate is the master sequence's fps, NOT NULL by schema.
+        -- No fallback to media.frame_rate — orphan masters (post-
+        -- Media:delete, models/media.lua:1271) carry a stub media table
+        -- with nil-fielded frame_rate that would crash format_timecode.
+        assert(clip.frame_rate, string.format(
+            "project_browser.add_master_clip_item: clip %s missing rate",
+            tostring(clip.clip_id)))
+        local duration_str = format_duration(duration_ms, clip.frame_rate)
         local display_width = clip.width or media.width
         local display_height = clip.height or media.height
-        local display_fps = clip.frame_rate or (media and media.frame_rate)
+        local display_fps = clip.frame_rate
         local resolution_str = (display_width and display_height and display_width > 0)
             and string.format("%dx%d", display_width, display_height)
             or ""

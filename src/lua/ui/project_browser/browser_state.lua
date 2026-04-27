@@ -81,7 +81,13 @@ local function normalize_master_clip(item, context)
         start_value = source_in,
         source_in = source_in,
         source_out = source_out,
-        frame_rate = assert(clip.frame_rate or (media and media.frame_rate), string.format("browser_state.normalize_master_clip: missing frame_rate for clip %s", tostring(clip.clip_id))),
+        -- V13: master clip rate = master sequence fps (NOT NULL by
+        -- schema). No fallback to media.frame_rate — that stub is
+        -- nil-fielded for orphan masters (Media:delete leaves shells,
+        -- models/media.lua:1271).
+        frame_rate = assert(clip.frame_rate, string.format(
+            "browser_state.normalize_master_clip: clip %s missing rate",
+            tostring(clip.clip_id))),
         width = assert(clip.width or (media and media.width), string.format("browser_state.normalize_master_clip: missing width for clip %s", tostring(clip.clip_id))),
         height = assert(clip.height or (media and media.height), string.format("browser_state.normalize_master_clip: missing height for clip %s", tostring(clip.clip_id))),
         codec = clip.codec or (media and media.codec),
