@@ -1,4 +1,5 @@
 local M = {}
+local log = require("core.logger").for_area("commands")
 local Project = require('models.project')
 
 
@@ -12,7 +13,7 @@ local SPEC = {
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["CreateProject"] = function(command)
         local args = command:get_all_parameters()
-        print("Executing CreateProject command")
+        log.event("Executing CreateProject")
 
         local name = args.name
         local project_id = args.project_id
@@ -28,10 +29,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         command:set_parameter("project_id", project.id)
 
         if project:save(db) then
-            print(string.format("Created project: %s with ID: %s", name, project.id))
+            log.event("Created project: %s id=%s", name, project.id)
             return true
         else
-            print(string.format("Failed to save project: %s", name))
+            log.error("Failed to save project: %s", name)
             return false
         end
     end

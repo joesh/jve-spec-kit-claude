@@ -1,4 +1,5 @@
 local M = {}
+local log = require("core.logger").for_area("commands")
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local clip_mutator = require("core.clip_mutator")
@@ -70,7 +71,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
 
         if not args.dry_run then
-            print("Executing MoveClipToTrack command")
+            log.event("Executing MoveClipToTrack")
         end
 
         local clip_id = args.clip_id
@@ -179,23 +180,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Populate __timeline_mutations for UI cache update
         record_planned_mutations(command, mutation_sequence, planned_mutations)
 
-        print(string.format("✅ Moved clip %s to track %s at %s", clip_id, args.target_track_id, tostring(clip.timeline_start)))
+        log.event("Moved clip %s to track %s at %s",
+            clip_id, args.target_track_id, tostring(clip.timeline_start))
         return true
     end
 
     command_undoers["UndoMoveClipToTrack"] = function(command)
         local args = command:get_all_parameters()
-        print("Executing UndoMoveClipToTrack command")
+        log.event("Executing UndoMoveClipToTrack")
 
-
-        -- Fallback for legacy undo if args.executed_mutations missing? 
-        -- The old undoer logic is incompatible with the new occlusion handling (doesn't restore deleted clips).
-        -- So we enforce new logic.
-        
         if not args.executed_mutations then
              local msg = "UndoMoveClipToTrack: No executed mutations found (legacy command?)"
-             print("WARNING: " .. msg)
-             return {success = false, error_message = msg}
+             log.warn("%s", msg)
+             return { success = false, error_message = msg }
         end
         
         -- We need sequence_id to record UI mutations during revert

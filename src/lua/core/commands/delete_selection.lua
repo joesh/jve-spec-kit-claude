@@ -98,7 +98,8 @@ function M.register(executors, undoers, db)
                 end
                 local result = command_manager.execute("RippleDeleteSelection", params)
                 if not result.success then
-                    print(string.format("Failed to ripple delete selection: %s", result.error_message or "unknown error"))
+                    log.warn("Failed to ripple delete selection: %s",
+                        tostring(result.error_message or "unknown error"))
                 end
                 return true
             end
@@ -192,9 +193,11 @@ function M.register(executors, undoers, db)
                 if timeline_state.clear_gap_selection then
                     timeline_state.clear_gap_selection()
                 end
-                print(string.format("Ripple deleted gap of %s on track %s", tostring(gap.duration), tostring(gap.track_id)))
+                log.event("Ripple deleted gap of %s on track %s",
+                    tostring(gap.duration), tostring(gap.track_id))
             else
-                print(string.format("Failed to ripple delete gap: %s", result.error_message or "unknown error"))
+                log.warn("Failed to ripple delete gap: %s",
+                    tostring(result.error_message or "unknown error"))
             end
             return true
         end

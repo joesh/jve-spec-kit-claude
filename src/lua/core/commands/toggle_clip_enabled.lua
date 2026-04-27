@@ -1,4 +1,5 @@
 local M = {}
+local log = require("core.logger").for_area("commands")
 local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local timeline_state = require('ui.timeline.timeline_state')
@@ -39,7 +40,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
 
         if not args.dry_run then
-            print("Executing ToggleClipEnabled command")
+            log.event("Executing ToggleClipEnabled")
         end
 
         local active_sequence_id = command_helper.resolve_active_sequence_id(args.sequence_id, timeline_state)
@@ -62,7 +63,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
 
             if not clip_ids or #clip_ids == 0 then
-                print("ToggleClipEnabled: No clips selected")
+                log.event("ToggleClipEnabled: no clips selected")
                 return false
             end
 
@@ -77,12 +78,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         enabled_after = not enabled_before,
                     })
                 else
-                    print(string.format("WARNING: ToggleClipEnabled: Clip %s not found", tostring(clip_id)))
+                    log.warn("ToggleClipEnabled: clip %s not found", tostring(clip_id))
                 end
             end
 
             if #toggles == 0 then
-                print("ToggleClipEnabled: No valid clips to toggle")
+                log.event("ToggleClipEnabled: no valid clips to toggle")
                 return false
             end
 
@@ -104,15 +105,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     record_clip_enabled_mutation(command, clip, args)
                     toggled = toggled + 1
                 else
-                    print(string.format("ERROR: ToggleClipEnabled: Failed to save clip %s", tostring(toggle.clip_id)))
+                    log.error("ToggleClipEnabled: failed to save clip %s",
+                        tostring(toggle.clip_id))
                     return false
                 end
             else
-                print(string.format("WARNING: ToggleClipEnabled: Clip %s missing during execution", tostring(toggle.clip_id)))
+                log.warn("ToggleClipEnabled: clip %s missing during execution",
+                    tostring(toggle.clip_id))
             end
         end
 
-        print(string.format("✅ Toggled enabled state for %d clip(s)", toggled))
+        log.event("Toggled enabled state for %d clip(s)", toggled)
         return toggled > 0
     end
 
@@ -132,15 +135,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     record_clip_enabled_mutation(command, clip, args)
                     restored = restored + 1
                 else
-                    print(string.format("WARNING: ToggleClipEnabled undo: Failed to restore clip %s", tostring(toggle.clip_id)))
+                    log.warn("ToggleClipEnabled undo: failed to restore clip %s",
+                        tostring(toggle.clip_id))
                 end
             end
         end
 
-        -- Flush logic is typically in command_manager, but some undoers called it explicitly.
-        -- We assume mutations are picked up from command by manager.
-
-        print(string.format("✅ Undo ToggleClipEnabled: Restored %d clip(s)", restored))
+        log.event("Undo ToggleClipEnabled: restored %d clip(s)", restored)
         return true
     end
 

@@ -1,4 +1,5 @@
 local M = {}
+local log = require("core.logger").for_area("commands")
 local Project = require('models.project')
 local json = require("dkjson")
 
@@ -17,27 +18,20 @@ local SPEC = {
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["SetupProject"] = function(command)
         local args = command:get_all_parameters()
-        print("Executing SetupProject command")
-
-
-
+        log.event("Executing SetupProject")
 
         local project = Project.load(args.project_id, db)
         if not project or project.id == "" then
-            print(string.format("WARNING: SetupProject: Project not found: %s", args.project_id))
+            log.warn("SetupProject: project not found: %s",
+                tostring(args.project_id))
             return false
         end
 
-        -- Store previous settings for undo
-        local previous_settings = project.settings
-        command:set_parameter("previous_settings", previous_settings)
-
-        -- Apply new settings
-        local settings_json = json.encode(args.settings)
-        project.settings = settings_json
+        command:set_parameter("previous_settings", project.settings)
+        project.settings = json.encode(args.settings)
 
         if project:save(db) then
-            print(string.format("Applied settings to project: %s", args.project_id))
+            log.event("Applied settings to project: %s", args.project_id)
             return true
         else
             set_last_error("Failed to save project settings")

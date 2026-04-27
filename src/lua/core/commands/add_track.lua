@@ -1,4 +1,5 @@
 local M = {}
+local log = require("core.logger").for_area("commands")
 local Track = require('models.track')
 
 
@@ -17,10 +18,7 @@ local SPEC = {
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["AddTrack"] = function(command)
         local args = command:get_all_parameters()
-        print("Executing AddTrack command")
-
-
-
+        log.event("Executing AddTrack")
 
         local track
         if args.track_type == "video" then
@@ -28,14 +26,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         elseif args.track_type == "audio" then
             track = Track.create_audio("Audio Track", args.sequence_id)
         else
-            print(string.format("WARNING: AddTrack: Unknown track type: %s", args.track_type))
+            log.warn("AddTrack: unknown track type: %s", tostring(args.track_type))
             return false
         end
 
         command:set_parameter("track_id", track.id)
 
         if track:save() then
-            print(string.format("Added track with ID: %s", track.id))
+            log.event("Added track id=%s", track.id)
             return true
         else
             set_last_error("Failed to save track")

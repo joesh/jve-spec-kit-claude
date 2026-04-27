@@ -1,4 +1,5 @@
 local M = {}
+local log = require("core.logger").for_area("commands")
 local timeline_state = require('ui.timeline.timeline_state')
 
 
@@ -16,7 +17,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
 
         if not args.dry_run then
-            print("Executing DeselectAll command")
+            log.event("Executing DeselectAll")
         end
 
         if args.dry_run then
@@ -27,7 +28,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local current_edges = timeline_state.get_selected_edges() or {}
 
         if #current_clips == 0 and #current_edges == 0 then
-            print("DeselectAll: nothing currently selected")
+            log.event("DeselectAll: nothing currently selected")
         end
 
         timeline_state.set_selection({})
@@ -36,7 +37,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             timeline_state.clear_gap_selection()
         end
 
-        print("✅ Deselected all clips, edges, and gaps")
+        log.event("Deselected all clips, edges, and gaps")
         return true
     end
 
