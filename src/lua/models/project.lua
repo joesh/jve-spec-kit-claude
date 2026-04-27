@@ -186,9 +186,8 @@ function Project.update_identity(old_id, new_id, new_name)
         error("Project.update_identity: UPDATE failed")
     end
 
-    -- Caller MUST update sequences before commit; return a commit function
-    -- Actually, we leave the transaction open — caller calls Sequence.rebind_to_project
-    -- then calls Project.commit_identity_update()
+    -- Transaction stays open. Caller invokes Sequence.rebind_to_project for
+    -- every sequence, then Project.commit_identity_update() to commit.
 end
 
 --- Feature 013: read the project's fps-mismatch policy.

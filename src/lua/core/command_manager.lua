@@ -2631,16 +2631,6 @@ function M.replay_all()
     return M.replay_from_sequence(1)
 end
 
-function M.enable_multi_stack(value)
-    history.enable_multi_stack = value and true or false -- Modify history module state directly if possible or add setter
-    -- history module has local multi_stack_enabled. We need to expose a setter in history or handle it here.
-    -- Actually, history module reads env var. Let's assume single stack for now or fix history.
-end
-
-function M.is_multi_stack_enabled()
-    return true
-end
-
 function M.stack_id_for_sequence(sequence_id)
     return history.stack_id_for_sequence(sequence_id)
 end
