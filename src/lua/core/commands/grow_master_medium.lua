@@ -49,7 +49,7 @@ end
 -- For the audio-add case: source range in samples = duration_samples.
 -- The parent's existing video clip has duration_frames in master's
 -- video timebase; the companion A clip's source range covers samples
--- 0..(duration_frames * audio_rate / fps).
+-- 0..(duration_frames * audio_sample_rate / fps).
 local function audio_samples_for_video_duration(duration_frames,
                                                 fps_num, fps_den, sample_rate)
     return math.floor(duration_frames * sample_rate * fps_den / fps_num + 0.5)

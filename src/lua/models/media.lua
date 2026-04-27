@@ -967,10 +967,10 @@ end
 --- candidate file's video TC range and audio sample range separately.
 ---
 --- @param media_rates table {[media_id] = {video_rate=number|nil,
----                                          audio_rate=number|nil}}
+---                                          audio_sample_rate=number|nil}}
 ---     video_rate: video frames-per-second the video extent should report
 ---                 in (typically media's start_tc_rate; nil disables video).
----     audio_rate: audio samples-per-second the audio extent should report
+---     audio_sample_rate: audio samples-per-second the audio extent should report
 ---                 in (typically media.audio_sample_rate; nil disables audio).
 --- @return table {[media_id] = {video={min_in,max_out,rate}|nil,
 ---                              audio={min_in,max_out,rate}|nil}}
@@ -988,16 +988,16 @@ function M.batch_get_source_extents(media_rates)
     for mid, rates in pairs(media_rates) do
         assert(type(rates) == "table", string.format(
             "Media.batch_get_source_extents: rates entry for %s must be a table "
-            .. "{video_rate=, audio_rate=}", tostring(mid)))
+            .. "{video_rate=, audio_sample_rate=}", tostring(mid)))
         if rates.video_rate ~= nil then
             assert(type(rates.video_rate) == "number" and rates.video_rate > 0,
                 string.format("Media.batch_get_source_extents: invalid video_rate "
                     .. "for %s: %s", tostring(mid), tostring(rates.video_rate)))
         end
-        if rates.audio_rate ~= nil then
-            assert(type(rates.audio_rate) == "number" and rates.audio_rate > 0,
-                string.format("Media.batch_get_source_extents: invalid audio_rate "
-                    .. "for %s: %s", tostring(mid), tostring(rates.audio_rate)))
+        if rates.audio_sample_rate ~= nil then
+            assert(type(rates.audio_sample_rate) == "number" and rates.audio_sample_rate > 0,
+                string.format("Media.batch_get_source_extents: invalid audio_sample_rate "
+                    .. "for %s: %s", tostring(mid), tostring(rates.audio_sample_rate)))
         end
         ids[#ids + 1] = mid
         result[mid] = { video = nil, audio = nil }
@@ -1022,14 +1022,14 @@ function M.batch_get_source_extents(media_rates)
         for i = 1, n do phs[i] = "?" end
         -- V13: walk clips → nested sequence → master.media_refs to find
         -- clips referencing each media. nested fps drives video clip rate;
-        -- nested.audio_rate drives audio clip rate. Track type drives which
+        -- nested.audio_sample_rate drives audio clip rate. Track type drives which
         -- bucket the row contributes to — video clips' source values are in
         -- video frames at nested.fps; audio clips' source values are in
-        -- audio samples at nested.audio_rate.
+        -- audio samples at nested.audio_sample_rate.
         local sql = string.format([[
             SELECT mr.media_id, c.source_in_frame, c.source_out_frame,
                    nested.fps_numerator, nested.fps_denominator,
-                   nested.audio_rate, t.track_type
+                   nested.audio_sample_rate, t.track_type
             FROM clips c
             JOIN sequences nested ON nested.id = c.nested_sequence_id
             JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
@@ -1051,7 +1051,7 @@ function M.batch_get_source_extents(media_rates)
             local src_out = stmt:value(2)
             local fps_num = stmt:value(3)
             local fps_den = stmt:value(4)
-            local audio_rate = stmt:value(5)
+            local audio_sample_rate = stmt:value(5)
             local track_type = stmt:value(6)
             assert(src_in, string.format(
                 "batch_get_source_extents: clip on media %s has NULL source_in_frame",
@@ -1080,15 +1080,15 @@ function M.batch_get_source_extents(media_rates)
                     result[mid].video = bucket
                 end
                 include_in_extent(bucket, src_in, src_out)
-            elseif track_type == "AUDIO" and rates.audio_rate then
-                assert(audio_rate and audio_rate > 0, string.format(
+            elseif track_type == "AUDIO" and rates.audio_sample_rate then
+                assert(audio_sample_rate and audio_sample_rate > 0, string.format(
                     "batch_get_source_extents: nested sequence for media %s has "
-                    .. "no audio_rate; cannot scale audio clip extent",
+                    .. "no audio_sample_rate; cannot scale audio clip extent",
                     tostring(mid)))
-                local target = rates.audio_rate
-                if math.abs(audio_rate - target) > 0.01 then
-                    src_in = math.floor(src_in * target / audio_rate + 0.5)
-                    src_out = math.floor(src_out * target / audio_rate + 0.5)
+                local target = rates.audio_sample_rate
+                if math.abs(audio_sample_rate - target) > 0.01 then
+                    src_in = math.floor(src_in * target / audio_sample_rate + 0.5)
+                    src_out = math.floor(src_out * target / audio_sample_rate + 0.5)
                 end
                 local bucket = result[mid].audio
                 if not bucket then

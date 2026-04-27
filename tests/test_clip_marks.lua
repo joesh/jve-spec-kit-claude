@@ -40,7 +40,7 @@ assert(db:exec([[
 
     INSERT INTO sequences (
         id, project_id, name, kind,
-        fps_numerator, fps_denominator, audio_rate,
+        fps_numerator, fps_denominator, audio_sample_rate,
         width, height,
         view_start_frame, view_duration_frames, playhead_frame,
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
@@ -59,7 +59,7 @@ assert(db:exec([[
     VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 
     -- V13 master sequence + track + media_ref for media1
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media1', 'proj', 'media1_master', 'master', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media1', 'master_media1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -152,7 +152,7 @@ print("Test 7: Clip model mark round-trip...")
 assert(db:exec([[
     INSERT INTO sequences (
         id, project_id, name, kind,
-        fps_numerator, fps_denominator, audio_rate,
+        fps_numerator, fps_denominator, audio_sample_rate,
         width, height,
         view_start_frame, view_duration_frames, playhead_frame,
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
@@ -169,7 +169,7 @@ assert(db:exec([[
     -- V13: clip references a master sequence via nested_sequence_id.
     INSERT INTO sequences (
         id, project_id, name, kind,
-        fps_numerator, fps_denominator, audio_rate,
+        fps_numerator, fps_denominator, audio_sample_rate,
         width, height,
         view_start_frame, view_duration_frames, playhead_frame,
         created_at, modified_at

@@ -210,7 +210,7 @@ assert(clip4.source_out - clip4.source_in == 100, string.format(
 print("  ✓ Matched-rate case unchanged")
 
 --------------------------------------------------------------------------------
--- Test 5: clip.rate stamp on the timeline-level clip (post-import)
+-- Test 5: clip.frame_rate stamp on the timeline-level clip (post-import)
 --------------------------------------------------------------------------------
 -- At the parse_resolve_tracks layer clips carry two rate fields:
 --   frame_rate  = sequence rate (for timeline position math)

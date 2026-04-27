@@ -37,7 +37,7 @@ local function init_db(path)
     local now = os.time()
     local ok, err = db:exec(string.format([[INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('default_project', 'Default Project', 'resample', %d, %d);]], now, now))
     assert(ok, err)
-    ok, err = db:exec(string.format([[INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+    ok, err = db:exec(string.format([[INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
                                                playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
                         VALUES ('default_sequence', 'default_project', 'Default Sequence', 'nested', 30, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d);]], now, now))
     assert(ok, err)

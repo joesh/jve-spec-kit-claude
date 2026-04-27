@@ -35,7 +35,7 @@ local ok, err = db:exec(string.format(
 assert(ok, "Failed to insert project: " .. tostring(err))
 
 ok, err = db:exec(string.format(
-    [[INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+    [[INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
       VALUES (%q, %q, 'Test Seq', 'nested', 24000, 1001, 48000, 1920, 1080, %d, %d)]],
     seq_id, project_id, now, now
 ))
@@ -139,7 +139,7 @@ print("  ✓ require_media_rate asserts on missing fps")
 print("Test: require_master_clip_rate with valid master clip")
 local master_clip = {
     id = "mc_1",
-    rate = { fps_numerator = 25, fps_denominator = 1 }
+    frame_rate = { fps_numerator = 25, fps_denominator = 1 }
 }
 fps_num, fps_den = helpers.require_master_clip_rate(master_clip)
 check("master_clip fps_num is 25", fps_num == 25)
@@ -172,7 +172,7 @@ print("  ✓ require_master_clip_rate rejects nil rate")
 
 print("Test: require_master_clip_rate with missing fps_numerator asserts")
 ok, err = pcall(function()
-    helpers.require_master_clip_rate({ rate = { fps_denominator = 1 } })
+    helpers.require_master_clip_rate({ frame_rate = { fps_denominator = 1 } })
 end)
 check("missing fps_numerator asserts", not ok)
 check("error mentions fps metadata", err and tostring(err):find("fps") ~= nil)
@@ -180,7 +180,7 @@ print("  ✓ require_master_clip_rate validates fps_numerator")
 
 print("Test: require_master_clip_rate with missing fps_denominator asserts")
 ok, err = pcall(function()
-    helpers.require_master_clip_rate({ rate = { fps_numerator = 24 } })
+    helpers.require_master_clip_rate({ frame_rate = { fps_numerator = 24 } })
 end)
 check("missing fps_denominator asserts", not ok)
 check("error mentions fps (denom)", err and tostring(err):find("fps") ~= nil)

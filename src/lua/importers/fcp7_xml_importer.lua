@@ -409,7 +409,7 @@ local function parse_sequence(sequence_node)
                         if audio_child.tag == "samplecharacteristics" then
                             for _, sc_child in ipairs(audio_child.children or {}) do
                                 if sc_child.tag == "samplerate" then
-                                    sequence_info.audio_rate = tonumber(sc_child.text)
+                                    sequence_info.audio_sample_rate = tonumber(sc_child.text)
                                 end
                             end
                         end
@@ -1104,10 +1104,10 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             local sequence_key = seq_info.original_id or ("sequence_" .. tostring(seq_index))
             local reuse_id = resolve_reuse_id('sequences', sequence_key)
             -- 013: edit timelines from FCP7 XML are kind='nested'.
-            -- audio_rate is parsed from <audio><samplecharacteristics><samplerate>;
+            -- audio_sample_rate is parsed from <audio><samplecharacteristics><samplerate>;
             -- if missing, use the project-conventional default (FCP7's own
             -- default mix bus rate is 48000).
-            local seq_audio_rate = seq_info.audio_rate or 48000
+            local seq_audio_rate = seq_info.audio_sample_rate or 48000
             local sequence = Sequence.create(
                 seq_info.name,
                 project_id,
@@ -1117,7 +1117,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
                 {
                     id = reuse_id or seq_info.original_id,
                     kind = "nested",
-                    audio_rate = seq_audio_rate,
+                    audio_sample_rate = seq_audio_rate,
                 }
             )
             if not sequence then

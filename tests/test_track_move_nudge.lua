@@ -36,7 +36,7 @@ db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
     VALUES ('default_project', 'Default Project', 'resample', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
         view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos,
         selected_gap_infos, current_sequence_number, created_at, modified_at)
     VALUES ('default_sequence', 'default_project', 'Sequence', 'nested',
@@ -73,7 +73,7 @@ db:exec(string.format([[
 
 db:exec(string.format([[
     -- V13 master sequence + track + media_ref for media_dest
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media_dest', 'default_project', 'media_dest_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_dest', 'master_media_dest', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -82,7 +82,7 @@ INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, s
 VALUES ('mr_media_dest', 'default_project', 'master_media_dest', 'master_v_media_dest', 'media_dest', 0, 2500, 0, 2500, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence + track + media_ref for media_keep
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media_keep', 'default_project', 'media_keep_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_keep', 'master_media_keep', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -91,7 +91,7 @@ INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, s
 VALUES ('mr_media_keep', 'default_project', 'master_media_keep', 'master_v_media_keep', 'media_keep', 0, 2000, 0, 2000, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence + track + media_ref for media_move
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media_move', 'default_project', 'media_move_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_move', 'master_media_move', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);

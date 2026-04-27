@@ -357,7 +357,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         source_out = assert(query:value(9), string.format("load_clips: clip %s missing source_out", clip_id)),
 
         -- The clip's source_in/out are in the NESTED sequence's timebase.
-        rate = {
+        frame_rate = {
             fps_numerator = nested_fps_num,
             fps_denominator = nested_fps_den,
         },
@@ -1128,7 +1128,7 @@ function M.load_master_clips(project_id)
             s.fps_denominator,
             s.width,
             s.height,
-            s.audio_rate,
+            s.audio_sample_rate,
             s.created_at,
             s.modified_at,
             mr.media_id,
@@ -1243,7 +1243,7 @@ function M.load_master_clips(project_id)
                 source_in = 0,
                 source_out = media_duration_frames or 0,
 
-                rate = { fps_numerator = seq_fps_num, fps_denominator = seq_fps_den },
+                frame_rate = { fps_numerator = seq_fps_num, fps_denominator = seq_fps_den },
 
                 enabled = true,
                 created_at = seq_created_at,
@@ -1280,7 +1280,7 @@ function M.load_sequences(project_id)
 
     local sequences = {}
     local query = db_connection:prepare([[
-        SELECT id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+        SELECT id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
                playhead_frame, view_start_frame, view_duration_frames
         FROM sequences
         WHERE project_id = ? AND kind = 'nested'
@@ -1300,7 +1300,7 @@ function M.load_sequences(project_id)
                 name = query:value(1),
                 kind = query:value(2),
                 frame_rate = { fps_numerator = fps_num, fps_denominator = fps_den },
-                audio_sample_rate = query:value(5), -- Maps to audio_rate
+                audio_sample_rate = query:value(5), -- Maps to audio_sample_rate
                 width = query:value(6),
                 height = query:value(7),
                 playhead_value = query:value(8),
@@ -1343,7 +1343,7 @@ function M.load_sequence_record(sequence_id)
                playhead_frame,
                view_start_frame, view_duration_frames,
                mark_in_frame, mark_out_frame,
-               selected_clip_ids, selected_edge_infos, audio_rate
+               selected_clip_ids, selected_edge_infos, audio_sample_rate
         FROM sequences
         WHERE id = ?
     ]])

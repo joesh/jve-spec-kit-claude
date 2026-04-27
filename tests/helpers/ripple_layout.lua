@@ -53,7 +53,7 @@ local DEFAULT_CONFIG = {
     sequence_name = "Timeline",
     fps_numerator = 1000,
     fps_denominator = 1,
-    audio_rate = 48000,
+    audio_sample_rate = 48000,
     width = 1920,
     height = 1080,
     view_start_frame = 0,
@@ -285,7 +285,7 @@ function M.create(opts)
     local sequence = Sequence.create(cfg.sequence_name, cfg.project_id, frame_rate, cfg.width, cfg.height, {
         id = cfg.sequence_id,
         kind = "nested",
-        audio_rate = cfg.audio_rate,
+        audio_sample_rate = cfg.audio_sample_rate,
         view_start_frame = cfg.view_start_frame,
         view_duration_frames = cfg.view_duration_frames,
         playhead_frame = cfg.playhead_frame,
@@ -317,7 +317,7 @@ function M.create(opts)
             start_tc_value = 0,
             start_tc_rate = fps_num,
             start_tc_audio_samples = 0,
-            start_tc_audio_rate = (m.audio_channels and m.audio_channels > 0) and cfg.audio_rate or nil,
+            start_tc_audio_rate = (m.audio_channels and m.audio_channels > 0) and cfg.audio_sample_rate or nil,
         })
         local media = Media.create({
             id = m.id,
@@ -330,7 +330,7 @@ function M.create(opts)
             width = m.width,
             height = m.height,
             audio_channels = m.audio_channels,
-            audio_sample_rate = (m.audio_channels and m.audio_channels > 0) and cfg.audio_rate or nil,
+            audio_sample_rate = (m.audio_channels and m.audio_channels > 0) and cfg.audio_sample_rate or nil,
             codec = m.codec,
             metadata = meta,
         })

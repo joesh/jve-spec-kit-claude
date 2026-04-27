@@ -165,7 +165,7 @@ local function apply_nested_marks(nested, mediums, v_dur, a_dur)
     end
     if mediums.AUDIO then
         local samples_per_frame =
-            nested.audio_rate * nested.fps_denominator / nested.fps_numerator
+            nested.audio_sample_rate * nested.fps_denominator / nested.fps_numerator
         local a_lo = math.floor(lo * samples_per_frame + 0.5)
         local a_hi = math.floor(hi * samples_per_frame + 0.5)
         assert(a_lo >= 0 and a_hi <= a_dur and a_hi > a_lo, string.format(
@@ -188,8 +188,8 @@ local function compute_owner_duration_for_plan(policy, owner, nested, mediums,
             owner.fps_numerator, owner.fps_denominator,
             nested.fps_numerator, nested.fps_denominator)
     end
-    -- Audio-only: samples @ nested.audio_rate → seconds → owner frames.
-    local seconds = a_dur / nested.audio_rate
+    -- Audio-only: samples @ nested.audio_sample_rate → seconds → owner frames.
+    local seconds = a_dur / nested.audio_sample_rate
     return math.floor(seconds * owner.fps_numerator / owner.fps_denominator + 0.5)
 end
 

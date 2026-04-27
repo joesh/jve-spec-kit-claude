@@ -53,7 +53,7 @@ function M.calculate_state_hash(project_id, sequence_id)
         -- Scoped mode: only hash the target sequence's tracks and clips.
         -- Used by per-command NSF checks and suppress_if_unchanged.
         append_query([[
-            SELECT id, name, fps_numerator, fps_denominator, audio_rate, width, height,
+            SELECT id, name, fps_numerator, fps_denominator, audio_sample_rate, width, height,
                    playhead_frame, view_start_frame, view_duration_frames
             FROM sequences
             WHERE id = ?
@@ -85,7 +85,7 @@ function M.calculate_state_hash(project_id, sequence_id)
         ]], {project_id}, 3, "project")
 
         append_query([[
-            SELECT id, name, fps_numerator, fps_denominator, audio_rate, width, height,
+            SELECT id, name, fps_numerator, fps_denominator, audio_sample_rate, width, height,
                    playhead_frame, view_start_frame, view_duration_frames
             FROM sequences
             WHERE project_id = ?

@@ -65,7 +65,7 @@ db:exec(string.format([[
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-        audio_rate, width, height, view_start_frame, view_duration_frames,
+        audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
     VALUES ('seq1', 'proj1', 'Seq1', 'nested', 24, 1, 48000,
         1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
@@ -94,7 +94,7 @@ db:exec(string.format([[
 -- Sequence with no tracks (for error paths)
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-        audio_rate, width, height, view_start_frame, view_duration_frames,
+        audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
     VALUES ('seq_empty', 'proj1', 'Empty', 'nested', 24, 1, 48000,
         1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
@@ -397,7 +397,7 @@ print("\n--- 8. get_media_fps ---")
 -- 8a. From master_clip
 local fps_n, fps_d = clip_edit_helper.get_media_fps(
     db,
-    { rate = { fps_numerator = 30000, fps_denominator = 1001 } },
+    { frame_rate = { fps_numerator = 30000, fps_denominator = 1001 } },
     "med1", 24, 1)
 check("fps from master_clip num", fps_n == 30000)
 check("fps from master_clip den", fps_d == 1001)
@@ -417,9 +417,9 @@ fps_n, fps_d = clip_edit_helper.get_media_fps(db, nil, "", 25, 1)
 check("fps empty media_id → seq", fps_n == 25 and fps_d == 1)
 
 -- 8e. master_clip without rate → assert
-expect_error("master_clip no rate → assert", function()
+expect_error("master_clip no frame_rate → assert", function()
     clip_edit_helper.get_media_fps(db, { name = "no_rate" }, "med1", 24, 1)
-end, "missing rate")
+end, "missing frame_rate")
 
 
 -- ═══════════════════════════════════════════════════════════════

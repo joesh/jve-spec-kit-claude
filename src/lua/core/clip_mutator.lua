@@ -53,7 +53,7 @@ end
             source_out = row.source_out,
             fps_numerator = row.fps_numerator,
             fps_denominator = row.fps_denominator,
-            rate = row.rate,
+            rate = row.frame_rate,
             enabled = row.enabled,
             volume = row.volume,
         }
@@ -74,8 +74,8 @@ end
 
 -- Helper to get fps metadata from row (for passing through to new clips)
 local function get_row_fps(row)
-    local num = row.fps_numerator or (row.rate and row.rate.fps_numerator)
-    local den = row.fps_denominator or (row.rate and row.rate.fps_denominator)
+    local num = row.fps_numerator or (row.frame_rate and row.frame_rate.fps_numerator)
+    local den = row.fps_denominator or (row.frame_rate and row.frame_rate.fps_denominator)
     assert_fps(num, den, "clip fps")
     return num, den
 end
@@ -125,8 +125,8 @@ end
 
 local function plan_insert(row)
     -- Prefer explicit fps fields, but fall back to rate table used by Clip objects
-    local fps_num = row.fps_numerator or (row.rate and row.rate.fps_numerator)
-    local fps_den = row.fps_denominator or (row.rate and row.rate.fps_denominator)
+    local fps_num = row.fps_numerator or (row.frame_rate and row.frame_rate.fps_numerator)
+    local fps_den = row.fps_denominator or (row.frame_rate and row.frame_rate.fps_denominator)
     assert_fps(fps_num, fps_den, "clip fps")
     assert(row.timeline_start, "clip_mutator: insert mutation missing timeline_start")
     assert(row.duration, "clip_mutator: insert mutation missing duration")
@@ -233,7 +233,7 @@ local function load_track_clips(db, track_id)
             source_in = stmt:value(8),
             source_out = stmt:value(9),
             -- Source-side timebase (nested sequence rate).
-            rate = { fps_numerator = nested_num, fps_denominator = nested_den },
+            frame_rate = { fps_numerator = nested_num, fps_denominator = nested_den },
             fps_numerator = nested_num,
             fps_denominator = nested_den,
             -- Owner-sequence rate (same as old seq_*).
@@ -905,7 +905,7 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         source_out = stmt:value(9),
         fps_numerator = nested_fps_num,
         fps_denominator = nested_fps_den,
-        rate = {fps_numerator = nested_fps_num, fps_denominator = nested_fps_den},
+        frame_rate = {fps_numerator = nested_fps_num, fps_denominator = nested_fps_den},
         owner_rate = {fps_numerator = owning_fps_num, fps_denominator = owning_fps_den},
         enabled = stmt:value(13) == 1 or stmt:value(13) == true,
         volume = stmt:value(14),

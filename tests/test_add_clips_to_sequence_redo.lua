@@ -26,7 +26,7 @@ db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', %d, %d);
 ]], now, now))
 db:exec(string.format([[
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
     VALUES ('sequence', 'project', 'Test Sequence', 'nested', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[

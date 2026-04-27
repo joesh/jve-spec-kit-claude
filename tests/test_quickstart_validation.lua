@@ -242,7 +242,7 @@ print("=== Category 6: Find & Replace ===")
 
 -- Insert test clips into DB for replace tests
 local seq_stmt = db:prepare(string.format(
-    "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at) VALUES ('seq1', 'proj1', 'Seq', 'nested', 24, 1, 48000, 1920, 1080, %d, %d)",
+    "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at) VALUES ('seq1', 'proj1', 'Seq', 'nested', 24, 1, 48000, 1920, 1080, %d, %d)",
     now, now))
 seq_stmt:exec()
 seq_stmt:finalize()
@@ -255,7 +255,7 @@ track_stmt:finalize()
 db:exec([[
     INSERT OR IGNORE INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
     VALUES ('_v13_placeholder_media', 'proj1', 'placeholder', '_placeholder', 100, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
-    INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+    INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
     VALUES ('_v13_placeholder_master', 'proj1', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
     INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);

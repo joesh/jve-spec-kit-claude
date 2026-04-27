@@ -88,10 +88,10 @@ rawset(_G, "MC_TEST", _Sequence_for_master.ensure_master("media_ripple", "projec
 
 
     -- V5 Schema INSERT
-    local seq1_sql = string.format("INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at) VALUES ('sequence', 'project', 'Seq', 'nested', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);", now, now)
+    local seq1_sql = string.format("INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at) VALUES ('sequence', 'project', 'Seq', 'nested', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);", now, now)
     exec_safe(seq1_sql, "Insert Sequence 1")
 
-    local seq2_sql = string.format("INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at) VALUES ('selection_sequence', 'project', 'Selection Seq', 'nested', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);", now, now)
+    local seq2_sql = string.format("INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at) VALUES ('selection_sequence', 'project', 'Selection Seq', 'nested', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);", now, now)
     exec_safe(seq2_sql, "Insert Sequence 2")
 
     exec_safe([[ 

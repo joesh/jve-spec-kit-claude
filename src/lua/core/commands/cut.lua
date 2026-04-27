@@ -84,14 +84,14 @@ local function build_clipboard_payload(clip_ids)
         local clip = Clip.load_optional(clip_id)
         if clip and clip.nested_sequence_id then
             earliest = math.min(earliest, clip.timeline_start)
-            local fps_n = clip.rate and clip.rate.fps_numerator or clip.fps_numerator
-            local fps_d = clip.rate and clip.rate.fps_denominator or clip.fps_denominator
+            local fps_n = clip.frame_rate and clip.frame_rate.fps_numerator or clip.fps_numerator
+            local fps_d = clip.frame_rate and clip.frame_rate.fps_denominator or clip.fps_denominator
             assert(type(fps_n) == "number" and fps_n > 0, string.format(
                 "Cut: clip %s has no fps_numerator (rate=%s, fps_numerator=%s)",
-                clip.id, tostring(clip.rate), tostring(clip.fps_numerator)))
+                clip.id, tostring(clip.frame_rate), tostring(clip.fps_numerator)))
             assert(type(fps_d) == "number" and fps_d > 0, string.format(
                 "Cut: clip %s has no fps_denominator (rate=%s, fps_denominator=%s)",
-                clip.id, tostring(clip.rate), tostring(clip.fps_denominator)))
+                clip.id, tostring(clip.frame_rate), tostring(clip.fps_denominator)))
             payloads[#payloads + 1] = {
                 original_id           = clip.id,
                 track_id              = clip.track_id,

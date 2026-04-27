@@ -41,7 +41,7 @@ with_db(function(db)
     local default_view_dur = math.floor(10.0 * fps_num / fps_den)
     local sql = string.format([[
         INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-                              audio_rate, width, height,
+                              audio_sample_rate, width, height,
                               playhead_frame, view_start_frame, view_duration_frames,
                               created_at, modified_at)
         VALUES ('seq_ntsc', 'proj', 'NTSC Timeline', 'nested', %d, %d, 48000, 1920, 1080,
@@ -85,7 +85,7 @@ with_db(function(db)
 
     local sql = string.format([[
         INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-                              audio_rate, width, height,
+                              audio_sample_rate, width, height,
                               playhead_frame, view_start_frame, view_duration_frames,
                               created_at, modified_at)
         VALUES ('seq_pal', 'proj', 'PAL Timeline', 'nested', %d, %d, 48000, 1920, 1080,
@@ -116,7 +116,7 @@ with_db(function(db)
 
     local sql = string.format([[
         INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-                              audio_rate, width, height,
+                              audio_sample_rate, width, height,
                               playhead_frame, view_start_frame, view_duration_frames,
                               created_at, modified_at)
         VALUES ('seq_30ntsc', 'proj', '30 NTSC Timeline', 'nested', %d, %d, 48000, 1920, 1080,

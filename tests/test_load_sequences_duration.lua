@@ -36,7 +36,7 @@ db:exec(string.format([[
 -- Sequence with 2 clips on different tracks
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-        audio_rate, width, height, view_start_frame, view_duration_frames,
+        audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
     VALUES ('seq1', 'proj1', 'Timeline', 'nested', 24, 1, 48000, 1920, 1080,
@@ -55,7 +55,7 @@ db:exec(string.format([[
     -- V13 placeholder master sequence (was V8 NULL media_id)
 INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
 VALUES ('_v13_placeholder_media', 'proj1', 'placeholder', '_placeholder', 200505, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('_v13_placeholder_master', 'proj1', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -96,7 +96,7 @@ check("audio_sample_rate=48000", s.audio_sample_rate == 48000)
 print("\n--- Empty sequence ---")
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-        audio_rate, width, height, view_start_frame, view_duration_frames,
+        audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
     VALUES ('seq_empty', 'proj1', 'Empty', 'nested', 25, 1, 48000, 1920, 1080,
@@ -116,7 +116,7 @@ check("empty seq duration=0", empty_seq.duration == 0)
 print("\n--- DRP-scale clip ---")
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-        audio_rate, width, height, view_start_frame, view_duration_frames,
+        audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
     VALUES ('seq_drp', 'proj1', 'DRP', 'nested', 25, 1, 48000, 1920, 1080,

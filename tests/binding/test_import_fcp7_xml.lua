@@ -83,7 +83,7 @@ local function bootstrap_schema(conn)
 
         INSERT INTO sequences (
             id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate,
+            fps_numerator, fps_denominator, audio_sample_rate,
             width, height,
             view_start_frame, view_duration_frames, playhead_frame,
             mark_in_frame, mark_out_frame,
@@ -498,7 +498,7 @@ assert(db:exec([[
     INSERT OR IGNORE INTO tag_namespaces(id, display_name) VALUES('bin', 'Bins');
     INSERT OR REPLACE INTO sequences (
         id, project_id, name, kind,
-        fps_numerator, fps_denominator, audio_rate,
+        fps_numerator, fps_denominator, audio_sample_rate,
         width, height,
         view_start_frame, view_duration_frames, playhead_frame,
         mark_in_frame, mark_out_frame,

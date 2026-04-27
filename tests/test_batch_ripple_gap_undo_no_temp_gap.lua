@@ -18,7 +18,7 @@ local function setup_db(path)
         INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
         VALUES ('default_project', 'Default Project', 'resample', %d, %d);
 
-        INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+        INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
                               playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
         VALUES ('default_sequence', 'default_project', 'Timeline', 'nested', 30, 1, 48000, 1920, 1080, 0, 0, 600, %d, %d);
 
@@ -32,7 +32,7 @@ local function setup_db(path)
         -- Track V1: left/right with gap
         -- 2000ms @ 30fps = 60 frames. 5000ms = 150 frames.
         -- V13 master sequence + track + media_ref for media1
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media1', 'default_project', 'media1_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media1', 'master_media1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);

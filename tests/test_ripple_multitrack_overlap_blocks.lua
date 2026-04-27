@@ -20,7 +20,7 @@ local function setup_db(db_path)
 
         INSERT INTO sequences (
             id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate,
+            fps_numerator, fps_denominator, audio_sample_rate,
             width, height, view_start_frame, view_duration_frames, playhead_frame,
             created_at, modified_at
         )
@@ -36,7 +36,7 @@ local function setup_db(db_path)
 
         -- Track V1: left clip then a gap, then right clip
         -- V13 master sequence + track + media_ref for media1
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media1', 'default_project', 'media1_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media1', 'master_media1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);

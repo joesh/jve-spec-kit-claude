@@ -53,7 +53,7 @@ local now = os.time()
 db:exec(string.format(
     "INSERT INTO projects (id, name, created_at, modified_at) VALUES ('proj1', 'Test', %d, %d)", now, now))
 local seq = Sequence.create("Timeline", "proj1", {fps_numerator = FPS, fps_denominator = 1}, 1920, 1080,
-    { kind = "nested", audio_rate = 48000, id = "seq1" })
+    { kind = "nested", audio_sample_rate = 48000, id = "seq1" })
 assert(seq:save())
 
 -- Create track

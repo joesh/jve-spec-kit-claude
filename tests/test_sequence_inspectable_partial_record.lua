@@ -31,7 +31,7 @@ db:exec(string.format([[
 -- Insert a sequence row with real values for marks, playhead, start tc.
 db:exec(string.format([[
     INSERT INTO sequences
-        (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
+        (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate,
          width, height, playhead_frame, view_start_frame, view_duration_frames,
          mark_in_frame, mark_out_frame, start_timecode_frame,
          video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
@@ -73,8 +73,8 @@ end
 -- Present on browser_record: returns without DB load.
 check("name (from browser record)",        seq_ins:get("name"),        "TestSeq")
 check("width (from browser record)",       seq_ins:get("width"),       1920)
-check("audio_rate (map → audio_sample_rate, from browser record)",
-    seq_ins:get("audio_rate"), 48000)
+check("audio_sample_rate (map → audio_sample_rate, from browser record)",
+    seq_ins:get("audio_sample_rate"), 48000)
 
 -- NOT on browser_record — must lazy-load from DB.
 check("mark_in_frame (lazy DB load, 91500)",

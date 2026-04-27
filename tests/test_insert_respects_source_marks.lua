@@ -54,7 +54,7 @@ local master_clip = {
     source_in = 0,
     source_out = 100,
     duration = 100,
-    rate = {fps_numerator = 24, fps_denominator = 1},
+    frame_rate = {fps_numerator = 24, fps_denominator = 1},
 }
 
 local media = {

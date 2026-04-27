@@ -40,7 +40,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         name                    = {type = "string"},
         width                   = {type = "number"},
         height                  = {type = "number"},
-        audio_rate              = {type = "number"},
+        audio_sample_rate              = {type = "number"},
         start_timecode_frame    = {type = "number"},
         playhead_frame          = {type = "number"},
         view_start_frame        = {type = "number"},

@@ -406,7 +406,7 @@ function M.register(executors, undoers, db)
                 project.id,
                 { fps_numerator = fps_num, fps_denominator = fps_den },
                 db_settings.width, db_settings.height,
-                { audio_rate = 48000 }
+                { audio_sample_rate = 48000 }
             )
 
             if not sequence:save() then

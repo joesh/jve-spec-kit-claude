@@ -19,7 +19,7 @@ assert(db:exec(
 -- A nested (non-master) sequence. INV-1 says media_refs CANNOT live here.
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
-    .. "audio_rate, width, height, created_at, modified_at) "
+    .. "audio_sample_rate, width, height, created_at, modified_at) "
     .. "VALUES ('seq-edit', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)"))
 assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
@@ -35,7 +35,7 @@ local MediaRef = require("models.media_ref")
 -- Good control: creating a media_ref in a master sequence succeeds.
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
-    .. "audio_rate, width, height, created_at, modified_at) "
+    .. "audio_sample_rate, width, height, created_at, modified_at) "
     .. "VALUES ('seq-master', 'p1', 'm', 'master', 24, 1, 48000, 1920, 1080, 0, 0)"))
 assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "

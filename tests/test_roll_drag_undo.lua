@@ -23,7 +23,7 @@ local function init_database(path)
         VALUES ('default_project', 'Default Project', 'resample', 0, 0);
         INSERT INTO sequences (
             id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate,
+            fps_numerator, fps_denominator, audio_sample_rate,
             width, height, view_start_frame, view_duration_frames, playhead_frame,
             created_at, modified_at
         )
@@ -35,7 +35,7 @@ local function init_database(path)
         INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at, metadata)
         VALUES ('media_b', 'default_project', 'B', '/tmp/jve/b.mov', 10000, 1000, 1, 1920, 1080, 2, 'prores', 0, 0, '{}');
         -- V13 master sequence + track + media_ref for media_a
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media_a', 'default_project', 'media_a_master', 'master', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_a', 'master_media_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -44,7 +44,7 @@ INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, s
 VALUES ('mr_media_a', 'default_project', 'master_media_a', 'master_v_media_a', 'media_a', 0, 10000, 0, 10000, 1, 1.0, 0, strftime('%s','now'), strftime('%s','now'));
 
 -- V13 master sequence + track + media_ref for media_b
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media_b', 'default_project', 'media_b_master', 'master', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_b', 'master_media_b', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);

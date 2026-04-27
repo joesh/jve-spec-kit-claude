@@ -42,7 +42,7 @@ db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
     VALUES ('default_project', 'Default Project', 'resample', %d, %d);
 
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
         view_start_frame, view_duration_frames, playhead_frame,
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
@@ -73,7 +73,7 @@ db:exec(string.format([[
         1920, 1080, 0, '', '{}', %d, %d);
 
     -- V13 master sequence + track + media_ref for media_clip_a
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media_clip_a', 'default_project', 'media_clip_a_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_clip_a', 'master_media_clip_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -82,7 +82,7 @@ INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, s
 VALUES ('mr_media_clip_a', 'default_project', 'master_media_clip_a', 'master_v_media_clip_a', 'media_clip_a', 0, 1500, 0, 1500, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence + track + media_ref for media_clip_b
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media_clip_b', 'default_project', 'media_clip_b_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_clip_b', 'master_media_clip_b', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -91,7 +91,7 @@ INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, s
 VALUES ('mr_media_clip_b', 'default_project', 'master_media_clip_b', 'master_v_media_clip_b', 'media_clip_b', 0, 1500, 0, 1500, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence + track + media_ref for media_clip_c
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media_clip_c', 'default_project', 'media_clip_c_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_clip_c', 'master_media_clip_c', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -100,7 +100,7 @@ INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, s
 VALUES ('mr_media_clip_c', 'default_project', 'master_media_clip_c', 'master_v_media_clip_c', 'media_clip_c', 0, 1200, 0, 1200, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence + track + media_ref for media_clip_d
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media_clip_d', 'default_project', 'media_clip_d_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_clip_d', 'master_media_clip_d', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);

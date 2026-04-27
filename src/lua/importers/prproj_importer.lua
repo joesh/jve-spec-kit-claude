@@ -710,9 +710,9 @@ function M.parse_prproj_file(prproj_path, progress_cb)
                 frame_rate = project_fps,
                 width = project_width,
                 height = project_height,
-                -- 013: every sequence carries audio_rate. .prproj doesn't
+                -- 013: every sequence carries audio_sample_rate. .prproj doesn't
                 -- expose a project-level mix bus rate; use industry default.
-                audio_rate = 48000,
+                audio_sample_rate = 48000,
             },
         },
         media_items = media_items,

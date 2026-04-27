@@ -43,7 +43,7 @@ project:save()
 
 local seq = Sequence.create("Test Seq", project.id,
     {  fps_numerator = 30, fps_denominator = 1 }, 1920, 1080,
-    { kind = "nested", audio_rate = 48000 })
+    { kind = "nested", audio_sample_rate = 48000 })
 seq:save()
 
 Track.create_video("V1", seq.id, { index = 1 }):save()

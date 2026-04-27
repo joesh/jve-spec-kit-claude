@@ -39,18 +39,18 @@ local function build_fixture()
         -- Multicam master with V1, V2, V3 (each its own media file) +
         -- one A track. Default layer = V1.
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('m', 'p1', 'multicam', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
 
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
 
         -- An "other" sequence to test cross-sequence refusal.
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('other', 'p1', 'other', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
 

@@ -14,7 +14,7 @@ db:exec(require("import_schema"))
 local now = os.time()
 assert(db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('default_project', 'Test', 'resample', %d, %d);
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
     VALUES ('default_sequence', 'default_project', 'Default', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now, now, now)))
 command_manager.init("default_sequence", "default_project")

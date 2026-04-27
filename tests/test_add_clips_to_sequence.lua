@@ -74,7 +74,7 @@ local _Sequence_for_master = require("models.sequence")
 local MC_TEST = _Sequence_for_master.ensure_master("media_1", "project")
 
 db:exec(string.format([[
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
     VALUES ('sequence', 'project', 'Test Sequence', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[

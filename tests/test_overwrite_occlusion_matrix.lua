@@ -39,15 +39,15 @@ local function build_fixture()
         INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
         VALUES ('p1', 'p', 'passthrough', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             default_video_layer_track_id, created_at, modified_at)
         VALUES ('m', 'p1', 'master', 'master', 24, 1, 48000, 1920, 1080, NULL, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             default_video_layer_track_id, created_at, modified_at)
         VALUES ('m-pre', 'p1', 'pre', 'master', 24, 1, 48000, 1920, 1080, NULL, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
@@ -388,7 +388,7 @@ do
     -- need a small purpose-built nested for this. Use a variant fixture.
     db:exec([[
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             default_video_layer_track_id, created_at, modified_at)
         VALUES ('m120', 'p1', 'm120', 'master', 24, 1, 48000, 1920, 1080,
             NULL, 0, 0);

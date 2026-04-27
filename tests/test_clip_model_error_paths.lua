@@ -48,7 +48,7 @@ db:exec(string.format([[
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-                           audio_rate, width, height, created_at, modified_at)
+                           audio_sample_rate, width, height, created_at, modified_at)
     VALUES ('seq1', 'proj1', 'Test Seq', 'nested', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 

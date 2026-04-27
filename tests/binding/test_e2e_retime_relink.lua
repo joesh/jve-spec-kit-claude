@@ -163,8 +163,8 @@ local batch = media_relinker.relink_media_batch(media_infos, {
                 clip_kind = clip.clip_kind,
                 source_in = clip.source_in,
                 source_out = clip.source_out,
-                fps_num = clip.rate.fps_numerator,
-                fps_den = clip.rate.fps_denominator,
+                fps_num = clip.frame_rate.fps_numerator,
+                fps_den = clip.frame_rate.fps_denominator,
             }
         end
         return entries

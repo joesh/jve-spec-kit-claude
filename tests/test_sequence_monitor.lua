@@ -257,7 +257,7 @@ mock_renderer_info[mc_id] = {
 -- Create timeline sequence
 assert(db:exec([[
     INSERT INTO sequences(id, project_id, name, kind, fps_numerator, fps_denominator,
-                         audio_rate, width, height, view_start_frame, view_duration_frames,
+                         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
                          playhead_frame, created_at, modified_at)
     VALUES('timeline1', 'proj', 'MyTimeline', 'nested', 24, 1, 48000, 1920, 1080,
            0, 2000, 0, 0, 0)
@@ -271,7 +271,7 @@ assert(db:exec([[
 ]]))
 assert(db:exec([[
     -- V13 master sequence for media1
-INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media1', 'proj', 'media1_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media1', 'master_media1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);

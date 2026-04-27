@@ -123,7 +123,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if not clip then
             return nil
         end
-        assert(clip.rate and clip.rate.fps_numerator and clip.rate.fps_denominator,
+        assert(clip.frame_rate and clip.frame_rate.fps_numerator and clip.frame_rate.fps_denominator,
             string.format("batch_ripple_edit: clip %s missing rate metadata", tostring(clip_id)))
         ctx.base_clips[clip_id] = clip
         return clip
@@ -320,8 +320,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- delta_frames which is OWNER (sequence) units. Convert before
         -- using as a delta limit, so a clip on a 24fps timeline against a
         -- 30fps source clamps to the right number of owner frames.
-        local clip_num = clip.rate and clip.rate.fps_numerator or clip.fps_numerator
-        local clip_den = clip.rate and clip.rate.fps_denominator or clip.fps_denominator
+        local clip_num = clip.frame_rate and clip.frame_rate.fps_numerator or clip.fps_numerator
+        local clip_den = clip.frame_rate and clip.frame_rate.fps_denominator or clip.fps_denominator
         local owner_limit = file_src_in
         if clip_num and clip_den and ctx.seq_fps_num and ctx.seq_fps_den then
             owner_limit = math.floor(
@@ -346,8 +346,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local available = media.duration - file_src_in - clip_state.duration
         -- available is in SOURCE units; convert to OWNER (sequence) units to
         -- match the per-edge constraint operating on delta_frames.
-        local clip_num = clip.rate and clip.rate.fps_numerator or clip.fps_numerator
-        local clip_den = clip.rate and clip.rate.fps_denominator or clip.fps_denominator
+        local clip_num = clip.frame_rate and clip.frame_rate.fps_numerator or clip.fps_numerator
+        local clip_den = clip.frame_rate and clip.frame_rate.fps_denominator or clip.fps_denominator
         if clip_num and clip_den and ctx.seq_fps_num and ctx.seq_fps_den then
             available = math.floor(
                 available * clip_den * ctx.seq_fps_num / (clip_num * ctx.seq_fps_den) + 0.5)
@@ -735,9 +735,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             -- register_ripple_anchor) sees the gap-orientation flip on synthesized
             -- gap edges. Without it, cross-track ripple propagation flipped sign.
             is_gap = base.is_gap,
-            rate = base.rate,
-            fps_numerator = base.rate.fps_numerator,
-            fps_denominator = base.rate.fps_denominator,
+            rate = base.frame_rate,
+            fps_numerator = base.frame_rate.fps_numerator,
+            fps_denominator = base.frame_rate.fps_denominator,
             created_at = base.created_at,
             modified_at = base.modified_at,
         }
@@ -748,8 +748,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Convert timeline-frame delta to source units for a clip.
     -- Delegates to frame_utils.timeline_to_source (the canonical conversion).
     local function timeline_delta_to_source(delta_frames_val, clip, seq_fps_num, seq_fps_den)
-        local clip_num = clip.fps_numerator or (clip.rate and clip.rate.fps_numerator)
-        local clip_den = clip.fps_denominator or (clip.rate and clip.rate.fps_denominator)
+        local clip_num = clip.fps_numerator or (clip.frame_rate and clip.frame_rate.fps_numerator)
+        local clip_den = clip.fps_denominator or (clip.frame_rate and clip.frame_rate.fps_denominator)
         assert(clip_num and clip_den, string.format(
             "apply_edge_ripple: clip %s missing fps", tostring(clip.id)))
         return frame_utils.timeline_to_source(delta_frames_val, clip_num, clip_den, seq_fps_num, seq_fps_den)

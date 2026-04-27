@@ -180,7 +180,7 @@ local function build_media_infos(media_list, widgets)
     -- source extent, which the matcher handles (trimmed-media
     -- containment check returns false for nil extents).
     local tc_by_id = {}     -- media_id → {value, rate}; rate may be nil
-    local rates_by_id = {}  -- per-stream target rates: {video_rate=, audio_rate=}
+    local rates_by_id = {}  -- per-stream target rates: {video_rate=, audio_sample_rate=}
     for _, media in ipairs(media_list) do
         local tc_value, tc_rate = media:get_start_tc()
         tc_by_id[media.id] = { value = tc_value, rate = tc_rate }
@@ -189,7 +189,7 @@ local function build_media_infos(media_list, widgets)
         if audio_rate_for_extent == 0 then audio_rate_for_extent = nil end
         rates_by_id[media.id] = {
             video_rate = tc_rate,
-            audio_rate = audio_rate_for_extent,
+            audio_sample_rate = audio_rate_for_extent,
         }
     end
 
@@ -220,7 +220,7 @@ local function build_media_infos(media_list, widgets)
             extent_start, extent_end = v_extent[1], v_extent[2]
         end
         if a_extent and tc.rate and a_extent.rate then
-            -- samples-at-audio_rate → frames-at-video_rate
+            -- samples-at-audio_sample_rate → frames-at-video_rate
             local a_in_frames  = math.floor(a_extent[1] * tc.rate / a_extent.rate + 0.5)
             local a_out_frames = math.floor(a_extent[2] * tc.rate / a_extent.rate + 0.5)
             if not extent_start or a_in_frames < extent_start then
@@ -607,8 +607,8 @@ function M.show(media_list, parent_window, opts)
                         track_type = clip.track_type,
                         source_in = clip.source_in,
                         source_out = clip.source_out,
-                        fps_num = clip.rate.fps_numerator,
-                        fps_den = clip.rate.fps_denominator,
+                        fps_num = clip.frame_rate.fps_numerator,
+                        fps_den = clip.frame_rate.fps_denominator,
                     }
                 end
                 return entries

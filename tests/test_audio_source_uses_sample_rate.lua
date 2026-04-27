@@ -1,14 +1,14 @@
 #!/usr/bin/env luajit
 
--- Regression: Audio clip source positions use clip.rate for conversion
+-- Regression: Audio clip source positions use clip.frame_rate for conversion
 --
--- For DRP audio clips, clip.rate = sample_rate/1 (e.g. 48000/1)
+-- For DRP audio clips, clip.frame_rate = sample_rate/1 (e.g. 48000/1)
 -- This ensures source_in/source_out (in sample units) are correctly converted to microseconds.
 --
--- Native JVE clips use clip.rate = timeline_fps/1 (e.g. 24/1)
+-- Native JVE clips use clip.frame_rate = timeline_fps/1 (e.g. 24/1)
 -- Their source_in/source_out are in frame units.
 --
--- TMB uses clip.rate for the conversion, so the importer
+-- TMB uses clip.frame_rate for the conversion, so the importer
 -- must set the correct rate based on what units source positions are stored in.
 
 require("test_env")
@@ -26,7 +26,7 @@ local source_in_samples = 4800000   -- 100 seconds worth at 48000Hz
 local duration_samples = 2400000    -- 50 seconds worth at 48000Hz
 local sample_rate = 48000
 
--- Using sample_rate as clip.rate (fps_num=48000, fps_den=1) gives correct conversion
+-- Using sample_rate as clip.frame_rate (fps_num=48000, fps_den=1) gives correct conversion
 -- Formula: time_us = frames * 1000000 * fps_den / fps_num
 local correct_seek_us = math.floor(source_in_samples * 1000000 * 1 / sample_rate)
 local correct_duration_us = math.floor(duration_samples * 1000000 * 1 / sample_rate)
@@ -61,7 +61,7 @@ print("✓ Frame-based clip (24/1) converts correctly")
 
 print("\n--- Test: Bug scenario - wrong rate for DRP audio ---")
 
--- If DRP importer wrongly set clip.rate = timeline_fps instead of sample_rate
+-- If DRP importer wrongly set clip.frame_rate = timeline_fps instead of sample_rate
 -- the conversion would be wildly wrong:
 local wrong_seek_us = math.floor(source_in_samples * 1000000 * 1 / 24)  -- Using 24fps
 local wrong_duration_us = math.floor(duration_samples * 1000000 * 1 / 24)

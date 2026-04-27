@@ -40,7 +40,7 @@ local created_timestamp = 1700000000  -- Nov 14, 2023
 db:exec(string.format([[
     INSERT INTO sequences (
         id, project_id, name, kind, fps_numerator, fps_denominator,
-        audio_rate, width, height,
+        audio_sample_rate, width, height,
         playhead_frame, view_start_frame, view_duration_frames,
         mark_in_frame, mark_out_frame,
         selected_clip_ids, selected_edge_infos, selected_gap_infos,

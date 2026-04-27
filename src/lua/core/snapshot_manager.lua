@@ -38,7 +38,7 @@ end
 local function fetch_sequence_record(db, sequence_id)
     local query = db:prepare([[
         SELECT id, project_id, name, kind,
-               fps_numerator, fps_denominator, audio_rate,
+               fps_numerator, fps_denominator, audio_sample_rate,
                width, height,
                view_start_frame, view_duration_frames, playhead_frame,
                mark_in_frame, mark_out_frame,
@@ -63,7 +63,7 @@ local function fetch_sequence_record(db, sequence_id)
             kind = query:value(3),
             fps_numerator = query:value(4),
             fps_denominator = query:value(5),
-            audio_rate = query:value(6),
+            audio_sample_rate = query:value(6),
             width = query:value(7),
             height = query:value(8),
             view_start_frame = query:value(9),
@@ -168,8 +168,8 @@ local function build_snapshot_payload(db, sequence_id, clips)
 
             -- Source-side timebase (the nested sequence's rate); kept on the
             -- snapshot so a deserializer can reconstruct without a fresh JOIN.
-            fps_numerator = clip.rate and clip.rate.fps_numerator,
-            fps_denominator = clip.rate and clip.rate.fps_denominator,
+            fps_numerator = clip.frame_rate and clip.frame_rate.fps_numerator,
+            fps_denominator = clip.frame_rate and clip.frame_rate.fps_denominator,
 
             enabled = clip.enabled and 1 or 0,
             volume = clip.volume
@@ -247,7 +247,7 @@ local function deserialize_snapshot_payload(json_str)
         require_field("deserialize_snapshot_payload", "sequence", "kind", payload.sequence.kind)
         require_field("deserialize_snapshot_payload", "sequence", "fps_numerator", payload.sequence.fps_numerator)
         require_field("deserialize_snapshot_payload", "sequence", "fps_denominator", payload.sequence.fps_denominator)
-        require_field("deserialize_snapshot_payload", "sequence", "audio_rate", payload.sequence.audio_rate)
+        require_field("deserialize_snapshot_payload", "sequence", "audio_sample_rate", payload.sequence.audio_sample_rate)
         require_field("deserialize_snapshot_payload", "sequence", "width", payload.sequence.width)
         require_field("deserialize_snapshot_payload", "sequence", "height", payload.sequence.height)
         require_field("deserialize_snapshot_payload", "sequence", "view_start_frame", payload.sequence.view_start_frame)
@@ -308,7 +308,7 @@ local function deserialize_snapshot_payload(json_str)
                 source_in = require_field("deserialize_snapshot_payload", "clip " .. data.id, "source_in_frame", data.source_in_frame),
                 source_out = require_field("deserialize_snapshot_payload", "clip " .. data.id, "source_out_frame", data.source_out_frame),
 
-                rate = { fps_numerator = num, fps_denominator = den },
+                frame_rate = { fps_numerator = num, fps_denominator = den },
 
                 enabled = data.enabled == 1,
                 volume = data.volume or 1.0

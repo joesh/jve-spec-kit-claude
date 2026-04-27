@@ -43,14 +43,14 @@ local function build_fixture(project_fps_mismatch_policy)
     -- Master at 25/1, stereo 48k audio, 1920x1080.
     assert(db:exec([[
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('m', 'p1', 'master', 'master', 25, 1, 48000, 1920, 1080, 0, 0)
     ]]))
     -- Edit sequence (nested) at 24/1.
     assert(db:exec([[
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)
     ]]))

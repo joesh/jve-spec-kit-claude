@@ -30,7 +30,7 @@ db:exec(string.format([[
 db:exec(string.format([[
     INSERT INTO sequences (
         id, project_id, name, kind,
-        fps_numerator, fps_denominator, audio_rate,
+        fps_numerator, fps_denominator, audio_sample_rate,
         width, height,
         view_start_frame, view_duration_frames, playhead_frame,
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
@@ -89,7 +89,7 @@ check("undo executes", undo_result == true)
 
 -- Verify sequence restored with EXACT original values
 local check_stmt = db:prepare([[
-    SELECT fps_numerator, fps_denominator, audio_rate, width, height,
+    SELECT fps_numerator, fps_denominator, audio_sample_rate, width, height,
            view_start_frame, view_duration_frames, playhead_frame
     FROM sequences WHERE id = ?
 ]])
@@ -98,7 +98,7 @@ assert(check_stmt:exec() and check_stmt:next(), "restored sequence not found")
 
 check("fps_numerator = 25 (not 0 or 30)", tonumber(check_stmt:value(0)) == 25)
 check("fps_denominator = 1", tonumber(check_stmt:value(1)) == 1)
-check("audio_rate = 44100 (not 48000)", tonumber(check_stmt:value(2)) == 44100)
+check("audio_sample_rate = 44100 (not 48000)", tonumber(check_stmt:value(2)) == 44100)
 check("width = 3840 (not 1920)", tonumber(check_stmt:value(3)) == 3840)
 check("height = 2160 (not 1080)", tonumber(check_stmt:value(4)) == 2160)
 check("view_start_frame = 50", tonumber(check_stmt:value(5)) == 50)
@@ -129,7 +129,6 @@ cmd2:set_parameters({
             fps_numerator = 24,
             fps_denominator = 1,
             audio_sample_rate = 48000,
-            audio_rate = 48000,
             width = nil,   -- missing!
             height = 1080,
             view_start_frame = 0,

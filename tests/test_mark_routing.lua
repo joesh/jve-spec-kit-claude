@@ -27,13 +27,13 @@ db:exec(string.format([[
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-                           audio_rate, width, height, created_at, modified_at)
+                           audio_sample_rate, width, height, created_at, modified_at)
     VALUES ('timeline_seq', 'proj', 'Timeline', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-                           audio_rate, width, height, created_at, modified_at)
+                           audio_sample_rate, width, height, created_at, modified_at)
     VALUES ('masterclip_seq', 'proj', 'Source Clip', 'master', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 

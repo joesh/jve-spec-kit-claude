@@ -47,7 +47,7 @@ db:exec(string.format([[
     VALUES ('p1', 'Undo Column Test', 'resample', %d, %d);
 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-        audio_rate, width, height, view_start_frame, view_duration_frames,
+        audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
     VALUES ('seq1', 'p1', 'Seq1', 'nested', 24000, 1001, 48000, 1920, 1080,
         0, 240, 0, '[]', '[]', %d, %d);
@@ -63,7 +63,7 @@ db:exec(string.format([[
     VALUES ('mc_media', 'p1', 'mc', '/tmp/mc.mov', 1000, 24000, 1001,
         1920, 1080, 0, 'raw', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-        audio_rate, width, height, created_at, modified_at)
+        audio_sample_rate, width, height, created_at, modified_at)
     VALUES ('mc_seq', 'p1', 'MC', 'master', 24000, 1001, 48000, 1920, 1080, %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
         enabled, locked, muted, soloed, volume, pan)

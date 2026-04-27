@@ -163,7 +163,7 @@ local function build_insert_mutation_entry(clip_id)
     assert(row, "Insert: could not re-read inserted clip " .. tostring(clip_id))
     -- Carry the source-side timebase from the clip's nested sequence so
     -- timeline_state's rate field gets populated. Without this, callers
-    -- that read clip.rate (batch_ripple_edit's fetch_base_clip etc.)
+    -- that read clip.frame_rate (batch_ripple_edit's fetch_base_clip etc.)
     -- crash with 'missing rate metadata' on freshly-inserted clips.
     local nested = Sequence.load(row.nested_sequence_id)
     local fps_num = nested and nested.frame_rate and nested.frame_rate.fps_numerator

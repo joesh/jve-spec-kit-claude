@@ -121,7 +121,7 @@ function M.execute(args)
         parent.width, parent.height,
         { id          = new_seq_id,
           kind        = "nested",
-          audio_rate  = parent.audio_rate,
+          audio_sample_rate  = parent.audio_sample_rate,
         })
     assert(s:save(), "Nest: failed to save new nested sequence")
 

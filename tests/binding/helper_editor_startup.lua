@@ -29,7 +29,7 @@ assert(db:exec(string.format([[
     INSERT INTO projects(id, name, created_at, modified_at)
     VALUES('%s', 'Startup Test', %d, %d);
     INSERT INTO sequences(id, project_id, name, kind, fps_numerator, fps_denominator,
-        audio_rate, width, height, playhead_frame, view_start_frame, view_duration_frames,
+        audio_sample_rate, width, height, playhead_frame, view_start_frame, view_duration_frames,
         created_at, modified_at)
     VALUES('%s', '%s', 'Test Timeline', 'timeline', 25, 1, 48000, 1920, 1080,
         0, 0, 250, %d, %d);

@@ -22,7 +22,7 @@ assert(db:exec(
 for _, id in ipairs({"A", "B"}) do
     assert(db:exec(string.format(
         "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
-        .. "audio_rate, width, height, created_at, modified_at) "
+        .. "audio_sample_rate, width, height, created_at, modified_at) "
         .. "VALUES ('%s', 'p1', '%s', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)", id, id)))
     assert(db:exec(string.format(
         "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "

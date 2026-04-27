@@ -33,7 +33,7 @@ local function setup_db(path)
         INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
         VALUES ('proj', 'Test', 'resample', %d, %d);
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate,
+            fps_numerator, fps_denominator, audio_sample_rate,
             width, height, playhead_frame,
             view_start_frame, view_duration_frames,
             created_at, modified_at)

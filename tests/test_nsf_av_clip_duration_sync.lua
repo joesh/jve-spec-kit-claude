@@ -33,7 +33,7 @@ db:exec(string.format([[
 
 -- Create timeline sequence at 30fps
 local timeline = Sequence.create("Timeline", project_id, { fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
-    {kind = "nested", audio_rate = 48000 })
+    {kind = "nested", audio_sample_rate = 48000 })
 assert(timeline:save(), "Failed to save timeline")
 
 local video_track = Track.create_video("V1", timeline.id, {index = 1})

@@ -47,7 +47,7 @@ db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
     VALUES ('%s', 'Relink Visibility Project', 'resample', %d, %d, '{}');
 
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
         view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos,
         selected_gap_infos, current_sequence_number, created_at, modified_at)
     VALUES ('%s', '%s', 'Seq', 'nested', 25, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, %d, %d);

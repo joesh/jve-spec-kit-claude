@@ -25,7 +25,7 @@ local seed = string.format([[
 
     INSERT INTO sequences (
         id, project_id, name, kind,
-        fps_numerator, fps_denominator, audio_rate,
+        fps_numerator, fps_denominator, audio_sample_rate,
         width, height, view_start_frame, view_duration_frames, playhead_frame,
         created_at, modified_at
     )
@@ -38,7 +38,7 @@ local seed = string.format([[
     -- V13 placeholder master sequence (was V8 NULL media_id)
 INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
 VALUES ('_v13_placeholder_media', 'proj', 'placeholder', '_placeholder', 4000, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('_v13_placeholder_master', 'proj', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);

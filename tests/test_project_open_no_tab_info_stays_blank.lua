@@ -41,7 +41,7 @@ assert(conn:exec(string.format([[
 INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
 VALUES ('%s', 'Open Test', 'resample', strftime('%%s','now'), strftime('%%s','now'));
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-    audio_rate, width, height, view_start_frame, view_duration_frames, playhead_frame,
+    audio_sample_rate, width, height, view_start_frame, view_duration_frames, playhead_frame,
     created_at, modified_at)
 VALUES
 ('%s', '%s', 'Oldest', 'nested', 24, 1, 48000, 1920, 1080, 0, 240, 0,

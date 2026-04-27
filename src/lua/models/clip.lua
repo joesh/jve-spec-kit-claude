@@ -134,7 +134,7 @@ local function load_internal(clip_id, raise_errors)
         fps_mismatch_policy   = query:value(12),
 
         -- Source-side timebase (the nested sequence's rate).
-        rate = {
+        frame_rate = {
             fps_numerator = nested_fps_num,
             fps_denominator = nested_fps_den,
         },

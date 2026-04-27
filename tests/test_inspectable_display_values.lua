@@ -37,7 +37,7 @@ local fake_clip = {
     mark_out        = 9999,
     playhead_frame  = 100,
     volume          = 0.75,
-    rate            = { fps_numerator = 24, fps_denominator = 1 },
+    frame_rate            = { fps_numerator = 24, fps_denominator = 1 },
 }
 
 local clip_ins = ClipInspectable.new({ clip_id = "c1", project_id = "p1", clip = fake_clip })
@@ -63,7 +63,7 @@ check("schema has clip.rate_display",
     schemas.get_field("clip", "rate_display") ~= nil, true)
 
 -- ---------------------------------------------------------------
--- Sequence: audio_rate reads from model.audio_sample_rate,
+-- Sequence: audio_sample_rate reads from model.audio_sample_rate,
 -- frame_rate_display is computed from model.frame_rate.
 -- ---------------------------------------------------------------
 local fake_seq = {
@@ -89,10 +89,10 @@ local seq_ins = SequenceInspectable.new({
 check("sequence.name",                 seq_ins:get("name"),                 "TestSeq")
 check("sequence.width",                seq_ins:get("width"),                1920)
 check("sequence.height",               seq_ins:get("height"),               1080)
--- Key mapping: Inspector asks `audio_rate` (DB column); model stores it as
+-- Key mapping: Inspector asks `audio_sample_rate` (DB column); model stores it as
 -- `audio_sample_rate`. COLUMN_TO_MODEL_FIELD translates.
-check("sequence.audio_rate (→ audio_sample_rate)",
-    seq_ins:get("audio_rate"), 48000)
+check("sequence.audio_sample_rate (→ audio_sample_rate)",
+    seq_ins:get("audio_sample_rate"), 48000)
 -- Synthetic display from rate table.
 check("sequence.frame_rate_display (30000/1001 → 29.970 fps)",
     seq_ins:get("frame_rate_display"), "29.970 fps")

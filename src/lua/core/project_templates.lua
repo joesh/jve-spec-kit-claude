@@ -25,15 +25,15 @@ local uuid = require("uuid")
 
 -- Template presets: each drives both combobox display and .jvp generation
 M.TEMPLATES = {
-    { name = "Film 24fps",         width = 1920, height = 1080, fps_num = 24,    fps_den = 1,    audio_rate = 48000 },
-    { name = "Film 23.976fps",     width = 1920, height = 1080, fps_num = 24000, fps_den = 1001, audio_rate = 48000 },
-    { name = "Broadcast 29.97fps", width = 1920, height = 1080, fps_num = 30000, fps_den = 1001, audio_rate = 48000 },
-    { name = "Broadcast 25fps",    width = 1920, height = 1080, fps_num = 25,    fps_den = 1,    audio_rate = 48000 },
-    { name = "4K Film 24fps",      width = 3840, height = 2160, fps_num = 24,    fps_den = 1,    audio_rate = 48000 },
-    { name = "YouTube HD",         width = 1920, height = 1080, fps_num = 30,    fps_den = 1,    audio_rate = 48000 },
-    { name = "Instagram Square",   width = 1080, height = 1080, fps_num = 30,    fps_den = 1,    audio_rate = 48000 },
-    { name = "Instagram Reels",    width = 1080, height = 1920, fps_num = 30,    fps_den = 1,    audio_rate = 48000 },
-    { name = "TikTok",             width = 1080, height = 1920, fps_num = 30,    fps_den = 1,    audio_rate = 48000 },
+    { name = "Film 24fps",         width = 1920, height = 1080, fps_num = 24,    fps_den = 1,    audio_sample_rate = 48000 },
+    { name = "Film 23.976fps",     width = 1920, height = 1080, fps_num = 24000, fps_den = 1001, audio_sample_rate = 48000 },
+    { name = "Broadcast 29.97fps", width = 1920, height = 1080, fps_num = 30000, fps_den = 1001, audio_sample_rate = 48000 },
+    { name = "Broadcast 25fps",    width = 1920, height = 1080, fps_num = 25,    fps_den = 1,    audio_sample_rate = 48000 },
+    { name = "4K Film 24fps",      width = 3840, height = 2160, fps_num = 24,    fps_den = 1,    audio_sample_rate = 48000 },
+    { name = "YouTube HD",         width = 1920, height = 1080, fps_num = 30,    fps_den = 1,    audio_sample_rate = 48000 },
+    { name = "Instagram Square",   width = 1080, height = 1080, fps_num = 30,    fps_den = 1,    audio_sample_rate = 48000 },
+    { name = "Instagram Reels",    width = 1080, height = 1920, fps_num = 30,    fps_den = 1,    audio_sample_rate = 48000 },
+    { name = "TikTok",             width = 1080, height = 1920, fps_num = 30,    fps_den = 1,    audio_sample_rate = 48000 },
 }
 
 local function template_filename(template)
@@ -81,7 +81,7 @@ function M.get_template_path(template)
     local sequence = Sequence.create("Sequence 1", project.id,
         { fps_numerator = template.fps_num, fps_denominator = template.fps_den },
         template.width, template.height,
-        { kind = "nested", audio_rate = template.audio_rate })
+        { kind = "nested", audio_sample_rate = template.audio_sample_rate })
     assert(sequence:save(), "project_templates: failed to save template sequence")
 
     for i = 1, 3 do
@@ -181,7 +181,7 @@ function M.format_info(template)
     else
         fps_str = string.format("%.3gfps", template.fps_num / template.fps_den)
     end
-    local audio_str = string.format("%dkHz", template.audio_rate / 1000)
+    local audio_str = string.format("%dkHz", template.audio_sample_rate / 1000)
     return string.format("%dx%d · %s · %s",
         template.width, template.height, fps_str, audio_str)
 end

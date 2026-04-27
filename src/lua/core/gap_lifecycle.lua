@@ -44,7 +44,7 @@ local function make_gap_clip(track_id, timeline_start, duration, seq_fps)
         source_out = nil,
         fps_numerator = seq_fps.fps_numerator,
         fps_denominator = seq_fps.fps_denominator,
-        rate = { fps_numerator = seq_fps.fps_numerator, fps_denominator = seq_fps.fps_denominator },
+        frame_rate = { fps_numerator = seq_fps.fps_numerator, fps_denominator = seq_fps.fps_denominator },
         enabled = 1,
     }
 end

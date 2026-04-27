@@ -76,7 +76,7 @@ assert_true("bootstrap project", bootstrap_ok)
 
 -- Add default sequence
 local seq_ok, seq_err = db:exec([[
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
     VALUES ('default_sequence', 'default_project', 'Default Timeline', 'timeline', 30, 1, 48000, 1920, 1080, 0, 0);
 ]])
 if not seq_ok then

@@ -133,7 +133,7 @@ local function build_insert_mutation_entry(clip_id)
     assert(row, "Overwrite: could not re-read clip " .. tostring(clip_id))
     -- Carry the source-side timebase from the clip's nested sequence so
     -- timeline_state's rate field gets populated. Without this, callers
-    -- that read clip.rate (clipboard_actions.copy_mark_range,
+    -- that read clip.frame_rate (clipboard_actions.copy_mark_range,
     -- batch_ripple_edit's fetch_base_clip) crash with 'missing rate'
     -- on a freshly-overwritten clip.
     local nested = Sequence.load(row.nested_sequence_id)

@@ -197,7 +197,7 @@ local function check_source_out_speed_ratio(db, result, sequence_id_filter)
     if sequence_id_filter then
         where_clause = string.format(" AND t.sequence_id = '%s'", sequence_id_filter)
     end
-    -- V13: clip.rate derives from nested_sequence; pull both owner+nested fps.
+    -- V13: clip.frame_rate derives from nested_sequence; pull both owner+nested fps.
     local sql = string.format([[
         SELECT c.id, c.name, c.source_in_frame, c.source_out_frame,
                c.duration_frames,

@@ -65,8 +65,8 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
     assert(opts.kind == "master" or opts.kind == "nested",
         "Sequence.create: opts.kind must be 'master' or 'nested' (V9 schema); got "
         .. tostring(opts.kind))
-    assert(opts.audio_rate and opts.audio_rate > 0,
-        "Sequence.create: opts.audio_rate is required (rule 2.13)")
+    assert(opts.audio_sample_rate and opts.audio_sample_rate > 0,
+        "Sequence.create: opts.audio_sample_rate is required (rule 2.13)")
 
     local sequence = {
         id = opts.id or uuid.generate(),
@@ -76,7 +76,7 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
         frame_rate = fr,
         width = w,
         height = h,
-        audio_sample_rate = opts.audio_rate,
+        audio_sample_rate = opts.audio_sample_rate,
 
         -- V9 columns.
         default_video_layer_track_id = opts.default_video_layer_track_id,  -- nullable
@@ -120,7 +120,7 @@ function Sequence.load(id)
             local stmt = conn:prepare([[
                 SELECT id, project_id, name, kind, fps_numerator, fps_denominator, width, height,
                        playhead_frame, view_start_frame,
-                       view_duration_frames, mark_in_frame, mark_out_frame, audio_rate,
+                       view_duration_frames, mark_in_frame, mark_out_frame, audio_sample_rate,
                        selected_clip_ids, selected_edge_infos, start_timecode_frame,
                        video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
                        selected_gap_infos, created_at, modified_at, mutation_generation
@@ -143,7 +143,7 @@ function Sequence.load(id)
     
             local fps_num = stmt:value(4)
             local fps_den = stmt:value(5)
-            local audio_rate = stmt:value(13)
+            local audio_sample_rate = stmt:value(13)
             local selected_clip_ids = stmt:value(14)  -- JSON string
             local selected_edge_infos = stmt:value(15)  -- JSON string
 
@@ -155,7 +155,7 @@ function Sequence.load(id)
                 name = stmt:value(2),
                 kind = stmt:value(3),
                 frame_rate = fr,
-                audio_sample_rate = audio_rate,
+                audio_sample_rate = audio_sample_rate,
                 width = stmt:value(6),
                 height = stmt:value(7),
 
@@ -229,7 +229,7 @@ function Sequence:save()
          start_timecode_frame,
          playhead_frame, view_start_frame, view_duration_frames,
          video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
-         mark_in_frame, mark_out_frame, audio_rate,
+         mark_in_frame, mark_out_frame, audio_sample_rate,
          selected_clip_ids, selected_edge_infos, selected_gap_infos,
          default_video_layer_track_id, video_start_tc_frame,
          audio_start_tc_samples, fps_mismatch_policy,
@@ -252,7 +252,7 @@ function Sequence:save()
             video_audio_split_ratio = excluded.video_audio_split_ratio,
             mark_in_frame = excluded.mark_in_frame,
             mark_out_frame = excluded.mark_out_frame,
-            audio_rate = excluded.audio_rate,
+            audio_sample_rate = excluded.audio_sample_rate,
             selected_clip_ids = excluded.selected_clip_ids,
             selected_edge_infos = excluded.selected_edge_infos,
             selected_gap_infos = excluded.selected_gap_infos,
@@ -531,7 +531,7 @@ end
 --- Idempotent: if a kind='master' sequence already references this media_id
 --- via any of its media_refs, returns its id. Otherwise builds one:
 ---   * sequences row with kind='master', timebase from media.fps,
----     audio_rate from media.audio_sample_rate (or opts.sample_rate).
+---     audio_sample_rate from media.audio_sample_rate (or opts.sample_rate).
 ---   * V1 track + V media_ref pointing at the file (source frames 0..duration).
 ---   * One A track per media.audio_channels, each with a media_ref over
 ---     samples 0..duration_samples.
@@ -639,7 +639,7 @@ function Sequence.ensure_master(media_id, project_id, opts)
             has_video        = has_video,
             has_audio        = has_audio,
             sample_rate      = sample_rate,
-            -- For Sequence.create's mandatory audio_rate field on a
+            -- For Sequence.create's mandatory audio_sample_rate field on a
             -- video-only master, fall back to a project-conventional
             -- value — the resolver never emits audio media_refs in that
             -- case so the rate goes unread.
@@ -657,7 +657,7 @@ function Sequence.ensure_master(media_id, project_id, opts)
             dims.width, dims.height, {
                 id                       = opts.id,
                 kind                     = "master",
-                audio_rate               = dims.seq_audio_rate,
+                audio_sample_rate               = dims.seq_audio_rate,
                 start_timecode_frame     = dims.video_tc or 0,
                 playhead_frame           = dims.video_tc or 0,
                 video_start_tc_frame     = dims.video_tc,
@@ -811,9 +811,9 @@ end
 -- match the V8 clip-stream contract that callers depend on:
 --   .id, .track_id, .timeline_start, .duration,
 --   .source_in, .source_out, .media_id,
---   .rate = {fps_numerator, fps_denominator}.
+--   .frame_rate = {fps_numerator, fps_denominator}.
 -- For video, rate is the master's frame_rate (= media's frame rate).
--- For audio, rate is {audio_rate, 1} so source units are samples.
+-- For audio, rate is {audio_sample_rate, 1} so source units are samples.
 -- @return table {video_clips = {...}, audio_clips = {...}}
 local function ensure_stream_clips(self)
     assert(self.kind == "master", string.format(
@@ -865,7 +865,7 @@ local function ensure_stream_clips(self)
 
     local video_rate = self.frame_rate
         or { fps_numerator = self.fps_numerator, fps_denominator = self.fps_denominator }
-    local audio_rate = { fps_numerator = self.audio_sample_rate or 48000, fps_denominator = 1 }
+    local audio_sample_rate = { fps_numerator = self.audio_sample_rate or 48000, fps_denominator = 1 }
 
     local video_clips, audio_clips = {}, {}
     for _, t in ipairs(video_tracks) do
@@ -874,7 +874,7 @@ local function ensure_stream_clips(self)
         end
     end
     for _, t in ipairs(audio_tracks) do
-        for _, r in ipairs(load_for_track(t.id, audio_rate)) do
+        for _, r in ipairs(load_for_track(t.id, audio_sample_rate)) do
             audio_clips[#audio_clips + 1] = r
         end
     end
@@ -1135,7 +1135,7 @@ local function calc_source_time_us(clip, playhead_frame)
     local offset_frames = playhead_frame - clip.timeline_start
     local source_frame = clip.source_in + offset_frames
 
-    local clip_rate = clip.rate
+    local clip_rate = clip.frame_rate
     assert(clip_rate and clip_rate.fps_numerator and clip_rate.fps_denominator,
         string.format("Sequence: clip %s has no rate", clip.id))
 
@@ -1188,7 +1188,7 @@ local function resolve_master_at(self, tracks, playhead_frame, track_kind)
                     source_out        = row.source_out,
                     enabled           = row.enabled,
                     volume            = row.volume,
-                    rate              = self.frame_rate,
+                    frame_rate        = self.frame_rate,
                     track_type        = track_kind,
                 }
                 local source_time_us, source_frame = calc_source_time_us(mr, playhead_frame)
@@ -2260,7 +2260,7 @@ function Sequence.find(id)
     local conn = resolve_db()
     local stmt = conn:prepare([[
         SELECT id, project_id, name, kind, fps_numerator, fps_denominator,
-               audio_rate, width, height,
+               audio_sample_rate, width, height,
                default_video_layer_track_id, video_start_tc_frame,
                audio_start_tc_samples, fps_mismatch_policy,
                start_timecode_frame, mark_in_frame, mark_out_frame,
@@ -2279,7 +2279,7 @@ function Sequence.find(id)
             kind = stmt:value(3),
             fps_numerator = stmt:value(4),
             fps_denominator = stmt:value(5),
-            audio_rate = stmt:value(6),
+            audio_sample_rate = stmt:value(6),
             width = stmt:value(7),
             height = stmt:value(8),
             default_video_layer_track_id = stmt:value(9),
@@ -2352,7 +2352,7 @@ function Sequence.assert_inv8(id)
 end
 
 -- Columns update() will touch. Structural columns (id, project_id, kind,
--- fps_*, audio_rate, width, height) are NOT here — changing them requires
+-- fps_*, audio_sample_rate, width, height) are NOT here — changing them requires
 -- dedicated commands.
 local SEQUENCE_UPDATABLE = {
     name = true,
@@ -2415,7 +2415,7 @@ end
 
 --- Feature 013 (T040): native-timebase duration of a sequence restricted to
 --- a single medium. A master's VIDEO duration is in video frames at the
---- master's fps; its AUDIO duration is in audio samples at its audio_rate —
+--- master's fps; its AUDIO duration is in audio samples at its audio_sample_rate —
 --- the two are in different units, so the caller must specify which.
 --- Computed as max(timeline_start_frame + duration_frames) across media_refs
 --- (for a master) OR clips (for a nested sequence) on tracks of the given
@@ -2541,7 +2541,7 @@ function Sequence.restore_full_state(state)
     local stmt = conn:prepare([[
         INSERT INTO sequences (
             id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             default_video_layer_track_id, video_start_tc_frame,
             audio_start_tc_samples, fps_mismatch_policy,
             playhead_frame, view_start_frame, view_duration_frames,
@@ -2557,7 +2557,7 @@ function Sequence.restore_full_state(state)
     stmt:bind_value(4,  s.kind)
     stmt:bind_value(5,  s.fps_numerator)
     stmt:bind_value(6,  s.fps_denominator)
-    stmt:bind_value(7,  s.audio_rate)
+    stmt:bind_value(7,  s.audio_sample_rate)
     stmt:bind_value(8,  s.width)
     stmt:bind_value(9,  s.height)
     stmt:bind_value(10, s.default_video_layer_track_id)

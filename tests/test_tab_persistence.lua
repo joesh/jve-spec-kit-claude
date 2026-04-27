@@ -27,7 +27,7 @@ for i = 1, 4 do
     local sid = string.format("seq_%d", i)
     db:exec(string.format([[
         INSERT INTO sequences (
-            id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
+            id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate,
             width, height, view_start_frame, view_duration_frames, playhead_frame,
             selected_clip_ids, selected_edge_infos, selected_gap_infos,
             current_sequence_number, created_at, modified_at

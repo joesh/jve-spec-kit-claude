@@ -59,14 +59,14 @@ local function normalize_clip_integers(clip)
     end
 
     -- Build rate table from flat fps fields if missing (mutations send flat fields)
-    if not clip.rate and clip.fps_numerator and clip.fps_denominator then
+    if not clip.frame_rate and clip.fps_numerator and clip.fps_denominator then
         assert(type(clip.fps_numerator) == "number" and clip.fps_numerator > 0,
             string.format("clip_state: fps_numerator must be positive, got %s for clip %s",
                 tostring(clip.fps_numerator), tostring(clip.id)))
         assert(type(clip.fps_denominator) == "number" and clip.fps_denominator > 0,
             string.format("clip_state: fps_denominator must be positive, got %s for clip %s",
                 tostring(clip.fps_denominator), tostring(clip.id)))
-        clip.rate = { fps_numerator = clip.fps_numerator, fps_denominator = clip.fps_denominator }
+        clip.frame_rate = { fps_numerator = clip.fps_numerator, fps_denominator = clip.fps_denominator }
     end
 
     clip._invalid = nil

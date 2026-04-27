@@ -29,7 +29,7 @@ db:exec(string.format(
     now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind,
-        fps_numerator, fps_denominator, audio_rate, width, height,
+        fps_numerator, fps_denominator, audio_sample_rate, width, height,
         created_at, modified_at)
     VALUES ('seq1', 'proj1', 'Seq 1', 'nested', 25, 1, 48000, 1920, 1080, %d, %d)
 ]], now, now))
@@ -46,7 +46,7 @@ db:exec(string.format([[
     VALUES ('mc_media', 'proj1', 'mc', '/tmp/mc.mov', 1000, 25, 1, 1920, 1080,
         0, 'raw', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-        audio_rate, width, height, created_at, modified_at)
+        audio_sample_rate, width, height, created_at, modified_at)
     VALUES ('mc_seq', 'proj1', 'MC', 'master', 25, 1, 48000, 1920, 1080, %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('mc_seq_v', 'mc_seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);

@@ -423,15 +423,15 @@ function M.import_into_project(project_id, parse_result, opts)
         -- 013: edit timelines created by import are kind='nested'
         -- (they hold clips referencing master sequences). Master sequences
         -- for source media are created separately via Sequence.ensure_master.
-        local seq_audio_rate = (project_settings and project_settings.audio_rate)
-            or (timeline_data.audio_rate)
+        local seq_audio_rate = (project_settings and project_settings.audio_sample_rate)
+            or (timeline_data.audio_sample_rate)
         assert(seq_audio_rate and seq_audio_rate > 0, string.format(
-            "importer_core: audio_rate required for timeline '%s' "
-            .. "(rule 2.13 — no silent default; got project_settings.audio_rate=%s, "
-            .. "timeline_data.audio_rate=%s)",
+            "importer_core: audio_sample_rate required for timeline '%s' "
+            .. "(rule 2.13 — no silent default; got project_settings.audio_sample_rate=%s, "
+            .. "timeline_data.audio_sample_rate=%s)",
             tostring(timeline_data.name),
-            tostring(project_settings and project_settings.audio_rate),
-            tostring(timeline_data.audio_rate)))
+            tostring(project_settings and project_settings.audio_sample_rate),
+            tostring(timeline_data.audio_sample_rate)))
 
         local sequence = Sequence.create(
             timeline_data.name,
@@ -441,7 +441,7 @@ function M.import_into_project(project_id, parse_result, opts)
             seq_height,
             {
                 kind = "nested",
-                audio_rate = seq_audio_rate,
+                audio_sample_rate = seq_audio_rate,
                 start_timecode_frame = start_timecode_frame,
                 view_start_frame = view_start,
                 view_duration_frames = view_duration,

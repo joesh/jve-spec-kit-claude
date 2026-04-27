@@ -33,7 +33,7 @@ db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', %d, %d);
 ]], now, now))
 db:exec(string.format([[
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
     VALUES ('default_sequence', 'project', 'Default Sequence', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
@@ -106,7 +106,7 @@ end
 local function create_test_sequence(id, name)
     local seq = Sequence.create(name, "project",
         { fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
-        { audio_rate = 48000,id = id, kind = "nested"})
+        { audio_sample_rate = 48000,id = id, kind = "nested"})
     assert(seq:save(), "Failed to save sequence " .. id)
 
     local track = Track.create_video("V1", id, {id = id .. "_track", index = 1})
@@ -249,7 +249,7 @@ reset_test_sequences()
 -- Create a master sequence
 local master_seq = Sequence.create("Master Sequence", "project",
     { fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
-    { audio_rate = 48000,id = "master_seq", kind = "master"})
+    { audio_sample_rate = 48000,id = "master_seq", kind = "master"})
 assert(master_seq:save(), "Failed to save master sequence")
 
 asserts._set_enabled_for_tests(false)
@@ -284,7 +284,7 @@ reset_test_sequences()
 -- Create sequence with multiple tracks
 local seq = Sequence.create("Multi Track Seq", "project",
     { fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
-    { audio_rate = 48000,id = "multi_seq", kind = "nested"})
+    { audio_sample_rate = 48000,id = "multi_seq", kind = "nested"})
 assert(seq:save(), "Failed to save sequence")
 
 -- Create multiple video tracks

@@ -48,7 +48,7 @@ db:exec(string.format([[
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-        audio_rate, width, height, view_start_frame, view_duration_frames,
+        audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
     VALUES ('seq1', 'proj1', 'Seq1', 'nested', 24, 1, 48000,
         1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
@@ -71,7 +71,7 @@ db:exec(string.format([[
 -- clip1: normal clip with media
 db:exec(string.format([[
     -- V13 master sequence + track + media_ref for med1
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_med1', 'proj1', 'med1_master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_med1', 'master_med1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -100,7 +100,7 @@ db:exec([[
 
 -- clip3: clip whose master sequence has NO media_ref (V13 "no media" shape)
 db:exec(string.format([[
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_nomedia', 'proj1', 'nomedia_master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_a_nomedia', 'master_nomedia', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -112,7 +112,7 @@ INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_seq
 -- Empty sequence for zero-clip tests
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-        audio_rate, width, height, view_start_frame, view_duration_frames,
+        audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
     VALUES ('seq_empty', 'proj1', 'Empty Seq', 'nested', 30, 1, 48000,
         1920, 1080, 0, 300, 0, '[]', '[]', %d, %d);
@@ -153,8 +153,8 @@ check("clip1.timeline_start == 0", c1.timeline_start == 0)
 check("clip1.duration == 100", c1.duration == 100)
 check("clip1.source_in == 0", c1.source_in == 0)
 check("clip1.source_out == 100", c1.source_out == 100)
-check("clip1.rate.fps_numerator", c1.rate.fps_numerator == 24)
-check("clip1.rate.fps_denominator", c1.rate.fps_denominator == 1)
+check("clip1.rate.fps_numerator", c1.frame_rate.fps_numerator == 24)
+check("clip1.rate.fps_denominator", c1.frame_rate.fps_denominator == 1)
 
 -- 1c. Media label
 check("clip1.resolved_media.name == shot_01.mov",

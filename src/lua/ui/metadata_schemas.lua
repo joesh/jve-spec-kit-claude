@@ -148,7 +148,7 @@ local sequence_sections = {
             field { key = "frame_rate_display",   label = "Frame Rate",        type = T.STRING,   read_only = true },
             field { key = "width",                label = "Width",             type = T.INTEGER,  read_only = true },
             field { key = "height",               label = "Height",            type = T.INTEGER,  read_only = true },
-            field { key = "audio_rate",           label = "Audio Sample Rate", type = T.INTEGER,  read_only = true },
+            field { key = "audio_sample_rate",           label = "Audio Sample Rate", type = T.INTEGER,  read_only = true },
             field { key = "start_timecode_frame", label = "Start Timecode",    type = T.TIMECODE },
         }},
     },

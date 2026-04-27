@@ -21,7 +21,7 @@ assert(db:exec(string.format(
 local function kind_insert(kind)
     local sql = string.format(
         "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
-        .. "audio_rate, width, height, created_at, modified_at) "
+        .. "audio_sample_rate, width, height, created_at, modified_at) "
         .. "VALUES ('s-%s', '%s', 'n', '%s', 24, 1, 48000, 1920, 1080, 0, 0)",
         kind, PROJECT_ID, kind)
     return db:exec(sql)

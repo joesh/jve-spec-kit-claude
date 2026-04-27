@@ -4,7 +4,7 @@
 -- Updated for integer-based coordinates (rational refactor complete)
 --
 -- Verifies that clip coordinates are plain integers, NOT Rationals.
--- The fps metadata is stored separately in clip.rate.
+-- The fps metadata is stored separately in clip.frame_rate.
 
 package.path = package.path
     .. ";../src/lua/?.lua"
@@ -35,7 +35,7 @@ assert(db:exec([[
 
     INSERT INTO sequences (
         id, project_id, name, kind,
-        fps_numerator, fps_denominator, audio_rate,
+        fps_numerator, fps_denominator, audio_sample_rate,
         width, height,
         view_start_frame, view_duration_frames, playhead_frame,
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
@@ -56,7 +56,7 @@ assert(db:exec([[
     -- V13 placeholder master sequence (was V8 NULL media_id)
 INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
 VALUES ('_v13_placeholder_media', 'proj', 'placeholder', '_placeholder', 3000, 30000, 1001, 1920, 1080, 0, 'raw', 0, 0);
-INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('_v13_placeholder_master', 'proj', 'placeholder_master', 'master', 30000, 1001, 48000, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -105,13 +105,13 @@ assert(clip.source_out == 3000,
     "expected source_out == 3000, got " .. tostring(clip.source_out))
 print("  ✓ source_out is integer 3000")
 
-print("Test 5: clip.rate contains fps metadata")
-assert(clip.rate, "clip should have rate metadata")
-assert(clip.rate.fps_numerator == 30000,
-    "expected clip.rate.fps_numerator == 30000, got " .. tostring(clip.rate.fps_numerator))
-assert(clip.rate.fps_denominator == 1001,
-    "expected clip.rate.fps_denominator == 1001, got " .. tostring(clip.rate.fps_denominator))
-print("  ✓ clip.rate has correct fps metadata")
+print("Test 5: clip.frame_rate contains fps metadata")
+assert(clip.frame_rate, "clip should have rate metadata")
+assert(clip.frame_rate.fps_numerator == 30000,
+    "expected clip.frame_rate.fps_numerator == 30000, got " .. tostring(clip.frame_rate.fps_numerator))
+assert(clip.frame_rate.fps_denominator == 1001,
+    "expected clip.frame_rate.fps_denominator == 1001, got " .. tostring(clip.frame_rate.fps_denominator))
+print("  ✓ clip.frame_rate has correct fps metadata")
 
 print("Test 6: timeline coords are NOT Rationals (are plain numbers)")
 -- Verify coords are plain numbers (Rationals would be tables)

@@ -26,7 +26,7 @@ end
 
 local function create_test_sequence(db, project_id)
     local seq = Sequence.create("Test Sequence", project_id, { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
-    {kind = "nested", audio_rate = 48000 })
+    {kind = "nested", audio_sample_rate = 48000 })
     seq:save(db)
     local track = Track.create_video("V1", seq.id, {index = 1})
     track:save(db)
@@ -67,7 +67,7 @@ local function test_gather_context_asserts_on_missing_video_dimensions()
         project_id = project_id,
         media_id = media.id,
         width = 0, height = 0, audio_channels = 0,
-        rate = { fps_numerator = 24, fps_denominator = 1 },
+        frame_rate = { fps_numerator = 24, fps_denominator = 1 },
         timeline_start = 0, duration = 240,
         source_in = 0, source_out = 240,
         fps_mismatch_policy = "resample",
@@ -164,7 +164,7 @@ local function test_gather_context_valid_video_only_media()
         project_id = project_id,
         media_id = media.id,
         width = 1920, height = 1080, audio_channels = 0,
-        rate = { fps_numerator = 24, fps_denominator = 1 },
+        frame_rate = { fps_numerator = 24, fps_denominator = 1 },
         timeline_start = 0, duration = 240,
         source_in = 0, source_out = 240,
         fps_mismatch_policy = "resample",

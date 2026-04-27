@@ -302,7 +302,7 @@ do
         track_id = "t1",
         source_in = nil,
         source_out = nil,
-        rate = { fps_numerator = 24, fps_denominator = 1 },
+        frame_rate = { fps_numerator = 24, fps_denominator = 1 },
         fps_numerator = 24,
         fps_denominator = 1,
     }

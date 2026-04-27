@@ -75,7 +75,7 @@ assert(db:exec(
     .. "VALUES ('p1', 'p', 'resample', 0, 0)"))
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
-    .. "audio_rate, width, height, default_video_layer_track_id, "
+    .. "audio_sample_rate, width, height, default_video_layer_track_id, "
     .. "created_at, modified_at) "
     .. "VALUES ('seq1', 'p1', 'm', 'master', 24, 1, 48000, 1920, 1080, NULL, 0, 0)"))
 assert(db:exec(

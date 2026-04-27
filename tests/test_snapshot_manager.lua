@@ -67,7 +67,7 @@ db:exec(string.format([[
 -- Seed sequence with all required fields
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-        audio_rate, width, height, view_start_frame, view_duration_frames,
+        audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
     VALUES ('seq1', 'proj1', 'Timeline 1', 'nested', 24, 1, 48000,
         1920, 1080, 0, 240, 10, '[]', '[]', %d, %d);
@@ -93,7 +93,7 @@ db:exec(string.format([[
 -- chain reaches a real media row.
 db:exec([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator,
-        fps_denominator, audio_rate, width, height, created_at, modified_at)
+        fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
     VALUES ('master_med1', 'proj1', 'shot_01_master', 'master', 24, 1,
         48000, 1920, 1080, 0, 0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
@@ -127,7 +127,7 @@ do
             duration = 100,
             source_in = 0,
             source_out = 100,
-            rate = { fps_numerator = 24, fps_denominator = 1 },
+            frame_rate = { fps_numerator = 24, fps_denominator = 1 },
             enabled = true,
             volume = 1.0,
             resolved_media = { id = "med1", name = "shot_01.mov", path = "/tmp/shot_01.mov" },
@@ -168,8 +168,8 @@ do
     check("clip.duration == 100", c.duration == 100)
     check("clip.source_in == 0", c.source_in == 0)
     check("clip.source_out == 100", c.source_out == 100)
-    check("clip.rate.fps_numerator", c.rate.fps_numerator == 24)
-    check("clip.rate.fps_denominator", c.rate.fps_denominator == 1)
+    check("clip.frame_rate.fps_numerator", c.frame_rate.fps_numerator == 24)
+    check("clip.frame_rate.fps_denominator", c.frame_rate.fps_denominator == 1)
     check("clip.enabled == true", c.enabled == true)
 
     -- Media
@@ -204,7 +204,7 @@ do
             duration = 50,
             source_in = 0,
             source_out = 50,
-            rate = { fps_numerator = 24, fps_denominator = 1 },
+            frame_rate = { fps_numerator = 24, fps_denominator = 1 },
             enabled = true,
             volume = 1.0,
             resolved_media = { id = "med1", name = "shot_01.mov", path = "/tmp/shot_01.mov" },
@@ -338,7 +338,7 @@ do
             duration = 300,
             source_in = 10,
             source_out = 310,
-            rate = { fps_numerator = 30, fps_denominator = 1 },
+            frame_rate = { fps_numerator = 30, fps_denominator = 1 },
             enabled = false,
             volume = 1.0,
             resolved_media = { id = "med1", name = "shot_01.mov", path = "/tmp/shot_01.mov" },
@@ -353,8 +353,8 @@ do
     check("30fps clip duration.frames", c.duration == 300)
     check("30fps clip source_in.frames", c.source_in == 10)
     check("30fps clip source_out.frames", c.source_out == 310)
-    check("30fps clip rate.fps_numerator", c.rate.fps_numerator == 30)
-    check("30fps clip rate.fps_denominator", c.rate.fps_denominator == 1)
+    check("30fps clip rate.fps_numerator", c.frame_rate.fps_numerator == 30)
+    check("30fps clip rate.fps_denominator", c.frame_rate.fps_denominator == 1)
     check("30fps clip enabled=false", c.enabled == false)
     -- V13: offline is no longer a snapshot field (derived runtime state).
 end
@@ -375,7 +375,7 @@ do
             duration = 50,
             source_in = 0,
             source_out = 50,
-            rate = { fps_numerator = 24, fps_denominator = 1 },
+            frame_rate = { fps_numerator = 24, fps_denominator = 1 },
             enabled = true, volume = 1.0,
             resolved_media = { id = "med1", name = "shot_01.mov", path = "/tmp/shot_01.mov" },
         },
@@ -388,7 +388,7 @@ do
             duration = 50,
             source_in = 50,
             source_out = 100,
-            rate = { fps_numerator = 24, fps_denominator = 1 },
+            frame_rate = { fps_numerator = 24, fps_denominator = 1 },
             enabled = true, volume = 1.0,
             resolved_media = { id = "med1", name = "shot_01.mov", path = "/tmp/shot_01.mov" },
         },
@@ -416,7 +416,7 @@ do
             duration = 30,
             source_in = 0,
             source_out = 30,
-            rate = { fps_numerator = 24, fps_denominator = 1 },
+            frame_rate = { fps_numerator = 24, fps_denominator = 1 },
             enabled = true, volume = 1.0,
             -- No resolved_media: this clip has no media leaf.
         },
@@ -436,7 +436,7 @@ do
     -- Create second sequence in same project
     db:exec(string.format([[
         INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-            audio_rate, width, height, view_start_frame, view_duration_frames,
+            audio_sample_rate, width, height, view_start_frame, view_duration_frames,
             playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
         VALUES ('seq2', 'proj1', 'Timeline 2', 'nested', 30, 1, 48000,
             1920, 1080, 0, 300, 0, '[]', '[]', %d, %d);
@@ -455,7 +455,7 @@ do
           nested_sequence_id = "master_med1", fps_mismatch_policy = "resample",
           timeline_start = 0, duration = 10,
           source_in = 0, source_out = 10,
-          rate = { fps_numerator = 24, fps_denominator = 1 },
+          frame_rate = { fps_numerator = 24, fps_denominator = 1 },
           enabled = true, volume = 1.0,
           resolved_media = _common_v13_resolved_media },
     })
@@ -465,7 +465,7 @@ do
           nested_sequence_id = "master_med1", fps_mismatch_policy = "resample",
           timeline_start = 0, duration = 20,
           source_in = 0, source_out = 20,
-          rate = { fps_numerator = 30, fps_denominator = 1 },
+          frame_rate = { fps_numerator = 30, fps_denominator = 1 },
           enabled = true, volume = 1.0,
           resolved_media = _common_v13_resolved_media },
     })

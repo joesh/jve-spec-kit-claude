@@ -29,7 +29,7 @@ local function init_database(path)
         VALUES ('default_project', 'Default Project', 'resample', %d, %d);
         INSERT INTO sequences (
             id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate,
+            fps_numerator, fps_denominator, audio_sample_rate,
             width, height, view_start_frame, view_duration_frames, playhead_frame,
             selected_clip_ids, selected_edge_infos, selected_gap_infos,
             current_sequence_number, created_at, modified_at

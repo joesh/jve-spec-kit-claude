@@ -43,7 +43,7 @@ local function build_fixture(project_policy, existing_clip_policy)
     -- V-only master (60 frames at 25fps).
     assert(db:exec([[
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             default_video_layer_track_id, created_at, modified_at)
         VALUES ('m', 'p1', 'master', 'master', 25, 1, 48000, 1920, 1080,
             NULL, 0, 0)
@@ -53,7 +53,7 @@ local function build_fixture(project_policy, existing_clip_policy)
     -- master".
     assert(db:exec([[
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             default_video_layer_track_id, created_at, modified_at)
         VALUES ('m-pre', 'p1', 'master-pre', 'master', 25, 1, 48000, 1920, 1080,
             NULL, 0, 0)
@@ -61,7 +61,7 @@ local function build_fixture(project_policy, existing_clip_policy)
     -- Edit sequence (nested) at 24/1.
     assert(db:exec([[
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)
     ]]))

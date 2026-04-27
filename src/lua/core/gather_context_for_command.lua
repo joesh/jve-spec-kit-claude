@@ -88,10 +88,10 @@ local function build_group_from_master_clip(master_clip, media, timeline_state, 
         assert(media, "gather_context: media not found for id " .. tostring(master_clip.media_id))
     end
 
-    -- Get clip's FPS (prefer clip.rate, fallback to media.frame_rate)
-    local clip_fps_num = (master_clip.rate and master_clip.rate.fps_numerator) or
+    -- Get clip's FPS (prefer clip.frame_rate, fallback to media.frame_rate)
+    local clip_fps_num = (master_clip.frame_rate and master_clip.frame_rate.fps_numerator) or
                          (media.frame_rate and media.frame_rate.fps_numerator)
-    local clip_fps_den = (master_clip.rate and master_clip.rate.fps_denominator) or
+    local clip_fps_den = (master_clip.frame_rate and master_clip.frame_rate.fps_denominator) or
                          (media.frame_rate and media.frame_rate.fps_denominator)
     assert(clip_fps_num and clip_fps_num > 0, "gather_context: missing clip/media fps_numerator")
     assert(clip_fps_den and clip_fps_den > 0, "gather_context: missing clip/media fps_denominator")

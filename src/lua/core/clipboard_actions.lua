@@ -73,7 +73,7 @@ local function copy_mark_range()
         -- Skip clips entirely outside mark range
         if clip_end <= mark_in or clip_start >= mark_out then goto continue end
 
-        assert(clip.rate and clip.rate.fps_numerator and clip.rate.fps_denominator,
+        assert(clip.frame_rate and clip.frame_rate.fps_numerator and clip.frame_rate.fps_denominator,
             "copy_mark_range: clip " .. tostring(clip.id) .. " missing rate")
 
         -- Clip to mark range boundaries
@@ -86,7 +86,7 @@ local function copy_mark_range()
         -- (video frames or audio samples). Convert via clip_rate/seq_rate.
         local left_trim = eff_start - clip_start
         local right_trim = clip_end - eff_end
-        local clip_rate = clip.rate.fps_numerator / clip.rate.fps_denominator
+        local clip_rate = clip.frame_rate.fps_numerator / clip.frame_rate.fps_denominator
         local source_per_timeline = clip_rate / seq_rate
 
         local source_left = math.floor(left_trim * source_per_timeline + 0.5)
@@ -97,8 +97,8 @@ local function copy_mark_range()
         clip_payloads[#clip_payloads + 1] = {
             original_id = clip.id,
             track_id = clip.track_id,
-            fps_numerator = clip.rate.fps_numerator,
-            fps_denominator = clip.rate.fps_denominator,
+            fps_numerator = clip.frame_rate.fps_numerator,
+            fps_denominator = clip.frame_rate.fps_denominator,
             nested_sequence_id = clip.nested_sequence_id,
             master_layer_track_id = clip.master_layer_track_id,
             master_audio_track_id = clip.master_audio_track_id,
@@ -168,7 +168,7 @@ local function copy_timeline_selection()
 
             earliest_start_frame = math.min(earliest_start_frame, start_frame)
 
-            assert(clip.rate and clip.rate.fps_numerator and clip.rate.fps_denominator,
+            assert(clip.frame_rate and clip.frame_rate.fps_numerator and clip.frame_rate.fps_denominator,
                 "clipboard_actions.copy_timeline_selection: clip " .. tostring(clip.id) .. " missing rate metadata")
             assert(type(clip.duration) == "number", "clipboard_actions: clip.duration must be integer")
             assert(type(clip.source_in) == "number", "clipboard_actions: clip.source_in must be integer")
@@ -176,8 +176,8 @@ local function copy_timeline_selection()
             clip_payloads[#clip_payloads + 1] = {
                 original_id = clip.id,
                 track_id = clip.track_id,
-                fps_numerator = clip.rate.fps_numerator,
-                fps_denominator = clip.rate.fps_denominator,
+                fps_numerator = clip.frame_rate.fps_numerator,
+                fps_denominator = clip.frame_rate.fps_denominator,
                 nested_sequence_id = clip.nested_sequence_id,
                 master_layer_track_id = clip.master_layer_track_id,
                 master_audio_track_id = clip.master_audio_track_id,

@@ -24,12 +24,12 @@ assert(db:exec(
 -- 25fps master.
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
-    .. "audio_rate, width, height, created_at, modified_at) "
+    .. "audio_sample_rate, width, height, created_at, modified_at) "
     .. "VALUES ('m25', 'p1', 'm', 'master', 25, 1, 48000, 1920, 1080, 0, 0)"))
 -- 24fps edit.
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
-    .. "audio_rate, width, height, created_at, modified_at) "
+    .. "audio_sample_rate, width, height, created_at, modified_at) "
     .. "VALUES ('e24', 'p1', 'e', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)"))
 assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "

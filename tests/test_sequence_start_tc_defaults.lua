@@ -46,7 +46,7 @@ local function insert_media(db, opts)
             width, height, metadata, created_at, modified_at)
         VALUES ('%s', 'p1', '%s', '%s', %d, %d, %d, %d, %d, %d, %d, '%s', 0, 0)
     ]], opts.id, opts.name, opts.path, opts.duration_frames,
-        opts.fps_num, opts.fps_den, opts.audio_rate, opts.audio_channels,
+        opts.fps_num, opts.fps_den, opts.audio_sample_rate, opts.audio_channels,
         opts.width, opts.height, meta_json)
     assert(db:exec(sql))
 end
@@ -73,7 +73,7 @@ do
     insert_media(db, {
         id = "med", name = "AV", path = "/tmp/av.mov",
         duration_frames = 100, fps_num = 24, fps_den = 1,
-        audio_rate = 48000, audio_channels = 2,
+        audio_sample_rate = 48000, audio_channels = 2,
         width = 1920, height = 1080,
         start_tc_frames = 86400,
     })
@@ -101,7 +101,7 @@ do
     insert_media(db, {
         id = "med", name = "VOnly", path = "/tmp/v.mov",
         duration_frames = 100, fps_num = 24, fps_den = 1,
-        audio_rate = 0, audio_channels = 0,
+        audio_sample_rate = 0, audio_channels = 0,
         width = 1920, height = 1080,
         start_tc_frames = 86400,
     })
@@ -125,7 +125,7 @@ do
     insert_media(db, {
         id = "med", name = "Zero", path = "/tmp/z.mov",
         duration_frames = 100, fps_num = 24, fps_den = 1,
-        audio_rate = 48000, audio_channels = 1,
+        audio_sample_rate = 48000, audio_channels = 1,
         width = 1920, height = 1080,
         start_tc_frames = 0,
     })

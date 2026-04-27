@@ -17,9 +17,9 @@ local Rational = require("core.rational")
 
 -- Simulate the fixed pattern:
 local function apply_source_marks_pattern(clip, mark_in, mark_out)
-    local rate = clip.rate
+    local rate = clip.frame_rate
     if not rate then
-        assert(clip.fps_numerator, "project_browser: clip.fps_numerator is required when clip.rate is missing for clip " .. tostring(clip.clip_id))
+        assert(clip.fps_numerator, "project_browser: clip.fps_numerator is required when clip.frame_rate is missing for clip " .. tostring(clip.clip_id))
         rate = { fps_numerator = clip.fps_numerator, fps_denominator = clip.fps_denominator or 1 }
     end
     return Rational.new(mark_in, rate.fps_numerator, rate.fps_denominator),
@@ -35,7 +35,7 @@ check("error mentions fps_numerator", err1 and tostring(err1):find("fps_numerato
 
 -- Test 2: clip with rate works
 local si = apply_source_marks_pattern(
-    { clip_id = "clip2", rate = { fps_numerator = 48, fps_denominator = 1 } }, 0, 100)
+    { clip_id = "clip2", frame_rate = { fps_numerator = 48, fps_denominator = 1 } }, 0, 100)
 check("clip with rate works", si.fps_numerator == 48)
 
 -- Test 3: clip with fps_numerator (no rate table) works

@@ -250,7 +250,7 @@ fetch_sequence_record = function(db, sequence_id)
 
     local stmt = db:prepare([[
         SELECT id, project_id, name, kind,
-               fps_numerator, fps_denominator, audio_rate, width, height,
+               fps_numerator, fps_denominator, audio_sample_rate, width, height,
                view_start_frame, view_duration_frames, playhead_frame,
                mark_in_frame, mark_out_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
                current_sequence_number, created_at, modified_at,
@@ -273,8 +273,7 @@ fetch_sequence_record = function(db, sequence_id)
             fps_numerator = assert(tonumber(stmt:value(4)), "DeleteSequence.fetch_sequence_record: missing fps_numerator for sequence " .. tostring(sequence_id)),
             fps_denominator = assert(tonumber(stmt:value(5)), "DeleteSequence.fetch_sequence_record: missing fps_denominator for sequence " .. tostring(sequence_id)),
             frame_rate = assert(tonumber(stmt:value(4)), "unreachable") / assert(tonumber(stmt:value(5)), "unreachable"),
-            audio_sample_rate = assert(tonumber(stmt:value(6)), "DeleteSequence.fetch_sequence_record: missing audio_rate for sequence " .. tostring(sequence_id)),
-            audio_rate = assert(tonumber(stmt:value(6)), "DeleteSequence.fetch_sequence_record: missing audio_rate for sequence " .. tostring(sequence_id)),
+            audio_sample_rate = assert(tonumber(stmt:value(6)), "DeleteSequence.fetch_sequence_record: missing audio_sample_rate for sequence " .. tostring(sequence_id)),
             width = assert(tonumber(stmt:value(7)), "DeleteSequence.fetch_sequence_record: missing width for sequence " .. tostring(sequence_id)),
             height = assert(tonumber(stmt:value(8)), "DeleteSequence.fetch_sequence_record: missing height for sequence " .. tostring(sequence_id)),
             view_start_frame = assert(tonumber(stmt:value(9)), "DeleteSequence.fetch_sequence_record: NULL view_start_frame for sequence " .. tostring(sequence_id)),
@@ -549,7 +548,7 @@ restore_sequence_from_payload = function(db, set_last_error, payload)
 
     local insert_sequence_stmt = db:prepare([[
         INSERT INTO sequences (
-            id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height,
+            id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
             view_start_frame, view_duration_frames, playhead_frame,
             mark_in_frame, mark_out_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
             current_sequence_number, created_at, modified_at,
@@ -577,11 +576,11 @@ restore_sequence_from_payload = function(db, set_last_error, payload)
     end
     insert_sequence_stmt:bind_value(5, sequence_row.fps_numerator)
     insert_sequence_stmt:bind_value(6, sequence_row.fps_denominator)
-    local audio_rate = sequence_row.audio_rate or sequence_row.audio_sample_rate
-    assert(audio_rate, "UndoDeleteSequence: missing audio_rate for sequence " .. tostring(sequence_row.id))
+    local audio_sample_rate = sequence_row.audio_sample_rate
+    assert(audio_sample_rate, "UndoDeleteSequence: missing audio_sample_rate for sequence " .. tostring(sequence_row.id))
     assert(sequence_row.width, "UndoDeleteSequence: missing width for sequence " .. tostring(sequence_row.id))
     assert(sequence_row.height, "UndoDeleteSequence: missing height for sequence " .. tostring(sequence_row.id))
-    insert_sequence_stmt:bind_value(7, audio_rate)
+    insert_sequence_stmt:bind_value(7, audio_sample_rate)
     insert_sequence_stmt:bind_value(8, sequence_row.width)
     insert_sequence_stmt:bind_value(9, sequence_row.height)
     insert_sequence_stmt:bind_value(10, sequence_row.view_start_frame)

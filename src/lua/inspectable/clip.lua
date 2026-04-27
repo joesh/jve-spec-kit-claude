@@ -97,8 +97,8 @@ function ClipInspectable:get(field)
     -- Synthetic display field (no backing column).
     if field == "rate_display" then
         local clip_table = self.clip_ref
-        if clip_table and clip_table.rate then
-            return format_rate_display(clip_table.rate)
+        if clip_table and clip_table.frame_rate then
+            return format_rate_display(clip_table.frame_rate)
         end
     end
 

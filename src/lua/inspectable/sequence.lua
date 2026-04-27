@@ -67,7 +67,7 @@ local COLUMN_TO_MODEL_FIELD = {
     view_duration_frames = "viewport_duration",
     mark_in_frame        = "mark_in",
     mark_out_frame       = "mark_out",
-    audio_rate           = "audio_sample_rate",
+    audio_sample_rate           = "audio_sample_rate",
 }
 
 local function format_frame_rate_display(fr)

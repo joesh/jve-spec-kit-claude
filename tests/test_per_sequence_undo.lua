@@ -36,7 +36,7 @@ local layout = ripple_layout.create({
 local frame_rate = {fps_numerator = 1000, fps_denominator = 1}
 local seq_b = Sequence.create("Sequence B", PROJECT_ID, frame_rate, 1920, 1080, { kind = "nested", 
     id = SEQ_B_ID,
-    audio_rate = 48000,
+    audio_sample_rate = 48000,
 })
 assert(seq_b and seq_b:save(), "Failed to create sequence B")
 

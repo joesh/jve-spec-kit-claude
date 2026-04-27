@@ -85,7 +85,7 @@ local db = database.get_connection()
 local now = os.time()
 db:exec(string.format(
     "INSERT INTO sequences (id, project_id, name, kind, created_at, modified_at, "
-    .. "fps_numerator, fps_denominator, audio_rate, width, height) "
+    .. "fps_numerator, fps_denominator, audio_sample_rate, width, height) "
     .. "VALUES ('seq1', '%s', 'Seq', 'nested', %d, %d, 25, 1, 48000, 1920, 1080)",
     project.id, now, now))
 
@@ -222,9 +222,9 @@ check("nonexistent ids silently omitted from result", #mixed == 1)
 -- ---------------------------------------------------------------------------
 print("\n--- batch_get_source_extents ---")
 
--- Per-stream API: pass {video_rate=, audio_rate=} per media. Each stream
+-- Per-stream API: pass {video_rate=, audio_sample_rate=} per media. Each stream
 -- bucket comes back as {min_in, max_out, rate=}, in that stream's native
--- units (frames at video_rate; samples at audio_rate). nil bucket means
+-- units (frames at video_rate; samples at audio_sample_rate). nil bucket means
 -- no clips of that track type reference the media.
 --
 -- media_a clips at native rate 25fps, target video_rate 25 → no
@@ -232,7 +232,7 @@ print("\n--- batch_get_source_extents ---")
 local extents = Media.batch_get_source_extents({
     media_a = { video_rate = 25 },
     media_b = { video_rate = 24 },
-    media_c = { audio_rate = 48000 },
+    media_c = { audio_sample_rate = 48000 },
 })
 check("media_a video extent_start reflects earliest non-master source_in (100)",
     extents["media_a"].video[1] == 100)

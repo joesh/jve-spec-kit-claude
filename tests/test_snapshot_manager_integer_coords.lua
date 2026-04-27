@@ -31,7 +31,7 @@ db:exec(string.format([[
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-        audio_rate, width, height, view_start_frame, view_duration_frames,
+        audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
     VALUES ('seq1', 'proj1', 'Timeline 1', 'nested', 24, 1, 48000,
         1920, 1080, 0, 240, 10, '[]', '[]', %d, %d);
@@ -56,7 +56,7 @@ db:exec(string.format([[
 -- the clip fixture below.
 db:exec([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator,
-        fps_denominator, audio_rate, width, height, created_at, modified_at)
+        fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
     VALUES ('master_seq_for_med1', 'proj1', 'shot_01_master', 'master',
         24, 1, 48000, 1920, 1080, 0, 0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
@@ -94,7 +94,7 @@ local clips = {
         duration = 100,
         source_in = 0,
         source_out = 100,
-        rate = { fps_numerator = 24, fps_denominator = 1 },
+        frame_rate = { fps_numerator = 24, fps_denominator = 1 },
         enabled = true,
         volume = 1.0,
         -- V13: snapshot_manager reads resolved_media (denormed leaf from
@@ -138,9 +138,9 @@ assert(m.duration == 1000, "media duration should be 1000, got " .. tostring(m.d
 print("  ✓ media duration is integer 1000")
 
 print("Test 4: fps metadata preserved in rate field")
-assert(c.rate, "clip should have rate")
-assert(c.rate.fps_numerator == 24, "rate.fps_numerator should be 24")
-assert(c.rate.fps_denominator == 1, "rate.fps_denominator should be 1")
+assert(c.frame_rate, "clip should have rate")
+assert(c.frame_rate.fps_numerator == 24, "rate.fps_numerator should be 24")
+assert(c.frame_rate.fps_denominator == 1, "rate.fps_denominator should be 1")
 print("  ✓ rate metadata preserved")
 
 --------------------------------------------------------------------------------
@@ -155,7 +155,7 @@ db:exec("DELETE FROM snapshots WHERE sequence_id = 'seq1'")
 local bad_payload = json.encode({
     sequence = {
         id = "seq1", project_id = "proj1", name = "T", kind = "nested",
-        fps_numerator = 24, fps_denominator = 1, audio_rate = 48000,
+        fps_numerator = 24, fps_denominator = 1, audio_sample_rate = 48000,
         width = 1920, height = 1080,
         view_start_frame = 0, view_duration_frames = 240, playhead_frame = 0,
     },
@@ -192,7 +192,7 @@ db:exec("DELETE FROM snapshots WHERE sequence_id = 'seq1'")
 local bad_payload2 = json.encode({
     sequence = {
         id = "seq1", project_id = "proj1", name = "T", kind = "nested",
-        fps_numerator = 24, fps_denominator = 1, audio_rate = 48000,
+        fps_numerator = 24, fps_denominator = 1, audio_sample_rate = 48000,
         width = 1920, height = 1080,
         view_start_frame = 0, view_duration_frames = 240, playhead_frame = 0,
     },

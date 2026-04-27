@@ -32,7 +32,7 @@ local now = os.time()
 db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('proj', 'P', 'resample', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
-                           audio_rate, width, height,
+                           audio_sample_rate, width, height,
                            playhead_frame, view_start_frame, view_duration_frames,
                            selected_clip_ids, selected_edge_infos, selected_gap_infos,
                            current_sequence_number, created_at, modified_at)

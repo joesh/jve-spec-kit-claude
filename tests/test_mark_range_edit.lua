@@ -25,7 +25,7 @@ local now = os.time()
 -- 25fps to catch unit confusion
 local BASE_SQL = string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('proj', 'Test', 'resample', %d, %d);
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate,
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate,
         width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
     VALUES ('seq', 'proj', 'TL', 'nested', 25, 1, 48000, 1920, 1080, 0, 0, 8000, %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)

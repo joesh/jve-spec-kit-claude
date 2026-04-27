@@ -113,7 +113,7 @@ package.loaded["core.logger"] = {
 local mock_clip_entry = {
     clip = {
         id = "clip1", timeline_start = 0, duration = 100, source_in = 0, source_out = 100,
-        rate = { fps_numerator = 24, fps_denominator = 1 },
+        frame_rate = { fps_numerator = 24, fps_denominator = 1 },
     },
     track = { id = "track_0", track_index = 0, volume = 1.0, muted = false, soloed = false },
     media_path = "/test.mov",
@@ -123,7 +123,7 @@ local mock_clip_entry = {
 local offline_clip_entry = {
     clip = {
         id = "clip_offline", timeline_start = 100, duration = 100, source_in = 0, source_out = 100,
-        rate = { fps_numerator = 24, fps_denominator = 1 },
+        frame_rate = { fps_numerator = 24, fps_denominator = 1 },
     },
     track = { id = "track_0", track_index = 0, volume = 1.0, muted = false, soloed = false },
     media_path = "/offline.braw",

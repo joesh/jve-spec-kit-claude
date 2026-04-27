@@ -52,10 +52,10 @@ end
 -- @param master_clip table Master clip object with rate field
 -- @return number, number fps_numerator, fps_denominator
 function M.require_master_clip_rate(master_clip)
-    assert(master_clip and master_clip.rate, "require_master_clip_rate: master clip missing rate field")
+    assert(master_clip and master_clip.frame_rate, "require_master_clip_rate: master clip missing frame_rate field")
 
-    local fps_num = master_clip.rate.fps_numerator
-    local fps_den = master_clip.rate.fps_denominator
+    local fps_num = master_clip.frame_rate.fps_numerator
+    local fps_den = master_clip.frame_rate.fps_denominator
 
     assert(fps_num and fps_den, "require_master_clip_rate: master clip missing fps metadata")
     return fps_num, fps_den

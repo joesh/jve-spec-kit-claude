@@ -25,7 +25,7 @@ for i, t in ipairs(project_templates.TEMPLATES) do
     assert(type(t.height) == "number" and t.height > 0, "template " .. i .. " bad height")
     assert(type(t.fps_num) == "number" and t.fps_num > 0, "template " .. i .. " bad fps_num")
     assert(type(t.fps_den) == "number" and t.fps_den > 0, "template " .. i .. " bad fps_den")
-    assert(type(t.audio_rate) == "number" and t.audio_rate > 0, "template " .. i .. " bad audio_rate")
+    assert(type(t.audio_sample_rate) == "number" and t.audio_sample_rate > 0, "template " .. i .. " bad audio_sample_rate")
 end
 
 -- ===========================================================================
@@ -58,7 +58,7 @@ assert(seq.frame_rate.fps_denominator == template.fps_den,
     "fps_den mismatch: " .. tostring(seq.frame_rate.fps_denominator))
 assert(seq.width == template.width, "width mismatch")
 assert(seq.height == template.height, "height mismatch")
-assert(seq.audio_sample_rate == template.audio_rate, "audio_rate mismatch")
+assert(seq.audio_sample_rate == template.audio_sample_rate, "audio_sample_rate mismatch")
 
 -- 3 video + 3 audio tracks = 6 total
 local track_count = Track.count_for_sequence(seq.id)

@@ -24,7 +24,7 @@ assert(db:exec([[
 
 assert(db:exec([[
     INSERT INTO sequences(id, project_id, name, kind, fps_numerator, fps_denominator,
-                         audio_rate, width, height, view_start_frame, view_duration_frames,
+                         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
                          playhead_frame, created_at, modified_at)
     VALUES('seq', 'proj', 'TestTimeline', 'nested', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
            0, 0)
@@ -62,7 +62,7 @@ assert(db:exec([[
 -- V1: clip at frames 24-72 (overlaps V2, higher priority)
 assert(db:exec([[
     -- V13 master sequence for media_a
-INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media_a', 'proj', 'media_a_master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_a', 'master_media_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -71,7 +71,7 @@ INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, m
 VALUES ('mr_media_a', 'proj', 'master_media_a', 'master_v_media_a', 'media_a', 0, 1000000, 0, 1000000, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence for media_audio
-INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media_audio', 'proj', 'media_audio_master', 'master', 48000, 1, 48000, 1920, 1080, 0, 0);
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_audio', 'master_media_audio', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -80,7 +80,7 @@ INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, m
 VALUES ('mr_media_audio', 'proj', 'master_media_audio', 'master_v_media_audio', 'media_audio', 0, 1000000, 0, 1000000, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence for media_b
-INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_rate, width, height, created_at, modified_at)
+INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_media_b', 'proj', 'media_b_master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_b', 'master_media_b', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);

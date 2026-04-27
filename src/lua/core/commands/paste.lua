@@ -204,7 +204,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 source_out = cd.source_out,
                 enabled = true,
                 volume = cd.volume or 1.0,
-                rate = { fps_numerator = cd.fps_numerator,
+                frame_rate = { fps_numerator = cd.fps_numerator,
                          fps_denominator = cd.fps_denominator },
                 fps_numerator = cd.fps_numerator,
                 fps_denominator = cd.fps_denominator,

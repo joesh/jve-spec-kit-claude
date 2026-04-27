@@ -2380,7 +2380,7 @@ function M.convert(drp_path, jvp_path, progress_cb)
     end
 
     local json = require("dkjson")
-    -- 013: every sequence carries audio_rate (mix bus rate). DRP doesn't store
+    -- 013: every sequence carries audio_sample_rate (mix bus rate). DRP doesn't store
     -- it at the project level; pick the most common audio_sample_rate among
     -- imported media, or fall back to 48000 (industry-standard mix bus rate
     -- for FCP/Premiere/Resolve project defaults — user-modifiable post-import).
@@ -2401,7 +2401,7 @@ function M.convert(drp_path, jvp_path, progress_cb)
         frame_rate = parse_result.project.settings.frame_rate,
         width = parse_result.project.settings.width,
         height = parse_result.project.settings.height,
-        audio_rate = picked_audio_rate,
+        audio_sample_rate = picked_audio_rate,
     }
 
     local project = Project.create(parse_result.project.name, {

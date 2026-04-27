@@ -149,7 +149,7 @@ function M.clip_update_payload(source, fallback_sequence_id)
     assert(source.id, "clip_update_payload: source.id is required")
     local track_sequence_id = source.owner_sequence_id or source.track_sequence_id or fallback_sequence_id
     assert(track_sequence_id, string.format("clip_update_payload: no sequence_id for clip %s", tostring(source.id)))
-    local rate = source.rate
+    local rate = source.frame_rate
     if not rate and source.fps_numerator and source.fps_denominator then
         rate = { fps_numerator = source.fps_numerator, fps_denominator = source.fps_denominator }
     end
@@ -169,7 +169,7 @@ function M.clip_update_payload(source, fallback_sequence_id)
         duration_value = source.duration,
         source_in_value = source.source_in,
         source_out_value = source.source_out,
-        rate = rate,
+        frame_rate = rate,
         fps_numerator = rate and rate.fps_numerator or nil,
         fps_denominator = rate and rate.fps_denominator or nil,
         enabled = source.enabled ~= false
@@ -184,7 +184,7 @@ function M.clip_insert_payload(source, fallback_sequence_id)
     if not track_sequence_id then
         return nil
     end
-    local rate = source.rate
+    local rate = source.frame_rate
     if not rate and source.fps_numerator and source.fps_denominator then
         rate = { fps_numerator = source.fps_numerator, fps_denominator = source.fps_denominator }
     end
@@ -214,7 +214,7 @@ function M.clip_insert_payload(source, fallback_sequence_id)
         duration = source.duration,
         source_in = source.source_in,
         source_out = source.source_out,
-        rate = rate,
+        frame_rate = rate,
         fps_numerator = rate and rate.fps_numerator or nil,
         fps_denominator = rate and rate.fps_denominator or nil,
 
@@ -490,7 +490,7 @@ end
 
 function M.capture_clip_state(clip)
     if not clip then return nil end
-    local rate = clip.rate
+    local rate = clip.frame_rate
     if not rate or not rate.fps_numerator or not rate.fps_denominator then
         error(string.format("capture_clip_state: Clip %s missing rate metadata", tostring(clip.id)), 2)
     end
@@ -927,8 +927,8 @@ function M.revert_mutations(db, mutations, command, sequence_id)
     end
 
     local function require_rate(prev, context)
-        local fps_num = prev and (prev.fps_numerator or (prev.rate and prev.rate.fps_numerator))
-        local fps_den = prev and (prev.fps_denominator or (prev.rate and prev.rate.fps_denominator))
+        local fps_num = prev and (prev.fps_numerator or (prev.frame_rate and prev.frame_rate.fps_numerator))
+        local fps_den = prev and (prev.fps_denominator or (prev.frame_rate and prev.frame_rate.fps_denominator))
         -- Also extract from source_in/source_out Rationals (consistent with clip_state.get_clip_rate)
         if (not fps_num or not fps_den) and prev and prev.source_in and type(prev.source_in) == "table" then
             fps_num = fps_num or prev.source_in.fps_numerator

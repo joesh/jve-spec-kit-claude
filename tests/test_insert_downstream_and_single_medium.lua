@@ -74,15 +74,15 @@ do
         INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
         VALUES ('p1', 'p', 'passthrough', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('m', 'p1', 'm', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('m-pre', 'p1', 'pre', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
@@ -179,11 +179,11 @@ do
         INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
         VALUES ('p1', 'p', 'passthrough', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('m', 'p1', 'm', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
@@ -232,11 +232,11 @@ do
         INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
         VALUES ('p1', 'p', 'passthrough', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('m', 'p1', 'm', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_rate, width, height,
+            fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
@@ -272,7 +272,7 @@ do
     assert(#clips_on_track(db, "e-a1") == 1, "A1 should have 1 clip")
 
     -- audio-only owner_duration computes from audio samples via
-    -- nested.audio_rate: 48000 samples / 48000 Hz = 1 second;
+    -- nested.audio_sample_rate: 48000 samples / 48000 Hz = 1 second;
     -- at owner 24/1 = 24 owner frames. Domain-derived; not from code.
     local a1 = clips_on_track(db, "e-a1")
     assert(a1[1].timeline_start == 0 and a1[1].duration == 24, string.format(

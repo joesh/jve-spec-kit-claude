@@ -89,8 +89,8 @@ CREATE TABLE IF NOT EXISTS sequences (
     fps_numerator INTEGER NOT NULL CHECK(fps_numerator > 0),
     fps_denominator INTEGER NOT NULL CHECK(fps_denominator > 0),
 
-    -- Sequence Audio Rate (Sample Rate, e.g. 48000)
-    audio_rate INTEGER NOT NULL CHECK(audio_rate > 0),
+    -- Sequence Audio Sample Rate (e.g. 48000)
+    audio_sample_rate INTEGER NOT NULL CHECK(audio_sample_rate > 0),
 
     -- Dimensions
     width INTEGER NOT NULL,
