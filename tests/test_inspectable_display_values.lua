@@ -21,7 +21,7 @@ print("=== Inspector display reads (clip + sequence) ===\n")
 
 -- ---------------------------------------------------------------
 -- Clip: BOOLEAN `false` must come through as `false`, not nil.
--- Synthetic `rate_display` must format from the rate table.
+-- Synthetic `rate_display` must format from the frame_rate table.
 -- ---------------------------------------------------------------
 local fake_clip = {
     id              = "c1",

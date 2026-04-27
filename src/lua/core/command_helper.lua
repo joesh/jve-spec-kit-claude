@@ -149,10 +149,12 @@ function M.clip_update_payload(source, fallback_sequence_id)
     assert(source.id, "clip_update_payload: source.id is required")
     local track_sequence_id = source.owner_sequence_id or source.track_sequence_id or fallback_sequence_id
     assert(track_sequence_id, string.format("clip_update_payload: no sequence_id for clip %s", tostring(source.id)))
-    local rate = source.frame_rate
-    if not rate and source.fps_numerator and source.fps_denominator then
-        rate = { fps_numerator = source.fps_numerator, fps_denominator = source.fps_denominator }
-    end
+    local frame_rate = source.frame_rate
+    assert(frame_rate
+        and frame_rate.fps_numerator
+        and frame_rate.fps_denominator,
+        string.format("clip_update_payload: clip %s missing frame_rate table",
+            tostring(source.id)))
 
     -- All coords must be integers (no Rational backward-compat)
     assert(type(source.timeline_start) == "number", string.format("clip_update_payload: timeline_start must be integer for clip %s", tostring(source.id)))
@@ -169,9 +171,7 @@ function M.clip_update_payload(source, fallback_sequence_id)
         duration_value = source.duration,
         source_in_value = source.source_in,
         source_out_value = source.source_out,
-        frame_rate = rate,
-        fps_numerator = rate and rate.fps_numerator or nil,
-        fps_denominator = rate and rate.fps_denominator or nil,
+        frame_rate = frame_rate,
         enabled = source.enabled ~= false
     }
 end
@@ -184,12 +184,13 @@ function M.clip_insert_payload(source, fallback_sequence_id)
     if not track_sequence_id then
         return nil
     end
-    local rate = source.frame_rate
-    if not rate and source.fps_numerator and source.fps_denominator then
-        rate = { fps_numerator = source.fps_numerator, fps_denominator = source.fps_denominator }
-    end
-    if (source.source_in ~= nil or source.source_out ~= nil) and (not rate or not rate.fps_numerator or not rate.fps_denominator) then
-        error("command_helper.clip_insert_payload: clip missing rate metadata for source bounds (clip_id=" .. tostring(source.id) .. ")", 2)
+    local frame_rate = source.frame_rate
+    if source.source_in ~= nil or source.source_out ~= nil then
+        assert(frame_rate
+            and frame_rate.fps_numerator
+            and frame_rate.fps_denominator,
+            string.format("command_helper.clip_insert_payload: clip %s missing frame_rate table for source bounds",
+                tostring(source.id)))
     end
     local label = source.label or source.name
     if (not label or label == "") and source.id then
@@ -214,9 +215,7 @@ function M.clip_insert_payload(source, fallback_sequence_id)
         duration = source.duration,
         source_in = source.source_in,
         source_out = source.source_out,
-        frame_rate = rate,
-        fps_numerator = rate and rate.fps_numerator or nil,
-        fps_denominator = rate and rate.fps_denominator or nil,
+        frame_rate = frame_rate,
 
         enabled = source.enabled ~= false,
         volume = source.volume,
@@ -517,8 +516,7 @@ function M.capture_clip_state(clip)
         source_out = clip.source_out,
         name = clip.name,
         enabled = clip.enabled,
-        fps_numerator = rate.fps_numerator,
-        fps_denominator = rate.fps_denominator
+        frame_rate = rate,
     }
     -- Timestamps needed for restore operations (may be nil if not set)
     if clip.created_at then state.created_at = clip.created_at end
@@ -927,21 +925,12 @@ function M.revert_mutations(db, mutations, command, sequence_id)
     end
 
     local function require_rate(prev, context)
-        local fps_num = prev and (prev.fps_numerator or (prev.frame_rate and prev.frame_rate.fps_numerator))
-        local fps_den = prev and (prev.fps_denominator or (prev.frame_rate and prev.frame_rate.fps_denominator))
-        -- Also extract from source_in/source_out Rationals (consistent with clip_state.get_clip_rate)
-        if (not fps_num or not fps_den) and prev and prev.source_in and type(prev.source_in) == "table" then
-            fps_num = fps_num or prev.source_in.fps_numerator
-            fps_den = fps_den or prev.source_in.fps_denominator
-        end
-        if (not fps_num or not fps_den) and prev and prev.source_out and type(prev.source_out) == "table" then
-            fps_num = fps_num or prev.source_out.fps_numerator
-            fps_den = fps_den or prev.source_out.fps_denominator
-        end
-        if not fps_num or not fps_den then
-            error(string.format("%s: missing fps for clip %s", context or "undo", tostring(prev and prev.id)), 2)
-        end
-        return fps_num, fps_den
+        assert(prev and prev.frame_rate
+            and prev.frame_rate.fps_numerator
+            and prev.frame_rate.fps_denominator,
+            string.format("%s: clip %s missing frame_rate table",
+                context or "undo", tostring(prev and prev.id)))
+        return prev.frame_rate.fps_numerator, prev.frame_rate.fps_denominator
     end
 
     local function apply_update(mut)

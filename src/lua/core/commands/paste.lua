@@ -53,8 +53,6 @@ local function populate_timeline_mutations(command, sequence_id, mutations)
                 owner_sequence_id = mut.owner_sequence_id,
                 enabled = mut.enabled ~= false,
                 track_type = mut.track_type,
-                fps_numerator = mut.fps_numerator,
-                fps_denominator = mut.fps_denominator,
             })
         elseif mut.type == "update" then
             command_helper.add_update_mutation(command, sequence_id, {
@@ -204,10 +202,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 source_out = cd.source_out,
                 enabled = true,
                 volume = cd.volume or 1.0,
-                frame_rate = { fps_numerator = cd.fps_numerator,
-                         fps_denominator = cd.fps_denominator },
-                fps_numerator = cd.fps_numerator,
-                fps_denominator = cd.fps_denominator,
+                frame_rate = cd.frame_rate,
                 created_at = now,
                 modified_at = now,
             }

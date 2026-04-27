@@ -51,9 +51,7 @@ end
             duration = row.duration,
             source_in = row.source_in,
             source_out = row.source_out,
-            fps_numerator = row.fps_numerator,
-            fps_denominator = row.fps_denominator,
-            rate = row.frame_rate,
+            frame_rate = row.frame_rate,
             enabled = row.enabled,
             volume = row.volume,
         }
@@ -72,11 +70,19 @@ local function assert_fps(num, den, label)
     assert(den and den > 0, "clip_mutator: missing " .. (label or "fps") .. " denominator")
 end
 
--- Helper to get fps metadata from row (for passing through to new clips)
+-- Helper to get fps metadata from row. Single-shape: row.frame_rate is mandatory.
 local function get_row_fps(row)
-    local num = row.fps_numerator or (row.frame_rate and row.frame_rate.fps_numerator)
-    local den = row.fps_denominator or (row.frame_rate and row.frame_rate.fps_denominator)
-    assert_fps(num, den, "clip fps")
+    assert(row and row.frame_rate,
+        string.format("clip_mutator.get_row_fps: clip %s missing frame_rate table",
+            tostring(row and row.id)))
+    local num = row.frame_rate.fps_numerator
+    local den = row.frame_rate.fps_denominator
+    assert(type(num) == "number" and num > 0,
+        string.format("clip_mutator.get_row_fps: clip %s fps_numerator must be positive, got %s",
+            tostring(row.id), tostring(num)))
+    assert(type(den) == "number" and den > 0,
+        string.format("clip_mutator.get_row_fps: clip %s fps_denominator must be positive, got %s",
+            tostring(row.id), tostring(den)))
     return num, den
 end
 
@@ -124,10 +130,10 @@ local function plan_delete(row)
 end
 
 local function plan_insert(row)
-    -- Prefer explicit fps fields, but fall back to rate table used by Clip objects
-    local fps_num = row.fps_numerator or (row.frame_rate and row.frame_rate.fps_numerator)
-    local fps_den = row.fps_denominator or (row.frame_rate and row.frame_rate.fps_denominator)
-    assert_fps(fps_num, fps_den, "clip fps")
+    -- Validate frame_rate present even though plan_insert doesn't itself
+    -- need fps for the SQL (no fps columns on the clips table) — keeps the
+    -- single-shape contract enforced at every entry point.
+    get_row_fps(row)
     assert(row.timeline_start, "clip_mutator: insert mutation missing timeline_start")
     assert(row.duration, "clip_mutator: insert mutation missing duration")
     assert(row.source_in, "clip_mutator: insert mutation missing source_in")
@@ -234,9 +240,7 @@ local function load_track_clips(db, track_id)
             source_out = stmt:value(9),
             -- Source-side timebase (nested sequence rate).
             frame_rate = { fps_numerator = nested_num, fps_denominator = nested_den },
-            fps_numerator = nested_num,
-            fps_denominator = nested_den,
-            -- Owner-sequence rate (same as old seq_*).
+            -- Owner-sequence rate (used by occlusion / re-bind paths).
             seq_fps_numerator = owner_num,
             seq_fps_denominator = owner_den,
             enabled = stmt:value(13) == 1 or stmt:value(13) == true,
@@ -404,7 +408,7 @@ function ClipMutator.resolve_occlusions(db, params)
             local trim_delta = new_duration - row.duration  -- negative (shrinking)
             row.duration = new_duration
             row.source_out = row.source_out + frame_utils.timeline_to_source(
-                trim_delta, row.fps_numerator, row.fps_denominator,
+                trim_delta, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
                 get_seq_fps(row))
 
             table.insert(actions, plan_update(row, original))
@@ -424,7 +428,7 @@ function ClipMutator.resolve_occlusions(db, params)
             row.timeline_start = end_time
             row.duration = new_duration
             row.source_in = get_source_in(row) + frame_utils.timeline_to_source(
-                trim_amount, row.fps_numerator, row.fps_denominator,
+                trim_amount, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
                 get_seq_fps(row))
             row.source_out = require_source_out(original, "resolve_occlusions/head_trim")
 
@@ -445,7 +449,7 @@ function ClipMutator.resolve_occlusions(db, params)
             local left_trim_delta = left_duration - row.duration  -- negative
             row.duration = left_duration
             row.source_out = row.source_out + frame_utils.timeline_to_source(
-                left_trim_delta, row.fps_numerator, row.fps_denominator,
+                left_trim_delta, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
                 get_seq_fps(row))
             table.insert(actions, plan_update(row, original))
 
@@ -463,8 +467,7 @@ function ClipMutator.resolve_occlusions(db, params)
                         right_shift, row_fps_num, row_fps_den,
                         get_seq_fps(original)),
                     source_out = require_source_out(original, "resolve_occlusions/straddle_split"),
-                    fps_numerator = row_fps_num,
-                    fps_denominator = row_fps_den,
+                    frame_rate = { fps_numerator = row_fps_num, fps_denominator = row_fps_den },
                     enabled = original.enabled,
                     volume = original.volume,
                     nested_sequence_id = original.nested_sequence_id,
@@ -581,11 +584,11 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
             row.timeline_start = first.s
             row.duration = first.e - first.s
             row.source_in = get_source_in(original) + frame_utils.timeline_to_source(
-                trim_left, row.fps_numerator, row.fps_denominator,
+                trim_left, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
                 get_seq_fps(row))
             row.source_out = require_source_out(original, "resolve_occlusions_multi/first")
                 - frame_utils.timeline_to_source(
-                    trim_right, row.fps_numerator, row.fps_denominator,
+                    trim_right, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
                     get_seq_fps(row))
             table.insert(actions, plan_update(row, original))
 
@@ -615,8 +618,7 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
                         - frame_utils.timeline_to_source(
                             trim_right_frag, row_fps_num, row_fps_den,
                             get_seq_fps(original)),
-                    fps_numerator = row_fps_num,
-                    fps_denominator = row_fps_den,
+                    frame_rate = { fps_numerator = row_fps_num, fps_denominator = row_fps_den },
                     enabled = original.enabled,
                     volume = original.volume,
                     created_at = os.time(),
@@ -679,7 +681,7 @@ function ClipMutator.resolve_ripple(db, params)
             local tail_trim_delta = left_dur - row.duration  -- negative (shrinking from right)
             row.duration = left_dur
             row.source_out = row.source_out + frame_utils.timeline_to_source(
-                tail_trim_delta, row.fps_numerator, row.fps_denominator,
+                tail_trim_delta, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
                 get_seq_fps(row))
 
             table.insert(actions, plan_update(row, original))
@@ -688,7 +690,7 @@ function ClipMutator.resolve_ripple(db, params)
             local right_start = insert_time + shift_amount
             local right_dur = clip_end - insert_time
             local right_src_in = get_source_in(original) + frame_utils.timeline_to_source(
-                left_dur, row.fps_numerator, row.fps_denominator,
+                left_dur, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
                 get_seq_fps(row))
 
             local right_clip = {
@@ -708,8 +710,7 @@ function ClipMutator.resolve_ripple(db, params)
                 duration = right_dur,
                 source_in = right_src_in,
                 source_out = require_source_out(original, "resolve_ripple"),
-                fps_numerator = row_fps_num,
-                fps_denominator = row_fps_den,
+                frame_rate = { fps_numerator = row_fps_num, fps_denominator = row_fps_den },
                 enabled = row.enabled,
                 volume = original.volume,
                 created_at = os.time(),
@@ -902,8 +903,6 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         duration = stmt:value(7),
         source_in = stmt:value(8),
         source_out = stmt:value(9),
-        fps_numerator = nested_fps_num,
-        fps_denominator = nested_fps_den,
         frame_rate = {fps_numerator = nested_fps_num, fps_denominator = nested_fps_den},
         enabled = stmt:value(13) == 1 or stmt:value(13) == true,
         volume = stmt:value(14),
@@ -1048,8 +1047,7 @@ function ClipMutator.plan_duplicate_block(db, params)
             duration = clip.duration,
             source_in = clip.source_in,
             source_out = clip.source_out,
-            fps_numerator = clip.fps_numerator,
-            fps_denominator = clip.fps_denominator,
+            frame_rate = clip.frame_rate,
             enabled = clip.enabled,
             created_at = now,
             modified_at = now,

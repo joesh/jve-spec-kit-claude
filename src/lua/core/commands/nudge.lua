@@ -176,8 +176,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
                 register_original_state(clip)
 
-                local clip_fps_num = clip.fps_numerator or (clip.frame_rate and clip.frame_rate.fps_numerator)
-                local clip_fps_den = clip.fps_denominator or (clip.frame_rate and clip.frame_rate.fps_denominator)
+                local clip_fps_num = clip.frame_rate.fps_numerator
+                local clip_fps_den = clip.frame_rate.fps_denominator
                 assert(clip_fps_num and clip_fps_den,
                     string.format("Nudge: clip %s missing fps", tostring(clip.id)))
 

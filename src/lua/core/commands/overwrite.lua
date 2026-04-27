@@ -129,36 +129,31 @@ local function build_executed_mutations(result)
 end
 
 local function build_insert_mutation_entry(clip_id)
-    local row = Clip.load_v13_row(clip_id)
-    assert(row, "Overwrite: could not re-read clip " .. tostring(clip_id))
-    -- Carry the source-side timebase from the clip's nested sequence so
-    -- timeline_state's rate field gets populated. Without this, callers
-    -- that read clip.frame_rate (clipboard_actions.copy_mark_range,
-    -- batch_ripple_edit's fetch_base_clip) crash with 'missing rate'
-    -- on a freshly-overwritten clip.
-    local nested = Sequence.load(row.nested_sequence_id)
-    local fps_num = nested and nested.frame_rate and nested.frame_rate.fps_numerator
-    local fps_den = nested and nested.frame_rate and nested.frame_rate.fps_denominator
+    -- Clip.load (not load_v13_row) so the in-memory mutation carries the
+    -- joined frame_rate from the nested sequence row. Consumers that
+    -- read clip.frame_rate (clipboard_actions.copy_mark_range,
+    -- batch_ripple_edit's fetch_base_clip) require it.
+    local clip = Clip.load(clip_id)
+    assert(clip, "Overwrite: could not re-read clip " .. tostring(clip_id))
     return {
-        id                    = row.id,
-        owner_sequence_id     = row.owner_sequence_id,
-        track_sequence_id     = row.owner_sequence_id,
-        track_id              = row.track_id,
-        nested_sequence_id    = row.nested_sequence_id,
-        start_value           = row.timeline_start_frame,
-        timeline_start        = row.timeline_start_frame,
-        duration_value        = row.duration_frames,
-        duration              = row.duration_frames,
-        source_in             = row.source_in_frame,
-        source_out            = row.source_out_frame,
-        master_layer_track_id = row.master_layer_track_id,
-        fps_mismatch_policy   = row.fps_mismatch_policy,
-        fps_numerator         = fps_num,
-        fps_denominator       = fps_den,
-        name                  = row.name,
-        enabled               = row.enabled,
-        volume                = row.volume,
-        playhead_frame        = row.playhead_frame,
+        id                    = clip.id,
+        owner_sequence_id     = clip.owner_sequence_id,
+        track_sequence_id     = clip.owner_sequence_id,
+        track_id              = clip.track_id,
+        nested_sequence_id    = clip.nested_sequence_id,
+        start_value           = clip.timeline_start,
+        timeline_start        = clip.timeline_start,
+        duration_value        = clip.duration,
+        duration              = clip.duration,
+        source_in             = clip.source_in,
+        source_out            = clip.source_out,
+        master_layer_track_id = clip.master_layer_track_id,
+        fps_mismatch_policy   = clip.fps_mismatch_policy,
+        frame_rate            = clip.frame_rate,
+        name                  = clip.name,
+        enabled               = clip.enabled,
+        volume                = clip.volume,
+        playhead_frame        = clip.playhead_frame,
     }
 end
 
@@ -326,27 +321,9 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                     end
                 end
                 for _, d in ipairs(cap.deleted or {}) do
-                    local row = Clip.load_v13_row(d.id)
-                    if row then
-                        bucket.inserts[#bucket.inserts + 1] = {
-                            id                    = row.id,
-                            owner_sequence_id     = row.owner_sequence_id,
-                            track_sequence_id     = row.owner_sequence_id,
-                            track_id              = row.track_id,
-                            nested_sequence_id    = row.nested_sequence_id,
-                            start_value           = row.timeline_start_frame,
-                            timeline_start        = row.timeline_start_frame,
-                            duration_value        = row.duration_frames,
-                            duration              = row.duration_frames,
-                            source_in             = row.source_in_frame,
-                            source_out            = row.source_out_frame,
-                            master_layer_track_id = row.master_layer_track_id,
-                            fps_mismatch_policy   = row.fps_mismatch_policy,
-                            name                  = row.name,
-                            enabled               = row.enabled,
-                            volume                = row.volume,
-                            playhead_frame        = row.playhead_frame,
-                        }
+                    local entry = build_insert_mutation_entry(d.id)
+                    if entry then
+                        bucket.inserts[#bucket.inserts + 1] = entry
                     end
                 end
             end

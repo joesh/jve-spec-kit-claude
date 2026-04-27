@@ -45,7 +45,7 @@ do
         duration = 100,
         source_in = 0,
         source_out = 100,
-        fps_numerator = 24000, fps_denominator = 1001,
+        frame_rate = { fps_numerator = 24000, fps_denominator = 1001 },
         fps_mismatch_policy = "resample",
         master_layer_track_id = nil,
         enabled = true,
@@ -83,7 +83,7 @@ do
     local row = {
         id = "c1", timeline_start = 0,
         source_in = 0, source_out = 100,
-        fps_numerator = 1000, fps_denominator = 1,
+        frame_rate = { fps_numerator = 1000, fps_denominator = 1 },
         created_at = os.time(), modified_at = os.time()
     }
     expect_error("plan_insert missing duration", function()
@@ -96,7 +96,7 @@ do
     local row = {
         id = "c1", timeline_start = 0, duration = 100,
         source_out = 100,
-        fps_numerator = 1000, fps_denominator = 1,
+        frame_rate = { fps_numerator = 1000, fps_denominator = 1 },
         created_at = os.time(), modified_at = os.time()
     }
     expect_error("plan_insert missing source_in", function()
@@ -109,7 +109,7 @@ do
     local row = {
         id = "c1", timeline_start = 0, duration = 100,
         source_in = 0,
-        fps_numerator = 1000, fps_denominator = 1,
+        frame_rate = { fps_numerator = 1000, fps_denominator = 1 },
         created_at = os.time(), modified_at = os.time()
     }
     expect_error("plan_insert missing source_out", function()
@@ -122,7 +122,7 @@ do
     local row = {
         id = "c1", timeline_start = 0, duration = 100,
         source_in = 0, source_out = 100,
-        fps_numerator = 1000, fps_denominator = 1,
+        frame_rate = { fps_numerator = 1000, fps_denominator = 1 },
         modified_at = os.time()
     }
     expect_error("plan_insert missing created_at", function()
@@ -135,7 +135,7 @@ do
     local row = {
         id = "c1", timeline_start = 0, duration = 100,
         source_in = 0, source_out = 100,
-        fps_numerator = 0, fps_denominator = 1,
+        frame_rate = { fps_numerator = 0, fps_denominator = 1 },
         created_at = os.time(), modified_at = os.time()
     }
     expect_error("plan_insert zero fps_numerator", function()
@@ -148,7 +148,7 @@ do
     local row = {
         id = "c1", timeline_start = 0, duration = 100,
         source_in = 0, source_out = 100,
-        fps_numerator = -1000, fps_denominator = 1,
+        frame_rate = { fps_numerator = -1000, fps_denominator = 1 },
         created_at = os.time(), modified_at = os.time()
     }
     expect_error("plan_insert negative fps", function()

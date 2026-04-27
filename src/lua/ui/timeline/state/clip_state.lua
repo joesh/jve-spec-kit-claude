@@ -58,16 +58,11 @@ local function normalize_clip_integers(clip)
             "clip_state: source_out must be integer, got " .. type(clip.source_out))
     end
 
-    -- Build rate table from flat fps fields if missing (mutations send flat fields)
-    if not clip.frame_rate and clip.fps_numerator and clip.fps_denominator then
-        assert(type(clip.fps_numerator) == "number" and clip.fps_numerator > 0,
-            string.format("clip_state: fps_numerator must be positive, got %s for clip %s",
-                tostring(clip.fps_numerator), tostring(clip.id)))
-        assert(type(clip.fps_denominator) == "number" and clip.fps_denominator > 0,
-            string.format("clip_state: fps_denominator must be positive, got %s for clip %s",
-                tostring(clip.fps_denominator), tostring(clip.id)))
-        clip.frame_rate = { fps_numerator = clip.fps_numerator, fps_denominator = clip.fps_denominator }
-    end
+    -- frame_rate is single-shape (table form only) per the rename, but it
+    -- is NOT required by clip_state itself — this function only validates
+    -- integer coords. Consumers that actually need fps (source-mark math,
+    -- ripple delta conversion, undo) assert frame_rate at the point of
+    -- use (clip_mutator.get_row_fps, command_helper.require_rate).
 
     clip._invalid = nil
     return true
@@ -404,10 +399,13 @@ function M.apply_mutations(mutations, persist_callback)
                         clip.track_id = update.track_id
                         needs_resort = true; changed = true
                     end
-                    -- Apply fps info from update (metadata, not used for coord conversion)
-                    if update.fps_numerator and update.fps_denominator then
-                        clip.fps_numerator = update.fps_numerator
-                        clip.fps_denominator = update.fps_denominator
+                    -- Apply frame_rate from update (metadata, not used for coord conversion)
+                    if update.frame_rate then
+                        assert(update.frame_rate.fps_numerator
+                            and update.frame_rate.fps_denominator,
+                            string.format("clip_state.apply_mutations: malformed frame_rate for clip %s",
+                                tostring(clip.id)))
+                        clip.frame_rate = update.frame_rate
                     end
                     -- All values are now integers - direct assignment
                     if update.start_value and update.start_value ~= clip.timeline_start then

@@ -351,26 +351,30 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                 bulk_shifts = {},
             }
             for _, cid in ipairs(result_or_err.created_clip_ids or {}) do
-                local row = Clip.load_v13_row(cid)
-                if row then
+                -- Clip.load (not load_v13_row) so the in-memory timeline_state
+                -- mutation carries the joined frame_rate from the nested
+                -- sequence row. clip_state asserts on missing frame_rate.
+                local clip = Clip.load(cid)
+                if clip then
                     bucket.inserts[#bucket.inserts + 1] = {
-                        id                    = row.id,
-                        owner_sequence_id     = row.owner_sequence_id,
-                        track_sequence_id     = row.owner_sequence_id,
-                        track_id              = row.track_id,
-                        nested_sequence_id    = row.nested_sequence_id,
-                        start_value           = row.timeline_start_frame,
-                        timeline_start        = row.timeline_start_frame,
-                        duration_value        = row.duration_frames,
-                        duration              = row.duration_frames,
-                        source_in             = row.source_in_frame,
-                        source_out            = row.source_out_frame,
-                        master_layer_track_id = row.master_layer_track_id,
-                        fps_mismatch_policy   = row.fps_mismatch_policy,
-                        name                  = row.name,
-                        enabled               = row.enabled,
-                        volume                = row.volume,
-                        playhead_frame        = row.playhead_frame,
+                        id                    = clip.id,
+                        owner_sequence_id     = clip.owner_sequence_id,
+                        track_sequence_id     = clip.owner_sequence_id,
+                        track_id              = clip.track_id,
+                        nested_sequence_id    = clip.nested_sequence_id,
+                        start_value           = clip.timeline_start,
+                        timeline_start        = clip.timeline_start,
+                        duration_value        = clip.duration,
+                        duration              = clip.duration,
+                        source_in             = clip.source_in,
+                        source_out            = clip.source_out,
+                        master_layer_track_id = clip.master_layer_track_id,
+                        fps_mismatch_policy   = clip.fps_mismatch_policy,
+                        frame_rate            = clip.frame_rate,
+                        name                  = clip.name,
+                        enabled               = clip.enabled,
+                        volume                = clip.volume,
+                        playhead_frame        = clip.playhead_frame,
                     }
                 end
             end

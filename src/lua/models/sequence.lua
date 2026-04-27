@@ -825,6 +825,22 @@ local function ensure_stream_clips(self)
         return self._cached_stream_clips
     end
 
+    -- Master sequences are constructed with NOT NULL fps + audio_sample_rate
+    -- by Sequence.ensure_master, so the table form is always present. Assert
+    -- before any DB work so a malformed master row fails loud at the source
+    -- rather than producing nil-fielded rate tables that crash consumers
+    -- later (the project_browser orphan-master crash class).
+    local video_frame_rate = self.frame_rate
+    assert(video_frame_rate
+        and video_frame_rate.fps_numerator
+        and video_frame_rate.fps_denominator,
+        string.format("ensure_stream_clips: master sequence %s missing frame_rate",
+            tostring(self.id)))
+    local audio_sample_rate = self.audio_sample_rate
+    assert(audio_sample_rate and audio_sample_rate > 0,
+        string.format("ensure_stream_clips: master sequence %s missing audio_sample_rate",
+            tostring(self.id)))
+
     local Track = require("models.track")
     local conn = resolve_db()
 
@@ -864,10 +880,6 @@ local function ensure_stream_clips(self)
         stmt:finalize()
         return out
     end
-
-    local video_frame_rate = self.frame_rate
-        or { fps_numerator = self.fps_numerator, fps_denominator = self.fps_denominator }
-    local audio_sample_rate = self.audio_sample_rate or 48000
 
     local video_clips, audio_clips = {}, {}
     for _, t in ipairs(video_tracks) do
@@ -1135,7 +1147,7 @@ local function calc_source_time_us(clip, playhead_frame)
 
     local clip_rate = clip.frame_rate
     assert(clip_rate and clip_rate.fps_numerator and clip_rate.fps_denominator,
-        string.format("Sequence: clip %s has no rate", clip.id))
+        string.format("Sequence: clip %s has no frame_rate", clip.id))
 
     -- Convert to microseconds: frame * 1000000 * fps_den / fps_num
     local source_time_us = math.floor(

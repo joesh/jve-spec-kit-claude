@@ -84,30 +84,34 @@ local clip = Clip.create({
     })
 assert(clip ~= nil and clip ~= "", "Failed to save clip")
 
-print("\n=== Test 1: Capture includes fps and timestamps ===")
+print("\n=== Test 1: Capture includes frame_rate and timestamps ===")
 local reloaded = Clip.load("clip_1", db)
 local captured = command_helper.capture_clip_state(reloaded)
 
-if not captured.fps_numerator or not captured.fps_denominator then
-    print("❌ Captured state missing fps fields")
+if not captured.frame_rate
+    or not captured.frame_rate.fps_numerator
+    or not captured.frame_rate.fps_denominator then
+    print("❌ Captured state missing frame_rate table")
     os.exit(1)
 end
 
-if captured.fps_numerator ~= 24 or captured.fps_denominator ~= 1 then
-    print(string.format("❌ Wrong fps: %s/%s", tostring(captured.fps_numerator), tostring(captured.fps_denominator)))
+if captured.frame_rate.fps_numerator ~= 24 or captured.frame_rate.fps_denominator ~= 1 then
+    print(string.format("❌ Wrong fps: %s/%s",
+        tostring(captured.frame_rate.fps_numerator),
+        tostring(captured.frame_rate.fps_denominator)))
     os.exit(1)
 end
 
 -- Timestamps are optional (may not be set on all clips)
-print("✅ Captured state includes fps_numerator, fps_denominator")
+print("✅ Captured state includes frame_rate")
 
 print("\n=== Test 2: JSON round-trip preserves frame data ===")
 local serialized = json.encode(captured)
 local deserialized = json.decode(serialized)
 
--- fps fields should be preserved as top-level fields
-if not deserialized.fps_numerator or deserialized.fps_numerator ~= 24 then
-    print("❌ fps_numerator lost during JSON round-trip")
+-- frame_rate table should be preserved
+if not deserialized.frame_rate or deserialized.frame_rate.fps_numerator ~= 24 then
+    print("❌ frame_rate lost during JSON round-trip")
     os.exit(1)
 end
 

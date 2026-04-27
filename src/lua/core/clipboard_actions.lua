@@ -97,8 +97,7 @@ local function copy_mark_range()
         clip_payloads[#clip_payloads + 1] = {
             original_id = clip.id,
             track_id = clip.track_id,
-            fps_numerator = clip.frame_rate.fps_numerator,
-            fps_denominator = clip.frame_rate.fps_denominator,
+            frame_rate = clip.frame_rate,
             nested_sequence_id = clip.nested_sequence_id,
             master_layer_track_id = clip.master_layer_track_id,
             master_audio_track_id = clip.master_audio_track_id,
@@ -176,8 +175,7 @@ local function copy_timeline_selection()
             clip_payloads[#clip_payloads + 1] = {
                 original_id = clip.id,
                 track_id = clip.track_id,
-                fps_numerator = clip.frame_rate.fps_numerator,
-                fps_denominator = clip.frame_rate.fps_denominator,
+                frame_rate = clip.frame_rate,
                 nested_sequence_id = clip.nested_sequence_id,
                 master_layer_track_id = clip.master_layer_track_id,
                 master_audio_track_id = clip.master_audio_track_id,

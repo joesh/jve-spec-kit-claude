@@ -45,6 +45,8 @@ local media_lookup = {
     },
 }
 
+-- V13: master clip entries (as produced by database.load_master_clips)
+-- carry `frame_rate` from the master sequence row, NOT NULL by schema.
 local master_lookup = {
     clip_a = {
         clip_id = "clip_a",
@@ -52,6 +54,9 @@ local master_lookup = {
         name = "Clip A",
         duration = 1500,
         project_id = "default_project",
+        frame_rate = { fps_numerator = 30000, fps_denominator = 1001 },
+        width = 1920,
+        height = 1080,
         metadata = {},
         media = media_lookup.media_a
     },
@@ -61,6 +66,9 @@ local master_lookup = {
         name = "Clip B",
         duration = 3200,
         project_id = "default_project",
+        frame_rate = { fps_numerator = 24000, fps_denominator = 1001 },
+        width = 3840,
+        height = 2160,
         metadata = {},
         media = media_lookup.media_b
     }
