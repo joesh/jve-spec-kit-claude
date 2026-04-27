@@ -347,10 +347,11 @@ end
 -- Cache miss: no-op (clip keeps whatever state it had).
 -- Writing to status_cache is done exclusively by authoritative sources:
 -- background probe, TMB, FS watcher, load_persisted.
--- @param clip table: clip with .media_path or .file_path field
+-- @param clip table: clip with .media_path field (the V13 denorm
+--   populated by database.load_clips; not the V8 .file_path)
 function M.ensure_clip_status(clip)
     assert(type(clip) == "table", "media_status.ensure_clip_status: clip must be a table")
-    local path = clip.media_path or clip.file_path
+    local path = clip.media_path
     if not path or path == "" then return end
 
     local cached = status_cache[path]
@@ -539,7 +540,7 @@ function M.start_background_probe(active_sequence_id)
     if active_sequence_id and active_sequence_id ~= "" then
         local clips = db.load_clips(active_sequence_id)
         for _, clip in ipairs(clips) do
-            local p = clip.media_path or clip.file_path
+            local p = clip.media_path
             if p and p ~= "" and not active_set[p] then
                 active_set[p] = true
                 active_paths[#active_paths + 1] = p

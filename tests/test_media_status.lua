@@ -93,16 +93,6 @@ do
     media_status.ensure_clip_status(c5)
     check("c5 unchanged (nil path)", c5.offline == nil)
 
-    -- file_path fallback works
-    local c7 = { id = "c7", file_path = "/tmp/jve/online.mov" }
-    media_status.ensure_clip_status(c7)
-    check("c7 online via file_path", c7.offline == false)
-
-    -- file_path also works
-    local c6 = { id = "c6", file_path = "/tmp/jve/online.mov" }
-    media_status.ensure_clip_status(c6)
-    check("c6 online via file_path", c6.offline == false)
-
     media_status.clear()
 end
 

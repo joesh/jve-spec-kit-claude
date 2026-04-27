@@ -8,13 +8,13 @@ require('test_env')
 local media_status = require("core.media.media_status")
 
 -- Contract: ensure_clip_status stamps clip.offline from cache for the
--- clip's file_path. This is the primitive the project_browser fix relies on.
+-- clip's media_path. This is the primitive the project_browser fix relies on.
 do
     local path = "/tmp/jve/does_not_exist_offline_stamp.mov"
     media_status._set_cache(path, { offline = true, error_code = "FileNotFound" })
 
     -- Simulate clip as returned by database.load_master_clips (offline=false default)
-    local clip = { file_path = path, offline = false }
+    local clip = { media_path = path, offline = false }
     media_status.ensure_clip_status(clip)
 
     assert(clip.offline == true,
