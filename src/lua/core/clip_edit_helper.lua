@@ -9,8 +9,6 @@
 
 local M = {}
 
-local _Clip = require('models.clip')  -- luacheck: ignore 211 (loaded for side effects)
-local _Media = require('models.media')  -- luacheck: ignore 211 (loaded for side effects)
 local Track = require('models.track')
 local command_helper = require('core.command_helper')
 local rational_helpers = require('core.command_rational_helpers')

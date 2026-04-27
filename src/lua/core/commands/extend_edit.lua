@@ -8,7 +8,6 @@
 --
 -- @file extend_edit.lua
 local M = {}
-local _database = require("core.database")  -- luacheck: ignore 211 (unused, required for module init)
 
 local SPEC = {
     args = {

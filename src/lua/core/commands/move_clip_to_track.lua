@@ -121,7 +121,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             }
         end
 
-        local _original_timeline_start = clip.timeline_start  -- luacheck: ignore 211 (preserved for future undo enhancement)
         local original_state = command_helper.capture_clip_state(clip)
 
         -- Pending values must be integers (if provided)
