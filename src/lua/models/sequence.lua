@@ -40,13 +40,25 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
     assert(project_id and project_id ~= "", "Sequence.create: project_id is required")
 
     local fr = validate_frame_rate(frame_rate)
-    
-    assert(type(width) == "number" and width > 0, "Sequence.create: width is required and must be positive")
-    assert(type(height) == "number" and height > 0, "Sequence.create: height is required and must be positive")
-    local w = math.floor(width)
-    local h = math.floor(height)
 
     opts = opts or {}
+
+    -- width/height are required for every sequence EXCEPT a master whose
+    -- source media is audio-only (no video media_refs, no callers reading
+    -- dimensions). Schema permits NULL only for that case. Rule 2.13:
+    -- no silent fallback to a stub resolution.
+    local w, h
+    if width ~= nil or height ~= nil then
+        assert(type(width) == "number" and width > 0,
+            "Sequence.create: width must be a positive number when provided")
+        assert(type(height) == "number" and height > 0,
+            "Sequence.create: height must be a positive number when provided")
+        w = math.floor(width)
+        h = math.floor(height)
+    else
+        assert(opts.kind == "master",
+            "Sequence.create: width/height are required for non-master sequences (rule 2.13)")
+    end
     local now = os.time()
 
     -- Integer frame coordinates (fps is metadata in frame_rate)
@@ -65,8 +77,18 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
     assert(opts.kind == "master" or opts.kind == "nested",
         "Sequence.create: opts.kind must be 'master' or 'nested' (V9 schema); got "
         .. tostring(opts.kind))
-    assert(opts.audio_sample_rate and opts.audio_sample_rate > 0,
-        "Sequence.create: opts.audio_sample_rate is required (rule 2.13)")
+    -- audio_sample_rate is required for every sequence EXCEPT a master
+    -- whose source media has no audio (kind='master' + no audio media_refs
+    -- will ever be inserted). Schema permits NULL only for that case.
+    -- Callers force the issue by passing nil explicitly; everywhere else
+    -- it is mandatory. Rule 2.13: no silent fallback.
+    if opts.audio_sample_rate ~= nil then
+        assert(type(opts.audio_sample_rate) == "number" and opts.audio_sample_rate > 0,
+            "Sequence.create: opts.audio_sample_rate must be a positive number when provided (rule 2.13)")
+    else
+        assert(opts.kind == "master",
+            "Sequence.create: opts.audio_sample_rate is required for non-master sequences (rule 2.13)")
+    end
 
     local sequence = {
         id = opts.id or uuid.generate(),
@@ -196,33 +218,64 @@ function Sequence.load(id)
     return setmetatable(sequence, Sequence)
 end
 
-function Sequence:save()
-    assert(self and self.id and self.id ~= "", "Sequence.save: invalid sequence or missing id")
-    assert(self.project_id and self.project_id ~= "", "Sequence.save: project_id is required")
+-- ============================================================================
+-- Sequence:save — validation, prepared statement, parameter binding
+-- ============================================================================
 
-    local conn = resolve_db()
-    if not conn then
-        return false
+-- Bind one column that may be NULL on a sequences row.
+local function bind_nullable(stmt, idx, val)
+    if val == nil then
+        if stmt.bind_null then stmt:bind_null(idx) else stmt:bind_value(idx, nil) end
+    else
+        stmt:bind_value(idx, val)
+    end
+end
+
+-- Enforce the master-only NULL window for audio_sample_rate / width / height
+-- and the kind whitelist. Throws actionable assertions on violation.
+local function validate_save_invariants(self)
+    assert(self.kind == "master" or self.kind == "nested",
+        "Sequence.save: kind must be 'master' or 'nested' (V9); got " .. tostring(self.kind))
+
+    if self.audio_sample_rate ~= nil then
+        assert(type(self.audio_sample_rate) == "number" and self.audio_sample_rate > 0,
+            "Sequence.save: audio_sample_rate must be a positive number when set (sequence "
+            .. tostring(self.id) .. ")")
+    else
+        assert(self.kind == "master", string.format(
+            "Sequence.save: audio_sample_rate=nil is permitted only on masters; "
+            .. "sequence %s has kind='%s'", tostring(self.id), tostring(self.kind)))
     end
 
-    self.modified_at = os.time()
+    if self.width ~= nil or self.height ~= nil then
+        assert(type(self.width) == "number" and self.width > 0
+            and type(self.height) == "number" and self.height > 0,
+            "Sequence.save: width and height must both be positive numbers when set (sequence "
+            .. tostring(self.id) .. ")")
+    else
+        assert(self.kind == "master", string.format(
+            "Sequence.save: width/height=nil is permitted only on masters; "
+            .. "sequence %s has kind='%s'", tostring(self.id), tostring(self.kind)))
+    end
 
-    -- Coordinates are now plain integers
-    local db_fps_num = self.frame_rate.fps_numerator
-    local db_fps_den = self.frame_rate.fps_denominator
+    -- Schema-NOT-NULL columns. Sequence.load asserts these are non-NULL on
+    -- read, so any path that produces a sequence with these unset is a bug
+    -- to surface, not paper over with a silent default.
+    assert(type(self.start_timecode_frame) == "number",
+        "Sequence.save: start_timecode_frame required (sequence " .. tostring(self.id) .. ")")
+    assert(type(self.video_scroll_offset) == "number",
+        "Sequence.save: video_scroll_offset required (sequence " .. tostring(self.id) .. ")")
+    assert(type(self.audio_scroll_offset) == "number",
+        "Sequence.save: audio_scroll_offset required (sequence " .. tostring(self.id) .. ")")
+    assert(type(self.video_audio_split_ratio) == "number",
+        "Sequence.save: video_audio_split_ratio required (sequence " .. tostring(self.id) .. ")")
+    assert(type(self.created_at) == "number",
+        "Sequence.save: created_at required (sequence " .. tostring(self.id) .. ")")
+end
 
-    local db_playhead = self.playhead_position
-    local db_view_start = self.viewport_start_time
-    local db_view_dur = self.viewport_duration
-
-    local db_mark_in = self.mark_in  -- nil or integer
-    local db_mark_out = self.mark_out  -- nil or integer
-    
-    assert(self.audio_sample_rate, "Sequence.save: audio_sample_rate is required for sequence " .. tostring(self.id))
-    local db_audio_rate = self.audio_sample_rate
-
-    -- CRITICAL: Use ON CONFLICT DO UPDATE instead of INSERT OR REPLACE
-    -- INSERT OR REPLACE triggers DELETE first, which cascades to delete clips via foreign keys!
+-- ON CONFLICT DO UPDATE upsert. INSERT OR REPLACE would DELETE first and
+-- cascade-delete clips via foreign keys; we rely on the upsert form.
+local function prepare_save_stmt(conn)
     local stmt = conn:prepare([[
         INSERT INTO sequences
         (id, project_id, name, kind, fps_numerator, fps_denominator, width, height,
@@ -262,71 +315,55 @@ function Sequence:save()
             fps_mismatch_policy = excluded.fps_mismatch_policy,
             modified_at = excluded.modified_at
     ]])
-
     if not stmt then
         local err = conn.last_error and conn:last_error() or "unknown error"
         error("Sequence.save: failed to prepare insert statement: " .. err)
     end
+    return stmt
+end
 
-    stmt:bind_value(1, self.id)
-    stmt:bind_value(2, self.project_id)
-    stmt:bind_value(3, self.name)
-    -- Schema V9 CHECK forbids NULL/default; caller must have set this.
-    assert(self.kind == "master" or self.kind == "nested",
-        "Sequence.save: kind must be 'master' or 'nested' (V9); got " .. tostring(self.kind))
-    stmt:bind_value(4, self.kind)
-    stmt:bind_value(5, db_fps_num)
-    stmt:bind_value(6, db_fps_den)
-    stmt:bind_value(7, self.width)
-    stmt:bind_value(8, self.height)
-    stmt:bind_value(9, self.start_timecode_frame or 0)
-    stmt:bind_value(10, db_playhead)
-    stmt:bind_value(11, db_view_start)
-    stmt:bind_value(12, db_view_dur)
-    stmt:bind_value(13, self.video_scroll_offset or 0)
-    stmt:bind_value(14, self.audio_scroll_offset or 0)
-    stmt:bind_value(15, self.video_audio_split_ratio or 0.5)
-
-    if db_mark_in then
-        stmt:bind_value(16, db_mark_in)
-    else
-        if stmt.bind_null then
-            stmt:bind_null(16)
-        else
-            stmt:bind_value(16, nil)
-        end
-    end
-
-    if db_mark_out then
-        stmt:bind_value(17, db_mark_out)
-    else
-        if stmt.bind_null then
-            stmt:bind_null(17)
-        else
-            stmt:bind_value(17, nil)
-        end
-    end
-
-    stmt:bind_value(18, db_audio_rate)
-    stmt:bind_value(19, self.selected_clip_ids_json or "")
-    stmt:bind_value(20, self.selected_edge_infos_json or "")
+local function bind_save_params(stmt, self)
+    stmt:bind_value(1,  self.id)
+    stmt:bind_value(2,  self.project_id)
+    stmt:bind_value(3,  self.name)
+    stmt:bind_value(4,  self.kind)
+    stmt:bind_value(5,  self.frame_rate.fps_numerator)
+    stmt:bind_value(6,  self.frame_rate.fps_denominator)
+    bind_nullable(stmt, 7, self.width)
+    bind_nullable(stmt, 8, self.height)
+    stmt:bind_value(9,  self.start_timecode_frame)
+    stmt:bind_value(10, self.playhead_position)
+    stmt:bind_value(11, self.viewport_start_time)
+    stmt:bind_value(12, self.viewport_duration)
+    stmt:bind_value(13, self.video_scroll_offset)
+    stmt:bind_value(14, self.audio_scroll_offset)
+    stmt:bind_value(15, self.video_audio_split_ratio)
+    bind_nullable(stmt, 16, self.mark_in)
+    bind_nullable(stmt, 17, self.mark_out)
+    bind_nullable(stmt, 18, self.audio_sample_rate)
+    -- Selection JSON columns: schema declares TEXT DEFAULT '[]'. Mirror it
+    -- — an empty-string fallback would produce un-parseable JSON on read.
+    stmt:bind_value(19, self.selected_clip_ids_json or "[]")
+    stmt:bind_value(20, self.selected_edge_infos_json or "[]")
     stmt:bind_value(21, self.selected_gap_infos_json or "[]")
-
-    -- V9 columns. All nullable.
-    local function bind_nullable(idx, val)
-        if val == nil then
-            if stmt.bind_null then stmt:bind_null(idx) else stmt:bind_value(idx, nil) end
-        else
-            stmt:bind_value(idx, val)
-        end
-    end
-    bind_nullable(22, self.default_video_layer_track_id)
-    bind_nullable(23, self.video_start_tc_frame)
-    bind_nullable(24, self.audio_start_tc_samples)
-    bind_nullable(25, self.fps_mismatch_policy)
-
-    stmt:bind_value(26, self.created_at or os.time())
+    bind_nullable(stmt, 22, self.default_video_layer_track_id)
+    bind_nullable(stmt, 23, self.video_start_tc_frame)
+    bind_nullable(stmt, 24, self.audio_start_tc_samples)
+    bind_nullable(stmt, 25, self.fps_mismatch_policy)
+    stmt:bind_value(26, self.created_at)
     stmt:bind_value(27, self.modified_at)
+end
+
+function Sequence:save()
+    assert(self and self.id and self.id ~= "", "Sequence.save: invalid sequence or missing id")
+    assert(self.project_id and self.project_id ~= "", "Sequence.save: project_id is required")
+    local conn = resolve_db()
+    if not conn then return false end
+
+    self.modified_at = os.time()
+    validate_save_invariants(self)
+    local stmt = prepare_save_stmt(conn)
+    bind_save_params(stmt, self)
 
     local ok = stmt:exec()
     if not ok then
@@ -334,7 +371,6 @@ function Sequence:save()
         stmt:finalize()
         error(string.format("Sequence.save: failed for %s: %s", tostring(self.id), tostring(err)))
     end
-
     stmt:finalize()
     return ok
 end
@@ -639,13 +675,18 @@ function Sequence.ensure_master(media_id, project_id, opts)
             has_video        = has_video,
             has_audio        = has_audio,
             sample_rate      = sample_rate,
-            -- For Sequence.create's mandatory audio_sample_rate field on a
-            -- video-only master, fall back to a project-conventional
-            -- value — the resolver never emits audio media_refs in that
-            -- case so the rate goes unread.
-            seq_audio_rate   = sample_rate or 48000,
-            width            = has_video and media.width  or 1920,
-            height           = has_video and media.height or 1080,
+            -- Video-only masters carry NULL audio_sample_rate (schema
+            -- permits it for kind='master' specifically). The resolver
+            -- never emits audio media_refs for these so the rate is
+            -- genuinely unrepresentable — better to be honest about the
+            -- absence than to invent a value.
+            seq_audio_rate   = sample_rate,  -- nil when video-only
+            -- Audio-only masters carry NULL width/height (schema permits
+            -- it for kind='master'). Same rationale as audio_sample_rate
+            -- above: no video media_refs ever land on them, so the
+            -- dimensions are unrepresentable.
+            width            = has_video and media.width  or nil,
+            height           = has_video and media.height or nil,
             video_tc         = video_tc,
             audio_tc         = audio_tc,
         }
@@ -836,10 +877,14 @@ local function ensure_stream_clips(self)
         and video_frame_rate.fps_denominator,
         string.format("ensure_stream_clips: master sequence %s missing frame_rate",
             tostring(self.id)))
+    -- audio_sample_rate is NULL on video-only masters (no audio media_refs
+    -- ever land on them). Assert validity only when audio tracks exist.
     local audio_sample_rate = self.audio_sample_rate
-    assert(audio_sample_rate and audio_sample_rate > 0,
-        string.format("ensure_stream_clips: master sequence %s missing audio_sample_rate",
-            tostring(self.id)))
+    if audio_sample_rate ~= nil then
+        assert(audio_sample_rate > 0, string.format(
+            "ensure_stream_clips: master sequence %s has invalid audio_sample_rate=%s",
+            tostring(self.id), tostring(audio_sample_rate)))
+    end
 
     local Track = require("models.track")
     local conn = resolve_db()
@@ -886,6 +931,12 @@ local function ensure_stream_clips(self)
         for _, r in ipairs(load_for_track(t.id, "frame_rate", video_frame_rate)) do
             video_clips[#video_clips + 1] = r
         end
+    end
+    if #audio_tracks > 0 then
+        assert(audio_sample_rate and audio_sample_rate > 0, string.format(
+            "ensure_stream_clips: master sequence %s has %d audio track(s) but "
+            .. "audio_sample_rate is missing",
+            tostring(self.id), #audio_tracks))
     end
     for _, t in ipairs(audio_tracks) do
         for _, r in ipairs(load_for_track(t.id, "sample_rate", audio_sample_rate)) do
@@ -1590,7 +1641,7 @@ function Sequence:get_track_indices(track_type)
     local Track = require("models.track")
     local tracks = Track.find_by_sequence(self.id, track_type)
     local indices = {}
-    for _, track in ipairs(tracks or {}) do
+    for _, track in ipairs(tracks) do
         indices[#indices + 1] = track.track_index
     end
     table.sort(indices)
@@ -1687,8 +1738,8 @@ end
 -- (FR-019). Dispatches on sequences.kind: 'master' iterates media_refs,
 -- 'nested' iterates clips + recurses.
 --
--- Rule 2.5: orchestrator reads as a high-level algorithm; each piece of
--- intent is a named helper.
+-- Rule 2.5: top-level reads as a high-level algorithm; each piece of intent
+-- is a named helper.
 --
 -- Coordinate spaces (read carefully — every bug in the prior implementation
 -- was a unit confusion):
@@ -1959,20 +2010,26 @@ local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
             local hi = math.min(r_hi, master_hi)
             local file_in  = r.source_in + (lo - r.timeline_start)
             local file_out = r.source_in + (hi - r.timeline_start)
-            -- Offline → media_path=nil + enabled=false (canonical CT-R9).
-            -- Park-mode offline overlay flows through media_status separately;
-            -- playback-time overlay regression tracked in
-            -- todo_offline_overlay_during_playback.md.
-            local online = require("core.media.media_status").is_online(r.file_path)
+            -- Pass media_path AND user-set enabled state through unchanged
+            -- regardless of online/offline. Offline routing is the
+            -- responsibility of downstream consumers:
+            --   * playback_engine._build_tmb_clip queries media_status.get
+            --     and sets ClipInfo.offline=true on the TMB clip → C++ TMB
+            --     emits the audible beep placeholder.
+            --   * timeline_view_renderer + offline_frame_cache key on
+            --     media_path to render the visual OFFLINE overlay.
+            -- Blanking media_path here used to filter offline clips out of
+            -- get_{audio,video}_in_range entirely, which silenced beeps
+            -- and blacked out the offline overlay during playback.
             local base = {
-                media_path     = online and r.file_path or nil,
+                media_path     = r.file_path,
                 media_id       = r.media_id,
                 source_in      = file_in,
                 source_out     = file_out,
                 timeline_start = lo,            -- master coords; outer translates
                 duration       = hi - lo,       -- master coords
                 volume         = r.volume,      -- leaf media_ref's own volume
-                enabled        = online and r.enabled,
+                enabled        = r.enabled,
                 effects        = {},
                 provenance     = build_provenance(outer_chain, r.id),
                 -- Default owner-track tagging for the case where this master
@@ -2513,7 +2570,7 @@ function Sequence.capture_full_state(id)
     local Track = require("models.track")
     local tracks = {}
     for _, ttype in ipairs({ "VIDEO", "AUDIO" }) do
-        local list = Track.find_by_sequence(id, ttype) or {}
+        local list = Track.find_by_sequence(id, ttype)
         for _, t in ipairs(list) do
             tracks[#tracks + 1] = {
                 id          = t.id,
@@ -2584,7 +2641,8 @@ function Sequence.restore_full_state(state)
     end
 
     local Track = require("models.track")
-    for _, t in ipairs(state.tracks or {}) do
+    -- capture_full_state always populates state.tracks (possibly empty).
+    for _, t in ipairs(state.tracks) do
         local newt
         if t.track_type == "VIDEO" then
             newt = Track.create_video(t.name, s.id,

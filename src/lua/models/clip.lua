@@ -25,66 +25,141 @@ end
 -- query media_refs directly via Sequence.find_master_for_media or the
 -- resolver chain.
 
+-- ============================================================================
+-- Clip.load phase helpers
+-- ============================================================================
+
+-- V13 SELECT: clips no longer carry clip_kind / media_id / master_clip_id /
+-- fps_numerator / fps_denominator / offline. The clip's source-side
+-- timebase comes from its nested sequence; clip_kind is derived from the
+-- owner-track type; media metadata is resolved through nested → master →
+-- media_ref → media when nested is a master.
+local CLIP_LOAD_SQL = [[
+    SELECT c.id, c.project_id, c.name, c.track_id,
+           c.owner_sequence_id, c.nested_sequence_id,
+           c.timeline_start_frame, c.duration_frames,
+           c.source_in_frame, c.source_out_frame,
+           c.master_layer_track_id, c.master_audio_track_id,
+           c.fps_mismatch_policy,
+           c.enabled, c.volume, c.mark_in_frame, c.mark_out_frame,
+           c.playhead_frame, c.created_at, c.modified_at,
+           t.track_type,
+           owner_seq.fps_numerator, owner_seq.fps_denominator,
+           nested_seq.kind, nested_seq.fps_numerator, nested_seq.fps_denominator,
+           mr.media_id, m.name, m.file_path, m.offline_note
+    FROM clips c
+    JOIN tracks t ON c.track_id = t.id
+    JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
+    JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
+    LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+                            AND nested_seq.kind = 'master'
+    LEFT JOIN media m ON m.id = mr.media_id
+    WHERE c.id = ?
+]]
+
+-- Assert the nested + owner sequences both carry positive frame rates.
+-- Throws on violation (caller has already done query:finalize()).
+local function assert_clip_load_frame_rates(query, clip_id)
+    local nested_fps_num, nested_fps_den = query:value(24), query:value(25)
+    if not nested_fps_num or nested_fps_num <= 0
+        or not nested_fps_den or nested_fps_den <= 0 then
+        error(string.format(
+            "Clip.load_failed: clip %s nested-sequence has invalid frame rate (%s/%s)",
+            clip_id, tostring(nested_fps_num), tostring(nested_fps_den)))
+    end
+    local owner_fps_num, owner_fps_den = query:value(21), query:value(22)
+    if not owner_fps_num or owner_fps_num <= 0
+        or not owner_fps_den or owner_fps_den <= 0 then
+        error(string.format(
+            "Clip.load_failed: clip %s owner-sequence has invalid frame rate (%s/%s)",
+            clip_id, tostring(owner_fps_num), tostring(owner_fps_den)))
+    end
+    return nested_fps_num, nested_fps_den
+end
+
+-- Materialize the clip table from one cursor row (mirrors
+-- database.build_clip_from_query_row's V13 chain-leaf shape so callers
+-- can read .resolved_media + .media_path uniformly).
+local function build_clip_from_load_row(query, clip_id, nested_fps_num, nested_fps_den)
+    local clip = {
+        id                    = query:value(0),
+        project_id            = query:value(1),
+        name                  = query:value(2),
+        track_id              = query:value(3),
+        owner_sequence_id     = query:value(4),
+        nested_sequence_id    = query:value(5),
+
+        timeline_start = assert(query:value(6),  "Clip.load: timeline_start_frame is NULL"),
+        duration       = assert(query:value(7),  "Clip.load: duration_frames is NULL"),
+        source_in      = assert(query:value(8),  "Clip.load: source_in_frame is NULL"),
+        source_out     = assert(query:value(9),  "Clip.load: source_out_frame is NULL"),
+
+        master_layer_track_id = query:value(10),
+        master_audio_track_id = query:value(11),
+        fps_mismatch_policy   = query:value(12),
+
+        -- Source-side timebase (the nested sequence's frame rate).
+        frame_rate = {
+            fps_numerator   = nested_fps_num,
+            fps_denominator = nested_fps_den,
+        },
+
+        enabled = query:value(13) == 1 or query:value(13) == true,
+        volume  = assert(query:value(14), string.format(
+            "Clip.load: volume is NULL for clip %s", tostring(clip_id))),
+        mark_in        = query:value(15),
+        mark_out       = query:value(16),
+        playhead_frame = assert(query:value(17), string.format(
+            "Clip.load: playhead_frame is NULL for clip %s", tostring(clip_id))),
+        created_at  = query:value(18),
+        modified_at = query:value(19),
+
+        track_type           = query:value(20),
+        nested_sequence_kind = query:value(23),
+    }
+
+    -- V13-resolved chain leaf: media chain leaks through the LEFT JOIN
+    -- only when nested.kind = 'master'. media_path is denormed flat for
+    -- the timeline offline-tracker (keys clips by media_path).
+    local media_id_val = query:value(26)
+    if media_id_val then
+        clip.resolved_media = {
+            id            = media_id_val,
+            name          = query:value(27),
+            path          = query:value(28),
+            offline_note  = query:value(29),
+        }
+        clip.media_path = query:value(28)
+    end
+    return clip
+end
+
 local function load_internal(clip_id, raise_errors)
     if not clip_id or clip_id == "" then
-        if raise_errors then
-            error("Clip.load_failed: Invalid clip_id")
-        end
+        if raise_errors then error("Clip.load_failed: Invalid clip_id") end
         return nil
     end
 
     local database = require("core.database")
     local db = database.get_connection()
     if not db then
-        if raise_errors then
-            error("Clip.load_failed: No database connection available")
-        end
+        if raise_errors then error("Clip.load_failed: No database connection available") end
         return nil
     end
 
-    -- V13 SELECT: clips no longer carry clip_kind / media_id / master_clip_id /
-    -- fps_numerator / fps_denominator / offline. The clip's source-side
-    -- timebase comes from its nested sequence; clip_kind is derived from the
-    -- owner-track type; media metadata is resolved through nested→master→
-    -- media_ref→media when nested is a master.
-    local query = db:prepare([[
-        SELECT c.id, c.project_id, c.name, c.track_id,
-               c.owner_sequence_id, c.nested_sequence_id,
-               c.timeline_start_frame, c.duration_frames,
-               c.source_in_frame, c.source_out_frame,
-               c.master_layer_track_id, c.master_audio_track_id,
-               c.fps_mismatch_policy,
-               c.enabled, c.volume, c.mark_in_frame, c.mark_out_frame,
-               c.playhead_frame, c.created_at, c.modified_at,
-               t.track_type,
-               owner_seq.fps_numerator, owner_seq.fps_denominator,
-               nested_seq.kind, nested_seq.fps_numerator, nested_seq.fps_denominator,
-               mr.media_id, m.name, m.file_path, m.offline_note
-        FROM clips c
-        JOIN tracks t ON c.track_id = t.id
-        JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
-        JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
-        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
-                                AND nested_seq.kind = 'master'
-        LEFT JOIN media m ON m.id = mr.media_id
-        WHERE c.id = ?
-    ]])
+    local query = db:prepare(CLIP_LOAD_SQL)
     if not query then
-        if raise_errors then
-            error("Clip.load_failed: Failed to prepare query")
-        end
+        if raise_errors then error("Clip.load_failed: Failed to prepare query") end
         return nil
     end
-
     query:bind_value(1, clip_id)
 
     if not query:exec() then
+        local err = query:last_error()
+        query:finalize()
         if raise_errors then
-            local err = query:last_error()
-            query:finalize()
             error(string.format("Clip.load_failed: Query execution failed: %s", err))
         end
-        query:finalize()
         return nil
     end
 
@@ -96,83 +171,11 @@ local function load_internal(clip_id, raise_errors)
         return nil
     end
 
-    local nested_fps_num = query:value(24)
-    local nested_fps_den = query:value(25)
-    if not nested_fps_num or nested_fps_num <= 0 or not nested_fps_den or nested_fps_den <= 0 then
-        query:finalize()
-        error(string.format(
-            "Clip.load_failed: clip %s nested-sequence has invalid frame rate (%s/%s)",
-            clip_id, tostring(nested_fps_num), tostring(nested_fps_den)))
-    end
-    local owner_fps_num = query:value(21)
-    local owner_fps_den = query:value(22)
-    if not owner_fps_num or owner_fps_num <= 0 or not owner_fps_den or owner_fps_den <= 0 then
-        query:finalize()
-        error(string.format(
-            "Clip.load_failed: clip %s owner-sequence has invalid frame rate (%s/%s)",
-            clip_id, tostring(owner_fps_num), tostring(owner_fps_den)))
-    end
-
-    local track_type = query:value(20)
-    local nested_id = query:value(5)
-
-    local clip = {
-        id = query:value(0),
-        project_id = query:value(1),
-        name = query:value(2),
-        track_id = query:value(3),
-        owner_sequence_id = query:value(4),
-        nested_sequence_id = nested_id,
-
-        timeline_start = assert(query:value(6), "Clip.load: timeline_start_frame is NULL"),
-        duration = assert(query:value(7), "Clip.load: duration_frames is NULL"),
-        source_in = assert(query:value(8), "Clip.load: source_in_frame is NULL"),
-        source_out = assert(query:value(9), "Clip.load: source_out_frame is NULL"),
-
-        master_layer_track_id = query:value(10),
-        master_audio_track_id = query:value(11),
-        fps_mismatch_policy   = query:value(12),
-
-        -- Source-side timebase (the nested sequence's frame rate).
-        frame_rate = {
-            fps_numerator = nested_fps_num,
-            fps_denominator = nested_fps_den,
-        },
-
-        enabled = query:value(13) == 1 or query:value(13) == true,
-        volume = assert(query:value(14),
-            string.format("Clip.load: volume is NULL for clip %s", tostring(clip_id))),
-        mark_in = query:value(15),
-        mark_out = query:value(16),
-        playhead_frame = assert(query:value(17),
-            string.format("Clip.load: playhead_frame is NULL for clip %s", tostring(clip_id))),
-        created_at = query:value(18),
-        modified_at = query:value(19),
-
-        track_type = track_type,
-        nested_sequence_kind = query:value(23),
-    }
-    -- V13-resolved chain leaf substructure (see
-    -- database.build_clip_from_query_row for the same shape).
-    do
-        local media_id_val = query:value(26)
-        if media_id_val then
-            clip.resolved_media = {
-                id = media_id_val,
-                name = query:value(27),
-                path = query:value(28),
-                offline_note = query:value(29),
-            }
-            -- Flat denorm field (mirrors database.load_clips); the timeline
-            -- offline-tracker keys clips by media_path.
-            clip.media_path = query:value(28)
-        end
-    end
-
+    local nested_fps_num, nested_fps_den = assert_clip_load_frame_rates(query, clip_id)
+    local clip = build_clip_from_load_row(query, clip_id, nested_fps_num, nested_fps_den)
     query:finalize()
 
     clip.name = derive_display_name(clip.id, clip.name)
-
     setmetatable(clip, {__index = M})
     return clip
 end
@@ -300,76 +303,62 @@ end
 
 -- Save clip to database (INSERT or UPDATE)
 -- opts.skip_occlusion: when true, skip occlusion checks (currently disabled, will be used when re-enabled)
-local function save_internal(self, _opts)
-    local database = require("core.database")
-    local db = database.get_connection()
-    assert(db, "Clip.save: No database connection available")
+-- ============================================================================
+-- Clip.save phase helpers
+-- ============================================================================
 
+-- Type-validate every required field on the clip before any DB work. Per
+-- rule 2.13: NOT NULL columns + invariant fields fail loud at write time.
+local function assert_clip_save_invariants(self)
     assert(self.id and self.id ~= "", "Clip.save: clip id is required")
-
-    -- Verify Invariants: coordinates must be integers
-    assert(type(self.timeline_start) == "number", "Clip.save: timeline_start must be integer (got " .. type(self.timeline_start) .. ")")
-    assert(type(self.duration) == "number", "Clip.save: duration must be integer (got " .. type(self.duration) .. ")")
-    assert(type(self.source_in) == "number", "Clip.save: source_in must be integer (got " .. type(self.source_in) .. ")")
-    assert(type(self.source_out) == "number", "Clip.save: source_out must be integer (got " .. type(self.source_out) .. ")")
-
-    -- Verify volume
-    assert(type(self.volume) == "number" and self.volume >= 0,
-        string.format("Clip.save: volume must be non-negative number (got %s=%s) for clip %s",
-            type(self.volume), tostring(self.volume), tostring(self.id)))
-
-    -- Verify mark field types (nullable marks must be number or nil)
+    assert(type(self.timeline_start) == "number",
+        "Clip.save: timeline_start must be integer (got " .. type(self.timeline_start) .. ")")
+    assert(type(self.duration) == "number",
+        "Clip.save: duration must be integer (got " .. type(self.duration) .. ")")
+    assert(type(self.source_in) == "number",
+        "Clip.save: source_in must be integer (got " .. type(self.source_in) .. ")")
+    assert(type(self.source_out) == "number",
+        "Clip.save: source_out must be integer (got " .. type(self.source_out) .. ")")
+    assert(type(self.volume) == "number" and self.volume >= 0, string.format(
+        "Clip.save: volume must be non-negative number (got %s=%s) for clip %s",
+        type(self.volume), tostring(self.volume), tostring(self.id)))
     if self.mark_in ~= nil then
-        assert(type(self.mark_in) == "number",
-            string.format("Clip.save: mark_in must be integer or nil (got %s) for clip %s",
-                type(self.mark_in), tostring(self.id)))
+        assert(type(self.mark_in) == "number", string.format(
+            "Clip.save: mark_in must be integer or nil (got %s) for clip %s",
+            type(self.mark_in), tostring(self.id)))
     end
     if self.mark_out ~= nil then
-        assert(type(self.mark_out) == "number",
-            string.format("Clip.save: mark_out must be integer or nil (got %s) for clip %s",
-                type(self.mark_out), tostring(self.id)))
+        assert(type(self.mark_out) == "number", string.format(
+            "Clip.save: mark_out must be integer or nil (got %s) for clip %s",
+            type(self.mark_out), tostring(self.id)))
     end
-    assert(type(self.playhead_frame) == "number",
-        string.format("Clip.save: playhead_frame must be number (got %s) for clip %s",
-            type(self.playhead_frame), tostring(self.id)))
-
+    assert(type(self.playhead_frame) == "number", string.format(
+        "Clip.save: playhead_frame must be number (got %s) for clip %s",
+        type(self.playhead_frame), tostring(self.id)))
+    assert(type(self.name) == "string" and self.name ~= "",
+        string.format("Clip.save: name is required for clip %s", tostring(self.id)))
+    assert(type(self.fps_mismatch_policy) == "string" and self.fps_mismatch_policy ~= "",
+        string.format("Clip.save: fps_mismatch_policy is required for clip %s",
+            tostring(self.id)))
     -- Source ordering convention: source_out >= source_in is forward;
     -- source_out < source_in is a reverse clip. Both are valid states.
     -- Full cross-operation source_out consistency is validated by
     -- project_validator, not here.
+end
 
-    ensure_project_context(self, db)
-    local nested_id = self.nested_sequence_id
-    assert(nested_id and nested_id ~= "",
-        "Clip.save: nested_sequence_id required for clip " .. tostring(self.id))
-    self.name = derive_display_name(self.id, self.name)
-
-    local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
-    local krono_start = krono_enabled and krono.now and krono.now() or nil
-    local exists_query = db:prepare("SELECT COUNT(*) FROM clips WHERE id = ?")
-    exists_query:bind_value(1, self.id)
-
+-- Does a row with this id already exist? Used to pick UPDATE vs INSERT.
+local function clip_row_exists(db, id)
+    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE id = ?")
+    stmt:bind_value(1, id)
     local exists = false
-    if exists_query:exec() and exists_query:next() then
-        exists = exists_query:value(0) > 0
-    end
-    exists_query:finalize()
+    if stmt:exec() and stmt:next() then exists = stmt:value(0) > 0 end
+    stmt:finalize()
+    return exists
+end
 
-    -- OCCLUSION LOGIC (Temporarily Disabled)
-    -- TODO: Update ClipMutator to handle occlusion properly
-    -- opts.skip_occlusion controls whether to skip occlusion checks (when re-enabled)
-    local occlusion_actions = nil
-
-    -- Coordinates are now plain integers - no .frames access needed
-    local db_start_frame = self.timeline_start
-    local db_duration_frames = self.duration
-    local db_source_in_frame = self.source_in
-    local db_source_out_frame = self.source_out
-
-    local query
-    local krono_exists = (krono_enabled and krono_start and krono.now and krono.now()) or nil
+local function prepare_clip_save_stmt(db, exists)
     if exists then
-        query = db:prepare([[
+        return db:prepare([[
             UPDATE clips
             SET project_id = ?, name = ?, track_id = ?,
                 owner_sequence_id = ?, nested_sequence_id = ?,
@@ -382,91 +371,105 @@ local function save_internal(self, _opts)
                 modified_at = strftime('%s','now')
             WHERE id = ?
         ]])
-    else
-        query = db:prepare([[
-            INSERT INTO clips (
-                id, project_id, name, track_id,
-                owner_sequence_id, nested_sequence_id,
-                timeline_start_frame, duration_frames,
-                source_in_frame, source_out_frame,
-                master_layer_track_id, master_audio_track_id,
-                fps_mismatch_policy,
-                enabled, volume,
-                mark_in_frame, mark_out_frame, playhead_frame,
-                created_at, modified_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    strftime('%s','now'), strftime('%s','now'))
-        ]])
     end
+    return db:prepare([[
+        INSERT INTO clips (
+            id, project_id, name, track_id,
+            owner_sequence_id, nested_sequence_id,
+            timeline_start_frame, duration_frames,
+            source_in_frame, source_out_frame,
+            master_layer_track_id, master_audio_track_id,
+            fps_mismatch_policy,
+            enabled, volume,
+            mark_in_frame, mark_out_frame, playhead_frame,
+            created_at, modified_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                strftime('%s','now'), strftime('%s','now'))
+    ]])
+end
 
+local function bind_clip_value_or_null(stmt, idx, val)
+    if val ~= nil then
+        stmt:bind_value(idx, val)
+    elseif stmt.bind_null then
+        stmt:bind_null(idx)
+    else
+        stmt:bind_value(idx, nil)
+    end
+end
+
+-- Bind the 17 mutable column values (everything except `id`/created_at/
+-- modified_at). UPDATE and INSERT share this set; UPDATE binds at
+-- offset 1 (slots 1-17), INSERT at offset 2 (slots 2-18).
+local function bind_clip_writable_columns(query, base, self, nested_id)
+    query:bind_value(base + 0, self.project_id)
+    query:bind_value(base + 1, self.name)
+    query:bind_value(base + 2, self.track_id)
+    query:bind_value(base + 3, self.owner_sequence_id)
+    query:bind_value(base + 4, nested_id)
+    query:bind_value(base + 5, self.timeline_start)
+    query:bind_value(base + 6, self.duration)
+    query:bind_value(base + 7, self.source_in)
+    query:bind_value(base + 8, self.source_out)
+    bind_clip_value_or_null(query, base + 9, self.master_layer_track_id)
+    bind_clip_value_or_null(query, base + 10, self.master_audio_track_id)
+    query:bind_value(base + 11, self.fps_mismatch_policy)
+    query:bind_value(base + 12, self.enabled and 1 or 0)
+    query:bind_value(base + 13, self.volume)
+    bind_clip_value_or_null(query, base + 14, self.mark_in)
+    bind_clip_value_or_null(query, base + 15, self.mark_out)
+    query:bind_value(base + 16, self.playhead_frame)
+end
+
+local function save_internal(self, _opts)
+    local database = require("core.database")
+    local db = database.get_connection()
+    assert(db, "Clip.save: No database connection available")
+
+    assert_clip_save_invariants(self)
+
+    ensure_project_context(self, db)
+    local nested_id = self.nested_sequence_id
+    assert(nested_id and nested_id ~= "",
+        "Clip.save: nested_sequence_id required for clip " .. tostring(self.id))
+    self.name = derive_display_name(self.id, self.name)
+
+    local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
+    local krono_start   = krono_enabled and krono.now and krono.now() or nil
+
+    local exists       = clip_row_exists(db, self.id)
+    local krono_exists = krono_enabled and krono.now and krono.now() or nil
+
+    -- OCCLUSION LOGIC (temporarily disabled — tracked in clip_mutator).
+    local occlusion_actions = nil
+
+    local query = prepare_clip_save_stmt(db, exists)
     assert(query, "Clip.save: Failed to prepare query for clip " .. tostring(self.id))
 
-    local function bind_nullable(stmt, idx, val)
-        if val ~= nil then
-            stmt:bind_value(idx, val)
-        elseif stmt.bind_null then
-            stmt:bind_null(idx)
-        else
-            stmt:bind_value(idx, nil)
-        end
-    end
-
-    local fps_policy = self.fps_mismatch_policy or "resample"
     if exists then
-        query:bind_value(1, self.project_id)
-        query:bind_value(2, self.name or "")
-        query:bind_value(3, self.track_id)
-        query:bind_value(4, self.owner_sequence_id)
-        query:bind_value(5, nested_id)
-        query:bind_value(6, db_start_frame)
-        query:bind_value(7, db_duration_frames)
-        query:bind_value(8, db_source_in_frame)
-        query:bind_value(9, db_source_out_frame)
-        bind_nullable(query, 10, self.master_layer_track_id)
-        bind_nullable(query, 11, self.master_audio_track_id)
-        query:bind_value(12, fps_policy)
-        query:bind_value(13, self.enabled and 1 or 0)
-        query:bind_value(14, self.volume)
-        bind_nullable(query, 15, self.mark_in)
-        bind_nullable(query, 16, self.mark_out)
-        query:bind_value(17, self.playhead_frame)
+        bind_clip_writable_columns(query, 1, self, nested_id)
         query:bind_value(18, self.id)
     else
         query:bind_value(1, self.id)
-        query:bind_value(2, self.project_id)
-        query:bind_value(3, self.name or "")
-        query:bind_value(4, self.track_id)
-        query:bind_value(5, self.owner_sequence_id)
-        query:bind_value(6, nested_id)
-        query:bind_value(7, db_start_frame)
-        query:bind_value(8, db_duration_frames)
-        query:bind_value(9, db_source_in_frame)
-        query:bind_value(10, db_source_out_frame)
-        bind_nullable(query, 11, self.master_layer_track_id)
-        bind_nullable(query, 12, self.master_audio_track_id)
-        query:bind_value(13, fps_policy)
-        query:bind_value(14, self.enabled and 1 or 0)
-        query:bind_value(15, self.volume)
-        bind_nullable(query, 16, self.mark_in)
-        bind_nullable(query, 17, self.mark_out)
-        query:bind_value(18, self.playhead_frame)
+        bind_clip_writable_columns(query, 2, self, nested_id)
     end
 
-    local krono_exec = (krono_enabled and krono_exists and krono.now and krono.now()) or nil
+    local krono_exec = krono_enabled and krono.now and krono.now() or nil
     if not query:exec() then
         local err = query:last_error()
         query:finalize()
-        error(string.format("Clip.save: Failed to save clip %s: %s", tostring(self.id), err))
+        error(string.format("Clip.save: Failed to save clip %s: %s",
+            tostring(self.id), err))
     end
-    
     query:finalize()
 
     if krono_enabled and krono_start and krono_exists and krono_exec then
-        local total_ms = (krono_exec - krono_start)
         log.detail("Clip.save[%s]: %.2fms (exists=%.2fms run=%.2fms)",
-            tostring(self.id:sub(1,8)), total_ms,
-            krono_exists - krono_start, krono_exec - krono_exists)
+            tostring(self.id:sub(1, 8)),
+            krono_exec - krono_start,
+            krono_exists - krono_start,
+            krono_exec - krono_exists)
     end
 
     return true, occlusion_actions

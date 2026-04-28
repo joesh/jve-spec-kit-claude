@@ -677,88 +677,115 @@ end
 
 -- Save command to database
 -- db parameter is optional - will get connection from database module if not provided
+-- Encode the command's persistable parameters as JSON. Returns the JSON
+-- string ("{}" when empty); throws on encoder failure.
+local function encode_command_params(self)
+    local persistable = self:get_persistable_parameters()
+    if next(persistable) == nil then return "{}" end
+    local ok, encoded = pcall(json.encode, persistable)
+    if not ok then
+        error("Command.save: Failed to encode parameters: " .. tostring(encoded), 2)
+    end
+    return encoded
+end
+
+-- Resolve a playhead_rate field that may be a bare number, a {numerator,
+-- denominator} table, or nil. require_positive=true asserts the resolved
+-- value is > 0 (covers the nil case — falls through to 0 and trips the
+-- assert with an actionable message).
+local function resolve_playhead_rate(rate, require_positive, label, command_type)
+    local val = 0
+    if type(rate) == "number" then
+        val = rate
+    elseif type(rate) == "table" and rate.fps_numerator then
+        if not rate.fps_denominator or rate.fps_denominator == 0 then
+            error("Command.save: " .. label .. " missing fps_denominator", 2)
+        end
+        val = rate.fps_numerator / rate.fps_denominator
+    end
+    if require_positive then
+        assert(val > 0, string.format(
+            "FATAL: Command.save: invalid %s (command_type=%s, %s=%s)",
+            label, tostring(command_type), label, tostring(val)))
+    end
+    return val
+end
+
+-- Does a row with this id already exist? The SQL connection's prepare
+-- can fail (returns nil); we propagate the failure as (nil, err).
+local function command_row_exists(db, id)
+    local stmt = db:prepare("SELECT COUNT(*) FROM commands WHERE id = ?")
+    if not stmt then
+        local err = "unknown error"
+        if db.last_error then err = db:last_error() end
+        return nil, err
+    end
+    stmt:bind_value(1, id)
+    local exists = false
+    if stmt:exec() and stmt:next() then
+        exists = stmt:value(0) > 0
+    end
+    stmt:finalize()
+    return exists
+end
+
+-- The shared per-command writable column set: every column except `id`
+-- and `parent_sequence_number` (the latter is INSERT-only). UPDATE binds
+-- this set + the WHERE id; INSERT binds id + parent_sequence_number +
+-- this set.
+local function bind_writable_command_columns(query, base, self, encoded_params,
+                                              playhead_rate_val, playhead_rate_post_val)
+    query:bind_value(base + 0, self.type)
+    query:bind_value(base + 1, self.sequence_number)
+    query:bind_value(base + 2, encoded_params)
+    query:bind_value(base + 3, self.pre_hash)
+    query:bind_value(base + 4, self.post_hash)
+    query:bind_value(base + 5, self.executed_at)
+    query:bind_value(base + 6, self.playhead_value)
+    query:bind_value(base + 7, playhead_rate_val)
+    query:bind_value(base + 8, self.selected_clip_ids       or "[]")
+    query:bind_value(base + 9, self.selected_edge_infos     or "[]")
+    query:bind_value(base + 10, self.selected_gap_infos     or "[]")
+    query:bind_value(base + 11, self.selected_clip_ids_pre  or "[]")
+    query:bind_value(base + 12, self.selected_edge_infos_pre or "[]")
+    query:bind_value(base + 13, self.selected_gap_infos_pre  or "[]")
+    query:bind_value(base + 14, self.undo_group_id)
+    query:bind_value(base + 15, self.playhead_value_post)
+    query:bind_value(base + 16, playhead_rate_post_val)
+    query:bind_value(base + 17, self.sequence_id)  -- NULL for project-level
+end
+
 function M:save(db)
     if not db then
         local database = require("core.database")
         db = database.get_connection()
     end
     assert(db, "Command.save: no database connection")
-    -- Serialize parameters to JSON
-    local params_json = "{}"
-    local persistable_parameters = self:get_persistable_parameters()
-    if next(persistable_parameters) ~= nil then
-        local success, json_str = pcall(json.encode, persistable_parameters) -- Changed to json.encode
-        if success then
-            params_json = json_str
-        else
-            error("Command.save: Failed to encode parameters: " .. tostring(json_str), 2)
-        end
-    end
-
-    -- Check if command exists
-    local exists_query = db:prepare("SELECT COUNT(*) FROM commands WHERE id = ?")
-    if not exists_query then
-        local err = "unknown error"
-        if db.last_error then
-            err = db:last_error()
-        end
-        log.warn("Command.save: Failed to prepare exists query: %s", err)
-        return false, err
-    end
-
-    exists_query:bind_value(1, self.id)
-
-    local exists = false
-    if exists_query:exec() and exists_query:next() then
-        exists = exists_query:value(0) > 0
-    end
-    exists_query:finalize()
-
-    local selected_clip_ids_json = self.selected_clip_ids or "[]"
-    local selected_edge_infos_json = self.selected_edge_infos or "[]"
-    local selected_gap_infos_json = self.selected_gap_infos or "[]"
-    local selected_clip_ids_pre_json = self.selected_clip_ids_pre or "[]"
-    local selected_edge_infos_pre_json = self.selected_edge_infos_pre or "[]"
-    local selected_gap_infos_pre_json = self.selected_gap_infos_pre or "[]"
-
-    local playhead_rate_val = 0
-    if type(self.playhead_rate) == "number" then
-        playhead_rate_val = self.playhead_rate
-    elseif type(self.playhead_rate) == "table" and self.playhead_rate.fps_numerator then
-        if not self.playhead_rate.fps_denominator or self.playhead_rate.fps_denominator == 0 then
-            error("Command.save: playhead_rate missing fps_denominator", 2)
-        end
-        playhead_rate_val = self.playhead_rate.fps_numerator / self.playhead_rate.fps_denominator
-    end
-
-    -- playhead_value must be integer frames
-    local db_playhead_value = self.playhead_value
-    assert(type(db_playhead_value) == "number", string.format(
-        "FATAL: Command.save: missing playhead_value (command_type=%s, playhead_value=%s)",
-        tostring(self.type), tostring(self.playhead_value)))
-    assert(playhead_rate_val > 0, string.format(
-        "FATAL: Command.save: invalid playhead_rate (command_type=%s, playhead_rate=%s)",
-        tostring(self.type), tostring(playhead_rate_val)))
-
-    -- Post-execution playhead (optional - only captured for commands that advance playhead)
-    local db_playhead_value_post = self.playhead_value_post
-    if db_playhead_value_post ~= nil then
-        assert(type(db_playhead_value_post) == "number", "Command.save: playhead_value_post must be integer")
-    end
-
-    local playhead_rate_post_val = 0
-    if type(self.playhead_rate_post) == "number" then
-        playhead_rate_post_val = self.playhead_rate_post
-    elseif type(self.playhead_rate_post) == "table" and self.playhead_rate_post.fps_numerator then
-        playhead_rate_post_val = self.playhead_rate_post.fps_numerator / (self.playhead_rate_post.fps_denominator or 1)
-    end
     if not self.executed_at then
         error("FATAL: Command.save requires executed_at")
+    end
+    assert(type(self.playhead_value) == "number", string.format(
+        "FATAL: Command.save: missing playhead_value (command_type=%s, playhead_value=%s)",
+        tostring(self.type), tostring(self.playhead_value)))
+    if self.playhead_value_post ~= nil then
+        assert(type(self.playhead_value_post) == "number",
+            "Command.save: playhead_value_post must be integer")
+    end
+
+    local encoded_params = encode_command_params(self)
+    local playhead_rate_val      = resolve_playhead_rate(self.playhead_rate, true,
+        "playhead_rate", self.type)
+    local playhead_rate_post_val = resolve_playhead_rate(self.playhead_rate_post, false,
+        "playhead_rate_post", self.type)
+
+    local exists, exists_err = command_row_exists(db, self.id)
+    if exists == nil then
+        log.warn("Command.save: Failed to prepare exists query: %s", exists_err)
+        return false, exists_err
     end
 
     local query
     if exists then
-        -- UPDATE
         query = db:prepare([[
             UPDATE commands
             SET command_type = ?, sequence_number = ?, command_args = ?,
@@ -769,69 +796,36 @@ function M:save(db)
             WHERE id = ?
         ]])
         if not query then
-            local err = "unknown error"
-            if db.last_error then
-                err = db:last_error()
-            end
+            local err = db.last_error and db:last_error() or "unknown error"
             log.warn("Command.save: Failed to prepare UPDATE query: %s", err)
             return false, err
         end
-
-        query:bind_value(1, self.type)
-        query:bind_value(2, self.sequence_number)
-        query:bind_value(3, params_json)
-        query:bind_value(4, self.pre_hash)
-        query:bind_value(5, self.post_hash)
-        query:bind_value(6, self.executed_at)
-        query:bind_value(7, db_playhead_value)
-        query:bind_value(8, playhead_rate_val)
-        query:bind_value(9, selected_clip_ids_json)
-        query:bind_value(10, selected_edge_infos_json)
-        query:bind_value(11, selected_gap_infos_json)
-        query:bind_value(12, selected_clip_ids_pre_json)
-        query:bind_value(13, selected_edge_infos_pre_json)
-        query:bind_value(14, selected_gap_infos_pre_json)
-        query:bind_value(15, self.undo_group_id)
-        query:bind_value(16, db_playhead_value_post)
-        query:bind_value(17, playhead_rate_post_val)
-        query:bind_value(18, self.sequence_id)  -- NULL for project-level
+        bind_writable_command_columns(query, 1, self, encoded_params,
+            playhead_rate_val, playhead_rate_post_val)
         query:bind_value(19, self.id)
     else
-        -- INSERT
+        -- Column order matches bind_writable_command_columns starting at
+        -- slot 3 (id and parent_sequence_number occupy 1 and 2).
         query = db:prepare([[
-            INSERT INTO commands (id, parent_sequence_number, sequence_number, command_type, command_args, pre_hash, post_hash, timestamp, playhead_value, playhead_rate, selected_clip_ids, selected_edge_infos, selected_gap_infos, selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre, undo_group_id, playhead_value_post, playhead_rate_post, sequence_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO commands (
+                id, parent_sequence_number,
+                command_type, sequence_number, command_args,
+                pre_hash, post_hash, timestamp,
+                playhead_value, playhead_rate,
+                selected_clip_ids, selected_edge_infos, selected_gap_infos,
+                selected_clip_ids_pre, selected_edge_infos_pre, selected_gap_infos_pre,
+                undo_group_id, playhead_value_post, playhead_rate_post, sequence_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ]])
         if not query then
-            local err = "unknown error"
-            if db.last_error then
-                err = db:last_error()
-            end
+            local err = db.last_error and db:last_error() or "unknown error"
             log.warn("Command.save: Failed to prepare INSERT query: %s", err)
             return false, err
         end
-
         query:bind_value(1, self.id)
-        -- parent_id removed
         query:bind_value(2, self.parent_sequence_number)
-        query:bind_value(3, self.sequence_number)
-        query:bind_value(4, self.type)
-        query:bind_value(5, params_json)
-        query:bind_value(6, self.pre_hash)
-        query:bind_value(7, self.post_hash)
-        query:bind_value(8, self.executed_at)
-        query:bind_value(9, db_playhead_value)
-        query:bind_value(10, playhead_rate_val)
-        query:bind_value(11, selected_clip_ids_json)
-        query:bind_value(12, selected_edge_infos_json)
-        query:bind_value(13, selected_gap_infos_json)
-        query:bind_value(14, selected_clip_ids_pre_json)
-        query:bind_value(15, selected_edge_infos_pre_json)
-        query:bind_value(16, selected_gap_infos_pre_json)
-        query:bind_value(17, self.undo_group_id)
-        query:bind_value(18, db_playhead_value_post)
-        query:bind_value(19, playhead_rate_post_val)
-        query:bind_value(20, self.sequence_id)  -- NULL for project-level
+        bind_writable_command_columns(query, 3, self, encoded_params,
+            playhead_rate_val, playhead_rate_post_val)
     end
 
     if not query:exec() then
@@ -840,9 +834,7 @@ function M:save(db)
         query:finalize()
         return false, err
     end
-
     query:finalize()
-
     return true
 end
 
