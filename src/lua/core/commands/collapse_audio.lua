@@ -155,7 +155,7 @@ local function compute_unselected_master_tracks(nested_id, selected)
         in_selection[s.row.master_audio_track_id] = true
     end
     local out = {}
-    for _, t in ipairs(Track.find_by_sequence(nested_id, "AUDIO") or {}) do
+    for _, t in ipairs(Track.find_by_sequence(nested_id, "AUDIO")) do
         if not in_selection[t.id] then out[#out + 1] = t end
     end
     return out
@@ -182,7 +182,7 @@ local function insert_composite_clip(sequence_id, first, topmost)
         fps_mismatch_policy   = first.fps_mismatch_policy,
         enabled               = first.enabled,
         volume                = 1.0,
-        playhead_frame        = first.playhead_frame or 0,
+        playhead_frame        = first.playhead_frame,
     })
     return composite_id
 end
@@ -195,7 +195,8 @@ local function composite_state_for_source(source_clip, source_captures)
     local cap_overrides = {}
     for _, sc in ipairs(source_captures) do
         if sc.row.id == source_clip.id then
-            cap_overrides = sc.overrides or {}
+            -- capture_v13_state always populates overrides as an array.
+            cap_overrides = sc.overrides
             break
         end
     end
@@ -205,7 +206,8 @@ local function composite_state_for_source(source_clip, source_captures)
             if not ((ov.enabled == 1) or (ov.enabled == true)) then
                 enabled = false
             end
-            gain_db = ov.gain_db or 0.0
+            -- Schema: clip_channel_override.gain_db is REAL NOT NULL.
+            gain_db = ov.gain_db
             break
         end
     end
@@ -305,7 +307,7 @@ function M.undo(capture)
         Clip.delete_by_ids({ capture.composite_clip_id })
     end
 
-    for _, sc in ipairs(capture.source_captures or {}) do
+    for _, sc in ipairs(capture.source_captures) do
         Clip.restore_v13_state(sc)
     end
 
@@ -344,7 +346,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         M.undo({
             sequence_id        = args.sequence_id,
             composite_clip_id  = args.composite_clip_id,
-            source_captures    = args.source_captures or {},
+            source_captures    = args.source_captures,
         })
         return true
     end

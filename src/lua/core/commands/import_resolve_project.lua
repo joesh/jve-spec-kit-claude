@@ -74,7 +74,9 @@ local SPEC_DB = {
 -- @param args table: command parameters with created_* id arrays
 -- @param db: database connection
 local function delete_imported_entities(command_name, args, db)
-    for _, clip_id in ipairs(args.created_clip_ids or {}) do
+    -- Both ImportResolveProject and any caller of this helper populate the
+    -- four created_*_ids arrays unconditionally on execute. No fallbacks.
+    for _, clip_id in ipairs(args.created_clip_ids) do
         local prop_stmt = db:prepare("DELETE FROM properties WHERE clip_id = ?")
         if prop_stmt then
             prop_stmt:bind_value(1, clip_id)
@@ -89,7 +91,7 @@ local function delete_imported_entities(command_name, args, db)
         end
     end
 
-    for _, clip_id in ipairs(args.created_clip_ids or {}) do
+    for _, clip_id in ipairs(args.created_clip_ids) do
         local del_stmt = db:prepare("DELETE FROM clips WHERE id = ?")
         assert(del_stmt, command_name .. ": clips DELETE prepare failed")
         del_stmt:bind_value(1, clip_id)
@@ -97,7 +99,7 @@ local function delete_imported_entities(command_name, args, db)
         del_stmt:finalize()
     end
 
-    for _, track_id in ipairs(args.created_track_ids or {}) do
+    for _, track_id in ipairs(args.created_track_ids) do
         local stmt = db:prepare("DELETE FROM tracks WHERE id = ?")
         assert(stmt, command_name .. ": tracks DELETE prepare failed")
         stmt:bind_value(1, track_id)
@@ -105,7 +107,7 @@ local function delete_imported_entities(command_name, args, db)
         stmt:finalize()
     end
 
-    for _, seq_id in ipairs(args.created_sequence_ids or {}) do
+    for _, seq_id in ipairs(args.created_sequence_ids) do
         local stmt = db:prepare("DELETE FROM sequences WHERE id = ?")
         assert(stmt, command_name .. ": sequences DELETE prepare failed")
         stmt:bind_value(1, seq_id)
@@ -113,7 +115,7 @@ local function delete_imported_entities(command_name, args, db)
         stmt:finalize()
     end
 
-    for _, media_id in ipairs(args.created_media_ids or {}) do
+    for _, media_id in ipairs(args.created_media_ids) do
         local stmt = db:prepare("DELETE FROM media WHERE id = ?")
         assert(stmt, command_name .. ": media DELETE prepare failed")
         stmt:bind_value(1, media_id)
@@ -200,6 +202,139 @@ local function persist_and_refresh(command, project_id_key, project_id, import_r
         local project_browser = ui_state.get_project_browser()
         if project_browser and project_browser.refresh then
             project_browser.refresh()
+        end
+    end
+end
+
+-- Industry-standard sample rate for video projects. Used for sequences
+-- imported from Resolve's database when no per-sequence audio rate is
+-- available — matches Resolve's own default. Hoisted here as a named
+-- constant per ENGINEERING.md 1.5b.
+local DEFAULT_AUDIO_SAMPLE_RATE = 48000
+
+-- Convert a fractional frame rate (e.g. "23.976") to (numerator, denominator).
+-- Snaps to the four canonical NTSC variants; everything else rounds to
+-- /1.
+local function fr_to_rational(fr)
+    local fps = tonumber(fr)
+    assert(fps, "ImportResolveDatabase: missing/invalid frame_rate")
+    if math.abs(fps - 23.976) < 0.01 then return 24000, 1001
+    elseif math.abs(fps - 29.97) < 0.01 then return 30000, 1001
+    elseif math.abs(fps - 59.94) < 0.01 then return 60000, 1001
+    end
+    return math.floor(fps + 0.5), 1
+end
+
+-- Phase 1 of ImportResolveDatabase: materialize every media row and build
+-- the resolve_id → jve_id map. Returns (created_ids, id_map).
+local function create_media_from_resolve_db(project_id, import_raw)
+    local Media = require("models.media")
+    local created_ids, id_map = {}, {}
+    for _, item in ipairs(import_raw.media_items) do
+        local media = Media.create({
+            project_id        = project_id,
+            name              = item.name,
+            file_path         = item.file_path,
+            duration_frames   = item.duration,
+            frame_rate        = item.frame_rate or import_raw.project.frame_rate,
+            width             = import_raw.project.width,
+            height            = import_raw.project.height,
+            audio_channels    = item.audio_channels or 0,
+            audio_sample_rate = item.audio_sample_rate,
+            codec             = item.codec,
+            is_still          = Media.classify_is_still(
+                item.codec, import_raw.project.width, item.duration),
+        })
+        if media:save() then
+            table.insert(created_ids, media.id)
+            if item.resolve_id then id_map[item.resolve_id] = media.id end
+        else
+            log.warn("Failed to import media: %s", item.name)
+        end
+    end
+    return created_ids, id_map
+end
+
+-- Build a single track + every clip on it. Appends ids onto the
+-- accumulators. Returns nothing.
+local function create_track_with_clips(project_id, sequence, track_data,
+                                       fps_num, fps_den, media_id_map,
+                                       created_track_ids, created_clip_ids)
+    local Track   = require("models.track")
+    local Clip    = require("models.clip")
+
+    local track_prefix = track_data.type == "VIDEO" and "V" or "A"
+    local track_name   = string.format("%s%d", track_prefix, track_data.index)
+
+    local track
+    if track_data.type == "VIDEO" then
+        track = Track.create_video(track_name, sequence.id, { index = track_data.index })
+    else
+        track = Track.create_audio(track_name, sequence.id, { index = track_data.index })
+    end
+
+    if not track:save() then
+        log.warn("Failed to create track: %s", track_name)
+        return
+    end
+    table.insert(created_track_ids, track.id)
+
+    -- Audio tracks carry a sample-rate timebase; video carries fps. Both
+    -- map to fps_numerator/denominator on the clip row at this layer.
+    local clip_fps_num = track_data.type == "AUDIO" and DEFAULT_AUDIO_SAMPLE_RATE or fps_num
+    local clip_fps_den = track_data.type == "AUDIO" and 1                          or fps_den
+
+    for _, c in ipairs(track_data.clips) do
+        local source_out = c.source_out
+        if not source_out and c.source_in and c.duration then
+            source_out = c.source_in + c.duration
+        end
+        local clip = Clip.create(c.name or "Untitled Clip", media_id_map[c.resolve_media_id], {
+            project_id        = project_id,
+            owner_sequence_id = sequence.id,
+            track_id          = track.id,
+            timeline_start    = c.start_value,
+            duration          = c.duration,
+            source_in         = c.source_in,
+            source_out        = source_out,
+            fps_numerator     = clip_fps_num,
+            fps_denominator   = clip_fps_den,
+        })
+        if clip:save() then
+            table.insert(created_clip_ids, clip.id)
+        else
+            log.warn("Failed to import clip: %s", c.name)
+        end
+    end
+end
+
+-- Phase 2 of ImportResolveDatabase: build every sequence with its tracks
+-- and clips. Appends sequence/track/clip ids onto the accumulators.
+local function create_timelines_from_resolve_db(project_id, import_raw,
+                                                db_settings, media_id_map,
+                                                created_sequence_ids,
+                                                created_track_ids,
+                                                created_clip_ids)
+    local Sequence = require("models.sequence")
+    for _, timeline_data in ipairs(import_raw.timelines) do
+        local fps_num, fps_den = fr_to_rational(
+            timeline_data.frame_rate or import_raw.project.frame_rate)
+
+        local sequence = Sequence.create(
+            timeline_data.name, project_id,
+            { fps_numerator = fps_num, fps_denominator = fps_den },
+            db_settings.width, db_settings.height,
+            { audio_sample_rate = DEFAULT_AUDIO_SAMPLE_RATE })
+
+        if not sequence:save() then
+            log.warn("Failed to create timeline: %s", timeline_data.name)
+        else
+            table.insert(created_sequence_ids, sequence.id)
+            for _, track_data in ipairs(timeline_data.tracks) do
+                create_track_with_clips(project_id, sequence, track_data,
+                    fps_num, fps_den, media_id_map,
+                    created_track_ids, created_clip_ids)
+            end
         end
     end
 end
@@ -330,9 +465,6 @@ function M.register(executors, undoers, db)
         end
 
         local Project = require("models.project")
-        local Media = require("models.media")
-        local Clip_mod = require("models.clip")
-        local Sequence_mod = require("models.sequence")
         local json = require("dkjson")
 
         local db_settings = {
@@ -355,115 +487,15 @@ function M.register(executors, undoers, db)
 
         -- ImportResolveDatabase uses a different data format than DRP parse_result,
         -- so it cannot use import_into_project() directly. Create entities via models.
-        local created_media_ids = {}
         local created_sequence_ids = {}
-        local created_track_ids = {}
-        local created_clip_ids = {}
+        local created_track_ids    = {}
+        local created_clip_ids     = {}
 
-        local media_id_map = {}
-        for _, media_item in ipairs(import_result_raw.media_items) do
-            local ir_codec = media_item.codec
-            local ir_width = import_result_raw.project.width
-            local media = Media.create({
-                project_id = project.id,
-                name = media_item.name,
-                file_path = media_item.file_path,
-                duration_frames = media_item.duration,
-                frame_rate = media_item.frame_rate or import_result_raw.project.frame_rate,
-                width = ir_width,
-                height = import_result_raw.project.height,
-                audio_channels = media_item.audio_channels or 0,
-                audio_sample_rate = media_item.audio_sample_rate,
-                codec = ir_codec,
-                is_still = Media.classify_is_still(ir_codec, ir_width, media_item.duration),
-            })
-
-            if media:save() then
-                table.insert(created_media_ids, media.id)
-                if media_item.resolve_id then
-                    media_id_map[media_item.resolve_id] = media.id
-                end
-            else
-                log.warn("Failed to import media: %s", media_item.name)
-            end
-        end
-
-        local function fr_to_rational(fr)
-            local fps = tonumber(fr)
-            assert(fps, "ImportResolveDatabase: missing/invalid frame_rate")
-            if math.abs(fps - 23.976) < 0.01 then return 24000, 1001
-            elseif math.abs(fps - 29.97) < 0.01 then return 30000, 1001
-            elseif math.abs(fps - 59.94) < 0.01 then return 60000, 1001
-            end
-            return math.floor(fps + 0.5), 1
-        end
-
-        for _, timeline_data in ipairs(import_result_raw.timelines) do
-            local fps_num, fps_den = fr_to_rational(timeline_data.frame_rate or import_result_raw.project.frame_rate)
-
-            local sequence = Sequence_mod.create(
-                timeline_data.name,
-                project.id,
-                { fps_numerator = fps_num, fps_denominator = fps_den },
-                db_settings.width, db_settings.height,
-                { audio_sample_rate = 48000 }
-            )
-
-            if not sequence:save() then
-                log.warn("Failed to create timeline: %s", timeline_data.name)
-            else
-                table.insert(created_sequence_ids, sequence.id)
-
-                for _, track_data in ipairs(timeline_data.tracks) do
-                    local Track = require("models.track")
-                    local track_prefix = track_data.type == "VIDEO" and "V" or "A"
-                    local track_name = string.format("%s%d", track_prefix, track_data.index)
-
-                    local track
-                    if track_data.type == "VIDEO" then
-                        track = Track.create_video(track_name, sequence.id, { index = track_data.index })
-                    else
-                        track = Track.create_audio(track_name, sequence.id, { index = track_data.index })
-                    end
-
-                    if not track:save() then
-                        log.warn("Failed to create track: %s", track_name)
-                    else
-                        table.insert(created_track_ids, track.id)
-
-                        for _, clip_data in ipairs(track_data.clips) do
-                            local media_id = media_id_map[clip_data.resolve_media_id]
-
-                            local source_out = clip_data.source_out
-                            if not source_out and clip_data.source_in and clip_data.duration then
-                                source_out = clip_data.source_in + clip_data.duration
-                            end
-
-                            local clip_fps_num = track_data.type == "AUDIO" and 48000 or fps_num
-                            local clip_fps_den = track_data.type == "AUDIO" and 1 or fps_den
-
-                            local clip = Clip_mod.create(clip_data.name or "Untitled Clip", media_id, {
-                                project_id = project.id,
-                                owner_sequence_id = sequence.id,
-                                track_id = track.id,
-                                timeline_start = clip_data.start_value,
-                                duration = clip_data.duration,
-                                source_in = clip_data.source_in,
-                                source_out = source_out,
-                                fps_numerator = clip_fps_num,
-                                fps_denominator = clip_fps_den,
-                            })
-
-                            if clip:save() then
-                                table.insert(created_clip_ids, clip.id)
-                            else
-                                log.warn("Failed to import clip: %s", clip_data.name)
-                            end
-                        end
-                    end
-                end
-            end
-        end
+        local created_media_ids, media_id_map = create_media_from_resolve_db(
+            project.id, import_result_raw)
+        create_timelines_from_resolve_db(project.id, import_result_raw,
+            db_settings, media_id_map,
+            created_sequence_ids, created_track_ids, created_clip_ids)
 
         log.event("Imported Resolve database: %d media, %d sequences, %d tracks, %d clips",
             #created_media_ids, #created_sequence_ids, #created_track_ids, #created_clip_ids)

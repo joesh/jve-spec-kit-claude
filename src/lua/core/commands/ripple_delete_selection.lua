@@ -97,6 +97,72 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return merged
     end
 
+    -- Resolve the working clip_ids list. Prefer args.clip_ids; fall back
+    -- to whatever timeline_state currently has selected. Selected entries
+    -- can be Clip rows, {clip_id=...} stubs, or bare id strings.
+    local function resolve_clip_ids_from_selection(args)
+        local clip_ids = args.clip_ids
+        if clip_ids and #clip_ids > 0 then return clip_ids end
+        if not (timeline_state and timeline_state.get_selected_clips) then return {} end
+        local selected = timeline_state.get_selected_clips()
+        local out = {}
+        for _, clip in ipairs(selected) do
+            if type(clip) == "table" then
+                if clip.id then
+                    out[#out + 1] = clip.id
+                elseif clip.clip_id then
+                    out[#out + 1] = clip.clip_id
+                end
+            elseif type(clip) == "string" then
+                out[#out + 1] = clip
+            end
+        end
+        return out
+    end
+
+    -- Load each requested clip and accumulate the (window_start, window_end)
+    -- enclosing rectangle. Returns clips, clip_ids_for_delete, window_start,
+    -- window_end. Missing clips are logged and skipped.
+    local function load_clips_and_window(clip_ids)
+        local clips = {}
+        local clip_ids_for_delete = {}
+        local window_start, window_end
+        for _, clip_id in ipairs(clip_ids) do
+            local clip = Clip.load_optional(clip_id)
+            if clip then
+                assert(type(clip.timeline_start) == "number",
+                    "FATAL: RippleDeleteSelection: clip.timeline_start must be integer")
+                assert(type(clip.duration) == "number",
+                    "FATAL: RippleDeleteSelection: clip.duration must be integer")
+                clips[#clips + 1] = clip
+                local clip_end = clip.timeline_start + clip.duration
+                window_start = window_start and math.min(window_start, clip.timeline_start) or clip.timeline_start
+                window_end   = window_end   and math.max(window_end,   clip_end)             or clip_end
+                clip_ids_for_delete[#clip_ids_for_delete + 1] = clip.id
+            else
+                log.warn("Clip %s not found", tostring(clip_id))
+            end
+        end
+        return clips, clip_ids_for_delete, window_start, window_end
+    end
+
+    -- Resolve the working sequence_id. Prefer args.sequence_id; fall back
+    -- to the first clip's track's sequence (joining via tracks).
+    local function resolve_sequence_id_from_args(args, clips)
+        local sequence_id = args.sequence_id
+        if sequence_id and sequence_id ~= "" then return sequence_id end
+        if #clips == 0 then return nil end
+        local stmt = db:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
+        if not stmt then return nil end
+        stmt:bind_value(1, clips[1].track_id)
+        local resolved
+        if stmt:exec() and stmt:next() then
+            resolved = stmt:value(0)
+        end
+        stmt:finalize()
+        return resolved
+    end
+
     local function load_sequence_track_ids(sequence_id)
         if not sequence_id or sequence_id == "" then
             return {}
@@ -116,6 +182,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return ids
     end
 
+    -- Helpers used inside the executor body that need to capture per-clip
+    -- assertion messages. Defined at top scope so we don't re-create them
+    -- on every command invocation.
+    local function clip_duration_frames(clip)
+        assert(type(clip.duration) == "number",
+            "FATAL: RippleDeleteSelection: clip.duration must be integer")
+        return clip.duration
+    end
+    local function clip_start_frames(clip)
+        assert(type(clip.timeline_start) == "number",
+            "FATAL: RippleDeleteSelection: clip.timeline_start must be integer")
+        return clip.timeline_start
+    end
+
     command_executors["RippleDeleteSelection"] = function(command)
         local args = command:get_all_parameters()
 
@@ -123,61 +203,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             log.detail("Executing RippleDeleteSelection command")
         end
 
-        local clip_ids = args.clip_ids
-
-        if (not clip_ids or #clip_ids == 0) and timeline_state and timeline_state.get_selected_clips then
-            local selected = timeline_state.get_selected_clips() or {}
-            clip_ids = {}
-            for _, clip in ipairs(selected) do
-                if type(clip) == "table" then
-                    if clip.id then
-                        table.insert(clip_ids, clip.id)
-                    elseif clip.clip_id then
-                        table.insert(clip_ids, clip.clip_id)
-                    end
-                elseif type(clip) == "string" then
-                    table.insert(clip_ids, clip)
-                end
-            end
-        end
-
-        if not clip_ids or #clip_ids == 0 then
+        local clip_ids = resolve_clip_ids_from_selection(args)
+        if #clip_ids == 0 then
             log.warn("No clips selected")
             return false
         end
 
-        local clips = {}
-        local clip_ids_for_delete = {}
-        local window_start = nil
-        local window_end = nil
-        local function clip_start_frames(clip)
-            assert(type(clip.timeline_start) == "number", "FATAL: RippleDeleteSelection: clip.timeline_start must be integer")
-            return clip.timeline_start
-        end
-        local function clip_duration_frames(clip)
-            assert(type(clip.duration) == "number", "FATAL: RippleDeleteSelection: clip.duration must be integer")
-            return clip.duration
-        end
-
-        for _, clip_id in ipairs(clip_ids) do
-            local clip = Clip.load_optional(clip_id)
-            if clip then
-                clips[#clips + 1] = clip
-                local clip_start = clip_start_frames(clip)
-                local clip_end = clip_start + clip_duration_frames(clip)
-                window_start = window_start and math.min(window_start, clip_start) or clip_start
-                window_end = window_end and math.max(window_end, clip_end) or clip_end
-                table.insert(clip_ids_for_delete, clip.id)
-            else
-                log.warn("Clip %s not found", tostring(clip_id))
-            end
-        end
-
+        local clips, clip_ids_for_delete, window_start, window_end =
+            load_clips_and_window(clip_ids)
         if #clips == 0 then
             log.warn("No valid clips to delete")
             return false
         end
-
         if window_start == nil or window_end == nil then
             error("FATAL: RippleDeleteSelection: unable to compute window bounds")
         end
@@ -186,18 +223,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             error("FATAL: RippleDeleteSelection: computed negative shift_amount")
         end
 
-        local sequence_id = args.sequence_id
-        if (not sequence_id or sequence_id == "") and #clips > 0 then
-            local track_query = db:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
-            if track_query then
-                track_query:bind_value(1, clips[1].track_id)
-                if track_query:exec() and track_query:next() then
-                    sequence_id = track_query:value(0)
-                end
-                track_query:finalize()
-            end
-        end
-
+        local sequence_id = resolve_sequence_id_from_args(args, clips)
         if not sequence_id or sequence_id == "" then
             log.error("Unable to determine sequence_id")
             return false
@@ -414,8 +440,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     command_undoers["RippleDeleteSelection"] = function(command)
         local args = command:get_all_parameters()
-        local deleted_states = args.ripple_selection_deleted_clips or {}
-        local shifted_clips = args.ripple_selection_shifted or {}
+        -- Executor sets all three unconditionally; SPEC.persisted defaults
+        -- already declare the empty-table shape.
+        local deleted_states = args.ripple_selection_deleted_clips
+        local shifted_clips  = args.ripple_selection_shifted
 
 
         local failed = false
@@ -446,7 +474,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
-        local deleted_properties = args.ripple_selection_deleted_properties or {}
+        local deleted_properties = args.ripple_selection_deleted_properties
         for _, state in ipairs(deleted_states) do
             local restored = command_helper.restore_clip_state(state)
             if restored then

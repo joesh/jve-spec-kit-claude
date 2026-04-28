@@ -67,6 +67,38 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
     end
 
+    -- SELECT sequence_id FROM tracks WHERE id = ? — single row, no result
+    -- means an unknown track id. Returns nil when the row is absent.
+    local function lookup_sequence_for_track(track_id)
+        if not track_id or track_id == "" then return nil end
+        local stmt = db:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
+        assert(stmt, "MoveClipToTrack: failed to prepare track→sequence lookup")
+        stmt:bind_value(1, track_id)
+        local seq
+        if stmt:exec() and stmt:next() then seq = stmt:value(0) end
+        stmt:finalize()
+        return seq
+    end
+
+    -- Resolve which sequence's mutation stream this move belongs on. Order:
+    --   1. clip.owner_sequence_id / clip.track_sequence_id  (already attached)
+    --   2. lookup via clip.track_id                          (clip's old home)
+    --   3. lookup via args.target_track_id                   (its new home)
+    -- Asserts when none of the three resolves a sequence — there is no
+    -- defensible fallback at that point.
+    local function resolve_mutation_sequence(clip, args)
+        local seq = clip.owner_sequence_id or clip.track_sequence_id
+        if seq and seq ~= "" then return seq end
+        seq = lookup_sequence_for_track(clip.track_id)
+        if seq and seq ~= "" then return seq end
+        seq = lookup_sequence_for_track(args.target_track_id)
+        assert(seq and seq ~= "", string.format(
+            "MoveClipToTrack: unable to resolve sequence for clip %s "
+            .. "(track_id=%s, target_track_id=%s)",
+            clip.id, tostring(clip.track_id), tostring(args.target_track_id)))
+        return seq
+    end
+
     command_executors["MoveClipToTrack"] = function(command)
         local args = command:get_all_parameters()
 
@@ -75,39 +107,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local clip_id = args.clip_id
-
-
-
-
         local clip = Clip.load(clip_id)
-        -- NSF: Clip must exist for move operation
         assert(clip, string.format("MoveClipToTrack: clip %s not found", clip_id))
 
-        -- Resolve mutation_sequence: prefer clip's owner, then lookup from track
-        local mutation_sequence = clip.owner_sequence_id or clip.track_sequence_id
-        if (not mutation_sequence or mutation_sequence == "") and clip.track_id then
-            local seq_lookup = db:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
-            assert(seq_lookup, "MoveClipToTrack: failed to prepare sequence lookup query")
-            seq_lookup:bind_value(1, clip.track_id)
-            if seq_lookup:exec() and seq_lookup:next() then
-                mutation_sequence = seq_lookup:value(0)
-            end
-            seq_lookup:finalize()
-        end
-        if not mutation_sequence or mutation_sequence == "" then
-            -- Try target track as fallback
-            local target_lookup = db:prepare("SELECT sequence_id FROM tracks WHERE id = ?")
-            assert(target_lookup, "MoveClipToTrack: failed to prepare target sequence lookup query")
-            target_lookup:bind_value(1, args.target_track_id)
-            if target_lookup:exec() and target_lookup:next() then
-                mutation_sequence = target_lookup:value(0)
-            end
-            target_lookup:finalize()
-        end
-        -- NSF: mutation_sequence is required - no fallback
-        assert(mutation_sequence and mutation_sequence ~= "",
-            string.format("MoveClipToTrack: unable to resolve sequence for clip %s (track_id=%s, target_track_id=%s)",
-                clip_id, tostring(clip.track_id), tostring(args.target_track_id)))
+        local mutation_sequence = resolve_mutation_sequence(clip, args)
         clip.owner_sequence_id = clip.owner_sequence_id or mutation_sequence
         command:set_parameters({
             ["sequence_id"] = mutation_sequence,

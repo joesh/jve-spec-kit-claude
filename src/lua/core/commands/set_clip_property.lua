@@ -113,6 +113,69 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return false
     end
 
+    -- Best-effort error-string extractor for sqlite stmt objects. Some
+    -- bindings expose `last_error` as a method, others as a field; some
+    -- raise on call. Always returns a string.
+    local function stmt_last_error(stmt)
+        if not stmt or not stmt.last_error then return "unknown" end
+        local ok, msg = pcall(stmt.last_error, stmt)
+        if ok and msg and msg ~= "" then return msg end
+        return "unknown"
+    end
+
+    -- UPDATE existing properties row by id. The SQL shape varies based on
+    -- whether default_json was supplied (the rare path that overrides the
+    -- previously-saved default).
+    local function update_property_row(property_id, encoded_value, property_type, default_json)
+        local sql = default_json ~= nil
+            and "UPDATE properties SET property_value = ?, property_type = ?, default_value = ? WHERE id = ?"
+            or  "UPDATE properties SET property_value = ?, property_type = ? WHERE id = ?"
+        local stmt = db:prepare(sql)
+        if not stmt then
+            return fail("SetClipProperty: Failed to prepare property update")
+        end
+        stmt:bind_value(1, encoded_value)
+        stmt:bind_value(2, property_type)
+        if default_json ~= nil then
+            stmt:bind_value(3, default_json)
+            stmt:bind_value(4, property_id)
+        else
+            stmt:bind_value(3, property_id)
+        end
+        local ok = stmt:exec()
+        local err = ok and nil or stmt_last_error(stmt)
+        stmt:finalize()
+        if not ok then
+            return fail("SetClipProperty: Failed to update property row: %s", tostring(err))
+        end
+        return true
+    end
+
+    -- INSERT a new properties row. default_json may be nil — we encode an
+    -- explicit null wrapper to keep the column non-NULL per schema.
+    local function insert_property_row(property_id, clip_id, property_name,
+                                       encoded_value, property_type, default_json)
+        local stmt = db:prepare(
+            "INSERT INTO properties (id, clip_id, property_name, property_value, property_type, default_value) "
+            .. "VALUES (?, ?, ?, ?, ?, ?)")
+        if not stmt then
+            return fail("SetClipProperty: Failed to prepare property insert")
+        end
+        stmt:bind_value(1, property_id)
+        stmt:bind_value(2, clip_id)
+        stmt:bind_value(3, property_name)
+        stmt:bind_value(4, encoded_value)
+        stmt:bind_value(5, property_type)
+        stmt:bind_value(6, default_json or json.encode({ value = nil }))
+        local ok = stmt:exec()
+        local err = ok and nil or stmt_last_error(stmt)
+        stmt:finalize()
+        if not ok then
+            return fail("SetClipProperty: Failed to insert property row: %s", tostring(err))
+        end
+        return true
+    end
+
     command_executors["SetClipProperty"] = function(command)
         local args = command:get_all_parameters()
         log.event("Executing SetClipProperty")
@@ -214,59 +277,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             ["executed_with_clip"] = true,
         })
         if existing_property then
-            local update_sql
-            if default_json ~= nil then
-                update_sql = "UPDATE properties SET property_value = ?, property_type = ?, default_value = ? WHERE id = ?"
-            else
-                update_sql = "UPDATE properties SET property_value = ?, property_type = ? WHERE id = ?"
+            if not update_property_row(property_id, encoded_value, property_type, default_json) then
+                return false
             end
-            local update_stmt = db:prepare(update_sql)
-            if not update_stmt then
-                return fail("SetClipProperty: Failed to prepare property update")
-            end
-            update_stmt:bind_value(1, encoded_value)
-            update_stmt:bind_value(2, property_type)
-            if default_json ~= nil then
-                update_stmt:bind_value(3, default_json)
-                update_stmt:bind_value(4, property_id)
-            else
-                update_stmt:bind_value(3, property_id)
-            end
-            if not update_stmt:exec() then
-                local err = "unknown"
-                if update_stmt.last_error then
-                    local ok, msg = pcall(update_stmt.last_error, update_stmt)
-                    if ok and msg and msg ~= "" then
-                        err = msg
-                    end
-                end
-                return fail("SetClipProperty: Failed to update property row: %s",
-                    tostring(err))
-            end
-            update_stmt:finalize()
         else
-            local insert_stmt = db:prepare("INSERT INTO properties (id, clip_id, property_name, property_value, property_type, default_value) VALUES (?, ?, ?, ?, ?, ?)")
-            if not insert_stmt then
-                return fail("SetClipProperty: Failed to prepare property insert")
+            if not insert_property_row(property_id, clip_id, property_name,
+                    encoded_value, property_type, default_json) then
+                return false
             end
-            insert_stmt:bind_value(1, property_id)
-            insert_stmt:bind_value(2, clip_id)
-            insert_stmt:bind_value(3, property_name)
-            insert_stmt:bind_value(4, encoded_value)
-            insert_stmt:bind_value(5, property_type)
-            insert_stmt:bind_value(6, default_json or json.encode({ value = nil }))
-            if not insert_stmt:exec() then
-                local err = "unknown"
-                if insert_stmt.last_error then
-                    local ok, msg = pcall(insert_stmt.last_error, insert_stmt)
-                    if ok and msg and msg ~= "" then
-                        err = msg
-                    end
-                end
-                return fail("SetClipProperty: Failed to insert property row: %s",
-                    tostring(err))
-            end
-            insert_stmt:finalize()
         end
 
         clip:set_property(property_name, args.value)
@@ -321,28 +339,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 return fail("Undo SetClipProperty: Failed to encode previous property value: %s",
                     tostring(encode_err))
             end
-            local update_sql
-            if args.previous_default ~= nil then
-                update_sql = "UPDATE properties SET property_value = ?, property_type = ?, default_value = ? WHERE id = ?"
-            else
-                update_sql = "UPDATE properties SET property_value = ?, property_type = ? WHERE id = ?"
-            end
-            local update_stmt = db:prepare(update_sql)
-            if not update_stmt then
-                return fail("Undo SetClipProperty: Failed to prepare update statement")
-            end
-            update_stmt:bind_value(1, encoded_prev)
-            update_stmt:bind_value(2, args.previous_type)
-            if args.previous_default ~= nil then
-                update_stmt:bind_value(3, args.previous_default)
-                update_stmt:bind_value(4, args.property_id)
-            else
-                update_stmt:bind_value(3, args.property_id)
-            end
-            if not update_stmt:exec() then
+            if not update_property_row(args.property_id, encoded_prev,
+                    args.previous_type, args.previous_default) then
                 return fail("Undo SetClipProperty: Failed to restore property row")
             end
-            update_stmt:finalize()
         end
 
         local clip = Clip.load_optional(args.clip_id)
