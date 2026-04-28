@@ -441,14 +441,26 @@ function M.restore_clip_state(state)
     
     if not clip then
         -- V13: Clip.create takes a single fields table. State carries V13
-        -- names only (no master_clip_id alias).
+        -- names only (no master_clip_id alias). capture_clip_state asserts
+        -- the same fields non-nil at write — read straight here too.
         local nested_id = state.nested_sequence_id
         assert(nested_id and nested_id ~= "",
             "restore_clip_state: state missing nested_sequence_id")
+        assert(type(state.name) == "string" and state.name ~= "",
+            "restore_clip_state: state.name required")
+        assert(type(state.fps_mismatch_policy) == "string"
+            and state.fps_mismatch_policy ~= "",
+            "restore_clip_state: state.fps_mismatch_policy required")
+        assert(type(state.enabled) == "boolean",
+            "restore_clip_state: state.enabled must be boolean")
+        assert(type(state.volume) == "number",
+            "restore_clip_state: state.volume required")
+        assert(type(state.playhead) == "number",
+            "restore_clip_state: state.playhead required")
         local new_id = Clip.create({
             id = state.id,
             project_id = state.project_id,
-            name = state.name or "Restored Clip",
+            name = state.name,
             track_id = state.track_id,
             owner_sequence_id = state.owner_sequence_id or state.track_sequence_id,
             nested_sequence_id = nested_id,
@@ -458,12 +470,12 @@ function M.restore_clip_state(state)
             source_out_frame = state.source_out,
             master_layer_track_id = state.master_layer_track_id,
             master_audio_track_id = state.master_audio_track_id,
-            fps_mismatch_policy = state.fps_mismatch_policy or "resample",
-            enabled = (state.enabled ~= false) and 1 or 0,
-            volume = state.volume or 1.0,
+            fps_mismatch_policy = state.fps_mismatch_policy,
+            enabled = state.enabled and 1 or 0,
+            volume = state.volume,
             mark_in_frame = state.mark_in,
             mark_out_frame = state.mark_out,
-            playhead_frame = state.playhead or 0,
+            playhead_frame = state.playhead,
         })
         clip = Clip.load(new_id)
         if clip and clip.restore_without_occlusion then
@@ -493,6 +505,16 @@ function M.capture_clip_state(clip)
     if not rate or not rate.fps_numerator or not rate.fps_denominator then
         error(string.format("capture_clip_state: Clip %s missing rate metadata", tostring(clip.id)), 2)
     end
+    local is_gap = clip.is_gap == true
+    -- Real (non-gap) clips loaded from the DB carry fps_mismatch_policy
+    -- (NOT NULL in schema). Gaps are synthesized in-memory and are filtered
+    -- out at persist time, so they don't need the field.
+    if not is_gap then
+        assert(type(clip.fps_mismatch_policy) == "string"
+            and clip.fps_mismatch_policy ~= "", string.format(
+            "capture_clip_state: clip %s missing fps_mismatch_policy",
+            tostring(clip.id)))
+    end
     -- V13 snapshot: ONLY V13 fields. V8 aliases (clip_kind, master_clip_id,
     -- media_id, offline) deleted per FR-018.
     local state = {
@@ -502,13 +524,13 @@ function M.capture_clip_state(clip)
         -- Mark gap captures so persistence can filter them out — gaps are
         -- in-memory-only (recomputed by timeline_state at apply/undo time);
         -- they have no source_in/source_out and would crash revert_mutations.
-        is_gap = clip.is_gap == true or nil,
+        is_gap = is_gap or nil,
         owner_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
         track_sequence_id = clip.track_sequence_id or clip.owner_sequence_id,
         nested_sequence_id = clip.nested_sequence_id,
         master_layer_track_id = clip.master_layer_track_id,
         master_audio_track_id = clip.master_audio_track_id,
-        fps_mismatch_policy = clip.fps_mismatch_policy or "resample",
+        fps_mismatch_policy = clip.fps_mismatch_policy,
         track_id = clip.track_id,
         timeline_start = clip.timeline_start,
         duration = clip.duration,
@@ -542,6 +564,16 @@ function M.capture_clip_state(clip)
     if mark_in ~= nil then state.mark_in = mark_in end
     if mark_out ~= nil then state.mark_out = mark_out end
     if playhead ~= nil then state.playhead = playhead end
+    -- Real (non-gap) captures must carry volume + playhead so restore can
+    -- re-INSERT the row. The schema requires both NOT NULL on clips.
+    if not is_gap then
+        assert(type(state.volume) == "number", string.format(
+            "capture_clip_state: clip %s has no volume (DB row missing?)",
+            tostring(clip.id)))
+        assert(type(state.playhead) == "number", string.format(
+            "capture_clip_state: clip %s has no playhead_frame (DB row missing?)",
+            tostring(clip.id)))
+    end
     return state
 end
 
@@ -811,6 +843,10 @@ function M.apply_mutations(db, mutations)
             stmt:bind_value(12, mut.master_audio_track_id)  -- nullable
             stmt:bind_value(13, policy)
             stmt:bind_value(14, mut.enabled)
+            -- volume/playhead_frame are NOT NULL in the schema. Plan_insert
+            -- substitutes semantic neutrals (1.0, 0) when the source row
+            -- omits them — both values are the only correct choices for a
+            -- brand-new clip, so we accept them here without reasserting.
             stmt:bind_value(15, mut.volume or 1.0)
             if mut.mark_in_frame ~= nil then stmt:bind_value(16, mut.mark_in_frame) end
             if mut.mark_out_frame ~= nil then stmt:bind_value(17, mut.mark_out_frame) end
@@ -911,6 +947,249 @@ function M.apply_mutations(db, mutations)
 	    return true
 	end
 
+-- Revert a forward `bulk_shift` mutation. The forward shift moved every
+-- clip on `track_id` with timeline_start_frame >= start_frame by
+-- +shift_frames; we enumerate from the post-shift position and shift each
+-- clip back by -shift_frames. Ordering matters on video tracks (mirrors
+-- the forward path in apply_mutations): positive undo delta → DESC,
+-- negative → ASC, so the trigger never sees a transient overlap.
+-- Returns (true, nil) | (false, reason). When undo_delta == 0 (forward
+-- shift was a no-op), nothing happens.
+local function revert_bulk_shift_mutation(db, mut)
+    if type(mut.shift_frames) ~= "number" then
+        return false, "bulk_shift undo: missing numeric shift_frames"
+    end
+    if not mut.track_id or mut.track_id == "" then
+        return false, "bulk_shift undo: missing track_id"
+    end
+    if type(mut.start_frame) ~= "number" then
+        return false, "bulk_shift undo: missing numeric start_frame"
+    end
+
+    local undo_delta = -mut.shift_frames
+    if undo_delta == 0 then return true end
+
+    local post_shift_start = mut.start_frame + mut.shift_frames
+    local order_desc = undo_delta > 0
+    local select_sql = order_desc
+        and "SELECT id FROM clips WHERE track_id = ? AND timeline_start_frame >= ? ORDER BY timeline_start_frame DESC"
+        or  "SELECT id FROM clips WHERE track_id = ? AND timeline_start_frame >= ? ORDER BY timeline_start_frame ASC"
+    local select_stmt = db:prepare(select_sql)
+    if not select_stmt then
+        return false, "bulk_shift undo: failed to prepare clip enumeration: "
+            .. tostring(db:last_error())
+    end
+    select_stmt:bind_value(1, mut.track_id)
+    select_stmt:bind_value(2, post_shift_start)
+    if not select_stmt:exec() then
+        local err = db:last_error()
+        select_stmt:finalize()
+        return false, "bulk_shift undo: failed to enumerate clips: " .. tostring(err)
+    end
+
+    -- Drain the cursor before issuing UPDATEs (SQLite prepared statements
+    -- can't overlap read and write on the same table).
+    local clip_ids = {}
+    while select_stmt:next() do
+        local cid = select_stmt:value(0)
+        if cid then clip_ids[#clip_ids + 1] = cid end
+    end
+    select_stmt:finalize()
+
+    -- Output invariant: the forward shift moved at least one clip
+    -- (apply_mutations asserts that); reverting must find the same set
+    -- at the post-shift position. Zero here means the DB diverged
+    -- between forward and reverse — bug we want to see loudly.
+    if #clip_ids == 0 then
+        return false, string.format(
+            "bulk_shift undo: no clips on track %s at or past post_shift_start %d "
+            .. "(DB diverged from forward mutation)",
+            tostring(mut.track_id), post_shift_start)
+    end
+
+    local update_stmt = db:prepare(
+        "UPDATE clips SET timeline_start_frame = timeline_start_frame + ?, modified_at = ? WHERE id = ?")
+    if not update_stmt then
+        return false, "bulk_shift undo: failed to prepare clip update: "
+            .. tostring(db:last_error())
+    end
+    local now = os.time()
+    for _, cid in ipairs(clip_ids) do
+        update_stmt:bind_value(1, undo_delta)
+        update_stmt:bind_value(2, now)
+        update_stmt:bind_value(3, cid)
+        local ok = update_stmt:exec()
+        local err = db:last_error()
+        update_stmt:reset()
+        update_stmt:clear_bindings()
+        if not ok then
+            update_stmt:finalize()
+            return false, "bulk_shift undo: failed to shift clip "
+                .. tostring(cid) .. ": " .. tostring(err)
+        end
+    end
+    update_stmt:finalize()
+    return true
+end
+
+-- Type-assert that v is a number, with a context-aware error message
+-- naming the originating command so divergence in undo capture is
+-- easy to trace.
+local function require_int_frame(v, label, command_type)
+    assert(type(v) == "number", string.format(
+        "undo %s: %s must be integer, got %s",
+        command_type or "update", label or "value", type(v)))
+    return v
+end
+
+local function require_clip_frame_rate(prev, context)
+    assert(prev and prev.frame_rate
+        and prev.frame_rate.fps_numerator
+        and prev.frame_rate.fps_denominator,
+        string.format("%s: clip %s missing frame_rate table",
+            context or "undo", tostring(prev and prev.id)))
+    return prev.frame_rate.fps_numerator, prev.frame_rate.fps_denominator
+end
+
+-- Reverse a forward `update` mutation: UPDATE the clip back to its
+-- captured `previous` state. Records the reverse mutation on the undo
+-- command so apply_command_mutations can sync clip_state.
+local function apply_update_revert(db, mut, command, sequence_id)
+    local prev = mut.previous
+    if not prev then return false, "Cannot undo update: missing previous state" end
+    local cmd_type = command and command.type or nil
+    local ts = require_int_frame(prev.timeline_start or prev.start_value, "timeline_start", cmd_type)
+    local dur = require_int_frame(prev.duration, "duration", cmd_type)
+    local src_in = require_int_frame(prev.source_in, "source_in", cmd_type)
+    local src_out = require_int_frame(prev.source_out, "source_out", cmd_type)
+
+    local stmt = db:prepare([[
+        UPDATE clips
+        SET track_id = ?, timeline_start_frame = ?, duration_frames = ?,
+            source_in_frame = ?, source_out_frame = ?, enabled = ?, modified_at = ?
+        WHERE id = ?
+    ]])
+    if not stmt then
+        return false, "Failed to prepare undo update: " .. tostring(db:last_error())
+    end
+    stmt:bind_value(1, prev.track_id)
+    stmt:bind_value(2, ts)
+    stmt:bind_value(3, dur)
+    stmt:bind_value(4, src_in)
+    stmt:bind_value(5, src_out)
+    stmt:bind_value(6, prev.enabled and 1 or 0)
+    stmt:bind_value(7, os.time())
+    stmt:bind_value(8, prev.id)
+    local ok = stmt:exec()
+    local err = db:last_error()
+    stmt:finalize()
+    if not ok then
+        return false, "Failed to execute undo update: " .. tostring(err)
+    end
+
+    if command then
+        local fps_num, fps_den = require_clip_frame_rate(prev, "undo update")
+        M.add_update_mutation(command, sequence_id, {
+            clip_id          = prev.id,
+            track_id         = prev.track_id,
+            start_value      = ts,
+            duration_value   = dur,
+            source_in_value  = src_in,
+            source_out_value = src_out,
+            fps_numerator    = fps_num,
+            fps_denominator  = fps_den,
+            enabled          = prev.enabled,
+            volume           = prev.volume,
+        })
+    end
+    return true
+end
+
+-- Reverse a forward `delete` mutation: re-INSERT the clip from its
+-- captured `previous` state. Records the reverse mutation on the undo
+-- command for clip_state sync.
+local function restore_deleted_clip_revert(db, mut, command, sequence_id)
+    local prev = mut.previous
+    if not prev then return false, "Cannot undo delete: missing previous state" end
+    if prev.created_at == nil or prev.modified_at == nil then
+        return false, "undo delete: missing created_at/modified_at for clip " .. tostring(prev.id)
+    end
+    local nested_id = prev.nested_sequence_id
+    if not nested_id or nested_id == "" then
+        return false, "undo delete: missing nested_sequence_id for clip " .. tostring(prev.id)
+    end
+    local cmd_type = command and command.type or nil
+    local ts = require_int_frame(prev.timeline_start or prev.start_value, "timeline_start", cmd_type)
+    local dur = require_int_frame(prev.duration, "duration", cmd_type)
+    local src_in = require_int_frame(prev.source_in, "source_in", cmd_type)
+    local src_out = require_int_frame(prev.source_out, "source_out", cmd_type)
+    local policy = prev.fps_mismatch_policy or "resample"
+
+    local stmt = db:prepare([[
+        INSERT INTO clips (
+            id, project_id, name, track_id,
+            owner_sequence_id, nested_sequence_id,
+            timeline_start_frame, duration_frames,
+            source_in_frame, source_out_frame,
+            master_layer_track_id, master_audio_track_id,
+            fps_mismatch_policy,
+            enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
+            created_at, modified_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ]])
+    if not stmt then
+        return false, "Failed to prepare undo delete: " .. tostring(db:last_error())
+    end
+    stmt:bind_value(1, prev.id)
+    stmt:bind_value(2, prev.project_id)
+    stmt:bind_value(3, prev.name)
+    stmt:bind_value(4, prev.track_id)
+    stmt:bind_value(5, prev.owner_sequence_id or prev.track_sequence_id)
+    stmt:bind_value(6, nested_id)
+    stmt:bind_value(7, ts)
+    stmt:bind_value(8, dur)
+    stmt:bind_value(9, src_in)
+    stmt:bind_value(10, src_out)
+    stmt:bind_value(11, prev.master_layer_track_id)
+    stmt:bind_value(12, prev.master_audio_track_id)
+    stmt:bind_value(13, policy)
+    stmt:bind_value(14, prev.enabled and 1 or 0)
+    -- Snapshots from older capture sites may not carry volume/playhead
+    -- (mainly because capture_clip_state pre-V13 didn't include them on
+    -- every path). Schema requires both NOT NULL — substitute the same
+    -- semantic neutrals used at clip creation rather than refusing to
+    -- restore. mark_in/out remain nullable.
+    stmt:bind_value(15, prev.volume or 1.0)
+    if prev.mark_in  ~= nil then stmt:bind_value(16, prev.mark_in)  end
+    if prev.mark_out ~= nil then stmt:bind_value(17, prev.mark_out) end
+    stmt:bind_value(18, prev.playhead or 0)
+    stmt:bind_value(19, prev.created_at)
+    stmt:bind_value(20, prev.modified_at)
+
+    local ok = stmt:exec()
+    stmt:finalize()
+    if not ok then
+        return false, "Failed to execute undo delete: " .. (db:last_error() or "")
+    end
+
+    if command then
+        M.add_insert_mutation(command, sequence_id, {
+            id                 = prev.id,
+            track_id           = prev.track_id,
+            nested_sequence_id = nested_id,
+            start_value        = ts,
+            duration_value     = dur,
+            source_in_value    = src_in,
+            source_out_value   = src_out,
+            enabled            = prev.enabled,
+            name               = prev.name,
+            volume             = prev.volume,
+        })
+    end
+    return true
+end
+
 function M.revert_mutations(db, mutations, command, sequence_id)
     if not db then return false, "No database connection" end
     if not mutations or #mutations == 0 then return true end
@@ -918,139 +1197,6 @@ function M.revert_mutations(db, mutations, command, sequence_id)
     local updates = {}
     local restore_deletes = {}
     local preserve_strict_order = command and command.type == "BatchRippleEdit"
-
-    local function val_frames(v, label)
-        assert(type(v) == "number", string.format("undo %s: %s must be integer, got %s", command and command.type or "update", label or "value", type(v)))
-        return v
-    end
-
-    local function require_rate(prev, context)
-        assert(prev and prev.frame_rate
-            and prev.frame_rate.fps_numerator
-            and prev.frame_rate.fps_denominator,
-            string.format("%s: clip %s missing frame_rate table",
-                context or "undo", tostring(prev and prev.id)))
-        return prev.frame_rate.fps_numerator, prev.frame_rate.fps_denominator
-    end
-
-    local function apply_update(mut)
-        local prev = mut.previous
-        if not prev then return false, "Cannot undo update: missing previous state" end
-        local now = os.time()
-
-        local stmt = db:prepare([[
-            UPDATE clips
-            SET track_id = ?, timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?, modified_at = ?
-            WHERE id = ?
-        ]])
-        if not stmt then return false, "Failed to prepare undo update: " .. tostring(db:last_error()) end
-
-        stmt:bind_value(1, prev.track_id)
-        stmt:bind_value(2, val_frames(prev.timeline_start or prev.start_value, "timeline_start"))
-        stmt:bind_value(3, val_frames(prev.duration, "duration"))
-        stmt:bind_value(4, val_frames(prev.source_in, "source_in"))
-        stmt:bind_value(5, val_frames(prev.source_out, "source_out"))
-        stmt:bind_value(6, prev.enabled and 1 or 0)
-        stmt:bind_value(7, now)
-        stmt:bind_value(8, prev.id)
-
-        local ok = stmt:exec()
-        local err = db:last_error()
-        stmt:finalize()
-        if not ok then
-            return false, "Failed to execute undo update: " .. tostring(err)
-        end
-
-        if command then
-            -- Include full clip state for UI cache update (not just clip_id)
-            local fps_num, fps_den = require_rate(prev, "undo update")
-            M.add_update_mutation(command, sequence_id, {
-                clip_id = prev.id,
-                track_id = prev.track_id,
-                start_value = val_frames(prev.timeline_start or prev.start_value, "timeline_start"),
-                duration_value = val_frames(prev.duration, "duration"),
-                source_in_value = val_frames(prev.source_in, "source_in"),
-                source_out_value = val_frames(prev.source_out, "source_out"),
-                fps_numerator = fps_num,
-                fps_denominator = fps_den,
-                enabled = prev.enabled,
-                volume = prev.volume,
-            })
-        end
-        return true
-    end
-
-    local function restore_deleted_clip(mut)
-        local prev = mut.previous
-        if not prev then return false, "Cannot undo delete: missing previous state" end
-        if prev.created_at == nil or prev.modified_at == nil then
-            return false, "undo delete: missing created_at/modified_at for clip " .. tostring(prev.id)
-        end
-        local nested_id = prev.nested_sequence_id
-        if not nested_id or nested_id == "" then
-            return false, "undo delete: missing nested_sequence_id for clip " .. tostring(prev.id)
-        end
-        local policy = prev.fps_mismatch_policy or "resample"
-
-        local stmt = db:prepare([[
-            INSERT INTO clips (
-                id, project_id, name, track_id,
-                owner_sequence_id, nested_sequence_id,
-                timeline_start_frame, duration_frames,
-                source_in_frame, source_out_frame,
-                master_layer_track_id, master_audio_track_id,
-                fps_mismatch_policy,
-                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
-                created_at, modified_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ]])
-        if not stmt then return false, "Failed to prepare undo delete: " .. tostring(db:last_error()) end
-
-        stmt:bind_value(1, prev.id)
-        stmt:bind_value(2, prev.project_id)
-        stmt:bind_value(3, prev.name)
-        stmt:bind_value(4, prev.track_id)
-        stmt:bind_value(5, prev.owner_sequence_id or prev.track_sequence_id)
-        stmt:bind_value(6, nested_id)
-        stmt:bind_value(7, val_frames(prev.timeline_start or prev.start_value, "timeline_start"))
-        stmt:bind_value(8, val_frames(prev.duration, "duration"))
-        stmt:bind_value(9, val_frames(prev.source_in, "source_in"))
-        stmt:bind_value(10, val_frames(prev.source_out, "source_out"))
-        stmt:bind_value(11, prev.master_layer_track_id)  -- nullable
-        stmt:bind_value(12, prev.master_audio_track_id)  -- nullable
-        stmt:bind_value(13, policy)
-        stmt:bind_value(14, prev.enabled and 1 or 0)
-        stmt:bind_value(15, prev.volume or 1.0)
-        if prev.mark_in ~= nil then stmt:bind_value(16, prev.mark_in) end
-        if prev.mark_out ~= nil then stmt:bind_value(17, prev.mark_out) end
-        stmt:bind_value(18, prev.playhead or 0)
-        stmt:bind_value(19, prev.created_at)
-        stmt:bind_value(20, prev.modified_at)
-
-        local ok = stmt:exec()
-        stmt:finalize()
-        if not ok then
-            return false, "Failed to execute undo delete: " .. (db:last_error() or "")
-        end
-
-        if command then
-            -- Include full clip payload for UI cache insert (not just id)
-            M.add_insert_mutation(command, sequence_id, {
-                id = prev.id,
-                track_id = prev.track_id,
-                nested_sequence_id = nested_id,
-                start_value = val_frames(prev.timeline_start or prev.start_value, "timeline_start"),
-                duration_value = val_frames(prev.duration, "duration"),
-                source_in_value = val_frames(prev.source_in, "source_in"),
-                source_out_value = val_frames(prev.source_out, "source_out"),
-                enabled = prev.enabled,
-                name = prev.name,
-                volume = prev.volume,
-            })
-        end
-        return true
-    end
 
     for i = #mutations, 1, -1 do
         local mut = mutations[i]
@@ -1070,107 +1216,21 @@ function M.revert_mutations(db, mutations, command, sequence_id)
             end
         elseif mut.type == "delete" then
             if preserve_strict_order then
-                local ok, err = restore_deleted_clip(mut)
+                local ok, err = restore_deleted_clip_revert(db, mut, command, sequence_id)
                 if not ok then return false, err end
             else
                 table.insert(restore_deletes, mut)
             end
         elseif mut.type == "update" then
             if preserve_strict_order then
-                local ok, err = apply_update(mut)
+                local ok, err = apply_update_revert(db, mut, command, sequence_id)
                 if not ok then return false, err end
             else
                 table.insert(updates, mut)
             end
         elseif mut.type == "bulk_shift" then
-            -- Reverse a canonical bulk_shift: { track_id, shift_frames, start_frame }.
-            --
-            -- The forward shift moved every clip on `track_id` with
-            -- timeline_start_frame >= start_frame by +shift_frames, so the
-            -- clips now sit at positions >= (start_frame + shift_frames).
-            -- To undo, we enumerate from that post-shift position and move
-            -- each clip back by -shift_frames.
-            --
-            -- Ordering matters on video tracks to avoid transient
-            -- VIDEO_OVERLAP trigger fires: the undo delta (-shift_frames)
-            -- determines direction, so positive undo delta processes DESC,
-            -- negative undo delta processes ASC. Same rule as the forward
-            -- path in apply_mutations.
-            local shift_frames = mut.shift_frames
-            if type(shift_frames) ~= "number" then
-                return false, "bulk_shift undo: missing numeric shift_frames"
-            end
-            if not mut.track_id or mut.track_id == "" then
-                return false, "bulk_shift undo: missing track_id"
-            end
-            if type(mut.start_frame) ~= "number" then
-                return false, "bulk_shift undo: missing numeric start_frame"
-            end
-
-            local undo_delta = -shift_frames
-            if undo_delta ~= 0 then
-                local post_shift_start = mut.start_frame + shift_frames
-                local order_desc = undo_delta > 0
-                local select_sql = order_desc
-                    and "SELECT id FROM clips WHERE track_id = ? AND timeline_start_frame >= ? ORDER BY timeline_start_frame DESC"
-                    or  "SELECT id FROM clips WHERE track_id = ? AND timeline_start_frame >= ? ORDER BY timeline_start_frame ASC"
-                local select_stmt = db:prepare(select_sql)
-                if not select_stmt then
-                    return false, "bulk_shift undo: failed to prepare clip enumeration: " .. tostring(db:last_error())
-                end
-                select_stmt:bind_value(1, mut.track_id)
-                select_stmt:bind_value(2, post_shift_start)
-                local ok_select = select_stmt:exec()
-                if not ok_select then
-                    local select_err = db:last_error()
-                    select_stmt:finalize()
-                    return false, "bulk_shift undo: failed to enumerate clips: " .. tostring(select_err)
-                end
-
-                -- Drain the cursor before issuing UPDATEs (SQLite prepared
-                -- statements can't overlap read and write on the same table).
-                local clip_ids = {}
-                while select_stmt:next() do
-                    local clip_id = select_stmt:value(0)
-                    if clip_id then
-                        table.insert(clip_ids, clip_id)
-                    end
-                end
-                select_stmt:finalize()
-
-                -- Output invariant: the forward shift moved at least one
-                -- clip (apply_mutations asserts that); reverting must find
-                -- the same set at the post-shift position. Zero here means
-                -- the DB state diverged between forward and reverse, or
-                -- a concurrent mutation removed the clips out from under
-                -- the undo — either way it's a bug we want to see loudly.
-                if #clip_ids == 0 then
-                    return false, string.format(
-                        "bulk_shift undo: no clips on track %s at or past "
-                        .. "post_shift_start %d (DB diverged from forward mutation)",
-                        tostring(mut.track_id), post_shift_start)
-                end
-
-                local update_stmt = db:prepare("UPDATE clips SET timeline_start_frame = timeline_start_frame + ?, modified_at = ? WHERE id = ?")
-                if not update_stmt then
-                    return false, "bulk_shift undo: failed to prepare clip update: " .. tostring(db:last_error())
-                end
-                local now = os.time()
-                for _, clip_id in ipairs(clip_ids) do
-                    update_stmt:bind_value(1, undo_delta)
-                    update_stmt:bind_value(2, now)
-                    update_stmt:bind_value(3, clip_id)
-                    local ok = update_stmt:exec()
-                    local err = db:last_error()
-                    update_stmt:reset()
-                    update_stmt:clear_bindings()
-                    if not ok then
-                        update_stmt:finalize()
-                        return false, "bulk_shift undo: failed to shift clip " .. tostring(clip_id) .. ": " .. tostring(err)
-                    end
-                end
-                update_stmt:finalize()
-            end
+            local ok, err = revert_bulk_shift_mutation(db, mut)
+            if not ok then return false, err end
 
             if command and sequence_id then
                 -- Record the reverse mutation on the undo command so that
@@ -1180,9 +1240,9 @@ function M.revert_mutations(db, mutations, command, sequence_id)
                 -- when this mutation is applied, so the reverse's
                 -- start_frame must match that post-shift boundary.
                 M.add_bulk_shift_mutation(command, sequence_id, {
-                    track_id = mut.track_id,
-                    shift_frames = undo_delta,
-                    start_frame = mut.start_frame + shift_frames,
+                    track_id     = mut.track_id,
+                    shift_frames = -mut.shift_frames,
+                    start_frame  = mut.start_frame + mut.shift_frames,
                 })
             end
         else
@@ -1227,13 +1287,13 @@ function M.revert_mutations(db, mutations, command, sequence_id)
         end
 
         for _, mut in ipairs(updates) do
-            local ok, err = apply_update(mut)
+            local ok, err = apply_update_revert(db, mut, command, sequence_id)
             if not ok then return false, err end
         end
     end
 
     for _, mut in ipairs(restore_deletes) do
-        local ok, err = restore_deleted_clip(mut)
+        local ok, err = restore_deleted_clip_revert(db, mut, command, sequence_id)
         if not ok then return false, err end
     end
     return true

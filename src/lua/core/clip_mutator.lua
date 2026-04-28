@@ -163,11 +163,14 @@ local function plan_insert(row)
         enabled = row.enabled and 1 or 0,
         created_at = assert(row.created_at, "clip_mutator: insert mutation missing created_at for clip " .. tostring(row.id)),
         modified_at = assert(row.modified_at, "clip_mutator: insert mutation missing modified_at for clip " .. tostring(row.id)),
-        -- Per-clip metadata (may be nil for new clips — DB uses defaults)
-        volume = row.volume,
+        -- Per-clip metadata. volume and playhead_frame are NOT NULL in the
+        -- schema; for a brand-new clip with no prior state, the semantic
+        -- neutrals (full volume, head-of-clip playhead) ARE the values, not
+        -- a fallback. mark_in/out are nullable (no marks set yet).
+        volume = row.volume or 1.0,
         mark_in_frame = row.mark_in,
         mark_out_frame = row.mark_out,
-        playhead_frame = row.playhead_frame
+        playhead_frame = row.playhead_frame or 0,
     }
 end
 
@@ -314,10 +317,153 @@ local function iter_overlaps(clip_list, start_value, end_time)
     end
 end
 
+-- ============================================================================
+-- resolve_occlusions: per-clip overlap-case planners
+-- ============================================================================
+--
+-- An existing clip C overlaps a "forbidden span" [start_value, end_time):
+--
+--    full_cover     — the span swallows C entirely → delete C
+--    trim_tail      — span clips C's tail → shrink C's duration
+--    trim_head      — span clips C's head → shift start, shorten duration
+--    straddle_split — span sits inside C → trim C to the left half +
+--                     INSERT a new clip for the right half
+--
+-- Each helper returns an `action` (or nil if the resulting clip would
+-- be sub-frame). Helpers mutate `row` in place where appropriate so the
+-- caller's plan_update sees the new state. Source-coord conversion uses
+-- `get_seq_fps(row)` to honor the row's nested sequence's timebase.
+
+-- Span fully covers the clip → DELETE.
+local function plan_full_cover_action(original)
+    return plan_delete(original)
+end
+
+-- Span clips the tail. Keep timeline_start, shorten duration to end at
+-- start_value. source_in stays; source_out moves (right edge trim).
+local function plan_trim_tail_action(row, original, start_value, get_seq_fps)
+    local clip_start = row.timeline_start
+    local new_duration = start_value - clip_start
+    if new_duration < 1 then
+        return plan_delete(original)
+    end
+    local trim_delta = new_duration - row.duration  -- negative (shrinking)
+    row.duration = new_duration
+    row.source_out = row.source_out + frame_utils.timeline_to_source(
+        trim_delta, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
+        get_seq_fps(row))
+    return plan_update(row, original)
+end
+
+-- Span clips the head. Shift timeline_start to end_time, shorten duration
+-- from the front. source_in moves by trim_amount (in source units);
+-- source_out stays.
+local function plan_trim_head_action(row, original, end_time, get_seq_fps)
+    local clip_start = row.timeline_start
+    local clip_end = clip_start + row.duration
+    local trim_amount = end_time - clip_start
+    local new_duration = clip_end - end_time
+    if new_duration < 1 then
+        return plan_delete(original)
+    end
+    row.timeline_start = end_time
+    row.duration = new_duration
+    row.source_in = get_source_in(row) + frame_utils.timeline_to_source(
+        trim_amount, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
+        get_seq_fps(row))
+    row.source_out = require_source_out(original, "resolve_occlusions/head_trim")
+    return plan_update(row, original)
+end
+
+-- Span sits inside the clip. Trim C to the left half (UPDATE) and INSERT
+-- a new clip for the right half. Returns (update_action, insert_action)
+-- — caller appends both. Returns just (delete_action) when the left half
+-- would be sub-frame.
+local function plan_straddle_split_actions(row, original, start_value, end_time, get_seq_fps)
+    local clip_start = row.timeline_start
+    local clip_end = clip_start + row.duration
+    local row_fps_num, row_fps_den = get_row_fps(row)
+    local left_duration = start_value - clip_start
+    local right_duration = clip_end - end_time
+    if left_duration < 1 then
+        return plan_delete(original), nil
+    end
+
+    local left_trim_delta = left_duration - row.duration  -- negative
+    row.duration = left_duration
+    row.source_out = row.source_out + frame_utils.timeline_to_source(
+        left_trim_delta, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
+        get_seq_fps(row))
+    local update_action = plan_update(row, original)
+
+    if right_duration <= 0 then
+        return update_action, nil
+    end
+
+    local right_shift = end_time - clip_start
+    local right_clip = {
+        id                    = uuid.generate(),
+        project_id            = original.project_id,
+        track_type            = original.track_type,
+        name                  = original.name,
+        track_id              = original.track_id,
+        timeline_start        = end_time,
+        duration              = right_duration,
+        source_in             = get_source_in(original) + frame_utils.timeline_to_source(
+            right_shift, row_fps_num, row_fps_den, get_seq_fps(original)),
+        source_out            = require_source_out(original, "resolve_occlusions/straddle_split"),
+        frame_rate            = { fps_numerator = row_fps_num, fps_denominator = row_fps_den },
+        enabled               = original.enabled,
+        volume                = original.volume,
+        nested_sequence_id    = original.nested_sequence_id,
+        master_layer_track_id = original.master_layer_track_id,
+        master_audio_track_id = original.master_audio_track_id,
+        fps_mismatch_policy   = original.fps_mismatch_policy,
+        owner_sequence_id     = original.owner_sequence_id,
+        created_at            = os.time(),
+        modified_at           = os.time(),
+    }
+    return update_action, plan_insert(right_clip)
+end
+
+-- Classify the overlap of one existing clip vs. the forbidden span and
+-- emit the corresponding actions onto `actions`. No-op when the span
+-- doesn't actually intersect (caller already filtered).
+local function plan_overlap_actions(row, start_value, end_time, get_seq_fps, actions)
+    local clip_start = row.timeline_start
+    assert(type(clip_start) == "number", "clip_mutator.resolve_occlusions: missing clip_start")
+    local clip_duration = row.duration
+    assert(type(clip_duration) == "number", "clip_mutator.resolve_occlusions: missing clip duration")
+    local clip_end = clip_start + clip_duration
+
+    local overlap_start = math.max(clip_start, start_value)
+    local overlap_end   = math.min(clip_end, end_time)
+    if overlap_end <= overlap_start then
+        return  -- no actual overlap
+    end
+
+    local original = clone_state(row)
+
+    if overlap_start <= clip_start and overlap_end >= clip_end then
+        table.insert(actions, plan_full_cover_action(original))
+    elseif clip_start < start_value and clip_end <= end_time then
+        table.insert(actions, plan_trim_tail_action(row, original, start_value, get_seq_fps))
+    elseif clip_start >= start_value and clip_end > end_time then
+        table.insert(actions, plan_trim_head_action(row, original, end_time, get_seq_fps))
+    elseif clip_start < start_value and clip_end > end_time then
+        local update_action, insert_action =
+            plan_straddle_split_actions(row, original, start_value, end_time, get_seq_fps)
+        table.insert(actions, update_action)
+        if insert_action then table.insert(actions, insert_action) end
+    end
+end
+
 function ClipMutator.resolve_occlusions(db, params)
-    if not params then return true end
+    assert(type(params) == "table",
+        "clip_mutator.resolve_occlusions: params table required")
     local track_id = params.track_id
-    if not track_id then return true end
+    assert(type(track_id) == "string" and track_id ~= "",
+        "clip_mutator.resolve_occlusions: params.track_id required")
     local start_value = assert(params.timeline_start,
         "clip_mutator.resolve_occlusions: timeline_start is required")
     local duration = assert(params.duration, "clip_mutator.resolve_occlusions: duration is required")
@@ -358,132 +504,15 @@ function ClipMutator.resolve_occlusions(db, params)
     local actions = {}
 
     local krono_prepare_done = krono_enabled and krono.now and krono.now() or nil
-    while true do
-        local row = overlaps()
-        if not row then
-            break
-        end
-
-        if row.id == exclude_id then
-            goto continue_loop
-        end
-
-        local pending_state = pending_lookup[row.id]
-        if pending_state then
-            pending_state._seen = true
-            goto continue_loop
-        end
-
-        local clip_start = row.timeline_start
-        assert(type(clip_start) == "number", "clip_mutator.resolve_occlusions: missing clip_start")
-
-        local clip_duration = row.duration
-        assert(type(clip_duration) == "number", "clip_mutator.resolve_occlusions: missing clip duration")
-
-        local clip_end = clip_start + clip_duration
-        local overlap_start = math.max(clip_start, start_value)
-        local overlap_end = math.min(clip_end, end_time)
-
-        if overlap_end <= overlap_start then
-            goto continue_loop
-        end
-
-        local original = clone_state(row)
-
-        -- Fully covered → delete
-        if overlap_start <= clip_start and overlap_end >= clip_end then
-            table.insert(actions, plan_delete(original))
-            goto continue_loop
-        end
-
-        -- Overlap on tail (trim right side): keep start, shorten duration to end at start_value.
-        -- source_in stays, source_out moves (right edge trim).
-        if clip_start < start_value and clip_end <= end_time then
-            local new_duration = start_value - clip_start
-            if new_duration < 1 then
-                table.insert(actions, plan_delete(original))
-                goto continue_loop
+    for row in overlaps do
+        if row.id ~= exclude_id then
+            local pending_state = pending_lookup[row.id]
+            if pending_state then
+                pending_state._seen = true
+            else
+                plan_overlap_actions(row, start_value, end_time, get_seq_fps, actions)
             end
-
-            local trim_delta = new_duration - row.duration  -- negative (shrinking)
-            row.duration = new_duration
-            row.source_out = row.source_out + frame_utils.timeline_to_source(
-                trim_delta, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
-                get_seq_fps(row))
-
-            table.insert(actions, plan_update(row, original))
-            goto continue_loop
         end
-
-        -- Overlap on head (trim left side): shift start to end_time, shorten duration from the front.
-        -- source_in moves by trim_amount (converted to source units), source_out stays.
-        if clip_start >= start_value and clip_end > end_time then
-            local trim_amount = end_time - clip_start
-            local new_duration = clip_end - end_time
-            if new_duration < 1 then
-                table.insert(actions, plan_delete(original))
-                goto continue_loop
-            end
-
-            row.timeline_start = end_time
-            row.duration = new_duration
-            row.source_in = get_source_in(row) + frame_utils.timeline_to_source(
-                trim_amount, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
-                get_seq_fps(row))
-            row.source_out = require_source_out(original, "resolve_occlusions/head_trim")
-
-            table.insert(actions, plan_update(row, original))
-            goto continue_loop
-        end
-
-        -- Straddles new clip → split existing clip into left and right parts.
-        if clip_start < start_value and clip_end > end_time then
-            local row_fps_num, row_fps_den = get_row_fps(row)
-            local left_duration = start_value - clip_start
-            local right_duration = clip_end - end_time
-            if left_duration < 1 then
-                table.insert(actions, plan_delete(original))
-                goto continue_loop
-            end
-
-            local left_trim_delta = left_duration - row.duration  -- negative
-            row.duration = left_duration
-            row.source_out = row.source_out + frame_utils.timeline_to_source(
-                left_trim_delta, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
-                get_seq_fps(row))
-            table.insert(actions, plan_update(row, original))
-
-            if right_duration > 0 then
-                local right_shift = end_time - clip_start
-                local right_clip = {
-                    id = uuid.generate(),
-                    project_id = original.project_id,
-                    track_type = original.track_type,
-                    name = original.name,
-                    track_id = original.track_id,
-                    timeline_start = end_time,
-                    duration = right_duration,
-                    source_in = get_source_in(original) + frame_utils.timeline_to_source(
-                        right_shift, row_fps_num, row_fps_den,
-                        get_seq_fps(original)),
-                    source_out = require_source_out(original, "resolve_occlusions/straddle_split"),
-                    frame_rate = { fps_numerator = row_fps_num, fps_denominator = row_fps_den },
-                    enabled = original.enabled,
-                    volume = original.volume,
-                    nested_sequence_id = original.nested_sequence_id,
-                    master_layer_track_id = original.master_layer_track_id,
-                    master_audio_track_id = original.master_audio_track_id,
-                    fps_mismatch_policy = original.fps_mismatch_policy,
-                    owner_sequence_id = original.owner_sequence_id,
-                    created_at = os.time(),
-                    modified_at = os.time()
-                }
-                table.insert(actions, plan_insert(right_clip))
-            end
-            goto continue_loop
-        end
-
-        ::continue_loop::
     end
 
     for clip_id, pending_state in pairs(pending_lookup) do
@@ -637,12 +666,14 @@ ClipMutator.plan_delete = plan_delete
 ClipMutator.plan_insert = plan_insert
 
 function ClipMutator.resolve_ripple(db, params)
-    if not params then return true end
+    assert(type(params) == "table", "clip_mutator.resolve_ripple: params table required")
     local track_id = params.track_id
     local insert_time = params.insert_time or params.timeline_start or params.timeline_start_frame
     local shift_amount = params.shift_amount or params.duration or params.duration_frames
-    if not track_id then return true end
-    if not insert_time then return true end
+    assert(type(track_id) == "string" and track_id ~= "",
+        "clip_mutator.resolve_ripple: params.track_id required")
+    assert(type(insert_time) == "number",
+        "clip_mutator.resolve_ripple: params.insert_time/timeline_start required")
     assert(shift_amount, "clip_mutator.resolve_ripple: shift_amount/duration is required")
 
     -- Ensure integer frame coordinates
@@ -784,7 +815,7 @@ end
 local function build_track_maps(tracks)
     local by_id = {}
     local by_type_index = {}
-    for _, track in ipairs(tracks or {}) do
+    for _, track in ipairs(tracks) do
         if track and track.id and track.track_type and track.track_index then
             by_id[track.id] = track
             by_type_index[track.track_type] = by_type_index[track.track_type] or {}
@@ -821,7 +852,7 @@ local function merge_intervals(intervals)
 end
 
 local function validate_no_overlaps_per_track(track_intervals)
-    for track_id, intervals in pairs(track_intervals or {}) do
+    for track_id, intervals in pairs(track_intervals) do
         table.sort(intervals, function(a, b)
             return a.start < b.start
         end)
@@ -917,6 +948,128 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
     return clip
 end
 
+-- Load every source clip referenced by the duplicate request. Returns
+-- (clips, min_timeline_start) | (nil, err_string). The min start lets the
+-- caller compute a lower bound for delta_frames (clamping prevents the
+-- duplicate landing at a negative timeline frame).
+local function load_source_clips_for_duplicate(db, sequence_id, clip_ids,
+                                               seq_fps_num, seq_fps_den)
+    local source_clips = {}
+    local min_start
+    for _, clip_id in ipairs(clip_ids) do
+        local clip = load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_num, seq_fps_den)
+        if not clip then
+            return nil, "clip_mutator.plan_duplicate_block: source clip not found: " .. tostring(clip_id)
+        end
+        assert(type(clip.timeline_start) == "number",
+            "clip_mutator.plan_duplicate_block: source clip timeline_start must be integer")
+        assert(type(clip.duration) == "number",
+            "clip_mutator.plan_duplicate_block: source clip duration must be integer")
+        source_clips[#source_clips + 1] = clip
+        if not min_start or clip.timeline_start < min_start then
+            min_start = clip.timeline_start
+        end
+    end
+    return source_clips, min_start
+end
+
+-- Map one source clip to its duplicated counterpart on `mapped_track`,
+-- shifted by effective_delta on the timeline. Returns nil for clips that
+-- map to no track on the target side or whose duplicate would land
+-- exactly on the source.
+local function build_duplicated_clip(clip, mapped_track, sequence_id, effective_delta)
+    local new_start = clip.timeline_start + effective_delta
+    if new_start < 0 then
+        return nil, "clip_mutator.plan_duplicate_block: computed negative timeline_start after clamping"
+    end
+    if new_start == clip.timeline_start and mapped_track.id == clip.track_id then
+        return nil  -- no-op (same place, same track)
+    end
+    local now = os.time()
+    return {
+        id                    = uuid.generate(),
+        project_id            = clip.project_id,
+        track_type            = clip.track_type,
+        name                  = clip.name,
+        track_id              = mapped_track.id,
+        owner_sequence_id     = sequence_id,
+        nested_sequence_id    = clip.nested_sequence_id,
+        master_layer_track_id = clip.master_layer_track_id,
+        master_audio_track_id = clip.master_audio_track_id,
+        fps_mismatch_policy   = clip.fps_mismatch_policy,
+        timeline_start        = new_start,
+        duration              = clip.duration,
+        source_in             = clip.source_in,
+        source_out            = clip.source_out,
+        frame_rate            = clip.frame_rate,
+        enabled               = clip.enabled,
+        created_at            = now,
+        modified_at           = now,
+        volume                = clip.volume,
+        mark_in_frame         = clip.mark_in,
+        mark_out_frame        = clip.mark_out,
+        playhead_frame        = clip.playhead_frame,
+    }
+end
+
+-- Walk the source clips, build INSERT mutations for each, and accumulate
+-- the planned-interval map (used downstream to validate overlaps and
+-- drive occlusion resolution). Returns (mutations, new_clip_ids, intervals_by_track)
+-- on success or (nil, err) on failure.
+local function plan_duplicate_inserts(source_clips, tracks_by_id, tracks_by_type_index,
+                                      anchor_track, sequence_id,
+                                      delta_track_index, effective_delta)
+    local insert_mutations = {}
+    local new_clip_ids = {}
+    local intervals_by_track = {}
+
+    for _, clip in ipairs(source_clips) do
+        local source_track = clip.track_id and tracks_by_id[clip.track_id] or nil
+        assert(source_track, "clip_mutator.plan_duplicate_block: source clip track not found in sequence: "
+            .. tostring(clip.track_id))
+        local mapped_track = nil
+        if source_track.track_type == anchor_track.track_type then
+            local target_index = source_track.track_index + delta_track_index
+            local by_index = tracks_by_type_index[source_track.track_type]
+            mapped_track = by_index and by_index[target_index] or nil
+        end
+        if mapped_track then
+            local new_clip, err = build_duplicated_clip(clip, mapped_track,
+                sequence_id, effective_delta)
+            if err then
+                return nil, err
+            end
+            if new_clip then
+                insert_mutations[#insert_mutations + 1] = plan_insert(new_clip)
+                new_clip_ids[#new_clip_ids + 1] = new_clip.id
+                intervals_by_track[mapped_track.id] = intervals_by_track[mapped_track.id] or {}
+                table.insert(intervals_by_track[mapped_track.id], {
+                    start  = new_clip.timeline_start,
+                    ["end"] = new_clip.timeline_start + new_clip.duration,
+                })
+            end
+        end
+    end
+    return insert_mutations, new_clip_ids, intervals_by_track
+end
+
+-- Run resolve_occlusions_multi over the merged spans on each track and
+-- collect the actions. Returns (mutations, nil) | (nil, err).
+local function resolve_duplicate_occlusions(db, intervals_by_track)
+    local occlusion_mutations = {}
+    for track_id, intervals in pairs(intervals_by_track) do
+        local merged = merge_intervals(intervals)
+        local ok, err, actions = ClipMutator.resolve_occlusions_multi(db, track_id, merged)
+        if not ok then
+            return nil, "clip_mutator.plan_duplicate_block: resolve_occlusions_multi failed: " .. tostring(err)
+        end
+        for _, mut in ipairs(actions) do
+            occlusion_mutations[#occlusion_mutations + 1] = mut
+        end
+    end
+    return occlusion_mutations
+end
+
 function ClipMutator.plan_duplicate_block(db, params)
     assert(db, "clip_mutator.plan_duplicate_block: db is nil")
     assert(type(params) == "table", "clip_mutator.plan_duplicate_block: params table required")
@@ -962,143 +1115,42 @@ function ClipMutator.plan_duplicate_block(db, params)
         return true, nil, {planned_mutations = {}, new_clip_ids = {}}
     end
 
-    local source_clips = {}
-    local min_source_start_frames = nil
-    for _, clip_id in ipairs(clip_ids) do
-        local clip = load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_num, seq_fps_den)
-        if not clip then
-            return false, "clip_mutator.plan_duplicate_block: source clip not found: " .. tostring(clip_id)
-        end
-        -- V13: every clip is a timeline reference (kind='nested' owner). The
-        -- pre-013 clip_kind='timeline' guard rejected master/still/gap. Master
-        -- clips are gone (sequences with kind='master' don't expose stream
-        -- clips), gaps are in-memory only, stills collapse into nested refs.
+    local source_clips, load_err = load_source_clips_for_duplicate(
+        db, sequence_id, clip_ids, seq_fps_num, seq_fps_den)
+    if not source_clips then return false, load_err end
 
-        table.insert(source_clips, clip)
-
-        assert(type(clip.timeline_start) == "number", "clip_mutator.plan_duplicate_block: source clip timeline_start must be integer")
-        assert(type(clip.duration) == "number", "clip_mutator.plan_duplicate_block: source clip duration must be integer")
-
-        if min_source_start_frames == nil or clip.timeline_start < min_source_start_frames then
-            min_source_start_frames = clip.timeline_start
+    -- Clamp delta so the duplicated block doesn't land at a negative
+    -- timeline frame. resolve_occlusions handles overlap with existing
+    -- clips (including the source clip being copied from).
+    local min_start
+    for _, c in ipairs(source_clips) do
+        if not min_start or c.timeline_start < min_start then
+            min_start = c.timeline_start
         end
     end
+    local lower_bound = -(min_start or 0)
+    local effective_delta = math.max(delta_frames, lower_bound)
 
-    local lower_bound = 0
-    if min_source_start_frames ~= nil then
-        lower_bound = -min_source_start_frames
-    end
-
-    local requested_delta_frames = delta_frames
-    if requested_delta_frames < lower_bound then
-        requested_delta_frames = lower_bound
-    end
-
-    -- Use requested delta directly — resolve_occlusions handles overlap
-    -- with existing clips (including the source clip being copied from).
-    local effective_delta = requested_delta_frames
-    if effective_delta < lower_bound then
-        return true, nil, {planned_mutations = {}, new_clip_ids = {}}
-    end
-
-    local insert_mutations = {}
-    local planned_intervals_by_track = {}
-    local merged_overwrite_spans_by_track = {}
-    local new_clip_ids = {}
-
-    for _, clip in ipairs(source_clips) do
-        local source_track = clip.track_id and tracks_by_id[clip.track_id] or nil
-        assert(source_track, "clip_mutator.plan_duplicate_block: source clip track not found in sequence: " .. tostring(clip.track_id))
-        if source_track.track_type ~= anchor_track.track_type then
-            goto continue_clip
-        end
-
-        local target_track_index = source_track.track_index + delta_track_index
-        local mapped_track = tracks_by_type_index[source_track.track_type]
-            and tracks_by_type_index[source_track.track_type][target_track_index]
-            or nil
-        if not mapped_track then
-            goto continue_clip
-        end
-
-        local new_start = clip.timeline_start + effective_delta
-        if new_start < 0 then
-            return false, "clip_mutator.plan_duplicate_block: computed negative timeline_start after clamping"
-        end
-
-        if new_start == clip.timeline_start and mapped_track.id == clip.track_id then
-            goto continue_clip
-        end
-
-        local new_id = uuid.generate()
-        local now = os.time()
-        local new_clip = {
-            id = new_id,
-            project_id = clip.project_id,
-            track_type = clip.track_type,
-            name = clip.name,
-            track_id = mapped_track.id,
-            owner_sequence_id = sequence_id,
-            nested_sequence_id = clip.nested_sequence_id,
-            master_layer_track_id = clip.master_layer_track_id,
-            master_audio_track_id = clip.master_audio_track_id,
-            fps_mismatch_policy = clip.fps_mismatch_policy,
-            timeline_start = new_start,
-            duration = clip.duration,
-            source_in = clip.source_in,
-            source_out = clip.source_out,
-            frame_rate = clip.frame_rate,
-            enabled = clip.enabled,
-            created_at = now,
-            modified_at = now,
-            volume = clip.volume,
-        }
-
-        table.insert(new_clip_ids, new_id)
-
-        planned_intervals_by_track[mapped_track.id] = planned_intervals_by_track[mapped_track.id] or {}
-        table.insert(planned_intervals_by_track[mapped_track.id], {
-            start = new_start,
-            ["end"] = new_start + clip.duration,
-        })
-
-        table.insert(insert_mutations, plan_insert(new_clip))
-
-        ::continue_clip::
-    end
-
+    local insert_mutations, new_clip_ids, intervals_by_track, plan_err =
+        plan_duplicate_inserts(source_clips, tracks_by_id, tracks_by_type_index,
+                               anchor_track, sequence_id,
+                               delta_track_index, effective_delta)
+    if not insert_mutations then return false, plan_err end
     if #insert_mutations == 0 then
         return true, nil, {planned_mutations = {}, new_clip_ids = {}}
     end
 
-    local ok_overlaps, overlap_err = validate_no_overlaps_per_track(planned_intervals_by_track)
+    local ok_overlaps, overlap_err = validate_no_overlaps_per_track(intervals_by_track)
     if not ok_overlaps then
         return false, overlap_err
     end
 
-    for track_id, intervals in pairs(planned_intervals_by_track) do
-        merged_overwrite_spans_by_track[track_id] = merge_intervals(intervals)
-    end
-
-    local occlusion_mutations = {}
-    for track_id, spans in pairs(merged_overwrite_spans_by_track) do
-        local ok_occ, occ_err, occ_actions = ClipMutator.resolve_occlusions_multi(db, track_id, spans)
-        if not ok_occ then
-            return false, "clip_mutator.plan_duplicate_block: resolve_occlusions_multi failed: " .. tostring(occ_err)
-        end
-        for _, mut in ipairs(occ_actions or {}) do
-            table.insert(occlusion_mutations, mut)
-        end
-    end
+    local occlusion_mutations, occ_err = resolve_duplicate_occlusions(db, intervals_by_track)
+    if not occlusion_mutations then return false, occ_err end
 
     local combined = {}
-    for _, mut in ipairs(occlusion_mutations) do
-        table.insert(combined, mut)
-    end
-    for _, mut in ipairs(insert_mutations) do
-        table.insert(combined, mut)
-    end
-
+    for _, mut in ipairs(occlusion_mutations) do combined[#combined + 1] = mut end
+    for _, mut in ipairs(insert_mutations)   do combined[#combined + 1] = mut end
     return true, nil, {planned_mutations = combined, new_clip_ids = new_clip_ids}
 end
 
