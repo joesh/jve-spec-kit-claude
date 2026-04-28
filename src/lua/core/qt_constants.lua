@@ -1,22 +1,26 @@
---- TODO: one-line summary (human review required)
+--- Lua-side façade over the C++-injected `qt_constants` global.
 --
 -- Responsibilities:
--- - TODO
+-- - Augment the C++-provided `qt_constants` table with sections/functions the
+--   binding layer doesn't pre-populate (LAYOUT, GEOMETRY, PROPERTIES, WIDGET,
+--   CONTROL extras, MENU.SHOW_POPUP).
+-- - Resolve named C++ binding functions out of `_G` via `require_global_function`,
+--   asserting (`error`) when a binding is missing rather than nil-propagating.
 --
 -- Non-goals:
--- - TODO
+-- - Owning Qt enums or constants — those live in C++ (`qt_bindings.cpp`) and
+--   are surfaced here as string aliases (e.g. "AlignTop") only when needed.
+-- - Providing fallbacks/stubs when the real binding is absent — missing
+--   bindings raise.
 --
 -- Invariants:
--- - TODO
---
--- Size: ~72 LOC
--- Volatility: unknown
+-- - Must be required only after the C++ engine has injected the global
+--   `qt_constants` table; the file is a no-op otherwise.
+-- - Returns the same global table (mutated in place) — every importer sees one
+--   shared `qt_constants` instance.
+-- - Bindings registered here must exist as global functions at require time.
 --
 -- @file qt_constants.lua
--- Original intent (unreviewed):
--- scripts/core/qt_constants.lua
--- PURPOSE: Qt binding constants and function mappings for Lua inspector
--- Maps to the real qt_constants table provided by the C++ application
 local function require_global_function(func_name)
     local fn = _G[func_name]
     if fn == nil then
