@@ -261,10 +261,12 @@ local function sequence_defaults()
     assert(record.frame_rate, string.format("project_browser.sequence_defaults: sequence %s missing frame_rate", sequence_id))
     assert(record.width, string.format("project_browser.sequence_defaults: sequence %s missing width", sequence_id))
     assert(record.height, string.format("project_browser.sequence_defaults: sequence %s missing height", sequence_id))
+    assert(record.audio_sample_rate, string.format("project_browser.sequence_defaults: sequence %s missing audio_sample_rate", sequence_id))
     return {
-        frame_rate = record.frame_rate,
-        width = record.width,
-        height = record.height,
+        frame_rate        = record.frame_rate,
+        width             = record.width,
+        height            = record.height,
+        audio_sample_rate = record.audio_sample_rate,
     }
 end
 
@@ -1961,11 +1963,12 @@ local function create_sequence_in_project()
     local defaults = sequence_defaults()
 
     local result, cmd = command_manager.execute_interactive("CreateSequence", {
-        project_id = project_id,
-        name = temp_name,
-        frame_rate = defaults.frame_rate,
-        width = defaults.width,
-        height = defaults.height,
+        project_id        = project_id,
+        name              = temp_name,
+        frame_rate        = defaults.frame_rate,
+        width             = defaults.width,
+        height            = defaults.height,
+        audio_sample_rate = defaults.audio_sample_rate,
     })
     if not result or not result.success then
         log.warn("New Sequence failed: %s", result and result.error_message or "unknown error")

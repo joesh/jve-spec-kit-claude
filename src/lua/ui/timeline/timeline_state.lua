@@ -225,7 +225,11 @@ local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_c
     local mutations = sequence_or_mutations
     local callback = maybe_mutations
 
-    -- Accept legacy signature apply_mutations(sequence_id, mutations, callback)
+    -- Two supported call shapes:
+    --   apply_mutations(mutations, callback)
+    --   apply_mutations(sequence_id, mutations, callback)
+    -- The 3-arg form is what command_manager uses when it has a target
+    -- sequence in hand; the 2-arg form is the direct call from in-state code.
     if type(sequence_or_mutations) == "string" or type(sequence_or_mutations) == "number" then
         mutations = maybe_mutations
         callback = persist_callback

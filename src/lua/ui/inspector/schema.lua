@@ -49,7 +49,7 @@ function M.build(schema_id, content_layout, callbacks)
     assert(schema_id and schema_id ~= "", "schema.build: schema_id required")
     assert(content_layout, "schema.build: content_layout required")
     assert(type(callbacks) == "table", "schema.build: callbacks required")
-    assert(type(callbacks.frame_rate) == "function", "schema.build: callbacks.frame_rate required")
+    assert(type(callbacks.sequence) == "function", "schema.build: callbacks.sequence required")
     assert(type(callbacks.on_commit) == "function", "schema.build: callbacks.on_commit required")
 
     local schema_sections = metadata_schemas.get_sections(schema_id)
@@ -66,7 +66,7 @@ function M.build(schema_id, content_layout, callbacks)
         local field_labels = {}
         for _, f in ipairs(section_def.schema.fields) do
             local entry = field_widget.create_field(section_widget, f, {
-                frame_rate = callbacks.frame_rate,
+                sequence = callbacks.sequence,
                 on_commit  = callbacks.on_commit,
                 on_error   = callbacks.on_error,
                 on_field_focused = callbacks.on_field_focused,

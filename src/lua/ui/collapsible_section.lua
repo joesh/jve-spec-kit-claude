@@ -215,7 +215,7 @@ function CollapsibleSection:create()
         return expand_result
     end
 
-    -- Step 9: Widgets will be shown after parenting (moved to ui_toolkit.lua after smart_add_child)
+    -- Visibility is set by ui_toolkit after the section is parented.
     log.event("Section '%s' created, visibility will be set after parenting", self.title)
 
     return error_system.create_success({
