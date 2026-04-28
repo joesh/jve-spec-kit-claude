@@ -273,9 +273,13 @@ fetch_sequence_record = function(db, sequence_id)
             fps_numerator = assert(tonumber(stmt:value(4)), "DeleteSequence.fetch_sequence_record: missing fps_numerator for sequence " .. tostring(sequence_id)),
             fps_denominator = assert(tonumber(stmt:value(5)), "DeleteSequence.fetch_sequence_record: missing fps_denominator for sequence " .. tostring(sequence_id)),
             frame_rate = assert(tonumber(stmt:value(4)), "unreachable") / assert(tonumber(stmt:value(5)), "unreachable"),
-            audio_sample_rate = assert(tonumber(stmt:value(6)), "DeleteSequence.fetch_sequence_record: missing audio_sample_rate for sequence " .. tostring(sequence_id)),
-            width = assert(tonumber(stmt:value(7)), "DeleteSequence.fetch_sequence_record: missing width for sequence " .. tostring(sequence_id)),
-            height = assert(tonumber(stmt:value(8)), "DeleteSequence.fetch_sequence_record: missing height for sequence " .. tostring(sequence_id)),
+            -- audio_sample_rate is NULL on video-only masters (schema permits it
+            -- there); preserve nil so undo restores the row faithfully.
+            audio_sample_rate = stmt:value(6) and tonumber(stmt:value(6)) or nil,
+            -- width/height are NULL on audio-only masters (schema permits it
+            -- there); preserve nil so undo restores the row faithfully.
+            width = stmt:value(7) and tonumber(stmt:value(7)) or nil,
+            height = stmt:value(8) and tonumber(stmt:value(8)) or nil,
             view_start_frame = assert(tonumber(stmt:value(9)), "DeleteSequence.fetch_sequence_record: NULL view_start_frame for sequence " .. tostring(sequence_id)),
             view_duration_frames = assert(tonumber(stmt:value(10)), "DeleteSequence.fetch_sequence_record: NULL view_duration_frames for sequence " .. tostring(sequence_id)),
             playhead_value = assert(tonumber(stmt:value(11)), "DeleteSequence.fetch_sequence_record: NULL playhead_frame for sequence " .. tostring(sequence_id)),
@@ -534,19 +538,26 @@ insert_properties_for_clip = function(db, clip_id, props)
     return true
 end
 
-restore_sequence_from_payload = function(db, set_last_error, payload)
-    if not payload or type(payload) ~= "table" then
-        set_error(set_last_error, "UndoDeleteSequence: Missing snapshot payload")
-        return false
-    end
+-- ============================================================================
+-- restore_sequence_from_payload — phase helpers
+-- ============================================================================
 
-    local sequence_row = payload.sequence
-    if not sequence_row or not sequence_row.id then
-        set_error(set_last_error, "UndoDeleteSequence: Missing sequence record")
-        return false
+-- Bind one column that may be NULL on the row.
+local function bind_nullable(stmt, idx, val)
+    if val ~= nil then
+        stmt:bind_value(idx, val)
+    elseif stmt.bind_null then
+        stmt:bind_null(idx)
+    else
+        stmt:bind_value(idx, nil)
     end
+end
 
-    local insert_sequence_stmt = db:prepare([[
+-- Re-INSERT the sequence row. audio_sample_rate / width / height are
+-- NULLABLE only on masters; non-master sequences must carry positive
+-- values per schema. Returns (true, nil) | (false, reason).
+local function restore_sequence_row(db, sequence_row)
+    local stmt = db:prepare([[
         INSERT INTO sequences (
             id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
             view_start_frame, view_duration_frames, playhead_frame,
@@ -555,193 +566,226 @@ restore_sequence_from_payload = function(db, set_last_error, payload)
             start_timecode_frame, video_scroll_offset, audio_scroll_offset, video_audio_split_ratio
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
-    if not insert_sequence_stmt then
-        set_error(set_last_error, "UndoDeleteSequence: Failed to prepare sequence insert")
-        return false
+    if not stmt then
+        return false, "UndoDeleteSequence: Failed to prepare sequence insert"
     end
-
-    insert_sequence_stmt:bind_value(1, sequence_row.id)
-    insert_sequence_stmt:bind_value(2, sequence_row.project_id)
-    insert_sequence_stmt:bind_value(3, sequence_row.name)
-    insert_sequence_stmt:bind_value(4, sequence_row.kind or "timeline")
     if not sequence_row.fps_numerator then
-        set_error(set_last_error, "UndoDeleteSequence: Missing sequence fps_numerator")
-        insert_sequence_stmt:finalize()
-        return false
+        stmt:finalize(); return false, "UndoDeleteSequence: Missing sequence fps_numerator"
     end
     if not sequence_row.fps_denominator then
-        set_error(set_last_error, "UndoDeleteSequence: Missing sequence fps_denominator")
-        insert_sequence_stmt:finalize()
+        stmt:finalize(); return false, "UndoDeleteSequence: Missing sequence fps_denominator"
+    end
+    if sequence_row.kind ~= "master" then
+        assert(sequence_row.audio_sample_rate, string.format(
+            "UndoDeleteSequence: missing audio_sample_rate for non-master sequence %s",
+            tostring(sequence_row.id)))
+        assert(sequence_row.width, string.format(
+            "UndoDeleteSequence: missing width for non-master sequence %s",
+            tostring(sequence_row.id)))
+        assert(sequence_row.height, string.format(
+            "UndoDeleteSequence: missing height for non-master sequence %s",
+            tostring(sequence_row.id)))
+    end
+
+    stmt:bind_value(1, sequence_row.id)
+    stmt:bind_value(2, sequence_row.project_id)
+    stmt:bind_value(3, sequence_row.name)
+    stmt:bind_value(4, sequence_row.kind or "timeline")
+    stmt:bind_value(5, sequence_row.fps_numerator)
+    stmt:bind_value(6, sequence_row.fps_denominator)
+    bind_nullable(stmt, 7, sequence_row.audio_sample_rate)
+    bind_nullable(stmt, 8, sequence_row.width)
+    bind_nullable(stmt, 9, sequence_row.height)
+    stmt:bind_value(10, sequence_row.view_start_frame)
+    stmt:bind_value(11, sequence_row.view_duration_frames)
+    stmt:bind_value(12, sequence_row.playhead_value)
+    stmt:bind_value(13, sequence_row.mark_in_value)
+    stmt:bind_value(14, sequence_row.mark_out_value)
+    stmt:bind_value(15, sequence_row.selected_clip_ids or '[]')
+    stmt:bind_value(16, sequence_row.selected_edge_infos or '[]')
+    stmt:bind_value(17, sequence_row.selected_gap_infos or '[]')
+    stmt:bind_value(18, sequence_row.current_sequence_number)
+    stmt:bind_value(19, sequence_row.created_at or os.time())
+    stmt:bind_value(20, sequence_row.modified_at or os.time())
+    stmt:bind_value(21, sequence_row.start_timecode_frame or 0)
+    stmt:bind_value(22, sequence_row.video_scroll_offset or 0)
+    stmt:bind_value(23, sequence_row.audio_scroll_offset or 0)
+    stmt:bind_value(24, sequence_row.video_audio_split_ratio or 0.5)
+
+    if not stmt:exec() then
+        stmt:finalize(); return false, "UndoDeleteSequence: Failed to restore sequence row"
+    end
+    stmt:finalize()
+    return true
+end
+
+-- Re-INSERT every captured track row.
+local function restore_tracks(db, tracks, fallback_sequence_id)
+    if #tracks == 0 then return true end
+    local stmt = db:prepare([[
+        INSERT INTO tracks (
+            id, sequence_id, name, track_type, track_index,
+            enabled, locked, muted, soloed, volume, pan
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ]])
+    if not stmt then return false, "UndoDeleteSequence: Failed to prepare track insert" end
+    for _, track in ipairs(tracks) do
+        stmt:bind_value(1, track.id)
+        stmt:bind_value(2, assert(track.sequence_id or fallback_sequence_id,
+            "UndoDeleteSequence: track missing sequence_id"))
+        stmt:bind_value(3, assert(track.name, "UndoDeleteSequence: track missing name"))
+        stmt:bind_value(4, assert(track.track_type, "UndoDeleteSequence: track missing track_type"))
+        stmt:bind_value(5, assert(track.track_index, "UndoDeleteSequence: track missing track_index"))
+        stmt:bind_value(6, track.enabled and 1 or 0)
+        stmt:bind_value(7, track.locked and 1 or 0)
+        stmt:bind_value(8, track.muted and 1 or 0)
+        stmt:bind_value(9, track.soloed and 1 or 0)
+        stmt:bind_value(10, track.volume or 1.0) -- NSF-OK: unity gain default
+        stmt:bind_value(11, track.pan or 0.0)    -- NSF-OK: center pan default
+        if not stmt:exec() then
+            stmt:finalize(); return false, "UndoDeleteSequence: Failed to restore track"
+        end
+        stmt:reset()
+        stmt:clear_bindings()
+    end
+    stmt:finalize()
+    return true
+end
+
+-- Re-INSERT every captured clip and its associated property rows. Asserts
+-- the schema-required NOT NULL fields are present (fetch_sequence_clips
+-- already asserted them; this is the bind-time mirror of that contract).
+local function restore_clips(db, clips, owner_sequence_id, payload_properties)
+    if #clips == 0 then return true end
+    local stmt = db:prepare([[
+        INSERT INTO clips (
+            id, project_id, name, track_id,
+            nested_sequence_id, owner_sequence_id,
+            timeline_start_frame, duration_frames,
+            source_in_frame, source_out_frame,
+            master_layer_track_id, master_audio_track_id,
+            fps_mismatch_policy,
+            enabled, created_at, modified_at,
+            volume, mark_in_frame, mark_out_frame, playhead_frame
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ]])
+    if not stmt then return false, "UndoDeleteSequence: Failed to prepare clip insert" end
+
+    for _, clip in ipairs(clips) do
+        if not clip.nested_sequence_id or clip.nested_sequence_id == "" then
+            stmt:finalize()
+            return false, "UndoDeleteSequence: clip " .. tostring(clip.id) .. " missing nested_sequence_id"
+        end
+        assert(clip.name and clip.fps_mismatch_policy
+            and clip.created_at and clip.modified_at
+            and type(clip.volume) == "number"
+            and type(clip.playhead_value) == "number"
+            and clip.owner_sequence_id == owner_sequence_id, string.format(
+            "UndoDeleteSequence: snapshot for clip %s missing required fields",
+            tostring(clip.id)))
+        stmt:bind_value(1, clip.id)
+        stmt:bind_value(2, clip.project_id)
+        stmt:bind_value(3, clip.name)
+        stmt:bind_value(4, clip.track_id)
+        stmt:bind_value(5, clip.nested_sequence_id)
+        stmt:bind_value(6, clip.owner_sequence_id)
+        stmt:bind_value(7, clip.start_value)
+        stmt:bind_value(8, clip.duration_value)
+        stmt:bind_value(9, clip.source_in_value)
+        stmt:bind_value(10, clip.source_out_value)
+        stmt:bind_value(11, clip.master_layer_track_id)
+        stmt:bind_value(12, clip.master_audio_track_id)
+        stmt:bind_value(13, clip.fps_mismatch_policy)
+        stmt:bind_value(14, clip.enabled and 1 or 0)
+        stmt:bind_value(15, clip.created_at)
+        stmt:bind_value(16, clip.modified_at)
+        stmt:bind_value(17, clip.volume)
+        if clip.mark_in_value  then stmt:bind_value(18, clip.mark_in_value)  end
+        if clip.mark_out_value then stmt:bind_value(19, clip.mark_out_value) end
+        stmt:bind_value(20, clip.playhead_value)
+        if not stmt:exec() then
+            stmt:finalize(); return false, "UndoDeleteSequence: Failed to restore clip"
+        end
+        stmt:reset()
+        stmt:clear_bindings()
+
+        local props = payload_properties and payload_properties[clip.id]
+        if props and not insert_properties_for_clip(db, clip.id, props) then
+            stmt:finalize(); return false, "UndoDeleteSequence: Failed to restore clip properties"
+        end
+    end
+    stmt:finalize()
+    return true
+end
+
+-- Re-INSERT every captured clip_links row.
+local function restore_clip_links(db, clip_links)
+    if #clip_links == 0 then return end
+    local stmt = assert(db:prepare([[
+        INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
+        VALUES (?, ?, ?, ?, ?)
+    ]]), "UndoDeleteSequence: failed to prepare clip_links INSERT")
+    for _, link in ipairs(clip_links) do
+        stmt:bind_value(1, link.link_group_id)
+        stmt:bind_value(2, link.clip_id)
+        stmt:bind_value(3, link.role)
+        stmt:bind_value(4, link.time_offset or 0)
+        stmt:bind_value(5, link.enabled and 1 or 0)
+        assert(stmt:exec(),
+            "UndoDeleteSequence: clip_links INSERT failed for clip " .. tostring(link.clip_id))
+        stmt:reset()
+        stmt:clear_bindings()
+    end
+    stmt:finalize()
+end
+
+-- Re-INSERT the captured undo snapshot row, if any.
+local function restore_snapshot(db, snapshot, fallback_sequence_id)
+    if not snapshot then return end
+    local stmt = assert(db:prepare([[
+        INSERT OR REPLACE INTO snapshots (id, sequence_id, sequence_number, clips_state, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    ]]), "UndoDeleteSequence: failed to prepare snapshots INSERT")
+    stmt:bind_value(1, snapshot.id)
+    stmt:bind_value(2, snapshot.sequence_id or fallback_sequence_id)
+    stmt:bind_value(3, snapshot.sequence_number or 0)
+    stmt:bind_value(4, snapshot.clips_state)
+    stmt:bind_value(5, snapshot.created_at or os.time())
+    assert(stmt:exec(), "UndoDeleteSequence: snapshots INSERT failed")
+    stmt:finalize()
+end
+
+restore_sequence_from_payload = function(db, set_last_error, payload)
+    if not payload or type(payload) ~= "table" then
+        set_error(set_last_error, "UndoDeleteSequence: Missing snapshot payload")
         return false
     end
-    insert_sequence_stmt:bind_value(5, sequence_row.fps_numerator)
-    insert_sequence_stmt:bind_value(6, sequence_row.fps_denominator)
-    local audio_sample_rate = sequence_row.audio_sample_rate
-    assert(audio_sample_rate, "UndoDeleteSequence: missing audio_sample_rate for sequence " .. tostring(sequence_row.id))
-    assert(sequence_row.width, "UndoDeleteSequence: missing width for sequence " .. tostring(sequence_row.id))
-    assert(sequence_row.height, "UndoDeleteSequence: missing height for sequence " .. tostring(sequence_row.id))
-    insert_sequence_stmt:bind_value(7, audio_sample_rate)
-    insert_sequence_stmt:bind_value(8, sequence_row.width)
-    insert_sequence_stmt:bind_value(9, sequence_row.height)
-    insert_sequence_stmt:bind_value(10, sequence_row.view_start_frame)
-    insert_sequence_stmt:bind_value(11, sequence_row.view_duration_frames)
-    insert_sequence_stmt:bind_value(12, sequence_row.playhead_value)
-    insert_sequence_stmt:bind_value(13, sequence_row.mark_in_value)
-    insert_sequence_stmt:bind_value(14, sequence_row.mark_out_value)
-    insert_sequence_stmt:bind_value(15, sequence_row.selected_clip_ids or '[]')
-    insert_sequence_stmt:bind_value(16, sequence_row.selected_edge_infos or '[]')
-    insert_sequence_stmt:bind_value(17, sequence_row.selected_gap_infos or '[]')
-    insert_sequence_stmt:bind_value(18, sequence_row.current_sequence_number)
-    insert_sequence_stmt:bind_value(19, sequence_row.created_at or os.time())
-    insert_sequence_stmt:bind_value(20, sequence_row.modified_at or os.time())
-    insert_sequence_stmt:bind_value(21, sequence_row.start_timecode_frame or 0)
-    insert_sequence_stmt:bind_value(22, sequence_row.video_scroll_offset or 0)
-    insert_sequence_stmt:bind_value(23, sequence_row.audio_scroll_offset or 0)
-    insert_sequence_stmt:bind_value(24, sequence_row.video_audio_split_ratio or 0.5)
-
-    if not insert_sequence_stmt:exec() then
-        insert_sequence_stmt:finalize()
-        set_error(set_last_error, "UndoDeleteSequence: Failed to restore sequence row")
+    local sequence_row = payload.sequence
+    if not sequence_row or not sequence_row.id then
+        set_error(set_last_error, "UndoDeleteSequence: Missing sequence record")
         return false
     end
-    insert_sequence_stmt:finalize()
 
-    local tracks = payload.tracks or {}
-    if #tracks > 0 then
-        local insert_track_stmt = db:prepare([[
-            INSERT INTO tracks (
-                id, sequence_id, name, track_type, track_index,
-                enabled, locked, muted, soloed, volume, pan
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ]])
-        if not insert_track_stmt then
-            set_error(set_last_error, "UndoDeleteSequence: Failed to prepare track insert")
-            return false
-        end
-        for _, track in ipairs(tracks) do
-            insert_track_stmt:bind_value(1, track.id)
-            insert_track_stmt:bind_value(2, assert(track.sequence_id or sequence_row.id, "UndoDeleteSequence: track missing sequence_id"))
-            insert_track_stmt:bind_value(3, assert(track.name, "UndoDeleteSequence: track missing name"))
-            insert_track_stmt:bind_value(4, assert(track.track_type, "UndoDeleteSequence: track missing track_type"))
-            insert_track_stmt:bind_value(5, assert(track.track_index, "UndoDeleteSequence: track missing track_index"))
-            insert_track_stmt:bind_value(6, track.enabled and 1 or 0)
-            insert_track_stmt:bind_value(7, track.locked and 1 or 0)
-            insert_track_stmt:bind_value(8, track.muted and 1 or 0)
-            insert_track_stmt:bind_value(9, track.soloed and 1 or 0)
-            insert_track_stmt:bind_value(10, track.volume or 1.0) -- NSF-OK: unity gain default
-            insert_track_stmt:bind_value(11, track.pan or 0.0) -- NSF-OK: center pan default
-            if not insert_track_stmt:exec() then
-                insert_track_stmt:finalize()
-                set_error(set_last_error, "UndoDeleteSequence: Failed to restore track")
-                return false
-            end
-            insert_track_stmt:reset()
-            insert_track_stmt:clear_bindings()
-        end
-        insert_track_stmt:finalize()
-    end
+    local ok, err = restore_sequence_row(db, sequence_row)
+    if not ok then set_error(set_last_error, err); return false end
 
-    local clips = payload.clips or {}
-    if #clips > 0 then
-        -- V13 INSERT shape: see schema.sql clips table.
-        local insert_clip_stmt = db:prepare([[
-            INSERT INTO clips (
-                id, project_id, name, track_id,
-                nested_sequence_id, owner_sequence_id,
-                timeline_start_frame, duration_frames,
-                source_in_frame, source_out_frame,
-                master_layer_track_id, master_audio_track_id,
-                fps_mismatch_policy,
-                enabled, created_at, modified_at,
-                volume, mark_in_frame, mark_out_frame, playhead_frame
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ]])
-        if not insert_clip_stmt then
-            set_error(set_last_error, "UndoDeleteSequence: Failed to prepare clip insert")
-            return false
-        end
+    -- snapshot_for_delete always populates tracks/clips/clip_links arrays;
+    -- a payload without them is a corrupt capture, not "nothing to do".
+    assert(type(payload.tracks)     == "table",
+        "UndoDeleteSequence: payload.tracks missing (corrupt snapshot)")
+    assert(type(payload.clips)      == "table",
+        "UndoDeleteSequence: payload.clips missing (corrupt snapshot)")
+    assert(type(payload.clip_links) == "table",
+        "UndoDeleteSequence: payload.clip_links missing (corrupt snapshot)")
 
-        for _, clip in ipairs(clips) do
-            if not clip.nested_sequence_id or clip.nested_sequence_id == "" then
-                insert_clip_stmt:finalize()
-                set_error(set_last_error, "UndoDeleteSequence: clip " .. tostring(clip.id) .. " missing nested_sequence_id")
-                return false
-            end
-            insert_clip_stmt:bind_value(1, clip.id)
-            insert_clip_stmt:bind_value(2, clip.project_id)
-            insert_clip_stmt:bind_value(3, clip.name or "")
-            insert_clip_stmt:bind_value(4, clip.track_id)
-            insert_clip_stmt:bind_value(5, clip.nested_sequence_id)
-            insert_clip_stmt:bind_value(6, clip.owner_sequence_id or sequence_row.id)
-            insert_clip_stmt:bind_value(7, clip.start_value or 0)
-            insert_clip_stmt:bind_value(8, clip.duration_value or clip.duration or 0)
-            insert_clip_stmt:bind_value(9, clip.source_in_value or clip.source_in or 0)
-            insert_clip_stmt:bind_value(10, clip.source_out_value or clip.source_out or 0)
-            insert_clip_stmt:bind_value(11, clip.master_layer_track_id)
-            insert_clip_stmt:bind_value(12, clip.master_audio_track_id)
-            insert_clip_stmt:bind_value(13, clip.fps_mismatch_policy or "resample")
-            insert_clip_stmt:bind_value(14, clip.enabled and 1 or 0)
-            insert_clip_stmt:bind_value(15, clip.created_at or os.time())
-            insert_clip_stmt:bind_value(16, clip.modified_at or os.time())
-            insert_clip_stmt:bind_value(17, clip.volume or 1.0)
-            if clip.mark_in_value then
-                insert_clip_stmt:bind_value(18, clip.mark_in_value)
-            end
-            if clip.mark_out_value then
-                insert_clip_stmt:bind_value(19, clip.mark_out_value)
-            end
-            insert_clip_stmt:bind_value(20, clip.playhead_value or 0)
-            if not insert_clip_stmt:exec() then
-                insert_clip_stmt:finalize()
-                set_error(set_last_error, "UndoDeleteSequence: Failed to restore clip")
-                return false
-            end
-            insert_clip_stmt:reset()
-            insert_clip_stmt:clear_bindings()
+    ok, err = restore_tracks(db, payload.tracks, sequence_row.id)
+    if not ok then set_error(set_last_error, err); return false end
 
-            local props = payload.properties and payload.properties[clip.id]
-            if props and not insert_properties_for_clip(db, clip.id, props) then
-                insert_clip_stmt:finalize()
-                set_error(set_last_error, "UndoDeleteSequence: Failed to restore clip properties")
-                return false
-            end
-        end
-        insert_clip_stmt:finalize()
-    end
+    ok, err = restore_clips(db, payload.clips, sequence_row.id, payload.properties)
+    if not ok then set_error(set_last_error, err); return false end
 
-    local clip_links = payload.clip_links or {}
-    if #clip_links > 0 then
-        local insert_link_stmt = assert(db:prepare([[
-            INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
-            VALUES (?, ?, ?, ?, ?)
-        ]]), "UndoDeleteSequence: failed to prepare clip_links INSERT")
-        for _, link in ipairs(clip_links) do
-            insert_link_stmt:bind_value(1, link.link_group_id)
-            insert_link_stmt:bind_value(2, link.clip_id)
-            insert_link_stmt:bind_value(3, link.role)
-            insert_link_stmt:bind_value(4, link.time_offset or 0)
-            insert_link_stmt:bind_value(5, link.enabled and 1 or 0)
-            assert(insert_link_stmt:exec(), "UndoDeleteSequence: clip_links INSERT failed for clip " .. tostring(link.clip_id))
-            insert_link_stmt:reset()
-            insert_link_stmt:clear_bindings()
-        end
-        insert_link_stmt:finalize()
-    end
-
-    if payload.snapshot then
-        local snapshot = payload.snapshot
-        local insert_snapshot_stmt = assert(db:prepare([[
-            INSERT OR REPLACE INTO snapshots (id, sequence_id, sequence_number, clips_state, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        ]]), "UndoDeleteSequence: failed to prepare snapshots INSERT")
-        insert_snapshot_stmt:bind_value(1, snapshot.id)
-        insert_snapshot_stmt:bind_value(2, snapshot.sequence_id or sequence_row.id)
-        insert_snapshot_stmt:bind_value(3, snapshot.sequence_number or 0)
-        insert_snapshot_stmt:bind_value(4, snapshot.clips_state)
-        insert_snapshot_stmt:bind_value(5, snapshot.created_at or os.time())
-        assert(insert_snapshot_stmt:exec(), "UndoDeleteSequence: snapshots INSERT failed")
-        insert_snapshot_stmt:finalize()
-    end
+    restore_clip_links(db, payload.clip_links)
+    restore_snapshot(db, payload.snapshot, sequence_row.id)
 
     log.event("Undo DeleteSequence: restored sequence %s", tostring(sequence_row.id))
     return true

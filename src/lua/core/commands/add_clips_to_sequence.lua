@@ -326,6 +326,54 @@ function M.execute(args)
     }
 end
 
+-- Build the __timeline_mutations bucket the executor hands off to
+-- command_manager. Inserts come from re-loading the just-created clips
+-- (Clip.load joins frame_rate from the nested sequence row, which
+-- clip_state asserts non-nil). Bulk_shifts come from the insert-mode
+-- carve's rippled clips.
+local function build_executor_mutation_bucket(sequence_id, result)
+    local bucket = {
+        sequence_id = sequence_id,
+        inserts     = {},
+        updates     = {},
+        deletes     = {},
+        bulk_shifts = {},
+    }
+    for _, cid in ipairs(result.created_clip_ids) do
+        local clip = Clip.load(cid)
+        if clip then
+            bucket.inserts[#bucket.inserts + 1] = {
+                id                    = clip.id,
+                owner_sequence_id     = clip.owner_sequence_id,
+                track_sequence_id     = clip.owner_sequence_id,
+                track_id              = clip.track_id,
+                nested_sequence_id    = clip.nested_sequence_id,
+                start_value           = clip.timeline_start,
+                timeline_start        = clip.timeline_start,
+                duration_value        = clip.duration,
+                duration              = clip.duration,
+                source_in             = clip.source_in,
+                source_out            = clip.source_out,
+                master_layer_track_id = clip.master_layer_track_id,
+                fps_mismatch_policy   = clip.fps_mismatch_policy,
+                frame_rate            = clip.frame_rate,
+                name                  = clip.name,
+                enabled               = clip.enabled,
+                volume                = clip.volume,
+                playhead_frame        = clip.playhead_frame,
+            }
+        end
+    end
+    for track_id, rip in pairs(result.carve.rippled) do
+        bucket.bulk_shifts[#bucket.bulk_shifts + 1] = {
+            track_id     = track_id,
+            shift_frames = rip.shift,
+            start_frame  = rip.from_frame,
+        }
+    end
+    return bucket
+end
+
 function M.register(command_executors, command_undoers, _db, set_last_error)
     command_executors["AddClipsToSequence"] = function(command)
         local args = command:get_all_parameters()
@@ -334,60 +382,13 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             set_last_error("AddClipsToSequence: " .. tostring(result_or_err))
             return false, tostring(result_or_err)
         end
+        -- carve always carries both fields (see carve_space); no fallback.
         command:set_parameter("created_clip_ids",       result_or_err.created_clip_ids)
         command:set_parameter("created_link_group_ids", result_or_err.link_group_ids)
-        command:set_parameter("rippled_capture",        (result_or_err.carve or {}).rippled or {})
-        command:set_parameter("occluded_capture",       (result_or_err.carve or {}).occluded or {})
-
-        -- Emit __timeline_mutations so command_manager's post-DB hook
-        -- can hand a structured mutation list to timeline_state. Mirrors
-        -- Insert's emission shape so the consumer is uniform.
-        do
-            local bucket = {
-                sequence_id = args.sequence_id,
-                inserts = {},
-                updates = {},
-                deletes = {},
-                bulk_shifts = {},
-            }
-            for _, cid in ipairs(result_or_err.created_clip_ids or {}) do
-                -- Clip.load (not load_v13_row) so the in-memory timeline_state
-                -- mutation carries the joined frame_rate from the nested
-                -- sequence row. clip_state asserts on missing frame_rate.
-                local clip = Clip.load(cid)
-                if clip then
-                    bucket.inserts[#bucket.inserts + 1] = {
-                        id                    = clip.id,
-                        owner_sequence_id     = clip.owner_sequence_id,
-                        track_sequence_id     = clip.owner_sequence_id,
-                        track_id              = clip.track_id,
-                        nested_sequence_id    = clip.nested_sequence_id,
-                        start_value           = clip.timeline_start,
-                        timeline_start        = clip.timeline_start,
-                        duration_value        = clip.duration,
-                        duration              = clip.duration,
-                        source_in             = clip.source_in,
-                        source_out            = clip.source_out,
-                        master_layer_track_id = clip.master_layer_track_id,
-                        fps_mismatch_policy   = clip.fps_mismatch_policy,
-                        frame_rate            = clip.frame_rate,
-                        name                  = clip.name,
-                        enabled               = clip.enabled,
-                        volume                = clip.volume,
-                        playhead_frame        = clip.playhead_frame,
-                    }
-                end
-            end
-            local carve = result_or_err.carve or {}
-            for track_id, rip in pairs(carve.rippled or {}) do
-                bucket.bulk_shifts[#bucket.bulk_shifts + 1] = {
-                    track_id     = track_id,
-                    shift_frames = rip.shift,
-                    start_frame  = rip.from_frame,
-                }
-            end
-            command:set_parameter("__timeline_mutations", bucket)
-        end
+        command:set_parameter("rippled_capture",        result_or_err.carve.rippled)
+        command:set_parameter("occluded_capture",       result_or_err.carve.occluded)
+        command:set_parameter("__timeline_mutations",
+            build_executor_mutation_bucket(args.sequence_id, result_or_err))
 
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
@@ -412,9 +413,11 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
 
     command_undoers["AddClipsToSequence"] = function(command)
         local args = command:get_all_parameters()
-        local created_ids = args.created_clip_ids or {}
-        local rippled     = args.rippled_capture or {}
-        local occluded    = args.occluded_capture or {}
+        -- Executor set these unconditionally; carve sub-captures always
+        -- carry split_new_ids/trimmed/deleted arrays (see occlude_track).
+        local created_ids = args.created_clip_ids
+        local rippled     = args.rippled_capture
+        local occluded    = args.occluded_capture
 
         -- 1. Delete the newly-created clips (clip_links FK cascades).
         Clip.delete_by_ids(created_ids)
@@ -431,10 +434,10 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         -- 3. Restore overwrite-mode occlusion captures: drop split-rights,
         --    un-trim, re-create fully-deleted clips. Mirrors Overwrite.undo.
         for _, cap in pairs(occluded) do
-            Clip.delete_by_ids(cap.split_new_ids or {})
+            Clip.delete_by_ids(cap.split_new_ids)
         end
         for _, cap in pairs(occluded) do
-            for _, tr in ipairs(cap.trimmed or {}) do
+            for _, tr in ipairs(cap.trimmed) do
                 Clip.update_bounds(tr.id,
                     tr.prior.timeline_start_frame,
                     tr.prior.duration_frames,
@@ -443,7 +446,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             end
         end
         for _, cap in pairs(occluded) do
-            for _, d in ipairs(cap.deleted or {}) do
+            for _, d in ipairs(cap.deleted) do
                 Clip.create({
                     id                    = d.id,
                     project_id            = d.project_id,

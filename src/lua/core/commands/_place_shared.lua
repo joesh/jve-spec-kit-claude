@@ -153,7 +153,9 @@ local function apply_nested_marks(nested, mediums, v_dur, a_dur)
     if mark_in == nil and mark_out == nil then
         return v_dur, 0, a_dur, 0
     end
-    local tc_origin = nested.start_timecode_frame or 0
+    local tc_origin = nested.start_timecode_frame
+    assert(tc_origin, string.format(
+        "place_shared: nested sequence %s missing start_timecode_frame", nested.id))
     local lo = mark_in  and (mark_in  - tc_origin) or 0
     local hi = mark_out and (mark_out - tc_origin) or v_dur
     local video_source_in, audio_source_in = 0, 0
@@ -208,12 +210,12 @@ local function resolve_audio_targets(owner, nested, drop_mode, args, a_dur,
         } }
     end
 
-    local nested_a = Track.find_by_sequence(nested.id, "AUDIO") or {}
+    local nested_a = Track.find_by_sequence(nested.id, "AUDIO")
     assert(#nested_a > 0, string.format(
         "place_shared: expanded audio_drop_mode requires nested %s to have "
         .. "at least one A track; got 0", nested.id))
     local owner_a_by_index = {}
-    for _, t in ipairs(Track.find_by_sequence(owner.id, "AUDIO") or {}) do
+    for _, t in ipairs(Track.find_by_sequence(owner.id, "AUDIO")) do
         owner_a_by_index[t.track_index] = t.id
     end
 
@@ -313,63 +315,52 @@ function M.plan_placement(args)
     }
 end
 
---- Insert the new clip rows dictated by `plan`. Returns the ids.
----
---- Audio: one clip per `plan.audio_targets[i]`. Composite mode produces
---- 1 entry with master_audio_track_id=NULL; expanded mode produces N
---- entries with distinct selectors and pre-validated/auto-created
---- target tracks (see plan_placement).
----
---- Link group: created with V + every A clip when both mediums land.
-function M.write_clips(plan)
-    local created_list = {}
-    local v_clip_id
-    local a_clip_ids = {}
-
-    local function insert_clip(fields)
-        return Clip.create(fields)
-    end
-
-    -- Optional preset_ids let callers (e.g. command redo replaying a
-    -- persisted execute) pin the new clip ids so undo/redo round-trip
-    -- without churning uuids. preset_ids[1] is consumed for the video
-    -- clip (when there is one) and the remaining entries feed the audio
-    -- clip loop in order. Falls back to uuid.generate per slot.
+-- Optional preset_ids let callers (e.g. command redo replaying a
+-- persisted execute) pin the new clip ids so undo/redo round-trip
+-- without churning uuids. preset_ids[1] is consumed for the video clip
+-- (when there is one) and the remaining entries feed the audio clip
+-- loop in order; new uuids fill the unfilled slots.
+local function make_id_supplier(plan)
     local preset_ids = plan.preset_ids or {}
-    local preset_idx = 1
-    local function next_preset()
-        local pid = preset_ids[preset_idx]
-        preset_idx = preset_idx + 1
-        return pid or uuid.generate()
+    local idx = 0
+    return function()
+        idx = idx + 1
+        return preset_ids[idx] or uuid.generate()
     end
+end
 
-    if plan.targets.VIDEO then
-        local v_in  = plan.video_source_in or 0
-        v_clip_id = insert_clip({
-            id                    = next_preset(),
-            project_id            = plan.owner.project_id,
-            owner_sequence_id     = plan.owner.id,
-            track_id              = plan.targets.VIDEO,
-            nested_sequence_id    = plan.nested.id,
-            name                  = plan.base_name,
-            timeline_start_frame  = plan.start_frame,
-            duration_frames       = plan.owner_duration,
-            source_in_frame       = v_in,
-            source_out_frame      = v_in + plan.video_native_dur,
-            master_layer_track_id = nil,
-            master_audio_track_id = nil,
-            fps_mismatch_policy   = plan.policy,
-            enabled               = true,
-            volume                = 1.0,
-            playhead_frame        = 0,
-        })
-        created_list[#created_list + 1] = v_clip_id
-    end
+local function insert_video_clip(plan, next_id)
+    local v_in = plan.video_source_in
+    assert(v_in, "place_shared.write_clips: video target without video_source_in")
+    return Clip.create({
+        id                    = next_id(),
+        project_id            = plan.owner.project_id,
+        owner_sequence_id     = plan.owner.id,
+        track_id              = plan.targets.VIDEO,
+        nested_sequence_id    = plan.nested.id,
+        name                  = plan.base_name,
+        timeline_start_frame  = plan.start_frame,
+        duration_frames       = plan.owner_duration,
+        source_in_frame       = v_in,
+        source_out_frame      = v_in + plan.video_native_dur,
+        master_layer_track_id = nil,
+        master_audio_track_id = nil,
+        fps_mismatch_policy   = plan.policy,
+        enabled               = true,
+        volume                = 1.0,
+        playhead_frame        = 0,
+    })
+end
 
-    local a_in = plan.audio_source_in or 0
-    for _, tgt in ipairs(plan.audio_targets or {}) do
-        local id = insert_clip({
-            id                    = next_preset(),
+local function insert_audio_clips(plan, next_id)
+    local audio_targets = plan.audio_targets
+    if not audio_targets or #audio_targets == 0 then return {} end
+    local a_in = plan.audio_source_in
+    assert(a_in, "place_shared.write_clips: audio targets without audio_source_in")
+    local ids = {}
+    for _, tgt in ipairs(audio_targets) do
+        ids[#ids + 1] = Clip.create({
+            id                    = next_id(),
             project_id            = plan.owner.project_id,
             owner_sequence_id     = plan.owner.id,
             track_id              = tgt.track_id,
@@ -386,24 +377,51 @@ function M.write_clips(plan)
             volume                = 1.0,
             playhead_frame        = 0,
         })
-        a_clip_ids[#a_clip_ids + 1] = id
-        created_list[#created_list + 1] = id
+    end
+    return ids
+end
+
+-- Group V + every A together. Caller guarantees both mediums landed.
+local function link_video_with_audio(v_clip_id, a_clip_ids)
+    local entries = {
+        { clip_id = v_clip_id, role = "video", time_offset = 0 },
+    }
+    for _, aid in ipairs(a_clip_ids) do
+        entries[#entries + 1] = {
+            clip_id = aid, role = "audio", time_offset = 0,
+        }
+    end
+    local link_group_id = clip_link.create_link_group(entries)
+    assert(link_group_id and link_group_id ~= "",
+        "place_shared: clip_link.create_link_group returned empty id")
+    return link_group_id
+end
+
+--- Insert the new clip rows dictated by `plan`. Returns the ids.
+---
+--- Audio: one clip per `plan.audio_targets[i]`. Composite mode produces
+--- 1 entry with master_audio_track_id=NULL; expanded mode produces N
+--- entries with distinct selectors and pre-validated/auto-created
+--- target tracks (see plan_placement).
+---
+--- Link group: created with V + every A clip when both mediums land.
+function M.write_clips(plan)
+    local next_id  = make_id_supplier(plan)
+    local v_clip_id
+    if plan.targets.VIDEO then
+        v_clip_id = insert_video_clip(plan, next_id)
+    end
+    local a_clip_ids = insert_audio_clips(plan, next_id)
+
+    local created_list = {}
+    if v_clip_id then created_list[#created_list + 1] = v_clip_id end
+    for _, aid in ipairs(a_clip_ids) do
+        created_list[#created_list + 1] = aid
     end
 
-    -- Link group: V + every A clip when both mediums land.
     local link_group_id
     if v_clip_id and #a_clip_ids > 0 then
-        local entries = {
-            { clip_id = v_clip_id, role = "video", time_offset = 0 },
-        }
-        for _, aid in ipairs(a_clip_ids) do
-            entries[#entries + 1] = {
-                clip_id = aid, role = "audio", time_offset = 0,
-            }
-        end
-        link_group_id = clip_link.create_link_group(entries)
-        assert(link_group_id and link_group_id ~= "",
-            "place_shared: clip_link.create_link_group returned empty id")
+        link_group_id = link_video_with_audio(v_clip_id, a_clip_ids)
     end
 
     return {

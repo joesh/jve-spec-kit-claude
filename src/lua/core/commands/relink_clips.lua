@@ -112,8 +112,12 @@ function M.register(executors, undoers, db)
                     }
                     if (rec.audio_channels or 0) > 0 then
                         tc_meta.start_tc_audio_samples = rec.start_tc_audio_samples or 0
-                        tc_meta.start_tc_audio_rate = rec.start_tc_audio_rate
-                            or rec.audio_sample_rate or 48000
+                        local audio_tc_rate = rec.start_tc_audio_rate or rec.audio_sample_rate
+                        assert(audio_tc_rate and audio_tc_rate > 0, string.format(
+                            "RelinkClips: media %s has audio_channels=%d but no "
+                            .. "start_tc_audio_rate or audio_sample_rate (rule 2.13)",
+                            tostring(rec.id), rec.audio_channels))
+                        tc_meta.start_tc_audio_rate = audio_tc_rate
                     end
                     rec_metadata = _json.encode(tc_meta)
                 else
@@ -278,8 +282,10 @@ function M.register(executors, undoers, db)
         -- tracked which mids it applied via media_offline_notes; any
         -- mid in that set whose old value is absent from the restored
         -- map must have been originally nil, so clear it.
-        local old_notes = args.old_offline_notes or {}
-        local applied_notes = args.media_offline_notes or {}
+        -- Executor sets old_offline_notes unconditionally; SPEC.persisted
+        -- defaults media_offline_notes to {}.
+        local old_notes = args.old_offline_notes
+        local applied_notes = args.media_offline_notes
         local restore_sets = {}
         local restore_clears = {}
         for mid, old_note in pairs(old_notes) do

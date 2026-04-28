@@ -160,22 +160,29 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
         local cap = capture_or_err
         command:set_parameter("scope", cap.scope)
-        -- prior_policy may be nil; persist the empty string sentinel
-        -- since command parameter set rejects nil. Distinguish via a
-        -- "_present" flag.
+        -- prior_policy may legitimately be nil (project- or sequence-level
+        -- policy was never explicitly set). Distinguish present-and-set
+        -- from absent via a paired flag — no '' sentinel.
         command:set_parameter("prior_policy_present", cap.prior_policy ~= nil)
-        command:set_parameter("prior_policy", cap.prior_policy or "")
+        if cap.prior_policy ~= nil then
+            command:set_parameter("prior_policy", cap.prior_policy)
+        end
         return true
     end
 
     command_undoers["SetFpsMismatchPolicy"] = function(command)
         local args = command:get_all_parameters()
-        local prior = args.prior_policy_present and args.prior_policy or nil
+        local prior_policy = nil
+        if args.prior_policy_present then
+            assert(type(args.prior_policy) == "string" and args.prior_policy ~= "",
+                "SetFpsMismatchPolicy.undo: prior_policy_present=true but prior_policy missing/empty")
+            prior_policy = args.prior_policy
+        end
         M.undo({
             scope        = args.scope,
             project_id   = args.project_id,
             sequence_id  = args.sequence_id,
-            prior_policy = prior,
+            prior_policy = prior_policy,
         })
         return true
     end

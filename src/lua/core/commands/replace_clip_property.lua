@@ -170,9 +170,9 @@ function M.register(command_executors, command_undoers, db, _set_last_error)
 
     undoers["ReplaceAllClipProperties"] = function(command)
         local args = command:get_all_parameters()
-        log.event("Undo ReplaceAllClipProperties: %d entries", #(args.previous_values or {}))
+        log.event("Undo ReplaceAllClipProperties: %d entries", #args.previous_values)
 
-        for _, entry in ipairs(args.previous_values or {}) do
+        for _, entry in ipairs(args.previous_values) do
             if entry.old_value ~= nil then
                 write_value(db, entry.clip_id, args.column, entry.old_value)
             end

@@ -51,7 +51,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local target_gaps = args.target_gaps or {}
 
         -- Get current selection
-        local current_gaps = timeline_state.get_selected_gaps() or {}
+        local current_gaps = timeline_state.get_selected_gaps()
 
         -- Check if all targets are already selected
         local all_selected = selection_contains_all(current_gaps, target_gaps)

@@ -102,15 +102,20 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             set_last_error("SetMasterDefaultLayer: " .. tostring(capture_or_err))
             return false, tostring(capture_or_err)
         end
-        command:set_parameter("prior_track_id", capture_or_err.prior_track_id or "")
+        -- prior_track_id is nullable on master sequences (no default set
+        -- yet). Persist nil-vs-set distinctly — no '' sentinel.
+        if capture_or_err.prior_track_id ~= nil then
+            command:set_parameter("prior_track_id", capture_or_err.prior_track_id)
+        end
         return true
     end
 
     command_undoers["SetMasterDefaultLayer"] = function(command)
         local args = command:get_all_parameters()
-        local prior = args.prior_track_id
-        if prior == "" then prior = nil end
-        M.undo({ sequence_id = args.sequence_id, prior_track_id = prior })
+        M.undo({
+            sequence_id    = args.sequence_id,
+            prior_track_id = args.prior_track_id,  -- nullable
+        })
         return true
     end
 

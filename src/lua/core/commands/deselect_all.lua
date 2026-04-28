@@ -24,8 +24,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true
         end
 
-        local current_clips = timeline_state.get_selected_clips() or {}
-        local current_edges = timeline_state.get_selected_edges() or {}
+        local current_clips = timeline_state.get_selected_clips()
+        local current_edges = timeline_state.get_selected_edges()
 
         if #current_clips == 0 and #current_edges == 0 then
             log.event("DeselectAll: nothing currently selected")

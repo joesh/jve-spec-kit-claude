@@ -90,25 +90,27 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     .. tostring(track.id) .. ": " .. tostring(err))
                 return false
             end
-            for _, mut in ipairs(mutations or {}) do
+            -- resolve_occlusions returns (ok, err, mutations) where mutations
+            -- is always an array (possibly empty).
+            for _, mut in ipairs(mutations) do
                 table.insert(all_mutations, mut)
             end
         end
 
+        -- Always persist the executed_mutations array (possibly empty); the
+        -- undoer reads it unconditionally and the SPEC.persisted contract
+        -- promises a table.
+        command:set_parameter("executed_mutations", all_mutations)
         if #all_mutations == 0 then
             log.event("LiftRange: no clips in range [%d, %d)", mark_in, mark_out)
             return true
         end
 
-        -- Apply mutations
         local ok_apply, apply_err = command_helper.apply_mutations(db, all_mutations)
         if not ok_apply then
             set_last_error("LiftRange: apply_mutations failed: " .. tostring(apply_err))
             return false
         end
-
-        -- Store for undo
-        command:set_parameter("executed_mutations", all_mutations)
         populate_timeline_mutations(command, sequence_id, all_mutations)
 
         log.event("LiftRange: lifted %d mutation(s) in [%d, %d)", #all_mutations, mark_in, mark_out)
@@ -119,7 +121,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
         assert(db, "UndoLiftRange: db is nil")
 
-        local executed_mutations = args.executed_mutations or {}
+        -- Executor sets executed_mutations unconditionally.
+        local executed_mutations = args.executed_mutations
         if #executed_mutations == 0 then
             return true
         end

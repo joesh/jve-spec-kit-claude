@@ -355,12 +355,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Delete in reverse order: media_refs, tracks, master sequences, media.
         -- (V13: master sequences hold media_refs, not clips. clip_links and
         -- clip_channel_override don't apply to media_refs.)
-        local video_media_ref_ids   = args.video_media_ref_ids   or {}
-        local audio_media_ref_ids   = args.audio_media_ref_ids   or {}
-        local video_track_ids       = args.video_track_ids       or {}
-        local audio_track_ids       = args.audio_track_ids       or {}
-        local master_sequence_ids   = args.master_sequence_ids   or {}
-        local media_ids             = args.media_ids             or {}
+        -- Executor populates all six arrays via set_parameters at the end of
+        -- the import run, so undoer reads them straight.
+        local video_media_ref_ids = args.video_media_ref_ids
+        local audio_media_ref_ids = args.audio_media_ref_ids
+        local video_track_ids     = args.video_track_ids
+        local audio_track_ids     = args.audio_track_ids
+        local master_sequence_ids = args.master_sequence_ids
+        local media_ids           = args.media_ids
 
         local function delete_media_ref(mr_id)
             if not mr_id or mr_id == "" then return end

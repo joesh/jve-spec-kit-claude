@@ -153,8 +153,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
 
         local project_id = args.project_id
-        local bin_moves = args.bin_moves or {}
-        local clip_moves = args.clip_moves or {}
+        -- Executor sets both unconditionally; no fallback.
+        local bin_moves  = args.bin_moves
+        local clip_moves = args.clip_moves
 
         -- Undo bin moves
         if #bin_moves > 0 then

@@ -89,7 +89,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 set_last_error("ExtractRange: occlusion failed: " .. tostring(err))
                 return false
             end
-            for _, mut in ipairs(mutations or {}) do
+            for _, mut in ipairs(mutations) do
                 table.insert(lift_mutations, mut)
             end
         end
@@ -115,7 +115,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             })
             assert(ok,
                 "ExtractRange: ripple failed on track " .. tostring(track.id) .. ": " .. tostring(err))
-            for _, mut in ipairs(mutations or {}) do
+            for _, mut in ipairs(mutations) do
                 table.insert(ripple_mutations, mut)
             end
         end
@@ -147,7 +147,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
         assert(db, "UndoExtractRange: db is nil")
 
-        local executed_mutations = args.executed_mutations or {}
+        local executed_mutations = args.executed_mutations
         if #executed_mutations == 0 then
             return true
         end

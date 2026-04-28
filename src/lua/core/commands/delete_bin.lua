@@ -34,7 +34,8 @@ local SPEC = {
     command_undoers["DeleteBin"] = function(command)
         local args = command:get_all_parameters()
 
-        local child_snapshot = args.child_parent_snapshot or {}
+        -- Executor sets this unconditionally; no fallback.
+        local child_snapshot = args.child_parent_snapshot
 
 
         local ok, err = tag_service.restore_bin(args.project_id, args.deleted_bin_definition, args.bin_insert_index, child_snapshot)

@@ -208,86 +208,109 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return true
     end
 
+    -- Re-INSERT one previously-deleted timeline clip from the snapshot.
+    -- Asserts the snapshot fields the schema requires (NOT NULL columns).
+    local function restore_timeline_clip(stmt, snap)
+        assert(snap.nested_sequence_id and snap.nested_sequence_id ~= "",
+            "UndoDeleteMasterClip: snap " .. tostring(snap.id) .. " missing nested_sequence_id")
+        assert(snap.name and snap.fps_mismatch_policy
+            and type(snap.created_at) == "number"
+            and type(snap.modified_at) == "number"
+            and type(snap.volume) == "number"
+            and type(snap.playhead_frame) == "number", string.format(
+            "UndoDeleteMasterClip: snapshot for clip %s missing required fields",
+            tostring(snap.id)))
+        stmt:bind_value(1, snap.id)
+        stmt:bind_value(2, snap.project_id)
+        stmt:bind_value(3, snap.name)
+        stmt:bind_value(4, snap.track_id)
+        stmt:bind_value(5, snap.nested_sequence_id)
+        stmt:bind_value(6, snap.owner_sequence_id)
+        stmt:bind_value(7, snap.timeline_start)
+        stmt:bind_value(8, snap.duration)
+        stmt:bind_value(9, snap.source_in)
+        stmt:bind_value(10, snap.source_out)
+        stmt:bind_value(11, snap.master_layer_track_id)
+        stmt:bind_value(12, snap.master_audio_track_id)
+        stmt:bind_value(13, snap.fps_mismatch_policy)
+        stmt:bind_value(14, snap.enabled and 1 or 0)
+        stmt:bind_value(15, snap.created_at)
+        stmt:bind_value(16, snap.modified_at)
+        stmt:bind_value(17, snap.volume)
+        if snap.mark_in  then stmt:bind_value(18, snap.mark_in)  end
+        if snap.mark_out then stmt:bind_value(19, snap.mark_out) end
+        stmt:bind_value(20, snap.playhead_frame)
+        assert(stmt:exec(), "UndoDeleteMasterClip: INSERT failed for clip " .. snap.id)
+        stmt:reset()
+        stmt:clear_bindings()
+    end
+
+    -- Record the V13 INSERT mutation on the undo command so apply_command_mutations
+    -- can sync timeline_state's in-memory cache after the SQL restore above.
+    local function record_restored_clip_mutation(command_helper, command, snap)
+        if not snap.owner_sequence_id then return end
+        command_helper.add_insert_mutation(command, snap.owner_sequence_id, {
+            id                    = snap.id,
+            track_id              = snap.track_id,
+            start_value           = snap.timeline_start,
+            duration_value        = snap.duration,
+            source_in_value       = snap.source_in,
+            source_out_value      = snap.source_out,
+            enabled               = snap.enabled,
+            name                  = snap.name,
+            nested_sequence_id    = snap.nested_sequence_id,
+            master_layer_track_id = snap.master_layer_track_id,
+            master_audio_track_id = snap.master_audio_track_id,
+            fps_mismatch_policy   = snap.fps_mismatch_policy,
+            volume                = snap.volume,
+        })
+    end
+
+    -- Re-INSERT every timeline clip that DeleteMasterClip's force=true path
+    -- removed. No-op when the executor recorded zero (force=false case).
+    local function restore_deleted_timeline_clips(command, deleted_timeline_clips)
+        if #deleted_timeline_clips == 0 then return end
+        local command_helper = require("core.command_helper")
+        local stmt = assert(db:prepare([[
+            INSERT INTO clips (
+                id, project_id, name, track_id,
+                nested_sequence_id, owner_sequence_id,
+                timeline_start_frame, duration_frames,
+                source_in_frame, source_out_frame,
+                master_layer_track_id, master_audio_track_id,
+                fps_mismatch_policy,
+                enabled, created_at, modified_at,
+                volume, mark_in_frame, mark_out_frame, playhead_frame
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ]]), "UndoDeleteMasterClip: failed to prepare clips INSERT")
+        for _, snap in ipairs(deleted_timeline_clips) do
+            restore_timeline_clip(stmt, snap)
+            record_restored_clip_mutation(command_helper, command, snap)
+        end
+        stmt:finalize()
+    end
+
     command_undoers["DeleteMasterClip"] = function(command)
         local args = command:get_all_parameters()
-
         assert(args.master_clip_snapshot,
             "UndoDeleteMasterClip: missing master_clip_snapshot")
 
-        local ok = delete_sequence_mod.restore_from_payload(db, args.master_clip_snapshot, set_last_error)
+        local ok = delete_sequence_mod.restore_from_payload(db,
+            args.master_clip_snapshot, set_last_error)
         assert(ok, "UndoDeleteMasterClip: restore_from_payload failed")
 
-        -- Re-INSERT timeline clips deleted under force=true (V13 INSERT shape).
-        local deleted_timeline_clips = args.deleted_timeline_clips or {}
-        local command_helper = require("core.command_helper")
-        if #deleted_timeline_clips > 0 then
-            local insert_clip_stmt = assert(db:prepare([[
-                INSERT INTO clips (
-                    id, project_id, name, track_id,
-                    nested_sequence_id, owner_sequence_id,
-                    timeline_start_frame, duration_frames,
-                    source_in_frame, source_out_frame,
-                    master_layer_track_id, master_audio_track_id,
-                    fps_mismatch_policy,
-                    enabled, created_at, modified_at,
-                    volume, mark_in_frame, mark_out_frame, playhead_frame
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ]]), "UndoDeleteMasterClip: failed to prepare clips INSERT")
+        -- Executor sets deleted_timeline_clips unconditionally.
+        local deleted_timeline_clips = args.deleted_timeline_clips
+        restore_deleted_timeline_clips(command, deleted_timeline_clips)
 
-            for _, snap in ipairs(deleted_timeline_clips) do
-                assert(snap.nested_sequence_id and snap.nested_sequence_id ~= "",
-                    "UndoDeleteMasterClip: snap " .. tostring(snap.id) .. " missing nested_sequence_id")
-                insert_clip_stmt:bind_value(1, snap.id)
-                insert_clip_stmt:bind_value(2, snap.project_id)
-                insert_clip_stmt:bind_value(3, snap.name or "Timeline Clip")
-                insert_clip_stmt:bind_value(4, snap.track_id)
-                insert_clip_stmt:bind_value(5, snap.nested_sequence_id)
-                insert_clip_stmt:bind_value(6, snap.owner_sequence_id)
-                insert_clip_stmt:bind_value(7, snap.timeline_start)
-                insert_clip_stmt:bind_value(8, snap.duration)
-                insert_clip_stmt:bind_value(9, snap.source_in)
-                insert_clip_stmt:bind_value(10, snap.source_out)
-                insert_clip_stmt:bind_value(11, snap.master_layer_track_id)
-                insert_clip_stmt:bind_value(12, snap.master_audio_track_id)
-                insert_clip_stmt:bind_value(13, snap.fps_mismatch_policy or "resample")
-                insert_clip_stmt:bind_value(14, snap.enabled and 1 or 0)
-                insert_clip_stmt:bind_value(15, snap.created_at or os.time())
-                insert_clip_stmt:bind_value(16, snap.modified_at or os.time())
-                insert_clip_stmt:bind_value(17, snap.volume or 1.0)
-                if snap.mark_in then insert_clip_stmt:bind_value(18, snap.mark_in) end
-                if snap.mark_out then insert_clip_stmt:bind_value(19, snap.mark_out) end
-                insert_clip_stmt:bind_value(20, snap.playhead_frame or 0)
-                assert(insert_clip_stmt:exec(),
-                    "UndoDeleteMasterClip: INSERT failed for clip " .. snap.id)
-                insert_clip_stmt:reset()
-                insert_clip_stmt:clear_bindings()
-
-                if snap.owner_sequence_id then
-                    command_helper.add_insert_mutation(command, snap.owner_sequence_id, {
-                        id = snap.id,
-                        track_id = snap.track_id,
-                        start_value = snap.timeline_start,
-                        duration_value = snap.duration,
-                        source_in_value = snap.source_in,
-                        source_out_value = snap.source_out,
-                        enabled = snap.enabled,
-                        name = snap.name,
-                        nested_sequence_id = snap.nested_sequence_id,
-                        master_layer_track_id = snap.master_layer_track_id,
-                        master_audio_track_id = snap.master_audio_track_id,
-                        fps_mismatch_policy = snap.fps_mismatch_policy,
-                        volume = snap.volume,
-                    })
-                end
-            end
-            insert_clip_stmt:finalize()
-        end
-
-        local seq_name = args.master_clip_snapshot.sequence and args.master_clip_snapshot.sequence.name or "unknown"
+        local seq_name = args.master_clip_snapshot.sequence
+            and args.master_clip_snapshot.sequence.name
+            or "unknown"
         local timeline_msg = #deleted_timeline_clips > 0
             and string.format(" and %d timeline clip(s)", #deleted_timeline_clips)
             or ""
-        log.event("Undo DeleteMasterClip: restored master sequence %s%s", seq_name, timeline_msg)
+        log.event("Undo DeleteMasterClip: restored master sequence %s%s",
+            seq_name, timeline_msg)
         return true
     end
 

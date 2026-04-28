@@ -112,7 +112,7 @@ end
 -- Append a new audio track to the master + a media_ref covering the
 -- file's full duration. Returns new_track_id, new_media_ref_id.
 local function add_master_audio_stream(master, media_id, media, sample_rate, opts)
-    local existing = Track.find_by_sequence(master.id, "AUDIO") or {}
+    local existing = Track.find_by_sequence(master.id, "AUDIO")
     local next_index = 1
     for _, t in ipairs(existing) do
         if t.track_index >= next_index then next_index = t.track_index + 1 end
@@ -160,7 +160,7 @@ local function build_companion_for_video_clip(c, master, sample_rate)
     then
         return nil
     end
-    local parent_a_tracks = Track.find_by_sequence(c.owner_sequence_id, "AUDIO") or {}
+    local parent_a_tracks = Track.find_by_sequence(c.owner_sequence_id, "AUDIO")
     assert(#parent_a_tracks > 0, string.format(
         "GrowMasterMedium: parent sequence %s has no A track to host the "
         .. "companion for clip %s. Auto-creating parent tracks is deferred "
@@ -258,9 +258,57 @@ function M.execute(args)
     }
 end
 
-function M.undo(_capture)
-    error("GrowMasterMedium.undo: not yet implemented (forward-only landing "
-        .. "for first-landing scope; undo is a follow-up).")
+-- For each forward-pass companion: delete the companion clip (its
+-- clip_links row cascades away on FK ON DELETE CASCADE). When the link
+-- group was CREATED by execute (pre_existing_lg=false), the deletion
+-- leaves V's row alone in the group — sweep it so the group disappears
+-- entirely. When pre_existing_lg=true, the group existed before execute
+-- and we leave V's pre-existing peer(s) intact.
+local function delete_companions_and_cleanup_groups(companions)
+    local clips_to_delete = {}
+    for _, c in ipairs(companions) do
+        clips_to_delete[#clips_to_delete + 1] = c.companion_clip_id
+    end
+    Clip.delete_by_ids(clips_to_delete)
+
+    for _, c in ipairs(companions) do
+        if not c.pre_existing_lg then
+            ClipLink.delete_link_group(c.link_group_id)
+        end
+    end
+end
+
+-- Drop the master sequence's new media_ref + new audio track (in that
+-- order — media_ref FK references the track).
+local function drop_master_audio_stream(new_media_ref_id, new_track_id)
+    MediaRef.delete(new_media_ref_id)
+    Track.delete(new_track_id)
+end
+
+function M.undo(capture)
+    assert(type(capture) == "table",
+        "GrowMasterMedium.undo: capture table required")
+    assert(type(capture.new_track_id) == "string"
+        and capture.new_track_id ~= "",
+        "GrowMasterMedium.undo: capture.new_track_id required")
+    assert(type(capture.new_media_ref_id) == "string"
+        and capture.new_media_ref_id ~= "",
+        "GrowMasterMedium.undo: capture.new_media_ref_id required")
+    assert(type(capture.companions) == "table",
+        "GrowMasterMedium.undo: capture.companions required")
+
+    delete_companions_and_cleanup_groups(capture.companions)
+    drop_master_audio_stream(capture.new_media_ref_id, capture.new_track_id)
+
+    local Signals = require("core.signals")
+    Signals.emit("sequence_content_changed", capture.sequence_id)
+    local touched = {}
+    for _, c in ipairs(capture.companions) do
+        touched[c.owner_sequence_id] = true
+    end
+    for parent_id, _ in pairs(touched) do
+        Signals.emit("sequence_content_changed", parent_id)
+    end
 end
 
 local SPEC = {
@@ -291,8 +339,15 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         return true
     end
 
-    command_undoers["GrowMasterMedium"] = function(_command)
-        error("GrowMasterMedium undo: pending follow-up.")
+    command_undoers["GrowMasterMedium"] = function(command)
+        local args = command:get_all_parameters()
+        M.undo({
+            sequence_id      = args.sequence_id,
+            new_track_id     = args.new_track_id,
+            new_media_ref_id = args.new_media_ref_id,
+            companions       = args.companions,
+        })
+        return true
     end
 
     -- Suppress unused-warnings for symmetric helpers retained for the

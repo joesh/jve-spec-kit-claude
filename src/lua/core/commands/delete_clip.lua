@@ -117,7 +117,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             deletes     = {},
             bulk_shifts = {},
         }
-        for _, captured in ipairs(result_or_err.deleted or {}) do
+        for _, captured in ipairs(result_or_err.deleted) do
             bucket.deletes[#bucket.deletes + 1] = captured.row and captured.row.id or captured.id
         end
         command:set_parameter("__timeline_mutations", bucket)

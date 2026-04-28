@@ -172,21 +172,35 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
         local cap = capture_or_err
         command:set_parameter("prior_existed", cap.prior_existed)
-        command:set_parameter("prior_enabled", cap.prior_enabled or false)
-        command:set_parameter("prior_gain_db", cap.prior_gain_db or 0.0)
+        if cap.prior_existed then
+            assert(type(cap.prior_enabled) == "boolean",
+                "ToggleClipChannel: prior_existed=true but prior_enabled missing/non-boolean")
+            assert(type(cap.prior_gain_db) == "number",
+                "ToggleClipChannel: prior_existed=true but prior_gain_db missing/non-number")
+            command:set_parameter("prior_enabled", cap.prior_enabled)
+            command:set_parameter("prior_gain_db", cap.prior_gain_db)
+        end
         return true
     end
 
     command_undoers["ToggleClipChannel"] = function(command)
         local args = command:get_all_parameters()
-        M.undo({
+        local prior_existed = args.prior_existed and true or false
+        local undo_args = {
             sequence_id   = args.sequence_id,
             clip_id       = args.clip_id,
             channel_index = args.channel_index,
-            prior_existed = args.prior_existed and true or false,
-            prior_enabled = args.prior_enabled and true or false,
-            prior_gain_db = args.prior_gain_db or 0.0,
-        })
+            prior_existed = prior_existed,
+        }
+        if prior_existed then
+            assert(type(args.prior_enabled) == "boolean",
+                "ToggleClipChannel.undo: prior_existed=true but prior_enabled missing")
+            assert(type(args.prior_gain_db) == "number",
+                "ToggleClipChannel.undo: prior_existed=true but prior_gain_db missing")
+            undo_args.prior_enabled = args.prior_enabled
+            undo_args.prior_gain_db = args.prior_gain_db
+        end
+        M.undo(undo_args)
         return true
     end
 

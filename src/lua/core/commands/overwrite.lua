@@ -111,14 +111,17 @@ local SPEC = {
 -- left/right halves of occluded clips.
 local function build_executed_mutations(result)
     local muts = {}
-    for _, cap in pairs(result.occluded or {}) do
-        for _, prev in ipairs(cap.deleted or {}) do
+    -- result.occluded always carries every track key; each value's
+    -- deleted/trimmed/split_new_ids fields are always arrays (see
+    -- occlude_track in _place_shared.lua). No fallbacks needed.
+    for _, cap in pairs(result.occluded) do
+        for _, prev in ipairs(cap.deleted) do
             muts[#muts + 1] = { type = "delete", clip_id = prev.id }
         end
-        for _, tr in ipairs(cap.trimmed or {}) do
+        for _, tr in ipairs(cap.trimmed) do
             muts[#muts + 1] = { type = "update", clip_id = tr.id }
         end
-        for _, new_id in ipairs(cap.split_new_ids or {}) do
+        for _, new_id in ipairs(cap.split_new_ids) do
             muts[#muts + 1] = { type = "insert", clip_id = new_id }
         end
     end
@@ -229,8 +232,10 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
 
     command_undoers["Overwrite"] = function(command)
         local args = command:get_all_parameters()
-        local created_ids = args.created_clip_ids or {}
-        local occluded    = args.occluded_capture or {}
+        -- Executor sets these unconditionally; carve sub-captures always
+        -- carry split_new_ids/trimmed/deleted arrays (see occlude_track).
+        local created_ids = args.created_clip_ids
+        local occluded    = args.occluded_capture
         -- args.created_link_group_id is preserved on the command for redo;
         -- the undoer doesn't need to read it (clip_links cascade on
         -- clip delete).
@@ -238,12 +243,12 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         -- Drop the new clips + any split-right-halves.
         Clip.delete_by_ids(created_ids)
         for _, cap in pairs(occluded) do
-            Clip.delete_by_ids(cap.split_new_ids or {})
+            Clip.delete_by_ids(cap.split_new_ids)
         end
 
         -- Restore trimmed clips to their prior bounds.
         for _, cap in pairs(occluded) do
-            for _, tr in ipairs(cap.trimmed or {}) do
+            for _, tr in ipairs(cap.trimmed) do
                 Clip.update_bounds(tr.id,
                     tr.prior.timeline_start_frame,
                     tr.prior.duration_frames,
@@ -257,7 +262,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         -- clip id remain valid (but link_group on the deleted row did
         -- already cascade — re-link is a future enhancement if needed).
         for _, cap in pairs(occluded) do
-            for _, d in ipairs(cap.deleted or {}) do
+            for _, d in ipairs(cap.deleted) do
                 Clip.create({
                     id                    = d.id,
                     project_id            = d.project_id,
@@ -294,10 +299,10 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                 bucket.deletes[#bucket.deletes + 1] = { clip_id = cid }
             end
             for _, cap in pairs(occluded) do
-                for _, snid in ipairs(cap.split_new_ids or {}) do
+                for _, snid in ipairs(cap.split_new_ids) do
                     bucket.deletes[#bucket.deletes + 1] = { clip_id = snid }
                 end
-                for _, tr in ipairs(cap.trimmed or {}) do
+                for _, tr in ipairs(cap.trimmed) do
                     local row = Clip.load_v13_row(tr.id)
                     if row then
                         bucket.updates[#bucket.updates + 1] = {
@@ -320,7 +325,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                         }
                     end
                 end
-                for _, d in ipairs(cap.deleted or {}) do
+                for _, d in ipairs(cap.deleted) do
                     local entry = build_insert_mutation_entry(d.id)
                     if entry then
                         bucket.inserts[#bucket.inserts + 1] = entry

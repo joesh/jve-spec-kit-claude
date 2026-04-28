@@ -80,7 +80,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             set_last_error("Paste: clipboard does not contain timeline clips")
             return false
         end
-        local clip_entries = payload.clips or {}
+        -- Producers of kind="timeline_clips" payloads always populate clips
+        -- (cut.lua, clipboard_actions). The kind check above narrows here.
+        local clip_entries = payload.clips
         if #clip_entries == 0 then
             set_last_error("Paste: clipboard is empty")
             return false
@@ -160,7 +162,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 set_last_error("Paste: occlusion failed on track " .. tostring(track_id) .. ": " .. tostring(err))
                 return false
             end
-            for _, mut in ipairs(mutations or {}) do
+            -- resolve_occlusions_multi returns (ok, err, mutations) where
+            -- mutations is always an array (possibly empty).
+            for _, mut in ipairs(mutations) do
                 table.insert(all_mutations, mut)
             end
         end
@@ -291,8 +295,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
         assert(db, "UndoPaste: db is nil")
 
-        local link_group_ids = args.created_link_group_ids or {}
-        local executed_mutations = args.executed_mutations or {}
+        -- Executor sets all three unconditionally before returning success.
+        local link_group_ids     = args.created_link_group_ids
+        local executed_mutations = args.executed_mutations
 
         if #executed_mutations == 0 and #link_group_ids == 0 then
             return true

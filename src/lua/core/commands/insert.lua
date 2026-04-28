@@ -26,8 +26,7 @@ local Sequence      = require("models.sequence")
 local place_shared  = require("core.commands._place_shared")
 local log           = require("core.logger").for_area("commands")
 
--- M.execute — pure-logic entry point. Args and return shape documented
--- alongside the orchestrator body below.
+-- M.execute — pure-logic entry point. Args and return shape documented below.
 function M.execute(args)
     -- timeline_start_frame is optional at the SPEC layer because the
     -- editor's user-mode Insert is "insert at playhead." When omitted,
@@ -139,11 +138,11 @@ local SPEC = {
 --   {type="update", clip_id=...}  — bounds changed (split left-half, ripple)
 local function build_executed_mutations(result)
     local muts = {}
-    for _, cap in pairs(result.split_captures or {}) do
-        for _, right_id in ipairs(cap.split_new_ids or {}) do
+    for _, cap in pairs(result.split_captures) do
+        for _, right_id in ipairs(cap.split_new_ids) do
             muts[#muts + 1] = { type = "insert", clip_id = right_id }
         end
-        for _, tr in ipairs(cap.trimmed or {}) do
+        for _, tr in ipairs(cap.trimmed) do
             muts[#muts + 1] = { type = "update", clip_id = tr.id }
         end
     end
@@ -151,7 +150,7 @@ local function build_executed_mutations(result)
         muts[#muts + 1] = { type = "insert", clip_id = cid }
     end
     for _, rip in pairs(result.rippled) do
-        for _, cid in ipairs(rip.clip_ids or {}) do
+        for _, cid in ipairs(rip.clip_ids) do
             muts[#muts + 1] = { type = "update", clip_id = cid }
         end
     end
@@ -202,10 +201,10 @@ local function build_executor_mutation_bucket(args, result)
         inserts = {}, updates = {}, deletes = {},
         bulk_shifts = {}, placements = {},
     }
-    for track_id, cap in pairs(result.split_captures or {}) do
+    for track_id, cap in pairs(result.split_captures) do
         local track_shift = result.rippled[track_id]
             and result.rippled[track_id].shift or 0
-        for _, right_id in ipairs(cap.split_new_ids or {}) do
+        for _, right_id in ipairs(cap.split_new_ids) do
             local entry = build_insert_mutation_entry(right_id)
             -- DB row is at POST-shift position (ripple ran after split).
             -- Emit at PRE-shift so the bucket's bulk_shift moves it to the
@@ -214,7 +213,7 @@ local function build_executor_mutation_bucket(args, result)
             entry.timeline_start = entry.timeline_start - track_shift
             bucket.inserts[#bucket.inserts + 1] = entry
         end
-        for _, tr in ipairs(cap.trimmed or {}) do
+        for _, tr in ipairs(cap.trimmed) do
             local row = Clip.load_v13_row(tr.id)
             assert(row, "Insert: could not re-read trimmed left-half "
                 .. tostring(tr.id))
@@ -267,10 +266,10 @@ local function build_undo_mutation_bucket(args, created_ids, rippled, splits)
         end
     end
     for _, cap in pairs(splits) do
-        for _, right_id in ipairs(cap.split_new_ids or {}) do
+        for _, right_id in ipairs(cap.split_new_ids) do
             bucket.deletes[#bucket.deletes + 1] = { clip_id = right_id }
         end
-        for _, tr in ipairs(cap.trimmed or {}) do
+        for _, tr in ipairs(cap.trimmed) do
             bucket.updates[#bucket.updates + 1] = {
                 clip_id          = tr.id,
                 id               = tr.id,
@@ -295,7 +294,7 @@ local function reverse_split_captures(splits)
         end
     end
     for _, cap in pairs(splits) do
-        for _, tr in ipairs(cap.trimmed or {}) do
+        for _, tr in ipairs(cap.trimmed) do
             Clip.update_bounds(tr.id,
                 tr.prior.timeline_start_frame, tr.prior.duration_frames,
                 tr.prior.source_in_frame,      tr.prior.source_out_frame)
@@ -341,7 +340,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("created_clip_ids",      result.created_clip_ids)
         command:set_parameter("created_link_group_id", result.link_group_id or "")
         command:set_parameter("rippled_capture",       result.rippled)
-        command:set_parameter("split_capture",         result.split_captures or {})
+        command:set_parameter("split_capture",         result.split_captures)
         command:set_parameter("duration_frames",       result.duration_frames)
         command:set_parameter("fps_mismatch_policy",   result.fps_mismatch_policy)
         command:set_parameter("executed_mutations",    build_executed_mutations(result))
@@ -356,9 +355,11 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
 
     command_undoers["Insert"] = function(command)
         local args = command:get_all_parameters()
-        local created_ids = args.created_clip_ids or {}
-        local rippled     = args.rippled_capture  or {}
-        local splits      = args.split_capture    or {}
+        -- Executor sets all three unconditionally (execute always returns
+        -- non-nil arrays/maps for these). No fallbacks.
+        local created_ids = args.created_clip_ids
+        local rippled     = args.rippled_capture
+        local splits      = args.split_capture
         -- clip_links cascade on clip delete; link_group_id is preserved on
         -- the command for redo reinstatement.
 

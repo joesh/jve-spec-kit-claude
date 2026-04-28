@@ -102,17 +102,24 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local cap = capture_or_err
         command:set_parameter("medium", cap.medium)
         command:set_parameter("prior_value_present", cap.prior_value ~= nil)
-        command:set_parameter("prior_value", cap.prior_value or 0)
+        if cap.prior_value ~= nil then
+            command:set_parameter("prior_value", cap.prior_value)
+        end
         return true
     end
 
     command_undoers["SetSequenceStartTC"] = function(command)
         local args = command:get_all_parameters()
-        local prior = args.prior_value_present and args.prior_value or nil
+        local prior_value = nil
+        if args.prior_value_present then
+            assert(type(args.prior_value) == "number",
+                "SetSequenceStartTC.undo: prior_value_present=true but prior_value missing/non-number")
+            prior_value = args.prior_value
+        end
         M.undo({
             sequence_id = args.sequence_id,
             medium      = args.medium,
-            prior_value = prior,
+            prior_value = prior_value,
         })
         return true
     end

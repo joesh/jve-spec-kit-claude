@@ -121,18 +121,20 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             return false, tostring(capture_or_err)
         end
         local capture = capture_or_err
-        command:set_parameter("prior_track_id", capture.prior_track_id or "")
+        -- prior_track_id is nullable (NULL = inherit nested sequence's
+        -- default). Persist nil-vs-set distinctly — no '' sentinel.
+        if capture.prior_track_id ~= nil then
+            command:set_parameter("prior_track_id", capture.prior_track_id)
+        end
         return true
     end
 
     command_undoers["SetClipLayer"] = function(command)
         local args = command:get_all_parameters()
-        local prior = args.prior_track_id
-        if prior == "" then prior = nil end  -- '' is the persisted-as-NULL sentinel
         M.undo({
             sequence_id     = args.sequence_id,
             clip_id         = args.clip_id,
-            prior_track_id  = prior,
+            prior_track_id  = args.prior_track_id,  -- nullable
         })
         return true
     end

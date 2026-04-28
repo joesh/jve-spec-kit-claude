@@ -59,13 +59,9 @@ local function migrate_clip_to_S(clip_id, new_owner, new_track, new_start)
     Clip.transfer_owner(clip_id, new_owner)
 end
 
-function M.execute(args)
-    assert(type(args) == "table", "Nest.execute: args table required")
-    local sequence_id = require_string_arg(args, "sequence_id")
-    local selected_ids = args.selected_clip_ids
-    assert(type(selected_ids) == "table" and #selected_ids > 0,
-        "Nest: selected_clip_ids must be a non-empty array")
-
+-- Resolve the parent sequence and refuse if it isn't a non-master ('nested').
+-- Masters hold media_refs, not clips, so Nest doesn't apply to them.
+local function load_parent_sequence(sequence_id)
     local parent = Sequence.find(sequence_id)
     assert(parent, string.format(
         "Nest: parent sequence %s not found", sequence_id))
@@ -73,9 +69,13 @@ function M.execute(args)
         "Nest: parent sequence %s has kind='%s'; Nest is valid only on "
         .. "non-master (kind='nested') sequences (masters hold media_refs, "
         .. "not clips).", sequence_id, tostring(parent.kind)))
+    return parent
+end
 
-    -- Load + validate selection: all clips belong to the parent and
-    -- share the same track (first-landing scope).
+-- Load each selected clip and enforce the first-landing scope: all clips
+-- belong to the parent sequence and sit on a single shared track. Returns
+-- the row list and the shared track_id.
+local function load_selected_clips(sequence_id, selected_ids)
     local clip_rows = {}
     local first_track_id
     for _, cid in ipairs(selected_ids) do
@@ -96,13 +96,11 @@ function M.execute(args)
         end
         clip_rows[#clip_rows + 1] = row
     end
+    return clip_rows, first_track_id
+end
 
-    -- Source track (in parent) and its type/index — needed to mirror in S.
-    local source_track = Track.load(first_track_id)
-    assert(source_track, string.format(
-        "Nest: source track %s not found", first_track_id))
-
-    -- Compute the selection span on the parent.
+-- [min_start, max_end) covering every selected clip's timeline window.
+local function compute_selection_span(clip_rows)
     local min_start, max_end
     for _, r in ipairs(clip_rows) do
         local s = r.timeline_start_frame
@@ -112,9 +110,12 @@ function M.execute(args)
     end
     local span = max_end - min_start
     assert(span > 0, "Nest: selection span must be > 0")
+    return min_start, span
+end
 
-    -- (1) Create new sequence S.
-    local new_seq_id = args.new_sequence_id or uuid.generate()
+-- Create the new nested sequence S inheriting timebase + dimensions from
+-- the parent so passthrough scaling holds at the parent boundary.
+local function create_nested_sequence(parent, new_seq_id)
     local s = Sequence.create("Nested", parent.project_id,
         { fps_numerator = parent.fps_numerator,
           fps_denominator = parent.fps_denominator },
@@ -124,26 +125,27 @@ function M.execute(args)
           audio_sample_rate  = parent.audio_sample_rate,
         })
     assert(s:save(), "Nest: failed to save new nested sequence")
+    return s
+end
 
-    -- (2) Create one matching track on S.
-    local new_track_id
+-- Create a single track on S mirroring the source track's type and index.
+-- For VIDEO, set the sequence's default video layer per INV-8.
+local function create_mirrored_track(source_track, new_seq_id, new_track_id)
     if source_track.track_type == "VIDEO" then
-        new_track_id = args.new_track_id or uuid.generate()
         local t = Track.create_video(source_track.name, new_seq_id,
             { id = new_track_id, index = source_track.track_index })
         assert(t:save(), "Nest: failed to save new V track on S")
-        -- INV-8: master with V tracks must have non-NULL default. S is
-        -- nested, but FU-checks may apply; per data-model.md it's only
-        -- required when at least one video track exists, so we set it.
         Sequence.update(new_seq_id, { default_video_layer_track_id = new_track_id })
     else
-        new_track_id = args.new_track_id or uuid.generate()
         local t = Track.create_audio(source_track.name, new_seq_id,
             { id = new_track_id, index = source_track.track_index })
         assert(t:save(), "Nest: failed to save new A track on S")
     end
+end
 
-    -- (3) Move clips. Capture priors for undo.
+-- Move every selected clip into S, translated so S starts at frame 0.
+-- Returns the priors needed to undo the move.
+local function migrate_selection_into_S(clip_rows, new_seq_id, new_track_id, min_start)
     local moved = {}
     for _, r in ipairs(clip_rows) do
         moved[#moved + 1] = {
@@ -155,14 +157,19 @@ function M.execute(args)
         migrate_clip_to_S(r.id, new_seq_id, new_track_id,
             r.timeline_start_frame - min_start)
     end
+    return moved
+end
 
-    -- (4) INSERT replacement clip on parent.
-    local new_clip_id = args.new_clip_id or uuid.generate()
+-- INSERT one replacement clip on the parent that wraps S over the same
+-- timeline window the selection used to occupy.
+local function insert_replacement_clip(parent, sequence_id, track_id,
+                                       new_clip_id, new_seq_id,
+                                       min_start, span)
     Clip.create({
         id                    = new_clip_id,
         project_id            = parent.project_id,
         owner_sequence_id     = sequence_id,
-        track_id              = first_track_id,
+        track_id              = track_id,
         nested_sequence_id    = new_seq_id,
         name                  = "Nested",
         timeline_start_frame  = min_start,
@@ -175,6 +182,31 @@ function M.execute(args)
         volume                = 1.0,
         playhead_frame        = 0,
     })
+end
+
+function M.execute(args)
+    assert(type(args) == "table", "Nest.execute: args table required")
+    local sequence_id  = require_string_arg(args, "sequence_id")
+    local selected_ids = args.selected_clip_ids
+    assert(type(selected_ids) == "table" and #selected_ids > 0,
+        "Nest: selected_clip_ids must be a non-empty array")
+
+    local parent                  = load_parent_sequence(sequence_id)
+    local clip_rows, src_track_id = load_selected_clips(sequence_id, selected_ids)
+    local source_track            = Track.load(src_track_id)
+    assert(source_track, string.format(
+        "Nest: source track %s not found", src_track_id))
+    local min_start, span         = compute_selection_span(clip_rows)
+
+    local new_seq_id   = args.new_sequence_id or uuid.generate()
+    local new_track_id = args.new_track_id    or uuid.generate()
+    local new_clip_id  = args.new_clip_id     or uuid.generate()
+
+    create_nested_sequence(parent, new_seq_id)
+    create_mirrored_track(source_track, new_seq_id, new_track_id)
+    local moved = migrate_selection_into_S(clip_rows, new_seq_id, new_track_id, min_start)
+    insert_replacement_clip(parent, sequence_id, src_track_id,
+                            new_clip_id, new_seq_id, min_start, span)
 
     log.event("Nest: parent=%s S=%s moved=%d span=%d at=%d",
         sequence_id, new_seq_id, #moved, span, min_start)
@@ -250,7 +282,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             new_sequence_id  = args.new_sequence_id,
             new_track_id     = args.new_track_id,
             new_clip_id      = args.new_clip_id,
-            moved            = args.moved or {},
+            moved            = args.moved,
         })
         return true
     end

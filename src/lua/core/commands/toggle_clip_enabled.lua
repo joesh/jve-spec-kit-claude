@@ -53,7 +53,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local clip_ids = args.clip_ids
 
             if not clip_ids or #clip_ids == 0 then
-                local selected_clips = timeline_state.get_selected_clips() or {}
+                local selected_clips = timeline_state.get_selected_clips()
                 clip_ids = {}
                 for _, clip in ipairs(selected_clips) do
                     if clip and clip.id then

@@ -65,7 +65,7 @@ local function collect_selected_clip_ids()
             out[#out + 1] = id
         end
     end
-    for _, clip in ipairs(timeline_state.get_selected_clips() or {}) do
+    for _, clip in ipairs(timeline_state.get_selected_clips()) do
         if type(clip) == "table" then
             add(clip.id or clip.clip_id)
         elseif type(clip) == "string" then

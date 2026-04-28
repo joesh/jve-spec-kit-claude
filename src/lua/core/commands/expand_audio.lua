@@ -78,13 +78,13 @@ end
 -- owner_track_id yet) cannot collide. Returns plan[] (entries get
 -- owner_track_id filled in here when one already exists).
 local function build_placement_plan(clip, clip_id, sequence_id)
-    local nested_a = Track.find_by_sequence(clip.nested_sequence_id, "AUDIO") or {}
+    local nested_a = Track.find_by_sequence(clip.nested_sequence_id, "AUDIO")
     assert(#nested_a >= 2, string.format(
         "ExpandAudio: nested sequence %s has %d audio track(s); ExpandAudio "
         .. "requires >= 2 (nothing to expand).",
         clip.nested_sequence_id, #nested_a))
     local owner_a_by_index = {}
-    for _, t in ipairs(Track.find_by_sequence(sequence_id, "AUDIO") or {}) do
+    for _, t in ipairs(Track.find_by_sequence(sequence_id, "AUDIO")) do
         owner_a_by_index[t.track_index] = t.id
     end
     local plan = {}
@@ -190,8 +190,10 @@ end
 -- ch=0 there. Out-of-bounds source channels are dropped (captured in
 -- undo via source_capture).
 local function project_source_overrides(source_capture, expanded_by_index)
-    local overrides = source_capture and source_capture.overrides or {}
-    for _, ov in ipairs(overrides) do
+    -- capture_v13_state always populates overrides as an array.
+    assert(type(source_capture) == "table" and type(source_capture.overrides) == "table",
+        "ExpandAudio: source_capture/overrides missing")
+    for _, ov in ipairs(source_capture.overrides) do
         local target_clip_id = expanded_by_index[ov.channel_index + 1]
         if target_clip_id then
             Override.insert({
@@ -262,12 +264,11 @@ function M.undo(capture)
     --      now (their only clips were the expanded ones, just deleted).
     --   3. Restore the source via Clip.restore_v13_state — re-INSERTs
     --      the row + overrides + the source's link_group entry.
-    Clip.delete_by_ids(capture.expanded_clip_ids or {})
+    -- Execute always populates these arrays (possibly empty).
+    Clip.delete_by_ids(capture.expanded_clip_ids)
 
-    if capture.created_track_ids then
-        for _, tid in ipairs(capture.created_track_ids) do
-            Track.delete(tid)
-        end
+    for _, tid in ipairs(capture.created_track_ids) do
+        Track.delete(tid)
     end
 
     Clip.restore_v13_state(capture.source_capture)
@@ -308,8 +309,8 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local args = command:get_all_parameters()
         M.undo({
             sequence_id        = args.sequence_id,
-            expanded_clip_ids  = args.expanded_clip_ids or {},
-            created_track_ids  = args.created_track_ids or {},
+            expanded_clip_ids  = args.expanded_clip_ids,
+            created_track_ids  = args.created_track_ids,
             source_capture     = args.source_capture,
         })
         return true

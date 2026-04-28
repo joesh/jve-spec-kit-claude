@@ -190,7 +190,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Get current selection
-        local current_edges = timeline_state.get_selected_edges() or {}
+        local current_edges = timeline_state.get_selected_edges()
 
         -- Check if all targets are already selected
         local all_selected = selection_contains_all(current_edges, target_edges)

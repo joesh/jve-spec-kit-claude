@@ -61,8 +61,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false, plan_err
         end
 
-        local planned_mutations = plan and plan.planned_mutations or {}
-        local new_clip_ids = plan and plan.new_clip_ids or {}
+        -- ok_plan=true guarantees plan is the {planned_mutations, new_clip_ids}
+        -- table returned by plan_duplicate_block; both fields are arrays.
+        local planned_mutations = plan.planned_mutations
+        local new_clip_ids = plan.new_clip_ids
         if #planned_mutations == 0 then
             return true
         end

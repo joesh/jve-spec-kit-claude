@@ -343,11 +343,11 @@ function M.register(executors, undoers, db)
             timeline_state = loaded_state
         end
 
-        -- Delete all created entities
-        local sequence_ids = args.created_sequence_ids or {}
-        local track_ids = args.created_track_ids or {}
-        local clip_ids = args.created_clip_ids or {}
-        local media_ids = args.created_media_ids or {}
+        -- Executor sets these unconditionally (always array, possibly empty).
+        local sequence_ids = args.created_sequence_ids
+        local track_ids    = args.created_track_ids
+        local clip_ids     = args.created_clip_ids
+        local media_ids    = args.created_media_ids
 
         -- Capture current view state from each sequence BEFORE deleting.
         -- This allows redo to restore the user's view state (zoom, playhead, selection).

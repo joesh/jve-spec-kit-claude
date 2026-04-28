@@ -163,11 +163,19 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local cap = capture_or_err
         command:set_parameter("kind", cap.kind)
         if cap.kind == "channel" then
+            assert(type(cap.prior_enabled) == "boolean",
+                "ClearClipOverride: channel branch missing prior_enabled")
+            assert(type(cap.prior_gain_db) == "number",
+                "ClearClipOverride: channel branch missing prior_gain_db")
             command:set_parameter("channel_index", cap.channel_index)
             command:set_parameter("prior_enabled", cap.prior_enabled)
             command:set_parameter("prior_gain_db", cap.prior_gain_db)
         else
-            command:set_parameter("prior_track_id", cap.prior_track_id or "")
+            -- Layer branch: prior_track_id is nullable (NULL = inherit
+            -- nested sequence's default). Persist nil-vs-set distinctly.
+            if cap.prior_track_id ~= nil then
+                command:set_parameter("prior_track_id", cap.prior_track_id)
+            end
         end
         return true
     end
@@ -175,22 +183,24 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
     command_undoers["ClearClipOverride"] = function(command)
         local args = command:get_all_parameters()
         if args.kind == "channel" then
+            assert(type(args.prior_enabled) == "boolean",
+                "ClearClipOverride.undo: channel branch missing prior_enabled")
+            assert(type(args.prior_gain_db) == "number",
+                "ClearClipOverride.undo: channel branch missing prior_gain_db")
             M.undo({
                 sequence_id   = args.sequence_id,
                 clip_id       = args.clip_id,
                 kind          = "channel",
                 channel_index = args.channel_index,
-                prior_enabled = args.prior_enabled and true or false,
-                prior_gain_db = args.prior_gain_db or 0.0,
+                prior_enabled = args.prior_enabled,
+                prior_gain_db = args.prior_gain_db,
             })
         else
-            local prior = args.prior_track_id
-            if prior == "" then prior = nil end
             M.undo({
                 sequence_id    = args.sequence_id,
                 clip_id        = args.clip_id,
                 kind           = "layer",
-                prior_track_id = prior,
+                prior_track_id = args.prior_track_id,  -- nullable
             })
         end
         return true

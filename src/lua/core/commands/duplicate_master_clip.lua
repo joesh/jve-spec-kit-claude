@@ -54,15 +54,31 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local has_video = media.width > 0
         local has_audio = (media.audio_channels or 0) > 0
 
-        local sample_rate = has_audio and media.audio_sample_rate or 48000
+        -- Video-only media → no audio rate. Schema permits NULL on
+        -- audio_sample_rate for masters specifically; pass nil through.
+        local sample_rate = has_audio and media.audio_sample_rate or nil
+        if has_audio then
+            assert(type(sample_rate) == "number" and sample_rate > 0,
+                string.format("DuplicateMasterClip: media %s has audio_channels=%d "
+                    .. "but missing/invalid audio_sample_rate (rule 2.13)",
+                    tostring(media_id), media.audio_channels))
+        end
         local duration_samples = 0
         if has_audio and duration_frames > 0 then
             duration_samples = math.floor(
                 duration_frames * sample_rate * fps_den / fps_num + 0.5)
         end
 
-        local width  = has_video and media.width  or 1920
-        local height = has_video and media.height or 1080
+        -- Audio-only media → nil width/height (schema permits NULL on
+        -- masters). For video media a positive size is required.
+        local width  = has_video and media.width  or nil
+        local height = has_video and media.height or nil
+        if has_video then
+            assert(type(width) == "number" and width > 0
+                and type(height) == "number" and height > 0,
+                string.format("DuplicateMasterClip: media %s is video but missing width/height",
+                    tostring(media_id)))
+        end
 
         local video_start_tc_frame = has_video and media:get_start_tc() or nil
         local audio_start_tc_samples = has_audio and media:get_audio_start_tc() or nil

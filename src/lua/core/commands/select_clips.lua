@@ -118,7 +118,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Get current selection from timeline state
-        local current_clips = timeline_state.get_selected_clips() or {}
+        local current_clips = timeline_state.get_selected_clips()
         local current_set = {}
         for _, clip in ipairs(current_clips) do
             current_set[clip.id] = clip

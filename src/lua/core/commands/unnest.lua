@@ -40,19 +40,17 @@ end
 -- (model-layer helpers used: Clip.list_in_sequence,
 --  Clip.count_referencing_nested, Track.find_at)
 
-function M.execute(args)
-    assert(type(args) == "table", "Unnest.execute: args table required")
-    local sequence_id = require_string_arg(args, "sequence_id")
-    local clip_id     = require_string_arg(args, "clip_id")
-
+-- Resolve the unnested clip and its referenced nested sequence. Refuses
+-- when the clip is missing, the sequence_id mismatches owner (rule 2.29),
+-- or the referenced sequence is a master (CT-C19).
+local function load_clip_and_nested(sequence_id, clip_id)
     local clip = Clip.load_v13_row(clip_id)
     assert(clip, string.format("Unnest: clip %s not found", clip_id))
     assert(clip.owner_sequence_id == sequence_id, string.format(
         "Unnest: sequence_id mismatch — clip %s owner=%s args=%s (rule 2.29)",
         clip_id, tostring(clip.owner_sequence_id), tostring(sequence_id)))
-
     local nested_id = clip.nested_sequence_id
-    local nested = Sequence.find(nested_id)
+    local nested    = Sequence.find(nested_id)
     assert(nested, string.format(
         "Unnest: nested sequence %s not found", tostring(nested_id)))
     assert(nested.kind == "nested", string.format(
@@ -60,42 +58,36 @@ function M.execute(args)
         .. "sequences can be unnested. Masters hold media_refs and cannot "
         .. "be expanded inline (CT-C19).",
         clip_id, tostring(nested.kind), nested_id))
+    return clip, nested_id
+end
 
-    -- Find inner clips inside the nested sequence.
-    local inner = Clip.list_in_sequence(nested_id)
-
-    -- Translation delta: outer position = inner_start + (clip.ts - clip.source_in).
-    local delta = clip.timeline_start_frame - clip.source_in_frame
-
-    -- Pre-resolve dst_track_id for every inner clip so we can refuse
-    -- BEFORE any DB mutation if a parent track is missing.
+-- For every inner clip resolve its destination track on the parent and
+-- refuse BEFORE any mutation if a matching track is missing. Returns
+-- a clip_id → dst_track_id map.
+local function resolve_destination_tracks(parent_seq_id, inner)
     local dst_track_ids = {}
     for _, ic in ipairs(inner) do
         local src_track = Track.load(ic.track_id)
         assert(src_track, string.format(
             "Unnest: inner clip %s track %s not found",
             ic.id, tostring(ic.track_id)))
-        local dst_track_id = Track.find_at(sequence_id,
+        local dst_track_id = Track.find_at(parent_seq_id,
             src_track.track_type, src_track.track_index)
         assert(dst_track_id, string.format(
             "Unnest: parent sequence %s has no %s track at index %d (matching "
             .. "the inner clip's source track). Auto-creating parent tracks "
             .. "is a follow-up; refusing rather than expanding silently.",
-            sequence_id, src_track.track_type, src_track.track_index))
+            parent_seq_id, src_track.track_type, src_track.track_index))
         dst_track_ids[ic.id] = dst_track_id
     end
+    return dst_track_ids
+end
 
-    -- Capture the unnested clip's full state for undo (so it can be
-    -- restored alongside the inner clips' priors). MUST happen BEFORE
-    -- the delete below.
-    local clip_capture = Clip.capture_v13_state(clip_id)
-
-    -- DELETE the unnested clip FIRST. Otherwise the parent's track has
-    -- both the old replacement clip AND the inner-clip moves overlap-
-    -- check against it, tripping the video-overlap trigger.
-    Clip.delete_by_ids({ clip_id })
-
-    -- Now move each inner clip into the parent. Capture priors for undo.
+-- Move each inner clip into the parent at delta-translated start. Returns
+-- the priors needed for undo. Caller MUST have deleted the wrapper clip
+-- first so the overlap trigger doesn't fire against it.
+local function move_inner_clips_to_parent(inner, dst_track_ids,
+                                          parent_seq_id, nested_id, delta)
     local moved = {}
     for _, ic in ipairs(inner) do
         moved[#moved + 1] = {
@@ -108,23 +100,45 @@ function M.execute(args)
             track_id             = dst_track_ids[ic.id],
             timeline_start_frame = ic.timeline_start_frame + delta,
         })
-        Clip.transfer_owner(ic.id, sequence_id)
+        Clip.transfer_owner(ic.id, parent_seq_id)
     end
+    return moved
+end
 
-    -- Orphan cleanup: any other clips still referencing the nested?
-    -- (Exclude the just-deleted clip_id, defensively.)
-    local refs = Clip.count_referencing_nested(nested_id, clip_id)
-    local orphan_deleted = false
-    local nested_state_capture = nil
-    if refs == 0 then
-        -- Capture the sequence's full state BEFORE deleting so undo can
-        -- resurrect it (the row + its tracks). Per MEMORY: "no silent
-        -- DB record creation" — the deletion is observable via undo.
-        nested_state_capture = Sequence.capture_full_state(nested_id)
-        Sequence.delete_one(nested_id)
-        orphan_deleted = true
-        log.event("Unnest: orphan-deleted nested sequence %s", nested_id)
+-- If no other clips still reference `nested_id`, capture and delete it.
+-- The capture lets undo resurrect the row + its tracks (no silent DB
+-- record creation). Returns (orphan_deleted, nested_state_capture).
+local function cleanup_orphan_nested(nested_id, just_deleted_clip_id)
+    local refs = Clip.count_referencing_nested(nested_id, just_deleted_clip_id)
+    if refs ~= 0 then
+        return false, nil
     end
+    local nested_state_capture = Sequence.capture_full_state(nested_id)
+    Sequence.delete_one(nested_id)
+    log.event("Unnest: orphan-deleted nested sequence %s", nested_id)
+    return true, nested_state_capture
+end
+
+function M.execute(args)
+    assert(type(args) == "table", "Unnest.execute: args table required")
+    local sequence_id = require_string_arg(args, "sequence_id")
+    local clip_id     = require_string_arg(args, "clip_id")
+
+    local clip, nested_id = load_clip_and_nested(sequence_id, clip_id)
+    local inner           = Clip.list_in_sequence(nested_id)
+    local dst_track_ids   = resolve_destination_tracks(sequence_id, inner)
+    -- outer_pos = inner_start + (clip.ts - clip.source_in)
+    local delta           = clip.timeline_start_frame - clip.source_in_frame
+
+    -- Capture wrapper state for undo BEFORE deleting it.
+    local clip_capture = Clip.capture_v13_state(clip_id)
+    -- Delete wrapper FIRST so inner-clip moves don't overlap against it.
+    Clip.delete_by_ids({ clip_id })
+
+    local moved = move_inner_clips_to_parent(inner, dst_track_ids,
+                                             sequence_id, nested_id, delta)
+    local orphan_deleted, nested_state_capture =
+        cleanup_orphan_nested(nested_id, clip_id)
 
     log.event("Unnest: parent=%s clip=%s expanded=%d orphan_deleted=%s",
         sequence_id, clip_id, #moved, tostring(orphan_deleted))
@@ -220,7 +234,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             sequence_id          = args.sequence_id,
             nested_id            = args.nested_id,
             orphan_deleted       = args.orphan_deleted and true or false,
-            moved                = args.moved or {},
+            moved                = args.moved,
             clip_capture         = args.clip_capture,
             nested_state_capture = args.nested_state_capture,
         })

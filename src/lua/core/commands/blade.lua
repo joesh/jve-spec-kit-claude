@@ -185,7 +185,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                     playhead_frame        = row.playhead_frame,
                 }
             end
-            for _, s in ipairs(result_or_err.splits or {}) do
+            for _, s in ipairs(result_or_err.splits) do
                 local left = entry_for(s.clip_id)
                 local right = entry_for(s.second_clip_id)
                 if left then bucket.updates[#bucket.updates + 1] = left end
@@ -201,7 +201,8 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
 
     command_undoers["Blade"] = function(command)
         local args = command:get_all_parameters()
-        local prior = args.prior_splits or {}
+        -- Executor sets prior_splits unconditionally (always an array).
+        local prior = args.prior_splits
         -- Undo in reverse order. For each split: delete the right half
         -- (cascades clip_links rows) and grow the left half back. The
         -- original link group survives untouched on the left halves.
