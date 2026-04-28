@@ -15,10 +15,12 @@ const char* SSE_METATABLE = "JVE.SSE.ScrubStretchEngine";
 // Global registry for SSE instances
 static std::unordered_map<void*, std::unique_ptr<sse::ScrubStretchEngine>> g_sse_instances;
 
-// Helper: Get userdata pointer (extern for cross-file access)
+// Helper: Get userdata pointer (extern for cross-file access).
+// The map key is the Lua userdata allocation address (stable for the
+// userdata's lifetime), NOT the contained ScrubStretchEngine* (which the
+// allocator can reuse after CLOSE — see push_sse_userdata for rationale).
 sse::ScrubStretchEngine* get_sse_userdata(lua_State* L, int idx) {
-    void** ud = static_cast<void**>(luaL_checkudata(L, idx, SSE_METATABLE));
-    void* key = *ud;
+    void* key = static_cast<void*>(luaL_checkudata(L, idx, SSE_METATABLE));
     auto it = g_sse_instances.find(key);
     if (it == g_sse_instances.end()) {
         return nullptr;
@@ -28,13 +30,19 @@ sse::ScrubStretchEngine* get_sse_userdata(lua_State* L, int idx) {
 
 namespace {
 
-// Helper: Create userdata with metatable
+// Helper: Create userdata with metatable.
+// Returns the userdata's allocation address — Lua guarantees this stays
+// stable for the userdata's lifetime, so it's a safe registry key. Using
+// the contained ScrubStretchEngine* would be unsafe: after CLOSE the
+// underlying allocation is freed and the same address can be handed back
+// by the allocator on the next CREATE, silently aliasing two distinct
+// Lua handles.
 void* push_sse_userdata(lua_State* L, sse::ScrubStretchEngine* ptr) {
     void** ud = static_cast<void**>(lua_newuserdata(L, sizeof(void*)));
     *ud = ptr;
     luaL_getmetatable(L, SSE_METATABLE);
     lua_setmetatable(L, -2);
-    return ptr;
+    return static_cast<void*>(ud);
 }
 
 // ============================================================================
@@ -99,8 +107,7 @@ static int lua_sse_create(lua_State* L) {
 
 // SSE.CLOSE(sse)
 static int lua_sse_close(lua_State* L) {
-    void** ud = static_cast<void**>(luaL_checkudata(L, 1, SSE_METATABLE));
-    void* key = *ud;
+    void* key = static_cast<void*>(luaL_checkudata(L, 1, SSE_METATABLE));
     g_sse_instances.erase(key);
     return 0;
 }
@@ -229,22 +236,36 @@ static int lua_sse_current_time_us(lua_State* L) {
 
 // SSE __gc metamethod
 static int lua_sse_gc(lua_State* L) {
-    void** ud = static_cast<void**>(luaL_checkudata(L, 1, SSE_METATABLE));
-    void* key = *ud;
+    void* key = static_cast<void*>(luaL_checkudata(L, 1, SSE_METATABLE));
     g_sse_instances.erase(key);
     return 0;
 }
 
-// Static render buffer for RENDER_ALLOC (avoids Lua allocation issues)
+// Static render buffer for _TEST_RENDER_ALLOC (avoids Lua allocation issues).
+// Process-global by design — this binding is single-threaded test code only.
 static std::vector<float> g_render_buffer;
 
-// SSE.RENDER_ALLOC(sse, frames) -> lightuserdata, frames_produced
-// Renders to internal buffer and returns pointer for use with AOP.WRITE_F32
-// This avoids needing to allocate float arrays in Lua
+// SSE._TEST_RENDER_ALLOC(sse, frames) -> lightuserdata, frames_produced
+// Renders to a static buffer and returns its pointer for use with
+// AOP._TEST_WRITE_F32. Avoids allocating float arrays in Lua.
+//
+// TEST INFRASTRUCTURE ONLY. Production audio does not render through Lua —
+// the hot path is AudioPump::pumpLoop() calling m_sse->Render() directly in
+// C++. This binding exists so Lua tests can drive SSE without the full
+// playback pipeline. Three reasons it's not safe for production:
+//   1. The buffer's channel sizing is hardcoded stereo (`frames * 2`),
+//      ignoring the SSE config's actual channel count.
+//   2. The buffer is process-global — concurrent calls from multiple SSE
+//      engines would alias.
+//   3. The returned lightuserdata is invalidated by any later call that
+//      causes the std::vector to resize.
+// All three are tolerable in single-threaded test code; none are tolerable
+// in a real audio thread. The `_TEST_` prefix is load-bearing — do not
+// rename or remove without first addressing those three issues.
 static int lua_sse_render_alloc(lua_State* L) {
     sse::ScrubStretchEngine* engine = get_sse_userdata(L, 1);
     if (!engine) {
-        return luaL_error(L, "SSE.RENDER_ALLOC: invalid sse handle");
+        return luaL_error(L, "SSE._TEST_RENDER_ALLOC: invalid sse handle");
     }
 
     int64_t frames = static_cast<int64_t>(luaL_checkinteger(L, 2));
@@ -297,7 +318,7 @@ void register_sse_bindings(lua_State* L) {
     lua_pushcfunction(L, lua_sse_render);
     lua_setfield(L, -2, "RENDER");
     lua_pushcfunction(L, lua_sse_render_alloc);
-    lua_setfield(L, -2, "RENDER_ALLOC");
+    lua_setfield(L, -2, "_TEST_RENDER_ALLOC");
     lua_pushcfunction(L, lua_sse_starved);
     lua_setfield(L, -2, "STARVED");
     lua_pushcfunction(L, lua_sse_clear_starved);
