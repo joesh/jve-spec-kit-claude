@@ -1325,10 +1325,10 @@ static int lua_create_gpu_video_surface(lua_State* L) {
     JVE_LOG_EVENT(Video, "Creating GPUVideoSurface (hw-accelerated)");
     GPUVideoSurface* widget = new GPUVideoSurface();
 
-    void** widget_ptr = static_cast<void**>(lua_newuserdata(L, sizeof(void*)));
-    *widget_ptr = widget;
-    luaL_getmetatable(L, WIDGET_METATABLE);
-    lua_setmetatable(L, -2);
+    // Goes through lua_push_widget so the surface is registered in
+    // g_widgetRegistry — required for the staleness check in lua_to_widget()
+    // that EMP.SURFACE_* bindings rely on after Qt destroys the QObject.
+    lua_push_widget(L, widget);
 
     return 1;
 }
@@ -1338,10 +1338,10 @@ static int lua_create_gpu_video_surface(lua_State* L) {
 static int lua_create_cpu_video_surface(lua_State* L) {
     CPUVideoSurface* widget = new CPUVideoSurface();
 
-    void** widget_ptr = static_cast<void**>(lua_newuserdata(L, sizeof(void*)));
-    *widget_ptr = widget;
-    luaL_getmetatable(L, WIDGET_METATABLE);
-    lua_setmetatable(L, -2);
+    // Goes through lua_push_widget so the surface is registered in
+    // g_widgetRegistry — required for the staleness check in lua_to_widget()
+    // that EMP.SURFACE_* bindings rely on after Qt destroys the QObject.
+    lua_push_widget(L, widget);
 
     return 1;
 }
@@ -1368,8 +1368,8 @@ static int lua_emp_set_decode_mode(lua_State* L) {
 // Set rotation for video surface (0, 90, 180, 270)
 // Currently only CPUVideoSurface supports rotation
 static int lua_emp_surface_set_rotation(lua_State* L) {
-    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 1, WIDGET_METATABLE));
-    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+    QWidget* qwidget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!qwidget) return luaL_error(L, "SURFACE_SET_ROTATION: widget is null or destroyed");
     int degrees = static_cast<int>(luaL_checkinteger(L, 2));
 
     GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
@@ -1391,8 +1391,8 @@ static int lua_emp_surface_set_rotation(lua_State* L) {
 // EMP.SURFACE_SET_PAR(surface_widget, num, den)
 // Set pixel aspect ratio for video surface (1:1 = square, 4:3 = anamorphic HD)
 static int lua_emp_surface_set_par(lua_State* L) {
-    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 1, WIDGET_METATABLE));
-    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+    QWidget* qwidget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!qwidget) return luaL_error(L, "SURFACE_SET_PAR: widget is null or destroyed");
     int num = static_cast<int>(luaL_checkinteger(L, 2));
     int den = static_cast<int>(luaL_checkinteger(L, 3));
 
@@ -1410,8 +1410,8 @@ static int lua_emp_surface_set_par(lua_State* L) {
 // Returns the number of times setFrame was called on a GPUVideoSurface.
 // Used by integration tests to verify frame delivery without mocks.
 static int lua_emp_surface_frame_count(lua_State* L) {
-    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 1, WIDGET_METATABLE));
-    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+    QWidget* qwidget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!qwidget) return luaL_error(L, "SURFACE_FRAME_COUNT: widget is null or destroyed");
 
     GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
     if (!gpu_surface) {
@@ -1427,8 +1427,8 @@ static int lua_emp_surface_frame_count(lua_State* L) {
 // Stride-duplicated frames (same decoded content reused for multiple timeline positions)
 // share the same PTS and don't increment this counter.
 static int lua_emp_surface_unique_frame_count(lua_State* L) {
-    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 1, WIDGET_METATABLE));
-    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+    QWidget* qwidget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!qwidget) return luaL_error(L, "SURFACE_UNIQUE_FRAME_COUNT: widget is null or destroyed");
 
     GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
     if (!gpu_surface) {
@@ -1443,8 +1443,8 @@ static int lua_emp_surface_unique_frame_count(lua_State* L) {
 // Returns current frame dimensions. 0,0 after clearFrame (gap), non-zero after setFrame.
 // Used by integration tests to verify gap rendering.
 static int lua_emp_surface_frame_size(lua_State* L) {
-    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 1, WIDGET_METATABLE));
-    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+    QWidget* qwidget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!qwidget) return luaL_error(L, "SURFACE_FRAME_SIZE: widget is null or destroyed");
 
     GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
     if (!gpu_surface) {
@@ -1460,8 +1460,8 @@ static int lua_emp_surface_frame_size(lua_State* L) {
 // Registers a callback that fires once when the GPUVideoSurface's Metal backend
 // becomes render-ready. If already ready, fires immediately.
 static int lua_emp_surface_on_ready(lua_State* L) {
-    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 1, WIDGET_METATABLE));
-    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+    QWidget* qwidget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!qwidget) return luaL_error(L, "EMP.SURFACE_ON_READY: widget is null or destroyed");
 
     GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
     if (!gpu_surface) {
@@ -1494,8 +1494,8 @@ static int lua_emp_surface_on_ready(lua_State* L) {
 // (unsupported pixel format, texture creation failure, etc.).
 // Callback receives one string argument: the error description.
 static int lua_emp_surface_on_error(lua_State* L) {
-    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 1, WIDGET_METATABLE));
-    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+    QWidget* qwidget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!qwidget) return luaL_error(L, "EMP.SURFACE_ON_ERROR: widget is null or destroyed");
 
     GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
     if (!gpu_surface) {
@@ -1527,8 +1527,8 @@ static int lua_emp_surface_on_error(lua_State* L) {
 // EMP.SURFACE_SET_FRAME(surface_widget, frame|nil)
 // Works with both GPUVideoSurface and CPUVideoSurface
 static int lua_emp_surface_set_frame(lua_State* L) {
-    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 1, WIDGET_METATABLE));
-    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+    QWidget* qwidget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!qwidget) return luaL_error(L, "EMP.SURFACE_SET_FRAME: widget is null or destroyed");
 
     // Try GPU surface first
     GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
@@ -1617,8 +1617,8 @@ static int lua_playback_gc(lua_State* L) {
 static int lua_playback_set_surface(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
 
-    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 2, WIDGET_METATABLE));
-    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+    QWidget* qwidget = static_cast<QWidget*>(lua_to_widget(L, 2));
+    if (!qwidget) return luaL_error(L, "PLAYBACK.SET_SURFACE: widget is null or destroyed");
     GPUVideoSurface* surface = qobject_cast<GPUVideoSurface*>(qwidget);
     if (!surface) {
         return luaL_error(L, "PLAYBACK.SET_SURFACE: widget is not a GPUVideoSurface");
@@ -1632,8 +1632,8 @@ static int lua_playback_set_surface(lua_State* L) {
 static int lua_playback_set_mirror_surface(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
 
-    void** widget_ptr = static_cast<void**>(luaL_checkudata(L, 2, WIDGET_METATABLE));
-    QWidget* qwidget = static_cast<QWidget*>(*widget_ptr);
+    QWidget* qwidget = static_cast<QWidget*>(lua_to_widget(L, 2));
+    if (!qwidget) return luaL_error(L, "PLAYBACK.SET_MIRROR_SURFACE: widget is null or destroyed");
     GPUVideoSurface* surface = qobject_cast<GPUVideoSurface*>(qwidget);
     if (!surface) {
         return luaL_error(L, "PLAYBACK.SET_MIRROR_SURFACE: widget is not a GPUVideoSurface");
