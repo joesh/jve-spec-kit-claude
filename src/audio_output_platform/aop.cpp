@@ -1,4 +1,5 @@
 #include "aop.h"
+#include "../assert_handler.h"  // JVE_ASSERT
 
 #include <QAudioFormat>
 #include <QAudioSink>
@@ -11,6 +12,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstring>
+#include <string>
 
 namespace aop {
 
@@ -337,9 +339,22 @@ AudioOutput::~AudioOutput() {
 }
 
 std::unique_ptr<AudioOutput> AudioOutput::Open(const AopConfig& config, AopOpenReport* out_report) {
-    int sample_rate = config.sample_rate > 0 ? config.sample_rate : 48000;
-    int channels = config.channels > 0 ? config.channels : 2;
-    int buffer_ms = config.target_buffer_ms > 0 ? config.target_buffer_ms : 100;
+    // No silent defaults (rule 2.13). The caller is responsible for
+    // supplying a real sequence rate, channel count, and buffer target;
+    // a zero/negative value here is a bug at the call site. Surface the
+    // offending value in the message so the caller can be identified.
+    JVE_ASSERT(config.sample_rate > 0,
+        ("AudioOutput::Open: AopConfig.sample_rate must be positive, got "
+         + std::to_string(config.sample_rate)).c_str());
+    JVE_ASSERT(config.channels > 0,
+        ("AudioOutput::Open: AopConfig.channels must be positive, got "
+         + std::to_string(config.channels)).c_str());
+    JVE_ASSERT(config.target_buffer_ms > 0,
+        ("AudioOutput::Open: AopConfig.target_buffer_ms must be positive, got "
+         + std::to_string(config.target_buffer_ms)).c_str());
+    int sample_rate = config.sample_rate;
+    int channels = config.channels;
+    int buffer_ms = config.target_buffer_ms;
 
     // Ring buffer 3x target fill: gives CoreAudio headroom to consume while
     // the AudioPump refills. Without headroom (capacity == target), the buffer

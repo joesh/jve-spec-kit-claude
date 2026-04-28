@@ -47,10 +47,15 @@ void* push_aop_userdata(lua_State* L, aop::AudioOutput* ptr) {
 // ============================================================================
 
 // AOP.OPEN(sample_rate, channels, target_buffer_ms) -> aop | nil, err
+//
+// All three arguments are required. Silent defaults (rule 2.13) would
+// substitute 48000/2/100 for missing values, masking caller bugs. Use
+// luaL_checkinteger so a missing argument raises a Lua error with the
+// argument index, not a silent default.
 static int lua_aop_open(lua_State* L) {
-    int32_t sample_rate = static_cast<int32_t>(luaL_optinteger(L, 1, 48000));
-    int32_t channels = static_cast<int32_t>(luaL_optinteger(L, 2, 2));
-    int32_t buffer_ms = static_cast<int32_t>(luaL_optinteger(L, 3, 100));
+    int32_t sample_rate = static_cast<int32_t>(luaL_checkinteger(L, 1));
+    int32_t channels = static_cast<int32_t>(luaL_checkinteger(L, 2));
+    int32_t buffer_ms = static_cast<int32_t>(luaL_checkinteger(L, 3));
 
     aop::AopConfig config;
     config.sample_rate = sample_rate;
