@@ -36,6 +36,11 @@ local media_status = require("core.media.media_status")
 local PlaybackEngine = {}
 PlaybackEngine.__index = PlaybackEngine
 
+-- Output channel count threaded through TMB → SSE → AOP. Stereo today;
+-- multichannel output requires plumbing Sequence.count_master_audio_channels
+-- through these layers (see memory: project_multichannel_output_plumbing).
+local OUTPUT_CHANNELS = 2
+
 -- Class-level audio playback reference (singleton audio device)
 local audio_playback = nil
 
@@ -314,8 +319,14 @@ function PlaybackEngine:_create_tmb()
         EMP.TMB_SET_SEQUENCE_RESOLUTION(self._tmb, self.sequence.width, self.sequence.height)
     end
 
-    -- Audio format: 48kHz stereo F32 (standard output format)
-    EMP.TMB_SET_AUDIO_FORMAT(self._tmb, 48000, 2)
+    -- TMB output rate IS the SSE/AOP session rate (the sequence's
+    -- audio_sample_rate). A mismatch would force SSE to resample every
+    -- output buffer. OUTPUT_CHANNELS is the module-level stereo constant.
+    assert(self.audio_sample_rate and self.audio_sample_rate > 0, string.format(
+        "PlaybackEngine:_create_tmb: audio_sample_rate must be a positive "
+        .. "sequence rate before configuring TMB; got %s",
+        tostring(self.audio_sample_rate)))
+    EMP.TMB_SET_AUDIO_FORMAT(self._tmb, self.audio_sample_rate, OUTPUT_CHANNELS)
 
     -- TC origin overrides for media with Set Timecode overrides (FR-011).
     -- When file_original_timecode is populated, the media's start_tc_value
@@ -1394,7 +1405,9 @@ function PlaybackEngine:_init_audio_session()
         "PlaybackEngine:_init_audio_session: audio_sample_rate not set (got %s)",
         tostring(self.audio_sample_rate)))
 
-    audio_pb.init_session(self.audio_sample_rate, 2)
+    -- OUTPUT_CHANNELS is the module-level stereo constant; AOP and SSE
+    -- open at the same channel count TMB renders at.
+    audio_pb.init_session(self.audio_sample_rate, OUTPUT_CHANNELS)
     audio_pb.set_max_time(self.max_media_time_us)
     audio_playback = audio_pb
     log.event("Init audio session: sr=%s", tostring(self.audio_sample_rate))
