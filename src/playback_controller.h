@@ -189,9 +189,14 @@ public:
     // Set sequence end time so pump can push remaining audio near the end
     void SetEndTimeUS(int64_t us);
 
-    // Pump timing constants (match Lua CFG) — public for pre-fill sizing
-    static constexpr int TARGET_BUFFER_MS = 200;
+    // Per-cycle render cap (independent of buffer sizing).
     static constexpr int MAX_RENDER_FRAMES = 4096;
+
+    // Target buffer duration the pump fills the AOP ring up to. Derived from
+    // the AOP at Start() (single source of truth lives in AOP — sized 3× this
+    // value). Read for pre-fill sizing in PlaybackController::Play before the
+    // pump thread spins up.
+    int32_t TargetBufferMs() const { return m_target_buffer_ms; }
 
 private:
     void pumpLoop();
@@ -215,6 +220,7 @@ private:
     PlaybackClock* m_clock{nullptr};
     int32_t m_sample_rate{48000};
     int32_t m_channels{2};
+    int32_t m_target_buffer_ms{0};  // Set in Start() from m_aop->TargetBufferMs()
 
     // Pump timing constants
     static constexpr int PUMP_INTERVAL_HUNGRY_MS = 2;

@@ -274,6 +274,9 @@ void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* ss
     m_clock = clock;
     m_sample_rate = sample_rate;
     m_channels = channels;
+    m_target_buffer_ms = aop->TargetBufferMs();
+    JVE_ASSERT(m_target_buffer_ms > 0,
+               "AudioPump::Start: AOP target_buffer_ms must be > 0");
     m_diag = diag;
     m_stop_requested.store(false, std::memory_order_relaxed);
     m_running.store(true, std::memory_order_relaxed);
@@ -486,7 +489,7 @@ void AudioPump::pumpLoop() {
 
         // 3. Render from SSE and write to AOP
         int64_t buffered = m_aop->BufferedFrames();
-        int64_t target_frames = (m_sample_rate * TARGET_BUFFER_MS) / 1000;
+        int64_t target_frames = (m_sample_rate * m_target_buffer_ms) / 1000;
         int64_t frames_needed = std::max<int64_t>(0, target_frames - buffered);
         frames_needed = std::min<int64_t>(frames_needed, MAX_RENDER_FRAMES);
 
@@ -777,7 +780,7 @@ void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
     // Fill the full ring buffer capacity (600ms at 3x target) so the pump
     // has enough runway to warm the TMB cache without CoreAudio starving.
     constexpr int64_t PREFILL_LOOKAHEAD_US = 2000000;
-    int64_t ring_capacity = 3 * (m_audio_sample_rate * AudioPump::TARGET_BUFFER_MS) / 1000;
+    int64_t ring_capacity = 3 * (m_audio_sample_rate * m_aop->TargetBufferMs()) / 1000;
     int64_t fetch_t0 = time_us;
     int64_t fetch_t1 = (signed_speed >= 0)
         ? time_us + PREFILL_LOOKAHEAD_US

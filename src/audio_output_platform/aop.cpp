@@ -177,9 +177,10 @@ private:
 // Implementation class
 class AudioOutputImpl {
 public:
-    AudioOutputImpl(int sample_rate, int channels, int buffer_frames)
+    AudioOutputImpl(int sample_rate, int channels, int buffer_frames, int target_buffer_ms)
         : m_sample_rate(sample_rate)
         , m_channels(channels)
+        , m_target_buffer_ms(target_buffer_ms)
         , m_ring_buffer(static_cast<size_t>(buffer_frames), channels)
         , m_io_device(&m_ring_buffer, sample_rate, channels)
         , m_playing(false) {
@@ -315,9 +316,12 @@ public:
     int sample_rate() const { return m_sample_rate; }
     int channels() const { return m_channels; }
 
+    int target_buffer_ms() const { return m_target_buffer_ms; }
+
 private:
     int m_sample_rate;
     int m_channels;
+    int m_target_buffer_ms;
     RingBuffer m_ring_buffer;
     AudioIODevice m_io_device;
     QAudioDevice m_device;
@@ -361,7 +365,7 @@ std::unique_ptr<AudioOutput> AudioOutput::Open(const AopConfig& config, AopOpenR
     // yo-yos between full and empty every pump cycle → underruns at startup.
     int buffer_frames = 3 * (sample_rate * buffer_ms) / 1000;
 
-    auto impl = std::make_unique<AudioOutputImpl>(sample_rate, channels, buffer_frames);
+    auto impl = std::make_unique<AudioOutputImpl>(sample_rate, channels, buffer_frames, buffer_ms);
 
     if (!impl->init(out_report)) {
         return nullptr;
@@ -422,6 +426,10 @@ int32_t AudioOutput::SampleRate() const {
 
 int32_t AudioOutput::Channels() const {
     return m_impl->channels();
+}
+
+int32_t AudioOutput::TargetBufferMs() const {
+    return static_cast<int32_t>(m_impl->target_buffer_ms());
 }
 
 void AudioOutput::SetVolume(float volume) {

@@ -14,10 +14,12 @@ const char* AOP_METATABLE = "JVE.AOP.AudioOutput";
 // Global registry for AudioOutput instances
 static std::unordered_map<void*, std::unique_ptr<aop::AudioOutput>> g_audio_outputs;
 
-// Helper: Get userdata pointer (extern for cross-file access)
+// Helper: Get userdata pointer (extern for cross-file access).
+// The map key is the Lua userdata allocation address (stable for the
+// userdata's lifetime), NOT the contained AudioOutput* (which can be reused
+// by the allocator after CLOSE — see push_aop_userdata for the rationale).
 aop::AudioOutput* get_aop_userdata(lua_State* L, int idx) {
-    void** ud = static_cast<void**>(luaL_checkudata(L, idx, AOP_METATABLE));
-    void* key = *ud;
+    void* key = static_cast<void*>(luaL_checkudata(L, idx, AOP_METATABLE));
     auto it = g_audio_outputs.find(key);
     if (it == g_audio_outputs.end()) {
         return nullptr;
@@ -33,13 +35,18 @@ void push_aop_error(lua_State* L, const char* msg) {
     lua_pushstring(L, msg);
 }
 
-// Helper: Create userdata with metatable
+// Helper: Create userdata with metatable.
+// Returns the userdata's allocation address — Lua guarantees this stays
+// stable for the userdata's lifetime, so it's a safe registry key. Using
+// the contained AudioOutput* would be unsafe: after CLOSE the underlying
+// allocation is freed and the same address can be handed back by the
+// allocator on the next OPEN, silently aliasing two distinct Lua handles.
 void* push_aop_userdata(lua_State* L, aop::AudioOutput* ptr) {
     void** ud = static_cast<void**>(lua_newuserdata(L, sizeof(void*)));
     *ud = ptr;
     luaL_getmetatable(L, AOP_METATABLE);
     lua_setmetatable(L, -2);
-    return ptr;
+    return static_cast<void*>(ud);
 }
 
 // ============================================================================
@@ -77,8 +84,7 @@ static int lua_aop_open(lua_State* L) {
 
 // AOP.CLOSE(aop)
 static int lua_aop_close(lua_State* L) {
-    void** ud = static_cast<void**>(luaL_checkudata(L, 1, AOP_METATABLE));
-    void* key = *ud;
+    void* key = static_cast<void*>(luaL_checkudata(L, 1, AOP_METATABLE));
     g_audio_outputs.erase(key);
     return 0;
 }
@@ -173,16 +179,24 @@ static int lua_aop_clear_underrun(lua_State* L) {
     return 0;
 }
 
-// AOP.WRITE_F32(aop, pcm_data_ptr, frames) -> frames_written
-// pcm_data_ptr is lightuserdata from EMP.PCM_DATA_PTR
+// AOP._TEST_WRITE_F32(aop, pcm_data_ptr, frames) -> frames_written
+// pcm_data_ptr is lightuserdata from EMP.PCM_DATA_PTR.
+//
+// TEST INFRASTRUCTURE ONLY. Production audio does not pump through Lua —
+// the hot path is playback_controller.mm → AudioPump::pumpLoop() →
+// m_aop->WriteF32() entirely in C++ for low-latency, lock-free operation.
+// This binding exists so Lua integration tests can drive PCM through AOP
+// without spinning up the full playback pipeline. The `_TEST_` prefix is
+// load-bearing — do not rename or remove it without first migrating callers
+// off this binding.
 static int lua_aop_write_f32(lua_State* L) {
     aop::AudioOutput* output = get_aop_userdata(L, 1);
     if (!output) {
-        return luaL_error(L, "AOP.WRITE_F32: invalid aop handle");
+        return luaL_error(L, "AOP._TEST_WRITE_F32: invalid aop handle");
     }
 
     if (!lua_islightuserdata(L, 2)) {
-        return luaL_error(L, "AOP.WRITE_F32: expected lightuserdata for pcm_data_ptr");
+        return luaL_error(L, "AOP._TEST_WRITE_F32: expected lightuserdata for pcm_data_ptr");
     }
 
     const float* data = static_cast<const float*>(lua_touserdata(L, 2));
@@ -216,6 +230,19 @@ static int lua_aop_channels(lua_State* L) {
     return 1;
 }
 
+// AOP.TARGET_BUFFER_MS(aop) -> int
+// Returns the target buffer duration AOP was opened with. AOP is the canonical
+// source — anything pumping into it must derive its own target from this so
+// the 3× ring headroom is preserved (see AudioOutput::Open in aop.cpp).
+static int lua_aop_target_buffer_ms(lua_State* L) {
+    aop::AudioOutput* output = get_aop_userdata(L, 1);
+    if (!output) {
+        return luaL_error(L, "AOP.TARGET_BUFFER_MS: invalid aop handle");
+    }
+    lua_pushinteger(L, output->TargetBufferMs());
+    return 1;
+}
+
 // AOP.SET_VOLUME(aop, volume) — volume 0.0 (mute) to 1.0 (full)
 static int lua_aop_set_volume(lua_State* L) {
     aop::AudioOutput* output = get_aop_userdata(L, 1);
@@ -239,8 +266,7 @@ static int lua_aop_volume(lua_State* L) {
 
 // AOP __gc metamethod
 static int lua_aop_gc(lua_State* L) {
-    void** ud = static_cast<void**>(luaL_checkudata(L, 1, AOP_METATABLE));
-    void* key = *ud;
+    void* key = static_cast<void*>(luaL_checkudata(L, 1, AOP_METATABLE));
     g_audio_outputs.erase(key);
     return 0;
 }
@@ -285,11 +311,13 @@ void register_aop_bindings(lua_State* L) {
     lua_pushcfunction(L, lua_aop_clear_underrun);
     lua_setfield(L, -2, "CLEAR_UNDERRUN");
     lua_pushcfunction(L, lua_aop_write_f32);
-    lua_setfield(L, -2, "WRITE_F32");
+    lua_setfield(L, -2, "_TEST_WRITE_F32");
     lua_pushcfunction(L, lua_aop_sample_rate);
     lua_setfield(L, -2, "SAMPLE_RATE");
     lua_pushcfunction(L, lua_aop_channels);
     lua_setfield(L, -2, "CHANNELS");
+    lua_pushcfunction(L, lua_aop_target_buffer_ms);
+    lua_setfield(L, -2, "TARGET_BUFFER_MS");
     lua_pushcfunction(L, lua_aop_set_volume);
     lua_setfield(L, -2, "SET_VOLUME");
     lua_pushcfunction(L, lua_aop_volume);

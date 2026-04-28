@@ -69,6 +69,12 @@ public:
     // Get actual channel count
     int32_t Channels() const;
 
+    // Target buffer duration in ms (the value passed to Open via AopConfig).
+    // Single source of truth for downstream pump-side buffer sizing — anything
+    // that writes into AOP must derive its target from this so the AOP ring
+    // (sized 3× this duration) keeps the documented headroom margin.
+    int32_t TargetBufferMs() const;
+
     // Volume control (0.0 = muted, 1.0 = full)
     void SetVolume(float volume);
     float Volume() const;
