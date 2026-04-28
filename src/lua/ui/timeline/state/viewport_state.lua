@@ -6,24 +6,12 @@ local perf_log = require("core.logger").for_area("ui.scroll_perf")
 
 local viewport_guard_count = 0
 
--- Helper: Compute content length based on clips in state (integer frames)
+-- Read the cached content length. The scan happens once per clip-list
+-- write inside data.update_content_length(); read path is O(1).
 local function compute_sequence_content_length()
-    local t0 = os.clock()
-    local clips = data.state.clips
-    assert(type(clips) == "table",
-        "viewport_state.compute_sequence_content_length: data.state.clips is not a table")
-    local max_end = 0
-    for _, clip in ipairs(clips) do
-        if type(clip.timeline_start) == "number" and type(clip.duration) == "number" then
-            local clip_end = clip.timeline_start + clip.duration
-            if clip_end > max_end then
-                max_end = clip_end
-            end
-        end
-    end
-    perf_log.detail("compute_sequence_content_length: %.3fms n=%d max_end=%d",
-        (os.clock() - t0) * 1000, #clips, max_end)
-    return max_end
+    assert(type(data.state.content_length) == "number",
+        "viewport_state.compute_sequence_content_length: data.state.content_length not initialized")
+    return data.state.content_length
 end
 
 -- Helper: Calculate timeline extent (content + playhead + buffer) in frames.

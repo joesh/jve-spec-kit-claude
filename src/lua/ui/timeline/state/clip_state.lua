@@ -96,7 +96,7 @@ local function rebuild_clip_indexes()
             end
         end
     end
-    data.state.clips = normalized
+    data.set_clips(normalized)
 
     for _, list in pairs(track_clip_index) do
         table.sort(list, function(a, b)
@@ -551,7 +551,7 @@ function M.rollback_mutation_transaction()
 
     local snapshot = table.remove(mutation_snapshot_stack)
 
-    data.state.clips = snapshot.clips
+    data.set_clips(snapshot.clips)
 
     -- Rebuild selected_clips from IDs against restored clip objects
     local id_lookup = {}

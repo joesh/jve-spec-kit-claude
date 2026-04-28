@@ -190,12 +190,16 @@ local function recompute_gap_clips(affected_track_ids)
     local scoped = type(affected_track_ids) == "table"
     local kept, media_for_scope, old_gap_tracks =
         partition_clips_for_recompute(clips, scoped, affected_track_ids)
+    -- Assign the kept set first; rebuild_gaps_for_tracks then table.inserts
+    -- gap rows into the same table in place, so we refresh the cached
+    -- content_length AFTER both have run.
     data.state.clips = kept
 
     local track_clips = build_sorted_track_media(media_for_scope)
     local new_gaps_by_track =
         rebuild_gaps_for_tracks(tracks, track_clips, scoped, affected_track_ids, seq_fr, kept)
     migrate_stale_edge_selections(old_gap_tracks, new_gaps_by_track)
+    data.update_content_length()
 end
 
 local TRACK_HEIGHT_TEMPLATE_KEY = "track_height_template"
@@ -403,7 +407,7 @@ function M.init(sequence_id, project_id)
 
     -- Load Data
     data.state.tracks = db.load_tracks(sequence_id)
-    data.state.clips = db.load_clips(sequence_id)
+    data.set_clips(db.load_clips(sequence_id))
     clip_state.invalidate_indexes()
 
     -- Load Sequence Settings using Sequence model
@@ -523,7 +527,7 @@ function M.clear()
 
     data.state.sequence_id = nil
     data.state.tracks = {}
-    data.state.clips = {}
+    data.set_clips({})
 
     data.state.selected_clips = {}
     data.state.selected_edges = {}
@@ -583,6 +587,9 @@ function M.reload_clips(target_sequence_id, opts)
         return false
     end
 
+    -- recompute_gap_clips will table.insert gaps into this list and
+    -- refresh content_length itself; raw assignment is fine here since
+    -- the cache is brought into sync by the recompute call below.
     data.state.clips = db.load_clips(active)
     recompute_gap_clips()
     clip_state.invalidate_indexes()

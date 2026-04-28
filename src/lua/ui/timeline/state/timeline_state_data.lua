@@ -27,6 +27,12 @@ local function fresh_state()
         -- Data
         tracks = {},
         clips = {},
+        -- Cached max(timeline_start + duration) across `clips`. Refreshed
+        -- by update_content_length(), which writers call after mutating
+        -- clips. Read by viewport math (clamp, extent, scrollbar thumb)
+        -- in O(1); pre-cache the read path scanned every clip on every
+        -- call (60Hz × O(N) at high clip counts).
+        content_length = 0,
         project_id = nil,
         sequence_id = nil,
 
@@ -96,6 +102,44 @@ function M.reset_state_preserve_listeners()
     M.state = fresh_state()
     M.sequence = nil
     notify_timer = nil
+end
+
+--- Replace `data.state.clips` and refresh the cached content_length in
+--- one call. The single canonical entry for assigning the clip list —
+--- using this setter makes the cache invariant unbypassable for whole-
+--- list assignments. For in-place mutation of the clip table (e.g., gap
+--- injection that table.inserts after the list is set), call
+--- `update_content_length()` after the mutation completes.
+function M.set_clips(clips)
+    assert(type(clips) == "table",
+        string.format("timeline_state_data.set_clips: clips must be a table, got %s",
+            type(clips)))
+    M.state.clips = clips
+    M.update_content_length()
+end
+
+--- Recompute the cached `content_length` from the current clip list.
+--
+-- Cache contract: every writer of `data.state.clips` MUST keep
+-- `data.state.content_length` consistent. The two ways to do that are:
+--   1. `set_clips(new_clips)` — assigns and refreshes in one call.
+--   2. In-place mutation of the existing table (e.g. table.insert), then
+--      `update_content_length()` afterwards.
+--
+-- The viewport-math read path (clamp, extent, scrollbar thumb) reads
+-- `data.state.content_length` in O(1) and trusts that any preceding
+-- write has refreshed it.
+function M.update_content_length()
+    local max_end = 0
+    for _, clip in ipairs(M.state.clips) do
+        if type(clip.timeline_start) == "number" and type(clip.duration) == "number" then
+            local clip_end = clip.timeline_start + clip.duration
+            if clip_end > max_end then
+                max_end = clip_end
+            end
+        end
+    end
+    M.state.content_length = max_end
 end
 
 function M.add_listener(callback)
